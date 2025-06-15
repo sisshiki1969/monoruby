@@ -112,6 +112,7 @@ pub enum NodeKind {
     Defined(Box<Node>),
     Super(Option<Box<ArgList>>),
     AliasMethod(Box<Node>, Box<Node>), // (new_method, old_method)
+    UndefMethod(Box<Node>),            // (new_method, old_method)
     DiscardLhs,
 }
 
@@ -478,6 +479,10 @@ impl Node {
 
     pub(crate) fn new_alias(new: Node, old: Node, loc: Loc) -> Self {
         Node::new(NodeKind::AliasMethod(Box::new(new), Box::new(old)), loc)
+    }
+
+    pub(crate) fn new_undef(undef: Node, loc: Loc) -> Self {
+        Node::new(NodeKind::UndefMethod(Box::new(undef)), loc)
     }
 
     pub(crate) fn new_discard(loc: Loc) -> Self {

@@ -182,6 +182,11 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     let loc = loc.merge(self.prev_loc());
                     Ok(Node::new_alias(new_name, old_name, loc))
                 }
+                Reserved::Undef => {
+                    let name = self.undef_name()?;
+                    let loc = loc.merge(self.prev_loc());
+                    Ok(Node::new_undef(name, loc))
+                }
                 Reserved::Super => self.parse_super(),
                 _ => Err(error_unexpected(
                     loc,

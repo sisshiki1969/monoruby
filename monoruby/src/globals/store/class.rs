@@ -442,8 +442,13 @@ impl ClassInfoTable {
     ///   
     /// If not found, simply return None with no error.
     ///
-    fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<&MethodTableEntry> {
-        self[class_id].methods.get(&name)
+    fn get_method(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Option<(FuncId, Visibility, ClassId)> {
+        let entry = self[class_id].methods.get(&name)?;
+        Some((entry.func_id()?, entry.visibility, entry.owner))
     }
 
     ///
@@ -459,7 +464,7 @@ impl ClassInfoTable {
         let mut visi = None;
         loop {
             if !module.has_origin()
-                && let Some(entry) = self.get_method(module.id(), name)
+                && let Some(entry) = self[module.id()].methods.get(&name)
             {
                 if entry.func_id.is_some() {
                     let visibility = if let Some(visi) = visi {
@@ -471,6 +476,8 @@ impl ClassInfoTable {
                         visibility,
                         ..entry.clone()
                     });
+                } else if entry.visibility == Visibility::Undefined {
+                    return None;
                 } else if visi.is_none() {
                     visi = Some(entry.visibility);
                 }
@@ -502,13 +509,13 @@ impl ClassInfoTable {
     ///
     /// Get public and protected method names in the class of *class_id*.
     ///  
-    pub(crate) fn get_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
+    pub(crate) fn get_method_names(&self, class_id: ClassId) -> Vec<Value> {
         self[class_id]
             .methods
             .iter()
             .filter_map(|(name, entry)| {
-                if entry.visibility != Visibility::Private {
-                    Some(*name)
+                if entry.is_public_protected() {
+                    Some(Value::symbol(*name))
                 } else {
                     None
                 }
@@ -519,13 +526,13 @@ impl ClassInfoTable {
     ///
     /// Get private method names in the class of *class_id*.
     ///  
-    pub(crate) fn get_private_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
+    pub(crate) fn get_private_method_names(&self, class_id: ClassId) -> Vec<Value> {
         self[class_id]
             .methods
             .iter()
             .filter_map(|(name, entry)| {
-                if entry.visibility == Visibility::Private {
-                    Some(*name)
+                if entry.is_private() {
+                    Some(Value::symbol(*name))
                 } else {
                     None
                 }
@@ -540,23 +547,22 @@ impl ClassInfoTable {
         &self,
         class_id: ClassId,
         only_singleton: bool,
-    ) -> Vec<IdentId> {
-        let mut names = vec![];
+    ) -> Vec<Value> {
+        let mut names = HashSet::default();
         let mut module = self.get_module(class_id);
+        let mut exclude = HashSet::default();
         loop {
             if !only_singleton || module.is_singleton().is_some() || module.is_iclass() {
-                names.extend(
-                    self[module.id()]
-                        .methods
-                        .iter()
-                        .filter_map(|(name, entry)| {
-                            if entry.visibility != Visibility::Private {
-                                Some(*name)
-                            } else {
-                                None
-                            }
-                        }),
-                );
+                for (name, entry) in &self[module.id()].methods {
+                    if matches!(
+                        entry.visibility,
+                        Visibility::Undefined | Visibility::Private
+                    ) {
+                        exclude.insert(*name);
+                    } else if entry.is_public_protected() && !exclude.contains(name) {
+                        names.insert(*name);
+                    }
+                }
             }
             match module.superclass() {
                 Some(superclass) => {
@@ -568,33 +574,35 @@ impl ClassInfoTable {
                 None => break,
             }
         }
-        names
+        names.into_iter().map(|sym| Value::symbol(sym)).collect()
     }
 
     ///
     /// Get public and protected method names in the class of *class_id* and its ancesters.
     ///
-    pub(crate) fn get_private_method_names_inherit(&self, mut class_id: ClassId) -> Vec<IdentId> {
-        let mut names = vec![];
+    pub(crate) fn get_private_method_names_inherit(&self, class_id: ClassId) -> Vec<Value> {
+        let mut names = HashSet::default();
+        let mut module = self.get_module(class_id);
+        let mut exclude = HashSet::default();
         loop {
-            names.extend(self[class_id].methods.iter().filter_map(|(name, entry)| {
-                if entry.visibility == Visibility::Private {
-                    Some(*name)
-                } else {
-                    None
+            for (name, entry) in &self[module.id()].methods {
+                if matches!(entry.visibility, Visibility::Undefined) {
+                    exclude.insert(*name);
+                } else if entry.is_private() && !exclude.contains(name) {
+                    names.insert(*name);
                 }
-            }));
-            match self.get_module(class_id).superclass_id() {
+            }
+            match module.superclass() {
                 Some(superclass) => {
-                    if superclass == OBJECT_CLASS {
+                    if superclass.id() == OBJECT_CLASS {
                         break;
                     }
-                    class_id = superclass;
+                    module = superclass;
                 }
                 None => break,
             }
         }
-        names
+        names.into_iter().map(|sym| Value::symbol(sym)).collect()
     }
 
     fn generate_class_obj(
@@ -948,10 +956,21 @@ impl Globals {
     ///
     /// This fn increments class version.
     ///
-    pub(crate) fn remove_method(&mut self, class_id: ClassId, func_name: IdentId) -> Option<()> {
+    pub(crate) fn remove_method(&mut self, class_id: ClassId, func_name: IdentId) -> Result<()> {
         self.class_version_inc();
-        self.store.classes[class_id].methods.remove(&func_name)?;
-        Some(())
+        if self.store.classes[class_id]
+            .methods
+            .remove(&func_name)
+            .is_none()
+        {
+            Err(MonorubyErr::nameerr(format!(
+                "method `{}' not defined in {}",
+                func_name,
+                self.store.get_class_name(class_id)
+            )))
+        } else {
+            Ok(())
+        }
     }
 
     ///
@@ -966,10 +985,7 @@ impl Globals {
         Some(if inherit {
             self.check_method_for_class(class_id, func_name)?.visibility
         } else {
-            self.store
-                .classes
-                .get_method(class_id, func_name)?
-                .visibility
+            self.store.classes.get_method(class_id, func_name)?.1
         })
     }
 
@@ -978,16 +994,39 @@ impl Globals {
     ///
     /// If not found, return MethodNotFound error.
     ///
-    pub(crate) fn find_method_entry_for_class(
+    pub(crate) fn find_method_for_object(
+        &self,
+        obj: Value,
+        func_name: IdentId,
+    ) -> Result<(FuncId, Visibility, ClassId)> {
+        let class = obj.class();
+        if let Some(entry) = self.check_method_for_class(class, func_name)
+            && let Some(func_id) = entry.func_id()
+        {
+            Ok((func_id, entry.visibility, entry.owner))
+        } else {
+            Err(MonorubyErr::method_not_found(self, func_name, obj))
+        }
+    }
+
+    ///
+    /// Find method *name* for object *obj*.
+    ///
+    /// If not found, return MethodNotFound error.
+    ///
+    pub(crate) fn find_method_for_class(
         &self,
         class: ClassId,
         func_name: IdentId,
-    ) -> Result<MethodTableEntry> {
-        match self.check_method_for_class(class, func_name) {
-            Some(entry) => Ok(entry),
-            None => Err(MonorubyErr::method_not_found_for_class(
+    ) -> Result<(FuncId, Visibility, ClassId)> {
+        if let Some(entry) = self.check_method_for_class(class, func_name)
+            && let Some(func_id) = entry.func_id()
+        {
+            Ok((func_id, entry.visibility, entry.owner))
+        } else {
+            Err(MonorubyErr::method_not_found_for_class(
                 self, func_name, class,
-            )),
+            ))
         }
     }
 
@@ -1025,11 +1064,7 @@ impl Globals {
     ///
     /// Check whether a method *name* of class *class_id* exists.
     ///
-    pub(crate) fn check_method_for_class(
-        &self,
-        class_id: ClassId,
-        name: IdentId,
-    ) -> Option<MethodTableEntry> {
+    fn check_method_for_class(&self, class_id: ClassId, name: IdentId) -> Option<MethodTableEntry> {
         let class_version = self.class_version();
         self.store
             .check_method_for_class(class_id, name, class_version)
@@ -1044,17 +1079,17 @@ impl Globals {
         &mut self,
         class_id: ClassId,
         names: &[IdentId],
-        visi: Visibility,
+        visibility: Visibility,
     ) -> Result<()> {
         for name in names {
-            self.find_method_entry_for_class(class_id, *name)?;
+            self.find_method_for_class(class_id, *name)?;
             match self.store.classes[class_id].methods.get_mut(name) {
                 Some(entry) => {
-                    entry.visibility = visi;
+                    entry.visibility = visibility;
                     self.class_version_inc();
                 }
                 None => {
-                    self.add_empty_method(class_id, *name, visi);
+                    self.add_empty_method(class_id, *name, visibility);
                 }
             };
         }

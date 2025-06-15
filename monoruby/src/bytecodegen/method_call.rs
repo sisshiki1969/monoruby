@@ -323,6 +323,9 @@ impl BytecodeGen {
                 self.level_down(n1, level);
                 self.level_down(n2, level);
             }
+            NodeKind::UndefMethod(box n1) => {
+                self.level_down(n1, level);
+            }
             NodeKind::If {
                 cond: n1,
                 then_: n2,

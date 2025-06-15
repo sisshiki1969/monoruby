@@ -11,8 +11,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(IO_CLASS, "puts", puts, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "print", print, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "printf", printf, 1, 1, true);
+    globals.define_builtin_func(IO_CLASS, "flush", flush, 0);
     globals.define_builtin_func(IO_CLASS, "gets", gets, 0);
     globals.define_builtin_funcs(IO_CLASS, "isatty", &["tty?"], isatty, 0);
+    globals.define_builtin_func(IO_CLASS, "closed?", closed_, 0);
     globals.define_builtin_func(IO_CLASS, "sync", sync, 0);
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
     globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 1, false);
@@ -41,13 +43,15 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/=3c=3c.html]
 #[monoruby_builtin]
 fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
     if let Some(b) = lfp.arg(0).try_bytes() {
-        lfp.self_val().as_io_inner_mut().write(b.as_bytes())?;
+        io.write(b.as_bytes())?;
     } else {
         let s = vm.to_s(globals, lfp.arg(0))?;
-        lfp.self_val().as_io_inner_mut().write(s.as_bytes())?;
+        io.write(s.as_bytes())?;
     };
-    globals.flush_stdout();
+    io.flush()?;
     Ok(lfp.self_val())
 }
 
@@ -77,7 +81,7 @@ fn puts(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     for v in collector {
         io_writeline(globals, io, v)?;
     }
-    globals.flush_stdout();
+    io.flush()?;
     Ok(Value::nil())
 }
 
@@ -142,6 +146,20 @@ fn io_write(globals: &Globals, io: &mut IoInner, v: Value) -> Result<()> {
 }
 
 ///
+/// ### IO#flush
+///
+/// - flush -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/flush.html]
+#[monoruby_builtin]
+fn flush(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    self_.as_io_inner_mut().flush()?;
+
+    Ok(lfp.self_val())
+}
+
+///
 /// ### IO#gets
 ///
 /// - gets([NOT SUPPORTED]rs = $/) -> String | nil
@@ -168,6 +186,17 @@ fn gets(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn isatty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_io_inner_mut().isatty()))
+}
+
+///
+/// ### IO#closed?
+///
+/// - closed? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/closed=3f.html]
+#[monoruby_builtin]
+fn closed_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().as_io_inner().is_closed()))
 }
 
 #[monoruby_builtin]

@@ -30,6 +30,10 @@ impl ExceptionInner {
         self.message = msg;
     }
 
+    pub fn set_class_name(&mut self, msg: String) {
+        self.message = msg;
+    }
+
     pub fn kind(&self) -> MonorubyErrKind {
         self.kind.clone()
     }

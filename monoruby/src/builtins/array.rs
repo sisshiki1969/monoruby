@@ -52,6 +52,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "-", sub, 1);
     globals.define_builtin_func(ARRAY_CLASS, "*", mul, 1);
     globals.define_builtin_func(ARRAY_CLASS, "&", and, 1);
+    globals.define_builtin_func(ARRAY_CLASS, "|", or, 1);
     globals.define_builtin_func_with(ARRAY_CLASS, "shift", shift, 0, 1, false);
     globals.define_builtin_funcs_rest(ARRAY_CLASS, "unshift", &["prepend"], unshift);
     globals.define_builtin_func_rest(ARRAY_CLASS, "concat", concat);
@@ -544,13 +545,28 @@ fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// - self & other -> Array
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=26.htmll]
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=26.html]
 #[monoruby_builtin]
 fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut lhs = lfp.self_val().dup().as_array();
     let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
     lhs.uniq()?;
     lhs.retain(|v| Ok(rhs.contains(v)))?;
+    Ok(lhs.as_val())
+}
+
+///
+/// ### Array#|
+///
+/// - self | other -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=7c.html]
+#[monoruby_builtin]
+fn or(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut lhs = lfp.self_val().dup().as_array();
+    let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
+    lhs.extend(rhs.iter().cloned());
+    lhs.uniq()?;
     Ok(lhs.as_val())
 }
 
@@ -1828,7 +1844,7 @@ fn union(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/intersect=3f.html]
 #[monoruby_builtin]
-fn intersect_(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn intersect_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
     for rhs in lfp.arg(0).as_array().iter().cloned() {
         if lhs.iter().cloned().any(|lhs| HashKey(lhs) == HashKey(rhs)) {
@@ -2398,10 +2414,24 @@ mod tests {
 
     #[test]
     fn and() {
+        run_test(r##"[] & []"##);
+        run_test_error(r##"[] & 100"##);
+        run_test(r##"[1,1,2,3,5,7,2,1,7] & []"##);
         run_test(r##"[1,1,2,3,5,7,2,1,7] & [1]"##);
         run_test(r##"[1,1,2,3,5,7,2,1,7] & [1,2]"##);
         run_test(r##"[1,1,2,3,5,7,2,1,7] & [1,3,7]"##);
         run_test(r##"[1,1,2,3,5,7,2,1,7] & [1,3,7,2]"##);
+    }
+
+    #[test]
+    fn or() {
+        run_test(r##"[] | []"##);
+        run_test_error(r##"[] | 100"##);
+        run_test(r##"[1,1,2,3,5,7,2,1,7] | []"##);
+        run_test(r##"[1,1,2,3,5,7,2,1,7] | [1]"##);
+        run_test(r##"[1,1,2,3,5,7,2,1,7] | [1,2]"##);
+        run_test(r##"[1,1,2,3,5,7,2,1,7] | [1,3,7]"##);
+        run_test(r##"[1,1,2,3,5,7,2,1,7] | [1,3,7,2]"##);
     }
 
     #[test]

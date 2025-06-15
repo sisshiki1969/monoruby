@@ -564,6 +564,7 @@ impl BytecodeGen {
                 };
                 Bytecode::from_u16(enc_www(171, op1.0, op2.0, len), rest)
             }
+            BytecodeInst::UndefMethod { undef } => Bytecode::from(enc_wl(172, 0, undef.get())),
             BytecodeInst::AliasMethod { new, old } => {
                 Bytecode::from_with_ident2(enc_www(173, 0, 0, 0), new, old)
             }

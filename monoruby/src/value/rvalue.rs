@@ -1402,6 +1402,10 @@ impl RValue {
         &self.kind.exception
     }
 
+    pub(super) unsafe fn as_exception_mut(&mut self) -> &mut ExceptionInner {
+        &mut self.kind.exception
+    }
+
     pub(crate) unsafe fn as_hashmap(&self) -> &HashmapInner {
         &self.kind.hash
     }

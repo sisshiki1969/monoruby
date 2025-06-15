@@ -16,6 +16,33 @@ thread_local! {
     pub static GLOBAL_METHOD_CACHE: RefCell<GlobalMethodCache> = RefCell::new(GlobalMethodCache::default());
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct MethodTableEntry {
+    owner: ClassId,
+    func_id: Option<FuncId>,
+    visibility: Visibility,
+    is_basic_op: bool,
+}
+
+impl MethodTableEntry {
+    pub fn func_id(&self) -> Option<FuncId> {
+        self.func_id
+    }
+
+    pub fn is_public(&self) -> bool {
+        self.func_id.is_some() && self.visibility == Visibility::Public
+    }
+
+    pub fn is_private(&self) -> bool {
+        self.func_id.is_some() && self.visibility == Visibility::Private
+    }
+
+    pub fn is_public_protected(&self) -> bool {
+        self.func_id.is_some()
+            && matches!(self.visibility, Visibility::Protected | Visibility::Public)
+    }
+}
+
 pub struct Store {
     /// function info.
     pub(crate) functions: function::Funcs,

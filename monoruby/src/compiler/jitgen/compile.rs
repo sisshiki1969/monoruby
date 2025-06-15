@@ -609,6 +609,10 @@ impl JitContext {
                 }
                 ir.expand_array(bbctx, dst, len, rest_pos);
             }
+            TraceIr::UndefMethod { undef } => {
+                ir.undef_method(bbctx, undef);
+                bbctx.unset_class_version_guard();
+            }
             TraceIr::AliasMethod { new, old } => {
                 ir.alias_method(bbctx, new, old);
                 bbctx.unset_class_version_guard();

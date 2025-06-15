@@ -34,6 +34,18 @@ impl FuncId {
     pub fn get(&self) -> u32 {
         self.0.get()
     }
+
+    pub fn lexical_class(self, store: &Store) -> ClassId {
+        if let Some(iseq) = store[self].is_iseq() {
+            store[iseq]
+                .lexical_context
+                .last()
+                .cloned()
+                .unwrap_or(OBJECT_CLASS)
+        } else {
+            store[self].owner_class().unwrap_or(OBJECT_CLASS)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

@@ -375,6 +375,13 @@ impl AsmIr {
         });
     }
 
+    pub(super) fn undef_method(&mut self, bb: &BBContext, undef: IdentId) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(bb);
+        self.push(AsmInst::UndefMethod { undef, using_xmm });
+        self.handle_error(error);
+    }
+
     pub(super) fn alias_method(&mut self, bb: &BBContext, new: IdentId, old: IdentId) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb);
@@ -1364,6 +1371,10 @@ pub(super) enum AsmInst {
         using_xmm: UsingXmm,
     },
 
+    UndefMethod {
+        undef: IdentId,
+        using_xmm: UsingXmm,
+    },
     AliasMethod {
         new: IdentId,
         old: IdentId,

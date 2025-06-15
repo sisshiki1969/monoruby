@@ -289,6 +289,9 @@ pub(crate) enum TraceIr {
         src: SlotId,
         dst: (SlotId, u16, Option<u16>),
     },
+    UndefMethod {
+        undef: IdentId,
+    },
     AliasMethod {
         new: IdentId,
         old: IdentId,
@@ -836,6 +839,9 @@ impl TraceIr {
                     s += &format!("{prefix}{:?}", *dst + i);
                 }
                 format!("{s} = expand({src:?})")
+            }
+            TraceIr::UndefMethod { undef } => {
+                format!("undef_method({:?})", undef)
             }
             TraceIr::AliasMethod { new, old } => {
                 format!("alias_method({:?}<-{:?})", new, old)

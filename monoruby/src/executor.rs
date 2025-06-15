@@ -565,9 +565,9 @@ impl Executor {
     ///
     fn get_parent(&self, globals: &Globals) -> Result<Module> {
         let fid = self.cfp().method_func_id();
-        let parent = globals.store.iseq(fid).lexical_context.last();
+        let parent = globals.store.iseq(fid).lexical_context.last().cloned();
         match parent {
-            Some(parent) => Ok(*parent),
+            Some(parent) => Ok(globals[parent].get_module()),
             None => Err(MonorubyErr::runtimeerr(
                 "class variable access from toplevel",
             )),
@@ -1271,17 +1271,8 @@ pub enum Visibility {
     Public = 0,
     Protected = 1,
     Private = 2,
+    Undefined = 3,
 }
-
-/*impl Visibility {
-    pub fn is_public(&self) -> bool {
-        self == &Self::Public
-    }
-
-    pub fn is_private(&self) -> bool {
-        self == &Self::Private
-    }
-}*/
 
 pub(crate) extern "C" fn exec_jit_specialized_recompile(globals: &mut Globals, idx: usize) {
     let (iseq_id, self_class, patch_point) = globals.codegen.specialized_patch_point[idx].clone();

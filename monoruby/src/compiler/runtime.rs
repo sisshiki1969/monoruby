@@ -53,7 +53,7 @@ pub(super) extern "C" fn enter_classdef<'a>(
 ) -> &'a FuncData {
     let current_func = vm.method_func_id();
     let mut lexical_context = globals.store.iseq(current_func).lexical_context.clone();
-    lexical_context.push(self_value);
+    lexical_context.push(self_value.id());
     globals.store.iseq_mut(func_id).lexical_context = lexical_context;
     globals.get_func_data(func_id)
 }
@@ -727,26 +727,41 @@ pub(super) extern "C" fn singleton_define_method(
     globals.add_public_method(class_id, name, func);
 }
 
+pub(super) extern "C" fn undef_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    method: IdentId,
+) -> Option<Value> {
+    let func_id = vm.cfp().lfp().func_id();
+    let class_id = func_id.lexical_class(globals);
+    globals
+        .undef_method_for_class(class_id, method)
+        .map_or_else(
+            |err| {
+                vm.set_error(err);
+                None
+            },
+            |_| Some(Value::nil()),
+        )
+}
+
 pub(super) extern "C" fn alias_method(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
-    new: IdentId,
     old: IdentId,
-    meta: Meta,
+    new: IdentId,
 ) -> Option<Value> {
-    match if meta.is_class_def() {
-        globals.alias_method_for_class(self_val.as_class().id(), new, old)
-    } else {
-        globals.alias_method(self_val, new, old)
-    } {
-        Ok(_) => {}
-        Err(err) => {
-            vm.set_error(err);
-            return None;
-        }
-    }
-    Some(Value::nil())
+    let func_id = vm.cfp().lfp().func_id();
+    let class_id = func_id.lexical_class(globals);
+    globals
+        .alias_method_for_class(class_id, new, old)
+        .map_or_else(
+            |err| {
+                vm.set_error(err);
+                None
+            },
+            |_| Some(Value::nil()),
+        )
 }
 
 pub(super) extern "C" fn defined_const(

@@ -385,12 +385,8 @@ fn instance_of(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 fn method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let receiver = lfp.self_val();
     let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    let entry = globals.find_method_entry_for_class(receiver.class(), method_name)?;
-    Ok(Value::new_method(
-        receiver,
-        entry.func_id().unwrap(),
-        entry.owner(),
-    ))
+    let (func_id, _, owner) = globals.find_method_for_object(receiver, method_name)?;
+    Ok(Value::new_method(receiver, func_id, owner))
 }
 
 ///
@@ -448,7 +444,7 @@ fn instance_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 #[monoruby_builtin]
 fn methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
-    let iter = if !inherited_too {
+    Ok(Value::array_from_vec(if !inherited_too {
         let class_id = match globals.store.has_singleton(lfp.self_val()) {
             Some(module) => module.id(),
             None => return Ok(Value::array_empty()),
@@ -457,10 +453,7 @@ fn methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     } else {
         let class_id = lfp.self_val().class();
         globals.store.get_method_names_inherit(class_id, true)
-    }
-    .into_iter()
-    .map(Value::symbol);
-    Ok(Value::array_from_iter(iter))
+    }))
 }
 
 ///
@@ -476,14 +469,11 @@ fn singleton_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Res
         None => return Ok(Value::array_empty()),
     };
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
-    let iter = if !inherited_too {
+    Ok(Value::array_from_vec(if !inherited_too {
         globals.store.get_method_names(class_id)
     } else {
         globals.store.get_method_names_inherit(class_id, true)
-    }
-    .into_iter()
-    .map(Value::symbol);
-    Ok(Value::array_from_iter(iter))
+    }))
 }
 
 ///

@@ -1,5 +1,6 @@
 use std::{
     io::{BufRead, IsTerminal, Read, Write},
+    os::fd::AsRawFd,
     rc::Rc,
 };
 
@@ -42,6 +43,30 @@ impl std::fmt::Display for IoInner {
 }
 
 impl IoInner {
+    fn fd(&self) -> i32 {
+        match self {
+            Self::Stdin => std::io::stdin().as_raw_fd(),
+            Self::Stdout => std::io::stdout().as_raw_fd(),
+            Self::Stderr => std::io::stderr().as_raw_fd(),
+            Self::File(file) => file.reader.get_ref().as_raw_fd(),
+        }
+    }
+
+    pub fn flush(&mut self) -> Result<()> {
+        let res = match self {
+            Self::Stdin => return Ok(()),
+            Self::Stdout => std::io::stdout().flush(),
+            Self::Stderr => std::io::stderr().flush(),
+            Self::File(file) => file.reader.get_ref().flush(),
+        };
+        res.map_err(|err| MonorubyErr::runtimeerr(err.to_string()))
+    }
+
+    pub fn is_closed(&self) -> bool {
+        let fd = self.fd();
+        unsafe { libc::fcntl(fd, libc::F_GETFD) == -1 && *libc::__errno_location() == libc::EBADF }
+    }
+
     pub(super) fn stdin() -> Self {
         Self::Stdin
     }

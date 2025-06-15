@@ -76,8 +76,9 @@ fn struct_initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resu
     if let Some(bh) = lfp.block() {
         vm.push_class_context(class_id);
         let data = vm.get_block_data(globals, bh)?;
-        vm.invoke_block_with_self(globals, &data, new_struct, &[new_struct])?;
+        let res = vm.invoke_block_with_self(globals, &data, new_struct, &[new_struct]);
         vm.pop_class_context();
+        res?;
     };
     Ok(Value::nil())
 }

@@ -121,7 +121,7 @@ pub struct ISeqInfo {
     ///
     /// Lexical module stack of this method.
     ///
-    pub lexical_context: Vec<Module>,
+    pub lexical_context: Vec<ClassId>,
     pub sourceinfo: SourceInfoRef,
     is_block_style: bool,
     pub(crate) can_be_inlined: bool,
@@ -151,7 +151,6 @@ impl std::fmt::Debug for ISeqInfo {
 impl alloc::GC<RValue> for ISeqInfo {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.literals.iter().for_each(|v| v.mark(alloc));
-        self.lexical_context.iter().for_each(|m| m.mark(alloc));
     }
 }
 
@@ -930,6 +929,10 @@ impl ISeqInfo {
                         }
                     }),
                 },
+                172 => {
+                    let undef = IdentId::from(dec_wl(op1).1);
+                    TraceIr::UndefMethod { undef }
+                }
                 173 => {
                     let (new, old) = op2.get_ident2();
                     TraceIr::AliasMethod { new, old }
