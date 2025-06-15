@@ -437,14 +437,19 @@ fn deprecate_constant(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Val
 fn instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
-    let iter = if !inherited_too {
-        globals.store.get_method_names(class_id)
+    if !inherited_too {
+        Ok(Value::array_from_iter(
+            globals.store.get_method_names(class_id).map(Value::symbol),
+        ))
     } else {
-        globals.store.get_method_names_inherit(class_id, false)
+        Ok(Value::array_from_iter(
+            globals
+                .store
+                .get_method_names_inherit(class_id, false)
+                .into_iter()
+                .map(Value::symbol),
+        ))
     }
-    .into_iter()
-    .map(Value::symbol);
-    Ok(Value::array_from_iter(iter))
 }
 
 ///
@@ -457,14 +462,22 @@ fn instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resu
 fn private_instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
-    let iter = if !inherited_too {
-        globals.store.get_private_method_names(class_id)
+    if !inherited_too {
+        Ok(Value::array_from_iter(
+            globals
+                .store
+                .get_private_method_names(class_id)
+                .map(Value::symbol),
+        ))
     } else {
-        globals.store.get_private_method_names_inherit(class_id)
+        Ok(Value::array_from_iter(
+            globals
+                .store
+                .get_private_method_names_inherit(class_id)
+                .into_iter()
+                .map(Value::symbol),
+        ))
     }
-    .into_iter()
-    .map(Value::symbol);
-    Ok(Value::array_from_iter(iter))
 }
 
 ///
@@ -549,25 +562,12 @@ fn prepend_features(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resu
 fn instance_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let klass = lfp.self_val().as_class();
     let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    let entry = match globals.check_method_for_class(klass.id(), method_name) {
-        Some(entry) => entry,
-        None => {
-            return Err(MonorubyErr::undefined_method(
-                method_name,
-                klass.id().get_name(&globals.store),
-            ))
-        }
-    };
-    let func_id = match entry.func_id() {
-        Some(id) => id,
-        None => {
-            return Err(MonorubyErr::undefined_method(
-                method_name,
-                klass.id().get_name(&globals.store),
-            ))
-        }
-    };
-    Ok(Value::new_unbound_method(func_id, entry.owner()))
+    let (func_id, _, owner) = globals
+        .find_method_for_class(klass.id(), method_name)
+        .map_err(|_| {
+            MonorubyErr::undefined_method(method_name, klass.id().get_name(&globals.store))
+        })?;
+    Ok(Value::new_unbound_method(func_id, owner))
 }
 
 ///
@@ -698,10 +698,7 @@ fn module_function(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
         let visi = vm.context_visibility();
         for v in arg0.as_array().iter() {
             let name = v.expect_symbol_or_string(globals)?;
-            let func_id = globals
-                .find_method_entry_for_class(class_id, name)?
-                .func_id()
-                .unwrap();
+            let func_id = globals.find_method_for_class(class_id, name)?.0;
             globals.add_singleton_method(class_id, name, func_id, visi);
         }
         Ok(arg0)

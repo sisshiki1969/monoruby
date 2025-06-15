@@ -442,8 +442,13 @@ impl ClassInfoTable {
     ///   
     /// If not found, simply return None with no error.
     ///
-    fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<&MethodTableEntry> {
-        self[class_id].methods.get(&name)
+    fn get_method(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Option<(FuncId, Visibility, ClassId)> {
+        let entry = self[class_id].methods.get(&name)?;
+        Some((entry.func_id()?, entry.visibility, entry.owner))
     }
 
     ///
@@ -459,7 +464,7 @@ impl ClassInfoTable {
         let mut visi = None;
         loop {
             if !module.has_origin()
-                && let Some(entry) = self.get_method(module.id(), name)
+                && let Some(entry) = self[module.id()].methods.get(&name)
             {
                 if entry.func_id.is_some() {
                     let visibility = if let Some(visi) = visi {
@@ -502,35 +507,30 @@ impl ClassInfoTable {
     ///
     /// Get public and protected method names in the class of *class_id*.
     ///  
-    pub(crate) fn get_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
-        self[class_id]
-            .methods
-            .iter()
-            .filter_map(|(name, entry)| {
-                if entry.visibility != Visibility::Private {
-                    Some(*name)
-                } else {
-                    None
-                }
-            })
-            .collect()
+    pub(crate) fn get_method_names(&self, class_id: ClassId) -> impl Iterator<Item = IdentId> + '_ {
+        self[class_id].methods.iter().filter_map(|(name, entry)| {
+            if entry.is_public_protected() {
+                Some(*name)
+            } else {
+                None
+            }
+        })
     }
 
     ///
     /// Get private method names in the class of *class_id*.
     ///  
-    pub(crate) fn get_private_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
-        self[class_id]
-            .methods
-            .iter()
-            .filter_map(|(name, entry)| {
-                if entry.visibility == Visibility::Private {
-                    Some(*name)
-                } else {
-                    None
-                }
-            })
-            .collect()
+    pub(crate) fn get_private_method_names(
+        &self,
+        class_id: ClassId,
+    ) -> impl Iterator<Item = IdentId> + '_ {
+        self[class_id].methods.iter().filter_map(|(name, entry)| {
+            if entry.is_private() {
+                Some(*name)
+            } else {
+                None
+            }
+        })
     }
 
     ///
@@ -550,7 +550,7 @@ impl ClassInfoTable {
                         .methods
                         .iter()
                         .filter_map(|(name, entry)| {
-                            if entry.visibility != Visibility::Private {
+                            if entry.is_public_protected() {
                                 Some(*name)
                             } else {
                                 None
@@ -578,7 +578,7 @@ impl ClassInfoTable {
         let mut names = vec![];
         loop {
             names.extend(self[class_id].methods.iter().filter_map(|(name, entry)| {
-                if entry.visibility == Visibility::Private {
+                if entry.is_private() {
                     Some(*name)
                 } else {
                     None
@@ -966,10 +966,7 @@ impl Globals {
         Some(if inherit {
             self.check_method_for_class(class_id, func_name)?.visibility
         } else {
-            self.store
-                .classes
-                .get_method(class_id, func_name)?
-                .visibility
+            self.store.classes.get_method(class_id, func_name)?.1
         })
     }
 
@@ -978,16 +975,39 @@ impl Globals {
     ///
     /// If not found, return MethodNotFound error.
     ///
-    pub(crate) fn find_method_entry_for_class(
+    pub(crate) fn find_method_for_object(
+        &self,
+        obj: Value,
+        func_name: IdentId,
+    ) -> Result<(FuncId, Visibility, ClassId)> {
+        let class = obj.class();
+        if let Some(entry) = self.check_method_for_class(class, func_name)
+            && let Some(func_id) = entry.func_id()
+        {
+            Ok((func_id, entry.visibility, entry.owner))
+        } else {
+            Err(MonorubyErr::method_not_found(self, func_name, obj))
+        }
+    }
+
+    ///
+    /// Find method *name* for object *obj*.
+    ///
+    /// If not found, return MethodNotFound error.
+    ///
+    pub(crate) fn find_method_for_class(
         &self,
         class: ClassId,
         func_name: IdentId,
-    ) -> Result<MethodTableEntry> {
-        match self.check_method_for_class(class, func_name) {
-            Some(entry) => Ok(entry),
-            None => Err(MonorubyErr::method_not_found_for_class(
+    ) -> Result<(FuncId, Visibility, ClassId)> {
+        if let Some(entry) = self.check_method_for_class(class, func_name)
+            && let Some(func_id) = entry.func_id()
+        {
+            Ok((func_id, entry.visibility, entry.owner))
+        } else {
+            Err(MonorubyErr::method_not_found_for_class(
                 self, func_name, class,
-            )),
+            ))
         }
     }
 
@@ -1025,11 +1045,7 @@ impl Globals {
     ///
     /// Check whether a method *name* of class *class_id* exists.
     ///
-    pub(crate) fn check_method_for_class(
-        &self,
-        class_id: ClassId,
-        name: IdentId,
-    ) -> Option<MethodTableEntry> {
+    fn check_method_for_class(&self, class_id: ClassId, name: IdentId) -> Option<MethodTableEntry> {
         let class_version = self.class_version();
         self.store
             .check_method_for_class(class_id, name, class_version)
@@ -1044,17 +1060,17 @@ impl Globals {
         &mut self,
         class_id: ClassId,
         names: &[IdentId],
-        visi: Visibility,
+        visibility: Visibility,
     ) -> Result<()> {
         for name in names {
-            self.find_method_entry_for_class(class_id, *name)?;
+            self.find_method_for_class(class_id, *name)?;
             match self.store.classes[class_id].methods.get_mut(name) {
                 Some(entry) => {
-                    entry.visibility = visi;
+                    entry.visibility = visibility;
                     self.class_version_inc();
                 }
                 None => {
-                    self.add_empty_method(class_id, *name, visi);
+                    self.add_empty_method(class_id, *name, visibility);
                 }
             };
         }

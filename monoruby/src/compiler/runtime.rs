@@ -730,10 +730,22 @@ pub(super) extern "C" fn singleton_define_method(
 pub(super) extern "C" fn undef_method(
     vm: &mut Executor,
     globals: &mut Globals,
-    undef: IdentId,
+    method: IdentId,
 ) -> Option<Value> {
-    dbg!(undef);
-    Some(Value::nil())
+    let class_id = if let Some(iseq) = globals[vm.cfp().lfp().func_id()].is_iseq() {
+        globals[iseq].lexical_context.last().unwrap().id()
+    } else {
+        unreachable!()
+    };
+    globals
+        .undef_method_for_class(class_id, method)
+        .map_or_else(
+            |err| {
+                vm.set_error(err);
+                None
+            },
+            |_| Some(Value::nil()),
+        )
 }
 
 pub(super) extern "C" fn alias_method(
@@ -745,18 +757,20 @@ pub(super) extern "C" fn alias_method(
     let lfp = vm.cfp().lfp();
     let self_val = lfp.self_val();
     let meta = lfp.meta();
-    match if meta.is_class_def() {
-        globals.alias_method_for_class(self_val.as_class().id(), new, old)
+    let class_id = if meta.is_class_def() {
+        self_val.as_class().id()
     } else {
-        globals.alias_method(self_val, new, old)
-    } {
-        Ok(_) => {}
-        Err(err) => {
-            vm.set_error(err);
-            return None;
-        }
-    }
-    Some(Value::nil())
+        self_val.class()
+    };
+    globals
+        .alias_method_for_class(class_id, new, old)
+        .map_or_else(
+            |err| {
+                vm.set_error(err);
+                None
+            },
+            |_| Some(Value::nil()),
+        )
 }
 
 pub(super) extern "C" fn defined_const(

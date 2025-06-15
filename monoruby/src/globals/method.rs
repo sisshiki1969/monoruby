@@ -696,25 +696,17 @@ impl Globals {
     }
 
     ///
-    /// Give alias *new_name* to the method *old_name* for object *obj*.
+    /// Undefine the instance method *method* of class *class_id*.
     ///
-    pub(crate) fn alias_method(
+    pub(crate) fn undef_method_for_class(
         &mut self,
-        obj: Value,
-        new_name: IdentId,
-        old_name: IdentId,
+        class_id: ClassId,
+        method: IdentId,
     ) -> Result<()> {
-        let class_id = obj.class();
-        let entry = match self.check_method_for_class(class_id, old_name) {
-            Some(func) => func,
-            None => return Err(MonorubyErr::method_not_found(self, old_name, obj)),
-        };
-        self.add_method(
-            obj.class(),
-            new_name,
-            entry.func_id().unwrap(),
-            entry.visibility,
-        );
+        let (_, visibility, _) = self
+            .find_method_for_class(class_id, method)
+            .map_err(|_| MonorubyErr::undefined_method(method, class_id.get_name(&self.store)))?;
+        self.add_empty_method(class_id, method, visibility);
         Ok(())
     }
 
@@ -727,13 +719,10 @@ impl Globals {
         new_name: IdentId,
         old_name: IdentId,
     ) -> Result<()> {
-        let entry = self.find_method_entry_for_class(class_id, old_name)?;
-        self.add_method(
-            class_id,
-            new_name,
-            entry.func_id().unwrap(),
-            entry.visibility,
-        );
+        let (func_id, visibility, _) = self
+            .find_method_for_class(class_id, old_name)
+            .map_err(|_| MonorubyErr::undefined_method(old_name, class_id.get_name(&self.store)))?;
+        self.add_method(class_id, new_name, func_id, visibility);
         Ok(())
     }
 }

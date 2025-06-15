@@ -29,28 +29,6 @@ pub(crate) type InlineGen = dyn Fn(
     ClassId,
 ) -> bool;
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct MethodTableEntry {
-    owner: ClassId,
-    func_id: Option<FuncId>,
-    visibility: Visibility,
-    is_basic_op: bool,
-}
-
-impl MethodTableEntry {
-    pub fn func_id(&self) -> Option<FuncId> {
-        self.func_id
-    }
-
-    pub fn owner(&self) -> ClassId {
-        self.owner
-    }
-
-    pub fn is_public(&self) -> bool {
-        self.visibility == Visibility::Public
-    }
-}
-
 pub(crate) const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
 

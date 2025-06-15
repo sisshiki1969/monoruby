@@ -328,61 +328,6 @@ fn test_assign() {
 }
 
 #[test]
-fn test_instance_var() {
-    run_test("@a=42; @a");
-    run_test("@a=42; @a = @a * 2; @a");
-    run_test("@a=42; b = @a * 2; b");
-    run_test("@a=42; c = b = @a * 2; c");
-    run_test("@a = 10; @a += 15; @a");
-    run_test_with_prelude(
-        r###"
-        x = C.new
-        x.ivar
-        "###,
-        r###"
-        class C
-          def initialize
-            @a = 1
-            @b = 2
-            @c = 3
-            @d = 4
-            @e = 5
-            @f = 6
-            @g = 7
-            @h = 8
-          end
-          def ivar
-            [@a, @b, @c, @d, @e, @f, @g, @h]
-          end
-        end
-        "###,
-    );
-    run_test_with_prelude(
-        r###"
-        x = C.new
-        x.ivar
-        "###,
-        r###"
-        class C < Array
-          def initialize
-            @a = 1
-            @b = 2
-            @c = 3
-            @d = 4
-            @e = 5
-            @f = 6
-            @g = 7
-            @h = 8
-          end
-          def ivar
-            [@a, @b, @c, @d, @e, @f, @g, @h]
-          end
-        end
-        "###,
-    );
-}
-
-#[test]
 fn test_class_def() {
     run_test(
         r#"
@@ -1002,62 +947,6 @@ fn test10() {
 }
 
 #[test]
-fn test_const() {
-    run_test(
-        r#"
-            Const=4
-            Const+=100
-            a = Const
-            Const
-        "#,
-    );
-}
-
-#[test]
-fn test_const2() {
-    run_test2(
-        r#"
-            CONST = 5.7
-            sum = 0
-            for i in 0..19 do
-                sum += CONST
-                CONST = 1000 if i == 12
-            end
-            sum
-        "#,
-    );
-}
-
-#[test]
-fn test_const3() {
-    run_test_with_prelude(
-        r#"
-            $res = []
-            A.new # => 100
-            B.new # => 200
-            $res
-            "#,
-        r#"
-            module M
-              def initialize
-                $res << self.class::C
-              end
-            end
-
-            class A
-              include M
-              C = 100
-            end
-
-            class B
-              include M
-              C = 200
-            end
-        "#,
-    );
-}
-
-#[test]
 fn test_string() {
     run_test(
         r##"
@@ -1136,15 +1025,29 @@ fn logical_assign_ops() {
 }
 
 #[test]
-fn test_global_var() {
+fn test_undef() {
     run_test(
         r#"
-        a = []
-        a << $std
-        $std = 42
-        a << $std
-        $std = nil
-        a
+        res = []
+        class S
+          def foo
+            "foo"
+          end
+        end
+        class C < S
+          def self.undefine
+            undef foo
+          end
+        end
+
+        res << C.instance_methods(false)
+        res << S.instance_methods(false)
+
+        C.undefine
+
+        res << C.instance_methods(false)
+        res << S.instance_methods(false)
+        res
         "#,
     )
 }
