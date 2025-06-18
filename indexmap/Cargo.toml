@@ -29,9 +29,6 @@ lazy_static = "1.3"
 serde_derive = "1.0"
 
 [features]
-default = ["std"]
-std = []
-
 # for testing only, of course
 test_debug = []
 

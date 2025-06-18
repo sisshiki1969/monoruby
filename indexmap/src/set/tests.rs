@@ -562,7 +562,6 @@ fn ops() {
 }
 
 #[test]
-#[cfg(feature = "std")]
 fn from_array() {
     let set1 = IndexSet::from([1, 2, 3, 4]);
     let set2: IndexSet<_> = [1, 2, 3, 4].into();

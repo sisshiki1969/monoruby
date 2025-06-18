@@ -35,8 +35,6 @@ macro_rules! indexmap_with_default {
     }};
 }
 
-#[cfg(feature = "std")]
-#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 #[macro_export]
 /// Create an [`IndexMap`][crate::IndexMap] from a list of key-value pairs
 ///
@@ -109,8 +107,6 @@ macro_rules! indexset_with_default {
     }};
 }
 
-#[cfg(feature = "std")]
-#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 #[macro_export]
 /// Create an [`IndexSet`][crate::IndexSet] from a list of values
 ///

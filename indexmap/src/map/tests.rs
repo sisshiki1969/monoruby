@@ -562,7 +562,6 @@ fn drain_range() {
 }
 
 #[test]
-#[cfg(feature = "std")]
 fn from_array() {
     let map = IndexMap::from([(1, 2), (3, 4)]);
     let mut expected = IndexMap::new();

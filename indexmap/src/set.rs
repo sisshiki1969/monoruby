@@ -15,7 +15,6 @@ pub use self::slice::Slice;
 
 use crate::TryReserveError;
 
-#[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
 
 use crate::util::try_simplify_range;
@@ -78,12 +77,7 @@ type Bucket<T> = super::Bucket<T, ()>;
 /// assert!(letters.contains(&'u'));
 /// assert!(!letters.contains(&'y'));
 /// ```
-#[cfg(feature = "std")]
 pub struct IndexSet<T, S = RandomState> {
-    pub(crate) map: IndexMap<T, (), S>,
-}
-#[cfg(not(feature = "std"))]
-pub struct IndexSet<T, S> {
     pub(crate) map: IndexMap<T, (), S>,
 }
 
@@ -145,8 +139,6 @@ where
     }
 }
 
-#[cfg(feature = "std")]
-#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 impl<T> IndexSet<T> {
     /// Create a new set. (Does not allocate.)
     pub fn new() -> Self {
@@ -1128,8 +1120,6 @@ where
     }
 }
 
-#[cfg(feature = "std")]
-#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 impl<T, const N: usize> From<[T; N]> for IndexSet<T, RandomState>
 where
     T: Eq + Hash,
