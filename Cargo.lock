@@ -925,7 +925,6 @@ dependencies = [
 name = "indexmap"
 version = "2.9.0"
 dependencies = [
- "equivalent",
  "fnv",
  "hashbrown",
  "itertools 0.14.0",

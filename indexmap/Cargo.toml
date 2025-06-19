@@ -13,9 +13,6 @@ rust-version = "1.63"
 [lib]
 bench = false
 
-[dependencies]
-equivalent = { version = "1.0", default-features = false }
-
 [dependencies.hashbrown]
 version = "0.15.0"
 default-features = false
