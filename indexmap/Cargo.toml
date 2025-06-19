@@ -13,9 +13,9 @@ rust-version = "1.63"
 [lib]
 bench = false
 
-[dependencies.hashbrown]
-version = "0.15.0"
-default-features = false
+[dependencies]
+hashbrown = { path = "../hashbrown", default-features = false }
+equivalent = { path = "../equivalent" }
 
 [dev-dependencies]
 itertools = "0.14"
