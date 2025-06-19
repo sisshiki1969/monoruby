@@ -1,8 +1,7 @@
 use core::hash::{BuildHasher, Hash};
 
 use super::{
-    Bucket, Entries, Entry, Equivalent, IndexMap, IndexedEntry, IterMut2, OccupiedEntry,
-    VacantEntry,
+    Bucket, Entries, Entry, Equivalent, IndexedEntry, IterMut2, OccupiedEntry, RubyMap, VacantEntry,
 };
 
 /// Opt-in mutable access to [`IndexMap`] keys.
@@ -55,7 +54,7 @@ pub trait MutableKeys: private::Sealed {
 /// Opt-in mutable access to [`IndexMap`] keys.
 ///
 /// See [`MutableKeys`] for more information.
-impl<K, V, S> MutableKeys for IndexMap<K, V, S>
+impl<K, V, S> MutableKeys for RubyMap<K, V, S>
 where
     S: BuildHasher,
 {
@@ -158,7 +157,7 @@ impl<K, V> MutableEntryKey for IndexedEntry<'_, K, V> {
 mod private {
     pub trait Sealed {}
 
-    impl<K, V, S> Sealed for super::IndexMap<K, V, S> {}
+    impl<K, V, S> Sealed for super::RubyMap<K, V, S> {}
     impl<K, V> Sealed for super::Entry<'_, K, V> {}
     impl<K, V> Sealed for super::OccupiedEntry<'_, K, V> {}
     impl<K, V> Sealed for super::VacantEntry<'_, K, V> {}

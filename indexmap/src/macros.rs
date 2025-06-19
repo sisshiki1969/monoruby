@@ -61,7 +61,7 @@ macro_rules! indexmap {
             // Note: `stringify!($key)` is just here to consume the repetition,
             // but we throw away that string literal during constant evaluation.
             const CAP: usize = <[()]>::len(&[$({ stringify!($key); }),*]);
-            let mut map = $crate::IndexMap::with_capacity(CAP);
+            let mut map = $crate::RubyMap::with_capacity(CAP);
             $(
                 map.insert($key, $value);
             )*

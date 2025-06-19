@@ -434,7 +434,7 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         Ok(())
     }
 
-    vm.temp_push(Value::hash(indexmap::IndexMap::default()));
+    vm.temp_push(Value::hash(indexmap::RubyMap::default()));
     let err = inner(vm, globals, lfp);
     let res = vm.temp_pop();
     err?;

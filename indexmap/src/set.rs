@@ -25,7 +25,7 @@ use core::fmt;
 use core::hash::{BuildHasher, Hash};
 use core::ops::{BitAnd, BitOr, BitXor, Index, RangeBounds, Sub};
 
-use super::{Entries, Equivalent, IndexMap};
+use super::{Entries, Equivalent, RubyMap};
 
 type Bucket<T> = super::Bucket<T, ()>;
 
@@ -78,7 +78,7 @@ type Bucket<T> = super::Bucket<T, ()>;
 /// assert!(!letters.contains(&'y'));
 /// ```
 pub struct IndexSet<T, S = RandomState> {
-    pub(crate) map: IndexMap<T, (), S>,
+    pub(crate) map: RubyMap<T, (), S>,
 }
 
 impl<T, S> Clone for IndexSet<T, S>
@@ -143,7 +143,7 @@ impl<T> IndexSet<T> {
     /// Create a new set. (Does not allocate.)
     pub fn new() -> Self {
         IndexSet {
-            map: IndexMap::new(),
+            map: RubyMap::new(),
         }
     }
 
@@ -153,7 +153,7 @@ impl<T> IndexSet<T> {
     /// Computes in **O(n)** time.
     pub fn with_capacity(n: usize) -> Self {
         IndexSet {
-            map: IndexMap::with_capacity(n),
+            map: RubyMap::with_capacity(n),
         }
     }
 }
@@ -165,7 +165,7 @@ impl<T, S> IndexSet<T, S> {
     /// Computes in **O(n)** time.
     pub fn with_capacity_and_hasher(n: usize, hash_builder: S) -> Self {
         IndexSet {
-            map: IndexMap::with_capacity_and_hasher(n, hash_builder),
+            map: RubyMap::with_capacity_and_hasher(n, hash_builder),
         }
     }
 
@@ -175,7 +175,7 @@ impl<T, S> IndexSet<T, S> {
     /// can be called in `static` contexts.
     pub const fn with_hasher(hash_builder: S) -> Self {
         IndexSet {
-            map: IndexMap::with_hasher(hash_builder),
+            map: RubyMap::with_hasher(hash_builder),
         }
     }
 
@@ -1115,7 +1115,7 @@ where
     fn from_iter<I: IntoIterator<Item = T>>(iterable: I) -> Self {
         let iter = iterable.into_iter().map(|x| (x, ()));
         IndexSet {
-            map: IndexMap::from_iter(iter),
+            map: RubyMap::from_iter(iter),
         }
     }
 }
@@ -1167,7 +1167,7 @@ where
     /// Return an empty [`IndexSet`]
     fn default() -> Self {
         IndexSet {
-            map: IndexMap::default(),
+            map: RubyMap::default(),
         }
     }
 }

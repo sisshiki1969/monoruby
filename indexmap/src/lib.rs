@@ -116,7 +116,7 @@ mod util;
 pub mod map;
 pub mod set;
 
-pub use crate::map::IndexMap;
+pub use crate::map::RubyMap;
 pub use crate::set::IndexSet;
 pub use equivalent::Equivalent;
 

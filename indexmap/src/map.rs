@@ -75,19 +75,19 @@ use crate::{Bucket, Entries, Equivalent, GetDisjointMutError, HashValue, TryRese
 /// assert_eq!(letters[&'u'], 1);
 /// assert_eq!(letters.get(&'y'), None);
 /// ```
-pub struct IndexMap<K, V, S = RandomState> {
+pub struct RubyMap<K, V, S = RandomState> {
     pub(crate) core: IndexMapCore<K, V>,
     hash_builder: S,
 }
 
-impl<K, V, S> Clone for IndexMap<K, V, S>
+impl<K, V, S> Clone for RubyMap<K, V, S>
 where
     K: Clone,
     V: Clone,
     S: Clone,
 {
     fn clone(&self) -> Self {
-        IndexMap {
+        RubyMap {
             core: self.core.clone(),
             hash_builder: self.hash_builder.clone(),
         }
@@ -99,7 +99,7 @@ where
     }
 }
 
-impl<K, V, S> Entries for IndexMap<K, V, S> {
+impl<K, V, S> Entries for RubyMap<K, V, S> {
     type Entry = Bucket<K, V>;
 
     #[inline]
@@ -125,7 +125,7 @@ impl<K, V, S> Entries for IndexMap<K, V, S> {
     }
 }
 
-impl<K, V, S> fmt::Debug for IndexMap<K, V, S>
+impl<K, V, S> fmt::Debug for RubyMap<K, V, S>
 where
     K: fmt::Debug,
     V: fmt::Debug,
@@ -144,7 +144,7 @@ where
     }
 }
 
-impl<K, V> IndexMap<K, V> {
+impl<K, V> RubyMap<K, V> {
     /// Create a new map. (Does not allocate.)
     #[inline]
     pub fn new() -> Self {
@@ -161,7 +161,7 @@ impl<K, V> IndexMap<K, V> {
     }
 }
 
-impl<K, V, S> IndexMap<K, V, S> {
+impl<K, V, S> RubyMap<K, V, S> {
     /// Create a new map with capacity for `n` key-value pairs. (Does not
     /// allocate if `n` is zero.)
     ///
@@ -171,7 +171,7 @@ impl<K, V, S> IndexMap<K, V, S> {
         if n == 0 {
             Self::with_hasher(hash_builder)
         } else {
-            IndexMap {
+            RubyMap {
                 core: IndexMapCore::with_capacity(n),
                 hash_builder,
             }
@@ -183,7 +183,7 @@ impl<K, V, S> IndexMap<K, V, S> {
     /// This function is `const`, so it
     /// can be called in `static` contexts.
     pub const fn with_hasher(hash_builder: S) -> Self {
-        IndexMap {
+        RubyMap {
             core: IndexMapCore::new(),
             hash_builder,
         }
@@ -362,7 +362,7 @@ impl<K, V, S> IndexMap<K, V, S> {
     }
 }
 
-impl<K, V, S> IndexMap<K, V, S>
+impl<K, V, S> RubyMap<K, V, S>
 where
     K: Hash + Eq,
     S: BuildHasher,
@@ -663,12 +663,12 @@ where
     /// assert!(a.keys().eq(&[3, 2, 1, 4, 5]));
     /// assert_eq!(a[&3], "d"); // "c" was overwritten.
     /// ```
-    pub fn append<S2>(&mut self, other: &mut IndexMap<K, V, S2>) {
+    pub fn append<S2>(&mut self, other: &mut RubyMap<K, V, S2>) {
         self.extend(other.drain(..));
     }
 }
 
-impl<K, V, S> IndexMap<K, V, S>
+impl<K, V, S> RubyMap<K, V, S>
 where
     S: BuildHasher,
 {
@@ -958,7 +958,7 @@ where
     }
 }
 
-impl<K, V, S> IndexMap<K, V, S> {
+impl<K, V, S> RubyMap<K, V, S> {
     /// Remove the last key-value pair
     ///
     /// This preserves the order of the remaining elements.
@@ -1362,7 +1362,7 @@ impl<K, V, S> IndexMap<K, V, S> {
 /// map.insert("foo", 1);
 /// println!("{:?}", map["bar"]); // panics!
 /// ```
-impl<K, V, Q: ?Sized, S> Index<&Q> for IndexMap<K, V, S>
+impl<K, V, Q: ?Sized, S> Index<&Q> for RubyMap<K, V, S>
 where
     Q: Hash + Equivalent<K>,
     S: BuildHasher,
@@ -1406,7 +1406,7 @@ where
 /// map.insert("foo", 1);
 /// map["bar"] = 1; // panics!
 /// ```
-impl<K, V, Q: ?Sized, S> IndexMut<&Q> for IndexMap<K, V, S>
+impl<K, V, Q: ?Sized, S> IndexMut<&Q> for RubyMap<K, V, S>
 where
     Q: Hash + Equivalent<K>,
     S: BuildHasher,
@@ -1451,7 +1451,7 @@ where
 /// map.insert("foo", 1);
 /// println!("{:?}", map[10]); // panics!
 /// ```
-impl<K, V, S> Index<usize> for IndexMap<K, V, S> {
+impl<K, V, S> Index<usize> for RubyMap<K, V, S> {
     type Output = V;
 
     /// Returns a reference to the value at the supplied `index`.
@@ -1498,7 +1498,7 @@ impl<K, V, S> Index<usize> for IndexMap<K, V, S> {
 /// map.insert("foo", 1);
 /// map[10] = 1; // panics!
 /// ```
-impl<K, V, S> IndexMut<usize> for IndexMap<K, V, S> {
+impl<K, V, S> IndexMut<usize> for RubyMap<K, V, S> {
     /// Returns a mutable reference to the value at the supplied `index`.
     ///
     /// ***Panics*** if `index` is out of bounds.
@@ -1513,7 +1513,7 @@ impl<K, V, S> IndexMut<usize> for IndexMap<K, V, S> {
     }
 }
 
-impl<K, V, S> FromIterator<(K, V)> for IndexMap<K, V, S>
+impl<K, V, S> FromIterator<(K, V)> for RubyMap<K, V, S>
 where
     K: Hash + Eq,
     S: BuildHasher + Default,
@@ -1532,7 +1532,7 @@ where
     }
 }
 
-impl<K, V, const N: usize> From<[(K, V); N]> for IndexMap<K, V, RandomState>
+impl<K, V, const N: usize> From<[(K, V); N]> for RubyMap<K, V, RandomState>
 where
     K: Hash + Eq,
 {
@@ -1550,7 +1550,7 @@ where
     }
 }
 
-impl<K, V, S> Extend<(K, V)> for IndexMap<K, V, S>
+impl<K, V, S> Extend<(K, V)> for RubyMap<K, V, S>
 where
     K: Hash + Eq,
     S: BuildHasher,
@@ -1583,7 +1583,7 @@ where
     }
 }
 
-impl<'a, K, V, S> Extend<(&'a K, &'a V)> for IndexMap<K, V, S>
+impl<'a, K, V, S> Extend<(&'a K, &'a V)> for RubyMap<K, V, S>
 where
     K: Hash + Eq + Copy,
     V: Copy,
@@ -1597,7 +1597,7 @@ where
     }
 }
 
-impl<K, V, S> Default for IndexMap<K, V, S>
+impl<K, V, S> Default for RubyMap<K, V, S>
 where
     S: Default,
 {
@@ -1607,14 +1607,14 @@ where
     }
 }
 
-impl<K, V1, S1, V2, S2> PartialEq<IndexMap<K, V2, S2>> for IndexMap<K, V1, S1>
+impl<K, V1, S1, V2, S2> PartialEq<RubyMap<K, V2, S2>> for RubyMap<K, V1, S1>
 where
     K: Hash + Eq,
     V1: PartialEq<V2>,
     S1: BuildHasher,
     S2: BuildHasher,
 {
-    fn eq(&self, other: &IndexMap<K, V2, S2>) -> bool {
+    fn eq(&self, other: &RubyMap<K, V2, S2>) -> bool {
         if self.len() != other.len() {
             return false;
         }
@@ -1624,7 +1624,7 @@ where
     }
 }
 
-impl<K, V, S> Eq for IndexMap<K, V, S>
+impl<K, V, S> Eq for RubyMap<K, V, S>
 where
     K: Eq + Hash,
     V: Eq,

@@ -10,7 +10,7 @@
 //! `IndexMap` without such an opt-in trait.
 
 use super::{Entries, RefMut};
-use crate::{Equivalent, HashValue, IndexMap};
+use crate::{Equivalent, HashValue, RubyMap};
 use core::fmt;
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::marker::PhantomData;
@@ -172,7 +172,7 @@ pub trait RawEntryApiV1<K, V, S>: private::Sealed {
     fn raw_entry_mut_v1(&mut self) -> RawEntryBuilderMut<'_, K, V, S>;
 }
 
-impl<K, V, S> RawEntryApiV1<K, V, S> for IndexMap<K, V, S> {
+impl<K, V, S> RawEntryApiV1<K, V, S> for RubyMap<K, V, S> {
     fn raw_entry_v1(&self) -> RawEntryBuilder<'_, K, V, S> {
         RawEntryBuilder { map: self }
     }
@@ -187,7 +187,7 @@ impl<K, V, S> RawEntryApiV1<K, V, S> for IndexMap<K, V, S> {
 /// This `struct` is created by the [`IndexMap::raw_entry_v1`] method, provided by the
 /// [`RawEntryApiV1`] trait. See its documentation for more.
 pub struct RawEntryBuilder<'a, K, V, S> {
-    map: &'a IndexMap<K, V, S>,
+    map: &'a RubyMap<K, V, S>,
 }
 
 impl<K, V, S> fmt::Debug for RawEntryBuilder<'_, K, V, S> {
@@ -254,7 +254,7 @@ impl<'a, K, V, S> RawEntryBuilder<'a, K, V, S> {
 /// This `struct` is created by the [`IndexMap::raw_entry_mut_v1`] method, provided by the
 /// [`RawEntryApiV1`] trait. See its documentation for more.
 pub struct RawEntryBuilderMut<'a, K, V, S> {
-    map: &'a mut IndexMap<K, V, S>,
+    map: &'a mut RubyMap<K, V, S>,
 }
 
 impl<K, V, S> fmt::Debug for RawEntryBuilderMut<'_, K, V, S> {
@@ -665,5 +665,5 @@ impl<'a, K, V, S> RawVacantEntryMut<'a, K, V, S> {
 mod private {
     pub trait Sealed {}
 
-    impl<K, V, S> Sealed for super::IndexMap<K, V, S> {}
+    impl<K, V, S> Sealed for super::RubyMap<K, V, S> {}
 }

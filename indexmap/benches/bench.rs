@@ -12,7 +12,7 @@ type FnvBuilder = BuildHasherDefault<FnvHasher>;
 use test::black_box;
 use test::Bencher;
 
-use indexmap::IndexMap;
+use indexmap::RubyMap;
 
 use std::collections::HashMap;
 
@@ -33,7 +33,7 @@ fn new_hashmap(b: &mut Bencher) {
 
 #[bench]
 fn new_indexmap(b: &mut Bencher) {
-    b.iter(|| IndexMap::<String, String>::new());
+    b.iter(|| RubyMap::<String, String>::new());
 }
 
 #[bench]
@@ -43,7 +43,7 @@ fn with_capacity_10e5_hashmap(b: &mut Bencher) {
 
 #[bench]
 fn with_capacity_10e5_indexmap(b: &mut Bencher) {
-    b.iter(|| IndexMap::<String, String>::with_capacity(10_000));
+    b.iter(|| RubyMap::<String, String>::with_capacity(10_000));
 }
 
 #[bench]
@@ -62,7 +62,7 @@ fn insert_hashmap_10_000(b: &mut Bencher) {
 fn insert_indexmap_10_000(b: &mut Bencher) {
     let c = 10_000;
     b.iter(|| {
-        let mut map = IndexMap::with_capacity(c);
+        let mut map = RubyMap::with_capacity(c);
         for x in 0..c {
             map.insert(x, ());
         }
@@ -86,7 +86,7 @@ fn insert_hashmap_string_10_000(b: &mut Bencher) {
 fn insert_indexmap_string_10_000(b: &mut Bencher) {
     let c = 10_000;
     b.iter(|| {
-        let mut map = IndexMap::with_capacity(c);
+        let mut map = RubyMap::with_capacity(c);
         for x in 0..c {
             map.insert(x.to_string(), ());
         }
@@ -112,7 +112,7 @@ fn insert_indexmap_str_10_000(b: &mut Bencher) {
     let c = 10_000;
     let ss = Vec::from_iter((0..c).map(|x| x.to_string()));
     b.iter(|| {
-        let mut map = IndexMap::with_capacity(c);
+        let mut map = RubyMap::with_capacity(c);
         for key in &ss {
             map.insert(&key[..], ());
         }
@@ -138,7 +138,7 @@ fn insert_indexmap_int_bigvalue_10_000(b: &mut Bencher) {
     let c = 10_000;
     let value = [0u64; 10];
     b.iter(|| {
-        let mut map = IndexMap::with_capacity(c);
+        let mut map = RubyMap::with_capacity(c);
         for i in 0..c {
             map.insert(i, value);
         }
@@ -162,7 +162,7 @@ fn insert_hashmap_100_000(b: &mut Bencher) {
 fn insert_indexmap_100_000(b: &mut Bencher) {
     let c = 100_000;
     b.iter(|| {
-        let mut map = IndexMap::with_capacity(c);
+        let mut map = RubyMap::with_capacity(c);
         for x in 0..c {
             map.insert(x, ());
         }
@@ -186,7 +186,7 @@ fn insert_hashmap_150(b: &mut Bencher) {
 fn insert_indexmap_150(b: &mut Bencher) {
     let c = 150;
     b.iter(|| {
-        let mut map = IndexMap::with_capacity(c);
+        let mut map = RubyMap::with_capacity(c);
         for x in 0..c {
             map.insert(x, ());
         }
@@ -210,7 +210,7 @@ fn entry_hashmap_150(b: &mut Bencher) {
 fn entry_indexmap_150(b: &mut Bencher) {
     let c = 150;
     b.iter(|| {
-        let mut map = IndexMap::with_capacity(c);
+        let mut map = RubyMap::with_capacity(c);
         for x in 0..c {
             map.entry(x).or_insert(());
         }
@@ -233,7 +233,7 @@ fn iter_sum_hashmap_10_000(b: &mut Bencher) {
 #[bench]
 fn iter_sum_indexmap_10_000(b: &mut Bencher) {
     let c = 10_000;
-    let mut map = IndexMap::with_capacity(c);
+    let mut map = RubyMap::with_capacity(c);
     let len = c - c / 10;
     for x in 0..len {
         map.insert(x, ());
@@ -261,7 +261,7 @@ fn iter_black_box_hashmap_10_000(b: &mut Bencher) {
 #[bench]
 fn iter_black_box_indexmap_10_000(b: &mut Bencher) {
     let c = 10_000;
-    let mut map = IndexMap::with_capacity(c);
+    let mut map = RubyMap::with_capacity(c);
     let len = c - c / 10;
     for x in 0..len {
         map.insert(x, ());
@@ -321,7 +321,7 @@ fn lookup_hashmap_10_000_noexist(b: &mut Bencher) {
 #[bench]
 fn lookup_indexmap_10_000_exist(b: &mut Bencher) {
     let c = 10_000;
-    let mut map = IndexMap::with_capacity(c);
+    let mut map = RubyMap::with_capacity(c);
     let keys = shuffled_keys(0..c);
     for &key in &keys {
         map.insert(key, 1);
@@ -338,7 +338,7 @@ fn lookup_indexmap_10_000_exist(b: &mut Bencher) {
 #[bench]
 fn lookup_indexmap_10_000_noexist(b: &mut Bencher) {
     let c = 10_000;
-    let mut map = IndexMap::with_capacity(c);
+    let mut map = RubyMap::with_capacity(c);
     let keys = shuffled_keys(0..c);
     for &key in &keys {
         map.insert(key, 1);
@@ -375,9 +375,9 @@ lazy_static! {
 }
 
 lazy_static! {
-    static ref IMAP_100K: IndexMap<u32, u32> = {
+    static ref IMAP_100K: RubyMap<u32, u32> = {
         let c = LOOKUP_MAP_SIZE;
-        let mut map = IndexMap::with_capacity(c as usize);
+        let mut map = RubyMap::with_capacity(c as usize);
         let keys = &*KEYS;
         for &key in keys {
             map.insert(key, key);
@@ -387,8 +387,8 @@ lazy_static! {
 }
 
 lazy_static! {
-    static ref IMAP_SORT_U32: IndexMap<u32, u32> = {
-        let mut map = IndexMap::with_capacity(SORT_MAP_SIZE);
+    static ref IMAP_SORT_U32: RubyMap<u32, u32> = {
+        let mut map = RubyMap::with_capacity(SORT_MAP_SIZE);
         for &key in &KEYS[..SORT_MAP_SIZE] {
             map.insert(key, key);
         }
@@ -396,8 +396,8 @@ lazy_static! {
     };
 }
 lazy_static! {
-    static ref IMAP_SORT_S: IndexMap<String, String> = {
-        let mut map = IndexMap::with_capacity(SORT_MAP_SIZE);
+    static ref IMAP_SORT_S: RubyMap<String, String> = {
+        let mut map = RubyMap::with_capacity(SORT_MAP_SIZE);
         for &key in &KEYS[..SORT_MAP_SIZE] {
             map.insert(format!("{:^16x}", &key), String::new());
         }
@@ -494,7 +494,7 @@ fn grow_fnv_hashmap_100_000(b: &mut Bencher) {
 #[bench]
 fn grow_fnv_indexmap_100_000(b: &mut Bencher) {
     b.iter(|| {
-        let mut map: IndexMap<_, _, FnvBuilder> = IndexMap::default();
+        let mut map: RubyMap<_, _, FnvBuilder> = RubyMap::default();
         for x in 0..GROW_SIZE {
             map.insert(x as GrowKey, x as GrowKey);
         }
@@ -532,8 +532,8 @@ fn hashmap_merge_shuffle(b: &mut Bencher) {
 
 #[bench]
 fn indexmap_merge_simple(b: &mut Bencher) {
-    let first_map: IndexMap<u64, _> = (0..MERGE).map(|i| (i, ())).collect();
-    let second_map: IndexMap<u64, _> = (MERGE..MERGE * 2).map(|i| (i, ())).collect();
+    let first_map: RubyMap<u64, _> = (0..MERGE).map(|i| (i, ())).collect();
+    let second_map: RubyMap<u64, _> = (MERGE..MERGE * 2).map(|i| (i, ())).collect();
     b.iter(|| {
         let mut merged = first_map.clone();
         merged.extend(second_map.iter().map(|(&k, &v)| (k, v)));
@@ -543,8 +543,8 @@ fn indexmap_merge_simple(b: &mut Bencher) {
 
 #[bench]
 fn indexmap_merge_shuffle(b: &mut Bencher) {
-    let first_map: IndexMap<u64, _> = (0..MERGE).map(|i| (i, ())).collect();
-    let second_map: IndexMap<u64, _> = (MERGE..MERGE * 2).map(|i| (i, ())).collect();
+    let first_map: RubyMap<u64, _> = (0..MERGE).map(|i| (i, ())).collect();
+    let second_map: RubyMap<u64, _> = (MERGE..MERGE * 2).map(|i| (i, ())).collect();
     let mut v = Vec::new();
     let mut rng = small_rng();
     b.iter(|| {
@@ -595,7 +595,7 @@ fn shift_remove_indexmap_100_000_few(b: &mut Bencher) {
 #[bench]
 fn shift_remove_indexmap_2_000_full(b: &mut Bencher) {
     let mut keys = KEYS[..2_000].to_vec();
-    let mut map = IndexMap::with_capacity(keys.len());
+    let mut map = RubyMap::with_capacity(keys.len());
     for &key in &keys {
         map.insert(key, key);
     }
@@ -693,7 +693,7 @@ fn many_retain_hashmap_100_000(b: &mut Bencher) {
 }
 
 // simple sort impl for comparison
-pub fn simple_sort<K: Ord + Hash, V>(m: &mut IndexMap<K, V>) {
+pub fn simple_sort<K: Ord + Hash, V>(m: &mut RubyMap<K, V>) {
     let mut ordered: Vec<_> = m.drain(..).collect();
     ordered.sort_by(|left, right| left.0.cmp(&right.0));
     m.extend(ordered);
