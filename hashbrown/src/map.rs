@@ -1,6 +1,4 @@
-use crate::raw::{
-    Allocator, Bucket, Global, RawDrain, RawExtractIf, RawIntoIter, RawIter, RawTable,
-};
+use crate::raw::{Bucket, RawDrain, RawExtractIf, RawIntoIter, RawIter, RawTable};
 use crate::{DefaultHashBuilder, Equivalent, TryReserveError};
 use core::borrow::Borrow;
 use core::fmt::{self, Debug};
@@ -179,12 +177,12 @@ use core::ops::Index;
 ///     .into_iter().collect();
 /// // use the values stored in map
 /// ```
-pub struct HashMap<K, V, S = DefaultHashBuilder, A: Allocator = Global> {
+pub struct HashMap<K, V, S = DefaultHashBuilder> {
     pub(crate) hash_builder: S,
-    pub(crate) table: RawTable<(K, V), A>,
+    pub(crate) table: RawTable<(K, V)>,
 }
 
-impl<K: Clone, V: Clone, S: Clone, A: Allocator + Clone> Clone for HashMap<K, V, S, A> {
+impl<K: Clone, V: Clone, S: Clone> Clone for HashMap<K, V, S> {
     fn clone(&self) -> Self {
         HashMap {
             hash_builder: self.hash_builder.clone(),
@@ -318,145 +316,7 @@ impl<K, V> HashMap<K, V, DefaultHashBuilder> {
     }
 }
 
-#[cfg(feature = "default-hasher")]
-impl<K, V, A: Allocator> HashMap<K, V, DefaultHashBuilder, A> {
-    /// Creates an empty `HashMap` using the given allocator.
-    ///
-    /// The hash map is initially created with a capacity of 0, so it will not allocate until it
-    /// is first inserted into.
-    ///
-    /// # HashDoS resistance
-    ///
-    /// The `hash_builder` normally use a fixed key by default and that does
-    /// not allow the `HashMap` to be protected against attacks such as [`HashDoS`].
-    /// Users who require HashDoS resistance should explicitly use
-    /// [`std::collections::hash_map::RandomState`]
-    /// as the hasher when creating a [`HashMap`], for example with
-    /// [`with_hasher_in`](HashMap::with_hasher_in) method.
-    ///
-    /// [`HashDoS`]: https://en.wikipedia.org/wiki/Collision_attack
-    /// [`std::collections::hash_map::RandomState`]: https://doc.rust-lang.org/std/collections/hash_map/struct.RandomState.html
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hashbrown::HashMap;
-    /// use bumpalo::Bump;
-    ///
-    /// let bump = Bump::new();
-    /// let mut map = HashMap::new_in(&bump);
-    ///
-    /// // The created HashMap holds none elements
-    /// assert_eq!(map.len(), 0);
-    ///
-    /// // The created HashMap also doesn't allocate memory
-    /// assert_eq!(map.capacity(), 0);
-    ///
-    /// // Now we insert element inside created HashMap
-    /// map.insert("One", 1);
-    /// // We can see that the HashMap holds 1 element
-    /// assert_eq!(map.len(), 1);
-    /// // And it also allocates some capacity
-    /// assert!(map.capacity() > 1);
-    /// ```
-    #[cfg_attr(feature = "inline-more", inline)]
-    pub fn new_in(alloc: A) -> Self {
-        Self::with_hasher_in(DefaultHashBuilder::default(), alloc)
-    }
-
-    /// Creates an empty `HashMap` with the specified capacity using the given allocator.
-    ///
-    /// The hash map will be able to hold at least `capacity` elements without
-    /// reallocating. If `capacity` is 0, the hash map will not allocate.
-    ///
-    /// # HashDoS resistance
-    ///
-    /// The `hash_builder` normally use a fixed key by default and that does
-    /// not allow the `HashMap` to be protected against attacks such as [`HashDoS`].
-    /// Users who require HashDoS resistance should explicitly use
-    /// [`std::collections::hash_map::RandomState`]
-    /// as the hasher when creating a [`HashMap`], for example with
-    /// [`with_capacity_and_hasher_in`](HashMap::with_capacity_and_hasher_in) method.
-    ///
-    /// [`HashDoS`]: https://en.wikipedia.org/wiki/Collision_attack
-    /// [`std::collections::hash_map::RandomState`]: https://doc.rust-lang.org/std/collections/hash_map/struct.RandomState.html
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hashbrown::HashMap;
-    /// use bumpalo::Bump;
-    ///
-    /// let bump = Bump::new();
-    /// let mut map = HashMap::with_capacity_in(5, &bump);
-    ///
-    /// // The created HashMap holds none elements
-    /// assert_eq!(map.len(), 0);
-    /// // But it can hold at least 5 elements without reallocating
-    /// let empty_map_capacity = map.capacity();
-    /// assert!(empty_map_capacity >= 5);
-    ///
-    /// // Now we insert some 5 elements inside created HashMap
-    /// map.insert("One",   1);
-    /// map.insert("Two",   2);
-    /// map.insert("Three", 3);
-    /// map.insert("Four",  4);
-    /// map.insert("Five",  5);
-    ///
-    /// // We can see that the HashMap holds 5 elements
-    /// assert_eq!(map.len(), 5);
-    /// // But its capacity isn't changed
-    /// assert_eq!(map.capacity(), empty_map_capacity)
-    /// ```
-    #[cfg_attr(feature = "inline-more", inline)]
-    pub fn with_capacity_in(capacity: usize, alloc: A) -> Self {
-        Self::with_capacity_and_hasher_in(capacity, DefaultHashBuilder::default(), alloc)
-    }
-}
-
 impl<K, V, S> HashMap<K, V, S> {
-    /// Creates an empty `HashMap` which will use the given hash builder to hash
-    /// keys.
-    ///
-    /// The hash map is initially created with a capacity of 0, so it will not
-    /// allocate until it is first inserted into.
-    ///
-    /// # HashDoS resistance
-    ///
-    /// The `hash_builder` normally use a fixed key by default and that does
-    /// not allow the `HashMap` to be protected against attacks such as [`HashDoS`].
-    /// Users who require HashDoS resistance should explicitly use
-    /// [`std::collections::hash_map::RandomState`]
-    /// as the hasher when creating a [`HashMap`].
-    ///
-    /// The `hash_builder` passed should implement the [`BuildHasher`] trait for
-    /// the `HashMap` to be useful, see its documentation for details.
-    ///
-    /// [`HashDoS`]: https://en.wikipedia.org/wiki/Collision_attack
-    /// [`std::collections::hash_map::RandomState`]: https://doc.rust-lang.org/std/collections/hash_map/struct.RandomState.html
-    /// [`BuildHasher`]: https://doc.rust-lang.org/std/hash/trait.BuildHasher.html
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hashbrown::HashMap;
-    /// use hashbrown::DefaultHashBuilder;
-    ///
-    /// let s = DefaultHashBuilder::default();
-    /// let mut map = HashMap::with_hasher(s);
-    /// assert_eq!(map.len(), 0);
-    /// assert_eq!(map.capacity(), 0);
-    ///
-    /// map.insert(1, 2);
-    /// ```
-    #[cfg_attr(feature = "inline-more", inline)]
-    pub const fn with_hasher(hash_builder: S) -> Self {
-        Self {
-            hash_builder,
-            table: RawTable::new(),
-        }
-    }
-
     /// Creates an empty `HashMap` with the specified capacity, using `hash_builder`
     /// to hash the keys.
     ///
@@ -500,13 +360,7 @@ impl<K, V, S> HashMap<K, V, S> {
     }
 }
 
-impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
-    /// Returns a reference to the underlying allocator.
-    #[inline]
-    pub fn allocator(&self) -> &A {
-        self.table.allocator()
-    }
-
+impl<K, V, S> HashMap<K, V, S> {
     /// Creates an empty `HashMap` which will use the given hash builder to hash
     /// keys. It will be allocated with the given allocator.
     ///
@@ -535,45 +389,10 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// map.insert(1, 2);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub const fn with_hasher_in(hash_builder: S, alloc: A) -> Self {
+    pub const fn with_hasher(hash_builder: S) -> Self {
         Self {
             hash_builder,
-            table: RawTable::new_in(alloc),
-        }
-    }
-
-    /// Creates an empty `HashMap` with the specified capacity, using `hash_builder`
-    /// to hash the keys. It will be allocated with the given allocator.
-    ///
-    /// The hash map will be able to hold at least `capacity` elements without
-    /// reallocating. If `capacity` is 0, the hash map will not allocate.
-    ///
-    /// # HashDoS resistance
-    ///
-    /// The `hash_builder` normally use a fixed key by default and that does
-    /// not allow the `HashMap` to be protected against attacks such as [`HashDoS`].
-    /// Users who require HashDoS resistance should explicitly use
-    /// [`std::collections::hash_map::RandomState`]
-    /// as the hasher when creating a [`HashMap`].
-    ///
-    /// [`HashDoS`]: https://en.wikipedia.org/wiki/Collision_attack
-    /// [`std::collections::hash_map::RandomState`]: https://doc.rust-lang.org/std/collections/hash_map/struct.RandomState.html
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hashbrown::HashMap;
-    /// use hashbrown::DefaultHashBuilder;
-    ///
-    /// let s = DefaultHashBuilder::default();
-    /// let mut map = HashMap::with_capacity_and_hasher(10, s);
-    /// map.insert(1, 2);
-    /// ```
-    #[cfg_attr(feature = "inline-more", inline)]
-    pub fn with_capacity_and_hasher_in(capacity: usize, hash_builder: S, alloc: A) -> Self {
-        Self {
-            hash_builder,
-            table: RawTable::with_capacity_in(capacity, alloc),
+            table: RawTable::new(),
         }
     }
 
@@ -880,7 +699,7 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// assert!(a.is_empty());
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn drain(&mut self) -> Drain<'_, K, V, A> {
+    pub fn drain(&mut self) -> Drain<'_, K, V> {
         Drain {
             inner: self.table.drain(),
         }
@@ -968,7 +787,7 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// assert_eq!(map.len(), 8);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn extract_if<F>(&mut self, f: F) -> ExtractIf<'_, K, V, F, A>
+    pub fn extract_if<F>(&mut self, f: F) -> ExtractIf<'_, K, V, F>
     where
         F: FnMut(&K, &mut V) -> bool,
     {
@@ -1027,7 +846,7 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// assert_eq!(vec, ["a", "b", "c"]);
     /// ```
     #[inline]
-    pub fn into_keys(self) -> IntoKeys<K, V, A> {
+    pub fn into_keys(self) -> IntoKeys<K, V> {
         IntoKeys {
             inner: self.into_iter(),
         }
@@ -1055,18 +874,17 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// assert_eq!(vec, [1, 2, 3]);
     /// ```
     #[inline]
-    pub fn into_values(self) -> IntoValues<K, V, A> {
+    pub fn into_values(self) -> IntoValues<K, V> {
         IntoValues {
             inner: self.into_iter(),
         }
     }
 }
 
-impl<K, V, S, A> HashMap<K, V, S, A>
+impl<K, V, S> HashMap<K, V, S>
 where
     K: Eq + Hash,
     S: BuildHasher,
-    A: Allocator,
 {
     /// Reserves capacity for at least `additional` more elements to be inserted
     /// in the `HashMap`. The collection may reserve more space to avoid
@@ -1221,7 +1039,7 @@ where
     /// assert_eq!(letters.get(&'y'), None);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn entry(&mut self, key: K) -> Entry<'_, K, V, S, A> {
+    pub fn entry(&mut self, key: K) -> Entry<'_, K, V, S> {
         let hash = make_hash::<K, S>(&self.hash_builder, &key);
         if let Some(elem) = self.table.find(hash, equivalent_key(&key)) {
             Entry::Occupied(OccupiedEntry {
@@ -1256,7 +1074,7 @@ where
     /// assert_eq!(words["horseyland"], 1);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn entry_ref<'a, 'b, Q>(&'a mut self, key: &'b Q) -> EntryRef<'a, 'b, K, Q, V, S, A>
+    pub fn entry_ref<'a, 'b, Q>(&'a mut self, key: &'b Q) -> EntryRef<'a, 'b, K, Q, V, S>
     where
         Q: Hash + Equivalent<K> + ?Sized,
     {
@@ -1907,11 +1725,7 @@ where
     /// }
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn try_insert(
-        &mut self,
-        key: K,
-        value: V,
-    ) -> Result<&mut V, OccupiedError<'_, K, V, S, A>> {
+    pub fn try_insert(&mut self, key: K, value: V) -> Result<&mut V, OccupiedError<'_, K, V, S>> {
         match self.entry(key) {
             Entry::Occupied(entry) => Err(OccupiedError { entry, value }),
             Entry::Vacant(entry) => Ok(entry.insert(value)),
@@ -2004,12 +1818,11 @@ where
     }
 }
 
-impl<K, V, S, A> PartialEq for HashMap<K, V, S, A>
+impl<K, V, S> PartialEq for HashMap<K, V, S>
 where
     K: Eq + Hash,
     V: PartialEq,
     S: BuildHasher,
-    A: Allocator,
 {
     fn eq(&self, other: &Self) -> bool {
         if self.len() != other.len() {
@@ -2021,32 +1834,29 @@ where
     }
 }
 
-impl<K, V, S, A> Eq for HashMap<K, V, S, A>
+impl<K, V, S> Eq for HashMap<K, V, S>
 where
     K: Eq + Hash,
     V: Eq,
     S: BuildHasher,
-    A: Allocator,
 {
 }
 
-impl<K, V, S, A> Debug for HashMap<K, V, S, A>
+impl<K, V, S> Debug for HashMap<K, V, S>
 where
     K: Debug,
     V: Debug,
-    A: Allocator,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_map().entries(self.iter()).finish()
     }
 }
 
-impl<K, V, S, A> Default for HashMap<K, V, S, A>
+impl<K, V, S> Default for HashMap<K, V, S>
 where
     S: Default,
-    A: Default + Allocator,
 {
-    /// Creates an empty `HashMap<K, V, S, A>`, with the `Default` value for the hasher and allocator.
+    /// Creates an empty `HashMap<K, V, S>`, with the `Default` value for the hasher and allocator.
     ///
     /// # Examples
     ///
@@ -2063,16 +1873,15 @@ where
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     fn default() -> Self {
-        Self::with_hasher_in(Default::default(), Default::default())
+        Self::with_hasher(Default::default())
     }
 }
 
-impl<K, Q, V, S, A> Index<&Q> for HashMap<K, V, S, A>
+impl<K, Q, V, S> Index<&Q> for HashMap<K, V, S>
 where
     K: Eq + Hash,
     Q: Hash + Equivalent<K> + ?Sized,
     S: BuildHasher,
-    A: Allocator,
 {
     type Output = V;
 
@@ -2100,10 +1909,9 @@ where
 
 // The default hasher is used to match the std implementation signature
 #[cfg(feature = "default-hasher")]
-impl<K, V, A, const N: usize> From<[(K, V); N]> for HashMap<K, V, DefaultHashBuilder, A>
+impl<K, V, const N: usize> From<[(K, V); N]> for HashMap<K, V, DefaultHashBuilder>
 where
     K: Eq + Hash,
-    A: Default + Allocator,
 {
     /// # Examples
     ///
@@ -2248,11 +2056,11 @@ impl<K, V> IterMut<'_, K, V> {
 /// assert_eq!(iter.next(), None);
 /// assert_eq!(iter.next(), None);
 /// ```
-pub struct IntoIter<K, V, A: Allocator = Global> {
-    inner: RawIntoIter<(K, V), A>,
+pub struct IntoIter<K, V> {
+    inner: RawIntoIter<(K, V)>,
 }
 
-impl<K, V, A: Allocator> IntoIter<K, V, A> {
+impl<K, V> IntoIter<K, V> {
     /// Returns a iterator of references over the remaining items.
     #[cfg_attr(feature = "inline-more", inline)]
     pub(super) fn iter(&self) -> Iter<'_, K, V> {
@@ -2292,11 +2100,11 @@ impl<K, V, A: Allocator> IntoIter<K, V, A> {
 /// assert_eq!(keys.next(), None);
 /// assert_eq!(keys.next(), None);
 /// ```
-pub struct IntoKeys<K, V, A: Allocator = Global> {
-    inner: IntoIter<K, V, A>,
+pub struct IntoKeys<K, V> {
+    inner: IntoIter<K, V>,
 }
 
-impl<K, V, A: Allocator> Default for IntoKeys<K, V, A> {
+impl<K, V> Default for IntoKeys<K, V> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn default() -> Self {
         Self {
@@ -2304,7 +2112,7 @@ impl<K, V, A: Allocator> Default for IntoKeys<K, V, A> {
         }
     }
 }
-impl<K, V, A: Allocator> Iterator for IntoKeys<K, V, A> {
+impl<K, V> Iterator for IntoKeys<K, V> {
     type Item = K;
 
     #[inline]
@@ -2325,16 +2133,16 @@ impl<K, V, A: Allocator> Iterator for IntoKeys<K, V, A> {
     }
 }
 
-impl<K, V, A: Allocator> ExactSizeIterator for IntoKeys<K, V, A> {
+impl<K, V> ExactSizeIterator for IntoKeys<K, V> {
     #[inline]
     fn len(&self) -> usize {
         self.inner.len()
     }
 }
 
-impl<K, V, A: Allocator> FusedIterator for IntoKeys<K, V, A> {}
+impl<K, V> FusedIterator for IntoKeys<K, V> {}
 
-impl<K: Debug, V: Debug, A: Allocator> fmt::Debug for IntoKeys<K, V, A> {
+impl<K: Debug, V: Debug> fmt::Debug for IntoKeys<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list()
             .entries(self.inner.iter().map(|(k, _)| k))
@@ -2370,11 +2178,11 @@ impl<K: Debug, V: Debug, A: Allocator> fmt::Debug for IntoKeys<K, V, A> {
 /// assert_eq!(values.next(), None);
 /// assert_eq!(values.next(), None);
 /// ```
-pub struct IntoValues<K, V, A: Allocator = Global> {
-    inner: IntoIter<K, V, A>,
+pub struct IntoValues<K, V> {
+    inner: IntoIter<K, V>,
 }
 
-impl<K, V, A: Allocator> Default for IntoValues<K, V, A> {
+impl<K, V> Default for IntoValues<K, V> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn default() -> Self {
         Self {
@@ -2382,7 +2190,7 @@ impl<K, V, A: Allocator> Default for IntoValues<K, V, A> {
         }
     }
 }
-impl<K, V, A: Allocator> Iterator for IntoValues<K, V, A> {
+impl<K, V> Iterator for IntoValues<K, V> {
     type Item = V;
 
     #[inline]
@@ -2403,16 +2211,16 @@ impl<K, V, A: Allocator> Iterator for IntoValues<K, V, A> {
     }
 }
 
-impl<K, V, A: Allocator> ExactSizeIterator for IntoValues<K, V, A> {
+impl<K, V> ExactSizeIterator for IntoValues<K, V> {
     #[inline]
     fn len(&self) -> usize {
         self.inner.len()
     }
 }
 
-impl<K, V, A: Allocator> FusedIterator for IntoValues<K, V, A> {}
+impl<K, V> FusedIterator for IntoValues<K, V> {}
 
-impl<K, V: Debug, A: Allocator> fmt::Debug for IntoValues<K, V, A> {
+impl<K, V: Debug> fmt::Debug for IntoValues<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list()
             .entries(self.inner.iter().map(|(_, v)| v))
@@ -2544,11 +2352,11 @@ impl<K, V: Debug> fmt::Debug for Values<'_, K, V> {
 /// assert_eq!(drain_iter.next(), None);
 /// assert_eq!(drain_iter.next(), None);
 /// ```
-pub struct Drain<'a, K, V, A: Allocator = Global> {
-    inner: RawDrain<'a, (K, V), A>,
+pub struct Drain<'a, K, V> {
+    inner: RawDrain<'a, (K, V)>,
 }
 
-impl<K, V, A: Allocator> Drain<'_, K, V, A> {
+impl<K, V> Drain<'_, K, V> {
     /// Returns a iterator of references over the remaining items.
     #[cfg_attr(feature = "inline-more", inline)]
     pub(super) fn iter(&self) -> Iter<'_, K, V> {
@@ -2591,15 +2399,14 @@ impl<K, V, A: Allocator> Drain<'_, K, V, A> {
 /// assert_eq!(map.len(), 1);
 /// ```
 #[must_use = "Iterators are lazy unless consumed"]
-pub struct ExtractIf<'a, K, V, F, A: Allocator = Global> {
+pub struct ExtractIf<'a, K, V, F> {
     f: F,
-    inner: RawExtractIf<'a, (K, V), A>,
+    inner: RawExtractIf<'a, (K, V)>,
 }
 
-impl<K, V, F, A> Iterator for ExtractIf<'_, K, V, F, A>
+impl<K, V, F> Iterator for ExtractIf<'_, K, V, F>
 where
     F: FnMut(&K, &mut V) -> bool,
-    A: Allocator,
 {
     type Item = (K, V);
 
@@ -2690,10 +2497,7 @@ pub struct ValuesMut<'a, K, V> {
 /// vec.sort_unstable();
 /// assert_eq!(vec, [("a", 1), ("b", 2), ("c", 3), ("d", 4), ("e", 5), ("f", 6)]);
 /// ```
-pub enum Entry<'a, K, V, S, A = Global>
-where
-    A: Allocator,
-{
+pub enum Entry<'a, K, V, S> {
     /// An occupied entry.
     ///
     /// # Examples
@@ -2707,7 +2511,7 @@ where
     ///     Entry::Occupied(_) => { }
     /// }
     /// ```
-    Occupied(OccupiedEntry<'a, K, V, S, A>),
+    Occupied(OccupiedEntry<'a, K, V, S>),
 
     /// A vacant entry.
     ///
@@ -2722,10 +2526,10 @@ where
     ///     Entry::Vacant(_) => { }
     /// }
     /// ```
-    Vacant(VacantEntry<'a, K, V, S, A>),
+    Vacant(VacantEntry<'a, K, V, S>),
 }
 
-impl<K: Debug, V: Debug, S, A: Allocator> Debug for Entry<'_, K, V, S, A> {
+impl<K: Debug, V: Debug, S> Debug for Entry<'_, K, V, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Entry::Vacant(ref v) => f.debug_tuple("Entry").field(v).finish(),
@@ -2772,30 +2576,28 @@ impl<K: Debug, V: Debug, S, A: Allocator> Debug for Entry<'_, K, V, S, A> {
 /// assert_eq!(map.get(&"c"), None);
 /// assert_eq!(map.len(), 2);
 /// ```
-pub struct OccupiedEntry<'a, K, V, S = DefaultHashBuilder, A: Allocator = Global> {
+pub struct OccupiedEntry<'a, K, V, S = DefaultHashBuilder> {
     hash: u64,
     elem: Bucket<(K, V)>,
-    table: &'a mut HashMap<K, V, S, A>,
+    table: &'a mut HashMap<K, V, S>,
 }
 
-unsafe impl<K, V, S, A> Send for OccupiedEntry<'_, K, V, S, A>
+unsafe impl<K, V, S> Send for OccupiedEntry<'_, K, V, S>
 where
     K: Send,
     V: Send,
     S: Send,
-    A: Send + Allocator,
 {
 }
-unsafe impl<K, V, S, A> Sync for OccupiedEntry<'_, K, V, S, A>
+unsafe impl<K, V, S> Sync for OccupiedEntry<'_, K, V, S>
 where
     K: Sync,
     V: Sync,
     S: Sync,
-    A: Sync + Allocator,
 {
 }
 
-impl<K: Debug, V: Debug, S, A: Allocator> Debug for OccupiedEntry<'_, K, V, S, A> {
+impl<K: Debug, V: Debug, S> Debug for OccupiedEntry<'_, K, V, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OccupiedEntry")
             .field("key", self.key())
@@ -2834,13 +2636,13 @@ impl<K: Debug, V: Debug, S, A: Allocator> Debug for OccupiedEntry<'_, K, V, S, A
 /// }
 /// assert!(map[&"b"] == 20 && map.len() == 2);
 /// ```
-pub struct VacantEntry<'a, K, V, S = DefaultHashBuilder, A: Allocator = Global> {
+pub struct VacantEntry<'a, K, V, S = DefaultHashBuilder> {
     hash: u64,
     key: K,
-    table: &'a mut HashMap<K, V, S, A>,
+    table: &'a mut HashMap<K, V, S>,
 }
 
-impl<K: Debug, V, S, A: Allocator> Debug for VacantEntry<'_, K, V, S, A> {
+impl<K: Debug, V, S> Debug for VacantEntry<'_, K, V, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("VacantEntry").field(self.key()).finish()
     }
@@ -2898,10 +2700,7 @@ impl<K: Debug, V, S, A: Allocator> Debug for VacantEntry<'_, K, V, S, A> {
 /// }
 /// assert_eq!(map.len(), 6);
 /// ```
-pub enum EntryRef<'a, 'b, K, Q: ?Sized, V, S, A = Global>
-where
-    A: Allocator,
-{
+pub enum EntryRef<'a, 'b, K, Q: ?Sized, V, S> {
     /// An occupied entry.
     ///
     /// # Examples
@@ -2915,7 +2714,7 @@ where
     ///     EntryRef::Occupied(_) => { }
     /// }
     /// ```
-    Occupied(OccupiedEntry<'a, K, V, S, A>),
+    Occupied(OccupiedEntry<'a, K, V, S>),
 
     /// A vacant entry.
     ///
@@ -2930,15 +2729,14 @@ where
     ///     EntryRef::Vacant(_) => { }
     /// }
     /// ```
-    Vacant(VacantEntryRef<'a, 'b, K, Q, V, S, A>),
+    Vacant(VacantEntryRef<'a, 'b, K, Q, V, S>),
 }
 
-impl<K, Q, V, S, A> Debug for EntryRef<'_, '_, K, Q, V, S, A>
+impl<K, Q, V, S> Debug for EntryRef<'_, '_, K, Q, V, S>
 where
     K: Debug + Borrow<Q>,
     Q: Debug + ?Sized,
     V: Debug,
-    A: Allocator,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
@@ -2978,17 +2776,16 @@ where
 /// }
 /// assert!(map["b"] == 20 && map.len() == 2);
 /// ```
-pub struct VacantEntryRef<'a, 'b, K, Q: ?Sized, V, S, A: Allocator = Global> {
+pub struct VacantEntryRef<'a, 'b, K, Q: ?Sized, V, S> {
     hash: u64,
     key: &'b Q,
-    table: &'a mut HashMap<K, V, S, A>,
+    table: &'a mut HashMap<K, V, S>,
 }
 
-impl<K, Q, V, S, A> Debug for VacantEntryRef<'_, '_, K, Q, V, S, A>
+impl<K, Q, V, S> Debug for VacantEntryRef<'_, '_, K, Q, V, S>
 where
     K: Borrow<Q>,
     Q: Debug + ?Sized,
-    A: Allocator,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("VacantEntryRef").field(&self.key()).finish()
@@ -3019,14 +2816,14 @@ where
 /// }
 /// assert_eq!(map[&"a"], 100);
 /// ```
-pub struct OccupiedError<'a, K, V, S, A: Allocator = Global> {
+pub struct OccupiedError<'a, K, V, S> {
     /// The entry in the map that was already occupied.
-    pub entry: OccupiedEntry<'a, K, V, S, A>,
+    pub entry: OccupiedEntry<'a, K, V, S>,
     /// The value which was not inserted, because the entry was already occupied.
     pub value: V,
 }
 
-impl<K: Debug, V: Debug, S, A: Allocator> Debug for OccupiedError<'_, K, V, S, A> {
+impl<K: Debug, V: Debug, S> Debug for OccupiedError<'_, K, V, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OccupiedError")
             .field("key", self.entry.key())
@@ -3036,7 +2833,7 @@ impl<K: Debug, V: Debug, S, A: Allocator> Debug for OccupiedError<'_, K, V, S, A
     }
 }
 
-impl<K: Debug, V: Debug, S, A: Allocator> fmt::Display for OccupiedError<'_, K, V, S, A> {
+impl<K: Debug, V: Debug, S> fmt::Display for OccupiedError<'_, K, V, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -3048,7 +2845,7 @@ impl<K: Debug, V: Debug, S, A: Allocator> fmt::Display for OccupiedError<'_, K, 
     }
 }
 
-impl<'a, K, V, S, A: Allocator> IntoIterator for &'a HashMap<K, V, S, A> {
+impl<'a, K, V, S> IntoIterator for &'a HashMap<K, V, S> {
     type Item = (&'a K, &'a V);
     type IntoIter = Iter<'a, K, V>;
 
@@ -3080,7 +2877,7 @@ impl<'a, K, V, S, A: Allocator> IntoIterator for &'a HashMap<K, V, S, A> {
     }
 }
 
-impl<'a, K, V, S, A: Allocator> IntoIterator for &'a mut HashMap<K, V, S, A> {
+impl<'a, K, V, S> IntoIterator for &'a mut HashMap<K, V, S> {
     type Item = (&'a K, &'a mut V);
     type IntoIter = IterMut<'a, K, V>;
 
@@ -3117,9 +2914,9 @@ impl<'a, K, V, S, A: Allocator> IntoIterator for &'a mut HashMap<K, V, S, A> {
     }
 }
 
-impl<K, V, S, A: Allocator> IntoIterator for HashMap<K, V, S, A> {
+impl<K, V, S> IntoIterator for HashMap<K, V, S> {
     type Item = (K, V);
-    type IntoIter = IntoIter<K, V, A>;
+    type IntoIter = IntoIter<K, V>;
 
     /// Creates a consuming iterator, that is, one that moves each key-value
     /// pair out of the map in arbitrary order. The map cannot be used after
@@ -3140,7 +2937,7 @@ impl<K, V, S, A: Allocator> IntoIterator for HashMap<K, V, S, A> {
     /// assert_eq!(vec, [("a", 1), ("b", 2), ("c", 3)]);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    fn into_iter(self) -> IntoIter<K, V, A> {
+    fn into_iter(self) -> IntoIter<K, V> {
         IntoIter {
             inner: self.table.into_iter(),
         }
@@ -3252,7 +3049,7 @@ where
     }
 }
 
-impl<K, V, A: Allocator> Default for IntoIter<K, V, A> {
+impl<K, V> Default for IntoIter<K, V> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn default() -> Self {
         Self {
@@ -3260,7 +3057,7 @@ impl<K, V, A: Allocator> Default for IntoIter<K, V, A> {
         }
     }
 }
-impl<K, V, A: Allocator> Iterator for IntoIter<K, V, A> {
+impl<K, V> Iterator for IntoIter<K, V> {
     type Item = (K, V);
 
     #[cfg_attr(feature = "inline-more", inline)]
@@ -3280,15 +3077,15 @@ impl<K, V, A: Allocator> Iterator for IntoIter<K, V, A> {
         self.inner.fold(init, f)
     }
 }
-impl<K, V, A: Allocator> ExactSizeIterator for IntoIter<K, V, A> {
+impl<K, V> ExactSizeIterator for IntoIter<K, V> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn len(&self) -> usize {
         self.inner.len()
     }
 }
-impl<K, V, A: Allocator> FusedIterator for IntoIter<K, V, A> {}
+impl<K, V> FusedIterator for IntoIter<K, V> {}
 
-impl<K: Debug, V: Debug, A: Allocator> fmt::Debug for IntoIter<K, V, A> {
+impl<K: Debug, V: Debug> fmt::Debug for IntoIter<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.iter()).finish()
     }
@@ -3422,7 +3219,7 @@ impl<K, V: Debug> fmt::Debug for ValuesMut<'_, K, V> {
     }
 }
 
-impl<K, V, A: Allocator> Iterator for Drain<'_, K, V, A> {
+impl<K, V> Iterator for Drain<'_, K, V> {
     type Item = (K, V);
 
     #[cfg_attr(feature = "inline-more", inline)]
@@ -3442,26 +3239,25 @@ impl<K, V, A: Allocator> Iterator for Drain<'_, K, V, A> {
         self.inner.fold(init, f)
     }
 }
-impl<K, V, A: Allocator> ExactSizeIterator for Drain<'_, K, V, A> {
+impl<K, V> ExactSizeIterator for Drain<'_, K, V> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn len(&self) -> usize {
         self.inner.len()
     }
 }
-impl<K, V, A: Allocator> FusedIterator for Drain<'_, K, V, A> {}
+impl<K, V> FusedIterator for Drain<'_, K, V> {}
 
-impl<K, V, A> fmt::Debug for Drain<'_, K, V, A>
+impl<K, V> fmt::Debug for Drain<'_, K, V>
 where
     K: fmt::Debug,
     V: fmt::Debug,
-    A: Allocator,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.iter()).finish()
     }
 }
 
-impl<'a, K, V, S, A: Allocator> Entry<'a, K, V, S, A> {
+impl<'a, K, V, S> Entry<'a, K, V, S> {
     /// Sets the value of the entry, and returns an `OccupiedEntry`.
     ///
     /// # Examples
@@ -3475,7 +3271,7 @@ impl<'a, K, V, S, A: Allocator> Entry<'a, K, V, S, A> {
     /// assert_eq!(entry.key(), &"horseyland");
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn insert(self, value: V) -> OccupiedEntry<'a, K, V, S, A>
+    pub fn insert(self, value: V) -> OccupiedEntry<'a, K, V, S>
     where
         K: Hash,
         S: BuildHasher,
@@ -3708,7 +3504,7 @@ impl<'a, K, V, S, A: Allocator> Entry<'a, K, V, S, A> {
     }
 }
 
-impl<'a, K, V: Default, S, A: Allocator> Entry<'a, K, V, S, A> {
+impl<'a, K, V: Default, S> Entry<'a, K, V, S> {
     /// Ensures a value is in the entry by inserting the default value if empty,
     /// and returns a mutable reference to the value in the entry.
     ///
@@ -3741,7 +3537,7 @@ impl<'a, K, V: Default, S, A: Allocator> Entry<'a, K, V, S, A> {
     }
 }
 
-impl<'a, K, V, S, A: Allocator> OccupiedEntry<'a, K, V, S, A> {
+impl<'a, K, V, S> OccupiedEntry<'a, K, V, S> {
     /// Gets a reference to the key in the entry.
     ///
     /// # Examples
@@ -3974,7 +3770,7 @@ impl<'a, K, V, S, A: Allocator> OccupiedEntry<'a, K, V, S, A> {
     /// assert!(!map.contains_key("poneyland"));
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn replace_entry_with<F>(self, f: F) -> Entry<'a, K, V, S, A>
+    pub fn replace_entry_with<F>(self, f: F) -> Entry<'a, K, V, S>
     where
         F: FnOnce(&K, V) -> Option<V>,
     {
@@ -4005,7 +3801,7 @@ impl<'a, K, V, S, A: Allocator> OccupiedEntry<'a, K, V, S, A> {
     }
 }
 
-impl<'a, K, V, S, A: Allocator> VacantEntry<'a, K, V, S, A> {
+impl<'a, K, V, S> VacantEntry<'a, K, V, S> {
     /// Gets a reference to the key that would be used when inserting a value
     /// through the `VacantEntry`.
     ///
@@ -4089,7 +3885,7 @@ impl<'a, K, V, S, A: Allocator> VacantEntry<'a, K, V, S, A> {
     /// }
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn insert_entry(self, value: V) -> OccupiedEntry<'a, K, V, S, A>
+    pub fn insert_entry(self, value: V) -> OccupiedEntry<'a, K, V, S>
     where
         K: Hash,
         S: BuildHasher,
@@ -4107,7 +3903,7 @@ impl<'a, K, V, S, A: Allocator> VacantEntry<'a, K, V, S, A> {
     }
 }
 
-impl<'a, 'b, K, Q: ?Sized, V, S, A: Allocator> EntryRef<'a, 'b, K, Q, V, S, A> {
+impl<'a, 'b, K, Q: ?Sized, V, S> EntryRef<'a, 'b, K, Q, V, S> {
     /// Sets the value of the entry, and returns an `OccupiedEntry`.
     ///
     /// # Examples
@@ -4121,7 +3917,7 @@ impl<'a, 'b, K, Q: ?Sized, V, S, A: Allocator> EntryRef<'a, 'b, K, Q, V, S, A> {
     /// assert_eq!(entry.key(), "horseyland");
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn insert(self, value: V) -> OccupiedEntry<'a, K, V, S, A>
+    pub fn insert(self, value: V) -> OccupiedEntry<'a, K, V, S>
     where
         K: Hash,
         &'b Q: Into<K>,
@@ -4293,7 +4089,7 @@ impl<'a, 'b, K, Q: ?Sized, V, S, A: Allocator> EntryRef<'a, 'b, K, Q, V, S, A> {
     }
 }
 
-impl<'a, 'b, K, Q: ?Sized, V: Default, S, A: Allocator> EntryRef<'a, 'b, K, Q, V, S, A> {
+impl<'a, 'b, K, Q: ?Sized, V: Default, S> EntryRef<'a, 'b, K, Q, V, S> {
     /// Ensures a value is in the entry by inserting the default value if empty,
     /// and returns a mutable reference to the value in the entry.
     ///
@@ -4327,7 +4123,7 @@ impl<'a, 'b, K, Q: ?Sized, V: Default, S, A: Allocator> EntryRef<'a, 'b, K, Q, V
     }
 }
 
-impl<'a, 'b, K, Q: ?Sized, V, S, A: Allocator> VacantEntryRef<'a, 'b, K, Q, V, S, A> {
+impl<'a, 'b, K, Q: ?Sized, V, S> VacantEntryRef<'a, 'b, K, Q, V, S> {
     /// Gets a reference to the key that would be used when inserting a value
     /// through the `VacantEntryRef`.
     ///
@@ -4395,7 +4191,7 @@ impl<'a, 'b, K, Q: ?Sized, V, S, A: Allocator> VacantEntryRef<'a, 'b, K, Q, V, S
     /// }
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn insert_entry(self, value: V) -> OccupiedEntry<'a, K, V, S, A>
+    pub fn insert_entry(self, value: V) -> OccupiedEntry<'a, K, V, S>
     where
         K: Hash,
         &'b Q: Into<K>,
@@ -4414,17 +4210,15 @@ impl<'a, 'b, K, Q: ?Sized, V, S, A: Allocator> VacantEntryRef<'a, 'b, K, Q, V, S
     }
 }
 
-impl<K, V, S, A> FromIterator<(K, V)> for HashMap<K, V, S, A>
+impl<K, V, S> FromIterator<(K, V)> for HashMap<K, V, S>
 where
     K: Eq + Hash,
     S: BuildHasher + Default,
-    A: Default + Allocator,
 {
     #[cfg_attr(feature = "inline-more", inline)]
     fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
         let iter = iter.into_iter();
-        let mut map =
-            Self::with_capacity_and_hasher_in(iter.size_hint().0, S::default(), A::default());
+        let mut map = Self::with_capacity_and_hasher(iter.size_hint().0, S::default());
         iter.for_each(|(k, v)| {
             map.insert(k, v);
         });
@@ -4434,13 +4228,12 @@ where
 
 /// Inserts all new key-values from the iterator and replaces values with existing
 /// keys with new values returned from the iterator.
-impl<K, V, S, A> Extend<(K, V)> for HashMap<K, V, S, A>
+impl<K, V, S> Extend<(K, V)> for HashMap<K, V, S>
 where
     K: Eq + Hash,
     S: BuildHasher,
-    A: Allocator,
 {
-    /// Inserts all new key-values from the iterator to existing `HashMap<K, V, S, A>`.
+    /// Inserts all new key-values from the iterator to existing `HashMap<K, V, S>`.
     /// Replace values with existing keys with new values returned from the iterator.
     ///
     /// # Examples
@@ -4496,14 +4289,13 @@ where
 
 /// Inserts all new key-values from the iterator and replaces values with existing
 /// keys with new values returned from the iterator.
-impl<'a, K, V, S, A> Extend<(&'a K, &'a V)> for HashMap<K, V, S, A>
+impl<'a, K, V, S> Extend<(&'a K, &'a V)> for HashMap<K, V, S>
 where
     K: Eq + Hash + Copy,
     V: Copy,
     S: BuildHasher,
-    A: Allocator,
 {
-    /// Inserts all new key-values from the iterator to existing `HashMap<K, V, S, A>`.
+    /// Inserts all new key-values from the iterator to existing `HashMap<K, V, S>`.
     /// Replace values with existing keys with new values returned from the iterator.
     /// The keys and values must implement [`Copy`] trait.
     ///
@@ -4549,14 +4341,13 @@ where
 
 /// Inserts all new key-values from the iterator and replaces values with existing
 /// keys with new values returned from the iterator.
-impl<'a, K, V, S, A> Extend<&'a (K, V)> for HashMap<K, V, S, A>
+impl<'a, K, V, S> Extend<&'a (K, V)> for HashMap<K, V, S>
 where
     K: Eq + Hash + Copy,
     V: Copy,
     S: BuildHasher,
-    A: Allocator,
 {
-    /// Inserts all new key-values from the iterator to existing `HashMap<K, V, S, A>`.
+    /// Inserts all new key-values from the iterator to existing `HashMap<K, V, S>`.
     /// Replace values with existing keys with new values returned from the iterator.
     /// The keys and values must implement [`Copy`] trait.
     ///
@@ -4609,14 +4400,10 @@ fn assert_covariance() {
     fn iter_val<'a, 'new>(v: Iter<'a, u8, &'static str>) -> Iter<'a, u8, &'new str> {
         v
     }
-    fn into_iter_key<'new, A: Allocator>(
-        v: IntoIter<&'static str, u8, A>,
-    ) -> IntoIter<&'new str, u8, A> {
+    fn into_iter_key<'new>(v: IntoIter<&'static str, u8>) -> IntoIter<&'new str, u8> {
         v
     }
-    fn into_iter_val<'new, A: Allocator>(
-        v: IntoIter<u8, &'static str, A>,
-    ) -> IntoIter<u8, &'new str, A> {
+    fn into_iter_val<'new>(v: IntoIter<u8, &'static str>) -> IntoIter<u8, &'new str> {
         v
     }
     fn keys_key<'a, 'new>(v: Keys<'a, &'static str, u8>) -> Keys<'a, &'new str, u8> {
@@ -4644,12 +4431,7 @@ mod test_map {
     use super::Entry::{Occupied, Vacant};
     use super::EntryRef;
     use super::HashMap;
-    use crate::raw::{AllocError, Allocator, Global};
     use alloc::string::{String, ToString};
-    use alloc::sync::Arc;
-    use core::alloc::Layout;
-    use core::ptr::NonNull;
-    use core::sync::atomic::{AtomicI8, Ordering};
     use rand::{rngs::SmallRng, Rng, SeedableRng};
     use std::borrow::ToOwned;
     use std::cell::RefCell;
@@ -6067,61 +5849,6 @@ mod test_map {
         let _map2 = map1.clone();
     }
 
-    struct MyAllocInner {
-        drop_count: Arc<AtomicI8>,
-    }
-
-    #[derive(Clone)]
-    struct MyAlloc {
-        _inner: Arc<MyAllocInner>,
-    }
-
-    impl MyAlloc {
-        fn new(drop_count: Arc<AtomicI8>) -> Self {
-            MyAlloc {
-                _inner: Arc::new(MyAllocInner { drop_count }),
-            }
-        }
-    }
-
-    impl Drop for MyAllocInner {
-        fn drop(&mut self) {
-            println!("MyAlloc freed.");
-            self.drop_count.fetch_sub(1, Ordering::SeqCst);
-        }
-    }
-
-    unsafe impl Allocator for MyAlloc {
-        fn allocate(&self, layout: Layout) -> std::result::Result<NonNull<[u8]>, AllocError> {
-            let g = Global;
-            g.allocate(layout)
-        }
-
-        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-            let g = Global;
-            g.deallocate(ptr, layout)
-        }
-    }
-
-    #[test]
-    fn test_hashmap_into_iter_bug() {
-        let dropped: Arc<AtomicI8> = Arc::new(AtomicI8::new(1));
-
-        {
-            let mut map = HashMap::with_capacity_in(10, MyAlloc::new(dropped.clone()));
-            for i in 0..10 {
-                map.entry(i).or_insert_with(|| "i".to_string());
-            }
-
-            for (k, v) in map {
-                println!("{}, {}", k, v);
-            }
-        }
-
-        // All allocator clones should already be dropped.
-        assert_eq!(dropped.load(Ordering::SeqCst), 0);
-    }
-
     #[derive(Debug)]
     struct CheckedCloneDrop<T> {
         panic_in_clone: bool,
@@ -6174,20 +5901,19 @@ mod test_map {
     ///
     /// This function does not panic, but returns an error as a `String`
     /// to distinguish between a test panic and an error in the input data.
-    fn get_test_map<I, T, A>(
+    fn get_test_map<I, T>(
         iter: I,
         mut fun: impl FnMut(u64) -> T,
-        alloc: A,
-    ) -> Result<HashMap<u64, CheckedCloneDrop<T>, DefaultHashBuilder, A>, String>
+    ) -> Result<HashMap<u64, CheckedCloneDrop<T>, DefaultHashBuilder>, String>
     where
         I: Iterator<Item = (bool, bool)> + Clone + ExactSizeIterator,
-        A: Allocator,
+
         T: PartialEq + core::fmt::Debug,
     {
         use crate::scopeguard::guard;
 
-        let mut map: HashMap<u64, CheckedCloneDrop<T>, _, A> =
-            HashMap::with_capacity_in(iter.size_hint().0, alloc);
+        let mut map: HashMap<u64, CheckedCloneDrop<T>, _> =
+            HashMap::with_capacity(iter.size_hint().0);
         {
             let mut guard = guard(&mut map, |map| {
                 for (_, value) in map.iter_mut() {
@@ -6270,17 +5996,11 @@ mod test_map {
     #[test]
     #[should_panic = "panic in clone"]
     fn test_clone_memory_leaks_and_double_drop_one() {
-        let dropped: Arc<AtomicI8> = Arc::new(AtomicI8::new(2));
-
         {
             assert_eq!(ARMED_FLAGS.len(), DISARMED_FLAGS.len());
 
-            let map: HashMap<u64, CheckedCloneDrop<Vec<u64>>, DefaultHashBuilder, MyAlloc> =
-                match get_test_map(
-                    ARMED_FLAGS.into_iter().zip(DISARMED_FLAGS),
-                    |n| vec![n],
-                    MyAlloc::new(dropped.clone()),
-                ) {
+            let map: HashMap<u64, CheckedCloneDrop<Vec<u64>>, DefaultHashBuilder> =
+                match get_test_map(ARMED_FLAGS.into_iter().zip(DISARMED_FLAGS), |n| vec![n]) {
                     Ok(map) => map,
                     Err(msg) => panic!("{msg}"),
                 };
@@ -6296,25 +6016,16 @@ mod test_map {
     #[test]
     #[should_panic = "panic in drop"]
     fn test_clone_memory_leaks_and_double_drop_two() {
-        let dropped: Arc<AtomicI8> = Arc::new(AtomicI8::new(2));
-
         {
             assert_eq!(ARMED_FLAGS.len(), DISARMED_FLAGS.len());
 
-            let map: HashMap<u64, CheckedCloneDrop<u64>, DefaultHashBuilder, _> = match get_test_map(
-                DISARMED_FLAGS.into_iter().zip(DISARMED_FLAGS),
-                |n| n,
-                MyAlloc::new(dropped.clone()),
-            ) {
-                Ok(map) => map,
-                Err(msg) => panic!("{msg}"),
-            };
+            let map: HashMap<u64, CheckedCloneDrop<u64>, DefaultHashBuilder> =
+                match get_test_map(DISARMED_FLAGS.into_iter().zip(DISARMED_FLAGS), |n| n) {
+                    Ok(map) => map,
+                    Err(msg) => panic!("{msg}"),
+                };
 
-            let mut map2 = match get_test_map(
-                DISARMED_FLAGS.into_iter().zip(ARMED_FLAGS),
-                |n| n,
-                MyAlloc::new(dropped.clone()),
-            ) {
+            let mut map2 = match get_test_map(DISARMED_FLAGS.into_iter().zip(ARMED_FLAGS), |n| n) {
                 Ok(map) => map,
                 Err(msg) => panic!("{msg}"),
             };
@@ -6324,139 +6035,6 @@ mod test_map {
             // dropped leak their memory.
             map2.clone_from(&map);
         }
-    }
-
-    /// We check that we have a working table if the clone operation from another
-    /// thread ended in a panic (when buckets of maps are equal to each other).
-    #[test]
-    fn test_catch_panic_clone_from_when_len_is_equal() {
-        use std::thread;
-
-        let dropped: Arc<AtomicI8> = Arc::new(AtomicI8::new(2));
-
-        {
-            assert_eq!(ARMED_FLAGS.len(), DISARMED_FLAGS.len());
-
-            let mut map = match get_test_map(
-                DISARMED_FLAGS.into_iter().zip(DISARMED_FLAGS),
-                |n| vec![n],
-                MyAlloc::new(dropped.clone()),
-            ) {
-                Ok(map) => map,
-                Err(msg) => panic!("{msg}"),
-            };
-
-            thread::scope(|s| {
-                let result: thread::ScopedJoinHandle<'_, String> = s.spawn(|| {
-                    let scope_map =
-                        match get_test_map(ARMED_FLAGS.into_iter().zip(DISARMED_FLAGS), |n| vec![n * 2], MyAlloc::new(dropped.clone())) {
-                            Ok(map) => map,
-                            Err(msg) => return msg,
-                        };
-                    if map.table.buckets() != scope_map.table.buckets() {
-                        return format!(
-                            "map.table.buckets() != scope_map.table.buckets(),\nleft: `{}`,\nright: `{}`",
-                            map.table.buckets(), scope_map.table.buckets()
-                        );
-                    }
-                    map.clone_from(&scope_map);
-                    "We must fail the cloning!!!".to_owned()
-                });
-                if let Ok(msg) = result.join() {
-                    panic!("{msg}")
-                }
-            });
-
-            // Let's check that all iterators work fine and do not return elements
-            // (especially `RawIterRange`, which does not depend on the number of
-            // elements in the table, but looks directly at the control bytes)
-            //
-            // SAFETY: We know for sure that `RawTable` will outlive
-            // the returned `RawIter / RawIterRange` iterator.
-            assert_eq!(map.len(), 0);
-            assert_eq!(map.iter().count(), 0);
-            assert_eq!(unsafe { map.table.iter().count() }, 0);
-            assert_eq!(unsafe { map.table.iter().iter.count() }, 0);
-
-            for idx in 0..map.table.buckets() {
-                let idx = idx as u64;
-                assert!(
-                    map.table.find(idx, |(k, _)| *k == idx).is_none(),
-                    "Index: {idx}"
-                );
-            }
-        }
-
-        // All allocator clones should already be dropped.
-        assert_eq!(dropped.load(Ordering::SeqCst), 0);
-    }
-
-    /// We check that we have a working table if the clone operation from another
-    /// thread ended in a panic (when buckets of maps are not equal to each other).
-    #[test]
-    fn test_catch_panic_clone_from_when_len_is_not_equal() {
-        use std::thread;
-
-        let dropped: Arc<AtomicI8> = Arc::new(AtomicI8::new(2));
-
-        {
-            assert_eq!(ARMED_FLAGS.len(), DISARMED_FLAGS.len());
-
-            let mut map = match get_test_map(
-                [DISARMED].into_iter().zip([DISARMED]),
-                |n| vec![n],
-                MyAlloc::new(dropped.clone()),
-            ) {
-                Ok(map) => map,
-                Err(msg) => panic!("{msg}"),
-            };
-
-            thread::scope(|s| {
-                let result: thread::ScopedJoinHandle<'_, String> = s.spawn(|| {
-                    let scope_map = match get_test_map(
-                        ARMED_FLAGS.into_iter().zip(DISARMED_FLAGS),
-                        |n| vec![n * 2],
-                        MyAlloc::new(dropped.clone()),
-                    ) {
-                        Ok(map) => map,
-                        Err(msg) => return msg,
-                    };
-                    if map.table.buckets() == scope_map.table.buckets() {
-                        return format!(
-                            "map.table.buckets() == scope_map.table.buckets(): `{}`",
-                            map.table.buckets()
-                        );
-                    }
-                    map.clone_from(&scope_map);
-                    "We must fail the cloning!!!".to_owned()
-                });
-                if let Ok(msg) = result.join() {
-                    panic!("{msg}")
-                }
-            });
-
-            // Let's check that all iterators work fine and do not return elements
-            // (especially `RawIterRange`, which does not depend on the number of
-            // elements in the table, but looks directly at the control bytes)
-            //
-            // SAFETY: We know for sure that `RawTable` will outlive
-            // the returned `RawIter / RawIterRange` iterator.
-            assert_eq!(map.len(), 0);
-            assert_eq!(map.iter().count(), 0);
-            assert_eq!(unsafe { map.table.iter().count() }, 0);
-            assert_eq!(unsafe { map.table.iter().iter.count() }, 0);
-
-            for idx in 0..map.table.buckets() {
-                let idx = idx as u64;
-                assert!(
-                    map.table.find(idx, |(k, _)| *k == idx).is_none(),
-                    "Index: {idx}"
-                );
-            }
-        }
-
-        // All allocator clones should already be dropped.
-        assert_eq!(dropped.load(Ordering::SeqCst), 0);
     }
 
     #[test]

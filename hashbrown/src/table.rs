@@ -2,8 +2,7 @@ use core::{fmt, iter::FusedIterator, marker::PhantomData};
 
 use crate::{
     raw::{
-        Allocator, Bucket, Global, InsertSlot, RawDrain, RawExtractIf, RawIntoIter, RawIter,
-        RawIterHash, RawTable,
+        Bucket, InsertSlot, RawDrain, RawExtractIf, RawIntoIter, RawIter, RawIterHash, RawTable,
     },
     TryReserveError,
 };
@@ -44,14 +43,11 @@ use crate::{
 /// [`HashSet`]: super::HashSet
 /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
 /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
-pub struct HashTable<T, A = Global>
-where
-    A: Allocator,
-{
-    pub(crate) raw: RawTable<T, A>,
+pub struct HashTable<T> {
+    pub(crate) raw: RawTable<T>,
 }
 
-impl<T> HashTable<T, Global> {
+impl<T> HashTable<T> {
     /// Creates an empty `HashTable`.
     ///
     /// The hash table is initially created with a capacity of 0, so it will not allocate until it
@@ -91,106 +87,7 @@ impl<T> HashTable<T, Global> {
     }
 }
 
-impl<T, A> HashTable<T, A>
-where
-    A: Allocator,
-{
-    /// Creates an empty `HashTable` using the given allocator.
-    ///
-    /// The hash table is initially created with a capacity of 0, so it will not allocate until it
-    /// is first inserted into.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[cfg(feature = "nightly")]
-    /// # fn test() {
-    /// use bumpalo::Bump;
-    /// use hashbrown::{HashTable, DefaultHashBuilder};
-    /// use std::hash::BuildHasher;
-    ///
-    /// let bump = Bump::new();
-    /// let mut table = HashTable::new_in(&bump);
-    /// let hasher = DefaultHashBuilder::default();
-    /// let hasher = |val: &_| hasher.hash_one(val);
-    ///
-    /// // The created HashTable holds none elements
-    /// assert_eq!(table.len(), 0);
-    ///
-    /// // The created HashTable also doesn't allocate memory
-    /// assert_eq!(table.capacity(), 0);
-    ///
-    /// // Now we insert element inside created HashTable
-    /// table.insert_unique(hasher(&"One"), "One", hasher);
-    /// // We can see that the HashTable holds 1 element
-    /// assert_eq!(table.len(), 1);
-    /// // And it also allocates some capacity
-    /// assert!(table.capacity() > 1);
-    /// # }
-    /// # fn main() {
-    /// #     #[cfg(feature = "nightly")]
-    /// #     test()
-    /// # }
-    /// ```
-    pub const fn new_in(alloc: A) -> Self {
-        Self {
-            raw: RawTable::new_in(alloc),
-        }
-    }
-
-    /// Creates an empty `HashTable` with the specified capacity using the given allocator.
-    ///
-    /// The hash table will be able to hold at least `capacity` elements without
-    /// reallocating. If `capacity` is 0, the hash table will not allocate.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[cfg(feature = "nightly")]
-    /// # fn test() {
-    /// use bumpalo::Bump;
-    /// use hashbrown::{HashTable, DefaultHashBuilder};
-    /// use std::hash::BuildHasher;
-    ///
-    /// let bump = Bump::new();
-    /// let mut table = HashTable::with_capacity_in(5, &bump);
-    /// let hasher = DefaultHashBuilder::default();
-    /// let hasher = |val: &_| hasher.hash_one(val);
-    ///
-    /// // The created HashTable holds none elements
-    /// assert_eq!(table.len(), 0);
-    /// // But it can hold at least 5 elements without reallocating
-    /// let empty_map_capacity = table.capacity();
-    /// assert!(empty_map_capacity >= 5);
-    ///
-    /// // Now we insert some 5 elements inside created HashTable
-    /// table.insert_unique(hasher(&"One"), "One", hasher);
-    /// table.insert_unique(hasher(&"Two"), "Two", hasher);
-    /// table.insert_unique(hasher(&"Three"), "Three", hasher);
-    /// table.insert_unique(hasher(&"Four"), "Four", hasher);
-    /// table.insert_unique(hasher(&"Five"), "Five", hasher);
-    ///
-    /// // We can see that the HashTable holds 5 elements
-    /// assert_eq!(table.len(), 5);
-    /// // But its capacity isn't changed
-    /// assert_eq!(table.capacity(), empty_map_capacity)
-    /// # }
-    /// # fn main() {
-    /// #     #[cfg(feature = "nightly")]
-    /// #     test()
-    /// # }
-    /// ```
-    pub fn with_capacity_in(capacity: usize, alloc: A) -> Self {
-        Self {
-            raw: RawTable::with_capacity_in(capacity, alloc),
-        }
-    }
-
-    /// Returns a reference to the underlying allocator.
-    pub fn allocator(&self) -> &A {
-        self.raw.allocator()
-    }
-
+impl<T> HashTable<T> {
     /// Returns a reference to an entry in the table with the given hash and
     /// which satisfies the equality function passed.
     ///
@@ -300,7 +197,7 @@ where
         &mut self,
         hash: u64,
         eq: impl FnMut(&T) -> bool,
-    ) -> Result<OccupiedEntry<'_, T, A>, AbsentEntry<'_, T, A>> {
+    ) -> Result<OccupiedEntry<'_, T>, AbsentEntry<'_, T>> {
         match self.raw.find(hash, eq) {
             Some(bucket) => Ok(OccupiedEntry {
                 hash,
@@ -361,7 +258,7 @@ where
         hash: u64,
         eq: impl FnMut(&T) -> bool,
         hasher: impl Fn(&T) -> u64,
-    ) -> Entry<'_, T, A> {
+    ) -> Entry<'_, T> {
         match self.raw.find_or_find_insert_slot(hash, eq, hasher) {
             Ok(bucket) => Entry::Occupied(OccupiedEntry {
                 hash,
@@ -406,7 +303,7 @@ where
         hash: u64,
         value: T,
         hasher: impl Fn(&T) -> u64,
-    ) -> OccupiedEntry<'_, T, A> {
+    ) -> OccupiedEntry<'_, T> {
         let bucket = self.raw.insert(hash, value, hasher);
         OccupiedEntry {
             hash,
@@ -900,7 +797,7 @@ where
     /// #     test()
     /// # }
     /// ```
-    pub fn drain(&mut self) -> Drain<'_, T, A> {
+    pub fn drain(&mut self) -> Drain<'_, T> {
         Drain {
             inner: self.raw.drain(),
         }
@@ -947,7 +844,7 @@ where
     /// #     test()
     /// # }
     /// ```
-    pub fn extract_if<F>(&mut self, f: F) -> ExtractIf<'_, T, F, A>
+    pub fn extract_if<F>(&mut self, f: F) -> ExtractIf<'_, T, F>
     where
         F: FnMut(&mut T) -> bool,
     {
@@ -1121,24 +1018,18 @@ where
     }
 }
 
-impl<T, A> IntoIterator for HashTable<T, A>
-where
-    A: Allocator,
-{
+impl<T> IntoIterator for HashTable<T> {
     type Item = T;
-    type IntoIter = IntoIter<T, A>;
+    type IntoIter = IntoIter<T>;
 
-    fn into_iter(self) -> IntoIter<T, A> {
+    fn into_iter(self) -> IntoIter<T> {
         IntoIter {
             inner: self.raw.into_iter(),
         }
     }
 }
 
-impl<'a, T, A> IntoIterator for &'a HashTable<T, A>
-where
-    A: Allocator,
-{
+impl<'a, T> IntoIterator for &'a HashTable<T> {
     type Item = &'a T;
     type IntoIter = Iter<'a, T>;
 
@@ -1147,10 +1038,7 @@ where
     }
 }
 
-impl<'a, T, A> IntoIterator for &'a mut HashTable<T, A>
-where
-    A: Allocator,
-{
+impl<'a, T> IntoIterator for &'a mut HashTable<T> {
     type Item = &'a mut T;
     type IntoIter = IterMut<'a, T>;
 
@@ -1159,10 +1047,7 @@ where
     }
 }
 
-impl<T, A> Default for HashTable<T, A>
-where
-    A: Allocator + Default,
-{
+impl<T> Default for HashTable<T> {
     fn default() -> Self {
         Self {
             raw: Default::default(),
@@ -1170,10 +1055,9 @@ where
     }
 }
 
-impl<T, A> Clone for HashTable<T, A>
+impl<T> Clone for HashTable<T>
 where
     T: Clone,
-    A: Allocator + Clone,
 {
     fn clone(&self) -> Self {
         Self {
@@ -1182,10 +1066,9 @@ where
     }
 }
 
-impl<T, A> fmt::Debug for HashTable<T, A>
+impl<T> fmt::Debug for HashTable<T>
 where
     T: fmt::Debug,
-    A: Allocator,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_set().entries(self.iter()).finish()
@@ -1245,10 +1128,7 @@ where
 /// #     test()
 /// # }
 /// ```
-pub enum Entry<'a, T, A = Global>
-where
-    A: Allocator,
-{
+pub enum Entry<'a, T> {
     /// An occupied entry.
     ///
     /// # Examples
@@ -1277,7 +1157,7 @@ where
     /// #     test()
     /// # }
     /// ```
-    Occupied(OccupiedEntry<'a, T, A>),
+    Occupied(OccupiedEntry<'a, T>),
 
     /// A vacant entry.
     ///
@@ -1304,10 +1184,10 @@ where
     /// #     test()
     /// # }
     /// ```
-    Vacant(VacantEntry<'a, T, A>),
+    Vacant(VacantEntry<'a, T>),
 }
 
-impl<T: fmt::Debug, A: Allocator> fmt::Debug for Entry<'_, T, A> {
+impl<T: fmt::Debug> fmt::Debug for Entry<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Entry::Vacant(ref v) => f.debug_tuple("Entry").field(v).finish(),
@@ -1316,10 +1196,7 @@ impl<T: fmt::Debug, A: Allocator> fmt::Debug for Entry<'_, T, A> {
     }
 }
 
-impl<'a, T, A> Entry<'a, T, A>
-where
-    A: Allocator,
-{
+impl<'a, T> Entry<'a, T> {
     /// Sets the value of the entry, replacing any existing value if there is
     /// one, and returns an [`OccupiedEntry`].
     ///
@@ -1346,7 +1223,7 @@ where
     /// #     test()
     /// # }
     /// ```
-    pub fn insert(self, value: T) -> OccupiedEntry<'a, T, A> {
+    pub fn insert(self, value: T) -> OccupiedEntry<'a, T> {
         match self {
             Entry::Occupied(mut entry) => {
                 *entry.get_mut() = value;
@@ -1394,7 +1271,7 @@ where
     /// #     test()
     /// # }
     /// ```
-    pub fn or_insert(self, default: T) -> OccupiedEntry<'a, T, A> {
+    pub fn or_insert(self, default: T) -> OccupiedEntry<'a, T> {
         match self {
             Entry::Occupied(entry) => entry,
             Entry::Vacant(entry) => entry.insert(default),
@@ -1430,7 +1307,7 @@ where
     /// #     test()
     /// # }
     /// ```
-    pub fn or_insert_with(self, default: impl FnOnce() -> T) -> OccupiedEntry<'a, T, A> {
+    pub fn or_insert_with(self, default: impl FnOnce() -> T) -> OccupiedEntry<'a, T> {
         match self {
             Entry::Occupied(entry) => entry,
             Entry::Vacant(entry) => entry.insert(default()),
@@ -1544,29 +1421,16 @@ where
 /// #     test()
 /// # }
 /// ```
-pub struct OccupiedEntry<'a, T, A = Global>
-where
-    A: Allocator,
-{
+pub struct OccupiedEntry<'a, T> {
     hash: u64,
     bucket: Bucket<T>,
-    table: &'a mut HashTable<T, A>,
+    table: &'a mut HashTable<T>,
 }
 
-unsafe impl<T, A> Send for OccupiedEntry<'_, T, A>
-where
-    T: Send,
-    A: Send + Allocator,
-{
-}
-unsafe impl<T, A> Sync for OccupiedEntry<'_, T, A>
-where
-    T: Sync,
-    A: Sync + Allocator,
-{
-}
+unsafe impl<T> Send for OccupiedEntry<'_, T> where T: Send {}
+unsafe impl<T> Sync for OccupiedEntry<'_, T> where T: Sync {}
 
-impl<T: fmt::Debug, A: Allocator> fmt::Debug for OccupiedEntry<'_, T, A> {
+impl<T: fmt::Debug> fmt::Debug for OccupiedEntry<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OccupiedEntry")
             .field("value", self.get())
@@ -1574,10 +1438,7 @@ impl<T: fmt::Debug, A: Allocator> fmt::Debug for OccupiedEntry<'_, T, A> {
     }
 }
 
-impl<'a, T, A> OccupiedEntry<'a, T, A>
-where
-    A: Allocator,
-{
+impl<'a, T> OccupiedEntry<'a, T> {
     /// Takes the value out of the entry, and returns it along with a
     /// `VacantEntry` that can be used to insert another value with the same
     /// hash as the one that was just removed.
@@ -1616,7 +1477,7 @@ where
     /// # }
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn remove(self) -> (T, VacantEntry<'a, T, A>) {
+    pub fn remove(self) -> (T, VacantEntry<'a, T>) {
         let (val, slot) = unsafe { self.table.raw.remove(self.bucket) };
         (
             val,
@@ -1765,7 +1626,7 @@ where
 
     /// Converts the `OccupiedEntry` into a mutable reference to the underlying
     /// table.
-    pub fn into_table(self) -> &'a mut HashTable<T, A> {
+    pub fn into_table(self) -> &'a mut HashTable<T> {
         self.table
     }
 }
@@ -1809,25 +1670,19 @@ where
 /// #     test()
 /// # }
 /// ```
-pub struct VacantEntry<'a, T, A = Global>
-where
-    A: Allocator,
-{
+pub struct VacantEntry<'a, T> {
     hash: u64,
     insert_slot: InsertSlot,
-    table: &'a mut HashTable<T, A>,
+    table: &'a mut HashTable<T>,
 }
 
-impl<T: fmt::Debug, A: Allocator> fmt::Debug for VacantEntry<'_, T, A> {
+impl<T: fmt::Debug> fmt::Debug for VacantEntry<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("VacantEntry")
     }
 }
 
-impl<'a, T, A> VacantEntry<'a, T, A>
-where
-    A: Allocator,
-{
+impl<'a, T> VacantEntry<'a, T> {
     /// Inserts a new element into the table with the hash that was used to
     /// obtain the `VacantEntry`.
     ///
@@ -1860,7 +1715,7 @@ where
     /// # }
     /// ```
     #[inline]
-    pub fn insert(self, value: T) -> OccupiedEntry<'a, T, A> {
+    pub fn insert(self, value: T) -> OccupiedEntry<'a, T> {
         let bucket = unsafe {
             self.table
                 .raw
@@ -1875,7 +1730,7 @@ where
 
     /// Converts the `VacantEntry` into a mutable reference to the underlying
     /// table.
-    pub fn into_table(self) -> &'a mut HashTable<T, A> {
+    pub fn into_table(self) -> &'a mut HashTable<T> {
         self.table
     }
 }
@@ -1921,26 +1776,20 @@ where
 /// #     test()
 /// # }
 /// ```
-pub struct AbsentEntry<'a, T, A = Global>
-where
-    A: Allocator,
-{
-    table: &'a mut HashTable<T, A>,
+pub struct AbsentEntry<'a, T> {
+    table: &'a mut HashTable<T>,
 }
 
-impl<T: fmt::Debug, A: Allocator> fmt::Debug for AbsentEntry<'_, T, A> {
+impl<T: fmt::Debug> fmt::Debug for AbsentEntry<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("AbsentEntry")
     }
 }
 
-impl<'a, T, A> AbsentEntry<'a, T, A>
-where
-    A: Allocator,
-{
+impl<'a, T> AbsentEntry<'a, T> {
     /// Converts the `AbsentEntry` into a mutable reference to the underlying
     /// table.
-    pub fn into_table(self) -> &'a mut HashTable<T, A> {
+    pub fn into_table(self) -> &'a mut HashTable<T> {
         self.table
     }
 }
@@ -2223,14 +2072,11 @@ where
 /// [`into_iter`]: struct.HashTable.html#method.into_iter
 /// [`HashTable`]: struct.HashTable.html
 /// [`IntoIterator`]: https://doc.rust-lang.org/core/iter/trait.IntoIterator.html
-pub struct IntoIter<T, A = Global>
-where
-    A: Allocator,
-{
-    inner: RawIntoIter<T, A>,
+pub struct IntoIter<T> {
+    inner: RawIntoIter<T>,
 }
 
-impl<T, A: Allocator> Default for IntoIter<T, A> {
+impl<T> Default for IntoIter<T> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn default() -> Self {
         IntoIter {
@@ -2239,10 +2085,7 @@ impl<T, A: Allocator> Default for IntoIter<T, A> {
     }
 }
 
-impl<T, A> Iterator for IntoIter<T, A>
-where
-    A: Allocator,
-{
+impl<T> Iterator for IntoIter<T> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -2262,21 +2105,17 @@ where
     }
 }
 
-impl<T, A> ExactSizeIterator for IntoIter<T, A>
-where
-    A: Allocator,
-{
+impl<T> ExactSizeIterator for IntoIter<T> {
     fn len(&self) -> usize {
         self.inner.len()
     }
 }
 
-impl<T, A> FusedIterator for IntoIter<T, A> where A: Allocator {}
+impl<T> FusedIterator for IntoIter<T> {}
 
-impl<T, A> fmt::Debug for IntoIter<T, A>
+impl<T> fmt::Debug for IntoIter<T>
 where
     T: fmt::Debug,
-    A: Allocator,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list()
@@ -2295,11 +2134,11 @@ where
 ///
 /// [`HashTable`]: struct.HashTable.html
 /// [`drain`]: struct.HashTable.html#method.drain
-pub struct Drain<'a, T, A: Allocator = Global> {
-    inner: RawDrain<'a, T, A>,
+pub struct Drain<'a, T> {
+    inner: RawDrain<'a, T>,
 }
 
-impl<T, A: Allocator> Iterator for Drain<'_, T, A> {
+impl<T> Iterator for Drain<'_, T> {
     type Item = T;
 
     fn next(&mut self) -> Option<T> {
@@ -2319,15 +2158,15 @@ impl<T, A: Allocator> Iterator for Drain<'_, T, A> {
     }
 }
 
-impl<T, A: Allocator> ExactSizeIterator for Drain<'_, T, A> {
+impl<T> ExactSizeIterator for Drain<'_, T> {
     fn len(&self) -> usize {
         self.inner.len()
     }
 }
 
-impl<T, A: Allocator> FusedIterator for Drain<'_, T, A> {}
+impl<T> FusedIterator for Drain<'_, T> {}
 
-impl<T: fmt::Debug, A: Allocator> fmt::Debug for Drain<'_, T, A> {
+impl<T: fmt::Debug> fmt::Debug for Drain<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list()
             .entries(Iter {
@@ -2343,12 +2182,12 @@ impl<T: fmt::Debug, A: Allocator> fmt::Debug for Drain<'_, T, A> {
 /// This `struct` is created by [`HashTable::extract_if`]. See its
 /// documentation for more.
 #[must_use = "Iterators are lazy unless consumed"]
-pub struct ExtractIf<'a, T, F, A: Allocator = Global> {
+pub struct ExtractIf<'a, T, F> {
     f: F,
-    inner: RawExtractIf<'a, T, A>,
+    inner: RawExtractIf<'a, T>,
 }
 
-impl<T, F, A: Allocator> Iterator for ExtractIf<'_, T, F, A>
+impl<T, F> Iterator for ExtractIf<'_, T, F>
 where
     F: FnMut(&mut T) -> bool,
 {
@@ -2365,7 +2204,7 @@ where
     }
 }
 
-impl<T, F, A: Allocator> FusedIterator for ExtractIf<'_, T, F, A> where F: FnMut(&mut T) -> bool {}
+impl<T, F> FusedIterator for ExtractIf<'_, T, F> where F: FnMut(&mut T) -> bool {}
 
 #[cfg(test)]
 mod tests {

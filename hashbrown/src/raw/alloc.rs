@@ -1,7 +1,4 @@
-#[cfg(test)]
-pub(crate) use self::inner::AllocError;
-pub(crate) use self::inner::{do_alloc, Allocator, Global};
-
+pub(crate) use self::inner::{do_alloc, Global};
 // Basic non-nightly case.
 // This uses `allocator-api2` enabled by default.
 // If any crate enables "nightly" in `allocator-api2`,
@@ -10,14 +7,12 @@ pub(crate) use self::inner::{do_alloc, Allocator, Global};
 // `core::alloc::Allocator`.
 mod inner {
     use crate::alloc::alloc::Layout;
-    #[cfg(test)]
-    pub use allocator_api2::alloc::AllocError;
     pub use allocator_api2::alloc::{Allocator, Global};
     use core::ptr::NonNull;
 
     #[allow(clippy::map_err_ignore)]
-    pub(crate) fn do_alloc<A: Allocator>(alloc: &A, layout: Layout) -> Result<NonNull<u8>, ()> {
-        match alloc.allocate(layout) {
+    pub(crate) fn do_alloc(layout: Layout) -> Result<NonNull<u8>, ()> {
+        match Global.allocate(layout) {
             Ok(ptr) => Ok(ptr.cast()),
             Err(_) => Err(()),
         }
