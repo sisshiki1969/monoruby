@@ -73,5 +73,5 @@ default-hasher = ["dep:foldhash"]
 inline-more = []
 
 [package.metadata.docs.rs]
-features = ["nightly", "rayon", "serde", "raw-entry"]
+features = ["nightly", "raw-entry"]
 rustdoc-args = ["--generate-link-to-definition"]

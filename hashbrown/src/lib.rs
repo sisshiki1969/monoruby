@@ -74,7 +74,6 @@ mod control;
 mod raw;
 mod util;
 
-mod external_trait_impls;
 mod map;
 #[cfg(feature = "raw-entry")]
 mod raw_entry;
@@ -90,44 +89,14 @@ pub mod hash_map {
 
     #[cfg(feature = "rustc-internal-api")]
     pub use crate::rustc_entry::*;
-
-    #[cfg(feature = "rayon")]
-    /// [rayon]-based parallel iterator types for hash maps.
-    /// You will rarely need to interact with it directly unless you have need
-    /// to name one of the iterator types.
-    ///
-    /// [rayon]: https://docs.rs/rayon/1.0/rayon
-    pub mod rayon {
-        pub use crate::external_trait_impls::rayon::map::*;
-    }
 }
 pub mod hash_set {
     //! A hash set implemented as a `HashMap` where the value is `()`.
     pub use crate::set::*;
-
-    #[cfg(feature = "rayon")]
-    /// [rayon]-based parallel iterator types for hash sets.
-    /// You will rarely need to interact with it directly unless you have need
-    /// to name one of the iterator types.
-    ///
-    /// [rayon]: https://docs.rs/rayon/1.0/rayon
-    pub mod rayon {
-        pub use crate::external_trait_impls::rayon::set::*;
-    }
 }
 pub mod hash_table {
     //! A hash table implemented with quadratic probing and SIMD lookup.
     pub use crate::table::*;
-
-    #[cfg(feature = "rayon")]
-    /// [rayon]-based parallel iterator types for hash tables.
-    /// You will rarely need to interact with it directly unless you have need
-    /// to name one of the iterator types.
-    ///
-    /// [rayon]: https://docs.rs/rayon/1.0/rayon
-    pub mod rayon {
-        pub use crate::external_trait_impls::rayon::table::*;
-    }
 }
 
 pub use crate::map::HashMap;
