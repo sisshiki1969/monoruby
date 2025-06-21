@@ -707,7 +707,6 @@ dependencies = [
  "rayon",
  "rustc-std-workspace-alloc",
  "rustc-std-workspace-core",
- "serde",
  "serde_test",
 ]
 

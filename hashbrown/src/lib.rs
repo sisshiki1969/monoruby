@@ -10,21 +10,6 @@
 //! [CppCon talk]: https://www.youtube.com/watch?v=ncHmEUmJZf4
 
 #![no_std]
-#![cfg_attr(
-    feature = "nightly",
-    feature(
-        test,
-        core_intrinsics,
-        dropck_eyepatch,
-        min_specialization,
-        extend_one,
-        allocator_api,
-        slice_ptr_get,
-        maybe_uninit_array_assume_init,
-        strict_provenance_lints
-    )
-)]
-#![cfg_attr(feature = "rustc-dep-of-std", feature(rustc_attrs))]
 #![allow(
     clippy::doc_markdown,
     clippy::module_name_repetitions,
@@ -37,15 +22,6 @@
 )]
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
-#![cfg_attr(feature = "nightly", warn(fuzzy_provenance_casts))]
-#![cfg_attr(
-    feature = "nightly",
-    allow(clippy::incompatible_msrv, internal_features)
-)]
-#![cfg_attr(
-    all(feature = "nightly", target_arch = "loongarch64"),
-    feature(stdarch_loongarch)
-)]
 
 /// Default hasher for [`HashMap`] and [`HashSet`].
 #[cfg(feature = "default-hasher")]
@@ -60,12 +36,7 @@ pub enum DefaultHashBuilder {}
 extern crate std;
 
 #[cfg_attr(test, macro_use)]
-#[cfg_attr(feature = "rustc-dep-of-std", allow(unused_extern_crates))]
 extern crate alloc;
-
-#[cfg(feature = "nightly")]
-#[cfg(doctest)]
-doc_comment::doctest!("../README.md");
 
 #[macro_use]
 mod macros;
@@ -75,10 +46,6 @@ mod raw;
 mod util;
 
 mod map;
-#[cfg(feature = "raw-entry")]
-mod raw_entry;
-#[cfg(feature = "rustc-internal-api")]
-mod rustc_entry;
 mod scopeguard;
 mod set;
 mod table;
@@ -86,9 +53,6 @@ mod table;
 pub mod hash_map {
     //! A hash map implemented with quadratic probing and SIMD lookup.
     pub use crate::map::*;
-
-    #[cfg(feature = "rustc-internal-api")]
-    pub use crate::rustc_entry::*;
 }
 pub mod hash_set {
     //! A hash set implemented as a `HashMap` where the value is `()`.

@@ -615,7 +615,6 @@ impl<T> RawTable<T, Global> {
     /// leave the data pointer dangling since that bucket is never written to
     /// due to our load factor forcing us to always have at least 1 free bucket.
     #[inline]
-    #[cfg_attr(feature = "rustc-dep-of-std", rustc_const_stable_indirect)]
     pub const fn new() -> Self {
         Self {
             table: RawTableInner::NEW,
@@ -641,7 +640,6 @@ impl<T, A: Allocator> RawTable<T, A> {
     /// leave the data pointer dangling since that bucket is never written to
     /// due to our load factor forcing us to always have at least 1 free bucket.
     #[inline]
-    #[cfg_attr(feature = "rustc-dep-of-std", rustc_const_stable_indirect)]
     pub const fn new_in(alloc: A) -> Self {
         Self {
             table: RawTableInner::NEW,
@@ -716,13 +714,6 @@ impl<T, A: Allocator> RawTable<T, A> {
         // P.S. `h1(hash) & self.bucket_mask` is the same as `hash as usize % self.buckets()` because the number
         // of buckets is a power of two, and `self.bucket_mask = self.buckets() - 1`.
         self.table.ctrl.cast()
-    }
-
-    /// Returns pointer to start of data table.
-    #[inline]
-    #[cfg(feature = "nightly")]
-    pub unsafe fn data_start(&self) -> NonNull<T> {
-        NonNull::new_unchecked(self.data_end().as_ptr().wrapping_sub(self.buckets()))
     }
 
     /// Returns the total amount of memory allocated internally by the hash
@@ -1081,26 +1072,6 @@ impl<T, A: Allocator> RawTable<T, A> {
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn insert_entry(&mut self, hash: u64, value: T, hasher: impl Fn(&T) -> u64) -> &mut T {
         unsafe { self.insert(hash, value, hasher).as_mut() }
-    }
-
-    /// Inserts a new element into the table, without growing the table.
-    ///
-    /// There must be enough space in the table to insert the new element.
-    ///
-    /// This does not check if the given element already exists in the table.
-    #[cfg_attr(feature = "inline-more", inline)]
-    #[cfg(feature = "rustc-internal-api")]
-    pub unsafe fn insert_no_grow(&mut self, hash: u64, value: T) -> Bucket<T> {
-        let (index, old_ctrl) = self.table.prepare_insert_slot(hash);
-        let bucket = self.table.bucket(index);
-
-        // If we are replacing a DELETED entry then we don't need to update
-        // the load counter.
-        self.table.growth_left -= old_ctrl.special_is_empty() as usize;
-
-        bucket.write(value);
-        self.table.items += 1;
-        bucket
     }
 
     /// Temporary removes a bucket, applying the given function to the removed
@@ -3265,23 +3236,6 @@ impl<T: Clone, A: Allocator + Clone> RawTableClone for RawTable<T, A> {
         }
     }
 }
-#[cfg(feature = "nightly")]
-impl<T: Copy, A: Allocator + Clone> RawTableClone for RawTable<T, A> {
-    #[cfg_attr(feature = "inline-more", inline)]
-    unsafe fn clone_from_spec(&mut self, source: &Self) {
-        source
-            .table
-            .ctrl(0)
-            .copy_to_nonoverlapping(self.table.ctrl(0), self.table.num_ctrl_bytes());
-        source
-            .data_start()
-            .as_ptr()
-            .copy_to_nonoverlapping(self.data_start().as_ptr(), self.table.buckets());
-
-        self.table.items = source.table.items;
-        self.table.growth_left = source.table.growth_left;
-    }
-}
 
 impl<T: Clone, A: Allocator + Clone> RawTable<T, A> {
     /// Common code for `clone` and `clone_from`. Assumes:
@@ -3333,24 +3287,6 @@ impl<T, A: Allocator + Default> Default for RawTable<T, A> {
     }
 }
 
-#[cfg(feature = "nightly")]
-unsafe impl<#[may_dangle] T, A: Allocator> Drop for RawTable<T, A> {
-    #[cfg_attr(feature = "inline-more", inline)]
-    fn drop(&mut self) {
-        unsafe {
-            // SAFETY:
-            // 1. We call the function only once;
-            // 2. We know for sure that `alloc` and `table_layout` matches the [`Allocator`]
-            //    and [`TableLayout`] that were used to allocate this table.
-            // 3. If the drop function of any elements fails, then only a memory leak will occur,
-            //    and we don't care because we are inside the `Drop` function of the `RawTable`,
-            //    so there won't be any table left in an inconsistent state.
-            self.table
-                .drop_inner_table::<T, _>(&self.alloc, Self::TABLE_LAYOUT);
-        }
-    }
-}
-#[cfg(not(feature = "nightly"))]
 impl<T, A: Allocator> Drop for RawTable<T, A> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn drop(&mut self) {
@@ -3829,22 +3765,6 @@ where
 {
 }
 
-#[cfg(feature = "nightly")]
-unsafe impl<#[may_dangle] T, A: Allocator> Drop for RawIntoIter<T, A> {
-    #[cfg_attr(feature = "inline-more", inline)]
-    fn drop(&mut self) {
-        unsafe {
-            // Drop all remaining elements
-            self.iter.drop_elements();
-
-            // Free the table
-            if let Some((ptr, layout, ref alloc)) = self.allocation {
-                alloc.deallocate(ptr, layout);
-            }
-        }
-    }
-}
-#[cfg(not(feature = "nightly"))]
 impl<T, A: Allocator> Drop for RawIntoIter<T, A> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn drop(&mut self) {

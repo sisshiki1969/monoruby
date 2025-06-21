@@ -16,10 +16,6 @@ rust-version = "1.65.0"
 # For the default hasher
 foldhash = { version = "0.1.2", default-features = false, optional = true }
 
-# For external trait impls
-rayon = { version = "1.2", optional = true }
-serde = { version = "1.0.25", default-features = false, optional = true }
-
 # When built as part of libstd
 core = { version = "1.0.0", optional = true, package = "rustc-std-workspace-core" }
 alloc = { version = "1.0.0", optional = true, package = "rustc-std-workspace-alloc" }
@@ -42,7 +38,7 @@ doc-comment = "0.3.1"
 bumpalo = { version = "3.13.0", features = ["allocator-api2"] }
 
 [features]
-default = ["default-hasher", "inline-more", "allocator-api2", "equivalent", "raw-entry"]
+default = ["default-hasher", "inline-more", "allocator-api2", "equivalent"]
 
 # Enables use of nightly features. This is only guaranteed to work on the latest
 # version of nightly Rust.
@@ -50,14 +46,6 @@ nightly = ["bumpalo/allocator_api"]
 
 # Enables the RustcEntry API used to provide the standard library's Entry API.
 rustc-internal-api = []
-
-# Internal feature used when building as part of the standard library.
-rustc-dep-of-std = [
-    "nightly",
-    "core",
-    "alloc",
-    "rustc-internal-api",
-]
 
 # Enables the deprecated RawEntry API.
 raw-entry = []
@@ -73,5 +61,5 @@ default-hasher = ["dep:foldhash"]
 inline-more = []
 
 [package.metadata.docs.rs]
-features = ["nightly", "raw-entry"]
+features = ["raw-entry"]
 rustdoc-args = ["--generate-link-to-definition"]
