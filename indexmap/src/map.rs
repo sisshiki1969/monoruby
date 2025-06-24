@@ -3,7 +3,6 @@
 
 mod core;
 mod iter;
-mod mutable;
 mod slice;
 
 #[cfg(test)]
@@ -12,10 +11,8 @@ mod tests;
 pub use self::core::raw_entry_v1::{self, RawEntryApiV1};
 pub use self::core::{Entry, IndexedEntry, OccupiedEntry, VacantEntry};
 pub use self::iter::{
-    Drain, IntoIter, IntoKeys, IntoValues, Iter, IterMut, IterMut2, Keys, Splice, Values, ValuesMut,
+    Drain, IntoIter, IntoKeys, IntoValues, Iter, IterMut, Keys, Splice, Values, ValuesMut,
 };
-pub use self::mutable::MutableEntryKey;
-pub use self::mutable::MutableKeys;
 pub use self::slice::Slice;
 
 use ::core::cmp::Ordering;

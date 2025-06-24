@@ -133,7 +133,7 @@ macro_rules! indexset {
             // Note: `stringify!($value)` is just here to consume the repetition,
             // but we throw away that string literal during constant evaluation.
             const CAP: usize = <[()]>::len(&[$({ stringify!($value); }),*]);
-            let mut set = $crate::IndexSet::with_capacity(CAP);
+            let mut set = $crate::RubySet::with_capacity(CAP);
             $(
                 set.insert($value);
             )*

@@ -583,36 +583,13 @@ fn iter_default() {
     }
     assert_default::<Iter<'static, K, V>>();
     assert_default::<IterMut<'static, K, V>>();
-    assert_default::<IterMut2<'static, K, V>>();
+    //assert_default::<IterMut2<'static, K, V>>();
     assert_default::<IntoIter<K, V>>();
     assert_default::<Keys<'static, K, V>>();
     assert_default::<IntoKeys<K, V>>();
     assert_default::<Values<'static, K, V>>();
     assert_default::<ValuesMut<'static, K, V>>();
     assert_default::<IntoValues<K, V>>();
-}
-
-#[test]
-fn get_index_mut2() {
-    let mut map: RubyMap<i32, i32> = RubyMap::new();
-    map.insert(1, 2);
-    map.insert(3, 4);
-    map.insert(5, 6);
-
-    {
-        let (key, value) = map.get_index_mut2(0).unwrap();
-        assert_eq!(*key, 1);
-        assert_eq!(*value, 2);
-
-        *value = 7;
-    }
-    assert_eq!(map[0], 7);
-
-    {
-        let (key, _) = map.get_index_mut2(0).unwrap();
-        *key = 8;
-    }
-    assert_eq!(map.get_index(0).unwrap().0, &8);
 }
 
 #[test]

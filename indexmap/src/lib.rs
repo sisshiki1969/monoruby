@@ -117,7 +117,7 @@ pub mod map;
 pub mod set;
 
 pub use crate::map::RubyMap;
-pub use crate::set::IndexSet;
+pub use crate::set::RubySet;
 pub use equivalent::Equivalent;
 
 // shared private items

@@ -1,7 +1,6 @@
 //! A hash set implemented using [`IndexMap`]
 
 mod iter;
-mod mutable;
 mod slice;
 
 #[cfg(test)]
@@ -10,7 +9,6 @@ mod tests;
 pub use self::iter::{
     Difference, Drain, Intersection, IntoIter, Iter, Splice, SymmetricDifference, Union,
 };
-pub use self::mutable::MutableValues;
 pub use self::slice::Slice;
 
 use crate::TryReserveError;
@@ -77,17 +75,17 @@ type Bucket<T> = super::Bucket<T, ()>;
 /// assert!(letters.contains(&'u'));
 /// assert!(!letters.contains(&'y'));
 /// ```
-pub struct IndexSet<T, S = RandomState> {
+pub struct RubySet<T, S = RandomState> {
     pub(crate) map: RubyMap<T, (), S>,
 }
 
-impl<T, S> Clone for IndexSet<T, S>
+impl<T, S> Clone for RubySet<T, S>
 where
     T: Clone,
     S: Clone,
 {
     fn clone(&self) -> Self {
-        IndexSet {
+        RubySet {
             map: self.map.clone(),
         }
     }
@@ -97,7 +95,7 @@ where
     }
 }
 
-impl<T, S> Entries for IndexSet<T, S> {
+impl<T, S> Entries for RubySet<T, S> {
     type Entry = Bucket<T>;
 
     #[inline]
@@ -123,7 +121,7 @@ impl<T, S> Entries for IndexSet<T, S> {
     }
 }
 
-impl<T, S> fmt::Debug for IndexSet<T, S>
+impl<T, S> fmt::Debug for RubySet<T, S>
 where
     T: fmt::Debug,
 {
@@ -139,10 +137,10 @@ where
     }
 }
 
-impl<T> IndexSet<T> {
+impl<T> RubySet<T> {
     /// Create a new set. (Does not allocate.)
     pub fn new() -> Self {
-        IndexSet {
+        RubySet {
             map: RubyMap::new(),
         }
     }
@@ -152,19 +150,19 @@ impl<T> IndexSet<T> {
     ///
     /// Computes in **O(n)** time.
     pub fn with_capacity(n: usize) -> Self {
-        IndexSet {
+        RubySet {
             map: RubyMap::with_capacity(n),
         }
     }
 }
 
-impl<T, S> IndexSet<T, S> {
+impl<T, S> RubySet<T, S> {
     /// Create a new set with capacity for `n` elements.
     /// (Does not allocate if `n` is zero.)
     ///
     /// Computes in **O(n)** time.
     pub fn with_capacity_and_hasher(n: usize, hash_builder: S) -> Self {
-        IndexSet {
+        RubySet {
             map: RubyMap::with_capacity_and_hasher(n, hash_builder),
         }
     }
@@ -174,7 +172,7 @@ impl<T, S> IndexSet<T, S> {
     /// This function is `const`, so it
     /// can be called in `static` contexts.
     pub const fn with_hasher(hash_builder: S) -> Self {
-        IndexSet {
+        RubySet {
             map: RubyMap::with_hasher(hash_builder),
         }
     }
@@ -318,7 +316,7 @@ impl<T, S> IndexSet<T, S> {
     }
 }
 
-impl<T, S> IndexSet<T, S>
+impl<T, S> RubySet<T, S>
 where
     T: Hash + Eq,
     S: BuildHasher,
@@ -506,7 +504,7 @@ where
     /// Return an iterator over the values that are in `self` but not `other`.
     ///
     /// Values are produced in the same order that they appear in `self`.
-    pub fn difference<'a, S2>(&'a self, other: &'a IndexSet<T, S2>) -> Difference<'a, T, S2>
+    pub fn difference<'a, S2>(&'a self, other: &'a RubySet<T, S2>) -> Difference<'a, T, S2>
     where
         S2: BuildHasher,
     {
@@ -520,7 +518,7 @@ where
     /// values from `other` in their original order.
     pub fn symmetric_difference<'a, S2>(
         &'a self,
-        other: &'a IndexSet<T, S2>,
+        other: &'a RubySet<T, S2>,
     ) -> SymmetricDifference<'a, T, S, S2>
     where
         S2: BuildHasher,
@@ -531,7 +529,7 @@ where
     /// Return an iterator over the values that are in both `self` and `other`.
     ///
     /// Values are produced in the same order that they appear in `self`.
-    pub fn intersection<'a, S2>(&'a self, other: &'a IndexSet<T, S2>) -> Intersection<'a, T, S2>
+    pub fn intersection<'a, S2>(&'a self, other: &'a RubySet<T, S2>) -> Intersection<'a, T, S2>
     where
         S2: BuildHasher,
     {
@@ -542,7 +540,7 @@ where
     ///
     /// Values from `self` are produced in their original order, followed by
     /// values that are unique to `other` in their original order.
-    pub fn union<'a, S2>(&'a self, other: &'a IndexSet<T, S2>) -> Union<'a, T, S>
+    pub fn union<'a, S2>(&'a self, other: &'a RubySet<T, S2>) -> Union<'a, T, S>
     where
         S2: BuildHasher,
     {
@@ -613,12 +611,12 @@ where
     ///
     /// assert!(a.iter().eq(&[3, 2, 1, 4, 5]));
     /// ```
-    pub fn append<S2>(&mut self, other: &mut IndexSet<T, S2>) {
+    pub fn append<S2>(&mut self, other: &mut RubySet<T, S2>) {
         self.map.append(&mut other.map);
     }
 }
 
-impl<T, S> IndexSet<T, S>
+impl<T, S> RubySet<T, S>
 where
     S: BuildHasher,
 {
@@ -787,7 +785,7 @@ where
     }
 }
 
-impl<T, S> IndexSet<T, S> {
+impl<T, S> RubySet<T, S> {
     /// Remove the last value
     ///
     /// This preserves the order of the remaining elements.
@@ -1089,7 +1087,7 @@ impl<T, S> IndexSet<T, S> {
 /// set.insert("foo");
 /// println!("{:?}", set[10]); // panics!
 /// ```
-impl<T, S> Index<usize> for IndexSet<T, S> {
+impl<T, S> Index<usize> for RubySet<T, S> {
     type Output = T;
 
     /// Returns a reference to the value at the supplied `index`.
@@ -1107,20 +1105,20 @@ impl<T, S> Index<usize> for IndexSet<T, S> {
     }
 }
 
-impl<T, S> FromIterator<T> for IndexSet<T, S>
+impl<T, S> FromIterator<T> for RubySet<T, S>
 where
     T: Hash + Eq,
     S: BuildHasher + Default,
 {
     fn from_iter<I: IntoIterator<Item = T>>(iterable: I) -> Self {
         let iter = iterable.into_iter().map(|x| (x, ()));
-        IndexSet {
+        RubySet {
             map: RubyMap::from_iter(iter),
         }
     }
 }
 
-impl<T, const N: usize> From<[T; N]> for IndexSet<T, RandomState>
+impl<T, const N: usize> From<[T; N]> for RubySet<T, RandomState>
 where
     T: Eq + Hash,
 {
@@ -1138,7 +1136,7 @@ where
     }
 }
 
-impl<T, S> Extend<T> for IndexSet<T, S>
+impl<T, S> Extend<T> for RubySet<T, S>
 where
     T: Hash + Eq,
     S: BuildHasher,
@@ -1149,7 +1147,7 @@ where
     }
 }
 
-impl<'a, T, S> Extend<&'a T> for IndexSet<T, S>
+impl<'a, T, S> Extend<&'a T> for RubySet<T, S>
 where
     T: Hash + Eq + Copy + 'a,
     S: BuildHasher,
@@ -1160,43 +1158,43 @@ where
     }
 }
 
-impl<T, S> Default for IndexSet<T, S>
+impl<T, S> Default for RubySet<T, S>
 where
     S: Default,
 {
     /// Return an empty [`IndexSet`]
     fn default() -> Self {
-        IndexSet {
+        RubySet {
             map: RubyMap::default(),
         }
     }
 }
 
-impl<T, S1, S2> PartialEq<IndexSet<T, S2>> for IndexSet<T, S1>
+impl<T, S1, S2> PartialEq<RubySet<T, S2>> for RubySet<T, S1>
 where
     T: Hash + Eq,
     S1: BuildHasher,
     S2: BuildHasher,
 {
-    fn eq(&self, other: &IndexSet<T, S2>) -> bool {
+    fn eq(&self, other: &RubySet<T, S2>) -> bool {
         self.len() == other.len() && self.is_subset(other)
     }
 }
 
-impl<T, S> Eq for IndexSet<T, S>
+impl<T, S> Eq for RubySet<T, S>
 where
     T: Eq + Hash,
     S: BuildHasher,
 {
 }
 
-impl<T, S> IndexSet<T, S>
+impl<T, S> RubySet<T, S>
 where
     T: Eq + Hash,
     S: BuildHasher,
 {
     /// Returns `true` if `self` has no elements in common with `other`.
-    pub fn is_disjoint<S2>(&self, other: &IndexSet<T, S2>) -> bool
+    pub fn is_disjoint<S2>(&self, other: &RubySet<T, S2>) -> bool
     where
         S2: BuildHasher,
     {
@@ -1208,7 +1206,7 @@ where
     }
 
     /// Returns `true` if all elements of `self` are contained in `other`.
-    pub fn is_subset<S2>(&self, other: &IndexSet<T, S2>) -> bool
+    pub fn is_subset<S2>(&self, other: &RubySet<T, S2>) -> bool
     where
         S2: BuildHasher,
     {
@@ -1216,7 +1214,7 @@ where
     }
 
     /// Returns `true` if all elements of `other` are contained in `self`.
-    pub fn is_superset<S2>(&self, other: &IndexSet<T, S2>) -> bool
+    pub fn is_superset<S2>(&self, other: &RubySet<T, S2>) -> bool
     where
         S2: BuildHasher,
     {
@@ -1224,68 +1222,68 @@ where
     }
 }
 
-impl<T, S1, S2> BitAnd<&IndexSet<T, S2>> for &IndexSet<T, S1>
+impl<T, S1, S2> BitAnd<&RubySet<T, S2>> for &RubySet<T, S1>
 where
     T: Eq + Hash + Clone,
     S1: BuildHasher + Default,
     S2: BuildHasher,
 {
-    type Output = IndexSet<T, S1>;
+    type Output = RubySet<T, S1>;
 
     /// Returns the set intersection, cloned into a new set.
     ///
     /// Values are collected in the same order that they appear in `self`.
-    fn bitand(self, other: &IndexSet<T, S2>) -> Self::Output {
+    fn bitand(self, other: &RubySet<T, S2>) -> Self::Output {
         self.intersection(other).cloned().collect()
     }
 }
 
-impl<T, S1, S2> BitOr<&IndexSet<T, S2>> for &IndexSet<T, S1>
+impl<T, S1, S2> BitOr<&RubySet<T, S2>> for &RubySet<T, S1>
 where
     T: Eq + Hash + Clone,
     S1: BuildHasher + Default,
     S2: BuildHasher,
 {
-    type Output = IndexSet<T, S1>;
+    type Output = RubySet<T, S1>;
 
     /// Returns the set union, cloned into a new set.
     ///
     /// Values from `self` are collected in their original order, followed by
     /// values that are unique to `other` in their original order.
-    fn bitor(self, other: &IndexSet<T, S2>) -> Self::Output {
+    fn bitor(self, other: &RubySet<T, S2>) -> Self::Output {
         self.union(other).cloned().collect()
     }
 }
 
-impl<T, S1, S2> BitXor<&IndexSet<T, S2>> for &IndexSet<T, S1>
+impl<T, S1, S2> BitXor<&RubySet<T, S2>> for &RubySet<T, S1>
 where
     T: Eq + Hash + Clone,
     S1: BuildHasher + Default,
     S2: BuildHasher,
 {
-    type Output = IndexSet<T, S1>;
+    type Output = RubySet<T, S1>;
 
     /// Returns the set symmetric-difference, cloned into a new set.
     ///
     /// Values from `self` are collected in their original order, followed by
     /// values from `other` in their original order.
-    fn bitxor(self, other: &IndexSet<T, S2>) -> Self::Output {
+    fn bitxor(self, other: &RubySet<T, S2>) -> Self::Output {
         self.symmetric_difference(other).cloned().collect()
     }
 }
 
-impl<T, S1, S2> Sub<&IndexSet<T, S2>> for &IndexSet<T, S1>
+impl<T, S1, S2> Sub<&RubySet<T, S2>> for &RubySet<T, S1>
 where
     T: Eq + Hash + Clone,
     S1: BuildHasher + Default,
     S2: BuildHasher,
 {
-    type Output = IndexSet<T, S1>;
+    type Output = RubySet<T, S1>;
 
     /// Returns the set difference, cloned into a new set.
     ///
     /// Values are collected in the same order that they appear in `self`.
-    fn sub(self, other: &IndexSet<T, S2>) -> Self::Output {
+    fn sub(self, other: &RubySet<T, S2>) -> Self::Output {
         self.difference(other).cloned().collect()
     }
 }

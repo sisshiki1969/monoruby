@@ -176,11 +176,6 @@ impl<'a, K, V> OccupiedEntry<'a, K, V> {
         &self.entries[self.index()].key
     }
 
-    pub(crate) fn key_mut(&mut self) -> &mut K {
-        let index = self.index();
-        &mut self.entries[index].key
-    }
-
     /// Gets a reference to the entry's value in the map.
     pub fn get(&self) -> &V {
         &self.entries[self.index()].value
@@ -359,10 +354,6 @@ impl<'a, K, V> VacantEntry<'a, K, V> {
         &self.key
     }
 
-    pub(crate) fn key_mut(&mut self) -> &mut K {
-        &mut self.key
-    }
-
     /// Takes ownership of the key, leaving the entry vacant.
     pub fn into_key(self) -> K {
         self.key
@@ -449,10 +440,6 @@ impl<'a, K, V> IndexedEntry<'a, K, V> {
     /// Gets a reference to the entry's key in the map.
     pub fn key(&self) -> &K {
         &self.map.entries[self.index].key
-    }
-
-    pub(crate) fn key_mut(&mut self) -> &mut K {
-        &mut self.map.entries[self.index].key
     }
 
     /// Gets a reference to the entry's value in the map.

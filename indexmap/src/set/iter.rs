@@ -1,4 +1,4 @@
-use super::{Bucket, Entries, IndexSet, Slice};
+use super::{Bucket, Entries, RubySet, Slice};
 
 use alloc::vec::{self, Vec};
 use core::fmt;
@@ -7,7 +7,7 @@ use core::iter::{Chain, FusedIterator};
 use core::ops::RangeBounds;
 use core::slice::Iter as SliceIter;
 
-impl<'a, T, S> IntoIterator for &'a IndexSet<T, S> {
+impl<'a, T, S> IntoIterator for &'a RubySet<T, S> {
     type Item = &'a T;
     type IntoIter = Iter<'a, T>;
 
@@ -16,7 +16,7 @@ impl<'a, T, S> IntoIterator for &'a IndexSet<T, S> {
     }
 }
 
-impl<T, S> IntoIterator for IndexSet<T, S> {
+impl<T, S> IntoIterator for RubySet<T, S> {
     type Item = T;
     type IntoIter = IntoIter<T>;
 
@@ -189,11 +189,11 @@ impl<T: fmt::Debug> fmt::Debug for Drain<'_, T> {
 /// See its documentation for more.
 pub struct Difference<'a, T, S> {
     iter: Iter<'a, T>,
-    other: &'a IndexSet<T, S>,
+    other: &'a RubySet<T, S>,
 }
 
 impl<'a, T, S> Difference<'a, T, S> {
-    pub(super) fn new<S1>(set: &'a IndexSet<T, S1>, other: &'a IndexSet<T, S>) -> Self {
+    pub(super) fn new<S1>(set: &'a RubySet<T, S1>, other: &'a RubySet<T, S>) -> Self {
         Self {
             iter: set.iter(),
             other,
@@ -269,11 +269,11 @@ where
 /// See its documentation for more.
 pub struct Intersection<'a, T, S> {
     iter: Iter<'a, T>,
-    other: &'a IndexSet<T, S>,
+    other: &'a RubySet<T, S>,
 }
 
 impl<'a, T, S> Intersection<'a, T, S> {
-    pub(super) fn new<S1>(set: &'a IndexSet<T, S1>, other: &'a IndexSet<T, S>) -> Self {
+    pub(super) fn new<S1>(set: &'a RubySet<T, S1>, other: &'a RubySet<T, S>) -> Self {
         Self {
             iter: set.iter(),
             other,
@@ -357,7 +357,7 @@ where
     S1: BuildHasher,
     S2: BuildHasher,
 {
-    pub(super) fn new(set1: &'a IndexSet<T, S1>, set2: &'a IndexSet<T, S2>) -> Self {
+    pub(super) fn new(set1: &'a RubySet<T, S1>, set2: &'a RubySet<T, S2>) -> Self {
         let diff1 = set1.difference(set2);
         let diff2 = set2.difference(set1);
         Self {
@@ -448,7 +448,7 @@ where
     T: Eq + Hash,
     S: BuildHasher,
 {
-    pub(super) fn new<S2>(set1: &'a IndexSet<T, S>, set2: &'a IndexSet<T, S2>) -> Self
+    pub(super) fn new<S2>(set1: &'a RubySet<T, S>, set2: &'a RubySet<T, S2>) -> Self
     where
         S2: BuildHasher,
     {
@@ -543,7 +543,7 @@ where
     S: BuildHasher,
 {
     #[track_caller]
-    pub(super) fn new<R>(set: &'a mut IndexSet<T, S>, range: R, replace_with: I) -> Self
+    pub(super) fn new<R>(set: &'a mut RubySet<T, S>, range: R, replace_with: I) -> Self
     where
         R: RangeBounds<usize>,
     {

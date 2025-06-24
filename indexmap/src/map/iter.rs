@@ -156,7 +156,7 @@ impl<K, V> Default for IterMut<'_, K, V> {
     }
 }
 
-/// A mutable iterator over the entries of an [`IndexMap`].
+/*/// A mutable iterator over the entries of an [`IndexMap`].
 ///
 /// This `struct` is created by the [`MutableKeys::iter_mut2`][super::MutableKeys::iter_mut2] method.
 /// See its documentation for more.
@@ -215,7 +215,7 @@ impl<K, V> Default for IterMut2<'_, K, V> {
             iter: [].iter_mut(),
         }
     }
-}
+}*/
 
 /// An owning iterator over the entries of an [`IndexMap`].
 ///

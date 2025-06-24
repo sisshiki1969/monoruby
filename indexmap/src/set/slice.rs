@@ -1,4 +1,4 @@
-use super::{Bucket, Entries, IndexSet, IntoIter, Iter};
+use super::{Bucket, Entries, IntoIter, Iter, RubySet};
 use crate::util::{slice_eq, try_simplify_range};
 
 use alloc::boxed::Box;
@@ -303,7 +303,7 @@ impl<T> Index<usize> for Slice<T> {
 // Instead, we repeat the implementations for all the core range types.
 macro_rules! impl_index {
     ($($range:ty),*) => {$(
-        impl<T, S> Index<$range> for IndexSet<T, S> {
+        impl<T, S> Index<$range> for RubySet<T, S> {
             type Output = Slice<T>;
 
             fn index(&self, range: $range) -> &Self::Output {
@@ -342,7 +342,7 @@ mod tests {
         }
 
         let vec: Vec<i32> = (0..10).map(|i| i * i).collect();
-        let set: IndexSet<i32> = vec.iter().cloned().collect();
+        let set: RubySet<i32> = vec.iter().cloned().collect();
         let slice = set.as_slice();
 
         // RangeFull
