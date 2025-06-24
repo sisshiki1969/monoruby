@@ -187,9 +187,9 @@ impl<K, V> Bucket<K, V> {
     fn ref_mut(&mut self) -> (&K, &mut V) {
         (&self.key, &mut self.value)
     }
-    fn muts(&mut self) -> (&mut K, &mut V) {
+    /*fn muts(&mut self) -> (&mut K, &mut V) {
         (&mut self.key, &mut self.value)
-    }
+    }*/
 }
 
 trait Entries {

@@ -9,7 +9,7 @@
 
 mod entry;
 
-pub mod raw_entry_v1;
+//pub mod raw_entry_v1;
 
 use hashbrown::hash_table;
 
@@ -721,5 +721,5 @@ fn assert_send_sync() {
     assert_send_sync::<IndexMapCore<i32, i32>>();
     assert_send_sync::<Entry<'_, i32, i32>>();
     assert_send_sync::<IndexedEntry<'_, i32, i32>>();
-    assert_send_sync::<raw_entry_v1::RawEntryMut<'_, i32, i32, ()>>();
+    //assert_send_sync::<raw_entry_v1::RawEntryMut<'_, i32, i32, ()>>();
 }

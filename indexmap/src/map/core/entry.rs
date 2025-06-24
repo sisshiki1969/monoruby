@@ -197,10 +197,10 @@ impl<'a, K, V> OccupiedEntry<'a, K, V> {
         &mut self.entries[index].value
     }
 
-    pub(super) fn into_muts(self) -> (&'a mut K, &'a mut V) {
+    /*pub(super) fn into_muts(self) -> (&'a mut K, &'a mut V) {
         let index = self.index();
         self.entries[index].muts()
-    }
+    }*/
 
     /// Sets the value of the entry to `value`, and returns the entry's old value.
     pub fn insert(&mut self, value: V) -> V {
