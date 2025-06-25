@@ -1,4 +1,4 @@
-use crate::alloc::alloc::{handle_alloc_error, Layout};
+use crate::alloc::alloc::Layout;
 use crate::control::{BitMaskIter, Group, Tag, TagSliceExt};
 use crate::scopeguard::{guard, ScopeGuard};
 use crate::util::{invalid_mut, likely, unlikely};

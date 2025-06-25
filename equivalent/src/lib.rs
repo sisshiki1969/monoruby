@@ -1,12 +1,10 @@
-//! [`Equivalent`] and [`Comparable`] are traits for key comparison in maps.
+//! [`Equivalent`] is a trait for key comparison in maps.
 //!
 //! These may be used in the implementation of maps where the lookup type `Q`
 //! may be different than the stored key type `K`.
 //!
 //! * `Q: Equivalent<K>` checks for equality, similar to the `HashMap<K, V>`
 //!   constraint `K: Borrow<Q>, Q: Eq`.
-//! * `Q: Comparable<K>` checks the ordering, similar to the `BTreeMap<K, V>`
-//!   constraint `K: Borrow<Q>, Q: Ord`.
 //!
 //! These traits are not used by the maps in the standard library, but they may
 //! add more flexibility in third-party map implementations, especially in
@@ -16,7 +14,6 @@
 //!
 //! ```
 //! use equivalent::*;
-//! use std::cmp::Ordering;
 //!
 //! pub struct Pair<A, B>(pub A, pub B);
 //!
@@ -30,19 +27,6 @@
 //!     }
 //! }
 //!
-//! impl<'a, A: ?Sized, B: ?Sized, C, D> Comparable<(C, D)> for Pair<&'a A, &'a B>
-//! where
-//!     A: Comparable<C>,
-//!     B: Comparable<D>,
-//! {
-//!     fn compare(&self, key: &(C, D)) -> Ordering {
-//!         match self.0.compare(&key.0) {
-//!             Ordering::Equal => self.1.compare(&key.1),
-//!             not_equal => not_equal,
-//!         }
-//!     }
-//! }
-//!
 //! fn main() {
 //!     let key = (String::from("foo"), String::from("bar"));
 //!     let q1 = Pair("foo", "bar");
@@ -52,16 +36,10 @@
 //!     assert!(q1.equivalent(&key));
 //!     assert!(!q2.equivalent(&key));
 //!     assert!(!q3.equivalent(&key));
-//!
-//!     assert_eq!(q1.compare(&key), Ordering::Equal);
-//!     assert_eq!(q2.compare(&key), Ordering::Less);
-//!     assert_eq!(q3.compare(&key), Ordering::Greater);
 //! }
 //! ```
 
-#![no_std]
-
-use core::borrow::Borrow;
+use std::borrow::Borrow;
 
 /// Key equivalence trait.
 ///

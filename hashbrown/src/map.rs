@@ -230,7 +230,6 @@ where
     move |x| k.equivalent(x)
 }
 
-#[cfg(not(feature = "nightly"))]
 #[cfg_attr(feature = "inline-more", inline)]
 pub(crate) fn make_hash<Q, S>(hash_builder: &S, val: &Q) -> u64
 where
@@ -241,16 +240,6 @@ where
     let mut state = hash_builder.build_hasher();
     val.hash(&mut state);
     state.finish()
-}
-
-#[cfg(feature = "nightly")]
-#[cfg_attr(feature = "inline-more", inline)]
-pub(crate) fn make_hash<Q, S>(hash_builder: &S, val: &Q) -> u64
-where
-    Q: Hash + ?Sized,
-    S: BuildHasher,
-{
-    hash_builder.hash_one(val)
 }
 
 #[cfg(feature = "default-hasher")]
@@ -5663,41 +5652,6 @@ mod test_map {
             let mut map: HashMap<i32, i32> = (0..8).map(|x| (x, x * 10)).collect();
             map.extract_if(|&k, _| k % 2 == 0).for_each(drop);
             assert_eq!(map.len(), 4);
-        }
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // FIXME: no OOM signalling (https://github.com/rust-lang/miri/issues/613)
-    fn test_try_reserve() {
-        use crate::TryReserveError::{AllocError, CapacityOverflow};
-
-        const MAX_ISIZE: usize = isize::MAX as usize;
-
-        let mut empty_bytes: HashMap<u8, u8> = HashMap::new();
-
-        if let Err(CapacityOverflow) = empty_bytes.try_reserve(usize::MAX) {
-        } else {
-            panic!("usize::MAX should trigger an overflow!");
-        }
-
-        if let Err(CapacityOverflow) = empty_bytes.try_reserve(MAX_ISIZE) {
-        } else {
-            panic!("isize::MAX should trigger an overflow!");
-        }
-
-        if let Err(AllocError { .. }) = empty_bytes.try_reserve(MAX_ISIZE / 5) {
-        } else {
-            // This may succeed if there is enough free memory. Attempt to
-            // allocate a few more hashmaps to ensure the allocation will fail.
-            let mut empty_bytes2: HashMap<u8, u8> = HashMap::new();
-            let _ = empty_bytes2.try_reserve(MAX_ISIZE / 5);
-            let mut empty_bytes3: HashMap<u8, u8> = HashMap::new();
-            let _ = empty_bytes3.try_reserve(MAX_ISIZE / 5);
-            let mut empty_bytes4: HashMap<u8, u8> = HashMap::new();
-            if let Err(AllocError { .. }) = empty_bytes4.try_reserve(MAX_ISIZE / 5) {
-            } else {
-                panic!("isize::MAX / 5 should trigger an OOM!");
-            }
         }
     }
 

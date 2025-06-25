@@ -523,7 +523,7 @@ impl HashContent {
     pub(crate) fn compare_by_identity(&mut self) {
         match self {
             HashContent::Map(box map) => {
-                let mut new_map = indexmap::RubyMap::default();
+                let mut new_map = IndexMap::default();
                 for (k, v) in map.iter() {
                     new_map.insert(IdentKey(k.0), *v);
                 }

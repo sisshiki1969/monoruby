@@ -35,20 +35,12 @@ rayon = "1.2"
 fnv = "1.0.7"
 serde_test = "1.0"
 doc-comment = "0.3.1"
-bumpalo = { version = "3.13.0", features = ["allocator-api2"] }
 
 [features]
-default = ["default-hasher", "inline-more", "allocator-api2", "equivalent"]
-
-# Enables use of nightly features. This is only guaranteed to work on the latest
-# version of nightly Rust.
-nightly = ["bumpalo/allocator_api"]
+default = ["default-hasher", "inline-more", "equivalent"]
 
 # Enables the RustcEntry API used to provide the standard library's Entry API.
 rustc-internal-api = []
-
-# Enables the deprecated RawEntry API.
-raw-entry = []
 
 # Provides a default hasher. Currently this is foldhash but this is subject to
 # change in the future. Note that the default hasher does *not* provide HashDoS
