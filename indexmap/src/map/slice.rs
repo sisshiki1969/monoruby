@@ -478,7 +478,7 @@ impl<K, V> IndexMut<usize> for Slice<K, V> {
 // Instead, we repeat the implementations for all the core range types.
 macro_rules! impl_index {
     ($($range:ty),*) => {$(
-        impl<K, V, S> Index<$range> for RubyMap<K, V, S> {
+        impl<K, V, E, G, R, S> Index<$range> for RubyMap<K, V, E, G, R, S> {
             type Output = Slice<K, V>;
 
             fn index(&self, range: $range) -> &Self::Output {
@@ -486,7 +486,7 @@ macro_rules! impl_index {
             }
         }
 
-        impl<K, V, S> IndexMut<$range> for RubyMap<K, V, S> {
+        impl<K, V, E, G, R, S> IndexMut<$range> for RubyMap<K, V, E, G, R, S> {
             fn index_mut(&mut self, range: $range) -> &mut Self::Output {
                 Slice::from_mut_slice(&mut self.as_entries_mut()[range])
             }

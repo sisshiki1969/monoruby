@@ -203,7 +203,7 @@ impl<'a, T, S> Difference<'a, T, S> {
 
 impl<'a, T, S> Iterator for Difference<'a, T, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     type Item = &'a T;
@@ -224,7 +224,7 @@ where
 
 impl<T, S> DoubleEndedIterator for Difference<'_, T, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
@@ -239,7 +239,7 @@ where
 
 impl<T, S> FusedIterator for Difference<'_, T, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
 }
@@ -255,7 +255,7 @@ impl<T, S> Clone for Difference<'_, T, S> {
 
 impl<T, S> fmt::Debug for Difference<'_, T, S>
 where
-    T: fmt::Debug + Eq + Hash,
+    T: fmt::Debug + RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -283,7 +283,7 @@ impl<'a, T, S> Intersection<'a, T, S> {
 
 impl<'a, T, S> Iterator for Intersection<'a, T, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     type Item = &'a T;
@@ -304,7 +304,7 @@ where
 
 impl<T, S> DoubleEndedIterator for Intersection<'_, T, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
@@ -319,7 +319,7 @@ where
 
 impl<T, S> FusedIterator for Intersection<'_, T, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
 }
@@ -335,7 +335,7 @@ impl<T, S> Clone for Intersection<'_, T, S> {
 
 impl<T, S> fmt::Debug for Intersection<'_, T, S>
 where
-    T: fmt::Debug + Eq + Hash,
+    T: fmt::Debug + RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -353,7 +353,7 @@ pub struct SymmetricDifference<'a, T, S1, S2> {
 
 impl<'a, T, S1, S2> SymmetricDifference<'a, T, S1, S2>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S1: BuildHasher,
     S2: BuildHasher,
 {
@@ -368,7 +368,7 @@ where
 
 impl<'a, T, S1, S2> Iterator for SymmetricDifference<'a, T, S1, S2>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S1: BuildHasher,
     S2: BuildHasher,
 {
@@ -392,7 +392,7 @@ where
 
 impl<T, S1, S2> DoubleEndedIterator for SymmetricDifference<'_, T, S1, S2>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S1: BuildHasher,
     S2: BuildHasher,
 {
@@ -410,7 +410,7 @@ where
 
 impl<T, S1, S2> FusedIterator for SymmetricDifference<'_, T, S1, S2>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S1: BuildHasher,
     S2: BuildHasher,
 {
@@ -426,7 +426,7 @@ impl<T, S1, S2> Clone for SymmetricDifference<'_, T, S1, S2> {
 
 impl<T, S1, S2> fmt::Debug for SymmetricDifference<'_, T, S1, S2>
 where
-    T: fmt::Debug + Eq + Hash,
+    T: fmt::Debug + RubyEql<E, G, R> + Hash,
     S1: BuildHasher,
     S2: BuildHasher,
 {
@@ -445,7 +445,7 @@ pub struct Union<'a, T, S> {
 
 impl<'a, T, S> Union<'a, T, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     pub(super) fn new<S2>(set1: &'a RubySet<T, S>, set2: &'a RubySet<T, S2>) -> Self
@@ -460,7 +460,7 @@ where
 
 impl<'a, T, S> Iterator for Union<'a, T, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     type Item = &'a T;
@@ -483,7 +483,7 @@ where
 
 impl<T, S> DoubleEndedIterator for Union<'_, T, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
@@ -500,7 +500,7 @@ where
 
 impl<T, S> FusedIterator for Union<'_, T, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
 }
@@ -515,7 +515,7 @@ impl<T, S> Clone for Union<'_, T, S> {
 
 impl<T, S> fmt::Debug for Union<'_, T, S>
 where
-    T: fmt::Debug + Eq + Hash,
+    T: fmt::Debug + RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

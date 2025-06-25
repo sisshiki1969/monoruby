@@ -569,10 +569,10 @@ impl<T> Bucket<T> {
 }
 
 /// A raw hash table with an unsafe API.
-pub struct RawTable<T> {
+pub struct RawTable<T, E, G, R> {
     table: RawTableInner,
     // Tell dropck that we own instances of T.
-    marker: PhantomData<T>,
+    marker: PhantomData<(T, E, G, R)>,
 }
 
 /// Non-generic part of `RawTable` which allows functions to be instantiated only once regardless
@@ -593,7 +593,7 @@ struct RawTableInner {
     items: usize,
 }
 
-impl<T> RawTable<T> {
+impl<T, E, G, R> RawTable<T, E, G, R> {
     /// Creates a new empty hash table without allocating any memory.
     ///
     /// In effect this returns a table with exactly 1 bucket. However we can
@@ -614,7 +614,7 @@ impl<T> RawTable<T> {
     }
 }
 
-impl<T> RawTable<T> {
+impl<T, E, G, R> RawTable<T, E, G, R> {
     const TABLE_LAYOUT: TableLayout = TableLayout::new::<T>();
     /// Allocates a new hash table with the given number of buckets.
     ///
@@ -1256,14 +1256,14 @@ impl<T> RawTable<T> {
     /// `RawIterHash`. Because we cannot make the `next` method unsafe on the
     /// `RawIterHash` struct, we have to make the `iter_hash` method unsafe.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub unsafe fn iter_hash(&self, hash: u64) -> RawIterHash<T> {
+    pub unsafe fn iter_hash(&self, hash: u64) -> RawIterHash<T, E, G, R> {
         RawIterHash::new(self, hash)
     }
 
     /// Returns an iterator which removes all elements from the table without
     /// freeing the memory.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn drain(&mut self) -> RawDrain<'_, T> {
+    pub fn drain(&mut self) -> RawDrain<'_, T, E, G, R> {
         unsafe {
             let iter = self.iter();
             self.drain_iter_from(iter)
@@ -1278,7 +1278,7 @@ impl<T> RawTable<T> {
     /// It is up to the caller to ensure that the iterator is valid for this
     /// `RawTable` and covers all items that remain in the table.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub unsafe fn drain_iter_from(&mut self, iter: RawIter<T>) -> RawDrain<'_, T> {
+    pub unsafe fn drain_iter_from(&mut self, iter: RawIter<T>) -> RawDrain<'_, T, E, G, R> {
         debug_assert_eq!(iter.len(), self.len());
         RawDrain {
             iter,
@@ -1327,9 +1327,6 @@ impl<T> RawTable<T> {
         alloc
     }
 }
-
-unsafe impl<T> Send for RawTable<T> where T: Send {}
-unsafe impl<T> Sync for RawTable<T> where T: Sync {}
 
 impl RawTableInner {
     const NEW: Self = RawTableInner::new();
@@ -3032,7 +3029,7 @@ impl RawTableInner {
     }
 }
 
-impl<T: Clone> Clone for RawTable<T> {
+impl<T: Clone, E, G, R> Clone for RawTable<T, E, G, R> {
     fn clone(&self) -> Self {
         if self.table.is_empty_singleton() {
             Self::new()
@@ -3133,7 +3130,7 @@ impl<T: Clone> Clone for RawTable<T> {
 trait RawTableClone {
     unsafe fn clone_from_spec(&mut self, source: &Self);
 }
-impl<T: Clone> RawTableClone for RawTable<T> {
+impl<T: Clone, E, G, R> RawTableClone for RawTable<T, E, G, R> {
     default_fn! {
         #[cfg_attr(feature = "inline-more", inline)]
         unsafe fn clone_from_spec(&mut self, source: &Self) {
@@ -3142,7 +3139,7 @@ impl<T: Clone> RawTableClone for RawTable<T> {
     }
 }
 
-impl<T: Clone> RawTable<T> {
+impl<T: Clone, E, G, R> RawTable<T, E, G, R> {
     /// Common code for `clone` and `clone_from`. Assumes:
     /// - `self.buckets() == source.buckets()`.
     /// - Any existing elements have been dropped.
@@ -3185,14 +3182,14 @@ impl<T: Clone> RawTable<T> {
     }
 }
 
-impl<T> Default for RawTable<T> {
+impl<T, E, G, R> Default for RawTable<T, E, G, R> {
     #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> Drop for RawTable<T> {
+impl<T, E, G, R> Drop for RawTable<T, E, G, R> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn drop(&mut self) {
         unsafe {
@@ -3208,7 +3205,7 @@ impl<T> Drop for RawTable<T> {
     }
 }
 
-impl<T> IntoIterator for RawTable<T> {
+impl<T, E, G, R> IntoIterator for RawTable<T, E, G, R> {
     type Item = T;
     type IntoIter = RawIntoIter<T>;
 
@@ -3701,7 +3698,7 @@ impl<T> ExactSizeIterator for RawIntoIter<T> {}
 impl<T> FusedIterator for RawIntoIter<T> {}
 
 /// Iterator which consumes elements without freeing the table storage.
-pub struct RawDrain<'a, T> {
+pub struct RawDrain<'a, T, E, G, R> {
     iter: RawIter<T>,
 
     // The table is moved into the iterator for the duration of the drain. This
@@ -3710,22 +3707,19 @@ pub struct RawDrain<'a, T> {
     table: RawTableInner,
     orig_table: NonNull<RawTableInner>,
 
-    // We don't use a &'a mut RawTable<T> because we want RawDrain to be
+    // We don't use a &'a mut RawTable<T, E, G, R> because we want RawDrain to be
     // covariant over T.
-    marker: PhantomData<&'a RawTable<T>>,
+    marker: PhantomData<&'a RawTable<T, E, G, R>>,
 }
 
-impl<T> RawDrain<'_, T> {
+impl<T, E, G, R> RawDrain<'_, T, E, G, R> {
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn iter(&self) -> RawIter<T> {
         self.iter.clone()
     }
 }
 
-unsafe impl<T> Send for RawDrain<'_, T> where T: Send {}
-unsafe impl<T> Sync for RawDrain<'_, T> where T: Sync {}
-
-impl<T> Drop for RawDrain<'_, T> {
+impl<T, E, G, R> Drop for RawDrain<'_, T, E, G, R> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn drop(&mut self) {
         unsafe {
@@ -3744,7 +3738,7 @@ impl<T> Drop for RawDrain<'_, T> {
     }
 }
 
-impl<T> Iterator for RawDrain<'_, T> {
+impl<T, E, G, R> Iterator for RawDrain<'_, T, E, G, R> {
     type Item = T;
 
     #[cfg_attr(feature = "inline-more", inline)]
@@ -3761,8 +3755,8 @@ impl<T> Iterator for RawDrain<'_, T> {
     }
 }
 
-impl<T> ExactSizeIterator for RawDrain<'_, T> {}
-impl<T> FusedIterator for RawDrain<'_, T> {}
+impl<T, E, G, R> ExactSizeIterator for RawDrain<'_, T, E, G, R> {}
+impl<T, E, G, R> FusedIterator for RawDrain<'_, T, E, G, R> {}
 
 /// Iterator over occupied buckets that could match a given hash.
 ///
@@ -3780,9 +3774,9 @@ impl<T> FusedIterator for RawDrain<'_, T> {}
 ///   created will be yielded by that iterator.
 /// - The order in which the iterator yields buckets is unspecified and may
 ///   change in the future.
-pub struct RawIterHash<T> {
+pub struct RawIterHash<T, E, G, R> {
     inner: RawIterHashInner,
-    _marker: PhantomData<T>,
+    _marker: PhantomData<(T, E, G, R)>,
 }
 
 #[derive(Clone)]
@@ -3805,9 +3799,9 @@ struct RawIterHashInner {
     bitmask: BitMaskIter,
 }
 
-impl<T> RawIterHash<T> {
+impl<T, E, G, R> RawIterHash<T, E, G, R> {
     #[cfg_attr(feature = "inline-more", inline)]
-    unsafe fn new(table: &RawTable<T>, hash: u64) -> Self {
+    unsafe fn new(table: &RawTable<T, E, G, R>, hash: u64) -> Self {
         RawIterHash {
             inner: RawIterHashInner::new(&table.table, hash),
             _marker: PhantomData,
@@ -3815,7 +3809,7 @@ impl<T> RawIterHash<T> {
     }
 }
 
-impl<T> Clone for RawIterHash<T> {
+impl<T, E, G, R> Clone for RawIterHash<T, E, G, R> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn clone(&self) -> Self {
         Self {
@@ -3825,7 +3819,7 @@ impl<T> Clone for RawIterHash<T> {
     }
 }
 
-impl<T> Default for RawIterHash<T> {
+impl<T, E, G, R> Default for RawIterHash<T, E, G, R> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn default() -> Self {
         Self {
@@ -3855,7 +3849,7 @@ impl RawIterHashInner {
     }
 }
 
-impl<T> Iterator for RawIterHash<T> {
+impl<T, E, G, R> Iterator for RawIterHash<T, E, G, R> {
     type Item = Bucket<T>;
 
     fn next(&mut self) -> Option<Bucket<T>> {
@@ -3902,12 +3896,12 @@ impl Iterator for RawIterHashInner {
     }
 }
 
-pub(crate) struct RawExtractIf<'a, T> {
+pub(crate) struct RawExtractIf<'a, T, E, G, R> {
     pub iter: RawIter<T>,
-    pub table: &'a mut RawTable<T>,
+    pub table: &'a mut RawTable<T, E, G, R>,
 }
 
-impl<T> RawExtractIf<'_, T> {
+impl<T, E, G, R> RawExtractIf<'_, T, E, G, R> {
     #[cfg_attr(feature = "inline-more", inline)]
     pub(crate) fn next<F>(&mut self, mut f: F) -> Option<T>
     where
@@ -3927,12 +3921,14 @@ impl<T> RawExtractIf<'_, T> {
 #[cfg(test)]
 mod test_map {
     use super::*;
+    struct E;
+    struct G;
 
     #[test]
     fn test_minimum_capacity_for_small_types() {
         #[track_caller]
-        fn test_t<T>() {
-            let raw_table: RawTable<T> = RawTable::with_capacity(1);
+        fn test_t<T, E, G, R>() {
+            let raw_table: RawTable<T, E, G, R> = RawTable::with_capacity(1);
             let actual_buckets = raw_table.buckets();
             let min_buckets = Group::WIDTH / core::mem::size_of::<T>();
             assert!(
@@ -3941,14 +3937,14 @@ mod test_map {
             );
         }
 
-        test_t::<u8>();
+        test_t::<u8, E, G, ()>();
 
         // This is only "small" for some platforms, like x86_64 with SSE2, but
         // there's no harm in running it on other platforms.
-        test_t::<u16>();
+        test_t::<u16, E, G, ()>();
     }
 
-    fn rehash_in_place<T>(table: &mut RawTable<T>, hasher: impl Fn(&T) -> u64) {
+    fn rehash_in_place<T, E, G, R>(table: &mut RawTable<T, E, G, R>, hasher: impl Fn(&T) -> u64) {
         unsafe {
             table.table.rehash_in_place(
                 &|table, index| hasher(table.bucket::<T>(index).as_ref()),
@@ -3964,7 +3960,7 @@ mod test_map {
 
     #[test]
     fn rehash() {
-        let mut table = RawTable::new();
+        let mut table = RawTable::<_, E, G, ()>::new();
         let hasher = |i: &u64| *i;
         for i in 0..100 {
             table.insert(i, i, hasher);
@@ -3996,7 +3992,8 @@ mod test_map {
         let table = unsafe {
             // SAFETY: The `buckets` is power of two and we're not
             // trying to actually use the returned RawTable.
-            RawTable::<(u64, Vec<i32>)>::new_uninitialized(8, Fallibility::Infallible).unwrap()
+            RawTable::<(u64, Vec<i32>), E, G, ()>::new_uninitialized(8, Fallibility::Infallible)
+                .unwrap()
         };
         drop(table);
     }
@@ -4009,8 +4006,11 @@ mod test_map {
         unsafe {
             // SAFETY: The `buckets` is power of two and we're not
             // trying to actually use the returned RawTable.
-            let mut table =
-                RawTable::<(u64, Vec<i32>)>::new_uninitialized(8, Fallibility::Infallible).unwrap();
+            let mut table = RawTable::<(u64, Vec<i32>), E, G, ()>::new_uninitialized(
+                8,
+                Fallibility::Infallible,
+            )
+            .unwrap();
 
             // WE SIMULATE, AS IT WERE, A FULL TABLE.
 

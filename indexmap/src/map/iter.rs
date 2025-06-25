@@ -8,7 +8,7 @@ use core::iter::FusedIterator;
 use core::ops::{Index, RangeBounds};
 use core::slice;
 
-impl<'a, K, V, S> IntoIterator for &'a RubyMap<K, V, S> {
+impl<'a, K, V, S> IntoIterator for &'a RubyMap<K, V, E, G, R, S> {
     type Item = (&'a K, &'a V);
     type IntoIter = Iter<'a, K, V>;
 
@@ -17,7 +17,7 @@ impl<'a, K, V, S> IntoIterator for &'a RubyMap<K, V, S> {
     }
 }
 
-impl<'a, K, V, S> IntoIterator for &'a mut RubyMap<K, V, S> {
+impl<'a, K, V, S> IntoIterator for &'a mut RubyMap<K, V, E, G, R, S> {
     type Item = (&'a K, &'a mut V);
     type IntoIter = IterMut<'a, K, V>;
 
@@ -26,7 +26,7 @@ impl<'a, K, V, S> IntoIterator for &'a mut RubyMap<K, V, S> {
     }
 }
 
-impl<K, V, S> IntoIterator for RubyMap<K, V, S> {
+impl<K, V, E, G, R, S> IntoIterator for RubyMap<K, V, E, G, R, S> {
     type Item = (K, V);
     type IntoIter = IntoIter<K, V>;
 
@@ -655,7 +655,7 @@ where
     K: Hash + Eq,
     S: BuildHasher,
 {
-    map: &'a mut RubyMap<K, V, S>,
+    map: &'a mut RubyMap<K, V, E, G, R, S>,
     tail: IndexMapCore<K, V>,
     drain: vec::IntoIter<Bucket<K, V>>,
     replace_with: I,
@@ -668,7 +668,7 @@ where
     S: BuildHasher,
 {
     #[track_caller]
-    pub(super) fn new<R>(map: &'a mut RubyMap<K, V, S>, range: R, replace_with: I) -> Self
+    pub(super) fn new<R>(map: &'a mut RubyMap<K, V, E, G, R, S>, range: R, replace_with: I) -> Self
     where
         R: RangeBounds<usize>,
     {

@@ -3,7 +3,7 @@
 //! These may be used in the implementation of maps where the lookup type `Q`
 //! may be different than the stored key type `K`.
 //!
-//! * `Q: Equivalent<K>` checks for equality, similar to the `HashMap<K, V>`
+//! * `Q: Equivalent<K, E, G, R>` checks for equality, similar to the `HashMap<K, V>`
 //!   constraint `K: Borrow<Q>, Q: Eq`.
 //!
 //! These traits are not used by the maps in the standard library, but they may
@@ -41,6 +41,18 @@
 
 use std::borrow::Borrow;
 
+pub trait RubyEql<E, G, R> {
+    /// Compare self to `other` and return `true` if they are equal.
+    fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R>;
+}
+
+impl<K: Eq, E, G, R> RubyEql<E, G, R> for K {
+    #[inline]
+    fn eql(&self, other: &Self, _: &mut E, _: &mut G) -> Result<bool, R> {
+        Ok(self == other)
+    }
+}
+
 /// Key equivalence trait.
 ///
 /// This trait allows hash table lookup to be customized. It has one blanket
@@ -51,18 +63,18 @@ use std::borrow::Borrow;
 /// # Contract
 ///
 /// The implementor **must** hash like `K`, if it is hashable.
-pub trait Equivalent<K: ?Sized> {
+pub trait Equivalent<K: ?Sized, E, G, R> {
     /// Compare self to `key` and return `true` if they are equal.
-    fn equivalent(&self, key: &K) -> bool;
+    fn equivalent(&self, key: &K, e: &mut E, g: &mut G) -> Result<bool, R>;
 }
 
-impl<Q: ?Sized, K: ?Sized> Equivalent<K> for Q
+impl<Q: ?Sized, K: ?Sized, E, G, R> Equivalent<K, E, G, R> for Q
 where
     Q: Eq,
     K: Borrow<Q>,
 {
     #[inline]
-    fn equivalent(&self, key: &K) -> bool {
-        PartialEq::eq(self, key.borrow())
+    fn equivalent(&self, key: &K, _: &mut E, _: &mut G) -> Result<bool, R> {
+        Ok(PartialEq::eq(self, key.borrow()))
     }
 }

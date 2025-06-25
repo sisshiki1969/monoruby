@@ -8,7 +8,7 @@
 These may be used in the implementation of maps where the lookup type `Q`
 may be different than the stored key type `K`.
 
-* `Q: Equivalent<K>` checks for equality, similar to the `HashMap<K, V>`
+* `Q: Equivalent<K, E, G, R>` checks for equality, similar to the `HashMap<K, V>`
   constraint `K: Borrow<Q>, Q: Eq`.
 * `Q: Comparable<K>` checks the ordering, similar to the `BTreeMap<K, V>`
   constraint `K: Borrow<Q>, Q: Ord`.

@@ -1,4 +1,4 @@
-use crate::{Equivalent, TryReserveError};
+use crate::{Equivalent, RubyEql, TryReserveError};
 use core::hash::{BuildHasher, Hash};
 use core::iter::{Chain, FusedIterator};
 use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Sub, SubAssign};
@@ -111,11 +111,11 @@ use crate::DefaultHashBuilder;
 /// [`HashMap`]: struct.HashMap.html
 /// [`PartialEq`]: https://doc.rust-lang.org/std/cmp/trait.PartialEq.html
 /// [`RefCell`]: https://doc.rust-lang.org/std/cell/struct.RefCell.html
-pub struct HashSet<T, S = DefaultHashBuilder> {
-    pub(crate) map: HashMap<T, (), S>,
+pub struct HashSet<T, E, G, R, S = DefaultHashBuilder> {
+    pub(crate) map: HashMap<T, (), E, G, R, S>,
 }
 
-impl<T: Clone, S: Clone + Clone> Clone for HashSet<T, S> {
+impl<T: Clone, E, G, R, S: Clone + Clone> Clone for HashSet<T, E, G, R, S> {
     fn clone(&self) -> Self {
         HashSet {
             map: self.map.clone(),
@@ -128,7 +128,7 @@ impl<T: Clone, S: Clone + Clone> Clone for HashSet<T, S> {
 }
 
 #[cfg(feature = "default-hasher")]
-impl<T> HashSet<T, DefaultHashBuilder> {
+impl<T, E, G, R> HashSet<T, E, G, R, DefaultHashBuilder> {
     /// Creates an empty `HashSet`.
     ///
     /// The hash set is initially created with a capacity of 0, so it will not allocate until it
@@ -191,7 +191,7 @@ impl<T> HashSet<T, DefaultHashBuilder> {
     }
 }
 
-impl<T, S> HashSet<T, S> {
+impl<T, E, G, R, S> HashSet<T, E, G, R, S> {
     /// Returns the number of elements the set can hold without reallocating.
     ///
     /// # Examples
@@ -281,7 +281,7 @@ impl<T, S> HashSet<T, S> {
     /// assert!(set.is_empty());
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn drain(&mut self) -> Drain<'_, T> {
+    pub fn drain(&mut self) -> Drain<'_, T, E, G, R> {
         Drain {
             iter: self.map.drain(),
         }
@@ -337,7 +337,7 @@ impl<T, S> HashSet<T, S> {
     /// assert_eq!(odds, vec![1, 3, 5, 7]);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn extract_if<F>(&mut self, f: F) -> ExtractIf<'_, T, F>
+    pub fn extract_if<F>(&mut self, f: F) -> ExtractIf<'_, T, F, E, G, R>
     where
         F: FnMut(&T) -> bool,
     {
@@ -368,7 +368,7 @@ impl<T, S> HashSet<T, S> {
     }
 }
 
-impl<T, S> HashSet<T, S> {
+impl<T, E, G, R, S> HashSet<T, E, G, R, S> {
     /// Creates a new empty hash set which will use the given hasher to hash
     /// keys.
     ///
@@ -446,7 +446,7 @@ impl<T, S> HashSet<T, S> {
     }
 }
 
-impl<T, S> HashSet<T, S> {
+impl<T, E, G, R, S> HashSet<T, E, G, R, S> {
     /// Returns a reference to the set's [`BuildHasher`].
     ///
     /// [`BuildHasher`]: https://doc.rust-lang.org/std/hash/trait.BuildHasher.html
@@ -467,9 +467,9 @@ impl<T, S> HashSet<T, S> {
     }
 }
 
-impl<T, S> HashSet<T, S>
+impl<T, E, G, R, S> HashSet<T, E, G, R, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     /// Reserves capacity for at least `additional` more elements to be inserted
@@ -590,7 +590,7 @@ where
     /// assert_eq!(diff, [4].iter().collect());
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn difference<'a>(&'a self, other: &'a Self) -> Difference<'a, T, S> {
+    pub fn difference<'a>(&'a self, other: &'a Self) -> Difference<'a, T, E, G, R, S> {
         Difference {
             iter: self.iter(),
             other,
@@ -619,7 +619,10 @@ where
     /// assert_eq!(diff1, [1, 4].iter().collect());
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn symmetric_difference<'a>(&'a self, other: &'a Self) -> SymmetricDifference<'a, T, S> {
+    pub fn symmetric_difference<'a>(
+        &'a self,
+        other: &'a Self,
+    ) -> SymmetricDifference<'a, T, E, G, R, S> {
         SymmetricDifference {
             iter: self.difference(other).chain(other.difference(self)),
         }
@@ -644,7 +647,7 @@ where
     /// assert_eq!(intersection, [2, 3].iter().collect());
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn intersection<'a>(&'a self, other: &'a Self) -> Intersection<'a, T, S> {
+    pub fn intersection<'a>(&'a self, other: &'a Self) -> Intersection<'a, T, E, G, R, S> {
         let (smaller, larger) = if self.len() <= other.len() {
             (self, other)
         } else {
@@ -675,7 +678,7 @@ where
     /// assert_eq!(union, [1, 2, 3, 4].iter().collect());
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn union<'a>(&'a self, other: &'a Self) -> Union<'a, T, S> {
+    pub fn union<'a>(&'a self, other: &'a Self) -> Union<'a, T, E, G, R, S> {
         // We'll iterate one set in full, and only the remaining difference from the other.
         // Use the smaller set for the difference in order to reduce hash lookups.
         let (smaller, larger) = if self.len() <= other.len() {
@@ -709,7 +712,7 @@ where
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn contains<Q>(&self, value: &Q) -> bool
     where
-        Q: Hash + Equivalent<T> + ?Sized,
+        Q: Hash + Equivalent<T, E, G, R> + ?Sized,
     {
         self.map.contains_key(value)
     }
@@ -735,7 +738,7 @@ where
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn get<Q>(&self, value: &Q) -> Option<&T>
     where
-        Q: Hash + Equivalent<T> + ?Sized,
+        Q: Hash + Equivalent<T, E, G, R> + ?Sized,
     {
         // Avoid `Option::map` because it bloats LLVM IR.
         match self.map.get_key_value(value) {
@@ -796,7 +799,7 @@ where
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn get_or_insert_with<Q, F>(&mut self, value: &Q, f: F) -> &T
     where
-        Q: Hash + Equivalent<T> + ?Sized,
+        Q: Hash + Equivalent<T, E, G, R> + ?Sized,
         F: FnOnce(&Q) -> T,
     {
         let hash = make_hash(&self.map.hash_builder, value);
@@ -804,7 +807,10 @@ where
             Ok(bucket) => bucket,
             Err(slot) => {
                 let new = f(value);
-                assert!(value.equivalent(&new), "new value is not equivalent");
+                assert!(
+                    value.equivalent(&new).unwrap_or(false),
+                    "new value is not equivalent"
+                );
                 unsafe { self.map.table.insert_in_slot(hash, slot, (new, ())) }
             }
         };
@@ -845,7 +851,7 @@ where
     /// assert!(!singles.contains(&'v') && !dupes.contains(&'v'));
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn entry(&mut self, value: T) -> Entry<'_, T, S> {
+    pub fn entry(&mut self, value: T) -> Entry<'_, T, E, G, R, S> {
         match self.map.entry(value) {
             map::Entry::Occupied(entry) => Entry::Occupied(OccupiedEntry { inner: entry }),
             map::Entry::Vacant(entry) => Entry::Vacant(VacantEntry { inner: entry }),
@@ -1022,7 +1028,7 @@ where
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn remove<Q>(&mut self, value: &Q) -> bool
     where
-        Q: Hash + Equivalent<T> + ?Sized,
+        Q: Hash + Equivalent<T, E, G, R> + ?Sized,
     {
         self.map.remove(value).is_some()
     }
@@ -1048,7 +1054,7 @@ where
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn take<Q>(&mut self, value: &Q) -> Option<T>
     where
-        Q: Hash + Equivalent<T> + ?Sized,
+        Q: Hash + Equivalent<T, E, G, R> + ?Sized,
     {
         // Avoid `Option::map` because it bloats LLVM IR.
         match self.map.remove_entry(value) {
@@ -1068,9 +1074,9 @@ where
     }
 }
 
-impl<T, S> PartialEq for HashSet<T, S>
+impl<T, E, G, R, S> PartialEq for HashSet<T, E, G, R, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     fn eq(&self, other: &Self) -> bool {
@@ -1082,14 +1088,14 @@ where
     }
 }
 
-impl<T, S> Eq for HashSet<T, S>
+impl<T, E, G, R, S> Eq for HashSet<T, E, G, R, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
 }
 
-impl<T, S> fmt::Debug for HashSet<T, S>
+impl<T, E, G, R, S> fmt::Debug for HashSet<T, E, G, R, S>
 where
     T: fmt::Debug,
 {
@@ -1098,15 +1104,15 @@ where
     }
 }
 
-impl<T, S> From<HashMap<T, (), S>> for HashSet<T, S> {
-    fn from(map: HashMap<T, (), S>) -> Self {
+impl<T, E, G, R, S> From<HashMap<T, (), E, G, R, S>> for HashSet<T, E, G, R, S> {
+    fn from(map: HashMap<T, (), E, G, R, S>) -> Self {
         Self { map }
     }
 }
 
-impl<T, S> FromIterator<T> for HashSet<T, S>
+impl<T, E, G, R, S> FromIterator<T> for HashSet<T, E, G, R, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher + Default,
 {
     #[cfg_attr(feature = "inline-more", inline)]
@@ -1119,9 +1125,9 @@ where
 
 // The default hasher is used to match the std implementation signature
 #[cfg(feature = "default-hasher")]
-impl<T, const N: usize> From<[T; N]> for HashSet<T, DefaultHashBuilder>
+impl<T, E, G, R, const N: usize> From<[T; N]> for HashSet<T, E, G, R, DefaultHashBuilder>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
 {
     /// # Examples
     ///
@@ -1137,9 +1143,9 @@ where
     }
 }
 
-impl<T, S> Extend<T> for HashSet<T, S>
+impl<T, E, G, R, S> Extend<T> for HashSet<T, E, G, R, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     #[cfg_attr(feature = "inline-more", inline)]
@@ -1148,9 +1154,9 @@ where
     }
 }
 
-impl<'a, T, S> Extend<&'a T> for HashSet<T, S>
+impl<'a, T, E, G, R, S> Extend<&'a T> for HashSet<T, E, G, R, S>
 where
-    T: 'a + Eq + Hash + Copy,
+    T: 'a + RubyEql<E, G, R> + Hash + Copy,
     S: BuildHasher,
 {
     #[cfg_attr(feature = "inline-more", inline)]
@@ -1159,11 +1165,11 @@ where
     }
 }
 
-impl<T, S> Default for HashSet<T, S>
+impl<T, E, G, R, S> Default for HashSet<T, E, G, R, S>
 where
     S: Default,
 {
-    /// Creates an empty `HashSet<T, S>` with the `Default` value for the hasher.
+    /// Creates an empty `HashSet<T, E, G, R, S>` with the `Default` value for the hasher.
     #[cfg_attr(feature = "inline-more", inline)]
     fn default() -> Self {
         Self {
@@ -1172,14 +1178,14 @@ where
     }
 }
 
-impl<T, S> BitOr<&HashSet<T, S>> for &HashSet<T, S>
+impl<T, E, G, R, S> BitOr<&HashSet<T, E, G, R, S>> for &HashSet<T, E, G, R, S>
 where
-    T: Eq + Hash + Clone,
+    T: RubyEql<E, G, R> + Hash + Clone,
     S: BuildHasher + Default,
 {
-    type Output = HashSet<T, S>;
+    type Output = HashSet<T, E, G, R, S>;
 
-    /// Returns the union of `self` and `rhs` as a new `HashSet<T, S>`.
+    /// Returns the union of `self` and `rhs` as a new `HashSet<T, E, G, R, S>`.
     ///
     /// # Examples
     ///
@@ -1199,19 +1205,19 @@ where
     /// }
     /// assert_eq!(i, expected.len());
     /// ```
-    fn bitor(self, rhs: &HashSet<T, S>) -> HashSet<T, S> {
+    fn bitor(self, rhs: &HashSet<T, E, G, R, S>) -> HashSet<T, E, G, R, S> {
         self.union(rhs).cloned().collect()
     }
 }
 
-impl<T, S> BitAnd<&HashSet<T, S>> for &HashSet<T, S>
+impl<T, E, G, R, S> BitAnd<&HashSet<T, E, G, R, S>> for &HashSet<T, E, G, R, S>
 where
-    T: Eq + Hash + Clone,
+    T: RubyEql<E, G, R> + Hash + Clone,
     S: BuildHasher + Default,
 {
-    type Output = HashSet<T, S>;
+    type Output = HashSet<T, E, G, R, S>;
 
-    /// Returns the intersection of `self` and `rhs` as a new `HashSet<T, S>`.
+    /// Returns the intersection of `self` and `rhs` as a new `HashSet<T, E, G, R, S>`.
     ///
     /// # Examples
     ///
@@ -1231,19 +1237,19 @@ where
     /// }
     /// assert_eq!(i, expected.len());
     /// ```
-    fn bitand(self, rhs: &HashSet<T, S>) -> HashSet<T, S> {
+    fn bitand(self, rhs: &HashSet<T, E, G, R, S>) -> HashSet<T, E, G, R, S> {
         self.intersection(rhs).cloned().collect()
     }
 }
 
-impl<T, S> BitXor<&HashSet<T, S>> for &HashSet<T, S>
+impl<T, E, G, R, S> BitXor<&HashSet<T, E, G, R, S>> for &HashSet<T, E, G, R, S>
 where
-    T: Eq + Hash + Clone,
+    T: RubyEql<E, G, R> + Hash + Clone,
     S: BuildHasher + Default,
 {
-    type Output = HashSet<T, S>;
+    type Output = HashSet<T, E, G, R, S>;
 
-    /// Returns the symmetric difference of `self` and `rhs` as a new `HashSet<T, S>`.
+    /// Returns the symmetric difference of `self` and `rhs` as a new `HashSet<T, E, G, R, S>`.
     ///
     /// # Examples
     ///
@@ -1263,19 +1269,19 @@ where
     /// }
     /// assert_eq!(i, expected.len());
     /// ```
-    fn bitxor(self, rhs: &HashSet<T, S>) -> HashSet<T, S> {
+    fn bitxor(self, rhs: &HashSet<T, E, G, R, S>) -> HashSet<T, E, G, R, S> {
         self.symmetric_difference(rhs).cloned().collect()
     }
 }
 
-impl<T, S> Sub<&HashSet<T, S>> for &HashSet<T, S>
+impl<T, E, G, R, S> Sub<&HashSet<T, E, G, R, S>> for &HashSet<T, E, G, R, S>
 where
-    T: Eq + Hash + Clone,
+    T: RubyEql<E, G, R> + Hash + Clone,
     S: BuildHasher + Default,
 {
-    type Output = HashSet<T, S>;
+    type Output = HashSet<T, E, G, R, S>;
 
-    /// Returns the difference of `self` and `rhs` as a new `HashSet<T, S>`.
+    /// Returns the difference of `self` and `rhs` as a new `HashSet<T, E, G, R, S>`.
     ///
     /// # Examples
     ///
@@ -1295,14 +1301,14 @@ where
     /// }
     /// assert_eq!(i, expected.len());
     /// ```
-    fn sub(self, rhs: &HashSet<T, S>) -> HashSet<T, S> {
+    fn sub(self, rhs: &HashSet<T, E, G, R, S>) -> HashSet<T, E, G, R, S> {
         self.difference(rhs).cloned().collect()
     }
 }
 
-impl<T, S> BitOrAssign<&HashSet<T, S>> for HashSet<T, S>
+impl<T, E, G, R, S> BitOrAssign<&HashSet<T, E, G, R, S>> for HashSet<T, E, G, R, S>
 where
-    T: Eq + Hash + Clone,
+    T: RubyEql<E, G, R> + Hash + Clone,
     S: BuildHasher,
 {
     /// Modifies this set to contain the union of `self` and `rhs`.
@@ -1325,7 +1331,7 @@ where
     /// }
     /// assert_eq!(i, expected.len());
     /// ```
-    fn bitor_assign(&mut self, rhs: &HashSet<T, S>) {
+    fn bitor_assign(&mut self, rhs: &HashSet<T, E, G, R, S>) {
         for item in rhs {
             if !self.contains(item) {
                 self.insert(item.clone());
@@ -1334,9 +1340,9 @@ where
     }
 }
 
-impl<T, S> BitAndAssign<&HashSet<T, S>> for HashSet<T, S>
+impl<T, E, G, R, S> BitAndAssign<&HashSet<T, E, G, R, S>> for HashSet<T, E, G, R, S>
 where
-    T: Eq + Hash + Clone,
+    T: RubyEql<E, G, R> + Hash + Clone,
     S: BuildHasher,
 {
     /// Modifies this set to contain the intersection of `self` and `rhs`.
@@ -1359,14 +1365,14 @@ where
     /// }
     /// assert_eq!(i, expected.len());
     /// ```
-    fn bitand_assign(&mut self, rhs: &HashSet<T, S>) {
+    fn bitand_assign(&mut self, rhs: &HashSet<T, E, G, R, S>) {
         self.retain(|item| rhs.contains(item));
     }
 }
 
-impl<T, S> BitXorAssign<&HashSet<T, S>> for HashSet<T, S>
+impl<T, E, G, R, S> BitXorAssign<&HashSet<T, E, G, R, S>> for HashSet<T, E, G, R, S>
 where
-    T: Eq + Hash + Clone,
+    T: RubyEql<E, G, R> + Hash + Clone,
     S: BuildHasher,
 {
     /// Modifies this set to contain the symmetric difference of `self` and `rhs`.
@@ -1389,7 +1395,7 @@ where
     /// }
     /// assert_eq!(i, expected.len());
     /// ```
-    fn bitxor_assign(&mut self, rhs: &HashSet<T, S>) {
+    fn bitxor_assign(&mut self, rhs: &HashSet<T, E, G, R, S>) {
         for item in rhs {
             let hash = make_hash(&self.map.hash_builder, item);
             match self.map.find_or_find_insert_slot(hash, item) {
@@ -1406,9 +1412,9 @@ where
     }
 }
 
-impl<T, S> SubAssign<&HashSet<T, S>> for HashSet<T, S>
+impl<T, E, G, R, S> SubAssign<&HashSet<T, E, G, R, S>> for HashSet<T, E, G, R, S>
 where
-    T: Eq + Hash + Clone,
+    T: RubyEql<E, G, R> + Hash + Clone,
     S: BuildHasher,
 {
     /// Modifies this set to contain the difference of `self` and `rhs`.
@@ -1431,7 +1437,7 @@ where
     /// }
     /// assert_eq!(i, expected.len());
     /// ```
-    fn sub_assign(&mut self, rhs: &HashSet<T, S>) {
+    fn sub_assign(&mut self, rhs: &HashSet<T, E, G, R, S>) {
         if rhs.len() < self.len() {
             for item in rhs {
                 self.remove(item);
@@ -1471,8 +1477,8 @@ pub struct IntoIter<K> {
 ///
 /// [`HashSet`]: struct.HashSet.html
 /// [`drain`]: struct.HashSet.html#method.drain
-pub struct Drain<'a, K> {
-    iter: map::Drain<'a, K, ()>,
+pub struct Drain<'a, K, E, G, R> {
+    iter: map::Drain<'a, K, (), E, G, R>,
 }
 
 /// A draining iterator over entries of a `HashSet` which don't satisfy the predicate `f`.
@@ -1483,9 +1489,9 @@ pub struct Drain<'a, K> {
 /// [`extract_if`]: struct.HashSet.html#method.extract_if
 /// [`HashSet`]: struct.HashSet.html
 #[must_use = "Iterators are lazy unless consumed"]
-pub struct ExtractIf<'a, K, F> {
+pub struct ExtractIf<'a, K, F, E, G, R> {
     f: F,
-    inner: RawExtractIf<'a, (K, ())>,
+    inner: RawExtractIf<'a, (K, ()), E, G, R>,
 }
 
 /// A lazy iterator producing elements in the intersection of `HashSet`s.
@@ -1495,11 +1501,11 @@ pub struct ExtractIf<'a, K, F> {
 ///
 /// [`HashSet`]: struct.HashSet.html
 /// [`intersection`]: struct.HashSet.html#method.intersection
-pub struct Intersection<'a, T, S> {
+pub struct Intersection<'a, T, E, G, R, S> {
     // iterator of the first set
     iter: Iter<'a, T>,
     // the second set
-    other: &'a HashSet<T, S>,
+    other: &'a HashSet<T, E, G, R, S>,
 }
 
 /// A lazy iterator producing elements in the difference of `HashSet`s.
@@ -1509,11 +1515,11 @@ pub struct Intersection<'a, T, S> {
 ///
 /// [`HashSet`]: struct.HashSet.html
 /// [`difference`]: struct.HashSet.html#method.difference
-pub struct Difference<'a, T, S> {
+pub struct Difference<'a, T, E, G, R, S> {
     // iterator of the first set
     iter: Iter<'a, T>,
     // the second set
-    other: &'a HashSet<T, S>,
+    other: &'a HashSet<T, E, G, R, S>,
 }
 
 /// A lazy iterator producing elements in the symmetric difference of `HashSet`s.
@@ -1523,8 +1529,8 @@ pub struct Difference<'a, T, S> {
 ///
 /// [`HashSet`]: struct.HashSet.html
 /// [`symmetric_difference`]: struct.HashSet.html#method.symmetric_difference
-pub struct SymmetricDifference<'a, T, S> {
-    iter: Chain<Difference<'a, T, S>, Difference<'a, T, S>>,
+pub struct SymmetricDifference<'a, T, E, G, R, S> {
+    iter: Chain<Difference<'a, T, E, G, R, S>, Difference<'a, T, E, G, R, S>>,
 }
 
 /// A lazy iterator producing elements in the union of `HashSet`s.
@@ -1534,11 +1540,11 @@ pub struct SymmetricDifference<'a, T, S> {
 ///
 /// [`HashSet`]: struct.HashSet.html
 /// [`union`]: struct.HashSet.html#method.union
-pub struct Union<'a, T, S> {
-    iter: Chain<Iter<'a, T>, Difference<'a, T, S>>,
+pub struct Union<'a, T, E, G, R, S> {
+    iter: Chain<Iter<'a, T>, Difference<'a, T, E, G, R, S>>,
 }
 
-impl<'a, T, S> IntoIterator for &'a HashSet<T, S> {
+impl<'a, T, E, G, R, S> IntoIterator for &'a HashSet<T, E, G, R, S> {
     type Item = &'a T;
     type IntoIter = Iter<'a, T>;
 
@@ -1548,7 +1554,7 @@ impl<'a, T, S> IntoIterator for &'a HashSet<T, S> {
     }
 }
 
-impl<T, S> IntoIterator for HashSet<T, S> {
+impl<T, E, G, R, S> IntoIterator for HashSet<T, E, G, R, S> {
     type Item = T;
     type IntoIter = IntoIter<T>;
 
@@ -1677,7 +1683,7 @@ impl<K: fmt::Debug> fmt::Debug for IntoIter<K> {
     }
 }
 
-impl<K> Iterator for Drain<'_, K> {
+impl<K, E, G, R> Iterator for Drain<'_, K, E, G, R> {
     type Item = K;
 
     #[cfg_attr(feature = "inline-more", inline)]
@@ -1701,22 +1707,22 @@ impl<K> Iterator for Drain<'_, K> {
         self.iter.fold(init, |acc, (k, ())| f(acc, k))
     }
 }
-impl<K> ExactSizeIterator for Drain<'_, K> {
+impl<K, E, G, R> ExactSizeIterator for Drain<'_, K, E, G, R> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn len(&self) -> usize {
         self.iter.len()
     }
 }
-impl<K> FusedIterator for Drain<'_, K> {}
+impl<K, E, G, R> FusedIterator for Drain<'_, K, E, G, R> {}
 
-impl<K: fmt::Debug> fmt::Debug for Drain<'_, K> {
+impl<K: fmt::Debug, E, G, R> fmt::Debug for Drain<'_, K, E, G, R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let entries_iter = self.iter.iter().map(|(k, _)| k);
         f.debug_list().entries(entries_iter).finish()
     }
 }
 
-impl<K, F> Iterator for ExtractIf<'_, K, F>
+impl<K, F, E, G, R> Iterator for ExtractIf<'_, K, F, E, G, R>
 where
     F: FnMut(&K) -> bool,
 {
@@ -1735,9 +1741,9 @@ where
     }
 }
 
-impl<K, F> FusedIterator for ExtractIf<'_, K, F> where F: FnMut(&K) -> bool {}
+impl<K, F, E, G, R> FusedIterator for ExtractIf<'_, K, F, E, G, R> where F: FnMut(&K) -> bool {}
 
-impl<T, S> Clone for Intersection<'_, T, S> {
+impl<T, E, G, R, S> Clone for Intersection<'_, T, E, G, R, S> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn clone(&self) -> Self {
         Intersection {
@@ -1747,9 +1753,9 @@ impl<T, S> Clone for Intersection<'_, T, S> {
     }
 }
 
-impl<'a, T, S> Iterator for Intersection<'a, T, S>
+impl<'a, T, E, G, R, S> Iterator for Intersection<'a, T, E, G, R, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     type Item = &'a T;
@@ -1786,9 +1792,9 @@ where
     }
 }
 
-impl<T, S> fmt::Debug for Intersection<'_, T, S>
+impl<T, E, G, R, S> fmt::Debug for Intersection<'_, T, E, G, R, S>
 where
-    T: fmt::Debug + Eq + Hash,
+    T: fmt::Debug + RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1796,14 +1802,14 @@ where
     }
 }
 
-impl<T, S> FusedIterator for Intersection<'_, T, S>
+impl<T, E, G, R, S> FusedIterator for Intersection<'_, T, E, G, R, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
 }
 
-impl<T, S> Clone for Difference<'_, T, S> {
+impl<T, E, G, R, S> Clone for Difference<'_, T, E, G, R, S> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn clone(&self) -> Self {
         Difference {
@@ -1813,9 +1819,9 @@ impl<T, S> Clone for Difference<'_, T, S> {
     }
 }
 
-impl<'a, T, S> Iterator for Difference<'a, T, S>
+impl<'a, T, E, G, R, S> Iterator for Difference<'a, T, E, G, R, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     type Item = &'a T;
@@ -1852,16 +1858,16 @@ where
     }
 }
 
-impl<T, S> FusedIterator for Difference<'_, T, S>
+impl<T, E, G, R, S> FusedIterator for Difference<'_, T, E, G, R, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
 }
 
-impl<T, S> fmt::Debug for Difference<'_, T, S>
+impl<T, E, G, R, S> fmt::Debug for Difference<'_, T, E, G, R, S>
 where
-    T: fmt::Debug + Eq + Hash,
+    T: fmt::Debug + RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1869,7 +1875,7 @@ where
     }
 }
 
-impl<T, S> Clone for SymmetricDifference<'_, T, S> {
+impl<T, E, G, R, S> Clone for SymmetricDifference<'_, T, E, G, R, S> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn clone(&self) -> Self {
         SymmetricDifference {
@@ -1878,9 +1884,9 @@ impl<T, S> Clone for SymmetricDifference<'_, T, S> {
     }
 }
 
-impl<'a, T, S> Iterator for SymmetricDifference<'a, T, S>
+impl<'a, T, E, G, R, S> Iterator for SymmetricDifference<'a, T, E, G, R, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     type Item = &'a T;
@@ -1905,16 +1911,16 @@ where
     }
 }
 
-impl<T, S> FusedIterator for SymmetricDifference<'_, T, S>
+impl<T, E, G, R, S> FusedIterator for SymmetricDifference<'_, T, E, G, R, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
 }
 
-impl<T, S> fmt::Debug for SymmetricDifference<'_, T, S>
+impl<T, E, G, R, S> fmt::Debug for SymmetricDifference<'_, T, E, G, R, S>
 where
-    T: fmt::Debug + Eq + Hash,
+    T: fmt::Debug + RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1922,7 +1928,7 @@ where
     }
 }
 
-impl<T, S> Clone for Union<'_, T, S> {
+impl<T, E, G, R, S> Clone for Union<'_, T, E, G, R, S> {
     #[cfg_attr(feature = "inline-more", inline)]
     fn clone(&self) -> Self {
         Union {
@@ -1931,16 +1937,16 @@ impl<T, S> Clone for Union<'_, T, S> {
     }
 }
 
-impl<T, S> FusedIterator for Union<'_, T, S>
+impl<T, E, G, R, S> FusedIterator for Union<'_, T, E, G, R, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
 }
 
-impl<T, S> fmt::Debug for Union<'_, T, S>
+impl<T, E, G, R, S> fmt::Debug for Union<'_, T, E, G, R, S>
 where
-    T: fmt::Debug + Eq + Hash,
+    T: fmt::Debug + RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1948,9 +1954,9 @@ where
     }
 }
 
-impl<'a, T, S> Iterator for Union<'a, T, S>
+impl<'a, T, E, G, R, S> Iterator for Union<'a, T, E, G, R, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     type Item = &'a T;
@@ -2011,7 +2017,7 @@ where
 /// vec.sort_unstable();
 /// assert_eq!(vec, ["a", "b", "c", "d", "e"]);
 /// ```
-pub enum Entry<'a, T, S> {
+pub enum Entry<'a, T, E, G, R, S> {
     /// An occupied entry.
     ///
     /// # Examples
@@ -2025,7 +2031,7 @@ pub enum Entry<'a, T, S> {
     ///     Entry::Occupied(_) => { }
     /// }
     /// ```
-    Occupied(OccupiedEntry<'a, T, S>),
+    Occupied(OccupiedEntry<'a, T, E, G, R, S>),
 
     /// A vacant entry.
     ///
@@ -2040,10 +2046,10 @@ pub enum Entry<'a, T, S> {
     ///     Entry::Vacant(_) => { }
     /// }
     /// ```
-    Vacant(VacantEntry<'a, T, S>),
+    Vacant(VacantEntry<'a, T, E, G, R, S>),
 }
 
-impl<T: fmt::Debug, S> fmt::Debug for Entry<'_, T, S> {
+impl<T: fmt::Debug, E, G, R, S> fmt::Debug for Entry<'_, T, E, G, R, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Entry::Vacant(ref v) => f.debug_tuple("Entry").field(v).finish(),
@@ -2088,11 +2094,11 @@ impl<T: fmt::Debug, S> fmt::Debug for Entry<'_, T, S> {
 /// assert_eq!(set.get(&"c"), None);
 /// assert_eq!(set.len(), 2);
 /// ```
-pub struct OccupiedEntry<'a, T, S> {
-    inner: map::OccupiedEntry<'a, T, (), S>,
+pub struct OccupiedEntry<'a, T, E, G, R, S> {
+    inner: map::OccupiedEntry<'a, T, (), E, G, R, S>,
 }
 
-impl<T: fmt::Debug, S> fmt::Debug for OccupiedEntry<'_, T, S> {
+impl<T: fmt::Debug, E, G, R, S> fmt::Debug for OccupiedEntry<'_, T, E, G, R, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OccupiedEntry")
             .field("value", self.get())
@@ -2126,17 +2132,17 @@ impl<T: fmt::Debug, S> fmt::Debug for OccupiedEntry<'_, T, S> {
 /// }
 /// assert!(set.contains("b") && set.len() == 2);
 /// ```
-pub struct VacantEntry<'a, T, S> {
-    inner: map::VacantEntry<'a, T, (), S>,
+pub struct VacantEntry<'a, T, E, G, R, S> {
+    inner: map::VacantEntry<'a, T, (), E, G, R, S>,
 }
 
-impl<T: fmt::Debug, S> fmt::Debug for VacantEntry<'_, T, S> {
+impl<T: fmt::Debug, E, G, R, S> fmt::Debug for VacantEntry<'_, T, E, G, R, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("VacantEntry").field(self.get()).finish()
     }
 }
 
-impl<'a, T, S> Entry<'a, T, S> {
+impl<'a, T, E, G, R, S> Entry<'a, T, E, G, R, S> {
     /// Sets the value of the entry, and returns an `OccupiedEntry`.
     ///
     /// # Examples
@@ -2150,7 +2156,7 @@ impl<'a, T, S> Entry<'a, T, S> {
     /// assert_eq!(entry.get(), &"horseyland");
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn insert(self) -> OccupiedEntry<'a, T, S>
+    pub fn insert(self) -> OccupiedEntry<'a, T, E, G, R, S>
     where
         T: Hash,
         S: BuildHasher,
@@ -2213,7 +2219,7 @@ impl<'a, T, S> Entry<'a, T, S> {
     }
 }
 
-impl<T, S> OccupiedEntry<'_, T, S> {
+impl<T, E, G, R, S> OccupiedEntry<'_, T, E, G, R, S> {
     /// Gets a reference to the value in the entry.
     ///
     /// # Examples
@@ -2264,7 +2270,7 @@ impl<T, S> OccupiedEntry<'_, T, S> {
     }
 }
 
-impl<'a, T, S> VacantEntry<'a, T, S> {
+impl<'a, T, E, G, R, S> VacantEntry<'a, T, E, G, R, S> {
     /// Gets a reference to the value that would be used when inserting
     /// through the `VacantEntry`.
     ///
@@ -2316,7 +2322,7 @@ impl<'a, T, S> VacantEntry<'a, T, S> {
     /// assert!(set.contains("poneyland"));
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn insert(self) -> OccupiedEntry<'a, T, S>
+    pub fn insert(self) -> OccupiedEntry<'a, T, E, G, R, S>
     where
         T: Hash,
         S: BuildHasher,
@@ -2327,9 +2333,12 @@ impl<'a, T, S> VacantEntry<'a, T, S> {
     }
 }
 
+struct E;
+struct G;
+
 #[allow(dead_code)]
 fn assert_covariance() {
-    fn set<'new>(v: HashSet<&'static str>) -> HashSet<&'new str> {
+    fn set<'new, E, G>(v: HashSet<&'static str, E, G, ()>) -> HashSet<&'new str, E, G, ()> {
         v
     }
     fn iter<'a, 'new>(v: Iter<'a, &'static str>) -> Iter<'a, &'new str> {
@@ -2339,26 +2348,26 @@ fn assert_covariance() {
         v
     }
     fn difference<'a, 'new>(
-        v: Difference<'a, &'static str, DefaultHashBuilder>,
-    ) -> Difference<'a, &'new str, DefaultHashBuilder> {
+        v: Difference<'a, &'static str, E, G, (), DefaultHashBuilder>,
+    ) -> Difference<'a, &'new str, E, G, (), DefaultHashBuilder> {
         v
     }
     fn symmetric_difference<'a, 'new>(
-        v: SymmetricDifference<'a, &'static str, DefaultHashBuilder>,
-    ) -> SymmetricDifference<'a, &'new str, DefaultHashBuilder> {
+        v: SymmetricDifference<'a, &'static str, E, G, (), DefaultHashBuilder>,
+    ) -> SymmetricDifference<'a, &'new str, E, G, (), DefaultHashBuilder> {
         v
     }
     fn intersection<'a, 'new>(
-        v: Intersection<'a, &'static str, DefaultHashBuilder>,
-    ) -> Intersection<'a, &'new str, DefaultHashBuilder> {
+        v: Intersection<'a, &'static str, E, G, (), DefaultHashBuilder>,
+    ) -> Intersection<'a, &'new str, E, G, (), DefaultHashBuilder> {
         v
     }
     fn union<'a, 'new>(
-        v: Union<'a, &'static str, DefaultHashBuilder>,
-    ) -> Union<'a, &'new str, DefaultHashBuilder> {
+        v: Union<'a, &'static str, E, G, (), DefaultHashBuilder>,
+    ) -> Union<'a, &'new str, E, G, (), DefaultHashBuilder> {
         v
     }
-    fn drain<'new>(d: Drain<'static, &'static str>) -> Drain<'new, &'new str> {
+    fn drain<'new>(d: Drain<'static, &'static str, E, G, ()>) -> Drain<'new, &'new str, E, G, ()> {
         d
     }
 }
@@ -2368,10 +2377,12 @@ mod test_set {
     use super::{make_hash, Equivalent, HashSet};
     use crate::DefaultHashBuilder;
     use std::vec::Vec;
+    struct E;
+    struct G;
 
     #[test]
     fn test_zero_capacities() {
-        type HS = HashSet<i32>;
+        type HS = HashSet<i32, E, G, ()>;
 
         let s = HS::new();
         assert_eq!(s.capacity(), 0);
@@ -2403,8 +2414,8 @@ mod test_set {
 
     #[test]
     fn test_disjoint() {
-        let mut xs = HashSet::new();
-        let mut ys = HashSet::new();
+        let mut xs = HashSet::<_, E, G, ()>::new();
+        let mut ys = HashSet::<_, E, G, ()>::new();
         assert!(xs.is_disjoint(&ys));
         assert!(ys.is_disjoint(&xs));
         assert!(xs.insert(5));
@@ -2425,7 +2436,7 @@ mod test_set {
 
     #[test]
     fn test_subset_and_superset() {
-        let mut a = HashSet::new();
+        let mut a = HashSet::<_, E, G, ()>::new();
         assert!(a.insert(0));
         assert!(a.insert(5));
         assert!(a.insert(11));
@@ -2454,7 +2465,7 @@ mod test_set {
 
     #[test]
     fn test_iterate() {
-        let mut a = HashSet::new();
+        let mut a = HashSet::<_, E, G, ()>::new();
         for i in 0..32 {
             assert!(a.insert(i));
         }
@@ -2467,8 +2478,8 @@ mod test_set {
 
     #[test]
     fn test_intersection() {
-        let mut a = HashSet::new();
-        let mut b = HashSet::new();
+        let mut a = HashSet::<_, E, G, ()>::new();
+        let mut b = HashSet::<_, E, G, ()>::new();
 
         assert!(a.insert(11));
         assert!(a.insert(1));
@@ -2497,8 +2508,8 @@ mod test_set {
 
     #[test]
     fn test_difference() {
-        let mut a = HashSet::new();
-        let mut b = HashSet::new();
+        let mut a = HashSet::<_, E, G, ()>::new();
+        let mut b = HashSet::<_, E, G, ()>::new();
 
         assert!(a.insert(1));
         assert!(a.insert(3));
@@ -2520,8 +2531,8 @@ mod test_set {
 
     #[test]
     fn test_symmetric_difference() {
-        let mut a = HashSet::new();
-        let mut b = HashSet::new();
+        let mut a = HashSet::<_, E, G, ()>::new();
+        let mut b = HashSet::<_, E, G, ()>::new();
 
         assert!(a.insert(1));
         assert!(a.insert(3));
@@ -2546,8 +2557,8 @@ mod test_set {
 
     #[test]
     fn test_sub_assign() {
-        let mut a: HashSet<_> = vec![1, 2, 3, 4, 5].into_iter().collect();
-        let b: HashSet<_> = vec![4, 5, 6].into_iter().collect();
+        let mut a: HashSet<_, E, G, ()> = vec![1, 2, 3, 4, 5].into_iter().collect();
+        let b: HashSet<_, E, G, ()> = vec![4, 5, 6].into_iter().collect();
 
         a -= &b;
 
@@ -2562,8 +2573,8 @@ mod test_set {
 
     #[test]
     fn test_union() {
-        let mut a = HashSet::new();
-        let mut b = HashSet::new();
+        let mut a = HashSet::<_, E, G, ()>::new();
+        let mut b = HashSet::<_, E, G, ()>::new();
 
         assert!(a.insert(1));
         assert!(a.insert(3));
@@ -2598,7 +2609,7 @@ mod test_set {
         a.insert(3, ());
         a.insert(4, ());
 
-        let a: HashSet<_> = a.into();
+        let a: HashSet<_, E, G, ()> = a.into();
 
         assert_eq!(a.len(), 4);
         assert!(a.contains(&1));
@@ -2611,7 +2622,7 @@ mod test_set {
     fn test_from_iter() {
         let xs = [1, 2, 2, 3, 4, 5, 6, 7, 8, 9];
 
-        let set: HashSet<_> = xs.iter().copied().collect();
+        let set: HashSet<_, E, G, ()> = xs.iter().copied().collect();
 
         for x in &xs {
             assert!(set.contains(x));
@@ -2623,7 +2634,7 @@ mod test_set {
     #[test]
     fn test_move_iter() {
         let hs = {
-            let mut hs = HashSet::new();
+            let mut hs = HashSet::<_, E, G, ()>::new();
 
             hs.insert('a');
             hs.insert('b');
@@ -2639,13 +2650,13 @@ mod test_set {
     fn test_eq() {
         // These constants once happened to expose a bug in insert().
         // I'm keeping them around to prevent a regression.
-        let mut s1 = HashSet::new();
+        let mut s1 = HashSet::<_, E, G, ()>::new();
 
         s1.insert(1);
         s1.insert(2);
         s1.insert(3);
 
-        let mut s2 = HashSet::new();
+        let mut s2 = HashSet::<_, E, G, ()>::new();
 
         s2.insert(1);
         s2.insert(2);
@@ -2659,8 +2670,8 @@ mod test_set {
 
     #[test]
     fn test_show() {
-        let mut set = HashSet::new();
-        let empty = HashSet::<i32>::new();
+        let mut set = HashSet::<i32, E, G, ()>::new();
+        let empty = HashSet::<i32, E, G, ()>::new();
 
         set.insert(1);
         set.insert(2);
@@ -2673,19 +2684,19 @@ mod test_set {
 
     #[test]
     fn test_trivial_drain() {
-        let mut s = HashSet::<i32>::new();
+        let mut s = HashSet::<i32, E, G, ()>::new();
         for _ in s.drain() {}
         assert!(s.is_empty());
         drop(s);
 
-        let mut s = HashSet::<i32>::new();
+        let mut s = HashSet::<i32, E, G, ()>::new();
         drop(s.drain());
         assert!(s.is_empty());
     }
 
     #[test]
     fn test_drain() {
-        let mut s: HashSet<_> = (1..100).collect();
+        let mut s: HashSet<_, E, G, ()> = (1..100).collect();
 
         // try this a bunch of times to make sure we don't screw up internal state.
         for _ in 0..20 {
@@ -2732,7 +2743,7 @@ mod test_set {
             }
         }
 
-        let mut s = HashSet::new();
+        let mut s = HashSet::<_, E, G, ()>::new();
         assert_eq!(s.replace(Foo("a", 1)), None);
         assert_eq!(s.len(), 1);
         assert_eq!(s.replace(Foo("a", 2)), Some(Foo("a", 1)));
@@ -2746,7 +2757,7 @@ mod test_set {
     #[test]
     #[allow(clippy::needless_borrow)]
     fn test_extend_ref() {
-        let mut a = HashSet::new();
+        let mut a = HashSet::<i32, E, G, ()>::new();
         a.insert(1);
 
         a.extend([2, 3, 4]);
@@ -2757,7 +2768,7 @@ mod test_set {
         assert!(a.contains(&3));
         assert!(a.contains(&4));
 
-        let mut b = HashSet::new();
+        let mut b = HashSet::<i32, E, G, ()>::new();
         b.insert(5);
         b.insert(6);
 
@@ -2775,7 +2786,7 @@ mod test_set {
     #[test]
     fn test_retain() {
         let xs = [1, 2, 3, 4, 5, 6];
-        let mut set: HashSet<i32> = xs.iter().copied().collect();
+        let mut set: HashSet<i32, E, G, ()> = xs.iter().copied().collect();
         set.retain(|&k| k % 2 == 0);
         assert_eq!(set.len(), 3);
         assert!(set.contains(&2));
@@ -2786,7 +2797,7 @@ mod test_set {
     #[test]
     fn test_extract_if() {
         {
-            let mut set: HashSet<i32> = (0..8).collect();
+            let mut set: HashSet<i32, E, G, ()> = (0..8).collect();
             let drained = set.extract_if(|&k| k % 2 == 0);
             let mut out = drained.collect::<Vec<_>>();
             out.sort_unstable();
@@ -2794,7 +2805,7 @@ mod test_set {
             assert_eq!(set.len(), 4);
         }
         {
-            let mut set: HashSet<i32> = (0..8).collect();
+            let mut set: HashSet<i32, E, G, ()> = (0..8).collect();
             set.extract_if(|&k| k % 2 == 0).for_each(drop);
             assert_eq!(set.len(), 4, "Removes non-matching items on drop");
         }
@@ -2815,7 +2826,7 @@ mod test_set {
             }
         }
 
-        const EMPTY_SET: HashSet<u32, MyHasher> = HashSet::with_hasher(MyHasher);
+        const EMPTY_SET: HashSet<u32, E, G, (), MyHasher> = HashSet::with_hasher(MyHasher);
 
         let mut set = EMPTY_SET;
         set.insert(19);
@@ -2824,7 +2835,7 @@ mod test_set {
 
     #[test]
     fn rehash_in_place() {
-        let mut set = HashSet::new();
+        let mut set = HashSet::<i32, E, G, ()>::new();
 
         for i in 0..224 {
             set.insert(i);
@@ -2846,19 +2857,22 @@ mod test_set {
     fn collect() {
         // At the time of writing, this hits the ZST case in from_base_index
         // (and without the `map`, it does not).
-        let mut _set: HashSet<_> = (0..3).map(|_| ()).collect();
+        let mut _set: HashSet<_, E, G, ()> = (0..3).map(|_| ()).collect();
     }
 
     #[test]
     fn test_allocation_info() {
-        assert_eq!(HashSet::<()>::new().allocation_size(), 0);
-        assert_eq!(HashSet::<u32>::new().allocation_size(), 0);
-        assert!(HashSet::<u32>::with_capacity(1).allocation_size() > core::mem::size_of::<u32>());
+        assert_eq!(HashSet::<(), E, G, ()>::new().allocation_size(), 0);
+        assert_eq!(HashSet::<u32, E, G, ()>::new().allocation_size(), 0);
+        assert!(
+            HashSet::<u32, E, G, ()>::with_capacity(1).allocation_size()
+                > core::mem::size_of::<u32>()
+        );
     }
 
     #[test]
     fn duplicate_insert() {
-        let mut set = HashSet::new();
+        let mut set = HashSet::<_, E, G, ()>::new();
         set.insert(1);
         set.get_or_insert_with(&1, |_| 1);
         set.get_or_insert_with(&1, |_| 1);
@@ -2886,7 +2900,7 @@ mod test_set {
         }
         impl Eq for Invalid {}
 
-        impl Equivalent<Invalid> for InvalidRef {
+        impl Equivalent<Invalid, E, G, ()> for InvalidRef {
             fn equivalent(&self, key: &Invalid) -> bool {
                 self.count == key.count && self.other == key.other
             }
@@ -2901,7 +2915,7 @@ mod test_set {
                 self.count.hash(state);
             }
         }
-        let mut set: HashSet<Invalid> = HashSet::new();
+        let mut set: HashSet<Invalid, E, G, ()> = HashSet::new();
         let key = InvalidRef { count: 1, other: 1 };
         let value = Invalid { count: 1, other: 2 };
         if make_hash(set.hasher(), &key) == make_hash(set.hasher(), &value) {

@@ -625,7 +625,7 @@ where
     /// Computes in **O(1)** time (average).
     pub fn contains<Q>(&self, value: &Q) -> bool
     where
-        Q: ?Sized + Hash + Equivalent<T>,
+        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
         self.map.contains_key(value)
     }
@@ -636,7 +636,7 @@ where
     /// Computes in **O(1)** time (average).
     pub fn get<Q>(&self, value: &Q) -> Option<&T>
     where
-        Q: ?Sized + Hash + Equivalent<T>,
+        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
         self.map.get_key_value(value).map(|(x, &())| x)
     }
@@ -644,7 +644,7 @@ where
     /// Return item index and value
     pub fn get_full<Q>(&self, value: &Q) -> Option<(usize, &T)>
     where
-        Q: ?Sized + Hash + Equivalent<T>,
+        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
         self.map.get_full(value).map(|(i, x, &())| (i, x))
     }
@@ -654,7 +654,7 @@ where
     /// Computes in **O(1)** time (average).
     pub fn get_index_of<Q>(&self, value: &Q) -> Option<usize>
     where
-        Q: ?Sized + Hash + Equivalent<T>,
+        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
         self.map.get_index_of(value)
     }
@@ -669,7 +669,7 @@ where
         use `swap_remove` or `shift_remove` for explicit behavior.")]
     pub fn remove<Q>(&mut self, value: &Q) -> bool
     where
-        Q: ?Sized + Hash + Equivalent<T>,
+        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
         self.swap_remove(value)
     }
@@ -685,7 +685,7 @@ where
     /// Computes in **O(1)** time (average).
     pub fn swap_remove<Q>(&mut self, value: &Q) -> bool
     where
-        Q: ?Sized + Hash + Equivalent<T>,
+        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
         self.map.swap_remove(value).is_some()
     }
@@ -701,7 +701,7 @@ where
     /// Computes in **O(n)** time (average).
     pub fn shift_remove<Q>(&mut self, value: &Q) -> bool
     where
-        Q: ?Sized + Hash + Equivalent<T>,
+        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
         self.map.shift_remove(value).is_some()
     }
@@ -717,7 +717,7 @@ where
         use `swap_take` or `shift_take` for explicit behavior.")]
     pub fn take<Q>(&mut self, value: &Q) -> Option<T>
     where
-        Q: ?Sized + Hash + Equivalent<T>,
+        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
         self.swap_take(value)
     }
@@ -734,7 +734,7 @@ where
     /// Computes in **O(1)** time (average).
     pub fn swap_take<Q>(&mut self, value: &Q) -> Option<T>
     where
-        Q: ?Sized + Hash + Equivalent<T>,
+        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
         self.map.swap_remove_entry(value).map(|(x, ())| x)
     }
@@ -751,7 +751,7 @@ where
     /// Computes in **O(n)** time (average).
     pub fn shift_take<Q>(&mut self, value: &Q) -> Option<T>
     where
-        Q: ?Sized + Hash + Equivalent<T>,
+        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
         self.map.shift_remove_entry(value).map(|(x, ())| x)
     }
@@ -765,7 +765,7 @@ where
     /// Return `None` if `value` was not in the set.
     pub fn swap_remove_full<Q>(&mut self, value: &Q) -> Option<(usize, T)>
     where
-        Q: ?Sized + Hash + Equivalent<T>,
+        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
         self.map.swap_remove_full(value).map(|(i, x, ())| (i, x))
     }
@@ -779,7 +779,7 @@ where
     /// Return `None` if `value` was not in the set.
     pub fn shift_remove_full<Q>(&mut self, value: &Q) -> Option<(usize, T)>
     where
-        Q: ?Sized + Hash + Equivalent<T>,
+        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
         self.map.shift_remove_full(value).map(|(i, x, ())| (i, x))
     }
@@ -1120,7 +1120,7 @@ where
 
 impl<T, const N: usize> From<[T; N]> for RubySet<T, RandomState>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
 {
     /// # Examples
     ///
@@ -1183,14 +1183,14 @@ where
 
 impl<T, S> Eq for RubySet<T, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
 }
 
 impl<T, S> RubySet<T, S>
 where
-    T: Eq + Hash,
+    T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     /// Returns `true` if `self` has no elements in common with `other`.
@@ -1224,7 +1224,7 @@ where
 
 impl<T, S1, S2> BitAnd<&RubySet<T, S2>> for &RubySet<T, S1>
 where
-    T: Eq + Hash + Clone,
+    T: RubyEql<E, G, R> + Hash + Clone,
     S1: BuildHasher + Default,
     S2: BuildHasher,
 {
@@ -1240,7 +1240,7 @@ where
 
 impl<T, S1, S2> BitOr<&RubySet<T, S2>> for &RubySet<T, S1>
 where
-    T: Eq + Hash + Clone,
+    T: RubyEql<E, G, R> + Hash + Clone,
     S1: BuildHasher + Default,
     S2: BuildHasher,
 {
@@ -1257,7 +1257,7 @@ where
 
 impl<T, S1, S2> BitXor<&RubySet<T, S2>> for &RubySet<T, S1>
 where
-    T: Eq + Hash + Clone,
+    T: RubyEql<E, G, R> + Hash + Clone,
     S1: BuildHasher + Default,
     S2: BuildHasher,
 {
@@ -1274,7 +1274,7 @@ where
 
 impl<T, S1, S2> Sub<&RubySet<T, S2>> for &RubySet<T, S1>
 where
-    T: Eq + Hash + Clone,
+    T: RubyEql<E, G, R> + Hash + Clone,
     S1: BuildHasher + Default,
     S2: BuildHasher,
 {
