@@ -9,7 +9,6 @@
 //! [here]: https://github.com/abseil/abseil-cpp/blob/master/absl/container/internal/raw_hash_set.h
 //! [CppCon talk]: https://www.youtube.com/watch?v=ncHmEUmJZf4
 
-#![no_std]
 #![allow(
     clippy::doc_markdown,
     clippy::module_name_repetitions,

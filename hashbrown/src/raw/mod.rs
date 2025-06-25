@@ -1,5 +1,3 @@
-use allocator_api2::alloc::Allocator;
-
 use crate::alloc::alloc::{handle_alloc_error, Layout};
 use crate::control::{BitMaskIter, Group, Tag, TagSliceExt};
 use crate::scopeguard::{guard, ScopeGuard};
@@ -12,10 +10,6 @@ use core::mem;
 use core::ptr::NonNull;
 use core::slice;
 use core::{hint, ptr};
-
-mod alloc;
-
-pub(crate) use self::alloc::{do_alloc, Global};
 
 #[inline]
 unsafe fn offset_from<T>(to: *const T, from: *const T) -> usize {
@@ -36,15 +30,6 @@ impl Fallibility {
         match self {
             Fallibility::Fallible => TryReserveError::CapacityOverflow,
             Fallibility::Infallible => panic!("Hash table capacity overflow"),
-        }
-    }
-
-    /// Error to return on allocation error.
-    #[cfg_attr(feature = "inline-more", inline)]
-    fn alloc_err(self, layout: Layout) -> TryReserveError {
-        match self {
-            Fallibility::Fallible => TryReserveError::AllocError { layout },
-            Fallibility::Infallible => handle_alloc_error(layout),
         }
     }
 }
@@ -1395,10 +1380,7 @@ impl RawTableInner {
             None => return Err(fallibility.capacity_overflow()),
         };
 
-        let ptr: NonNull<u8> = match do_alloc(layout) {
-            Ok(block) => block.cast(),
-            Err(_) => return Err(fallibility.alloc_err(layout)),
-        };
+        let ptr: NonNull<u8> = NonNull::new(alloc::alloc::alloc(layout)).unwrap();
 
         // SAFETY: null pointer will be caught in above check
         let ctrl = NonNull::new_unchecked(ptr.as_ptr().add(ctrl_offset));
@@ -2878,7 +2860,7 @@ impl RawTableInner {
         // SAFETY: The caller must uphold the safety contract for `free_buckets`
         // method.
         let (ptr, layout) = self.allocation_info(table_layout);
-        Global.deallocate(ptr, layout);
+        alloc::alloc::dealloc(ptr.as_ptr(), layout);
     }
 
     /// Returns a pointer to the allocated memory and the layout that was used to
@@ -3686,7 +3668,7 @@ impl<T> Drop for RawIntoIter<T> {
 
             // Free the table
             if let Some((ptr, layout)) = self.allocation {
-                alloc::Global.deallocate(ptr, layout);
+                alloc::alloc::dealloc(ptr.as_ptr(), layout);
             }
         }
     }
