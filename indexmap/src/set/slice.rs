@@ -303,7 +303,7 @@ impl<T> Index<usize> for Slice<T> {
 // Instead, we repeat the implementations for all the core range types.
 macro_rules! impl_index {
     ($($range:ty),*) => {$(
-        impl<T, S> Index<$range> for RubySet<T, S> {
+        impl<T, E, G, R, S> Index<$range> for RubySet<T, E, G, R, S> {
             type Output = Slice<T>;
 
             fn index(&self, range: $range) -> &Self::Output {
@@ -333,6 +333,8 @@ impl_index!(
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct E;
+    struct G;
 
     #[test]
     fn slice_index() {
@@ -341,8 +343,11 @@ mod tests {
             itertools::assert_equal(vec_slice, set_slice);
         }
 
+        let mut e = E;
+        let mut g = G;
         let vec: Vec<i32> = (0..10).map(|i| i * i).collect();
-        let set: RubySet<i32> = vec.iter().cloned().collect();
+        let set: RubySet<i32, E, G, ()> =
+            RubySet::from_iter(vec.iter().cloned(), &mut e, &mut g).unwrap();
         let slice = set.as_slice();
 
         // RangeFull
@@ -350,7 +355,7 @@ mod tests {
 
         for i in 0usize..10 {
             // Index
-            assert_eq!(vec[i], set[i]);
+            assert_eq!(&vec[i], &slice[i]);
             assert_eq!(vec[i], slice[i]);
 
             // RangeFrom

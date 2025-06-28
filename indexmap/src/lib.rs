@@ -1,7 +1,6 @@
 // We *mostly* avoid unsafe code, but `Slice` allows it for DST casting.
 #![deny(unsafe_code)]
 #![warn(rust_2018_idioms)]
-#![no_std]
 
 //! [`IndexMap`] is a hash table where the iteration order of the key-value
 //! pairs is independent of the hash values of the keys.
@@ -118,7 +117,7 @@ pub mod set;
 
 pub use crate::map::RubyMap;
 pub use crate::set::RubySet;
-pub use equivalent::Equivalent;
+pub use equivalent::{Equivalent, RubyEql};
 
 // shared private items
 

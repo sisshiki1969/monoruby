@@ -117,8 +117,14 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// #     test()
     /// # }
     /// ```
-    pub fn find(&self, hash: u64, eq: impl FnMut(&T) -> bool) -> Option<&T> {
-        self.raw.get(hash, eq)
+    pub fn find(
+        &self,
+        hash: u64,
+        eq: impl FnMut(&T, &mut E, &mut G) -> Result<bool, R>,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<&T>, R> {
+        self.raw.get(hash, eq, e, g)
     }
 
     /// Returns a mutable reference to an entry in the table with the given hash
@@ -155,8 +161,14 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// #     test()
     /// # }
     /// ```
-    pub fn find_mut(&mut self, hash: u64, eq: impl FnMut(&T) -> bool) -> Option<&mut T> {
-        self.raw.get_mut(hash, eq)
+    pub fn find_mut(
+        &mut self,
+        hash: u64,
+        eq: impl FnMut(&T, &mut E, &mut G) -> Result<bool, R>,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<&mut T>, R> {
+        self.raw.get_mut(hash, eq, e, g)
     }
 
     /// Returns an `OccupiedEntry` for an entry in the table with the given hash
@@ -196,16 +208,18 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     pub fn find_entry(
         &mut self,
         hash: u64,
-        eq: impl FnMut(&T) -> bool,
-    ) -> Result<OccupiedEntry<'_, T, E, G, R>, AbsentEntry<'_, T, E, G, R>> {
-        match self.raw.find(hash, eq) {
+        eq: impl FnMut(&T, &mut E, &mut G) -> Result<bool, R>,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Result<OccupiedEntry<'_, T, E, G, R>, AbsentEntry<'_, T, E, G, R>>, R> {
+        Ok(match self.raw.find(hash, eq, e, g)? {
             Some(bucket) => Ok(OccupiedEntry {
                 hash,
                 bucket,
                 table: self,
             }),
             None => Err(AbsentEntry { table: self }),
-        }
+        })
     }
 
     /// Returns an `Entry` for an entry in the table with the given hash
@@ -256,21 +270,25 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     pub fn entry(
         &mut self,
         hash: u64,
-        eq: impl FnMut(&T) -> bool,
+        eq: impl FnMut(&T, &mut E, &mut G) -> Result<bool, R>,
         hasher: impl Fn(&T) -> u64,
-    ) -> Entry<'_, T, E, G, R> {
-        match self.raw.find_or_find_insert_slot(hash, eq, hasher) {
-            Ok(bucket) => Entry::Occupied(OccupiedEntry {
-                hash,
-                bucket,
-                table: self,
-            }),
-            Err(insert_slot) => Entry::Vacant(VacantEntry {
-                hash,
-                insert_slot,
-                table: self,
-            }),
-        }
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Entry<'_, T, E, G, R>, R> {
+        Ok(
+            match self.raw.find_or_find_insert_slot(hash, eq, hasher, e, g)? {
+                Ok(bucket) => Entry::Occupied(OccupiedEntry {
+                    hash,
+                    bucket,
+                    table: self,
+                }),
+                Err(insert_slot) => Entry::Vacant(VacantEntry {
+                    hash,
+                    insert_slot,
+                    table: self,
+                }),
+            },
+        )
     }
 
     /// Inserts an element into the `HashTable` with the given hash value, but
@@ -855,156 +873,6 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
                 table: &mut self.raw,
             },
         }
-    }
-
-    /// Attempts to get mutable references to `N` values in the map at once.
-    ///
-    /// The `eq` argument should be a closure such that `eq(i, k)` returns true if `k` is equal to
-    /// the `i`th key to be looked up.
-    ///
-    /// Returns an array of length `N` with the results of each query. For soundness, at most one
-    /// mutable reference will be returned to any value. `None` will be used if the key is missing.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any keys are overlapping.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[cfg(feature = "nightly")]
-    /// # fn test() {
-    /// use hashbrown::hash_table::Entry;
-    /// use hashbrown::{HashTable, DefaultHashBuilder};
-    /// use std::hash::BuildHasher;
-    ///
-    /// let mut libraries: HashTable<(&str, u32)> = HashTable::new();
-    /// let hasher = DefaultHashBuilder::default();
-    /// let hasher = |val: &_| hasher.hash_one(val);
-    /// for (k, v) in [
-    ///     ("Bodleian Library", 1602),
-    ///     ("Athenæum", 1807),
-    ///     ("Herzogin-Anna-Amalia-Bibliothek", 1691),
-    ///     ("Library of Congress", 1800),
-    /// ] {
-    ///     libraries.insert_unique(hasher(&k), (k, v), |(k, _)| hasher(&k));
-    /// }
-    ///
-    /// let keys = ["Athenæum", "Library of Congress"];
-    /// let got = libraries.get_many_mut(keys.map(|k| hasher(&k)), |i, val| keys[i] == val.0);
-    /// assert_eq!(
-    ///     got,
-    ///     [Some(&mut ("Athenæum", 1807)), Some(&mut ("Library of Congress", 1800))],
-    /// );
-    ///
-    /// // Missing keys result in None
-    /// let keys = ["Athenæum", "New York Public Library"];
-    /// let got = libraries.get_many_mut(keys.map(|k| hasher(&k)), |i, val| keys[i] == val.0);
-    /// assert_eq!(got, [Some(&mut ("Athenæum", 1807)), None]);
-    /// # }
-    /// # fn main() {
-    /// #     #[cfg(feature = "nightly")]
-    /// #     test()
-    /// # }
-    /// ```
-    ///
-    /// ```should_panic
-    /// # #[cfg(feature = "nightly")]
-    /// # fn test() {
-    /// # use hashbrown::{HashTable, DefaultHashBuilder};
-    /// # use std::hash::BuildHasher;
-    ///
-    /// let mut libraries: HashTable<(&str, u32)> = HashTable::new();
-    /// let hasher = DefaultHashBuilder::default();
-    /// let hasher = |val: &_| hasher.hash_one(val);
-    /// for (k, v) in [
-    ///     ("Athenæum", 1807),
-    ///     ("Library of Congress", 1800),
-    /// ] {
-    ///     libraries.insert_unique(hasher(&k), (k, v), |(k, _)| hasher(&k));
-    /// }
-    ///
-    /// // Duplicate keys result in a panic!
-    /// let keys = ["Athenæum", "Athenæum"];
-    /// let got = libraries.get_many_mut(keys.map(|k| hasher(&k)), |i, val| keys[i] == val.0);
-    /// # }
-    /// # fn main() {
-    /// #     #[cfg(feature = "nightly")]
-    /// #     test();
-    /// #     #[cfg(not(feature = "nightly"))]
-    /// #     panic!();
-    /// # }
-    /// ```
-    pub fn get_many_mut<const N: usize>(
-        &mut self,
-        hashes: [u64; N],
-        eq: impl FnMut(usize, &T) -> bool,
-    ) -> [Option<&'_ mut T>; N] {
-        self.raw.get_many_mut(hashes, eq)
-    }
-
-    /// Attempts to get mutable references to `N` values in the map at once, without validating that
-    /// the values are unique.
-    ///
-    /// The `eq` argument should be a closure such that `eq(i, k)` returns true if `k` is equal to
-    /// the `i`th key to be looked up.
-    ///
-    /// Returns an array of length `N` with the results of each query. `None` will be returned if
-    /// any of the keys are missing.
-    ///
-    /// For a safe alternative see [`get_many_mut`](`HashTable::get_many_mut`).
-    ///
-    /// # Safety
-    ///
-    /// Calling this method with overlapping keys is *[undefined behavior]* even if the resulting
-    /// references are not used.
-    ///
-    /// [undefined behavior]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[cfg(feature = "nightly")]
-    /// # fn test() {
-    /// use hashbrown::hash_table::Entry;
-    /// use hashbrown::{HashTable, DefaultHashBuilder};
-    /// use std::hash::BuildHasher;
-    ///
-    /// let mut libraries: HashTable<(&str, u32)> = HashTable::new();
-    /// let hasher = DefaultHashBuilder::default();
-    /// let hasher = |val: &_| hasher.hash_one(val);
-    /// for (k, v) in [
-    ///     ("Bodleian Library", 1602),
-    ///     ("Athenæum", 1807),
-    ///     ("Herzogin-Anna-Amalia-Bibliothek", 1691),
-    ///     ("Library of Congress", 1800),
-    /// ] {
-    ///     libraries.insert_unique(hasher(&k), (k, v), |(k, _)| hasher(&k));
-    /// }
-    ///
-    /// let keys = ["Athenæum", "Library of Congress"];
-    /// let got = libraries.get_many_mut(keys.map(|k| hasher(&k)), |i, val| keys[i] == val.0);
-    /// assert_eq!(
-    ///     got,
-    ///     [Some(&mut ("Athenæum", 1807)), Some(&mut ("Library of Congress", 1800))],
-    /// );
-    ///
-    /// // Missing keys result in None
-    /// let keys = ["Athenæum", "New York Public Library"];
-    /// let got = libraries.get_many_mut(keys.map(|k| hasher(&k)), |i, val| keys[i] == val.0);
-    /// assert_eq!(got, [Some(&mut ("Athenæum", 1807)), None]);
-    /// # }
-    /// # fn main() {
-    /// #     #[cfg(feature = "nightly")]
-    /// #     test()
-    /// # }
-    /// ```
-    pub unsafe fn get_many_unchecked_mut<const N: usize>(
-        &mut self,
-        hashes: [u64; N],
-        eq: impl FnMut(usize, &T) -> bool,
-    ) -> [Option<&'_ mut T>; N] {
-        self.raw.get_many_unchecked_mut(hashes, eq)
     }
 
     /// Returns the total amount of memory allocated internally by the hash

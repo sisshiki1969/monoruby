@@ -5,19 +5,24 @@
 use hashbrown::HashSet;
 use std::hash::{BuildHasher, BuildHasherDefault, Hasher};
 
+struct E;
+struct G;
+
 fn check<S: BuildHasher + Default>() {
     let range = 0..1_000;
+    let mut e = E;
+    let mut g = G;
 
-    let mut set = HashSet::<i32, S>::default();
-    set.extend(range.clone());
+    let mut set = HashSet::<i32, E, G, (), S>::default();
+    set.extend(range.clone(), &mut e, &mut g).unwrap();
 
-    assert!(!set.contains(&i32::MIN));
-    assert!(!set.contains(&(range.start - 1)));
+    assert!(!set.contains(&i32::MIN, &mut e, &mut g).unwrap());
+    assert!(!set.contains(&(range.start - 1), &mut e, &mut g).unwrap());
     for i in range.clone() {
-        assert!(set.contains(&i));
+        assert!(set.contains(&i, &mut e, &mut g).unwrap());
     }
-    assert!(!set.contains(&range.end));
-    assert!(!set.contains(&i32::MAX));
+    assert!(!set.contains(&range.end, &mut e, &mut g).unwrap());
+    assert!(!set.contains(&i32::MAX, &mut e, &mut g).unwrap());
 }
 
 /// Use hashbrown's default hasher.

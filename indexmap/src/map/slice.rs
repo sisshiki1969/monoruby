@@ -520,6 +520,8 @@ impl_index!(
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct E;
+    struct G;
 
     #[test]
     fn slice_index() {
@@ -537,8 +539,11 @@ mod tests {
             itertools::assert_equal(vec_slice.iter().map(|(_, v)| v), map_slice.values());
         }
 
+        let mut e = E;
+        let mut g = G;
         let vec: Vec<(i32, i32)> = (0..10).map(|i| (i, i * i)).collect();
-        let map: RubyMap<i32, i32> = vec.iter().cloned().collect();
+        let map: RubyMap<i32, i32, E, G, ()> =
+            RubyMap::from_iter(vec.iter().cloned(), &mut e, &mut g).unwrap();
         let slice = map.as_slice();
 
         // RangeFull
@@ -548,8 +553,14 @@ mod tests {
             // Index
             assert_eq!(vec[i].1, map[i]);
             assert_eq!(vec[i].1, slice[i]);
-            assert_eq!(map[&(i as i32)], map[i]);
-            assert_eq!(map[&(i as i32)], slice[i]);
+            assert_eq!(
+                map.get(&(i as i32), &mut e, &mut g).unwrap().unwrap(),
+                &map[i]
+            );
+            assert_eq!(
+                map.get(&(i as i32), &mut e, &mut g).unwrap().unwrap(),
+                &slice[i]
+            );
 
             // RangeFrom
             check(&vec[i..], &map[i..], &slice[i..]);
@@ -594,8 +605,11 @@ mod tests {
             );
         }
 
+        let mut e = E;
+        let mut g = G;
         let vec: Vec<(i32, i32)> = (0..10).map(|i| (i, i * i)).collect();
-        let mut map: RubyMap<i32, i32> = vec.iter().cloned().collect();
+        let mut map: RubyMap<i32, i32, E, G, ()> =
+            RubyMap::from_iter(vec.iter().cloned(), &mut e, &mut g).unwrap();
         let mut map2 = map.clone();
         let slice = map2.as_mut_slice();
 
@@ -647,7 +661,10 @@ mod tests {
 
     #[test]
     fn slice_get_index_mut() {
-        let mut map: RubyMap<i32, i32> = (0..10).map(|i| (i, i * i)).collect();
+        let mut e = E;
+        let mut g = G;
+        let mut map: RubyMap<i32, i32, E, G, ()> =
+            RubyMap::from_iter((0..10).map(|i| (i, i * i)), &mut e, &mut g).unwrap();
         let slice: &mut Slice<i32, i32> = map.as_mut_slice();
 
         {
@@ -672,7 +689,10 @@ mod tests {
         let result = slice.split_first();
         assert!(result.is_none());
 
-        let mut map: RubyMap<i32, i32> = (0..10).map(|i| (i, i * i)).collect();
+        let mut e = E;
+        let mut g = G;
+        let mut map: RubyMap<i32, i32, E, G, ()> =
+            RubyMap::from_iter((0..10).map(|i| (i, i * i)), &mut e, &mut g).unwrap();
         let slice: &mut Slice<i32, i32> = map.as_mut_slice();
 
         {
@@ -689,7 +709,10 @@ mod tests {
         let result = slice.split_first_mut();
         assert!(result.is_none());
 
-        let mut map: RubyMap<i32, i32> = (0..10).map(|i| (i, i * i)).collect();
+        let mut e = E;
+        let mut g = G;
+        let mut map: RubyMap<i32, i32, E, G, ()> =
+            RubyMap::from_iter((0..10).map(|i| (i, i * i)), &mut e, &mut g).unwrap();
         let slice: &mut Slice<i32, i32> = map.as_mut_slice();
 
         {
@@ -709,7 +732,8 @@ mod tests {
         let result = slice.split_last();
         assert!(result.is_none());
 
-        let mut map: RubyMap<i32, i32> = (0..10).map(|i| (i, i * i)).collect();
+        let mut map: RubyMap<i32, i32, E, G, ()> =
+            RubyMap::from_iter((0..10).map(|i| (i, i * i)), &mut E, &mut G).unwrap();
         let slice: &mut Slice<i32, i32> = map.as_mut_slice();
 
         {
@@ -726,7 +750,10 @@ mod tests {
         let result = slice.split_last_mut();
         assert!(result.is_none());
 
-        let mut map: RubyMap<i32, i32> = (0..10).map(|i| (i, i * i)).collect();
+        let mut e = E;
+        let mut g = G;
+        let mut map: RubyMap<i32, i32, E, G, ()> =
+            RubyMap::from_iter((0..10).map(|i| (i, i * i)), &mut e, &mut g).unwrap();
         let slice: &mut Slice<i32, i32> = map.as_mut_slice();
 
         {
@@ -743,7 +770,8 @@ mod tests {
 
     #[test]
     fn slice_get_range() {
-        let mut map: RubyMap<i32, i32> = (0..10).map(|i| (i, i * i)).collect();
+        let mut map: RubyMap<i32, i32, E, G, ()> =
+            RubyMap::from_iter((0..10).map(|i| (i, i * i)), &mut E, &mut G).unwrap();
         let slice: &mut Slice<i32, i32> = map.as_mut_slice();
         let subslice = slice.get_range(3..6).unwrap();
         assert_eq!(subslice.len(), 3);

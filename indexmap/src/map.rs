@@ -11,7 +11,7 @@ mod tests;
 //pub use self::core::raw_entry_v1::{self, RawEntryApiV1};
 pub use self::core::{Entry, IndexedEntry, OccupiedEntry, VacantEntry};
 pub use self::iter::{
-    Drain, IntoIter, IntoKeys, IntoValues, Iter, IterMut, Keys, Splice, Values, ValuesMut,
+    Drain, IntoIter, IntoKeys, IntoValues, Iter, IterMut, Keys, Values, ValuesMut,
 };
 pub use self::slice::Slice;
 
@@ -22,6 +22,7 @@ use ::core::mem;
 use ::core::ops::{Index, IndexMut, RangeBounds};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use hashbrown::RubyEql;
 
 use std::collections::hash_map::RandomState;
 
@@ -72,8 +73,8 @@ use crate::{Bucket, Entries, Equivalent, GetDisjointMutError, HashValue, TryRese
 /// assert_eq!(letters[&'u'], 1);
 /// assert_eq!(letters.get(&'y'), None);
 /// ```
-pub struct RubyMap<K, V, S = RandomState> {
-    pub(crate) core: IndexMapCore<K, V>,
+pub struct RubyMap<K, V, E, G, R, S = RandomState> {
+    pub(crate) core: IndexMapCore<K, V, E, G, R>,
     hash_builder: S,
 }
 
@@ -127,21 +128,12 @@ where
     K: fmt::Debug,
     V: fmt::Debug,
 {
-    #[cfg(not(feature = "test_debug"))]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_map().entries(self.iter()).finish()
     }
-
-    #[cfg(feature = "test_debug")]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Let the inner `IndexMapCore` print all of its details
-        f.debug_struct("IndexMap")
-            .field("core", &self.core)
-            .finish()
-    }
 }
 
-impl<K, V> RubyMap<K, V> {
+impl<K, V, E, G, R> RubyMap<K, V, E, G, R> {
     /// Create a new map. (Does not allocate.)
     #[inline]
     pub fn new() -> Self {
@@ -263,8 +255,8 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
     /// Shortens the map, keeping the first `len` elements and dropping the rest.
     ///
     /// If `len` is greater than the map's current length, this has no effect.
-    pub fn truncate(&mut self, len: usize) {
-        self.core.truncate(len);
+    pub fn truncate(&mut self, len: usize, e: &mut E, g: &mut G) -> Result<(), R> {
+        self.core.truncate(len, e, g)
     }
 
     /// Clears the `IndexMap` in the given index range, returning those
@@ -281,11 +273,11 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
     /// ***Panics*** if the starting point is greater than the end point or if
     /// the end point is greater than the length of the map.
     #[track_caller]
-    pub fn drain<R>(&mut self, range: R) -> Drain<'_, K, V>
+    pub fn drain<Ra>(&mut self, range: Ra, e: &mut E, g: &mut G) -> Result<Drain<'_, K, V>, R>
     where
-        R: RangeBounds<usize>,
+        Ra: RangeBounds<usize>,
     {
-        Drain::new(self.core.drain(range))
+        Ok(Drain::new(self.core.drain(range, e, g)?))
     }
 
     /// Splits the collection into two at the given index.
@@ -296,14 +288,14 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
     ///
     /// ***Panics*** if `at > len`.
     #[track_caller]
-    pub fn split_off(&mut self, at: usize) -> Self
+    pub fn split_off(&mut self, at: usize, e: &mut E, g: &mut G) -> Result<Self, R>
     where
         S: Clone,
     {
-        Self {
-            core: self.core.split_off(at),
+        Ok(Self {
+            core: self.core.split_off(at, e, g)?,
             hash_builder: self.hash_builder.clone(),
-        }
+        })
     }
 
     /// Reserve capacity for `additional` more key-value pairs.
@@ -361,7 +353,7 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
 
 impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S>
 where
-    K: Hash + Eq,
+    K: Hash + RubyEql<E, G, R>,
     S: BuildHasher,
 {
     /// Insert a key-value pair in the map.
@@ -378,8 +370,8 @@ where
     /// See also [`entry`][Self::entry] if you want to insert *or* modify,
     /// or [`insert_full`][Self::insert_full] if you need to get the index of
     /// the corresponding key-value pair.
-    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        self.insert_full(key, value).1
+    pub fn insert(&mut self, key: K, value: V, e: &mut E, g: &mut G) -> Result<Option<V>, R> {
+        Ok(self.insert_full(key, value, e, g)?.1)
     }
 
     /// Insert a key-value pair in the map, and get their index.
@@ -394,9 +386,15 @@ where
     /// Computes in **O(1)** time (amortized average).
     ///
     /// See also [`entry`][Self::entry] if you want to insert *or* modify.
-    pub fn insert_full(&mut self, key: K, value: V) -> (usize, Option<V>) {
+    pub fn insert_full(
+        &mut self,
+        key: K,
+        value: V,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(usize, Option<V>), R> {
         let hash = self.hash(&key);
-        self.core.insert_full(hash, key, value)
+        self.core.insert_full(hash, key, value, e, g)
     }
 
     /// Insert a key-value pair in the map at its ordered position among sorted keys.
@@ -418,14 +416,20 @@ where
     /// `insert_sorted`, it may be faster to call batched [`insert`][Self::insert]
     /// or [`extend`][Self::extend] and only call [`sort_keys`][Self::sort_keys]
     /// or [`sort_unstable_keys`][Self::sort_unstable_keys] once.
-    pub fn insert_sorted(&mut self, key: K, value: V) -> (usize, Option<V>)
+    pub fn insert_sorted(
+        &mut self,
+        key: K,
+        value: V,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(usize, Option<V>), R>
     where
         K: Ord,
     {
-        match self.binary_search_keys(&key) {
+        Ok(match self.binary_search_keys(&key) {
             Ok(i) => (i, Some(mem::replace(&mut self[i], value))),
-            Err(i) => self.insert_before(i, key, value),
-        }
+            Err(i) => self.insert_before(i, key, value, e, g)?,
+        })
     }
 
     /// Insert a key-value pair in the map before the entry at the given index, or at the end.
@@ -477,7 +481,14 @@ where
     /// assert_eq!(map.len(), 28);
     /// ```
     #[track_caller]
-    pub fn insert_before(&mut self, mut index: usize, key: K, value: V) -> (usize, Option<V>) {
+    pub fn insert_before(
+        &mut self,
+        mut index: usize,
+        key: K,
+        value: V,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(usize, Option<V>), R> {
         let len = self.len();
 
         assert!(
@@ -485,7 +496,7 @@ where
             "index out of bounds: the len is {len} but the index is {index}. Expected index <= len"
         );
 
-        match self.entry(key) {
+        Ok(match self.entry(key, e, g)? {
             Entry::Occupied(mut entry) => {
                 if index > entry.index() {
                     // Some entries will shift down when this one moves up,
@@ -494,14 +505,14 @@ where
                     index -= 1;
                 }
                 let old = mem::replace(entry.get_mut(), value);
-                entry.move_index(index);
+                entry.move_index(index, e, g)?;
                 (index, Some(old))
             }
             Entry::Vacant(entry) => {
-                entry.shift_insert(index, value);
+                entry.shift_insert(index, value, e, g)?;
                 (index, None)
             }
-        }
+        })
     }
 
     /// Insert a key-value pair in the map at the given index.
@@ -562,9 +573,16 @@ where
     /// map.shift_insert(map.len(), 'a', ());
     /// ```
     #[track_caller]
-    pub fn shift_insert(&mut self, index: usize, key: K, value: V) -> Option<V> {
+    pub fn shift_insert(
+        &mut self,
+        index: usize,
+        key: K,
+        value: V,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<V>, R> {
         let len = self.len();
-        match self.entry(key) {
+        match self.entry(key, e, g)? {
             Entry::Occupied(mut entry) => {
                 assert!(
                     index < len,
@@ -572,8 +590,8 @@ where
                 );
 
                 let old = mem::replace(entry.get_mut(), value);
-                entry.move_index(index);
-                Some(old)
+                entry.move_index(index, e, g)?;
+                Ok(Some(old))
             }
             Entry::Vacant(entry) => {
                 assert!(
@@ -581,8 +599,8 @@ where
                     "index out of bounds: the len is {len} but the index is {index}. Expected index <= len"
                 );
 
-                entry.shift_insert(index, value);
-                None
+                entry.shift_insert(index, value, e, g)?;
+                Ok(None)
             }
         }
     }
@@ -591,48 +609,9 @@ where
     /// in-place manipulation.
     ///
     /// Computes in **O(1)** time (amortized average).
-    pub fn entry(&mut self, key: K) -> Entry<'_, K, V> {
+    pub fn entry(&mut self, key: K, e: &mut E, g: &mut G) -> Result<Entry<'_, K, V, E, G, R>, R> {
         let hash = self.hash(&key);
-        self.core.entry(hash, key)
-    }
-
-    /// Creates a splicing iterator that replaces the specified range in the map
-    /// with the given `replace_with` key-value iterator and yields the removed
-    /// items. `replace_with` does not need to be the same length as `range`.
-    ///
-    /// The `range` is removed even if the iterator is not consumed until the
-    /// end. It is unspecified how many elements are removed from the map if the
-    /// `Splice` value is leaked.
-    ///
-    /// The input iterator `replace_with` is only consumed when the `Splice`
-    /// value is dropped. If a key from the iterator matches an existing entry
-    /// in the map (outside of `range`), then the value will be updated in that
-    /// position. Otherwise, the new key-value pair will be inserted in the
-    /// replaced `range`.
-    ///
-    /// ***Panics*** if the starting point is greater than the end point or if
-    /// the end point is greater than the length of the map.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use indexmap::IndexMap;
-    ///
-    /// let mut map = IndexMap::from([(0, '_'), (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd')]);
-    /// let new = [(5, 'E'), (4, 'D'), (3, 'C'), (2, 'B'), (1, 'A')];
-    /// let removed: Vec<_> = map.splice(2..4, new).collect();
-    ///
-    /// // 1 and 4 got new values, while 5, 3, and 2 were newly inserted.
-    /// assert!(map.into_iter().eq([(0, '_'), (1, 'A'), (5, 'E'), (3, 'C'), (2, 'B'), (4, 'D')]));
-    /// assert_eq!(removed, &[(2, 'b'), (3, 'c')]);
-    /// ```
-    #[track_caller]
-    pub fn splice<R, I>(&mut self, range: R, replace_with: I) -> Splice<'_, I::IntoIter, K, V, S>
-    where
-        R: RangeBounds<usize>,
-        I: IntoIterator<Item = (K, V)>,
-    {
-        Splice::new(self, range, replace_with.into_iter())
+        self.core.entry(hash, key, e, g)
     }
 
     /// Moves all key-value pairs from `other` into `self`, leaving `other` empty.
@@ -660,8 +639,13 @@ where
     /// assert!(a.keys().eq(&[3, 2, 1, 4, 5]));
     /// assert_eq!(a[&3], "d"); // "c" was overwritten.
     /// ```
-    pub fn append<S2>(&mut self, other: &mut RubyMap<K, V, S2>) {
-        self.extend(other.drain(..));
+    pub fn append<S2>(
+        &mut self,
+        other: &mut RubyMap<K, V, E, G, R, S2>,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(), R> {
+        self.extend(other.drain(.., e, g)?, e, g)
     }
 }
 
@@ -678,97 +662,102 @@ where
     /// Return `true` if an equivalent to `key` exists in the map.
     ///
     /// Computes in **O(1)** time (average).
-    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    pub fn contains_key<Q>(&self, key: &Q, e: &mut E, g: &mut G) -> Result<bool, R>
     where
         Q: ?Sized + Hash + Equivalent<K, E, G, R>,
     {
-        self.get_index_of(key).is_some()
+        Ok(self.get_index_of(key, e, g)?.is_some())
     }
 
     /// Return a reference to the value stored for `key`, if it is present,
     /// else `None`.
     ///
     /// Computes in **O(1)** time (average).
-    pub fn get<Q>(&self, key: &Q) -> Option<&V>
+    pub fn get<Q>(&self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<&V>, R>
     where
         Q: ?Sized + Hash + Equivalent<K, E, G, R>,
     {
-        if let Some(i) = self.get_index_of(key) {
+        Ok(if let Some(i) = self.get_index_of(key, e, g)? {
             let entry = &self.as_entries()[i];
             Some(&entry.value)
         } else {
             None
-        }
+        })
     }
 
     /// Return references to the key-value pair stored for `key`,
     /// if it is present, else `None`.
     ///
     /// Computes in **O(1)** time (average).
-    pub fn get_key_value<Q>(&self, key: &Q) -> Option<(&K, &V)>
+    pub fn get_key_value<Q>(&self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<(&K, &V)>, R>
     where
         Q: ?Sized + Hash + Equivalent<K, E, G, R>,
     {
-        if let Some(i) = self.get_index_of(key) {
+        Ok(if let Some(i) = self.get_index_of(key, e, g)? {
             let entry = &self.as_entries()[i];
             Some((&entry.key, &entry.value))
         } else {
             None
-        }
+        })
     }
 
     /// Return item index, key and value
-    pub fn get_full<Q>(&self, key: &Q) -> Option<(usize, &K, &V)>
+    pub fn get_full<Q>(&self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<(usize, &K, &V)>, R>
     where
         Q: ?Sized + Hash + Equivalent<K, E, G, R>,
     {
-        if let Some(i) = self.get_index_of(key) {
+        Ok(if let Some(i) = self.get_index_of(key, e, g)? {
             let entry = &self.as_entries()[i];
             Some((i, &entry.key, &entry.value))
         } else {
             None
-        }
+        })
     }
 
     /// Return item index, if it exists in the map
     ///
     /// Computes in **O(1)** time (average).
-    pub fn get_index_of<Q>(&self, key: &Q) -> Option<usize>
+    pub fn get_index_of<Q>(&self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<usize>, R>
     where
         Q: ?Sized + Hash + Equivalent<K, E, G, R>,
     {
-        match self.as_entries() {
+        Ok(match self.as_entries() {
             [] => None,
-            [x] => key.equivalent(&x.key).then_some(0),
+            [x] => key.equivalent(&x.key, e, g)?.then_some(0),
             _ => {
                 let hash = self.hash(key);
-                self.core.get_index_of(hash, key)
+                self.core.get_index_of(hash, key, e, g)?
             }
-        }
+        })
     }
 
-    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    pub fn get_mut<Q>(&mut self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<&mut V>, R>
     where
         Q: ?Sized + Hash + Equivalent<K, E, G, R>,
     {
-        if let Some(i) = self.get_index_of(key) {
+        Ok(if let Some(i) = self.get_index_of(key, e, g)? {
             let entry = &mut self.as_entries_mut()[i];
             Some(&mut entry.value)
         } else {
             None
-        }
+        })
     }
 
-    pub fn get_full_mut<Q>(&mut self, key: &Q) -> Option<(usize, &K, &mut V)>
+    pub fn get_full_mut<Q>(
+        &mut self,
+        key: &Q,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(usize, &K, &mut V)>, R>
     where
         Q: ?Sized + Hash + Equivalent<K, E, G, R>,
     {
-        if let Some(i) = self.get_index_of(key) {
+        Ok(if let Some(i) = self.get_index_of(key, e, g)? {
             let entry = &mut self.as_entries_mut()[i];
             Some((i, &entry.key, &mut entry.value))
         } else {
             None
-        }
+        })
     }
 
     /// Return the values for `N` keys. If any key is duplicated, this function will panic.
@@ -779,12 +768,20 @@ where
     /// let mut map = indexmap::IndexMap::from([(1, 'a'), (3, 'b'), (2, 'c')]);
     /// assert_eq!(map.get_disjoint_mut([&2, &1]), [Some(&mut 'c'), Some(&mut 'a')]);
     /// ```
-    pub fn get_disjoint_mut<Q, const N: usize>(&mut self, keys: [&Q; N]) -> [Option<&mut V>; N]
+    pub fn get_disjoint_mut<Q, const N: usize>(
+        &mut self,
+        keys: [&Q; N],
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<[Option<&mut V>; N], R>
     where
         Q: ?Sized + Hash + Equivalent<K, E, G, R>,
     {
-        let indices = keys.map(|key| self.get_index_of(key));
-        match self.as_mut_slice().get_disjoint_opt_mut(indices) {
+        let mut indices: [Option<usize>; N] = [None; N];
+        for (i, k) in keys.iter().enumerate() {
+            indices[i] = self.get_index_of(*k, e, g)?;
+        }
+        Ok(match self.as_mut_slice().get_disjoint_opt_mut(indices) {
             Err(GetDisjointMutError::IndexOutOfBounds) => {
                 unreachable!(
                     "Internal error: indices should never be OOB as we got them from get_index_of"
@@ -794,23 +791,7 @@ where
                 panic!("duplicate keys found");
             }
             Ok(key_values) => key_values.map(|kv_opt| kv_opt.map(|kv| kv.1)),
-        }
-    }
-
-    /// Remove the key-value pair equivalent to `key` and return
-    /// its value.
-    ///
-    /// **NOTE:** This is equivalent to [`.swap_remove(key)`][Self::swap_remove], replacing this
-    /// entry's position with the last element, and it is deprecated in favor of calling that
-    /// explicitly. If you need to preserve the relative order of the keys in the map, use
-    /// [`.shift_remove(key)`][Self::shift_remove] instead.
-    #[deprecated(note = "`remove` disrupts the map order -- \
-        use `swap_remove` or `shift_remove` for explicit behavior.")]
-    pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
-    where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
-    {
-        self.swap_remove(key)
+        })
     }
 
     /// Remove and return the key-value pair equivalent to `key`.
@@ -821,11 +802,11 @@ where
     /// use [`.shift_remove_entry(key)`][Self::shift_remove_entry] instead.
     #[deprecated(note = "`remove_entry` disrupts the map order -- \
         use `swap_remove_entry` or `shift_remove_entry` for explicit behavior.")]
-    pub fn remove_entry<Q>(&mut self, key: &Q) -> Option<(K, V)>
+    pub fn remove_entry<Q>(&mut self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<(K, V)>, R>
     where
         Q: ?Sized + Hash + Equivalent<K, E, G, R>,
     {
-        self.swap_remove_entry(key)
+        self.swap_remove_entry(key, e, g)
     }
 
     /// Remove the key-value pair equivalent to `key` and return
@@ -838,11 +819,11 @@ where
     /// Return `None` if `key` is not in map.
     ///
     /// Computes in **O(1)** time (average).
-    pub fn swap_remove<Q>(&mut self, key: &Q) -> Option<V>
+    pub fn swap_remove<Q>(&mut self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<V>, R>
     where
         Q: ?Sized + Hash + Equivalent<K, E, G, R>,
     {
-        self.swap_remove_full(key).map(third)
+        Ok(self.swap_remove_full(key, e, g)?.map(third))
     }
 
     /// Remove and return the key-value pair equivalent to `key`.
@@ -854,14 +835,19 @@ where
     /// Return `None` if `key` is not in map.
     ///
     /// Computes in **O(1)** time (average).
-    pub fn swap_remove_entry<Q>(&mut self, key: &Q) -> Option<(K, V)>
+    pub fn swap_remove_entry<Q>(
+        &mut self,
+        key: &Q,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(K, V)>, R>
     where
         Q: ?Sized + Hash + Equivalent<K, E, G, R>,
     {
-        match self.swap_remove_full(key) {
+        Ok(match self.swap_remove_full(key, e, g)? {
             Some((_, key, value)) => Some((key, value)),
             None => None,
-        }
+        })
     }
 
     /// Remove the key-value pair equivalent to `key` and return it and
@@ -874,19 +860,27 @@ where
     /// Return `None` if `key` is not in map.
     ///
     /// Computes in **O(1)** time (average).
-    pub fn swap_remove_full<Q>(&mut self, key: &Q) -> Option<(usize, K, V)>
+    pub fn swap_remove_full<Q>(
+        &mut self,
+        key: &Q,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(usize, K, V)>, R>
     where
         Q: ?Sized + Hash + Equivalent<K, E, G, R>,
     {
         match self.as_entries() {
-            [x] if key.equivalent(&x.key) => {
-                let (k, v) = self.core.pop()?;
-                Some((0, k, v))
+            [x] if key.equivalent(&x.key, e, g)? => {
+                let (k, v) = match self.core.pop(e, g)? {
+                    Some((k, v)) => (k, v),
+                    None => return Ok(None),
+                };
+                Ok(Some((0, k, v)))
             }
-            [_] | [] => None,
+            [_] | [] => Ok(None),
             _ => {
                 let hash = self.hash(key);
-                self.core.swap_remove_full(hash, key)
+                self.core.swap_remove_full(hash, key, e, g)
             }
         }
     }
@@ -901,11 +895,11 @@ where
     /// Return `None` if `key` is not in map.
     ///
     /// Computes in **O(n)** time (average).
-    pub fn shift_remove<Q>(&mut self, key: &Q) -> Option<V>
+    pub fn shift_remove<Q>(&mut self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<V>, R>
     where
         Q: ?Sized + Hash + Equivalent<K, E, G, R>,
     {
-        self.shift_remove_full(key).map(third)
+        Ok(self.shift_remove_full(key, e, g)?.map(third))
     }
 
     /// Remove and return the key-value pair equivalent to `key`.
@@ -917,14 +911,19 @@ where
     /// Return `None` if `key` is not in map.
     ///
     /// Computes in **O(n)** time (average).
-    pub fn shift_remove_entry<Q>(&mut self, key: &Q) -> Option<(K, V)>
+    pub fn shift_remove_entry<Q>(
+        &mut self,
+        key: &Q,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(K, V)>, R>
     where
         Q: ?Sized + Hash + Equivalent<K, E, G, R>,
     {
-        match self.shift_remove_full(key) {
+        Ok(match self.shift_remove_full(key, e, g)? {
             Some((_, key, value)) => Some((key, value)),
             None => None,
-        }
+        })
     }
 
     /// Remove the key-value pair equivalent to `key` and return it and
@@ -937,19 +936,27 @@ where
     /// Return `None` if `key` is not in map.
     ///
     /// Computes in **O(n)** time (average).
-    pub fn shift_remove_full<Q>(&mut self, key: &Q) -> Option<(usize, K, V)>
+    pub fn shift_remove_full<Q>(
+        &mut self,
+        key: &Q,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(usize, K, V)>, R>
     where
         Q: ?Sized + Hash + Equivalent<K, E, G, R>,
     {
         match self.as_entries() {
-            [x] if key.equivalent(&x.key) => {
-                let (k, v) = self.core.pop()?;
-                Some((0, k, v))
+            [x] if key.equivalent(&x.key, e, g)? => {
+                let (k, v) = match self.core.pop(e, g)? {
+                    Some((k, v)) => (k, v),
+                    None => return Ok(None),
+                };
+                Ok(Some((0, k, v)))
             }
-            [_] | [] => None,
+            [_] | [] => Ok(None),
             _ => {
                 let hash = self.hash(key);
-                self.core.shift_remove_full(hash, key)
+                self.core.shift_remove_full(hash, key, e, g)
             }
         }
     }
@@ -962,8 +969,8 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
     ///
     /// Computes in **O(1)** time (average).
     #[doc(alias = "pop_last")] // like `BTreeMap`
-    pub fn pop(&mut self) -> Option<(K, V)> {
-        self.core.pop()
+    pub fn pop(&mut self, e: &mut E, g: &mut G) -> Result<Option<(K, V)>, R> {
+        self.core.pop(e, g)
     }
 
     /// Scan through each key-value pair in the map and keep those where the
@@ -1196,7 +1203,7 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
     /// Valid indices are `0 <= index < self.len()`.
     ///
     /// Computes in **O(1)** time.
-    pub fn get_index_entry(&mut self, index: usize) -> Option<IndexedEntry<'_, K, V>> {
+    pub fn get_index_entry(&mut self, index: usize) -> Option<IndexedEntry<'_, K, V, E, G, R>> {
         if index >= self.len() {
             return None;
         }
@@ -1225,7 +1232,7 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
     /// Valid indices are `0 <= index < self.len()`.
     ///
     /// Computes in **O(1)** time.
-    pub fn get_range<R: RangeBounds<usize>>(&self, range: R) -> Option<&Slice<K, V>> {
+    pub fn get_range<Ra: RangeBounds<usize>>(&self, range: Ra) -> Option<&Slice<K, V>> {
         let entries = self.as_entries();
         let range = try_simplify_range(range, entries.len())?;
         entries.get(range).map(Slice::from_slice)
@@ -1236,7 +1243,7 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
     /// Valid indices are `0 <= index < self.len()`.
     ///
     /// Computes in **O(1)** time.
-    pub fn get_range_mut<R: RangeBounds<usize>>(&mut self, range: R) -> Option<&mut Slice<K, V>> {
+    pub fn get_range_mut<Ra: RangeBounds<usize>>(&mut self, range: Ra) -> Option<&mut Slice<K, V>> {
         let entries = self.as_entries_mut();
         let range = try_simplify_range(range, entries.len())?;
         entries.get_mut(range).map(Slice::from_mut_slice)
@@ -1260,7 +1267,7 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
     /// Get the first entry in the map for in-place manipulation.
     ///
     /// Computes in **O(1)** time.
-    pub fn first_entry(&mut self) -> Option<IndexedEntry<'_, K, V>> {
+    pub fn first_entry(&mut self) -> Option<IndexedEntry<'_, K, V, E, G, R>> {
         self.get_index_entry(0)
     }
 
@@ -1282,7 +1289,7 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
     /// Get the last entry in the map for in-place manipulation.
     ///
     /// Computes in **O(1)** time.
-    pub fn last_entry(&mut self) -> Option<IndexedEntry<'_, K, V>> {
+    pub fn last_entry(&mut self) -> Option<IndexedEntry<'_, K, V, E, G, R>> {
         self.get_index_entry(self.len().checked_sub(1)?)
     }
 
@@ -1295,8 +1302,13 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
     /// the position of what used to be the last element!**
     ///
     /// Computes in **O(1)** time (average).
-    pub fn swap_remove_index(&mut self, index: usize) -> Option<(K, V)> {
-        self.core.swap_remove_index(index)
+    pub fn swap_remove_index(
+        &mut self,
+        index: usize,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(K, V)>, R> {
+        self.core.swap_remove_index(index, e, g)
     }
 
     /// Remove the key-value pair by index
@@ -1308,8 +1320,13 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
     /// **This perturbs the index of all of those elements!**
     ///
     /// Computes in **O(n)** time (average).
-    pub fn shift_remove_index(&mut self, index: usize) -> Option<(K, V)> {
-        self.core.shift_remove_index(index)
+    pub fn shift_remove_index(
+        &mut self,
+        index: usize,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(K, V)>, R> {
+        self.core.shift_remove_index(index, e, g)
     }
 
     /// Moves the position of a key-value pair from one index to another
@@ -1322,97 +1339,8 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
     ///
     /// Computes in **O(n)** time (average).
     #[track_caller]
-    pub fn move_index(&mut self, from: usize, to: usize) {
-        self.core.move_index(from, to)
-    }
-
-    /// Swaps the position of two key-value pairs in the map.
-    ///
-    /// ***Panics*** if `a` or `b` are out of bounds.
-    ///
-    /// Computes in **O(1)** time (average).
-    #[track_caller]
-    pub fn swap_indices(&mut self, a: usize, b: usize) {
-        self.core.swap_indices(a, b)
-    }
-}
-
-/// Access [`IndexMap`] values corresponding to a key.
-///
-/// # Examples
-///
-/// ```
-/// use indexmap::IndexMap;
-///
-/// let mut map = IndexMap::new();
-/// for word in "Lorem ipsum dolor sit amet".split_whitespace() {
-///     map.insert(word.to_lowercase(), word.to_uppercase());
-/// }
-/// assert_eq!(map["lorem"], "LOREM");
-/// assert_eq!(map["ipsum"], "IPSUM");
-/// ```
-///
-/// ```should_panic
-/// use indexmap::IndexMap;
-///
-/// let mut map = IndexMap::new();
-/// map.insert("foo", 1);
-/// println!("{:?}", map["bar"]); // panics!
-/// ```
-impl<K, V, Q: ?Sized, S> Index<&Q> for RubyMap<K, V, E, G, R, S>
-where
-    Q: Hash + Equivalent<K, E, G, R>,
-    S: BuildHasher,
-{
-    type Output = V;
-
-    /// Returns a reference to the value corresponding to the supplied `key`.
-    ///
-    /// ***Panics*** if `key` is not present in the map.
-    fn index(&self, key: &Q) -> &V {
-        self.get(key).expect("no entry found for key")
-    }
-}
-
-/// Access [`IndexMap`] values corresponding to a key.
-///
-/// Mutable indexing allows changing / updating values of key-value
-/// pairs that are already present.
-///
-/// You can **not** insert new pairs with index syntax, use `.insert()`.
-///
-/// # Examples
-///
-/// ```
-/// use indexmap::IndexMap;
-///
-/// let mut map = IndexMap::new();
-/// for word in "Lorem ipsum dolor sit amet".split_whitespace() {
-///     map.insert(word.to_lowercase(), word.to_string());
-/// }
-/// let lorem = &mut map["lorem"];
-/// assert_eq!(lorem, "Lorem");
-/// lorem.retain(char::is_lowercase);
-/// assert_eq!(map["lorem"], "orem");
-/// ```
-///
-/// ```should_panic
-/// use indexmap::IndexMap;
-///
-/// let mut map = IndexMap::new();
-/// map.insert("foo", 1);
-/// map["bar"] = 1; // panics!
-/// ```
-impl<K, V, Q: ?Sized, S> IndexMut<&Q> for RubyMap<K, V, E, G, R, S>
-where
-    Q: Hash + Equivalent<K, E, G, R>,
-    S: BuildHasher,
-{
-    /// Returns a mutable reference to the value corresponding to the supplied `key`.
-    ///
-    /// ***Panics*** if `key` is not present in the map.
-    fn index_mut(&mut self, key: &Q) -> &mut V {
-        self.get_mut(key).expect("no entry found for key")
+    pub fn move_index(&mut self, from: usize, to: usize, e: &mut E, g: &mut G) -> Result<(), R> {
+        self.core.move_index(from, to, e, g)
     }
 }
 
@@ -1510,9 +1438,9 @@ impl<K, V, E, G, R, S> IndexMut<usize> for RubyMap<K, V, E, G, R, S> {
     }
 }
 
-impl<K, V, E, G, R, S> FromIterator<(K, V)> for RubyMap<K, V, E, G, R, S>
+impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S>
 where
-    K: Hash + Eq,
+    K: Hash + RubyEql<E, G, R>,
     S: BuildHasher + Default,
 {
     /// Create an `IndexMap` from the sequence of key-value pairs in the
@@ -1520,18 +1448,22 @@ where
     ///
     /// `from_iter` uses the same logic as `extend`. See
     /// [`extend`][IndexMap::extend] for more details.
-    fn from_iter<I: IntoIterator<Item = (K, V)>>(iterable: I) -> Self {
+    pub fn from_iter<I: IntoIterator<Item = (K, V)>>(
+        iterable: I,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Self, R> {
         let iter = iterable.into_iter();
         let (low, _) = iter.size_hint();
         let mut map = Self::with_capacity_and_hasher(low, <_>::default());
-        map.extend(iter);
-        map
+        map.extend(iter, e, g)?;
+        Ok(map)
     }
 }
 
-impl<K, V, const N: usize> From<[(K, V); N]> for RubyMap<K, V, RandomState>
+impl<K, V, E, G, R> RubyMap<K, V, E, G, R, RandomState>
 where
-    K: Hash + Eq,
+    K: Hash + RubyEql<E, G, R>,
 {
     /// # Examples
     ///
@@ -1542,14 +1474,14 @@ where
     /// let map2: IndexMap<_, _> = [(1, 2), (3, 4)].into();
     /// assert_eq!(map1, map2);
     /// ```
-    fn from(arr: [(K, V); N]) -> Self {
-        Self::from_iter(arr)
+    pub fn from_ary<const N: usize>(arr: [(K, V); N], e: &mut E, g: &mut G) -> Result<Self, R> {
+        Self::from_iter(arr, e, g)
     }
 }
 
-impl<K, V, E, G, R, S> Extend<(K, V)> for RubyMap<K, V, E, G, R, S>
+impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S>
 where
-    K: Hash + Eq,
+    K: Hash + RubyEql<E, G, R>,
     S: BuildHasher,
 {
     /// Extend the map with all key-value pairs in the iterable.
@@ -1561,7 +1493,12 @@ where
     /// New keys are inserted in the order they appear in the sequence. If
     /// equivalents of a key occur more than once, the last corresponding value
     /// prevails.
-    fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iterable: I) {
+    pub fn extend<I: IntoIterator<Item = (K, V)>>(
+        &mut self,
+        iterable: I,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(), R> {
         // (Note: this is a copy of `std`/`hashbrown`'s reservation logic.)
         // Keys may be already present or show multiple times in the iterator.
         // Reserve the entire hint lower bound if the map is empty.
@@ -1574,23 +1511,10 @@ where
             (iter.size_hint().0 + 1) / 2
         };
         self.reserve(reserve);
-        iter.for_each(move |(k, v)| {
-            self.insert(k, v);
-        });
-    }
-}
-
-impl<'a, K, V, S> Extend<(&'a K, &'a V)> for RubyMap<K, V, E, G, R, S>
-where
-    K: Hash + Eq + Copy,
-    V: Copy,
-    S: BuildHasher,
-{
-    /// Extend the map with all key-value pairs in the iterable.
-    ///
-    /// See the first extend method for more details.
-    fn extend<I: IntoIterator<Item = (&'a K, &'a V)>>(&mut self, iterable: I) {
-        self.extend(iterable.into_iter().map(|(&key, &value)| (key, value)));
+        for (k, v) in iter {
+            self.insert(k, v, e, g)?;
+        }
+        Ok(())
     }
 }
 
@@ -1604,27 +1528,26 @@ where
     }
 }
 
-impl<K, V1, S1, V2, S2> PartialEq<RubyMap<K, V2, S2>> for RubyMap<K, V1, S1>
+impl<K, V, E, G, R> RubyEql<E, G, R> for RubyMap<K, V, E, G, R>
 where
-    K: Hash + Eq,
-    V1: PartialEq<V2>,
-    S1: BuildHasher,
-    S2: BuildHasher,
+    K: Hash + RubyEql<E, G, R>,
+    V: RubyEql<E, G, R>,
 {
-    fn eq(&self, other: &RubyMap<K, V2, S2>) -> bool {
+    fn eql(&self, other: &RubyMap<K, V, E, G, R>, e: &mut E, g: &mut G) -> Result<bool, R> {
         if self.len() != other.len() {
-            return false;
+            return Ok(false);
         }
 
-        self.iter()
-            .all(|(key, value)| other.get(key).map_or(false, |v| *value == *v))
+        for (key, value) in self.iter() {
+            match other.get(key, e, g)? {
+                None => return Ok(false),
+                Some(other_value) => {
+                    if !value.eql(other_value, e, g)? {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        Ok(true)
     }
-}
-
-impl<K, V, E, G, R, S> Eq for RubyMap<K, V, E, G, R, S>
-where
-    K: RubyEql<E, G, R> + Hash,
-    V: Eq,
-    S: BuildHasher,
-{
 }

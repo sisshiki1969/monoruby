@@ -53,6 +53,13 @@ impl<K: Eq, E, G, R> RubyEql<E, G, R> for K {
     }
 }
 
+// Implement RubyEql for str and String for test types
+impl<E, G, R> RubyEql<E, G, R> for str {
+    fn eql(&self, other: &Self, _: &mut E, _: &mut G) -> Result<bool, R> {
+        Ok(self == other)
+    }
+}
+
 /// Key equivalence trait.
 ///
 /// This trait allows hash table lookup to be customized. It has one blanket
@@ -70,11 +77,11 @@ pub trait Equivalent<K: ?Sized, E, G, R> {
 
 impl<Q: ?Sized, K: ?Sized, E, G, R> Equivalent<K, E, G, R> for Q
 where
-    Q: Eq,
+    Q: RubyEql<E, G, R>,
     K: Borrow<Q>,
 {
     #[inline]
-    fn equivalent(&self, key: &K, _: &mut E, _: &mut G) -> Result<bool, R> {
-        Ok(PartialEq::eq(self, key.borrow()))
+    fn equivalent(&self, key: &K, e: &mut E, g: &mut G) -> Result<bool, R> {
+        self.eql(key.borrow(), e, g)
     }
 }

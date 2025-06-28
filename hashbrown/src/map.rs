@@ -6,7 +6,6 @@ use core::hash::{BuildHasher, Hash};
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
 use core::mem;
-use core::ops::Index;
 
 /// A hash map implemented with quadratic probing and SIMD lookup.
 ///
@@ -212,22 +211,26 @@ where
 /// Ensures that a single closure type across uses of this which, in turn prevents multiple
 /// instances of any functions like `RawTable::reserve` from being generated
 #[cfg_attr(feature = "inline-more", inline)]
-pub(crate) fn equivalent_key<Q, K, V, E, G, R>(k: &Q) -> impl Fn(&(K, V)) -> bool + '_
+pub(crate) fn equivalent_key<Q, K, V, E, G, R>(
+    k: &Q,
+) -> impl Fn(&(K, V), &mut E, &mut G) -> Result<bool, R> + '_
 where
     Q: Equivalent<K, E, G, R> + ?Sized,
 {
-    move |x| k.equivalent(&x.0).unwrap_or(false)
+    move |x, e, g| k.equivalent(&x.0, e, g)
 }
 
 /// Ensures that a single closure type across uses of this which, in turn prevents multiple
 /// instances of any functions like `RawTable::reserve` from being generated
 #[cfg_attr(feature = "inline-more", inline)]
 #[allow(dead_code)]
-pub(crate) fn equivalent<Q, K, E, G, R>(k: &Q) -> impl Fn(&K) -> bool + '_
+pub(crate) fn equivalent<Q, K, E, G, R>(
+    k: &Q,
+) -> impl Fn(&K, &mut E, &mut G) -> Result<bool, R> + '_
 where
     Q: Equivalent<K, E, G, R> + ?Sized,
 {
-    move |x| k.equivalent(x).unwrap_or(false)
+    move |x, e, g| k.equivalent(x, e, g)
 }
 
 #[cfg_attr(feature = "inline-more", inline)]
@@ -1028,20 +1031,25 @@ where
     /// assert_eq!(letters.get(&'y'), None);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn entry(&mut self, key: K) -> Entry<'_, K, V, E, G, R, S> {
+    pub fn entry(
+        &mut self,
+        key: K,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Entry<'_, K, V, E, G, R, S>, R> {
         let hash = make_hash::<K, S>(&self.hash_builder, &key);
-        if let Some(elem) = self.table.find(hash, equivalent_key(&key)) {
-            Entry::Occupied(OccupiedEntry {
+        if let Some(elem) = self.table.find(hash, equivalent_key(&key), e, g)? {
+            Ok(Entry::Occupied(OccupiedEntry {
                 hash,
                 elem,
                 table: self,
-            })
+            }))
         } else {
-            Entry::Vacant(VacantEntry {
+            Ok(Entry::Vacant(VacantEntry {
                 hash,
                 key,
                 table: self,
-            })
+            }))
         }
     }
 
@@ -1063,23 +1071,28 @@ where
     /// assert_eq!(words["horseyland"], 1);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn entry_ref<'a, 'b, Q>(&'a mut self, key: &'b Q) -> EntryRef<'a, 'b, K, Q, V, E, G, R, S>
+    pub fn entry_ref<'a, 'b, Q>(
+        &'a mut self,
+        key: &'b Q,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<EntryRef<'a, 'b, K, Q, V, E, G, R, S>, R>
     where
         Q: Hash + Equivalent<K, E, G, R> + ?Sized,
     {
         let hash = make_hash::<Q, S>(&self.hash_builder, key);
-        if let Some(elem) = self.table.find(hash, equivalent_key(key)) {
-            EntryRef::Occupied(OccupiedEntry {
+        if let Some(elem) = self.table.find(hash, equivalent_key(key), e, g)? {
+            Ok(EntryRef::Occupied(OccupiedEntry {
                 hash,
                 elem,
                 table: self,
-            })
+            }))
         } else {
-            EntryRef::Vacant(VacantEntryRef {
+            Ok(EntryRef::Vacant(VacantEntryRef {
                 hash,
                 key,
                 table: self,
-            })
+            }))
         }
     }
 
@@ -1103,15 +1116,15 @@ where
     /// assert_eq!(map.get(&2), None);
     /// ```
     #[inline]
-    pub fn get<Q>(&self, k: &Q) -> Option<&V>
+    pub fn get<Q>(&self, k: &Q, e: &mut E, g: &mut G) -> Result<Option<&V>, R>
     where
         Q: Hash + Equivalent<K, E, G, R> + ?Sized,
     {
         // Avoid `Option::map` because it bloats LLVM IR.
-        match self.get_inner(k) {
+        Ok(match self.get_inner(k, e, g)? {
             Some((_, v)) => Some(v),
             None => None,
-        }
+        })
     }
 
     /// Returns the key-value pair corresponding to the supplied key.
@@ -1134,27 +1147,27 @@ where
     /// assert_eq!(map.get_key_value(&2), None);
     /// ```
     #[inline]
-    pub fn get_key_value<Q>(&self, k: &Q) -> Option<(&K, &V)>
+    pub fn get_key_value<Q>(&self, k: &Q, e: &mut E, g: &mut G) -> Result<Option<(&K, &V)>, R>
     where
         Q: Hash + Equivalent<K, E, G, R> + ?Sized,
     {
         // Avoid `Option::map` because it bloats LLVM IR.
-        match self.get_inner(k) {
+        Ok(match self.get_inner(k, e, g)? {
             Some((key, value)) => Some((key, value)),
             None => None,
-        }
+        })
     }
 
     #[inline]
-    fn get_inner<Q>(&self, k: &Q) -> Option<&(K, V)>
+    fn get_inner<Q>(&self, k: &Q, e: &mut E, g: &mut G) -> Result<Option<&(K, V)>, R>
     where
         Q: Hash + Equivalent<K, E, G, R> + ?Sized,
     {
         if self.table.is_empty() {
-            None
+            Ok(None)
         } else {
             let hash = make_hash::<Q, S>(&self.hash_builder, k);
-            self.table.get(hash, equivalent_key(k))
+            self.table.get(hash, equivalent_key(k), e, g)
         }
     }
 
@@ -1182,15 +1195,20 @@ where
     /// assert_eq!(map.get_key_value_mut(&2), None);
     /// ```
     #[inline]
-    pub fn get_key_value_mut<Q>(&mut self, k: &Q) -> Option<(&K, &mut V)>
+    pub fn get_key_value_mut<Q>(
+        &mut self,
+        k: &Q,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(&K, &mut V)>, R>
     where
         Q: Hash + Equivalent<K, E, G, R> + ?Sized,
     {
         // Avoid `Option::map` because it bloats LLVM IR.
-        match self.get_inner_mut(k) {
+        Ok(match self.get_inner_mut(k, e, g)? {
             Some(&mut (ref key, ref mut value)) => Some((key, value)),
             None => None,
-        }
+        })
     }
 
     /// Returns `true` if the map contains a value for the specified key.
@@ -1213,11 +1231,11 @@ where
     /// assert_eq!(map.contains_key(&2), false);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn contains_key<Q>(&self, k: &Q) -> bool
+    pub fn contains_key<Q>(&self, k: &Q, e: &mut E, g: &mut G) -> Result<bool, R>
     where
         Q: Hash + Equivalent<K, E, G, R> + ?Sized,
     {
-        self.get_inner(k).is_some()
+        Ok(self.get_inner(k, e, g)?.is_some())
     }
 
     /// Returns a mutable reference to the value corresponding to the key.
@@ -1244,311 +1262,28 @@ where
     /// assert_eq!(map.get_mut(&2), None);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn get_mut<Q>(&mut self, k: &Q) -> Option<&mut V>
+    pub fn get_mut<Q>(&mut self, k: &Q, e: &mut E, g: &mut G) -> Result<Option<&mut V>, R>
     where
         Q: Hash + Equivalent<K, E, G, R> + ?Sized,
     {
         // Avoid `Option::map` because it bloats LLVM IR.
-        match self.get_inner_mut(k) {
+        Ok(match self.get_inner_mut(k, e, g)? {
             Some(&mut (_, ref mut v)) => Some(v),
             None => None,
-        }
+        })
     }
 
     #[inline]
-    fn get_inner_mut<Q>(&mut self, k: &Q) -> Option<&mut (K, V)>
+    fn get_inner_mut<Q>(&mut self, k: &Q, e: &mut E, g: &mut G) -> Result<Option<&mut (K, V)>, R>
     where
         Q: Hash + Equivalent<K, E, G, R> + ?Sized,
     {
         if self.table.is_empty() {
-            None
+            Ok(None)
         } else {
             let hash = make_hash::<Q, S>(&self.hash_builder, k);
-            self.table.get_mut(hash, equivalent_key(k))
+            self.table.get_mut(hash, equivalent_key(k), e, g)
         }
-    }
-
-    /// Attempts to get mutable references to `N` values in the map at once.
-    ///
-    /// Returns an array of length `N` with the results of each query. For soundness, at most one
-    /// mutable reference will be returned to any value. `None` will be used if the key is missing.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any keys are overlapping.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hashbrown::HashMap;
-    ///
-    /// let mut libraries = HashMap::new();
-    /// libraries.insert("Bodleian Library".to_string(), 1602);
-    /// libraries.insert("Athenæum".to_string(), 1807);
-    /// libraries.insert("Herzogin-Anna-Amalia-Bibliothek".to_string(), 1691);
-    /// libraries.insert("Library of Congress".to_string(), 1800);
-    ///
-    /// // Get Athenæum and Bodleian Library
-    /// let [Some(a), Some(b)] = libraries.get_many_mut([
-    ///     "Athenæum",
-    ///     "Bodleian Library",
-    /// ]) else { panic!() };
-    ///
-    /// // Assert values of Athenæum and Library of Congress
-    /// let got = libraries.get_many_mut([
-    ///     "Athenæum",
-    ///     "Library of Congress",
-    /// ]);
-    /// assert_eq!(
-    ///     got,
-    ///     [
-    ///         Some(&mut 1807),
-    ///         Some(&mut 1800),
-    ///     ],
-    /// );
-    ///
-    /// // Missing keys result in None
-    /// let got = libraries.get_many_mut([
-    ///     "Athenæum",
-    ///     "New York Public Library",
-    /// ]);
-    /// assert_eq!(
-    ///     got,
-    ///     [
-    ///         Some(&mut 1807),
-    ///         None
-    ///     ]
-    /// );
-    /// ```
-    ///
-    /// ```should_panic
-    /// use hashbrown::HashMap;
-    ///
-    /// let mut libraries = HashMap::new();
-    /// libraries.insert("Athenæum".to_string(), 1807);
-    ///
-    /// // Duplicate keys panic!
-    /// let got = libraries.get_many_mut([
-    ///     "Athenæum",
-    ///     "Athenæum",
-    /// ]);
-    /// ```
-    pub fn get_many_mut<Q, const N: usize>(&mut self, ks: [&Q; N]) -> [Option<&'_ mut V>; N]
-    where
-        Q: Hash + Equivalent<K, E, G, R> + ?Sized,
-    {
-        self.get_many_mut_inner(ks).map(|res| res.map(|(_, v)| v))
-    }
-
-    /// Attempts to get mutable references to `N` values in the map at once, without validating that
-    /// the values are unique.
-    ///
-    /// Returns an array of length `N` with the results of each query. `None` will be used if
-    /// the key is missing.
-    ///
-    /// For a safe alternative see [`get_many_mut`](`HashMap::get_many_mut`).
-    ///
-    /// # Safety
-    ///
-    /// Calling this method with overlapping keys is *[undefined behavior]* even if the resulting
-    /// references are not used.
-    ///
-    /// [undefined behavior]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hashbrown::HashMap;
-    ///
-    /// let mut libraries = HashMap::new();
-    /// libraries.insert("Bodleian Library".to_string(), 1602);
-    /// libraries.insert("Athenæum".to_string(), 1807);
-    /// libraries.insert("Herzogin-Anna-Amalia-Bibliothek".to_string(), 1691);
-    /// libraries.insert("Library of Congress".to_string(), 1800);
-    ///
-    /// // SAFETY: The keys do not overlap.
-    /// let [Some(a), Some(b)] = (unsafe { libraries.get_many_unchecked_mut([
-    ///     "Athenæum",
-    ///     "Bodleian Library",
-    /// ]) }) else { panic!() };
-    ///
-    /// // SAFETY: The keys do not overlap.
-    /// let got = unsafe { libraries.get_many_unchecked_mut([
-    ///     "Athenæum",
-    ///     "Library of Congress",
-    /// ]) };
-    /// assert_eq!(
-    ///     got,
-    ///     [
-    ///         Some(&mut 1807),
-    ///         Some(&mut 1800),
-    ///     ],
-    /// );
-    ///
-    /// // SAFETY: The keys do not overlap.
-    /// let got = unsafe { libraries.get_many_unchecked_mut([
-    ///     "Athenæum",
-    ///     "New York Public Library",
-    /// ]) };
-    /// // Missing keys result in None
-    /// assert_eq!(got, [Some(&mut 1807), None]);
-    /// ```
-    pub unsafe fn get_many_unchecked_mut<Q, const N: usize>(
-        &mut self,
-        ks: [&Q; N],
-    ) -> [Option<&'_ mut V>; N]
-    where
-        Q: Hash + Equivalent<K, E, G, R> + ?Sized,
-    {
-        self.get_many_unchecked_mut_inner(ks)
-            .map(|res| res.map(|(_, v)| v))
-    }
-
-    /// Attempts to get mutable references to `N` values in the map at once, with immutable
-    /// references to the corresponding keys.
-    ///
-    /// Returns an array of length `N` with the results of each query. For soundness, at most one
-    /// mutable reference will be returned to any value. `None` will be used if the key is missing.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any keys are overlapping.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hashbrown::HashMap;
-    ///
-    /// let mut libraries = HashMap::new();
-    /// libraries.insert("Bodleian Library".to_string(), 1602);
-    /// libraries.insert("Athenæum".to_string(), 1807);
-    /// libraries.insert("Herzogin-Anna-Amalia-Bibliothek".to_string(), 1691);
-    /// libraries.insert("Library of Congress".to_string(), 1800);
-    ///
-    /// let got = libraries.get_many_key_value_mut([
-    ///     "Bodleian Library",
-    ///     "Herzogin-Anna-Amalia-Bibliothek",
-    /// ]);
-    /// assert_eq!(
-    ///     got,
-    ///     [
-    ///         Some((&"Bodleian Library".to_string(), &mut 1602)),
-    ///         Some((&"Herzogin-Anna-Amalia-Bibliothek".to_string(), &mut 1691)),
-    ///     ],
-    /// );
-    /// // Missing keys result in None
-    /// let got = libraries.get_many_key_value_mut([
-    ///     "Bodleian Library",
-    ///     "Gewandhaus",
-    /// ]);
-    /// assert_eq!(got, [Some((&"Bodleian Library".to_string(), &mut 1602)), None]);
-    /// ```
-    ///
-    /// ```should_panic
-    /// use hashbrown::HashMap;
-    ///
-    /// let mut libraries = HashMap::new();
-    /// libraries.insert("Bodleian Library".to_string(), 1602);
-    /// libraries.insert("Herzogin-Anna-Amalia-Bibliothek".to_string(), 1691);
-    ///
-    /// // Duplicate keys result in panic!
-    /// let got = libraries.get_many_key_value_mut([
-    ///     "Bodleian Library",
-    ///     "Herzogin-Anna-Amalia-Bibliothek",
-    ///     "Herzogin-Anna-Amalia-Bibliothek",
-    /// ]);
-    /// ```
-    pub fn get_many_key_value_mut<Q, const N: usize>(
-        &mut self,
-        ks: [&Q; N],
-    ) -> [Option<(&'_ K, &'_ mut V)>; N]
-    where
-        Q: Hash + Equivalent<K, E, G, R> + ?Sized,
-    {
-        self.get_many_mut_inner(ks)
-            .map(|res| res.map(|(k, v)| (&*k, v)))
-    }
-
-    /// Attempts to get mutable references to `N` values in the map at once, with immutable
-    /// references to the corresponding keys, without validating that the values are unique.
-    ///
-    /// Returns an array of length `N` with the results of each query. `None` will be returned if
-    /// any of the keys are missing.
-    ///
-    /// For a safe alternative see [`get_many_key_value_mut`](`HashMap::get_many_key_value_mut`).
-    ///
-    /// # Safety
-    ///
-    /// Calling this method with overlapping keys is *[undefined behavior]* even if the resulting
-    /// references are not used.
-    ///
-    /// [undefined behavior]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hashbrown::HashMap;
-    ///
-    /// let mut libraries = HashMap::new();
-    /// libraries.insert("Bodleian Library".to_string(), 1602);
-    /// libraries.insert("Athenæum".to_string(), 1807);
-    /// libraries.insert("Herzogin-Anna-Amalia-Bibliothek".to_string(), 1691);
-    /// libraries.insert("Library of Congress".to_string(), 1800);
-    ///
-    /// let got = libraries.get_many_key_value_mut([
-    ///     "Bodleian Library",
-    ///     "Herzogin-Anna-Amalia-Bibliothek",
-    /// ]);
-    /// assert_eq!(
-    ///     got,
-    ///     [
-    ///         Some((&"Bodleian Library".to_string(), &mut 1602)),
-    ///         Some((&"Herzogin-Anna-Amalia-Bibliothek".to_string(), &mut 1691)),
-    ///     ],
-    /// );
-    /// // Missing keys result in None
-    /// let got = libraries.get_many_key_value_mut([
-    ///     "Bodleian Library",
-    ///     "Gewandhaus",
-    /// ]);
-    /// assert_eq!(
-    ///     got,
-    ///     [
-    ///         Some((&"Bodleian Library".to_string(), &mut 1602)),
-    ///         None,
-    ///     ],
-    /// );
-    /// ```
-    pub unsafe fn get_many_key_value_unchecked_mut<Q, const N: usize>(
-        &mut self,
-        ks: [&Q; N],
-    ) -> [Option<(&'_ K, &'_ mut V)>; N]
-    where
-        Q: Hash + Equivalent<K, E, G, R> + ?Sized,
-    {
-        self.get_many_unchecked_mut_inner(ks)
-            .map(|res| res.map(|(k, v)| (&*k, v)))
-    }
-
-    fn get_many_mut_inner<Q, const N: usize>(&mut self, ks: [&Q; N]) -> [Option<&'_ mut (K, V)>; N]
-    where
-        Q: Hash + Equivalent<K, E, G, R> + ?Sized,
-    {
-        let hashes = self.build_hashes_inner(ks);
-        self.table
-            .get_many_mut(hashes, |i, (k, _)| ks[i].equivalent(k).unwrap())
-    }
-
-    unsafe fn get_many_unchecked_mut_inner<Q, const N: usize>(
-        &mut self,
-        ks: [&Q; N],
-    ) -> [Option<&'_ mut (K, V)>; N]
-    where
-        Q: Hash + Equivalent<K, E, G, R> + ?Sized,
-    {
-        let hashes = self.build_hashes_inner(ks);
-        self.table
-            .get_many_unchecked_mut(hashes, |i, (k, _)| ks[i].equivalent(k).unwrap())
     }
 
     fn build_hashes_inner<Q, const N: usize>(&self, ks: [&Q; N]) -> [u64; N]
@@ -1589,9 +1324,9 @@ where
     /// assert_eq!(map[&37], "c");
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn insert(&mut self, k: K, v: V) -> Option<V> {
+    pub fn insert(&mut self, k: K, v: V, e: &mut E, g: &mut G) -> Result<Option<V>, R> {
         let hash = make_hash::<K, S>(&self.hash_builder, &k);
-        match self.find_or_find_insert_slot(hash, &k) {
+        Ok(match self.find_or_find_insert_slot(hash, &k, e, g)? {
             Ok(bucket) => Some(mem::replace(unsafe { &mut bucket.as_mut().1 }, v)),
             Err(slot) => {
                 unsafe {
@@ -1599,7 +1334,7 @@ where
                 }
                 None
             }
-        }
+        })
     }
 
     #[cfg_attr(feature = "inline-more", inline)]
@@ -1607,7 +1342,9 @@ where
         &mut self,
         hash: u64,
         key: &Q,
-    ) -> Result<Bucket<(K, V)>, crate::raw::InsertSlot>
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Result<Bucket<(K, V)>, crate::raw::InsertSlot>, R>
     where
         Q: Equivalent<K, E, G, R> + ?Sized,
     {
@@ -1615,6 +1352,8 @@ where
             hash,
             equivalent_key(key),
             make_hasher(&self.hash_builder),
+            e,
+            g,
         )
     }
 
@@ -1718,11 +1457,13 @@ where
         &mut self,
         key: K,
         value: V,
-    ) -> Result<&mut V, OccupiedError<'_, K, V, E, G, R, S>> {
-        match self.entry(key) {
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Result<&mut V, OccupiedError<'_, K, V, E, G, R, S>>, R> {
+        Ok(match self.entry(key, e, g)? {
             Entry::Occupied(entry) => Err(OccupiedError { entry, value }),
             Entry::Vacant(entry) => Ok(entry.insert(value)),
-        }
+        })
     }
 
     /// Removes a key from the map, returning the value at the key if the key
@@ -1753,15 +1494,15 @@ where
     /// assert!(map.is_empty());
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn remove<Q>(&mut self, k: &Q) -> Option<V>
+    pub fn remove<Q>(&mut self, k: &Q, e: &mut E, g: &mut G) -> Result<Option<V>, R>
     where
         Q: Hash + Equivalent<K, E, G, R> + ?Sized,
     {
         // Avoid `Option::map` because it bloats LLVM IR.
-        match self.remove_entry(k) {
+        Ok(match self.remove_entry(k, e, g)? {
             Some((_, v)) => Some(v),
             None => None,
-        }
+        })
     }
 
     /// Removes a key from the map, returning the stored key and value if the
@@ -1792,12 +1533,12 @@ where
     /// assert!(map.is_empty());
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn remove_entry<Q>(&mut self, k: &Q) -> Option<(K, V)>
+    pub fn remove_entry<Q>(&mut self, k: &Q, e: &mut E, g: &mut G) -> Result<Option<(K, V)>, R>
     where
         Q: Hash + Equivalent<K, E, G, R> + ?Sized,
     {
         let hash = make_hash::<Q, S>(&self.hash_builder, k);
-        self.table.remove_entry(hash, equivalent_key(k))
+        self.table.remove_entry(hash, equivalent_key(k), e, g)
     }
 
     /// Returns the total amount of memory allocated internally by the hash
@@ -1811,28 +1552,30 @@ where
     }
 }
 
-impl<K, V, E, G, R, S> PartialEq for HashMap<K, V, E, G, R, S>
+impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S>
 where
     K: RubyEql<E, G, R> + Hash,
-    V: PartialEq,
+    V: RubyEql<E, G, R>,
     S: BuildHasher,
 {
-    fn eq(&self, other: &Self) -> bool {
+    pub fn eq(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R> {
         if self.len() != other.len() {
-            return false;
+            return Ok(false);
         }
 
-        self.iter()
-            .all(|(key, value)| other.get(key).map_or(false, |v| *value == *v))
-    }
-}
+        for (k, v) in self.iter() {
+            match other.get(k, e, g)? {
+                Some(other_v) => {
+                    if !v.eql(other_v, e, g)? {
+                        return Ok(false);
+                    }
+                }
+                None => return Ok(false),
+            }
+        }
 
-impl<K, V, E, G, R, S> Eq for HashMap<K, V, E, G, R, S>
-where
-    K: RubyEql<E, G, R> + Hash,
-    V: Eq,
-    S: BuildHasher,
-{
+        Ok(true)
+    }
 }
 
 impl<K, V, E, G, R, S> Debug for HashMap<K, V, E, G, R, S>
@@ -1870,39 +1613,9 @@ where
     }
 }
 
-impl<K, Q, V, E, G, R, S> Index<&Q> for HashMap<K, V, E, G, R, S>
-where
-    K: RubyEql<E, G, R> + Hash,
-    Q: Hash + Equivalent<K, E, G, R> + ?Sized,
-    S: BuildHasher,
-{
-    type Output = V;
-
-    /// Returns a reference to the value corresponding to the supplied key.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the key is not present in the `HashMap`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hashbrown::HashMap;
-    ///
-    /// let map: HashMap<_, _> = [("a", "One"), ("b", "Two")].into();
-    ///
-    /// assert_eq!(map[&"a"], "One");
-    /// assert_eq!(map[&"b"], "Two");
-    /// ```
-    #[cfg_attr(feature = "inline-more", inline)]
-    fn index(&self, key: &Q) -> &V {
-        self.get(key).expect("no entry found for key")
-    }
-}
-
 // The default hasher is used to match the std implementation signature
 #[cfg(feature = "default-hasher")]
-impl<K, V, E, G, R, const N: usize> From<[(K, V); N]> for HashMap<K, V, E, G, R, DefaultHashBuilder>
+impl<K, V, E, G, R> HashMap<K, V, E, G, R, DefaultHashBuilder>
 where
     K: RubyEql<E, G, R> + Hash,
 {
@@ -1915,8 +1628,12 @@ where
     /// let map2: HashMap<_, _> = [(1, 2), (3, 4)].into();
     /// assert_eq!(map1, map2);
     /// ```
-    fn from(arr: [(K, V); N]) -> Self {
-        arr.into_iter().collect()
+    fn from_ary<const N: usize>(arr: [(K, V); N], e: &mut E, g: &mut G) -> Result<Self, R> {
+        let mut map = Self::with_capacity(N);
+        for (k, v) in arr {
+            map.insert(k, v, e, g)?;
+        }
+        Ok(map)
     }
 }
 
@@ -4206,25 +3923,29 @@ impl<'a, 'b, K, Q: ?Sized, V, E, G, R, S> VacantEntryRef<'a, 'b, K, Q, V, E, G, 
     }
 }
 
-impl<K, V, E, G, R, S> FromIterator<(K, V)> for HashMap<K, V, E, G, R, S>
+impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S>
 where
     K: RubyEql<E, G, R> + Hash,
     S: BuildHasher + Default,
 {
     #[cfg_attr(feature = "inline-more", inline)]
-    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+    pub fn from_iter<T: IntoIterator<Item = (K, V)>>(
+        iter: T,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Self, R> {
         let iter = iter.into_iter();
         let mut map = Self::with_capacity_and_hasher(iter.size_hint().0, S::default());
-        iter.for_each(|(k, v)| {
-            map.insert(k, v);
-        });
-        map
+        for (k, v) in iter {
+            map.insert(k, v, e, g)?;
+        }
+        Ok(map)
     }
 }
 
 /// Inserts all new key-values from the iterator and replaces values with existing
 /// keys with new values returned from the iterator.
-impl<K, V, E, G, R, S> Extend<(K, V)> for HashMap<K, V, E, G, R, S>
+impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S>
 where
     K: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
@@ -4265,7 +3986,12 @@ where
     /// assert_eq!(vec, [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)]);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
-    fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
+    pub fn extend<T: IntoIterator<Item = (K, V)>>(
+        &mut self,
+        iter: T,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(), R> {
         // Keys may be already present or show multiple times in the iterator.
         // Reserve the entire hint lower bound if the map is empty.
         // Otherwise reserve half the hint (rounded up), so the map
@@ -4277,108 +4003,10 @@ where
             (iter.size_hint().0 + 1) / 2
         };
         self.reserve(reserve);
-        iter.for_each(move |(k, v)| {
-            self.insert(k, v);
-        });
-    }
-}
-
-/// Inserts all new key-values from the iterator and replaces values with existing
-/// keys with new values returned from the iterator.
-impl<'a, K, V, E, G, R, S> Extend<(&'a K, &'a V)> for HashMap<K, V, E, G, R, S>
-where
-    K: RubyEql<E, G, R> + Hash + Copy,
-    V: Copy,
-    S: BuildHasher,
-{
-    /// Inserts all new key-values from the iterator to existing `HashMap<K, V, E, G, R, S>`.
-    /// Replace values with existing keys with new values returned from the iterator.
-    /// The keys and values must implement [`Copy`] trait.
-    ///
-    /// [`Copy`]: https://doc.rust-lang.org/core/marker/trait.Copy.html
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hashbrown::hash_map::HashMap;
-    ///
-    /// let mut map = HashMap::new();
-    /// map.insert(1, 100);
-    ///
-    /// let arr = [(1, 1), (2, 2)];
-    /// let some_iter = arr.iter().map(|(k, v)| (k, v));
-    /// map.extend(some_iter);
-    /// // Replace values with existing keys with new values returned from the iterator.
-    /// // So that the map.get(&1) doesn't return Some(&100).
-    /// assert_eq!(map.get(&1), Some(&1));
-    ///
-    /// let some_vec: Vec<_> = vec![(3, 3), (4, 4)];
-    /// map.extend(some_vec.iter().map(|(k, v)| (k, v)));
-    ///
-    /// let some_arr = [(5, 5), (6, 6)];
-    /// map.extend(some_arr.iter().map(|(k, v)| (k, v)));
-    ///
-    /// // You can also extend from another HashMap
-    /// let mut new_map = HashMap::new();
-    /// new_map.extend(&map);
-    /// assert_eq!(new_map, map);
-    ///
-    /// let mut vec: Vec<_> = new_map.into_iter().collect();
-    /// // The `IntoIter` iterator produces items in arbitrary order, so the
-    /// // items must be sorted to test them against a sorted array.
-    /// vec.sort_unstable();
-    /// assert_eq!(vec, [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)]);
-    /// ```
-    #[cfg_attr(feature = "inline-more", inline)]
-    fn extend<T: IntoIterator<Item = (&'a K, &'a V)>>(&mut self, iter: T) {
-        self.extend(iter.into_iter().map(|(&key, &value)| (key, value)));
-    }
-}
-
-/// Inserts all new key-values from the iterator and replaces values with existing
-/// keys with new values returned from the iterator.
-impl<'a, K, V, E, G, R, S> Extend<&'a (K, V)> for HashMap<K, V, E, G, R, S>
-where
-    K: RubyEql<E, G, R> + Hash + Copy,
-    V: Copy,
-    S: BuildHasher,
-{
-    /// Inserts all new key-values from the iterator to existing `HashMap<K, V, E, G, R, S>`.
-    /// Replace values with existing keys with new values returned from the iterator.
-    /// The keys and values must implement [`Copy`] trait.
-    ///
-    /// [`Copy`]: https://doc.rust-lang.org/core/marker/trait.Copy.html
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hashbrown::hash_map::HashMap;
-    ///
-    /// let mut map = HashMap::new();
-    /// map.insert(1, 100);
-    ///
-    /// let arr = [(1, 1), (2, 2)];
-    /// let some_iter = arr.iter();
-    /// map.extend(some_iter);
-    /// // Replace values with existing keys with new values returned from the iterator.
-    /// // So that the map.get(&1) doesn't return Some(&100).
-    /// assert_eq!(map.get(&1), Some(&1));
-    ///
-    /// let some_vec: Vec<_> = vec![(3, 3), (4, 4)];
-    /// map.extend(&some_vec);
-    ///
-    /// let some_arr = [(5, 5), (6, 6)];
-    /// map.extend(&some_arr);
-    ///
-    /// let mut vec: Vec<_> = map.into_iter().collect();
-    /// // The `IntoIter` iterator produces items in arbitrary order, so the
-    /// // items must be sorted to test them against a sorted array.
-    /// vec.sort_unstable();
-    /// assert_eq!(vec, [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)]);
-    /// ```
-    #[cfg_attr(feature = "inline-more", inline)]
-    fn extend<T: IntoIterator<Item = &'a (K, V)>>(&mut self, iter: T) {
-        self.extend(iter.into_iter().map(|&(key, value)| (key, value)));
+        for (k, v) in iter {
+            self.insert(k, v, e, g)?;
+        }
+        Ok(())
     }
 }
 
@@ -4430,7 +4058,6 @@ mod test_map {
     use super::Entry::{Occupied, Vacant};
     use super::EntryRef;
     use super::HashMap;
-    use alloc::string::{String, ToString};
     use rand::{rngs::SmallRng, Rng, SeedableRng};
     use std::borrow::ToOwned;
     use std::cell::RefCell;
@@ -4442,6 +4069,8 @@ mod test_map {
     #[test]
     fn test_zero_capacities() {
         type HM = HashMap<i32, i32, E, G, ()>;
+        let mut e = E;
+        let mut g = G;
 
         let m = HM::new();
         assert_eq!(m.capacity(), 0);
@@ -4459,10 +4088,10 @@ mod test_map {
         assert_eq!(m.capacity(), 0);
 
         let mut m = HM::new();
-        m.insert(1, 1);
-        m.insert(2, 2);
-        m.remove(&1);
-        m.remove(&2);
+        m.insert(1, 1, &mut e, &mut g).unwrap();
+        m.insert(2, 2, &mut e, &mut g).unwrap();
+        m.remove(&1, &mut e, &mut g).unwrap();
+        m.remove(&2, &mut e, &mut g).unwrap();
         m.shrink_to_fit();
         assert_eq!(m.capacity(), 0);
 
@@ -4474,37 +4103,43 @@ mod test_map {
     #[test]
     fn test_create_capacity_zero() {
         let mut m = HashMap::<_, _, E, G, ()>::with_capacity(0);
+        let mut e = E;
+        let mut g = G;
 
-        assert!(m.insert(1, 1).is_none());
+        assert!(m.insert(1, 1, &mut e, &mut g).unwrap().is_none());
 
-        assert!(m.contains_key(&1));
-        assert!(!m.contains_key(&0));
+        assert!(m.contains_key(&1, &mut e, &mut g).unwrap());
+        assert!(!m.contains_key(&0, &mut e, &mut g).unwrap());
     }
 
     #[test]
     fn test_insert() {
         let mut m = HashMap::<_, _, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
         assert_eq!(m.len(), 0);
-        assert!(m.insert(1, 2).is_none());
+        assert!(m.insert(1, 2, &mut e, &mut g).unwrap().is_none());
         assert_eq!(m.len(), 1);
-        assert!(m.insert(2, 4).is_none());
+        assert!(m.insert(2, 4, &mut e, &mut g).unwrap().is_none());
         assert_eq!(m.len(), 2);
-        assert_eq!(*m.get(&1).unwrap(), 2);
-        assert_eq!(*m.get(&2).unwrap(), 4);
+        assert_eq!(*m.get(&1, &mut e, &mut g).unwrap().unwrap(), 2);
+        assert_eq!(*m.get(&2, &mut e, &mut g).unwrap().unwrap(), 4);
     }
 
     #[test]
     fn test_clone() {
         let mut m = HashMap::<_, _, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
         assert_eq!(m.len(), 0);
-        assert!(m.insert(1, 2).is_none());
+        assert!(m.insert(1, 2, &mut e, &mut g).unwrap().is_none());
         assert_eq!(m.len(), 1);
-        assert!(m.insert(2, 4).is_none());
+        assert!(m.insert(2, 4, &mut e, &mut g).unwrap().is_none());
         assert_eq!(m.len(), 2);
         #[allow(clippy::redundant_clone)]
         let m2 = m.clone();
-        assert_eq!(*m2.get(&1).unwrap(), 2);
-        assert_eq!(*m2.get(&2).unwrap(), 4);
+        assert_eq!(*m2.get(&1, &mut e, &mut g).unwrap().unwrap(), 2);
+        assert_eq!(*m2.get(&2, &mut e, &mut g).unwrap().unwrap(), 4);
         assert_eq!(m2.len(), 2);
     }
 
@@ -4512,14 +4147,16 @@ mod test_map {
     fn test_clone_from() {
         let mut m = HashMap::<_, _, E, G, ()>::new();
         let mut m2 = HashMap::<_, _, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
         assert_eq!(m.len(), 0);
-        assert!(m.insert(1, 2).is_none());
+        assert!(m.insert(1, 2, &mut e, &mut g).unwrap().is_none());
         assert_eq!(m.len(), 1);
-        assert!(m.insert(2, 4).is_none());
+        assert!(m.insert(2, 4, &mut e, &mut g).unwrap().is_none());
         assert_eq!(m.len(), 2);
         m2.clone_from(&m);
-        assert_eq!(*m2.get(&1).unwrap(), 2);
-        assert_eq!(*m2.get(&2).unwrap(), 4);
+        assert_eq!(*m2.get(&1, &mut e, &mut g).unwrap().unwrap(), 2);
+        assert_eq!(*m2.get(&2, &mut e, &mut g).unwrap().unwrap(), 4);
         assert_eq!(m2.len(), 2);
     }
 
@@ -4562,6 +4199,8 @@ mod test_map {
 
         {
             let mut m = HashMap::<_, _, E, G, ()>::new();
+            let mut e = E;
+            let mut g = G;
 
             DROP_VECTOR.with(|v| {
                 for i in 0..200 {
@@ -4572,7 +4211,7 @@ mod test_map {
             for i in 0..100 {
                 let d1 = Droppable::new(i);
                 let d2 = Droppable::new(i + 100);
-                m.insert(d1, d2);
+                m.insert(d1, d2, &mut e, &mut g).unwrap();
             }
 
             DROP_VECTOR.with(|v| {
@@ -4583,7 +4222,7 @@ mod test_map {
 
             for i in 0..50 {
                 let k = Droppable::new(i);
-                let v = m.remove(&k);
+                let v = m.remove(&k, &mut e, &mut g).unwrap();
 
                 assert!(v.is_some());
 
@@ -4621,6 +4260,8 @@ mod test_map {
 
         let hm = {
             let mut hm = HashMap::<_, _, E, G, ()>::new();
+            let mut e = E;
+            let mut g = G;
 
             DROP_VECTOR.with(|v| {
                 for i in 0..200 {
@@ -4631,7 +4272,7 @@ mod test_map {
             for i in 0..100 {
                 let d1 = Droppable::new(i);
                 let d2 = Droppable::new(i + 100);
-                hm.insert(d1, d2);
+                hm.insert(d1, d2, &mut e, &mut g).unwrap();
             }
 
             DROP_VECTOR.with(|v| {
@@ -4677,28 +4318,37 @@ mod test_map {
     #[test]
     fn test_empty_remove() {
         let mut m: HashMap<i32, bool, E, G, ()> = HashMap::new();
-        assert_eq!(m.remove(&0), None);
+        let mut e = E;
+        let mut g = G;
+        assert_eq!(m.remove(&0, &mut e, &mut g).unwrap(), None);
     }
 
     #[test]
     fn test_empty_entry() {
         let mut m: HashMap<i32, bool, E, G, ()> = HashMap::new();
-        match m.entry(0) {
+        let mut e = E;
+        let mut g = G;
+        match m.entry(0, &mut e, &mut g).unwrap() {
             Occupied(_) => panic!(),
             Vacant(_) => {}
         }
-        assert!(*m.entry(0).or_insert(true));
+        assert!(*m.entry(0, &mut e, &mut g).unwrap().or_insert(true));
         assert_eq!(m.len(), 1);
     }
 
     #[test]
     fn test_empty_entry_ref() {
         let mut m: HashMap<std::string::String, bool, E, G, ()> = HashMap::new();
-        match m.entry_ref("poneyland") {
+        let mut e = E;
+        let mut g = G;
+        match m.entry_ref("poneyland", &mut e, &mut g).unwrap() {
             EntryRef::Occupied(_) => panic!(),
             EntryRef::Vacant(_) => {}
         }
-        assert!(*m.entry_ref("poneyland").or_insert(true));
+        assert!(*m
+            .entry_ref("poneyland", &mut e, &mut g)
+            .unwrap()
+            .or_insert(true));
         assert_eq!(m.len(), 1);
     }
 
@@ -4720,6 +4370,8 @@ mod test_map {
     #[cfg_attr(miri, ignore)] // FIXME: takes too long
     fn test_lots_of_insertions() {
         let mut m = HashMap::<_, _, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
 
         // Try this a few times to make sure we never screw up the hashmap's
         // internal state.
@@ -4727,54 +4379,54 @@ mod test_map {
             assert!(m.is_empty());
 
             for i in 1..1001 {
-                assert!(m.insert(i, i).is_none());
+                assert!(m.insert(i, i, &mut e, &mut g).unwrap().is_none());
 
                 for j in 1..=i {
-                    let r = m.get(&j);
+                    let r = m.get(&j, &mut E, &mut G).unwrap();
                     assert_eq!(r, Some(&j));
                 }
 
                 for j in i + 1..1001 {
-                    let r = m.get(&j);
+                    let r = m.get(&j, &mut E, &mut G).unwrap();
                     assert_eq!(r, None);
                 }
             }
 
             for i in 1001..2001 {
-                assert!(!m.contains_key(&i));
+                assert!(!m.contains_key(&i, &mut e, &mut g).unwrap());
             }
 
             // remove forwards
             for i in 1..1001 {
-                assert!(m.remove(&i).is_some());
+                assert!(m.remove(&i, &mut e, &mut g).unwrap().is_some());
 
                 for j in 1..=i {
-                    assert!(!m.contains_key(&j));
+                    assert!(!m.contains_key(&j, &mut e, &mut g).unwrap());
                 }
 
                 for j in i + 1..1001 {
-                    assert!(m.contains_key(&j));
+                    assert!(m.contains_key(&j, &mut e, &mut g).unwrap());
                 }
             }
 
             for i in 1..1001 {
-                assert!(!m.contains_key(&i));
+                assert!(!m.contains_key(&i, &mut e, &mut g).unwrap());
             }
 
             for i in 1..1001 {
-                assert!(m.insert(i, i).is_none());
+                assert!(m.insert(i, i, &mut e, &mut g).unwrap().is_none());
             }
 
             // remove backwards
             for i in (1..1001).rev() {
-                assert!(m.remove(&i).is_some());
+                assert!(m.remove(&i, &mut e, &mut g).unwrap().is_some());
 
                 for j in i..1001 {
-                    assert!(!m.contains_key(&j));
+                    assert!(!m.contains_key(&j, &mut e, &mut g).unwrap());
                 }
 
                 for j in 1..i {
-                    assert!(m.contains_key(&j));
+                    assert!(m.contains_key(&j, &mut e, &mut g).unwrap());
                 }
             }
         }
@@ -4783,100 +4435,118 @@ mod test_map {
     #[test]
     fn test_find_mut() {
         let mut m = HashMap::<_, _, E, G, ()>::new();
-        assert!(m.insert(1, 12).is_none());
-        assert!(m.insert(2, 8).is_none());
-        assert!(m.insert(5, 14).is_none());
+        let mut e = E;
+        let mut g = G;
+        assert!(m.insert(1, 12, &mut e, &mut g).unwrap().is_none());
+        assert!(m.insert(2, 8, &mut e, &mut g).unwrap().is_none());
+        assert!(m.insert(5, 14, &mut e, &mut g).unwrap().is_none());
         let new = 100;
-        match m.get_mut(&5) {
+        match m.get_mut(&5, &mut e, &mut g).unwrap() {
             None => panic!(),
             Some(x) => *x = new,
         }
-        assert_eq!(m.get(&5), Some(&new));
+        assert_eq!(m.get(&5, &mut e, &mut g).unwrap(), Some(&new));
         let mut hashmap: HashMap<i32, String, E, G, ()> = HashMap::<_, _, E, G, ()>::default();
         let key = &1;
-        let result = hashmap.get_mut(key);
+        let result = hashmap.get_mut(key, &mut e, &mut g).unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn test_insert_overwrite() {
         let mut m = HashMap::<_, _, E, G, ()>::new();
-        assert!(m.insert(1, 2).is_none());
-        assert_eq!(*m.get(&1).unwrap(), 2);
-        assert!(m.insert(1, 3).is_some());
-        assert_eq!(*m.get(&1).unwrap(), 3);
+        let mut e = E;
+        let mut g = G;
+        assert!(m.insert(1, 2, &mut e, &mut g).unwrap().is_none());
+        assert_eq!(*m.get(&1, &mut e, &mut g).unwrap().unwrap(), 2);
+        assert!(m.insert(1, 3, &mut e, &mut g).unwrap().is_some());
+        assert_eq!(*m.get(&1, &mut e, &mut g).unwrap().unwrap(), 3);
     }
 
     #[test]
     fn test_insert_conflicts() {
         let mut m = HashMap::<_, _, E, G, ()>::with_capacity(4);
-        assert!(m.insert(1, 2).is_none());
-        assert!(m.insert(5, 3).is_none());
-        assert!(m.insert(9, 4).is_none());
-        assert_eq!(*m.get(&9).unwrap(), 4);
-        assert_eq!(*m.get(&5).unwrap(), 3);
-        assert_eq!(*m.get(&1).unwrap(), 2);
+        let mut e = E;
+        let mut g = G;
+        assert!(m.insert(1, 2, &mut e, &mut g).unwrap().is_none());
+        assert!(m.insert(5, 3, &mut e, &mut g).unwrap().is_none());
+        assert!(m.insert(9, 4, &mut e, &mut g).unwrap().is_none());
+        assert_eq!(*m.get(&9, &mut e, &mut g).unwrap().unwrap(), 4);
+        assert_eq!(*m.get(&5, &mut e, &mut g).unwrap().unwrap(), 3);
+        assert_eq!(*m.get(&1, &mut e, &mut g).unwrap().unwrap(), 2);
     }
 
     #[test]
     fn test_conflict_remove() {
         let mut m = HashMap::<_, _, E, G, ()>::with_capacity(4);
-        assert!(m.insert(1, 2).is_none());
-        assert_eq!(*m.get(&1).unwrap(), 2);
-        assert!(m.insert(5, 3).is_none());
-        assert_eq!(*m.get(&1).unwrap(), 2);
-        assert_eq!(*m.get(&5).unwrap(), 3);
-        assert!(m.insert(9, 4).is_none());
-        assert_eq!(*m.get(&1).unwrap(), 2);
-        assert_eq!(*m.get(&5).unwrap(), 3);
-        assert_eq!(*m.get(&9).unwrap(), 4);
-        assert!(m.remove(&1).is_some());
-        assert_eq!(*m.get(&9).unwrap(), 4);
-        assert_eq!(*m.get(&5).unwrap(), 3);
+        let mut e = E;
+        let mut g = G;
+        assert!(m.insert(1, 2, &mut e, &mut g).unwrap().is_none());
+        assert_eq!(*m.get(&1, &mut e, &mut g).unwrap().unwrap(), 2);
+        assert!(m.insert(5, 3, &mut e, &mut g).unwrap().is_none());
+        assert_eq!(*m.get(&1, &mut e, &mut g).unwrap().unwrap(), 2);
+        assert_eq!(*m.get(&5, &mut e, &mut g).unwrap().unwrap(), 3);
+        assert!(m.insert(9, 4, &mut e, &mut g).unwrap().is_none());
+        assert_eq!(*m.get(&1, &mut e, &mut g).unwrap().unwrap(), 2);
+        assert_eq!(*m.get(&5, &mut e, &mut g).unwrap().unwrap(), 3);
+        assert_eq!(*m.get(&9, &mut e, &mut g).unwrap().unwrap(), 4);
+        assert!(m.remove(&1, &mut e, &mut g).unwrap().is_some());
+        assert_eq!(*m.get(&9, &mut e, &mut g).unwrap().unwrap(), 4);
+        assert_eq!(*m.get(&5, &mut e, &mut g).unwrap().unwrap(), 3);
     }
 
     #[test]
     fn test_insert_unique_unchecked() {
         let mut map = HashMap::<_, _, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
         let (k1, v1) = unsafe { map.insert_unique_unchecked(10, 11) };
         assert_eq!((&10, &mut 11), (k1, v1));
         let (k2, v2) = unsafe { map.insert_unique_unchecked(20, 21) };
         assert_eq!((&20, &mut 21), (k2, v2));
-        assert_eq!(Some(&11), map.get(&10));
-        assert_eq!(Some(&21), map.get(&20));
-        assert_eq!(None, map.get(&30));
+        assert_eq!(Some(&11), map.get(&10, &mut e, &mut g).unwrap());
+        assert_eq!(Some(&21), map.get(&20, &mut e, &mut g).unwrap());
+        assert_eq!(None, map.get(&30, &mut e, &mut g).unwrap());
     }
 
     #[test]
     fn test_is_empty() {
         let mut m = HashMap::<_, _, E, G, ()>::with_capacity(4);
-        assert!(m.insert(1, 2).is_none());
+        let mut e = E;
+        let mut g = G;
+        assert!(m.insert(1, 2, &mut e, &mut g).unwrap().is_none());
         assert!(!m.is_empty());
-        assert!(m.remove(&1).is_some());
+        assert!(m.remove(&1, &mut e, &mut g).unwrap().is_some());
         assert!(m.is_empty());
     }
 
     #[test]
     fn test_remove() {
         let mut m = HashMap::<_, _, E, G, ()>::new();
-        m.insert(1, 2);
-        assert_eq!(m.remove(&1), Some(2));
-        assert_eq!(m.remove(&1), None);
+        let mut e = E;
+        let mut g = G;
+        m.insert(1, 2, &mut e, &mut g).unwrap();
+        assert_eq!(m.remove(&1, &mut e, &mut g).unwrap(), Some(2));
+        assert_eq!(m.remove(&1, &mut e, &mut g).unwrap(), None);
     }
 
     #[test]
     fn test_remove_entry() {
         let mut m = HashMap::<_, _, E, G, ()>::new();
-        m.insert(1, 2);
-        assert_eq!(m.remove_entry(&1), Some((1, 2)));
-        assert_eq!(m.remove(&1), None);
+        let mut e = E;
+        let mut g = G;
+        m.insert(1, 2, &mut e, &mut g).unwrap();
+        assert_eq!(m.remove_entry(&1, &mut e, &mut g).unwrap(), Some((1, 2)));
+        assert_eq!(m.remove(&1, &mut e, &mut g).unwrap(), None);
     }
 
     #[test]
     fn test_iterate() {
         let mut m = HashMap::<_, _, E, G, ()>::with_capacity(4);
+        let mut e = E;
+        let mut g = G;
         for i in 0..32 {
-            assert!(m.insert(i, i * 2).is_none());
+            assert!(m.insert(i, i * 2, &mut e, &mut g).unwrap().is_none());
         }
         assert_eq!(m.len(), 32);
 
@@ -4892,7 +4562,10 @@ mod test_map {
     #[test]
     fn test_keys() {
         let vec = vec![(1, 'a'), (2, 'b'), (3, 'c')];
-        let map: HashMap<_, _, E, G, ()> = vec.into_iter().collect();
+        let mut e = E;
+        let mut g = G;
+        let map: HashMap<_, _, E, G, ()> =
+            HashMap::from_iter(vec.into_iter(), &mut e, &mut g).unwrap();
         let keys: Vec<_> = map.keys().copied().collect();
         assert_eq!(keys.len(), 3);
         assert!(keys.contains(&1));
@@ -4903,7 +4576,8 @@ mod test_map {
     #[test]
     fn test_values() {
         let vec = vec![(1, 'a'), (2, 'b'), (3, 'c')];
-        let map: HashMap<_, _, E, G, ()> = vec.into_iter().collect();
+        let map: HashMap<_, _, E, G, ()> =
+            HashMap::from_iter(vec.into_iter(), &mut E, &mut G).unwrap();
         let values: Vec<_> = map.values().copied().collect();
         assert_eq!(values.len(), 3);
         assert!(values.contains(&'a'));
@@ -4914,7 +4588,8 @@ mod test_map {
     #[test]
     fn test_values_mut() {
         let vec = vec![(1, 1), (2, 2), (3, 3)];
-        let mut map: HashMap<_, _, E, G, ()> = vec.into_iter().collect();
+        let mut map: HashMap<_, _, E, G, ()> =
+            HashMap::from_iter(vec.into_iter(), &mut E, &mut G).unwrap();
         for value in map.values_mut() {
             *value *= 2;
         }
@@ -4928,7 +4603,8 @@ mod test_map {
     #[test]
     fn test_into_keys() {
         let vec = vec![(1, 'a'), (2, 'b'), (3, 'c')];
-        let map: HashMap<_, _, E, G, ()> = vec.into_iter().collect();
+        let map: HashMap<_, _, E, G, ()> =
+            HashMap::from_iter(vec.into_iter(), &mut E, &mut G).unwrap();
         let keys: Vec<_> = map.into_keys().collect();
 
         assert_eq!(keys.len(), 3);
@@ -4940,7 +4616,8 @@ mod test_map {
     #[test]
     fn test_into_values() {
         let vec = vec![(1, 'a'), (2, 'b'), (3, 'c')];
-        let map: HashMap<_, _, E, G, ()> = vec.into_iter().collect();
+        let map: HashMap<_, _, E, G, ()> =
+            HashMap::from_iter(vec.into_iter(), &mut E, &mut G).unwrap();
         let values: Vec<_> = map.into_values().collect();
 
         assert_eq!(values.len(), 3);
@@ -4952,9 +4629,11 @@ mod test_map {
     #[test]
     fn test_find() {
         let mut m = HashMap::<_, _, E, G, ()>::new();
-        assert!(m.get(&1).is_none());
-        m.insert(1, 2);
-        match m.get(&1) {
+        let mut e = E;
+        let mut g = G;
+        assert!(m.get(&1, &mut e, &mut g).unwrap().is_none());
+        m.insert(1, 2, &mut e, &mut g).unwrap();
+        match m.get(&1, &mut e, &mut g).unwrap() {
             None => panic!(),
             Some(v) => assert_eq!(*v, 2),
         }
@@ -4963,28 +4642,32 @@ mod test_map {
     #[test]
     fn test_eq() {
         let mut m1 = HashMap::<_, _, E, G, ()>::new();
-        m1.insert(1, 2);
-        m1.insert(2, 3);
-        m1.insert(3, 4);
+        let mut e = E;
+        let mut g = G;
+        m1.insert(1, 2, &mut e, &mut g).unwrap();
+        m1.insert(2, 3, &mut e, &mut g).unwrap();
+        m1.insert(3, 4, &mut e, &mut g).unwrap();
 
         let mut m2 = HashMap::<_, _, E, G, ()>::new();
-        m2.insert(1, 2);
-        m2.insert(2, 3);
+        m2.insert(1, 2, &mut e, &mut g).unwrap();
+        m2.insert(2, 3, &mut e, &mut g).unwrap();
 
-        assert!(m1 != m2);
+        assert!(!m1.eq(&m2, &mut e, &mut g).unwrap());
 
-        m2.insert(3, 4);
+        m2.insert(3, 4, &mut e, &mut g).unwrap();
 
-        assert_eq!(m1, m2);
+        m1.eq(&m2, &mut e, &mut g).unwrap();
     }
 
     #[test]
     fn test_show() {
         let mut map = HashMap::<_, _, E, G, ()>::new();
         let empty: HashMap<i32, i32, E, G, ()> = HashMap::new();
+        let mut e = E;
+        let mut g = G;
 
-        map.insert(1, 2);
-        map.insert(3, 4);
+        map.insert(1, 2, &mut e, &mut g).unwrap();
+        map.insert(3, 4, &mut e, &mut g).unwrap();
 
         let map_str = format!("{map:?}");
 
@@ -4995,6 +4678,8 @@ mod test_map {
     #[test]
     fn test_expand() {
         let mut m = HashMap::<_, _, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
 
         assert_eq!(m.len(), 0);
         assert!(m.is_empty());
@@ -5002,7 +4687,7 @@ mod test_map {
         let mut i = 0;
         let old_raw_cap = m.raw_capacity();
         while old_raw_cap == m.raw_capacity() {
-            m.insert(i, i);
+            m.insert(i, i, &mut e, &mut g).unwrap();
             i += 1;
         }
 
@@ -5013,13 +4698,15 @@ mod test_map {
     #[test]
     fn test_behavior_resize_policy() {
         let mut m = HashMap::<_, _, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
 
         assert_eq!(m.len(), 0);
         assert_eq!(m.raw_capacity(), 1);
         assert!(m.is_empty());
 
-        m.insert(0, 0);
-        m.remove(&0);
+        m.insert(0, 0, &mut e, &mut g).unwrap();
+        m.remove(&0, &mut e, &mut g).unwrap();
         assert!(m.is_empty());
         let initial_raw_cap = m.raw_capacity();
         m.reserve(initial_raw_cap);
@@ -5029,7 +4716,7 @@ mod test_map {
 
         let mut i = 0;
         for _ in 0..raw_cap * 3 / 4 {
-            m.insert(i, i);
+            m.insert(i, i, &mut e, &mut g).unwrap();
             i += 1;
         }
         // three quarters full
@@ -5038,7 +4725,7 @@ mod test_map {
         assert_eq!(m.raw_capacity(), raw_cap);
 
         for _ in 0..raw_cap / 4 {
-            m.insert(i, i);
+            m.insert(i, i, &mut e, &mut g).unwrap();
             i += 1;
         }
         // half full
@@ -5048,7 +4735,7 @@ mod test_map {
 
         for _ in 0..raw_cap / 2 - 1 {
             i -= 1;
-            m.remove(&i);
+            m.remove(&i, &mut e, &mut g).unwrap();
             assert_eq!(m.raw_capacity(), new_raw_cap);
         }
         // A little more than one quarter full.
@@ -5057,7 +4744,7 @@ mod test_map {
         // again, a little more than half full
         for _ in 0..raw_cap / 2 {
             i -= 1;
-            m.remove(&i);
+            m.remove(&i, &mut e, &mut g).unwrap();
         }
         m.shrink_to_fit();
 
@@ -5069,22 +4756,24 @@ mod test_map {
     #[test]
     fn test_reserve_shrink_to_fit() {
         let mut m = HashMap::<_, _, E, G, ()>::new();
-        m.insert(0, 0);
-        m.remove(&0);
+        let mut e = E;
+        let mut g = G;
+        m.insert(0, 0, &mut e, &mut g).unwrap();
+        m.remove(&0, &mut e, &mut g).unwrap();
         assert!(m.capacity() >= m.len());
         for i in 0..128 {
-            m.insert(i, i);
+            m.insert(i, i, &mut e, &mut g).unwrap();
         }
         m.reserve(256);
 
         let usable_cap = m.capacity();
         for i in 128..(128 + 256) {
-            m.insert(i, i);
+            m.insert(i, i, &mut e, &mut g).unwrap();
             assert_eq!(m.capacity(), usable_cap);
         }
 
         for i in 100..(128 + 256) {
-            assert_eq!(m.remove(&i), Some(i));
+            assert_eq!(m.remove(&i, &mut e, &mut g).unwrap(), Some(i));
         }
         m.shrink_to_fit();
 
@@ -5093,24 +4782,27 @@ mod test_map {
         assert!(m.capacity() >= m.len());
 
         for i in 0..100 {
-            assert_eq!(m.remove(&i), Some(i));
+            assert_eq!(m.remove(&i, &mut e, &mut g).unwrap(), Some(i));
         }
         m.shrink_to_fit();
-        m.insert(0, 0);
+        m.insert(0, 0, &mut e, &mut g).unwrap();
 
         assert_eq!(m.len(), 1);
         assert!(m.capacity() >= m.len());
-        assert_eq!(m.remove(&0), Some(0));
+        assert_eq!(m.remove(&0, &mut e, &mut g).unwrap(), Some(0));
     }
 
     #[test]
     fn test_from_iter() {
         let xs = [(1, 1), (2, 2), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)];
+        let mut e = E;
+        let mut g = G;
 
-        let map: HashMap<_, _, E, G, ()> = xs.iter().copied().collect();
+        let map: HashMap<_, _, E, G, ()> =
+            HashMap::from_iter(xs.iter().copied(), &mut e, &mut g).unwrap();
 
         for &(k, v) in &xs {
-            assert_eq!(map.get(&k), Some(&v));
+            assert_eq!(map.get(&k, &mut e, &mut g).unwrap(), Some(&v));
         }
 
         assert_eq!(map.iter().len(), xs.len() - 1);
@@ -5120,7 +4812,8 @@ mod test_map {
     fn test_size_hint() {
         let xs = [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)];
 
-        let map: HashMap<_, _, E, G, ()> = xs.iter().copied().collect();
+        let map: HashMap<_, _, E, G, ()> =
+            HashMap::from_iter(xs.iter().copied(), &mut E, &mut G).unwrap();
 
         let mut iter = map.iter();
 
@@ -5133,7 +4826,8 @@ mod test_map {
     fn test_iter_len() {
         let xs = [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)];
 
-        let map: HashMap<_, _, E, G, ()> = xs.iter().copied().collect();
+        let map: HashMap<_, _, E, G, ()> =
+            HashMap::from_iter(xs.iter().copied(), &mut E, &mut G).unwrap();
 
         let mut iter = map.iter();
 
@@ -5146,7 +4840,8 @@ mod test_map {
     fn test_mut_size_hint() {
         let xs = [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)];
 
-        let mut map: HashMap<_, _, E, G, ()> = xs.iter().copied().collect();
+        let mut map: HashMap<_, _, E, G, ()> =
+            HashMap::from_iter(xs.iter().copied(), &mut E, &mut G).unwrap();
 
         let mut iter = map.iter_mut();
 
@@ -5159,7 +4854,8 @@ mod test_map {
     fn test_iter_mut_len() {
         let xs = [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)];
 
-        let mut map: HashMap<_, _, E, G, ()> = xs.iter().copied().collect();
+        let mut map: HashMap<_, _, E, G, ()> =
+            HashMap::from_iter(xs.iter().copied(), &mut E, &mut G).unwrap();
 
         let mut iter = map.iter_mut();
 
@@ -5171,46 +4867,53 @@ mod test_map {
     #[test]
     fn test_index() {
         let mut map = HashMap::<_, _, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
 
-        map.insert(1, 2);
-        map.insert(2, 1);
-        map.insert(3, 4);
+        map.insert(1, 2, &mut e, &mut g).unwrap();
+        map.insert(2, 1, &mut e, &mut g).unwrap();
+        map.insert(3, 4, &mut e, &mut g).unwrap();
 
-        assert_eq!(map[&2], 1);
+        assert_eq!(map.get(&2, &mut e, &mut g).unwrap().unwrap(), &1);
     }
 
     #[test]
     #[should_panic]
     fn test_index_nonexistent() {
         let mut map = HashMap::<_, _, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
 
-        map.insert(1, 2);
-        map.insert(2, 1);
-        map.insert(3, 4);
+        map.insert(1, 2, &mut e, &mut g).unwrap();
+        map.insert(2, 1, &mut e, &mut g).unwrap();
+        map.insert(3, 4, &mut e, &mut g).unwrap();
 
         #[allow(clippy::no_effect)] // false positive lint
-        map[&4];
+        map.get(&4, &mut e, &mut g).unwrap().unwrap();
     }
 
     #[test]
     fn test_entry() {
         let xs = [(1, 10), (2, 20), (3, 30), (4, 40), (5, 50), (6, 60)];
 
-        let mut map: HashMap<_, _, E, G, ()> = xs.iter().copied().collect();
+        let mut map: HashMap<_, _, E, G, ()> =
+            HashMap::from_iter(xs.iter().copied(), &mut E, &mut G).unwrap();
+        let mut e = E;
+        let mut g = G;
 
         // Existing key (insert)
-        match map.entry(1) {
+        match map.entry(1, &mut e, &mut g).unwrap() {
             Vacant(_) => unreachable!(),
             Occupied(mut view) => {
                 assert_eq!(view.get(), &10);
                 assert_eq!(view.insert(100), 10);
             }
         }
-        assert_eq!(map.get(&1).unwrap(), &100);
+        assert_eq!(map.get(&1, &mut e, &mut g).unwrap().unwrap(), &100);
         assert_eq!(map.len(), 6);
 
         // Existing key (update)
-        match map.entry(2) {
+        match map.entry(2, &mut e, &mut g).unwrap() {
             Vacant(_) => unreachable!(),
             Occupied(mut view) => {
                 let v = view.get_mut();
@@ -5218,27 +4921,27 @@ mod test_map {
                 *v = new_v;
             }
         }
-        assert_eq!(map.get(&2).unwrap(), &200);
+        assert_eq!(map.get(&2, &mut e, &mut g).unwrap().unwrap(), &200);
         assert_eq!(map.len(), 6);
 
         // Existing key (take)
-        match map.entry(3) {
+        match map.entry(3, &mut e, &mut g).unwrap() {
             Vacant(_) => unreachable!(),
             Occupied(view) => {
                 assert_eq!(view.remove(), 30);
             }
         }
-        assert_eq!(map.get(&3), None);
+        assert_eq!(map.get(&3, &mut e, &mut g).unwrap(), None);
         assert_eq!(map.len(), 5);
 
         // Inexistent key (insert)
-        match map.entry(10) {
+        match map.entry(10, &mut e, &mut g).unwrap() {
             Occupied(_) => unreachable!(),
             Vacant(view) => {
                 assert_eq!(*view.insert(1000), 1000);
             }
         }
-        assert_eq!(map.get(&10).unwrap(), &1000);
+        assert_eq!(map.get(&10, &mut e, &mut g).unwrap().unwrap(), &1000);
         assert_eq!(map.len(), 6);
     }
 
@@ -5253,21 +4956,24 @@ mod test_map {
             ("Six".to_owned(), 60),
         ];
 
-        let mut map: HashMap<_, _, E, G, ()> = xs.iter().cloned().collect();
+        let mut map: HashMap<_, _, E, G, ()> =
+            HashMap::from_iter(xs.iter().cloned(), &mut E, &mut G).unwrap();
+        let mut e = E;
+        let mut g = G;
 
         // Existing key (insert)
-        match map.entry_ref("One") {
+        match map.entry_ref("One", &mut e, &mut g).unwrap() {
             EntryRef::Vacant(_) => unreachable!(),
             EntryRef::Occupied(mut view) => {
                 assert_eq!(view.get(), &10);
                 assert_eq!(view.insert(100), 10);
             }
         }
-        assert_eq!(map.get("One").unwrap(), &100);
+        assert_eq!(map.get("One", &mut e, &mut g).unwrap().unwrap(), &100);
         assert_eq!(map.len(), 6);
 
         // Existing key (update)
-        match map.entry_ref("Two") {
+        match map.entry_ref("Two", &mut e, &mut g).unwrap() {
             EntryRef::Vacant(_) => unreachable!(),
             EntryRef::Occupied(mut view) => {
                 let v = view.get_mut();
@@ -5275,27 +4981,28 @@ mod test_map {
                 *v = new_v;
             }
         }
-        assert_eq!(map.get("Two").unwrap(), &200);
+        assert_eq!(map.get("Two", &mut e, &mut g).unwrap().unwrap(), &200);
         assert_eq!(map.len(), 6);
 
         // Existing key (take)
-        match map.entry_ref("Three") {
+        match map.entry_ref("Three", &mut e, &mut g).unwrap() {
             EntryRef::Vacant(_) => unreachable!(),
             EntryRef::Occupied(view) => {
                 assert_eq!(view.remove(), 30);
             }
         }
-        assert_eq!(map.get("Three"), None);
+
+        assert_eq!(map.get("Three", &mut e, &mut g).unwrap(), None);
         assert_eq!(map.len(), 5);
 
         // Inexistent key (insert)
-        match map.entry_ref("Ten") {
+        match map.entry_ref("Ten", &mut e, &mut g).unwrap() {
             EntryRef::Occupied(_) => unreachable!(),
             EntryRef::Vacant(view) => {
                 assert_eq!(*view.insert(1000), 1000);
             }
         }
-        assert_eq!(map.get("Ten").unwrap(), &1000);
+        assert_eq!(map.get("Ten", &mut e, &mut g).unwrap().unwrap(), &1000);
         assert_eq!(map.len(), 6);
     }
 
@@ -5303,13 +5010,18 @@ mod test_map {
     fn test_entry_take_doesnt_corrupt() {
         #![allow(deprecated)] //rand
                               // Test for #19292
-        fn check(m: &HashMap<i32, (), E, G, ()>) {
+        fn check(m: &HashMap<i32, (), E, G, ()>, e: &mut E, g: &mut G) {
             for k in m.keys() {
-                assert!(m.contains_key(k), "{k} is in keys() but not in the map?");
+                assert!(
+                    m.contains_key(k, e, g).unwrap(),
+                    "{k} is in keys() but not in the map?"
+                );
             }
         }
 
         let mut m = HashMap::new();
+        let mut e = E;
+        let mut g = G;
 
         let mut rng = {
             let seed = u64::from_le_bytes(*b"testseed");
@@ -5319,19 +5031,19 @@ mod test_map {
         // Populate the map with some items.
         for _ in 0..50 {
             let x = rng.gen_range(-10..10);
-            m.insert(x, ());
+            m.insert(x, (), &mut e, &mut g).unwrap();
         }
 
         for _ in 0..1000 {
             let x = rng.gen_range(-10..10);
-            match m.entry(x) {
+            match m.entry(x, &mut e, &mut g).unwrap() {
                 Vacant(_) => {}
                 Occupied(e) => {
                     e.remove();
                 }
             }
 
-            check(&m);
+            check(&m, &mut e, &mut g);
         }
     }
 
@@ -5339,13 +5051,18 @@ mod test_map {
     fn test_entry_ref_take_doesnt_corrupt() {
         #![allow(deprecated)] //rand
                               // Test for #19292
-        fn check(m: &HashMap<std::string::String, (), E, G, ()>) {
+        fn check(m: &HashMap<std::string::String, (), E, G, ()>, e: &mut E, g: &mut G) {
             for k in m.keys() {
-                assert!(m.contains_key(k), "{k} is in keys() but not in the map?");
+                assert!(
+                    m.contains_key(k, e, g).unwrap(),
+                    "{k} is in keys() but not in the map?"
+                );
             }
         }
 
         let mut m = HashMap::new();
+        let mut e = E;
+        let mut g = G;
 
         let mut rng = {
             let seed = u64::from_le_bytes(*b"testseed");
@@ -5356,37 +5073,39 @@ mod test_map {
         for _ in 0..50 {
             let mut x = std::string::String::with_capacity(1);
             x.push(rng.gen_range('a'..='z'));
-            m.insert(x, ());
+            m.insert(x, (), &mut e, &mut g).unwrap();
         }
 
         for _ in 0..1000 {
             let mut x = std::string::String::with_capacity(1);
             x.push(rng.gen_range('a'..='z'));
-            match m.entry_ref(x.as_str()) {
+            match m.entry_ref(x.as_str(), &mut e, &mut g).unwrap() {
                 EntryRef::Vacant(_) => {}
                 EntryRef::Occupied(e) => {
                     e.remove();
                 }
             }
 
-            check(&m);
+            check(&m, &mut e, &mut g);
         }
     }
 
     #[test]
     fn test_extend_ref_k_ref_v() {
+        let mut e = E;
+        let mut g = G;
         let mut a = HashMap::<_, _, E, G, ()>::new();
-        a.insert(1, "one");
+        a.insert(1, "one", &mut e, &mut g).unwrap();
         let mut b = HashMap::<_, _, E, G, ()>::new();
-        b.insert(2, "two");
-        b.insert(3, "three");
+        b.insert(2, "two", &mut e, &mut g).unwrap();
+        b.insert(3, "three", &mut e, &mut g).unwrap();
 
-        a.extend(&b);
+        a.extend(b.into_iter(), &mut e, &mut g).unwrap();
 
         assert_eq!(a.len(), 3);
-        assert_eq!(a[&1], "one");
-        assert_eq!(a[&2], "two");
-        assert_eq!(a[&3], "three");
+        assert_eq!(a.get(&1, &mut e, &mut g).unwrap().unwrap(), &"one");
+        assert_eq!(a.get(&2, &mut e, &mut g).unwrap().unwrap(), &"two");
+        assert_eq!(a.get(&3, &mut e, &mut g).unwrap().unwrap(), &"three");
     }
 
     #[test]
@@ -5394,7 +5113,9 @@ mod test_map {
     fn test_extend_ref_kv_tuple() {
         use std::ops::AddAssign;
         let mut a = HashMap::<_, _, E, G, ()>::new();
-        a.insert(0, 0);
+        let mut e = E;
+        let mut g = G;
+        a.insert(0, 0, &mut e, &mut g).unwrap();
 
         fn create_arr<T: AddAssign<T> + Copy, const N: usize>(start: T, step: T) -> [(T, T); N] {
             let mut outs: [(T, T); N] = [(start, start); N];
@@ -5408,26 +5129,29 @@ mod test_map {
         }
 
         let for_iter: Vec<_> = (0..100).map(|i| (i, i)).collect();
-        let iter = for_iter.iter();
+        let iter = for_iter.iter().cloned();
         let vec: Vec<_> = (100..200).map(|i| (i, i)).collect();
-        a.extend(iter);
-        a.extend(&vec);
-        a.extend(create_arr::<i32, 100>(200, 1));
+        a.extend(iter, &mut e, &mut g).unwrap();
+        a.extend(vec.into_iter(), &mut e, &mut g).unwrap();
+        a.extend(create_arr::<i32, 100>(200, 1), &mut e, &mut g)
+            .unwrap();
 
         assert_eq!(a.len(), 300);
 
         for item in 0..300 {
-            assert_eq!(a[&item], item);
+            assert_eq!(a.get(&item, &mut e, &mut g).unwrap().unwrap(), &item);
         }
     }
 
     #[test]
     fn test_capacity_not_less_than_len() {
         let mut a = HashMap::<_, _, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
         let mut item = 0;
 
         for _ in 0..116 {
-            a.insert(item, 0);
+            a.insert(item, 0, &mut e, &mut g).unwrap();
             item += 1;
         }
 
@@ -5435,61 +5159,67 @@ mod test_map {
 
         let free = a.capacity() - a.len();
         for _ in 0..free {
-            a.insert(item, 0);
+            a.insert(item, 0, &mut e, &mut g).unwrap();
             item += 1;
         }
 
         assert_eq!(a.len(), a.capacity());
 
         // Insert at capacity should cause allocation.
-        a.insert(item, 0);
+        a.insert(item, 0, &mut e, &mut g).unwrap();
         assert!(a.capacity() > a.len());
     }
 
     #[test]
     fn test_occupied_entry_key() {
         let mut a = HashMap::<_, _, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
         let key = "hello there";
         let value = "value goes here";
         assert!(a.is_empty());
-        a.insert(key, value);
+        a.insert(key, value, &mut e, &mut g).unwrap();
         assert_eq!(a.len(), 1);
-        assert_eq!(a[key], value);
+        assert_eq!(a.get(key, &mut e, &mut g).unwrap().unwrap(), &value);
 
-        match a.entry(key) {
+        match a.entry(key, &mut e, &mut g).unwrap() {
             Vacant(_) => panic!(),
             Occupied(e) => assert_eq!(key, *e.key()),
         }
         assert_eq!(a.len(), 1);
-        assert_eq!(a[key], value);
+        assert_eq!(a.get(key, &mut e, &mut g).unwrap().unwrap(), &value);
     }
 
     #[test]
     fn test_occupied_entry_ref_key() {
         let mut a = HashMap::<_, _, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
         let key = "hello there";
         let value = "value goes here";
         assert!(a.is_empty());
-        a.insert(key.to_owned(), value);
+        a.insert(key.to_owned(), value, &mut e, &mut g).unwrap();
         assert_eq!(a.len(), 1);
-        assert_eq!(a[key], value);
+        assert_eq!(a.get(key, &mut e, &mut g).unwrap().unwrap(), &value);
 
-        match a.entry_ref(key) {
+        match a.entry_ref(key, &mut e, &mut g).unwrap() {
             EntryRef::Vacant(_) => panic!(),
             EntryRef::Occupied(e) => assert_eq!(key, e.key()),
         }
         assert_eq!(a.len(), 1);
-        assert_eq!(a[key], value);
+        assert_eq!(a.get(key, &mut e, &mut g).unwrap().unwrap(), &value);
     }
 
     #[test]
     fn test_vacant_entry_key() {
         let mut a = HashMap::<_, _, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
         let key = "hello there";
         let value = "value goes here";
 
         assert!(a.is_empty());
-        match a.entry(key) {
+        match a.entry(key, &mut e, &mut g).unwrap() {
             Occupied(_) => panic!(),
             Vacant(e) => {
                 assert_eq!(key, *e.key());
@@ -5497,17 +5227,19 @@ mod test_map {
             }
         }
         assert_eq!(a.len(), 1);
-        assert_eq!(a[key], value);
+        assert_eq!(a.get(key, &mut e, &mut g).unwrap().unwrap(), &value);
     }
 
     #[test]
     fn test_vacant_entry_ref_key() {
         let mut a: HashMap<std::string::String, &str, E, G, ()> = HashMap::new();
+        let mut e = E;
+        let mut g = G;
         let key = "hello there";
         let value = "value goes here";
 
         assert!(a.is_empty());
-        match a.entry_ref(key) {
+        match a.entry_ref(key, &mut e, &mut g).unwrap() {
             EntryRef::Occupied(_) => panic!(),
             EntryRef::Vacant(e) => {
                 assert_eq!(key, e.key());
@@ -5515,22 +5247,28 @@ mod test_map {
             }
         }
         assert_eq!(a.len(), 1);
-        assert_eq!(a[key], value);
+        assert_eq!(a.get(key, &mut e, &mut g).unwrap().unwrap(), &value);
     }
 
     #[test]
     fn test_occupied_entry_replace_entry_with() {
         let mut a = HashMap::<_, _, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
 
         let key = "a key";
         let value = "an initial value";
         let new_value = "a new value";
 
-        let entry = a.entry(key).insert(value).replace_entry_with(|k, v| {
-            assert_eq!(k, &key);
-            assert_eq!(v, value);
-            Some(new_value)
-        });
+        let entry = a
+            .entry(key, &mut e, &mut g)
+            .unwrap()
+            .insert(value)
+            .replace_entry_with(|k, v| {
+                assert_eq!(k, &key);
+                assert_eq!(v, value);
+                Some(new_value)
+            });
 
         match entry {
             Occupied(e) => {
@@ -5540,10 +5278,10 @@ mod test_map {
             Vacant(_) => panic!(),
         }
 
-        assert_eq!(a[key], new_value);
+        assert_eq!(a.get(key, &mut e, &mut g).unwrap().unwrap(), &new_value);
         assert_eq!(a.len(), 1);
 
-        let entry = match a.entry(key) {
+        let entry = match a.entry(key, &mut e, &mut g).unwrap() {
             Occupied(e) => e.replace_entry_with(|k, v| {
                 assert_eq!(k, &key);
                 assert_eq!(v, new_value);
@@ -5557,32 +5295,40 @@ mod test_map {
             Occupied(_) => panic!(),
         }
 
-        assert!(!a.contains_key(key));
+        assert!(!a.contains_key(key, &mut e, &mut g).unwrap());
         assert_eq!(a.len(), 0);
     }
 
     #[test]
     fn test_entry_and_replace_entry_with() {
         let mut a = HashMap::<_, _, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
 
         let key = "a key";
         let value = "an initial value";
         let new_value = "a new value";
 
-        let entry = a.entry(key).and_replace_entry_with(|_, _| panic!());
+        let entry = a
+            .entry(key, &mut e, &mut g)
+            .unwrap()
+            .and_replace_entry_with(|_, _| panic!());
 
         match entry {
             Vacant(e) => assert_eq!(e.key(), &key),
             Occupied(_) => panic!(),
         }
 
-        a.insert(key, value);
+        a.insert(key, value, &mut e, &mut g).unwrap();
 
-        let entry = a.entry(key).and_replace_entry_with(|k, v| {
-            assert_eq!(k, &key);
-            assert_eq!(v, value);
-            Some(new_value)
-        });
+        let entry = a
+            .entry(key, &mut e, &mut g)
+            .unwrap()
+            .and_replace_entry_with(|k, v| {
+                assert_eq!(k, &key);
+                assert_eq!(v, value);
+                Some(new_value)
+            });
 
         match entry {
             Occupied(e) => {
@@ -5592,21 +5338,24 @@ mod test_map {
             Vacant(_) => panic!(),
         }
 
-        assert_eq!(a[key], new_value);
+        assert_eq!(a.get(key, &mut e, &mut g).unwrap().unwrap(), &new_value);
         assert_eq!(a.len(), 1);
 
-        let entry = a.entry(key).and_replace_entry_with(|k, v| {
-            assert_eq!(k, &key);
-            assert_eq!(v, new_value);
-            None
-        });
+        let entry = a
+            .entry(key, &mut e, &mut g)
+            .unwrap()
+            .and_replace_entry_with(|k, v| {
+                assert_eq!(k, &key);
+                assert_eq!(v, new_value);
+                None
+            });
 
         match entry {
             Vacant(e) => assert_eq!(e.key(), &key),
             Occupied(_) => panic!(),
         }
 
-        assert!(!a.contains_key(key));
+        assert!(!a.contains_key(key, &mut e, &mut g).unwrap());
         assert_eq!(a.len(), 0);
     }
 
@@ -5614,13 +5363,18 @@ mod test_map {
     fn test_replace_entry_with_doesnt_corrupt() {
         #![allow(deprecated)] //rand
                               // Test for #19292
-        fn check(m: &HashMap<i32, (), E, G, ()>) {
+        fn check(m: &HashMap<i32, (), E, G, ()>, e: &mut E, g: &mut G) {
             for k in m.keys() {
-                assert!(m.contains_key(k), "{k} is in keys() but not in the map?");
+                assert!(
+                    m.contains_key(k, e, g).unwrap(),
+                    "{k} is in keys() but not in the map?"
+                );
             }
         }
 
         let mut m = HashMap::new();
+        let mut e = E;
+        let mut g = G;
 
         let mut rng = {
             let seed = u64::from_le_bytes(*b"testseed");
@@ -5630,31 +5384,39 @@ mod test_map {
         // Populate the map with some items.
         for _ in 0..50 {
             let x = rng.gen_range(-10..10);
-            m.insert(x, ());
+            m.insert(x, (), &mut e, &mut g).unwrap();
         }
 
         for _ in 0..1000 {
             let x = rng.gen_range(-10..10);
-            m.entry(x).and_replace_entry_with(|_, _| None);
-            check(&m);
+            m.entry(x, &mut e, &mut g)
+                .unwrap()
+                .and_replace_entry_with(|_, _| None);
+            check(&m, &mut e, &mut g);
         }
     }
 
     #[test]
     fn test_retain() {
-        let mut map: HashMap<i32, i32, E, G, ()> = (0..100).map(|x| (x, x * 10)).collect();
+        let mut map: HashMap<i32, i32, E, G, ()> =
+            HashMap::from_iter((0..100).map(|x| (x, x * 10)), &mut E, &mut G).unwrap();
+        let mut e = E;
+        let mut g = G;
 
         map.retain(|&k, _| k % 2 == 0);
         assert_eq!(map.len(), 50);
-        assert_eq!(map[&2], 20);
-        assert_eq!(map[&4], 40);
-        assert_eq!(map[&6], 60);
+        assert_eq!(map.get(&2, &mut e, &mut g).unwrap().unwrap(), &20);
+        assert_eq!(map.get(&4, &mut e, &mut g).unwrap().unwrap(), &40);
+        assert_eq!(map.get(&6, &mut e, &mut g).unwrap().unwrap(), &60);
     }
 
     #[test]
     fn test_extract_if() {
+        let mut e = E;
+        let mut g = G;
         {
-            let mut map: HashMap<i32, i32, E, G, ()> = (0..8).map(|x| (x, x * 10)).collect();
+            let mut map: HashMap<i32, i32, E, G, ()> =
+                HashMap::from_iter((0..8).map(|x| (x, x * 10)), &mut e, &mut g).unwrap();
             let drained = map.extract_if(|&k, _| k % 2 == 0);
             let mut out = drained.collect::<Vec<_>>();
             out.sort_unstable();
@@ -5662,7 +5424,8 @@ mod test_map {
             assert_eq!(map.len(), 4);
         }
         {
-            let mut map: HashMap<i32, i32, E, G, ()> = (0..8).map(|x| (x, x * 10)).collect();
+            let mut map: HashMap<i32, i32, E, G, ()> =
+                HashMap::from_iter((0..8).map(|x| (x, x * 10)), &mut e, &mut g).unwrap();
             map.extract_if(|&k, _| k % 2 == 0).for_each(drop);
             assert_eq!(map.len(), 4);
         }
@@ -5687,44 +5450,11 @@ mod test_map {
             HashMap::with_hasher(MyHasher);
 
         let mut map = EMPTY_MAP;
-        map.insert(17, "seventeen".to_owned());
-        assert_eq!("seventeen", map[&17]);
-    }
-
-    #[test]
-    fn test_get_many_mut() {
-        let mut map = HashMap::<_, _, E, G, ()>::new();
-        map.insert("foo".to_owned(), 0);
-        map.insert("bar".to_owned(), 10);
-        map.insert("baz".to_owned(), 20);
-        map.insert("qux".to_owned(), 30);
-
-        let xs = map.get_many_mut(["foo", "qux"]);
-        assert_eq!(xs, [Some(&mut 0), Some(&mut 30)]);
-
-        let xs = map.get_many_mut(["foo", "dud"]);
-        assert_eq!(xs, [Some(&mut 0), None]);
-
-        let ys = map.get_many_key_value_mut(["bar", "baz"]);
-        assert_eq!(
-            ys,
-            [
-                Some((&"bar".to_owned(), &mut 10)),
-                Some((&"baz".to_owned(), &mut 20))
-            ],
-        );
-
-        let ys = map.get_many_key_value_mut(["bar", "dip"]);
-        assert_eq!(ys, [Some((&"bar".to_string(), &mut 10)), None]);
-    }
-
-    #[test]
-    #[should_panic = "duplicate keys found"]
-    fn test_get_many_mut_duplicate() {
-        let mut map = HashMap::<_, _, E, G, ()>::new();
-        map.insert("foo".to_owned(), 0);
-
-        let _xs = map.get_many_mut(["foo", "foo"]);
+        let mut e = E;
+        let mut g = G;
+        map.insert(17, "seventeen".to_owned(), &mut e, &mut g)
+            .unwrap();
+        assert_eq!("seventeen", map.get(&17, &mut e, &mut g).unwrap().unwrap());
     }
 
     #[test]
@@ -5756,17 +5486,19 @@ mod test_map {
             dropped: false,
         };
 
+        let mut e = E;
+        let mut g = G;
         let mut map1 = HashMap::<_, _, E, G, ()>::new();
-        map1.insert(1, DISARMED);
-        map1.insert(2, DISARMED);
-        map1.insert(3, DISARMED);
-        map1.insert(4, DISARMED);
+        map1.insert(1, DISARMED, &mut e, &mut g).unwrap();
+        map1.insert(2, DISARMED, &mut e, &mut g).unwrap();
+        map1.insert(3, DISARMED, &mut e, &mut g).unwrap();
+        map1.insert(4, DISARMED, &mut e, &mut g).unwrap();
 
         let mut map2 = HashMap::<_, _, E, G, ()>::new();
-        map2.insert(1, DISARMED);
-        map2.insert(2, ARMED);
-        map2.insert(3, DISARMED);
-        map2.insert(4, DISARMED);
+        map2.insert(1, DISARMED, &mut e, &mut g).unwrap();
+        map2.insert(2, ARMED, &mut e, &mut g).unwrap();
+        map2.insert(3, DISARMED, &mut e, &mut g).unwrap();
+        map2.insert(4, DISARMED, &mut e, &mut g).unwrap();
 
         map2.clone_from(&map1);
     }
@@ -5791,6 +5523,8 @@ mod test_map {
                 }
             }
         }
+        let mut e = E;
+        let mut g = G;
         let mut map1 = HashMap::<_, _, E, G, ()>::new();
         map1.insert(
             1,
@@ -5798,21 +5532,30 @@ mod test_map {
                 panic_in_clone: false,
                 need_drop: vec![0, 1, 2],
             },
-        );
+            &mut e,
+            &mut g,
+        )
+        .unwrap();
         map1.insert(
             2,
             CheckedClone {
                 panic_in_clone: false,
                 need_drop: vec![3, 4, 5],
             },
-        );
+            &mut e,
+            &mut g,
+        )
+        .unwrap();
         map1.insert(
             3,
             CheckedClone {
                 panic_in_clone: true,
                 need_drop: vec![6, 7, 8],
             },
-        );
+            &mut e,
+            &mut g,
+        )
+        .unwrap();
         let _map2 = map1.clone();
     }
 

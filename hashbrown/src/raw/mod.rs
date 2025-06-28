@@ -3,7 +3,6 @@ use crate::control::{BitMaskIter, Group, Tag, TagSliceExt};
 use crate::scopeguard::{guard, ScopeGuard};
 use crate::util::{invalid_mut, likely, unlikely};
 use crate::TryReserveError;
-use core::array;
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
 use core::mem;
@@ -776,12 +775,18 @@ impl<T, E, G, R> RawTable<T, E, G, R> {
 
     /// Finds and removes an element from the table, returning it.
     #[cfg_attr(feature = "inline-more", inline)]
-    pub fn remove_entry(&mut self, hash: u64, eq: impl FnMut(&T) -> bool) -> Option<T> {
+    pub fn remove_entry(
+        &mut self,
+        hash: u64,
+        eq: impl FnMut(&T, &mut E, &mut G) -> Result<bool, R>,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<T>, R> {
         // Avoid `Option::map` because it bloats LLVM IR.
-        match self.find(hash, eq) {
+        Ok(match self.find(hash, eq, e, g)? {
             Some(bucket) => Some(unsafe { self.remove(bucket).0 }),
             None => None,
-        }
+        })
     }
 
     /// Marks all table buckets as empty without dropping their contents.
@@ -1062,9 +1067,11 @@ impl<T, E, G, R> RawTable<T, E, G, R> {
     pub fn find_or_find_insert_slot(
         &mut self,
         hash: u64,
-        mut eq: impl FnMut(&T) -> bool,
+        mut eq: impl FnMut(&T, &mut E, &mut G) -> Result<bool, R>,
         hasher: impl Fn(&T) -> u64,
-    ) -> Result<Bucket<T>, InsertSlot> {
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Result<Bucket<T>, InsertSlot>, R> {
         self.reserve(1, hasher);
 
         unsafe {
@@ -1075,14 +1082,17 @@ impl<T, E, G, R> RawTable<T, E, G, R> {
             // 3. The `find_or_find_insert_slot_inner` function returns the `index` of only the full bucket,
             //    which is in the range `0..self.buckets()` (since there is at least one empty `bucket` in
             //    the table), so calling `self.bucket(index)` and `Bucket::as_ref` is safe.
-            match self
-                .table
-                .find_or_find_insert_slot_inner(hash, &mut |index| eq(self.bucket(index).as_ref()))
-            {
-                // SAFETY: See explanation above.
-                Ok(index) => Ok(self.bucket(index)),
-                Err(slot) => Err(slot),
-            }
+            Ok(
+                match self
+                    .table
+                    .find_or_find_insert_slot_inner(hash, &mut |index| {
+                        eq(self.bucket(index).as_ref(), e, g).unwrap_or(false) // TO_BE_FIXED
+                    }) {
+                    // SAFETY: See explanation above.
+                    Ok(index) => Ok(self.bucket(index)),
+                    Err(slot) => Err(slot),
+                },
+            )
         }
     }
 
@@ -1106,7 +1116,13 @@ impl<T, E, G, R> RawTable<T, E, G, R> {
 
     /// Searches for an element in the table.
     #[inline]
-    pub fn find(&self, hash: u64, mut eq: impl FnMut(&T) -> bool) -> Option<Bucket<T>> {
+    pub fn find(
+        &self,
+        hash: u64,
+        mut eq: impl FnMut(&T, &mut E, &mut G) -> Result<bool, R>,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<Bucket<T>>, R> {
         unsafe {
             // SAFETY:
             // 1. The [`RawTableInner`] must already have properly initialized control bytes since we
@@ -1114,85 +1130,48 @@ impl<T, E, G, R> RawTable<T, E, G, R> {
             // 1. The `find_inner` function returns the `index` of only the full bucket, which is in
             //    the range `0..self.buckets()`, so calling `self.bucket(index)` and `Bucket::as_ref`
             //    is safe.
-            let result = self
-                .table
-                .find_inner(hash, &mut |index| eq(self.bucket(index).as_ref()));
+            let result = self.table.find_inner(hash, &mut |index| {
+                eq(self.bucket(index).as_ref(), e, g).unwrap_or(false) // TO_BE_FIXED
+            });
 
             // Avoid `Option::map` because it bloats LLVM IR.
             match result {
                 // SAFETY: See explanation above.
-                Some(index) => Some(self.bucket(index)),
-                None => None,
+                Some(index) => Ok(Some(self.bucket(index))),
+                None => Ok(None),
             }
         }
     }
 
     /// Gets a reference to an element in the table.
     #[inline]
-    pub fn get(&self, hash: u64, eq: impl FnMut(&T) -> bool) -> Option<&T> {
+    pub fn get(
+        &self,
+        hash: u64,
+        eq: impl FnMut(&T, &mut E, &mut G) -> Result<bool, R>,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<&T>, R> {
         // Avoid `Option::map` because it bloats LLVM IR.
-        match self.find(hash, eq) {
+        Ok(match self.find(hash, eq, e, g)? {
             Some(bucket) => Some(unsafe { bucket.as_ref() }),
             None => None,
-        }
+        })
     }
 
     /// Gets a mutable reference to an element in the table.
     #[inline]
-    pub fn get_mut(&mut self, hash: u64, eq: impl FnMut(&T) -> bool) -> Option<&mut T> {
+    pub fn get_mut(
+        &mut self,
+        hash: u64,
+        eq: impl FnMut(&T, &mut E, &mut G) -> Result<bool, R>,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<&mut T>, R> {
         // Avoid `Option::map` because it bloats LLVM IR.
-        match self.find(hash, eq) {
+        Ok(match self.find(hash, eq, e, g)? {
             Some(bucket) => Some(unsafe { bucket.as_mut() }),
             None => None,
-        }
-    }
-
-    /// Attempts to get mutable references to `N` entries in the table at once.
-    ///
-    /// Returns an array of length `N` with the results of each query.
-    ///
-    /// At most one mutable reference will be returned to any entry. `None` will be returned if any
-    /// of the hashes are duplicates. `None` will be returned if the hash is not found.
-    ///
-    /// The `eq` argument should be a closure such that `eq(i, k)` returns true if `k` is equal to
-    /// the `i`th key to be looked up.
-    pub fn get_many_mut<const N: usize>(
-        &mut self,
-        hashes: [u64; N],
-        eq: impl FnMut(usize, &T) -> bool,
-    ) -> [Option<&'_ mut T>; N] {
-        unsafe {
-            let ptrs = self.get_many_mut_pointers(hashes, eq);
-
-            for (i, cur) in ptrs.iter().enumerate() {
-                if cur.is_some() && ptrs[..i].contains(cur) {
-                    panic!("duplicate keys found");
-                }
-            }
-            // All bucket are distinct from all previous buckets so we're clear to return the result
-            // of the lookup.
-
-            ptrs.map(|ptr| ptr.map(|mut ptr| ptr.as_mut()))
-        }
-    }
-
-    pub unsafe fn get_many_unchecked_mut<const N: usize>(
-        &mut self,
-        hashes: [u64; N],
-        eq: impl FnMut(usize, &T) -> bool,
-    ) -> [Option<&'_ mut T>; N] {
-        let ptrs = self.get_many_mut_pointers(hashes, eq);
-        ptrs.map(|ptr| ptr.map(|mut ptr| ptr.as_mut()))
-    }
-
-    unsafe fn get_many_mut_pointers<const N: usize>(
-        &mut self,
-        hashes: [u64; N],
-        mut eq: impl FnMut(usize, &T) -> bool,
-    ) -> [Option<NonNull<T>>; N] {
-        array::from_fn(|i| {
-            self.find(hashes[i], |k| eq(i, k))
-                .map(|cur| cur.as_non_null())
         })
     }
 
@@ -3961,6 +3940,8 @@ mod test_map {
     #[test]
     fn rehash() {
         let mut table = RawTable::<_, E, G, ()>::new();
+        let mut e = E;
+        let mut g = G;
         let hasher = |i: &u64| *i;
         for i in 0..100 {
             table.insert(i, i, hasher);
@@ -3968,18 +3949,36 @@ mod test_map {
 
         for i in 0..100 {
             unsafe {
-                assert_eq!(table.find(i, |x| *x == i).map(|b| b.read()), Some(i));
+                assert_eq!(
+                    table
+                        .find(i, |x, _, _| Ok(*x == i), &mut e, &mut g)
+                        .unwrap()
+                        .map(|b| b.read()),
+                    Some(i)
+                );
             }
-            assert!(table.find(i + 100, |x| *x == i + 100).is_none());
+            assert!(table
+                .find(i + 100, |x, _, _| Ok(*x == i + 100), &mut e, &mut g)
+                .unwrap()
+                .is_none());
         }
 
         rehash_in_place(&mut table, hasher);
 
         for i in 0..100 {
             unsafe {
-                assert_eq!(table.find(i, |x| *x == i).map(|b| b.read()), Some(i));
+                assert_eq!(
+                    table
+                        .find(i, |x, _, _| Ok(*x == i), &mut e, &mut g)
+                        .unwrap()
+                        .map(|b| b.read()),
+                    Some(i)
+                );
             }
-            assert!(table.find(i + 100, |x| *x == i + 100).is_none());
+            assert!(table
+                .find(i + 100, |x, _, _| Ok(*x == i + 100), &mut e, &mut g)
+                .unwrap()
+                .is_none());
         }
     }
 

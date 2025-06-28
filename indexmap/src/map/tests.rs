@@ -1,20 +1,24 @@
 use super::*;
 use std::string::String;
+struct E;
+struct G;
 
 #[test]
 fn it_works() {
-    let mut map = RubyMap::new();
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<i32, (), E, G, ()> = RubyMap::new();
     assert_eq!(map.is_empty(), true);
-    map.insert(1, ());
-    map.insert(1, ());
+    map.insert(1, (), &mut e, &mut g).unwrap();
+    map.insert(1, (), &mut e, &mut g).unwrap();
     assert_eq!(map.len(), 1);
-    assert!(map.get(&1).is_some());
+    assert!(map.get(&1, &mut e, &mut g).unwrap().is_some());
     assert_eq!(map.is_empty(), false);
 }
 
 #[test]
 fn new() {
-    let map = RubyMap::<String, String>::new();
+    let map = RubyMap::<String, String, E, G, ()>::new();
     println!("{:?}", map);
     assert_eq!(map.capacity(), 0);
     assert_eq!(map.len(), 0);
@@ -25,19 +29,21 @@ fn new() {
 fn insert() {
     let insert = [0, 4, 2, 12, 8, 7, 11, 5];
     let not_present = [1, 3, 6, 9, 10];
-    let mut map = RubyMap::with_capacity(insert.len());
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::with_capacity(insert.len());
+    let mut e = E;
+    let mut g = G;
 
     for (i, &elt) in insert.iter().enumerate() {
         assert_eq!(map.len(), i);
-        map.insert(elt, elt);
+        map.insert(elt, elt, &mut e, &mut g).unwrap();
         assert_eq!(map.len(), i + 1);
-        assert_eq!(map.get(&elt), Some(&elt));
-        assert_eq!(map[&elt], elt);
+        assert_eq!(map.get(&elt, &mut e, &mut g).unwrap(), Some(&elt));
+        assert_eq!(map.get(&elt, &mut e, &mut g).unwrap().unwrap(), &elt);
     }
     println!("{:?}", map);
 
     for &elt in &not_present {
-        assert!(map.get(&elt).is_none());
+        assert!(map.get(&elt, &mut e, &mut g).unwrap().is_none());
     }
 }
 
@@ -45,28 +51,38 @@ fn insert() {
 fn insert_full() {
     let insert = vec![9, 2, 7, 1, 4, 6, 13];
     let present = vec![1, 6, 2];
-    let mut map = RubyMap::with_capacity(insert.len());
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::with_capacity(insert.len());
+    let mut e = E;
+    let mut g = G;
 
     for (i, &elt) in insert.iter().enumerate() {
         assert_eq!(map.len(), i);
-        let (index, existing) = map.insert_full(elt, elt);
+        let (index, existing) = map.insert_full(elt, elt, &mut e, &mut g).unwrap();
         assert_eq!(existing, None);
-        assert_eq!(Some(index), map.get_full(&elt).map(|x| x.0));
+        assert_eq!(
+            Some(index),
+            map.get_full(&elt, &mut e, &mut g).unwrap().map(|x| x.0)
+        );
         assert_eq!(map.len(), i + 1);
     }
 
     let len = map.len();
     for &elt in &present {
-        let (index, existing) = map.insert_full(elt, elt);
+        let (index, existing) = map.insert_full(elt, elt, &mut e, &mut g).unwrap();
         assert_eq!(existing, Some(elt));
-        assert_eq!(Some(index), map.get_full(&elt).map(|x| x.0));
+        assert_eq!(
+            Some(index),
+            map.get_full(&elt, &mut e, &mut g).unwrap().map(|x| x.0)
+        );
         assert_eq!(map.len(), len);
     }
 }
 
 #[test]
 fn insert_2() {
-    let mut map = RubyMap::with_capacity(16);
+    let mut map: RubyMap<i32, (), E, G, ()> = RubyMap::with_capacity(16);
+    let mut e = E;
+    let mut g = G;
 
     let mut keys = vec![];
     keys.extend(0..16);
@@ -74,9 +90,9 @@ fn insert_2() {
 
     for &i in &keys {
         let old_map = map.clone();
-        map.insert(i, ());
+        map.insert(i, (), &mut e, &mut g).unwrap();
         for key in old_map.keys() {
-            if map.get(key).is_none() {
+            if map.get(key, &mut e, &mut g).unwrap().is_none() {
                 println!("old_map: {:?}", old_map);
                 println!("map: {:?}", map);
                 panic!("did not find {} in map", key);
@@ -85,17 +101,23 @@ fn insert_2() {
     }
 
     for &i in &keys {
-        assert!(map.get(&i).is_some(), "did not find {}", i);
+        assert!(
+            map.get(&i, &mut e, &mut g).unwrap().is_some(),
+            "did not find {}",
+            i
+        );
     }
 }
 
 #[test]
 fn insert_order() {
     let insert = [0, 4, 2, 12, 8, 7, 11, 5, 3, 17, 19, 22, 23];
-    let mut map = RubyMap::new();
+    let mut map: RubyMap<i32, (), E, G, ()> = RubyMap::new();
+    let mut e = E;
+    let mut g = G;
 
     for &elt in &insert {
-        map.insert(elt, ());
+        map.insert(elt, (), &mut e, &mut g).unwrap();
     }
 
     assert_eq!(map.keys().count(), map.len());
@@ -111,10 +133,12 @@ fn insert_order() {
 #[test]
 fn shift_insert() {
     let insert = [0, 4, 2, 12, 8, 7, 11, 5, 3, 17, 19, 22, 23];
-    let mut map = RubyMap::new();
+    let mut e = E;
+    let mut g = G;
+    let mut map = RubyMap::<i32, (), E, G, ()>::new();
 
     for &elt in &insert {
-        map.shift_insert(0, elt, ());
+        map.shift_insert(0, elt, (), &mut e, &mut g).unwrap();
     }
 
     assert_eq!(map.keys().count(), map.len());
@@ -127,7 +151,7 @@ fn shift_insert() {
     }
 
     // "insert" that moves an existing entry
-    map.shift_insert(0, insert[0], ());
+    map.shift_insert(0, insert[0], (), &mut e, &mut g).unwrap();
     assert_eq!(map.keys().count(), insert.len());
     assert_eq!(insert[0], map.keys()[0]);
     for (a, b) in insert[1..].iter().rev().zip(map.keys().skip(1)) {
@@ -137,10 +161,12 @@ fn shift_insert() {
 
 #[test]
 fn insert_sorted_bad() {
-    let mut map = RubyMap::new();
-    map.insert(10, ());
+    let mut e = E;
+    let mut g = G;
+    let mut map = RubyMap::<i32, (), E, G, ()>::new();
+    map.insert(10, (), &mut e, &mut g).unwrap();
     for i in 0..10 {
-        map.insert(i, ());
+        map.insert(i, (), &mut e, &mut g).unwrap();
     }
 
     // The binary search will want to insert this at the end (index == len()),
@@ -148,18 +174,18 @@ fn insert_sorted_bad() {
     // without panicking though, and in this case it's simple enough that we
     // know the exact result. (But don't read this as an API guarantee!)
     assert_eq!(map.first(), Some((&10, &())));
-    map.insert_sorted(10, ());
+    map.insert_sorted(10, (), &mut e, &mut g).unwrap();
     assert_eq!(map.last(), Some((&10, &())));
     assert!(map.keys().copied().eq(0..=10));
 
     // Other out-of-order entries can also "insert" to a binary-searched
     // position, moving in either direction.
-    map.move_index(5, 0);
-    map.move_index(6, 10);
+    map.move_index(5, 0, &mut e, &mut g).unwrap();
+    map.move_index(6, 10, &mut e, &mut g).unwrap();
     assert_eq!(map.first(), Some((&5, &())));
     assert_eq!(map.last(), Some((&6, &())));
-    map.insert_sorted(5, ()); // moves back up
-    map.insert_sorted(6, ()); // moves back down
+    map.insert_sorted(5, (), &mut e, &mut g).unwrap(); // moves back up
+    map.insert_sorted(6, (), &mut e, &mut g).unwrap(); // moves back down
     assert!(map.keys().copied().eq(0..=10));
 }
 
@@ -167,55 +193,63 @@ fn insert_sorted_bad() {
 fn grow() {
     let insert = [0, 4, 2, 12, 8, 7, 11];
     let not_present = [1, 3, 6, 9, 10];
-    let mut map = RubyMap::with_capacity(insert.len());
+    let mut e = E;
+    let mut g = G;
+    let mut map = RubyMap::<i32, i32, E, G, ()>::with_capacity(insert.len());
 
     for (i, &elt) in insert.iter().enumerate() {
         assert_eq!(map.len(), i);
-        map.insert(elt, elt);
+        map.insert(elt, elt, &mut e, &mut g).unwrap();
         assert_eq!(map.len(), i + 1);
-        assert_eq!(map.get(&elt), Some(&elt));
-        assert_eq!(map[&elt], elt);
+        assert_eq!(map.get(&elt, &mut e, &mut g).unwrap(), Some(&elt));
     }
 
     println!("{:?}", map);
     for &elt in &insert {
-        map.insert(elt * 10, elt);
+        map.insert(elt * 10, elt, &mut e, &mut g).unwrap();
     }
     for &elt in &insert {
-        map.insert(elt * 100, elt);
+        map.insert(elt * 100, elt, &mut e, &mut g).unwrap();
     }
     for (i, &elt) in insert.iter().cycle().enumerate().take(100) {
-        map.insert(elt * 100 + i as i32, elt);
+        map.insert(elt * 100 + i as i32, elt, &mut e, &mut g)
+            .unwrap();
     }
     println!("{:?}", map);
     for &elt in &not_present {
-        assert!(map.get(&elt).is_none());
+        assert!(map.get(&elt, &mut e, &mut g).unwrap().is_none());
     }
 }
 
 #[test]
 fn reserve() {
-    let mut map = RubyMap::<usize, usize>::new();
+    let mut e = E;
+    let mut g = G;
+    let mut map = RubyMap::<usize, usize, E, G, ()>::new();
     assert_eq!(map.capacity(), 0);
     map.reserve(100);
     let capacity = map.capacity();
     assert!(capacity >= 100);
     for i in 0..capacity {
         assert_eq!(map.len(), i);
-        map.insert(i, i * i);
+        map.insert(i, i * i, &mut e, &mut g).unwrap();
         assert_eq!(map.len(), i + 1);
         assert_eq!(map.capacity(), capacity);
-        assert_eq!(map.get(&i), Some(&(i * i)));
+        assert_eq!(map.get(&i, &mut e, &mut g).unwrap(), Some(&(i * i)));
     }
-    map.insert(capacity, std::usize::MAX);
+    map.insert(capacity, std::usize::MAX, &mut e, &mut g)
+        .unwrap();
     assert_eq!(map.len(), capacity + 1);
     assert!(map.capacity() > capacity);
-    assert_eq!(map.get(&capacity), Some(&std::usize::MAX));
+    assert_eq!(
+        map.get(&capacity, &mut e, &mut g).unwrap(),
+        Some(&std::usize::MAX)
+    );
 }
 
 #[test]
 fn try_reserve() {
-    let mut map = RubyMap::<usize, usize>::new();
+    let mut map = RubyMap::<usize, usize, E, G, ()>::new();
     assert_eq!(map.capacity(), 0);
     assert_eq!(map.try_reserve(100), Ok(()));
     assert!(map.capacity() >= 100);
@@ -224,28 +258,32 @@ fn try_reserve() {
 
 #[test]
 fn shrink_to_fit() {
-    let mut map = RubyMap::<usize, usize>::new();
+    let mut map = RubyMap::<usize, usize, E, G, ()>::new();
+    let mut e = E;
+    let mut g = G;
     assert_eq!(map.capacity(), 0);
     for i in 0..100 {
         assert_eq!(map.len(), i);
-        map.insert(i, i * i);
+        map.insert(i, i * i, &mut e, &mut g).unwrap();
         assert_eq!(map.len(), i + 1);
         assert!(map.capacity() >= i + 1);
-        assert_eq!(map.get(&i), Some(&(i * i)));
+        assert_eq!(map.get(&i, &mut e, &mut g).unwrap(), Some(&(i * i)));
         map.shrink_to_fit();
         assert_eq!(map.len(), i + 1);
         assert_eq!(map.capacity(), i + 1);
-        assert_eq!(map.get(&i), Some(&(i * i)));
+        assert_eq!(map.get(&i, &mut e, &mut g).unwrap(), Some(&(i * i)));
     }
 }
 
 #[test]
 fn remove() {
     let insert = [0, 4, 2, 12, 8, 7, 11, 5, 3, 17, 19, 22, 23];
-    let mut map = RubyMap::new();
+    let mut e = E;
+    let mut g = G;
+    let mut map = RubyMap::<i32, i32, E, G, ()>::new();
 
     for &elt in &insert {
-        map.insert(elt, elt);
+        map.insert(elt, elt, &mut e, &mut g).unwrap();
     }
 
     assert_eq!(map.keys().count(), map.len());
@@ -258,18 +296,27 @@ fn remove() {
     let remove = [4, 12, 8, 7];
 
     for &key in &remove_fail {
-        assert!(map.swap_remove_full(&key).is_none());
+        assert!(map
+            .swap_remove_full(&key, &mut e, &mut g)
+            .unwrap()
+            .is_none());
     }
     println!("{:?}", map);
     for &key in &remove {
         //println!("{:?}", map);
-        let index = map.get_full(&key).unwrap().0;
-        assert_eq!(map.swap_remove_full(&key), Some((index, key, key)));
+        let index = map.get_full(&key, &mut e, &mut g).unwrap().unwrap().0;
+        assert_eq!(
+            map.swap_remove_full(&key, &mut e, &mut g).unwrap(),
+            Some((index, key, key))
+        );
     }
     println!("{:?}", map);
 
     for key in &insert {
-        assert_eq!(map.get(key).is_some(), !remove.contains(key));
+        assert_eq!(
+            map.get(key, &mut e, &mut g).unwrap().is_some(),
+            !remove.contains(key)
+        );
     }
     assert_eq!(map.len(), insert.len() - remove.len());
     assert_eq!(map.keys().count(), insert.len() - remove.len());
@@ -277,20 +324,24 @@ fn remove() {
 
 #[test]
 fn remove_to_empty() {
-    let mut map = indexmap! { 0 => 0, 4 => 4, 5 => 5 };
-    map.swap_remove(&5).unwrap();
-    map.swap_remove(&4).unwrap();
-    map.swap_remove(&0).unwrap();
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<i32, i32, E, G, ()> = indexmap! { &mut e; &mut g; 0 => 0, 4 => 4, 5 => 5 };
+    map.swap_remove(&5, &mut e, &mut g).unwrap().unwrap();
+    map.swap_remove(&4, &mut e, &mut g).unwrap().unwrap();
+    map.swap_remove(&0, &mut e, &mut g).unwrap().unwrap();
     assert!(map.is_empty());
 }
 
 #[test]
 fn swap_remove_index() {
     let insert = [0, 4, 2, 12, 8, 7, 11, 5, 3, 17, 19, 22, 23];
-    let mut map = RubyMap::new();
+    let mut e = E;
+    let mut g = G;
+    let mut map = RubyMap::<i32, i32, E, G, ()>::new();
 
     for &elt in &insert {
-        map.insert(elt, elt * 2);
+        map.insert(elt, elt * 2, &mut e, &mut g).unwrap();
     }
 
     let mut vector = insert.to_vec();
@@ -300,7 +351,7 @@ fn swap_remove_index() {
     // have the same result.
     for &rm in remove_sequence {
         let out_vec = vector.swap_remove(rm);
-        let (out_map, _) = map.swap_remove_index(rm).unwrap();
+        let (out_map, _) = map.swap_remove_index(rm, &mut e, &mut g).unwrap().unwrap();
         assert_eq!(out_vec, out_map);
     }
     assert_eq!(vector.len(), map.len());
@@ -311,44 +362,56 @@ fn swap_remove_index() {
 
 #[test]
 fn partial_eq_and_eq() {
+    let mut e = E;
+    let mut g = G;
     let mut map_a = RubyMap::new();
-    map_a.insert(1, "1");
-    map_a.insert(2, "2");
+    map_a.insert(1, "1", &mut e, &mut g).unwrap();
+    map_a.insert(2, "2", &mut e, &mut g).unwrap();
     let mut map_b = map_a.clone();
-    assert_eq!(map_a, map_b);
-    map_b.swap_remove(&1);
-    assert_ne!(map_a, map_b);
+    assert!(map_a.eql(&map_b, &mut e, &mut g).unwrap());
+    map_b.swap_remove(&1, &mut e, &mut g).unwrap();
+    assert!(!map_a.eql(&map_b, &mut e, &mut g).unwrap());
 
-    let map_c: RubyMap<_, String> = map_b.into_iter().map(|(k, v)| (k, v.into())).collect();
-    assert_ne!(map_a, map_c);
-    assert_ne!(map_c, map_a);
+    let map_c: RubyMap<i32, &str, E, G, ()> = RubyMap::from_iter(
+        map_b.into_iter().map(|(k, v)| (k, v.into())),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
+    assert!(!map_a.eql(&map_c, &mut e, &mut g).unwrap());
+    assert!(!map_c.eql(&map_a, &mut e, &mut g).unwrap());
 }
 
 #[test]
 fn extend() {
-    let mut map = RubyMap::new();
-    map.extend(vec![(&1, &2), (&3, &4)]);
-    map.extend(vec![(5, 6)]);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<&i32, &i32, E, G, ()> = RubyMap::new();
+    map.extend(vec![(&1, &2), (&3, &4)], &mut e, &mut g)
+        .unwrap();
+    map.extend(vec![(&5, &6)], &mut e, &mut g).unwrap();
     assert_eq!(
         map.into_iter().collect::<Vec<_>>(),
-        vec![(1, 2), (3, 4), (5, 6)]
+        vec![(&1, &2), (&3, &4), (&5, &6)]
     );
 }
 
 #[test]
 fn entry() {
-    let mut map = RubyMap::new();
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<i32, &'static str, E, G, ()> = RubyMap::new();
 
-    map.insert(1, "1");
-    map.insert(2, "2");
+    map.insert(1, "1", &mut e, &mut g).unwrap();
+    map.insert(2, "2", &mut e, &mut g).unwrap();
     {
-        let e = map.entry(3);
+        let e = map.entry(3, &mut e, &mut g).unwrap();
         assert_eq!(e.index(), 2);
         let e = e.or_insert("3");
         assert_eq!(e, &"3");
     }
 
-    let e = map.entry(2);
+    let e = map.entry(2, &mut e, &mut g).unwrap();
     assert_eq!(e.index(), 1);
     assert_eq!(e.key(), &2);
     match e {
@@ -360,19 +423,27 @@ fn entry() {
 
 #[test]
 fn entry_and_modify() {
-    let mut map = RubyMap::new();
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<i32, &'static str, E, G, ()> = RubyMap::new();
 
-    map.insert(1, "1");
-    map.entry(1).and_modify(|x| *x = "2");
-    assert_eq!(Some(&"2"), map.get(&1));
+    map.insert(1, "1", &mut e, &mut g).unwrap();
+    map.entry(1, &mut e, &mut g)
+        .unwrap()
+        .and_modify(|x| *x = "2");
+    assert_eq!(Some(&"2"), map.get(&1, &mut e, &mut g).unwrap());
 
-    map.entry(2).and_modify(|x| *x = "doesn't exist");
-    assert_eq!(None, map.get(&2));
+    map.entry(2, &mut e, &mut g)
+        .unwrap()
+        .and_modify(|x| *x = "doesn't exist");
+    assert_eq!(None, map.get(&2, &mut e, &mut g).unwrap());
 }
 
 #[test]
 fn entry_or_default() {
-    let mut map = RubyMap::new();
+    let mut e = E;
+    let mut g = G;
+    let mut map = RubyMap::<_, _, E, G, ()>::new();
 
     #[derive(Debug, PartialEq)]
     enum TestEnum {
@@ -386,23 +457,32 @@ fn entry_or_default() {
         }
     }
 
-    map.insert(1, TestEnum::NonDefaultValue);
-    assert_eq!(&mut TestEnum::NonDefaultValue, map.entry(1).or_default());
+    map.insert(1, TestEnum::NonDefaultValue, &mut e, &mut g)
+        .unwrap();
+    assert_eq!(
+        &mut TestEnum::NonDefaultValue,
+        map.entry(1, &mut e, &mut g).unwrap().or_default()
+    );
 
-    assert_eq!(&mut TestEnum::DefaultValue, map.entry(2).or_default());
+    assert_eq!(
+        &mut TestEnum::DefaultValue,
+        map.entry(2, &mut e, &mut g).unwrap().or_default()
+    );
 }
 
 #[test]
 fn occupied_entry_key() {
     // These keys match hash and equality, but their addresses are distinct.
+    let mut e = E;
+    let mut g = G;
     let (k1, k2) = (&mut 1, &mut 1);
     let k1_ptr = k1 as *const i32;
     let k2_ptr = k2 as *const i32;
     assert_ne!(k1_ptr, k2_ptr);
 
-    let mut map = RubyMap::new();
-    map.insert(k1, "value");
-    match map.entry(k2) {
+    let mut map = RubyMap::<_, _, E, G, ()>::new();
+    map.insert(k1, "value", &mut e, &mut g).unwrap();
+    match map.entry(k2, &mut e, &mut g).unwrap() {
         Entry::Occupied(ref e) => {
             // `OccupiedEntry::key` should reference the key in the map,
             // not the key that was used to find the entry.
@@ -416,24 +496,26 @@ fn occupied_entry_key() {
 
 #[test]
 fn get_index_entry() {
-    let mut map = RubyMap::new();
+    let mut e = E;
+    let mut g = G;
+    let mut map = RubyMap::<_, _, E, G, ()>::new();
 
     assert!(map.get_index_entry(0).is_none());
     assert!(map.first_entry().is_none());
     assert!(map.last_entry().is_none());
 
-    map.insert(0, "0");
-    map.insert(1, "1");
-    map.insert(2, "2");
-    map.insert(3, "3");
+    map.insert(0, "0", &mut e, &mut g).unwrap();
+    map.insert(1, "1", &mut e, &mut g).unwrap();
+    map.insert(2, "2", &mut e, &mut g).unwrap();
+    map.insert(3, "3", &mut e, &mut g).unwrap();
 
     assert!(map.get_index_entry(4).is_none());
 
     {
-        let e = map.get_index_entry(1).unwrap();
-        assert_eq!(*e.key(), 1);
-        assert_eq!(*e.get(), "1");
-        assert_eq!(e.swap_remove(), "1");
+        let entry = map.get_index_entry(1).unwrap();
+        assert_eq!(*entry.key(), 1);
+        assert_eq!(*entry.get(), "1");
+        assert_eq!(entry.swap_remove(&mut e, &mut g).unwrap(), "1");
     }
 
     {
@@ -443,7 +525,7 @@ fn get_index_entry() {
         assert_eq!(e.insert("4"), "3");
     }
 
-    assert_eq!(*map.get(&3).unwrap(), "4");
+    assert_eq!(*map.get(&3, &mut e, &mut g).unwrap().unwrap(), "4");
 
     {
         let e = map.first_entry().unwrap();
@@ -460,33 +542,39 @@ fn get_index_entry() {
 
 #[test]
 fn from_entries() {
-    let mut map = RubyMap::from([(1, "1"), (2, "2"), (3, "3")]);
+    let mut e = E;
+    let mut g = G;
+    let mut map =
+        RubyMap::<_, _, E, G, ()>::from_ary([(1, "1"), (2, "2"), (3, "3")], &mut e, &mut g)
+            .unwrap();
 
     {
-        let e = match map.entry(1) {
+        let entry = match map.entry(1, &mut e, &mut g).unwrap() {
             Entry::Occupied(e) => IndexedEntry::from(e),
             Entry::Vacant(_) => panic!(),
         };
-        assert_eq!(e.index(), 0);
-        assert_eq!(*e.key(), 1);
-        assert_eq!(*e.get(), "1");
+        assert_eq!(entry.index(), 0);
+        assert_eq!(*entry.key(), 1);
+        assert_eq!(*entry.get(), "1");
     }
 
     {
-        let e = match map.get_index_entry(1) {
-            Some(e) => OccupiedEntry::from(e),
+        let entry = match map.get_index_entry(1) {
+            Some(entry) => OccupiedEntry::from_index(entry, &mut e, &mut g).unwrap(),
             None => panic!(),
         };
-        assert_eq!(e.index(), 1);
-        assert_eq!(*e.key(), 2);
-        assert_eq!(*e.get(), "2");
+        assert_eq!(entry.index(), 1);
+        assert_eq!(*entry.key(), 2);
+        assert_eq!(*entry.get(), "2");
     }
 }
 
 #[test]
 fn keys() {
+    let mut e = E;
+    let mut g = G;
     let vec = vec![(1, 'a'), (2, 'b'), (3, 'c')];
-    let map: RubyMap<_, _> = vec.into_iter().collect();
+    let map: RubyMap<_, _, E, G, ()> = RubyMap::from_iter(vec.into_iter(), &mut e, &mut g).unwrap();
     let keys: Vec<_> = map.keys().copied().collect();
     assert_eq!(keys.len(), 3);
     assert!(keys.contains(&1));
@@ -496,8 +584,10 @@ fn keys() {
 
 #[test]
 fn into_keys() {
+    let mut e = E;
+    let mut g = G;
     let vec = vec![(1, 'a'), (2, 'b'), (3, 'c')];
-    let map: RubyMap<_, _> = vec.into_iter().collect();
+    let map: RubyMap<_, _, E, G, ()> = RubyMap::from_iter(vec.into_iter(), &mut e, &mut g).unwrap();
     let keys: Vec<i32> = map.into_keys().collect();
     assert_eq!(keys.len(), 3);
     assert!(keys.contains(&1));
@@ -507,8 +597,10 @@ fn into_keys() {
 
 #[test]
 fn values() {
+    let mut e = E;
+    let mut g = G;
     let vec = vec![(1, 'a'), (2, 'b'), (3, 'c')];
-    let map: RubyMap<_, _> = vec.into_iter().collect();
+    let map: RubyMap<_, _, E, G, ()> = RubyMap::from_iter(vec.into_iter(), &mut e, &mut g).unwrap();
     let values: Vec<_> = map.values().copied().collect();
     assert_eq!(values.len(), 3);
     assert!(values.contains(&'a'));
@@ -518,8 +610,11 @@ fn values() {
 
 #[test]
 fn values_mut() {
+    let mut e = E;
+    let mut g = G;
     let vec = vec![(1, 1), (2, 2), (3, 3)];
-    let mut map: RubyMap<_, _> = vec.into_iter().collect();
+    let mut map: RubyMap<_, _, E, G, ()> =
+        RubyMap::from_iter(vec.into_iter(), &mut e, &mut g).unwrap();
     for value in map.values_mut() {
         *value *= 2
     }
@@ -532,8 +627,10 @@ fn values_mut() {
 
 #[test]
 fn into_values() {
+    let mut e = E;
+    let mut g = G;
     let vec = vec![(1, 'a'), (2, 'b'), (3, 'c')];
-    let map: RubyMap<_, _> = vec.into_iter().collect();
+    let map: RubyMap<_, _, E, G, ()> = RubyMap::from_iter(vec.into_iter(), &mut e, &mut g).unwrap();
     let values: Vec<char> = map.into_values().collect();
     assert_eq!(values.len(), 3);
     assert!(values.contains(&'a'));
@@ -544,6 +641,8 @@ fn into_values() {
 #[test]
 fn drain_range() {
     // Test the various heuristics of `erase_indices`
+    let mut e = E;
+    let mut g = G;
     for range in [
         0..0,   // nothing erased
         10..90, // reinsert the few kept (..10 and 90..)
@@ -551,24 +650,28 @@ fn drain_range() {
         20..30, // sweep everything
     ] {
         let mut vec = Vec::from_iter(0..100);
-        let mut map: RubyMap<i32, ()> = (0..100).map(|i| (i, ())).collect();
+        let mut map: RubyMap<i32, (), E, G, ()> =
+            RubyMap::from_iter((0..100).map(|i| (i, ())), &mut e, &mut g).unwrap();
         drop(vec.drain(range.clone()));
-        drop(map.drain(range));
+        drop(map.drain(range, &mut e, &mut g).unwrap());
         assert!(vec.iter().eq(map.keys()));
         for (i, x) in vec.iter().enumerate() {
-            assert_eq!(map.get_index_of(x), Some(i));
+            assert_eq!(map.get_index_of(x, &mut e, &mut g).unwrap(), Some(i));
         }
     }
 }
 
 #[test]
 fn from_array() {
-    let map = RubyMap::from([(1, 2), (3, 4)]);
+    let mut e = E;
+    let mut g = G;
+    let map: RubyMap<i32, i32, E, G, ()> =
+        RubyMap::from_ary([(1, 2), (3, 4)], &mut e, &mut g).unwrap();
     let mut expected = RubyMap::new();
-    expected.insert(1, 2);
-    expected.insert(3, 4);
+    expected.insert(1, 2, &mut e, &mut g).unwrap();
+    expected.insert(3, 4, &mut e, &mut g).unwrap();
 
-    assert_eq!(map, expected)
+    assert!(map.eql(&expected, &mut e, &mut g).unwrap());
 }
 
 #[test]
@@ -594,29 +697,31 @@ fn iter_default() {
 
 #[test]
 fn shift_shift_remove_index() {
-    let mut map: RubyMap<i32, i32> = RubyMap::new();
-    map.insert(1, 2);
-    map.insert(3, 4);
-    map.insert(5, 6);
-    map.insert(7, 8);
-    map.insert(9, 10);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    map.insert(1, 2, &mut e, &mut g).unwrap();
+    map.insert(3, 4, &mut e, &mut g).unwrap();
+    map.insert(5, 6, &mut e, &mut g).unwrap();
+    map.insert(7, 8, &mut e, &mut g).unwrap();
+    map.insert(9, 10, &mut e, &mut g).unwrap();
 
-    let result = map.shift_remove_index(1);
+    let result = map.shift_remove_index(1, &mut e, &mut g).unwrap();
     assert_eq!(result, Some((3, 4)));
     assert_eq!(map.len(), 4);
     assert_eq!(map.as_slice(), &[(1, 2), (5, 6), (7, 8), (9, 10)]);
 
-    let result = map.shift_remove_index(1);
+    let result = map.shift_remove_index(1, &mut e, &mut g).unwrap();
     assert_eq!(result, Some((5, 6)));
     assert_eq!(map.len(), 3);
     assert_eq!(map.as_slice(), &[(1, 2), (7, 8), (9, 10)]);
 
-    let result = map.shift_remove_index(2);
+    let result = map.shift_remove_index(2, &mut e, &mut g).unwrap();
     assert_eq!(result, Some((9, 10)));
     assert_eq!(map.len(), 2);
     assert_eq!(map.as_slice(), &[(1, 2), (7, 8)]);
 
-    let result = map.shift_remove_index(2);
+    let result = map.shift_remove_index(2, &mut e, &mut g).unwrap();
     assert_eq!(result, None);
     assert_eq!(map.len(), 2);
     assert_eq!(map.as_slice(), &[(1, 2), (7, 8)]);
@@ -624,24 +729,26 @@ fn shift_shift_remove_index() {
 
 #[test]
 fn shift_remove_entry() {
-    let mut map: RubyMap<i32, i32> = RubyMap::new();
-    map.insert(1, 2);
-    map.insert(3, 4);
-    map.insert(5, 6);
-    map.insert(7, 8);
-    map.insert(9, 10);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    map.insert(1, 2, &mut e, &mut g).unwrap();
+    map.insert(3, 4, &mut e, &mut g).unwrap();
+    map.insert(5, 6, &mut e, &mut g).unwrap();
+    map.insert(7, 8, &mut e, &mut g).unwrap();
+    map.insert(9, 10, &mut e, &mut g).unwrap();
 
-    let result = map.shift_remove_entry(&3);
+    let result = map.shift_remove_entry(&3, &mut e, &mut g).unwrap();
     assert_eq!(result, Some((3, 4)));
     assert_eq!(map.len(), 4);
     assert_eq!(map.as_slice(), &[(1, 2), (5, 6), (7, 8), (9, 10)]);
 
-    let result = map.shift_remove_entry(&9);
+    let result = map.shift_remove_entry(&9, &mut e, &mut g).unwrap();
     assert_eq!(result, Some((9, 10)));
     assert_eq!(map.len(), 3);
     assert_eq!(map.as_slice(), &[(1, 2), (5, 6), (7, 8)]);
 
-    let result = map.shift_remove_entry(&9);
+    let result = map.shift_remove_entry(&9, &mut e, &mut g).unwrap();
     assert_eq!(result, None);
     assert_eq!(map.len(), 3);
     assert_eq!(map.as_slice(), &[(1, 2), (5, 6), (7, 8)]);
@@ -649,24 +756,26 @@ fn shift_remove_entry() {
 
 #[test]
 fn shift_remove_full() {
-    let mut map: RubyMap<i32, i32> = RubyMap::new();
-    map.insert(1, 2);
-    map.insert(3, 4);
-    map.insert(5, 6);
-    map.insert(7, 8);
-    map.insert(9, 10);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    map.insert(1, 2, &mut e, &mut g).unwrap();
+    map.insert(3, 4, &mut e, &mut g).unwrap();
+    map.insert(5, 6, &mut e, &mut g).unwrap();
+    map.insert(7, 8, &mut e, &mut g).unwrap();
+    map.insert(9, 10, &mut e, &mut g).unwrap();
 
-    let result = map.shift_remove_full(&3);
+    let result = map.shift_remove_full(&3, &mut e, &mut g).unwrap();
     assert_eq!(result, Some((1, 3, 4)));
     assert_eq!(map.len(), 4);
     assert_eq!(map.as_slice(), &[(1, 2), (5, 6), (7, 8), (9, 10)]);
 
-    let result = map.shift_remove_full(&9);
+    let result = map.shift_remove_full(&9, &mut e, &mut g).unwrap();
     assert_eq!(result, Some((3, 9, 10)));
     assert_eq!(map.len(), 3);
     assert_eq!(map.as_slice(), &[(1, 2), (5, 6), (7, 8)]);
 
-    let result = map.shift_remove_full(&9);
+    let result = map.shift_remove_full(&9, &mut e, &mut g).unwrap();
     assert_eq!(result, None);
     assert_eq!(map.len(), 3);
     assert_eq!(map.as_slice(), &[(1, 2), (5, 6), (7, 8)]);
@@ -674,8 +783,15 @@ fn shift_remove_full() {
 
 #[test]
 fn sorted_unstable_by() {
-    let mut map: RubyMap<i32, i32> = RubyMap::new();
-    map.extend(vec![(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)]);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    map.extend(
+        vec![(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)],
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     let sorted = map.sorted_unstable_by(|_a, b, _c, d| d.cmp(&b));
 
     assert_eq!(
@@ -686,9 +802,11 @@ fn sorted_unstable_by() {
 
 #[test]
 fn into_boxed_slice() {
-    let mut map: RubyMap<i32, i32> = RubyMap::new();
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
     for i in 0..5 {
-        map.insert(i, i * 10);
+        map.insert(i, i * 10, &mut e, &mut g).unwrap();
     }
     let boxed_slice: Box<Slice<i32, i32>> = map.into_boxed_slice();
     assert_eq!(boxed_slice.len(), 5);
@@ -700,46 +818,59 @@ fn into_boxed_slice() {
 
 #[test]
 fn last_mut() {
-    let mut map: RubyMap<&str, i32> = RubyMap::new();
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<&str, i32, E, G, ()> = RubyMap::new();
 
     let last_entry = map.last_mut();
     assert_eq!(last_entry, None);
 
-    map.insert("key1", 1);
-    map.insert("key2", 2);
-    map.insert("key3", 3);
+    map.insert("key1", 1, &mut e, &mut g).unwrap();
+    map.insert("key2", 2, &mut e, &mut g).unwrap();
+    map.insert("key3", 3, &mut e, &mut g).unwrap();
     let last_entry = map.last_mut();
     assert_eq!(last_entry, Some((&"key3", &mut 3)));
 
     *last_entry.unwrap().1 = 4;
-    assert_eq!(map.get("key3"), Some(&4));
+    assert_eq!(map.get("key3", &mut e, &mut g).unwrap(), Some(&4));
 }
 
 #[test]
 #[should_panic = "index out of bounds"]
 fn insert_before_oob() {
-    let mut map: RubyMap<char, ()> = RubyMap::new();
-    let _ = map.insert_before(0, 'a', ());
-    let _ = map.insert_before(1, 'b', ());
-    map.insert_before(3, 'd', ());
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<char, (), E, G, ()> = RubyMap::new();
+    let _ = map.insert_before(0, 'a', (), &mut e, &mut g).unwrap();
+    let _ = map.insert_before(1, 'b', (), &mut e, &mut g).unwrap();
+    map.insert_before(3, 'd', (), &mut e, &mut g).unwrap();
 }
 
 #[test]
 fn clear() {
-    let mut map: RubyMap<i32, i32> = RubyMap::new();
-    map.extend(vec![(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)]);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    map.extend(
+        vec![(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)],
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     map.clear();
     assert_eq!(map.len(), 0);
 }
 
 #[test]
 fn get_range() {
-    let mut index_map: RubyMap<i32, i32> = RubyMap::new();
-    index_map.insert(1, 10);
-    index_map.insert(2, 20);
-    index_map.insert(3, 30);
-    index_map.insert(4, 40);
-    index_map.insert(5, 50);
+    let mut e = E;
+    let mut g = G;
+    let mut index_map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    index_map.insert(1, 10, &mut e, &mut g).unwrap();
+    index_map.insert(2, 20, &mut e, &mut g).unwrap();
+    index_map.insert(3, 30, &mut e, &mut g).unwrap();
+    index_map.insert(4, 40, &mut e, &mut g).unwrap();
+    index_map.insert(5, 50, &mut e, &mut g).unwrap();
 
     let result = index_map.get_range(2..2);
     assert!(result.unwrap().is_empty());
@@ -755,12 +886,14 @@ fn get_range() {
 
 #[test]
 fn get_range_mut() {
-    let mut index_map: RubyMap<i32, i32> = RubyMap::new();
-    index_map.insert(1, 10);
-    index_map.insert(2, 20);
-    index_map.insert(3, 30);
-    index_map.insert(4, 40);
-    index_map.insert(5, 50);
+    let mut e = E;
+    let mut g = G;
+    let mut index_map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    index_map.insert(1, 10, &mut e, &mut g).unwrap();
+    index_map.insert(2, 20, &mut e, &mut g).unwrap();
+    index_map.insert(3, 30, &mut e, &mut g).unwrap();
+    index_map.insert(4, 40, &mut e, &mut g).unwrap();
+    index_map.insert(5, 50, &mut e, &mut g).unwrap();
 
     let result = index_map.get_range_mut(2..2);
     assert!(result.unwrap().is_empty());
@@ -782,71 +915,97 @@ fn get_range_mut() {
 #[test]
 #[should_panic = "index out of bounds"]
 fn shift_insert_oob() {
-    let mut map: RubyMap<u32, u32> = RubyMap::new();
-    map.shift_insert(0, 1, 10);
-    map.shift_insert(1, 2, 20);
-    map.shift_insert(2, 3, 30);
-    map.shift_insert(5, 4, 40);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<u32, u32, E, G, ()> = RubyMap::new();
+    map.shift_insert(0, 1, 10, &mut e, &mut g).unwrap();
+    map.shift_insert(1, 2, 20, &mut e, &mut g).unwrap();
+    map.shift_insert(2, 3, 30, &mut e, &mut g).unwrap();
+    map.shift_insert(5, 4, 40, &mut e, &mut g).unwrap();
 }
 
 #[test]
 fn test_binary_search_by() {
+    let mut e = E;
+    let mut g = G;
     // adapted from std's test for binary_search
-    let b: RubyMap<_, i32> = []
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [].into_iter().enumerate().map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&5)), Err(0));
 
-    let b: RubyMap<_, i32> = [4]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [4].into_iter().enumerate().map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&3)), Err(0));
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&4)), Ok(0));
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&5)), Err(1));
 
-    let b: RubyMap<_, i32> = [1, 2, 4, 6, 8, 9]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [1, 2, 4, 6, 8, 9]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&5)), Err(3));
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&6)), Ok(3));
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&7)), Err(4));
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&8)), Ok(4));
 
-    let b: RubyMap<_, i32> = [1, 2, 4, 5, 6, 8]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [1, 2, 4, 5, 6, 8]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&9)), Err(6));
 
-    let b: RubyMap<_, i32> = [1, 2, 4, 6, 7, 8, 9]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [1, 2, 4, 6, 7, 8, 9]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&6)), Ok(3));
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&5)), Err(3));
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&8)), Ok(5));
 
-    let b: RubyMap<_, i32> = [1, 2, 4, 5, 6, 8, 9]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [1, 2, 4, 5, 6, 8, 9]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&7)), Err(5));
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&0)), Err(0));
 
-    let b: RubyMap<_, i32> = [1, 3, 3, 3, 7]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [1, 3, 3, 3, 7]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&0)), Err(0));
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&1)), Ok(0));
     assert_eq!(b.binary_search_by(|_, x| x.cmp(&2)), Err(1));
@@ -868,61 +1027,85 @@ fn test_binary_search_by() {
 #[test]
 fn test_binary_search_by_key() {
     // adapted from std's test for binary_search
-    let b: RubyMap<_, i32> = []
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let mut e = E;
+    let mut g = G;
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [].into_iter().enumerate().map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.binary_search_by_key(&5, |_, &x| x), Err(0));
 
-    let b: RubyMap<_, i32> = [4]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [4].into_iter().enumerate().map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.binary_search_by_key(&3, |_, &x| x), Err(0));
     assert_eq!(b.binary_search_by_key(&4, |_, &x| x), Ok(0));
     assert_eq!(b.binary_search_by_key(&5, |_, &x| x), Err(1));
 
-    let b: RubyMap<_, i32> = [1, 2, 4, 6, 8, 9]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [1, 2, 4, 6, 8, 9]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.binary_search_by_key(&5, |_, &x| x), Err(3));
     assert_eq!(b.binary_search_by_key(&6, |_, &x| x), Ok(3));
     assert_eq!(b.binary_search_by_key(&7, |_, &x| x), Err(4));
     assert_eq!(b.binary_search_by_key(&8, |_, &x| x), Ok(4));
 
-    let b: RubyMap<_, i32> = [1, 2, 4, 5, 6, 8]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [1, 2, 4, 5, 6, 8]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.binary_search_by_key(&9, |_, &x| x), Err(6));
 
-    let b: RubyMap<_, i32> = [1, 2, 4, 6, 7, 8, 9]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [1, 2, 4, 6, 7, 8, 9]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.binary_search_by_key(&6, |_, &x| x), Ok(3));
     assert_eq!(b.binary_search_by_key(&5, |_, &x| x), Err(3));
     assert_eq!(b.binary_search_by_key(&8, |_, &x| x), Ok(5));
 
-    let b: RubyMap<_, i32> = [1, 2, 4, 5, 6, 8, 9]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [1, 2, 4, 5, 6, 8, 9]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.binary_search_by_key(&7, |_, &x| x), Err(5));
     assert_eq!(b.binary_search_by_key(&0, |_, &x| x), Err(0));
 
-    let b: RubyMap<_, i32> = [1, 3, 3, 3, 7]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [1, 3, 3, 3, 7]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.binary_search_by_key(&0, |_, &x| x), Err(0));
     assert_eq!(b.binary_search_by_key(&1, |_, &x| x), Ok(0));
     assert_eq!(b.binary_search_by_key(&2, |_, &x| x), Err(1));
@@ -943,62 +1126,86 @@ fn test_binary_search_by_key() {
 
 #[test]
 fn test_partition_point() {
+    let mut e = E;
+    let mut g = G;
     // adapted from std's test for partition_point
-    let b: RubyMap<_, i32> = []
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [].into_iter().enumerate().map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.partition_point(|_, &x| x < 5), 0);
 
-    let b: RubyMap<_, i32> = [4]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [4].into_iter().enumerate().map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.partition_point(|_, &x| x < 3), 0);
     assert_eq!(b.partition_point(|_, &x| x < 4), 0);
     assert_eq!(b.partition_point(|_, &x| x < 5), 1);
 
-    let b: RubyMap<_, i32> = [1, 2, 4, 6, 8, 9]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [1, 2, 4, 6, 8, 9]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.partition_point(|_, &x| x < 5), 3);
     assert_eq!(b.partition_point(|_, &x| x < 6), 3);
     assert_eq!(b.partition_point(|_, &x| x < 7), 4);
     assert_eq!(b.partition_point(|_, &x| x < 8), 4);
 
-    let b: RubyMap<_, i32> = [1, 2, 4, 5, 6, 8]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [1, 2, 4, 5, 6, 8]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.partition_point(|_, &x| x < 9), 6);
 
-    let b: RubyMap<_, i32> = [1, 2, 4, 6, 7, 8, 9]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [1, 2, 4, 6, 7, 8, 9]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.partition_point(|_, &x| x < 6), 3);
     assert_eq!(b.partition_point(|_, &x| x < 5), 3);
     assert_eq!(b.partition_point(|_, &x| x < 8), 5);
 
-    let b: RubyMap<_, i32> = [1, 2, 4, 5, 6, 8, 9]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [1, 2, 4, 5, 6, 8, 9]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.partition_point(|_, &x| x < 7), 5);
     assert_eq!(b.partition_point(|_, &x| x < 0), 0);
 
-    let b: RubyMap<_, i32> = [1, 3, 3, 3, 7]
-        .into_iter()
-        .enumerate()
-        .map(|(i, x)| (i + 100, x))
-        .collect();
+    let b: RubyMap<_, i32, E, G, ()> = RubyMap::from_iter(
+        [1, 3, 3, 3, 7]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| (i + 100, x)),
+        &mut e,
+        &mut g,
+    )
+    .unwrap();
     assert_eq!(b.partition_point(|_, &x| x < 0), 0);
     assert_eq!(b.partition_point(|_, &x| x < 1), 0);
     assert_eq!(b.partition_point(|_, &x| x < 2), 1);
@@ -1015,8 +1222,11 @@ macro_rules! move_index_oob {
         #[test]
         #[should_panic(expected = "index out of bounds")]
         fn $test() {
-            let mut map: RubyMap<i32, ()> = (0..10).map(|k| (k, ())).collect();
-            map.move_index($from, $to);
+            let mut e = E;
+            let mut g = G;
+            let mut map: RubyMap<i32, (), E, G, ()> =
+                RubyMap::from_iter((0..10).map(|k| (k, ())), &mut e, &mut g).unwrap();
+            map.move_index($from, $to, &mut e, &mut g).unwrap();
         }
     };
 }
@@ -1027,51 +1237,70 @@ move_index_oob!(test_move_index_out_of_bounds_max_0, usize::MAX, 0);
 
 #[test]
 fn disjoint_mut_empty_map() {
-    let mut map: RubyMap<u32, u32> = RubyMap::default();
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<u32, u32, E, G, ()> = RubyMap::default();
     assert_eq!(
-        map.get_disjoint_mut([&0, &1, &2, &3]),
+        map.get_disjoint_mut([&0, &1, &2, &3], &mut e, &mut g)
+            .unwrap(),
         [None, None, None, None]
     );
 }
 
 #[test]
 fn disjoint_mut_empty_param() {
-    let mut map: RubyMap<u32, u32> = RubyMap::default();
-    map.insert(1, 10);
-    assert_eq!(map.get_disjoint_mut([] as [&u32; 0]), []);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<u32, u32, E, G, ()> = RubyMap::default();
+    map.insert(1, 10, &mut e, &mut g).unwrap();
+    assert_eq!(
+        map.get_disjoint_mut([] as [&u32; 0], &mut e, &mut g)
+            .unwrap(),
+        []
+    );
 }
 
 #[test]
 fn disjoint_mut_single_fail() {
-    let mut map: RubyMap<u32, u32> = RubyMap::default();
-    map.insert(1, 10);
-    assert_eq!(map.get_disjoint_mut([&0]), [None]);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<u32, u32, E, G, ()> = RubyMap::default();
+    map.insert(1, 10, &mut e, &mut g).unwrap();
+    assert_eq!(map.get_disjoint_mut([&0], &mut e, &mut g).unwrap(), [None]);
 }
 
 #[test]
 fn disjoint_mut_single_success() {
-    let mut map: RubyMap<u32, u32> = RubyMap::default();
-    map.insert(1, 10);
-    assert_eq!(map.get_disjoint_mut([&1]), [Some(&mut 10)]);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<u32, u32, E, G, ()> = RubyMap::default();
+    map.insert(1, 10, &mut e, &mut g).unwrap();
+    assert_eq!(
+        map.get_disjoint_mut([&1], &mut e, &mut g).unwrap(),
+        [Some(&mut 10)]
+    );
 }
 
 #[test]
 fn disjoint_mut_multi_success() {
-    let mut map: RubyMap<u32, u32> = RubyMap::default();
-    map.insert(1, 100);
-    map.insert(2, 200);
-    map.insert(3, 300);
-    map.insert(4, 400);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<u32, u32, E, G, ()> = RubyMap::default();
+    map.insert(1, 100, &mut e, &mut g).unwrap();
+    map.insert(2, 200, &mut e, &mut g).unwrap();
+    map.insert(3, 300, &mut e, &mut g).unwrap();
+    map.insert(4, 400, &mut e, &mut g).unwrap();
     assert_eq!(
-        map.get_disjoint_mut([&1, &2]),
+        map.get_disjoint_mut([&1, &2], &mut e, &mut g).unwrap(),
         [Some(&mut 100), Some(&mut 200)]
     );
     assert_eq!(
-        map.get_disjoint_mut([&1, &3]),
+        map.get_disjoint_mut([&1, &3], &mut e, &mut g).unwrap(),
         [Some(&mut 100), Some(&mut 300)]
     );
     assert_eq!(
-        map.get_disjoint_mut([&3, &1, &4, &2]),
+        map.get_disjoint_mut([&3, &1, &4, &2], &mut e, &mut g)
+            .unwrap(),
         [
             Some(&mut 300),
             Some(&mut 100),
@@ -1083,22 +1312,25 @@ fn disjoint_mut_multi_success() {
 
 #[test]
 fn disjoint_mut_multi_success_unsized_key() {
-    let mut map: RubyMap<&'static str, u32> = RubyMap::default();
-    map.insert("1", 100);
-    map.insert("2", 200);
-    map.insert("3", 300);
-    map.insert("4", 400);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<&'static str, u32, E, G, ()> = RubyMap::default();
+    map.insert("1", 100, &mut e, &mut g).unwrap();
+    map.insert("2", 200, &mut e, &mut g).unwrap();
+    map.insert("3", 300, &mut e, &mut g).unwrap();
+    map.insert("4", 400, &mut e, &mut g).unwrap();
 
     assert_eq!(
-        map.get_disjoint_mut(["1", "2"]),
+        map.get_disjoint_mut(["1", "2"], &mut e, &mut g).unwrap(),
         [Some(&mut 100), Some(&mut 200)]
     );
     assert_eq!(
-        map.get_disjoint_mut(["1", "3"]),
+        map.get_disjoint_mut(["1", "3"], &mut e, &mut g).unwrap(),
         [Some(&mut 100), Some(&mut 300)]
     );
     assert_eq!(
-        map.get_disjoint_mut(["3", "1", "4", "2"]),
+        map.get_disjoint_mut(["3", "1", "4", "2"], &mut e, &mut g)
+            .unwrap(),
         [
             Some(&mut 300),
             Some(&mut 100),
@@ -1110,22 +1342,25 @@ fn disjoint_mut_multi_success_unsized_key() {
 
 #[test]
 fn disjoint_mut_multi_success_borrow_key() {
-    let mut map: RubyMap<String, u32> = RubyMap::default();
-    map.insert("1".into(), 100);
-    map.insert("2".into(), 200);
-    map.insert("3".into(), 300);
-    map.insert("4".into(), 400);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<String, u32, E, G, ()> = RubyMap::default();
+    map.insert("1".into(), 100, &mut e, &mut g).unwrap();
+    map.insert("2".into(), 200, &mut e, &mut g).unwrap();
+    map.insert("3".into(), 300, &mut e, &mut g).unwrap();
+    map.insert("4".into(), 400, &mut e, &mut g).unwrap();
 
     assert_eq!(
-        map.get_disjoint_mut(["1", "2"]),
+        map.get_disjoint_mut(["1", "2"], &mut e, &mut g).unwrap(),
         [Some(&mut 100), Some(&mut 200)]
     );
     assert_eq!(
-        map.get_disjoint_mut(["1", "3"]),
+        map.get_disjoint_mut(["1", "3"], &mut e, &mut g).unwrap(),
         [Some(&mut 100), Some(&mut 300)]
     );
     assert_eq!(
-        map.get_disjoint_mut(["3", "1", "4", "2"]),
+        map.get_disjoint_mut(["3", "1", "4", "2"], &mut e, &mut g)
+            .unwrap(),
         [
             Some(&mut 300),
             Some(&mut 100),
@@ -1137,16 +1372,24 @@ fn disjoint_mut_multi_success_borrow_key() {
 
 #[test]
 fn disjoint_mut_multi_fail_missing() {
-    let mut map: RubyMap<u32, u32> = RubyMap::default();
-    map.insert(1, 100);
-    map.insert(2, 200);
-    map.insert(3, 300);
-    map.insert(4, 400);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<u32, u32, E, G, ()> = RubyMap::default();
+    map.insert(1, 100, &mut e, &mut g).unwrap();
+    map.insert(2, 200, &mut e, &mut g).unwrap();
+    map.insert(3, 300, &mut e, &mut g).unwrap();
+    map.insert(4, 400, &mut e, &mut g).unwrap();
 
-    assert_eq!(map.get_disjoint_mut([&1, &5]), [Some(&mut 100), None]);
-    assert_eq!(map.get_disjoint_mut([&5, &6]), [None, None]);
     assert_eq!(
-        map.get_disjoint_mut([&1, &5, &4]),
+        map.get_disjoint_mut([&1, &5], &mut e, &mut g).unwrap(),
+        [Some(&mut 100), None]
+    );
+    assert_eq!(
+        map.get_disjoint_mut([&5, &6], &mut e, &mut g).unwrap(),
+        [None, None]
+    );
+    assert_eq!(
+        map.get_disjoint_mut([&1, &5, &4], &mut e, &mut g).unwrap(),
         [Some(&mut 100), None, Some(&mut 400)]
     );
 }
@@ -1154,16 +1397,20 @@ fn disjoint_mut_multi_fail_missing() {
 #[test]
 #[should_panic]
 fn disjoint_mut_multi_fail_duplicate_panic() {
-    let mut map: RubyMap<u32, u32> = RubyMap::default();
-    map.insert(1, 100);
-    map.get_disjoint_mut([&1, &2, &1]);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<u32, u32, E, G, ()> = RubyMap::default();
+    map.insert(1, 100, &mut e, &mut g).unwrap();
+    map.get_disjoint_mut([&1, &2, &1], &mut e, &mut g).unwrap();
 }
 
 #[test]
 fn disjoint_indices_mut_fail_oob() {
-    let mut map: RubyMap<u32, u32> = RubyMap::default();
-    map.insert(1, 10);
-    map.insert(321, 20);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<u32, u32, E, G, ()> = RubyMap::default();
+    map.insert(1, 10, &mut e, &mut g).unwrap();
+    map.insert(321, 20, &mut e, &mut g).unwrap();
     assert_eq!(
         map.get_disjoint_indices_mut([1, 3]),
         Err(crate::GetDisjointMutError::IndexOutOfBounds)
@@ -1172,17 +1419,21 @@ fn disjoint_indices_mut_fail_oob() {
 
 #[test]
 fn disjoint_indices_mut_empty() {
-    let mut map: RubyMap<u32, u32> = RubyMap::default();
-    map.insert(1, 10);
-    map.insert(321, 20);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<u32, u32, E, G, ()> = RubyMap::default();
+    map.insert(1, 10, &mut e, &mut g).unwrap();
+    map.insert(321, 20, &mut e, &mut g).unwrap();
     assert_eq!(map.get_disjoint_indices_mut([]), Ok([]));
 }
 
 #[test]
 fn disjoint_indices_mut_success() {
-    let mut map: RubyMap<u32, u32> = RubyMap::default();
-    map.insert(1, 10);
-    map.insert(321, 20);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<u32, u32, E, G, ()> = RubyMap::default();
+    map.insert(1, 10, &mut e, &mut g).unwrap();
+    map.insert(321, 20, &mut e, &mut g).unwrap();
     assert_eq!(map.get_disjoint_indices_mut([0]), Ok([(&1, &mut 10)]));
 
     assert_eq!(map.get_disjoint_indices_mut([1]), Ok([(&321, &mut 20)]));
@@ -1194,9 +1445,11 @@ fn disjoint_indices_mut_success() {
 
 #[test]
 fn disjoint_indices_mut_fail_duplicate() {
-    let mut map: RubyMap<u32, u32> = RubyMap::default();
-    map.insert(1, 10);
-    map.insert(321, 20);
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<u32, u32, E, G, ()> = RubyMap::default();
+    map.insert(1, 10, &mut e, &mut g).unwrap();
+    map.insert(321, 20, &mut e, &mut g).unwrap();
     assert_eq!(
         map.get_disjoint_indices_mut([1, 0, 1]),
         Err(crate::GetDisjointMutError::OverlappingIndices)

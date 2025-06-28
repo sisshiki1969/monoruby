@@ -6,11 +6,8 @@ mod slice;
 #[cfg(test)]
 mod tests;
 
-pub use self::iter::{
-    Difference, Drain, Intersection, IntoIter, Iter, Splice, SymmetricDifference, Union,
-};
+pub use self::iter::{Drain, IntoIter, Iter};
 pub use self::slice::Slice;
-
 use crate::TryReserveError;
 
 use std::collections::hash_map::RandomState;
@@ -21,9 +18,9 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt;
 use core::hash::{BuildHasher, Hash};
-use core::ops::{BitAnd, BitOr, BitXor, Index, RangeBounds, Sub};
+use core::ops::RangeBounds;
 
-use super::{Entries, Equivalent, RubyMap};
+use super::{Entries, Equivalent, RubyEql, RubyMap};
 
 type Bucket<T> = super::Bucket<T, ()>;
 
@@ -75,14 +72,13 @@ type Bucket<T> = super::Bucket<T, ()>;
 /// assert!(letters.contains(&'u'));
 /// assert!(!letters.contains(&'y'));
 /// ```
-pub struct RubySet<T, S = RandomState> {
-    pub(crate) map: RubyMap<T, (), S>,
+pub struct RubySet<T, E, G, R, S = RandomState> {
+    pub(crate) map: RubyMap<T, (), E, G, R, S>,
 }
 
-impl<T, S> Clone for RubySet<T, S>
+impl<T, E, G, R> Clone for RubySet<T, E, G, R>
 where
     T: Clone,
-    S: Clone,
 {
     fn clone(&self) -> Self {
         RubySet {
@@ -95,7 +91,7 @@ where
     }
 }
 
-impl<T, S> Entries for RubySet<T, S> {
+impl<T, E, G, R, S> Entries for RubySet<T, E, G, R, S> {
     type Entry = Bucket<T>;
 
     #[inline]
@@ -121,23 +117,16 @@ impl<T, S> Entries for RubySet<T, S> {
     }
 }
 
-impl<T, S> fmt::Debug for RubySet<T, S>
+impl<T, E, G, R> fmt::Debug for RubySet<T, E, G, R>
 where
     T: fmt::Debug,
 {
-    #[cfg(not(feature = "test_debug"))]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_set().entries(self.iter()).finish()
     }
-
-    #[cfg(feature = "test_debug")]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Let the inner `IndexMap` print all of its details
-        f.debug_struct("IndexSet").field("map", &self.map).finish()
-    }
 }
 
-impl<T> RubySet<T> {
+impl<T, E, G, R> RubySet<T, E, G, R> {
     /// Create a new set. (Does not allocate.)
     pub fn new() -> Self {
         RubySet {
@@ -156,7 +145,7 @@ impl<T> RubySet<T> {
     }
 }
 
-impl<T, S> RubySet<T, S> {
+impl<T, E, G, R, S> RubySet<T, E, G, R, S> {
     /// Create a new set with capacity for `n` elements.
     /// (Does not allocate if `n` is zero.)
     ///
@@ -221,8 +210,8 @@ impl<T, S> RubySet<T, S> {
     /// Shortens the set, keeping the first `len` elements and dropping the rest.
     ///
     /// If `len` is greater than the set's current length, this has no effect.
-    pub fn truncate(&mut self, len: usize) {
-        self.map.truncate(len);
+    pub fn truncate(&mut self, len: usize, e: &mut E, g: &mut G) -> Result<(), R> {
+        self.map.truncate(len, e, g)
     }
 
     /// Clears the `IndexSet` in the given index range, returning those values
@@ -239,11 +228,11 @@ impl<T, S> RubySet<T, S> {
     /// ***Panics*** if the starting point is greater than the end point or if
     /// the end point is greater than the length of the set.
     #[track_caller]
-    pub fn drain<R>(&mut self, range: R) -> Drain<'_, T>
+    pub fn drain<Ra>(&mut self, range: Ra, e: &mut E, g: &mut G) -> Result<Drain<'_, T>, R>
     where
-        R: RangeBounds<usize>,
+        Ra: RangeBounds<usize>,
     {
-        Drain::new(self.map.core.drain(range))
+        Ok(Drain::new(self.map.core.drain(range, e, g)?))
     }
 
     /// Splits the collection into two at the given index.
@@ -254,13 +243,13 @@ impl<T, S> RubySet<T, S> {
     ///
     /// ***Panics*** if `at > len`.
     #[track_caller]
-    pub fn split_off(&mut self, at: usize) -> Self
+    pub fn split_off(&mut self, at: usize, e: &mut E, g: &mut G) -> Result<Self, R>
     where
         S: Clone,
     {
-        Self {
-            map: self.map.split_off(at),
-        }
+        Ok(Self {
+            map: self.map.split_off(at, e, g)?,
+        })
     }
 
     /// Reserve capacity for `additional` more values.
@@ -316,7 +305,7 @@ impl<T, S> RubySet<T, S> {
     }
 }
 
-impl<T, S> RubySet<T, S>
+impl<T, E, G, R, S> RubySet<T, E, G, R, S>
 where
     T: Hash + Eq,
     S: BuildHasher,
@@ -329,8 +318,8 @@ where
     /// item and returns `true`.
     ///
     /// Computes in **O(1)** time (amortized average).
-    pub fn insert(&mut self, value: T) -> bool {
-        self.map.insert(value, ()).is_none()
+    pub fn insert(&mut self, value: T, e: &mut E, g: &mut G) -> Result<bool, R> {
+        Ok(self.map.insert(value, (), e, g)?.is_none())
     }
 
     /// Insert the value into the set, and get its index.
@@ -342,9 +331,9 @@ where
     /// of the inserted item and `true`.
     ///
     /// Computes in **O(1)** time (amortized average).
-    pub fn insert_full(&mut self, value: T) -> (usize, bool) {
-        let (index, existing) = self.map.insert_full(value, ());
-        (index, existing.is_none())
+    pub fn insert_full(&mut self, value: T, e: &mut E, g: &mut G) -> Result<(usize, bool), R> {
+        let (index, existing) = self.map.insert_full(value, (), e, g)?;
+        Ok((index, existing.is_none()))
     }
 
     /// Insert the value into the set at its ordered position among sorted values.
@@ -365,12 +354,12 @@ where
     /// `insert_sorted`, it may be faster to call batched [`insert`][Self::insert]
     /// or [`extend`][Self::extend] and only call [`sort`][Self::sort] or
     /// [`sort_unstable`][Self::sort_unstable] once.
-    pub fn insert_sorted(&mut self, value: T) -> (usize, bool)
+    pub fn insert_sorted(&mut self, value: T, e: &mut E, g: &mut G) -> Result<(usize, bool), R>
     where
         T: Ord,
     {
-        let (index, existing) = self.map.insert_sorted(value, ());
-        (index, existing.is_none())
+        let (index, existing) = self.map.insert_sorted(value, (), e, g)?;
+        Ok((index, existing.is_none()))
     }
 
     /// Insert the value into the set before the value at the given index, or at the end.
@@ -417,9 +406,15 @@ where
     /// assert_eq!(set.len(), 28);
     /// ```
     #[track_caller]
-    pub fn insert_before(&mut self, index: usize, value: T) -> (usize, bool) {
-        let (index, existing) = self.map.insert_before(index, value, ());
-        (index, existing.is_none())
+    pub fn insert_before(
+        &mut self,
+        index: usize,
+        value: T,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(usize, bool), R> {
+        let (index, existing) = self.map.insert_before(index, value, (), e, g)?;
+        Ok((index, existing.is_none()))
     }
 
     /// Insert the value into the set at the given index.
@@ -475,8 +470,14 @@ where
     /// set.shift_insert(set.len(), 'a');
     /// ```
     #[track_caller]
-    pub fn shift_insert(&mut self, index: usize, value: T) -> bool {
-        self.map.shift_insert(index, value, ()).is_none()
+    pub fn shift_insert(
+        &mut self,
+        index: usize,
+        value: T,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<bool, R> {
+        Ok(self.map.shift_insert(index, value, (), e, g)?.is_none())
     }
 
     /// Adds a value to the set, replacing the existing value, if any, that is
@@ -484,8 +485,8 @@ where
     /// the replaced value.
     ///
     /// Computes in **O(1)** time (average).
-    pub fn replace(&mut self, value: T) -> Option<T> {
-        self.replace_full(value).1
+    pub fn replace(&mut self, value: T, e: &mut E, g: &mut G) -> Result<Option<T>, R> {
+        Ok(self.replace_full(value, e, g)?.1)
     }
 
     /// Adds a value to the set, replacing the existing value, if any, that is
@@ -493,96 +494,17 @@ where
     /// the index of the item and its replaced value.
     ///
     /// Computes in **O(1)** time (average).
-    pub fn replace_full(&mut self, value: T) -> (usize, Option<T>) {
+    pub fn replace_full(
+        &mut self,
+        value: T,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(usize, Option<T>), R> {
         let hash = self.map.hash(&value);
-        match self.map.core.replace_full(hash, value, ()) {
+        Ok(match self.map.core.replace_full(hash, value, (), e, g)? {
             (i, Some((replaced, ()))) => (i, Some(replaced)),
             (i, None) => (i, None),
-        }
-    }
-
-    /// Return an iterator over the values that are in `self` but not `other`.
-    ///
-    /// Values are produced in the same order that they appear in `self`.
-    pub fn difference<'a, S2>(&'a self, other: &'a RubySet<T, S2>) -> Difference<'a, T, S2>
-    where
-        S2: BuildHasher,
-    {
-        Difference::new(self, other)
-    }
-
-    /// Return an iterator over the values that are in `self` or `other`,
-    /// but not in both.
-    ///
-    /// Values from `self` are produced in their original order, followed by
-    /// values from `other` in their original order.
-    pub fn symmetric_difference<'a, S2>(
-        &'a self,
-        other: &'a RubySet<T, S2>,
-    ) -> SymmetricDifference<'a, T, S, S2>
-    where
-        S2: BuildHasher,
-    {
-        SymmetricDifference::new(self, other)
-    }
-
-    /// Return an iterator over the values that are in both `self` and `other`.
-    ///
-    /// Values are produced in the same order that they appear in `self`.
-    pub fn intersection<'a, S2>(&'a self, other: &'a RubySet<T, S2>) -> Intersection<'a, T, S2>
-    where
-        S2: BuildHasher,
-    {
-        Intersection::new(self, other)
-    }
-
-    /// Return an iterator over all values that are in `self` or `other`.
-    ///
-    /// Values from `self` are produced in their original order, followed by
-    /// values that are unique to `other` in their original order.
-    pub fn union<'a, S2>(&'a self, other: &'a RubySet<T, S2>) -> Union<'a, T, S>
-    where
-        S2: BuildHasher,
-    {
-        Union::new(self, other)
-    }
-
-    /// Creates a splicing iterator that replaces the specified range in the set
-    /// with the given `replace_with` iterator and yields the removed items.
-    /// `replace_with` does not need to be the same length as `range`.
-    ///
-    /// The `range` is removed even if the iterator is not consumed until the
-    /// end. It is unspecified how many elements are removed from the set if the
-    /// `Splice` value is leaked.
-    ///
-    /// The input iterator `replace_with` is only consumed when the `Splice`
-    /// value is dropped. If a value from the iterator matches an existing entry
-    /// in the set (outside of `range`), then the original will be unchanged.
-    /// Otherwise, the new value will be inserted in the replaced `range`.
-    ///
-    /// ***Panics*** if the starting point is greater than the end point or if
-    /// the end point is greater than the length of the set.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use indexmap::IndexSet;
-    ///
-    /// let mut set = IndexSet::from([0, 1, 2, 3, 4]);
-    /// let new = [5, 4, 3, 2, 1];
-    /// let removed: Vec<_> = set.splice(2..4, new).collect();
-    ///
-    /// // 1 and 4 kept their positions, while 5, 3, and 2 were newly inserted.
-    /// assert!(set.into_iter().eq([0, 1, 5, 3, 2, 4]));
-    /// assert_eq!(removed, &[2, 3]);
-    /// ```
-    #[track_caller]
-    pub fn splice<R, I>(&mut self, range: R, replace_with: I) -> Splice<'_, I::IntoIter, T, S>
-    where
-        R: RangeBounds<usize>,
-        I: IntoIterator<Item = T>,
-    {
-        Splice::new(self, range, replace_with.into_iter())
+        })
     }
 
     /// Moves all values from `other` into `self`, leaving `other` empty.
@@ -611,67 +533,57 @@ where
     ///
     /// assert!(a.iter().eq(&[3, 2, 1, 4, 5]));
     /// ```
-    pub fn append<S2>(&mut self, other: &mut RubySet<T, S2>) {
-        self.map.append(&mut other.map);
+    pub fn append<S2>(
+        &mut self,
+        other: &mut RubySet<T, E, G, R, S2>,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(), R> {
+        self.map.append(&mut other.map, e, g)
     }
 }
 
-impl<T, S> RubySet<T, S>
+impl<T, E, G, R, S> RubySet<T, E, G, R, S>
 where
     S: BuildHasher,
 {
     /// Return `true` if an equivalent to `value` exists in the set.
     ///
     /// Computes in **O(1)** time (average).
-    pub fn contains<Q>(&self, value: &Q) -> bool
+    pub fn contains<Q>(&self, value: &Q, e: &mut E, g: &mut G) -> Result<bool, R>
     where
         Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
-        self.map.contains_key(value)
+        Ok(self.map.contains_key(value, e, g)?)
     }
 
     /// Return a reference to the value stored in the set, if it is present,
     /// else `None`.
     ///
     /// Computes in **O(1)** time (average).
-    pub fn get<Q>(&self, value: &Q) -> Option<&T>
+    pub fn get<Q>(&self, value: &Q, e: &mut E, g: &mut G) -> Result<Option<&T>, R>
     where
         Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
-        self.map.get_key_value(value).map(|(x, &())| x)
+        Ok(self.map.get_key_value(value, e, g)?.map(|(x, &())| x))
     }
 
     /// Return item index and value
-    pub fn get_full<Q>(&self, value: &Q) -> Option<(usize, &T)>
+    pub fn get_full<Q>(&self, value: &Q, e: &mut E, g: &mut G) -> Result<Option<(usize, &T)>, R>
     where
         Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
-        self.map.get_full(value).map(|(i, x, &())| (i, x))
+        Ok(self.map.get_full(value, e, g)?.map(|(i, x, &())| (i, x)))
     }
 
     /// Return item index, if it exists in the set
     ///
     /// Computes in **O(1)** time (average).
-    pub fn get_index_of<Q>(&self, value: &Q) -> Option<usize>
+    pub fn get_index_of<Q>(&self, value: &Q, e: &mut E, g: &mut G) -> Result<Option<usize>, R>
     where
         Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
-        self.map.get_index_of(value)
-    }
-
-    /// Remove the value from the set, and return `true` if it was present.
-    ///
-    /// **NOTE:** This is equivalent to [`.swap_remove(value)`][Self::swap_remove], replacing this
-    /// value's position with the last element, and it is deprecated in favor of calling that
-    /// explicitly. If you need to preserve the relative order of the values in the set, use
-    /// [`.shift_remove(value)`][Self::shift_remove] instead.
-    #[deprecated(note = "`remove` disrupts the set order -- \
-        use `swap_remove` or `shift_remove` for explicit behavior.")]
-    pub fn remove<Q>(&mut self, value: &Q) -> bool
-    where
-        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
-    {
-        self.swap_remove(value)
+        self.map.get_index_of(value, e, g)
     }
 
     /// Remove the value from the set, and return `true` if it was present.
@@ -683,11 +595,11 @@ where
     /// Return `false` if `value` was not in the set.
     ///
     /// Computes in **O(1)** time (average).
-    pub fn swap_remove<Q>(&mut self, value: &Q) -> bool
+    pub fn swap_remove<Q>(&mut self, value: &Q, e: &mut E, g: &mut G) -> Result<bool, R>
     where
         Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
-        self.map.swap_remove(value).is_some()
+        Ok(self.map.swap_remove(value, e, g)?.is_some())
     }
 
     /// Remove the value from the set, and return `true` if it was present.
@@ -699,27 +611,11 @@ where
     /// Return `false` if `value` was not in the set.
     ///
     /// Computes in **O(n)** time (average).
-    pub fn shift_remove<Q>(&mut self, value: &Q) -> bool
+    pub fn shift_remove<Q>(&mut self, value: &Q, e: &mut E, g: &mut G) -> Result<bool, R>
     where
         Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
-        self.map.shift_remove(value).is_some()
-    }
-
-    /// Removes and returns the value in the set, if any, that is equal to the
-    /// given one.
-    ///
-    /// **NOTE:** This is equivalent to [`.swap_take(value)`][Self::swap_take], replacing this
-    /// value's position with the last element, and it is deprecated in favor of calling that
-    /// explicitly. If you need to preserve the relative order of the values in the set, use
-    /// [`.shift_take(value)`][Self::shift_take] instead.
-    #[deprecated(note = "`take` disrupts the set order -- \
-        use `swap_take` or `shift_take` for explicit behavior.")]
-    pub fn take<Q>(&mut self, value: &Q) -> Option<T>
-    where
-        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
-    {
-        self.swap_take(value)
+        Ok(self.map.shift_remove(value, e, g)?.is_some())
     }
 
     /// Removes and returns the value in the set, if any, that is equal to the
@@ -732,11 +628,11 @@ where
     /// Return `None` if `value` was not in the set.
     ///
     /// Computes in **O(1)** time (average).
-    pub fn swap_take<Q>(&mut self, value: &Q) -> Option<T>
+    pub fn swap_take<Q>(&mut self, value: &Q, e: &mut E, g: &mut G) -> Result<Option<T>, R>
     where
         Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
-        self.map.swap_remove_entry(value).map(|(x, ())| x)
+        Ok(self.map.swap_remove_entry(value, e, g)?.map(|(x, ())| x))
     }
 
     /// Removes and returns the value in the set, if any, that is equal to the
@@ -749,11 +645,11 @@ where
     /// Return `None` if `value` was not in the set.
     ///
     /// Computes in **O(n)** time (average).
-    pub fn shift_take<Q>(&mut self, value: &Q) -> Option<T>
+    pub fn shift_take<Q>(&mut self, value: &Q, e: &mut E, g: &mut G) -> Result<Option<T>, R>
     where
         Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
-        self.map.shift_remove_entry(value).map(|(x, ())| x)
+        Ok(self.map.shift_remove_entry(value, e, g)?.map(|(x, ())| x))
     }
 
     /// Remove the value from the set return it and the index it had.
@@ -763,11 +659,19 @@ where
     /// the position of what used to be the last element!**
     ///
     /// Return `None` if `value` was not in the set.
-    pub fn swap_remove_full<Q>(&mut self, value: &Q) -> Option<(usize, T)>
+    pub fn swap_remove_full<Q>(
+        &mut self,
+        value: &Q,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(usize, T)>, R>
     where
         Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
-        self.map.swap_remove_full(value).map(|(i, x, ())| (i, x))
+        Ok(self
+            .map
+            .swap_remove_full(value, e, g)?
+            .map(|(i, x, ())| (i, x)))
     }
 
     /// Remove the value from the set return it and the index it had.
@@ -777,23 +681,31 @@ where
     /// **This perturbs the index of all of those elements!**
     ///
     /// Return `None` if `value` was not in the set.
-    pub fn shift_remove_full<Q>(&mut self, value: &Q) -> Option<(usize, T)>
+    pub fn shift_remove_full<Q>(
+        &mut self,
+        value: &Q,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(usize, T)>, R>
     where
         Q: ?Sized + Hash + Equivalent<T, E, G, R>,
     {
-        self.map.shift_remove_full(value).map(|(i, x, ())| (i, x))
+        Ok(self
+            .map
+            .shift_remove_full(value, e, g)?
+            .map(|(i, x, ())| (i, x)))
     }
 }
 
-impl<T, S> RubySet<T, S> {
+impl<T, E, G, R, S> RubySet<T, E, G, R, S> {
     /// Remove the last value
     ///
     /// This preserves the order of the remaining elements.
     ///
     /// Computes in **O(1)** time (average).
     #[doc(alias = "pop_last")] // like `BTreeSet`
-    pub fn pop(&mut self) -> Option<T> {
-        self.map.pop().map(|(x, ())| x)
+    pub fn pop(&mut self, e: &mut E, g: &mut G) -> Result<Option<T>, R> {
+        Ok(self.map.pop(e, g)?.map(|(x, ())| x))
     }
 
     /// Scan through each value in the set and keep those where the
@@ -988,7 +900,7 @@ impl<T, S> RubySet<T, S> {
     /// Valid indices are `0 <= index < self.len()`.
     ///
     /// Computes in **O(1)** time.
-    pub fn get_range<R: RangeBounds<usize>>(&self, range: R) -> Option<&Slice<T>> {
+    pub fn get_range<Ra: RangeBounds<usize>>(&self, range: Ra) -> Option<&Slice<T>> {
         let entries = self.as_entries();
         let range = try_simplify_range(range, entries.len())?;
         entries.get(range).map(Slice::from_slice)
@@ -1017,8 +929,13 @@ impl<T, S> RubySet<T, S> {
     /// the position of what used to be the last element!**
     ///
     /// Computes in **O(1)** time (average).
-    pub fn swap_remove_index(&mut self, index: usize) -> Option<T> {
-        self.map.swap_remove_index(index).map(|(x, ())| x)
+    pub fn swap_remove_index(
+        &mut self,
+        index: usize,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<T>, R> {
+        Ok(self.map.swap_remove_index(index, e, g)?.map(|(x, ())| x))
     }
 
     /// Remove the value by index
@@ -1030,8 +947,13 @@ impl<T, S> RubySet<T, S> {
     /// **This perturbs the index of all of those elements!**
     ///
     /// Computes in **O(n)** time (average).
-    pub fn shift_remove_index(&mut self, index: usize) -> Option<T> {
-        self.map.shift_remove_index(index).map(|(x, ())| x)
+    pub fn shift_remove_index(
+        &mut self,
+        index: usize,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<T>, R> {
+        Ok(self.map.shift_remove_index(index, e, g)?.map(|(x, ())| x))
     }
 
     /// Moves the position of a value from one index to another
@@ -1044,81 +966,25 @@ impl<T, S> RubySet<T, S> {
     ///
     /// Computes in **O(n)** time (average).
     #[track_caller]
-    pub fn move_index(&mut self, from: usize, to: usize) {
-        self.map.move_index(from, to)
-    }
-
-    /// Swaps the position of two values in the set.
-    ///
-    /// ***Panics*** if `a` or `b` are out of bounds.
-    ///
-    /// Computes in **O(1)** time (average).
-    #[track_caller]
-    pub fn swap_indices(&mut self, a: usize, b: usize) {
-        self.map.swap_indices(a, b)
+    pub fn move_index(&mut self, from: usize, to: usize, e: &mut E, g: &mut G) -> Result<(), R> {
+        self.map.move_index(from, to, e, g)
     }
 }
 
-/// Access [`IndexSet`] values at indexed positions.
-///
-/// # Examples
-///
-/// ```
-/// use indexmap::IndexSet;
-///
-/// let mut set = IndexSet::new();
-/// for word in "Lorem ipsum dolor sit amet".split_whitespace() {
-///     set.insert(word.to_string());
-/// }
-/// assert_eq!(set[0], "Lorem");
-/// assert_eq!(set[1], "ipsum");
-/// set.reverse();
-/// assert_eq!(set[0], "amet");
-/// assert_eq!(set[1], "sit");
-/// set.sort();
-/// assert_eq!(set[0], "Lorem");
-/// assert_eq!(set[1], "amet");
-/// ```
-///
-/// ```should_panic
-/// use indexmap::IndexSet;
-///
-/// let mut set = IndexSet::new();
-/// set.insert("foo");
-/// println!("{:?}", set[10]); // panics!
-/// ```
-impl<T, S> Index<usize> for RubySet<T, S> {
-    type Output = T;
-
-    /// Returns a reference to the value at the supplied `index`.
-    ///
-    /// ***Panics*** if `index` is out of bounds.
-    fn index(&self, index: usize) -> &T {
-        if let Some(value) = self.get_index(index) {
-            value
-        } else {
-            panic!(
-                "index out of bounds: the len is {len} but the index is {index}",
-                len = self.len()
-            );
-        }
-    }
-}
-
-impl<T, S> FromIterator<T> for RubySet<T, S>
+impl<T, E, G, R, S> RubySet<T, E, G, R, S>
 where
-    T: Hash + Eq,
+    T: Hash + RubyEql<E, G, R>,
     S: BuildHasher + Default,
 {
-    fn from_iter<I: IntoIterator<Item = T>>(iterable: I) -> Self {
+    fn from_iter<I: IntoIterator<Item = T>>(iterable: I, e: &mut E, g: &mut G) -> Result<Self, R> {
         let iter = iterable.into_iter().map(|x| (x, ()));
-        RubySet {
-            map: RubyMap::from_iter(iter),
-        }
+        Ok(RubySet {
+            map: RubyMap::from_iter(iter, e, g)?,
+        })
     }
 }
 
-impl<T, const N: usize> From<[T; N]> for RubySet<T, RandomState>
+impl<T, E, G, R> RubySet<T, E, G, R, RandomState>
 where
     T: RubyEql<E, G, R> + Hash,
 {
@@ -1131,34 +997,28 @@ where
     /// let set2: IndexSet<_> = [1, 2, 3, 4].into();
     /// assert_eq!(set1, set2);
     /// ```
-    fn from(arr: [T; N]) -> Self {
-        Self::from_iter(arr)
+    fn from_ary<const N: usize>(arr: [T; N], e: &mut E, g: &mut G) -> Result<Self, R> {
+        Self::from_iter(arr, e, g)
     }
 }
 
-impl<T, S> Extend<T> for RubySet<T, S>
+impl<T, E, G, R, S> RubySet<T, E, G, R, S>
 where
     T: Hash + Eq,
     S: BuildHasher,
 {
-    fn extend<I: IntoIterator<Item = T>>(&mut self, iterable: I) {
+    pub fn extend<I: IntoIterator<Item = T>>(
+        &mut self,
+        iterable: I,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(), R> {
         let iter = iterable.into_iter().map(|x| (x, ()));
-        self.map.extend(iter);
+        self.map.extend(iter, e, g)
     }
 }
 
-impl<'a, T, S> Extend<&'a T> for RubySet<T, S>
-where
-    T: Hash + Eq + Copy + 'a,
-    S: BuildHasher,
-{
-    fn extend<I: IntoIterator<Item = &'a T>>(&mut self, iterable: I) {
-        let iter = iterable.into_iter().copied();
-        self.extend(iter);
-    }
-}
-
-impl<T, S> Default for RubySet<T, S>
+impl<T, E, G, R, S> Default for RubySet<T, E, G, R, S>
 where
     S: Default,
 {
@@ -1170,120 +1030,69 @@ where
     }
 }
 
-impl<T, S1, S2> PartialEq<RubySet<T, S2>> for RubySet<T, S1>
+impl<T, E, G, R, S> RubyEql<E, G, R> for RubySet<T, E, G, R, S>
 where
     T: Hash + Eq,
-    S1: BuildHasher,
-    S2: BuildHasher,
+    S: BuildHasher,
 {
-    fn eq(&self, other: &RubySet<T, S2>) -> bool {
-        self.len() == other.len() && self.is_subset(other)
+    fn eql(&self, other: &RubySet<T, E, G, R, S>, e: &mut E, g: &mut G) -> Result<bool, R> {
+        Ok(self.len() == other.len() && self.is_subset(other, e, g)?)
     }
 }
 
-impl<T, S> Eq for RubySet<T, S>
-where
-    T: RubyEql<E, G, R> + Hash,
-    S: BuildHasher,
-{
-}
-
-impl<T, S> RubySet<T, S>
+impl<T, E, G, R, S> RubySet<T, E, G, R, S>
 where
     T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
     /// Returns `true` if `self` has no elements in common with `other`.
-    pub fn is_disjoint<S2>(&self, other: &RubySet<T, S2>) -> bool
-    where
-        S2: BuildHasher,
-    {
+    pub fn is_disjoint(
+        &self,
+        other: &RubySet<T, E, G, R, S>,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<bool, R> {
         if self.len() <= other.len() {
-            self.iter().all(move |value| !other.contains(value))
+            for v in self.iter() {
+                if other.contains(v, e, g)? {
+                    return Ok(false);
+                }
+            }
         } else {
-            other.iter().all(move |value| !self.contains(value))
+            for v in other.iter() {
+                if self.contains(v, e, g)? {
+                    return Ok(false);
+                }
+            }
         }
+        Ok(true)
     }
 
     /// Returns `true` if all elements of `self` are contained in `other`.
-    pub fn is_subset<S2>(&self, other: &RubySet<T, S2>) -> bool
-    where
-        S2: BuildHasher,
-    {
-        self.len() <= other.len() && self.iter().all(move |value| other.contains(value))
+    pub fn is_subset(
+        &self,
+        other: &RubySet<T, E, G, R, S>,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<bool, R> {
+        if self.len() > other.len() {
+            return Ok(false);
+        }
+        for v in self.iter() {
+            if !other.contains(v, e, g)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Returns `true` if all elements of `other` are contained in `self`.
-    pub fn is_superset<S2>(&self, other: &RubySet<T, S2>) -> bool
-    where
-        S2: BuildHasher,
-    {
-        other.is_subset(self)
-    }
-}
-
-impl<T, S1, S2> BitAnd<&RubySet<T, S2>> for &RubySet<T, S1>
-where
-    T: RubyEql<E, G, R> + Hash + Clone,
-    S1: BuildHasher + Default,
-    S2: BuildHasher,
-{
-    type Output = RubySet<T, S1>;
-
-    /// Returns the set intersection, cloned into a new set.
-    ///
-    /// Values are collected in the same order that they appear in `self`.
-    fn bitand(self, other: &RubySet<T, S2>) -> Self::Output {
-        self.intersection(other).cloned().collect()
-    }
-}
-
-impl<T, S1, S2> BitOr<&RubySet<T, S2>> for &RubySet<T, S1>
-where
-    T: RubyEql<E, G, R> + Hash + Clone,
-    S1: BuildHasher + Default,
-    S2: BuildHasher,
-{
-    type Output = RubySet<T, S1>;
-
-    /// Returns the set union, cloned into a new set.
-    ///
-    /// Values from `self` are collected in their original order, followed by
-    /// values that are unique to `other` in their original order.
-    fn bitor(self, other: &RubySet<T, S2>) -> Self::Output {
-        self.union(other).cloned().collect()
-    }
-}
-
-impl<T, S1, S2> BitXor<&RubySet<T, S2>> for &RubySet<T, S1>
-where
-    T: RubyEql<E, G, R> + Hash + Clone,
-    S1: BuildHasher + Default,
-    S2: BuildHasher,
-{
-    type Output = RubySet<T, S1>;
-
-    /// Returns the set symmetric-difference, cloned into a new set.
-    ///
-    /// Values from `self` are collected in their original order, followed by
-    /// values from `other` in their original order.
-    fn bitxor(self, other: &RubySet<T, S2>) -> Self::Output {
-        self.symmetric_difference(other).cloned().collect()
-    }
-}
-
-impl<T, S1, S2> Sub<&RubySet<T, S2>> for &RubySet<T, S1>
-where
-    T: RubyEql<E, G, R> + Hash + Clone,
-    S1: BuildHasher + Default,
-    S2: BuildHasher,
-{
-    type Output = RubySet<T, S1>;
-
-    /// Returns the set difference, cloned into a new set.
-    ///
-    /// Values are collected in the same order that they appear in `self`.
-    fn sub(self, other: &RubySet<T, S2>) -> Self::Output {
-        self.difference(other).cloned().collect()
+    pub fn is_superset(
+        &self,
+        other: &RubySet<T, E, G, R, S>,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<bool, R> {
+        other.is_subset(self, e, g)
     }
 }

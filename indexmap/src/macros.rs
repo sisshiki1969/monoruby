@@ -55,15 +55,15 @@ macro_rules! indexmap_with_default {
 /// assert_eq!(map.keys().next(), Some(&"a"));
 /// ```
 macro_rules! indexmap {
-    ($($key:expr => $value:expr,)+) => { $crate::indexmap!($($key => $value),+) };
-    ($($key:expr => $value:expr),*) => {
+    ($e:expr; $g:expr; $($key:expr => $value:expr,)+) => { $crate::indexmap!($e; $g; $($key => $value),+) };
+    ($e:expr; $g:expr; $($key:expr => $value:expr),*) => {
         {
             // Note: `stringify!($key)` is just here to consume the repetition,
             // but we throw away that string literal during constant evaluation.
             const CAP: usize = <[()]>::len(&[$({ stringify!($key); }),*]);
             let mut map = $crate::RubyMap::with_capacity(CAP);
             $(
-                map.insert($key, $value);
+                map.insert($key, $value, $e, $g).unwrap();
             )*
             map
         }
@@ -127,15 +127,15 @@ macro_rules! indexset_with_default {
 /// assert_eq!(set.iter().next(), Some(&"a"));
 /// ```
 macro_rules! indexset {
-    ($($value:expr,)+) => { $crate::indexset!($($value),+) };
-    ($($value:expr),*) => {
+    ($e:expr; $g:expr; $($value:expr,)+) => { $crate::indexset!($e; $g; $($value),+) };
+    ($e:expr; $g:expr; $($value:expr),*) => {
         {
             // Note: `stringify!($value)` is just here to consume the repetition,
             // but we throw away that string literal during constant evaluation.
             const CAP: usize = <[()]>::len(&[$({ stringify!($value); }),*]);
             let mut set = $crate::RubySet::with_capacity(CAP);
             $(
-                set.insert($value);
+                set.insert($value, $e, $g).unwrap();
             )*
             set
         }
