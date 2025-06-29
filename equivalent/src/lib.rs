@@ -41,24 +41,74 @@
 
 use std::borrow::Borrow;
 
+/// Ruby-level Key equivalence trait.
+///
+/// This trait allows `Hash` lookup to be customized.
+///
+/// This operations is failible, and return Err if failed.
 pub trait RubyEql<E, G, R> {
     /// Compare self to `other` and return `true` if they are equal.
     fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R>;
 }
 
-impl<K: Eq, E, G, R> RubyEql<E, G, R> for K {
-    #[inline]
-    fn eql(&self, other: &Self, _: &mut E, _: &mut G) -> Result<bool, R> {
-        Ok(self == other)
+macro_rules! impl_ruby_eql {
+    ($($t:ty),*) => {
+        $(
+            impl<E, G, R> RubyEql<E, G, R> for $t {
+                fn eql(&self, other: &Self, _: &mut E, _: &mut G) -> Result<bool, R> {
+                    Ok(self == other)
+                }
+            }
+
+            impl<E, G, R> RubyEql<E, G, R> for &$t {
+                fn eql(&self, other: &Self, _: &mut E, _: &mut G) -> Result<bool, R> {
+                    Ok(self == other)
+                }
+            }
+
+            impl<E, G, R> RubyEql<E, G, R> for &mut $t {
+                fn eql(&self, other: &Self, _: &mut E, _: &mut G) -> Result<bool, R> {
+                    Ok(self == other)
+                }
+            }
+        )*
+    };
+}
+
+impl<T, E, G, R> RubyEql<E, G, R> for Vec<T>
+where
+    T: RubyEql<E, G, R>,
+{
+    fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R> {
+        if self.len() != other.len() {
+            return Ok(false);
+        }
+        for (a, b) in self.iter().zip(other.iter()) {
+            if !a.eql(b, e, g)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 }
 
-// Implement RubyEql for str and String for test types
-impl<E, G, R> RubyEql<E, G, R> for str {
-    fn eql(&self, other: &Self, _: &mut E, _: &mut G) -> Result<bool, R> {
-        Ok(self == other)
-    }
-}
+impl_ruby_eql!(
+    (),
+    bool,
+    char,
+    i8,
+    u8,
+    i16,
+    u16,
+    i32,
+    u32,
+    i64,
+    u64,
+    isize,
+    usize,
+    str,
+    String
+);
 
 /// Key equivalence trait.
 ///
@@ -67,9 +117,6 @@ impl<E, G, R> RubyEql<E, G, R> for str {
 /// like `HashMap` does, so that you can pass `&str` to lookup into a map with
 /// `String` keys and so on.
 ///
-/// # Contract
-///
-/// The implementor **must** hash like `K`, if it is hashable.
 pub trait Equivalent<K: ?Sized, E, G, R> {
     /// Compare self to `key` and return `true` if they are equal.
     fn equivalent(&self, key: &K, e: &mut E, g: &mut G) -> Result<bool, R>;

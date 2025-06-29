@@ -1,4 +1,4 @@
-use indexmap::{indexmap, indexset, RubyMap};
+use rubymap::{indexmap, indexset, RubyMap, RubySet};
 struct E;
 struct G;
 
@@ -24,7 +24,7 @@ fn test_sort() {
 fn test_sort_set() {
     let mut e = E;
     let mut g = G;
-    let s: indexmap::RubySet<_, E, G, ()> = indexset! {
+    let s: RubySet<_, E, G, ()> = indexset! {
         &mut e; &mut g;
         1,
         7,

@@ -1,5 +1,5 @@
 [package]
-name = "indexmap"
+name = "rubymap"
 edition = "2021"
 version = "2.9.0"
 documentation = "https://docs.rs/indexmap/"

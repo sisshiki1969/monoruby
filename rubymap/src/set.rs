@@ -307,7 +307,7 @@ impl<T, E, G, R, S> RubySet<T, E, G, R, S> {
 
 impl<T, E, G, R, S> RubySet<T, E, G, R, S>
 where
-    T: Hash + Eq,
+    T: Hash + RubyEql<E, G, R>,
     S: BuildHasher,
 {
     /// Insert the value into the set.
@@ -976,6 +976,7 @@ where
     T: Hash + RubyEql<E, G, R>,
     S: BuildHasher + Default,
 {
+    /// Create a new set from an iterator of values.
     fn from_iter<I: IntoIterator<Item = T>>(iterable: I, e: &mut E, g: &mut G) -> Result<Self, R> {
         let iter = iterable.into_iter().map(|x| (x, ()));
         Ok(RubySet {
@@ -1004,7 +1005,7 @@ where
 
 impl<T, E, G, R, S> RubySet<T, E, G, R, S>
 where
-    T: Hash + Eq,
+    T: Hash + RubyEql<E, G, R>,
     S: BuildHasher,
 {
     pub fn extend<I: IntoIterator<Item = T>>(
@@ -1032,7 +1033,7 @@ where
 
 impl<T, E, G, R, S> RubyEql<E, G, R> for RubySet<T, E, G, R, S>
 where
-    T: Hash + Eq,
+    T: Hash + RubyEql<E, G, R>,
     S: BuildHasher,
 {
     fn eql(&self, other: &RubySet<T, E, G, R, S>, e: &mut E, g: &mut G) -> Result<bool, R> {

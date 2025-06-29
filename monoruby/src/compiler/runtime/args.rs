@@ -163,7 +163,7 @@ fn positional(
 
     let ex = if callee.no_keyword() && caller.kw_may_exists() {
         // handle excessive keyword arguments
-        let mut h = IndexMap::default();
+        let mut h = RubyMap::default();
         for (k, id) in caller.kw_args.iter() {
             let v = caller_lfp.register(caller.kw_pos + *id).unwrap();
             h.insert(HashKey(Value::symbol(*k)), v);
@@ -409,7 +409,7 @@ fn handle_keyword_simple(callee: &FuncInfo, mut callee_lfp: Lfp) -> Result<()> {
     }
 
     if let Some(rest) = callee.kw_rest() {
-        let kw_rest = IndexMap::default();
+        let kw_rest = RubyMap::default();
         unsafe { callee_lfp.set_register(rest, Some(Value::hash(kw_rest))) }
     }
     Ok(())
@@ -500,7 +500,7 @@ fn hash_splat_and_kw_rest(
     }
 
     if let Some(rest) = callee.kw_rest() {
-        let mut kw_rest = IndexMap::default();
+        let mut kw_rest = RubyMap::default();
         for (name, i) in kw_args.iter() {
             if callee.kw_names().contains(name) {
                 continue;

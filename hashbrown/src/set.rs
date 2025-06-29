@@ -982,6 +982,7 @@ where
     T: RubyEql<E, G, R> + Hash,
     S: BuildHasher + Default,
 {
+    /// Creates a new HashSet from an iterator.
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn from_iter<I: IntoIterator<Item = T>>(iter: I, e: &mut E, g: &mut G) -> Result<Self, R> {
         let mut set = Self::with_hasher(Default::default());
@@ -1015,6 +1016,7 @@ where
     T: RubyEql<E, G, R> + Hash,
     S: BuildHasher,
 {
+    /// Extend the set with the given iterator.
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn extend<I: IntoIterator<Item = T>>(
         &mut self,
@@ -1892,7 +1894,11 @@ mod test_set {
             }
         }
 
-        impl Eq for Foo {}
+        impl equivalent::RubyEql<E, G, ()> for Foo {
+            fn eql(&self, other: &Self, _: &mut E, _: &mut G) -> Result<bool, ()> {
+                Ok(self == other)
+            }
+        }
 
         impl hash::Hash for Foo {
             fn hash<H: hash::Hasher>(&self, h: &mut H) {
@@ -2076,7 +2082,11 @@ mod test_set {
                 self.count == other.count && self.other == other.other
             }
         }
-        impl Eq for Invalid {}
+        impl RubyEql<E, G, ()> for Invalid {
+            fn eql(&self, other: &Self, _: &mut E, _: &mut G) -> Result<bool, ()> {
+                Ok(self == other)
+            }
+        }
 
         impl Equivalent<Invalid, E, G, ()> for InvalidRef {
             fn equivalent(&self, key: &Invalid, _: &mut E, _: &mut G) -> Result<bool, ()> {

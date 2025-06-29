@@ -204,7 +204,7 @@ pub(super) extern "C" fn gen_lambda(vm: &mut Executor, _: &mut Globals, func_id:
 }
 
 pub(super) extern "C" fn gen_hash(src: *const Value, len: usize) -> Value {
-    let mut map = IndexMap::default();
+    let mut map = RubyMap::default();
     if len > 0 {
         let mut iter = unsafe { std::slice::from_raw_parts(src.sub(len * 2 - 1), len * 2) }
             .iter()

@@ -398,7 +398,7 @@ impl Value {
         RValue::new_array_from_vec_with_class(v, class_id).pack()
     }
 
-    pub fn hash(map: IndexMap<HashKey, Value>) -> Self {
+    pub fn hash(map: RubyMap<HashKey, Value>) -> Self {
         RValue::new_hash(map).pack()
     }
 
@@ -1383,7 +1383,7 @@ impl Value {
                 Value::range(start, end, *exclude_end)
             }
             NodeKind::Hash(v, ..) => {
-                let mut map = IndexMap::default();
+                let mut map = RubyMap::default();
                 for (k, v) in v.iter() {
                     let k = Self::from_ast(k, globals);
                     let v = Self::from_ast(v, globals);
@@ -1438,7 +1438,7 @@ impl Value {
                 Value::range(start, end, *exclude_end)
             }
             NodeKind::Hash(v, true) => {
-                let mut map = IndexMap::default();
+                let mut map = RubyMap::default();
                 for (k, v) in v.iter() {
                     map.insert(HashKey(Self::from_ast2(k)), Self::from_ast2(v));
                 }

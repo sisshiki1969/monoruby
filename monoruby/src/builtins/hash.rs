@@ -45,7 +45,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "values", values, 0);
     globals.define_builtin_funcs(HASH_CLASS, "clone", &["dup"], clone, 0);
 
-    let mut env_map = IndexMap::default();
+    let mut env_map = RubyMap::default();
     std::env::vars().for_each(|(var, val)| {
         env_map.insert(HashKey(Value::string(var)), Value::string(val));
     });
@@ -605,7 +605,7 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn invert(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
     let hash = lfp.self_val().as_hash();
-    let mut map = IndexMap::default();
+    let mut map = RubyMap::default();
     for (k, v) in hash.iter() {
         map.insert(HashKey(v), k);
     }

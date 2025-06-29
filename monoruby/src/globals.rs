@@ -34,7 +34,7 @@ pub(crate) const GLOBALS_FUNCINFO: usize =
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExternalContext {
-    scope: Vec<(IndexMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
+    scope: Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
 }
 
 impl ruruby_parse::LocalsContext for ExternalContext {
@@ -50,7 +50,7 @@ impl ruruby_parse::LocalsContext for ExternalContext {
 }
 
 impl std::ops::Index<usize> for ExternalContext {
-    type Output = (IndexMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>);
+    type Output = (HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>);
     fn index(&self, index: usize) -> &Self::Output {
         &self.scope[index]
     }
@@ -61,7 +61,7 @@ impl ExternalContext {
         Self { scope: vec![] }
     }
 
-    pub fn one(locals: IndexMap<IdentId, bytecodegen::BcLocal>, block: Option<IdentId>) -> Self {
+    pub fn one(locals: HashMap<IdentId, bytecodegen::BcLocal>, block: Option<IdentId>) -> Self {
         Self {
             scope: vec![(locals, block)],
         }
@@ -99,7 +99,7 @@ pub struct Globals {
     /// standard PRNG
     random: Box<Prng>,
     /// loaded libraries (canonical path).
-    pub(crate) loaded_canonicalized_files: IndexSet<PathBuf>,
+    pub(crate) loaded_canonicalized_files: indexmap::IndexSet<PathBuf>,
     /// stats for deoptimization
     #[cfg(feature = "profile")]
     deopt_stats: HashMap<(FuncId, bytecodegen::BcIndex), usize>,
@@ -141,7 +141,7 @@ impl Globals {
 
         let main_object = Value::object(OBJECT_CLASS);
 
-        let mut loaded_canonicalized_files = IndexSet::default();
+        let mut loaded_canonicalized_files = indexmap::IndexSet::default();
         ["thread.rb"].iter().for_each(|f| {
             loaded_canonicalized_files.insert(std::path::PathBuf::from(f));
         });
@@ -279,7 +279,7 @@ impl Globals {
     ) -> Result<FuncId> {
         let outer_fid = caller_cfp.lfp().func_id();
         let mother = caller_cfp.method_func_id_depth();
-        let mut ex_scope = IndexMap::default();
+        let mut ex_scope = HashMap::default();
         for (name, idx) in &self.store.iseq(outer_fid).locals {
             ex_scope.insert(*name, *idx);
         }
@@ -313,7 +313,7 @@ impl Globals {
         let outer_fid = binding.outer_lfp().func_id();
         let (lfp, outer) = binding.outer_lfp().outermost();
         let mother = (lfp.func_id(), outer);
-        let mut ex_scope = IndexMap::default();
+        let mut ex_scope = HashMap::default();
         for (name, idx) in &self.store.iseq(outer_fid).locals {
             ex_scope.insert(*name, *idx);
         }

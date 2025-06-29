@@ -77,21 +77,21 @@ impl alloc::GC<RValue> for HashmapInner {
 }
 
 impl HashmapInner {
-    pub fn new(map: IndexMap<HashKey, Value>) -> Self {
+    pub fn new(map: RubyMap<HashKey, Value>) -> Self {
         HashmapInner {
             default: HashDefault::default(),
             content: HashContent::new(map),
         }
     }
 
-    pub fn new_with_default(map: IndexMap<HashKey, Value>, default: Value) -> Self {
+    pub fn new_with_default(map: RubyMap<HashKey, Value>, default: Value) -> Self {
         HashmapInner {
             default: HashDefault::Value(default),
             content: HashContent::new(map),
         }
     }
 
-    pub fn new_with_default_proc(map: IndexMap<HashKey, Value>, default_proc: Proc) -> Self {
+    pub fn new_with_default_proc(map: RubyMap<HashKey, Value>, default_proc: Proc) -> Self {
         HashmapInner {
             default: HashDefault::Proc(default_proc),
             content: HashContent::new(map),
@@ -235,13 +235,13 @@ impl HashmapInner {
 
 #[derive(Debug, Clone)]
 pub enum HashContent {
-    Map(Box<IndexMap<HashKey, Value>>),
-    IdentMap(Box<IndexMap<IdentKey, Value>>),
+    Map(Box<RubyMap<HashKey, Value>>),
+    IdentMap(Box<RubyMap<IdentKey, Value>>),
 }
 
 impl std::default::Default for HashContent {
     fn default() -> Self {
-        HashContent::Map(Box::new(IndexMap::default()))
+        HashContent::Map(Box::new(RubyMap::default()))
     }
 }
 
@@ -370,8 +370,8 @@ impl PartialEq for IdentKey {
 }
 
 pub enum MonorubyHashIntoIter {
-    Map(indexmap::map::IntoIter<HashKey, Value>),
-    IdentMap(indexmap::map::IntoIter<IdentKey, Value>),
+    Map(rubymap::map::IntoIter<HashKey, Value>),
+    IdentMap(rubymap::map::IntoIter<IdentKey, Value>),
 }
 
 impl MonorubyHashIntoIter {
@@ -392,18 +392,18 @@ impl Iterator for MonorubyHashIntoIter {
         }
     }
 }
-
 macro_rules! define_iter {
-    ($trait:ident) => {
-        pub enum $trait<'a> {
-            Map(indexmap::map::$trait<'a, HashKey, Value>),
-            IdentMap(indexmap::map::$trait<'a, IdentKey, Value>),
-        }
+    ($($trait:ident),*) => {
+        $(
+            pub enum $trait<'a> {
+                Map(rubymap::map::$trait<'a, HashKey, Value>),
+                IdentMap(rubymap::map::$trait<'a, IdentKey, Value>),
+            }
+        )*
     };
 }
 
-define_iter!(Iter);
-define_iter!(IterMut);
+define_iter!(Iter, IterMut);
 
 macro_rules! define_iter_new {
     ($ty1: ident, $ty2: ty, $method: ident) => {
@@ -463,7 +463,7 @@ impl IntoIterator for HashContent {
 }
 
 impl HashContent {
-    pub(crate) fn new(map: IndexMap<HashKey, Value>) -> Self {
+    pub(crate) fn new(map: RubyMap<HashKey, Value>) -> Self {
         HashContent::Map(Box::new(map))
     }
 
@@ -523,7 +523,7 @@ impl HashContent {
     pub(crate) fn compare_by_identity(&mut self) {
         match self {
             HashContent::Map(box map) => {
-                let mut new_map = IndexMap::default();
+                let mut new_map = RubyMap::default();
                 for (k, v) in map.iter() {
                     new_map.insert(IdentKey(k.0), *v);
                 }

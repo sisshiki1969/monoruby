@@ -392,7 +392,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         g: &mut G,
     ) -> Result<(usize, Option<(K, V)>), R>
     where
-        K: Eq,
+        K: RubyEql<E, G, R>,
     {
         let eq = equivalent(&key, &self.entries);
         let hasher = get_hash(&self.entries);

@@ -107,7 +107,7 @@ impl BytecodeGen {
             let hash_splat_pos = vec![kw_start];
             Some(KeywordArgs {
                 kw_start,
-                kw_args: IndexMap::default(),
+                kw_args: RubyMap::default(),
                 hash_splat_pos,
             })
         } else {
@@ -159,7 +159,7 @@ impl BytecodeGen {
                 self.sp().into()
             };
 
-            let mut kw_args = IndexMap::default();
+            let mut kw_args = RubyMap::default();
             for (i, name) in kw_list.iter().enumerate() {
                 kw_args.insert(*name, i);
                 if outer != 0 {
@@ -243,7 +243,7 @@ impl BytecodeGen {
         if kw_args_list.is_empty() && hash_splat.is_empty() {
             Ok(None)
         } else {
-            let mut kw_args = IndexMap::default();
+            let mut kw_args = RubyMap::default();
             let kw_start = self.sp().into();
             let mut hash_splat_pos = vec![];
             for (id, (name, node)) in kw_args_list.into_iter().enumerate() {

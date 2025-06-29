@@ -348,7 +348,7 @@ struct KeywordArgs {
     /// Position of the first keyword argument.
     kw_start: BcReg,
     /// Names and positions of keyword arguments.
-    kw_args: IndexMap<IdentId, usize>,
+    kw_args: RubyMap<IdentId, usize>,
     /// Positions of splat keyword arguments.
     hash_splat_pos: Vec<BcReg>,
 }
@@ -498,7 +498,7 @@ struct BytecodeGen {
     /// ensure clause information.
     ensure: Vec<Option<Node>>,
     /// local variables.
-    locals: IndexMap<IdentId, BcLocal>,
+    locals: HashMap<IdentId, BcLocal>,
     /// outer local variables. (dynamic_locals, block_param)
     outer_locals: ExternalContext,
     /// literal values. (for GC)
@@ -542,7 +542,7 @@ impl BytecodeGen {
             labels: vec![None], // The first label is for redo.
             loops: vec![],
             ensure: vec![],
-            locals: IndexMap::default(),
+            locals: HashMap::default(),
             outer_locals: info.outer_locals.clone(),
             literals: vec![],
             block_param: info.block_param(),

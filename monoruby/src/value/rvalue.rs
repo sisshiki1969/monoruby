@@ -249,7 +249,7 @@ impl ObjKind {
         }
     }
 
-    fn hash_from(map: IndexMap<HashKey, Value>) -> Self {
+    fn hash_from(map: RubyMap<HashKey, Value>) -> Self {
         Self {
             hash: ManuallyDrop::new(HashmapInner::new(map)),
         }
@@ -257,14 +257,14 @@ impl ObjKind {
 
     fn hash_with_default(default: Value) -> Self {
         Self {
-            hash: ManuallyDrop::new(HashmapInner::new_with_default(IndexMap::default(), default)),
+            hash: ManuallyDrop::new(HashmapInner::new_with_default(RubyMap::default(), default)),
         }
     }
 
     fn hash_with_default_proc(default_proc: Proc) -> Self {
         Self {
             hash: ManuallyDrop::new(HashmapInner::new_with_default_proc(
-                IndexMap::default(),
+                RubyMap::default(),
                 default_proc,
             )),
         }
@@ -844,7 +844,7 @@ impl RValue {
                         )
                     }
                     ObjTy::HASH => {
-                        let mut map = IndexMap::default();
+                        let mut map = RubyMap::default();
                         let hash = self.as_hashmap();
                         for (k, v) in hash.iter() {
                             map.insert(HashKey(k.deep_copy()), v.deep_copy());
@@ -1108,7 +1108,7 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_hash(map: IndexMap<HashKey, Value>) -> Self {
+    pub(super) fn new_hash(map: RubyMap<HashKey, Value>) -> Self {
         RValue {
             header: Header::new(HASH_CLASS, ObjTy::HASH),
             kind: ObjKind::hash_from(map),

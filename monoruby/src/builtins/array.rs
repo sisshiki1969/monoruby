@@ -434,7 +434,7 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         Ok(())
     }
 
-    vm.temp_push(Value::hash(indexmap::RubyMap::default()));
+    vm.temp_push(Value::hash(RubyMap::default()));
     let err = inner(vm, globals, lfp);
     let res = vm.temp_pop();
     err?;
@@ -1424,7 +1424,7 @@ fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
         globals: &mut Globals,
         data: &ProcData,
         ary: Array,
-        map: &mut IndexMap<HashKey, Value>,
+        map: &mut RubyMap<HashKey, Value>,
     ) -> Result<()> {
         for elem in ary.iter() {
             let key = vm.invoke_block(globals, &data, &[*elem])?;
@@ -1437,7 +1437,7 @@ fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let ary = lfp.self_val().as_array();
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
-        let mut map = IndexMap::default();
+        let mut map = RubyMap::default();
         let gc_enabled = Globals::gc_enable(false);
         let res = inner(vm, globals, &data, ary, &mut map);
         Globals::gc_enable(gc_enabled);

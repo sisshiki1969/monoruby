@@ -101,7 +101,7 @@ pub struct ISeqInfo {
     ///
     /// Name of local variables
     ///
-    pub(crate) locals: IndexMap<IdentId, bytecodegen::BcLocal>,
+    pub(crate) locals: RubyMap<IdentId, bytecodegen::BcLocal>,
     ///
     /// outer local variables. (dynamic_locals, block_param)
     ///
@@ -175,7 +175,7 @@ impl ISeqInfo {
             sp: vec![],
             exception_map: vec![],
             args,
-            locals: IndexMap::default(),
+            locals: RubyMap::default(),
             outer_locals,
             literals: vec![],
             non_temp_num: 0,
@@ -263,7 +263,7 @@ impl ISeqInfo {
     /// Get names of local variables.
     ///
     pub(crate) fn local_variables(&self) -> Vec<Value> {
-        let mut map = IndexSet::default();
+        let mut map = RubySet::default();
         self.locals.keys().for_each(|id| {
             map.insert(*id);
         });

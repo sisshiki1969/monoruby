@@ -170,19 +170,3 @@ impl<T: fmt::Debug> fmt::Debug for Drain<'_, T> {
         f.debug_list().entries(iter).finish()
     }
 }
-
-struct UnitValue<I>(I);
-
-impl<I: Iterator> Iterator for UnitValue<I> {
-    type Item = (I::Item, ());
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|x| (x, ()))
-    }
-}
-
-impl<I: fmt::Debug> fmt::Debug for UnitValue<I> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.0, f)
-    }
-}

@@ -1245,7 +1245,7 @@ mod tests {
             (TRUE_CLASS, Value::bool(true)),
             (FALSE_CLASS, Value::bool(false)),
             (ARRAY_CLASS, Value::array_from_vec(vec![])),
-            (HASH_CLASS, Value::hash(IndexMap::default())),
+            (HASH_CLASS, Value::hash(RubyMap::default())),
             (STRING_CLASS, Value::string_from_str("Ruby")),
         ] {
             let func = gen.jit.get_label_addr(&gen.get_class);

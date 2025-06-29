@@ -42,7 +42,8 @@ monoasm = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
 onigmo-regex = { git = "https://github.com/sisshiki1969/onigmo-regex.git" }
 ruruby-parse = { path = "../ruruby-parse" }
 monoruby-attr = { path = "../monoruby_attr" }
-indexmap = { path = "../indexmap" }
+rubymap = { path = "../rubymap" }
+indexmap = "2.10.0"
 num = "0.4.3"
 fxhash = "0.2.1"
 tempfile = "3.20.0"

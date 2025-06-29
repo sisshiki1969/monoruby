@@ -1552,13 +1552,13 @@ where
     }
 }
 
-impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S>
+impl<K, V, E, G, R, S> RubyEql<E, G, R> for HashMap<K, V, E, G, R, S>
 where
     K: RubyEql<E, G, R> + Hash,
     V: RubyEql<E, G, R>,
     S: BuildHasher,
 {
-    pub fn eq(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R> {
+    fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R> {
         if self.len() != other.len() {
             return Ok(false);
         }
@@ -3928,6 +3928,7 @@ where
     K: RubyEql<E, G, R> + Hash,
     S: BuildHasher + Default,
 {
+    /// Creates a new HashMap from an iterator of key-value pairs.
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn from_iter<T: IntoIterator<Item = (K, V)>>(
         iter: T,
@@ -4058,6 +4059,7 @@ mod test_map {
     use super::Entry::{Occupied, Vacant};
     use super::EntryRef;
     use super::HashMap;
+    use equivalent::RubyEql;
     use rand::{rngs::SmallRng, Rng, SeedableRng};
     use std::borrow::ToOwned;
     use std::cell::RefCell;
@@ -4188,6 +4190,12 @@ mod test_map {
     impl Clone for Droppable {
         fn clone(&self) -> Self {
             Droppable::new(self.k)
+        }
+    }
+
+    impl equivalent::RubyEql<E, G, ()> for Droppable {
+        fn eql(&self, other: &Self, _: &mut E, _: &mut G) -> Result<bool, ()> {
+            Ok(self.k == other.k)
         }
     }
 
@@ -4652,11 +4660,11 @@ mod test_map {
         m2.insert(1, 2, &mut e, &mut g).unwrap();
         m2.insert(2, 3, &mut e, &mut g).unwrap();
 
-        assert!(!m1.eq(&m2, &mut e, &mut g).unwrap());
+        assert!(!m1.eql(&m2, &mut e, &mut g).unwrap());
 
         m2.insert(3, 4, &mut e, &mut g).unwrap();
 
-        m1.eq(&m2, &mut e, &mut g).unwrap();
+        m1.eql(&m2, &mut e, &mut g).unwrap();
     }
 
     #[test]
