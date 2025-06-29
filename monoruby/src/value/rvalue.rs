@@ -1,6 +1,7 @@
 use super::*;
 use num::BigInt;
 use onigmo_regex::Captures;
+use rubymap::RubyEql;
 use ruruby_parse::Loc;
 use ruruby_parse::SourceInfoRef;
 use std::mem::ManuallyDrop;
@@ -567,7 +568,7 @@ impl RValue {
 
 impl RValue {
     // This type of equality is used for comparison for keys of Hash.
-    pub(crate) fn eql(&self, other: &Self) -> bool {
+    fn eql(&self, other: &Self) -> bool {
         unsafe {
             match (self.ty(), other.ty()) {
                 (ObjTy::OBJECT, ObjTy::OBJECT) => self.id() == other.id(),

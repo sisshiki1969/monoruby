@@ -692,7 +692,7 @@ impl BytecodeGen {
                 .collect();
             (kw_pos, kw_args, hash_splat_pos)
         } else {
-            (SlotId(0), RubyMap::default(), vec![])
+            (SlotId(0), indexmap::IndexMap::default(), vec![])
         };
         Ok(store.new_callsite(
             name,

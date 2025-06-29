@@ -348,7 +348,7 @@ struct KeywordArgs {
     /// Position of the first keyword argument.
     kw_start: BcReg,
     /// Names and positions of keyword arguments.
-    kw_args: RubyMap<IdentId, usize>,
+    kw_args: indexmap::IndexMap<IdentId, usize>,
     /// Positions of splat keyword arguments.
     hash_splat_pos: Vec<BcReg>,
 }

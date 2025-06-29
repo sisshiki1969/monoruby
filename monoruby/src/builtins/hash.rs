@@ -602,7 +602,7 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/3.2/method/Hash/i/invert.html]
 #[monoruby_builtin]
-fn invert(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn invert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
     let hash = lfp.self_val().as_hash();
     let mut map = RubyMap::default();

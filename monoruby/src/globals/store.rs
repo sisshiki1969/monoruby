@@ -423,7 +423,7 @@ impl Store {
         name: Option<IdentId>,
         pos_num: usize,
         kw_pos: SlotId,
-        kw_args: RubyMap<IdentId, usize>,
+        kw_args: indexmap::IndexMap<IdentId, usize>,
         splat_pos: Vec<usize>,
         hash_splat_pos: Vec<SlotId>,
         block_fid: Option<FuncId>,
@@ -764,7 +764,7 @@ pub struct CallSiteInfo {
     /// Postion of keyword arguments.
     pub(crate) kw_pos: SlotId,
     /// Names and positions of keyword arguments.
-    pub kw_args: RubyMap<IdentId, usize>,
+    pub kw_args: indexmap::IndexMap<IdentId, usize>,
     /// Position of hash splat arguments.
     pub(crate) hash_splat_pos: Vec<SlotId>,
     /// Position where the result is to be stored to.

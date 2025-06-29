@@ -1,3 +1,5 @@
+use rubymap::RubyEql;
+
 use super::*;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
@@ -370,8 +372,8 @@ impl PartialEq for IdentKey {
 }
 
 pub enum MonorubyHashIntoIter {
-    Map(rubymap::map::IntoIter<HashKey, Value>),
-    IdentMap(rubymap::map::IntoIter<IdentKey, Value>),
+    Map(indexmap::map::IntoIter<HashKey, Value>),
+    IdentMap(indexmap::map::IntoIter<IdentKey, Value>),
 }
 
 impl MonorubyHashIntoIter {
@@ -396,8 +398,8 @@ macro_rules! define_iter {
     ($($trait:ident),*) => {
         $(
             pub enum $trait<'a> {
-                Map(rubymap::map::$trait<'a, HashKey, Value>),
-                IdentMap(rubymap::map::$trait<'a, IdentKey, Value>),
+                Map(indexmap::map::$trait<'a, HashKey, Value>),
+                IdentMap(indexmap::map::$trait<'a, IdentKey, Value>),
             }
         )*
     };
