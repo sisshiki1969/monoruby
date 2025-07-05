@@ -1673,7 +1673,7 @@ impl Visitor {
             | NodeKind::RegExp(nodes, _, _)
             | NodeKind::InterporatedString(nodes)
             | NodeKind::CompStmt(nodes) => self.visit_nodes(nodes),
-            NodeKind::Hash(pairs, _) => pairs.iter().for_each(|(k, v)| {
+            NodeKind::Hash(pairs) => pairs.iter().for_each(|(k, v)| {
                 self.visit(k);
                 self.visit(v);
             }),

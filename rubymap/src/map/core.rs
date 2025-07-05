@@ -14,7 +14,6 @@ mod entry;
 use hashbrown::hash_table;
 
 use crate::vec::{self, Vec};
-use crate::TryReserveError;
 use core::mem;
 use core::ops::RangeBounds;
 
@@ -230,34 +229,6 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         Ok(Self { indices, entries })
     }
 
-    #[track_caller]
-    pub(crate) fn split_splice<Ra>(
-        &mut self,
-        range: Ra,
-        e: &mut E,
-        g: &mut G,
-    ) -> Result<(Self, vec::IntoIter<Bucket<K, V>>), R>
-    where
-        Ra: RangeBounds<usize>,
-    {
-        let range = simplify_range(range, self.len());
-        self.erase_indices(range.start, self.entries.len(), e, g)?;
-        let entries = self.entries.split_off(range.end);
-        let drained = self.entries.split_off(range.start);
-
-        let mut indices = Indices::with_capacity(entries.len());
-        insert_bulk_no_grow(&mut indices, &entries);
-        Ok((Self { indices, entries }, drained.into_iter()))
-    }
-
-    /// Append from another map without checking whether items already exist.
-    pub(crate) fn append_unchecked(&mut self, other: &mut Self) {
-        self.reserve(other.len());
-        insert_bulk_no_grow(&mut self.indices, &other.entries);
-        self.entries.append(&mut other.entries);
-        other.indices.clear();
-    }
-
     /// Reserve capacity for `additional` more key-value pairs.
     pub(crate) fn reserve(&mut self, additional: usize) {
         self.indices.reserve(additional, get_hash(&self.entries));
@@ -271,43 +242,6 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
     pub(crate) fn reserve_exact(&mut self, additional: usize) {
         self.indices.reserve(additional, get_hash(&self.entries));
         self.entries.reserve_exact(additional);
-    }
-
-    /// Try to reserve capacity for `additional` more key-value pairs.
-    pub(crate) fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.indices
-            .try_reserve(additional, get_hash(&self.entries))
-            .map_err(TryReserveError::from_hashbrown)?;
-        // Only grow entries if necessary, since we also round up capacity.
-        if additional > self.entries.capacity() - self.entries.len() {
-            self.try_reserve_entries(additional)
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Try to reserve entries capacity, rounded up to match the indices
-    fn try_reserve_entries(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        // Use a soft-limit on the maximum capacity, but if the caller explicitly
-        // requested more, do it and let them have the resulting error.
-        let new_capacity = Ord::min(self.indices.capacity(), Self::MAX_ENTRIES_CAPACITY);
-        let try_add = new_capacity - self.entries.len();
-        if try_add > additional && self.entries.try_reserve_exact(try_add).is_ok() {
-            return Ok(());
-        }
-        self.entries
-            .try_reserve_exact(additional)
-            .map_err(TryReserveError::from_alloc)
-    }
-
-    /// Try to reserve capacity for `additional` more key-value pairs, without over-allocating.
-    pub(crate) fn try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.indices
-            .try_reserve(additional, get_hash(&self.entries))
-            .map_err(TryReserveError::from_hashbrown)?;
-        self.entries
-            .try_reserve_exact(additional)
-            .map_err(TryReserveError::from_alloc)
     }
 
     /// Shrink the capacity of the map with a lower bound

@@ -1,5 +1,5 @@
 use crate::raw::{Bucket, RawDrain, RawExtractIf, RawIntoIter, RawIter, RawTable};
-use crate::{DefaultHashBuilder, Equivalent, RubyEql, TryReserveError};
+use crate::{DefaultHashBuilder, Equivalent, RubyEql};
 use core::borrow::Borrow;
 use core::fmt::{self, Debug};
 use core::hash::{BuildHasher, Hash};
@@ -885,8 +885,7 @@ where
     /// # Panics
     ///
     /// Panics if the new capacity exceeds [`isize::MAX`] bytes and [`abort`] the program
-    /// in case of allocation error. Use [`try_reserve`](HashMap::try_reserve) instead
-    /// if you want to handle memory allocation failure.
+    /// in case of allocation error.
     ///
     /// [`isize::MAX`]: https://doc.rust-lang.org/std/primitive.isize.html
     /// [`abort`]: https://doc.rust-lang.org/alloc/alloc/fn.handle_alloc_error.html
@@ -908,56 +907,6 @@ where
     pub fn reserve(&mut self, additional: usize) {
         self.table
             .reserve(additional, make_hasher::<_, V, S>(&self.hash_builder));
-    }
-
-    /// Tries to reserve capacity for at least `additional` more elements to be inserted
-    /// in the given `HashMap<K,V>`. The collection may reserve more space to avoid
-    /// frequent reallocations.
-    ///
-    /// # Errors
-    ///
-    /// If the capacity overflows, or the allocator reports a failure, then an error
-    /// is returned.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hashbrown::HashMap;
-    ///
-    /// let mut map: HashMap<&str, isize> = HashMap::new();
-    /// // Map is empty and doesn't allocate memory
-    /// assert_eq!(map.capacity(), 0);
-    ///
-    /// map.try_reserve(10).expect("why is the test harness OOMing on 10 bytes?");
-    ///
-    /// // And now map can hold at least 10 elements
-    /// assert!(map.capacity() >= 10);
-    /// ```
-    /// If the capacity overflows, or the allocator reports a failure, then an error
-    /// is returned:
-    /// ```
-    /// # fn test() {
-    /// use hashbrown::HashMap;
-    /// use hashbrown::TryReserveError;
-    /// let mut map: HashMap<i32, i32> = HashMap::new();
-    ///
-    /// match map.try_reserve(usize::MAX) {
-    ///     Err(error) => match error {
-    ///         TryReserveError::CapacityOverflow => {}
-    ///         _ => panic!("TryReserveError::AllocError ?"),
-    ///     },
-    ///     _ => panic!(),
-    /// }
-    /// # }
-    /// # fn main() {
-    /// #     #[cfg(not(miri))]
-    /// #     test()
-    /// # }
-    /// ```
-    #[cfg_attr(feature = "inline-more", inline)]
-    pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.table
-            .try_reserve(additional, make_hasher::<_, V, S>(&self.hash_builder))
     }
 
     /// Shrinks the capacity of the map as much as possible. It will drop
@@ -1286,7 +1235,7 @@ where
         }
     }
 
-    fn build_hashes_inner<Q, const N: usize>(&self, ks: [&Q; N]) -> [u64; N]
+    /*fn build_hashes_inner<Q, const N: usize>(&self, ks: [&Q; N]) -> [u64; N]
     where
         Q: Hash + Equivalent<K, E, G, R> + ?Sized,
     {
@@ -1295,7 +1244,7 @@ where
             hashes[i] = make_hash::<Q, S>(&self.hash_builder, ks[i]);
         }
         hashes
-    }
+    }*/
 
     /// Inserts a key-value pair into the map.
     ///
@@ -1628,7 +1577,7 @@ where
     /// let map2: HashMap<_, _> = [(1, 2), (3, 4)].into();
     /// assert_eq!(map1, map2);
     /// ```
-    fn from_ary<const N: usize>(arr: [(K, V); N], e: &mut E, g: &mut G) -> Result<Self, R> {
+    pub fn from_ary<const N: usize>(arr: [(K, V); N], e: &mut E, g: &mut G) -> Result<Self, R> {
         let mut map = Self::with_capacity(N);
         for (k, v) in arr {
             map.insert(k, v, e, g)?;

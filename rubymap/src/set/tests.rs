@@ -376,15 +376,6 @@ fn reserve() {
 }
 
 #[test]
-fn try_reserve() {
-    let mut set = RubySet::<usize, E, G, ()>::new();
-    assert_eq!(set.capacity(), 0);
-    assert_eq!(set.try_reserve(100), Ok(()));
-    assert!(set.capacity() >= 100);
-    assert!(set.try_reserve(usize::MAX).is_err());
-}
-
-#[test]
 fn shrink_to_fit() {
     let mut e = E;
     let mut g = G;
@@ -593,21 +584,6 @@ fn sort_unstable() {
 
     index_set.sort_unstable();
     assert_eq!(index_set.as_slice(), &[10, 20, 30]);
-}
-
-#[test]
-fn try_reserve_exact() {
-    let mut e = E;
-    let mut g = G;
-    let mut index_set: RubySet<i32, E, G, ()> = RubySet::new();
-    index_set.insert(10, &mut e, &mut g).unwrap();
-    index_set.insert(20, &mut e, &mut g).unwrap();
-    index_set.insert(30, &mut e, &mut g).unwrap();
-    index_set.shrink_to_fit();
-    assert_eq!(index_set.capacity(), 3);
-
-    index_set.try_reserve_exact(2).unwrap();
-    assert_eq!(index_set.capacity(), 5);
 }
 
 #[test]

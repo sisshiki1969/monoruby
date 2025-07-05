@@ -885,8 +885,10 @@ impl Codegen {
     fn new_hash(&mut self, args: SlotId, len: usize, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
-            lea  rdi, [r14 - (conv(args))];
-            movq rsi, (len);
+            movq rdi, rbx;
+            movq rsi, r12;
+            lea  rdx, [r14 - (conv(args))];
+            movq rcx, (len);
             movq rax, (runtime::gen_hash);
             call rax;
         );

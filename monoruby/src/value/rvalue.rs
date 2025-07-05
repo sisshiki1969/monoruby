@@ -566,41 +566,49 @@ impl RValue {
     }
 }
 
-impl RValue {
+impl RubyEql<Executor, Globals, MonorubyErr> for RValue {
     // This type of equality is used for comparison for keys of Hash.
-    fn eql(&self, other: &Self) -> bool {
+    fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
         unsafe {
-            match (self.ty(), other.ty()) {
+            Ok(match (self.ty(), other.ty()) {
                 (ObjTy::OBJECT, ObjTy::OBJECT) => self.id() == other.id(),
                 (ObjTy::BIGNUM, ObjTy::BIGNUM) => self.as_bignum() == other.as_bignum(),
                 (ObjTy::FLOAT, ObjTy::FLOAT) => self.as_float() == other.as_float(),
-                (ObjTy::COMPLEX, ObjTy::COMPLEX) => self.as_complex().eql(other.as_complex()),
+                (ObjTy::COMPLEX, ObjTy::COMPLEX) => {
+                    self.as_complex().eql(other.as_complex(), vm, globals)?
+                }
                 (ObjTy::STRING, ObjTy::STRING) => self.as_rstring() == other.as_rstring(),
                 (ObjTy::ARRAY, ObjTy::ARRAY) => {
                     let lhs = self.as_array();
                     let rhs = other.as_array();
                     if lhs.len() != rhs.len() {
-                        return false;
+                        return Ok(false);
                     }
-                    lhs.iter().zip(rhs.iter()).all(|(a1, a2)| {
+                    for (a1, a2) in lhs.iter().zip(rhs.iter()) {
                         // Support self-containing arrays.
                         if self.id() == a1.id() && other.id() == a2.id() {
-                            true
                         } else if self.id() == a1.id() || other.id() == a2.id() {
-                            false
+                            return Ok(false);
                         } else {
-                            a1.eql(a2)
+                            if !HashKey(*a1).eql(&HashKey(*a2), vm, globals)? {
+                                return Ok(false);
+                            }
                         }
-                    })
+                    }
+                    true
                 }
-                (ObjTy::RANGE, ObjTy::RANGE) => self.as_range().eql(other.as_range()),
-                (ObjTy::HASH, ObjTy::HASH) => self.as_hashmap() == other.as_hashmap(),
+                (ObjTy::RANGE, ObjTy::RANGE) => {
+                    self.as_range().eql(other.as_range(), vm, globals)?
+                }
+                (ObjTy::HASH, ObjTy::HASH) => {
+                    self.as_hashmap().eql(other.as_hashmap(), vm, globals)?
+                }
                 //(ObjTy::METHOD, ObjTy::METHOD) => *self.method() == *other.method(),
                 //(ObjTy::UNBOUND_METHOD, ObjTy::UNBOUND_METHOD) => *self.method() == *other.method(),
                 //(ObjTy::INVALID, _) => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
                 //(_, ObjTy::INVALID) => panic!("Invalid rvalue. (maybe GC problem) {:?}", other),
                 _ => false,
-            }
+            })
         }
     }
 }
@@ -833,9 +841,13 @@ impl RValue {
                     ),
                     ObjTy::STRING => ObjKind::string_from_inner(self.as_rstring().clone()),
                     ObjTy::TIME => ObjKind::time(self.as_time().clone()),
-                    ObjTy::ARRAY => ObjKind::array(ArrayInner::from_iter(
-                        self.as_array().iter().map(|v| v.deep_copy()),
-                    )),
+                    ObjTy::ARRAY => {
+                        let mut v = vec![];
+                        for e in self.as_array().iter() {
+                            v.push(e.deep_copy());
+                        }
+                        ObjKind::array(ArrayInner::from_vec(v))
+                    }
                     ObjTy::RANGE => {
                         let lhs = self.as_range();
                         ObjKind::range(
@@ -844,19 +856,24 @@ impl RValue {
                             lhs.exclude_end(),
                         )
                     }
-                    ObjTy::HASH => {
+                    /*ObjTy::HASH => {
                         let mut map = RubyMap::default();
                         let hash = self.as_hashmap();
                         for (k, v) in hash.iter() {
-                            map.insert(HashKey(k.deep_copy()), v.deep_copy());
+                            map.insert(
+                                HashKey(k.deep_copy(vm, globals)?),
+                                v.deep_copy(vm, globals)?,
+                                vm,
+                                globals,
+                            )?;
                         }
                         ObjKind::hash_from(map)
-                    }
+                    }*/
                     ObjTy::REGEXP => {
                         let regexp = self.as_regex();
                         ObjKind::regexp(regexp.clone())
                     }
-                    _ => unreachable!("clone()"),
+                    _ => unreachable!("deep_copy()"),
                 }
             },
         }

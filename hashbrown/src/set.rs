@@ -1,4 +1,4 @@
-use crate::{Equivalent, RubyEql, TryReserveError};
+use crate::{Equivalent, RubyEql};
 use core::hash::{BuildHasher, Hash};
 use core::iter::FusedIterator;
 use core::{fmt, mem};
@@ -478,8 +478,7 @@ where
     /// # Panics
     ///
     /// Panics if the new capacity exceeds [`isize::MAX`] bytes and [`abort`] the program
-    /// in case of allocation error. Use [`try_reserve`](HashSet::try_reserve) instead
-    /// if you want to handle memory allocation failure.
+    /// in case of allocation error.
     ///
     /// [`isize::MAX`]: https://doc.rust-lang.org/std/primitive.isize.html
     /// [`abort`]: https://doc.rust-lang.org/alloc/alloc/fn.handle_alloc_error.html
@@ -495,27 +494,6 @@ where
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn reserve(&mut self, additional: usize) {
         self.map.reserve(additional);
-    }
-
-    /// Tries to reserve capacity for at least `additional` more elements to be inserted
-    /// in the given `HashSet<K,V>`. The collection may reserve more space to avoid
-    /// frequent reallocations.
-    ///
-    /// # Errors
-    ///
-    /// If the capacity overflows, or the allocator reports a failure, then an error
-    /// is returned.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hashbrown::HashSet;
-    /// let mut set: HashSet<i32> = HashSet::new();
-    /// set.try_reserve(10).expect("why is the test harness OOMing on 10 bytes?");
-    /// ```
-    #[cfg_attr(feature = "inline-more", inline)]
-    pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.map.try_reserve(additional)
     }
 
     /// Shrinks the capacity of the set as much as possible. It will drop
@@ -1006,7 +984,7 @@ where
     /// let set2: HashSet<_> = [1, 2, 3, 4].into();
     /// assert_eq!(set1, set2);
     /// ```
-    fn from_ary<const N: usize>(arr: [T; N], e: &mut E, g: &mut G) -> Result<Self, R> {
+    pub fn from_ary<const N: usize>(arr: [T; N], e: &mut E, g: &mut G) -> Result<Self, R> {
         Self::from_iter(arr.into_iter(), e, g)
     }
 }

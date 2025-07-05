@@ -40,5 +40,5 @@ use monoruby_attr::*;
 
 const STRING_INLINE_CAP: usize = 32;
 
-type RubyMap<K, V> = indexmap::IndexMap<K, V, fxhash::FxBuildHasher>;
-type RubySet<T> = indexmap::IndexSet<T, fxhash::FxBuildHasher>;
+type RubyMap<K, V> = rubymap::RubyMap<K, V, Executor, Globals, MonorubyErr>;
+type RubySet<T> = rubymap::RubySet<T, Executor, Globals, MonorubyErr, fxhash::FxBuildHasher>;

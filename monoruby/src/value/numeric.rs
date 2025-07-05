@@ -1,5 +1,6 @@
 use num::{Signed, ToPrimitive, Zero};
 use paste::paste;
+use rubymap::RubyEql;
 use ruruby_parse::NReal;
 
 use super::*;
@@ -165,6 +166,12 @@ impl num::One for Real {
     }
 }
 
+impl RubyEql<Executor, Globals, MonorubyErr> for Real {
+    fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
+        HashKey(self.0).eql(&HashKey(other.0), vm, globals)
+    }
+}
+
 impl Real {
     pub fn get(self) -> Value {
         self.0
@@ -188,10 +195,6 @@ impl Real {
 
     pub fn is_zero(&self) -> bool {
         RealKind::from(*self).is_zero()
-    }
-
-    pub fn eql(&self, other: &Self) -> bool {
-        self.0.eql(&other.0)
     }
 
     pub fn to_f64(&self) -> f64 {

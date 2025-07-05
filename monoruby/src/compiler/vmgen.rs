@@ -963,8 +963,10 @@ impl Codegen {
         self.fetch3();
         self.vm_get_slot_addr(GP::Rdi);
         monoasm! { &mut self.jit,
-            // src: *const Value
-            movzxw rsi, rsi;  // len: usize
+            movq rdx, rdi;      // src: *const Value
+            movzxw rcx, rsi;    // len: usize
+            movq rdi, rbx;
+            movq rsi, r12;
             movq rax, (runtime::gen_hash);
             call rax;
         };

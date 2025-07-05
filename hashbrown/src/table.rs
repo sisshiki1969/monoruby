@@ -1,10 +1,7 @@
 use core::{fmt, iter::FusedIterator, marker::PhantomData};
 
-use crate::{
-    raw::{
-        Bucket, InsertSlot, RawDrain, RawExtractIf, RawIntoIter, RawIter, RawIterHash, RawTable,
-    },
-    TryReserveError,
+use crate::raw::{
+    Bucket, InsertSlot, RawDrain, RawExtractIf, RawIntoIter, RawIter, RawIterHash, RawTable,
 };
 
 /// Low-level hash table with explicit hashing.
@@ -437,8 +434,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// # Panics
     ///
     /// Panics if the new capacity exceeds [`isize::MAX`] bytes and [`abort`] the program
-    /// in case of allocation error. Use [`try_reserve`](HashTable::try_reserve) instead
-    /// if you want to handle memory allocation failure.
+    /// in case of allocation error.
     ///
     /// [`isize::MAX`]: https://doc.rust-lang.org/std/primitive.isize.html
     /// [`abort`]: https://doc.rust-lang.org/alloc/alloc/fn.handle_alloc_error.html
@@ -464,46 +460,6 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// ```
     pub fn reserve(&mut self, additional: usize, hasher: impl Fn(&T) -> u64) {
         self.raw.reserve(additional, hasher)
-    }
-
-    /// Tries to reserve capacity for at least `additional` more elements to be inserted
-    /// in the given `HashTable`. The collection may reserve more space to avoid
-    /// frequent reallocations.
-    ///
-    /// `hasher` is called if entries need to be moved or copied to a new table.
-    /// This must return the same hash value that each entry was inserted with.
-    ///
-    /// # Errors
-    ///
-    /// If the capacity overflows, or the allocator reports a failure, then an error
-    /// is returned.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[cfg(feature = "nightly")]
-    /// # fn test() {
-    /// use hashbrown::{HashTable, DefaultHashBuilder};
-    /// use std::hash::BuildHasher;
-    ///
-    /// let mut table: HashTable<i32> = HashTable::new();
-    /// let hasher = DefaultHashBuilder::default();
-    /// let hasher = |val: &_| hasher.hash_one(val);
-    /// table
-    ///     .try_reserve(10, hasher)
-    ///     .expect("why is the test harness OOMing on 10 bytes?");
-    /// # }
-    /// # fn main() {
-    /// #     #[cfg(feature = "nightly")]
-    /// #     test()
-    /// # }
-    /// ```
-    pub fn try_reserve(
-        &mut self,
-        additional: usize,
-        hasher: impl Fn(&T) -> u64,
-    ) -> Result<(), TryReserveError> {
-        self.raw.try_reserve(additional, hasher)
     }
 
     /// Returns the number of elements the table can hold without reallocating.

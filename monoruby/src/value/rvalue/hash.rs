@@ -14,7 +14,7 @@ impl Hashmap {
     }
 
     pub fn index(&self, vm: &mut Executor, globals: &mut Globals, key: Value) -> Result<Value> {
-        if let Some(v) = self.get(key) {
+        if let Some(v) = self.get(key, vm, globals)? {
             Ok(v)
         } else {
             match self.default {
@@ -46,9 +46,10 @@ pub struct HashmapInner {
     content: HashContent,
 }
 
-impl PartialEq for HashmapInner {
-    fn eq(&self, other: &Self) -> bool {
-        self.content == other.content
+impl RubyEql<Executor, Globals, MonorubyErr> for HashmapInner {
+    // This type of equality is used for comparison for keys of Hash.
+    fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
+        self.content.eql(&other.content, vm, globals)
     }
 }
 
@@ -135,21 +136,26 @@ impl HashmapInner {
         }
     }
 
-    pub fn get(&self, v: Value) -> Option<Value> {
-        match &self.content {
-            HashContent::Map(box map) => map.get(&HashKey(v)).copied(),
-            HashContent::IdentMap(box map) => map.get(&IdentKey(v)).copied(),
-        }
+    pub fn get(&self, v: Value, vm: &mut Executor, globals: &mut Globals) -> Result<Option<Value>> {
+        Ok(match &self.content {
+            HashContent::Map(box map) => map.get(&HashKey(v), vm, globals)?.copied(),
+            HashContent::IdentMap(box map) => map.get(&IdentKey(v), vm, globals)?.copied(),
+        })
     }
 
-    pub fn remove(&mut self, k: Value) -> Option<Value> {
-        match &mut self.content {
-            HashContent::Map(map) => map.shift_remove(&HashKey(k)),
-            HashContent::IdentMap(map) => map.shift_remove(&IdentKey(k)),
-        }
+    pub fn remove(
+        &mut self,
+        k: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Option<Value>> {
+        Ok(match &mut self.content {
+            HashContent::Map(map) => map.shift_remove(&HashKey(k), vm, globals)?,
+            HashContent::IdentMap(map) => map.shift_remove(&IdentKey(k), vm, globals)?,
+        })
     }
 
-    pub fn entry_and_modify<F>(&mut self, k: Value, f: F)
+    /*pub fn entry_and_modify<F>(&mut self, k: Value, f: F)
     where
         F: FnOnce(&mut Value),
     {
@@ -161,7 +167,7 @@ impl HashmapInner {
                 map.entry(IdentKey(k)).and_modify(f);
             }
         }
-    }
+    }*/
 
     pub fn debug(&self, store: &Store) -> String {
         match self.len() {
@@ -266,28 +272,52 @@ impl Hash for HashContent {
     }
 }
 
-impl PartialEq for HashContent {
+impl RubyEql<Executor, Globals, MonorubyErr> for HashContent {
     // This type of equality is used for comparison for keys of Hash.
-    fn eq(&self, other: &Self) -> bool {
+    fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
         match (self, other) {
-            (HashContent::Map(map1), HashContent::Map(map2)) => map1 == map2,
+            (HashContent::Map(map1), HashContent::Map(map2)) => {
+                if map1.len() != map2.len() {
+                    return Ok(false);
+                };
+                for (k, v1) in map1.iter() {
+                    match map2.get(k, vm, globals)? {
+                        None => return Ok(false),
+                        Some(v2) => {
+                            if !HashKey(*v1).eql(&HashKey(*v2), vm, globals)? {
+                                return Ok(false);
+                            }
+                        }
+                    }
+                }
+                Ok(true)
+            }
             (HashContent::IdentMap(map1), HashContent::IdentMap(map2)) => {
                 if map1.len() != map2.len() {
-                    return false;
+                    return Ok(false);
                 };
-                let mut m1 = HashMap::default();
-                map1.iter().for_each(|(k, v)| {
-                    m1.insert(HashKey(k.0), *v);
-                });
-                map2.iter()
-                    .all(|(k, v)| m1.get(&HashKey(k.0)).map_or(false, |v2| *v == *v2))
+                let mut m1 = RubyMap::default();
+                for (k, v) in map1.iter() {
+                    m1.insert(HashKey(k.0), *v, vm, globals)?;
+                }
+                for (k, v) in map2.iter() {
+                    match m1.get(&HashKey(k.0), vm, globals)? {
+                        None => return Ok(false),
+                        Some(v1) => {
+                            if !HashKey(*v1).eql(&HashKey(*v), vm, globals)? {
+                                return Ok(false);
+                            }
+                        }
+                    }
+                }
+                Ok(true)
             }
-            _ => false,
+            _ => Ok(false),
         }
     }
 }
 
-#[derive(Clone, Copy, Eq)]
+#[derive(Clone, Copy)]
 pub struct HashKey(pub Value);
 
 impl std::fmt::Debug for HashKey {
@@ -324,17 +354,15 @@ impl Hash for HashKey {
     }
 }
 
-impl PartialEq for HashKey {
-    // Object#eql?()
-    // This type of equality is used for comparison for keys of Hash.
-    fn eq(&self, other: &Self) -> bool {
+impl RubyEql<Executor, Globals, MonorubyErr> for HashKey {
+    fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
         if self.0.id() == other.0.id() {
-            return true;
+            return Ok(true);
         }
         match (self.try_rvalue(), other.try_rvalue()) {
-            (None, None) => self.0.id() == other.0.id(),
-            (Some(lhs), Some(rhs)) => lhs.eql(rhs),
-            _ => false,
+            (None, None) => Ok(self.0.id() == other.0.id()),
+            (Some(lhs), Some(rhs)) => lhs.eql(rhs, vm, globals),
+            _ => Ok(false),
         }
     }
 }
@@ -347,7 +375,7 @@ impl HashKey {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct IdentKey(pub Value);
 
 impl Deref for IdentKey {
@@ -363,17 +391,17 @@ impl Hash for IdentKey {
     }
 }
 
-impl PartialEq for IdentKey {
+impl RubyEql<Executor, Globals, MonorubyErr> for IdentKey {
     // Object#eql?()
     // This type of equality is used for comparison for keys of Hash.
-    fn eq(&self, other: &Self) -> bool {
-        self.0.id() == other.0.id()
+    fn eql(&self, other: &Self, _: &mut Executor, _: &mut Globals) -> Result<bool> {
+        Ok(self.0.id() == other.0.id())
     }
 }
 
 pub enum MonorubyHashIntoIter {
-    Map(indexmap::map::IntoIter<HashKey, Value>),
-    IdentMap(indexmap::map::IntoIter<IdentKey, Value>),
+    Map(rubymap::map::IntoIter<HashKey, Value>),
+    IdentMap(rubymap::map::IntoIter<IdentKey, Value>),
 }
 
 impl MonorubyHashIntoIter {
@@ -398,8 +426,8 @@ macro_rules! define_iter {
     ($($trait:ident),*) => {
         $(
             pub enum $trait<'a> {
-                Map(indexmap::map::$trait<'a, HashKey, Value>),
-                IdentMap(indexmap::map::$trait<'a, IdentKey, Value>),
+                Map(rubymap::map::$trait<'a, HashKey, Value>),
+                IdentMap(rubymap::map::$trait<'a, IdentKey, Value>),
             }
         )*
     };
@@ -487,11 +515,18 @@ impl HashContent {
         }
     }
 
-    pub(crate) fn insert(&mut self, k: Value, v: Value) {
+    pub(crate) fn insert(
+        &mut self,
+        k: Value,
+        v: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
         match self {
-            HashContent::Map(box map) => map.insert(HashKey(k), v),
-            HashContent::IdentMap(box map) => map.insert(IdentKey(k), v),
+            HashContent::Map(box map) => map.insert(HashKey(k), v, vm, globals)?,
+            HashContent::IdentMap(box map) => map.insert(IdentKey(k), v, vm, globals)?,
         };
+        Ok(())
     }
 
     /*pub(crate) fn remove(&mut self, k: Value) -> Option<Value> {
@@ -501,10 +536,15 @@ impl HashContent {
         }
     }*/
 
-    pub(crate) fn contains_key(&self, k: Value) -> bool {
+    pub(crate) fn contains_key(
+        &self,
+        k: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<bool> {
         match self {
-            HashContent::Map(map) => map.contains_key(&HashKey(k)),
-            HashContent::IdentMap(map) => map.contains_key(&IdentKey(k)),
+            HashContent::Map(map) => map.contains_key(&HashKey(k), vm, globals),
+            HashContent::IdentMap(map) => map.contains_key(&IdentKey(k), vm, globals),
         }
     }
 
@@ -522,17 +562,22 @@ impl HashContent {
         }
     }
 
-    pub(crate) fn compare_by_identity(&mut self) {
+    pub(crate) fn compare_by_identity(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
         match self {
             HashContent::Map(box map) => {
                 let mut new_map = RubyMap::default();
                 for (k, v) in map.iter() {
-                    new_map.insert(IdentKey(k.0), *v);
+                    new_map.insert(IdentKey(k.0), *v, vm, globals)?;
                 }
                 *self = HashContent::IdentMap(Box::new(new_map));
             }
             HashContent::IdentMap(_) => {}
         }
+        Ok(())
     }
 }
 
@@ -542,11 +587,35 @@ mod tests {
 
     #[test]
     fn hash0() {
+        let mut globals = Globals::new_test();
+        let mut executor = Executor::default();
         let mut map = HashmapInner::default();
-        map.insert(Value::integer(5), Value::float(12.0));
-        map.insert(Value::integer(5), Value::float(5.7));
-        map.insert(Value::integer(7), Value::float(42.5));
-        assert_eq!(Some(Value::float(5.7)), map.get(Value::integer(5)));
+        map.insert(
+            Value::integer(5),
+            Value::float(12.0),
+            &mut executor,
+            &mut globals,
+        )
+        .unwrap();
+        map.insert(
+            Value::integer(5),
+            Value::float(5.7),
+            &mut executor,
+            &mut globals,
+        )
+        .unwrap();
+        map.insert(
+            Value::integer(7),
+            Value::float(42.5),
+            &mut executor,
+            &mut globals,
+        )
+        .unwrap();
+        assert_eq!(
+            Some(Value::float(5.7)),
+            map.get(Value::integer(5), &mut executor, &mut globals)
+                .unwrap()
+        );
         assert_eq!(vec![Value::integer(5), Value::integer(7)], map.keys());
         assert_eq!(vec![Value::float(5.7), Value::float(42.5)], map.values());
         assert_eq!(2, map.len())

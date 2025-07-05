@@ -68,7 +68,7 @@ impl BytecodeGen {
                     self.check_defined(n, nil_label, ret, false)?
                 }
             }
-            NodeKind::Hash(v, false) => {
+            NodeKind::Hash(v) => {
                 for (k, v) in v {
                     self.check_defined(k, nil_label, ret, false)?;
                     self.check_defined(v, nil_label, ret, false)?;

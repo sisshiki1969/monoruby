@@ -203,7 +203,12 @@ pub(super) extern "C" fn gen_lambda(vm: &mut Executor, _: &mut Globals, func_id:
     vm.generate_lambda(func_id).into()
 }
 
-pub(super) extern "C" fn gen_hash(src: *const Value, len: usize) -> Value {
+pub(super) extern "C" fn gen_hash(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: *const Value,
+    len: usize,
+) -> Value {
     let mut map = RubyMap::default();
     if len > 0 {
         let mut iter = unsafe { std::slice::from_raw_parts(src.sub(len * 2 - 1), len * 2) }
@@ -211,7 +216,8 @@ pub(super) extern "C" fn gen_hash(src: *const Value, len: usize) -> Value {
             .copied()
             .rev();
         while let Ok(chunk) = iter.next_chunk::<2>() {
-            map.insert(HashKey(chunk[0]), chunk[1]);
+            map.insert(HashKey(chunk[0]), chunk[1], vm, globals)
+                .unwrap();
         }
     }
     Value::hash(map)
@@ -382,7 +388,7 @@ pub(super) extern "C" fn vm_handle_arguments(
     callee_lfp: Lfp,
     callid: CallSiteId,
 ) -> Option<Value> {
-    match set_frame_arguments(globals, callee_lfp, caller_lfp, callid) {
+    match set_frame_arguments(vm, globals, callee_lfp, caller_lfp, callid) {
         Ok(_) => {
             set_frame_block(&globals.store[callid], callee_lfp, caller_lfp);
             Some(Value::nil())
@@ -402,7 +408,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
     callee_lfp: Lfp,
     callid: CallSiteId,
 ) -> Option<Value> {
-    match set_frame_arguments(globals, callee_lfp, caller_lfp, callid) {
+    match set_frame_arguments(vm, globals, callee_lfp, caller_lfp, callid) {
         Ok(_) => Some(Value::nil()),
         Err(mut err) => {
             err.push_internal_trace(callee_lfp.func_id());

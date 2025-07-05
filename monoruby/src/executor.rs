@@ -165,8 +165,9 @@ impl Executor {
         self.temp_stack.last_mut().unwrap().as_array().push(v);
     }
 
-    pub fn temp_hash_insert(&mut self, k: Value, v: Value) {
-        self.temp_stack.last_mut().unwrap().as_hash().insert(k, v);
+    pub fn temp_hash_insert(&mut self, globals: &mut Globals, k: Value, v: Value) -> Result<()> {
+        let mut h = self.temp_stack.last_mut().unwrap().as_hash();
+        h.insert(k, v, self, globals)
     }
 
     pub fn temp_array_extend_from_slice(&mut self, slice: &[Value]) {

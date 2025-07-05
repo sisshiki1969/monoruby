@@ -8,7 +8,6 @@ mod tests;
 
 pub use self::iter::{Drain, IntoIter, Iter};
 pub use self::slice::Slice;
-use crate::TryReserveError;
 
 use std::collections::hash_map::RandomState;
 
@@ -269,25 +268,6 @@ impl<T, E, G, R, S> RubySet<T, E, G, R, S> {
     /// Computes in **O(n)** time.
     pub fn reserve_exact(&mut self, additional: usize) {
         self.map.reserve_exact(additional);
-    }
-
-    /// Try to reserve capacity for `additional` more values.
-    ///
-    /// Computes in **O(n)** time.
-    pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.map.try_reserve(additional)
-    }
-
-    /// Try to reserve capacity for `additional` more values, without over-allocating.
-    ///
-    /// Unlike `try_reserve`, this does not deliberately over-allocate the entry capacity to avoid
-    /// frequent re-allocations. However, the underlying data structures may still have internal
-    /// capacity requirements, and the allocator itself may give more space than requested, so this
-    /// cannot be relied upon to be precisely minimal.
-    ///
-    /// Computes in **O(n)** time.
-    pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.map.try_reserve_exact(additional)
     }
 
     /// Shrink the capacity of the set as much as possible.
@@ -998,7 +978,7 @@ where
     /// let set2: IndexSet<_> = [1, 2, 3, 4].into();
     /// assert_eq!(set1, set2);
     /// ```
-    fn from_ary<const N: usize>(arr: [T; N], e: &mut E, g: &mut G) -> Result<Self, R> {
+    pub fn from_ary<const N: usize>(arr: [T; N], e: &mut E, g: &mut G) -> Result<Self, R> {
         Self::from_iter(arr, e, g)
     }
 }

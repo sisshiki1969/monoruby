@@ -1,5 +1,6 @@
 use super::*;
 use jitgen::JitContext;
+use rubymap::RubyEql;
 use smallvec::smallvec;
 use std::cmp::Ordering;
 
@@ -429,7 +430,7 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                     elem.len()
                 )));
             }
-            vm.temp_hash_insert(elem[0], elem[1]);
+            vm.temp_hash_insert(globals, elem[0], elem[1])?;
         }
         Ok(())
     }
@@ -550,7 +551,7 @@ fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut lhs = lfp.self_val().dup().as_array();
     let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
-    lhs.uniq()?;
+    lhs.uniq(vm, globals)?;
     lhs.retain(|v| Ok(rhs.contains(v)))?;
     Ok(lhs.as_val())
 }
@@ -566,7 +567,7 @@ fn or(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut lhs = lfp.self_val().dup().as_array();
     let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
     lhs.extend(rhs.iter().cloned());
-    lhs.uniq()?;
+    lhs.uniq(vm, globals)?;
     Ok(lhs.as_val())
 }
 
@@ -1428,7 +1429,7 @@ fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     ) -> Result<()> {
         for elem in ary.iter() {
             let key = vm.invoke_block(globals, &data, &[*elem])?;
-            map.entry(HashKey(key))
+            map.entry(HashKey(key), vm, globals)?
                 .and_modify(|v: &mut Value| v.as_array().push(*elem))
                 .or_insert(Value::array1(*elem));
         }
@@ -1827,13 +1828,13 @@ fn product_inner(lhs: Array, rhs: Vec<Array>) -> Vec<Array> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/union.html]
 #[monoruby_builtin]
-fn union(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().dup().as_array();
     for rhs in lfp.arg(0).as_array().into_iter() {
         let rhs = rhs.expect_array_ty(globals)?;
         ary.extend(rhs.into_iter().cloned());
     }
-    ary.uniq()?;
+    ary.uniq(vm, globals)?;
     Ok(ary.into())
 }
 
@@ -1844,11 +1845,13 @@ fn union(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/intersect=3f.html]
 #[monoruby_builtin]
-fn intersect_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn intersect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
     for rhs in lfp.arg(0).as_array().iter().cloned() {
-        if lhs.iter().cloned().any(|lhs| HashKey(lhs) == HashKey(rhs)) {
-            return Ok(Value::bool(true));
+        for lhs in lhs.iter().cloned() {
+            if HashKey(lhs).eql(&HashKey(rhs), vm, globals)? {
+                return Ok(Value::bool(true));
+            }
         }
     }
     Ok(Value::bool(false))
@@ -1867,7 +1870,7 @@ fn intersect_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().dup().as_array();
     match lfp.block() {
-        None => ary.uniq()?,
+        None => ary.uniq(vm, globals)?,
         Some(bh) => uniq_block(vm, globals, ary, bh)?,
     };
     Ok(ary.into())
@@ -1877,7 +1880,7 @@ fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     let deleted = match lfp.block() {
-        None => ary.uniq()?,
+        None => ary.uniq(vm, globals)?,
         Some(bh) => uniq_block(vm, globals, ary, bh)?,
     };
     if deleted {
@@ -1905,13 +1908,13 @@ fn uniq_inner(
     mut ary: Array,
     bh: BlockHandler,
 ) -> Result<bool> {
-    let mut h = HashSet::default();
+    let mut h = RubySet::default();
     let data = vm.get_block_data(globals, bh)?;
     vm.temp_array_new(Some(ary.len()));
     let res = ary.retain(|x| {
         let res = vm.invoke_block(globals, &data, &[*x])?;
         vm.temp_array_push(res);
-        Ok(h.insert(HashKey(res)))
+        Ok(h.insert(HashKey(res), vm, globals)?)
     });
     vm.temp_pop();
     res.map(|removed| removed.is_some())

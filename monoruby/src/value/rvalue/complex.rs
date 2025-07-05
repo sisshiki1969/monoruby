@@ -60,6 +60,12 @@ impl std::convert::From<num::complex::Complex<Real>> for ComplexInner {
     }
 }
 
+impl RubyEql<Executor, Globals, MonorubyErr> for ComplexInner {
+    fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
+        Ok(self.0.re.eql(&other.0.re, vm, globals)? && self.0.im.eql(&other.0.im, vm, globals)?)
+    }
+}
+
 impl ComplexInner {
     pub fn new(re: Real, im: Real) -> Self {
         Self(num::complex::Complex { re, im })
@@ -75,10 +81,6 @@ impl ComplexInner {
 
     pub fn im(&self) -> Real {
         self.0.im
-    }
-
-    pub fn eql(&self, other: &Self) -> bool {
-        self.0.re.eql(&other.0.re) && self.0.im.eql(&other.0.im)
     }
 
     pub fn dup(&self) -> Self {

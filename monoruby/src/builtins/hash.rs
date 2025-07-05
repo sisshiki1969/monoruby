@@ -46,8 +46,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(HASH_CLASS, "clone", &["dup"], clone, 0);
 
     let mut env_map = RubyMap::default();
+    let mut vm = Executor::default();
     std::env::vars().for_each(|(var, val)| {
-        env_map.insert(HashKey(Value::string(var)), Value::string(val));
+        env_map
+            .insert(
+                HashKey(Value::string(var)),
+                Value::string(val),
+                &mut vm,
+                globals,
+            )
+            .unwrap();
     });
     #[cfg(windows)]
     if let None = env_map.get(&Value::string("HOME")) {
@@ -178,7 +186,7 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         return Ok(Value::bool(false));
     }
     for (k, lhs_value) in lhs.iter() {
-        if let Some(rhs_value) = rhs.get(k)
+        if let Some(rhs_value) = rhs.get(k, vm, globals)?
             && vm.eq_values_bool(globals, lhs_value, rhs_value)?
         {
             continue;
@@ -197,10 +205,10 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/=5b=5d=3d.html]
 #[monoruby_builtin]
-fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn index_assign(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let key = lfp.arg(0);
     let val = lfp.arg(1);
-    lfp.self_val().as_hash().insert(key, val);
+    lfp.self_val().as_hash().insert(key, val, vm, globals)?;
     Ok(val)
 }
 
@@ -338,7 +346,7 @@ fn clone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut h = lfp.self_val().as_hash();
     let key = lfp.arg(0);
-    let removed_value = h.remove(key);
+    let removed_value = h.remove(key, vm, globals)?;
     if removed_value.is_none()
         && let Some(bh) = lfp.block()
     {
@@ -467,7 +475,7 @@ fn select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut inner = HashmapInner::default();
     for (k, v) in lfp.self_val().as_hash().iter() {
         if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
-            inner.insert(k, v);
+            inner.insert(k, v, vm, globals)?;
         }
     }
     Ok(Value::hash_from_inner(inner))
@@ -500,9 +508,9 @@ fn select_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     }
     let changed = !remove.is_empty();
     let mut h = lfp.self_val().as_hash();
-    remove.into_iter().for_each(|k| {
-        h.remove(k);
-    });
+    for k in remove {
+        h.remove(k, vm, globals)?;
+    }
     Ok(if changed {
         lfp.self_val()
     } else {
@@ -534,8 +542,11 @@ fn empty_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/has_key=3f.html]
 #[monoruby_builtin]
-fn include(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let b = lfp.self_val().as_hashmap_inner().contains_key(lfp.arg(0));
+fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let b = lfp
+        .self_val()
+        .as_hash()
+        .contains_key(lfp.arg(0), vm, globals)?;
     Ok(Value::bool(b))
 }
 
@@ -548,7 +559,7 @@ fn include(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/inspect.html]
 #[monoruby_builtin]
 fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let s = lfp.self_val().as_hashmap_inner().to_s(&globals.store);
+    let s = lfp.self_val().as_hash().to_s(&globals.store);
     Ok(Value::string(s))
 }
 
@@ -568,7 +579,7 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut res = Hashmap::new(h);
     for (k, v) in lfp.self_val().expect_hash_ty(globals)?.iter() {
         if vm.invoke_block(globals, &p, &[k, v])?.as_bool() {
-            res.remove(k);
+            res.remove(k, vm, globals)?;
         }
     }
     let h = vm.temp_pop();
@@ -588,10 +599,10 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let hash = lfp.self_val().as_hash();
     let mut ary = hash.keys();
     vm.sort(globals, &mut ary)?;
-    let res: Vec<_> = ary
-        .into_iter()
-        .map(|k| Value::array2(k, hash.get(k).unwrap()))
-        .collect();
+    let mut res = vec![];
+    for k in ary {
+        res.push(Value::array2(k, hash.get(k, vm, globals)?.unwrap()))
+    }
     Ok(Value::array_from_vec(res))
 }
 
@@ -607,7 +618,7 @@ fn invert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let hash = lfp.self_val().as_hash();
     let mut map = RubyMap::default();
     for (k, v) in hash.iter() {
-        map.insert(HashKey(v), k);
+        map.insert(HashKey(v), k, vm, globals)?;
     }
     Ok(Value::hash(map))
 }
@@ -620,13 +631,13 @@ fn invert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/merge.html]
 #[monoruby_builtin]
-fn merge(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
     let mut h = lfp.self_val().dup().expect_hash_ty(globals)?;
     for arg in lfp.arg(0).as_array().iter() {
         let other = arg.expect_hash_ty(globals)?;
         for (k, v) in other.iter() {
-            h.insert(k, v);
+            h.insert(k, v, vm, globals)?;
         }
     }
 
@@ -650,11 +661,11 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         for arg in lfp.arg(0).as_array().iter() {
             let other = arg.expect_hash_ty(globals)?;
             for (k, other_v) in other.iter() {
-                if let Some(self_v) = h.get(k) {
+                if let Some(self_v) = h.get(k, vm, globals)? {
                     let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
-                    h.insert(k, v);
+                    h.insert(k, v, vm, globals)?;
                 } else {
-                    h.insert(k, other_v);
+                    h.insert(k, other_v, vm, globals)?;
                 }
             }
         }
@@ -662,7 +673,7 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         for arg in lfp.arg(0).as_array().iter() {
             let other = arg.expect_hash_ty(globals)?;
             for (k, v) in other.iter() {
-                h.insert(k, v);
+                h.insert(k, v, vm, globals)?;
             }
         }
     }
@@ -676,10 +687,9 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/compare_by_identity.html]
 #[monoruby_builtin]
-fn compare_by_identity(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn compare_by_identity(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
-    let mut self_val = lfp.self_val();
-    self_val.as_hashmap_inner_mut().compare_by_identity();
+    lfp.self_val().as_hash().compare_by_identity(vm, globals)?;
     Ok(lfp.self_val())
 }
 
@@ -690,7 +700,7 @@ fn compare_by_identity(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/=5b=5d.html]
 #[monoruby_builtin]
-fn env_index(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn env_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let key = lfp.arg(0);
     if key.is_str().is_none() {
         return Err(MonorubyErr::no_implicit_conversion(
@@ -701,8 +711,8 @@ fn env_index(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     }
     let val = lfp
         .self_val()
-        .as_hashmap_inner()
-        .get(key)
+        .as_hash()
+        .get(key, vm, globals)?
         .unwrap_or_default();
     Ok(val)
 }
@@ -727,12 +737,12 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         if lfp.try_arg(1).is_some() {
             eprintln!("warning: block supersedes default value argument");
         }
-        match hash.get(lfp.arg(0)) {
+        match hash.get(lfp.arg(0), vm, globals)? {
             Some(v) => v,
             None => vm.invoke_block_once(globals, bh, &[lfp.arg(0)])?,
         }
     } else if lfp.try_arg(1).is_none() {
-        match hash.get(lfp.arg(0)) {
+        match hash.get(lfp.arg(0), vm, globals)? {
             Some(v) => v,
             None => {
                 return Err(MonorubyErr::keyerr(format!(
@@ -742,7 +752,7 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             }
         }
     } else {
-        match hash.get(lfp.arg(0)) {
+        match hash.get(lfp.arg(0), vm, globals)? {
             Some(v) => v,
             None => lfp.arg(1),
         }

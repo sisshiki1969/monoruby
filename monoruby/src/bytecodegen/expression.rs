@@ -99,12 +99,10 @@ impl BytecodeGen {
             NodeKind::String(s) => self.emit_string(dst, s),
             NodeKind::Bytes(b) => self.emit_bytes(dst, b),
             NodeKind::Array(nodes, false) => self.gen_array(dst, nodes, loc)?,
-            NodeKind::Hash(nodes, false) => self.gen_hash(dst, nodes, loc)?,
+            NodeKind::Hash(nodes) => self.gen_hash(dst, nodes, loc)?,
             NodeKind::RegExp(nodes, op, false) => self.gen_regexp(dst, nodes, op, loc)?,
-            NodeKind::Array(_, true)
-            | NodeKind::Hash(_, true)
-            | NodeKind::Range { is_const: true, .. } => {
-                let val = Value::from_ast2(&rhs);
+            NodeKind::Array(_, true) | NodeKind::Range { is_const: true, .. } => {
+                let val = Value::from_const_ast(&rhs);
                 self.emit_literal(dst, val);
             }
             NodeKind::RegExp(nodes, op, true) => {
