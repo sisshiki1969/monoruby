@@ -250,7 +250,7 @@ impl ObjKind {
         }
     }
 
-    fn hash_from(map: RubyMap<HashKey, Value>) -> Self {
+    fn hash_from(map: RubyMap<Value, Value>) -> Self {
         Self {
             hash: ManuallyDrop::new(HashmapInner::new(map)),
         }
@@ -590,7 +590,7 @@ impl RubyEql<Executor, Globals, MonorubyErr> for RValue {
                         } else if self.id() == a1.id() || other.id() == a2.id() {
                             return Ok(false);
                         } else {
-                            if !HashKey(*a1).eql(&HashKey(*a2), vm, globals)? {
+                            if !a1.eql(a2, vm, globals)? {
                                 return Ok(false);
                             }
                         }
@@ -1126,7 +1126,7 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_hash(map: RubyMap<HashKey, Value>) -> Self {
+    pub(super) fn new_hash(map: RubyMap<Value, Value>) -> Self {
         RValue {
             header: Header::new(HASH_CLASS, ObjTy::HASH),
             kind: ObjKind::hash_from(map),
@@ -1380,7 +1380,7 @@ impl RValue {
         self.kind.float
     }
 
-    unsafe fn as_bignum(&self) -> &BigInt {
+    pub(super) unsafe fn as_bignum(&self) -> &BigInt {
         &self.kind.bignum
     }
 

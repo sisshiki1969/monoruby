@@ -17,8 +17,8 @@ impl GC<RValue> for RangeInner {
 
 impl RubyEql<Executor, Globals, MonorubyErr> for RangeInner {
     fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
-        Ok(HashKey(self.start).eql(&HashKey(other.start), vm, globals)?
-            && HashKey(self.end).eql(&HashKey(other.end), vm, globals)?
+        Ok(self.start.eql(&other.start, vm, globals)?
+            && self.end.eql(&other.end, vm, globals)?
             && self.exclude_end() == other.exclude_end())
     }
 }

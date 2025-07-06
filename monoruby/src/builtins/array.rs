@@ -450,7 +450,7 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/hash.html]
 #[monoruby_builtin]
 fn hash(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let h = HashKey(lfp.self_val()).calculate_hash();
+    let h = lfp.self_val().calculate_hash();
     Ok(Value::integer_from_u64(h))
 }
 
@@ -1425,11 +1425,11 @@ fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
         globals: &mut Globals,
         data: &ProcData,
         ary: Array,
-        map: &mut RubyMap<HashKey, Value>,
+        map: &mut RubyMap<Value, Value>,
     ) -> Result<()> {
         for elem in ary.iter() {
             let key = vm.invoke_block(globals, &data, &[*elem])?;
-            map.entry(HashKey(key), vm, globals)?
+            map.entry(key, vm, globals)?
                 .and_modify(|v: &mut Value| v.as_array().push(*elem))
                 .or_insert(Value::array1(*elem));
         }
@@ -1849,7 +1849,7 @@ fn intersect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let lhs = lfp.self_val().as_array();
     for rhs in lfp.arg(0).as_array().iter().cloned() {
         for lhs in lhs.iter().cloned() {
-            if HashKey(lhs).eql(&HashKey(rhs), vm, globals)? {
+            if lhs.eql(&rhs, vm, globals)? {
                 return Ok(Value::bool(true));
             }
         }
@@ -1914,7 +1914,7 @@ fn uniq_inner(
     let res = ary.retain(|x| {
         let res = vm.invoke_block(globals, &data, &[*x])?;
         vm.temp_array_push(res);
-        Ok(h.insert(HashKey(res), vm, globals)?)
+        Ok(h.insert(res, vm, globals)?)
     });
     vm.temp_pop();
     res.map(|removed| removed.is_some())

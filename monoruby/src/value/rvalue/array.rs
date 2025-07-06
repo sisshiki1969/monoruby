@@ -66,7 +66,7 @@ impl Array {
                     Ok(false)
                 }
             } else {
-                h.insert(HashKey(*x), vm, globals)
+                h.insert(*x, vm, globals)
             }
         })
         .map(|removed| removed.is_some())

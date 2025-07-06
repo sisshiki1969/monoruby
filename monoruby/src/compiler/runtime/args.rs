@@ -161,7 +161,7 @@ fn positional(
         let mut h = RubyMap::default();
         for (k, id) in globals[caller].kw_args.clone().iter() {
             let v = caller_lfp.register(globals[caller].kw_pos + *id).unwrap();
-            h.insert(HashKey(Value::symbol(*k)), v, vm, globals)?;
+            h.insert(Value::symbol(*k), v, vm, globals)?;
         }
         for v in globals[caller]
             .hash_splat_pos
@@ -170,7 +170,7 @@ fn positional(
             .map(|pos| caller_lfp.register(pos).unwrap())
         {
             for (k, v) in v.expect_hash_ty(globals)?.iter() {
-                h.insert(HashKey(k), v, vm, globals)?;
+                h.insert(k, v, vm, globals)?;
             }
         }
         if h.is_empty() {
@@ -506,7 +506,7 @@ fn hash_splat_and_kw_rest(
                 continue;
             }
             let v = caller_lfp.register(kw_pos + *i).unwrap();
-            kw_rest.insert(HashKey(Value::symbol(*name)), v, &mut e, globals)?;
+            kw_rest.insert(Value::symbol(*name), v, &mut e, globals)?;
         }
         for h in hash_splat_pos
             .iter()
@@ -518,7 +518,7 @@ fn hash_splat_and_kw_rest(
                 h.remove(sym, &mut e, globals)?;
             }
             for (k, v) in h.iter() {
-                kw_rest.insert(HashKey(k), v, &mut e, globals)?;
+                kw_rest.insert(k, v, &mut e, globals)?;
             }
         }
 

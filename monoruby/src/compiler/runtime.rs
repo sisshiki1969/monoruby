@@ -216,8 +216,7 @@ pub(super) extern "C" fn gen_hash(
             .copied()
             .rev();
         while let Ok(chunk) = iter.next_chunk::<2>() {
-            map.insert(HashKey(chunk[0]), chunk[1], vm, globals)
-                .unwrap();
+            map.insert(chunk[0], chunk[1], vm, globals).unwrap();
         }
     }
     Value::hash(map)

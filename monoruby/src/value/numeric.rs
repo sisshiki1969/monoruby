@@ -168,7 +168,7 @@ impl num::One for Real {
 
 impl RubyEql<Executor, Globals, MonorubyErr> for Real {
     fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
-        HashKey(self.0).eql(&HashKey(other.0), vm, globals)
+        self.0.eql(&other.0, vm, globals)
     }
 }
 

@@ -1,7 +1,7 @@
 use rubymap::RubyEql;
 
 use super::*;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::ops::Deref;
 
 #[monoruby_object]
@@ -80,21 +80,21 @@ impl alloc::GC<RValue> for HashmapInner {
 }
 
 impl HashmapInner {
-    pub fn new(map: RubyMap<HashKey, Value>) -> Self {
+    pub fn new(map: RubyMap<Value, Value>) -> Self {
         HashmapInner {
             default: HashDefault::default(),
             content: HashContent::new(map),
         }
     }
 
-    pub fn new_with_default(map: RubyMap<HashKey, Value>, default: Value) -> Self {
+    pub fn new_with_default(map: RubyMap<Value, Value>, default: Value) -> Self {
         HashmapInner {
             default: HashDefault::Value(default),
             content: HashContent::new(map),
         }
     }
 
-    pub fn new_with_default_proc(map: RubyMap<HashKey, Value>, default_proc: Proc) -> Self {
+    pub fn new_with_default_proc(map: RubyMap<Value, Value>, default_proc: Proc) -> Self {
         HashmapInner {
             default: HashDefault::Proc(default_proc),
             content: HashContent::new(map),
@@ -138,7 +138,7 @@ impl HashmapInner {
 
     pub fn get(&self, v: Value, vm: &mut Executor, globals: &mut Globals) -> Result<Option<Value>> {
         Ok(match &self.content {
-            HashContent::Map(box map) => map.get(&HashKey(v), vm, globals)?.copied(),
+            HashContent::Map(box map) => map.get(&v, vm, globals)?.copied(),
             HashContent::IdentMap(box map) => map.get(&IdentKey(v), vm, globals)?.copied(),
         })
     }
@@ -150,7 +150,7 @@ impl HashmapInner {
         globals: &mut Globals,
     ) -> Result<Option<Value>> {
         Ok(match &mut self.content {
-            HashContent::Map(map) => map.shift_remove(&HashKey(k), vm, globals)?,
+            HashContent::Map(map) => map.shift_remove(&k, vm, globals)?,
             HashContent::IdentMap(map) => map.shift_remove(&IdentKey(k), vm, globals)?,
         })
     }
@@ -243,7 +243,7 @@ impl HashmapInner {
 
 #[derive(Debug, Clone)]
 pub enum HashContent {
-    Map(Box<RubyMap<HashKey, Value>>),
+    Map(Box<RubyMap<Value, Value>>),
     IdentMap(Box<RubyMap<IdentKey, Value>>),
 }
 
@@ -276,102 +276,12 @@ impl RubyEql<Executor, Globals, MonorubyErr> for HashContent {
     // This type of equality is used for comparison for keys of Hash.
     fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
         match (self, other) {
-            (HashContent::Map(map1), HashContent::Map(map2)) => {
-                if map1.len() != map2.len() {
-                    return Ok(false);
-                };
-                for (k, v1) in map1.iter() {
-                    match map2.get(k, vm, globals)? {
-                        None => return Ok(false),
-                        Some(v2) => {
-                            if !HashKey(*v1).eql(&HashKey(*v2), vm, globals)? {
-                                return Ok(false);
-                            }
-                        }
-                    }
-                }
-                Ok(true)
-            }
+            (HashContent::Map(map1), HashContent::Map(map2)) => map1.eql(map2, vm, globals),
             (HashContent::IdentMap(map1), HashContent::IdentMap(map2)) => {
-                if map1.len() != map2.len() {
-                    return Ok(false);
-                };
-                let mut m1 = RubyMap::default();
-                for (k, v) in map1.iter() {
-                    m1.insert(HashKey(k.0), *v, vm, globals)?;
-                }
-                for (k, v) in map2.iter() {
-                    match m1.get(&HashKey(k.0), vm, globals)? {
-                        None => return Ok(false),
-                        Some(v1) => {
-                            if !HashKey(*v1).eql(&HashKey(*v), vm, globals)? {
-                                return Ok(false);
-                            }
-                        }
-                    }
-                }
-                Ok(true)
+                map1.eql(map2, vm, globals)
             }
             _ => Ok(false),
         }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct HashKey(pub Value);
-
-impl std::fmt::Debug for HashKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "HashKey({:?})", self.0)
-    }
-}
-
-impl Deref for HashKey {
-    type Target = Value;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Hash for HashKey {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self.try_rvalue() {
-            None => self.0.hash(state),
-            Some(lhs) => unsafe {
-                match lhs.ty() {
-                    //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", lhs),
-                    ObjTy::BIGNUM => lhs.as_bignum().hash(state),
-                    ObjTy::FLOAT => lhs.as_float().to_bits().hash(state),
-                    ObjTy::STRING => lhs.as_rstring().hash(state),
-                    ObjTy::ARRAY => lhs.as_array().hash(state),
-                    ObjTy::RANGE => lhs.as_range().hash(state),
-                    ObjTy::HASH => lhs.as_hashmap().hash(state),
-                    //ObjTy::METHOD => lhs.method().hash(state),
-                    _ => self.0.hash(state),
-                }
-            },
-        }
-    }
-}
-
-impl RubyEql<Executor, Globals, MonorubyErr> for HashKey {
-    fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
-        if self.0.id() == other.0.id() {
-            return Ok(true);
-        }
-        match (self.try_rvalue(), other.try_rvalue()) {
-            (None, None) => Ok(self.0.id() == other.0.id()),
-            (Some(lhs), Some(rhs)) => lhs.eql(rhs, vm, globals),
-            _ => Ok(false),
-        }
-    }
-}
-
-impl HashKey {
-    pub fn calculate_hash(self) -> u64 {
-        let mut s = std::hash::DefaultHasher::new();
-        self.hash(&mut s);
-        s.finish()
     }
 }
 
@@ -400,7 +310,7 @@ impl RubyEql<Executor, Globals, MonorubyErr> for IdentKey {
 }
 
 pub enum MonorubyHashIntoIter {
-    Map(rubymap::map::IntoIter<HashKey, Value>),
+    Map(rubymap::map::IntoIter<Value, Value>),
     IdentMap(rubymap::map::IntoIter<IdentKey, Value>),
 }
 
@@ -417,7 +327,7 @@ impl Iterator for MonorubyHashIntoIter {
     type Item = (Value, Value);
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            MonorubyHashIntoIter::Map(map) => map.next().map(|(k, v)| (k.0, v)),
+            MonorubyHashIntoIter::Map(map) => map.next().map(|(k, v)| (k, v)),
             MonorubyHashIntoIter::IdentMap(map) => map.next().map(|(k, v)| (k.0, v)),
         }
     }
@@ -426,7 +336,7 @@ macro_rules! define_iter {
     ($($trait:ident),*) => {
         $(
             pub enum $trait<'a> {
-                Map(rubymap::map::$trait<'a, HashKey, Value>),
+                Map(rubymap::map::$trait<'a, Value, Value>),
                 IdentMap(rubymap::map::$trait<'a, IdentKey, Value>),
             }
         )*
@@ -457,7 +367,7 @@ macro_rules! define_iterator {
             type Item = (Value, Value);
             fn next(&mut self) -> Option<Self::Item> {
                 match self {
-                    $ty2::Map(map) => map.next().map(|(k, v)| (k.0, *v)),
+                    $ty2::Map(map) => map.next().map(|(k, v)| (*k, *v)),
                     $ty2::IdentMap(map) => map.next().map(|(k, v)| (k.0, *v)),
                 }
             }
@@ -493,7 +403,7 @@ impl IntoIterator for HashContent {
 }
 
 impl HashContent {
-    pub(crate) fn new(map: RubyMap<HashKey, Value>) -> Self {
+    pub(crate) fn new(map: RubyMap<Value, Value>) -> Self {
         HashContent::Map(Box::new(map))
     }
 
@@ -523,7 +433,7 @@ impl HashContent {
         globals: &mut Globals,
     ) -> Result<()> {
         match self {
-            HashContent::Map(box map) => map.insert(HashKey(k), v, vm, globals)?,
+            HashContent::Map(box map) => map.insert(k, v, vm, globals)?,
             HashContent::IdentMap(box map) => map.insert(IdentKey(k), v, vm, globals)?,
         };
         Ok(())
@@ -543,14 +453,14 @@ impl HashContent {
         globals: &mut Globals,
     ) -> Result<bool> {
         match self {
-            HashContent::Map(map) => map.contains_key(&HashKey(k), vm, globals),
+            HashContent::Map(map) => map.contains_key(&k, vm, globals),
             HashContent::IdentMap(map) => map.contains_key(&IdentKey(k), vm, globals),
         }
     }
 
     pub(crate) fn keys(&self) -> Vec<Value> {
         match self {
-            HashContent::Map(map) => map.keys().map(|x| x.0).collect(),
+            HashContent::Map(map) => map.keys().map(|x| *x).collect(),
             HashContent::IdentMap(map) => map.keys().map(|x| x.0).collect(),
         }
     }
@@ -571,7 +481,7 @@ impl HashContent {
             HashContent::Map(box map) => {
                 let mut new_map = RubyMap::default();
                 for (k, v) in map.iter() {
-                    new_map.insert(IdentKey(k.0), *v, vm, globals)?;
+                    new_map.insert(IdentKey(*k), *v, vm, globals)?;
                 }
                 *self = HashContent::IdentMap(Box::new(new_map));
             }

@@ -49,12 +49,7 @@ pub(super) fn init(globals: &mut Globals) {
     let mut vm = Executor::default();
     std::env::vars().for_each(|(var, val)| {
         env_map
-            .insert(
-                HashKey(Value::string(var)),
-                Value::string(val),
-                &mut vm,
-                globals,
-            )
+            .insert(Value::string(var), Value::string(val), &mut vm, globals)
             .unwrap();
     });
     #[cfg(windows)]
@@ -618,7 +613,7 @@ fn invert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let hash = lfp.self_val().as_hash();
     let mut map = RubyMap::default();
     for (k, v) in hash.iter() {
-        map.insert(HashKey(v), k, vm, globals)?;
+        map.insert(v, k, vm, globals)?;
     }
     Ok(Value::hash(map))
 }

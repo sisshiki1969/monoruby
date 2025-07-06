@@ -1,5 +1,7 @@
 use num::ToPrimitive;
 use onigmo_regex::Captures;
+use rubymap::RubyEql;
+use std::hash::{Hash, Hasher};
 
 use super::*;
 use crate::{
@@ -22,7 +24,7 @@ pub const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
 
 pub const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Value(std::num::NonZeroU64);
 
@@ -52,6 +54,48 @@ impl GC<RValue> for Value {
     }
 }
 
+impl Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self.try_rvalue() {
+            None => self.0.hash(state),
+            Some(lhs) => unsafe {
+                match lhs.ty() {
+                    //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", lhs),
+                    ObjTy::BIGNUM => lhs.as_bignum().hash(state),
+                    ObjTy::FLOAT => lhs.as_float().to_bits().hash(state),
+                    ObjTy::STRING => lhs.as_rstring().hash(state),
+                    ObjTy::ARRAY => lhs.as_array().hash(state),
+                    ObjTy::RANGE => lhs.as_range().hash(state),
+                    ObjTy::HASH => lhs.as_hashmap().hash(state),
+                    //ObjTy::METHOD => lhs.method().hash(state),
+                    _ => self.0.hash(state),
+                }
+            },
+        }
+    }
+}
+
+impl RubyEql<Executor, Globals, MonorubyErr> for Value {
+    fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
+        if self.id() == other.id() {
+            return Ok(true);
+        }
+        match (self.try_rvalue(), other.try_rvalue()) {
+            (None, None) => Ok(self.id() == other.id()),
+            (Some(lhs), Some(rhs)) => lhs.eql(rhs, vm, globals),
+            _ => Ok(false),
+        }
+    }
+}
+
+impl Value {
+    pub fn calculate_hash(self) -> u64 {
+        let mut s = std::hash::DefaultHasher::new();
+        self.hash(&mut s);
+        s.finish()
+    }
+}
+
 impl Value {
     /// This function is only used for system assertion.
     pub(crate) fn assert_eq(lhs: Self, rhs: Self) {
@@ -68,10 +112,6 @@ impl Value {
         }
         panic!("{} != {}", lhs, rhs)
     }
-
-    /*pub(crate) fn eql(&self, other: &Self) -> bool {
-        HashKey(*self) == HashKey(*other)
-    }*/
 }
 
 impl Value {
@@ -398,7 +438,7 @@ impl Value {
         RValue::new_array_from_vec_with_class(v, class_id).pack()
     }
 
-    pub fn hash(map: RubyMap<HashKey, Value>) -> Self {
+    pub fn hash(map: RubyMap<Value, Value>) -> Self {
         RValue::new_hash(map).pack()
     }
 
@@ -1388,7 +1428,7 @@ impl Value {
                 for (k, v) in v.iter() {
                     let k = Self::from_ast_inner(k, vm, globals);
                     let v = Self::from_ast_inner(v, vm, globals);
-                    map.insert(HashKey(k), v, vm, globals).unwrap();
+                    map.insert(k, v, vm, globals).unwrap();
                 }
                 Value::hash(map)
             }
