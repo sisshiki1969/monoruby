@@ -163,6 +163,18 @@ module Enumerable
     end
   end
 
+  def filter
+    return self.to_enum(:filter) if !block_given?
+    res = []
+    self.each do |x|
+      if yield(x)
+        res << x
+      end
+    end
+    res
+  end
+  alias select filter
+
   def any?
     if block_given?
       self.each do |x|

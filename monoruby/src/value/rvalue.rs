@@ -83,7 +83,7 @@ impl std::fmt::Debug for ObjTy {
                 20 => "BINDING",
                 21 => "UMETHOD",
                 22 => "MATCHDATA",
-                _ => unreachable!(),
+                _ => unreachable!("Invalid ty: {ty}"),
             }
         )
     }
@@ -553,12 +553,12 @@ impl RValue {
 
     fn enumerator_debug(&self, store: &Store) -> String {
         let e = unsafe { self.as_enumerator() };
-        format!("#<Enumerator: {} {}>", e.obj.debug(store), e.method)
+        format!("#<Enumerator: {}:{}>", e.obj.debug(store), e.method)
     }
 
     fn enumerator_tos(&self, store: &Store) -> String {
         let e = unsafe { self.as_enumerator() };
-        format!("#<Enumerator: {} {}>", e.obj.to_s(store), e.method)
+        format!("#<Enumerator: {}:{}>", e.obj.to_s(store), e.method)
     }
 
     fn proc_tos(&self) -> String {
