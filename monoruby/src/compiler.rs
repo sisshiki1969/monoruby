@@ -18,7 +18,7 @@ use crate::executor::*;
 
 const OPECODE: i64 = 6;
 
-type MethodInvoker = extern "C" fn(
+pub(crate) type MethodInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
     FuncId,
@@ -28,7 +28,7 @@ type MethodInvoker = extern "C" fn(
     Option<BlockHandler>,
 ) -> Option<Value>;
 
-type MethodInvoker2 = extern "C" fn(
+pub(crate) type MethodInvoker2 = extern "C" fn(
     &mut Executor,
     &mut Globals,
     FuncId,
@@ -38,7 +38,7 @@ type MethodInvoker2 = extern "C" fn(
     Option<BlockHandler>,
 ) -> Option<Value>;
 
-type BlockInvoker = extern "C" fn(
+pub(crate) type BlockInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
     &ProcData,
@@ -47,9 +47,9 @@ type BlockInvoker = extern "C" fn(
     usize,
 ) -> Option<Value>;
 
-type BindingInvoker = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<Value>;
+pub(crate) type BindingInvoker = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<Value>;
 
-type FiberInvoker = extern "C" fn(
+pub(crate) type FiberInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
     &ProcData,
@@ -58,6 +58,13 @@ type FiberInvoker = extern "C" fn(
     usize,
     &mut Executor,
 ) -> Option<Value>;
+
+thread_local! {
+    pub static CODEGEN: std::cell::RefCell<Codegen> = std::cell::RefCell::new(
+    {
+        Codegen::new()
+    });
+}
 
 #[cfg(feature = "perf")]
 thread_local! {
@@ -843,6 +850,22 @@ impl Codegen {
         (start1..start1 + size1).contains(&addr) || (start2..start2 + size2).contains(&addr)
     }
 
+    pub(crate) fn immediate_eviction(&mut self, mut cfp: Cfp) {
+        let mut return_addr = unsafe { cfp.return_addr() };
+        while let Some(prev_cfp) = cfp.prev() {
+            let ret = return_addr.unwrap();
+            if !self.check_vm_address(ret) {
+                if let Some((patch_point, deopt)) = self.get_deopt_with_return_addr(ret) {
+                    let patch_point = patch_point.unwrap();
+                    self.jit.apply_jmp_patch_address(patch_point, &deopt);
+                    unsafe { patch_point.as_ptr().write(0xe9) };
+                }
+            }
+            cfp = prev_cfp;
+            return_addr = unsafe { cfp.return_addr() };
+        }
+    }
+
     fn icmp_teq(&mut self) {
         self.icmp_eq()
     }
@@ -1293,9 +1316,10 @@ mod tests {
     }
 }
 
-impl Globals {
-    pub(super) fn exec_jit_compile(
+impl Codegen {
+    fn compile(
         &mut self,
+        globals: &mut Globals,
         iseq_id: ISeqId,
         self_class: ClassId,
         position: Option<BytecodePtr>,
@@ -1305,11 +1329,11 @@ impl Globals {
         #[cfg(feature = "profile")]
         {
             if is_recompile {
-                self.countup_recompile(self.store[iseq_id].func_id(), self_class);
+                globals.countup_recompile(globals.store[iseq_id].func_id(), self_class);
             }
         }
-        self.codegen.jit_compile(
-            &self.store,
+        self.jit_compile(
+            &globals.store,
             iseq_id,
             self_class,
             position,
@@ -1321,13 +1345,80 @@ impl Globals {
     ///
     /// Compile the Ruby method.
     ///
-    pub(super) fn exec_jit_compile_method(
+    fn compile_method(
         &mut self,
+        globals: &mut Globals,
         iseq_id: ISeqId,
         self_class: ClassId,
         jit_entry: DestLabel,
         is_recompile: bool,
     ) {
-        self.exec_jit_compile(iseq_id, self_class, None, jit_entry, is_recompile)
+        self.compile(globals, iseq_id, self_class, None, jit_entry, is_recompile)
+    }
+
+    pub(super) fn recompile_method(&mut self, globals: &mut Globals, lfp: Lfp) {
+        let self_class = lfp.self_val().class();
+        let func_id = lfp.func_id();
+        let iseq_id = globals.store[func_id].as_iseq();
+        let jit_entry = self.jit.label();
+        self.compile_method(globals, iseq_id, self_class, jit_entry.clone(), true);
+        // get_jit_code() must not be None.
+        // After BOP redefinition occurs, recompilation in invalidated methods cause None.
+        if let Some(patch_point) = globals.store[iseq_id].get_jit_code(self_class) {
+            let patch_point = self.jit.get_label_address(&patch_point);
+            self.jit.apply_jmp_patch_address(patch_point, &jit_entry);
+        }
+    }
+
+    pub(crate) fn compile_partial(
+        &mut self,
+        globals: &mut Globals,
+        lfp: Lfp,
+        pc: BytecodePtr,
+        is_recompile: bool,
+    ) {
+        let entry_label = self.jit.label();
+        let self_class = lfp.self_val().class();
+        let func_id = lfp.func_id();
+        let iseq_id = globals.store[func_id].as_iseq();
+        self.compile(
+            globals,
+            iseq_id,
+            self_class,
+            Some(pc),
+            entry_label.clone(),
+            is_recompile,
+        );
+        let codeptr = self.jit.get_label_address(&entry_label);
+        pc.write2(codeptr.as_ptr() as u64);
+    }
+
+    pub(crate) fn recompile_specialized(&mut self, globals: &mut Globals, idx: usize) {
+        let (iseq_id, self_class, patch_point) = self.specialized_patch_point[idx].clone();
+
+        let entry = self.jit.label();
+        self.compile(globals, iseq_id, self_class, None, entry.clone(), true);
+
+        let patch_point = self.jit.get_label_address(&patch_point);
+        self.jit.apply_jmp_patch_address(patch_point, &entry);
+    }
+
+    pub(crate) fn compile_patch(
+        &mut self,
+        globals: &mut Globals,
+        lfp: Lfp,
+        entry_patch_point: monoasm::CodePtr,
+    ) {
+        let patch_point = self.jit.label();
+        let jit_entry = self.jit.label();
+        let guard = self.jit.label();
+        let func_id = lfp.func_id();
+        let iseq_id = globals.store[func_id].as_iseq();
+        let self_class = lfp.self_val().class();
+        self.class_guard_stub(self_class, &patch_point, &jit_entry, &guard);
+        let old_entry = globals.store[iseq_id].add_jit_code(self_class, patch_point);
+        assert!(old_entry.is_none());
+        self.compile_method(globals, iseq_id, self_class, jit_entry, false);
+        self.jit.apply_jmp_patch_address(entry_patch_point, &guard);
     }
 }

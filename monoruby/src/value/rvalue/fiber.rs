@@ -73,7 +73,7 @@ impl Fiber {
         let arg0 = lfp.arg(0).as_array();
         match self.state() {
             FiberState::Created => self.invoke_fiber(vm, globals, &[lfp.arg(0)]),
-            FiberState::Suspended => self.resume_fiber(vm, globals, arg0.peel()),
+            FiberState::Suspended => self.resume_fiber(vm, arg0.peel()),
             FiberState::Terminated => Err(MonorubyErr::fibererr(
                 "attempt to resume a terminated fiber".to_string(),
             )),
@@ -91,7 +91,7 @@ impl Fiber {
             FiberState::Created => {
                 self.invoke_fiber_with_self(vm, globals, &[], self_val.into())?
             }
-            FiberState::Suspended => self.resume_fiber(vm, globals, val)?,
+            FiberState::Suspended => self.resume_fiber(vm, val)?,
             FiberState::Terminated => {
                 return Err(MonorubyErr::stopiterationerr(
                     "iteration reached an end".to_string(),
@@ -109,7 +109,7 @@ impl Fiber {
     ) -> Result<Value> {
         match self.state() {
             FiberState::Created => self.invoke_fiber(vm, globals, &[yielder]),
-            FiberState::Suspended => self.resume_fiber(vm, globals, yielder),
+            FiberState::Suspended => self.resume_fiber(vm, yielder),
             FiberState::Terminated => Err(MonorubyErr::stopiterationerr(
                 "iteration reached an end".to_string(),
             )),
@@ -143,7 +143,7 @@ impl Fiber {
         self.initialize();
         let proc = ProcData::from_proc(&self.proc);
         let handle = &mut self.handle;
-        match (globals.codegen.fiber_invoker)(
+        match (globals.invokers.fiber)(
             vm,
             globals,
             &proc,
@@ -173,7 +173,7 @@ impl Fiber {
         self.initialize();
         let proc = ProcData::from_proc(&self.proc);
         let handle = &mut self.handle;
-        match (globals.codegen.fiber_invoker_with_self)(
+        match (globals.invokers.fiber_with_self)(
             vm,
             globals,
             &proc,
@@ -187,13 +187,9 @@ impl Fiber {
         }
     }
 
-    pub(super) fn resume_fiber(
-        &mut self,
-        vm: &mut Executor,
-        globals: &Globals,
-        val: Value,
-    ) -> Result<Value> {
-        match (globals.codegen.resume_fiber)(vm, &mut self.handle as _, val) {
+    pub(super) fn resume_fiber(&mut self, vm: &mut Executor, val: Value) -> Result<Value> {
+        let invoker = CODEGEN.with(|codegen| codegen.borrow().resume_fiber);
+        match invoker(vm, &mut self.handle as _, val) {
             Some(val) => Ok(val),
             None => Err(self.take_error()),
         }

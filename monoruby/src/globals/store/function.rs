@@ -364,8 +364,8 @@ fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 }
 
 #[monoruby_builtin]
-fn yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    vm.yield_fiber(globals, lfp.arg(0))
+fn yielder(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    vm.yield_fiber(lfp.arg(0))
 }
 
 impl Funcs {

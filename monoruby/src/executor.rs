@@ -107,7 +107,9 @@ impl Executor {
         if !globals.no_gems {
             executor.load_gems(globals);
         }
-        globals.codegen.startup_flag = true;
+        CODEGEN.with(|codegen| {
+            codegen.borrow_mut().startup_flag = true;
+        });
         #[cfg(feature = "profile")]
         globals.clear_stats();
         executor
@@ -233,15 +235,8 @@ impl Executor {
         globals.dump_bc();
 
         let main_object = globals.main_object;
-        let res = (globals.codegen.method_invoker)(
-            self,
-            globals,
-            func_id,
-            main_object,
-            ([]).as_ptr(),
-            0,
-            None,
-        );
+        let res =
+            (globals.invokers.method)(self, globals, func_id, main_object, ([]).as_ptr(), 0, None);
         res.ok_or_else(|| self.take_error())
     }
 
@@ -254,7 +249,7 @@ impl Executor {
         #[cfg(feature = "emit-bc")]
         globals.dump_bc();
 
-        let res = (globals.codegen.binding_invoker)(self, globals, binding_lfp);
+        let res = (globals.invokers.binding)(self, globals, binding_lfp);
         res.ok_or_else(|| self.take_error())
     }
 
@@ -439,8 +434,9 @@ impl Executor {
         self.rsp_save = Some(std::ptr::NonNull::new(rsp).unwrap());
     }
 
-    pub(crate) fn yield_fiber(&mut self, globals: &Globals, val: Value) -> Result<Value> {
-        match (globals.codegen.yield_fiber)(self as _, val) {
+    pub(crate) fn yield_fiber(&mut self, val: Value) -> Result<Value> {
+        let invoker = CODEGEN.with(|codegen| codegen.borrow().yield_fiber);
+        match invoker(self as _, val) {
             Some(res) => Ok(res),
             None => Err(unsafe { self.parent_fiber.unwrap().as_mut().take_error() }),
         }
@@ -596,9 +592,12 @@ impl Executor {
             if module_function {
                 globals.add_singleton_method(class_id, name, func, visibility);
             }
-            if globals.codegen.bop_redefine_flags() != 0 {
-                self.immediate_eviction(globals);
-            }
+            CODEGEN.with(|codegen| {
+                let mut codegen = codegen.borrow_mut();
+                if codegen.bop_redefine_flags() != 0 {
+                    codegen.immediate_eviction(self.cfp());
+                }
+            });
             self.invoke_method_if_exists(
                 globals,
                 IdentId::METHOD_ADDED,
@@ -614,27 +613,6 @@ impl Executor {
                 name,
                 (func.get() as u64) + ((name.get() as u64) << 32)
             )))
-        }
-    }
-
-    fn immediate_eviction(&mut self, globals: &mut Globals) {
-        let mut cfp = self.cfp();
-        let mut return_addr = unsafe { cfp.return_addr() };
-        while let Some(prev_cfp) = cfp.prev() {
-            let ret = return_addr.unwrap();
-            if !globals.codegen.check_vm_address(ret) {
-                if let Some((patch_point, deopt)) = globals.codegen.get_deopt_with_return_addr(ret)
-                {
-                    let patch_point = patch_point.unwrap();
-                    globals
-                        .codegen
-                        .jit
-                        .apply_jmp_patch_address(patch_point, &deopt);
-                    unsafe { patch_point.as_ptr().write(0xe9) };
-                }
-            }
-            cfp = prev_cfp;
-            return_addr = unsafe { cfp.return_addr() };
         }
     }
 }
@@ -702,15 +680,8 @@ impl Executor {
         data: &ProcData,
         args: &[Value],
     ) -> Result<Value> {
-        (globals.codegen.block_invoker)(
-            self,
-            globals,
-            data,
-            Value::nil(),
-            args.as_ptr(),
-            args.len(),
-        )
-        .ok_or_else(|| self.take_error())
+        (globals.invokers.block)(self, globals, data, Value::nil(), args.as_ptr(), args.len())
+            .ok_or_else(|| self.take_error())
     }
 
     pub(crate) fn invoke_block_with_self(
@@ -720,7 +691,8 @@ impl Executor {
         self_val: Value,
         args: &[Value],
     ) -> Result<Value> {
-        (globals.codegen.block_invoker_with_self)(
+        let invoker = CODEGEN.with(|codegen| codegen.borrow().block_invoker_with_self);
+        invoker(
             self,
             globals,
             data as _,
@@ -853,7 +825,7 @@ impl Executor {
         args: &[Value],
     ) -> Result<Value> {
         let proc = ProcData::from_proc(proc);
-        (globals.codegen.block_invoker)(
+        (globals.invokers.block)(
             self,
             globals,
             &proc,
@@ -893,7 +865,7 @@ impl Executor {
         bh: Option<BlockHandler>,
     ) -> Option<Value> {
         let bh = bh.map(|bh| bh.delegate());
-        (globals.codegen.method_invoker)(
+        (globals.invokers.method)(
             self,
             globals,
             func_id,
@@ -1276,16 +1248,9 @@ pub enum Visibility {
 }
 
 pub(crate) extern "C" fn exec_jit_specialized_recompile(globals: &mut Globals, idx: usize) {
-    let (iseq_id, self_class, patch_point) = globals.codegen.specialized_patch_point[idx].clone();
-
-    let entry = globals.codegen.jit.label();
-    globals.exec_jit_compile(iseq_id, self_class, None, entry.clone(), true);
-
-    let patch_point = globals.codegen.jit.get_label_address(&patch_point);
-    globals
-        .codegen
-        .jit
-        .apply_jmp_patch_address(patch_point, &entry);
+    CODEGEN.with(|codegen| {
+        codegen.borrow_mut().recompile_specialized(globals, idx);
+    });
 }
 
 pub(crate) extern "C" fn exec_jit_compile_patch(
@@ -1293,40 +1258,17 @@ pub(crate) extern "C" fn exec_jit_compile_patch(
     lfp: Lfp,
     entry_patch_point: monoasm::CodePtr,
 ) {
-    let patch_point = globals.codegen.jit.label();
-    let jit_entry = globals.codegen.jit.label();
-    let guard = globals.codegen.jit.label();
-    let func_id = lfp.func_id();
-    let iseq_id = globals.store[func_id].as_iseq();
-    let self_class = lfp.self_val().class();
-    globals
-        .codegen
-        .class_guard_stub(self_class, &patch_point, &jit_entry, &guard);
-    let old_entry = globals.store[iseq_id].add_jit_code(self_class, patch_point);
-    assert!(old_entry.is_none());
-    globals.exec_jit_compile_method(iseq_id, self_class, jit_entry, false);
-    globals
-        .codegen
-        .jit
-        .apply_jmp_patch_address(entry_patch_point, &guard);
+    CODEGEN.with(|codegen| {
+        codegen
+            .borrow_mut()
+            .compile_patch(globals, lfp, entry_patch_point);
+    });
 }
 
 pub(crate) extern "C" fn exec_jit_recompile_method(globals: &mut Globals, lfp: Lfp) {
-    let self_class = lfp.self_val().class();
-    let func_id = lfp.func_id();
-    let iseq_id = globals.store[func_id].as_iseq();
-    let jit_entry = globals.codegen.jit.label();
-
-    globals.exec_jit_compile_method(iseq_id, self_class, jit_entry.clone(), true);
-    // get_jit_code() must not be None.
-    // After BOP redefinition occurs, recompilation in invalidated methods cause None.
-    if let Some(patch_point) = globals.store[iseq_id].get_jit_code(self_class) {
-        let patch_point = globals.codegen.jit.get_label_address(&patch_point);
-        globals
-            .codegen
-            .jit
-            .apply_jmp_patch_address(patch_point, &jit_entry);
-    }
+    CODEGEN.with(|codegen| {
+        codegen.borrow_mut().recompile_method(globals, lfp);
+    });
 }
 
 ///
@@ -1355,19 +1297,11 @@ pub(crate) extern "C" fn exec_jit_partial_recompile(
 }
 
 fn partial_compile(globals: &mut Globals, lfp: Lfp, pc: BytecodePtr, is_recompile: bool) {
-    let entry_label = globals.codegen.jit.label();
-    let self_class = lfp.self_val().class();
-    let func_id = lfp.func_id();
-    let iseq_id = globals.store[func_id].as_iseq();
-    globals.exec_jit_compile(
-        iseq_id,
-        self_class,
-        Some(pc),
-        entry_label.clone(),
-        is_recompile,
-    );
-    let codeptr = globals.codegen.jit.get_label_address(&entry_label);
-    pc.write2(codeptr.as_ptr() as u64);
+    CODEGEN.with(|codegen| {
+        codegen
+            .borrow_mut()
+            .compile_partial(globals, lfp, pc, is_recompile);
+    });
 }
 
 struct Root<'a, 'b> {
@@ -1397,11 +1331,16 @@ pub(crate) extern "C" fn execute_gc(
     mut executor: &mut Executor,
     globals: &mut Globals,
 ) -> Option<Value> {
-    if globals.codegen.sigint_flag() {
-        executor.set_error(MonorubyErr::runtimeerr("Interrupt"));
-        globals.codegen.unset_sigint_flag();
-        return None;
-    };
+    CODEGEN.with(|codegen| {
+        let codegen = codegen.borrow_mut();
+        if codegen.sigint_flag() {
+            executor.set_error(MonorubyErr::runtimeerr("Interrupt"));
+            codegen.unset_sigint_flag();
+            None
+        } else {
+            Some(())
+        }
+    })?;
     // Get root Executor.
     while let Some(mut parent) = executor.parent_fiber {
         executor = unsafe { parent.as_mut() };
