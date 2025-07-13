@@ -5,12 +5,12 @@
 //! [`IndexMap`] is a hash table where the iteration order of the key-value
 //! pairs is independent of the hash values of the keys.
 //!
-//! [`IndexSet`] is a corresponding hash set using the same implementation and
+//! [`RubySet`] is a corresponding hash set using the same implementation and
 //! with similar properties.
 //!
 //! ### Highlights
 //!
-//! [`IndexMap`] and [`IndexSet`] are drop-in compatible with the std `HashMap`
+//! [`IndexMap`] and [`RubySet`] are drop-in compatible with the std `HashMap`
 //! and `HashSet`, but they also have some features of note:
 //!
 //! - The ordering semantics (see their documentation for details)
@@ -31,15 +31,15 @@
 //!   information see the section on [`no_std`].
 //! * `rayon`: Enables parallel iteration and other parallel methods.
 //! * `serde`: Adds implementations for [`Serialize`] and [`Deserialize`]
-//!   to [`IndexMap`] and [`IndexSet`]. Alternative implementations for
+//!   to [`IndexMap`] and [`RubySet`]. Alternative implementations for
 //!   (de)serializing [`IndexMap`] as an ordered sequence are available in the
 //!   [`map::serde_seq`] module.
 //! * `arbitrary`: Adds implementations for the [`arbitrary::Arbitrary`] trait
-//!   to [`IndexMap`] and [`IndexSet`].
+//!   to [`IndexMap`] and [`RubySet`].
 //! * `quickcheck`: Adds implementations for the [`quickcheck::Arbitrary`] trait
-//!   to [`IndexMap`] and [`IndexSet`].
+//!   to [`IndexMap`] and [`RubySet`].
 //! * `borsh` (**deprecated**): Adds implementations for [`BorshSerialize`] and
-//!   [`BorshDeserialize`] to [`IndexMap`] and [`IndexSet`]. Due to a cyclic
+//!   [`BorshDeserialize`] to [`IndexMap`] and [`RubySet`]. Due to a cyclic
 //!   dependency that arose between [`borsh`] and `indexmap`, `borsh v1.5.6`
 //!   added an `indexmap` feature that should be used instead of enabling the
 //!   feature here.
@@ -58,23 +58,11 @@
 //!
 //! ### Alternate Hashers
 //!
-//! [`IndexMap`] and [`IndexSet`] have a default hasher type
+//! [`IndexMap`] and [`RubySet`] have a default hasher type
 //! [`S = RandomState`][std::collections::hash_map::RandomState],
 //! just like the standard `HashMap` and `HashSet`, which is resistant to
 //! HashDoS attacks but not the most performant. Type aliases can make it easier
 //! to use alternate hashers:
-//!
-//! ```
-//! use fnv::FnvBuildHasher;
-//! use rubymap::{IndexMap, IndexSet};
-//!
-//! type FnvIndexMap<K, V> = IndexMap<K, V, FnvBuildHasher>;
-//! type FnvIndexSet<T> = IndexSet<T, FnvBuildHasher>;
-//!
-//! let std: IndexSet<i32> = (0..100).collect();
-//! let fnv: FnvIndexSet<i32> = (0..100).collect();
-//! assert_eq!(std, fnv);
-//! ```
 //!
 //! ### Rust Version
 //!

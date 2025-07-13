@@ -4,17 +4,17 @@
 /// ## Example
 ///
 /// ```
-/// use rubymap::indexmap_with_default;
+/// use rubymap::{RubyMap, indexmap_with_default};
 /// use fnv::FnvHasher;
 ///
-/// let map = indexmap_with_default!{
+/// let map: RubyMap<_, _, _, _, _, _> = indexmap_with_default!{
 ///     FnvHasher;
 ///     "a" => 1,
 ///     "b" => 2,
 /// };
 /// assert_eq!(map["a"], 1);
 /// assert_eq!(map["b"], 2);
-/// assert_eq!(map.get("c"), None);
+/// assert_eq!(map.get("c", &mut (), &mut ()).unwrap(), None);
 ///
 /// // "a" is the first key
 /// assert_eq!(map.keys().next(), Some(&"a"));
@@ -29,7 +29,7 @@ macro_rules! indexmap_with_default {
         // Specify your custom `H` (must implement Default + Hasher) as the hasher:
         let mut map = $crate::RubyMap::with_capacity_and_hasher(CAP, builder);
         $(
-            map.insert($key, $value);
+            map.insert($key, $value, &mut (), &mut ()).unwrap();
         )*
         map
     }};
@@ -44,12 +44,13 @@ macro_rules! indexmap_with_default {
 /// use rubymap::indexmap;
 ///
 /// let map = indexmap!{
+///     &mut (); &mut ();
 ///     "a" => 1,
 ///     "b" => 2,
 /// };
 /// assert_eq!(map["a"], 1);
 /// assert_eq!(map["b"], 2);
-/// assert_eq!(map.get("c"), None);
+/// assert_eq!(map.get("c", &mut (), &mut ()).unwrap(), None);
 ///
 /// // "a" is the first key
 /// assert_eq!(map.keys().next(), Some(&"a"));
@@ -70,7 +71,7 @@ macro_rules! indexmap {
     };
 }
 
-/// Create an [`IndexSet`][crate::IndexSet] from a list of values
+/// Create an [`RubySet`][crate::RubySet] from a list of values
 /// and a [`BuildHasherDefault`][core::hash::BuildHasherDefault]-wrapped custom hasher.
 ///
 /// ## Example
@@ -79,14 +80,14 @@ macro_rules! indexmap {
 /// use rubymap::indexset_with_default;
 /// use fnv::FnvHasher;
 ///
-/// let set = indexset_with_default!{
+/// let set: rubymap::RubySet<_, (), (), (), _> = indexset_with_default!{
 ///     FnvHasher;
 ///     "a",
 ///     "b",
 /// };
-/// assert!(set.contains("a"));
-/// assert!(set.contains("b"));
-/// assert!(!set.contains("c"));
+/// assert!(set.contains("a", &mut (), &mut ()).unwrap());
+/// assert!(set.contains("b", &mut (), &mut ()).unwrap());
+/// assert!(!set.contains("c", &mut (), &mut ()).unwrap());
 ///
 /// // "a" is the first value
 /// assert_eq!(set.iter().next(), Some(&"a"));
@@ -99,29 +100,30 @@ macro_rules! indexset_with_default {
         const CAP: usize = <[()]>::len(&[$({ stringify!($value); }),*]);
         #[allow(unused_mut)]
         // Specify your custom `H` (must implement Default + Hash) as the hasher:
-        let mut set = $crate::IndexSet::with_capacity_and_hasher(CAP, builder);
+        let mut set = $crate::RubySet::with_capacity_and_hasher(CAP, builder);
         $(
-            set.insert($value);
+            set.insert($value, &mut (), &mut ()).unwrap();
         )*
         set
     }};
 }
 
 #[macro_export]
-/// Create an [`IndexSet`][crate::IndexSet] from a list of values
+/// Create an [`RubySet`][crate::RubySet] from a list of values
 ///
 /// ## Example
 ///
 /// ```
-/// use rubymap::indexset;
+/// use rubymap::{RubySet, indexset};
 ///
-/// let set = indexset!{
+/// let set: RubySet<_, (), (), ()> = indexset!{
+///     &mut (); &mut ();
 ///     "a",
 ///     "b",
 /// };
-/// assert!(set.contains("a"));
-/// assert!(set.contains("b"));
-/// assert!(!set.contains("c"));
+/// assert!(set.contains("a", &mut (), &mut ()).unwrap());
+/// assert!(set.contains("b", &mut (), &mut ()).unwrap());
+/// assert!(!set.contains("c", &mut (), &mut ()).unwrap());
 ///
 /// // "a" is the first value
 /// assert_eq!(set.iter().next(), Some(&"a"));

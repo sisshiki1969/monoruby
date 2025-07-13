@@ -8,12 +8,12 @@ use core::fmt;
 use core::hash::{Hash, Hasher};
 use core::ops::{self, Bound, Index, RangeBounds};
 
-/// A dynamically-sized slice of values in an [`IndexSet`].
+/// A dynamically-sized slice of values in an [`RubySet`].
 ///
 /// This supports indexed operations much like a `[T]` slice,
 /// but not any hashed operations on the values.
 ///
-/// Unlike `IndexSet`, `Slice` does consider the order for [`PartialEq`]
+/// Unlike `RubySet`, `Slice` does consider the order for [`PartialEq`]
 /// and [`Eq`], and it also implements [`PartialOrd`], [`Ord`], and [`Hash`].
 #[repr(transparent)]
 pub struct Slice<T> {
@@ -122,7 +122,7 @@ impl<T> Slice<T> {
     /// to maintain the sort. See [`slice::binary_search`] for more details.
     ///
     /// Computes in **O(log(n))** time, which is notably less scalable than looking the value up in
-    /// the set this is a slice from using [`IndexSet::get_index_of`], but this can also position
+    /// the set this is a slice from using [`RubySet::get_index_of`], but this can also position
     /// missing values.
     pub fn binary_search(&self, x: &T) -> Result<usize, usize>
     where

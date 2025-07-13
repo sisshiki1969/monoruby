@@ -39,7 +39,7 @@ type Bucket<T> = super::Bucket<T, ()>;
 /// already present.
 ///
 /// All iterators traverse the set *in order*.  Set operation iterators like
-/// [`IndexSet::union`] produce a concatenated order, as do their matching "bitwise"
+/// [`RubySet::union`] produce a concatenated order, as do their matching "bitwise"
 /// operators.  See their documentation for specifics.
 ///
 /// The insertion order is preserved, with **notable exceptions** like the
@@ -55,23 +55,23 @@ type Bucket<T> = super::Bucket<T, ()>;
 ///
 /// # Complexity
 ///
-/// Internally, `IndexSet<T, S>` just holds an [`IndexMap<T, (), S>`](IndexMap). Thus the complexity
+/// Internally, `RubySet<T, S>` just holds an [`IndexMap<T, (), S>`](IndexMap). Thus the complexity
 /// of the two are the same for most methods.
 ///
 /// # Examples
 ///
 /// ```
-/// use rubymap::IndexSet;
+/// use rubymap::RubySet;
 ///
 /// // Collects which letters appear in a sentence.
-/// let letters: IndexSet<_> = "a short treatise on fungi".chars().collect();
+/// let letters: RubySet<_> = RubySet::from_iter("a short treatise on fungi".chars(), &mut (), &mut ()).unwrap();
 ///
-/// assert!(letters.contains(&'s'));
-/// assert!(letters.contains(&'t'));
-/// assert!(letters.contains(&'u'));
-/// assert!(!letters.contains(&'y'));
+/// assert!(letters.contains(&'s', &mut (), &mut ()).unwrap());
+/// assert!(letters.contains(&'t', &mut (), &mut ()).unwrap());
+/// assert!(letters.contains(&'u', &mut (), &mut ()).unwrap());
+/// assert!(!letters.contains(&'y', &mut (), &mut ()).unwrap());
 /// ```
-pub struct RubySet<T, E, G, R, S = RandomState> {
+pub struct RubySet<T, E = (), G = (), R = (), S = RandomState> {
     pub(crate) map: RubyMap<T, (), E, G, R, S>,
 }
 
@@ -87,6 +87,12 @@ where
 
     fn clone_from(&mut self, other: &Self) {
         self.map.clone_from(&other.map);
+    }
+}
+
+impl<T: PartialEq + RubyEql<(), (), ()> + Hash> PartialEq for RubySet<T, (), (), ()> {
+    fn eq(&self, other: &Self) -> bool {
+        self.map == other.map
     }
 }
 
@@ -213,7 +219,7 @@ impl<T, E, G, R, S> RubySet<T, E, G, R, S> {
         self.map.truncate(len, e, g)
     }
 
-    /// Clears the `IndexSet` in the given index range, returning those values
+    /// Clears the `RubySet` in the given index range, returning those values
     /// as a drain iterator.
     ///
     /// The range may be any type that implements [`RangeBounds<usize>`],
@@ -359,30 +365,30 @@ where
     /// # Examples
     ///
     /// ```
-    /// use rubymap::IndexSet;
-    /// let mut set: IndexSet<char> = ('a'..='z').collect();
+    /// use rubymap::RubySet;
+    /// let mut set: RubySet<char> = RubySet::from_iter('a'..='z', &mut (), &mut ()).unwrap();
     ///
     /// // The new value '*' goes exactly at the given index.
-    /// assert_eq!(set.get_index_of(&'*'), None);
-    /// assert_eq!(set.insert_before(10, '*'), (10, true));
-    /// assert_eq!(set.get_index_of(&'*'), Some(10));
+    /// assert_eq!(set.get_index_of(&'*', &mut (), &mut ()).unwrap(), None);
+    /// assert_eq!(set.insert_before(10, '*', &mut (), &mut ()).unwrap(), (10, true));
+    /// assert_eq!(set.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(10));
     ///
     /// // Moving the value 'a' up will shift others down, so this moves *before* 10 to index 9.
-    /// assert_eq!(set.insert_before(10, 'a'), (9, false));
-    /// assert_eq!(set.get_index_of(&'a'), Some(9));
-    /// assert_eq!(set.get_index_of(&'*'), Some(10));
+    /// assert_eq!(set.insert_before(10, 'a', &mut (), &mut ()).unwrap(), (9, false));
+    /// assert_eq!(set.get_index_of(&'a', &mut (), &mut ()).unwrap(), Some(9));
+    /// assert_eq!(set.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(10));
     ///
     /// // Moving the value 'z' down will shift others up, so this moves to exactly 10.
-    /// assert_eq!(set.insert_before(10, 'z'), (10, false));
-    /// assert_eq!(set.get_index_of(&'z'), Some(10));
-    /// assert_eq!(set.get_index_of(&'*'), Some(11));
+    /// assert_eq!(set.insert_before(10, 'z', &mut (), &mut ()).unwrap(), (10, false));
+    /// assert_eq!(set.get_index_of(&'z', &mut (), &mut ()).unwrap(), Some(10));
+    /// assert_eq!(set.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(11));
     ///
     /// // Moving or inserting before the endpoint is also valid.
     /// assert_eq!(set.len(), 27);
-    /// assert_eq!(set.insert_before(set.len(), '*'), (26, false));
-    /// assert_eq!(set.get_index_of(&'*'), Some(26));
-    /// assert_eq!(set.insert_before(set.len(), '+'), (27, true));
-    /// assert_eq!(set.get_index_of(&'+'), Some(27));
+    /// assert_eq!(set.insert_before(set.len(), '*', &mut (), &mut ()).unwrap(), (26, false));
+    /// assert_eq!(set.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(26));
+    /// assert_eq!(set.insert_before(set.len(), '+', &mut (), &mut ()).unwrap(), (27, true));
+    /// assert_eq!(set.get_index_of(&'+', &mut (), &mut ()).unwrap(), Some(27));
     /// assert_eq!(set.len(), 28);
     /// ```
     #[track_caller]
@@ -415,39 +421,39 @@ where
     /// # Examples
     ///
     /// ```
-    /// use rubymap::IndexSet;
-    /// let mut set: IndexSet<char> = ('a'..='z').collect();
+    /// use rubymap::RubySet;
+    /// let mut set: RubySet<char> = RubySet::from_iter('a'..='z', &mut (), &mut ()).unwrap();
     ///
     /// // The new value '*' goes exactly at the given index.
-    /// assert_eq!(set.get_index_of(&'*'), None);
-    /// assert_eq!(set.shift_insert(10, '*'), true);
-    /// assert_eq!(set.get_index_of(&'*'), Some(10));
+    /// assert_eq!(set.get_index_of(&'*', &mut (), &mut ()).unwrap(), None);
+    /// assert_eq!(set.shift_insert(10, '*', &mut (), &mut ()).unwrap(), true);
+    /// assert_eq!(set.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(10));
     ///
     /// // Moving the value 'a' up to 10 will shift others down, including the '*' that was at 10.
-    /// assert_eq!(set.shift_insert(10, 'a'), false);
-    /// assert_eq!(set.get_index_of(&'a'), Some(10));
-    /// assert_eq!(set.get_index_of(&'*'), Some(9));
+    /// assert_eq!(set.shift_insert(10, 'a', &mut (), &mut ()).unwrap(), false);
+    /// assert_eq!(set.get_index_of(&'a', &mut (), &mut ()).unwrap(), Some(10));
+    /// assert_eq!(set.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(9));
     ///
     /// // Moving the value 'z' down to 9 will shift others up, including the '*' that was at 9.
-    /// assert_eq!(set.shift_insert(9, 'z'), false);
-    /// assert_eq!(set.get_index_of(&'z'), Some(9));
-    /// assert_eq!(set.get_index_of(&'*'), Some(10));
+    /// assert_eq!(set.shift_insert(9, 'z', &mut (), &mut ()).unwrap(), false);
+    /// assert_eq!(set.get_index_of(&'z', &mut (), &mut ()).unwrap(), Some(9));
+    /// assert_eq!(set.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(10));
     ///
     /// // Existing values can move to len-1 at most, but new values can insert at the endpoint.
     /// assert_eq!(set.len(), 27);
-    /// assert_eq!(set.shift_insert(set.len() - 1, '*'), false);
-    /// assert_eq!(set.get_index_of(&'*'), Some(26));
-    /// assert_eq!(set.shift_insert(set.len(), '+'), true);
-    /// assert_eq!(set.get_index_of(&'+'), Some(27));
+    /// assert_eq!(set.shift_insert(set.len() - 1, '*', &mut (), &mut ()).unwrap(), false);
+    /// assert_eq!(set.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(26));
+    /// assert_eq!(set.shift_insert(set.len(), '+', &mut (), &mut ()).unwrap(), true);
+    /// assert_eq!(set.get_index_of(&'+', &mut (), &mut ()).unwrap(), Some(27));
     /// assert_eq!(set.len(), 28);
     /// ```
     ///
     /// ```should_panic
-    /// use rubymap::IndexSet;
-    /// let mut set: IndexSet<char> = ('a'..='z').collect();
+    /// use rubymap::RubySet;
+    /// let mut set: RubySet<char> = RubySet::from_iter('a'..='z', &mut (), &mut ()).unwrap();
     ///
     /// // This is an invalid index for moving an existing value!
-    /// set.shift_insert(set.len(), 'a');
+    /// set.shift_insert(set.len(), 'a', &mut (), &mut ()).unwrap();
     /// ```
     #[track_caller]
     pub fn shift_insert(
@@ -499,13 +505,13 @@ where
     /// # Examples
     ///
     /// ```
-    /// use rubymap::IndexSet;
+    /// use rubymap::RubySet;
     ///
-    /// let mut a = IndexSet::from([3, 2, 1]);
-    /// let mut b = IndexSet::from([3, 4, 5]);
+    /// let mut a: RubySet<_, _> = RubySet::from_ary([3, 2, 1], &mut (), &mut ()).unwrap();
+    /// let mut b: RubySet<_, _> = RubySet::from_ary([3, 4, 5], &mut (), &mut ()).unwrap();
     /// let old_capacity = b.capacity();
     ///
-    /// a.append(&mut b);
+    /// a.append(&mut b, &mut (), &mut ()).unwrap();
     ///
     /// assert_eq!(a.len(), 5);
     /// assert_eq!(b.len(), 0);
@@ -794,7 +800,7 @@ impl<T, E, G, R, S> RubySet<T, E, G, R, S> {
     /// to maintain the sort. See [`slice::binary_search`] for more details.
     ///
     /// Computes in **O(log(n))** time, which is notably less scalable than looking the value up
-    /// using [`get_index_of`][IndexSet::get_index_of], but this can also position missing values.
+    /// using [`get_index_of`][RubySet::get_index_of], but this can also position missing values.
     pub fn binary_search(&self, x: &T) -> Result<usize, usize>
     where
         T: Ord,
@@ -957,7 +963,11 @@ where
     S: BuildHasher + Default,
 {
     /// Create a new set from an iterator of values.
-    fn from_iter<I: IntoIterator<Item = T>>(iterable: I, e: &mut E, g: &mut G) -> Result<Self, R> {
+    pub fn from_iter<I: IntoIterator<Item = T>>(
+        iterable: I,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Self, R> {
         let iter = iterable.into_iter().map(|x| (x, ()));
         Ok(RubySet {
             map: RubyMap::from_iter(iter, e, g)?,
@@ -972,11 +982,13 @@ where
     /// # Examples
     ///
     /// ```
-    /// use rubymap::IndexSet;
+    /// use rubymap::RubySet;
     ///
-    /// let set1 = IndexSet::from([1, 2, 3, 4]);
-    /// let set2: IndexSet<_> = [1, 2, 3, 4].into();
+    /// # fn main() {
+    /// let set1: RubySet<_> = RubySet::from_ary([1, 2, 3, 4], &mut (), &mut ()).unwrap();
+    /// let set2: RubySet<_> = RubySet::from_ary([1, 2, 3, 4], &mut (), &mut ()).unwrap();
     /// assert_eq!(set1, set2);
+    /// # }
     /// ```
     pub fn from_ary<const N: usize>(arr: [T; N], e: &mut E, g: &mut G) -> Result<Self, R> {
         Self::from_iter(arr, e, g)
@@ -1003,7 +1015,7 @@ impl<T, E, G, R, S> Default for RubySet<T, E, G, R, S>
 where
     S: Default,
 {
-    /// Return an empty [`IndexSet`]
+    /// Return an empty [`RubySet`]
     fn default() -> Self {
         RubySet {
             map: RubyMap::default(),

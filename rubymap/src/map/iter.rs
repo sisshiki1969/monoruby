@@ -392,9 +392,9 @@ impl<K, V> Default for Keys<'_, K, V> {
 /// ```
 /// use rubymap::RubyMap;
 ///
-/// let mut map = RubyMap::new();
+/// let mut map: RubyMap<_, _> = RubyMap::new();
 /// for word in "Lorem ipsum dolor sit amet".split_whitespace() {
-///     map.insert(word.to_lowercase(), word.to_uppercase());
+///     map.insert(word.to_lowercase(), word.to_uppercase(), &mut (), &mut ()).unwrap();
 /// }
 ///
 /// assert_eq!(map[0], "LOREM");
@@ -424,10 +424,10 @@ impl<K, V> Default for Keys<'_, K, V> {
 /// ```
 ///
 /// ```should_panic
-/// use rubymap::IndexMap;
+/// use rubymap::RubyMap;
 ///
-/// let mut map = IndexMap::new();
-/// map.insert("foo", 1);
+/// let mut map: RubyMap<_, _> = RubyMap::new();
+/// map.insert("foo", 1, &mut (), &mut ()).unwrap();
 /// println!("{:?}", map.keys()[10]); // panics!
 /// ```
 impl<K, V> Index<usize> for Keys<'_, K, V> {

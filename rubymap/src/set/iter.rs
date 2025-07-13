@@ -23,9 +23,9 @@ impl<T, E, G, R, S> IntoIterator for RubySet<T, E, G, R, S> {
     }
 }
 
-/// An iterator over the items of an [`IndexSet`].
+/// An iterator over the items of an [`RubySet`].
 ///
-/// This `struct` is created by the [`IndexSet::iter`] method.
+/// This `struct` is created by the [`RubySet::iter`] method.
 /// See its documentation for more.
 pub struct Iter<'a, T> {
     iter: SliceIter<'a, Bucket<T>>,
@@ -77,9 +77,9 @@ impl<T> Default for Iter<'_, T> {
     }
 }
 
-/// An owning iterator over the items of an [`IndexSet`].
+/// An owning iterator over the items of an [`RubySet`].
 ///
-/// This `struct` is created by the [`IndexSet::into_iter`] method
+/// This `struct` is created by the [`RubySet::into_iter`] method
 /// (provided by the [`IntoIterator`] trait). See its documentation for more.
 #[derive(Clone)]
 pub struct IntoIter<T> {
@@ -127,9 +127,9 @@ impl<T> Default for IntoIter<T> {
     }
 }
 
-/// A draining iterator over the items of an [`IndexSet`].
+/// A draining iterator over the items of an [`RubySet`].
 ///
-/// This `struct` is created by the [`IndexSet::drain`] method.
+/// This `struct` is created by the [`RubySet::drain`] method.
 /// See its documentation for more.
 pub struct Drain<'a, T> {
     iter: vec::Drain<'a, Bucket<T>>,

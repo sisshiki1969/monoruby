@@ -60,20 +60,20 @@ use crate::{Bucket, Entries, Equivalent, GetDisjointMutError, HashValue};
 /// # Examples
 ///
 /// ```
-/// use rubymap::IndexMap;
+/// use rubymap::RubyMap;
 ///
 /// // count the frequency of each letter in a sentence.
-/// let mut letters = IndexMap::new();
+/// let mut letters = RubyMap::new();
 /// for ch in "a short treatise on fungi".chars() {
-///     *letters.entry(ch).or_insert(0) += 1;
+///     *letters.entry(ch, &mut (), &mut ()).unwrap().or_insert(0) += 1;
 /// }
 ///
 /// assert_eq!(letters[&'s'], 2);
 /// assert_eq!(letters[&'t'], 3);
 /// assert_eq!(letters[&'u'], 1);
-/// assert_eq!(letters.get(&'y'), None);
+/// assert_eq!(letters.get(&'y', &mut (), &mut ()).unwrap(), None);
 /// ```
-pub struct RubyMap<K, V, E, G, R, S = RandomState> {
+pub struct RubyMap<K, V, E = (), G = (), R = (), S = RandomState> {
     pub(crate) core: IndexMapCore<K, V, E, G, R>,
     hash_builder: S,
 }
@@ -94,6 +94,35 @@ where
     fn clone_from(&mut self, other: &Self) {
         self.core.clone_from(&other.core);
         self.hash_builder.clone_from(&other.hash_builder);
+    }
+}
+
+impl<K: PartialEq + RubyEql<(), (), ()> + Hash, V: PartialEq> PartialEq
+    for RubyMap<K, V, (), (), ()>
+{
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        for (k1, v1) in self.iter() {
+            if Some(v1) != other.get(k1, &mut (), &mut ()).unwrap() {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl<K, Q: ?Sized, V, S> std::ops::Index<&Q> for RubyMap<K, V, (), (), (), S>
+where
+    K: Hash + equivalent::RubyEql<(), (), ()> + std::borrow::Borrow<Q>,
+    Q: Hash + equivalent::RubyEql<(), (), ()>,
+    S: BuildHasher,
+{
+    type Output = V;
+
+    fn index(&self, key: &Q) -> &Self::Output {
+        self.get(key, &mut (), &mut ()).unwrap().unwrap()
     }
 }
 
@@ -436,29 +465,29 @@ where
     ///
     /// ```
     /// use rubymap::RubyMap;
-    /// let mut map: RubyMap<char, ()> = ('a'..='z').map(|c| (c, ())).collect();
+    /// let mut map: RubyMap<char, ()> = RubyMap::from_iter(('a'..='z').map(|c| (c, ())), &mut (), &mut ()).unwrap();
     ///
     /// // The new key '*' goes exactly at the given index.
-    /// assert_eq!(map.get_index_of(&'*'), None);
-    /// assert_eq!(map.insert_before(10, '*', ()), (10, None));
-    /// assert_eq!(map.get_index_of(&'*'), Some(10));
+    /// assert_eq!(map.get_index_of(&'*', &mut (), &mut ()).unwrap(), None);
+    /// assert_eq!(map.insert_before(10, '*', (), &mut (), &mut ()).unwrap(), (10, None));
+    /// assert_eq!(map.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(10));
     ///
     /// // Moving the key 'a' up will shift others down, so this moves *before* 10 to index 9.
-    /// assert_eq!(map.insert_before(10, 'a', ()), (9, Some(())));
-    /// assert_eq!(map.get_index_of(&'a'), Some(9));
-    /// assert_eq!(map.get_index_of(&'*'), Some(10));
+    /// assert_eq!(map.insert_before(10, 'a', (), &mut (), &mut ()).unwrap(), (9, Some(())));
+    /// assert_eq!(map.get_index_of(&'a', &mut (), &mut ()).unwrap(), Some(9));
+    /// assert_eq!(map.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(10));
     ///
     /// // Moving the key 'z' down will shift others up, so this moves to exactly 10.
-    /// assert_eq!(map.insert_before(10, 'z', ()), (10, Some(())));
-    /// assert_eq!(map.get_index_of(&'z'), Some(10));
-    /// assert_eq!(map.get_index_of(&'*'), Some(11));
+    /// assert_eq!(map.insert_before(10, 'z', (), &mut (), &mut ()).unwrap(), (10, Some(())));
+    /// assert_eq!(map.get_index_of(&'z', &mut (), &mut ()).unwrap(), Some(10));
+    /// assert_eq!(map.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(11));
     ///
     /// // Moving or inserting before the endpoint is also valid.
     /// assert_eq!(map.len(), 27);
-    /// assert_eq!(map.insert_before(map.len(), '*', ()), (26, Some(())));
-    /// assert_eq!(map.get_index_of(&'*'), Some(26));
-    /// assert_eq!(map.insert_before(map.len(), '+', ()), (27, None));
-    /// assert_eq!(map.get_index_of(&'+'), Some(27));
+    /// assert_eq!(map.insert_before(map.len(), '*', (), &mut (), &mut ()).unwrap(), (26, Some(())));
+    /// assert_eq!(map.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(26));
+    /// assert_eq!(map.insert_before(map.len(), '+', (), &mut (), &mut ()).unwrap(), (27, None));
+    /// assert_eq!(map.get_index_of(&'+', &mut (), &mut ()).unwrap(), Some(27));
     /// assert_eq!(map.len(), 28);
     /// ```
     #[track_caller]
@@ -520,38 +549,38 @@ where
     ///
     /// ```
     /// use rubymap::RubyMap;
-    /// let mut map: RubyMap<char, ()> = ('a'..='z').map(|c| (c, ())).collect();
+    /// let mut map: RubyMap<char, ()> = RubyMap::from_iter(('a'..='z').map(|c| (c, ())), &mut (), &mut ()).unwrap();
     ///
     /// // The new key '*' goes exactly at the given index.
-    /// assert_eq!(map.get_index_of(&'*'), None);
-    /// assert_eq!(map.shift_insert(10, '*', ()), None);
-    /// assert_eq!(map.get_index_of(&'*'), Some(10));
+    /// assert_eq!(map.get_index_of(&'*', &mut (), &mut ()).unwrap(), None);
+    /// assert_eq!(map.shift_insert(10, '*', (), &mut (), &mut ()).unwrap(), None);
+    /// assert_eq!(map.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(10));
     ///
     /// // Moving the key 'a' up to 10 will shift others down, including the '*' that was at 10.
-    /// assert_eq!(map.shift_insert(10, 'a', ()), Some(()));
-    /// assert_eq!(map.get_index_of(&'a'), Some(10));
-    /// assert_eq!(map.get_index_of(&'*'), Some(9));
+    /// assert_eq!(map.shift_insert(10, 'a', (), &mut (), &mut ()).unwrap(), Some(()));
+    /// assert_eq!(map.get_index_of(&'a', &mut (), &mut ()).unwrap(), Some(10));
+    /// assert_eq!(map.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(9));
     ///
     /// // Moving the key 'z' down to 9 will shift others up, including the '*' that was at 9.
-    /// assert_eq!(map.shift_insert(9, 'z', ()), Some(()));
-    /// assert_eq!(map.get_index_of(&'z'), Some(9));
-    /// assert_eq!(map.get_index_of(&'*'), Some(10));
+    /// assert_eq!(map.shift_insert(9, 'z', (), &mut (), &mut ()).unwrap(), Some(()));
+    /// assert_eq!(map.get_index_of(&'z', &mut (), &mut ()).unwrap(), Some(9));
+    /// assert_eq!(map.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(10));
     ///
     /// // Existing keys can move to len-1 at most, but new keys can insert at the endpoint.
     /// assert_eq!(map.len(), 27);
-    /// assert_eq!(map.shift_insert(map.len() - 1, '*', ()), Some(()));
-    /// assert_eq!(map.get_index_of(&'*'), Some(26));
-    /// assert_eq!(map.shift_insert(map.len(), '+', ()), None);
-    /// assert_eq!(map.get_index_of(&'+'), Some(27));
+    /// assert_eq!(map.shift_insert(map.len() - 1, '*', (), &mut (), &mut ()).unwrap(), Some(()));
+    /// assert_eq!(map.get_index_of(&'*', &mut (), &mut ()).unwrap(), Some(26));
+    /// assert_eq!(map.shift_insert(map.len(), '+', (), &mut (), &mut ()).unwrap(), None);
+    /// assert_eq!(map.get_index_of(&'+', &mut (), &mut ()).unwrap(), Some(27));
     /// assert_eq!(map.len(), 28);
     /// ```
     ///
     /// ```should_panic
-    /// use rubymap::IndexMap;
-    /// let mut map: IndexMap<char, ()> = ('a'..='z').map(|c| (c, ())).collect();
+    /// use rubymap::RubyMap;
+    /// let mut map: RubyMap<char, ()> = RubyMap::from_iter(('a'..='z').map(|c| (c, ())), &mut (), &mut ()).unwrap();
     ///
     /// // This is an invalid index for moving an existing key!
-    /// map.shift_insert(map.len(), 'a', ());
+    /// map.shift_insert(map.len(), 'a', (), &mut (), &mut ()).unwrap();
     /// ```
     #[track_caller]
     pub fn shift_insert(
@@ -604,14 +633,14 @@ where
     /// # Examples
     ///
     /// ```
-    /// use rubymap::IndexMap;
+    /// use rubymap::RubyMap;
     ///
     /// // Note: Key (3) is present in both maps.
-    /// let mut a = IndexMap::from([(3, "c"), (2, "b"), (1, "a")]);
-    /// let mut b = IndexMap::from([(3, "d"), (4, "e"), (5, "f")]);
+    /// let mut a = RubyMap::from_ary([(3, "c"), (2, "b"), (1, "a")], &mut (), &mut ()).unwrap();
+    /// let mut b = RubyMap::from_ary([(3, "d"), (4, "e"), (5, "f")], &mut (), &mut ()).unwrap();
     /// let old_capacity = b.capacity();
     ///
-    /// a.append(&mut b);
+    /// a.append(&mut b, &mut (), &mut ()).unwrap();
     ///
     /// assert_eq!(a.len(), 5);
     /// assert_eq!(b.len(), 0);
@@ -746,8 +775,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// let mut map = rubymap::IndexMap::from([(1, 'a'), (3, 'b'), (2, 'c')]);
-    /// assert_eq!(map.get_disjoint_mut([&2, &1]), [Some(&mut 'c'), Some(&mut 'a')]);
+    /// let mut map: rubymap::RubyMap<_, _> = rubymap::RubyMap::from_ary([(1, 'a'), (3, 'b'), (2, 'c')], &mut (), &mut ()).unwrap();
+    /// assert_eq!(map.get_disjoint_mut([&2, &1], &mut (), &mut ()).unwrap(), [Some(&mut 'c'), Some(&mut 'a')]);
     /// ```
     pub fn get_disjoint_mut<Q, const N: usize>(
         &mut self,
@@ -1198,7 +1227,7 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
     /// # Examples
     ///
     /// ```
-    /// let mut map = rubymap::IndexMap::from([(1, 'a'), (3, 'b'), (2, 'c')]);
+    /// let mut map: rubymap::RubyMap<_, _> = rubymap::RubyMap::from_ary([(1, 'a'), (3, 'b'), (2, 'c')], &mut (), &mut ()).unwrap();
     /// assert_eq!(map.get_disjoint_indices_mut([2, 0]), Ok([(&2, &mut 'c'), (&1, &mut 'a')]));
     /// ```
     pub fn get_disjoint_indices_mut<const N: usize>(
@@ -1334,11 +1363,11 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
 /// # Examples
 ///
 /// ```
-/// use rubymap::IndexMap;
+/// use rubymap::RubyMap;
 ///
-/// let mut map = IndexMap::new();
+/// let mut map: RubyMap<_, _> = RubyMap::new();
 /// for word in "Lorem ipsum dolor sit amet".split_whitespace() {
-///     map.insert(word.to_lowercase(), word.to_uppercase());
+///     map.insert(word.to_lowercase(), word.to_uppercase(), &mut (), &mut ()).unwrap();
 /// }
 /// assert_eq!(map[0], "LOREM");
 /// assert_eq!(map[1], "IPSUM");
@@ -1351,10 +1380,10 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
 /// ```
 ///
 /// ```should_panic
-/// use rubymap::IndexMap;
+/// use rubymap::RubyMap;
 ///
-/// let mut map = IndexMap::new();
-/// map.insert("foo", 1);
+/// let mut map: RubyMap<_, _> = RubyMap::new();
+/// map.insert("foo", 1, &mut (), &mut ()).unwrap();
 /// println!("{:?}", map[10]); // panics!
 /// ```
 impl<K, V, E, G, R, S> Index<usize> for RubyMap<K, V, E, G, R, S> {
@@ -1385,11 +1414,11 @@ impl<K, V, E, G, R, S> Index<usize> for RubyMap<K, V, E, G, R, S> {
 /// # Examples
 ///
 /// ```
-/// use rubymap::IndexMap;
+/// use rubymap::RubyMap;
 ///
-/// let mut map = IndexMap::new();
+/// let mut map = RubyMap::new();
 /// for word in "Lorem ipsum dolor sit amet".split_whitespace() {
-///     map.insert(word.to_lowercase(), word.to_string());
+///     map.insert(word.to_lowercase(), word.to_string(), &mut (), &mut ()).unwrap();
 /// }
 /// let lorem = &mut map[0];
 /// assert_eq!(lorem, "Lorem");
@@ -1398,10 +1427,10 @@ impl<K, V, E, G, R, S> Index<usize> for RubyMap<K, V, E, G, R, S> {
 /// ```
 ///
 /// ```should_panic
-/// use rubymap::IndexMap;
+/// use rubymap::RubyMap;
 ///
-/// let mut map = IndexMap::new();
-/// map.insert("foo", 1);
+/// let mut map: RubyMap<_, _> = RubyMap::new();
+/// map.insert("foo", 1, &mut (), &mut ()).unwrap();
 /// map[10] = 1; // panics!
 /// ```
 impl<K, V, E, G, R, S> IndexMut<usize> for RubyMap<K, V, E, G, R, S> {
@@ -1449,10 +1478,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// use rubymap::IndexMap;
+    /// use rubymap::RubyMap;
     ///
-    /// let map1 = IndexMap::from([(1, 2), (3, 4)]);
-    /// let map2: IndexMap<_, _> = [(1, 2), (3, 4)].into();
+    /// let map1 = RubyMap::from_ary([(1, 2), (3, 4)], &mut (), &mut ()).unwrap();
+    /// let map2: RubyMap<_, _> = RubyMap::from_ary([(1, 2), (3, 4)], &mut (), &mut ()).unwrap();
     /// assert_eq!(map1, map2);
     /// ```
     pub fn from_ary<const N: usize>(arr: [(K, V); N], e: &mut E, g: &mut G) -> Result<Self, R> {
