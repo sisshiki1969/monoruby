@@ -7,7 +7,17 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Proc", PROC_CLASS, ObjTy::PROC);
     globals.define_builtin_class_func(PROC_CLASS, "new", new, 0);
-    globals.define_builtin_funcs_rest(PROC_CLASS, "call", &["[]", "yield", "==="], call);
+    globals.define_builtin_funcs_with_kw(
+        PROC_CLASS,
+        "call",
+        &["[]", "yield", "==="],
+        call,
+        0,
+        0,
+        true,
+        &[],
+        true,
+    );
 }
 
 ///

@@ -60,7 +60,7 @@ use crate::{Bucket, Entries, Equivalent, GetDisjointMutError, HashValue};
 /// # Examples
 ///
 /// ```
-/// use indexmap::IndexMap;
+/// use rubymap::IndexMap;
 ///
 /// // count the frequency of each letter in a sentence.
 /// let mut letters = IndexMap::new();
@@ -435,8 +435,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// use indexmap::IndexMap;
-    /// let mut map: IndexMap<char, ()> = ('a'..='z').map(|c| (c, ())).collect();
+    /// use rubymap::RubyMap;
+    /// let mut map: RubyMap<char, ()> = ('a'..='z').map(|c| (c, ())).collect();
     ///
     /// // The new key '*' goes exactly at the given index.
     /// assert_eq!(map.get_index_of(&'*'), None);
@@ -519,8 +519,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// use indexmap::IndexMap;
-    /// let mut map: IndexMap<char, ()> = ('a'..='z').map(|c| (c, ())).collect();
+    /// use rubymap::RubyMap;
+    /// let mut map: RubyMap<char, ()> = ('a'..='z').map(|c| (c, ())).collect();
     ///
     /// // The new key '*' goes exactly at the given index.
     /// assert_eq!(map.get_index_of(&'*'), None);
@@ -547,7 +547,7 @@ where
     /// ```
     ///
     /// ```should_panic
-    /// use indexmap::IndexMap;
+    /// use rubymap::IndexMap;
     /// let mut map: IndexMap<char, ()> = ('a'..='z').map(|c| (c, ())).collect();
     ///
     /// // This is an invalid index for moving an existing key!
@@ -604,7 +604,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use indexmap::IndexMap;
+    /// use rubymap::IndexMap;
     ///
     /// // Note: Key (3) is present in both maps.
     /// let mut a = IndexMap::from([(3, "c"), (2, "b"), (1, "a")]);
@@ -746,7 +746,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// let mut map = indexmap::IndexMap::from([(1, 'a'), (3, 'b'), (2, 'c')]);
+    /// let mut map = rubymap::IndexMap::from([(1, 'a'), (3, 'b'), (2, 'c')]);
     /// assert_eq!(map.get_disjoint_mut([&2, &1]), [Some(&mut 'c'), Some(&mut 'a')]);
     /// ```
     pub fn get_disjoint_mut<Q, const N: usize>(
@@ -1198,7 +1198,7 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
     /// # Examples
     ///
     /// ```
-    /// let mut map = indexmap::IndexMap::from([(1, 'a'), (3, 'b'), (2, 'c')]);
+    /// let mut map = rubymap::IndexMap::from([(1, 'a'), (3, 'b'), (2, 'c')]);
     /// assert_eq!(map.get_disjoint_indices_mut([2, 0]), Ok([(&2, &mut 'c'), (&1, &mut 'a')]));
     /// ```
     pub fn get_disjoint_indices_mut<const N: usize>(
@@ -1334,7 +1334,7 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
 /// # Examples
 ///
 /// ```
-/// use indexmap::IndexMap;
+/// use rubymap::IndexMap;
 ///
 /// let mut map = IndexMap::new();
 /// for word in "Lorem ipsum dolor sit amet".split_whitespace() {
@@ -1351,7 +1351,7 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
 /// ```
 ///
 /// ```should_panic
-/// use indexmap::IndexMap;
+/// use rubymap::IndexMap;
 ///
 /// let mut map = IndexMap::new();
 /// map.insert("foo", 1);
@@ -1385,7 +1385,7 @@ impl<K, V, E, G, R, S> Index<usize> for RubyMap<K, V, E, G, R, S> {
 /// # Examples
 ///
 /// ```
-/// use indexmap::IndexMap;
+/// use rubymap::IndexMap;
 ///
 /// let mut map = IndexMap::new();
 /// for word in "Lorem ipsum dolor sit amet".split_whitespace() {
@@ -1398,7 +1398,7 @@ impl<K, V, E, G, R, S> Index<usize> for RubyMap<K, V, E, G, R, S> {
 /// ```
 ///
 /// ```should_panic
-/// use indexmap::IndexMap;
+/// use rubymap::IndexMap;
 ///
 /// let mut map = IndexMap::new();
 /// map.insert("foo", 1);
@@ -1449,7 +1449,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use indexmap::IndexMap;
+    /// use rubymap::IndexMap;
     ///
     /// let map1 = IndexMap::from([(1, 2), (3, 4)]);
     /// let map2: IndexMap<_, _> = [(1, 2), (3, 4)].into();

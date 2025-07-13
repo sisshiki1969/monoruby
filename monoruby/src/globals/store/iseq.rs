@@ -1151,15 +1151,32 @@ impl ParamsInfo {
         }
     }
 
-    pub fn new_native(min: usize, max: usize, rest: bool, kw_names: Vec<IdentId>) -> Self {
+    pub fn new_native(
+        min: usize,
+        max: usize,
+        rest: bool,
+        kw_names: Vec<IdentId>,
+        kw_rest: bool,
+    ) -> Self {
+        let mut p = max;
+        let kw_num = kw_names.len();
         ParamsInfo {
             required_num: min,
             optional_num: max - min,
-            rest: if rest { Some(max) } else { None },
+            rest: if rest {
+                p += 1;
+                Some(max)
+            } else {
+                None
+            },
             post_num: 0,
             args_names: vec![],
             kw_names,
-            kw_rest: None,
+            kw_rest: if kw_rest {
+                Some(SlotId::new((1 + p + kw_num) as u16))
+            } else {
+                None
+            },
             block_param: None,
         }
     }

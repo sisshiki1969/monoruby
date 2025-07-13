@@ -4,7 +4,7 @@
 /// ## Example
 ///
 /// ```
-/// use indexmap::indexmap_with_default;
+/// use rubymap::indexmap_with_default;
 /// use fnv::FnvHasher;
 ///
 /// let map = indexmap_with_default!{
@@ -27,7 +27,7 @@ macro_rules! indexmap_with_default {
         const CAP: usize = <[()]>::len(&[$({ stringify!($key); }),*]);
         #[allow(unused_mut)]
         // Specify your custom `H` (must implement Default + Hasher) as the hasher:
-        let mut map = $crate::IndexMap::with_capacity_and_hasher(CAP, builder);
+        let mut map = $crate::RubyMap::with_capacity_and_hasher(CAP, builder);
         $(
             map.insert($key, $value);
         )*
@@ -41,7 +41,7 @@ macro_rules! indexmap_with_default {
 /// ## Example
 ///
 /// ```
-/// use indexmap::indexmap;
+/// use rubymap::indexmap;
 ///
 /// let map = indexmap!{
 ///     "a" => 1,
@@ -76,7 +76,7 @@ macro_rules! indexmap {
 /// ## Example
 ///
 /// ```
-/// use indexmap::indexset_with_default;
+/// use rubymap::indexset_with_default;
 /// use fnv::FnvHasher;
 ///
 /// let set = indexset_with_default!{
@@ -113,7 +113,7 @@ macro_rules! indexset_with_default {
 /// ## Example
 ///
 /// ```
-/// use indexmap::indexset;
+/// use rubymap::indexset;
 ///
 /// let set = indexset!{
 ///     "a",

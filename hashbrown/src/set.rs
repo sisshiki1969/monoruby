@@ -46,22 +46,22 @@ use crate::DefaultHashBuilder;
 /// use hashbrown::HashSet;
 /// // Type inference lets us omit an explicit type signature (which
 /// // would be `HashSet<String>` in this example).
-/// let mut books = HashSet::new();
+/// let mut books: HashSet<_> = HashSet::new();
 ///
 /// // Add some books.
-/// books.insert("A Dance With Dragons".to_string());
-/// books.insert("To Kill a Mockingbird".to_string());
-/// books.insert("The Odyssey".to_string());
-/// books.insert("The Great Gatsby".to_string());
+/// books.insert("A Dance With Dragons".to_string(), &mut (), &mut ()).unwrap();
+/// books.insert("To Kill a Mockingbird".to_string(), &mut (), &mut ()).unwrap();
+/// books.insert("The Odyssey".to_string(), &mut (), &mut ()).unwrap();
+/// books.insert("The Great Gatsby".to_string(), &mut (), &mut ()).unwrap();
 ///
 /// // Check for a specific one.
-/// if !books.contains("The Winds of Winter") {
+/// if !books.contains("The Winds of Winter", &mut (), &mut ()).unwrap() {
 ///     println!("We have {} books, but The Winds of Winter ain't one.",
 ///              books.len());
 /// }
 ///
 /// // Remove a book.
-/// books.remove("The Odyssey");
+/// books.remove("The Odyssey", &mut (), &mut ()).unwrap();
 ///
 /// // Iterate over everything.
 /// for book in &books {
@@ -81,12 +81,18 @@ use crate::DefaultHashBuilder;
 ///     power: usize,
 /// }
 ///
-/// let mut vikings = HashSet::new();
+/// impl<E, G> equivalent::RubyEql<E, G, ()> for Viking {
+///    fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, ()> {
+///       Ok(self.name.eql(&other.name, e, g)? && self.power.eql(&other.power, e, g)?)
+///     }
+/// }
 ///
-/// vikings.insert(Viking { name: "Einar".to_string(), power: 9 });
-/// vikings.insert(Viking { name: "Einar".to_string(), power: 9 });
-/// vikings.insert(Viking { name: "Olaf".to_string(), power: 4 });
-/// vikings.insert(Viking { name: "Harald".to_string(), power: 8 });
+/// let mut vikings: HashSet<_> = HashSet::new();
+///
+/// vikings.insert(Viking { name: "Einar".to_string(), power: 9 }, &mut (), &mut ()).unwrap();
+/// vikings.insert(Viking { name: "Einar".to_string(), power: 9 }, &mut (), &mut ()).unwrap();
+/// vikings.insert(Viking { name: "Olaf".to_string(), power: 4 }, &mut (), &mut ()).unwrap();
+/// vikings.insert(Viking { name: "Harald".to_string(), power: 8 }, &mut (), &mut ()).unwrap();
 ///
 /// // Use derived implementation to print the vikings.
 /// for x in &vikings {
@@ -99,8 +105,8 @@ use crate::DefaultHashBuilder;
 /// ```
 /// use hashbrown::HashSet;
 ///
-/// let viking_names: HashSet<&'static str> =
-///     [ "Einar", "Olaf", "Harald" ].into_iter().collect();
+/// let viking_names: HashSet<_> =
+///     HashSet::from_iter([ "Einar", "Olaf", "Harald" ].into_iter(), &mut (), &mut ()).unwrap();
 /// // use the values stored in the set
 /// ```
 ///
@@ -110,7 +116,7 @@ use crate::DefaultHashBuilder;
 /// [`HashMap`]: struct.HashMap.html
 /// [`PartialEq`]: https://doc.rust-lang.org/std/cmp/trait.PartialEq.html
 /// [`RefCell`]: https://doc.rust-lang.org/std/cell/struct.RefCell.html
-pub struct HashSet<T, E, G, R, S = DefaultHashBuilder> {
+pub struct HashSet<T, E = (), G = (), R = (), S = DefaultHashBuilder> {
     pub(crate) map: HashMap<T, (), E, G, R, S>,
 }
 
@@ -126,7 +132,12 @@ impl<T: Clone, E, G, R, S: Clone + Clone> Clone for HashSet<T, E, G, R, S> {
     }
 }
 
-#[cfg(feature = "default-hasher")]
+impl<T: PartialEq + RubyEql<(), (), ()> + Hash> PartialEq for HashSet<T, (), (), ()> {
+    fn eq(&self, other: &Self) -> bool {
+        self.map == other.map
+    }
+}
+
 impl<T, E, G, R> HashSet<T, E, G, R, DefaultHashBuilder> {
     /// Creates an empty `HashSet`.
     ///
@@ -212,9 +223,9 @@ impl<T, E, G, R, S> HashSet<T, E, G, R, S> {
     ///
     /// ```
     /// use hashbrown::HashSet;
-    /// let mut set = HashSet::new();
-    /// set.insert("a");
-    /// set.insert("b");
+    /// let mut set = HashSet::<_, (), ()>::new();
+    /// set.insert("a", &mut (), &mut ()).unwrap();
+    /// set.insert("b", &mut (), &mut ()).unwrap();
     ///
     /// // Will print in an arbitrary order.
     /// for x in set.iter() {
@@ -235,9 +246,9 @@ impl<T, E, G, R, S> HashSet<T, E, G, R, S> {
     /// ```
     /// use hashbrown::HashSet;
     ///
-    /// let mut v = HashSet::new();
+    /// let mut v = HashSet::<_, (), ()>::new();
     /// assert_eq!(v.len(), 0);
-    /// v.insert(1);
+    /// v.insert(1, &mut (), &mut ()).unwrap();
     /// assert_eq!(v.len(), 1);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
@@ -252,9 +263,9 @@ impl<T, E, G, R, S> HashSet<T, E, G, R, S> {
     /// ```
     /// use hashbrown::HashSet;
     ///
-    /// let mut v = HashSet::new();
+    /// let mut v = HashSet::<_, (), ()>::new();
     /// assert!(v.is_empty());
-    /// v.insert(1);
+    /// v.insert(1, &mut (), &mut ()).unwrap();
     /// assert!(!v.is_empty());
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
@@ -269,7 +280,7 @@ impl<T, E, G, R, S> HashSet<T, E, G, R, S> {
     /// ```
     /// use hashbrown::HashSet;
     ///
-    /// let mut set: HashSet<_> = [1, 2, 3].into_iter().collect();
+    /// let mut set: HashSet<_, (), ()> = HashSet::from_iter([1, 2, 3].into_iter(), &mut (), &mut ()).unwrap();
     /// assert!(!set.is_empty());
     ///
     /// // print 1, 2, 3 in an arbitrary order
@@ -296,7 +307,7 @@ impl<T, E, G, R, S> HashSet<T, E, G, R, S> {
     /// use hashbrown::HashSet;
     ///
     /// let xs = [1,2,3,4,5,6];
-    /// let mut set: HashSet<i32> = xs.into_iter().collect();
+    /// let mut set: HashSet<i32, (), ()> = HashSet::from_iter(xs.into_iter(), &mut (), &mut ()).unwrap();
     /// set.retain(|&k| k % 2 == 0);
     /// assert_eq!(set.len(), 3);
     /// ```
@@ -323,9 +334,11 @@ impl<T, E, G, R, S> HashSet<T, E, G, R, S> {
     ///
     /// ```
     /// use hashbrown::HashSet;
+    /// struct E;
+    /// struct G;
     ///
-    /// let mut set: HashSet<i32> = (0..8).collect();
-    /// let drained: HashSet<i32> = set.extract_if(|v| v % 2 == 0).collect();
+    /// let mut set: HashSet<i32, E, G> = HashSet::from_iter(0..8, &mut E, &mut G).unwrap();
+    /// let drained: HashSet<i32, E, G> = HashSet::from_iter(set.extract_if(|v| v % 2 == 0), &mut E, &mut G).unwrap();
     ///
     /// let mut evens = drained.into_iter().collect::<Vec<_>>();
     /// let mut odds = set.into_iter().collect::<Vec<_>>();
@@ -355,9 +368,11 @@ impl<T, E, G, R, S> HashSet<T, E, G, R, S> {
     ///
     /// ```
     /// use hashbrown::HashSet;
+    /// struct E;
+    /// struct G;
     ///
-    /// let mut v = HashSet::new();
-    /// v.insert(1);
+    /// let mut v = HashSet::<_,E,G>::new();
+    /// v.insert(1, &mut E, &mut G).unwrap();
     /// v.clear();
     /// assert!(v.is_empty());
     /// ```
@@ -394,10 +409,12 @@ impl<T, E, G, R, S> HashSet<T, E, G, R, S> {
     /// ```
     /// use hashbrown::HashSet;
     /// use hashbrown::DefaultHashBuilder;
+    /// struct E;
+    /// struct G;
     ///
     /// let s = DefaultHashBuilder::default();
-    /// let mut set = HashSet::with_hasher(s);
-    /// set.insert(2);
+    /// let mut set = HashSet::<_,E,G>::with_hasher(s);
+    /// set.insert(2, &mut E, &mut G).unwrap();
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub const fn with_hasher(hasher: S) -> Self {
@@ -434,8 +451,8 @@ impl<T, E, G, R, S> HashSet<T, E, G, R, S> {
     /// use hashbrown::DefaultHashBuilder;
     ///
     /// let s = DefaultHashBuilder::default();
-    /// let mut set = HashSet::with_capacity_and_hasher(10, s);
-    /// set.insert(1);
+    /// let mut set = HashSet::<_, (), ()>::with_capacity_and_hasher(10, s);
+    /// set.insert(1, &mut (), &mut ()).unwrap();
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn with_capacity_and_hasher(capacity: usize, hasher: S) -> Self {
@@ -457,7 +474,7 @@ impl<T, E, G, R, S> HashSet<T, E, G, R, S> {
     /// use hashbrown::DefaultHashBuilder;
     ///
     /// let hasher = DefaultHashBuilder::default();
-    /// let set: HashSet<i32> = HashSet::with_hasher(hasher);
+    /// let set: HashSet<i32, (), ()> = HashSet::with_hasher(hasher);
     /// let hasher: &DefaultHashBuilder = set.hasher();
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
@@ -504,10 +521,12 @@ where
     ///
     /// ```
     /// use hashbrown::HashSet;
+    /// struct E;
+    /// struct G;
     ///
-    /// let mut set = HashSet::with_capacity(100);
-    /// set.insert(1);
-    /// set.insert(2);
+    /// let mut set = HashSet::<_, _, _, ()>::with_capacity(100);
+    /// set.insert(1, &mut E, &mut G).unwrap();
+    /// set.insert(2, &mut E, &mut G).unwrap();
     /// assert!(set.capacity() >= 100);
     /// set.shrink_to_fit();
     /// assert!(set.capacity() >= 2);
@@ -529,9 +548,9 @@ where
     /// ```
     /// use hashbrown::HashSet;
     ///
-    /// let mut set = HashSet::with_capacity(100);
-    /// set.insert(1);
-    /// set.insert(2);
+    /// let mut set = HashSet::<_, (), ()>::with_capacity(100);
+    /// set.insert(1, &mut (), &mut ()).unwrap();
+    /// set.insert(2, &mut (), &mut ()).unwrap();
     /// assert!(set.capacity() >= 100);
     /// set.shrink_to(10);
     /// assert!(set.capacity() >= 10);
@@ -554,9 +573,9 @@ where
     /// ```
     /// use hashbrown::HashSet;
     ///
-    /// let set: HashSet<_> = [1, 2, 3].into_iter().collect();
-    /// assert_eq!(set.contains(&1), true);
-    /// assert_eq!(set.contains(&4), false);
+    /// let set: HashSet<_> = HashSet::from_iter([1, 2, 3].into_iter(), &mut (), &mut ()).unwrap();
+    /// assert_eq!(set.contains(&1, &mut (), &mut ()).unwrap(), true);
+    /// assert_eq!(set.contains(&4, &mut (), &mut ()).unwrap(), false);
     /// ```
     ///
     /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
@@ -580,9 +599,9 @@ where
     /// ```
     /// use hashbrown::HashSet;
     ///
-    /// let set: HashSet<_> = [1, 2, 3].into_iter().collect();
-    /// assert_eq!(set.get(&2), Some(&2));
-    /// assert_eq!(set.get(&4), None);
+    /// let set: HashSet<_, (), ()> = HashSet::from_iter([1, 2, 3].into_iter(), &mut (), &mut ()).unwrap();
+    /// assert_eq!(set.get(&2, &mut (), &mut ()).unwrap(), Some(&2));
+    /// assert_eq!(set.get(&4, &mut (), &mut ()).unwrap(), None);
     /// ```
     ///
     /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
@@ -607,10 +626,10 @@ where
     /// ```
     /// use hashbrown::HashSet;
     ///
-    /// let mut set: HashSet<_> = [1, 2, 3].into_iter().collect();
+    /// let mut set: HashSet<_> = HashSet::from_iter([1, 2, 3].into_iter(), &mut (), &mut ()).unwrap();
     /// assert_eq!(set.len(), 3);
-    /// assert_eq!(set.get_or_insert(2), &2);
-    /// assert_eq!(set.get_or_insert(100), &100);
+    /// assert_eq!(set.get_or_insert(2, &mut (), &mut ()).unwrap(), &2);
+    /// assert_eq!(set.get_or_insert(100, &mut (), &mut ()).unwrap(), &100);
     /// assert_eq!(set.len(), 4); // 100 was inserted
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
@@ -631,12 +650,12 @@ where
     /// ```
     /// use hashbrown::HashSet;
     ///
-    /// let mut set: HashSet<String> = ["cat", "dog", "horse"]
-    ///     .iter().map(|&pet| pet.to_owned()).collect();
+    /// let mut set: HashSet<String> = HashSet::from_iter(["cat", "dog", "horse"]
+    ///     .iter().map(|&pet| pet.to_owned()), &mut (), &mut ()).unwrap();
     ///
     /// assert_eq!(set.len(), 3);
     /// for &pet in &["cat", "dog", "fish"] {
-    ///     let value = set.get_or_insert_with(pet, str::to_owned);
+    ///     let value = set.get_or_insert_with(pet, str::to_owned, &mut (), &mut ()).unwrap();
     ///     assert_eq!(value, pet);
     /// }
     /// assert_eq!(set.len(), 4); // a new "fish" was inserted
@@ -645,8 +664,8 @@ where
     /// The following example will panic because the new value doesn't match.
     ///
     /// ```should_panic
-    /// let mut set = hashbrown::HashSet::new();
-    /// set.get_or_insert_with("rust", |_| String::new());
+    /// let mut set: hashbrown::HashSet<_> = hashbrown::HashSet::new();
+    /// set.get_or_insert_with("rust", |_| String::new(), &mut (), &mut ()).unwrap();
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn get_or_insert_with<Q, F>(
@@ -683,14 +702,14 @@ where
     /// use hashbrown::HashSet;
     /// use hashbrown::hash_set::Entry::*;
     ///
-    /// let mut singles = HashSet::new();
-    /// let mut dupes = HashSet::new();
+    /// let mut singles: HashSet<_> = HashSet::new();
+    /// let mut dupes: HashSet<_> = HashSet::new();
     ///
     /// for ch in "a short treatise on fungi".chars() {
-    ///     if let Vacant(dupe_entry) = dupes.entry(ch) {
+    ///     if let Vacant(dupe_entry) = dupes.entry(ch, &mut (), &mut ()).unwrap() {
     ///         // We haven't already seen a duplicate, so
     ///         // check if we've at least seen it once.
-    ///         match singles.entry(ch) {
+    ///         match singles.entry(ch, &mut (), &mut ()).unwrap() {
     ///             Vacant(single_entry) => {
     ///                 // We found a new character for the first time.
     ///                 single_entry.insert();
@@ -704,9 +723,9 @@ where
     ///     }
     /// }
     ///
-    /// assert!(!singles.contains(&'t') && dupes.contains(&'t'));
-    /// assert!(singles.contains(&'u') && !dupes.contains(&'u'));
-    /// assert!(!singles.contains(&'v') && !dupes.contains(&'v'));
+    /// assert!(!singles.contains(&'t', &mut (), &mut ()).unwrap() && dupes.contains(&'t', &mut (), &mut ()).unwrap());
+    /// assert!(singles.contains(&'u', &mut (), &mut ()).unwrap() && !dupes.contains(&'u', &mut (), &mut ()).unwrap());
+    /// assert!(!singles.contains(&'v', &mut (), &mut ()).unwrap() && !dupes.contains(&'v', &mut (), &mut ()).unwrap());
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn entry(&mut self, value: T, e: &mut E, g: &mut G) -> Result<Entry<'_, T, E, G, R, S>, R> {
@@ -724,14 +743,14 @@ where
     /// ```
     /// use hashbrown::HashSet;
     ///
-    /// let sup: HashSet<_> = [1, 2, 3].into_iter().collect();
+    /// let sup: HashSet<_> = HashSet::from_iter([1, 2, 3].into_iter(), &mut (), &mut ()).unwrap();
     /// let mut set = HashSet::new();
     ///
-    /// assert_eq!(set.is_subset(&sup), true);
-    /// set.insert(2);
-    /// assert_eq!(set.is_subset(&sup), true);
-    /// set.insert(4);
-    /// assert_eq!(set.is_subset(&sup), false);
+    /// assert_eq!(set.is_subset(&sup, &mut (), &mut ()).unwrap(), true);
+    /// set.insert(2, &mut (), &mut ()).unwrap();
+    /// assert_eq!(set.is_subset(&sup, &mut (), &mut ()).unwrap(), true);
+    /// set.insert(4, &mut (), &mut ()).unwrap();
+    /// assert_eq!(set.is_subset(&sup, &mut (), &mut ()).unwrap(), false);
     /// ```
     pub fn is_subset(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R> {
         if self.len() > other.len() {
@@ -753,17 +772,17 @@ where
     /// ```
     /// use hashbrown::HashSet;
     ///
-    /// let sub: HashSet<_> = [1, 2].into_iter().collect();
+    /// let sub: HashSet<_> = HashSet::from_iter([1, 2].into_iter(), &mut (), &mut ()).unwrap();
     /// let mut set = HashSet::new();
     ///
-    /// assert_eq!(set.is_superset(&sub), false);
+    /// assert_eq!(set.is_superset(&sub, &mut (), &mut ()).unwrap(), false);
     ///
-    /// set.insert(0);
-    /// set.insert(1);
-    /// assert_eq!(set.is_superset(&sub), false);
+    /// set.insert(0, &mut (), &mut ()).unwrap();
+    /// set.insert(1, &mut (), &mut ()).unwrap();
+    /// assert_eq!(set.is_superset(&sub, &mut (), &mut ()).unwrap(), false);
     ///
-    /// set.insert(2);
-    /// assert_eq!(set.is_superset(&sub), true);
+    /// set.insert(2, &mut (), &mut ()).unwrap();
+    /// assert_eq!(set.is_superset(&sub, &mut (), &mut ()).unwrap(), true);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn is_superset(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R> {
@@ -781,10 +800,10 @@ where
     /// ```
     /// use hashbrown::HashSet;
     ///
-    /// let mut set = HashSet::new();
+    /// let mut set: HashSet<_> = HashSet::new();
     ///
-    /// assert_eq!(set.insert(2), true);
-    /// assert_eq!(set.insert(2), false);
+    /// assert_eq!(set.insert(2, &mut (), &mut ()).unwrap(), true);
+    /// assert_eq!(set.insert(2, &mut (), &mut ()).unwrap(), false);
     /// assert_eq!(set.len(), 1);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
@@ -827,13 +846,15 @@ where
     ///
     /// ```
     /// use hashbrown::HashSet;
+    /// struct E;
+    /// struct G;
     ///
-    /// let mut set = HashSet::new();
-    /// set.insert(Vec::<i32>::new());
+    /// let mut set = HashSet::<_>::new();
+    /// set.insert(Vec::<i32>::new(), &mut (), &mut ()).unwrap();
     ///
-    /// assert_eq!(set.get(&[][..]).unwrap().capacity(), 0);
-    /// set.replace(Vec::with_capacity(10));
-    /// assert_eq!(set.get(&[][..]).unwrap().capacity(), 10);
+    /// assert_eq!(set.get(&[][..], &mut (), &mut ()).unwrap().unwrap().capacity(), 0);
+    /// set.replace(Vec::with_capacity(10), &mut (), &mut ()).unwrap();
+    /// assert_eq!(set.get(&[][..], &mut (), &mut ()).unwrap().unwrap().capacity(), 10);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn replace(&mut self, value: T, e: &mut E, g: &mut G) -> Result<Option<T>, R> {
@@ -863,11 +884,11 @@ where
     /// ```
     /// use hashbrown::HashSet;
     ///
-    /// let mut set = HashSet::new();
+    /// let mut set: HashSet<_> = HashSet::new();
     ///
-    /// set.insert(2);
-    /// assert_eq!(set.remove(&2), true);
-    /// assert_eq!(set.remove(&2), false);
+    /// set.insert(2, &mut (), &mut ()).unwrap();
+    /// assert_eq!(set.remove(&2, &mut (), &mut ()).unwrap(), true);
+    /// assert_eq!(set.remove(&2, &mut (), &mut ()).unwrap(), false);
     /// ```
     ///
     /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
@@ -891,9 +912,9 @@ where
     /// ```
     /// use hashbrown::HashSet;
     ///
-    /// let mut set: HashSet<_> = [1, 2, 3].into_iter().collect();
-    /// assert_eq!(set.take(&2), Some(2));
-    /// assert_eq!(set.take(&2), None);
+    /// let mut set: HashSet<_> = HashSet::from_iter([1, 2, 3].into_iter(), &mut (), &mut ()).unwrap();
+    /// assert_eq!(set.take(&2, &mut (), &mut ()).unwrap(), Some(2));
+    /// assert_eq!(set.take(&2, &mut (), &mut ()).unwrap(), None);
     /// ```
     ///
     /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
@@ -970,7 +991,6 @@ where
 }
 
 // The default hasher is used to match the std implementation signature
-#[cfg(feature = "default-hasher")]
 impl<T, E, G, R> HashSet<T, E, G, R, DefaultHashBuilder>
 where
     T: RubyEql<E, G, R> + Hash,
@@ -980,8 +1000,8 @@ where
     /// ```
     /// use hashbrown::HashSet;
     ///
-    /// let set1 = HashSet::from([1, 2, 3, 4]);
-    /// let set2: HashSet<_> = [1, 2, 3, 4].into();
+    /// let set1 = HashSet::from_iter([1, 2, 3, 4], &mut (), &mut ()).unwrap();
+    /// let set2: HashSet<_> = HashSet::from_iter([1, 2, 3, 4], &mut (), &mut ()).unwrap();
     /// assert_eq!(set1, set2);
     /// ```
     pub fn from_ary<const N: usize>(arr: [T; N], e: &mut E, g: &mut G) -> Result<Self, R> {
@@ -1087,9 +1107,9 @@ impl<T, E, G, R, S> IntoIterator for HashSet<T, E, G, R, S> {
     ///
     /// ```
     /// use hashbrown::HashSet;
-    /// let mut set = HashSet::new();
-    /// set.insert("a".to_string());
-    /// set.insert("b".to_string());
+    /// let mut set: HashSet<_> = HashSet::new();
+    /// set.insert("a".to_string(), &mut (), &mut ()).unwrap();
+    /// set.insert("b".to_string(), &mut (), &mut ()).unwrap();
     ///
     /// // Not possible to collect to a Vec<String> with a regular `.iter()`.
     /// let v: Vec<String> = set.into_iter().collect();
@@ -1276,21 +1296,21 @@ impl<K, F, E, G, R> FusedIterator for ExtractIf<'_, K, F, E, G, R> where F: FnMu
 /// ```
 /// use hashbrown::hash_set::{Entry, HashSet, OccupiedEntry};
 ///
-/// let mut set = HashSet::new();
-/// set.extend(["a", "b", "c"]);
+/// # fn main () {
+/// let mut set: HashSet<&str, (), (), ()> = HashSet::from_ary(["a", "b", "c"], &mut (), &mut ()).unwrap();
 /// assert_eq!(set.len(), 3);
 ///
 /// // Existing value (insert)
-/// let entry: Entry<_, _> = set.entry("a");
-/// let _raw_o: OccupiedEntry<_, _> = entry.insert();
+/// let entry: Entry<_, _, _, _, _> = set.entry("a", &mut (), &mut ()).unwrap();
+/// let _raw_o: OccupiedEntry<_, _, _, _, _> = entry.insert();
 /// assert_eq!(set.len(), 3);
 /// // Nonexistent value (insert)
-/// set.entry("d").insert();
+/// set.entry("d", &mut (), &mut ()).unwrap().insert();
 ///
 /// // Existing value (or_insert)
-/// set.entry("b").or_insert();
+/// set.entry("b", &mut (), &mut ()).unwrap().or_insert();
 /// // Nonexistent value (or_insert)
-/// set.entry("e").or_insert();
+/// set.entry("e", &mut (), &mut ()).unwrap().or_insert();
 ///
 /// println!("Our HashSet: {:?}", set);
 ///
@@ -1299,6 +1319,7 @@ impl<K, F, E, G, R> FusedIterator for ExtractIf<'_, K, F, E, G, R> where F: FnMu
 /// // items must be sorted to test them against a sorted array.
 /// vec.sort_unstable();
 /// assert_eq!(vec, ["a", "b", "c", "d", "e"]);
+/// # }
 /// ```
 pub enum Entry<'a, T, E, G, R, S> {
     /// An occupied entry.
@@ -1307,9 +1328,9 @@ pub enum Entry<'a, T, E, G, R, S> {
     ///
     /// ```
     /// use hashbrown::hash_set::{Entry, HashSet};
-    /// let mut set: HashSet<_> = ["a", "b"].into();
+    /// let mut set: HashSet<_> = HashSet::from_ary(["a", "b"], &mut (), &mut ()).unwrap();
     ///
-    /// match set.entry("a") {
+    /// match set.entry("a", &mut (), &mut ()).unwrap() {
     ///     Entry::Vacant(_) => unreachable!(),
     ///     Entry::Occupied(_) => { }
     /// }
@@ -1324,7 +1345,7 @@ pub enum Entry<'a, T, E, G, R, S> {
     /// use hashbrown::hash_set::{Entry, HashSet};
     /// let mut set: HashSet<&str> = HashSet::new();
     ///
-    /// match set.entry("a") {
+    /// match set.entry("a", &mut (), &mut ()).unwrap() {
     ///     Entry::Occupied(_) => unreachable!(),
     ///     Entry::Vacant(_) => { }
     /// }
@@ -1350,15 +1371,14 @@ impl<T: fmt::Debug, E, G, R, S> fmt::Debug for Entry<'_, T, E, G, R, S> {
 ///
 /// ```
 /// use hashbrown::hash_set::{Entry, HashSet, OccupiedEntry};
-///
 /// let mut set = HashSet::new();
-/// set.extend(["a", "b", "c"]);
+/// set.extend(["a", "b", "c"], &mut (), &mut ()).unwrap();
 ///
-/// let _entry_o: OccupiedEntry<_, _> = set.entry("a").insert();
+/// let _entry_o: OccupiedEntry<_, (), (), (), _> = set.entry("a", &mut (), &mut ()).unwrap().insert();
 /// assert_eq!(set.len(), 3);
 ///
 /// // Existing key
-/// match set.entry("a") {
+/// match set.entry("a", &mut (), &mut ()).unwrap() {
 ///     Entry::Vacant(_) => unreachable!(),
 ///     Entry::Occupied(view) => {
 ///         assert_eq!(view.get(), &"a");
@@ -1368,13 +1388,13 @@ impl<T: fmt::Debug, E, G, R, S> fmt::Debug for Entry<'_, T, E, G, R, S> {
 /// assert_eq!(set.len(), 3);
 ///
 /// // Existing key (take)
-/// match set.entry("c") {
+/// match set.entry("c", &mut (), &mut ()).unwrap() {
 ///     Entry::Vacant(_) => unreachable!(),
 ///     Entry::Occupied(view) => {
 ///         assert_eq!(view.remove(), "c");
 ///     }
 /// }
-/// assert_eq!(set.get(&"c"), None);
+/// assert_eq!(set.get(&"c", &mut (), &mut ()).unwrap(), None);
 /// assert_eq!(set.len(), 2);
 /// ```
 pub struct OccupiedEntry<'a, T, E, G, R, S> {
@@ -1399,21 +1419,21 @@ impl<T: fmt::Debug, E, G, R, S> fmt::Debug for OccupiedEntry<'_, T, E, G, R, S> 
 /// ```
 /// use hashbrown::hash_set::{Entry, HashSet, VacantEntry};
 ///
-/// let mut set = HashSet::<&str>::new();
+/// let mut set: HashSet<_> = HashSet::new();
 ///
-/// let entry_v: VacantEntry<_, _> = match set.entry("a") {
+/// let entry_v: VacantEntry<_, (), (), (), _> = match set.entry("a", &mut (), &mut ()).unwrap() {
 ///     Entry::Vacant(view) => view,
 ///     Entry::Occupied(_) => unreachable!(),
 /// };
 /// entry_v.insert();
-/// assert!(set.contains("a") && set.len() == 1);
+/// assert!(set.contains("a", &mut (), &mut ()).unwrap() && set.len() == 1);
 ///
 /// // Nonexistent key (insert)
-/// match set.entry("b") {
+/// match set.entry("b", &mut (), &mut ()).unwrap() {
 ///     Entry::Vacant(view) => { view.insert(); },
 ///     Entry::Occupied(_) => unreachable!(),
 /// }
-/// assert!(set.contains("b") && set.len() == 2);
+/// assert!(set.contains("b", &mut (), &mut ()).unwrap() && set.len() == 2);
 /// ```
 pub struct VacantEntry<'a, T, E, G, R, S> {
     inner: map::VacantEntry<'a, T, (), E, G, R, S>,
@@ -1434,7 +1454,7 @@ impl<'a, T, E, G, R, S> Entry<'a, T, E, G, R, S> {
     /// use hashbrown::HashSet;
     ///
     /// let mut set: HashSet<&str> = HashSet::new();
-    /// let entry = set.entry("horseyland").insert();
+    /// let entry = set.entry("horseyland", &mut (), &mut ()).unwrap().insert();
     ///
     /// assert_eq!(entry.get(), &"horseyland");
     /// ```
@@ -1460,12 +1480,12 @@ impl<'a, T, E, G, R, S> Entry<'a, T, E, G, R, S> {
     /// let mut set: HashSet<&str> = HashSet::new();
     ///
     /// // nonexistent key
-    /// set.entry("poneyland").or_insert();
-    /// assert!(set.contains("poneyland"));
+    /// set.entry("poneyland", &mut (), &mut ()).unwrap().or_insert();
+    /// assert!(set.contains("poneyland", &mut (), &mut ()).unwrap());
     ///
     /// // existing key
-    /// set.entry("poneyland").or_insert();
-    /// assert!(set.contains("poneyland"));
+    /// set.entry("poneyland", &mut (), &mut ()).unwrap().or_insert();
+    /// assert!(set.contains("poneyland", &mut (), &mut ()).unwrap());
     /// assert_eq!(set.len(), 1);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
@@ -1487,11 +1507,12 @@ impl<'a, T, E, G, R, S> Entry<'a, T, E, G, R, S> {
     /// use hashbrown::HashSet;
     ///
     /// let mut set: HashSet<&str> = HashSet::new();
-    /// set.entry("poneyland").or_insert();
+    /// set.entry("poneyland", &mut (), &mut ()).unwrap().or_insert();
     /// // existing key
-    /// assert_eq!(set.entry("poneyland").get(), &"poneyland");
+    /// assert_eq!(set.entry("poneyland", &mut (), &mut ()).unwrap().get(), &"poneyland");
     /// // nonexistent key
-    /// assert_eq!(set.entry("horseland").get(), &"horseland");
+    /// assert_eq!(set.entry("horseland", &mut (), &mut ()).unwrap().get(
+    /// ), &"horseland");
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn get(&self) -> &T {
@@ -1511,9 +1532,9 @@ impl<T, E, G, R, S> OccupiedEntry<'_, T, E, G, R, S> {
     /// use hashbrown::hash_set::{Entry, HashSet};
     ///
     /// let mut set: HashSet<&str> = HashSet::new();
-    /// set.entry("poneyland").or_insert();
+    /// set.entry("poneyland", &mut (), &mut ()).unwrap().or_insert();
     ///
-    /// match set.entry("poneyland") {
+    /// match set.entry("poneyland", &mut (), &mut ()).unwrap() {
     ///     Entry::Vacant(_) => panic!(),
     ///     Entry::Occupied(entry) => assert_eq!(entry.get(), &"poneyland"),
     /// }
@@ -1536,14 +1557,14 @@ impl<T, E, G, R, S> OccupiedEntry<'_, T, E, G, R, S> {
     /// // The set is empty
     /// assert!(set.is_empty() && set.capacity() == 0);
     ///
-    /// set.entry("poneyland").or_insert();
+    /// set.entry("poneyland", &mut (), &mut ()).unwrap().or_insert();
     /// let capacity_before_remove = set.capacity();
     ///
-    /// if let Entry::Occupied(o) = set.entry("poneyland") {
+    /// if let Entry::Occupied(o) = set.entry("poneyland", &mut (), &mut ()).unwrap() {
     ///     assert_eq!(o.remove(), "poneyland");
     /// }
     ///
-    /// assert_eq!(set.contains("poneyland"), false);
+    /// assert_eq!(set.contains("poneyland", &mut (), &mut ()).unwrap(), false);
     /// // Now set hold none elements but capacity is equal to the old one
     /// assert!(set.len() == 0 && set.capacity() == capacity_before_remove);
     /// ```
@@ -1563,7 +1584,7 @@ impl<'a, T, E, G, R, S> VacantEntry<'a, T, E, G, R, S> {
     /// use hashbrown::HashSet;
     ///
     /// let mut set: HashSet<&str> = HashSet::new();
-    /// assert_eq!(set.entry("poneyland").get(), &"poneyland");
+    /// assert_eq!(set.entry("poneyland", &mut (), &mut ()).unwrap().get(), &"poneyland");
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn get(&self) -> &T {
@@ -1576,10 +1597,12 @@ impl<'a, T, E, G, R, S> VacantEntry<'a, T, E, G, R, S> {
     ///
     /// ```
     /// use hashbrown::hash_set::{Entry, HashSet};
+    /// struct E;
+    /// struct G;
     ///
-    /// let mut set: HashSet<&str> = HashSet::new();
+    /// let mut set: HashSet<&str, E, G, ()> = HashSet::new();
     ///
-    /// match set.entry("poneyland") {
+    /// match set.entry("poneyland", &mut E, &mut G).unwrap() {
     ///     Entry::Occupied(_) => panic!(),
     ///     Entry::Vacant(v) => assert_eq!(v.into_value(), "poneyland"),
     /// }
@@ -1596,13 +1619,15 @@ impl<'a, T, E, G, R, S> VacantEntry<'a, T, E, G, R, S> {
     /// ```
     /// use hashbrown::HashSet;
     /// use hashbrown::hash_set::Entry;
+    /// struct E;
+    /// struct G;
     ///
-    /// let mut set: HashSet<&str> = HashSet::new();
+    /// let mut set: HashSet<&str, _, _, ()> = HashSet::new();
     ///
-    /// if let Entry::Vacant(o) = set.entry("poneyland") {
+    /// if let Entry::Vacant(o) = set.entry("poneyland", &mut E, &mut G).unwrap() {
     ///     o.insert();
     /// }
-    /// assert!(set.contains("poneyland"));
+    /// assert!(set.contains("poneyland", &mut E, &mut G).unwrap());
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn insert(self) -> OccupiedEntry<'a, T, E, G, R, S>

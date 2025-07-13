@@ -430,10 +430,11 @@ impl Funcs {
         max: usize,
         rest: bool,
         kw_names: &[&str],
+        kw_rest: bool,
     ) -> FuncId {
         let id = self.next_func_id();
         self.info.push(FuncInfo::new_native(
-            id, name, address, min, max, rest, kw_names,
+            id, name, address, min, max, rest, kw_names, kw_rest,
         ));
         id
     }
@@ -755,9 +756,10 @@ impl FuncInfo {
         max: usize,
         rest: bool,
         kw_names: &[&str],
+        kw_rest: bool,
     ) -> Self {
         let kw_names = kw_names.iter().map(|s| IdentId::get_id(s)).collect();
-        let params = ParamsInfo::new_native(min, max, rest, kw_names);
+        let params = ParamsInfo::new_native(min, max, rest, kw_names, kw_rest);
         let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),
@@ -795,7 +797,7 @@ impl FuncInfo {
         max: usize,
         rest: bool,
     ) -> Self {
-        let params = ParamsInfo::new_native(min, max, rest, vec![]);
+        let params = ParamsInfo::new_native(min, max, rest, vec![], false);
         let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),
@@ -816,7 +818,7 @@ impl FuncInfo {
         max: usize,
         rest: bool,
     ) -> Self {
-        let params = ParamsInfo::new_native(min, max, rest, vec![]);
+        let params = ParamsInfo::new_native(min, max, rest, vec![], false);
         let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),

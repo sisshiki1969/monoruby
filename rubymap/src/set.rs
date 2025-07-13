@@ -61,7 +61,7 @@ type Bucket<T> = super::Bucket<T, ()>;
 /// # Examples
 ///
 /// ```
-/// use indexmap::IndexSet;
+/// use rubymap::IndexSet;
 ///
 /// // Collects which letters appear in a sentence.
 /// let letters: IndexSet<_> = "a short treatise on fungi".chars().collect();
@@ -359,7 +359,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use indexmap::IndexSet;
+    /// use rubymap::IndexSet;
     /// let mut set: IndexSet<char> = ('a'..='z').collect();
     ///
     /// // The new value '*' goes exactly at the given index.
@@ -415,7 +415,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use indexmap::IndexSet;
+    /// use rubymap::IndexSet;
     /// let mut set: IndexSet<char> = ('a'..='z').collect();
     ///
     /// // The new value '*' goes exactly at the given index.
@@ -443,7 +443,7 @@ where
     /// ```
     ///
     /// ```should_panic
-    /// use indexmap::IndexSet;
+    /// use rubymap::IndexSet;
     /// let mut set: IndexSet<char> = ('a'..='z').collect();
     ///
     /// // This is an invalid index for moving an existing value!
@@ -499,7 +499,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use indexmap::IndexSet;
+    /// use rubymap::IndexSet;
     ///
     /// let mut a = IndexSet::from([3, 2, 1]);
     /// let mut b = IndexSet::from([3, 4, 5]);
@@ -972,7 +972,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use indexmap::IndexSet;
+    /// use rubymap::IndexSet;
     ///
     /// let set1 = IndexSet::from([1, 2, 3, 4]);
     /// let set2: IndexSet<_> = [1, 2, 3, 4].into();

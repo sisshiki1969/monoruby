@@ -16,26 +16,31 @@
 //! use equivalent::*;
 //!
 //! pub struct Pair<A, B>(pub A, pub B);
+//! struct E;
+//! struct G;
 //!
-//! impl<'a, A: ?Sized, B: ?Sized, C, D> Equivalent<(C, D)> for Pair<&'a A, &'a B>
+//! impl<'a, A: ?Sized, B: ?Sized, C, D, E, G, R> Equivalent<(C, D), E, G, R> for Pair<&'a A, &'a B>
 //! where
-//!     A: Equivalent<C>,
-//!     B: Equivalent<D>,
+//!     A: Equivalent<C, E, G, R>,
+//!     B: Equivalent<D, E, G, R>,
 //! {
-//!     fn equivalent(&self, key: &(C, D)) -> bool {
-//!         self.0.equivalent(&key.0) && self.1.equivalent(&key.1)
+//!     fn equivalent(&self, key: &(C, D), e: &mut E, g: &mut G) -> Result<bool, R> {
+//!         Ok(self.0.equivalent(&key.0, e, g)? && self.1.equivalent(&key.1, e, g)?)
 //!     }
 //! }
 //!
+//!
 //! fn main() {
 //!     let key = (String::from("foo"), String::from("bar"));
+//!     let mut e = E;
+//!     let mut g = G;
 //!     let q1 = Pair("foo", "bar");
 //!     let q2 = Pair("boo", "bar");
 //!     let q3 = Pair("foo", "baz");
 //!
-//!     assert!(q1.equivalent(&key));
-//!     assert!(!q2.equivalent(&key));
-//!     assert!(!q3.equivalent(&key));
+//!     assert!(<Pair<&str, &str> as equivalent::Equivalent<(String, String), E, G, ()>>::equivalent(&q1, &key, &mut e, &mut g).unwrap());
+//!     assert!(!<Pair<&str, &str> as equivalent::Equivalent<(String, String), E, G, ()>>::equivalent(&q2, &key, &mut e, &mut g).unwrap());
+//!     assert!(!<Pair<&str, &str> as equivalent::Equivalent<(String, String), E, G, ()>>::equivalent(&q3, &key, &mut e, &mut g).unwrap());
 //! }
 //! ```
 
@@ -76,6 +81,23 @@ macro_rules! impl_ruby_eql {
 }
 
 impl<T, E, G, R> RubyEql<E, G, R> for Vec<T>
+where
+    T: RubyEql<E, G, R>,
+{
+    fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R> {
+        if self.len() != other.len() {
+            return Ok(false);
+        }
+        for (a, b) in self.iter().zip(other.iter()) {
+            if !a.eql(b, e, g)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}
+
+impl<T, E, G, R> RubyEql<E, G, R> for [T]
 where
     T: RubyEql<E, G, R>,
 {

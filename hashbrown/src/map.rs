@@ -18,20 +18,19 @@ use core::mem;
 /// [`default`], [`with_hasher`], and [`with_capacity_and_hasher`] methods. Many
 /// alternative algorithms are available on crates.io, such as the [`fnv`] crate.
 ///
-/// It is required that the keys implement the [`Eq`] and [`Hash`] traits, although
-/// this can frequently be achieved by using `#[derive(PartialEq, Eq, Hash)]`.
+/// It is required that the keys implement the [`RubyEql`] and [`Hash`] traits.
 /// If you implement these yourself, it is important that the following
 /// property holds:
 ///
 /// ```text
-/// k1 == k2 -> hash(k1) == hash(k2)
+/// k1.eql(k2) -> hash(k1) == hash(k2)
 /// ```
 ///
 /// In other words, if two keys are equal, their hashes must be equal.
 ///
 /// It is a logic error for a key to be modified in such a way that the key's
 /// hash, as determined by the [`Hash`] trait, or its equality, as determined by
-/// the [`Eq`] trait, changes while it is in the map. This is normally only
+/// the [`RubyEql`] trait, changes while it is in the map. This is normally only
 /// possible through [`Cell`], [`RefCell`], global state, I/O, or unsafe code.
 ///
 /// It is also a logic error for the [`Hash`] implementation of a key to panic.
@@ -44,50 +43,53 @@ use core::mem;
 /// ```
 /// use hashbrown::HashMap;
 ///
-/// // Type inference lets us omit an explicit type signature (which
-/// // would be `HashMap<String, String>` in this example).
-/// let mut book_reviews = HashMap::new();
+/// let mut book_reviews: HashMap<_, _> = HashMap::new();
 ///
 /// // Review some books.
 /// book_reviews.insert(
 ///     "Adventures of Huckleberry Finn".to_string(),
 ///     "My favorite book.".to_string(),
-/// );
+///     &mut (),
+///     &mut ()
+/// ).unwrap();
 /// book_reviews.insert(
 ///     "Grimms' Fairy Tales".to_string(),
 ///     "Masterpiece.".to_string(),
-/// );
+///     &mut (),
+///     &mut ()
+/// ).unwrap();
 /// book_reviews.insert(
 ///     "Pride and Prejudice".to_string(),
 ///     "Very enjoyable.".to_string(),
-/// );
+///     &mut (),
+///     &mut ()
+/// ).unwrap();
 /// book_reviews.insert(
 ///     "The Adventures of Sherlock Holmes".to_string(),
 ///     "Eye lyked it alot.".to_string(),
-/// );
+///     &mut (),
+///     &mut ()
+/// ).unwrap();
 ///
 /// // Check for a specific one.
 /// // When collections store owned values (String), they can still be
 /// // queried using references (&str).
-/// if !book_reviews.contains_key("Les Misérables") {
+/// if !book_reviews.contains_key("Les Misérables", &mut (), &mut ()).unwrap() {
 ///     println!("We've got {} reviews, but Les Misérables ain't one.",
 ///              book_reviews.len());
 /// }
 ///
 /// // oops, this review has a lot of spelling mistakes, let's delete it.
-/// book_reviews.remove("The Adventures of Sherlock Holmes");
+/// book_reviews.remove("The Adventures of Sherlock Holmes", &mut (), &mut ()).unwrap();
 ///
 /// // Look up the values associated with some keys.
 /// let to_find = ["Pride and Prejudice", "Alice's Adventure in Wonderland"];
 /// for &book in &to_find {
-///     match book_reviews.get(book) {
+///     match book_reviews.get(book, &mut (), &mut ()).unwrap() {
 ///         Some(review) => println!("{}: {}", book, review),
 ///         None => println!("{} is unreviewed.", book)
 ///     }
 /// }
-///
-/// // Look up the value for a key (will panic if the key is not found).
-/// println!("Review for Jane: {}", book_reviews["Pride and Prejudice"]);
 ///
 /// // Iterate over everything.
 /// for (book, review) in &book_reviews {
@@ -104,7 +106,7 @@ use core::mem;
 ///
 /// // type inference lets us omit an explicit type signature (which
 /// // would be `HashMap<&str, u8>` in this example).
-/// let mut player_stats = HashMap::new();
+/// let mut player_stats: HashMap<_, _> = HashMap::new();
 ///
 /// fn random_stat_buff() -> u8 {
 ///     // could actually return some random value here - let's just return
@@ -113,23 +115,21 @@ use core::mem;
 /// }
 ///
 /// // insert a key only if it doesn't already exist
-/// player_stats.entry("health").or_insert(100);
+/// player_stats.entry("health", &mut (), &mut ()).unwrap().or_insert(100);
 ///
 /// // insert a key using a function that provides a new value only if it
 /// // doesn't already exist
-/// player_stats.entry("defence").or_insert_with(random_stat_buff);
+/// player_stats.entry("defence", &mut (), &mut ()).unwrap().or_insert_with(random_stat_buff);
 ///
 /// // update a key, guarding against the key possibly not being set
-/// let stat = player_stats.entry("attack").or_insert(100);
+/// let stat = player_stats.entry("attack", &mut (), &mut ()).unwrap().or_insert(100);
 /// *stat += random_stat_buff();
 /// ```
 ///
 /// The easiest way to use `HashMap` with a custom key type is to derive [`Eq`] and [`Hash`].
 /// We must also derive [`PartialEq`].
 ///
-/// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
 /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
-/// [`PartialEq`]: https://doc.rust-lang.org/std/cmp/trait.PartialEq.html
 /// [`RefCell`]: https://doc.rust-lang.org/std/cell/struct.RefCell.html
 /// [`Cell`]: https://doc.rust-lang.org/std/cell/struct.Cell.html
 /// [`default`]: #method.default
@@ -154,12 +154,18 @@ use core::mem;
 ///     }
 /// }
 ///
+/// impl<E, G> equivalent::RubyEql<E, G, ()> for Viking {
+///    fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, ()> {
+///       Ok(self.name.eql(&other.name, e, g)? && self.country.eql(&other.country, e, g)?)
+///     }
+/// }
+///
 /// // Use a HashMap to store the vikings' health points.
 /// let mut vikings = HashMap::new();
 ///
-/// vikings.insert(Viking::new("Einar", "Norway"), 25);
-/// vikings.insert(Viking::new("Olaf", "Denmark"), 24);
-/// vikings.insert(Viking::new("Harald", "Iceland"), 12);
+/// vikings.insert(Viking::new("Einar", "Norway"), 25, &mut (), &mut ()).unwrap();
+/// vikings.insert(Viking::new("Olaf", "Denmark"), 24, &mut (), &mut ()).unwrap();
+/// vikings.insert(Viking::new("Harald", "Iceland"), 12, &mut (), &mut ()).unwrap();
 ///
 /// // Use derived implementation to print the status of the vikings.
 /// for (viking, health) in &vikings {
@@ -172,11 +178,10 @@ use core::mem;
 /// ```
 /// use hashbrown::HashMap;
 ///
-/// let timber_resources: HashMap<&str, i32> = [("Norway", 100), ("Denmark", 50), ("Iceland", 10)]
-///     .into_iter().collect();
+/// let timber_resources: HashMap<&str, i32> = HashMap::from_ary([("Norway", 100), ("Denmark", 50), ("Iceland", 10)], &mut (), &mut ()).unwrap();
 /// // use the values stored in map
 /// ```
-pub struct HashMap<K, V, E, G, R, S = DefaultHashBuilder> {
+pub struct HashMap<K, V, E = (), G = (), R = (), S = DefaultHashBuilder> {
     pub(crate) hash_builder: S,
     pub(crate) table: RawTable<(K, V), E, G, R>,
 }
@@ -194,6 +199,35 @@ impl<K: Clone, V: Clone, E, G, R, S: Clone> Clone for HashMap<K, V, E, G, R, S> 
 
         // Update hash_builder only if we successfully cloned all elements.
         self.hash_builder.clone_from(&source.hash_builder);
+    }
+}
+
+impl<K: PartialEq + RubyEql<(), (), ()> + Hash, V: PartialEq> PartialEq
+    for HashMap<K, V, (), (), ()>
+{
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        for (k1, v1) in self.iter() {
+            if Some(v1) != other.get(k1, &mut (), &mut ()).unwrap() {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl<K, Q: ?Sized, V, S> std::ops::Index<&Q> for HashMap<K, V, (), (), (), S>
+where
+    K: Hash + equivalent::RubyEql<(), (), ()> + Borrow<Q>,
+    Q: Hash + equivalent::RubyEql<(), (), ()>,
+    S: BuildHasher,
+{
+    type Output = V;
+
+    fn index(&self, key: &Q) -> &Self::Output {
+        self.get(key, &mut (), &mut ()).unwrap().unwrap()
     }
 }
 
@@ -245,7 +279,6 @@ where
     state.finish()
 }
 
-#[cfg(feature = "default-hasher")]
 impl<K, V, E, G, R> HashMap<K, V, E, G, R, DefaultHashBuilder> {
     /// Creates an empty `HashMap`.
     ///
@@ -337,11 +370,11 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// use hashbrown::DefaultHashBuilder;
     ///
     /// let s = DefaultHashBuilder::default();
-    /// let mut map = HashMap::with_capacity_and_hasher(10, s);
+    /// let mut map: HashMap<_, _> = HashMap::with_capacity_and_hasher(10, s);
     /// assert_eq!(map.len(), 0);
     /// assert!(map.capacity() >= 10);
     ///
-    /// map.insert(1, 2);
+    /// map.insert(1, 2, &mut (), &mut ()).unwrap();
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn with_capacity_and_hasher(capacity: usize, hash_builder: S) -> Self {
@@ -377,8 +410,8 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// use hashbrown::DefaultHashBuilder;
     ///
     /// let s = DefaultHashBuilder::default();
-    /// let mut map = HashMap::with_hasher(s);
-    /// map.insert(1, 2);
+    /// let mut map: HashMap<_, _> = HashMap::with_hasher(s);
+    /// map.insert(1, 2, &mut (), &mut ()).unwrap();
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub const fn with_hasher(hash_builder: S) -> Self {
@@ -433,10 +466,10 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map = HashMap::new();
-    /// map.insert("a", 1);
-    /// map.insert("b", 2);
-    /// map.insert("c", 3);
+    /// let mut map: HashMap<_, _> = HashMap::new();
+    /// map.insert("a", 1, &mut (), &mut ()).unwrap();
+    /// map.insert("b", 2, &mut (), &mut ()).unwrap();
+    /// map.insert("c", 3, &mut (), &mut ()).unwrap();
     /// assert_eq!(map.len(), 3);
     /// let mut vec: Vec<&str> = Vec::new();
     ///
@@ -465,10 +498,10 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map = HashMap::new();
-    /// map.insert("a", 1);
-    /// map.insert("b", 2);
-    /// map.insert("c", 3);
+    /// let mut map: HashMap<_, _> = HashMap::new();
+    /// map.insert("a", 1, &mut (), &mut ()).unwrap();
+    /// map.insert("b", 2, &mut (), &mut ()).unwrap();
+    /// map.insert("c", 3, &mut (), &mut ()).unwrap();
     /// assert_eq!(map.len(), 3);
     /// let mut vec: Vec<i32> = Vec::new();
     ///
@@ -497,11 +530,11 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map = HashMap::new();
+    /// let mut map: HashMap<_, _> = HashMap::new();
     ///
-    /// map.insert("a", 1);
-    /// map.insert("b", 2);
-    /// map.insert("c", 3);
+    /// map.insert("a", 1, &mut (), &mut ()).unwrap();
+    /// map.insert("b", 2, &mut (), &mut ()).unwrap();
+    /// map.insert("c", 3, &mut (), &mut ()).unwrap();
     ///
     /// for val in map.values_mut() {
     ///     *val = *val + 10;
@@ -537,10 +570,10 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map = HashMap::new();
-    /// map.insert("a", 1);
-    /// map.insert("b", 2);
-    /// map.insert("c", 3);
+    /// let mut map: HashMap<_, _> = HashMap::new();
+    /// map.insert("a", 1, &mut (), &mut ()).unwrap();
+    /// map.insert("b", 2, &mut (), &mut ()).unwrap();
+    /// map.insert("c", 3, &mut (), &mut ()).unwrap();
     /// assert_eq!(map.len(), 3);
     /// let mut vec: Vec<(&str, i32)> = Vec::new();
     ///
@@ -576,10 +609,10 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map = HashMap::new();
-    /// map.insert("a", 1);
-    /// map.insert("b", 2);
-    /// map.insert("c", 3);
+    /// let mut map: HashMap<_, _> = HashMap::new();
+    /// map.insert("a", 1, &mut (), &mut ()).unwrap();
+    /// map.insert("b", 2, &mut (), &mut ()).unwrap();
+    /// map.insert("c", 3, &mut (), &mut ()).unwrap();
     ///
     /// // Update all values
     /// for (_, val) in map.iter_mut() {
@@ -625,9 +658,9 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut a = HashMap::new();
+    /// let mut a: HashMap<_, _> = HashMap::new();
     /// assert_eq!(a.len(), 0);
-    /// a.insert(1, "a");
+    /// a.insert(1, "a", &mut (), &mut ()).unwrap();
     /// assert_eq!(a.len(), 1);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
@@ -642,9 +675,9 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut a = HashMap::new();
+    /// let mut a: HashMap<_, _> = HashMap::new();
     /// assert!(a.is_empty());
-    /// a.insert(1, "a");
+    /// a.insert(1, "a", &mut (), &mut ()).unwrap();
     /// assert!(!a.is_empty());
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
@@ -664,9 +697,9 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut a = HashMap::new();
-    /// a.insert(1, "a");
-    /// a.insert(2, "b");
+    /// let mut a: HashMap<_, _> = HashMap::new();
+    /// a.insert(1, "a", &mut (), &mut ()).unwrap();
+    /// a.insert(2, "b", &mut (), &mut ()).unwrap();
     /// let capacity_before_drain = a.capacity();
     ///
     /// for (k, v) in a.drain().take(1) {
@@ -679,9 +712,9 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// // But map capacity is equal to old one.
     /// assert_eq!(a.capacity(), capacity_before_drain);
     ///
-    /// let mut a = HashMap::new();
-    /// a.insert(1, "a");
-    /// a.insert(2, "b");
+    /// let mut a: HashMap<_, _> = HashMap::new();
+    /// a.insert(1, "a", &mut (), &mut ()).unwrap();
+    /// a.insert(2, "b", &mut (), &mut ()).unwrap();
     ///
     /// {   // Iterator is dropped without being consumed.
     ///     let d = a.drain();
@@ -708,7 +741,7 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map: HashMap<i32, i32> = (0..8).map(|x|(x, x*10)).collect();
+    /// let mut map: HashMap<i32, i32> = HashMap::from_iter((0..8).map(|x|(x, x*10)), &mut (), &mut ()).unwrap();
     /// assert_eq!(map.len(), 8);
     ///
     /// map.retain(|&k, _| k % 2 == 0);
@@ -757,9 +790,9 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map: HashMap<i32, i32> = (0..8).map(|x| (x, x)).collect();
+    /// let mut map: HashMap<i32, i32> = HashMap::from_iter((0..8).map(|x| (x, x)), &mut (), &mut ()).unwrap();
     ///
-    /// let drained: HashMap<i32, i32> = map.extract_if(|k, _v| k % 2 == 0).collect();
+    /// let drained: HashMap<i32, i32> = HashMap::from_iter(map.extract_if(|k, _v| k % 2 == 0), &mut (), &mut ()).unwrap();
     ///
     /// let mut evens = drained.keys().cloned().collect::<Vec<_>>();
     /// let mut odds = map.keys().cloned().collect::<Vec<_>>();
@@ -769,7 +802,7 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// assert_eq!(evens, vec![0, 2, 4, 6]);
     /// assert_eq!(odds, vec![1, 3, 5, 7]);
     ///
-    /// let mut map: HashMap<i32, i32> = (0..8).map(|x| (x, x)).collect();
+    /// let mut map: HashMap<i32, i32> = HashMap::from_iter((0..8).map(|x| (x, x)), &mut (), &mut ()).unwrap();
     ///
     /// {   // Iterator is dropped without being consumed.
     ///     let d = map.extract_if(|k, _v| k % 2 != 0);
@@ -800,8 +833,8 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut a = HashMap::new();
-    /// a.insert(1, "a");
+    /// let mut a: HashMap<_, _> = HashMap::new();
+    /// a.insert(1, "a", &mut (), &mut ()).unwrap();
     /// let capacity_before_clear = a.capacity();
     ///
     /// a.clear();
@@ -825,10 +858,10 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map = HashMap::new();
-    /// map.insert("a", 1);
-    /// map.insert("b", 2);
-    /// map.insert("c", 3);
+    /// let mut map: HashMap<_, _> = HashMap::new();
+    /// map.insert("a", 1, &mut (), &mut ()).unwrap();
+    /// map.insert("b", 2, &mut (), &mut ()).unwrap();
+    /// map.insert("c", 3, &mut (), &mut ()).unwrap();
     ///
     /// let mut vec: Vec<&str> = map.into_keys().collect();
     ///
@@ -853,10 +886,10 @@ impl<K, V, E, G, R, S> HashMap<K, V, E, G, R, S> {
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map = HashMap::new();
-    /// map.insert("a", 1);
-    /// map.insert("b", 2);
-    /// map.insert("c", 3);
+    /// let mut map: HashMap<_, _> = HashMap::new();
+    /// map.insert("a", 1, &mut (), &mut ()).unwrap();
+    /// map.insert("b", 2, &mut (), &mut ()).unwrap();
+    /// map.insert("c", 3, &mut (), &mut ()).unwrap();
     ///
     /// let mut vec: Vec<i32> = map.into_values().collect();
     ///
@@ -919,8 +952,8 @@ where
     /// use hashbrown::HashMap;
     ///
     /// let mut map: HashMap<i32, i32> = HashMap::with_capacity(100);
-    /// map.insert(1, 2);
-    /// map.insert(3, 4);
+    /// map.insert(1, 2, &mut (), &mut ()).unwrap();
+    /// map.insert(3, 4, &mut (), &mut ()).unwrap();
     /// assert!(map.capacity() >= 100);
     /// map.shrink_to_fit();
     /// assert!(map.capacity() >= 2);
@@ -944,8 +977,8 @@ where
     /// use hashbrown::HashMap;
     ///
     /// let mut map: HashMap<i32, i32> = HashMap::with_capacity(100);
-    /// map.insert(1, 2);
-    /// map.insert(3, 4);
+    /// map.insert(1, 2, &mut (), &mut ()).unwrap();
+    /// map.insert(3, 4, &mut (), &mut ()).unwrap();
     /// assert!(map.capacity() >= 100);
     /// map.shrink_to(10);
     /// assert!(map.capacity() >= 10);
@@ -967,17 +1000,17 @@ where
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut letters = HashMap::new();
+    /// let mut letters: HashMap<_, _> = HashMap::new();
     ///
     /// for ch in "a short treatise on fungi".chars() {
-    ///     let counter = letters.entry(ch).or_insert(0);
+    ///     let counter = letters.entry(ch, &mut (), &mut ()).unwrap().or_insert(0);
     ///     *counter += 1;
     /// }
     ///
-    /// assert_eq!(letters[&'s'], 2);
-    /// assert_eq!(letters[&'t'], 3);
-    /// assert_eq!(letters[&'u'], 1);
-    /// assert_eq!(letters.get(&'y'), None);
+    /// assert_eq!(letters.get(&'s', &mut (), &mut ()).unwrap(), Some(&2));
+    /// assert_eq!(letters.get(&'t', &mut (), &mut ()).unwrap(), Some(&3));
+    /// assert_eq!(letters.get(&'u', &mut (), &mut ()).unwrap(), Some(&1));
+    /// assert_eq!(letters.get(&'y', &mut (), &mut ()).unwrap(), None);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn entry(
@@ -1012,12 +1045,12 @@ where
     /// let mut words: HashMap<String, usize> = HashMap::new();
     /// let source = ["poneyland", "horseyland", "poneyland", "poneyland"];
     /// for (i, &s) in source.iter().enumerate() {
-    ///     let counter = words.entry_ref(s).or_insert(0);
+    ///     let counter = words.entry_ref(s, &mut (), &mut ()).unwrap().or_insert(0);
     ///     *counter += 1;
     /// }
     ///
-    /// assert_eq!(words["poneyland"], 3);
-    /// assert_eq!(words["horseyland"], 1);
+    /// assert_eq!(words.get("poneyland", &mut (), &mut ()).unwrap(), Some(&3));
+    /// assert_eq!(words.get("horseyland", &mut (), &mut ()).unwrap(), Some(&1));
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn entry_ref<'a, 'b, Q>(
@@ -1059,10 +1092,10 @@ where
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map = HashMap::new();
-    /// map.insert(1, "a");
-    /// assert_eq!(map.get(&1), Some(&"a"));
-    /// assert_eq!(map.get(&2), None);
+    /// let mut map: HashMap<_, _> = HashMap::new();
+    /// map.insert(1, "a", &mut (), &mut ()).unwrap();
+    /// assert_eq!(map.get(&1, &mut (), &mut ()).unwrap(), Some(&"a"));
+    /// assert_eq!(map.get(&2, &mut (), &mut ()).unwrap(), None);
     /// ```
     #[inline]
     pub fn get<Q>(&self, k: &Q, e: &mut E, g: &mut G) -> Result<Option<&V>, R>
@@ -1090,10 +1123,10 @@ where
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map = HashMap::new();
-    /// map.insert(1, "a");
-    /// assert_eq!(map.get_key_value(&1), Some((&1, &"a")));
-    /// assert_eq!(map.get_key_value(&2), None);
+    /// let mut map: HashMap<_, _> = HashMap::new();
+    /// map.insert(1, "a", &mut (), &mut ()).unwrap();
+    /// assert_eq!(map.get_key_value(&1, &mut (), &mut ()).unwrap(), Some((&1, &"a")));
+    /// assert_eq!(map.get_key_value(&2, &mut (), &mut ()).unwrap(), None);
     /// ```
     #[inline]
     pub fn get_key_value<Q>(&self, k: &Q, e: &mut E, g: &mut G) -> Result<Option<(&K, &V)>, R>
@@ -1134,14 +1167,14 @@ where
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map = HashMap::new();
-    /// map.insert(1, "a");
-    /// let (k, v) = map.get_key_value_mut(&1).unwrap();
+    /// let mut map: HashMap<_, _> = HashMap::new();
+    /// map.insert(1, "a", &mut (), &mut ()).unwrap();
+    /// let (k, v) = map.get_key_value_mut(&1, &mut (), &mut ()).unwrap().unwrap();
     /// assert_eq!(k, &1);
     /// assert_eq!(v, &mut "a");
     /// *v = "b";
-    /// assert_eq!(map.get_key_value_mut(&1), Some((&1, &mut "b")));
-    /// assert_eq!(map.get_key_value_mut(&2), None);
+    /// assert_eq!(map.get_key_value_mut(&1, &mut (), &mut ()).unwrap(), Some((&1, &mut "b")));
+    /// assert_eq!(map.get_key_value_mut(&2, &mut (), &mut ()).unwrap(), None);
     /// ```
     #[inline]
     pub fn get_key_value_mut<Q>(
@@ -1174,10 +1207,10 @@ where
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map = HashMap::new();
-    /// map.insert(1, "a");
-    /// assert_eq!(map.contains_key(&1), true);
-    /// assert_eq!(map.contains_key(&2), false);
+    /// let mut map: HashMap<_, _> = HashMap::new();
+    /// map.insert(1, "a", &mut (), &mut ()).unwrap();
+    /// assert_eq!(map.contains_key(&1, &mut (), &mut ()).unwrap(), true);
+    /// assert_eq!(map.contains_key(&2, &mut (), &mut ()).unwrap(), false);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn contains_key<Q>(&self, k: &Q, e: &mut E, g: &mut G) -> Result<bool, R>
@@ -1201,14 +1234,14 @@ where
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map = HashMap::new();
-    /// map.insert(1, "a");
-    /// if let Some(x) = map.get_mut(&1) {
+    /// let mut map: HashMap<_, _> = HashMap::new();
+    /// map.insert(1, "a", &mut (), &mut ()).unwrap();
+    /// if let Some(x) = map.get_mut(&1, &mut (), &mut ()).unwrap() {
     ///     *x = "b";
     /// }
-    /// assert_eq!(map[&1], "b");
+    /// assert_eq!(map.get(&1, &mut (), &mut ()).unwrap(), Some(&"b"));
     ///
-    /// assert_eq!(map.get_mut(&2), None);
+    /// assert_eq!(map.get_mut(&2, &mut (), &mut ()).unwrap(), None);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn get_mut<Q>(&mut self, k: &Q, e: &mut E, g: &mut G) -> Result<Option<&mut V>, R>
@@ -1264,13 +1297,13 @@ where
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map = HashMap::new();
-    /// assert_eq!(map.insert(37, "a"), None);
+    /// let mut map: HashMap<_, _> = HashMap::new();
+    /// assert_eq!(map.insert(37, "a", &mut (), &mut ()).unwrap(), None);
     /// assert_eq!(map.is_empty(), false);
     ///
-    /// map.insert(37, "b");
-    /// assert_eq!(map.insert(37, "c"), Some("b"));
-    /// assert_eq!(map[&37], "c");
+    /// map.insert(37, "b", &mut (), &mut ()).unwrap();
+    /// assert_eq!(map.insert(37, "c", &mut (), &mut ()).unwrap(), Some("b"));
+    /// assert_eq!(map.get(&37, &mut (), &mut ()).unwrap().unwrap(), &"c");
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn insert(&mut self, k: K, v: V, e: &mut E, g: &mut G) -> Result<Option<V>, R> {
@@ -1338,10 +1371,10 @@ where
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map1 = HashMap::new();
-    /// assert_eq!(map1.insert(1, "a"), None);
-    /// assert_eq!(map1.insert(2, "b"), None);
-    /// assert_eq!(map1.insert(3, "c"), None);
+    /// let mut map1: HashMap<_, _> = HashMap::new();
+    /// assert_eq!(map1.insert(1, "a", &mut (), &mut ()).unwrap(), None);
+    /// assert_eq!(map1.insert(2, "b", &mut (), &mut ()).unwrap(), None);
+    /// assert_eq!(map1.insert(3, "c", &mut (), &mut ()).unwrap(), None);
     /// assert_eq!(map1.len(), 3);
     ///
     /// let mut map2 = HashMap::new();
@@ -1389,10 +1422,10 @@ where
     /// use hashbrown::HashMap;
     /// use hashbrown::hash_map::OccupiedError;
     ///
-    /// let mut map = HashMap::new();
-    /// assert_eq!(map.try_insert(37, "a").unwrap(), &"a");
+    /// let mut map: HashMap<_, _> = HashMap::new();
+    /// assert_eq!(map.try_insert(37, "a", &mut (), &mut ()).unwrap().unwrap(), &"a");
     ///
-    /// match map.try_insert(37, "b") {
+    /// match map.try_insert(37, "b", &mut (), &mut ()).unwrap() {
     ///     Err(OccupiedError { entry, value }) => {
     ///         assert_eq!(entry.key(), &37);
     ///         assert_eq!(entry.get(), &"a");
@@ -1430,14 +1463,14 @@ where
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map = HashMap::new();
+    /// let mut map: HashMap<_, _> = HashMap::new();
     /// // The map is empty
     /// assert!(map.is_empty() && map.capacity() == 0);
     ///
-    /// map.insert(1, "a");
+    /// map.insert(1, "a", &mut (), &mut ()).unwrap();
     ///
-    /// assert_eq!(map.remove(&1), Some("a"));
-    /// assert_eq!(map.remove(&1), None);
+    /// assert_eq!(map.remove(&1, &mut (), &mut ()).unwrap(), Some("a"));
+    /// assert_eq!(map.remove(&1, &mut (), &mut ()).unwrap(), None);
     ///
     /// // Now map holds none elements
     /// assert!(map.is_empty());
@@ -1469,14 +1502,14 @@ where
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let mut map = HashMap::new();
+    /// let mut map: HashMap<_, _> = HashMap::new();
     /// // The map is empty
     /// assert!(map.is_empty() && map.capacity() == 0);
     ///
-    /// map.insert(1, "a");
+    /// map.insert(1, "a", &mut (), &mut ()).unwrap();
     ///
-    /// assert_eq!(map.remove_entry(&1), Some((1, "a")));
-    /// assert_eq!(map.remove(&1), None);
+    /// assert_eq!(map.remove_entry(&1, &mut (), &mut ()).unwrap(), Some((1, "a")));
+    /// assert_eq!(map.remove(&1, &mut (), &mut ()).unwrap(), None);
     ///
     /// // Now map hold none elements
     /// assert!(map.is_empty());
@@ -1563,7 +1596,6 @@ where
 }
 
 // The default hasher is used to match the std implementation signature
-#[cfg(feature = "default-hasher")]
 impl<K, V, E, G, R> HashMap<K, V, E, G, R, DefaultHashBuilder>
 where
     K: RubyEql<E, G, R> + Hash,
@@ -1573,8 +1605,8 @@ where
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let map1 = HashMap::from([(1, 2), (3, 4)]);
-    /// let map2: HashMap<_, _> = [(1, 2), (3, 4)].into();
+    /// let map1 = HashMap::from_iter([(1, 2), (3, 4)], &mut (), &mut ()).unwrap();
+    /// let map2: HashMap<_, _> = HashMap::from_iter([(1, 2), (3, 4)], &mut (), &mut ()).unwrap();
     /// assert_eq!(map1, map2);
     /// ```
     pub fn from_ary<const N: usize>(arr: [(K, V); N], e: &mut E, g: &mut G) -> Result<Self, R> {
@@ -1600,7 +1632,7 @@ where
 /// ```
 /// use hashbrown::HashMap;
 ///
-/// let map: HashMap<_, _> = [(1, "a"), (2, "b"), (3, "c")].into();
+/// let map: HashMap<_, _> = HashMap::from_ary([(1, "a"), (2, "b"), (3, "c")], &mut (), &mut ()).unwrap();
 ///
 /// let mut iter = map.iter();
 /// let mut vec = vec![iter.next(), iter.next(), iter.next()];
@@ -1650,7 +1682,7 @@ impl<K: Debug, V: Debug> fmt::Debug for Iter<'_, K, V> {
 /// ```
 /// use hashbrown::HashMap;
 ///
-/// let mut map: HashMap<_, _> = [(1, "One".to_owned()), (2, "Two".into())].into();
+/// let mut map: HashMap<_, _> = HashMap::from_ary([(1, "One".to_owned()), (2, "Two".into())], &mut (), &mut ()).unwrap();
 ///
 /// let mut iter = map.iter_mut();
 /// iter.next().map(|(_, v)| v.push_str(" Mississippi"));
@@ -1660,8 +1692,8 @@ impl<K: Debug, V: Debug> fmt::Debug for Iter<'_, K, V> {
 /// assert_eq!(iter.next(), None);
 /// assert_eq!(iter.next(), None);
 ///
-/// assert_eq!(map.get(&1).unwrap(), &"One Mississippi".to_owned());
-/// assert_eq!(map.get(&2).unwrap(), &"Two Mississippi".to_owned());
+/// assert_eq!(map.get(&1, &mut (), &mut ()).unwrap().unwrap(), &"One Mississippi".to_owned());
+/// assert_eq!(map.get(&2, &mut (), &mut ()).unwrap().unwrap(), &"Two Mississippi".to_owned());
 /// ```
 pub struct IterMut<'a, K, V> {
     inner: RawIter<(K, V)>,
@@ -1701,7 +1733,7 @@ impl<K, V> IterMut<'_, K, V> {
 /// ```
 /// use hashbrown::HashMap;
 ///
-/// let map: HashMap<_, _> = [(1, "a"), (2, "b"), (3, "c")].into();
+/// let map: HashMap<_, _> = HashMap::from_iter([(1, "a"), (2, "b"), (3, "c")], &mut (), &mut ()).unwrap();
 ///
 /// let mut iter = map.into_iter();
 /// let mut vec = vec![iter.next(), iter.next(), iter.next()];
@@ -1745,7 +1777,7 @@ impl<K, V> IntoIter<K, V> {
 /// ```
 /// use hashbrown::HashMap;
 ///
-/// let map: HashMap<_, _> = [(1, "a"), (2, "b"), (3, "c")].into();
+/// let map: HashMap<_, _> = HashMap::from_iter([(1, "a"), (2, "b"), (3, "c")], &mut (), &mut ()).unwrap();
 ///
 /// let mut keys = map.into_keys();
 /// let mut vec = vec![keys.next(), keys.next(), keys.next()];
@@ -1823,7 +1855,7 @@ impl<K: Debug, V: Debug> fmt::Debug for IntoKeys<K, V> {
 /// ```
 /// use hashbrown::HashMap;
 ///
-/// let map: HashMap<_, _> = [(1, "a"), (2, "b"), (3, "c")].into();
+/// let map: HashMap<_, _> = HashMap::from_iter([(1, "a"), (2, "b"), (3, "c")], &mut (), &mut ()).unwrap();
 ///
 /// let mut values = map.into_values();
 /// let mut vec = vec![values.next(), values.next(), values.next()];
@@ -1901,7 +1933,7 @@ impl<K, V: Debug> fmt::Debug for IntoValues<K, V> {
 /// ```
 /// use hashbrown::HashMap;
 ///
-/// let map: HashMap<_, _> = [(1, "a"), (2, "b"), (3, "c")].into();
+/// let map: HashMap<_, _> = HashMap::from_iter([(1, "a"), (2, "b"), (3, "c")], &mut (), &mut ()).unwrap();
 ///
 /// let mut keys = map.keys();
 /// let mut vec = vec![keys.next(), keys.next(), keys.next()];
@@ -1949,7 +1981,7 @@ impl<K: Debug, V> fmt::Debug for Keys<'_, K, V> {
 /// ```
 /// use hashbrown::HashMap;
 ///
-/// let map: HashMap<_, _> = [(1, "a"), (2, "b"), (3, "c")].into();
+/// let map: HashMap<_, _> = HashMap::from_iter([(1, "a"), (2, "b"), (3, "c")], &mut (), &mut ()).unwrap();
 ///
 /// let mut values = map.values();
 /// let mut vec = vec![values.next(), values.next(), values.next()];
@@ -1997,7 +2029,7 @@ impl<K, V: Debug> fmt::Debug for Values<'_, K, V> {
 /// ```
 /// use hashbrown::HashMap;
 ///
-/// let mut map: HashMap<_, _> = [(1, "a"), (2, "b"), (3, "c")].into();
+/// let mut map: HashMap<_, _> = HashMap::from_iter([(1, "a"), (2, "b"), (3, "c")], &mut (), &mut ()).unwrap();
 ///
 /// let mut drain_iter = map.drain();
 /// let mut vec = vec![drain_iter.next(), drain_iter.next(), drain_iter.next()];
@@ -2040,7 +2072,7 @@ impl<K, V, E, G, R> Drain<'_, K, V, E, G, R> {
 /// ```
 /// use hashbrown::HashMap;
 ///
-/// let mut map: HashMap<i32, &str> = [(1, "a"), (2, "b"), (3, "c")].into();
+/// let mut map: HashMap<i32, &str> = HashMap::from_iter([(1, "a"), (2, "b"), (3, "c")], &mut (), &mut ()).unwrap();
 ///
 /// let mut extract_if = map.extract_if(|k, _v| k % 2 != 0);
 /// let mut vec = vec![extract_if.next(), extract_if.next()];
@@ -2099,7 +2131,7 @@ impl<K, V, F, E, G, R> FusedIterator for ExtractIf<'_, K, V, F, E, G, R> where
 /// ```
 /// use hashbrown::HashMap;
 ///
-/// let mut map: HashMap<_, _> = [(1, "One".to_owned()), (2, "Two".into())].into();
+/// let mut map: HashMap<_, _> = HashMap::from_iter([(1, "One".to_owned()), (2, "Two".into())], &mut (), &mut ()).unwrap();
 ///
 /// let mut values = map.values_mut();
 /// values.next().map(|v| v.push_str(" Mississippi"));
@@ -2109,8 +2141,8 @@ impl<K, V, F, E, G, R> FusedIterator for ExtractIf<'_, K, V, F, E, G, R> where
 /// assert_eq!(values.next(), None);
 /// assert_eq!(values.next(), None);
 ///
-/// assert_eq!(map.get(&1).unwrap(), &"One Mississippi".to_owned());
-/// assert_eq!(map.get(&2).unwrap(), &"Two Mississippi".to_owned());
+/// assert_eq!(map.get(&1, &mut (), &mut ()).unwrap().unwrap(), &"One Mississippi".to_owned());
+/// assert_eq!(map.get(&2, &mut (), &mut ()).unwrap().unwrap(), &"Two Mississippi".to_owned());
 /// ```
 pub struct ValuesMut<'a, K, V> {
     inner: IterMut<'a, K, V>,
@@ -2128,28 +2160,28 @@ pub struct ValuesMut<'a, K, V> {
 /// ```
 /// use hashbrown::hash_map::{Entry, HashMap, OccupiedEntry};
 ///
-/// let mut map = HashMap::new();
-/// map.extend([("a", 10), ("b", 20), ("c", 30)]);
+/// let mut map: HashMap<_, _> = HashMap::new();
+/// map.extend([("a", 10), ("b", 20), ("c", 30)], &mut (), &mut ()).unwrap();
 /// assert_eq!(map.len(), 3);
 ///
 /// // Existing key (insert)
-/// let entry: Entry<_, _, _> = map.entry("a");
-/// let _raw_o: OccupiedEntry<_, _, _> = entry.insert(1);
+/// let entry: Entry<_, _, _, _, _, _> = map.entry("a", &mut (), &mut ()).unwrap();
+/// let _raw_o: OccupiedEntry<_, _, _, _, _> = entry.insert(1);
 /// assert_eq!(map.len(), 3);
 /// // Nonexistent key (insert)
-/// map.entry("d").insert(4);
+/// map.entry("d", &mut (), &mut ()).unwrap().insert(4);
 ///
 /// // Existing key (or_insert)
-/// let v = map.entry("b").or_insert(2);
+/// let v = map.entry("b", &mut (), &mut ()).unwrap().or_insert(2);
 /// assert_eq!(std::mem::replace(v, 2), 20);
 /// // Nonexistent key (or_insert)
-/// map.entry("e").or_insert(5);
+/// map.entry("e", &mut (), &mut ()).unwrap().or_insert(5);
 ///
 /// // Existing key (or_insert_with)
-/// let v = map.entry("c").or_insert_with(|| 3);
+/// let v = map.entry("c", &mut (), &mut ()).unwrap().or_insert_with(|| 3);
 /// assert_eq!(std::mem::replace(v, 3), 30);
 /// // Nonexistent key (or_insert_with)
-/// map.entry("f").or_insert_with(|| 6);
+/// map.entry("f", &mut (), &mut ()).unwrap().or_insert_with(|| 6);
 ///
 /// println!("Our HashMap: {:?}", map);
 ///
@@ -2166,9 +2198,9 @@ pub enum Entry<'a, K, V, E, G, R, S> {
     ///
     /// ```
     /// use hashbrown::hash_map::{Entry, HashMap};
-    /// let mut map: HashMap<_, _> = [("a", 100), ("b", 200)].into();
+    /// let mut map: HashMap<_, _> = HashMap::from_ary([("a", 100), ("b", 200)], &mut (), &mut ()).unwrap();
     ///
-    /// match map.entry("a") {
+    /// match map.entry("a", &mut (), &mut ()).unwrap() {
     ///     Entry::Vacant(_) => unreachable!(),
     ///     Entry::Occupied(_) => { }
     /// }
@@ -2183,7 +2215,7 @@ pub enum Entry<'a, K, V, E, G, R, S> {
     /// use hashbrown::hash_map::{Entry, HashMap};
     /// let mut map: HashMap<&str, i32> = HashMap::new();
     ///
-    /// match map.entry("a") {
+    /// match map.entry("a", &mut (), &mut ()).unwrap() {
     ///     Entry::Occupied(_) => unreachable!(),
     ///     Entry::Vacant(_) => { }
     /// }
@@ -2208,14 +2240,14 @@ impl<K: Debug, V: Debug, E, G, R, S> Debug for Entry<'_, K, V, E, G, R, S> {
 /// ```
 /// use hashbrown::hash_map::{Entry, HashMap, OccupiedEntry};
 ///
-/// let mut map = HashMap::new();
-/// map.extend([("a", 10), ("b", 20), ("c", 30)]);
+/// let mut map: HashMap<_, _> = HashMap::new();
+/// map.extend([("a", 10), ("b", 20), ("c", 30)], &mut (), &mut ()).unwrap();
 ///
-/// let _entry_o: OccupiedEntry<_, _, _> = map.entry("a").insert(100);
+/// let _entry_o: OccupiedEntry<_, _, _, _, _> = map.entry("a", &mut (), &mut ()).unwrap().insert(100);
 /// assert_eq!(map.len(), 3);
 ///
 /// // Existing key (insert and update)
-/// match map.entry("a") {
+/// match map.entry("a", &mut (), &mut ()).unwrap() {
 ///     Entry::Vacant(_) => unreachable!(),
 ///     Entry::Occupied(mut view) => {
 ///         assert_eq!(view.get(), &100);
@@ -2229,13 +2261,13 @@ impl<K: Debug, V: Debug, E, G, R, S> Debug for Entry<'_, K, V, E, G, R, S> {
 /// assert_eq!(map.len(), 3);
 ///
 /// // Existing key (take)
-/// match map.entry("c") {
+/// match map.entry("c", &mut (), &mut ()).unwrap() {
 ///     Entry::Vacant(_) => unreachable!(),
 ///     Entry::Occupied(view) => {
 ///         assert_eq!(view.remove_entry(), ("c", 30));
 ///     }
 /// }
-/// assert_eq!(map.get(&"c"), None);
+/// assert_eq!(map.get(&"c", &mut (), &mut ()).unwrap(), None);
 /// assert_eq!(map.len(), 2);
 /// ```
 pub struct OccupiedEntry<'a, K, V, E, G, R, S = DefaultHashBuilder> {
@@ -2280,7 +2312,7 @@ impl<K: Debug, V: Debug, E, G, R, S> Debug for OccupiedEntry<'_, K, V, E, G, R, 
 ///
 /// let mut map = HashMap::<&str, i32>::new();
 ///
-/// let entry_v: VacantEntry<_, _, _> = match map.entry("a") {
+/// let entry_v: VacantEntry<_, _, (), (), ()> = match map.entry("a", &mut (), &mut ()).unwrap() {
 ///     Entry::Vacant(view) => view,
 ///     Entry::Occupied(_) => unreachable!(),
 /// };
@@ -2288,7 +2320,7 @@ impl<K: Debug, V: Debug, E, G, R, S> Debug for OccupiedEntry<'_, K, V, E, G, R, 
 /// assert!(map[&"a"] == 10 && map.len() == 1);
 ///
 /// // Nonexistent key (insert and update)
-/// match map.entry("b") {
+/// match map.entry("b", &mut (), &mut ()).unwrap() {
 ///     Entry::Occupied(_) => unreachable!(),
 ///     Entry::Vacant(view) => {
 ///         let value = view.insert(2);
@@ -2331,29 +2363,29 @@ impl<K: Debug, V, E, G, R, S> Debug for VacantEntry<'_, K, V, E, G, R, S> {
 /// ```
 /// use hashbrown::hash_map::{EntryRef, HashMap, OccupiedEntry};
 ///
-/// let mut map = HashMap::new();
-/// map.extend([("a".to_owned(), 10), ("b".into(), 20), ("c".into(), 30)]);
+/// let mut map: HashMap<_, _> = HashMap::new();
+/// map.extend([("a".to_owned(), 10), ("b".into(), 20), ("c".into(), 30)], &mut (), &mut ()).unwrap();
 /// assert_eq!(map.len(), 3);
 ///
 /// // Existing key (insert)
 /// let key = String::from("a");
-/// let entry: EntryRef<_, _, _, _> = map.entry_ref(&key);
-/// let _raw_o: OccupiedEntry<_, _, _, _> = entry.insert(1);
+/// let entry: EntryRef<_, _, _, _, _, _, _> = map.entry_ref(&key, &mut (), &mut ()).unwrap();
+/// let _raw_o: OccupiedEntry<_, _, _, _, _> = entry.insert(1);
 /// assert_eq!(map.len(), 3);
 /// // Nonexistent key (insert)
-/// map.entry_ref("d").insert(4);
+/// map.entry_ref("d", &mut (), &mut ()).unwrap().insert(4);
 ///
 /// // Existing key (or_insert)
-/// let v = map.entry_ref("b").or_insert(2);
+/// let v = map.entry_ref("b", &mut (), &mut ()).unwrap().or_insert(2);
 /// assert_eq!(std::mem::replace(v, 2), 20);
 /// // Nonexistent key (or_insert)
-/// map.entry_ref("e").or_insert(5);
+/// map.entry_ref("e", &mut (), &mut ()).unwrap().or_insert(5);
 ///
 /// // Existing key (or_insert_with)
-/// let v = map.entry_ref("c").or_insert_with(|| 3);
+/// let v = map.entry_ref("c", &mut (), &mut ()).unwrap().or_insert_with(|| 3);
 /// assert_eq!(std::mem::replace(v, 3), 30);
 /// // Nonexistent key (or_insert_with)
-/// map.entry_ref("f").or_insert_with(|| 6);
+/// map.entry_ref("f", &mut (), &mut ()).unwrap().or_insert_with(|| 6);
 ///
 /// println!("Our HashMap: {:?}", map);
 ///
@@ -2369,9 +2401,9 @@ pub enum EntryRef<'a, 'b, K, Q: ?Sized, V, E, G, R, S> {
     ///
     /// ```
     /// use hashbrown::hash_map::{EntryRef, HashMap};
-    /// let mut map: HashMap<_, _> = [("a".to_owned(), 100), ("b".into(), 200)].into();
+    /// let mut map: HashMap<_, _> = HashMap::from_ary([("a".to_owned(), 100), ("b".into(), 200)], &mut (), &mut ()).unwrap();
     ///
-    /// match map.entry_ref("a") {
+    /// match map.entry_ref("a", &mut (), &mut ()).unwrap() {
     ///     EntryRef::Vacant(_) => unreachable!(),
     ///     EntryRef::Occupied(_) => { }
     /// }
@@ -2386,7 +2418,7 @@ pub enum EntryRef<'a, 'b, K, Q: ?Sized, V, E, G, R, S> {
     /// use hashbrown::hash_map::{EntryRef, HashMap};
     /// let mut map: HashMap<String, i32> = HashMap::new();
     ///
-    /// match map.entry_ref("a") {
+    /// match map.entry_ref("a", &mut (), &mut ()).unwrap() {
     ///     EntryRef::Occupied(_) => unreachable!(),
     ///     EntryRef::Vacant(_) => { }
     /// }
@@ -2418,9 +2450,9 @@ where
 /// ```
 /// use hashbrown::hash_map::{EntryRef, HashMap, VacantEntryRef};
 ///
-/// let mut map = HashMap::<String, i32>::new();
+/// let mut map: HashMap<_, _> = HashMap::<String, i32>::new();
 ///
-/// let entry_v: VacantEntryRef<_, _, _, _> = match map.entry_ref("a") {
+/// let entry_v: VacantEntryRef<_, _, _, (), (), (), _> = match map.entry_ref("a", &mut (), &mut ()).unwrap() {
 ///     EntryRef::Vacant(view) => view,
 ///     EntryRef::Occupied(_) => unreachable!(),
 /// };
@@ -2428,7 +2460,7 @@ where
 /// assert!(map["a"] == 10 && map.len() == 1);
 ///
 /// // Nonexistent key (insert and update)
-/// match map.entry_ref("b") {
+/// match map.entry_ref("b", &mut (), &mut ()).unwrap() {
 ///     EntryRef::Occupied(_) => unreachable!(),
 ///     EntryRef::Vacant(view) => {
 ///         let value = view.insert(2);
@@ -2463,12 +2495,12 @@ where
 /// ```
 /// use hashbrown::hash_map::{HashMap, OccupiedError};
 ///
-/// let mut map: HashMap<_, _> = [("a", 10), ("b", 20)].into();
+/// let mut map: HashMap<_, _> = HashMap::from_ary([("a", 10), ("b", 20)], &mut (), &mut ()).unwrap();
 ///
 /// // try_insert method returns mutable reference to the value if keys are vacant,
 /// // but if the map did have key present, nothing is updated, and the provided
 /// // value is returned inside `Err(_)` variant
-/// match map.try_insert("a", 100) {
+/// match map.try_insert("a", 100, &mut (), &mut ()).unwrap() {
 ///     Err(OccupiedError { mut entry, value }) => {
 ///         assert_eq!(entry.key(), &"a");
 ///         assert_eq!(value, 100);
@@ -2523,12 +2555,12 @@ impl<'a, K, V, E, G, R, S> IntoIterator for &'a HashMap<K, V, E, G, R, S> {
     ///
     /// ```
     /// use hashbrown::HashMap;
-    /// let map_one: HashMap<_, _> = [(1, "a"), (2, "b"), (3, "c")].into();
+    /// let map_one: HashMap<_, _> = HashMap::from_ary([(1, "a"), (2, "b"), (3, "c")], &mut (), &mut ()).unwrap();
     /// let mut map_two = HashMap::new();
     ///
     /// for (key, value) in &map_one {
     ///     println!("Key: {}, Value: {}", key, value);
-    ///     map_two.insert(*key, *value);
+    ///     map_two.insert(*key, *value, &mut (), &mut ()).unwrap();
     /// }
     ///
     /// assert_eq!(map_one, map_two);
@@ -2557,7 +2589,7 @@ impl<'a, K, V, E, G, R, S> IntoIterator for &'a mut HashMap<K, V, E, G, R, S> {
     ///
     /// ```
     /// use hashbrown::HashMap;
-    /// let mut map: HashMap<_, _> = [("a", 1), ("b", 2), ("c", 3)].into();
+    /// let mut map: HashMap<_, _> = HashMap::from_ary([("a", 1), ("b", 2), ("c", 3)], &mut (), &mut ()).unwrap();
     ///
     /// for (key, value) in &mut map {
     ///     println!("Key: {}, Value: {}", key, value);
@@ -2589,7 +2621,7 @@ impl<K, V, E, G, R, S> IntoIterator for HashMap<K, V, E, G, R, S> {
     /// ```
     /// use hashbrown::HashMap;
     ///
-    /// let map: HashMap<_, _> = [("a", 1), ("b", 2), ("c", 3)].into();
+    /// let map: HashMap<_, _> = HashMap::from_iter([("a", 1), ("b", 2), ("c", 3)], &mut (), &mut ()).unwrap();
     ///
     /// // Not possible with .iter()
     /// let mut vec: Vec<(&str, i32)> = map.into_iter().collect();
@@ -2928,7 +2960,7 @@ impl<'a, K, V, E, G, R, S> Entry<'a, K, V, E, G, R, S> {
     /// use hashbrown::HashMap;
     ///
     /// let mut map: HashMap<&str, u32> = HashMap::new();
-    /// let entry = map.entry("horseyland").insert(37);
+    /// let entry = map.entry("horseyland", &mut (), &mut ()).unwrap().insert(37);
     ///
     /// assert_eq!(entry.key(), &"horseyland");
     /// ```
@@ -2958,11 +2990,11 @@ impl<'a, K, V, E, G, R, S> Entry<'a, K, V, E, G, R, S> {
     /// let mut map: HashMap<&str, u32> = HashMap::new();
     ///
     /// // nonexistent key
-    /// map.entry("poneyland").or_insert(3);
+    /// map.entry("poneyland", &mut (), &mut ()).unwrap().or_insert(3);
     /// assert_eq!(map["poneyland"], 3);
     ///
     /// // existing key
-    /// *map.entry("poneyland").or_insert(10) *= 2;
+    /// *map.entry("poneyland", &mut (), &mut ()).unwrap().or_insert(10) *= 2;
     /// assert_eq!(map["poneyland"], 6);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
@@ -2988,11 +3020,11 @@ impl<'a, K, V, E, G, R, S> Entry<'a, K, V, E, G, R, S> {
     /// let mut map: HashMap<&str, u32> = HashMap::new();
     ///
     /// // nonexistent key
-    /// map.entry("poneyland").or_insert_with(|| 3);
+    /// map.entry("poneyland", &mut (), &mut ()).unwrap().or_insert_with(|| 3);
     /// assert_eq!(map["poneyland"], 3);
     ///
     /// // existing key
-    /// *map.entry("poneyland").or_insert_with(|| 10) *= 2;
+    /// *map.entry("poneyland", &mut (), &mut ()).unwrap().or_insert_with(|| 10) *= 2;
     /// assert_eq!(map["poneyland"], 6);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
@@ -3022,11 +3054,11 @@ impl<'a, K, V, E, G, R, S> Entry<'a, K, V, E, G, R, S> {
     /// let mut map: HashMap<&str, usize> = HashMap::new();
     ///
     /// // nonexistent key
-    /// map.entry("poneyland").or_insert_with_key(|key| key.chars().count());
+    /// map.entry("poneyland", &mut (), &mut ()).unwrap().or_insert_with_key(|key| key.chars().count());
     /// assert_eq!(map["poneyland"], 9);
     ///
     /// // existing key
-    /// *map.entry("poneyland").or_insert_with_key(|key| key.chars().count() * 10) *= 2;
+    /// *map.entry("poneyland", &mut (), &mut ()).unwrap().or_insert_with_key(|key| key.chars().count() * 10) *= 2;
     /// assert_eq!(map["poneyland"], 18);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
@@ -3052,11 +3084,11 @@ impl<'a, K, V, E, G, R, S> Entry<'a, K, V, E, G, R, S> {
     /// use hashbrown::HashMap;
     ///
     /// let mut map: HashMap<&str, u32> = HashMap::new();
-    /// map.entry("poneyland").or_insert(3);
+    /// map.entry("poneyland", &mut (), &mut ()).unwrap().or_insert(3);
     /// // existing key
-    /// assert_eq!(map.entry("poneyland").key(), &"poneyland");
+    /// assert_eq!(map.entry("poneyland", &mut (), &mut ()).unwrap().key(), &"poneyland");
     /// // nonexistent key
-    /// assert_eq!(map.entry("horseland").key(), &"horseland");
+    /// assert_eq!(map.entry("horseland", &mut (), &mut ()).unwrap().key(), &"horseland");
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn key(&self) -> &K {
@@ -3076,12 +3108,12 @@ impl<'a, K, V, E, G, R, S> Entry<'a, K, V, E, G, R, S> {
     ///
     /// let mut map: HashMap<&str, u32> = HashMap::new();
     ///
-    /// map.entry("poneyland")
+    /// map.entry("poneyland", &mut (), &mut ()).unwrap()
     ///    .and_modify(|e| { *e += 1 })
     ///    .or_insert(42);
     /// assert_eq!(map["poneyland"], 42);
     ///
-    /// map.entry("poneyland")
+    /// map.entry("poneyland", &mut (), &mut ()).unwrap()
     ///    .and_modify(|e| { *e += 1 })
     ///    .or_insert(42);
     /// assert_eq!(map["poneyland"], 43);
@@ -3113,7 +3145,7 @@ impl<'a, K, V, E, G, R, S> Entry<'a, K, V, E, G, R, S> {
     /// let mut map: HashMap<&str, u32> = HashMap::new();
     ///
     /// let entry = map
-    ///     .entry("poneyland")
+    ///     .entry("poneyland", &mut (), &mut ()).unwrap()
     ///     .and_replace_entry_with(|_k, _v| panic!());
     ///
     /// match entry {
@@ -3123,10 +3155,10 @@ impl<'a, K, V, E, G, R, S> Entry<'a, K, V, E, G, R, S> {
     ///     Entry::Occupied(_) => panic!(),
     /// }
     ///
-    /// map.insert("poneyland", 42);
+    /// map.insert("poneyland", 42, &mut (), &mut ()).unwrap();
     ///
     /// let entry = map
-    ///     .entry("poneyland")
+    ///     .entry("poneyland", &mut (), &mut ()).unwrap()
     ///     .and_replace_entry_with(|k, v| {
     ///         assert_eq!(k, &"poneyland");
     ///         assert_eq!(v, 42);
@@ -3144,7 +3176,7 @@ impl<'a, K, V, E, G, R, S> Entry<'a, K, V, E, G, R, S> {
     /// assert_eq!(map["poneyland"], 43);
     ///
     /// let entry = map
-    ///     .entry("poneyland")
+    ///     .entry("poneyland", &mut (), &mut ()).unwrap()
     ///     .and_replace_entry_with(|_k, _v| None);
     ///
     /// match entry {
@@ -3152,7 +3184,7 @@ impl<'a, K, V, E, G, R, S> Entry<'a, K, V, E, G, R, S> {
     ///     Entry::Occupied(_) => panic!(),
     /// }
     ///
-    /// assert!(!map.contains_key("poneyland"));
+    /// assert!(!map.contains_key("poneyland", &mut (), &mut ()).unwrap());
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn and_replace_entry_with<F>(self, f: F) -> Self
@@ -3178,13 +3210,13 @@ impl<'a, K, V: Default, E, G, R, S> Entry<'a, K, V, E, G, R, S> {
     /// let mut map: HashMap<&str, Option<u32>> = HashMap::new();
     ///
     /// // nonexistent key
-    /// map.entry("poneyland").or_default();
+    /// map.entry("poneyland", &mut (), &mut ()).unwrap().or_default();
     /// assert_eq!(map["poneyland"], None);
     ///
-    /// map.insert("horseland", Some(3));
+    /// map.insert("horseland", Some(3), &mut (), &mut ()).unwrap();
     ///
     /// // existing key
-    /// assert_eq!(map.entry("horseland").or_default(), &mut Some(3));
+    /// assert_eq!(map.entry("horseland", &mut (), &mut ()).unwrap().or_default(), &mut Some(3));
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn or_default(self) -> &'a mut V
@@ -3208,9 +3240,9 @@ impl<'a, K, V, E, G, R, S> OccupiedEntry<'a, K, V, E, G, R, S> {
     /// use hashbrown::hash_map::{Entry, HashMap};
     ///
     /// let mut map: HashMap<&str, u32> = HashMap::new();
-    /// map.entry("poneyland").or_insert(12);
+    /// map.entry("poneyland", &mut (), &mut ()).unwrap().or_insert(12);
     ///
-    /// match map.entry("poneyland") {
+    /// match map.entry("poneyland", &mut (), &mut ()).unwrap() {
     ///     Entry::Vacant(_) => panic!(),
     ///     Entry::Occupied(entry) => assert_eq!(entry.key(), &"poneyland"),
     /// }
@@ -3233,14 +3265,14 @@ impl<'a, K, V, E, G, R, S> OccupiedEntry<'a, K, V, E, G, R, S> {
     /// // The map is empty
     /// assert!(map.is_empty() && map.capacity() == 0);
     ///
-    /// map.entry("poneyland").or_insert(12);
+    /// map.entry("poneyland", &mut (), &mut ()).unwrap().or_insert(12);
     ///
-    /// if let Entry::Occupied(o) = map.entry("poneyland") {
+    /// if let Entry::Occupied(o) = map.entry("poneyland", &mut (), &mut ()).unwrap() {
     ///     // We delete the entry from the map.
     ///     assert_eq!(o.remove_entry(), ("poneyland", 12));
     /// }
     ///
-    /// assert_eq!(map.contains_key("poneyland"), false);
+    /// assert_eq!(map.contains_key("poneyland", &mut (), &mut ()).unwrap(), false);
     /// // Now map hold none elements
     /// assert!(map.is_empty());
     /// ```
@@ -3258,9 +3290,9 @@ impl<'a, K, V, E, G, R, S> OccupiedEntry<'a, K, V, E, G, R, S> {
     /// use hashbrown::hash_map::Entry;
     ///
     /// let mut map: HashMap<&str, u32> = HashMap::new();
-    /// map.entry("poneyland").or_insert(12);
+    /// map.entry("poneyland", &mut (), &mut ()).unwrap().or_insert(12);
     ///
-    /// match map.entry("poneyland") {
+    /// match map.entry("poneyland", &mut (), &mut ()).unwrap() {
     ///     Entry::Vacant(_) => panic!(),
     ///     Entry::Occupied(entry) => assert_eq!(entry.get(), &12),
     /// }
@@ -3284,10 +3316,10 @@ impl<'a, K, V, E, G, R, S> OccupiedEntry<'a, K, V, E, G, R, S> {
     /// use hashbrown::hash_map::Entry;
     ///
     /// let mut map: HashMap<&str, u32> = HashMap::new();
-    /// map.entry("poneyland").or_insert(12);
+    /// map.entry("poneyland", &mut (), &mut ()).unwrap().or_insert(12);
     ///
     /// assert_eq!(map["poneyland"], 12);
-    /// if let Entry::Occupied(mut o) = map.entry("poneyland") {
+    /// if let Entry::Occupied(mut o) = map.entry("poneyland", &mut (), &mut ()).unwrap() {
     ///     *o.get_mut() += 10;
     ///     assert_eq!(*o.get(), 22);
     ///
@@ -3315,12 +3347,12 @@ impl<'a, K, V, E, G, R, S> OccupiedEntry<'a, K, V, E, G, R, S> {
     /// use hashbrown::hash_map::{Entry, HashMap};
     ///
     /// let mut map: HashMap<&str, u32> = HashMap::new();
-    /// map.entry("poneyland").or_insert(12);
+    /// map.entry("poneyland", &mut (), &mut ()).unwrap().or_insert(12);
     ///
     /// assert_eq!(map["poneyland"], 12);
     ///
     /// let value: &mut u32;
-    /// match map.entry("poneyland") {
+    /// match map.entry("poneyland", &mut (), &mut ()).unwrap() {
     ///     Entry::Occupied(entry) => value = entry.into_mut(),
     ///     Entry::Vacant(_) => panic!(),
     /// }
@@ -3342,9 +3374,9 @@ impl<'a, K, V, E, G, R, S> OccupiedEntry<'a, K, V, E, G, R, S> {
     /// use hashbrown::hash_map::Entry;
     ///
     /// let mut map: HashMap<&str, u32> = HashMap::new();
-    /// map.entry("poneyland").or_insert(12);
+    /// map.entry("poneyland", &mut (), &mut ()).unwrap().or_insert(12);
     ///
-    /// if let Entry::Occupied(mut o) = map.entry("poneyland") {
+    /// if let Entry::Occupied(mut o) = map.entry("poneyland", &mut (), &mut ()).unwrap() {
     ///     assert_eq!(o.insert(15), 12);
     /// }
     ///
@@ -3368,13 +3400,13 @@ impl<'a, K, V, E, G, R, S> OccupiedEntry<'a, K, V, E, G, R, S> {
     /// // The map is empty
     /// assert!(map.is_empty() && map.capacity() == 0);
     ///
-    /// map.entry("poneyland").or_insert(12);
+    /// map.entry("poneyland", &mut (), &mut ()).unwrap().or_insert(12);
     ///
-    /// if let Entry::Occupied(o) = map.entry("poneyland") {
+    /// if let Entry::Occupied(o) = map.entry("poneyland", &mut (), &mut ()).unwrap() {
     ///     assert_eq!(o.remove(), 12);
     /// }
     ///
-    /// assert_eq!(map.contains_key("poneyland"), false);
+    /// assert_eq!(map.contains_key("poneyland", &mut (), &mut ()).unwrap(), false);
     /// // Now map hold none elements
     /// assert!(map.is_empty());
     /// ```
@@ -3394,9 +3426,9 @@ impl<'a, K, V, E, G, R, S> OccupiedEntry<'a, K, V, E, G, R, S> {
     /// use hashbrown::hash_map::Entry;
     ///
     /// let mut map: HashMap<&str, u32> = HashMap::new();
-    /// map.insert("poneyland", 42);
+    /// map.insert("poneyland", 42, &mut (), &mut ()).unwrap();
     ///
-    /// let entry = match map.entry("poneyland") {
+    /// let entry = match map.entry("poneyland", &mut (), &mut ()).unwrap() {
     ///     Entry::Occupied(e) => {
     ///         e.replace_entry_with(|k, v| {
     ///             assert_eq!(k, &"poneyland");
@@ -3417,7 +3449,7 @@ impl<'a, K, V, E, G, R, S> OccupiedEntry<'a, K, V, E, G, R, S> {
     ///
     /// assert_eq!(map["poneyland"], 43);
     ///
-    /// let entry = match map.entry("poneyland") {
+    /// let entry = match map.entry("poneyland", &mut (), &mut ()).unwrap() {
     ///     Entry::Occupied(e) => e.replace_entry_with(|_k, _v| None),
     ///     Entry::Vacant(_) => panic!(),
     /// };
@@ -3429,7 +3461,7 @@ impl<'a, K, V, E, G, R, S> OccupiedEntry<'a, K, V, E, G, R, S> {
     ///     Entry::Occupied(_) => panic!(),
     /// }
     ///
-    /// assert!(!map.contains_key("poneyland"));
+    /// assert!(!map.contains_key("poneyland", &mut (), &mut ()).unwrap());
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn replace_entry_with<F>(self, f: F) -> Entry<'a, K, V, E, G, R, S>
@@ -3473,7 +3505,7 @@ impl<'a, K, V, E, G, R, S> VacantEntry<'a, K, V, E, G, R, S> {
     /// use hashbrown::HashMap;
     ///
     /// let mut map: HashMap<&str, u32> = HashMap::new();
-    /// assert_eq!(map.entry("poneyland").key(), &"poneyland");
+    /// assert_eq!(map.entry("poneyland", &mut (), &mut ()).unwrap().key(), &"poneyland");
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn key(&self) -> &K {
@@ -3489,7 +3521,7 @@ impl<'a, K, V, E, G, R, S> VacantEntry<'a, K, V, E, G, R, S> {
     ///
     /// let mut map: HashMap<&str, u32> = HashMap::new();
     ///
-    /// match map.entry("poneyland") {
+    /// match map.entry("poneyland", &mut (), &mut ()).unwrap() {
     ///     Entry::Occupied(_) => panic!(),
     ///     Entry::Vacant(v) => assert_eq!(v.into_key(), "poneyland"),
     /// }
@@ -3510,7 +3542,7 @@ impl<'a, K, V, E, G, R, S> VacantEntry<'a, K, V, E, G, R, S> {
     ///
     /// let mut map: HashMap<&str, u32> = HashMap::new();
     ///
-    /// if let Entry::Vacant(o) = map.entry("poneyland") {
+    /// if let Entry::Vacant(o) = map.entry("poneyland", &mut (), &mut ()).unwrap() {
     ///     o.insert(37);
     /// }
     /// assert_eq!(map["poneyland"], 37);
@@ -3541,7 +3573,7 @@ impl<'a, K, V, E, G, R, S> VacantEntry<'a, K, V, E, G, R, S> {
     ///
     /// let mut map: HashMap<&str, u32> = HashMap::new();
     ///
-    /// if let Entry::Vacant(v) = map.entry("poneyland") {
+    /// if let Entry::Vacant(v) = map.entry("poneyland", &mut (), &mut ()).unwrap() {
     ///     let o = v.insert_entry(37);
     ///     assert_eq!(o.get(), &37);
     /// }
@@ -3574,7 +3606,7 @@ impl<'a, 'b, K, Q: ?Sized, V, E, G, R, S> EntryRef<'a, 'b, K, Q, V, E, G, R, S> 
     /// use hashbrown::HashMap;
     ///
     /// let mut map: HashMap<String, u32> = HashMap::new();
-    /// let entry = map.entry_ref("horseyland").insert(37);
+    /// let entry = map.entry_ref("horseyland", &mut (), &mut ()).unwrap().insert(37);
     ///
     /// assert_eq!(entry.key(), "horseyland");
     /// ```
@@ -3605,11 +3637,11 @@ impl<'a, 'b, K, Q: ?Sized, V, E, G, R, S> EntryRef<'a, 'b, K, Q, V, E, G, R, S> 
     /// let mut map: HashMap<String, u32> = HashMap::new();
     ///
     /// // nonexistent key
-    /// map.entry_ref("poneyland").or_insert(3);
+    /// map.entry_ref("poneyland", &mut (), &mut ()).unwrap().or_insert(3);
     /// assert_eq!(map["poneyland"], 3);
     ///
     /// // existing key
-    /// *map.entry_ref("poneyland").or_insert(10) *= 2;
+    /// *map.entry_ref("poneyland", &mut (), &mut ()).unwrap().or_insert(10) *= 2;
     /// assert_eq!(map["poneyland"], 6);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
@@ -3636,11 +3668,11 @@ impl<'a, 'b, K, Q: ?Sized, V, E, G, R, S> EntryRef<'a, 'b, K, Q, V, E, G, R, S> 
     /// let mut map: HashMap<String, u32> = HashMap::new();
     ///
     /// // nonexistent key
-    /// map.entry_ref("poneyland").or_insert_with(|| 3);
+    /// map.entry_ref("poneyland", &mut (), &mut ()).unwrap().or_insert_with(|| 3);
     /// assert_eq!(map["poneyland"], 3);
     ///
     /// // existing key
-    /// *map.entry_ref("poneyland").or_insert_with(|| 10) *= 2;
+    /// *map.entry_ref("poneyland", &mut (), &mut ()).unwrap().or_insert_with(|| 10) *= 2;
     /// assert_eq!(map["poneyland"], 6);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
@@ -3668,11 +3700,11 @@ impl<'a, 'b, K, Q: ?Sized, V, E, G, R, S> EntryRef<'a, 'b, K, Q, V, E, G, R, S> 
     /// let mut map: HashMap<String, usize> = HashMap::new();
     ///
     /// // nonexistent key
-    /// map.entry_ref("poneyland").or_insert_with_key(|key| key.chars().count());
+    /// map.entry_ref("poneyland", &mut (), &mut ()).unwrap().or_insert_with_key(|key| key.chars().count());
     /// assert_eq!(map["poneyland"], 9);
     ///
     /// // existing key
-    /// *map.entry_ref("poneyland").or_insert_with_key(|key| key.chars().count() * 10) *= 2;
+    /// *map.entry_ref("poneyland", &mut (), &mut ()).unwrap().or_insert_with_key(|key| key.chars().count() * 10) *= 2;
     /// assert_eq!(map["poneyland"], 18);
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
@@ -3699,11 +3731,11 @@ impl<'a, 'b, K, Q: ?Sized, V, E, G, R, S> EntryRef<'a, 'b, K, Q, V, E, G, R, S> 
     /// use hashbrown::HashMap;
     ///
     /// let mut map: HashMap<String, u32> = HashMap::new();
-    /// map.entry_ref("poneyland").or_insert(3);
+    /// map.entry_ref("poneyland", &mut (), &mut ()).unwrap().or_insert(3);
     /// // existing key
-    /// assert_eq!(map.entry_ref("poneyland").key(), "poneyland");
+    /// assert_eq!(map.entry_ref("poneyland", &mut (), &mut ()).unwrap().key(), "poneyland");
     /// // nonexistent key
-    /// assert_eq!(map.entry_ref("horseland").key(), "horseland");
+    /// assert_eq!(map.entry_ref("horseland", &mut (), &mut ()).unwrap().key(), "horseland");
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn key(&self) -> &Q
@@ -3726,12 +3758,12 @@ impl<'a, 'b, K, Q: ?Sized, V, E, G, R, S> EntryRef<'a, 'b, K, Q, V, E, G, R, S> 
     ///
     /// let mut map: HashMap<String, u32> = HashMap::new();
     ///
-    /// map.entry_ref("poneyland")
+    /// map.entry_ref("poneyland", &mut (), &mut ()).unwrap()
     ///    .and_modify(|e| { *e += 1 })
     ///    .or_insert(42);
     /// assert_eq!(map["poneyland"], 42);
     ///
-    /// map.entry_ref("poneyland")
+    /// map.entry_ref("poneyland", &mut (), &mut ()).unwrap()
     ///    .and_modify(|e| { *e += 1 })
     ///    .or_insert(42);
     /// assert_eq!(map["poneyland"], 43);
@@ -3763,13 +3795,13 @@ impl<'a, 'b, K, Q: ?Sized, V: Default, E, G, R, S> EntryRef<'a, 'b, K, Q, V, E, 
     /// let mut map: HashMap<String, Option<u32>> = HashMap::new();
     ///
     /// // nonexistent key
-    /// map.entry_ref("poneyland").or_default();
+    /// map.entry_ref("poneyland", &mut (), &mut ()).unwrap().or_default();
     /// assert_eq!(map["poneyland"], None);
     ///
-    /// map.insert("horseland".to_string(), Some(3));
+    /// map.insert("horseland".to_string(), Some(3), &mut (), &mut ()).unwrap();
     ///
     /// // existing key
-    /// assert_eq!(map.entry_ref("horseland").or_default(), &mut Some(3));
+    /// assert_eq!(map.entry_ref("horseland", &mut (), &mut ()).unwrap().or_default(), &mut Some(3));
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn or_default(self) -> &'a mut V
@@ -3796,7 +3828,7 @@ impl<'a, 'b, K, Q: ?Sized, V, E, G, R, S> VacantEntryRef<'a, 'b, K, Q, V, E, G, 
     ///
     /// let mut map: HashMap<String, u32> = HashMap::new();
     /// let key: &str = "poneyland";
-    /// assert_eq!(map.entry_ref(key).key(), "poneyland");
+    /// assert_eq!(map.entry_ref(key, &mut (), &mut ()).unwrap().key(), "poneyland");
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn key(&self) -> &'b Q {
@@ -3815,7 +3847,7 @@ impl<'a, 'b, K, Q: ?Sized, V, E, G, R, S> VacantEntryRef<'a, 'b, K, Q, V, E, G, 
     /// let mut map: HashMap<String, u32> = HashMap::new();
     /// let key: &str = "poneyland";
     ///
-    /// if let EntryRef::Vacant(o) = map.entry_ref(key) {
+    /// if let EntryRef::Vacant(o) = map.entry_ref(key, &mut (), &mut ()).unwrap() {
     ///     o.insert(37);
     /// }
     /// assert_eq!(map["poneyland"], 37);
@@ -3847,7 +3879,7 @@ impl<'a, 'b, K, Q: ?Sized, V, E, G, R, S> VacantEntryRef<'a, 'b, K, Q, V, E, G, 
     ///
     /// let mut map: HashMap<&str, u32> = HashMap::new();
     ///
-    /// if let EntryRef::Vacant(v) = map.entry_ref("poneyland") {
+    /// if let EntryRef::Vacant(v) = map.entry_ref("poneyland", &mut (), &mut ()).unwrap() {
     ///     let o = v.insert_entry(37);
     ///     assert_eq!(o.get(), &37);
     /// }
@@ -3908,25 +3940,25 @@ where
     /// ```
     /// use hashbrown::hash_map::HashMap;
     ///
-    /// let mut map = HashMap::new();
-    /// map.insert(1, 100);
+    /// let mut map: HashMap<_, _> = HashMap::new();
+    /// map.insert(1, 100, &mut (), &mut ()).unwrap();
     ///
     /// let some_iter = [(1, 1), (2, 2)].into_iter();
-    /// map.extend(some_iter);
+    /// map.extend(some_iter, &mut (), &mut ()).unwrap();
     /// // Replace values with existing keys with new values returned from the iterator.
     /// // So that the map.get(&1) doesn't return Some(&100).
-    /// assert_eq!(map.get(&1), Some(&1));
+    /// assert_eq!(map.get(&1, &mut (), &mut ()).unwrap(), Some(&1));
     ///
     /// let some_vec: Vec<_> = vec![(3, 3), (4, 4)];
-    /// map.extend(some_vec);
+    /// map.extend(some_vec, &mut (), &mut ()).unwrap();
     ///
     /// let some_arr = [(5, 5), (6, 6)];
-    /// map.extend(some_arr);
+    /// map.extend(some_arr, &mut (), &mut ()).unwrap();
     /// let old_map_len = map.len();
     ///
     /// // You can also extend from another HashMap
-    /// let mut new_map = HashMap::new();
-    /// new_map.extend(map);
+    /// let mut new_map: HashMap<_, _> = HashMap::new();
+    /// new_map.extend(map, &mut (), &mut ()).unwrap();
     /// assert_eq!(new_map.len(), old_map_len);
     ///
     /// let mut vec: Vec<_> = new_map.into_iter().collect();

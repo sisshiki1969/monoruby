@@ -22,13 +22,10 @@
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 
-/// Default hasher for [`HashMap`] and [`HashSet`].
-#[cfg(feature = "default-hasher")]
-pub type DefaultHashBuilder = foldhash::fast::RandomState;
+use foldhash;
 
-/// Dummy default hasher for [`HashMap`] and [`HashSet`].
-#[cfg(not(feature = "default-hasher"))]
-pub enum DefaultHashBuilder {}
+/// Default hasher for [`HashMap`] and [`HashSet`].
+pub type DefaultHashBuilder = foldhash::fast::RandomState;
 
 #[cfg(test)]
 #[macro_use]

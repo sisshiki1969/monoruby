@@ -390,9 +390,9 @@ impl<K, V> Default for Keys<'_, K, V> {
 /// # Examples
 ///
 /// ```
-/// use indexmap::IndexMap;
+/// use rubymap::RubyMap;
 ///
-/// let mut map = IndexMap::new();
+/// let mut map = RubyMap::new();
 /// for word in "Lorem ipsum dolor sit amet".split_whitespace() {
 ///     map.insert(word.to_lowercase(), word.to_uppercase());
 /// }
@@ -424,7 +424,7 @@ impl<K, V> Default for Keys<'_, K, V> {
 /// ```
 ///
 /// ```should_panic
-/// use indexmap::IndexMap;
+/// use rubymap::IndexMap;
 ///
 /// let mut map = IndexMap::new();
 /// map.insert("foo", 1);

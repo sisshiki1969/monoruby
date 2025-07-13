@@ -377,9 +377,10 @@ impl Store {
         max: usize,
         rest: bool,
         kw: &[&str],
+        kw_rest: bool,
     ) -> FuncId {
         self.functions
-            .new_native_func(name.to_string(), address, min, max, rest, kw)
+            .new_native_func(name.to_string(), address, min, max, rest, kw, kw_rest)
     }
 
     pub(super) fn new_basic_op(

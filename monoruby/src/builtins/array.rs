@@ -109,7 +109,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "uniq", uniq, 0);
     globals.define_builtin_func(ARRAY_CLASS, "uniq!", uniq_, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "slice!", slice_, 1, 2, false);
-    globals.define_builtin_func_with_kw(ARRAY_CLASS, "pack", pack, 1, 1, false, &["buffer"]);
+    globals.define_builtin_func_with_kw(ARRAY_CLASS, "pack", pack, 1, 1, false, &["buffer"], false);
     globals.define_builtin_func_with(ARRAY_CLASS, "flatten", flatten, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "flatten!", flatten_, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "compact", compact, 0);
@@ -122,6 +122,7 @@ pub(super) fn init(globals: &mut Globals) {
         0,
         false,
         &["random"],
+        false,
     );
     globals.define_builtin_func(ARRAY_CLASS, "delete", delete, 1);
     globals.define_builtin_func(ARRAY_CLASS, "delete_at", delete_at, 1);

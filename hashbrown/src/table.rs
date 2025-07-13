@@ -54,7 +54,9 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     ///
     /// ```
     /// use hashbrown::HashTable;
-    /// let mut table: HashTable<&str> = HashTable::new();
+    /// struct E;
+    /// struct G;
+    /// let mut table: HashTable<&str, E, G, ()> = HashTable::new();
     /// assert_eq!(table.len(), 0);
     /// assert_eq!(table.capacity(), 0);
     /// ```
@@ -73,7 +75,9 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     ///
     /// ```
     /// use hashbrown::HashTable;
-    /// let mut table: HashTable<&str> = HashTable::with_capacity(10);
+    /// struct E;
+    /// struct G;
+    /// let mut table: HashTable<&str, E, G, ()> = HashTable::with_capacity(10);
     /// assert_eq!(table.len(), 0);
     /// assert!(table.capacity() >= 10);
     /// ```
@@ -468,7 +472,9 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     ///
     /// ```
     /// use hashbrown::HashTable;
-    /// let table: HashTable<i32> = HashTable::with_capacity(100);
+    /// struct E;
+    /// struct G;
+    /// let table: HashTable<i32, E, G, ()> = HashTable::with_capacity(100);
     /// assert!(table.capacity() >= 100);
     /// ```
     pub fn capacity(&self) -> usize {
@@ -1466,11 +1472,13 @@ impl<'a, T, E, G, R> OccupiedEntry<'a, T, E, G, R> {
 /// use hashbrown::{HashTable, DefaultHashBuilder};
 /// use std::hash::BuildHasher;
 ///
+/// struct E;
+/// struct G;
 /// let mut table: HashTable<&str> = HashTable::new();
 /// let hasher = DefaultHashBuilder::default();
 /// let hasher = |val: &_| hasher.hash_one(val);
 ///
-/// let entry_v: VacantEntry<_, _> = match table.entry(hasher(&"a"), |&x| x == "a", hasher) {
+/// let entry_v: VacantEntry<_, _, E, G, ()> = match table.entry(hasher(&"a"), |&x| x == "a", hasher) {
 ///     Entry::Vacant(view) => view,
 ///     Entry::Occupied(_) => unreachable!(),
 /// };

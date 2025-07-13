@@ -66,7 +66,7 @@
 //!
 //! ```
 //! use fnv::FnvBuildHasher;
-//! use indexmap::{IndexMap, IndexSet};
+//! use rubymap::{IndexMap, IndexSet};
 //!
 //! type FnvIndexMap<K, V> = IndexMap<K, V, FnvBuildHasher>;
 //! type FnvIndexSet<T> = IndexSet<T, FnvBuildHasher>;

@@ -14,7 +14,7 @@ rust-version = "1.65.0"
 
 [dependencies]
 # For the default hasher
-foldhash = { version = "0.1.2", default-features = false, optional = true }
+foldhash = { version = "0.1.2" }
 
 # When built as part of libstd
 core = { version = "1.0.0", optional = true, package = "rustc-std-workspace-core" }
@@ -37,15 +37,10 @@ serde_test = "1.0"
 doc-comment = "0.3.1"
 
 [features]
-default = ["default-hasher", "inline-more"]
+default = ["inline-more"]
 
 # Enables the RustcEntry API used to provide the standard library's Entry API.
 rustc-internal-api = []
-
-# Provides a default hasher. Currently this is foldhash but this is subject to
-# change in the future. Note that the default hasher does *not* provide HashDoS
-# resistance, unlike the one in the standard library.
-default-hasher = ["dep:foldhash"]
 
 # Enables usage of `#[inline]` on far more functions than by default in this
 # crate. This may lead to a performance increase but often comes at a compile
