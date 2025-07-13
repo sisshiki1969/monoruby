@@ -12,16 +12,6 @@ impl JitModule {
         let entry_panic = jit.label();
         let exec_gc = jit.label();
         let f64_to_val = jit.label();
-        #[cfg(feature = "perf")]
-        let perf_file = {
-            let pid = std::process::id();
-            let temp_file = format!("/tmp/perf-{pid}.map");
-            let file = match std::fs::File::create(&temp_file) {
-                Err(why) => panic!("couldn't create {}: {}", temp_file, why),
-                Ok(file) => file,
-            };
-            file
-        };
         // dispatch table.
         let entry_unimpl = jit.get_current_address();
         monoasm! { &mut jit,
@@ -46,8 +36,6 @@ impl JitModule {
             entry_panic,
             dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
             bop_redefined_flags,
-            #[cfg(feature = "perf")]
-            perf_file,
         };
         j.init();
         j.jit.finalize();

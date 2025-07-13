@@ -1337,6 +1337,9 @@ pub(crate) extern "C" fn exec_jit_partial_compile(
     lfp: Lfp,
     pc: BytecodePtr,
 ) {
+    if globals.no_jit {
+        return;
+    }
     partial_compile(globals, lfp, pc, false);
 }
 

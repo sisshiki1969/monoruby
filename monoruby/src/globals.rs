@@ -89,7 +89,7 @@ pub struct Globals {
     /// globals variables.
     global_vars: HashMap<IdentId, Value>,
     /// suppress jit compilation.
-    no_jit: bool,
+    pub no_jit: bool,
     /// suppress loading gem.
     pub no_gems: bool,
     /// stdout.
@@ -146,7 +146,7 @@ impl Globals {
             loaded_canonicalized_files.insert(std::path::PathBuf::from(f));
         });
 
-        let codegen = Codegen::new(no_jit);
+        let codegen = Codegen::new();
 
         let mut globals = Self {
             main_object,

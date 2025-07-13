@@ -87,7 +87,7 @@ impl Codegen {
     ///
     /// Generate interpreter.
     ///
-    pub(super) fn construct_vm(&mut self, no_jit: bool) {
+    pub(super) fn construct_vm(&mut self) {
         let vm_entry = self.jit.label();
         let entry_fetch = self.jit.label();
 
@@ -253,7 +253,7 @@ impl Codegen {
         self.dispatch[11] = self.vm_store_const();
         self.dispatch[12] = self.vm_condbr(&branch);
         self.dispatch[13] = self.vm_condnotbr(&branch);
-        self.dispatch[14] = self.vm_loop_start(no_jit);
+        self.dispatch[14] = self.vm_loop_start();
         self.dispatch[15] = self.vm_loop_end();
         self.dispatch[16] = self.vm_load_ivar();
         self.dispatch[17] = self.vm_store_ivar();
@@ -804,11 +804,12 @@ impl Codegen {
         label
     }
 
-    fn vm_loop_start(&mut self, no_jit: bool) -> CodePtr {
+    fn vm_loop_start(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let compile = self.jit.label();
+        let cont = self.jit.label();
         self.vm_execute_gc();
-        if !no_jit && !cfg!(feature = "no-jit") {
+        if !cfg!(feature = "no-jit") {
             let count = self.jit.label();
             monoasm! { &mut self.jit,
                 movq rax, [r13 - 8];
@@ -821,8 +822,9 @@ impl Codegen {
                 jae   compile;
             };
         };
+        self.jit.bind_label(cont.clone());
         self.fetch_and_dispatch();
-        if !no_jit && !cfg!(feature = "no-jit") {
+        if !cfg!(feature = "no-jit") {
             monoasm!( &mut self.jit,
             compile:
                 movq rdi, r12;
@@ -831,6 +833,8 @@ impl Codegen {
                 movq rax, (exec_jit_partial_compile);
                 call rax;
                 movq rax, [r13 - 8];
+                testq rax, rax;
+                jeq cont;
                 jmp rax;
             );
         }

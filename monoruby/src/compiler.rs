@@ -59,6 +59,20 @@ type FiberInvoker = extern "C" fn(
     &mut Executor,
 ) -> Option<Value>;
 
+#[cfg(feature = "perf")]
+thread_local! {
+    pub static PERF_FILE: std::cell::RefCell<std::fs::File> = std::cell::RefCell::new(
+    {
+        let pid = std::process::id();
+        let temp_file = format!("/tmp/perf-{pid}.map");
+        let file = match std::fs::File::create(&temp_file) {
+            Err(why) => panic!("couldn't create {}: {}", temp_file, why),
+            Ok(file) => file,
+        };
+        file
+    });
+}
+
 #[cfg(not(test))]
 const COUNT_START_COMPILE: i32 = 20;
 #[cfg(test)]
@@ -160,8 +174,6 @@ pub struct JitModule {
     entry_panic: DestLabel,
     dispatch: Box<[CodePtr; 256]>,
     bop_redefined_flags: DestLabel,
-    #[cfg(feature = "perf")]
-    perf_file: std::fs::File,
 }
 
 impl std::ops::Deref for JitModule {
@@ -215,20 +227,21 @@ impl JitModule {
     }
 
     #[cfg(feature = "perf")]
-    pub(crate) fn perf_write(&mut self, info: (CodePtr, usize, CodePtr, usize), desc: &str) {
+    pub(crate) fn perf_write(info: (CodePtr, usize, CodePtr, usize), desc: &str) {
         use std::io::Write;
-        self.perf_file
-            .write_all(format!("{:x} {:x} {desc}\n", info.0.as_ptr() as usize, info.1).as_bytes())
-            .unwrap();
-        self.perf_file
-            .write_all(format!("{:x} {:x} {desc}\n", info.2.as_ptr() as usize, info.3).as_bytes())
-            .unwrap();
+        PERF_FILE.with(|file| {
+            let mut f = file.borrow_mut();
+            f.write_all(format!("{:x} {:x} {desc}\n", info.0.as_ptr() as usize, info.1).as_bytes())
+                .unwrap();
+            f.write_all(format!("{:x} {:x} {desc}\n", info.2.as_ptr() as usize, info.3).as_bytes())
+                .unwrap();
+        });
     }
 
     #[cfg(feature = "perf")]
     pub(crate) fn perf_info(&mut self, pair: (CodePtr, CodePtr), func_name: &str) {
         let info = self.get_wrapper_info(pair);
-        self.perf_write(info, func_name);
+        Self::perf_write(info, func_name);
     }
 
     ///
@@ -672,7 +685,7 @@ impl std::ops::DerefMut for Codegen {
 }
 
 impl Codegen {
-    pub fn new(no_jit: bool) -> Self {
+    pub fn new() -> Self {
         let mut jit = JitModule::new();
         let pair = jit.get_address_pair();
 
@@ -717,7 +730,7 @@ impl Codegen {
             #[cfg(feature = "jit-log")]
             jit_compile_time: std::time::Duration::default(),
         };
-        codegen.construct_vm(no_jit);
+        codegen.construct_vm();
         let signal_handler = codegen.signal_handler();
         codegen.jit.finalize();
 
@@ -1227,7 +1240,7 @@ mod tests {
 
     #[test]
     fn guard_class() {
-        let mut gen = Codegen::new(false);
+        let mut gen = Codegen::new();
 
         for (class, value) in [
             (INTEGER_CLASS, Value::integer(-2558)),
@@ -1256,7 +1269,7 @@ mod tests {
 
     #[test]
     fn test_f64_to_val() {
-        let mut gen = Codegen::new(false);
+        let mut gen = Codegen::new();
 
         for f in [
             1.44e-17,
