@@ -14,3 +14,9 @@ fn filter() {
     run_test(r##"(1..7).filter { |x| x.odd? }"##);
     run_test(r##"(1..7).filter(&:odd?)"##);
 }
+
+#[test]
+fn filter_map() {
+    run_test(r##"(1..10).filter_map { |i| i * 2 if i.even? }"##);
+    run_test(r##"[*(1..10)].filter_map { |i| i * 2 if i.even? }"##);
+}

@@ -175,6 +175,16 @@ module Enumerable
   end
   alias select filter
 
+  def filter_map
+    return self.to_enum(:filter_map) if !block_given?
+    res = []
+    self.each do |x|
+      y = yield(x)
+      res << y if y
+    end
+    res
+  end
+
   def any?
     if block_given?
       self.each do |x|
