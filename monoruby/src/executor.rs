@@ -457,16 +457,15 @@ impl Executor {
         globals: &mut Globals,
         site_id: ConstSiteId,
     ) -> Result<(Value, Option<Value>)> {
-        let base = globals.store[site_id]
-            .base
-            .map(|base| unsafe { self.get_slot(base) }.unwrap());
-        let current_func = self.method_func_id();
         let ConstSiteInfo {
             name,
             toplevel,
             mut prefix,
+            base,
             ..
         } = globals.store[site_id].clone();
+        let base = base.map(|base| unsafe { self.get_slot(base) }.unwrap());
+        let current_func = self.method_func_id();
         let mut parent = if let Some(base) = base {
             base.expect_class_or_module(&globals.store)?.id()
         } else if toplevel {
@@ -486,7 +485,8 @@ impl Executor {
                 .expect_class_or_module(&globals.store)?
                 .id();
         }
-        let v = self.get_constant_checked(globals, parent, name)?;
+        let v =
+            self.get_constant_superclass_checked(globals, globals[parent].get_module(), name)?;
         Ok((v, base))
     }
 
