@@ -360,6 +360,7 @@ fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
         receiver,
         args,
         Some(BlockHandler::from_current(FuncId::new(2))),
+        None,
     )
 }
 

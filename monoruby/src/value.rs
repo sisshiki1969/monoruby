@@ -835,7 +835,7 @@ impl Value {
         if let Some(ary) = self.try_array_ty() {
             return Ok(ary);
         } else if let Some(fid) = globals.check_method(*self, IdentId::get_id("to_ary")) {
-            let v = vm.invoke_func_inner(globals, fid, *self, &[], None)?;
+            let v = vm.invoke_func_inner(globals, fid, *self, &[], None, None)?;
             if let Some(ary) = v.try_array_ty() {
                 return Ok(ary);
             }
@@ -1147,7 +1147,7 @@ impl Value {
         if let Some(s) = self.is_rstring() {
             return Ok(s);
         } else if let Some(fid) = globals.check_method(*self, IdentId::get_id("to_str")) {
-            let v = vm.invoke_func_inner(globals, fid, *self, &[], None)?;
+            let v = vm.invoke_func_inner(globals, fid, *self, &[], None, None)?;
             if let Some(s) = v.is_rstring() {
                 return Ok(s);
             }

@@ -308,7 +308,8 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         if klass.id() == STOP_ITERATION_CLASS {
             return Err(MonorubyErr::stopiterationerr("".to_string()));
         } else if klass.is_exception() {
-            let ex = vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &[], None)?;
+            let ex =
+                vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &[], None, None)?;
             let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
             if let Some(arg1) = lfp.try_arg(1) {
                 err.set_msg(arg1.expect_string(globals)?);
@@ -562,11 +563,11 @@ fn kernel_array(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
     }
     if let Some(func_id) = globals.check_method(arg, IdentId::TO_ARY) {
         return vm
-            .invoke_func(globals, func_id, arg, &[], None)
+            .invoke_func(globals, func_id, arg, &[], None, None)
             .ok_or_else(|| vm.take_error());
     } else if let Some(func_id) = globals.check_method(arg, IdentId::TO_A) {
         return vm
-            .invoke_func(globals, func_id, arg, &[], None)
+            .invoke_func(globals, func_id, arg, &[], None, None)
             .ok_or_else(|| vm.take_error());
     };
     if arg.is_nil() {

@@ -74,7 +74,7 @@ macro_rules! binop_values {
                         return None;
                     }
                     _ => {
-                        return vm.invoke_method(globals, $op_str, lhs, &[rhs], None);
+                        return vm.invoke_method_simple(globals, $op_str, lhs, &[rhs]);
                     }
                 };
                 Some(v)
@@ -96,7 +96,7 @@ macro_rules! binop_values_no_opt {
                 lhs: Value,
                 rhs: Value
             ) -> Option<Value> {
-                vm.invoke_method(globals, $op_str, lhs, &[rhs], None)
+                vm.invoke_method_simple(globals, $op_str, lhs, &[rhs])
             }
         }
     };
@@ -198,7 +198,7 @@ pub(crate) extern "C" fn pow_values(
             return None;
         }
         _ => {
-            return vm.invoke_method(globals, IdentId::_POW, lhs, &[rhs], None);
+            return vm.invoke_method_simple(globals, IdentId::_POW, lhs, &[rhs]);
         }
     };
     Some(v)
@@ -312,7 +312,7 @@ pub(crate) extern "C" fn div_values(
             return None;
         }
         _ => {
-            return vm.invoke_method(globals, IdentId::_DIV, lhs, &[rhs], None);
+            return vm.invoke_method_simple(globals, IdentId::_DIV, lhs, &[rhs]);
         }
     };
     Some(v)
@@ -338,7 +338,7 @@ macro_rules! int_binop_values {
                         return None;
                     }
                     _ => {
-                        return vm.invoke_method(globals, $op_str, lhs, &[rhs], None);
+                        return vm.invoke_method_simple(globals, $op_str, lhs, &[rhs]);
                     }
                 };
                 Some(v)
@@ -384,7 +384,7 @@ pub(crate) extern "C" fn shr_values(
             return None;
         }
         _ => {
-            return vm.invoke_method(globals, IdentId::_SHR, lhs, &[rhs], None);
+            return vm.invoke_method_simple(globals, IdentId::_SHR, lhs, &[rhs]);
         }
     };
     Some(v)
@@ -417,7 +417,7 @@ pub(crate) extern "C" fn shl_values(
             return None;
         }
         _ => {
-            return vm.invoke_method(globals, IdentId::_SHL, lhs, &[rhs], None);
+            return vm.invoke_method_simple(globals, IdentId::_SHL, lhs, &[rhs]);
         }
     };
     Some(v)

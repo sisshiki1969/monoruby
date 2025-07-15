@@ -521,11 +521,11 @@ pub(super) extern "C" fn get_index(
             let method = base.as_method();
             let func_id = method.func_id();
             let receiver = method.receiver();
-            return vm.invoke_func(globals, func_id, receiver, &[index], None);
+            return vm.invoke_func(globals, func_id, receiver, &[index], None, None);
         }
         _ => {}
     }
-    vm.invoke_method(globals, IdentId::_INDEX, base, &[index], None)
+    vm.invoke_method_simple(globals, IdentId::_INDEX, base, &[index])
 }
 
 pub(super) extern "C" fn set_index(
@@ -551,7 +551,7 @@ pub(super) extern "C" fn set_index(
             }
         };
     }
-    vm.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src], None)
+    vm.invoke_method_simple(globals, IdentId::_INDEX_ASSIGN, base, &[index, src])
 }
 
 /*///
@@ -883,7 +883,7 @@ pub(super) extern "C" fn to_a(
     src: Value,
 ) -> Option<Value> {
     if let Some(func_id) = globals.check_method(src, IdentId::TO_A) {
-        let ary = vm.invoke_func(globals, func_id, src, &[], None)?;
+        let ary = vm.invoke_func(globals, func_id, src, &[], None, None)?;
         if ary.is_array_ty() {
             Some(ary)
         } else {

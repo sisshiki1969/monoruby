@@ -15,9 +15,11 @@ impl JitModule {
         // rcx: receiver: Value
         // r8:  *args: *const Value
         // r9:  len: usize
+        // r10: Option<Box<HashMap<IdentId, Value>>>
         // r11: Option<BlockHandler>
         let error_exit = self.jit.label();
         monoasm! { &mut self.jit,
+            movq r10, [rsp + 16];
             movq r11, [rsp + 8];
         }
         self.invoker_prologue(&error_exit);
@@ -44,9 +46,11 @@ impl JitModule {
         // rcx: receiver: Value
         // r8:  args: Arg
         // r9:  len: usize
+        // r10: Option<Box<HashMap<IdentId, Value>>>
         // r11: Option<BlockHandler>
         let error_exit = self.jit.label();
         monoasm! { &mut self.jit,
+            movq r10, [rsp + 16];
             movq r11, [rsp + 8];
         }
         self.invoker_prologue(&error_exit);
@@ -73,7 +77,11 @@ impl JitModule {
         // rcx: <dummy>
         // r8:  *args: *const Value
         // r9:  len: usize
+        // r10: Option<Box<HashMap<IdentId, Value>>>
         let error_exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            movq r10, [rsp + 8];
+        }
         self.invoker_prologue(&error_exit);
         self.invoker_frame_setup(true, false);
         self.invoker_args_setup(&error_exit, true);
@@ -98,7 +106,11 @@ impl JitModule {
         // rcx: self: Value
         // r8:  *args: *const Value
         // r9:  len: usize
+        // r10: Option<Box<HashMap<IdentId, Value>>>
         let error_exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            movq r10, [rsp + 8];
+        }
         self.invoker_prologue(&error_exit);
         self.invoker_frame_setup(true, true);
         self.invoker_args_setup(&error_exit, true);
@@ -153,15 +165,16 @@ impl JitModule {
         // [rsp + 8]: *mut Executor
         let error_exit = self.jit.label();
         monoasm! { &mut self.jit,
-            movq r10, [rsp + 8];
+            movq rax, [rsp + 8];
         };
         self.push_callee_save();
         monoasm! { &mut self.jit,
             movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
-            movq rsp, [r10 + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
-            movq [r10 + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
-            movq rbx, r10;
+            movq rsp, [rax + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
+            movq [rax + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
+            movq rbx, rax;
             movq r12, rsi;
+            xorq r10, r10;
         }
         self.invoker_frame_setup(true, false);
         self.invoker_args_setup(&error_exit, true);
@@ -198,15 +211,16 @@ impl JitModule {
         // [rsp + 8]: *mut Executor
         let error_exit = self.jit.label();
         monoasm! { &mut self.jit,
-            movq r10, [rsp + 8];
+            movq rax, [rsp + 8];
         };
         self.push_callee_save();
         monoasm! { &mut self.jit,
             movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
-            movq rsp, [r10 + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
-            movq [r10 + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
-            movq rbx, r10;
+            movq rsp, [rax + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
+            movq [rax + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
+            movq rbx, rax;
             movq r12, rsi;
+            xorq r10, r10;
         }
         self.invoker_frame_setup(true, true);
         self.invoker_args_setup(&error_exit, true);
@@ -448,6 +462,7 @@ impl JitModule {
     /// - r15: &FuncData
     /// - r8: args: *const Value
     /// - r9: len: usize
+    /// - r10: Option<Box<HashMap<IdentId, Value>>>
     /// - r15: &FuncData
     ///
     /// ### destroy
@@ -457,13 +472,16 @@ impl JitModule {
         let generic = self.jit.label();
         let exit = self.jit.label();
         monoasm! { &mut self.jit,
-            // check if the callee is_simple
+            // check whether the callee is_simple
             shrq rsi, 56;
             testq rsi, 0b1_0000;
             jz  generic;
-            // check if req == pos_num
+            // check whether req == pos_num
             cmpw r9, [r15 + (FUNCDATA_MIN)];
             jne generic;
+            // check keyword arguments
+            testq r10, r10;
+            jnz generic;
         }
 
         let loop_ = self.jit.label();
@@ -506,6 +524,7 @@ impl JitModule {
             movq rcx, r9; // arg_num
             movq rdi, rbx; // &mut Executor
             movq rsi, r12; // &mut Globals
+            movq r9, r10;
             movq rax, (if upward {handle_invoker_arguments} else {handle_invoker_arguments2});
             call rax;
         }
@@ -536,8 +555,9 @@ extern "C" fn handle_invoker_arguments(
     callee_lfp: Lfp,
     arg_num: usize,
     args: *const Value,
+    kw_arg: Option<Box<hash_map::HashMap<IdentId, Value>>>,
 ) -> Option<Value> {
-    invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, true)
+    invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, true, kw_arg)
 }
 
 extern "C" fn handle_invoker_arguments2(
@@ -546,17 +566,19 @@ extern "C" fn handle_invoker_arguments2(
     callee_lfp: Lfp,
     arg_num: usize,
     args: *const Value,
+    kw_arg: Option<Box<hash_map::HashMap<IdentId, Value>>>,
 ) -> Option<Value> {
-    invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, false)
+    invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, false, kw_arg)
 }
 
 fn invoker_arguments_inner(
     vm: &mut Executor,
     globals: &Globals,
-    callee_lfp: Lfp,
+    mut callee_lfp: Lfp,
     arg_num: usize,
     args: *const Value,
     upward: bool,
+    mut kw_arg: Option<Box<hash_map::HashMap<IdentId, Value>>>,
 ) -> Option<Value> {
     let callee_fid = callee_lfp.func_id();
     let info = &globals.store[callee_fid];
@@ -570,9 +592,10 @@ fn invoker_arguments_inner(
     // keyword
     let params = info.kw_names();
     let callee_kw_pos = info.kw_reg_pos();
-    for (id, _) in params.iter().enumerate() {
+    for (id, name) in params.iter().enumerate() {
+        let v = kw_arg.as_mut().and_then(|map| map.get(name)).cloned();
         unsafe {
-            *callee_lfp.register_ptr(callee_kw_pos + id) = Some(Value::nil());
+            callee_lfp.set_register(callee_kw_pos + id, v);
         }
     }
 

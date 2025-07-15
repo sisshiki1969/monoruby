@@ -47,7 +47,7 @@ macro_rules! cmp_values {
                         return None;
                     }
                     _ => {
-                        return vm.invoke_method(globals, $op_str, lhs, &[rhs], None);
+                        return vm.invoke_method_simple(globals, $op_str, lhs, &[rhs]);
                     }
                 };
                 Some(Value::bool(b))
@@ -61,7 +61,7 @@ macro_rules! cmp_values {
                 lhs: Value,
                 rhs: Value
             ) -> Option<Value> {
-                vm.invoke_method(globals, $op_str, lhs, &[rhs], None)
+                vm.invoke_method_simple(globals, $op_str, lhs, &[rhs])
             }
         }
     };
@@ -107,7 +107,7 @@ impl Executor {
             (RV::String(lhs), RV::String(rhs)) => lhs.eq(rhs),
             (RV::String(_), _) => false,
             _ => self
-                .invoke_method_inner(globals, IdentId::_EQ, lhs, &[rhs], None)?
+                .invoke_method_inner(globals, IdentId::_EQ, lhs, &[rhs], None, None)?
                 .as_bool(),
         };
         Ok(b)
@@ -120,7 +120,7 @@ impl Executor {
         rhs: Value,
     ) -> Result<bool> {
         let b = self
-            .invoke_method_inner(globals, IdentId::_EQ, lhs, &[rhs], None)?
+            .invoke_method_inner(globals, IdentId::_EQ, lhs, &[rhs], None, None)?
             .as_bool();
         Ok(b)
     }
@@ -257,7 +257,7 @@ pub(crate) extern "C" fn cmp_teq_values(
         (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
         (RV::Float(_), _) => false,
         _ => {
-            return vm.invoke_method(globals, IdentId::_TEQ, lhs, &[rhs], None);
+            return vm.invoke_method_simple(globals, IdentId::_TEQ, lhs, &[rhs]);
         }
     };
     Some(Value::bool(b))
@@ -269,7 +269,7 @@ pub(crate) extern "C" fn cmp_teq_values_no_opt(
     lhs: Value,
     rhs: Value,
 ) -> Option<Value> {
-    vm.invoke_method(globals, IdentId::_TEQ, lhs, &[rhs], None)
+    vm.invoke_method_simple(globals, IdentId::_TEQ, lhs, &[rhs])
 }
 
 pub(crate) fn cmp_teq_values_bool(
@@ -299,7 +299,7 @@ pub(crate) fn cmp_teq_values_bool(
         (RV::Float(_), _) => false,
         _ => {
             return vm
-                .invoke_method_inner(globals, IdentId::_TEQ, lhs, &[rhs], None)
+                .invoke_method_inner(globals, IdentId::_TEQ, lhs, &[rhs], None, None)
                 .map(|v| v.as_bool());
         }
     };
@@ -313,7 +313,7 @@ pub(crate) fn cmp_teq_values_bool_no_opt(
     lhs: Value,
     rhs: Value,
 ) -> Result<bool> {
-    vm.invoke_method_inner(globals, IdentId::_TEQ, lhs, &[rhs], None)
+    vm.invoke_method_inner(globals, IdentId::_TEQ, lhs, &[rhs], None, None)
         .map(|v| v.as_bool())
 }
 
@@ -360,7 +360,7 @@ impl Executor {
             (RV::Float(_), _) => None,
             _ => {
                 if let Some(i) = self
-                    .invoke_method_inner(globals, IdentId::_CMP, lhs, &[rhs], None)?
+                    .invoke_method_inner(globals, IdentId::_CMP, lhs, &[rhs], None, None)?
                     .try_fixnum()
                 {
                     match i {
@@ -386,7 +386,7 @@ macro_rules! unop_value_no_opt {
                 globals: &mut Globals,
                 lhs: Value,
             ) -> Option<Value> {
-                vm.invoke_method(globals, $op_str, lhs, &[], None)
+                vm.invoke_method_simple(globals, $op_str, lhs, &[])
             }
         }
     };
@@ -416,7 +416,7 @@ pub(crate) extern "C" fn neg_value(
         RV::Float(lhs) => Value::float(-lhs),
         RV::Complex(lhs) => Value::complex(-lhs.re, -lhs.im),
         _ => {
-            return vm.invoke_method(globals, IdentId::_UMINUS, lhs, &[], None);
+            return vm.invoke_method_simple(globals, IdentId::_UMINUS, lhs, &[]);
         }
     };
     Some(v)
@@ -432,7 +432,7 @@ pub(crate) extern "C" fn pos_value(
         RV::BigInt(lhs) => Value::bigint(lhs.clone()),
         RV::Float(lhs) => Value::float(lhs),
         _ => {
-            return vm.invoke_method(globals, IdentId::_UPLUS, lhs, &[], None);
+            return vm.invoke_method_simple(globals, IdentId::_UPLUS, lhs, &[]);
         }
     };
     Some(v)
@@ -447,7 +447,7 @@ pub(crate) extern "C" fn bitnot_value(
         RV::Fixnum(lhs) => Value::integer(!lhs),
         RV::BigInt(lhs) => Value::bigint(!lhs),
         _ => {
-            return vm.invoke_method(globals, IdentId::_BNOT, lhs, &[], None);
+            return vm.invoke_method_simple(globals, IdentId::_BNOT, lhs, &[]);
         }
     };
     Some(v)

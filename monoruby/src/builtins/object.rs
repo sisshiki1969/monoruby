@@ -40,14 +40,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get, 1);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variables", iv, 0);
     globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
-    globals.define_builtin_inline_funcs_with(
+    globals.define_builtin_funcs_with_kw(
         OBJECT_CLASS,
         "send",
         &["__send__"],
         crate::builtins::send,
-        Box::new(crate::builtins::object_send),
+        //Box::new(crate::builtins::object_send),
         0,
         0,
+        true,
+        &[],
         true,
     );
     globals.define_builtin_funcs_eval_with(
@@ -131,8 +133,34 @@ pub(crate) fn send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
     if ary.len() < 1 {
         return Err(MonorubyErr::wrong_number_of_arg_min(ary.len(), 1));
     }
-    let method = ary[0].expect_symbol_or_string(globals)?;
-    vm.invoke_method_inner(globals, method, lfp.self_val(), &ary[1..], lfp.block())
+    let kw = dbg!(lfp.arg(1).try_hash_ty().unwrap());
+    if kw.is_empty() {
+        let method = ary[0].expect_symbol_or_string(globals)?;
+        vm.invoke_method_inner(
+            globals,
+            method,
+            lfp.self_val(),
+            &ary[1..],
+            lfp.block(),
+            None,
+        )
+    } else {
+        let mut kw_args: std::collections::hash_map::HashMap<IdentId, Value> =
+            std::collections::hash_map::HashMap::default();
+        for (k, v) in kw.iter() {
+            let key = k.expect_symbol_or_string(globals)?;
+            kw_args.insert(key, v.clone());
+        }
+        let method = ary[0].expect_symbol_or_string(globals)?;
+        vm.invoke_method_inner(
+            globals,
+            method,
+            lfp.self_val(),
+            &ary[1..],
+            lfp.block(),
+            Some(Box::new(kw_args)),
+        )
+    }
 }
 
 pub fn object_send(
@@ -195,6 +223,7 @@ fn object_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         obj,
         &lfp.arg(0).as_array(),
         lfp.block(),
+        None,
     )?;
     Ok(obj)
 }

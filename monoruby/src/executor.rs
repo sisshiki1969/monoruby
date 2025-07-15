@@ -1,3 +1,5 @@
+use std::collections::hash_map;
+
 use super::*;
 
 mod constants;
@@ -235,8 +237,16 @@ impl Executor {
         globals.dump_bc();
 
         let main_object = globals.main_object;
-        let res =
-            (globals.invokers.method)(self, globals, func_id, main_object, ([]).as_ptr(), 0, None);
+        let res = (globals.invokers.method)(
+            self,
+            globals,
+            func_id,
+            main_object,
+            ([]).as_ptr(),
+            0,
+            None,
+            None,
+        );
         res.ok_or_else(|| self.take_error())
     }
 
@@ -604,6 +614,7 @@ impl Executor {
                 globals.store[class_id].get_module().into(),
                 &[Value::symbol(name)],
                 None,
+                None,
             )?;
             Ok(Value::nil())
         } else {
@@ -630,6 +641,7 @@ impl Executor {
         receiver: Value,
         args: &[Value],
         bh: Option<BlockHandler>,
+        kw_args: Option<Box<hash_map::HashMap<IdentId, Value>>>,
     ) -> Option<Value> {
         let func_id = match globals.find_method(receiver, method, false) {
             Ok(id) => id,
@@ -638,7 +650,20 @@ impl Executor {
                 return None;
             }
         };
-        self.invoke_func(globals, func_id, receiver, args, bh)
+        self.invoke_func(globals, func_id, receiver, args, bh, kw_args)
+    }
+
+    ///
+    /// Invoke method for *receiver* and *method*.
+    ///
+    pub(crate) fn invoke_method_simple(
+        &mut self,
+        globals: &mut Globals,
+        method: IdentId,
+        receiver: Value,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.invoke_method(globals, method, receiver, args, None, None)
     }
 
     ///
@@ -651,9 +676,10 @@ impl Executor {
         receiver: Value,
         args: &[Value],
         bh: Option<BlockHandler>,
+        kw_args: Option<Box<hash_map::HashMap<IdentId, Value>>>,
     ) -> Result<Value> {
         let func_id = globals.find_method(receiver, method, true)?;
-        self.invoke_func(globals, func_id, receiver, args, bh)
+        self.invoke_func(globals, func_id, receiver, args, bh, kw_args)
             .ok_or_else(|| self.take_error())
     }
 
@@ -663,7 +689,7 @@ impl Executor {
             _ => return Value::string(receiver.to_s(&globals.store)),
         }
         let func_id = globals.find_method(receiver, IdentId::TO_S, true).unwrap();
-        self.invoke_func(globals, func_id, receiver, &[], None)
+        self.invoke_func(globals, func_id, receiver, &[], None, None)
             .unwrap()
     }
 
@@ -680,8 +706,16 @@ impl Executor {
         data: &ProcData,
         args: &[Value],
     ) -> Result<Value> {
-        (globals.invokers.block)(self, globals, data, Value::nil(), args.as_ptr(), args.len())
-            .ok_or_else(|| self.take_error())
+        (globals.invokers.block)(
+            self,
+            globals,
+            data,
+            Value::nil(),
+            args.as_ptr(),
+            args.len(),
+            None,
+        )
+        .ok_or_else(|| self.take_error())
     }
 
     pub(crate) fn invoke_block_with_self(
@@ -699,6 +733,7 @@ impl Executor {
             self_val,
             args.as_ptr(),
             args.len(),
+            None,
         )
         .ok_or_else(|| self.take_error())
     }
@@ -832,6 +867,7 @@ impl Executor {
             Value::nil(),
             args.as_ptr(),
             args.len(),
+            None,
         )
         .ok_or_else(|| self.take_error())
     }
@@ -843,9 +879,10 @@ impl Executor {
         receiver: Value,
         args: &[Value],
         bh: Option<BlockHandler>,
+        kw_args: Option<Box<hash_map::HashMap<IdentId, Value>>>,
     ) -> Result<Option<Value>> {
         if let Some(func_id) = globals.check_method(receiver, method) {
-            self.invoke_func(globals, func_id, receiver, args, bh)
+            self.invoke_func(globals, func_id, receiver, args, bh, kw_args)
                 .ok_or_else(|| self.take_error())
                 .map(|v| Some(v))
         } else {
@@ -863,6 +900,7 @@ impl Executor {
         receiver: Value,
         args: &[Value],
         bh: Option<BlockHandler>,
+        kw_args: Option<Box<hash_map::HashMap<IdentId, Value>>>,
     ) -> Option<Value> {
         let bh = bh.map(|bh| bh.delegate());
         (globals.invokers.method)(
@@ -873,6 +911,7 @@ impl Executor {
             args.as_ptr(),
             args.len(),
             bh,
+            kw_args,
         )
     }
 
@@ -883,8 +922,9 @@ impl Executor {
         receiver: Value,
         args: &[Value],
         bh: Option<BlockHandler>,
+        kw_args: Option<Box<hash_map::HashMap<IdentId, Value>>>,
     ) -> Result<Value> {
-        self.invoke_func(globals, func_id, receiver, args, bh)
+        self.invoke_func(globals, func_id, receiver, args, bh, kw_args)
             .ok_or_else(|| self.take_error())
     }
 }
@@ -903,7 +943,7 @@ impl Executor {
         } else if let Some(proc) = bh.0.is_proc() {
             Ok(ProcData::from_proc(&proc))
         } else if let Some(proc) =
-            self.invoke_method_if_exists(globals, IdentId::TO_PROC, bh.0, &[], None)?
+            self.invoke_method_if_exists(globals, IdentId::TO_PROC, bh.0, &[], None, None)?
             && let Some(proc) = proc.is_proc()
         {
             Ok(ProcData::from_proc(&proc))
@@ -913,7 +953,7 @@ impl Executor {
     }
 
     pub fn to_s(&mut self, globals: &mut Globals, receiver: Value) -> Result<String> {
-        self.invoke_method_inner(globals, IdentId::TO_S, receiver, &[], None)?
+        self.invoke_method_inner(globals, IdentId::TO_S, receiver, &[], None, None)?
             .expect_string(globals)
     }
 

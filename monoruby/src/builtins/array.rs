@@ -156,6 +156,7 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         obj,
         &lfp.arg(0).as_array(),
         lfp.block(),
+        None,
     )?;
     Ok(obj)
 }
@@ -350,7 +351,7 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         let mut count = 0;
         for elem in lfp.self_val().as_array().iter() {
             if vm
-                .invoke_method_inner(globals, IdentId::_EQ, arg0, &[*elem], None)?
+                .invoke_method_inner(globals, IdentId::_EQ, arg0, &[*elem], None, None)?
                 .as_bool()
             {
                 count += 1;
@@ -964,7 +965,7 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             return Err(MonorubyErr::argumenterr("wrong number of arguments"));
         };
         for v in iter {
-            res = vm.invoke_method_inner(globals, sym, res, &[v], None)?;
+            res = vm.invoke_method_inner(globals, sym, res, &[v], None, None)?;
         }
         Ok(res)
     }
@@ -2176,7 +2177,7 @@ fn find_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         let func_id = globals.find_method(arg0, IdentId::_EQ, false)?;
         for (i, v) in ary.iter().enumerate() {
             if vm
-                .invoke_func_inner(globals, func_id, arg0, &[*v], None)?
+                .invoke_func_inner(globals, func_id, arg0, &[*v], None, None)?
                 .as_bool()
             {
                 return Ok(Value::integer(i as i64));

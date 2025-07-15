@@ -35,6 +35,7 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         receiver,
         &lfp.arg(0).as_array(),
         lfp.block(),
+        None,
     )
     .ok_or_else(|| vm.take_error())
 }

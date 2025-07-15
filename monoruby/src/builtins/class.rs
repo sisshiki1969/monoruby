@@ -55,13 +55,15 @@ fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/new.html]
 #[monoruby_builtin]
 pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let obj = vm.invoke_method_inner(globals, IdentId::ALLOCATE, lfp.self_val(), &[], None)?;
+    let obj =
+        vm.invoke_method_inner(globals, IdentId::ALLOCATE, lfp.self_val(), &[], None, None)?;
     vm.invoke_method_if_exists(
         globals,
         IdentId::INITIALIZE,
         obj,
         &lfp.arg(0).as_array(),
         lfp.block(),
+        None,
     )?;
     Ok(obj)
 }
@@ -147,10 +149,10 @@ pub(super) fn gen_class_new(
                 movq rcx, r15;
                 lea r8, [r14 - (crate::executor::jitgen::conv(args))];
                 movl r9, (pos_num);
-                subq rsp, 8;
-                // TODO: Currently inline call does not support calling with block.
+                // TODO: Currently inline call does not support calling with block or keyword arguments.
                 xorq rax, rax;
-                pushq rax;
+                pushq rax;  // kw_arg
+                pushq rax;  // bh
                 movq rax, (gen.method_invoker2);
                 call rax;
                 addq rsp, 16;
