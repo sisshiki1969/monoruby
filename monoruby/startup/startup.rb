@@ -8,8 +8,8 @@ class Object
     self
   end
 
-  def initialize(*arg)
-  end
+  #def initialize(*arg)
+  #end
 
   def tap
     yield self

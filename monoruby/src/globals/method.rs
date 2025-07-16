@@ -418,10 +418,7 @@ impl Globals {
         inline_gen: Box<InlineGen>,
         arg_num: usize,
     ) -> FuncId {
-        let fid = self.define_builtin_func(class_id, name, address, arg_num);
-        let info = inline::InlineFuncInfo { inline_gen };
-        self.store.inline_info.add_inline(fid, info);
-        fid
+        self.define_builtin_inline_funcs(class_id, name, &[], address, inline_gen, arg_num)
     }
 
     pub(crate) fn define_builtin_inline_funcs(
@@ -433,10 +430,9 @@ impl Globals {
         inline_gen: Box<InlineGen>,
         arg_num: usize,
     ) -> FuncId {
-        let fid = self.define_builtin_funcs(class_id, name, alias, address, arg_num);
-        let info = inline::InlineFuncInfo { inline_gen };
-        self.store.inline_info.add_inline(fid, info);
-        fid
+        self.define_builtin_inline_funcs_with(
+            class_id, name, alias, address, inline_gen, arg_num, arg_num, false,
+        )
     }
 
     pub(crate) fn define_builtin_inline_func_with(
@@ -449,20 +445,16 @@ impl Globals {
         max: usize,
         rest: bool,
     ) -> FuncId {
-        let fid = self.new_builtin_fn(
+        self.define_builtin_inline_funcs_with(
             class_id,
             name,
+            &[],
             address,
-            Visibility::Public,
+            inline_gen,
             min,
             max,
             rest,
-            &[],
-            false,
-        );
-        let info = inline::InlineFuncInfo { inline_gen };
-        self.store.inline_info.add_inline(fid, info);
-        fid
+        )
     }
 
     pub(crate) fn define_builtin_inline_funcs_with(
@@ -476,8 +468,46 @@ impl Globals {
         max: usize,
         rest: bool,
     ) -> FuncId {
-        let fid = self
-            .define_builtin_inline_func_with(class_id, name, address, inline_gen, min, max, rest);
+        self.define_builtin_inline_funcs_with_kw(
+            class_id,
+            name,
+            alias,
+            address,
+            inline_gen,
+            min,
+            max,
+            rest,
+            &[],
+            false,
+        )
+    }
+
+    pub(crate) fn define_builtin_inline_funcs_with_kw(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        alias: &[&str],
+        address: BuiltinFn,
+        inline_gen: Box<InlineGen>,
+        min: usize,
+        max: usize,
+        rest: bool,
+        kw_names: &[&str],
+        kw_rest: bool,
+    ) -> FuncId {
+        let fid = self.new_builtin_fn(
+            class_id,
+            name,
+            address,
+            Visibility::Public,
+            min,
+            max,
+            rest,
+            kw_names,
+            kw_rest,
+        );
+        let info = inline::InlineFuncInfo { inline_gen };
+        self.store.inline_info.add_inline(fid, info);
         for alias in alias {
             self.add_method(class_id, IdentId::get_id(alias), fid, Visibility::Public);
         }

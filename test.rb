@@ -1,7 +1,9 @@
 class C
   def foo(*x, **y)
-    p "#{x.inspect} #{y.inspect}"
+    puts "#{x.inspect} #{y.inspect}"
   end
 end
 
-C.new.foo(1, 2, a: 3, b: 4)
+100.times {
+  C.new.send(:foo, 1, 2, a: 3, b: 4)
+}
