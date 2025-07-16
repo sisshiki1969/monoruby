@@ -1106,6 +1106,11 @@ impl Value {
         })
     }
 
+    pub(crate) fn expect_symbol(&self, store: &Store) -> Result<IdentId> {
+        self.try_symbol()
+            .ok_or_else(|| MonorubyErr::is_not_symbol(store, *self))
+    }
+
     pub(crate) fn expect_symbol_or_string(&self, store: &Store) -> Result<IdentId> {
         self.try_symbol_or_string()
             .ok_or_else(|| MonorubyErr::is_not_symbol_nor_string(store, *self))

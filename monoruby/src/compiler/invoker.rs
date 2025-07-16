@@ -551,53 +551,89 @@ impl JitModule {
 
 extern "C" fn handle_invoker_arguments(
     vm: &mut Executor,
-    globals: &Globals,
+    globals: &mut Globals,
     callee_lfp: Lfp,
     arg_num: usize,
     args: *const Value,
-    kw_arg: Option<Box<hash_map::HashMap<IdentId, Value>>>,
+    kw_arg: Option<Box<indexmap::IndexMap<IdentId, Value>>>,
 ) -> Option<Value> {
-    invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, true, kw_arg)
+    match invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, true, kw_arg) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 extern "C" fn handle_invoker_arguments2(
     vm: &mut Executor,
-    globals: &Globals,
+    globals: &mut Globals,
     callee_lfp: Lfp,
     arg_num: usize,
     args: *const Value,
-    kw_arg: Option<Box<hash_map::HashMap<IdentId, Value>>>,
+    kw_arg: Option<Box<indexmap::IndexMap<IdentId, Value>>>,
 ) -> Option<Value> {
-    invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, false, kw_arg)
+    match invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, false, kw_arg) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 fn invoker_arguments_inner(
     vm: &mut Executor,
-    globals: &Globals,
+    globals: &mut Globals,
     mut callee_lfp: Lfp,
     arg_num: usize,
     args: *const Value,
     upward: bool,
-    mut kw_arg: Option<Box<hash_map::HashMap<IdentId, Value>>>,
-) -> Option<Value> {
+    mut kw_arg: Option<Box<indexmap::IndexMap<IdentId, Value>>>,
+) -> Result<Value> {
     let callee_fid = callee_lfp.func_id();
     let info = &globals.store[callee_fid];
 
     // required + optional + post + rest
-    if let Err(err) = super::runtime::positional_invoker(info, callee_lfp, args, arg_num, upward) {
-        vm.set_error(err);
-        return None;
-    };
+    super::runtime::positional_invoker(info, callee_lfp, args, arg_num, upward)?;
 
     // keyword
     let params = info.kw_names();
     let callee_kw_pos = info.kw_reg_pos();
     for (id, name) in params.iter().enumerate() {
-        let v = kw_arg.as_mut().and_then(|map| map.get(name)).cloned();
+        let v = kw_arg.as_mut().and_then(|map| map.shift_remove(name));
         unsafe {
             callee_lfp.set_register(callee_kw_pos + id, v);
         }
     }
 
-    Some(Value::nil())
+    // keyword rest
+    if let Some(kw_rest) = info.kw_rest() {
+        let mut rest_map = RubyMap::new();
+        if let Some(box map) = kw_arg {
+            for (name, value) in map.iter() {
+                rest_map.insert(Value::symbol(*name), *value, vm, globals)?;
+            }
+        };
+        unsafe {
+            callee_lfp.set_register(kw_rest, Some(Value::hash(rest_map)));
+        }
+    } else {
+        if let Some(kw_arg) = kw_arg
+            && !kw_arg.is_empty()
+        {
+            let mut s = "unknown keywords: ".to_string();
+            for (i, (name, _)) in kw_arg.iter().enumerate() {
+                if i == 0 {
+                    s.push_str(&format!(":{name}"));
+                } else {
+                    s.push_str(&format!(", :{name}"));
+                }
+            }
+            return Err(MonorubyErr::argumenterr(s));
+        }
+    }
+
+    Ok(Value::nil())
 }

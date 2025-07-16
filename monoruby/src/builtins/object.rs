@@ -134,13 +134,12 @@ pub(crate) fn send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
         return Err(MonorubyErr::wrong_number_of_arg_min(ary.len(), 1));
     }
     if let Some(kw) = lfp.try_arg(1)
-        && let kw = kw.try_hash_ty().unwrap()
+        && let Some(kw) = kw.try_hash_ty()
         && !kw.is_empty()
     {
-        let mut kw_args: std::collections::hash_map::HashMap<IdentId, Value> =
-            std::collections::hash_map::HashMap::default();
+        let mut kw_args = indexmap::IndexMap::default();
         for (k, v) in kw.iter() {
-            let key = k.expect_symbol_or_string(globals)?;
+            let key = k.expect_symbol(globals)?;
             kw_args.insert(key, v.clone());
         }
         let method = ary[0].expect_symbol_or_string(globals)?;

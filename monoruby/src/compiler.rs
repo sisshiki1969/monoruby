@@ -1,4 +1,3 @@
-use std::collections::hash_map;
 use std::hash::Hash;
 
 use monoasm::*;
@@ -27,7 +26,7 @@ pub(crate) type MethodInvoker = extern "C" fn(
     *const Value,
     usize,
     Option<BlockHandler>,
-    Option<Box<hash_map::HashMap<IdentId, Value>>>,
+    Option<Box<indexmap::IndexMap<IdentId, Value>>>,
 ) -> Option<Value>;
 
 pub(crate) type MethodInvoker2 = extern "C" fn(
@@ -38,7 +37,7 @@ pub(crate) type MethodInvoker2 = extern "C" fn(
     Arg,
     usize,
     Option<BlockHandler>,
-    Option<Box<hash_map::HashMap<IdentId, Value>>>,
+    Option<Box<indexmap::IndexMap<IdentId, Value>>>,
 ) -> Option<Value>;
 
 pub(crate) type BlockInvoker = extern "C" fn(
@@ -48,7 +47,7 @@ pub(crate) type BlockInvoker = extern "C" fn(
     Value,
     *const Value,
     usize,
-    Option<Box<hash_map::HashMap<IdentId, Value>>>,
+    Option<Box<indexmap::IndexMap<IdentId, Value>>>,
 ) -> Option<Value>;
 
 pub(crate) type BindingInvoker = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<Value>;
