@@ -222,6 +222,11 @@ pub(super) extern "C" fn gen_hash(
     Value::hash(map)
 }
 
+pub(super) extern "C" fn empty_hash() -> Value {
+    let map = RubyMap::default();
+    Value::hash(map)
+}
+
 pub(super) extern "C" fn gen_range(
     start: Value,
     end: Value,
@@ -426,6 +431,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_send(
 ) -> Option<Value> {
     let src = caller_lfp.register_ptr(globals.store[callid].args) as *const Value;
     match set_frame_arguments_simple(
+        vm,
         globals,
         callee_lfp,
         caller_lfp,

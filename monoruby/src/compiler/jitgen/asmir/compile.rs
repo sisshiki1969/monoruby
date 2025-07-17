@@ -322,6 +322,17 @@ impl Codegen {
                     jnz  dest;
                 );
             }
+            AsmInst::CheckKwRest(slot) => {
+                let exit = self.jit.label();
+                monoasm! { &mut self.jit,
+                    cmpq [r14 - (conv(slot))], (NIL_VALUE);
+                    jne  exit;
+                    movq rax, (runtime::empty_hash);
+                    call rax;
+                    movq [r14 - (conv(slot))], rax;
+                exit:
+                };
+            }
             AsmInst::OptCase {
                 max,
                 min,

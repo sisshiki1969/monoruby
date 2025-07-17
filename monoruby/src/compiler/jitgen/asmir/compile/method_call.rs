@@ -551,7 +551,7 @@ extern "C" fn jit_handle_hash_splat_kw_rest(
     callee_lfp: Lfp,
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
-    match runtime::jit_hash_splat_kw_rest(globals, callid, callee_lfp, caller_lfp, meta) {
+    match runtime::jit_hash_splat_kw_rest(vm, globals, callid, callee_lfp, caller_lfp, meta) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);

@@ -489,6 +489,7 @@ impl ISeqInfo {
                         None
                     },
                 ),
+                19 => TraceIr::CheckKwRest(SlotId::new(op1_w)),
                 20 => {
                     let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
                     TraceIr::CheckLocal(SlotId::new(op1_w), dest)

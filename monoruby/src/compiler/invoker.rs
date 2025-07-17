@@ -610,14 +610,17 @@ fn invoker_arguments_inner(
 
     // keyword rest
     if let Some(kw_rest) = info.kw_rest() {
-        let mut rest_map = RubyMap::new();
-        if let Some(box map) = kw_arg {
+        let v = if let Some(box map) = kw_arg {
+            let mut rest_map = RubyMap::new();
             for (name, value) in map.iter() {
                 rest_map.insert(Value::symbol(*name), *value, vm, globals)?;
             }
+            Value::hash(rest_map)
+        } else {
+            Value::nil()
         };
         unsafe {
-            callee_lfp.set_register(kw_rest, Some(Value::hash(rest_map)));
+            callee_lfp.set_register(kw_rest, Some(v));
         }
     } else {
         if let Some(kw_arg) = kw_arg

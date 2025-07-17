@@ -108,6 +108,12 @@ fn bytecode_compile_func(
         }
         gen.apply_label(next);
     }
+    // check keyword rest param. if nil, substitute with empty hash.
+    if let Some(kw_rest) = info.args.kw_rest {
+        let local = BcLocal(kw_rest.0 - 1).into();
+        gen.emit_check_kw_rest(local);
+    }
+
     gen.apply_label(gen.redo_label);
     // we must check whether redo exist in the function.
     let mut v = Visitor { redo_flag: false };
@@ -879,6 +885,10 @@ impl BytecodeGen {
     fn emit_check_local(&mut self, local: BcReg, else_pos: Label) {
         self.add_merge(else_pos);
         self.emit(BytecodeInst::CheckLocal(local, else_pos), Loc::default());
+    }
+
+    fn emit_check_kw_rest(&mut self, local: BcReg) {
+        self.emit(BytecodeInst::CheckKwRest(local), Loc::default());
     }
 
     fn emit_nil(&mut self, dst: BcReg) {

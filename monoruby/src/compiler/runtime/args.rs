@@ -4,6 +4,7 @@ use super::*;
 /// Handle hash splat arguments and a keyword rest parameter.
 ///
 pub(crate) fn jit_hash_splat_kw_rest(
+    vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
     callee_lfp: Lfp,
@@ -11,7 +12,7 @@ pub(crate) fn jit_hash_splat_kw_rest(
     meta: Meta,
 ) -> Result<()> {
     let callee_func_id = meta.func_id();
-    hash_splat_and_kw_rest(globals, callee_func_id, callid, callee_lfp, caller_lfp)
+    hash_splat_and_kw_rest(vm, globals, callee_func_id, callid, callee_lfp, caller_lfp)
 }
 
 ///
@@ -31,13 +32,14 @@ pub(crate) fn set_frame_arguments(
     let callee = &globals.store[callee_fid];
     let caller = &globals.store[callid];
     if !callee.no_keyword() || !caller.kw_may_exists() {
-        handle_keyword(globals, callee_fid, callid, callee_lfp, caller_lfp)?;
+        handle_keyword(vm, globals, callee_fid, callid, callee_lfp, caller_lfp)?;
     }
 
     Ok(())
 }
 
 pub(crate) fn set_frame_arguments_simple(
+    vm: &mut Executor,
     globals: &mut Globals,
     callee_lfp: Lfp,
     caller_lfp: Lfp,
@@ -50,7 +52,7 @@ pub(crate) fn set_frame_arguments_simple(
 
     positional_simple(callee, src, pos_num, callee_lfp)?;
     if !callee.no_keyword() {
-        handle_keyword(globals, callee_fid, callid, callee_lfp, caller_lfp)?;
+        handle_keyword(vm, globals, callee_fid, callid, callee_lfp, caller_lfp)?;
     }
 
     Ok(())
@@ -169,6 +171,9 @@ fn positional(
             .into_iter()
             .map(|pos| caller_lfp.register(pos).unwrap())
         {
+            if v.is_nil() {
+                continue;
+            }
             for (k, v) in v.expect_hash_ty(globals)?.iter() {
                 h.insert(k, v, vm, globals)?;
             }
@@ -387,6 +392,7 @@ fn positional_send_splat(callee: &FuncInfo, src: *const Value, callee_lfp: Lfp) 
 /// Handle keyword arguments.
 ///
 fn handle_keyword(
+    vm: &mut Executor,
     globals: &mut Globals,
     callee: FuncId,
     caller: CallSiteId,
@@ -394,7 +400,7 @@ fn handle_keyword(
     caller_lfp: Lfp,
 ) -> Result<()> {
     ordinary_keyword(globals, callee, caller, callee_lfp, caller_lfp)?;
-    hash_splat_and_kw_rest(globals, callee, caller, callee_lfp, caller_lfp)
+    hash_splat_and_kw_rest(vm, globals, callee, caller, callee_lfp, caller_lfp)
 }
 
 fn handle_keyword_simple(callee: &FuncInfo, mut callee_lfp: Lfp) -> Result<()> {
@@ -406,8 +412,7 @@ fn handle_keyword_simple(callee: &FuncInfo, mut callee_lfp: Lfp) -> Result<()> {
     }
 
     if let Some(rest) = callee.kw_rest() {
-        let kw_rest = RubyMap::default();
-        unsafe { callee_lfp.set_register(rest, Some(Value::hash(kw_rest))) }
+        unsafe { callee_lfp.set_register(rest, Some(Value::nil())) }
     }
     Ok(())
 }
@@ -450,34 +455,40 @@ fn ordinary_keyword(
 /// Handle hash splat arguments and a keyword rest parameter.
 ///
 fn hash_splat_and_kw_rest(
+    vm: &mut Executor,
     globals: &mut Globals,
     callee: FuncId,
     caller: CallSiteId,
     mut callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
+    if globals[callee].no_keyword() {
+        return Ok(());
+    }
+
     let CallSiteInfo {
         kw_pos,
-        kw_args,
         hash_splat_pos,
         ..
     } = globals[caller].clone();
 
     let callee_kw_pos = globals[callee].kw_reg_pos();
     let kw_names = globals[callee].kw_names().to_vec();
-    let mut e = Executor::default();
 
     for h in hash_splat_pos
         .iter()
         .map(|pos| caller_lfp.register(*pos).unwrap())
     {
-        let mut used = 0;
+        if h.is_nil() {
+            continue;
+        }
+        let h = h.expect_hash_ty(globals)?;
+        let mut unused = h.len();
         for (id, param_name) in kw_names.iter().enumerate() {
-            let h = h.expect_hash_ty(globals)?;
             unsafe {
                 let sym = Value::symbol(*param_name);
-                if let Some(v) = h.get(sym, &mut e, globals)? {
-                    used += 1;
+                if let Some(v) = h.get(sym, vm, globals)? {
+                    unused -= 1;
                     let ptr = callee_lfp.register_ptr(callee_kw_pos + id);
                     if (*ptr).is_some() {
                         eprintln!(
@@ -488,41 +499,46 @@ fn hash_splat_and_kw_rest(
                     *ptr = Some(v);
                 }
             }
-            if used < h.len() && globals[callee].kw_rest().is_none() {
-                for (k, _) in h.iter() {
-                    let sym = k.as_symbol();
-                    if !globals[callee].kw_names().contains(&sym) {
-                        return Err(MonorubyErr::argumenterr(format!("unknown keyword: :{sym}")));
-                    }
+        }
+        if unused > 0 && globals[callee].kw_rest().is_none() {
+            for (k, _) in h.iter() {
+                let sym = k.as_symbol();
+                if !globals[callee].kw_names().contains(&sym) {
+                    return Err(MonorubyErr::argumenterr(format!("unknown keyword: :{sym}")));
                 }
             }
         }
     }
 
     if let Some(rest) = globals[callee].kw_rest() {
-        let mut kw_rest = RubyMap::default();
-        for (name, i) in kw_args.iter() {
-            if kw_names.contains(name) {
-                continue;
+        if !globals[caller].kw_may_exists() {
+            // no keyword arguments
+            unsafe { callee_lfp.set_register(rest, Some(Value::nil())) }
+        } else {
+            let mut kw_rest = RubyMap::default();
+            for (name, i) in globals[caller].kw_args.clone().into_iter() {
+                if kw_names.contains(&name) {
+                    continue;
+                }
+                let v = caller_lfp.register(kw_pos + i).unwrap();
+                kw_rest.insert(Value::symbol(name), v, vm, globals)?;
             }
-            let v = caller_lfp.register(kw_pos + *i).unwrap();
-            kw_rest.insert(Value::symbol(*name), v, &mut e, globals)?;
-        }
-        for h in hash_splat_pos
-            .iter()
-            .map(|pos| caller_lfp.register(*pos).unwrap())
-        {
-            let mut h = h.as_hashmap_inner().clone();
-            for name in kw_names.iter() {
-                let sym = Value::symbol(*name);
-                h.remove(sym, &mut e, globals)?;
+            for h in hash_splat_pos
+                .iter()
+                .map(|pos| caller_lfp.register(*pos).unwrap())
+            {
+                let mut h = h.as_hashmap_inner().clone();
+                for name in kw_names.iter() {
+                    let sym = Value::symbol(*name);
+                    h.remove(sym, vm, globals)?;
+                }
+                for (k, v) in h.iter() {
+                    kw_rest.insert(k, v, vm, globals)?;
+                }
             }
-            for (k, v) in h.iter() {
-                kw_rest.insert(k, v, &mut e, globals)?;
-            }
-        }
 
-        unsafe { callee_lfp.set_register(rest, Some(Value::hash(kw_rest))) }
+            unsafe { callee_lfp.set_register(rest, Some(Value::hash(kw_rest))) }
+        }
     }
     Ok(())
 }

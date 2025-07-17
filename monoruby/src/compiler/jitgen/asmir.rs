@@ -835,6 +835,7 @@ pub(super) enum AsmInst {
     CondBr(BrKind, JitLabel),
     NilBr(JitLabel),
     CheckLocal(JitLabel),
+    CheckKwRest(SlotId),
     OptCase {
         max: u16,
         min: u16,

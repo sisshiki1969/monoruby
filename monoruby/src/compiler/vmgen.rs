@@ -258,6 +258,7 @@ impl Codegen {
         self.dispatch[16] = self.vm_load_ivar();
         self.dispatch[17] = self.vm_store_ivar();
         self.dispatch[18] = self.vm_check_const();
+        self.dispatch[19] = self.vm_check_kw_rest();
         self.dispatch[20] = self.vm_check_local(&branch);
         self.dispatch[21] = self.vm_block_arg_proxy();
         self.dispatch[22] = self.vm_singleton_class_def();
@@ -1400,6 +1401,23 @@ impl Codegen {
         monoasm! { &mut self.jit,
             testq r15, r15;
             jne  branch;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_check_kw_rest(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let exit = self.jit.label();
+        self.fetch2();
+        self.vm_get_slot_addr(GP::R15);
+        monoasm! { &mut self.jit,
+            cmpq [r15], (NIL_VALUE);
+            jne  exit;
+            movq rax, (runtime::empty_hash);
+            call rax;
+            movq [r15], rax;
+        exit:
         };
         self.fetch_and_dispatch();
         label
