@@ -1,9 +1,7 @@
 class C
-  def foo(*x, a:100, **y)
-    puts "#{x.inspect} #{a.inspect} #{y.inspect}"
+  def foo(a:100, b:10)
+    puts "#{a.inspect} #{b.inspect}"
   end
 end
 
-100.times {
-  C.new.send(:foo, 1, 2, a: 3, c: 5)
-}
+C.new.foo(a:42, :b => 100)

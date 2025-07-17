@@ -19,13 +19,16 @@ pub(super) fn init(globals: &mut Globals) {
         Box::new(class_allocate),
         0,
     );
-    globals.define_builtin_inline_func_with(
+    globals.define_builtin_inline_funcs_with_kw(
         CLASS_CLASS,
         "new",
+        &[],
         new,
         gen_class_new_object(),
         0,
         0,
+        true,
+        &[],
         true,
     );
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
@@ -50,20 +53,33 @@ fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 
 /// ### Class#new
 ///
-/// - new(*args, &block) -> object
+/// - new(*args, **kw, &block) -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/new.html]
 #[monoruby_builtin]
 pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let obj =
         vm.invoke_method_inner(globals, IdentId::ALLOCATE, lfp.self_val(), &[], None, None)?;
+
     vm.invoke_method_if_exists(
         globals,
         IdentId::INITIALIZE,
         obj,
         &lfp.arg(0).as_array(),
         lfp.block(),
-        None,
+        if let Some(kw) = lfp.try_arg(1)
+            && let Some(kw) = kw.try_hash_ty()
+            && !kw.is_empty()
+        {
+            let mut kw_args = indexmap::IndexMap::default();
+            for (k, v) in kw.iter() {
+                let key = k.expect_symbol(globals)?;
+                kw_args.insert(key, v.clone());
+            }
+            Some(Box::new(kw_args))
+        } else {
+            None
+        },
     )?;
     Ok(obj)
 }

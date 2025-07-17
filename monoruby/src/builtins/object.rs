@@ -133,35 +133,27 @@ pub(crate) fn send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
     if ary.len() < 1 {
         return Err(MonorubyErr::wrong_number_of_arg_min(ary.len(), 1));
     }
-    if let Some(kw) = lfp.try_arg(1)
-        && let Some(kw) = kw.try_hash_ty()
-        && !kw.is_empty()
-    {
-        let mut kw_args = indexmap::IndexMap::default();
-        for (k, v) in kw.iter() {
-            let key = k.expect_symbol(globals)?;
-            kw_args.insert(key, v.clone());
-        }
-        let method = ary[0].expect_symbol_or_string(globals)?;
-        vm.invoke_method_inner(
-            globals,
-            method,
-            lfp.self_val(),
-            &ary[1..],
-            lfp.block(),
-            Some(Box::new(kw_args)),
-        )
-    } else {
-        let method = ary[0].expect_symbol_or_string(globals)?;
-        vm.invoke_method_inner(
-            globals,
-            method,
-            lfp.self_val(),
-            &ary[1..],
-            lfp.block(),
-            None,
-        )
-    }
+    let method = ary[0].expect_symbol_or_string(globals)?;
+    vm.invoke_method_inner(
+        globals,
+        method,
+        lfp.self_val(),
+        &ary[1..],
+        lfp.block(),
+        if let Some(kw) = lfp.try_arg(1)
+            && let Some(kw) = kw.try_hash_ty()
+            && !kw.is_empty()
+        {
+            let mut kw_args = indexmap::IndexMap::default();
+            for (k, v) in kw.iter() {
+                let key = k.expect_symbol(globals)?;
+                kw_args.insert(key, v.clone());
+            }
+            Some(Box::new(kw_args))
+        } else {
+            None
+        },
+    )
 }
 
 pub fn object_send(

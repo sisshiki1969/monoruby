@@ -60,7 +60,7 @@ fn struct_initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resu
     let class_id = new_struct.as_class().id();
     let args = lfp.arg(0).as_array();
 
-    globals.define_builtin_class_inline_funcs_rest(
+    globals.define_builtin_class_inline_funcs_catch_all(
         class_id,
         "new",
         &["[]"],
