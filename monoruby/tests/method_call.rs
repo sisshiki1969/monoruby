@@ -233,6 +233,38 @@ fn keyword() {
 }
 
 #[test]
+fn keyword_fatarrow() {
+    run_test_with_prelude(
+        r##"
+        $res = ""
+        C.new.foo(a:42, 100 => 100, c:5)
+        $res
+        "##,
+        r##"
+        class C
+          def foo(*x)
+            $res << x.inspect
+          end
+        end
+        "##,
+    );
+    run_test_with_prelude(
+        r##"
+        $res = ""
+        C.new.foo(a:42, 100 => 100, c:5)
+        $res
+        "##,
+        r##"
+        class C
+          def foo(*x, **y)
+            $res << x.inspect + " " + y.inspect
+          end
+        end
+        "##,
+    );
+}
+
+#[test]
 fn keyword_rest() {
     run_test_with_prelude(
         r#"

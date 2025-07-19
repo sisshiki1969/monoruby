@@ -1,7 +1,7 @@
 class C
-  def foo(a:100, b:10)
-    puts "#{a.inspect} #{b.inspect}"
+  def foo(*x)
+    puts "#{x.inspect}"
   end
 end
 
-C.new.foo(a:42, :b => 100)
+C.new.foo(a:42, 100 => 100, c:5)

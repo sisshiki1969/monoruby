@@ -61,6 +61,8 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         if self.peek()?.kind == TokenKind::Punct(Punct::Comma) {
             return Ok(arglist);
         }
+        let mut as_hash_splat = vec![];
+        let mut kw_args = vec![];
         loop {
             if let Some(punct) = punct {
                 if self.consume_punct(punct)? {
@@ -84,76 +86,62 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 arglist.block = Some(Box::new(self.parse_arg(false)?));
             } else {
                 let node = self.parse_arg(false)?;
-                let loc = node.loc();
                 if self.consume_punct(Punct::FatArrow)? {
                     let value = self.parse_arg(false)?;
-                    let mut kvp = vec![(node, value)];
-                    if self.consume_punct(Punct::Comma)? {
-                        loop {
-                            // Support trailing comma
-                            if let Some(punct) = punct {
-                                if let TokenKind::Punct(p) = self.peek()?.kind {
-                                    if punct == p {
-                                        break;
-                                    }
-                                }
-                            };
-                            let key = self.parse_arg(false)?;
-                            self.expect_punct(Punct::FatArrow)?;
-                            let value = self.parse_arg(false)?;
-                            kvp.push((key, value));
-                            if !self.consume_punct(Punct::Comma)? {
-                                break;
+                    if as_hash_splat.is_empty()
+                        && let NodeKind::Symbol(sym) = &node.kind
+                    {
+                        // keyword args
+                        kw_args.push((sym.to_string(), value));
+                    } else {
+                        if as_hash_splat.is_empty() {
+                            as_hash_splat.extend(
+                                std::mem::take(&mut kw_args)
+                                    .into_iter()
+                                    .map(|(id, value)| (Node::new_symbol(id, node.loc()), value)),
+                            );
+                        }
+                        as_hash_splat.push((node, value));
+                    }
+                } else {
+                    if let Some(id) = match &node.kind {
+                        NodeKind::Ident(id, ..) | NodeKind::LocalVar(_, id) => {
+                            if self.consume_punct_no_term(Punct::Colon)? {
+                                // keyword args
+                                Some(id.to_string())
+                            } else {
+                                None
                             }
                         }
-                    }
-                    if let Some(punct) = punct {
-                        self.consume_punct(punct)?;
-                    };
-                    let node = Node::new_hash(kvp, loc);
-                    arglist.args.push(node);
-                    return Ok(arglist);
-                }
-                match &node.kind {
-                    NodeKind::Ident(id, ..) | NodeKind::LocalVar(_, id) => {
-                        if self.consume_punct_no_term(Punct::Colon)? {
-                            // keyword args
-                            arglist
-                                .kw_args
-                                .push((id.to_string(), self.parse_arg(false)?));
-                        } else {
-                            // positional args
-                            arglist.args.push(node);
+                        NodeKind::Const {
+                            toplevel: false,
+                            parent: None,
+                            prefix,
+                            name: id,
+                        } => {
+                            if prefix.is_empty() && self.consume_punct_no_term(Punct::Colon)? {
+                                Some(id.to_string())
+                            } else {
+                                None
+                            }
                         }
-                    }
-                    NodeKind::Const {
-                        toplevel: false,
-                        parent: None,
-                        prefix,
-                        name: id,
-                    } => {
-                        if prefix.is_empty() && self.consume_punct_no_term(Punct::Colon)? {
-                            // keyword args
-                            arglist
-                                .kw_args
-                                .push((id.to_string(), self.parse_arg(false)?));
-                        } else {
-                            // positional args
-                            arglist.args.push(node);
+                        NodeKind::String(id) => {
+                            if self.consume_punct_no_term(Punct::Colon)? {
+                                // keyword args
+                                Some(id.to_string())
+                            } else {
+                                None
+                            }
                         }
-                    }
-                    NodeKind::String(id) => {
-                        if self.consume_punct_no_term(Punct::Colon)? {
-                            // keyword args
-                            arglist
-                                .kw_args
-                                .push((id.to_string(), self.parse_arg(false)?));
+                        _ => None,
+                    } {
+                        if as_hash_splat.is_empty() {
+                            kw_args.push((id, self.parse_arg(false)?));
                         } else {
-                            // positional args
-                            arglist.args.push(node);
+                            as_hash_splat
+                                .push((Node::new_symbol(id, node.loc), self.parse_arg(false)?));
                         }
-                    }
-                    _ => {
+                    } else {
                         arglist.args.push(node);
                     }
                 }
@@ -167,6 +155,16 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 };
             }
         }
+
+        if !as_hash_splat.is_empty() {
+            arglist
+                .hash_splat
+                .push(Node::new_hash(as_hash_splat, self.prev_loc()));
+        }
+        if !kw_args.is_empty() {
+            arglist.kw_args = kw_args;
+        }
+
         if let Some(punct) = punct {
             self.consume_punct(punct)?;
         };
