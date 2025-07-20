@@ -26,19 +26,11 @@ pub(crate) type MethodInvoker = extern "C" fn(
     *const Value,
     usize,
     Option<BlockHandler>,
-    Option<Box<indexmap::IndexMap<IdentId, Value>>>,
+    Option<Hashmap>,
 ) -> Option<Value>;
 
-pub(crate) type MethodInvoker2 = extern "C" fn(
-    &mut Executor,
-    &mut Globals,
-    FuncId,
-    Value,
-    Arg,
-    usize,
-    Option<BlockHandler>,
-    Option<Box<indexmap::IndexMap<IdentId, Value>>>,
-) -> Option<Value>;
+pub(crate) type MethodInvoker2 =
+    extern "C" fn(&mut Executor, &mut Globals, FuncId, Value, Arg, usize) -> Option<Value>;
 
 pub(crate) type BlockInvoker = extern "C" fn(
     &mut Executor,
@@ -47,7 +39,7 @@ pub(crate) type BlockInvoker = extern "C" fn(
     Value,
     *const Value,
     usize,
-    Option<Box<indexmap::IndexMap<IdentId, Value>>>,
+    Option<Hashmap>,
 ) -> Option<Value>;
 
 pub(crate) type BindingInvoker = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<Value>;

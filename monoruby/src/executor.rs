@@ -639,7 +639,7 @@ impl Executor {
         receiver: Value,
         args: &[Value],
         bh: Option<BlockHandler>,
-        kw_args: Option<Box<indexmap::IndexMap<IdentId, Value>>>,
+        kw_args: Option<Hashmap>,
     ) -> Option<Value> {
         let func_id = match globals.find_method(receiver, method, false) {
             Ok(id) => id,
@@ -674,7 +674,7 @@ impl Executor {
         receiver: Value,
         args: &[Value],
         bh: Option<BlockHandler>,
-        kw_args: Option<Box<indexmap::IndexMap<IdentId, Value>>>,
+        kw_args: Option<Hashmap>,
     ) -> Result<Value> {
         let func_id = globals.find_method(receiver, method, true)?;
         self.invoke_func(globals, func_id, receiver, args, bh, kw_args)
@@ -877,7 +877,7 @@ impl Executor {
         receiver: Value,
         args: &[Value],
         bh: Option<BlockHandler>,
-        kw_args: Option<Box<indexmap::IndexMap<IdentId, Value>>>,
+        kw_args: Option<Hashmap>,
     ) -> Result<Option<Value>> {
         if let Some(func_id) = globals.check_method(receiver, method) {
             self.invoke_func(globals, func_id, receiver, args, bh, kw_args)
@@ -898,7 +898,7 @@ impl Executor {
         receiver: Value,
         args: &[Value],
         bh: Option<BlockHandler>,
-        kw_args: Option<Box<indexmap::IndexMap<IdentId, Value>>>,
+        kw_args: Option<Hashmap>,
     ) -> Option<Value> {
         let bh = bh.map(|bh| bh.delegate());
         (globals.invokers.method)(
@@ -920,7 +920,7 @@ impl Executor {
         receiver: Value,
         args: &[Value],
         bh: Option<BlockHandler>,
-        kw_args: Option<Box<indexmap::IndexMap<IdentId, Value>>>,
+        kw_args: Option<Hashmap>,
     ) -> Result<Value> {
         self.invoke_func(globals, func_id, receiver, args, bh, kw_args)
             .ok_or_else(|| self.take_error())

@@ -15,7 +15,7 @@ impl JitModule {
         // rcx: receiver: Value
         // r8:  *args: *const Value
         // r9:  len: usize
-        // r10: Option<Box<HashMap<IdentId, Value>>>
+        // r10: Option<Hashmap>
         // r11: Option<BlockHandler>
         let error_exit = self.jit.label();
         monoasm! { &mut self.jit,
@@ -46,12 +46,12 @@ impl JitModule {
         // rcx: receiver: Value
         // r8:  args: Arg
         // r9:  len: usize
-        // r10: Option<Box<HashMap<IdentId, Value>>>
+        // r10: Option<Hashmap>
         // r11: Option<BlockHandler>
         let error_exit = self.jit.label();
         monoasm! { &mut self.jit,
-            movq r10, [rsp + 16];
-            movq r11, [rsp + 8];
+            xorq r10, r10;
+            xorq r11, r11;
         }
         self.invoker_prologue(&error_exit);
         self.invoker_frame_setup(false, true);
@@ -77,7 +77,7 @@ impl JitModule {
         // rcx: <dummy>
         // r8:  *args: *const Value
         // r9:  len: usize
-        // r10: Option<Box<HashMap<IdentId, Value>>>
+        // r10: Option<Hashmap>
         let error_exit = self.jit.label();
         monoasm! { &mut self.jit,
             movq r10, [rsp + 8];
@@ -106,7 +106,7 @@ impl JitModule {
         // rcx: self: Value
         // r8:  *args: *const Value
         // r9:  len: usize
-        // r10: Option<Box<HashMap<IdentId, Value>>>
+        // r10: Option<Hashmap>
         let error_exit = self.jit.label();
         monoasm! { &mut self.jit,
             movq r10, [rsp + 8];
@@ -462,7 +462,7 @@ impl JitModule {
     /// - r15: &FuncData
     /// - r8: args: *const Value
     /// - r9: len: usize
-    /// - r10: Option<Box<HashMap<IdentId, Value>>>
+    /// - r10: Option<Hashmap>
     /// - r15: &FuncData
     ///
     /// ### destroy
@@ -555,7 +555,7 @@ extern "C" fn handle_invoker_arguments(
     callee_lfp: Lfp,
     arg_num: usize,
     args: *const Value,
-    kw_arg: Option<Box<indexmap::IndexMap<IdentId, Value>>>,
+    kw_arg: Option<Hashmap>,
 ) -> Option<Value> {
     match invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, true, kw_arg) {
         Ok(val) => Some(val),
@@ -572,7 +572,7 @@ extern "C" fn handle_invoker_arguments2(
     callee_lfp: Lfp,
     arg_num: usize,
     args: *const Value,
-    kw_arg: Option<Box<indexmap::IndexMap<IdentId, Value>>>,
+    kw_arg: Option<Hashmap>,
 ) -> Option<Value> {
     match invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, false, kw_arg) {
         Ok(val) => Some(val),
@@ -590,53 +590,63 @@ fn invoker_arguments_inner(
     arg_num: usize,
     args: *const Value,
     upward: bool,
-    mut kw_arg: Option<Box<indexmap::IndexMap<IdentId, Value>>>,
+    mut kw_arg: Option<Hashmap>,
 ) -> Result<Value> {
     let callee_fid = callee_lfp.func_id();
     let info = &globals.store[callee_fid];
 
-    // required + optional + post + rest
-    super::runtime::positional_invoker(info, callee_lfp, args, arg_num, upward)?;
-
     // keyword
-    let params = info.kw_names();
     let callee_kw_pos = info.kw_reg_pos();
-    for (id, name) in params.iter().enumerate() {
-        let v = kw_arg.as_mut().and_then(|map| map.shift_remove(name));
+    for (id, name) in info.kw_names().to_vec().into_iter().enumerate() {
+        let v = match &mut kw_arg {
+            Some(map) => map.remove(Value::symbol(name), vm, globals)?,
+            None => None,
+        };
         unsafe {
             callee_lfp.set_register(callee_kw_pos + id, v);
         }
     }
 
+    let info = &globals.store[callee_fid];
+    let kw_arg = if let Some(kw_arg) = kw_arg
+        && !kw_arg.is_empty()
+    {
+        Some(kw_arg)
+    } else {
+        None
+    };
+
     // keyword rest
-    if let Some(kw_rest) = info.kw_rest() {
-        let v = if let Some(box map) = kw_arg {
-            let mut rest_map = RubyMap::new();
-            for (name, value) in map.iter() {
-                rest_map.insert(Value::symbol(*name), *value, vm, globals)?;
-            }
-            Value::hash(rest_map)
+    let ex = if let Some(kw_rest) = info.kw_rest() {
+        let v = if let Some(kw_arg) = kw_arg {
+            kw_arg.into()
         } else {
             Value::nil()
         };
         unsafe {
             callee_lfp.set_register(kw_rest, Some(v));
         }
-    } else {
-        if let Some(kw_arg) = kw_arg
-            && !kw_arg.is_empty()
-        {
-            let mut s = "unknown keywords: ".to_string();
-            for (i, (name, _)) in kw_arg.iter().enumerate() {
-                if i == 0 {
-                    s.push_str(&format!(":{name}"));
-                } else {
-                    s.push_str(&format!(", :{name}"));
-                }
+        None
+    } else if info.kw_names().is_empty()
+        && let Some(kw_arg) = kw_arg
+    {
+        Some(kw_arg.into())
+    } else if let Some(kw_arg) = kw_arg {
+        let mut s = "unknown keywords: ".to_string();
+        for (i, (name, _)) in kw_arg.iter().enumerate() {
+            if i == 0 {
+                s.push_str(&format!(":{name}"));
+            } else {
+                s.push_str(&format!(", :{name}"));
             }
-            return Err(MonorubyErr::argumenterr(s));
         }
-    }
+        return Err(MonorubyErr::argumenterr(s));
+    } else {
+        None
+    };
+
+    // required + optional + post + rest
+    super::runtime::positional_invoker(info, callee_lfp, args, arg_num, upward, ex)?;
 
     Ok(Value::nil())
 }

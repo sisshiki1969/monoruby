@@ -659,20 +659,6 @@ impl Globals {
         self.define_builtin_inline_func_with(class_id, name, address, inline_gen, 0, 0, true)
     }
 
-    pub(crate) fn define_builtin_class_inline_funcs_rest(
-        &mut self,
-        class_id: ClassId,
-        name: &str,
-        alias: &[&str],
-        address: BuiltinFn,
-        inline_gen: Box<InlineGen>,
-    ) -> FuncId {
-        let class_id = self.store.get_metaclass(class_id).id();
-        self.define_builtin_inline_funcs_with(
-            class_id, name, alias, address, inline_gen, 0, 0, true,
-        )
-    }
-
     pub(crate) fn define_builtin_class_inline_funcs_catch_all(
         &mut self,
         class_id: ClassId,

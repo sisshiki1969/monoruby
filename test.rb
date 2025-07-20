@@ -1,7 +1,13 @@
+$res = []
+
 class C
-  def foo(*x)
-    puts "#{x.inspect}"
+  def initialize(*a)
+    $res << a.inspect
   end
 end
 
-C.new.foo(a:42, 100 => 100, c:5)
+100.times {
+  C.new(1,2,3, a:1, b:2)
+}
+
+puts $res

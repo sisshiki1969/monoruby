@@ -144,12 +144,7 @@ pub(crate) fn send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
             && let Some(kw) = kw.try_hash_ty()
             && !kw.is_empty()
         {
-            let mut kw_args = indexmap::IndexMap::default();
-            for (k, v) in kw.iter() {
-                let key = k.expect_symbol(globals)?;
-                kw_args.insert(key, v.clone());
-            }
-            Some(Box::new(kw_args))
+            Some(kw)
         } else {
             None
         },

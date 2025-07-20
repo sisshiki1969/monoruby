@@ -235,17 +235,34 @@ pub(crate) fn positional_invoker(
     args: *const Value,
     pos_args: usize,
     upward: bool,
+    ex: Option<Value>,
 ) -> Result<()> {
     let dst = callee_lfp.register_ptr(SlotId(1));
 
     // single array argument expansion for blocks
     if callee.single_arg_expand()
-        && let Some((ptr, len)) = check_single_arg_expand(&vec![], pos_args, args, None)
+        && let Some((ptr, len)) = check_single_arg_expand(&vec![], pos_args, args, ex)
     {
         return fill_positional_args(dst, callee, ptr, len, true);
     }
-
-    fill_positional_args(dst, callee, args, pos_args, upward)
+    if let Some(ex) = ex {
+        let mut buf: Vec<Value> = unsafe {
+            if upward {
+                std::slice::from_raw_parts(args, pos_args).to_vec()
+            } else {
+                let slice = std::slice::from_raw_parts_mut(
+                    (args as *mut Value).sub(pos_args).add(1),
+                    pos_args,
+                );
+                slice.reverse();
+                slice.to_vec()
+            }
+        };
+        buf.push(ex);
+        fill_positional_args1(dst, callee, &buf)
+    } else {
+        fill_positional_args(dst, callee, args, pos_args, upward)
+    }
 }
 
 fn fill_positional_args1(dst: *mut Option<Value>, callee: &FuncInfo, buf: &[Value]) -> Result<()> {

@@ -71,12 +71,7 @@ pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
             && let Some(kw) = kw.try_hash_ty()
             && !kw.is_empty()
         {
-            let mut kw_args = indexmap::IndexMap::default();
-            for (k, v) in kw.iter() {
-                let key = k.expect_symbol(globals)?;
-                kw_args.insert(key, v.clone());
-            }
-            Some(Box::new(kw_args))
+            Some(kw)
         } else {
             None
         },
@@ -166,12 +161,8 @@ pub(super) fn gen_class_new(
                 lea r8, [r14 - (crate::executor::jitgen::conv(args))];
                 movl r9, (pos_num);
                 // TODO: Currently inline call does not support calling with block or keyword arguments.
-                xorq rax, rax;
-                pushq rax;  // kw_arg
-                pushq rax;  // bh
                 movq rax, (gen.method_invoker2);
                 call rax;
-                addq rsp, 16;
                 testq rax, rax;
                 jne  exit;
                 xorq r15, r15;
@@ -276,6 +267,20 @@ mod tests {
         a = A.new(7, 11, 17)
         [a.w, a.x, a.y, a.z]
         "#,
+        );
+        run_test_with_prelude(
+            r##"
+        $res = []
+        C.new(1,2,3, a:1, b:2)
+        $res
+        "##,
+            r##"
+        class C
+          def initialize(*a)
+            $res << a.inspect
+          end
+        end
+        "##,
         );
     }
 
