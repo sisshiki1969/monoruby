@@ -40,7 +40,7 @@ use crate::raw::{
 /// [`HashSet`]: super::HashSet
 /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
 /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
-pub struct HashTable<T, E, G, R> {
+pub struct HashTable<T, E = (), G = (), R = ()> {
     pub(crate) raw: RawTable<T, E, G, R>,
 }
 
@@ -56,7 +56,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::HashTable;
     /// struct E;
     /// struct G;
-    /// let mut table: HashTable<&str, E, G, ()> = HashTable::new();
+    /// let mut table: HashTable<&str> = HashTable::new();
     /// assert_eq!(table.len(), 0);
     /// assert_eq!(table.capacity(), 0);
     /// ```
@@ -77,7 +77,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::HashTable;
     /// struct E;
     /// struct G;
-    /// let mut table: HashTable<&str, E, G, ()> = HashTable::with_capacity(10);
+    /// let mut table: HashTable<&str> = HashTable::with_capacity(10);
     /// assert_eq!(table.len(), 0);
     /// assert!(table.capacity() >= 10);
     /// ```
@@ -104,14 +104,14 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table = HashTable::new();
+    /// let mut table: HashTable<i32> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// table.insert_unique(hasher(&1), 1, hasher);
     /// table.insert_unique(hasher(&2), 2, hasher);
     /// table.insert_unique(hasher(&3), 3, hasher);
-    /// assert_eq!(table.find(hasher(&2), |&val| val == 2), Some(&2));
-    /// assert_eq!(table.find(hasher(&4), |&val| val == 4), None);
+    /// assert_eq!(table.find(hasher(&2), |&val, _, _| Ok(val == 2), &mut (), &mut ()).unwrap(), Some(&2));
+    /// assert_eq!(table.find(hasher(&4), |&val, _, _| Ok(val == 4), &mut (), &mut ()).unwrap(), None);
     /// # }
     /// # fn main() {
     /// #     #[cfg(feature = "nightly")]
@@ -147,15 +147,15 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table = HashTable::new();
+    /// let mut table: HashTable<(i32, &str)> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// table.insert_unique(hasher(&1), (1, "a"), |val| hasher(&val.0));
-    /// if let Some(val) = table.find_mut(hasher(&1), |val| val.0 == 1) {
+    /// if let Some(val) = table.find_mut(hasher(&1), |val, _, _| Ok(val.0 == 1), &mut (), &mut ()).unwrap() {
     ///     val.1 = "b";
     /// }
-    /// assert_eq!(table.find(hasher(&1), |val| val.0 == 1), Some(&(1, "b")));
-    /// assert_eq!(table.find(hasher(&2), |val| val.0 == 2), None);
+    /// assert_eq!(table.find(hasher(&1), |val, _, _| Ok(val.0 == 1), &mut (), &mut ()).unwrap(), Some(&(1, "b")));
+    /// assert_eq!(table.find(hasher(&2), |val, _, _| Ok(val.0 == 2), &mut (), &mut ()).unwrap(), None);
     /// # }
     /// # fn main() {
     /// #     #[cfg(feature = "nightly")]
@@ -191,14 +191,14 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table = HashTable::new();
+    /// let mut table: HashTable<(i32, &str)> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// table.insert_unique(hasher(&1), (1, "a"), |val| hasher(&val.0));
-    /// if let Ok(entry) = table.find_entry(hasher(&1), |val| val.0 == 1) {
+    /// if let Ok(entry) = table.find_entry(hasher(&1), |val, _, _| Ok(val.0 == 1), &mut (), &mut ()).unwrap() {
     ///     entry.remove();
     /// }
-    /// assert_eq!(table.find(hasher(&1), |val| val.0 == 1), None);
+    /// assert_eq!(table.find(hasher(&1), |val, _, _| Ok(val.0 == 1), &mut (), &mut ()).unwrap(), None);
     /// # }
     /// # fn main() {
     /// #     #[cfg(feature = "nightly")]
@@ -248,19 +248,19 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table = HashTable::new();
+    /// let mut table: HashTable<(i32, &str)> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// table.insert_unique(hasher(&1), (1, "a"), |val| hasher(&val.0));
-    /// if let Entry::Occupied(entry) = table.entry(hasher(&1), |val| val.0 == 1, |val| hasher(&val.0))
-    /// {
+    /// if let Entry::Occupied(entry) = table.entry(hasher(&1), |val, _, _| Ok(val.0 == 1), |val| hasher(&val.0), &mut (), &mut ()).unwrap() {
     ///     entry.remove();
     /// }
-    /// if let Entry::Vacant(entry) = table.entry(hasher(&2), |val| val.0 == 2, |val| hasher(&val.0)) {
+    /// if let Entry::Vacant(entry) = table.entry(hasher(&2), |val, _, _| Ok(val.0 == 2), |val| hasher(&val.0), &mut (), &mut ()).unwrap() {
     ///     entry.insert((2, "b"));
     /// }
-    /// assert_eq!(table.find(hasher(&1), |val| val.0 == 1), None);
-    /// assert_eq!(table.find(hasher(&2), |val| val.0 == 2), Some(&(2, "b")));
+    /// assert_eq!(table.find(hasher(&1), |val, _, _| Ok(val.0 == 1), &mut (), &mut ()).unwrap(), None);
+    /// assert_eq!(table.find(hasher(&2), |val, _, _| Ok(val.0 == 2), &mut (), &mut ()).unwrap(), Some(&(2, "b")));
+    ///
     /// # }
     /// # fn main() {
     /// #     #[cfg(feature = "nightly")]
@@ -307,7 +307,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut v = HashTable::new();
+    /// let mut v: HashTable<i32> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// v.insert_unique(hasher(&1), 1, hasher);
@@ -341,7 +341,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut v = HashTable::new();
+    /// let mut v: HashTable<i32> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// v.insert_unique(hasher(&1), 1, hasher);
@@ -372,7 +372,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table = HashTable::with_capacity(100);
+    /// let mut table: HashTable<i32> = HashTable::with_capacity(100);
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// table.insert_unique(hasher(&1), 1, hasher);
@@ -408,7 +408,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table = HashTable::with_capacity(100);
+    /// let mut table: HashTable<i32> = HashTable::with_capacity(100);
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// table.insert_unique(hasher(&1), 1, hasher);
@@ -493,7 +493,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     ///
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
-    /// let mut v = HashTable::new();
+    /// let mut v: HashTable<i32> = HashTable::new();
     /// assert_eq!(v.len(), 0);
     /// v.insert_unique(hasher(&1), 1, hasher);
     /// assert_eq!(v.len(), 1);
@@ -519,7 +519,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     ///
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
-    /// let mut v = HashTable::new();
+    /// let mut v: HashTable<i32> = HashTable::new();
     /// assert!(v.is_empty());
     /// v.insert_unique(hasher(&1), 1, hasher);
     /// assert!(!v.is_empty());
@@ -544,7 +544,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table = HashTable::new();
+    /// let mut table: HashTable<&str> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// table.insert_unique(hasher(&"a"), "b", hasher);
@@ -579,7 +579,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table = HashTable::new();
+    /// let mut table: HashTable<i32> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// table.insert_unique(hasher(&1), 1, hasher);
@@ -633,7 +633,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table = HashTable::new();
+    /// let mut table: HashTable<&str> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// table.insert_unique(hasher(&"a"), "a", hasher);
@@ -672,7 +672,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table = HashTable::new();
+    /// let mut table: HashTable<i32> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// table.insert_unique(hasher(&1), 2, hasher);
@@ -722,7 +722,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table = HashTable::new();
+    /// let mut table: HashTable<i32> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// for x in 1..=6 {
@@ -757,7 +757,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table: HashTable<i32, (), (), ()> = HashTable::new();
+    /// let mut table: HashTable<i32> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// for x in 1..=3 {
@@ -803,7 +803,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table = HashTable::new();
+    /// let mut table: HashTable<i32> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// for x in 0..8 {
@@ -930,19 +930,19 @@ where
 /// assert_eq!(table.len(), 3);
 ///
 /// // Existing value (insert)
-/// let entry: Entry<_> = table.entry(hasher(&"a"), |&x| x == "a", hasher);
-/// let _raw_o: OccupiedEntry<_, _> = entry.insert("a");
+/// let entry: Entry<_, _, _, ()> = table.entry(hasher(&"a"), |&x, _, _| Ok(x == "a"), hasher, &mut (), &mut ()).unwrap();
+/// let _raw_o: OccupiedEntry<_, _, _, _> = entry.insert("a");
 /// assert_eq!(table.len(), 3);
 /// // Nonexistent value (insert)
-/// table.entry(hasher(&"d"), |&x| x == "d", hasher).insert("d");
+/// table.entry(hasher(&"d"), |&x, _, _| Ok(x == "d"), hasher, &mut (), &mut ()).unwrap().insert("d");
 ///
 /// // Existing value (or_insert)
 /// table
-///     .entry(hasher(&"b"), |&x| x == "b", hasher)
+///     .entry(hasher(&"b"), |&x, _, _| Ok(x == "b"), hasher, &mut (), &mut ()).unwrap()
 ///     .or_insert("b");
 /// // Nonexistent value (or_insert)
 /// table
-///     .entry(hasher(&"e"), |&x| x == "e", hasher)
+///     .entry(hasher(&"e"), |&x, _, _| Ok(x == "e"), hasher, &mut (), &mut ()).unwrap()
 ///     .or_insert("e");
 ///
 /// println!("Our HashTable: {:?}", table);
@@ -958,7 +958,8 @@ where
 /// #     test()
 /// # }
 /// ```
-pub enum Entry<'a, T, E, G, R> {
+
+pub enum Entry<'a, T, E, G, R = ()> {
     /// An occupied entry.
     ///
     /// # Examples
@@ -970,14 +971,14 @@ pub enum Entry<'a, T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table = HashTable::new();
+    /// let mut table: HashTable<&str> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// for x in ["a", "b"] {
     ///     table.insert_unique(hasher(&x), x, hasher);
     /// }
     ///
-    /// match table.entry(hasher(&"a"), |&x| x == "a", hasher) {
+    /// match table.entry(hasher(&"a"), |&x, _, _| Ok(x == "a"), hasher, &mut (), &mut ()).unwrap() {
     ///     Entry::Vacant(_) => unreachable!(),
     ///     Entry::Occupied(_) => {}
     /// }
@@ -1004,7 +1005,7 @@ pub enum Entry<'a, T, E, G, R> {
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     ///
-    /// match table.entry(hasher(&"a"), |&x| x == "a", hasher) {
+    /// match table.entry(hasher(&"a"), |&x, _, _| Ok(x == "a"), hasher, &mut (), &mut ()).unwrap() {
     ///     Entry::Vacant(_) => {}
     ///     Entry::Occupied(_) => unreachable!(),
     /// }
@@ -1043,7 +1044,8 @@ impl<'a, T, E, G, R> Entry<'a, T, E, G, R> {
     /// let hasher = |val: &_| hasher.hash_one(val);
     ///
     /// let entry = table
-    ///     .entry(hasher(&"horseyland"), |&x| x == "horseyland", hasher)
+    ///     .entry(hasher(&"horseyland"), |&x, _, _| Ok(x == "horseyland"), hasher, &mut (), &mut ())
+    ///     .unwrap()
     ///     .insert("horseyland");
     ///
     /// assert_eq!(entry.get(), &"horseyland");
@@ -1081,18 +1083,22 @@ impl<'a, T, E, G, R> Entry<'a, T, E, G, R> {
     ///
     /// // nonexistent key
     /// table
-    ///     .entry(hasher(&"poneyland"), |&x| x == "poneyland", hasher)
+    ///     .entry(hasher(&"poneyland"), |&x, _, _| Ok(x == "poneyland"), hasher, &mut (), &mut ())
+    /// .unwrap()
     ///     .or_insert("poneyland");
     /// assert!(table
-    ///     .find(hasher(&"poneyland"), |&x| x == "poneyland")
+    ///     .find(hasher(&"poneyland"), |&x, _, _| Ok(x == "poneyland"), &mut (), &mut ())
+    ///     .unwrap()
     ///     .is_some());
     ///
     /// // existing key
     /// table
-    ///     .entry(hasher(&"poneyland"), |&x| x == "poneyland", hasher)
+    ///     .entry(hasher(&"poneyland"), |&x, _, _| Ok(x == "poneyland"), hasher, &mut (), &mut ())
+    ///     .unwrap()
     ///     .or_insert("poneyland");
     /// assert!(table
-    ///     .find(hasher(&"poneyland"), |&x| x == "poneyland")
+    ///     .find(hasher(&"poneyland"), |&x, _, _| Ok(x == "poneyland"), &mut (), &mut ())
+    ///     .unwrap()
     ///     .is_some());
     /// assert_eq!(table.len(), 1);
     /// # }
@@ -1125,11 +1131,13 @@ impl<'a, T, E, G, R> Entry<'a, T, E, G, R> {
     /// let hasher = |val: &_| hasher.hash_one(val);
     ///
     /// table
-    ///     .entry(hasher("poneyland"), |x| x == "poneyland", |val| hasher(val))
+    ///     .entry(hasher("poneyland"), |x, _, _| Ok(x == "poneyland"), |val| hasher(val), &mut (), &mut ())
+    ///     .unwrap()
     ///     .or_insert_with(|| "poneyland".to_string());
     ///
     /// assert!(table
-    ///     .find(hasher(&"poneyland"), |x| x == "poneyland")
+    ///     .find(hasher(&"poneyland"), |x, _, _| Ok(x == "poneyland"), &mut (), &mut ())
+    ///     .unwrap()
     ///     .is_some());
     /// # }
     /// # fn main() {
@@ -1162,26 +1170,32 @@ impl<'a, T, E, G, R> Entry<'a, T, E, G, R> {
     /// table
     ///     .entry(
     ///         hasher(&"poneyland"),
-    ///         |&(x, _)| x == "poneyland",
+    ///         |&(x, _), _, _| Ok(x == "poneyland"),
     ///         |(k, _)| hasher(&k),
+    ///         &mut (),
+    ///         &mut (),
     ///     )
+    ///     .unwrap()
     ///     .and_modify(|(_, v)| *v += 1)
     ///     .or_insert(("poneyland", 42));
     /// assert_eq!(
-    ///     table.find(hasher(&"poneyland"), |&(k, _)| k == "poneyland"),
+    ///     table.find(hasher(&"poneyland"), |&(k, _), _, _| Ok(k == "poneyland"), &mut (), &mut ()).unwrap(),
     ///     Some(&("poneyland", 42))
     /// );
     ///
     /// table
     ///     .entry(
     ///         hasher(&"poneyland"),
-    ///         |&(x, _)| x == "poneyland",
+    ///         |&(x, _), _, _| Ok(x == "poneyland"),
     ///         |(k, _)| hasher(&k),
+    ///         &mut (),
+    ///         &mut (),
     ///     )
+    ///     .unwrap()
     ///     .and_modify(|(_, v)| *v += 1)
     ///     .or_insert(("poneyland", 42));
     /// assert_eq!(
-    ///     table.find(hasher(&"poneyland"), |&(k, _)| k == "poneyland"),
+    ///     table.find(hasher(&"poneyland"), |&(k, _), _, _| Ok(k == "poneyland"), &mut (), &mut ()).unwrap(),
     ///     Some(&("poneyland", 43))
     /// );
     /// # }
@@ -1215,7 +1229,7 @@ impl<'a, T, E, G, R> Entry<'a, T, E, G, R> {
 /// use hashbrown::{HashTable, DefaultHashBuilder};
 /// use std::hash::BuildHasher;
 ///
-/// let mut table = HashTable::new();
+/// let mut table: HashTable<&str> = HashTable::new();
 /// let hasher = DefaultHashBuilder::default();
 /// let hasher = |val: &_| hasher.hash_one(val);
 /// for x in ["a", "b", "c"] {
@@ -1223,11 +1237,11 @@ impl<'a, T, E, G, R> Entry<'a, T, E, G, R> {
 /// }
 /// assert_eq!(table.len(), 3);
 ///
-/// let _entry_o: OccupiedEntry<_, _> = table.find_entry(hasher(&"a"), |&x| x == "a").unwrap();
+/// let _entry_o: OccupiedEntry<_, _, _, ()> = table.find_entry(hasher(&"a"), |&x, _, _| Ok(x == "a"), &mut (), &mut ()).unwrap().unwrap();
 /// assert_eq!(table.len(), 3);
 ///
 /// // Existing key
-/// match table.entry(hasher(&"a"), |&x| x == "a", hasher) {
+/// match table.entry(hasher(&"a"), |&x, _, _| Ok(x == "a"), hasher, &mut (), &mut ()).unwrap() {
 ///     Entry::Vacant(_) => unreachable!(),
 ///     Entry::Occupied(view) => {
 ///         assert_eq!(view.get(), &"a");
@@ -1237,13 +1251,13 @@ impl<'a, T, E, G, R> Entry<'a, T, E, G, R> {
 /// assert_eq!(table.len(), 3);
 ///
 /// // Existing key (take)
-/// match table.entry(hasher(&"c"), |&x| x == "c", hasher) {
+/// match table.entry(hasher(&"c"), |&x, _, _| Ok(x == "c"), hasher, &mut (), &mut ()).unwrap() {
 ///     Entry::Vacant(_) => unreachable!(),
 ///     Entry::Occupied(view) => {
 ///         assert_eq!(view.remove().0, "c");
 ///     }
 /// }
-/// assert_eq!(table.find(hasher(&"c"), |&x| x == "c"), None);
+/// assert_eq!(table.find(hasher(&"c"), |&x, _, _| Ok(x == "c"), &mut (), &mut ()).unwrap(), None);
 /// assert_eq!(table.len(), 2);
 /// # }
 /// # fn main() {
@@ -1279,7 +1293,7 @@ impl<'a, T, E, G, R> OccupiedEntry<'a, T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table: HashTable<&str> = HashTable::new();
+    /// let mut table: HashTable<&str, (), (), ()> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// // The table is empty
@@ -1288,12 +1302,13 @@ impl<'a, T, E, G, R> OccupiedEntry<'a, T, E, G, R> {
     /// table.insert_unique(hasher(&"poneyland"), "poneyland", hasher);
     /// let capacity_before_remove = table.capacity();
     ///
-    /// if let Entry::Occupied(o) = table.entry(hasher(&"poneyland"), |&x| x == "poneyland", hasher) {
+    /// if let Entry::Occupied(o) = table.entry(hasher(&"poneyland"), |&x, _, _| Ok(x == "poneyland"), hasher, &mut (), &mut ()).unwrap() {
     ///     assert_eq!(o.remove().0, "poneyland");
     /// }
     ///
     /// assert!(table
-    ///     .find(hasher(&"poneyland"), |&x| x == "poneyland")
+    ///     .find(hasher(&"poneyland"), |&x, _, _| Ok(x == "poneyland"), &mut (), &mut ())
+    ///     .unwrap()
     ///     .is_none());
     /// // Now table hold none elements but capacity is equal to the old one
     /// assert!(table.len() == 0 && table.capacity() == capacity_before_remove);
@@ -1332,7 +1347,7 @@ impl<'a, T, E, G, R> OccupiedEntry<'a, T, E, G, R> {
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// table.insert_unique(hasher(&"poneyland"), "poneyland", hasher);
     ///
-    /// match table.entry(hasher(&"poneyland"), |&x| x == "poneyland", hasher) {
+    /// match table.entry(hasher(&"poneyland"), |&x, _, _| Ok(x == "poneyland"), hasher, &mut (), &mut ()).unwrap() {
     ///     Entry::Vacant(_) => panic!(),
     ///     Entry::Occupied(entry) => assert_eq!(entry.get(), &"poneyland"),
     /// }
@@ -1369,15 +1384,17 @@ impl<'a, T, E, G, R> OccupiedEntry<'a, T, E, G, R> {
     /// table.insert_unique(hasher(&"poneyland"), ("poneyland", 12), |(k, _)| hasher(&k));
     ///
     /// assert_eq!(
-    ///     table.find(hasher(&"poneyland"), |&(x, _)| x == "poneyland",),
+    ///     table.find(hasher(&"poneyland"), |&(x, _), _, _| Ok(x == "poneyland"), &mut (), &mut ()).unwrap(),
     ///     Some(&("poneyland", 12))
     /// );
     ///
     /// if let Entry::Occupied(mut o) = table.entry(
     ///     hasher(&"poneyland"),
-    ///     |&(x, _)| x == "poneyland",
+    ///     |&(x, _), _, _| Ok(x == "poneyland"),
     ///     |(k, _)| hasher(&k),
-    /// ) {
+    ///     &mut (),
+    ///     &mut (),
+    /// ).unwrap() {
     ///     o.get_mut().1 += 10;
     ///     assert_eq!(o.get().1, 22);
     ///
@@ -1386,7 +1403,7 @@ impl<'a, T, E, G, R> OccupiedEntry<'a, T, E, G, R> {
     /// }
     ///
     /// assert_eq!(
-    ///     table.find(hasher(&"poneyland"), |&(x, _)| x == "poneyland",),
+    ///     table.find(hasher(&"poneyland"), |&(x, _), _, _| Ok(x == "poneyland"), &mut (), &mut ()).unwrap(),
     ///     Some(&("poneyland", 24))
     /// );
     /// # }
@@ -1416,29 +1433,31 @@ impl<'a, T, E, G, R> OccupiedEntry<'a, T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table: HashTable<(&str, u32)> = HashTable::new();
+    /// let mut table: HashTable<(&str, u32), (), (), ()> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// table.insert_unique(hasher(&"poneyland"), ("poneyland", 12), |(k, _)| hasher(&k));
     ///
     /// assert_eq!(
-    ///     table.find(hasher(&"poneyland"), |&(x, _)| x == "poneyland",),
+    ///     table.find(hasher(&"poneyland"), |&(x, _), _, _| Ok(x == "poneyland"), &mut (), &mut ()).unwrap(),
     ///     Some(&("poneyland", 12))
     /// );
     ///
     /// let value: &mut (&str, u32);
     /// match table.entry(
     ///     hasher(&"poneyland"),
-    ///     |&(x, _)| x == "poneyland",
+    ///     |&(x, _), _, _| Ok(x == "poneyland"),
     ///     |(k, _)| hasher(&k),
-    /// ) {
+    ///     &mut (),
+    ///     &mut (),
+    /// ).unwrap() {
     ///     Entry::Occupied(entry) => value = entry.into_mut(),
     ///     Entry::Vacant(_) => panic!(),
     /// }
     /// value.1 += 10;
     ///
     /// assert_eq!(
-    ///     table.find(hasher(&"poneyland"), |&(x, _)| x == "poneyland",),
+    ///     table.find(hasher(&"poneyland"), |&(x, _), _, _| Ok(x == "poneyland"), &mut (), &mut ()).unwrap(),
     ///     Some(&("poneyland", 22))
     /// );
     /// # }
@@ -1472,27 +1491,25 @@ impl<'a, T, E, G, R> OccupiedEntry<'a, T, E, G, R> {
 /// use hashbrown::{HashTable, DefaultHashBuilder};
 /// use std::hash::BuildHasher;
 ///
-/// struct E;
-/// struct G;
 /// let mut table: HashTable<&str> = HashTable::new();
 /// let hasher = DefaultHashBuilder::default();
 /// let hasher = |val: &_| hasher.hash_one(val);
 ///
-/// let entry_v: VacantEntry<_, _, E, G, ()> = match table.entry(hasher(&"a"), |&x| x == "a", hasher) {
+/// let entry_v: VacantEntry<_, _, _, _> = match table.entry(hasher(&"a"), |&x, _, _| Ok(x == "a"), hasher, &mut (), &mut ()).unwrap() {
 ///     Entry::Vacant(view) => view,
 ///     Entry::Occupied(_) => unreachable!(),
 /// };
 /// entry_v.insert("a");
-/// assert!(table.find(hasher(&"a"), |&x| x == "a").is_some() && table.len() == 1);
+/// assert!(table.find(hasher(&"a"), |&x, _, _| Ok(x == "a"), &mut (), &mut ()).unwrap().is_some() && table.len() == 1);
 ///
 /// // Nonexistent key (insert)
-/// match table.entry(hasher(&"b"), |&x| x == "b", hasher) {
+/// match table.entry(hasher(&"b"), |&x, _, _| Ok(x == "b"), hasher, &mut (), &mut ()).unwrap() {
 ///     Entry::Vacant(view) => {
 ///         view.insert("b");
 ///     }
 ///     Entry::Occupied(_) => unreachable!(),
 /// }
-/// assert!(table.find(hasher(&"b"), |&x| x == "b").is_some() && table.len() == 2);
+/// assert!(table.find(hasher(&"b"), |&x, _, _| Ok(x == "b"), &mut (), &mut ()).unwrap().is_some() && table.len() == 2);
 /// # }
 /// # fn main() {
 /// #     #[cfg(feature = "nightly")]
@@ -1530,11 +1547,11 @@ impl<'a, T, E, G, R> VacantEntry<'a, T, E, G, R> {
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     ///
-    /// if let Entry::Vacant(o) = table.entry(hasher(&"poneyland"), |&x| x == "poneyland", hasher) {
+    /// if let Entry::Vacant(o) = table.entry(hasher(&"poneyland"), |&x, _, _| Ok(x == "poneyland"), hasher, &mut (), &mut ()).unwrap() {
     ///     o.insert("poneyland");
     /// }
     /// assert_eq!(
-    ///     table.find(hasher(&"poneyland"), |&x| x == "poneyland"),
+    ///     table.find(hasher(&"poneyland"), |&x, _, _| Ok(x == "poneyland"), &mut (), &mut ()).unwrap(),
     ///     Some(&"poneyland")
     /// );
     /// # }
@@ -1585,20 +1602,20 @@ impl<'a, T, E, G, R> VacantEntry<'a, T, E, G, R> {
 /// let hasher = DefaultHashBuilder::default();
 /// let hasher = |val: &_| hasher.hash_one(val);
 ///
-/// let entry_v: AbsentEntry<_, _> = table.find_entry(hasher(&"a"), |&x| x == "a").unwrap_err();
+/// let entry_v: AbsentEntry<_, _, _, _> = table.find_entry(hasher(&"a"), |&x, _, _| Ok(x == "a"), &mut (), &mut ()).unwrap().unwrap_err();
 /// entry_v
 ///     .into_table()
 ///     .insert_unique(hasher(&"a"), "a", hasher);
-/// assert!(table.find(hasher(&"a"), |&x| x == "a").is_some() && table.len() == 1);
+/// assert!(table.find(hasher(&"a"), |&x, _, _| Ok(x == "a"), &mut (), &mut ()).unwrap().is_some() && table.len() == 1);
 ///
 /// // Nonexistent key (insert)
-/// match table.entry(hasher(&"b"), |&x| x == "b", hasher) {
+/// match table.entry(hasher(&"b"), |&x, _, _| Ok(x == "b"), hasher, &mut (), &mut ()).unwrap() {
 ///     Entry::Vacant(view) => {
 ///         view.insert("b");
 ///     }
 ///     Entry::Occupied(_) => unreachable!(),
 /// }
-/// assert!(table.find(hasher(&"b"), |&x| x == "b").is_some() && table.len() == 2);
+/// assert!(table.find(hasher(&"b"), |&x, _, _| Ok(x == "b"), &mut (), &mut ()).unwrap().is_some() && table.len() == 2);
 /// # }
 /// # fn main() {
 /// #     #[cfg(feature = "nightly")]

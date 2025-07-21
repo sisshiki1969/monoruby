@@ -542,7 +542,7 @@ impl<T> Bucket<T> {
 }
 
 /// A raw hash table with an unsafe API.
-pub struct RawTable<T, E, G, R> {
+pub struct RawTable<T, E = (), G = (), R = ()> {
     table: RawTableInner,
     // Tell dropck that we own instances of T.
     marker: PhantomData<(T, E, G, R)>,
