@@ -178,6 +178,7 @@ pub(super) enum BytecodeInst {
         src: BcReg,
     },
     CheckLocal(BcReg, Label),
+    CheckKwRest(BcReg),
     Br(Label),
     CondBr(BcReg, Label, bool, BrKind),
     /// when *BcReg* is nil, goto *Label*.

@@ -1,5 +1,6 @@
 use super::*;
 use jitgen::JitContext;
+use rubymap::RubyEql;
 use smallvec::smallvec;
 use std::cmp::Ordering;
 
@@ -108,7 +109,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "uniq", uniq, 0);
     globals.define_builtin_func(ARRAY_CLASS, "uniq!", uniq_, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "slice!", slice_, 1, 2, false);
-    globals.define_builtin_func_with_kw(ARRAY_CLASS, "pack", pack, 1, 1, false, &["buffer"]);
+    globals.define_builtin_func_with_kw(ARRAY_CLASS, "pack", pack, 1, 1, false, &["buffer"], false);
     globals.define_builtin_func_with(ARRAY_CLASS, "flatten", flatten, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "flatten!", flatten_, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "compact", compact, 0);
@@ -121,6 +122,7 @@ pub(super) fn init(globals: &mut Globals) {
         0,
         false,
         &["random"],
+        false,
     );
     globals.define_builtin_func(ARRAY_CLASS, "delete", delete, 1);
     globals.define_builtin_func(ARRAY_CLASS, "delete_at", delete_at, 1);
@@ -154,6 +156,7 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         obj,
         &lfp.arg(0).as_array(),
         lfp.block(),
+        None,
     )?;
     Ok(obj)
 }
@@ -348,7 +351,7 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         let mut count = 0;
         for elem in lfp.self_val().as_array().iter() {
             if vm
-                .invoke_method_inner(globals, IdentId::_EQ, arg0, &[*elem], None)?
+                .invoke_method_inner(globals, IdentId::_EQ, arg0, &[*elem], None, None)?
                 .as_bool()
             {
                 count += 1;
@@ -429,12 +432,12 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                     elem.len()
                 )));
             }
-            vm.temp_hash_insert(elem[0], elem[1]);
+            vm.temp_hash_insert(globals, elem[0], elem[1])?;
         }
         Ok(())
     }
 
-    vm.temp_push(Value::hash(indexmap::IndexMap::default()));
+    vm.temp_push(Value::hash(RubyMap::default()));
     let err = inner(vm, globals, lfp);
     let res = vm.temp_pop();
     err?;
@@ -449,7 +452,7 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/hash.html]
 #[monoruby_builtin]
 fn hash(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let h = HashKey(lfp.self_val()).calculate_hash();
+    let h = lfp.self_val().calculate_hash();
     Ok(Value::integer_from_u64(h))
 }
 
@@ -550,7 +553,7 @@ fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut lhs = lfp.self_val().dup().as_array();
     let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
-    lhs.uniq()?;
+    lhs.uniq(vm, globals)?;
     lhs.retain(|v| Ok(rhs.contains(v)))?;
     Ok(lhs.as_val())
 }
@@ -566,7 +569,7 @@ fn or(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut lhs = lfp.self_val().dup().as_array();
     let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
     lhs.extend(rhs.iter().cloned());
-    lhs.uniq()?;
+    lhs.uniq(vm, globals)?;
     Ok(lhs.as_val())
 }
 
@@ -962,7 +965,7 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             return Err(MonorubyErr::argumenterr("wrong number of arguments"));
         };
         for v in iter {
-            res = vm.invoke_method_inner(globals, sym, res, &[v], None)?;
+            res = vm.invoke_method_inner(globals, sym, res, &[v], None, None)?;
         }
         Ok(res)
     }
@@ -1424,11 +1427,11 @@ fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
         globals: &mut Globals,
         data: &ProcData,
         ary: Array,
-        map: &mut IndexMap<HashKey, Value>,
+        map: &mut RubyMap<Value, Value>,
     ) -> Result<()> {
         for elem in ary.iter() {
             let key = vm.invoke_block(globals, &data, &[*elem])?;
-            map.entry(HashKey(key))
+            map.entry(key, vm, globals)?
                 .and_modify(|v: &mut Value| v.as_array().push(*elem))
                 .or_insert(Value::array1(*elem));
         }
@@ -1437,7 +1440,7 @@ fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let ary = lfp.self_val().as_array();
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
-        let mut map = IndexMap::default();
+        let mut map = RubyMap::default();
         let gc_enabled = Globals::gc_enable(false);
         let res = inner(vm, globals, &data, ary, &mut map);
         Globals::gc_enable(gc_enabled);
@@ -1827,13 +1830,13 @@ fn product_inner(lhs: Array, rhs: Vec<Array>) -> Vec<Array> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/union.html]
 #[monoruby_builtin]
-fn union(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().dup().as_array();
     for rhs in lfp.arg(0).as_array().into_iter() {
         let rhs = rhs.expect_array_ty(globals)?;
         ary.extend(rhs.into_iter().cloned());
     }
-    ary.uniq()?;
+    ary.uniq(vm, globals)?;
     Ok(ary.into())
 }
 
@@ -1844,11 +1847,13 @@ fn union(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/intersect=3f.html]
 #[monoruby_builtin]
-fn intersect_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn intersect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
     for rhs in lfp.arg(0).as_array().iter().cloned() {
-        if lhs.iter().cloned().any(|lhs| HashKey(lhs) == HashKey(rhs)) {
-            return Ok(Value::bool(true));
+        for lhs in lhs.iter().cloned() {
+            if lhs.eql(&rhs, vm, globals)? {
+                return Ok(Value::bool(true));
+            }
         }
     }
     Ok(Value::bool(false))
@@ -1867,7 +1872,7 @@ fn intersect_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().dup().as_array();
     match lfp.block() {
-        None => ary.uniq()?,
+        None => ary.uniq(vm, globals)?,
         Some(bh) => uniq_block(vm, globals, ary, bh)?,
     };
     Ok(ary.into())
@@ -1877,7 +1882,7 @@ fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     let deleted = match lfp.block() {
-        None => ary.uniq()?,
+        None => ary.uniq(vm, globals)?,
         Some(bh) => uniq_block(vm, globals, ary, bh)?,
     };
     if deleted {
@@ -1905,13 +1910,13 @@ fn uniq_inner(
     mut ary: Array,
     bh: BlockHandler,
 ) -> Result<bool> {
-    let mut h = HashSet::default();
+    let mut h = RubySet::default();
     let data = vm.get_block_data(globals, bh)?;
     vm.temp_array_new(Some(ary.len()));
     let res = ary.retain(|x| {
         let res = vm.invoke_block(globals, &data, &[*x])?;
         vm.temp_array_push(res);
-        Ok(h.insert(HashKey(res)))
+        Ok(h.insert(res, vm, globals)?)
     });
     vm.temp_pop();
     res.map(|removed| removed.is_some())
@@ -2172,7 +2177,7 @@ fn find_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         let func_id = globals.find_method(arg0, IdentId::_EQ, false)?;
         for (i, v) in ary.iter().enumerate() {
             if vm
-                .invoke_func_inner(globals, func_id, arg0, &[*v], None)?
+                .invoke_func_inner(globals, func_id, arg0, &[*v], None, None)?
                 .as_bool()
             {
                 return Ok(Value::integer(i as i64));

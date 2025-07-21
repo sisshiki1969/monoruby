@@ -24,7 +24,7 @@ pub enum NodeKind {
         is_const: bool,
     }, // start, end, exclude_end
     Array(Vec<Node>, bool),          // Vec<ELEM>, is_constant_expr
-    Hash(Vec<(Node, Node)>, bool),   // Vec<KEY, VALUE>, is_constant_expr
+    Hash(Vec<(Node, Node)>),         // Vec<KEY, VALUE>
     RegExp(Vec<Node>, String, bool), // Vec<STRING>, option, is_constant_expr
 
     LocalVar(usize, String),
@@ -441,10 +441,7 @@ impl Node {
     }
 
     pub(crate) fn new_hash(key_value: Vec<(Node, Node)>, loc: Loc) -> Self {
-        let is_const = key_value
-            .iter()
-            .all(|(k, v)| k.is_const_expr() && v.is_const_expr());
-        Node::new(NodeKind::Hash(key_value, is_const), loc)
+        Node::new(NodeKind::Hash(key_value), loc)
     }
 
     pub(crate) fn new_regexp(regex: Vec<Node>, postfix: String, loc: Loc) -> Self {

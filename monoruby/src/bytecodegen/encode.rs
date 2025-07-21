@@ -166,6 +166,11 @@ impl BytecodeGen {
                 let op2 = dst as isize - idx as isize - 1;
                 Bytecode::from(enc_wl(20, op1.0, op2 as u32))
             }
+            BytecodeInst::CheckKwRest(local) => {
+                // 19
+                let op1 = self.slot_id(&local);
+                Bytecode::from(enc_wl(19, op1.0, 0))
+            }
             BytecodeInst::OptCase {
                 reg,
                 min,
@@ -692,7 +697,7 @@ impl BytecodeGen {
                 .collect();
             (kw_pos, kw_args, hash_splat_pos)
         } else {
-            (SlotId(0), IndexMap::default(), vec![])
+            (SlotId(0), indexmap::IndexMap::default(), vec![])
         };
         Ok(store.new_callsite(
             name,

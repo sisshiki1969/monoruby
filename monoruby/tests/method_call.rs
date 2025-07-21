@@ -233,6 +233,38 @@ fn keyword() {
 }
 
 #[test]
+fn keyword_fatarrow() {
+    run_test_with_prelude(
+        r##"
+        $res = ""
+        C.new.foo(a:42, 100 => 100, c:5)
+        $res
+        "##,
+        r##"
+        class C
+          def foo(*x)
+            $res << x.inspect
+          end
+        end
+        "##,
+    );
+    run_test_with_prelude(
+        r##"
+        $res = ""
+        C.new.foo(a:42, 100 => 100, c:5)
+        $res
+        "##,
+        r##"
+        class C
+          def foo(*x, **y)
+            $res << x.inspect + " " + y.inspect
+          end
+        end
+        "##,
+    );
+}
+
+#[test]
 fn keyword_rest() {
     run_test_with_prelude(
         r#"
@@ -440,6 +472,33 @@ fn hash_splat4() {
               [b,c,x,y]
             end
         "#,
+    );
+}
+
+#[test]
+fn invoker_ruby() {
+    run_test_with_prelude(
+        r#"
+        C.new.send(:foo, 1, 2, a:3, b:5)
+        "#,
+        r##"
+        class C
+          def foo(*x, a:100, **y)
+            x.inspect + a.inspect + y.inspect
+          end
+        end
+        "##,
+    );
+    run_test_error(
+        r##"
+        class C
+            def foo(*x, a:100)
+                x.inspect + a.inspect
+            end
+        end
+
+        C.new.send(:foo, 1, 2, a:3, b:5)
+        "##,
     );
 }
 

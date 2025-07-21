@@ -42,6 +42,8 @@ monoasm = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
 onigmo-regex = { git = "https://github.com/sisshiki1969/onigmo-regex.git" }
 ruruby-parse = { path = "../ruruby-parse" }
 monoruby-attr = { path = "../monoruby_attr" }
+rubymap = { path = "../rubymap" }
+indexmap = "2.10.0"
 num = "0.4.3"
 fxhash = "0.2.1"
 tempfile = "3.20.0"
@@ -53,7 +55,6 @@ smallvec = { git = "https://github.com/sisshiki1969/rust-smallvec.git", features
 escape_string = "0.1.2"
 hex = "0.4.3"
 rand = "0.9.1"
-indexmap = "2.9.0"
 regex = "1.11.1"
 libc = "0.2.172"
 getrandom = "0.3.3"

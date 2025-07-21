@@ -1,5 +1,3 @@
-use indexmap::IndexMap;
-
 use super::*;
 
 mod args;
@@ -205,17 +203,27 @@ pub(super) extern "C" fn gen_lambda(vm: &mut Executor, _: &mut Globals, func_id:
     vm.generate_lambda(func_id).into()
 }
 
-pub(super) extern "C" fn gen_hash(src: *const Value, len: usize) -> Value {
-    let mut map = IndexMap::default();
+pub(super) extern "C" fn gen_hash(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: *const Value,
+    len: usize,
+) -> Value {
+    let mut map = RubyMap::default();
     if len > 0 {
         let mut iter = unsafe { std::slice::from_raw_parts(src.sub(len * 2 - 1), len * 2) }
             .iter()
             .copied()
             .rev();
         while let Ok(chunk) = iter.next_chunk::<2>() {
-            map.insert(HashKey(chunk[0]), chunk[1]);
+            map.insert(chunk[0], chunk[1], vm, globals).unwrap();
         }
     }
+    Value::hash(map)
+}
+
+pub(super) extern "C" fn empty_hash() -> Value {
+    let map = RubyMap::default();
     Value::hash(map)
 }
 
@@ -384,7 +392,7 @@ pub(super) extern "C" fn vm_handle_arguments(
     callee_lfp: Lfp,
     callid: CallSiteId,
 ) -> Option<Value> {
-    match set_frame_arguments(globals, callee_lfp, caller_lfp, callid) {
+    match set_frame_arguments(vm, globals, callee_lfp, caller_lfp, callid) {
         Ok(_) => {
             set_frame_block(&globals.store[callid], callee_lfp, caller_lfp);
             Some(Value::nil())
@@ -404,7 +412,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
     callee_lfp: Lfp,
     callid: CallSiteId,
 ) -> Option<Value> {
-    match set_frame_arguments(globals, callee_lfp, caller_lfp, callid) {
+    match set_frame_arguments(vm, globals, callee_lfp, caller_lfp, callid) {
         Ok(_) => Some(Value::nil()),
         Err(mut err) => {
             err.push_internal_trace(callee_lfp.func_id());
@@ -423,6 +431,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_send(
 ) -> Option<Value> {
     let src = caller_lfp.register_ptr(globals.store[callid].args) as *const Value;
     match set_frame_arguments_simple(
+        vm,
         globals,
         callee_lfp,
         caller_lfp,
@@ -518,11 +527,11 @@ pub(super) extern "C" fn get_index(
             let method = base.as_method();
             let func_id = method.func_id();
             let receiver = method.receiver();
-            return vm.invoke_func(globals, func_id, receiver, &[index], None);
+            return vm.invoke_func(globals, func_id, receiver, &[index], None, None);
         }
         _ => {}
     }
-    vm.invoke_method(globals, IdentId::_INDEX, base, &[index], None)
+    vm.invoke_method_simple(globals, IdentId::_INDEX, base, &[index])
 }
 
 pub(super) extern "C" fn set_index(
@@ -548,7 +557,7 @@ pub(super) extern "C" fn set_index(
             }
         };
     }
-    vm.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src], None)
+    vm.invoke_method_simple(globals, IdentId::_INDEX_ASSIGN, base, &[index, src])
 }
 
 /*///
@@ -880,7 +889,7 @@ pub(super) extern "C" fn to_a(
     src: Value,
 ) -> Option<Value> {
     if let Some(func_id) = globals.check_method(src, IdentId::TO_A) {
-        let ary = vm.invoke_func(globals, func_id, src, &[], None)?;
+        let ary = vm.invoke_func(globals, func_id, src, &[], None, None)?;
         if ary.is_array_ty() {
             Some(ary)
         } else {

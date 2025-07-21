@@ -40,7 +40,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get, 1);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variables", iv, 0);
     globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
-    globals.define_builtin_inline_funcs_with(
+    globals.define_builtin_inline_funcs_with_kw(
         OBJECT_CLASS,
         "send",
         &["__send__"],
@@ -48,6 +48,8 @@ pub(super) fn init(globals: &mut Globals) {
         Box::new(crate::builtins::object_send),
         0,
         0,
+        true,
+        &[],
         true,
     );
     globals.define_builtin_funcs_eval_with(
@@ -132,7 +134,21 @@ pub(crate) fn send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
         return Err(MonorubyErr::wrong_number_of_arg_min(ary.len(), 1));
     }
     let method = ary[0].expect_symbol_or_string(globals)?;
-    vm.invoke_method_inner(globals, method, lfp.self_val(), &ary[1..], lfp.block())
+    vm.invoke_method_inner(
+        globals,
+        method,
+        lfp.self_val(),
+        &ary[1..],
+        lfp.block(),
+        if let Some(kw) = lfp.try_arg(1)
+            && let Some(kw) = kw.try_hash_ty()
+            && !kw.is_empty()
+        {
+            Some(kw)
+        } else {
+            None
+        },
+    )
 }
 
 pub fn object_send(
@@ -195,6 +211,7 @@ fn object_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         obj,
         &lfp.arg(0).as_array(),
         lfp.block(),
+        None,
     )?;
     Ok(obj)
 }

@@ -22,7 +22,9 @@ jobs:
           toolchain: nightly
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: taiki-e/install-action@nextest
-      - run: cargo llvm-cov nextest --lcov --output-path lcov.info
+      - run: cargo llvm-cov --lcov --output-path lcov.info
+
+      - run: cargo llvm-cov --doc --lcov --output-path lcov.info
 
       - name: Install ImageMagick
         run: sudo apt-get install imagemagick

@@ -983,7 +983,7 @@ impl Codegen {
 
 #[test]
 fn float_test() {
-    let gen = Codegen::new(false);
+    let gen = Codegen::new();
 
     let from_f64_entry = gen.jit.get_label_address(&gen.f64_to_val);
     let from_f64: fn(f64) -> Value = unsafe { std::mem::transmute(from_f64_entry.as_ptr()) };
@@ -1013,7 +1013,7 @@ fn float_test() {
 
 #[test]
 fn float_test2() {
-    let mut gen = Codegen::new(false);
+    let mut gen = Codegen::new();
 
     let assume_int_to_f64 = gen.jit.label();
     let x = Xmm(0);

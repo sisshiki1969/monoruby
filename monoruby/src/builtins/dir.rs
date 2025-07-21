@@ -8,7 +8,16 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_class_under_obj("Dir").id();
-    globals.define_builtin_class_func_with_kw(klass, "glob", glob, 1, 2, false, &["base", "sort"]);
+    globals.define_builtin_class_func_with_kw(
+        klass,
+        "glob",
+        glob,
+        1,
+        2,
+        false,
+        &["base", "sort"],
+        false,
+    );
     globals.define_builtin_class_func(klass, "home", home, 0);
     globals.define_builtin_class_funcs(klass, "pwd", &["getwd"], pwd, 0);
     globals.define_builtin_class_func_with(klass, "chdir", chdir, 0, 1, false);

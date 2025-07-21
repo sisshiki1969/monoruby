@@ -1,6 +1,7 @@
 use super::*;
 use num::BigInt;
 use onigmo_regex::Captures;
+use rubymap::RubyEql;
 use ruruby_parse::Loc;
 use ruruby_parse::SourceInfoRef;
 use std::mem::ManuallyDrop;
@@ -82,7 +83,7 @@ impl std::fmt::Debug for ObjTy {
                 20 => "BINDING",
                 21 => "UMETHOD",
                 22 => "MATCHDATA",
-                _ => unreachable!(),
+                _ => unreachable!("Invalid ty: {ty}"),
             }
         )
     }
@@ -249,7 +250,7 @@ impl ObjKind {
         }
     }
 
-    fn hash_from(map: IndexMap<HashKey, Value>) -> Self {
+    fn hash_from(map: RubyMap<Value, Value>) -> Self {
         Self {
             hash: ManuallyDrop::new(HashmapInner::new(map)),
         }
@@ -257,14 +258,14 @@ impl ObjKind {
 
     fn hash_with_default(default: Value) -> Self {
         Self {
-            hash: ManuallyDrop::new(HashmapInner::new_with_default(IndexMap::default(), default)),
+            hash: ManuallyDrop::new(HashmapInner::new_with_default(RubyMap::default(), default)),
         }
     }
 
     fn hash_with_default_proc(default_proc: Proc) -> Self {
         Self {
             hash: ManuallyDrop::new(HashmapInner::new_with_default_proc(
-                IndexMap::default(),
+                RubyMap::default(),
                 default_proc,
             )),
         }
@@ -552,12 +553,12 @@ impl RValue {
 
     fn enumerator_debug(&self, store: &Store) -> String {
         let e = unsafe { self.as_enumerator() };
-        format!("#<Enumerator: {} {}>", e.obj.debug(store), e.method)
+        format!("#<Enumerator: {}:{}>", e.obj.debug(store), e.method)
     }
 
     fn enumerator_tos(&self, store: &Store) -> String {
         let e = unsafe { self.as_enumerator() };
-        format!("#<Enumerator: {} {}>", e.obj.to_s(store), e.method)
+        format!("#<Enumerator: {}:{}>", e.obj.to_s(store), e.method)
     }
 
     fn proc_tos(&self) -> String {
@@ -565,41 +566,49 @@ impl RValue {
     }
 }
 
-impl RValue {
+impl RubyEql<Executor, Globals, MonorubyErr> for RValue {
     // This type of equality is used for comparison for keys of Hash.
-    pub(crate) fn eql(&self, other: &Self) -> bool {
+    fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
         unsafe {
-            match (self.ty(), other.ty()) {
+            Ok(match (self.ty(), other.ty()) {
                 (ObjTy::OBJECT, ObjTy::OBJECT) => self.id() == other.id(),
                 (ObjTy::BIGNUM, ObjTy::BIGNUM) => self.as_bignum() == other.as_bignum(),
                 (ObjTy::FLOAT, ObjTy::FLOAT) => self.as_float() == other.as_float(),
-                (ObjTy::COMPLEX, ObjTy::COMPLEX) => self.as_complex().eql(other.as_complex()),
+                (ObjTy::COMPLEX, ObjTy::COMPLEX) => {
+                    self.as_complex().eql(other.as_complex(), vm, globals)?
+                }
                 (ObjTy::STRING, ObjTy::STRING) => self.as_rstring() == other.as_rstring(),
                 (ObjTy::ARRAY, ObjTy::ARRAY) => {
                     let lhs = self.as_array();
                     let rhs = other.as_array();
                     if lhs.len() != rhs.len() {
-                        return false;
+                        return Ok(false);
                     }
-                    lhs.iter().zip(rhs.iter()).all(|(a1, a2)| {
+                    for (a1, a2) in lhs.iter().zip(rhs.iter()) {
                         // Support self-containing arrays.
                         if self.id() == a1.id() && other.id() == a2.id() {
-                            true
                         } else if self.id() == a1.id() || other.id() == a2.id() {
-                            false
+                            return Ok(false);
                         } else {
-                            a1.eql(a2)
+                            if !a1.eql(a2, vm, globals)? {
+                                return Ok(false);
+                            }
                         }
-                    })
+                    }
+                    true
                 }
-                (ObjTy::RANGE, ObjTy::RANGE) => self.as_range().eql(other.as_range()),
-                (ObjTy::HASH, ObjTy::HASH) => self.as_hashmap() == other.as_hashmap(),
+                (ObjTy::RANGE, ObjTy::RANGE) => {
+                    self.as_range().eql(other.as_range(), vm, globals)?
+                }
+                (ObjTy::HASH, ObjTy::HASH) => {
+                    self.as_hashmap().eql(other.as_hashmap(), vm, globals)?
+                }
                 //(ObjTy::METHOD, ObjTy::METHOD) => *self.method() == *other.method(),
                 //(ObjTy::UNBOUND_METHOD, ObjTy::UNBOUND_METHOD) => *self.method() == *other.method(),
                 //(ObjTy::INVALID, _) => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
                 //(_, ObjTy::INVALID) => panic!("Invalid rvalue. (maybe GC problem) {:?}", other),
                 _ => false,
-            }
+            })
         }
     }
 }
@@ -832,9 +841,13 @@ impl RValue {
                     ),
                     ObjTy::STRING => ObjKind::string_from_inner(self.as_rstring().clone()),
                     ObjTy::TIME => ObjKind::time(self.as_time().clone()),
-                    ObjTy::ARRAY => ObjKind::array(ArrayInner::from_iter(
-                        self.as_array().iter().map(|v| v.deep_copy()),
-                    )),
+                    ObjTy::ARRAY => {
+                        let mut v = vec![];
+                        for e in self.as_array().iter() {
+                            v.push(e.deep_copy());
+                        }
+                        ObjKind::array(ArrayInner::from_vec(v))
+                    }
                     ObjTy::RANGE => {
                         let lhs = self.as_range();
                         ObjKind::range(
@@ -843,19 +856,24 @@ impl RValue {
                             lhs.exclude_end(),
                         )
                     }
-                    ObjTy::HASH => {
-                        let mut map = IndexMap::default();
+                    /*ObjTy::HASH => {
+                        let mut map = RubyMap::default();
                         let hash = self.as_hashmap();
                         for (k, v) in hash.iter() {
-                            map.insert(HashKey(k.deep_copy()), v.deep_copy());
+                            map.insert(
+                                HashKey(k.deep_copy(vm, globals)?),
+                                v.deep_copy(vm, globals)?,
+                                vm,
+                                globals,
+                            )?;
                         }
                         ObjKind::hash_from(map)
-                    }
+                    }*/
                     ObjTy::REGEXP => {
                         let regexp = self.as_regex();
                         ObjKind::regexp(regexp.clone())
                     }
-                    _ => unreachable!("clone()"),
+                    _ => unreachable!("deep_copy()"),
                 }
             },
         }
@@ -1108,7 +1126,7 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_hash(map: IndexMap<HashKey, Value>) -> Self {
+    pub(super) fn new_hash(map: RubyMap<Value, Value>) -> Self {
         RValue {
             header: Header::new(HASH_CLASS, ObjTy::HASH),
             kind: ObjKind::hash_from(map),
@@ -1362,7 +1380,7 @@ impl RValue {
         self.kind.float
     }
 
-    unsafe fn as_bignum(&self) -> &BigInt {
+    pub(super) unsafe fn as_bignum(&self) -> &BigInt {
         &self.kind.bignum
     }
 

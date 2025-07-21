@@ -18,7 +18,7 @@ use crate::executor::*;
 
 const OPECODE: i64 = 6;
 
-type MethodInvoker = extern "C" fn(
+pub(crate) type MethodInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
     FuncId,
@@ -26,30 +26,25 @@ type MethodInvoker = extern "C" fn(
     *const Value,
     usize,
     Option<BlockHandler>,
+    Option<Hashmap>,
 ) -> Option<Value>;
 
-type MethodInvoker2 = extern "C" fn(
-    &mut Executor,
-    &mut Globals,
-    FuncId,
-    Value,
-    Arg,
-    usize,
-    Option<BlockHandler>,
-) -> Option<Value>;
+pub(crate) type MethodInvoker2 =
+    extern "C" fn(&mut Executor, &mut Globals, FuncId, Value, Arg, usize) -> Option<Value>;
 
-type BlockInvoker = extern "C" fn(
+pub(crate) type BlockInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
     &ProcData,
     Value,
     *const Value,
     usize,
+    Option<Hashmap>,
 ) -> Option<Value>;
 
-type BindingInvoker = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<Value>;
+pub(crate) type BindingInvoker = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<Value>;
 
-type FiberInvoker = extern "C" fn(
+pub(crate) type FiberInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
     &ProcData,
@@ -58,6 +53,27 @@ type FiberInvoker = extern "C" fn(
     usize,
     &mut Executor,
 ) -> Option<Value>;
+
+thread_local! {
+    pub static CODEGEN: std::cell::RefCell<Codegen> = std::cell::RefCell::new(
+    {
+        Codegen::new()
+    });
+}
+
+#[cfg(feature = "perf")]
+thread_local! {
+    pub static PERF_FILE: std::cell::RefCell<std::fs::File> = std::cell::RefCell::new(
+    {
+        let pid = std::process::id();
+        let temp_file = format!("/tmp/perf-{pid}.map");
+        let file = match std::fs::File::create(&temp_file) {
+            Err(why) => panic!("couldn't create {}: {}", temp_file, why),
+            Ok(file) => file,
+        };
+        file
+    });
+}
 
 #[cfg(not(test))]
 const COUNT_START_COMPILE: i32 = 20;
@@ -160,8 +176,6 @@ pub struct JitModule {
     entry_panic: DestLabel,
     dispatch: Box<[CodePtr; 256]>,
     bop_redefined_flags: DestLabel,
-    #[cfg(feature = "perf")]
-    perf_file: std::fs::File,
 }
 
 impl std::ops::Deref for JitModule {
@@ -215,20 +229,21 @@ impl JitModule {
     }
 
     #[cfg(feature = "perf")]
-    pub(crate) fn perf_write(&mut self, info: (CodePtr, usize, CodePtr, usize), desc: &str) {
+    pub(crate) fn perf_write(info: (CodePtr, usize, CodePtr, usize), desc: &str) {
         use std::io::Write;
-        self.perf_file
-            .write_all(format!("{:x} {:x} {desc}\n", info.0.as_ptr() as usize, info.1).as_bytes())
-            .unwrap();
-        self.perf_file
-            .write_all(format!("{:x} {:x} {desc}\n", info.2.as_ptr() as usize, info.3).as_bytes())
-            .unwrap();
+        PERF_FILE.with(|file| {
+            let mut f = file.borrow_mut();
+            f.write_all(format!("{:x} {:x} {desc}\n", info.0.as_ptr() as usize, info.1).as_bytes())
+                .unwrap();
+            f.write_all(format!("{:x} {:x} {desc}\n", info.2.as_ptr() as usize, info.3).as_bytes())
+                .unwrap();
+        });
     }
 
     #[cfg(feature = "perf")]
     pub(crate) fn perf_info(&mut self, pair: (CodePtr, CodePtr), func_name: &str) {
         let info = self.get_wrapper_info(pair);
-        self.perf_write(info, func_name);
+        Self::perf_write(info, func_name);
     }
 
     ///
@@ -672,7 +687,7 @@ impl std::ops::DerefMut for Codegen {
 }
 
 impl Codegen {
-    pub fn new(no_jit: bool) -> Self {
+    pub fn new() -> Self {
         let mut jit = JitModule::new();
         let pair = jit.get_address_pair();
 
@@ -717,7 +732,7 @@ impl Codegen {
             #[cfg(feature = "jit-log")]
             jit_compile_time: std::time::Duration::default(),
         };
-        codegen.construct_vm(no_jit);
+        codegen.construct_vm();
         let signal_handler = codegen.signal_handler();
         codegen.jit.finalize();
 
@@ -828,6 +843,22 @@ impl Codegen {
         let start1 = start1.unwrap();
         let start2 = start2.unwrap();
         (start1..start1 + size1).contains(&addr) || (start2..start2 + size2).contains(&addr)
+    }
+
+    pub(crate) fn immediate_eviction(&mut self, mut cfp: Cfp) {
+        let mut return_addr = unsafe { cfp.return_addr() };
+        while let Some(prev_cfp) = cfp.prev() {
+            let ret = return_addr.unwrap();
+            if !self.check_vm_address(ret) {
+                if let Some((patch_point, deopt)) = self.get_deopt_with_return_addr(ret) {
+                    let patch_point = patch_point.unwrap();
+                    self.jit.apply_jmp_patch_address(patch_point, &deopt);
+                    unsafe { patch_point.as_ptr().write(0xe9) };
+                }
+            }
+            cfp = prev_cfp;
+            return_addr = unsafe { cfp.return_addr() };
+        }
     }
 
     fn icmp_teq(&mut self) {
@@ -1227,7 +1258,7 @@ mod tests {
 
     #[test]
     fn guard_class() {
-        let mut gen = Codegen::new(false);
+        let mut gen = Codegen::new();
 
         for (class, value) in [
             (INTEGER_CLASS, Value::integer(-2558)),
@@ -1245,7 +1276,7 @@ mod tests {
             (TRUE_CLASS, Value::bool(true)),
             (FALSE_CLASS, Value::bool(false)),
             (ARRAY_CLASS, Value::array_from_vec(vec![])),
-            (HASH_CLASS, Value::hash(IndexMap::default())),
+            (HASH_CLASS, Value::hash(RubyMap::default())),
             (STRING_CLASS, Value::string_from_str("Ruby")),
         ] {
             let func = gen.jit.get_label_addr(&gen.get_class);
@@ -1256,7 +1287,7 @@ mod tests {
 
     #[test]
     fn test_f64_to_val() {
-        let mut gen = Codegen::new(false);
+        let mut gen = Codegen::new();
 
         for f in [
             1.44e-17,
@@ -1280,9 +1311,10 @@ mod tests {
     }
 }
 
-impl Globals {
-    pub(super) fn exec_jit_compile(
+impl Codegen {
+    fn compile(
         &mut self,
+        globals: &mut Globals,
         iseq_id: ISeqId,
         self_class: ClassId,
         position: Option<BytecodePtr>,
@@ -1292,11 +1324,11 @@ impl Globals {
         #[cfg(feature = "profile")]
         {
             if is_recompile {
-                self.countup_recompile(self.store[iseq_id].func_id(), self_class);
+                globals.countup_recompile(globals.store[iseq_id].func_id(), self_class);
             }
         }
-        self.codegen.jit_compile(
-            &self.store,
+        self.jit_compile(
+            &globals.store,
             iseq_id,
             self_class,
             position,
@@ -1308,13 +1340,80 @@ impl Globals {
     ///
     /// Compile the Ruby method.
     ///
-    pub(super) fn exec_jit_compile_method(
+    fn compile_method(
         &mut self,
+        globals: &mut Globals,
         iseq_id: ISeqId,
         self_class: ClassId,
         jit_entry: DestLabel,
         is_recompile: bool,
     ) {
-        self.exec_jit_compile(iseq_id, self_class, None, jit_entry, is_recompile)
+        self.compile(globals, iseq_id, self_class, None, jit_entry, is_recompile)
+    }
+
+    pub(super) fn recompile_method(&mut self, globals: &mut Globals, lfp: Lfp) {
+        let self_class = lfp.self_val().class();
+        let func_id = lfp.func_id();
+        let iseq_id = globals.store[func_id].as_iseq();
+        let jit_entry = self.jit.label();
+        self.compile_method(globals, iseq_id, self_class, jit_entry.clone(), true);
+        // get_jit_code() must not be None.
+        // After BOP redefinition occurs, recompilation in invalidated methods cause None.
+        if let Some(patch_point) = globals.store[iseq_id].get_jit_code(self_class) {
+            let patch_point = self.jit.get_label_address(&patch_point);
+            self.jit.apply_jmp_patch_address(patch_point, &jit_entry);
+        }
+    }
+
+    pub(crate) fn compile_partial(
+        &mut self,
+        globals: &mut Globals,
+        lfp: Lfp,
+        pc: BytecodePtr,
+        is_recompile: bool,
+    ) {
+        let entry_label = self.jit.label();
+        let self_class = lfp.self_val().class();
+        let func_id = lfp.func_id();
+        let iseq_id = globals.store[func_id].as_iseq();
+        self.compile(
+            globals,
+            iseq_id,
+            self_class,
+            Some(pc),
+            entry_label.clone(),
+            is_recompile,
+        );
+        let codeptr = self.jit.get_label_address(&entry_label);
+        pc.write2(codeptr.as_ptr() as u64);
+    }
+
+    pub(crate) fn recompile_specialized(&mut self, globals: &mut Globals, idx: usize) {
+        let (iseq_id, self_class, patch_point) = self.specialized_patch_point[idx].clone();
+
+        let entry = self.jit.label();
+        self.compile(globals, iseq_id, self_class, None, entry.clone(), true);
+
+        let patch_point = self.jit.get_label_address(&patch_point);
+        self.jit.apply_jmp_patch_address(patch_point, &entry);
+    }
+
+    pub(crate) fn compile_patch(
+        &mut self,
+        globals: &mut Globals,
+        lfp: Lfp,
+        entry_patch_point: monoasm::CodePtr,
+    ) {
+        let patch_point = self.jit.label();
+        let jit_entry = self.jit.label();
+        let guard = self.jit.label();
+        let func_id = lfp.func_id();
+        let iseq_id = globals.store[func_id].as_iseq();
+        let self_class = lfp.self_val().class();
+        self.class_guard_stub(self_class, &patch_point, &jit_entry, &guard);
+        let old_entry = globals.store[iseq_id].add_jit_code(self_class, patch_point);
+        assert!(old_entry.is_none());
+        self.compile_method(globals, iseq_id, self_class, jit_entry, false);
+        self.jit.apply_jmp_patch_address(entry_patch_point, &guard);
     }
 }

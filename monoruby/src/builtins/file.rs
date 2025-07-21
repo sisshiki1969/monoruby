@@ -351,7 +351,14 @@ fn path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if lfp.arg(0).is_str().is_some() {
         Ok(lfp.arg(0))
     } else {
-        vm.invoke_method_inner(globals, IdentId::get_id("to_path"), lfp.arg(0), &[], None)
+        vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("to_path"),
+            lfp.arg(0),
+            &[],
+            None,
+            None,
+        )
     }
 }
 

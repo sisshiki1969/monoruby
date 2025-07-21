@@ -335,7 +335,7 @@ impl BytecodeGen {
                 self.level_down(n2, level);
                 self.level_down(n3, level);
             }
-            NodeKind::Hash(pairs, ..) => pairs.iter_mut().for_each(|(n1, n2)| {
+            NodeKind::Hash(pairs) => pairs.iter_mut().for_each(|(n1, n2)| {
                 self.level_down(n1, level);
                 self.level_down(n2, level);
             }),

@@ -360,12 +360,13 @@ fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
         receiver,
         args,
         Some(BlockHandler::from_current(FuncId::new(2))),
+        None,
     )
 }
 
 #[monoruby_builtin]
-fn yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    vm.yield_fiber(globals, lfp.arg(0))
+fn yielder(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    vm.yield_fiber(lfp.arg(0))
 }
 
 impl Funcs {
@@ -430,10 +431,11 @@ impl Funcs {
         max: usize,
         rest: bool,
         kw_names: &[&str],
+        kw_rest: bool,
     ) -> FuncId {
         let id = self.next_func_id();
         self.info.push(FuncInfo::new_native(
-            id, name, address, min, max, rest, kw_names,
+            id, name, address, min, max, rest, kw_names, kw_rest,
         ));
         id
     }
@@ -755,9 +757,10 @@ impl FuncInfo {
         max: usize,
         rest: bool,
         kw_names: &[&str],
+        kw_rest: bool,
     ) -> Self {
         let kw_names = kw_names.iter().map(|s| IdentId::get_id(s)).collect();
-        let params = ParamsInfo::new_native(min, max, rest, kw_names);
+        let params = ParamsInfo::new_native(min, max, rest, kw_names, kw_rest);
         let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),
@@ -795,7 +798,7 @@ impl FuncInfo {
         max: usize,
         rest: bool,
     ) -> Self {
-        let params = ParamsInfo::new_native(min, max, rest, vec![]);
+        let params = ParamsInfo::new_native(min, max, rest, vec![], false);
         let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),
@@ -816,7 +819,7 @@ impl FuncInfo {
         max: usize,
         rest: bool,
     ) -> Self {
-        let params = ParamsInfo::new_native(min, max, rest, vec![]);
+        let params = ParamsInfo::new_native(min, max, rest, vec![], false);
         let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),

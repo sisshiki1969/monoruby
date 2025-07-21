@@ -16,6 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         false,
         &["encoding", "capacity"],
+        false,
     );
     globals.define_builtin_class_func(STRING_CLASS, "try_convert", string_try_convert, 1);
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);

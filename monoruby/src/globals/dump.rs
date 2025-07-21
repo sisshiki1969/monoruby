@@ -61,7 +61,7 @@ impl Globals {
     #[cfg(feature = "emit-bc")]
     pub fn dump_bc(&mut self) {
         let dumped_bc = self.dumped_bc;
-        if self.codegen.startup_flag {
+        if CODEGEN.with(|codegen| codegen.borrow().startup_flag) {
             self.store.functions()[dumped_bc..]
                 .iter()
                 .for_each(|info| match &info.kind {
@@ -144,7 +144,7 @@ impl Globals {
             eprintln!();
             eprintln!(
                 "elapsed JIT compile time: {:?}",
-                self.codegen.jit_compile_time
+                CODEGEN.with(|codegen| codegen.borrow().jit_compile_time)
             );
         }
     }

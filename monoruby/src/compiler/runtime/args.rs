@@ -4,6 +4,7 @@ use super::*;
 /// Handle hash splat arguments and a keyword rest parameter.
 ///
 pub(crate) fn jit_hash_splat_kw_rest(
+    vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
     callee_lfp: Lfp,
@@ -11,9 +12,7 @@ pub(crate) fn jit_hash_splat_kw_rest(
     meta: Meta,
 ) -> Result<()> {
     let callee_func_id = meta.func_id();
-    let callee = &globals.store[callee_func_id];
-    let caller = &globals.store[callid];
-    hash_splat_and_kw_rest(globals, callee, caller, callee_lfp, caller_lfp)
+    hash_splat_and_kw_rest(vm, globals, callee_func_id, callid, callee_lfp, caller_lfp)
 }
 
 ///
@@ -22,24 +21,25 @@ pub(crate) fn jit_hash_splat_kw_rest(
 /// This function solves the match of arguments-parameters dynamically.
 ///
 pub(crate) fn set_frame_arguments(
+    vm: &mut Executor,
     globals: &mut Globals,
     callee_lfp: Lfp,
     caller_lfp: Lfp,
     callid: CallSiteId,
 ) -> Result<()> {
     let callee_fid = callee_lfp.func_id();
+    positional(vm, globals, callid, callee_fid, callee_lfp, caller_lfp)?;
     let callee = &globals.store[callee_fid];
     let caller = &globals.store[callid];
-
-    positional(globals, caller, callee, callee_lfp, caller_lfp)?;
     if !callee.no_keyword() || !caller.kw_may_exists() {
-        handle_keyword(globals, callee, caller, callee_lfp, caller_lfp)?;
+        handle_keyword(vm, globals, callee_fid, callid, callee_lfp, caller_lfp)?;
     }
 
     Ok(())
 }
 
 pub(crate) fn set_frame_arguments_simple(
+    vm: &mut Executor,
     globals: &mut Globals,
     callee_lfp: Lfp,
     caller_lfp: Lfp,
@@ -49,11 +49,10 @@ pub(crate) fn set_frame_arguments_simple(
 ) -> Result<()> {
     let callee_fid = callee_lfp.func_id();
     let callee = &globals.store[callee_fid];
-    let caller = &globals.store[callid];
 
     positional_simple(callee, src, pos_num, callee_lfp)?;
     if !callee.no_keyword() {
-        handle_keyword(globals, callee, caller, callee_lfp, caller_lfp)?;
+        handle_keyword(vm, globals, callee_fid, callid, callee_lfp, caller_lfp)?;
     }
 
     Ok(())
@@ -100,16 +99,14 @@ pub(crate) fn set_frame_block(caller: &CallSiteInfo, callee_lfp: Lfp, caller_lfp
 
 pub(crate) extern "C" fn jit_generic_set_arguments(
     vm: &mut Executor,
-    globals: &Globals,
+    globals: &mut Globals,
     caller: CallSiteId,
     callee_lfp: Lfp,
     meta: Meta,
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
-    let caller = &globals.store[caller];
     let callee_fid = meta.func_id();
-    let callee = &globals.store[callee_fid];
-    match positional(globals, caller, callee, callee_lfp, caller_lfp) {
+    match positional(vm, globals, caller, callee_fid, callee_lfp, caller_lfp) {
         Ok(_) => Some(Value::nil()),
         Err(mut err) => {
             err.push_internal_trace(meta.func_id());
@@ -150,31 +147,35 @@ fn check_single_arg_expand(
 /// Set positional arguments.
 ///
 fn positional(
-    store: &Store,
-    caller: &CallSiteInfo,
-    callee: &FuncInfo,
+    vm: &mut Executor,
+    globals: &mut Globals,
+    caller: CallSiteId,
+    callee: FuncId,
     callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
-    let splat_pos = &caller.splat_pos;
-    let src = caller_lfp.register_ptr(caller.args) as *mut Value;
+    let src = caller_lfp.register_ptr(globals[caller].args) as *mut Value;
     let dst = callee_lfp.register_ptr(SlotId(1));
-    let pos_args = caller.pos_num;
+    let pos_args = globals[caller].pos_num;
 
-    let ex = if callee.no_keyword() && caller.kw_may_exists() {
+    let ex = if globals[callee].no_keyword() && globals[caller].kw_may_exists() {
         // handle excessive keyword arguments
-        let mut h = IndexMap::default();
-        for (k, id) in caller.kw_args.iter() {
-            let v = caller_lfp.register(caller.kw_pos + *id).unwrap();
-            h.insert(HashKey(Value::symbol(*k)), v);
+        let mut h = RubyMap::default();
+        for (k, id) in globals[caller].kw_args.clone().iter() {
+            let v = caller_lfp.register(globals[caller].kw_pos + *id).unwrap();
+            h.insert(Value::symbol(*k), v, vm, globals)?;
         }
-        for v in caller
+        for v in globals[caller]
             .hash_splat_pos
-            .iter()
-            .map(|pos| caller_lfp.register(*pos).unwrap())
+            .clone()
+            .into_iter()
+            .map(|pos| caller_lfp.register(pos).unwrap())
         {
-            for (k, v) in v.expect_hash_ty(store)?.iter() {
-                h.insert(HashKey(k), v);
+            if v.is_nil() {
+                continue;
+            }
+            for (k, v) in v.expect_hash_ty(globals)?.iter() {
+                h.insert(k, v, vm, globals)?;
             }
         }
         if h.is_empty() {
@@ -187,14 +188,15 @@ fn positional(
     };
 
     // single array argument expansion for blocks
-    if callee.single_arg_expand()
+    let splat_pos = &globals[caller].splat_pos;
+    if globals[callee].single_arg_expand()
         && let Some((ptr, len)) = check_single_arg_expand(splat_pos, pos_args, src, ex)
     {
-        return fill_positional_args(dst, callee, ptr, len, true);
+        return fill_positional_args(dst, &globals[callee], ptr, len, true);
     }
 
     if splat_pos.is_empty() && ex.is_none() {
-        return fill_positional_args2(dst, callee, src, pos_args);
+        return fill_positional_args2(dst, &globals[callee], src, pos_args);
     }
 
     if pos_args == 1
@@ -202,7 +204,7 @@ fn positional(
         && splat_pos == &[0]
         && let Some(ary) = unsafe { *src }.try_array_ty()
     {
-        return fill_positional_args1(dst, callee, ary.as_ref());
+        return fill_positional_args1(dst, &globals[callee], ary.as_ref());
     }
 
     let mut buf = vec![];
@@ -221,7 +223,7 @@ fn positional(
         buf.push(v);
     }
 
-    fill_positional_args1(dst, callee, &buf)
+    fill_positional_args1(dst, &globals[callee], &buf)
 }
 
 ///
@@ -233,17 +235,34 @@ pub(crate) fn positional_invoker(
     args: *const Value,
     pos_args: usize,
     upward: bool,
+    ex: Option<Value>,
 ) -> Result<()> {
     let dst = callee_lfp.register_ptr(SlotId(1));
 
     // single array argument expansion for blocks
     if callee.single_arg_expand()
-        && let Some((ptr, len)) = check_single_arg_expand(&vec![], pos_args, args, None)
+        && let Some((ptr, len)) = check_single_arg_expand(&vec![], pos_args, args, ex)
     {
         return fill_positional_args(dst, callee, ptr, len, true);
     }
-
-    fill_positional_args(dst, callee, args, pos_args, upward)
+    if let Some(ex) = ex {
+        let mut buf: Vec<Value> = unsafe {
+            if upward {
+                std::slice::from_raw_parts(args, pos_args).to_vec()
+            } else {
+                let slice = std::slice::from_raw_parts_mut(
+                    (args as *mut Value).sub(pos_args).add(1),
+                    pos_args,
+                );
+                slice.reverse();
+                slice.to_vec()
+            }
+        };
+        buf.push(ex);
+        fill_positional_args1(dst, callee, &buf)
+    } else {
+        fill_positional_args(dst, callee, args, pos_args, upward)
+    }
 }
 
 fn fill_positional_args1(dst: *mut Option<Value>, callee: &FuncInfo, buf: &[Value]) -> Result<()> {
@@ -390,14 +409,15 @@ fn positional_send_splat(callee: &FuncInfo, src: *const Value, callee_lfp: Lfp) 
 /// Handle keyword arguments.
 ///
 fn handle_keyword(
-    store: &Store,
-    callee: &FuncInfo,
-    caller: &CallSiteInfo,
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callee: FuncId,
+    caller: CallSiteId,
     callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
-    ordinary_keyword(callee, caller, callee_lfp, caller_lfp)?;
-    hash_splat_and_kw_rest(store, callee, caller, callee_lfp, caller_lfp)
+    ordinary_keyword(globals, callee, caller, callee_lfp, caller_lfp)?;
+    hash_splat_and_kw_rest(vm, globals, callee, caller, callee_lfp, caller_lfp)
 }
 
 fn handle_keyword_simple(callee: &FuncInfo, mut callee_lfp: Lfp) -> Result<()> {
@@ -409,25 +429,25 @@ fn handle_keyword_simple(callee: &FuncInfo, mut callee_lfp: Lfp) -> Result<()> {
     }
 
     if let Some(rest) = callee.kw_rest() {
-        let kw_rest = IndexMap::default();
-        unsafe { callee_lfp.set_register(rest, Some(Value::hash(kw_rest))) }
+        unsafe { callee_lfp.set_register(rest, Some(Value::nil())) }
     }
     Ok(())
 }
 
 fn ordinary_keyword(
-    info: &FuncInfo,
-    callsite: &CallSiteInfo,
+    globals: &Globals,
+    info: FuncId,
+    callsite: CallSiteId,
     mut callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
     let CallSiteInfo {
         kw_pos, kw_args, ..
-    } = callsite;
+    } = &globals[callsite];
 
-    let callee_kw_pos = info.kw_reg_pos();
+    let callee_kw_pos = globals[info].kw_reg_pos();
     let mut used = 0;
-    for (id, param_name) in info.kw_names().iter().enumerate() {
+    for (id, param_name) in globals[info].kw_names().iter().enumerate() {
         unsafe {
             let v = kw_args
                 .get(param_name)
@@ -438,9 +458,9 @@ fn ordinary_keyword(
             callee_lfp.set_register(callee_kw_pos + id, v);
         }
     }
-    if used < kw_args.len() && info.kw_rest().is_none() {
+    if used < kw_args.len() && globals[info].kw_rest().is_none() {
         for (k, _) in kw_args.iter() {
-            if !info.kw_names().contains(k) {
+            if !globals[info].kw_names().contains(k) {
                 return Err(MonorubyErr::argumenterr(format!("unknown keyword: :{k}")));
             }
         }
@@ -452,32 +472,40 @@ fn ordinary_keyword(
 /// Handle hash splat arguments and a keyword rest parameter.
 ///
 fn hash_splat_and_kw_rest(
-    store: &Store,
-    callee: &FuncInfo,
-    caller: &CallSiteInfo,
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callee: FuncId,
+    caller: CallSiteId,
     mut callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
+    if globals[callee].no_keyword() {
+        return Ok(());
+    }
+
     let CallSiteInfo {
         kw_pos,
-        kw_args,
         hash_splat_pos,
         ..
-    } = caller;
+    } = globals[caller].clone();
 
-    let callee_kw_pos = callee.kw_reg_pos();
+    let callee_kw_pos = globals[callee].kw_reg_pos();
+    let kw_names = globals[callee].kw_names().to_vec();
 
     for h in hash_splat_pos
         .iter()
         .map(|pos| caller_lfp.register(*pos).unwrap())
     {
-        let mut used = 0;
-        for (id, param_name) in callee.kw_names().iter().enumerate() {
-            let h = h.expect_hash_ty(store)?;
+        if h.is_nil() {
+            continue;
+        }
+        let h = h.expect_hash_ty(globals)?;
+        let mut unused = h.len();
+        for (id, param_name) in kw_names.iter().enumerate() {
             unsafe {
                 let sym = Value::symbol(*param_name);
-                if let Some(v) = h.get(sym) {
-                    used += 1;
+                if let Some(v) = h.get(sym, vm, globals)? {
+                    unused -= 1;
                     let ptr = callee_lfp.register_ptr(callee_kw_pos + id);
                     if (*ptr).is_some() {
                         eprintln!(
@@ -488,41 +516,46 @@ fn hash_splat_and_kw_rest(
                     *ptr = Some(v);
                 }
             }
-            if used < h.len() && callee.kw_rest().is_none() {
-                for (k, _) in h.iter() {
-                    let sym = k.as_symbol();
-                    if !callee.kw_names().contains(&sym) {
-                        return Err(MonorubyErr::argumenterr(format!("unknown keyword: :{sym}")));
-                    }
+        }
+        if unused > 0 && globals[callee].kw_rest().is_none() {
+            for (k, _) in h.iter() {
+                let sym = k.as_symbol();
+                if !globals[callee].kw_names().contains(&sym) {
+                    return Err(MonorubyErr::argumenterr(format!("unknown keyword: :{sym}")));
                 }
             }
         }
     }
 
-    if let Some(rest) = callee.kw_rest() {
-        let mut kw_rest = IndexMap::default();
-        for (name, i) in kw_args.iter() {
-            if callee.kw_names().contains(name) {
-                continue;
+    if let Some(rest) = globals[callee].kw_rest() {
+        if !globals[caller].kw_may_exists() {
+            // no keyword arguments
+            unsafe { callee_lfp.set_register(rest, Some(Value::nil())) }
+        } else {
+            let mut kw_rest = RubyMap::default();
+            for (name, i) in globals[caller].kw_args.clone().into_iter() {
+                if kw_names.contains(&name) {
+                    continue;
+                }
+                let v = caller_lfp.register(kw_pos + i).unwrap();
+                kw_rest.insert(Value::symbol(name), v, vm, globals)?;
             }
-            let v = caller_lfp.register(*kw_pos + *i).unwrap();
-            kw_rest.insert(HashKey(Value::symbol(*name)), v);
-        }
-        for h in hash_splat_pos
-            .iter()
-            .map(|pos| caller_lfp.register(*pos).unwrap())
-        {
-            let mut h = h.as_hashmap_inner().clone();
-            for name in callee.kw_names().iter() {
-                let sym = Value::symbol(*name);
-                h.remove(sym);
+            for h in hash_splat_pos
+                .iter()
+                .map(|pos| caller_lfp.register(*pos).unwrap())
+            {
+                let mut h = h.as_hashmap_inner().clone();
+                for name in kw_names.iter() {
+                    let sym = Value::symbol(*name);
+                    h.remove(sym, vm, globals)?;
+                }
+                for (k, v) in h.iter() {
+                    kw_rest.insert(k, v, vm, globals)?;
+                }
             }
-            for (k, v) in h.iter() {
-                kw_rest.insert(HashKey(k), v);
-            }
-        }
 
-        unsafe { callee_lfp.set_register(rest, Some(Value::hash(kw_rest))) }
+            unsafe { callee_lfp.set_register(rest, Some(Value::hash(kw_rest))) }
+        }
     }
     Ok(())
 }

@@ -53,8 +53,8 @@ impl Array {
     ///
     /// If some elements were removed, returns Ok(true).
     ///
-    pub fn uniq(&mut self) -> Result<bool> {
-        let mut h = HashSet::default();
+    pub fn uniq(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
+        let mut h = RubySet::default();
         let mut recursive = false;
         let self_id = self.id();
         self.retain(|x| {
@@ -66,7 +66,7 @@ impl Array {
                     Ok(false)
                 }
             } else {
-                Ok(h.insert(HashKey(*x)))
+                h.insert(*x, vm, globals)
             }
         })
         .map(|removed| removed.is_some())

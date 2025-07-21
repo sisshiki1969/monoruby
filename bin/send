@@ -1,4 +1,4 @@
 #!/bin/sh
 
 cargo build --release
-benchmark-driver -o markdown benchmark/vm_send.yml benchmark/class_new.yaml benchmark/vm_array_small.yaml benchmark/vm_array.yaml benchmark/vm_const.yml --rbenv '3.3.0; 3.3.0 --yjit; truffleruby-24.0.0' -e 'target/release/monoruby' -e 'target/release/monoruby --no-jit' --repeat-count 3
+benchmark-driver -o markdown benchmark/vm_send.yml benchmark/class_new.yaml benchmark/vm_array_small.yaml benchmark/vm_array.yaml benchmark/vm_const.yml --rbenv '3.4.2; 3.4.2 --yjit; truffleruby-24.2.1' -e 'target/release/monoruby' -e 'target/release/monoruby --no-jit' --repeat-count 3

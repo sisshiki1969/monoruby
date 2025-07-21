@@ -855,7 +855,7 @@ impl Globals {
         {
             let info = self.store[func_id].get_wrapper_info();
             let desc = self.store.func_description(func_id);
-            self.codegen.perf_write(info, &desc);
+            JitModule::perf_write(info, &desc);
         }
     }
 
@@ -898,7 +898,7 @@ impl Globals {
         {
             let info = self.store[func_id].get_wrapper_info();
             let desc = self.store.func_description(func_id);
-            self.codegen.perf_write(info, &desc);
+            JitModule::perf_write(info, &desc);
         }
         let singleton = self.store.classes.get_metaclass(class_id).id();
         self.store[func_id].set_owner_class(class_id);
@@ -1111,15 +1111,18 @@ impl Globals {
     }
 
     fn set_bop_redefine(&mut self) {
-        self.codegen.set_bop_redefine();
-        self.store.invalidate_jit_code();
-        let vm_entry = self.codegen.vm_entry();
-        for func in self.store.functions.functions() {
-            if let FuncKind::ISeq(_) = func.kind {
-                let entry = self.codegen.jit.get_label_address(&func.entry_label());
-                self.codegen.jit.apply_jmp_patch_address(entry, &vm_entry);
+        CODEGEN.with(|codegen| {
+            let mut codegen = codegen.borrow_mut();
+            codegen.set_bop_redefine();
+            self.store.invalidate_jit_code();
+            let vm_entry = codegen.vm_entry();
+            for func in self.store.functions.functions() {
+                if let FuncKind::ISeq(_) = func.kind {
+                    let entry = codegen.jit.get_label_address(&func.entry_label());
+                    codegen.jit.apply_jmp_patch_address(entry, &vm_entry);
+                }
             }
-        }
+        });
     }
 
     #[cfg(feature = "profile")]

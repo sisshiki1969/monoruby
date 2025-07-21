@@ -97,6 +97,7 @@ fn exception_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
         obj,
         &lfp.arg(0).as_array(),
         lfp.block(),
+        None,
     )?;
 
     Ok(obj)

@@ -1,5 +1,7 @@
 use num::ToPrimitive;
 use onigmo_regex::Captures;
+use rubymap::RubyEql;
+use std::hash::{Hash, Hasher};
 
 use super::*;
 use crate::{
@@ -22,7 +24,7 @@ pub const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
 
 pub const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Value(std::num::NonZeroU64);
 
@@ -52,6 +54,48 @@ impl GC<RValue> for Value {
     }
 }
 
+impl Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self.try_rvalue() {
+            None => self.0.hash(state),
+            Some(lhs) => unsafe {
+                match lhs.ty() {
+                    //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", lhs),
+                    ObjTy::BIGNUM => lhs.as_bignum().hash(state),
+                    ObjTy::FLOAT => lhs.as_float().to_bits().hash(state),
+                    ObjTy::STRING => lhs.as_rstring().hash(state),
+                    ObjTy::ARRAY => lhs.as_array().hash(state),
+                    ObjTy::RANGE => lhs.as_range().hash(state),
+                    ObjTy::HASH => lhs.as_hashmap().hash(state),
+                    //ObjTy::METHOD => lhs.method().hash(state),
+                    _ => self.0.hash(state),
+                }
+            },
+        }
+    }
+}
+
+impl RubyEql<Executor, Globals, MonorubyErr> for Value {
+    fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
+        if self.id() == other.id() {
+            return Ok(true);
+        }
+        match (self.try_rvalue(), other.try_rvalue()) {
+            (None, None) => Ok(self.id() == other.id()),
+            (Some(lhs), Some(rhs)) => lhs.eql(rhs, vm, globals),
+            _ => Ok(false),
+        }
+    }
+}
+
+impl Value {
+    pub fn calculate_hash(self) -> u64 {
+        let mut s = std::hash::DefaultHasher::new();
+        self.hash(&mut s);
+        s.finish()
+    }
+}
+
 impl Value {
     /// This function is only used for system assertion.
     pub(crate) fn assert_eq(lhs: Self, rhs: Self) {
@@ -67,10 +111,6 @@ impl Value {
             _ => {}
         }
         panic!("{} != {}", lhs, rhs)
-    }
-
-    pub(crate) fn eql(&self, other: &Self) -> bool {
-        HashKey(*self) == HashKey(*other)
     }
 }
 
@@ -398,7 +438,7 @@ impl Value {
         RValue::new_array_from_vec_with_class(v, class_id).pack()
     }
 
-    pub fn hash(map: IndexMap<HashKey, Value>) -> Self {
+    pub fn hash(map: RubyMap<Value, Value>) -> Self {
         RValue::new_hash(map).pack()
     }
 
@@ -795,7 +835,7 @@ impl Value {
         if let Some(ary) = self.try_array_ty() {
             return Ok(ary);
         } else if let Some(fid) = globals.check_method(*self, IdentId::get_id("to_ary")) {
-            let v = vm.invoke_func_inner(globals, fid, *self, &[], None)?;
+            let v = vm.invoke_func_inner(globals, fid, *self, &[], None, None)?;
             if let Some(ary) = v.try_array_ty() {
                 return Ok(ary);
             }
@@ -1066,6 +1106,11 @@ impl Value {
         })
     }
 
+    pub(crate) fn expect_symbol(&self, store: &Store) -> Result<IdentId> {
+        self.try_symbol()
+            .ok_or_else(|| MonorubyErr::is_not_symbol(store, *self))
+    }
+
     pub(crate) fn expect_symbol_or_string(&self, store: &Store) -> Result<IdentId> {
         self.try_symbol_or_string()
             .ok_or_else(|| MonorubyErr::is_not_symbol_nor_string(store, *self))
@@ -1107,7 +1152,7 @@ impl Value {
         if let Some(s) = self.is_rstring() {
             return Ok(s);
         } else if let Some(fid) = globals.check_method(*self, IdentId::get_id("to_str")) {
-            let v = vm.invoke_func_inner(globals, fid, *self, &[], None)?;
+            let v = vm.invoke_func_inner(globals, fid, *self, &[], None, None)?;
             if let Some(s) = v.is_rstring() {
                 return Ok(s);
             }
@@ -1311,12 +1356,17 @@ impl Value {
 
 impl Value {
     pub(crate) fn from_ast(node: &Node, globals: &mut Globals) -> Value {
+        let mut vm = Executor::default();
+        Self::from_ast_inner(node, &mut vm, globals)
+    }
+
+    fn from_ast_inner(node: &Node, vm: &mut Executor, globals: &mut Globals) -> Value {
         use ruruby_parse::NReal;
 
         match &node.kind {
             NodeKind::CompStmt(stmts) => {
                 assert_eq!(1, stmts.len());
-                Self::from_ast(&stmts[0], globals)
+                Self::from_ast_inner(&stmts[0], vm, globals)
             }
             NodeKind::Integer(num) => Value::integer(*num),
             NodeKind::Bignum(num) => Value::bigint(num.clone()),
@@ -1332,7 +1382,7 @@ impl Value {
             NodeKind::String(s) => Value::string_from_str(s),
             NodeKind::Bytes(b) => Value::bytes_from_slice(b),
             NodeKind::Array(v, ..) => {
-                let iter = v.iter().map(|node| Self::from_ast(node, globals));
+                let iter = v.iter().map(|node| Self::from_ast_inner(node, vm, globals));
                 Value::array_from_iter(iter)
             }
             NodeKind::Const {
@@ -1346,17 +1396,14 @@ impl Value {
                 if prefix.len() == 0 {
                     let constant = IdentId::get_id(name);
                     globals
-                        .store
                         .get_constant_noautoload(OBJECT_CLASS, constant)
                         .unwrap()
                 } else {
                     let mut module = globals
-                        .store
                         .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id(&prefix[0]))
                         .unwrap();
                     for id in &prefix[1..] {
                         module = globals
-                            .store
                             .get_constant_noautoload(
                                 module.is_class_or_module().unwrap().id(),
                                 IdentId::get_id(id),
@@ -1364,7 +1411,6 @@ impl Value {
                             .unwrap();
                     }
                     globals
-                        .store
                         .get_constant_noautoload(
                             module.is_class_or_module().unwrap().id(),
                             IdentId::get_id(name),
@@ -1378,21 +1424,21 @@ impl Value {
                 exclude_end,
                 ..
             } => {
-                let start = Self::from_ast(start, globals);
-                let end = Self::from_ast(end, globals);
+                let start = Self::from_ast_inner(start, vm, globals);
+                let end = Self::from_ast_inner(end, vm, globals);
                 Value::range(start, end, *exclude_end)
             }
-            NodeKind::Hash(v, ..) => {
-                let mut map = IndexMap::default();
+            NodeKind::Hash(v) => {
+                let mut map = RubyMap::default();
                 for (k, v) in v.iter() {
-                    let k = Self::from_ast(k, globals);
-                    let v = Self::from_ast(v, globals);
-                    map.insert(HashKey(k), v);
+                    let k = Self::from_ast_inner(k, vm, globals);
+                    let v = Self::from_ast_inner(v, vm, globals);
+                    map.insert(k, v, vm, globals).unwrap();
                 }
                 Value::hash(map)
             }
             NodeKind::BinOp(ruruby_parse::BinOp::Add, box lhs, box rhs) => {
-                let lhs = Self::from_ast(lhs, globals);
+                let lhs = Self::from_ast_inner(lhs, vm, globals);
                 if let NodeKind::Imaginary(im) = &rhs.kind {
                     Value::complex(Real::try_from(globals, lhs).unwrap(), im.clone())
                 } else {
@@ -1400,7 +1446,7 @@ impl Value {
                 }
             }
             NodeKind::BinOp(ruruby_parse::BinOp::Sub, box lhs, box rhs) => {
-                let lhs = Self::from_ast(lhs, globals);
+                let lhs = Self::from_ast_inner(lhs, vm, globals);
                 if let NodeKind::Imaginary(im) = &rhs.kind {
                     Value::complex(
                         Real::try_from(globals, lhs).unwrap(),
@@ -1414,37 +1460,37 @@ impl Value {
         }
     }
 
-    pub(crate) fn from_ast2(node: &Node) -> Value {
+    pub(crate) fn from_const_ast(node: &Node) -> Value {
+        use ruruby_parse::NReal;
         match &node.kind {
             NodeKind::Integer(num) => Value::integer(*num),
             NodeKind::Bignum(num) => Value::bigint(num.clone()),
             NodeKind::Float(num) => Value::float(*num),
+            NodeKind::Imaginary(r) => match r {
+                NReal::Float(f) => Value::complex(0, *f),
+                NReal::Integer(i) => Value::complex(0, *i),
+                NReal::Bignum(b) => Value::complex(0, b.clone()),
+            },
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
             NodeKind::String(s) => Value::string_from_str(s),
-            NodeKind::Array(v, true) => {
-                let iter = v.iter().map(Self::from_ast2);
+            NodeKind::Bytes(b) => Value::bytes_from_slice(b),
+            NodeKind::Array(v, ..) => {
+                let iter = v.iter().map(|node| Self::from_const_ast(node));
                 Value::array_from_iter(iter)
             }
             NodeKind::Range {
                 box start,
                 box end,
                 exclude_end,
-                is_const: true,
+                ..
             } => {
-                let start = Self::from_ast2(start);
-                let end = Self::from_ast2(end);
+                let start = Self::from_const_ast(start);
+                let end = Self::from_const_ast(end);
                 Value::range(start, end, *exclude_end)
             }
-            NodeKind::Hash(v, true) => {
-                let mut map = IndexMap::default();
-                for (k, v) in v.iter() {
-                    map.insert(HashKey(Self::from_ast2(k)), Self::from_ast2(v));
-                }
-                Value::hash(map)
-            }
-            _ => unreachable!(),
+            _ => unreachable!("{:?}", node.kind),
         }
     }
 }

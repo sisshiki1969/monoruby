@@ -108,6 +108,12 @@ fn bytecode_compile_func(
         }
         gen.apply_label(next);
     }
+    // check keyword rest param. if nil, substitute with empty hash.
+    if let Some(kw_rest) = info.args.kw_rest {
+        let local = BcLocal(kw_rest.0 - 1).into();
+        gen.emit_check_kw_rest(local);
+    }
+
     gen.apply_label(gen.redo_label);
     // we must check whether redo exist in the function.
     let mut v = Visitor { redo_flag: false };
@@ -348,7 +354,7 @@ struct KeywordArgs {
     /// Position of the first keyword argument.
     kw_start: BcReg,
     /// Names and positions of keyword arguments.
-    kw_args: IndexMap<IdentId, usize>,
+    kw_args: indexmap::IndexMap<IdentId, usize>,
     /// Positions of splat keyword arguments.
     hash_splat_pos: Vec<BcReg>,
 }
@@ -498,7 +504,7 @@ struct BytecodeGen {
     /// ensure clause information.
     ensure: Vec<Option<Node>>,
     /// local variables.
-    locals: IndexMap<IdentId, BcLocal>,
+    locals: HashMap<IdentId, BcLocal>,
     /// outer local variables. (dynamic_locals, block_param)
     outer_locals: ExternalContext,
     /// literal values. (for GC)
@@ -542,7 +548,7 @@ impl BytecodeGen {
             labels: vec![None], // The first label is for redo.
             loops: vec![],
             ensure: vec![],
-            locals: IndexMap::default(),
+            locals: HashMap::default(),
             outer_locals: info.outer_locals.clone(),
             literals: vec![],
             block_param: info.block_param(),
@@ -879,6 +885,10 @@ impl BytecodeGen {
     fn emit_check_local(&mut self, local: BcReg, else_pos: Label) {
         self.add_merge(else_pos);
         self.emit(BytecodeInst::CheckLocal(local, else_pos), Loc::default());
+    }
+
+    fn emit_check_kw_rest(&mut self, local: BcReg) {
+        self.emit(BytecodeInst::CheckKwRest(local), Loc::default());
     }
 
     fn emit_nil(&mut self, dst: BcReg) {
@@ -1673,7 +1683,7 @@ impl Visitor {
             | NodeKind::RegExp(nodes, _, _)
             | NodeKind::InterporatedString(nodes)
             | NodeKind::CompStmt(nodes) => self.visit_nodes(nodes),
-            NodeKind::Hash(pairs, _) => pairs.iter().for_each(|(k, v)| {
+            NodeKind::Hash(pairs) => pairs.iter().for_each(|(k, v)| {
                 self.visit(k);
                 self.visit(v);
             }),

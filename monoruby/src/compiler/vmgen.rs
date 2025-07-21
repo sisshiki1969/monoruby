@@ -87,7 +87,7 @@ impl Codegen {
     ///
     /// Generate interpreter.
     ///
-    pub(super) fn construct_vm(&mut self, no_jit: bool) {
+    pub(super) fn construct_vm(&mut self) {
         let vm_entry = self.jit.label();
         let entry_fetch = self.jit.label();
 
@@ -253,11 +253,12 @@ impl Codegen {
         self.dispatch[11] = self.vm_store_const();
         self.dispatch[12] = self.vm_condbr(&branch);
         self.dispatch[13] = self.vm_condnotbr(&branch);
-        self.dispatch[14] = self.vm_loop_start(no_jit);
+        self.dispatch[14] = self.vm_loop_start();
         self.dispatch[15] = self.vm_loop_end();
         self.dispatch[16] = self.vm_load_ivar();
         self.dispatch[17] = self.vm_store_ivar();
         self.dispatch[18] = self.vm_check_const();
+        self.dispatch[19] = self.vm_check_kw_rest();
         self.dispatch[20] = self.vm_check_local(&branch);
         self.dispatch[21] = self.vm_block_arg_proxy();
         self.dispatch[22] = self.vm_singleton_class_def();
@@ -804,11 +805,12 @@ impl Codegen {
         label
     }
 
-    fn vm_loop_start(&mut self, no_jit: bool) -> CodePtr {
+    fn vm_loop_start(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let compile = self.jit.label();
+        let cont = self.jit.label();
         self.vm_execute_gc();
-        if !no_jit && !cfg!(feature = "no-jit") {
+        if !cfg!(feature = "no-jit") {
             let count = self.jit.label();
             monoasm! { &mut self.jit,
                 movq rax, [r13 - 8];
@@ -821,8 +823,9 @@ impl Codegen {
                 jae   compile;
             };
         };
+        self.jit.bind_label(cont.clone());
         self.fetch_and_dispatch();
-        if !no_jit && !cfg!(feature = "no-jit") {
+        if !cfg!(feature = "no-jit") {
             monoasm!( &mut self.jit,
             compile:
                 movq rdi, r12;
@@ -831,6 +834,8 @@ impl Codegen {
                 movq rax, (exec_jit_partial_compile);
                 call rax;
                 movq rax, [r13 - 8];
+                testq rax, rax;
+                jeq cont;
                 jmp rax;
             );
         }
@@ -963,8 +968,10 @@ impl Codegen {
         self.fetch3();
         self.vm_get_slot_addr(GP::Rdi);
         monoasm! { &mut self.jit,
-            // src: *const Value
-            movzxw rsi, rsi;  // len: usize
+            movq rdx, rdi;      // src: *const Value
+            movzxw rcx, rsi;    // len: usize
+            movq rdi, rbx;
+            movq rsi, r12;
             movq rax, (runtime::gen_hash);
             call rax;
         };
@@ -1394,6 +1401,23 @@ impl Codegen {
         monoasm! { &mut self.jit,
             testq r15, r15;
             jne  branch;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_check_kw_rest(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let exit = self.jit.label();
+        self.fetch2();
+        self.vm_get_slot_addr(GP::R15);
+        monoasm! { &mut self.jit,
+            cmpq [r15], (NIL_VALUE);
+            jne  exit;
+            movq rax, (runtime::empty_hash);
+            call rax;
+            movq [r15], rax;
+        exit:
         };
         self.fetch_and_dispatch();
         label

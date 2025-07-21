@@ -322,6 +322,17 @@ impl Codegen {
                     jnz  dest;
                 );
             }
+            AsmInst::CheckKwRest(slot) => {
+                let exit = self.jit.label();
+                monoasm! { &mut self.jit,
+                    cmpq [r14 - (conv(slot))], (NIL_VALUE);
+                    jne  exit;
+                    movq rax, (runtime::empty_hash);
+                    call rax;
+                    movq [r14 - (conv(slot))], rax;
+                exit:
+                };
+            }
             AsmInst::OptCase {
                 max,
                 min,
@@ -885,8 +896,10 @@ impl Codegen {
     fn new_hash(&mut self, args: SlotId, len: usize, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
-            lea  rdi, [r14 - (conv(args))];
-            movq rsi, (len);
+            movq rdi, rbx;
+            movq rsi, r12;
+            lea  rdx, [r14 - (conv(args))];
+            movq rcx, (len);
             movq rax, (runtime::gen_hash);
             call rax;
         );

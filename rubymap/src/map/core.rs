@@ -1,0 +1,731 @@
+//! This is the core implementation that doesn't depend on the hasher at all.
+//!
+//! The methods of `IndexMapCore` don't use any Hash properties of K.
+//!
+//! It's cleaner to separate them out, then the compiler checks that we are not
+//! using Hash at all in these methods.
+//!
+//! However, we should probably not let this show in the public API or docs.
+
+mod entry;
+
+//pub mod raw_entry_v1;
+
+use hashbrown::hash_table;
+
+use crate::vec::{self, Vec};
+use core::mem;
+use core::ops::RangeBounds;
+
+use crate::util::simplify_range;
+use crate::{Bucket, Equivalent, HashValue, RubyEql};
+
+type Indices<E, G, R> = hash_table::HashTable<usize, E, G, R>;
+type Entries<K, V> = Vec<Bucket<K, V>>;
+
+pub use entry::{Entry, IndexedEntry, OccupiedEntry, VacantEntry};
+
+/// Core of the map that does not depend on S
+#[derive(Debug)]
+pub(crate) struct IndexMapCore<K, V, E, G, R> {
+    /// indices mapping from the entry hash to its index.
+    indices: Indices<E, G, R>,
+    /// entries is a dense vec maintaining entry order.
+    entries: Entries<K, V>,
+}
+
+/// Mutable references to the parts of an `IndexMapCore`.
+///
+/// When using `HashTable::find_entry`, that takes hold of `&mut indices`, so we have to borrow our
+/// `&mut entries` separately, and there's no way to go back to a `&mut IndexMapCore`. So this type
+/// is used to implement methods on the split references, and `IndexMapCore` can also call those to
+/// avoid duplication.
+struct RefMut<'a, K, V, E, G, R> {
+    indices: &'a mut Indices<E, G, R>,
+    entries: &'a mut Entries<K, V>,
+}
+
+#[inline(always)]
+fn get_hash<K, V>(entries: &[Bucket<K, V>]) -> impl Fn(&usize) -> u64 + '_ {
+    move |&i| entries[i].hash.get()
+}
+
+#[inline]
+fn equivalent<'a, K, V, E, G, R, Q: ?Sized + Equivalent<K, E, G, R>>(
+    key: &'a Q,
+    entries: &'a [Bucket<K, V>],
+) -> impl Fn(&usize, &mut E, &mut G) -> Result<bool, R> + 'a {
+    move |&i, e, g| Q::equivalent(key, &entries[i].key, e, g)
+}
+
+#[inline]
+fn erase_index<E, G, R>(
+    table: &mut Indices<E, G, R>,
+    hash: HashValue,
+    index: usize,
+    e: &mut E,
+    g: &mut G,
+) -> Result<(), R> {
+    if let Ok(entry) = table.find_entry(hash.get(), move |&i, _, _| Ok(i == index), e, g)? {
+        entry.remove();
+    } else if cfg!(debug_assertions) {
+        panic!("index not found");
+    }
+    Ok(())
+}
+
+#[inline]
+fn update_index<E, G, R>(
+    table: &mut Indices<E, G, R>,
+    hash: HashValue,
+    old: usize,
+    new: usize,
+    e: &mut E,
+    g: &mut G,
+) -> Result<(), R> {
+    let index = table
+        .find_mut(hash.get(), move |&i, _, _| Ok(i == old), e, g)?
+        .expect("index not found");
+    *index = new;
+    Ok(())
+}
+
+/// Inserts many entries into the indices table without reallocating,
+/// and without regard for duplication.
+///
+/// ***Panics*** if there is not sufficient capacity already.
+fn insert_bulk_no_grow<K, V, E, G, R>(indices: &mut Indices<E, G, R>, entries: &[Bucket<K, V>]) {
+    assert!(indices.capacity() - indices.len() >= entries.len());
+    for entry in entries {
+        indices.insert_unique(entry.hash.get(), indices.len(), |_| unreachable!());
+    }
+}
+
+impl<K, V, E, G, R> Clone for IndexMapCore<K, V, E, G, R>
+where
+    K: Clone,
+    V: Clone,
+{
+    fn clone(&self) -> Self {
+        let mut new = Self::new();
+        new.clone_from(self);
+        new
+    }
+
+    fn clone_from(&mut self, other: &Self) {
+        self.indices.clone_from(&other.indices);
+        if self.entries.capacity() < other.entries.len() {
+            // If we must resize, match the indices capacity.
+            let additional = other.entries.len() - self.entries.len();
+            self.borrow_mut().reserve_entries(additional);
+        }
+        self.entries.clone_from(&other.entries);
+    }
+}
+
+impl<K, V, E, G, R> crate::Entries for IndexMapCore<K, V, E, G, R> {
+    type Entry = Bucket<K, V>;
+
+    #[inline]
+    fn into_entries(self) -> Vec<Self::Entry> {
+        self.entries
+    }
+
+    #[inline]
+    fn as_entries(&self) -> &[Self::Entry] {
+        &self.entries
+    }
+
+    #[inline]
+    fn as_entries_mut(&mut self) -> &mut [Self::Entry] {
+        &mut self.entries
+    }
+
+    fn with_entries<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut [Self::Entry]),
+    {
+        f(&mut self.entries);
+        self.rebuild_hash_table();
+    }
+}
+
+impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
+    /// The maximum capacity before the `entries` allocation would exceed `isize::MAX`.
+    const MAX_ENTRIES_CAPACITY: usize = (isize::MAX as usize) / mem::size_of::<Bucket<K, V>>();
+
+    #[inline]
+    pub(crate) const fn new() -> Self {
+        IndexMapCore {
+            indices: Indices::new(),
+            entries: Vec::new(),
+        }
+    }
+
+    #[inline]
+    fn borrow_mut(&mut self) -> RefMut<'_, K, V, E, G, R> {
+        RefMut::new(&mut self.indices, &mut self.entries)
+    }
+
+    #[inline]
+    pub(crate) fn with_capacity(n: usize) -> Self {
+        IndexMapCore {
+            indices: Indices::with_capacity(n),
+            entries: Vec::with_capacity(n),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        self.indices.len()
+    }
+
+    #[inline]
+    pub(crate) fn capacity(&self) -> usize {
+        Ord::min(self.indices.capacity(), self.entries.capacity())
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.indices.clear();
+        self.entries.clear();
+    }
+
+    pub(crate) fn truncate(&mut self, len: usize, e: &mut E, g: &mut G) -> Result<(), R> {
+        if len < self.len() {
+            self.erase_indices(len, self.entries.len(), e, g)?;
+            self.entries.truncate(len);
+        }
+        Ok(())
+    }
+
+    #[track_caller]
+    pub(crate) fn drain<Ra>(
+        &mut self,
+        range: Ra,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<vec::Drain<'_, Bucket<K, V>>, R>
+    where
+        Ra: RangeBounds<usize>,
+    {
+        let range = simplify_range(range, self.entries.len());
+        self.erase_indices(range.start, range.end, e, g)?;
+        Ok(self.entries.drain(range))
+    }
+
+    #[track_caller]
+    pub(crate) fn split_off(&mut self, at: usize, e: &mut E, g: &mut G) -> Result<Self, R> {
+        let len = self.entries.len();
+        assert!(
+            at <= len,
+            "index out of bounds: the len is {len} but the index is {at}. Expected index <= len"
+        );
+
+        self.erase_indices(at, self.entries.len(), e, g)?;
+        let entries = self.entries.split_off(at);
+
+        let mut indices = Indices::with_capacity(entries.len());
+        insert_bulk_no_grow(&mut indices, &entries);
+        Ok(Self { indices, entries })
+    }
+
+    /// Reserve capacity for `additional` more key-value pairs.
+    pub(crate) fn reserve(&mut self, additional: usize) {
+        self.indices.reserve(additional, get_hash(&self.entries));
+        // Only grow entries if necessary, since we also round up capacity.
+        if additional > self.entries.capacity() - self.entries.len() {
+            self.borrow_mut().reserve_entries(additional);
+        }
+    }
+
+    /// Reserve capacity for `additional` more key-value pairs, without over-allocating.
+    pub(crate) fn reserve_exact(&mut self, additional: usize) {
+        self.indices.reserve(additional, get_hash(&self.entries));
+        self.entries.reserve_exact(additional);
+    }
+
+    /// Shrink the capacity of the map with a lower bound
+    pub(crate) fn shrink_to(&mut self, min_capacity: usize) {
+        self.indices
+            .shrink_to(min_capacity, get_hash(&self.entries));
+        self.entries.shrink_to(min_capacity);
+    }
+
+    /// Remove the last key-value pair
+    pub(crate) fn pop(&mut self, e: &mut E, g: &mut G) -> Result<Option<(K, V)>, R> {
+        Ok(if let Some(entry) = self.entries.pop() {
+            let last = self.entries.len();
+            erase_index(&mut self.indices, entry.hash, last, e, g)?;
+            Some((entry.key, entry.value))
+        } else {
+            None
+        })
+    }
+
+    /// Return the index in `entries` where an equivalent key can be found
+    pub(crate) fn get_index_of<Q>(
+        &self,
+        hash: HashValue,
+        key: &Q,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<usize>, R>
+    where
+        Q: ?Sized + Equivalent<K, E, G, R>,
+    {
+        let eq = equivalent(key, &self.entries);
+        Ok(self.indices.find(hash.get(), eq, e, g)?.copied())
+    }
+
+    /// Append a key-value pair to `entries`,
+    /// *without* checking whether it already exists.
+    fn push_entry(&mut self, hash: HashValue, key: K, value: V) {
+        if self.entries.len() == self.entries.capacity() {
+            // Reserve our own capacity synced to the indices,
+            // rather than letting `Vec::push` just double it.
+            self.borrow_mut().reserve_entries(1);
+        }
+        self.entries.push(Bucket { hash, key, value });
+    }
+
+    pub(crate) fn insert_full(
+        &mut self,
+        hash: HashValue,
+        key: K,
+        value: V,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(usize, Option<V>), R>
+    where
+        K: RubyEql<E, G, R>,
+    {
+        let eq = equivalent(&key, &self.entries);
+        let hasher = get_hash(&self.entries);
+        match self.indices.entry(hash.get(), eq, hasher, e, g)? {
+            hash_table::Entry::Occupied(entry) => {
+                let i = *entry.get();
+                Ok((i, Some(mem::replace(&mut self.entries[i].value, value))))
+            }
+            hash_table::Entry::Vacant(entry) => {
+                let i = self.entries.len();
+                entry.insert(i);
+                self.push_entry(hash, key, value);
+                debug_assert_eq!(self.indices.len(), self.entries.len());
+                Ok((i, None))
+            }
+        }
+    }
+
+    /// Same as `insert_full`, except it also replaces the key
+    pub(crate) fn replace_full(
+        &mut self,
+        hash: HashValue,
+        key: K,
+        value: V,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(usize, Option<(K, V)>), R>
+    where
+        K: RubyEql<E, G, R>,
+    {
+        let eq = equivalent(&key, &self.entries);
+        let hasher = get_hash(&self.entries);
+        match self.indices.entry(hash.get(), eq, hasher, e, g)? {
+            hash_table::Entry::Occupied(entry) => {
+                let i = *entry.get();
+                let entry = &mut self.entries[i];
+                let kv = (
+                    mem::replace(&mut entry.key, key),
+                    mem::replace(&mut entry.value, value),
+                );
+                Ok((i, Some(kv)))
+            }
+            hash_table::Entry::Vacant(entry) => {
+                let i = self.entries.len();
+                entry.insert(i);
+                self.push_entry(hash, key, value);
+                debug_assert_eq!(self.indices.len(), self.entries.len());
+                Ok((i, None))
+            }
+        }
+    }
+
+    /// Remove an entry by shifting all entries that follow it
+    pub(crate) fn shift_remove_full<Q>(
+        &mut self,
+        hash: HashValue,
+        key: &Q,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(usize, K, V)>, R>
+    where
+        Q: ?Sized + Equivalent<K, E, G, R>,
+    {
+        let eq = equivalent(key, &self.entries);
+        Ok(match self.indices.find_entry(hash.get(), eq, e, g)? {
+            Ok(entry) => {
+                let (index, _) = entry.remove();
+                let (key, value) = self.borrow_mut().shift_remove_finish(index, e, g)?;
+                Some((index, key, value))
+            }
+            Err(_) => None,
+        })
+    }
+
+    /// Remove an entry by shifting all entries that follow it
+    #[inline]
+    pub(crate) fn shift_remove_index(
+        &mut self,
+        index: usize,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(K, V)>, R> {
+        self.borrow_mut().shift_remove_index(index, e, g)
+    }
+
+    #[inline]
+    #[track_caller]
+    pub(super) fn move_index(
+        &mut self,
+        from: usize,
+        to: usize,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(), R> {
+        self.borrow_mut().move_index(from, to, e, g)
+    }
+
+    /// Remove an entry by swapping it with the last
+    pub(crate) fn swap_remove_full<Q>(
+        &mut self,
+        hash: HashValue,
+        key: &Q,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(usize, K, V)>, R>
+    where
+        Q: ?Sized + Equivalent<K, E, G, R>,
+    {
+        let eq = equivalent(key, &self.entries);
+        Ok(match self.indices.find_entry(hash.get(), eq, e, g)? {
+            Ok(entry) => {
+                let (index, _) = entry.remove();
+                let (key, value) = self.borrow_mut().swap_remove_finish(index, e, g)?;
+                Some((index, key, value))
+            }
+            Err(_) => None,
+        })
+    }
+
+    /// Remove an entry by swapping it with the last
+    #[inline]
+    pub(crate) fn swap_remove_index(
+        &mut self,
+        index: usize,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(K, V)>, R> {
+        self.borrow_mut().swap_remove_index(index, e, g)
+    }
+
+    /// Erase `start..end` from `indices`, and shift `end..` indices down to `start..`
+    ///
+    /// All of these items should still be at their original location in `entries`.
+    /// This is used by `drain`, which will let `Vec::drain` do the work on `entries`.
+    fn erase_indices(&mut self, start: usize, end: usize, e: &mut E, g: &mut G) -> Result<(), R> {
+        let (init, shifted_entries) = self.entries.split_at(end);
+        let (start_entries, erased_entries) = init.split_at(start);
+
+        let erased = erased_entries.len();
+        let shifted = shifted_entries.len();
+        let half_capacity = self.indices.capacity() / 2;
+
+        // Use a heuristic between different strategies
+        if erased == 0 {
+            // Degenerate case, nothing to do
+        } else if start + shifted < half_capacity && start < erased {
+            // Reinsert everything, as there are few kept indices
+            self.indices.clear();
+
+            // Reinsert stable indices, then shifted indices
+            insert_bulk_no_grow(&mut self.indices, start_entries);
+            insert_bulk_no_grow(&mut self.indices, shifted_entries);
+        } else if erased + shifted < half_capacity {
+            // Find each affected index, as there are few to adjust
+
+            // Find erased indices
+            for (i, entry) in (start..).zip(erased_entries) {
+                erase_index(&mut self.indices, entry.hash, i, e, g)?;
+            }
+
+            // Find shifted indices
+            for ((new, old), entry) in (start..).zip(end..).zip(shifted_entries) {
+                update_index(&mut self.indices, entry.hash, old, new, e, g)?;
+            }
+        } else {
+            // Sweep the whole table for adjustments
+            let offset = end - start;
+            self.indices.retain(move |i| {
+                if *i >= end {
+                    *i -= offset;
+                    true
+                } else {
+                    *i < start
+                }
+            });
+        }
+
+        debug_assert_eq!(self.indices.len(), start + shifted);
+        Ok(())
+    }
+
+    pub(crate) fn retain_in_order<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&mut K, &mut V) -> bool,
+    {
+        self.entries
+            .retain_mut(|entry| keep(&mut entry.key, &mut entry.value));
+        if self.entries.len() < self.indices.len() {
+            self.rebuild_hash_table();
+        }
+    }
+
+    fn rebuild_hash_table(&mut self) {
+        self.indices.clear();
+        insert_bulk_no_grow(&mut self.indices, &self.entries);
+    }
+
+    pub(crate) fn reverse(&mut self) {
+        self.entries.reverse();
+
+        // No need to save hash indices, can easily calculate what they should
+        // be, given that this is an in-place reversal.
+        let len = self.entries.len();
+        for i in &mut self.indices {
+            *i = len - *i - 1;
+        }
+    }
+}
+
+/// Reserve entries capacity, rounded up to match the indices (via `try_capacity`).
+fn reserve_entries<K, V, E, G, R>(
+    entries: &mut Entries<K, V>,
+    additional: usize,
+    try_capacity: usize,
+) {
+    // Use a soft-limit on the maximum capacity, but if the caller explicitly
+    // requested more, do it and let them have the resulting panic.
+    let try_capacity = try_capacity.min(IndexMapCore::<K, V, E, G, R>::MAX_ENTRIES_CAPACITY);
+    let try_add = try_capacity - entries.len();
+    if try_add > additional && entries.try_reserve_exact(try_add).is_ok() {
+        return;
+    }
+    entries.reserve_exact(additional);
+}
+
+impl<'a, K, V, E, G, R> RefMut<'a, K, V, E, G, R> {
+    #[inline]
+    fn new(indices: &'a mut Indices<E, G, R>, entries: &'a mut Entries<K, V>) -> Self {
+        Self { indices, entries }
+    }
+
+    /// Reserve entries capacity, rounded up to match the indices
+    #[inline]
+    fn reserve_entries(&mut self, additional: usize) {
+        reserve_entries::<K, V, E, G, R>(self.entries, additional, self.indices.capacity());
+    }
+
+    /// Insert a key-value pair in `entries`,
+    /// *without* checking whether it already exists.
+    fn insert_unique(self, hash: HashValue, key: K, value: V) -> OccupiedEntry<'a, K, V, E, G, R> {
+        let i = self.indices.len();
+        debug_assert_eq!(i, self.entries.len());
+        let entry = self
+            .indices
+            .insert_unique(hash.get(), i, get_hash(self.entries));
+        if self.entries.len() == self.entries.capacity() {
+            // We can't call `indices.capacity()` while this `entry` has borrowed it, so we'll have
+            // to amortize growth on our own. It's still an improvement over the basic `Vec::push`
+            // doubling though, since we also consider `MAX_ENTRIES_CAPACITY`.
+            reserve_entries::<K, V, E, G, R>(self.entries, 1, 2 * self.entries.capacity());
+        }
+        self.entries.push(Bucket { hash, key, value });
+        OccupiedEntry::new(self.entries, entry)
+    }
+
+    /// Insert a key-value pair in `entries` at a particular index,
+    /// *without* checking whether it already exists.
+    fn shift_insert_unique(
+        &mut self,
+        index: usize,
+        hash: HashValue,
+        key: K,
+        value: V,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(), R> {
+        let end = self.indices.len();
+        assert!(index <= end);
+        // Increment others first so we don't have duplicate indices.
+        self.increment_indices(index, end, e, g)?;
+        let entries = &*self.entries;
+        self.indices.insert_unique(hash.get(), index, move |&i| {
+            // Adjust for the incremented indices to find hashes.
+            debug_assert_ne!(i, index);
+            let i = if i < index { i } else { i - 1 };
+            entries[i].hash.get()
+        });
+        if self.entries.len() == self.entries.capacity() {
+            // Reserve our own capacity synced to the indices,
+            // rather than letting `Vec::insert` just double it.
+            self.reserve_entries(1);
+        }
+        self.entries.insert(index, Bucket { hash, key, value });
+        Ok(())
+    }
+
+    /// Remove an entry by shifting all entries that follow it
+    fn shift_remove_index(
+        &mut self,
+        index: usize,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(K, V)>, R> {
+        Ok(match self.entries.get(index) {
+            Some(entry) => {
+                erase_index(self.indices, entry.hash, index, e, g)?;
+                Some(self.shift_remove_finish(index, e, g)?)
+            }
+            None => None,
+        })
+    }
+
+    /// Remove an entry by shifting all entries that follow it
+    ///
+    /// The index should already be removed from `self.indices`.
+    fn shift_remove_finish(&mut self, index: usize, e: &mut E, g: &mut G) -> Result<(K, V), R> {
+        // Correct indices that point to the entries that followed the removed entry.
+        self.decrement_indices(index + 1, self.entries.len(), e, g)?;
+
+        // Use Vec::remove to actually remove the entry.
+        let entry = self.entries.remove(index);
+        Ok((entry.key, entry.value))
+    }
+
+    /// Remove an entry by swapping it with the last
+    fn swap_remove_index(
+        &mut self,
+        index: usize,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(K, V)>, R> {
+        Ok(match self.entries.get(index) {
+            Some(entry) => {
+                erase_index(self.indices, entry.hash, index, e, g)?;
+                Some(self.swap_remove_finish(index, e, g)?)
+            }
+            None => None,
+        })
+    }
+
+    /// Finish removing an entry by swapping it with the last
+    ///
+    /// The index should already be removed from `self.indices`.
+    fn swap_remove_finish(&mut self, index: usize, e: &mut E, g: &mut G) -> Result<(K, V), R> {
+        // use swap_remove, but then we need to update the index that points
+        // to the other entry that has to move
+        let entry = self.entries.swap_remove(index);
+
+        // correct index that points to the entry that had to swap places
+        if let Some(entry) = self.entries.get(index) {
+            // was not last element
+            // examine new element in `index` and find it in indices
+            let last = self.entries.len();
+            update_index(self.indices, entry.hash, last, index, e, g)?;
+        }
+
+        Ok((entry.key, entry.value))
+    }
+
+    /// Decrement all indices in the range `start..end`.
+    ///
+    /// The index `start - 1` should not exist in `self.indices`.
+    /// All entries should still be in their original positions.
+    fn decrement_indices(
+        &mut self,
+        start: usize,
+        end: usize,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(), R> {
+        // Use a heuristic between a full sweep vs. a `find()` for every shifted item.
+        let shifted_entries = &self.entries[start..end];
+        if shifted_entries.len() > self.indices.capacity() / 2 {
+            // Shift all indices in range.
+            for i in &mut *self.indices {
+                if start <= *i && *i < end {
+                    *i -= 1;
+                }
+            }
+        } else {
+            // Find each entry in range to shift its index.
+            for (i, entry) in (start..end).zip(shifted_entries) {
+                update_index(self.indices, entry.hash, i, i - 1, e, g)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Increment all indices in the range `start..end`.
+    ///
+    /// The index `end` should not exist in `self.indices`.
+    /// All entries should still be in their original positions.
+    fn increment_indices(
+        &mut self,
+        start: usize,
+        end: usize,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(), R> {
+        // Use a heuristic between a full sweep vs. a `find()` for every shifted item.
+        let shifted_entries = &self.entries[start..end];
+        if shifted_entries.len() > self.indices.capacity() / 2 {
+            // Shift all indices in range.
+            for i in &mut *self.indices {
+                if start <= *i && *i < end {
+                    *i += 1;
+                }
+            }
+        } else {
+            // Find each entry in range to shift its index, updated in reverse so
+            // we never have duplicated indices that might have a hash collision.
+            for (i, entry) in (start..end).zip(shifted_entries).rev() {
+                update_index(self.indices, entry.hash, i, i + 1, e, g)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[track_caller]
+    fn move_index(&mut self, from: usize, to: usize, e: &mut E, g: &mut G) -> Result<(), R> {
+        let from_hash = self.entries[from].hash;
+        let _ = self.entries[to]; // explicit bounds check
+        if from != to {
+            // Use a sentinel index so other indices don't collide.
+            update_index(self.indices, from_hash, from, usize::MAX, e, g)?;
+
+            // Update all other indices and rotate the entry positions.
+            if from < to {
+                self.decrement_indices(from + 1, to + 1, e, g)?;
+                self.entries[from..=to].rotate_left(1);
+            } else if to < from {
+                self.increment_indices(to, from, e, g)?;
+                self.entries[to..=from].rotate_right(1);
+            }
+
+            // Change the sentinel index to its final position.
+            update_index(self.indices, from_hash, usize::MAX, to, e, g)?;
+        }
+        Ok(())
+    }
+}

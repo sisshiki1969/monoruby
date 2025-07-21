@@ -8,8 +8,8 @@ class Object
     self
   end
 
-  def initialize(*arg)
-  end
+  #def initialize(*arg)
+  #end
 
   def tap
     yield self
@@ -161,6 +161,28 @@ module Enumerable
     else
       ifnone.call
     end
+  end
+
+  def filter
+    return self.to_enum(:filter) if !block_given?
+    res = []
+    self.each do |x|
+      if yield(x)
+        res << x
+      end
+    end
+    res
+  end
+  alias select filter
+
+  def filter_map
+    return self.to_enum(:filter_map) if !block_given?
+    res = []
+    self.each do |x|
+      y = yield(x)
+      res << y if y
+    end
+    res
   end
 
   def any?

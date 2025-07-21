@@ -101,7 +101,7 @@ pub struct ISeqInfo {
     ///
     /// Name of local variables
     ///
-    pub(crate) locals: IndexMap<IdentId, bytecodegen::BcLocal>,
+    pub(crate) locals: HashMap<IdentId, bytecodegen::BcLocal>,
     ///
     /// outer local variables. (dynamic_locals, block_param)
     ///
@@ -175,7 +175,7 @@ impl ISeqInfo {
             sp: vec![],
             exception_map: vec![],
             args,
-            locals: IndexMap::default(),
+            locals: HashMap::default(),
             outer_locals,
             literals: vec![],
             non_temp_num: 0,
@@ -263,7 +263,7 @@ impl ISeqInfo {
     /// Get names of local variables.
     ///
     pub(crate) fn local_variables(&self) -> Vec<Value> {
-        let mut map = IndexSet::default();
+        let mut map = indexmap::IndexSet::<IdentId>::default();
         self.locals.keys().for_each(|id| {
             map.insert(*id);
         });
@@ -489,6 +489,7 @@ impl ISeqInfo {
                         None
                     },
                 ),
+                19 => TraceIr::CheckKwRest(SlotId::new(op1_w)),
                 20 => {
                     let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
                     TraceIr::CheckLocal(SlotId::new(op1_w), dest)
@@ -1151,15 +1152,32 @@ impl ParamsInfo {
         }
     }
 
-    pub fn new_native(min: usize, max: usize, rest: bool, kw_names: Vec<IdentId>) -> Self {
+    pub fn new_native(
+        min: usize,
+        max: usize,
+        rest: bool,
+        kw_names: Vec<IdentId>,
+        kw_rest: bool,
+    ) -> Self {
+        let mut p = max;
+        let kw_num = kw_names.len();
         ParamsInfo {
             required_num: min,
             optional_num: max - min,
-            rest: if rest { Some(max) } else { None },
+            rest: if rest {
+                p += 1;
+                Some(max)
+            } else {
+                None
+            },
             post_num: 0,
             args_names: vec![],
             kw_names,
-            kw_rest: None,
+            kw_rest: if kw_rest {
+                Some(SlotId::new((1 + p + kw_num) as u16))
+            } else {
+                None
+            },
             block_param: None,
         }
     }

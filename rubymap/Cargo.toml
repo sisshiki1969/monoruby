@@ -1,0 +1,36 @@
+[package]
+name = "rubymap"
+edition = "2021"
+version = "2.9.0"
+documentation = "https://docs.rs/indexmap/"
+repository = "https://github.com/indexmap-rs/indexmap"
+license = "Apache-2.0 OR MIT"
+description = "A hash table with consistent order and fast iteration."
+keywords = ["hashmap", "no_std"]
+categories = ["data-structures", "no-std"]
+rust-version = "1.63"
+
+[lib]
+bench = false
+
+[dependencies]
+hashbrown = { path = "../hashbrown", default-features = false }
+equivalent = { path = "../equivalent" }
+
+[dev-dependencies]
+itertools = "0.14"
+rand = {version = "0.9", features = ["small_rng"] }
+fnv = "1.0"
+lazy_static = "1.3"
+
+[features]
+# for testing only, of course
+test_debug = []
+
+[package.metadata.release]
+allow-branch = ["main"]
+sign-tag = true
+tag-name = "{{version}}"
+
+[lints.clippy]
+style = "allow"

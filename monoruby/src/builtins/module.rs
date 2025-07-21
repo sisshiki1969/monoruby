@@ -481,6 +481,7 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
             v,
             &[lfp.self_val()],
             None,
+            None,
         )?;
         globals.include_module(class, v.expect_module(globals)?)?;
     }
@@ -515,6 +516,7 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
             IdentId::get_id("prepend_features"),
             v,
             &[self_],
+            None,
             None,
         )?;
     }

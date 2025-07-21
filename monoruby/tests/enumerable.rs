@@ -7,3 +7,16 @@ fn inject() {
     run_test(r##"[2, 3, 4, 5].inject(0) {|result, item| result + item ** 2 }"##);
     run_test(r##"(1..5).inject(0) {|result, item| result + item ** 2 }"##);
 }
+
+#[test]
+fn filter() {
+    run_test(r##"[1, 2, 3, 4, 5, 6, 7].filter { |x| x.odd? }"##);
+    run_test(r##"(1..7).filter { |x| x.odd? }"##);
+    run_test(r##"(1..7).filter(&:odd?)"##);
+}
+
+#[test]
+fn filter_map() {
+    run_test(r##"(1..10).filter_map { |i| i * 2 if i.even? }"##);
+    run_test(r##"[*(1..10)].filter_map { |i| i * 2 if i.even? }"##);
+}

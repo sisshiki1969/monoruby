@@ -807,6 +807,9 @@ impl JitContext {
                 ir.push(AsmInst::CheckLocal(branch_dest));
                 self.new_side_branch(iseq, bc_pos, dest_idx, bbctx.clone(), branch_dest);
             }
+            TraceIr::CheckKwRest(local) => {
+                ir.push(AsmInst::CheckKwRest(local));
+            }
             TraceIr::OptCase {
                 cond,
                 min,

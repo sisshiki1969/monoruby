@@ -36,7 +36,14 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         .define_struct_class(name, lfp.self_val().as_class())
         .as_val();
 
-    vm.invoke_method_if_exists(globals, IdentId::INITIALIZE, new_struct, &args, lfp.block())?;
+    vm.invoke_method_if_exists(
+        globals,
+        IdentId::INITIALIZE,
+        new_struct,
+        &args,
+        lfp.block(),
+        None,
+    )?;
 
     Ok(new_struct)
 }
@@ -53,7 +60,7 @@ fn struct_initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resu
     let class_id = new_struct.as_class().id();
     let args = lfp.arg(0).as_array();
 
-    globals.define_builtin_class_inline_funcs_rest(
+    globals.define_builtin_class_inline_funcs_catch_all(
         class_id,
         "new",
         &["[]"],

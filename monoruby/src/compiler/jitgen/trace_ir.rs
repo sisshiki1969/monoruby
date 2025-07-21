@@ -43,6 +43,7 @@ pub(crate) enum TraceIr {
         branch_table: Box<[BasicBlockId]>,
     },
     CheckLocal(SlotId, BasicBlockId),
+    CheckKwRest(SlotId),
     /// integer(%reg, i32)
     Integer(SlotId, i32),
     /// Symbol(%reg, IdentId)
@@ -482,6 +483,9 @@ impl TraceIr {
             }
             TraceIr::CheckLocal(local, dest) => {
                 format!("check_local({:?}) =>{:?}", local, dest)
+            }
+            TraceIr::CheckKwRest(local) => {
+                format!("check_kw_rest({:?})", local)
             }
             TraceIr::Br(dest) => {
                 format!("br => {:?}", dest)

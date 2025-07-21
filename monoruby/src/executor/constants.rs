@@ -9,7 +9,7 @@ impl Executor {
         inherit: bool,
     ) -> Result<Value> {
         if inherit {
-            self.search_constant_superclass_checked(globals, module, name)
+            self.get_constant_superclass_checked(globals, module, name)
         } else {
             self.get_constant_checked(globals, module.id(), name)
         }
@@ -89,7 +89,7 @@ impl Executor {
         }
     }
 
-    fn search_constant_superclass_checked(
+    pub(crate) fn get_constant_superclass_checked(
         &mut self,
         globals: &mut Globals,
         mut module: Module,
@@ -119,7 +119,7 @@ impl Executor {
         let module = current_func.lexical_class(globals);
         let module = globals[module].get_module();
 
-        self.search_constant_superclass_checked(globals, module, name)
+        self.get_constant_superclass_checked(globals, module, name)
     }
 
     fn search_lexical_stack(

@@ -34,7 +34,7 @@ pub(crate) const GLOBALS_FUNCINFO: usize =
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExternalContext {
-    scope: Vec<(IndexMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
+    scope: Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
 }
 
 impl ruruby_parse::LocalsContext for ExternalContext {
@@ -50,7 +50,7 @@ impl ruruby_parse::LocalsContext for ExternalContext {
 }
 
 impl std::ops::Index<usize> for ExternalContext {
-    type Output = (IndexMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>);
+    type Output = (HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>);
     fn index(&self, index: usize) -> &Self::Output {
         &self.scope[index]
     }
@@ -61,7 +61,7 @@ impl ExternalContext {
         Self { scope: vec![] }
     }
 
-    pub fn one(locals: IndexMap<IdentId, bytecodegen::BcLocal>, block: Option<IdentId>) -> Self {
+    pub fn one(locals: HashMap<IdentId, bytecodegen::BcLocal>, block: Option<IdentId>) -> Self {
         Self {
             scope: vec![(locals, block)],
         }
@@ -76,6 +76,14 @@ impl ExternalContext {
     }
 }
 
+pub(crate) struct Invokers {
+    pub method: MethodInvoker,
+    pub block: BlockInvoker,
+    pub fiber: FiberInvoker,
+    pub fiber_with_self: FiberInvoker,
+    pub binding: BindingInvoker,
+}
+
 ///
 /// Global state.
 ///
@@ -84,12 +92,10 @@ pub struct Globals {
     pub main_object: Value,
     /// function and class info.
     pub store: Store,
-    /// code generator.
-    pub codegen: Codegen,
     /// globals variables.
     global_vars: HashMap<IdentId, Value>,
     /// suppress jit compilation.
-    no_jit: bool,
+    pub no_jit: bool,
     /// suppress loading gem.
     pub no_gems: bool,
     /// stdout.
@@ -99,7 +105,9 @@ pub struct Globals {
     /// standard PRNG
     random: Box<Prng>,
     /// loaded libraries (canonical path).
-    pub(crate) loaded_canonicalized_files: IndexSet<PathBuf>,
+    pub(crate) loaded_canonicalized_files: indexmap::IndexSet<PathBuf>,
+    /// address of invokers.
+    pub(crate) invokers: Invokers,
     /// stats for deoptimization
     #[cfg(feature = "profile")]
     deopt_stats: HashMap<(FuncId, bytecodegen::BcIndex), usize>,
@@ -141,16 +149,24 @@ impl Globals {
 
         let main_object = Value::object(OBJECT_CLASS);
 
-        let mut loaded_canonicalized_files = IndexSet::default();
+        let mut loaded_canonicalized_files = indexmap::IndexSet::default();
         ["thread.rb"].iter().for_each(|f| {
             loaded_canonicalized_files.insert(std::path::PathBuf::from(f));
         });
 
-        let codegen = Codegen::new(no_jit);
+        let invokers = CODEGEN.with(|codegen| {
+            let codegen = codegen.borrow();
+            Invokers {
+                method: codegen.method_invoker,
+                block: codegen.block_invoker,
+                fiber: codegen.fiber_invoker,
+                fiber_with_self: codegen.fiber_invoker_with_self,
+                binding: codegen.binding_invoker,
+            }
+        });
 
         let mut globals = Self {
             main_object,
-            codegen,
             store: Store::new(),
             global_vars: HashMap::default(),
             no_jit,
@@ -159,6 +175,7 @@ impl Globals {
             load_path: Value::array_empty(),
             random: Box::new(Prng::new()),
             loaded_canonicalized_files,
+            invokers,
             #[cfg(feature = "profile")]
             deopt_stats: HashMap::default(),
             #[cfg(feature = "profile")]
@@ -279,7 +296,7 @@ impl Globals {
     ) -> Result<FuncId> {
         let outer_fid = caller_cfp.lfp().func_id();
         let mother = caller_cfp.method_func_id_depth();
-        let mut ex_scope = IndexMap::default();
+        let mut ex_scope = HashMap::default();
         for (name, idx) in &self.store.iseq(outer_fid).locals {
             ex_scope.insert(*name, *idx);
         }
@@ -313,7 +330,7 @@ impl Globals {
         let outer_fid = binding.outer_lfp().func_id();
         let (lfp, outer) = binding.outer_lfp().outermost();
         let mother = (lfp.func_id(), outer);
-        let mut ex_scope = IndexMap::default();
+        let mut ex_scope = HashMap::default();
         for (name, idx) in &self.store.iseq(outer_fid).locals {
             ex_scope.insert(*name, *idx);
         }
@@ -499,34 +516,37 @@ impl Globals {
     ///  - (old rbp) is to be set by callee.
     ///
     pub(crate) fn gen_wrapper(&mut self, func_id: FuncId) {
-        #[cfg(feature = "perf")]
-        let pair = self.codegen.get_address_pair();
-        let kind = self.store[func_id].kind.clone();
-        let entry = self.codegen.gen_wrapper(&kind, self.no_jit);
-        let codeptr = self.codegen.jit.get_label_address(&entry);
-        self.store[func_id].set_entry(entry, codeptr);
-        #[cfg(feature = "perf")]
-        {
-            let info = self.codegen.get_wrapper_info(pair);
-            self.store[func_id].set_wrapper_info(info);
-        }
+        CODEGEN.with(|codegen| {
+            let mut codegen = codegen.borrow_mut();
+            #[cfg(feature = "perf")]
+            let pair = codegen.get_address_pair();
+            let kind = self.store[func_id].kind.clone();
+            let entry = codegen.gen_wrapper(&kind, self.no_jit);
+            let codeptr = codegen.jit.get_label_address(&entry);
+            self.store[func_id].set_entry(entry, codeptr);
+            #[cfg(feature = "perf")]
+            {
+                let info = codegen.get_wrapper_info(pair);
+                self.store[func_id].set_wrapper_info(info);
+            }
+        });
     }
 
     pub(crate) fn class_version_inc(&mut self) {
-        self.codegen.class_version_inc()
+        CODEGEN.with(|codegen| codegen.borrow_mut().class_version_inc());
     }
 
     pub(crate) fn class_version(&self) -> u32 {
-        self.codegen.class_version()
+        CODEGEN.with(|codegen| codegen.borrow().class_version())
     }
 
     pub fn set_constant(&mut self, class_id: ClassId, name: IdentId, val: Value) {
-        self.codegen.const_version_inc();
+        CODEGEN.with(|codegen| codegen.borrow_mut().const_version_inc());
         self.store.set_constant(class_id, name, val);
     }
 
     pub fn remove_constant(&mut self, class_id: ClassId, name: IdentId) -> Option<Value> {
-        self.codegen.const_version_inc();
+        CODEGEN.with(|codegen| codegen.borrow_mut().const_version_inc());
         self[class_id].remove_constant(name)
     }
 }
