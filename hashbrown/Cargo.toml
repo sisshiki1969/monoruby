@@ -37,7 +37,7 @@ serde_test = "1.0"
 doc-comment = "0.3.1"
 
 [features]
-default = ["inline-more"]
+default = ["inline-more", "nightly"]
 
 # Enables the RustcEntry API used to provide the standard library's Entry API.
 rustc-internal-api = []
@@ -46,6 +46,7 @@ rustc-internal-api = []
 # crate. This may lead to a performance increase but often comes at a compile
 # time cost.
 inline-more = []
+nightly = []
 
 [package.metadata.docs.rs]
 features = ["raw-entry"]

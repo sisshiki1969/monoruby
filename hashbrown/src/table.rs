@@ -757,7 +757,7 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
     /// use hashbrown::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
     ///
-    /// let mut table = HashTable::new();
+    /// let mut table: HashTable<i32, (), (), ()> = HashTable::new();
     /// let hasher = DefaultHashBuilder::default();
     /// let hasher = |val: &_| hasher.hash_one(val);
     /// for x in 1..=3 {
