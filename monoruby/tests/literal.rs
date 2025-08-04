@@ -145,7 +145,6 @@ fn percent_w() {
     );
 }
 
-#[ignore]
 #[test]
 fn percent_w_() {
     run_test(r##"%W(abc def ghi)"##);

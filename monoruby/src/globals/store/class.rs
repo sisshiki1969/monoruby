@@ -915,43 +915,6 @@ impl Globals {
     }
 
     ///
-    /// Find method *name* for object *obj*.
-    ///
-    /// If not found, return MethodNotFound error.
-    ///
-    pub fn find_method(
-        &self,
-        recv: Value,
-        func_name: IdentId,
-        is_func_call: bool,
-    ) -> Result<FuncId> {
-        let class_id = recv.class();
-        match self.check_method_for_class(class_id, func_name) {
-            Some(entry) => {
-                match entry.visibility {
-                    Visibility::Private => {
-                        if !is_func_call {
-                            return Err(MonorubyErr::private_method_called(self, func_name, recv));
-                        }
-                    }
-                    Visibility::Protected => {
-                        //if !is_func_call {
-                        //    self.err_protected_method_called(func_name, obj);
-                        //    return None;
-                        //}
-                    }
-                    _ => {}
-                }
-                match entry.func_id() {
-                    Some(func_id) => Ok(func_id),
-                    None => Err(MonorubyErr::method_not_found(self, func_name, recv)),
-                }
-            }
-            None => Err(MonorubyErr::method_not_found(self, func_name, recv)),
-        }
-    }
-
-    ///
     /// Remove method.
     ///
     /// This fn increments class version.

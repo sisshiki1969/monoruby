@@ -29,6 +29,10 @@ impl MethodTableEntry {
         self.func_id
     }
 
+    pub fn visibility(&self) -> Visibility {
+        self.visibility
+    }
+
     pub fn is_public(&self) -> bool {
         self.func_id.is_some() && self.visibility == Visibility::Public
     }

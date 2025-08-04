@@ -43,6 +43,7 @@ impl Codegen {
         let exec = self.jit.label();
         let slow_path1 = self.jit.label();
         let slow_path2 = self.jit.label();
+        let method_missing = self.jit.label();
         let class_version = self.class_version_label();
         let get_class = self.get_class.clone();
         self.vm_execute_gc();
@@ -67,13 +68,30 @@ impl Codegen {
             jne  slow_path2;
         exec:
             movl rdx, [r13 + (CACHED_FUNCID)];
+            testq rdx, rdx;
+            jeq  method_missing;
         };
         self.get_func_data();
         self.set_method_outer();
         self.call(is_simple);
+        monoasm! { &mut self.jit,
+            addq rsp, 8;
+            popq r13;   // pop pc
+            movzxw r15, [r13 + (RET_REG)];  // r15 <- :1
+            addq r13, 16;
+        };
+        self.vm_handle_error();
+        self.vm_store_r15(GP::Rax);
         self.fetch_and_dispatch();
 
         self.slow_path(&exec, &slow_path1, &slow_path2);
+
+        let raise = self.entry_raise();
+        // r15: class of receiver: ClassId
+        monoasm! { &mut self.jit,
+        method_missing:
+            jmp  raise;
+        };
 
         label
     }
@@ -106,6 +124,14 @@ impl Codegen {
         };
         self.set_block_self_outer();
         self.call(is_simple);
+        monoasm! { &mut self.jit,
+            addq rsp, 8;
+            popq r13;   // pop pc
+            movzxw r15, [r13 + (RET_REG)];  // r15 <- :1
+            addq r13, 16;
+        };
+        self.vm_handle_error();
+        self.vm_store_r15(GP::Rax);
         self.fetch_and_dispatch();
         label
     }
@@ -197,14 +223,14 @@ impl Codegen {
             self.vm_handle_error();
         }
         self.call_funcdata();
-        monoasm! { &mut self.jit,
-            addq rsp, 8;
-            popq r13;   // pop pc
-            movzxw r15, [r13 + (RET_REG)];  // r15 <- :1
-            addq r13, 16;
-        };
-        self.vm_handle_error();
-        self.vm_store_r15(GP::Rax);
+        //monoasm! { &mut self.jit,
+        //    addq rsp, 8;
+        //    popq r13;   // pop pc
+        //    movzxw r15, [r13 + (RET_REG)];  // r15 <- :1
+        //    addq r13, 16;
+        //};
+        //self.vm_handle_error();
+        //self.vm_store_r15(GP::Rax);
     }
 
     ///
@@ -242,7 +268,7 @@ impl Codegen {
             movl rax, rax;
             addq rsp, 1024;
         );
-        self.vm_handle_error();
+        //self.vm_handle_error();
         self.save_cache();
         monoasm!( &mut self.jit,
             jmp exec;

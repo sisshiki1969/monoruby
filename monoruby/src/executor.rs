@@ -630,6 +630,46 @@ impl Executor {
 
 impl Executor {
     ///
+    /// Find method *name* for object *obj*.
+    ///
+    /// If not found, return MethodNotFound error.
+    ///
+    pub fn find_method(
+        &mut self,
+        globals: &mut Globals,
+        recv: Value,
+        func_name: IdentId,
+        is_func_call: bool,
+    ) -> Result<FuncId> {
+        let class_id = recv.class();
+        match globals.check_method_for_class(class_id, func_name, globals.class_version()) {
+            Some(entry) => {
+                match entry.visibility() {
+                    Visibility::Private => {
+                        if !is_func_call {
+                            return Err(MonorubyErr::private_method_called(
+                                globals, func_name, recv,
+                            ));
+                        }
+                    }
+                    Visibility::Protected => {
+                        //if !is_func_call {
+                        //    self.err_protected_method_called(func_name, obj);
+                        //    return None;
+                        //}
+                    }
+                    _ => {}
+                }
+                match entry.func_id() {
+                    Some(func_id) => Ok(func_id),
+                    None => Err(MonorubyErr::method_not_found(globals, func_name, recv)),
+                }
+            }
+            None => Err(MonorubyErr::method_not_found(globals, func_name, recv)),
+        }
+    }
+
+    ///
     /// Invoke method for *receiver* and *method*.
     ///
     pub(crate) fn invoke_method(
@@ -641,7 +681,7 @@ impl Executor {
         bh: Option<BlockHandler>,
         kw_args: Option<Hashmap>,
     ) -> Option<Value> {
-        let func_id = match globals.find_method(receiver, method, false) {
+        let func_id = match self.find_method(globals, receiver, method, false) {
             Ok(id) => id,
             Err(err) => {
                 self.set_error(err);
@@ -676,19 +716,18 @@ impl Executor {
         bh: Option<BlockHandler>,
         kw_args: Option<Hashmap>,
     ) -> Result<Value> {
-        let func_id = globals.find_method(receiver, method, true)?;
+        let func_id = self.find_method(globals, receiver, method, true)?;
         self.invoke_func(globals, func_id, receiver, args, bh, kw_args)
             .ok_or_else(|| self.take_error())
     }
 
-    pub(crate) fn invoke_tos(&mut self, globals: &mut Globals, receiver: Value) -> Value {
+    pub(crate) fn invoke_tos(&mut self, globals: &mut Globals, receiver: Value) -> Result<Value> {
         match receiver.unpack() {
             RV::Object(_) => {}
-            _ => return Value::string(receiver.to_s(&globals.store)),
+            _ => return Ok(Value::string(receiver.to_s(&globals.store))),
         }
-        let func_id = globals.find_method(receiver, IdentId::TO_S, true).unwrap();
-        self.invoke_func(globals, func_id, receiver, &[], None, None)
-            .unwrap()
+        let func_id = self.find_method(globals, receiver, IdentId::TO_S, true)?;
+        self.invoke_func_inner(globals, func_id, receiver, &[], None, None)
     }
 
     ///

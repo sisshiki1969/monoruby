@@ -18,8 +18,7 @@ pub(super) extern "C" fn find_method(
 ) -> Option<FuncId> {
     if let Some(func_name) = globals[callid].name {
         let is_func_call = globals[callid].recv.is_self();
-        globals
-            .find_method(recv, func_name, is_func_call)
+        vm.find_method(globals, recv, func_name, is_func_call)
             .map_err(|err| vm.set_error(err))
             .ok()
     } else {
@@ -263,7 +262,7 @@ fn concatenate_string_inner(
     let mut res = String::new();
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
-        res += vm.invoke_tos(globals, v).expect_str(globals).unwrap();
+        res += vm.invoke_tos(globals, v)?.expect_str(globals)?;
     }
     Ok(Value::string(res))
 }
@@ -821,7 +820,7 @@ pub(super) extern "C" fn defined_method(
     name: IdentId,
 ) {
     let is_func_call = vm.cfp().lfp().self_val() == recv;
-    if globals.find_method(recv, name, is_func_call).is_err() {
+    if vm.find_method(globals, recv, name, is_func_call).is_err() {
         unsafe { *reg = Value::nil() }
     }
 }
@@ -903,6 +902,38 @@ pub(super) extern "C" fn to_a(
     } else {
         Some(Value::array1(src))
     }
+}
+
+pub(super) extern "C" fn invoke_method_missing(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Value,
+    method_name: IdentId,
+    args: *const Value,
+    args_len: usize,
+    kw_args: Option<Hashmap>,
+    bh: Option<BlockHandler>,
+) -> Option<Value> {
+    let mut args = unsafe {
+        std::slice::from_raw_parts(
+            if args_len == 0 {
+                args
+            } else {
+                args.sub(args_len - 1)
+            },
+            args_len,
+        )
+        .to_vec()
+    };
+    args.insert(0, Value::symbol(method_name));
+    vm.invoke_method(
+        globals,
+        IdentId::METHOD_MISSING,
+        receiver,
+        &args,
+        bh,
+        kw_args,
+    )
 }
 
 pub extern "C" fn _dump_reg(reg: u64) {

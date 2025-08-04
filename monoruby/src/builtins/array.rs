@@ -2174,7 +2174,7 @@ fn find_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         }
         Ok(Value::nil())
     } else if let Some(arg0) = lfp.try_arg(0) {
-        let func_id = globals.find_method(arg0, IdentId::_EQ, false)?;
+        let func_id = vm.find_method(globals, arg0, IdentId::_EQ, false)?;
         for (i, v) in ary.iter().enumerate() {
             if vm
                 .invoke_func_inner(globals, func_id, arg0, &[*v], None, None)?
