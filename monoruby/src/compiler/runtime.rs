@@ -909,31 +909,29 @@ pub(super) extern "C" fn invoke_method_missing(
     globals: &mut Globals,
     receiver: Value,
     method_name: IdentId,
-    args: *const Value,
-    args_len: usize,
-    kw_args: Option<Hashmap>,
-    bh: Option<BlockHandler>,
+    lfp: Lfp,
+    callsite: CallSiteId,
 ) -> Option<Value> {
-    let mut args = unsafe {
-        std::slice::from_raw_parts(
-            if args_len == 0 {
-                args
-            } else {
-                args.sub(args_len - 1)
-            },
-            args_len,
-        )
-        .to_vec()
-    };
+    let callsite = &globals.store[callsite];
+    let mut args = unsafe { lfp.args_to_vec(callsite.args, callsite.pos_num) };
     args.insert(0, Value::symbol(method_name));
-    vm.invoke_method(
-        globals,
-        IdentId::METHOD_MISSING,
-        receiver,
-        &args,
-        bh,
-        kw_args,
-    )
+    let kw_pos = callsite.kw_pos;
+    let kw = if callsite.kw_len() == 0 {
+        None
+    } else {
+        let mut map = HashmapInner::default();
+        for (k, offset) in callsite.kw_args.clone().into_iter() {
+            map.insert(
+                Value::symbol(k),
+                lfp.register(kw_pos + offset).unwrap(),
+                vm,
+                globals,
+            )
+            .unwrap();
+        }
+        Some(Value::hash_from_inner(map).as_hash())
+    };
+    vm.invoke_method(globals, IdentId::METHOD_MISSING, receiver, &args, None, kw)
 }
 
 pub extern "C" fn _dump_reg(reg: u64) {

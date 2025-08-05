@@ -388,6 +388,16 @@ impl Lfp {
     pub(crate) unsafe fn set_register(&mut self, index: SlotId, val: Option<Value>) {
         std::ptr::write(self.register_ptr(index), val);
     }
+
+    pub(crate) unsafe fn args_to_vec(&self, args: SlotId, args_len: usize) -> Vec<Value> {
+        let p = self.register_ptr(args) as *const Value;
+        let p = if args_len == 0 {
+            p
+        } else {
+            p.sub(args_len - 1)
+        };
+        std::slice::from_raw_parts(p, args_len).to_vec()
+    }
 }
 
 // APIs for native methods.
