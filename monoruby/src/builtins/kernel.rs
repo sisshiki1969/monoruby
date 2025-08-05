@@ -562,13 +562,9 @@ fn kernel_array(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
         return Ok(arg);
     }
     if let Some(func_id) = globals.check_method(arg, IdentId::TO_ARY) {
-        return vm
-            .invoke_func(globals, func_id, arg, &[], None, None)
-            .ok_or_else(|| vm.take_error());
+        return vm.invoke_func_inner(globals, func_id, arg, &[], None, None);
     } else if let Some(func_id) = globals.check_method(arg, IdentId::TO_A) {
-        return vm
-            .invoke_func(globals, func_id, arg, &[], None, None)
-            .ok_or_else(|| vm.take_error());
+        return vm.invoke_func_inner(globals, func_id, arg, &[], None, None);
     };
     if arg.is_nil() {
         Ok(Value::array_empty())

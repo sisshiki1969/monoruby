@@ -717,8 +717,7 @@ impl Executor {
         kw_args: Option<Hashmap>,
     ) -> Result<Value> {
         let func_id = self.find_method(globals, receiver, method, true)?;
-        self.invoke_func(globals, func_id, receiver, args, bh, kw_args)
-            .ok_or_else(|| self.take_error())
+        self.invoke_func_inner(globals, func_id, receiver, args, bh, kw_args)
     }
 
     pub(crate) fn invoke_tos(&mut self, globals: &mut Globals, receiver: Value) -> Result<Value> {
@@ -918,13 +917,13 @@ impl Executor {
         bh: Option<BlockHandler>,
         kw_args: Option<Hashmap>,
     ) -> Result<Option<Value>> {
-        if let Some(func_id) = globals.check_method(receiver, method) {
-            self.invoke_func(globals, func_id, receiver, args, bh, kw_args)
-                .ok_or_else(|| self.take_error())
-                .map(|v| Some(v))
-        } else {
-            Ok(None)
-        }
+        Ok(
+            if let Some(func_id) = globals.check_method(receiver, method) {
+                Some(self.invoke_func_inner(globals, func_id, receiver, args, bh, kw_args)?)
+            } else {
+                None
+            },
+        )
     }
 
     ///

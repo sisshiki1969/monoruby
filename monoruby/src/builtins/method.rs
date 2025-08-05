@@ -29,7 +29,7 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let func_id = method.func_id();
     let receiver = method.receiver();
 
-    vm.invoke_func(
+    vm.invoke_func_inner(
         globals,
         func_id,
         receiver,
@@ -37,7 +37,6 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         lfp.block(),
         None,
     )
-    .ok_or_else(|| vm.take_error())
 }
 
 ///
