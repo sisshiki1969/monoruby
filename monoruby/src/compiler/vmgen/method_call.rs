@@ -41,6 +41,7 @@ impl Codegen {
     pub(super) fn vm_call(&mut self, is_simple: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let exec = self.jit.label();
+        let done = self.jit.label();
         let slow_path1 = self.jit.label();
         let slow_path2 = self.jit.label();
         let method_missing = self.jit.label();
@@ -75,6 +76,7 @@ impl Codegen {
         self.set_method_outer();
         self.call(is_simple);
         monoasm! { &mut self.jit,
+        done:
             addq rsp, 8;
             popq r13;   // pop pc
             movzxw r15, [r13 + (RET_REG)];  // r15 <- :1
@@ -86,12 +88,19 @@ impl Codegen {
 
         self.slow_path(&exec, &slow_path1, &slow_path2);
 
-        let raise = self.entry_raise();
-        // r15: class of receiver: ClassId
+        self.jit.select_page(1);
         monoasm! { &mut self.jit,
         method_missing:
-            jmp  raise;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, rcx;
+            movq rcx, r14;
+            movl r8, [r13 + (CALLSITE_ID)];
+            movq rax, (invoke_method_missing);
+            call rax;
+            jmp  done;
         };
+        self.jit.select_page(0);
 
         label
     }
@@ -259,14 +268,16 @@ impl Codegen {
             movb [r13 + (OPCODE_SUB)], 1;
             // version mismatch
         slow_path2:
-            subq rsp, 1024;
+            subq rsp, 1016;
+            pushq rcx;
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId
             movq rax, (runtime::find_method);
             call rax;   // rax <- Option<FuncId>
             movl rax, rax;
-            addq rsp, 1024;
+            popq rcx;
+            addq rsp, 1016;
         );
         //self.vm_handle_error();
         self.save_cache();
@@ -292,4 +303,15 @@ impl Codegen {
             movl [r13 + (CACHED_VERSION)], rdi;    // class_version
         );
     }
+}
+
+extern "C" fn invoke_method_missing(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Value,
+    lfp: Lfp,
+    callsite: CallSiteId,
+) -> Option<Value> {
+    vm.discard_error();
+    vm.invoke_method_missing(globals, receiver, lfp, callsite)
 }

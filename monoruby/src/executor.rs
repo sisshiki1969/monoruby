@@ -377,6 +377,14 @@ impl Executor {
         std::mem::take(&mut self.exception).unwrap()
     }
 
+    pub(crate) fn discard_error(&mut self) {
+        self.exception = None
+    }
+
+    pub(crate) fn pop_error_trace(&mut self) {
+        self.exception.as_mut().unwrap().trace.pop();
+    }
+
     pub(crate) fn exception(&self) -> Option<&MonorubyErr> {
         self.exception.as_ref()
     }
@@ -676,12 +684,13 @@ impl Executor {
         &mut self,
         globals: &mut Globals,
         method: IdentId,
+        is_func_call: bool,
         receiver: Value,
         args: &[Value],
         bh: Option<BlockHandler>,
         kw_args: Option<Hashmap>,
     ) -> Option<Value> {
-        let func_id = match self.find_method(globals, receiver, method, false) {
+        let func_id = match self.find_method(globals, receiver, method, is_func_call) {
             Ok(id) => id,
             Err(err) => {
                 self.set_error(err);
@@ -701,7 +710,7 @@ impl Executor {
         receiver: Value,
         args: &[Value],
     ) -> Option<Value> {
-        self.invoke_method(globals, method, receiver, args, None, None)
+        self.invoke_method(globals, method, false, receiver, args, None, None)
     }
 
     ///
@@ -718,6 +727,57 @@ impl Executor {
     ) -> Result<Value> {
         let func_id = self.find_method(globals, receiver, method, true)?;
         self.invoke_func_inner(globals, func_id, receiver, args, bh, kw_args)
+    }
+
+    pub(crate) fn invoke_method_missing(
+        &mut self,
+        globals: &mut Globals,
+        receiver: Value,
+        lfp: Lfp,
+        callsite: CallSiteId,
+    ) -> Option<Value> {
+        let callsite = &globals.store[callsite];
+        assert!(callsite.splat_pos.is_empty());
+        assert!(!callsite.has_hash_splat());
+        let is_func_call = callsite.is_func_call();
+        let method_name = if let Some(name) = callsite.name {
+            name
+        } else {
+            let func_id = self.method_func_id();
+            globals.store[func_id].name().unwrap()
+        };
+        let bh = callsite.block_handler(lfp);
+        let mut args = unsafe { lfp.args_to_vec(callsite.args, callsite.pos_num) };
+        args.insert(0, Value::symbol(method_name));
+        let kw_pos = callsite.kw_pos;
+        let kw = if callsite.kw_len() == 0 {
+            None
+        } else {
+            let mut map = HashmapInner::default();
+            for (k, offset) in callsite.kw_args.clone().into_iter() {
+                map.insert(
+                    Value::symbol(k),
+                    lfp.register(kw_pos + offset).unwrap(),
+                    self,
+                    globals,
+                )
+                .unwrap();
+            }
+            Some(Value::hash_from_inner(map).as_hash())
+        };
+        let res = self.invoke_method(
+            globals,
+            IdentId::METHOD_MISSING,
+            is_func_call,
+            receiver,
+            &args,
+            bh,
+            kw,
+        );
+        if res.is_none() {
+            self.pop_error_trace();
+        }
+        res
     }
 
     pub(crate) fn invoke_tos(&mut self, globals: &mut Globals, receiver: Value) -> Result<Value> {

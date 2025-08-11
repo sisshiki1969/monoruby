@@ -3,6 +3,12 @@ RUBY_PATCHLEVEL = 0
 
 require 'rbconfig' 
 
+class BasicObject
+  def method_missing(name, *args)
+    raise NoMethodError, " undefined method '#{name}' for #{self}"
+  end
+end
+
 class Object
   def freeze
     self

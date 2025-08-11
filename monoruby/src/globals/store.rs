@@ -546,7 +546,7 @@ impl Store {
         }
     }
 
-    #[cfg(feature = "emit-bc")]
+    //#[cfg(feature = "emit-bc")]
     pub fn dump_iseq(&self, iseq_id: ISeqId) {
         use bytecodegen::BcIndex;
 
@@ -717,7 +717,6 @@ impl alloc::GC<RValue> for ConstSiteInfo {
 }
 
 impl ConstSiteInfo {
-    #[cfg(feature = "dump-bc")]
     pub fn format(&self) -> String {
         let ConstSiteInfo {
             name,
@@ -793,6 +792,24 @@ impl CallSiteInfo {
         self.kw_args.len() + self.hash_splat_pos.len()
     }
 
+    pub fn is_func_call(&self) -> bool {
+        self.recv.is_self()
+    }
+
+    pub fn block_handler(&self, lfp: Lfp) -> Option<BlockHandler> {
+        if let Some(block_fid) = self.block_fid {
+            let bh = BlockHandler::from_caller(block_fid);
+            Some(bh)
+        } else if let Some(block_arg) = self.block_arg {
+            match lfp.register(block_arg) {
+                Some(v) => Some(BlockHandler::new(v)),
+                None => None,
+            }
+        } else {
+            None
+        }
+    }
+
     ///
     /// This call site has no keyword arguments, no splat arguments, no hash splat arguments, and no block argument.
     ///
@@ -804,7 +821,6 @@ impl CallSiteInfo {
         self.splat_pos.len() == 1 && self.pos_num == 1 && !self.kw_may_exists()
     }
 
-    #[cfg(feature = "dump-bc")]
     pub fn format_args(&self) -> String {
         let CallSiteInfo {
             pos_num,

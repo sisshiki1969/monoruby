@@ -135,11 +135,8 @@ pub(crate) enum TraceIr {
         info: BinOpInfo,
     },
     GBinOpNotrace {
-        #[cfg(feature = "dump-bc")]
         kind: BinOpK,
-        #[cfg(feature = "dump-bc")]
         dst: Option<SlotId>,
-        #[cfg(feature = "dump-bc")]
         mode: OpMode,
     },
     IBinOp {
@@ -157,11 +154,8 @@ pub(crate) enum TraceIr {
         info: BinOpInfo,
     },
     GCmpNotrace {
-        #[cfg(feature = "dump-bc")]
         kind: ruruby_parse::CmpKind,
-        #[cfg(feature = "dump-bc")]
         dst: Option<SlotId>,
-        #[cfg(feature = "dump-bc")]
         mode: OpMode,
     },
     ICmp {
@@ -181,11 +175,8 @@ pub(crate) enum TraceIr {
         brkind: BrKind,
     },
     GCmpBrNotrace {
-        #[cfg(feature = "dump-bc")]
         kind: ruruby_parse::CmpKind,
-        #[cfg(feature = "dump-bc")]
         dst: Option<SlotId>,
-        #[cfg(feature = "dump-bc")]
         mode: OpMode,
     },
     ICmpBr {
@@ -345,7 +336,6 @@ pub(crate) enum TraceIr {
 }
 
 impl TraceIr {
-    #[cfg(feature = "dump-bc")]
     pub(crate) fn format(&self, store: &Store) -> Option<String> {
         fn optstr(opt: bool) -> &'static str {
             if opt {

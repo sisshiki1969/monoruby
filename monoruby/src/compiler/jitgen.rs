@@ -49,6 +49,8 @@ enum CompileResult {
     Leave,
     /// deoptimize and recompile.
     Recompile,
+    /// internal error.
+    Abort,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

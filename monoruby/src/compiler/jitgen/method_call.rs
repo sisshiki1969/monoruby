@@ -311,7 +311,11 @@ impl JitContext {
                 assert_eq!(1, pos_num);
                 assert!(!callsite.kw_may_exists());
                 assert!(block_fid.is_none());
-                assert!(callsite.block_arg.is_none());
+                if callsite.block_arg.is_some() {
+                    dbg!(ivar_name);
+                    dbg!(callsite);
+                    return CompileResult::Abort;
+                }
                 let ivarid = if let Some(id) = store[recv_class].get_ivarid(ivar_name) {
                     id
                 } else {

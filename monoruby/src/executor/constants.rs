@@ -104,6 +104,10 @@ impl Executor {
                 },
             };
         }
+        if let Some(v) = self.get_constant(globals, OBJECT_CLASS, name)? {
+            // for BasicObject class
+            return Ok(v);
+        }
         Err(MonorubyErr::uninitialized_constant(name))
     }
 

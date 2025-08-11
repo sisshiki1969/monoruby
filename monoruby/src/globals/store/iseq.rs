@@ -299,7 +299,6 @@ impl ISeqInfo {
     ///
     /// Get length of bytecode.
     ///
-    #[cfg(feature = "emit-bc")]
     pub(crate) fn bytecode_len(&self) -> usize {
         self.bytecode.as_ref().unwrap().len()
     }
@@ -386,7 +385,6 @@ impl ISeqInfo {
         self.exception_map.is_empty()
     }
 
-    #[cfg(feature = "emit-bc")]
     pub(crate) fn get_exception_map(
         &self,
     ) -> Vec<(
@@ -739,14 +737,7 @@ impl ISeqInfo {
                             },
                         }
                     } else {
-                        TraceIr::GCmpNotrace {
-                            #[cfg(feature = "dump-bc")]
-                            kind,
-                            #[cfg(feature = "dump-bc")]
-                            dst,
-                            #[cfg(feature = "dump-bc")]
-                            mode,
-                        }
+                        TraceIr::GCmpNotrace { kind, dst, mode }
                     }
                 }
                 142..=149 => {
@@ -780,14 +771,7 @@ impl ISeqInfo {
                             },
                         }
                     } else {
-                        TraceIr::GCmpNotrace {
-                            #[cfg(feature = "dump-bc")]
-                            kind,
-                            #[cfg(feature = "dump-bc")]
-                            dst,
-                            #[cfg(feature = "dump-bc")]
-                            mode,
-                        }
+                        TraceIr::GCmpNotrace { kind, dst, mode }
                     }
                 }
                 150 => TraceIr::LoadDynVar(
@@ -849,14 +833,7 @@ impl ISeqInfo {
                             brkind,
                         }
                     } else {
-                        TraceIr::GCmpBrNotrace {
-                            #[cfg(feature = "dump-bc")]
-                            kind,
-                            #[cfg(feature = "dump-bc")]
-                            dst,
-                            #[cfg(feature = "dump-bc")]
-                            mode,
-                        }
+                        TraceIr::GCmpBrNotrace { kind, dst, mode }
                     }
                 }
                 162..=169 => {
@@ -904,14 +881,7 @@ impl ISeqInfo {
                             brkind,
                         }
                     } else {
-                        TraceIr::GCmpBrNotrace {
-                            #[cfg(feature = "dump-bc")]
-                            kind,
-                            #[cfg(feature = "dump-bc")]
-                            dst,
-                            #[cfg(feature = "dump-bc")]
-                            mode,
-                        }
+                        TraceIr::GCmpBrNotrace { kind, dst, mode }
                     }
                 }
                 170 => TraceIr::InitMethod(FnInitInfo {
@@ -988,14 +958,7 @@ impl ISeqInfo {
                             },
                         }
                     } else {
-                        TraceIr::GBinOpNotrace {
-                            #[cfg(feature = "dump-bc")]
-                            kind,
-                            #[cfg(feature = "dump-bc")]
-                            dst,
-                            #[cfg(feature = "dump-bc")]
-                            mode,
-                        }
+                        TraceIr::GBinOpNotrace { kind, dst, mode }
                     }
                 }
                 190..=199 => {
@@ -1027,14 +990,7 @@ impl ISeqInfo {
                             },
                         }
                     } else {
-                        TraceIr::GBinOpNotrace {
-                            #[cfg(feature = "dump-bc")]
-                            kind,
-                            #[cfg(feature = "dump-bc")]
-                            dst,
-                            #[cfg(feature = "dump-bc")]
-                            mode,
-                        }
+                        TraceIr::GBinOpNotrace { kind, dst, mode }
                     }
                 }
                 200..=209 => {
@@ -1068,14 +1024,7 @@ impl ISeqInfo {
                             },
                         }
                     } else {
-                        TraceIr::GBinOpNotrace {
-                            #[cfg(feature = "dump-bc")]
-                            kind,
-                            #[cfg(feature = "dump-bc")]
-                            dst,
-                            #[cfg(feature = "dump-bc")]
-                            mode,
-                        }
+                        TraceIr::GBinOpNotrace { kind, dst, mode }
                     }
                 }
                 _ => unreachable!("{:016x}", op1),

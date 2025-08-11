@@ -307,7 +307,7 @@ impl MonorubyErr {
             MonorubyErrKind::NotMethod,
             format!(
                 "private method `{name}' called for {}:{}",
-                obj.inspect(store),
+                obj.to_s(store),
                 obj.get_real_class_name(store)
             ),
         )

@@ -3,10 +3,10 @@ use super::*;
 impl JitContext {
     pub(super) fn compile(&mut self, store: &Store) {
         let iseq_id = self.iseq_id();
-        let iseq = &store[iseq_id];
 
+        let iseq = &store[iseq_id];
         for (loop_start, loop_end) in iseq.bb_info.loops() {
-            self.analyse_loop(store, iseq, *loop_start, *loop_end);
+            self.analyse_loop(store, iseq_id, *loop_start, *loop_end);
         }
 
         let mut bbctx = BBContext::new_with_args(&self);
@@ -60,7 +60,7 @@ impl JitContext {
         };
 
         for bbid in bb_begin..=bb_end {
-            let ir = self.compile_basic_block(store, iseq, bbid, bbid == bb_end);
+            let ir = self.compile_basic_block(store, iseq_id, bbid, bbid == bb_end);
             self.ir.push((Some(bbid), ir));
         }
 
@@ -73,11 +73,12 @@ impl JitContext {
     fn compile_basic_block(
         &mut self,
         store: &Store,
-        iseq: &ISeqInfo,
+        iseq_id: ISeqId,
         bbid: BasicBlockId,
         last: bool,
     ) -> AsmIr {
         let mut ir = AsmIr::new();
+        let iseq = &store[iseq_id];
 
         let mut bbctx = match self.incoming_context(iseq, bbid) {
             Some(bb) => bb,
@@ -103,6 +104,10 @@ impl JitContext {
                     return ir;
                 }
                 CompileResult::ExitLoop => break,
+                CompileResult::Abort => {
+                    store.dump_iseq(iseq_id);
+                    unreachable!()
+                }
             }
 
             bbctx.clear_above_next_sp();
@@ -120,7 +125,7 @@ impl JitContext {
     pub(super) fn analyse_loop(
         &mut self,
         store: &Store,
-        iseq: &ISeqInfo,
+        iseq_id: ISeqId,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
     ) {
@@ -138,7 +143,7 @@ impl JitContext {
         );
 
         for bbid in loop_start..=loop_end {
-            ctx.analyse_basic_block(store, iseq, &mut liveness, bbid, bbid == loop_end);
+            ctx.analyse_basic_block(store, iseq_id, &mut liveness, bbid, bbid == loop_end);
         }
 
         let mut backedge: Option<BBContext> = None;
@@ -161,12 +166,13 @@ impl JitContext {
     fn analyse_basic_block(
         &mut self,
         store: &Store,
-        iseq: &ISeqInfo,
+        iseq_id: ISeqId,
         liveness: &mut Liveness,
         bbid: BasicBlockId,
         last: bool,
     ) {
         let mut ir = AsmIr::new();
+        let iseq = &store[iseq_id];
         let mut bbctx = match self.incoming_context(iseq, bbid) {
             Some(bb) => bb,
             None => return,
@@ -182,6 +188,10 @@ impl JitContext {
                 CompileResult::Leave | CompileResult::Recompile | CompileResult::ExitLoop => {
                     liveness.merge(&bbctx);
                     return;
+                }
+                CompileResult::Abort => {
+                    store.dump_iseq(iseq_id);
+                    unreachable!()
                 }
             }
 

@@ -17,28 +17,24 @@ pub(super) extern "C" fn find_method(
     recv: Value,
 ) -> Option<FuncId> {
     if let Some(func_name) = globals[callid].name {
-        let is_func_call = globals[callid].recv.is_self();
+        let is_func_call = globals[callid].is_func_call();
         vm.find_method(globals, recv, func_name, is_func_call)
-            .map_err(|err| vm.set_error(err))
-            .ok()
     } else {
         find_super(vm, globals)
     }
+    .map_err(|err| vm.set_error(err))
+    .ok()
 }
 
-fn find_super(vm: &mut Executor, globals: &mut Globals) -> Option<FuncId> {
+fn find_super(vm: &mut Executor, globals: &mut Globals) -> Result<FuncId> {
     let func_id = vm.method_func_id();
     let self_val = vm.cfp().lfp().self_val();
     let owner = globals.store[func_id].owner_class().unwrap();
     let func_name = globals.store[func_id].name().unwrap();
     let self_class = self_val.class();
     match globals.store.check_super(self_class, owner, func_name) {
-        Some(func_id) => Some(func_id),
-        None => {
-            let err = MonorubyErr::method_not_found(globals, func_name, self_val);
-            vm.set_error(err);
-            None
-        }
+        Some(func_id) => Ok(func_id),
+        None => Err(MonorubyErr::method_not_found(globals, func_name, self_val)),
     }
 }
 
@@ -902,36 +898,6 @@ pub(super) extern "C" fn to_a(
     } else {
         Some(Value::array1(src))
     }
-}
-
-pub(super) extern "C" fn invoke_method_missing(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    receiver: Value,
-    method_name: IdentId,
-    lfp: Lfp,
-    callsite: CallSiteId,
-) -> Option<Value> {
-    let callsite = &globals.store[callsite];
-    let mut args = unsafe { lfp.args_to_vec(callsite.args, callsite.pos_num) };
-    args.insert(0, Value::symbol(method_name));
-    let kw_pos = callsite.kw_pos;
-    let kw = if callsite.kw_len() == 0 {
-        None
-    } else {
-        let mut map = HashmapInner::default();
-        for (k, offset) in callsite.kw_args.clone().into_iter() {
-            map.insert(
-                Value::symbol(k),
-                lfp.register(kw_pos + offset).unwrap(),
-                vm,
-                globals,
-            )
-            .unwrap();
-        }
-        Some(Value::hash_from_inner(map).as_hash())
-    };
-    vm.invoke_method(globals, IdentId::METHOD_MISSING, receiver, &args, None, kw)
 }
 
 pub extern "C" fn _dump_reg(reg: u64) {
