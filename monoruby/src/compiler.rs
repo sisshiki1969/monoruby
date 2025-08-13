@@ -1319,11 +1319,11 @@ impl Codegen {
         self_class: ClassId,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
-        is_recompile: bool,
+        is_recompile: Option<RecompileReason>,
     ) {
         #[cfg(feature = "profile")]
         {
-            if is_recompile {
+            if let Some(reason) = &is_recompile {
                 globals.countup_recompile(globals.store[iseq_id].func_id(), self_class);
             }
         }
@@ -1346,17 +1346,28 @@ impl Codegen {
         iseq_id: ISeqId,
         self_class: ClassId,
         jit_entry: DestLabel,
-        is_recompile: bool,
+        is_recompile: Option<RecompileReason>,
     ) {
         self.compile(globals, iseq_id, self_class, None, jit_entry, is_recompile)
     }
 
-    pub(super) fn recompile_method(&mut self, globals: &mut Globals, lfp: Lfp) {
+    pub(super) fn recompile_method(
+        &mut self,
+        globals: &mut Globals,
+        lfp: Lfp,
+        reason: RecompileReason,
+    ) {
         let self_class = lfp.self_val().class();
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
         let jit_entry = self.jit.label();
-        self.compile_method(globals, iseq_id, self_class, jit_entry.clone(), true);
+        self.compile_method(
+            globals,
+            iseq_id,
+            self_class,
+            jit_entry.clone(),
+            Some(reason),
+        );
         // get_jit_code() must not be None.
         // After BOP redefinition occurs, recompilation in invalidated methods cause None.
         if let Some(patch_point) = globals.store[iseq_id].get_jit_code(self_class) {
@@ -1370,7 +1381,7 @@ impl Codegen {
         globals: &mut Globals,
         lfp: Lfp,
         pc: BytecodePtr,
-        is_recompile: bool,
+        is_recompile: Option<RecompileReason>,
     ) {
         let entry_label = self.jit.label();
         let self_class = lfp.self_val().class();
@@ -1388,11 +1399,23 @@ impl Codegen {
         pc.write2(codeptr.as_ptr() as u64);
     }
 
-    pub(crate) fn recompile_specialized(&mut self, globals: &mut Globals, idx: usize) {
+    pub(crate) fn recompile_specialized(
+        &mut self,
+        globals: &mut Globals,
+        idx: usize,
+        reason: RecompileReason,
+    ) {
         let (iseq_id, self_class, patch_point) = self.specialized_patch_point[idx].clone();
 
         let entry = self.jit.label();
-        self.compile(globals, iseq_id, self_class, None, entry.clone(), true);
+        self.compile(
+            globals,
+            iseq_id,
+            self_class,
+            None,
+            entry.clone(),
+            Some(reason),
+        );
 
         let patch_point = self.jit.get_label_address(&patch_point);
         self.jit.apply_jmp_patch_address(patch_point, &entry);
@@ -1413,7 +1436,7 @@ impl Codegen {
         self.class_guard_stub(self_class, &patch_point, &jit_entry, &guard);
         let old_entry = globals.store[iseq_id].add_jit_code(self_class, patch_point);
         assert!(old_entry.is_none());
-        self.compile_method(globals, iseq_id, self_class, jit_entry, false);
+        self.compile_method(globals, iseq_id, self_class, jit_entry, None);
         self.jit.apply_jmp_patch_address(entry_patch_point, &guard);
     }
 }

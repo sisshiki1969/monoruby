@@ -29,7 +29,7 @@ impl JitContext {
             if let Some(fid) = self.jit_check_call(store, recv_class, callsite.name) {
                 func_id = fid;
             } else {
-                return CompileResult::Recompile;
+                return CompileResult::Recompile(RecompileReason::MethodNotFound);
             }
         }
 
@@ -105,7 +105,7 @@ impl JitContext {
         ));
         let callee = &store[fid];
         if (!callee.is_rest() && callee.max_positional_args() < 1) || callee.req_num() > 1 {
-            return CompileResult::Recompile;
+            return CompileResult::Recompile(RecompileReason::MaybeError);
         }
 
         // class version guard
@@ -291,7 +291,7 @@ impl JitContext {
                     let ivarid = if let Some(id) = store[recv_class].get_ivarid(ivar_name) {
                         id
                     } else {
-                        return CompileResult::Recompile;
+                        return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
                     };
                     let is_object_ty = store[recv_class].is_object_ty_instance();
                     if is_object_ty && ivarid.is_inline() {
@@ -311,15 +311,15 @@ impl JitContext {
                 assert_eq!(1, pos_num);
                 assert!(!callsite.kw_may_exists());
                 assert!(block_fid.is_none());
-                if callsite.block_arg.is_some() {
+                /*if callsite.block_arg.is_some() {
                     dbg!(ivar_name);
                     dbg!(callsite);
                     return CompileResult::Abort;
-                }
+                }*/
                 let ivarid = if let Some(id) = store[recv_class].get_ivarid(ivar_name) {
                     id
                 } else {
-                    return CompileResult::Recompile;
+                    return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
                 };
                 let src = bbctx.fetch_or_reg(ir, args, GP::Rax);
                 let is_object_ty = store[recv_class].is_object_ty_instance();

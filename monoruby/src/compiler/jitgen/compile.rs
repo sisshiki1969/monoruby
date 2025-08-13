@@ -99,8 +99,8 @@ impl JitContext {
             match self.compile_instruction(&mut ir, &mut bbctx, store, iseq, bc_pos) {
                 CompileResult::Continue => {}
                 CompileResult::Branch | CompileResult::Leave => return ir,
-                CompileResult::Recompile => {
-                    self.recompile_and_deopt(&mut bbctx, &mut ir);
+                CompileResult::Recompile(reason) => {
+                    self.recompile_and_deopt(&mut bbctx, &mut ir, reason);
                     return ir;
                 }
                 CompileResult::ExitLoop => break,
@@ -185,7 +185,7 @@ impl JitContext {
             match self.compile_instruction(&mut ir, &mut bbctx, store, iseq, bc_pos) {
                 CompileResult::Continue => {}
                 CompileResult::Branch => return,
-                CompileResult::Leave | CompileResult::Recompile | CompileResult::ExitLoop => {
+                CompileResult::Leave | CompileResult::Recompile(_) | CompileResult::ExitLoop => {
                     liveness.merge(&bbctx);
                     return;
                 }
@@ -295,12 +295,12 @@ impl JitContext {
                         if let Some(base_class) = cache.base_class {
                             bbctx.guard_const_base_class(ir, slot, base_class);
                         } else {
-                            return CompileResult::Recompile;
+                            return CompileResult::Recompile(RecompileReason::NotCached);
                         }
                     }
                     bbctx.load_constant(ir, dst, cache);
                 } else {
-                    return CompileResult::Recompile;
+                    return CompileResult::Recompile(RecompileReason::NotCached);
                 }
             }
             TraceIr::StoreConst(src, id) => {
@@ -328,7 +328,7 @@ impl JitContext {
                         self.ivar_heap_accessed = true;
                     }
                 } else {
-                    return CompileResult::Recompile;
+                    return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
                 }
             }
             TraceIr::StoreIvar(src, name, cache) => {
@@ -343,7 +343,7 @@ impl JitContext {
                         self.ivar_heap_accessed = true;
                     }
                 } else {
-                    return CompileResult::Recompile;
+                    return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
                 }
             }
             TraceIr::LoadCvar { dst, name } => {
@@ -446,10 +446,12 @@ impl JitContext {
                 if let Some(fid) = self.jit_check_method(store, recv_class, name) {
                     return self.compile_binop_call(bbctx, ir, store, fid, info);
                 } else {
-                    return CompileResult::Recompile;
+                    return CompileResult::Recompile(RecompileReason::MethodNotFound);
                 }
             }
-            TraceIr::GBinOpNotrace { .. } => return CompileResult::Recompile,
+            TraceIr::GBinOpNotrace { .. } => {
+                return CompileResult::Recompile(RecompileReason::NotCached)
+            }
             TraceIr::FCmp { kind, info } => {
                 bbctx.gen_cmp_float(ir, info, kind);
             }
@@ -460,10 +462,12 @@ impl JitContext {
                 if let Some(fid) = self.jit_check_method(store, recv_class, name) {
                     return self.compile_binop_call(bbctx, ir, store, fid, info);
                 } else {
-                    return CompileResult::Recompile;
+                    return CompileResult::Recompile(RecompileReason::MethodNotFound);
                 }
             }
-            TraceIr::GCmpNotrace { .. } => return CompileResult::Recompile,
+            TraceIr::GCmpNotrace { .. } => {
+                return CompileResult::Recompile(RecompileReason::NotCached)
+            }
             TraceIr::FCmpBr {
                 kind,
                 info,
@@ -520,10 +524,12 @@ impl JitContext {
                         res => return res,
                     }
                 } else {
-                    return CompileResult::Recompile;
+                    return CompileResult::Recompile(RecompileReason::MethodNotFound);
                 }
             }
-            TraceIr::GCmpBrNotrace { .. } => return CompileResult::Recompile,
+            TraceIr::GCmpBrNotrace { .. } => {
+                return CompileResult::Recompile(RecompileReason::NotCached)
+            }
             TraceIr::ArrayTEq { lhs, rhs } => {
                 bbctx.write_back_slot(ir, lhs);
                 bbctx.write_back_slot(ir, rhs);
@@ -563,7 +569,7 @@ impl JitContext {
                         return self.compile_binop_call(bbctx, ir, store, fid, info);
                     }
                 }
-                return CompileResult::Recompile;
+                return CompileResult::Recompile(RecompileReason::NotCached);
             }
             TraceIr::IndexAssign {
                 src,
@@ -580,7 +586,7 @@ impl JitContext {
                         bbctx.unset_class_version_guard();
                     }
                 } else {
-                    return CompileResult::Recompile;
+                    return CompileResult::Recompile(RecompileReason::NotCached);
                 }
             }
             TraceIr::ToA { dst, src } => {
@@ -635,7 +641,7 @@ impl JitContext {
                 if let Some(cache) = cache {
                     return self.compile_method_call(bbctx, ir, store, cache, &store[callid]);
                 } else {
-                    return CompileResult::Recompile;
+                    return CompileResult::Recompile(RecompileReason::NotCached);
                 }
             }
             TraceIr::Yield { callid } => {
@@ -880,15 +886,18 @@ impl JitContext {
         }
     }
 
-    fn recompile_and_deopt(&self, bbctx: &mut BBContext, ir: &mut AsmIr) {
+    fn recompile_and_deopt(&self, bbctx: &mut BBContext, ir: &mut AsmIr, reason: RecompileReason) {
         let deopt = ir.new_deopt(bbctx);
         match self.jit_type() {
-            JitType::Specialized { idx, .. } => {
-                ir.push(AsmInst::RecompileDeoptSpecialized { idx: *idx, deopt })
-            }
+            JitType::Specialized { idx, .. } => ir.push(AsmInst::RecompileDeoptSpecialized {
+                idx: *idx,
+                deopt,
+                reason,
+            }),
             _ => ir.push(AsmInst::RecompileDeopt {
                 position: self.position(),
                 deopt,
+                reason,
             }),
         }
     }

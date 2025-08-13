@@ -36,6 +36,7 @@ pub const LFP_ARG0: i32 = LFP_SELF + 8;
 pub(crate) const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;
 pub(crate) const EXECUTOR_RSP_SAVE: i64 = std::mem::offset_of!(Executor, rsp_save) as _;
 pub(crate) const EXECUTOR_PARENT_FIBER: i64 = std::mem::offset_of!(Executor, parent_fiber) as _;
+pub(crate) const EXECUTOR_STACK_LIMIT: i64 = std::mem::offset_of!(Executor, stack_limit) as _;
 
 ///
 /// Bytecode interpreter.
@@ -52,6 +53,8 @@ pub struct Executor {
     /// - other: suspended
     rsp_save: Option<std::ptr::NonNull<u8>>,
     parent_fiber: Option<std::ptr::NonNull<Executor>>,
+    stack_limit: usize,
+    /// lexical class stack.
     lexical_class: Vec<Vec<Cref>>,
     sp_last_match: Option<String>,   // $&        : Regexp.last_match(0)
     sp_post_match: Option<String>,   // $'        : Regexp.post_match
@@ -68,6 +71,7 @@ impl std::default::Default for Executor {
             cfp: None,
             rsp_save: None,
             parent_fiber: None,
+            stack_limit: 0,
             lexical_class: vec![vec![]],
             sp_last_match: None,
             sp_post_match: None,
@@ -1383,9 +1387,25 @@ pub enum Visibility {
     Undefined = 3,
 }
 
-pub(crate) extern "C" fn exec_jit_specialized_recompile(globals: &mut Globals, idx: usize) {
+#[derive(Debug)]
+#[repr(u32)]
+pub enum RecompileReason {
+    NotCached = 0,
+    MethodNotFound = 1,
+    IvarIdNotFound = 2,
+    MaybeError = 3,
+    ClassVersionGuardFailed = 4,
+}
+
+pub(crate) extern "C" fn exec_jit_specialized_recompile(
+    globals: &mut Globals,
+    idx: usize,
+    reason: RecompileReason,
+) {
     CODEGEN.with(|codegen| {
-        codegen.borrow_mut().recompile_specialized(globals, idx);
+        codegen
+            .borrow_mut()
+            .recompile_specialized(globals, idx, reason);
     });
 }
 
@@ -1401,9 +1421,13 @@ pub(crate) extern "C" fn exec_jit_compile_patch(
     });
 }
 
-pub(crate) extern "C" fn exec_jit_recompile_method(globals: &mut Globals, lfp: Lfp) {
+pub(crate) extern "C" fn exec_jit_recompile_method(
+    globals: &mut Globals,
+    lfp: Lfp,
+    reason: RecompileReason,
+) {
     CODEGEN.with(|codegen| {
-        codegen.borrow_mut().recompile_method(globals, lfp);
+        codegen.borrow_mut().recompile_method(globals, lfp, reason);
     });
 }
 
@@ -1418,21 +1442,27 @@ pub(crate) extern "C" fn exec_jit_partial_compile(
     if globals.no_jit {
         return;
     }
-    partial_compile(globals, lfp, pc, false);
+    partial_compile(globals, lfp, pc, None);
 }
 
 ///
 /// Recompile the loop.
 ///
-pub(crate) extern "C" fn exec_jit_partial_recompile(
+pub(crate) extern "C" fn exec_jit_recompile_partial(
     globals: &mut Globals,
     lfp: Lfp,
     pc: BytecodePtr,
+    reason: RecompileReason,
 ) {
-    partial_compile(globals, lfp, pc, true);
+    partial_compile(globals, lfp, pc, Some(reason));
 }
 
-fn partial_compile(globals: &mut Globals, lfp: Lfp, pc: BytecodePtr, is_recompile: bool) {
+fn partial_compile(
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+    is_recompile: Option<RecompileReason>,
+) {
     CODEGEN.with(|codegen| {
         codegen
             .borrow_mut()

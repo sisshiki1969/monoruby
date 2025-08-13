@@ -232,13 +232,17 @@ impl Codegen {
                     jmp deopt;
                 );
             }
-            AsmInst::RecompileDeopt { position, deopt } => {
+            AsmInst::RecompileDeopt {
+                position,
+                deopt,
+                reason,
+            } => {
                 let deopt = &labels[deopt];
-                self.recompile_and_deopt(position, deopt)
+                self.recompile_and_deopt(position, deopt, reason)
             }
-            AsmInst::RecompileDeoptSpecialized { idx, deopt } => {
+            AsmInst::RecompileDeoptSpecialized { idx, deopt, reason } => {
                 let deopt = &labels[deopt];
-                self.recompile_and_deopt_specialized(deopt, self.specialized_base + idx)
+                self.recompile_and_deopt_specialized(deopt, self.specialized_base + idx, reason)
             }
             AsmInst::CheckBOP { deopt } => {
                 let deopt = &labels[deopt];

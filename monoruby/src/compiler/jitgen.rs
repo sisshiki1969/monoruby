@@ -48,7 +48,7 @@ enum CompileResult {
     /// leave the current method/block.
     Leave,
     /// deoptimize and recompile.
-    Recompile,
+    Recompile(RecompileReason),
     /// internal error.
     Abort,
 }
@@ -537,7 +537,7 @@ impl Codegen {
         self_class: ClassId,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
-        _is_recompile: bool,
+        _is_recompile: Option<RecompileReason>,
     ) {
         #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
         if self.startup_flag {
@@ -545,13 +545,18 @@ impl Codegen {
             let start_pos = iseq.get_pc_index(position);
             let name = store.func_description(iseq.func_id());
             eprintln!(
-                "==> start {} {}compile: {:?} <{}> {}self_class: {} {}:{}",
+                "==> start {} {}compile: {}{:?} <{}> {}self_class: {} {}:{}",
                 if position.is_some() {
                     "partial"
                 } else {
                     "whole"
                 },
-                if _is_recompile { "re" } else { "" },
+                if _is_recompile.is_some() { "re" } else { "" },
+                if let Some(reason) = _is_recompile {
+                    format!("({:?}) ", reason)
+                } else {
+                    String::new()
+                },
                 iseq.func_id(),
                 name,
                 if position.is_some() {

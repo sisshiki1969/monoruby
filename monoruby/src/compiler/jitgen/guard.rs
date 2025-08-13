@@ -21,7 +21,7 @@ impl Codegen {
     /// Class version guard for JIT.
     ///
     /// Check the cached class version.
-    /// If different, jump to `deopt`.
+    /// If different, recompile immediately, and jump to `deopt`.
     ///
     /// ### destroy
     /// - rax
@@ -37,7 +37,7 @@ impl Codegen {
         self.check_version(cached_version, &fail);
 
         self.jit.select_page(1);
-        self.exec_recompile(position, fail);
+        self.exec_recompile(position, fail, RecompileReason::ClassVersionGuardFailed);
         self.version_guard_fail(deopt);
         self.jit.select_page(0);
     }
@@ -53,7 +53,7 @@ impl Codegen {
         self.check_version(cached_version, &fail);
 
         self.jit.select_page(1);
-        self.exec_specialized_recompile(idx, fail);
+        self.exec_specialized_recompile(idx, fail, RecompileReason::ClassVersionGuardFailed);
         self.version_guard_fail(deopt);
         self.jit.select_page(0);
     }
@@ -77,7 +77,12 @@ impl Codegen {
         );
     }
 
-    pub(super) fn recompile_and_deopt(&mut self, position: Option<BytecodePtr>, deopt: &DestLabel) {
+    pub(super) fn recompile_and_deopt(
+        &mut self,
+        position: Option<BytecodePtr>,
+        deopt: &DestLabel,
+        reason: RecompileReason,
+    ) {
         let recompile = self.jit.label();
         let dec = self.jit.label();
 
@@ -85,7 +90,7 @@ impl Codegen {
 
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
-        self.exec_recompile(position, recompile);
+        self.exec_recompile(position, recompile, reason);
         monoasm!( &mut self.jit,
             xorq rdi, rdi;
             jmp dec;
@@ -95,7 +100,12 @@ impl Codegen {
         eprintln!(" => deopt");
     }
 
-    pub(super) fn recompile_and_deopt_specialized(&mut self, deopt: &DestLabel, idx: usize) {
+    pub(super) fn recompile_and_deopt_specialized(
+        &mut self,
+        deopt: &DestLabel,
+        idx: usize,
+        reason: RecompileReason,
+    ) {
         let recompile = self.jit.label();
         let dec = self.jit.label();
 
@@ -103,7 +113,7 @@ impl Codegen {
 
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
-        self.exec_specialized_recompile(idx, recompile);
+        self.exec_specialized_recompile(idx, recompile, reason);
         monoasm! { &mut self.jit,
             xorq rdi, rdi;
             jmp dec;
@@ -123,7 +133,12 @@ impl Codegen {
     /// ### destroy
     /// - rax
     ///
-    fn exec_recompile(&mut self, position: Option<BytecodePtr>, label: DestLabel) {
+    fn exec_recompile(
+        &mut self,
+        position: Option<BytecodePtr>,
+        label: DestLabel,
+        reason: RecompileReason,
+    ) {
         self.jit.bind_label(label);
         self.jit.save_registers();
         monoasm!( &mut self.jit,
@@ -133,11 +148,13 @@ impl Codegen {
         if let Some(pc) = position {
             monoasm!( &mut self.jit,
                 movq rdx, (pc.as_ptr());
-                movq rax, (exec_jit_partial_recompile);
+                movl rcx, (reason as u32);
+                movq rax, (exec_jit_recompile_partial);
                 call rax;
             );
         } else {
             monoasm!( &mut self.jit,
+                movl rdx, (reason as u32);
                 movq rax, (exec_jit_recompile_method);
                 call rax;
             );
@@ -145,12 +162,18 @@ impl Codegen {
         self.jit.restore_registers();
     }
 
-    fn exec_specialized_recompile(&mut self, idx: usize, label: DestLabel) {
+    fn exec_specialized_recompile(
+        &mut self,
+        idx: usize,
+        label: DestLabel,
+        reason: RecompileReason,
+    ) {
         self.jit.bind_label(label);
         self.jit.save_registers();
         monoasm!( &mut self.jit,
             movq rdi, r12;
             movq rsi, (idx);
+            movl rdx, (reason as u32);
             movq rax, (exec_jit_specialized_recompile);
             call rax;
         );

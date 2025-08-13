@@ -855,10 +855,12 @@ pub(super) enum AsmInst {
     RecompileDeopt {
         position: Option<BytecodePtr>,
         deopt: AsmDeopt,
+        reason: RecompileReason,
     },
     RecompileDeoptSpecialized {
         idx: usize,
         deopt: AsmDeopt,
+        reason: RecompileReason,
     },
     WriteBack(WriteBack),
     HandleError(AsmError),
