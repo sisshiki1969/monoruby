@@ -12,6 +12,8 @@ impl JitModule {
         let entry_panic = jit.label();
         let exec_gc = jit.label();
         let f64_to_val = jit.label();
+        let stack_overflow = jit.label();
+
         // dispatch table.
         let entry_unimpl = jit.get_current_address();
         monoasm! { &mut jit,
@@ -33,6 +35,7 @@ impl JitModule {
             entry_raise,
             exec_gc,
             f64_to_val,
+            vm_stack_overflow: stack_overflow,
             entry_panic,
             dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
             bop_redefined_flags,
@@ -57,6 +60,7 @@ impl JitModule {
     ///
     fn init(&mut self) {
         let raise = self.entry_raise.clone();
+        let overflow = self.vm_stack_overflow.clone();
         let leave = self.jit.label();
         let goto = self.jit.label();
         monoasm! { &mut self.jit,
@@ -89,6 +93,14 @@ impl JitModule {
 
         let label = self.f64_to_val.clone();
         self.gen_f64_to_val(label);
+
+        monoasm! { &mut self.jit,
+        overflow:
+            movq rdi, rbx;
+            movq rax, (stack_overflow);
+            call rax;
+            jmp raise;
+        };
 
         let label = self.exec_gc.clone();
         monoasm! { &mut self.jit,
@@ -250,6 +262,25 @@ impl JitModule {
             testq rax, rax;
             jne  exit;
             jmp  error;
+        }
+        self.jit.select_page(0);
+    }
+
+    pub fn jit_check_stack(&mut self, wb: &jitgen::WriteBack, error: &DestLabel) {
+        let overflow = self.jit.label();
+        assert_eq!(0, self.jit.get_page());
+        monoasm! { &mut self.jit,
+            cmpq rsp, [rbx + (EXECUTOR_STACK_LIMIT)];
+            jle  overflow;
+        }
+        self.jit.select_page(1);
+        self.jit.bind_label(overflow);
+        self.gen_write_back(wb);
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rax, (stack_overflow);
+            call rax;
+            jmp error;
         }
         self.jit.select_page(0);
     }

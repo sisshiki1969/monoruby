@@ -125,6 +125,7 @@ impl Fiber {
             let stack_top = stack_bottom.add(FIBER_STACK_SIZE);
             self.stack = Some(std::ptr::NonNull::new(stack_bottom).unwrap());
             self.handle.save_rsp(stack_top);
+            self.handle.set_stack_limit(stack_top);
         }
     }
 

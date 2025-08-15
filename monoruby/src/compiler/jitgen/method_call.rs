@@ -220,7 +220,7 @@ impl JitContext {
         block_self: ClassId,
     ) {
         let dst = store[callid].dst;
-        bbctx.exec_gc(ir);
+        bbctx.exec_gc(ir, true);
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
         bbctx.set_arguments(store, ir, &store[callid], store[block_iseq].func_id());
@@ -477,7 +477,7 @@ impl JitContext {
         outer_lfp: Option<Lfp>,
     ) {
         ir.reg_move(GP::Rdi, GP::R13);
-        bbctx.exec_gc(ir);
+        bbctx.exec_gc(ir, true);
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
         bbctx.set_arguments(store, ir, callsite, callee_fid);
@@ -513,7 +513,7 @@ impl JitContext {
         evict: AsmEvict,
     ) {
         ir.reg_move(GP::Rdi, GP::R13);
-        bbctx.exec_gc(ir);
+        bbctx.exec_gc(ir, true);
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
         bbctx.set_arguments(store, ir, callsite, callee_fid);
@@ -563,7 +563,7 @@ impl BBContext {
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self);
         let evict = ir.new_evict();
-        self.exec_gc(ir);
+        self.exec_gc(ir, true);
         ir.push(AsmInst::Yield {
             callid,
             using_xmm,

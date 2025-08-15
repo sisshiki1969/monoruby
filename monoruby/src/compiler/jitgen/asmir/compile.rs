@@ -265,9 +265,13 @@ impl Codegen {
             AsmInst::WriteBack(wb) => self.gen_write_back(&wb),
             AsmInst::XmmSave(using_xmm) => self.xmm_save(using_xmm),
             AsmInst::XmmRestore(using_xmm) => self.xmm_restore(using_xmm),
-            AsmInst::ExecGc(wb, error) => {
+            AsmInst::ExecGc { write_back, error } => {
                 let error = &labels[error];
-                self.execute_gc(&wb, error)
+                self.jit_execute_gc(&write_back, error)
+            }
+            AsmInst::CheckStack { write_back, error } => {
+                let error = &labels[error];
+                self.jit_check_stack(&write_back, error);
             }
             AsmInst::SetArguments { callid, callee_fid } => {
                 let meta = store[callee_fid].meta();

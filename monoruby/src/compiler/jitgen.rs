@@ -50,6 +50,7 @@ enum CompileResult {
     /// deoptimize and recompile.
     Recompile(RecompileReason),
     /// internal error.
+    #[allow(dead_code)]
     Abort,
 }
 
@@ -260,10 +261,10 @@ impl BBContext {
             .push(AsmInst::GuardConstBaseClass { base_class, deopt });
     }
 
-    pub fn exec_gc(&self, ir: &mut AsmIr) {
+    pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool) {
         let wb = self.get_gc_write_back();
         let error = ir.new_error(self);
-        ir.exec_gc(wb, error);
+        ir.exec_gc(wb, error, check_stack);
     }
 
     pub fn load_constant(&mut self, ir: &mut AsmIr, dst: SlotId, cache: &ConstCache) {

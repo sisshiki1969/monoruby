@@ -424,6 +424,7 @@ impl MonorubyErr {
     ///
     /// Set TypeError with message "*name* is not Symbol".
     ///
+    #[allow(dead_code)]
     pub(crate) fn is_not_symbol(store: &Store, val: Value) -> MonorubyErr {
         MonorubyErr::typeerr(format!("{} is not a symbol", val.to_s(store)))
     }

@@ -119,6 +119,22 @@ impl Executor {
         executor
     }
 
+    ///
+    /// Set stack limit to (rsp - MAX_STACK_SIZE).
+    ///
+    pub fn init_stack_limit(&mut self, globals: &Globals) {
+        let invoker = globals.invokers.init_stack_limit;
+        invoker(self);
+    }
+
+    ///
+    /// Set stack limit to (*rsp* - MAX_STACK_SIZE).
+    ///
+    pub fn set_stack_limit(&mut self, rsp: *mut u8) {
+        let stack_limit = unsafe { rsp.sub(MAX_STACK_SIZE) };
+        self.stack_limit = stack_limit as usize;
+    }
+
     fn load_gems(&mut self, globals: &mut Globals) {
         if let Err(err) = self.require(globals, &std::path::PathBuf::from("rubygems"), false) {
             err.show_error_message_and_all_loc(&globals.store);
@@ -1387,7 +1403,7 @@ pub enum Visibility {
     Undefined = 3,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u32)]
 pub enum RecompileReason {
     NotCached = 0,

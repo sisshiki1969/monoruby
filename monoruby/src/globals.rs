@@ -77,6 +77,7 @@ impl ExternalContext {
 }
 
 pub(crate) struct Invokers {
+    pub init_stack_limit: extern "C" fn(&mut Executor) -> *const u8,
     pub method: MethodInvoker,
     pub block: BlockInvoker,
     pub fiber: FiberInvoker,
@@ -114,7 +115,7 @@ pub struct Globals {
     #[cfg(feature = "profile")]
     jit_class_unmatched_stats: HashMap<(FuncId, ClassId), usize>,
     #[cfg(feature = "profile")]
-    jit_recompile_count: HashMap<(FuncId, ClassId), usize>,
+    jit_recompile_count: HashMap<(FuncId, ClassId, RecompileReason), usize>,
     #[cfg(feature = "emit-bc")]
     dumped_bc: usize,
 }
@@ -157,6 +158,7 @@ impl Globals {
         let invokers = CODEGEN.with(|codegen| {
             let codegen = codegen.borrow();
             Invokers {
+                init_stack_limit: codegen.init_stack_limit,
                 method: codegen.method_invoker,
                 block: codegen.block_invoker,
                 fiber: codegen.fiber_invoker,
@@ -267,6 +269,7 @@ impl Globals {
             None => ".".to_string(),
         };
         let mut executor = Executor::init(self, &program_name);
+        executor.init_stack_limit(self);
         let res = executor.exec_script(self, code, path);
         self.flush_stdout();
         #[cfg(any(feature = "profile", feature = "jit-log"))]
@@ -561,11 +564,20 @@ impl Globals {
     }
 
     #[cfg(feature = "profile")]
-    pub fn countup_recompile(&mut self, func_id: FuncId, class_id: ClassId) {
-        match self.jit_recompile_count.get_mut(&(func_id, class_id)) {
+    pub fn countup_recompile(
+        &mut self,
+        func_id: FuncId,
+        class_id: ClassId,
+        reason: &RecompileReason,
+    ) {
+        match self
+            .jit_recompile_count
+            .get_mut(&(func_id, class_id, *reason))
+        {
             Some(c) => *c += 1,
             None => {
-                self.jit_recompile_count.insert((func_id, class_id), 1);
+                self.jit_recompile_count
+                    .insert((func_id, class_id, *reason), 1);
             }
         };
     }

@@ -155,8 +155,14 @@ impl AsmIr {
     /// - rax, rcx
     /// - stack
     ///
-    pub(super) fn exec_gc(&mut self, wb: WriteBack, error: AsmError) {
-        self.push(AsmInst::ExecGc(wb, error));
+    pub(super) fn exec_gc(&mut self, write_back: WriteBack, error: AsmError, check_stack: bool) {
+        if check_stack {
+            self.push(AsmInst::CheckStack {
+                write_back: write_back.clone(),
+                error,
+            });
+        }
+        self.push(AsmInst::ExecGc { write_back, error });
     }
 
     pub(super) fn reg_move(&mut self, src: GP, dst: GP) {
@@ -883,7 +889,20 @@ pub(super) enum AsmInst {
     /// - rax, rcx
     /// - stack
     ///
-    ExecGc(WriteBack, AsmError),
+    ExecGc {
+        write_back: WriteBack,
+        error: AsmError,
+    },
+    ///
+    /// Check stack overflow.
+    ///
+    /// ### in
+    /// - rbx: &mut Executor
+    ///
+    CheckStack {
+        write_back: WriteBack,
+        error: AsmError,
+    },
     ///
     /// Set arguments.
     ///

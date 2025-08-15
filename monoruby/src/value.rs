@@ -1106,6 +1106,7 @@ impl Value {
         })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn expect_symbol(&self, store: &Store) -> Result<IdentId> {
         self.try_symbol()
             .ok_or_else(|| MonorubyErr::is_not_symbol(store, *self))

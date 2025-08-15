@@ -174,6 +174,13 @@ pub struct JitModule {
     /// - r12: &mut Globals
     ///
     entry_panic: DestLabel,
+    ///
+    /// Raise StackOverFlow error.
+    ///
+    /// #### in
+    /// - rbx: &mut Executor
+    ///
+    vm_stack_overflow: DestLabel,
     dispatch: Box<[CodePtr; 256]>,
     bop_redefined_flags: DestLabel,
 }
@@ -597,6 +604,19 @@ impl JitModule {
     }
 
     ///
+    /// Check stack overflow.
+    ///
+    /// raise StackOverFlow error if the stack pointer is below the stack limit.
+    ///
+    fn vm_check_stack(&mut self) {
+        let overflow = self.vm_stack_overflow.clone();
+        monoasm! { &mut self.jit,
+            cmpq rsp, [rbx + (EXECUTOR_STACK_LIMIT)];
+            jle overflow;
+        };
+    }
+
+    ///
     /// Execute GC. (for JIT code)
     ///
     /// ### in
@@ -610,7 +630,7 @@ impl JitModule {
     /// - rax, rcx
     /// - stack
     ///
-    fn execute_gc(&mut self, wb: &jitgen::WriteBack, error: &DestLabel) {
+    fn jit_execute_gc(&mut self, wb: &jitgen::WriteBack, error: &DestLabel) {
         self.execute_gc_inner(Some(wb), error);
     }
 }
@@ -647,6 +667,10 @@ pub struct Codegen {
     ///
     get_class: DestLabel,
 
+    ///
+    /// Initialize stack bottom.
+    ///
+    pub(crate) init_stack_limit: extern "C" fn(&mut Executor) -> *const u8,
     pub(crate) method_invoker: MethodInvoker,
     pub(crate) method_invoker2: MethodInvoker2,
     pub(crate) block_invoker: BlockInvoker,
@@ -695,6 +719,7 @@ impl Codegen {
         let const_version_addr = jit.get_label_address(&jit.const_version).as_ptr() as *mut u64;
         let entry_panic = jit.entry_panic.clone();
         let get_class = jit.get_class();
+        let init_stack_limit = jit.init_stack_limit();
         let method_invoker = jit.method_invoker();
         let method_invoker2 = jit.method_invoker2();
         let block_invoker = jit.block_invoker();
@@ -719,6 +744,7 @@ impl Codegen {
             jit_class_guard_fail: entry_panic.clone(),
             div_by_zero: entry_panic.clone(),
             get_class,
+            init_stack_limit,
             method_invoker,
             method_invoker2,
             block_invoker,
@@ -1246,6 +1272,11 @@ extern "C" fn set_instance_var_with_cache(
     Some(Value::nil())
 }
 
+extern "C" fn stack_overflow(executor: &mut Executor) -> Option<Value> {
+    executor.set_error(MonorubyErr::runtimeerr("StackOverflow"));
+    None
+}
+
 #[cfg(feature = "profile")]
 extern "C" fn guard_fail(vm: &mut Executor, globals: &mut Globals, self_val: Value) {
     let func_id = vm.cfp().lfp().func_id();
@@ -1324,7 +1355,7 @@ impl Codegen {
         #[cfg(feature = "profile")]
         {
             if let Some(reason) = &is_recompile {
-                globals.countup_recompile(globals.store[iseq_id].func_id(), self_class);
+                globals.countup_recompile(globals.store[iseq_id].func_id(), self_class, reason);
             }
         }
         self.jit_compile(

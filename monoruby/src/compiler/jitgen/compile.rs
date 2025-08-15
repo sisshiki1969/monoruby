@@ -223,7 +223,7 @@ impl JitContext {
             TraceIr::InitMethod { .. } => {}
             TraceIr::LoopStart { .. } => {
                 self.loop_count += 1;
-                bbctx.exec_gc(ir);
+                bbctx.exec_gc(ir, false);
             }
             TraceIr::LoopEnd => {
                 assert_ne!(0, self.loop_count);

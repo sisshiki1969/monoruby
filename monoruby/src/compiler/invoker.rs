@@ -1,8 +1,18 @@
+use super::*;
 use crate::compiler::runtime::{PROCDATA_FUNCID, PROCDATA_OUTER};
 
-use super::*;
-
 impl JitModule {
+    pub(super) fn init_stack_limit(&mut self) -> extern "C" fn(&mut Executor) -> *const u8 {
+        let codeptr = self.jit.get_current_address();
+        monoasm! { &mut self.jit,
+            movq rax, rsp;
+            subq rax, (MAX_STACK_SIZE);
+            movq [rdi + (EXECUTOR_STACK_LIMIT)], rax;
+            ret;
+        }
+        unsafe { std::mem::transmute(codeptr.as_ptr()) }
+    }
+
     pub(super) fn method_invoker(&mut self) -> MethodInvoker {
         let codeptr = self.jit.get_current_address();
 
@@ -385,18 +395,30 @@ extern "C" fn illegal_classid(v: Value) {
 }
 
 impl JitModule {
-    fn invoker_prologue(&mut self, _error: &DestLabel) {
+    fn invoker_prologue(&mut self, error: &DestLabel) {
         // rdi: &mut Interp
         // rsi: &mut Globals
+        let overflow = self.jit.label();
         monoasm! { &mut self.jit,
             pushq rbx;
             pushq r12;
             pushq r13;
             pushq r14;
             pushq r15;
+            cmpq rsp, [rdi + (EXECUTOR_STACK_LIMIT)];
+            jle  overflow;
             movq rbx, rdi;
             movq r12, rsi;
         }
+
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        overflow:
+            movq rax, (stack_overflow);
+            call rax;
+            jmp error;
+        }
+        self.jit.select_page(0);
     }
 
     ///
