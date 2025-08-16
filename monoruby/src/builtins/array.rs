@@ -61,6 +61,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "push", push, 0, 0, true);
     globals.define_builtin_func(ARRAY_CLASS, "pop", pop, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "==", &["==="], eq, 1);
+    globals.define_builtin_func(ARRAY_CLASS, "eql?", eql, 1);
     globals.define_builtin_func(ARRAY_CLASS, "<=>", cmp, 1);
     globals.define_builtin_funcs_with(ARRAY_CLASS, "[]", &["slice"], index, 1, 2, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "[]=", index_assign, 2, 3, false);
@@ -706,6 +707,31 @@ fn pop(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     let res = ary.pop().unwrap_or_default();
     Ok(res)
+}
+
+///
+/// ### Array#eql?
+///
+/// - self.eql?(other) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/eql=3f.html]
+#[monoruby_builtin]
+fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let lhs = lfp.self_val().as_array();
+    let rhs = if let Some(rhs) = lfp.arg(0).try_array_ty() {
+        rhs
+    } else {
+        return Ok(Value::bool(false));
+    };
+    if lhs.len() != rhs.len() {
+        return Ok(Value::bool(false));
+    }
+    for i in 0..lhs.len() {
+        if !lhs[i].eql(&rhs[i], vm, globals)? {
+            return Ok(Value::bool(false));
+        }
+    }
+    Ok(Value::bool(true))
 }
 
 ///
@@ -2485,6 +2511,13 @@ mod tests {
         run_test(r##"[ 1, 2, 3 ] <=> [ 1, 2, 3 ] "##);
         run_test(r##"[ 1, 2, 3 ] <=> [ 1, 2 ] "##);
         run_test(r##"[ 1, 2 ] <=> [ 1, 2, 3 ] "##);
+    }
+
+    #[test]
+    fn eql() {
+        run_test(r##"["a", "b", "c"].eql? ["a", "b", "c"]"##);
+        run_test(r##"["a", "b", "c"].eql? ["a", "c", "b"]"##);
+        run_test(r##"["a", "b", 1].eql? ["a", "b", 1.0]"##);
     }
 
     #[test]
