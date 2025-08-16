@@ -5,7 +5,7 @@ require 'rbconfig'
 
 class BasicObject
   def method_missing(name, *args)
-    raise NoMethodError, " undefined method '#{name}' for #{self}"
+    raise NoMethodError, "undefined method '#{name}' for an instance of #{self.class}"
   end
 end
 
@@ -191,6 +191,16 @@ module Enumerable
     res
   end
 
+  def take_while
+    return self.to_enum(:take_while) if !block_given?
+    res = []
+    self.each do |x|
+      break unless yield(x)
+      res << x
+    end
+    res
+  end
+
   def any?
     if block_given?
       self.each do |x|
@@ -343,6 +353,47 @@ class Array
   #  end
   #  res
   #end
+
+  def bsearch
+    return to_enum(:bsearch) if !block_given?
+    low = 0
+    high = size
+    # 判定モードを最初の呼び出しで決定
+    mode = nil
+    while low < high
+      mid = (low + high) / 2
+      val = self[mid]
+      res = yield(val)
+
+      if mode.nil?
+        if res == true || res == false
+          mode = :find_min
+        elsif res.is_a?(Numeric)
+          mode = :find_exact
+        else
+          raise TypeError, "unexpected block result #{res.inspect}"
+        end
+      end
+
+      case mode
+      when :find_min
+        if res
+          high = mid
+        else
+          low = mid + 1
+        end
+      when :find_exact
+        if res < 0
+          low = mid + 1
+        elsif res > 0
+          high = mid
+        else
+          return val
+        end
+      end
+    end
+    mode == :find_min ? self[low] : nil
+  end
 end
 
 class Hash
@@ -465,6 +516,13 @@ class Range
       elem = elem.succ
     end
     res
+  end
+
+  def bsearch
+    return to_enum(:bsearch) if !block_given?
+    self.to_a.bsearch do |x|
+      yield(x)
+    end
   end
 end
 

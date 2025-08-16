@@ -20,3 +20,9 @@ fn filter_map() {
     run_test(r##"(1..10).filter_map { |i| i * 2 if i.even? }"##);
     run_test(r##"[*(1..10)].filter_map { |i| i * 2 if i.even? }"##);
 }
+
+#[test]
+fn take_while() {
+    run_test(r##"(1..10).take_while { |i| i < 5 }"##);
+    run_test(r##"[*(1..10)].take_while { |i| i < 5 }"##);
+}

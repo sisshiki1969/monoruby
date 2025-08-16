@@ -3256,4 +3256,26 @@ mod tests {
         "##,
         );
     }
+
+    #[test]
+    fn bsearch() {
+        run_test(
+            r##"
+        res = []
+        ary = [0, 4, 7, 10, 12]
+        res << ary.bsearch {|x| x >=   4 } # => 4
+        res << ary.bsearch {|x| x >=   6 } # => 7
+        res << ary.bsearch {|x| x >=  -1 } # => 0
+        res << ary.bsearch {|x| x >= 100 } # => nil
+
+        ary = [0, 4, 7, 10, 12]
+        # 4 <= v < 8 になる要素を検索
+        res << ary.bsearch {|x| 1 - x / 4 } # => 4 or 7
+        # 8 <= v < 10 になる要素を検索
+        res << ary.bsearch {|x| 4 - x / 2 } # => nil
+        
+        res
+        "##,
+        );
+    }
 }

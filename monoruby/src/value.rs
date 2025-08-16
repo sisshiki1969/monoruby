@@ -1,7 +1,10 @@
 use num::ToPrimitive;
 use onigmo_regex::Captures;
 use rubymap::RubyEql;
-use std::hash::{Hash, Hasher};
+use std::{
+    collections::HashSet,
+    hash::{Hash, Hasher},
+};
 
 use super::*;
 use crate::{
@@ -617,8 +620,16 @@ impl Value {
     }
 
     pub fn inspect(&self, store: &Store) -> String {
+        let mut set = HashSet::new();
+        self.inspect_inner(store, &mut set)
+    }
+
+    fn inspect_inner(&self, store: &Store, set: &mut HashSet<u64>) -> String {
+        if !set.insert(self.id()) {
+            return "...".to_string();
+        }
         let s = match self.unpack() {
-            RV::Object(rvalue) => rvalue.inspect(store),
+            RV::Object(rvalue) => rvalue.inspect(store, set),
             _ => self.debug(store),
         };
         s

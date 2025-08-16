@@ -480,10 +480,10 @@ impl RValue {
         }
     }
 
-    pub(crate) fn inspect(&self, store: &Store) -> String {
+    pub(crate) fn inspect(&self, store: &Store, set: &mut HashSet<u64>) -> String {
         unsafe {
             match self.ty() {
-                ObjTy::OBJECT => self.object_inspect(store),
+                ObjTy::OBJECT => self.object_inspect(store, set),
                 ObjTy::EXCEPTION => {
                     let class_name = store.get_class_name(self.class());
                     let msg = self.as_exception().message();
@@ -520,13 +520,13 @@ impl RValue {
         }
     }
 
-    fn object_inspect(&self, store: &Store) -> String {
+    fn object_inspect(&self, store: &Store, set: &mut HashSet<u64>) -> String {
         if let Some(name) = self.get_ivar(store, IdentId::_NAME) {
             name.to_s(store)
         } else {
             let mut s = String::new();
             for (id, v) in self.get_ivars(store).into_iter() {
-                s += &format!(" {id}={}", v.inspect(store));
+                s += &format!(" {id}={}", v.inspect_inner(store, set));
             }
             format!(
                 "#<{}:0x{:016x}{s}>",

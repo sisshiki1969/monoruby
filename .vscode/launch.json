@@ -11,7 +11,6 @@
       "cargo": {
         "args": [
           "run",
-          "--debug",
           "--features",
           "jit-log",
           "--bin=monoruby",
@@ -31,11 +30,20 @@
       "type": "lldb",
       "request": "launch",
       "name": "Debug 'lee'",
-      "program": "target/debug/monoruby",
+      "cargo": {
+        "args": [
+          "run",
+          "--features",
+          "jit-log",
+        ],
+      },
       "args": [
         "/home/monochrome/yjit-bench/benchmarks/lee/benchmark.rb",
       ],
-      "cwd": "${workspaceFolder}"
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PATH": "/home/monochrome/.rbenv/shims:${env:PATH}"
+      }
     },
     {
       "type": "lldb",

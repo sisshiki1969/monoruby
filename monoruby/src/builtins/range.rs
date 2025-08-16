@@ -433,4 +433,25 @@ mod tests {
         "#,
         );
     }
+
+    #[test]
+    fn bsearch() {
+        run_test(
+            r##"
+        res = []
+        ary = [0, 4, 7, 10, 12]
+        res << (0...ary.size).bsearch {|i| ary[i] >= 4 } # => 1
+        res << (0...ary.size).bsearch {|i| ary[i] >= 6 } # => 2
+        res << (0...ary.size).bsearch {|i| ary[i] >= 8 } # => 3
+        res << (0...ary.size).bsearch {|i| ary[i] >= 100 } # => nil
+
+        ary = [0, 100, 100, 100, 200]
+        res << (0..4).bsearch {|i| 100 - ary[i] } # => 1, 2 or 3
+        res << (0..4).bsearch {|i| 300 - ary[i] } # => nil
+        res << (0..4).bsearch {|i|  50 - ary[i] } # => nil
+        
+        res
+        "##,
+        );
+    }
 }
