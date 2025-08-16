@@ -7,10 +7,11 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug 'optcarrot'",
+      "name": "Debug 'activerecord'",
       "cargo": {
         "args": [
-          "build",
+          "run",
+          "--debug",
           "--features",
           "jit-log",
           "--bin=monoruby",
@@ -29,22 +30,10 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug 'bedcov'",
-      "cargo": {
-        "args": [
-          "run",
-          "--features",
-          "emit-asm",
-          "--bin=monoruby",
-          "--package=monoruby",
-        ],
-        "filter": {
-          "name": "monoruby",
-          "kind": "bin"
-        }
-      },
+      "name": "Debug 'lee'",
+      "program": "target/debug/monoruby",
       "args": [
-        "benchmark/plb2/bedcov.rb",
+        "/home/monochrome/yjit-bench/benchmarks/lee/benchmark.rb",
       ],
       "cwd": "${workspaceFolder}"
     },

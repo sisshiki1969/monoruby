@@ -1,5 +1,5 @@
 use super::*;
-use onigmo_regex::{Captures, FindCaptures, Regex};
+use onigmo_regex::{Captures, FindCaptures, OnigmoEncoding, Regex};
 use std::sync::Arc;
 use std::sync::{LazyLock, RwLock};
 
@@ -59,11 +59,20 @@ impl RegexpInner {
 
     /// Create `RegexpInfo` from `escaped_str` escaping all meta characters.
     pub fn from_escaped(text: &str) -> Result<Self> {
-        RegexpInner::with_option(Self::escape(text), 0)
+        RegexpInner::with_option_and_encoding(Self::escape(text), 0, OnigmoEncoding::UTF8)
     }
 
     /// Create `RegexpInfo` from `reg_str` with `option`.
     pub fn with_option(reg_str: impl Into<String>, option: u32) -> Result<Self> {
+        Self::with_option_and_encoding(reg_str, option, OnigmoEncoding::UTF8)
+    }
+
+    /// Create `RegexpInfo` from `reg_str` with `option`.
+    pub fn with_option_and_encoding(
+        reg_str: impl Into<String>,
+        option: u32,
+        encoding: OnigmoEncoding,
+    ) -> Result<Self> {
         let reg_str: String = reg_str.into();
         match REGEX_CACHE
             .write()
@@ -75,7 +84,7 @@ impl RegexpInner {
                 Ok(RegexpInner(entry.get().clone()))
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
-                match Regex::new_with_option(&reg_str, option) {
+                match Regex::new_with_option_and_encoding(&reg_str, option, encoding) {
                     Ok(regexp) => {
                         let regex = Arc::new(regexp);
                         entry.insert(regex.clone());

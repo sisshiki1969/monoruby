@@ -1090,7 +1090,6 @@ impl<'a> Lexer<'a> {
             } else if self.consume('x') {
                 // free format mode
                 s.push('x');
-                //free_format = true;
             } else if self.consume('o') {
                 // expand "#{}" only once
                 //s.push('o');
@@ -1098,6 +1097,7 @@ impl<'a> Lexer<'a> {
                 // Encoding+ utf-8
             } else if self.consume('n') {
                 // Encoding+ ASCII-8bit
+                s.push('n');
             } else {
                 break;
             };

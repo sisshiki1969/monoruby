@@ -1007,6 +1007,11 @@ impl BytecodeGen {
 
     fn const_regexp(&self, nodes: Vec<Node>, option: String, loc: Loc) -> Result<Value> {
         let mut string = String::new();
+        let encoding = if option.contains('n') {
+            onigmo_regex::OnigmoEncoding::ASCII
+        } else {
+            onigmo_regex::OnigmoEncoding::UTF8
+        };
         let option = onigmo_regex::ONIG_OPTION_NONE
             | if option.contains('i') {
                 onigmo_regex::ONIG_OPTION_IGNORECASE
@@ -1029,7 +1034,7 @@ impl BytecodeGen {
                 _ => unreachable!(),
             }
         }
-        let re = match RegexpInner::with_option(string, option) {
+        let re = match RegexpInner::with_option_and_encoding(string, option, encoding) {
             Ok(re) => re,
             Err(err) => return Err(self.syntax_error(err.message(), loc)),
         };
