@@ -62,7 +62,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "pop", pop, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "==", &["==="], eq, 1);
     globals.define_builtin_func(ARRAY_CLASS, "<=>", cmp, 1);
-    globals.define_builtin_func_with(ARRAY_CLASS, "[]", index, 1, 2, false);
+    globals.define_builtin_funcs_with(ARRAY_CLASS, "[]", &["slice"], index, 1, 2, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "[]=", index_assign, 2, 3, false);
     globals.define_builtin_func(ARRAY_CLASS, "clear", clear, 0);
     globals.define_builtin_func(ARRAY_CLASS, "fill", fill, 1);
@@ -1922,7 +1922,7 @@ fn uniq_inner(
     res.map(|removed| removed.is_some())
 }
 
-///e
+///
 /// ### Array#slice!
 ///
 /// - slice!(nth) -> object | nil
