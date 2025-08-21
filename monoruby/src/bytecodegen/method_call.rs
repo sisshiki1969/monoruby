@@ -4,6 +4,7 @@ mod arguments;
 
 impl BytecodeGen {
     pub(super) fn emit_call(&mut self, callsite: CallSite, loc: Loc) {
+        self.save_method_cache();
         if callsite.block_fid.is_some() {
             self.emit(
                 BytecodeInst::MethodCallBlock(Box::new(callsite.clone())),
@@ -16,6 +17,7 @@ impl BytecodeGen {
     }
 
     pub(super) fn emit_yield(&mut self, callsite: CallSite, loc: Loc) {
+        self.save_method_cache();
         self.emit(BytecodeInst::Yield(Box::new(callsite.clone())), loc);
         self.emit(BytecodeInst::InlineCache(Box::new(callsite)), loc);
     }

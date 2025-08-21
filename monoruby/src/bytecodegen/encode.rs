@@ -57,6 +57,7 @@ impl BytecodeGen {
         let can_be_inlined = self.ir.iter().all(|(inst, _)| inst.can_be_inlined());
         let (ops, sourcemap, bbinfo) = self.ir_to_bc(store)?;
         let info = store.iseq_mut(func_id);
+        info.cache_map = std::mem::take(&mut self.cache_map);
         info.temp_num = self.temp_num;
         info.non_temp_num = self.non_temp_num;
         info.literals = std::mem::take(&mut self.literals);
@@ -429,12 +430,12 @@ impl BytecodeGen {
                 let opcode = if callsite.is_simple() { 32 } else { 33 };
                 self.encode_call(store, opcode, callsite, loc)?
             }
-            BytecodeInst::InlineCache(box callsite) => self.encode_cache(130, callsite)?,
             BytecodeInst::Yield(box callsite) => {
                 // 34, 35
                 let opcode = if callsite.is_simple() { 34 } else { 35 };
                 self.encode_call(store, opcode, callsite, loc)?
             }
+            BytecodeInst::InlineCache(box callsite) => self.encode_cache(130, callsite)?,
             BytecodeInst::Array(ret, box callsite) => {
                 // 39
                 let op1 = self.slot_id(&ret);

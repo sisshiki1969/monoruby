@@ -125,6 +125,8 @@ pub struct ISeqInfo {
     pub sourceinfo: SourceInfoRef,
     is_block_style: bool,
     pub(crate) can_be_inlined: bool,
+    /// Cache map.
+    pub(crate) cache_map: indexmap::IndexMap<BcIndex, CacheType>,
     /// JIT code entries for each class of *self*.
     jit_entry: HashMap<ClassId, DestLabel>,
     ///
@@ -184,6 +186,7 @@ impl ISeqInfo {
             sourceinfo,
             is_block_style,
             can_be_inlined: false,
+            cache_map: indexmap::IndexMap::default(),
             jit_entry: HashMap::default(),
             bb_info: BasicBlockInfo::default(),
         }
@@ -530,14 +533,15 @@ impl ISeqInfo {
                         1 => true,
                         _ => unreachable!(),
                     };
-                    if let Some(func_id) = pc.cached_fid() {
+                    let (cached_class, cached_fid, version) = pc.method_cache();
+                    if let Some(func_id) = cached_fid {
                         TraceIr::MethodCall {
                             _polymorphic: polymorphic,
                             callid,
                             cache: Some(MethodCacheEntry {
-                                recv_class: pc.cached_class1().unwrap(),
+                                recv_class: cached_class.unwrap(),
                                 func_id,
-                                version: (pc + 1).cached_version(),
+                                version,
                             }),
                         }
                     } else {

@@ -570,7 +570,7 @@ impl Codegen {
                 iseq.sourceinfo.get_line(&iseq.loc),
             );
         }
-        #[cfg(feature = "emit-bc")]
+        #[cfg(feature = "emit-asm")]
         {
             store.dump_iseq(iseq_id);
         }

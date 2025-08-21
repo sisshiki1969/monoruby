@@ -487,6 +487,11 @@ struct MergeSourceInfo {
     sp: BcTemp,
 }
 
+#[derive(Debug, Clone)]
+pub enum CacheType {
+    Method,
+}
+
 #[derive(Debug)]
 struct BytecodeGen {
     /// ID of this function.
@@ -525,6 +530,8 @@ struct BytecodeGen {
     exception_table: Vec<ExceptionEntry>,
     /// Merge info.
     merge_info: HashMap<Label, (Option<BcTemp>, Vec<MergeSourceInfo>)>,
+    /// Cahce map
+    cache_map: indexmap::IndexMap<BcIndex, CacheType>,
 }
 
 impl std::ops::Index<Label> for BytecodeGen {
@@ -559,6 +566,7 @@ impl BytecodeGen {
             sourceinfo: info.sourceinfo.clone(),
             exception_table: vec![],
             merge_info: HashMap::default(),
+            cache_map: indexmap::IndexMap::default(),
         };
         if let Some(lvc) = binding {
             assert!(info.args.args_names.is_empty());
@@ -635,6 +643,10 @@ impl BytecodeGen {
 
     fn loop_pop(&mut self) {
         self.loops.pop().unwrap();
+    }
+
+    fn save_method_cache(&mut self) {
+        self.cache_map.insert(self.pc(), CacheType::Method);
     }
 }
 

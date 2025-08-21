@@ -559,6 +559,11 @@ impl Store {
             "<{}> {file_name}:{line}",
             self.func_description(iseq.func_id()),
         );
+        for (bc_idx, cache_type) in &iseq.cache_map {
+            let pc = iseq.get_pc(*bc_idx);
+            let (cached_class, cached_fid, cached_version) = pc.method_cache();
+            eprintln!("{:?} {:?} {:08x}", cached_class, cached_fid, cached_version);
+        }
         eprintln!(
             "{:?} owner:{:?} local_vars:{} temp:{}",
             self[iseq.func_id()].meta(),
@@ -609,15 +614,17 @@ impl Store {
 
         eprintln!();
         eprintln!("full method exploration stats (top 20)");
-        eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
-        eprintln!("------------------------------------------------------------------------");
+        eprintln!("{:25} {:45} {:10}", "func name", "class", "count");
+        eprintln!(
+            "----------------------------------------------------------------------------------"
+        );
         GLOBAL_METHOD_CACHE.with(|cache| {
             let c = cache.borrow();
             let mut v = c.method_exprolation_stats();
             v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
             for ((class_id, name), count) in v.into_iter().take(20) {
                 eprintln!(
-                    "{:30} {:30} {:10}",
+                    "{:25} {:45} {:10}",
                     name.to_string(),
                     self.debug_class_name(*class_id),
                     count

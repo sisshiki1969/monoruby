@@ -106,15 +106,15 @@ impl Globals {
             self.store.show_stats();
             eprintln!();
             eprintln!("jit class guard failed stats (top 20)");
-            eprintln!(" FuncId  {:40} {:30} {:10}", "func name", "class", "count");
+            eprintln!(" FuncId  {:35} {:45} {:10}", "func name", "class", "count");
             eprintln!(
-                "--------------------------------------------------------------------------------------------"
+                "------------------------------------------------------------------------------------------------------"
             );
             let mut v: Vec<_> = self.jit_class_unmatched_stats.iter().collect();
             v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
             for ((func_id, class_id), count) in v.into_iter().take(20) {
                 eprintln!(
-                    "({:6}) {:40} {:30} {:10}",
+                    "({:6}) {:35} {:45} {:10}",
                     func_id.get(),
                     self.store.func_description(*func_id),
                     self.store.debug_class_name(*class_id),
@@ -128,17 +128,17 @@ impl Globals {
                 "func name", "class", "reason", "count"
             );
             eprintln!(
-                "--------------------------------------------------------------------------------------------"
+                "--------------------------------------------------------------------------------------------------------------------------------"
             );
             let mut v: Vec<_> = self.jit_recompile_count.iter().collect();
             v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
             for ((func_id, class_id, reason), count) in v.into_iter().take(20) {
                 eprintln!(
-                    "({:6}) {:40} {:30} {:30?} {:10}",
+                    "({:6}) {:40} {:30} {:30} {:10}",
                     func_id.get(),
                     self.store.func_description(*func_id),
                     self.store.debug_class_name(*class_id),
-                    reason,
+                    format!("{:?}", reason),
                     count
                 );
             }

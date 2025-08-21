@@ -23,6 +23,7 @@ mod value;
 pub(crate) use crate::compiler::runtime::ProcData;
 pub(crate) use bytecode::*;
 pub use bytecodegen::bytecode_compile_script;
+pub(crate) use bytecodegen::CacheType;
 pub use compiler::jitgen::JitContext;
 pub use executor::Executor;
 pub use globals::OBJECT_CLASS;

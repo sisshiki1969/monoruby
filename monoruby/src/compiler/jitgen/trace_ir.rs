@@ -735,9 +735,9 @@ impl TraceIr {
                 let s = callsite.format_args();
                 let op1 = format!("{} = {:?}.{name}{s}", ret_str(*dst), recv,);
                 format!(
-                    "{:36} {} [{}] {}",
+                    "{:36} {}[{}] {}",
                     op1,
-                    if *polymorphic { "POLY" } else { "" },
+                    if *polymorphic { "POLYMORPHIC " } else { "" },
                     store.debug_class_name(if let Some(entry) = cache {
                         Some(entry.recv_class)
                     } else {

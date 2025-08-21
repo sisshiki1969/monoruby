@@ -304,4 +304,12 @@ impl BytecodePtr {
     pub fn cached_class0(self) -> Option<ClassId> {
         self.classid1()
     }
+
+    pub fn method_cache(self) -> (Option<ClassId>, Option<FuncId>, u32) {
+        (
+            self.cached_class1(),
+            self.cached_fid(),
+            (self + 1).cached_version(),
+        )
+    }
 }
