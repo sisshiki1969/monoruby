@@ -13,6 +13,7 @@ impl JitContext {
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
         store: &Store,
+        bc_pos: BcIndex,
         cache: MethodCacheEntry,
         callsite: &CallSiteInfo,
     ) -> CompileResult {
@@ -25,8 +26,15 @@ impl JitContext {
         if (version != self.class_version()) || (recv.is_self() && self.self_class() != recv_class)
         {
             // the inline method cache is invalid because the receiver class is not matched.
-            recv_class = self.self_class();
+            if recv.is_self() {
+                recv_class = self.self_class()
+            };
             if let Some(fid) = self.jit_check_call(store, recv_class, callsite.name) {
+                store[self.iseq_id()].get_pc(bc_pos).write_method_cache(
+                    recv_class,
+                    fid,
+                    self.class_version(),
+                );
                 func_id = fid;
             } else {
                 return CompileResult::Recompile(RecompileReason::MethodNotFound);

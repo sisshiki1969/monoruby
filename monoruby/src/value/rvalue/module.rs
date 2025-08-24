@@ -37,10 +37,13 @@ impl Module {
     ///
     /// We must ensure `module` does not include `self` cyclically.
     ///
+    /// class_version is incremented.
+    ///
     pub(crate) fn include_module(&mut self, mut module: Module) -> Result<()> {
         if self.check_cyclic(module) {
             return Err(MonorubyErr::argumenterr("cyclic include detected"));
         }
+        Globals::class_version_inc();
         let mut base = *self;
         loop {
             if !module.is_ancestor_of(*self) {

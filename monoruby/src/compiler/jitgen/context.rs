@@ -479,7 +479,7 @@ impl JitContext {
     ) -> Option<FuncId> {
         let class_version = self.class_version;
         store
-            .check_method_for_class(class_id, name, class_version)?
+            .check_method_for_class_with_version(class_id, name, class_version)?
             .func_id()
     }
 

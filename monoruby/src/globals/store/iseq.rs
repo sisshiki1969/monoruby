@@ -2,7 +2,7 @@ use bytecodegen::{
     inst::{BrKind, DynVar, FnInitInfo},
     BinOpK, UnOpK,
 };
-use jitgen::trace_ir::{BinOpInfo, MethodCacheEntry, OpMode, TraceIr};
+use jitgen::trace_ir::{BinOpInfo, OpMode, TraceIr};
 use ruruby_parse::CmpKind;
 
 use super::*;
@@ -533,23 +533,15 @@ impl ISeqInfo {
                         1 => true,
                         _ => unreachable!(),
                     };
-                    let (cached_class, cached_fid, version) = pc.method_cache();
-                    if let Some(func_id) = cached_fid {
-                        TraceIr::MethodCall {
-                            _polymorphic: polymorphic,
-                            callid,
-                            cache: Some(MethodCacheEntry {
-                                recv_class: cached_class.unwrap(),
-                                func_id,
-                                version,
-                            }),
-                        }
+                    let cache = if let Some(cache) = pc.method_cache() {
+                        Some(cache)
                     } else {
-                        TraceIr::MethodCall {
-                            _polymorphic: polymorphic,
-                            callid,
-                            cache: None,
-                        }
+                        None
+                    };
+                    TraceIr::MethodCall {
+                        _polymorphic: polymorphic,
+                        callid,
+                        cache,
                     }
                 }
                 34..=35 => TraceIr::Yield {

@@ -2,6 +2,8 @@ use inline::InlineTable;
 use monoasm::DestLabel;
 use ruruby_parse::{LvarCollector, ParseResult};
 
+use crate::compiler::jitgen::trace_ir::MethodCacheEntry;
+
 use super::*;
 use std::{cell::RefCell, pin::Pin};
 
@@ -506,6 +508,15 @@ impl Store {
         &self,
         class_id: ClassId,
         name: IdentId,
+    ) -> Option<MethodTableEntry> {
+        let class_version = Globals::class_version();
+        self.check_method_for_class_with_version(class_id, name, class_version)
+    }
+
+    pub(crate) fn check_method_for_class_with_version(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
         class_version: u32,
     ) -> Option<MethodTableEntry> {
         GLOBAL_METHOD_CACHE.with(|cache| {
@@ -561,8 +572,17 @@ impl Store {
         );
         for (bc_idx, cache_type) in &iseq.cache_map {
             let pc = iseq.get_pc(*bc_idx);
-            let (cached_class, cached_fid, cached_version) = pc.method_cache();
-            eprintln!("{:?} {:?} {:08x}", cached_class, cached_fid, cached_version);
+            if let Some(MethodCacheEntry {
+                recv_class,
+                func_id,
+                version,
+            }) = pc.method_cache()
+            {
+                eprintln!(
+                    "{:?} {:?} {:08x} {:?}",
+                    recv_class, func_id, version, cache_type
+                );
+            }
         }
         eprintln!(
             "{:?} owner:{:?} local_vars:{} temp:{}",

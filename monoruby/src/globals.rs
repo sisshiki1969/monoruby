@@ -535,11 +535,11 @@ impl Globals {
         });
     }
 
-    pub(crate) fn class_version_inc(&mut self) {
+    pub(crate) fn class_version_inc() {
         CODEGEN.with(|codegen| codegen.borrow_mut().class_version_inc());
     }
 
-    pub(crate) fn class_version(&self) -> u32 {
+    pub(crate) fn class_version() -> u32 {
         CODEGEN.with(|codegen| codegen.borrow().class_version())
     }
 

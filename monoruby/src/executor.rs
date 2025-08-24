@@ -670,7 +670,7 @@ impl Executor {
         is_func_call: bool,
     ) -> Result<FuncId> {
         let class_id = recv.class();
-        match globals.check_method_for_class(class_id, func_name, globals.class_version()) {
+        match globals.check_method_for_class(class_id, func_name) {
             Some(entry) => {
                 match entry.visibility() {
                     Visibility::Private => {

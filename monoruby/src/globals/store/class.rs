@@ -777,17 +777,7 @@ impl ClassInfoTable {
     }
 }
 
-impl Globals {
-    pub fn include_module(&mut self, mut base: Module, module: Module) -> Result<()> {
-        self.class_version_inc();
-        base.include_module(module)
-    }
-
-    pub fn prepend_module(&mut self, mut base: Module, module: Module) -> Result<()> {
-        self.class_version_inc();
-        base.prepend_module(module)
-    }
-
+impl Store {
     ///
     /// Add a new public method *func* with *name* to the class of *class_id*.
     ///
@@ -840,7 +830,7 @@ impl Globals {
         visibility: Visibility,
         is_basic_op: bool,
     ) {
-        self.store[func_id].set_owner_class(owner);
+        self[func_id].set_owner_class(owner);
         self.insert_method(
             owner,
             name,
@@ -853,8 +843,8 @@ impl Globals {
         );
         #[cfg(feature = "perf")]
         {
-            let info = self.store[func_id].get_wrapper_info();
-            let desc = self.store.func_description(func_id);
+            let info = self[func_id].get_wrapper_info();
+            let desc = self.func_description(func_id);
             JitModule::perf_write(info, &desc);
         }
     }
@@ -896,12 +886,12 @@ impl Globals {
     ) {
         #[cfg(feature = "perf")]
         {
-            let info = self.store[func_id].get_wrapper_info();
-            let desc = self.store.func_description(func_id);
+            let info = self[func_id].get_wrapper_info();
+            let desc = self.func_description(func_id);
             JitModule::perf_write(info, &desc);
         }
-        let singleton = self.store.classes.get_metaclass(class_id).id();
-        self.store[func_id].set_owner_class(class_id);
+        let singleton = self.classes.get_metaclass(class_id).id();
+        self[func_id].set_owner_class(class_id);
         self.insert_method(
             singleton,
             name,
@@ -920,16 +910,12 @@ impl Globals {
     /// This fn increments class version.
     ///
     pub(crate) fn remove_method(&mut self, class_id: ClassId, func_name: IdentId) -> Result<()> {
-        self.class_version_inc();
-        if self.store.classes[class_id]
-            .methods
-            .remove(&func_name)
-            .is_none()
-        {
+        Globals::class_version_inc();
+        if self.classes[class_id].methods.remove(&func_name).is_none() {
             Err(MonorubyErr::nameerr(format!(
                 "method `{}' not defined in {}",
                 func_name,
-                self.store.get_class_name(class_id)
+                self.get_class_name(class_id)
             )))
         } else {
             Ok(())
@@ -948,7 +934,7 @@ impl Globals {
         Some(if inherit {
             self.check_method_for_class(class_id, func_name)?.visibility
         } else {
-            self.store.classes.get_method(class_id, func_name)?.1
+            self.classes.get_method(class_id, func_name)?.1
         })
     }
 
@@ -1025,15 +1011,6 @@ impl Globals {
     }
 
     ///
-    /// Check whether a method *name* of class *class_id* exists.
-    ///
-    fn check_method_for_class(&self, class_id: ClassId, name: IdentId) -> Option<MethodTableEntry> {
-        let class_version = self.class_version();
-        self.store
-            .check_method_for_class(class_id, name, class_version)
-    }
-
-    ///
     /// Change visibility of methods `names` class *class_id*.
     ///
     /// This fn increments class version.
@@ -1046,10 +1023,10 @@ impl Globals {
     ) -> Result<()> {
         for name in names {
             self.find_method_for_class(class_id, *name)?;
-            match self.store.classes[class_id].methods.get_mut(name) {
+            match self.classes[class_id].methods.get_mut(name) {
                 Some(entry) => {
                     entry.visibility = visibility;
-                    self.class_version_inc();
+                    Globals::class_version_inc();
                 }
                 None => {
                     self.add_empty_method(class_id, *name, visibility);
@@ -1065,8 +1042,8 @@ impl Globals {
     /// This fn increments class version.
     ///
     fn insert_method(&mut self, class_id: ClassId, name: IdentId, entry: MethodTableEntry) {
-        self.class_version_inc();
-        if let Some(old) = self.store.classes[class_id].methods.insert(name, entry)
+        Globals::class_version_inc();
+        if let Some(old) = self.classes[class_id].methods.insert(name, entry)
             && old.is_basic_op
         {
             self.set_bop_redefine();
@@ -1077,9 +1054,9 @@ impl Globals {
         CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
             codegen.set_bop_redefine();
-            self.store.invalidate_jit_code();
+            self.invalidate_jit_code();
             let vm_entry = codegen.vm_entry();
-            for func in self.store.functions.functions() {
+            for func in self.functions.functions() {
                 if let FuncKind::ISeq(_) = func.kind {
                     let entry = codegen.jit.get_label_address(&func.entry_label());
                     codegen.jit.apply_jmp_patch_address(entry, &vm_entry);
@@ -1088,6 +1065,37 @@ impl Globals {
         });
     }
 
+    fn check_cache_map(&self, iseq_id: ISeqId) -> bool {
+        let current_version = Globals::class_version();
+        let iseq = &self[iseq_id];
+        for (bc_pos, ty) in &iseq.cache_map {
+            let pc = iseq.get_pc(*bc_pos);
+            match ty {
+                CacheType::Method => {
+                    if let Some(MethodCacheEntry {
+                        recv_class,
+                        func_id: cached_fid,
+                        ..
+                    }) = pc.method_cache()
+                    {
+                        let method_name = self[pc.method_callsite()].name.unwrap();
+                        if let Some(MethodTableEntry { func_id, .. }) =
+                            self.check_method_for_class(recv_class, method_name)
+                            && func_id == Some(cached_fid)
+                        {
+                            pc.write_method_cache_version(current_version);
+                        } else {
+                            return false;
+                        }
+                    };
+                }
+            }
+        }
+        true
+    }
+}
+
+impl Globals {
     #[cfg(feature = "profile")]
     pub(crate) fn jit_class_guard_failed(&mut self, func_id: FuncId, class_id: ClassId) {
         {
