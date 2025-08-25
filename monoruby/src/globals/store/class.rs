@@ -1065,8 +1065,8 @@ impl Store {
         });
     }
 
-    fn check_cache_map(&self, iseq_id: ISeqId) -> bool {
-        let current_version = Globals::class_version();
+    fn update_cache_map(&self, iseq_id: ISeqId) -> bool {
+        let class_version = Globals::class_version();
         let iseq = &self[iseq_id];
         for (bc_pos, ty) in &iseq.cache_map {
             let pc = iseq.get_pc(*bc_pos);
@@ -1075,15 +1075,20 @@ impl Store {
                     if let Some(MethodCacheEntry {
                         recv_class,
                         func_id: cached_fid,
-                        ..
+                        version: cached_version,
                     }) = pc.method_cache()
+                        && cached_version != class_version
                     {
                         let method_name = self[pc.method_callsite()].name.unwrap();
-                        if let Some(MethodTableEntry { func_id, .. }) =
-                            self.check_method_for_class(recv_class, method_name)
+                        if let Some(MethodTableEntry { func_id, .. }) = self
+                            .check_method_for_class_with_version(
+                                recv_class,
+                                method_name,
+                                class_version,
+                            )
                             && func_id == Some(cached_fid)
                         {
-                            pc.write_method_cache_version(current_version);
+                            pc.write_method_cache_version(class_version);
                         } else {
                             return false;
                         }

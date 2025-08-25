@@ -504,6 +504,8 @@ impl Store {
     ///
     /// Check whether a method *name* of class *class_id* exists.
     ///
+    /// This fn does not consider visibility.
+    ///
     pub(crate) fn check_method_for_class(
         &self,
         class_id: ClassId,

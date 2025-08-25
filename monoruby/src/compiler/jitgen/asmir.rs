@@ -806,6 +806,7 @@ pub(super) enum AsmInst {
     GuardClassVersion {
         version: u32,
         position: Option<BytecodePtr>,
+        with_recovery: bool,
         deopt: AsmDeopt,
     },
     GuardClassVersionSpecialized {

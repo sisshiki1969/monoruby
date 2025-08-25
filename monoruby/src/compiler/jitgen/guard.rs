@@ -3,10 +3,9 @@ use super::*;
 impl Codegen {
     fn check_version(&mut self, cached_version: u32, fail: &DestLabel) {
         let global_version = self.class_version_label();
-        let cached_version = self.jit.data_i32(cached_version as i32);
         monoasm! { &mut self.jit,
-            movl rax, [rip + cached_version];
-            cmpl [rip + global_version], rax;
+            movl rax, [rip + global_version];
+            cmpl rax, (cached_version);
             jne  fail;
         }
     }
@@ -30,6 +29,7 @@ impl Codegen {
         &mut self,
         cached_version: u32,
         position: Option<BytecodePtr>,
+        with_recovery: bool,
         deopt: &DestLabel,
     ) {
         assert_eq!(0, self.jit.get_page());

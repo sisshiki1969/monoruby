@@ -119,7 +119,7 @@ impl JitContext {
         // class version guard
         let class_version = self.class_version();
         let deopt = ir.new_deopt(bbctx);
-        self.guard_class_version(bbctx, ir, class_version, deopt);
+        self.guard_class_version(bbctx, ir, class_version, false, deopt);
 
         // receiver class guard
         let BinOpInfo {
@@ -165,7 +165,7 @@ impl JitContext {
 
         // class version guard
         let deopt = ir.new_deopt(bbctx);
-        self.guard_class_version(bbctx, ir, version, deopt);
+        self.guard_class_version(bbctx, ir, version, true, deopt);
 
         // receiver class guard
         bbctx.fetch(ir, recv, GP::Rdi);
@@ -190,6 +190,7 @@ impl JitContext {
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
         version: u32,
+        with_recovery: bool,
         deopt: AsmDeopt,
     ) {
         if bbctx.class_version_guarded {
@@ -207,6 +208,7 @@ impl JitContext {
                 ir.push(AsmInst::GuardClassVersion {
                     version,
                     position: self.position(),
+                    with_recovery,
                     deopt,
                 });
             }

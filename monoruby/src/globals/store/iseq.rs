@@ -126,7 +126,7 @@ pub struct ISeqInfo {
     is_block_style: bool,
     pub(crate) can_be_inlined: bool,
     /// Cache map.
-    pub(crate) cache_map: indexmap::IndexMap<BcIndex, CacheType>,
+    pub(crate) cache_map: Vec<(BcIndex, CacheType)>,
     /// JIT code entries for each class of *self*.
     jit_entry: HashMap<ClassId, DestLabel>,
     ///
@@ -186,7 +186,7 @@ impl ISeqInfo {
             sourceinfo,
             is_block_style,
             can_be_inlined: false,
-            cache_map: indexmap::IndexMap::default(),
+            cache_map: vec![],
             jit_entry: HashMap::default(),
             bb_info: BasicBlockInfo::default(),
         }
