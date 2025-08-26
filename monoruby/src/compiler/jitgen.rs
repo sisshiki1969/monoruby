@@ -583,11 +583,14 @@ impl Codegen {
         } else {
             JitType::Method
         };
+        let class_version = self.class_version();
+        let class_version_label = self.jit.const_i32(class_version as _);
         let mut ctx = JitContext::new(
             store,
             iseq_id,
             jit_type,
-            self.class_version(),
+            class_version,
+            class_version_label,
             self_class,
             0,
         );

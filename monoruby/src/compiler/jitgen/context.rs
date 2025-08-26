@@ -98,6 +98,7 @@ pub struct JitContext {
     /// Class version at compile time.
     ///
     class_version: u32,
+    class_version_label: DestLabel,
     ///
     /// Level of inlining.
     ///
@@ -174,6 +175,7 @@ impl JitContext {
         iseq_id: ISeqId,
         jit_type: JitType,
         class_version: u32,
+        class_version_label: DestLabel,
         self_class: ClassId,
         specialize_level: usize,
     ) -> Self {
@@ -206,6 +208,7 @@ impl JitContext {
             inline_bridges: HashMap::default(),
             labels,
             class_version,
+            class_version_label,
             ir: vec![],
             ivar_heap_accessed: false,
             specialize_level,
@@ -237,6 +240,7 @@ impl JitContext {
             inline_bridges: HashMap::default(),
             labels: vec![],
             class_version: 0,
+            class_version_label: self.class_version_label(),
             ir: vec![],
             ivar_heap_accessed: false,
             specialize_level: 0,
@@ -302,6 +306,10 @@ impl JitContext {
 
     pub(crate) fn class_version(&self) -> u32 {
         self.class_version
+    }
+
+    pub(crate) fn class_version_label(&self) -> DestLabel {
+        self.class_version_label.clone()
     }
 
     pub(super) fn specialize_level(&self) -> usize {

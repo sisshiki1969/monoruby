@@ -381,7 +381,7 @@ impl Codegen {
 
         if let Some(iseq) = callee.is_iseq() {
             match store[iseq].get_jit_code(recv_class) {
-                Some(dest) => {
+                Some((dest, _)) => {
                     monoasm! { &mut self.jit,
                         call dest;  // CALL_SITE
                     }

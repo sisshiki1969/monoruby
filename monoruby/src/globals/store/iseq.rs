@@ -127,8 +127,8 @@ pub struct ISeqInfo {
     pub(crate) can_be_inlined: bool,
     /// Cache map.
     pub(crate) cache_map: Vec<(BcIndex, CacheType)>,
-    /// JIT code entries for each class of *self*.
-    jit_entry: HashMap<ClassId, DestLabel>,
+    /// JIT code entries for each class of *self*. (entry, class_version)
+    jit_entry: HashMap<ClassId, (DestLabel, DestLabel)>,
     ///
     /// Basic block information.
     ///
@@ -412,11 +412,12 @@ impl ISeqInfo {
         &mut self,
         self_class: ClassId,
         entry: DestLabel,
-    ) -> Option<DestLabel> {
-        self.jit_entry.insert(self_class, entry)
+        class_version: DestLabel,
+    ) -> Option<(DestLabel, DestLabel)> {
+        self.jit_entry.insert(self_class, (entry, class_version))
     }
 
-    pub(crate) fn get_jit_code(&self, self_class: ClassId) -> Option<DestLabel> {
+    pub(crate) fn get_jit_code(&self, self_class: ClassId) -> Option<(DestLabel, DestLabel)> {
         self.jit_entry.get(&self_class).cloned()
     }
 

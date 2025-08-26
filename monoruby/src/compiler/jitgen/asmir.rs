@@ -804,13 +804,13 @@ pub(super) enum AsmInst {
     /// - rax
     ///
     GuardClassVersion {
-        version: u32,
+        version: DestLabel,
         position: Option<BytecodePtr>,
         with_recovery: bool,
         deopt: AsmDeopt,
     },
     GuardClassVersionSpecialized {
-        version: u32,
+        version: DestLabel,
         idx: usize,
         deopt: AsmDeopt,
     },

@@ -1404,6 +1404,11 @@ impl Codegen {
         if let Some(patch_point) = globals.store[iseq_id].get_jit_code(self_class) {
             let patch_point = self.jit.get_label_address(&patch_point);
             self.jit.apply_jmp_patch_address(patch_point, &jit_entry);
+        } else {
+            unreachable!(
+                "Warning: recompilation of invalidated method: {:?}",
+                globals.store[func_id].name()
+            );
         }
     }
 

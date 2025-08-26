@@ -1,11 +1,11 @@
 use super::*;
 
 impl Codegen {
-    fn check_version(&mut self, cached_version: u32, fail: &DestLabel) {
+    fn check_version(&mut self, cached_version: DestLabel, fail: &DestLabel) {
         let global_version = self.class_version_label();
         monoasm! { &mut self.jit,
             movl rax, [rip + global_version];
-            cmpl rax, (cached_version);
+            cmpl rax, [rip + cached_version];
             jne  fail;
         }
     }
@@ -27,7 +27,7 @@ impl Codegen {
     ///
     pub(super) fn guard_class_version(
         &mut self,
-        cached_version: u32,
+        cached_version: DestLabel,
         position: Option<BytecodePtr>,
         with_recovery: bool,
         deopt: &DestLabel,
@@ -44,7 +44,7 @@ impl Codegen {
 
     pub(super) fn guard_class_version_specialized(
         &mut self,
-        cached_version: u32,
+        cached_version: DestLabel,
         idx: usize,
         deopt: &DestLabel,
     ) {
