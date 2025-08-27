@@ -62,23 +62,8 @@ impl Codegen {
     /// ```
     fn gen_jit_stub(&mut self, entry: &DestLabel) {
         let vm_entry = self.vm_entry();
-        let counter = self.jit.data_i32(COUNT_START_COMPILE);
-        let next = self.jit.label();
         let entry_addr = self.jit.get_current_address();
-        monoasm!( &mut self.jit,
-            jmp  next;
-        next:
-            subl [rip + counter], 1;
-            jne vm_entry;
-            movq rdi, r12;
-            movq rsi, r14;
-            movq rdx, (entry_addr.as_ptr());
-            subq rsp, 4088;
-            movq rax, (exec_jit_compile_patch);
-            call rax;
-            addq rsp, 4088;
-            jmp entry;
-        );
+        self.gen_compile_patch(&vm_entry, entry, COUNT_START_COMPILE, entry_addr);
     }
 
     fn gen_vm_stub(&mut self) {

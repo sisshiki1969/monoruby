@@ -1014,7 +1014,6 @@ impl Codegen {
     ) {
         let exit = self.jit_class_guard_fail.clone();
         let exit_patch_point = self.jit.label();
-        let counter = self.jit.data_i32(COUNT_RECOMPILE_ARECV_CLASS);
 
         monoasm! { &mut self.jit,
         guard:
@@ -1028,25 +1027,43 @@ impl Codegen {
 
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
-        let cont = self.jit.label();
         let exit_patch_point_addr = self.jit.get_current_address();
         monoasm! { &mut self.jit,
         exit_patch_point:
+        }
+        self.gen_compile_patch(
+            &exit,
+            &exit_patch_point,
+            COUNT_RECOMPILE_ARECV_CLASS,
+            exit_patch_point_addr,
+        );
+        self.jit.select_page(0);
+    }
+
+    fn gen_compile_patch(
+        &mut self,
+        no_compile_exit: &DestLabel,
+        compiled_exit: &DestLabel,
+        counter: i32,
+        patch_point_addr: CodePtr,
+    ) {
+        let counter = self.jit.data_i32(counter);
+        let cont = self.jit.label();
+        monoasm! { &mut self.jit,
             jmp cont;
         cont:
             subl [rip + counter], 1;
-            jne exit;
+            jne no_compile_exit;
 
             movq rdi, r12;
             movq rsi, r14;
-            movq rdx, (exit_patch_point_addr.as_ptr());
+            movq rdx, (patch_point_addr.as_ptr());
             subq rsp, 4088;
             movq rax, (exec_jit_compile_patch as usize);
             call rax;
             addq rsp, 4088;
-            jmp exit_patch_point;
+            jmp compiled_exit;
         }
-        self.jit.select_page(0);
     }
 
     ///
