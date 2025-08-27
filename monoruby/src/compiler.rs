@@ -1283,6 +1283,71 @@ extern "C" fn guard_fail(vm: &mut Executor, globals: &mut Globals, self_val: Val
     globals.jit_class_guard_failed(func_id, self_val.class());
 }
 
+extern "C" fn exec_jit_specialized_recompile(
+    globals: &mut Globals,
+    idx: usize,
+    reason: RecompileReason,
+) {
+    CODEGEN.with(|codegen| {
+        codegen
+            .borrow_mut()
+            .recompile_specialized(globals, idx, reason);
+    });
+}
+
+extern "C" fn exec_jit_compile_patch(
+    globals: &mut Globals,
+    lfp: Lfp,
+    entry_patch_point: monoasm::CodePtr,
+) {
+    CODEGEN.with(|codegen| {
+        codegen
+            .borrow_mut()
+            .compile_patch(globals, lfp, entry_patch_point);
+    });
+}
+
+extern "C" fn exec_jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: RecompileReason) {
+    CODEGEN.with(|codegen| {
+        codegen.borrow_mut().recompile_method(globals, lfp, reason);
+    });
+}
+
+///
+/// Compile the loop.
+///
+extern "C" fn exec_jit_partial_compile(globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) {
+    if globals.no_jit {
+        return;
+    }
+    partial_compile(globals, lfp, pc, None);
+}
+
+///
+/// Recompile the loop.
+///
+extern "C" fn exec_jit_recompile_partial(
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+    reason: RecompileReason,
+) {
+    partial_compile(globals, lfp, pc, Some(reason));
+}
+
+fn partial_compile(
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+    is_recompile: Option<RecompileReason>,
+) {
+    CODEGEN.with(|codegen| {
+        codegen
+            .borrow_mut()
+            .compile_partial(globals, lfp, pc, is_recompile);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
