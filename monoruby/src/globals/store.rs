@@ -572,7 +572,7 @@ impl Store {
             "<{}> {file_name}:{line}",
             self.func_description(iseq.func_id()),
         );
-        for (bc_idx, cache_type) in &iseq.cache_map {
+        for (bc_idx, cache_type) in &iseq.inline_cache_map {
             let pc = iseq.get_pc(*bc_idx);
             if let Some(MethodCacheEntry {
                 recv_class,

@@ -538,6 +538,8 @@ impl Codegen {
         self_class: ClassId,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
+        class_version: u32,
+        class_version_label: DestLabel,
         _is_recompile: Option<RecompileReason>,
     ) {
         #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
@@ -583,8 +585,7 @@ impl Codegen {
         } else {
             JitType::Method
         };
-        let class_version = self.class_version();
-        let class_version_label = self.jit.const_i32(class_version as _);
+
         let mut ctx = JitContext::new(
             store,
             iseq_id,

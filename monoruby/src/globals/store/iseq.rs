@@ -57,6 +57,12 @@ impl ISeqId {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct JitInfo {
+    pub entry: DestLabel,
+    pub class_version_label: DestLabel,
+}
+
 ///
 /// Information of instruction sequences.
 ///
@@ -126,9 +132,9 @@ pub struct ISeqInfo {
     is_block_style: bool,
     pub(crate) can_be_inlined: bool,
     /// Cache map.
-    pub(crate) cache_map: Vec<(BcIndex, CacheType)>,
+    pub(crate) inline_cache_map: Vec<(BcIndex, CacheType)>,
     /// JIT code entries for each class of *self*. (entry, class_version)
-    jit_entry: HashMap<ClassId, DestLabel>,
+    jit_entry: HashMap<ClassId, JitInfo>,
     ///
     /// Basic block information.
     ///
@@ -186,7 +192,7 @@ impl ISeqInfo {
             sourceinfo,
             is_block_style,
             can_be_inlined: false,
-            cache_map: vec![],
+            inline_cache_map: vec![],
             jit_entry: HashMap::default(),
             bb_info: BasicBlockInfo::default(),
         }
@@ -412,12 +418,21 @@ impl ISeqInfo {
         &mut self,
         self_class: ClassId,
         entry: DestLabel,
-    ) -> Option<DestLabel> {
-        self.jit_entry.insert(self_class, entry)
+        class_version_label: DestLabel,
+    ) -> Option<JitInfo> {
+        self.jit_entry.insert(
+            self_class,
+            JitInfo {
+                entry,
+                class_version_label,
+            },
+        )
     }
 
-    pub(crate) fn get_jit_code(&self, self_class: ClassId) -> Option<DestLabel> {
-        self.jit_entry.get(&self_class).cloned()
+    pub(crate) fn get_jit_entry(&self, self_class: ClassId) -> Option<DestLabel> {
+        self.jit_entry
+            .get(&self_class)
+            .map(|info| info.entry.clone())
     }
 
     pub(crate) fn invalidate_jit_code(&mut self) {

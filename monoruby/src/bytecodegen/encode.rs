@@ -57,7 +57,7 @@ impl BytecodeGen {
         let can_be_inlined = self.ir.iter().all(|(inst, _)| inst.can_be_inlined());
         let (ops, sourcemap, bbinfo) = self.ir_to_bc(store)?;
         let info = store.iseq_mut(func_id);
-        info.cache_map = std::mem::take(&mut self.cache_map);
+        info.inline_cache_map = std::mem::take(&mut self.cache_map);
         info.temp_num = self.temp_num;
         info.non_temp_num = self.non_temp_num;
         info.literals = std::mem::take(&mut self.literals);

@@ -7,7 +7,7 @@ impl Codegen {
         match kind {
             FuncKind::ISeq(_) => {
                 if !no_jit && !cfg!(feature = "no-jit") {
-                    self.gen_jit_stub(&entry);
+                    self.gen_jit_stub();
                 } else {
                     self.gen_vm_stub()
                 }
@@ -44,26 +44,10 @@ impl Codegen {
     ///
     /// Set jit compilation stub code for an entry point of each Ruby methods.
     ///
-    /// ```text
-    ///
-    ///       wrapper                               class guard stub
-    ///    +-------------------------------+     +------------------------------------------+
-    ///    |                               |     |                                          |        JIT code for self_class
-    /// ---+-> entry:                      |  /--+-> guard:                                 |     +---------------------------+
-    ///    |     jmp [next]; --------------+-/   |     movq rdi, [r14 - (LFP_SELF)];        |     |                           |
-    ///    |   next:                       |     |     <class_guard(self_class, vm_entry)>  |  /--+-> jit_code_body:          |
-    ///    |     subl [rip + counter], 1;  |     |   jit_entry:                             |  |  |     <jit_code>            |
-    ///    |     jne vm_entry;             |     |     jmp [jit_code_body]; ----------------+--/  |                           |
-    ///    |     <exec_compile_and_patch>  |     |                                          |     |                           |
-    ///    |     jmp entry;                |     +------------------------------------------+     
-    ///    |                               |
-    ///    +-------------------------------+
-    ///
-    /// ```
-    fn gen_jit_stub(&mut self, entry: &DestLabel) {
+    fn gen_jit_stub(&mut self) {
         let vm_entry = self.vm_entry();
-        let entry_addr = self.jit.get_current_address();
-        self.gen_compile_patch(&vm_entry, entry, COUNT_START_COMPILE, entry_addr);
+        let entry = self.jit.label();
+        self.gen_compile_patch(&vm_entry, &entry, COUNT_START_COMPILE);
     }
 
     fn gen_vm_stub(&mut self) {

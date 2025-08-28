@@ -6,6 +6,7 @@ use monoasm_macro::monoasm;
 mod invoker;
 mod jit_module;
 pub mod jitgen;
+mod patch;
 pub mod runtime;
 mod vmgen;
 mod wrapper;
@@ -993,80 +994,6 @@ impl Codegen {
     }
 
     ///
-    /// Generate class guard stub for JIT code.
-    ///
-    /// ~~~text
-    ///
-    /// guard:
-    ///     movq rdi, [r14 - (LFP_SELF)];
-    ///     guard_class_rdi(self_class, vm_entry);
-    /// patch_point:
-    ///     jmp jit_entry;
-    ///
-    /// ~~~
-    ///
-    pub(super) fn class_guard_stub(
-        &mut self,
-        self_class: ClassId,
-        patch_point: &DestLabel,
-        jit_entry: &DestLabel,
-        guard: &DestLabel,
-    ) {
-        let exit = self.jit_class_guard_fail.clone();
-        let exit_patch_point = self.jit.label();
-
-        monoasm! { &mut self.jit,
-        guard:
-            movq rdi, [r14 - (LFP_SELF)];
-        }
-        self.guard_class_rdi(self_class, &exit_patch_point);
-        monoasm! { &mut self.jit,
-        patch_point:
-            jmp jit_entry;
-        }
-
-        assert_eq!(0, self.jit.get_page());
-        self.jit.select_page(1);
-        let exit_patch_point_addr = self.jit.get_current_address();
-        monoasm! { &mut self.jit,
-        exit_patch_point:
-        }
-        self.gen_compile_patch(
-            &exit,
-            &exit_patch_point,
-            COUNT_RECOMPILE_ARECV_CLASS,
-            exit_patch_point_addr,
-        );
-        self.jit.select_page(0);
-    }
-
-    fn gen_compile_patch(
-        &mut self,
-        no_compile_exit: &DestLabel,
-        compiled_exit: &DestLabel,
-        counter: i32,
-        patch_point_addr: CodePtr,
-    ) {
-        let counter = self.jit.data_i32(counter);
-        let cont = self.jit.label();
-        monoasm! { &mut self.jit,
-            jmp cont;
-        cont:
-            subl [rip + counter], 1;
-            jne no_compile_exit;
-
-            movq rdi, r12;
-            movq rsi, r14;
-            movq rdx, (patch_point_addr.as_ptr());
-            subq rsp, 4088;
-            movq rax, (exec_jit_compile_patch as usize);
-            call rax;
-            addq rsp, 4088;
-            jmp compiled_exit;
-        }
-    }
-
-    ///
     /// Gen code for break in block.
     ///
     /// rbp <- bp for a context of the outer of the block.
@@ -1432,6 +1359,8 @@ impl Codegen {
         self_class: ClassId,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
+        class_version: u32,
+        class_version_label: DestLabel,
         is_recompile: Option<RecompileReason>,
     ) {
         #[cfg(feature = "profile")]
@@ -1446,6 +1375,8 @@ impl Codegen {
             self_class,
             position,
             entry_label,
+            class_version,
+            class_version_label,
             is_recompile,
         );
     }
@@ -1459,9 +1390,20 @@ impl Codegen {
         iseq_id: ISeqId,
         self_class: ClassId,
         jit_entry: DestLabel,
+        class_version: u32,
+        class_version_label: DestLabel,
         is_recompile: Option<RecompileReason>,
     ) {
-        self.compile(globals, iseq_id, self_class, None, jit_entry, is_recompile)
+        self.compile(
+            globals,
+            iseq_id,
+            self_class,
+            None,
+            jit_entry,
+            class_version,
+            class_version_label,
+            is_recompile,
+        )
     }
 
     pub(super) fn recompile_method(
@@ -1474,16 +1416,20 @@ impl Codegen {
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
         let jit_entry = self.jit.label();
+        let class_version = self.class_version();
+        let class_version_label = self.jit.const_i32(class_version as _);
         self.compile_method(
             globals,
             iseq_id,
             self_class,
             jit_entry.clone(),
+            class_version,
+            class_version_label,
             Some(reason),
         );
         // get_jit_code() must not be None.
         // After BOP redefinition occurs, recompilation in invalidated methods cause None.
-        if let Some(patch_point) = globals.store[iseq_id].get_jit_code(self_class) {
+        if let Some(patch_point) = globals.store[iseq_id].get_jit_entry(self_class) {
             let patch_point = self.jit.get_label_address(&patch_point);
             self.jit.apply_jmp_patch_address(patch_point, &jit_entry);
         } else {
@@ -1505,12 +1451,16 @@ impl Codegen {
         let self_class = lfp.self_val().class();
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
+        let class_version = self.class_version();
+        let class_version_label = self.jit.const_i32(class_version as _);
         self.compile(
             globals,
             iseq_id,
             self_class,
             Some(pc),
             entry_label.clone(),
+            class_version,
+            class_version_label,
             is_recompile,
         );
         let codeptr = self.jit.get_label_address(&entry_label);
@@ -1526,35 +1476,20 @@ impl Codegen {
         let (iseq_id, self_class, patch_point) = self.specialized_patch_point[idx].clone();
 
         let entry = self.jit.label();
+        let class_version = self.class_version();
+        let class_version_label = self.jit.const_i32(class_version as _);
         self.compile(
             globals,
             iseq_id,
             self_class,
             None,
             entry.clone(),
+            class_version,
+            class_version_label,
             Some(reason),
         );
 
         let patch_point = self.jit.get_label_address(&patch_point);
         self.jit.apply_jmp_patch_address(patch_point, &entry);
-    }
-
-    pub(crate) fn compile_patch(
-        &mut self,
-        globals: &mut Globals,
-        lfp: Lfp,
-        entry_patch_point: monoasm::CodePtr,
-    ) {
-        let patch_point = self.jit.label();
-        let jit_entry = self.jit.label();
-        let guard = self.jit.label();
-        let func_id = lfp.func_id();
-        let iseq_id = globals.store[func_id].as_iseq();
-        let self_class = lfp.self_val().class();
-        self.class_guard_stub(self_class, &patch_point, &jit_entry, &guard);
-        let old_entry = globals.store[iseq_id].add_jit_code(self_class, patch_point);
-        assert!(old_entry.is_none());
-        self.compile_method(globals, iseq_id, self_class, jit_entry, None);
-        self.jit.apply_jmp_patch_address(entry_patch_point, &guard);
     }
 }

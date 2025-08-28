@@ -1065,10 +1065,10 @@ impl Store {
         });
     }
 
-    fn update_cache_map(&self, iseq_id: ISeqId) -> bool {
+    fn update_inline_cache_map(&self, iseq_id: ISeqId) -> bool {
         let class_version = Globals::class_version();
         let iseq = &self[iseq_id];
-        for (bc_pos, ty) in &iseq.cache_map {
+        for (bc_pos, ty) in &iseq.inline_cache_map {
             let pc = iseq.get_pc(*bc_pos);
             match ty {
                 CacheType::Method => {
