@@ -1065,8 +1065,10 @@ impl Store {
         });
     }
 
-    fn update_inline_cache_map(&self, iseq_id: ISeqId) -> bool {
+    pub(crate) fn update_inline_cache(&mut self, lfp: Lfp) -> bool {
         let class_version = Globals::class_version();
+        let func_id = lfp.func_id();
+        let iseq_id = self[func_id].as_iseq();
         let iseq = &self[iseq_id];
         for (bc_pos, ty) in &iseq.inline_cache_map {
             let pc = iseq.get_pc(*bc_pos);
@@ -1079,23 +1081,40 @@ impl Store {
                     }) = pc.method_cache()
                         && cached_version != class_version
                     {
-                        let method_name = self[pc.method_callsite()].name.unwrap();
-                        if let Some(MethodTableEntry { func_id, .. }) = self
-                            .check_method_for_class_with_version(
-                                recv_class,
-                                method_name,
-                                class_version,
-                            )
-                            && func_id == Some(cached_fid)
-                        {
+                        let func_id = if let Some(method_name) = self[pc.method_callsite()].name {
+                            self.check_method_for_class(recv_class, method_name)
+                                .map(|entry| entry.func_id())
+                                .flatten()
+                        } else {
+                            let func_id = lfp.method_func_id();
+                            let owner = self[func_id].owner_class().unwrap();
+                            let name = self[func_id].name().unwrap();
+                            self.check_super(recv_class, owner, name)
+                        };
+                        if func_id == Some(cached_fid) {
                             pc.write_method_cache_version(class_version);
                         } else {
+                            if let Some(fid) = func_id {
+                                eprintln!("changed {}", self.func_description(fid))
+                            } else {
+                                eprintln!("deleted {}", self.func_description(cached_fid))
+                            };
                             return false;
                         }
                     };
                 }
             }
         }
+        let version_label = self[iseq_id]
+            .get_jit_class_version(lfp.self_val().class())
+            .unwrap();
+        CODEGEN.with(|codegen| {
+            codegen
+                .borrow_mut()
+                .set_class_version(class_version, &version_label);
+        });
+        eprintln!("recovered {}", self.func_description(func_id));
+
         true
     }
 }

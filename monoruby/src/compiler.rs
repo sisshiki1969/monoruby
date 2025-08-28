@@ -236,6 +236,12 @@ impl JitModule {
         (ptr0, size0 as usize, ptr1, size1 as usize)
     }
 
+    pub fn set_class_version(&mut self, version: u32, label: &DestLabel) {
+        let p = self.jit.get_label_address(label).as_ptr() as *mut u32;
+        eprintln!("set_version: {} -> {version}", unsafe { *p });
+        unsafe { *p = version };
+    }
+
     #[cfg(feature = "perf")]
     pub(crate) fn perf_write(info: (CodePtr, usize, CodePtr, usize), desc: &str) {
         use std::io::Write;
@@ -1255,6 +1261,20 @@ extern "C" fn exec_jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason:
     CODEGEN.with(|codegen| {
         codegen.borrow_mut().recompile_method(globals, lfp, reason);
     });
+}
+
+extern "C" fn exec_jit_recompile_method_with_recovery(
+    globals: &mut Globals,
+    lfp: Lfp,
+    reason: RecompileReason,
+) -> u64 {
+    if globals.store.update_inline_cache(lfp) {
+        return 1;
+    };
+    CODEGEN.with(|codegen| {
+        codegen.borrow_mut().recompile_method(globals, lfp, reason);
+    });
+    0
 }
 
 ///

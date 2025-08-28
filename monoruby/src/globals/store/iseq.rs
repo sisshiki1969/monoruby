@@ -435,6 +435,12 @@ impl ISeqInfo {
             .map(|info| info.entry.clone())
     }
 
+    pub(crate) fn get_jit_class_version(&self, self_class: ClassId) -> Option<DestLabel> {
+        self.jit_entry
+            .get(&self_class)
+            .map(|info| info.class_version_label.clone())
+    }
+
     pub(crate) fn invalidate_jit_code(&mut self) {
         self.jit_entry.clear();
     }

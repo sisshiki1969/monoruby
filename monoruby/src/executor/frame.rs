@@ -218,6 +218,10 @@ impl Lfp {
         (lfp, depth)
     }
 
+    pub(crate) fn method_func_id(&self) -> FuncId {
+        self.outermost().0.func_id()
+    }
+
     ///
     /// Set outer.
     ///
