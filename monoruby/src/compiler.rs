@@ -122,6 +122,14 @@ impl Xmm {
     }
 }
 
+///
+/// Type of the inline cache.
+///
+#[derive(Debug, Clone)]
+pub(crate) enum InlineCacheType {
+    Method(jitgen::trace_ir::MethodCacheEntry),
+}
+
 pub struct JitModule {
     pub(crate) jit: JitMemory,
     class_version: DestLabel,
@@ -238,7 +246,6 @@ impl JitModule {
 
     pub fn set_class_version(&mut self, version: u32, label: &DestLabel) {
         let p = self.jit.get_label_address(label).as_ptr() as *mut u32;
-        eprintln!("set_version: {} -> {version}", unsafe { *p });
         unsafe { *p = version };
     }
 
@@ -1382,14 +1389,53 @@ impl Codegen {
         class_version: u32,
         class_version_label: DestLabel,
         is_recompile: Option<RecompileReason>,
-    ) {
+    ) -> Vec<(bytecodegen::BcIndex, InlineCacheType)> {
         #[cfg(feature = "profile")]
         {
             if let Some(reason) = &is_recompile {
                 globals.countup_recompile(globals.store[iseq_id].func_id(), self_class, reason);
             }
         }
-        self.jit_compile(
+
+        #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
+        if self.startup_flag {
+            let iseq = &globals.store[iseq_id];
+            let start_pos = iseq.get_pc_index(position);
+            let name = globals.store.func_description(iseq.func_id());
+            eprintln!(
+                "==> start {} {}compile: {}{:?} <{}> {}self_class: {} {}:{}",
+                if position.is_some() {
+                    "partial"
+                } else {
+                    "whole"
+                },
+                if is_recompile.is_some() { "re" } else { "" },
+                if let Some(reason) = is_recompile {
+                    format!("({:?}) ", reason)
+                } else {
+                    String::new()
+                },
+                iseq.func_id(),
+                name,
+                if position.is_some() {
+                    format!("start:[{}] ", start_pos)
+                } else {
+                    String::new()
+                },
+                globals.store.debug_class_name(self_class),
+                iseq.sourceinfo.file_name(),
+                iseq.sourceinfo.get_line(&iseq.loc),
+            );
+        }
+        #[cfg(feature = "emit-asm")]
+        {
+            globals.store.dump_iseq(iseq_id);
+        }
+
+        #[cfg(feature = "jit-log")]
+        let now = std::time::Instant::now();
+
+        let cache = self.jit_compile(
             &globals.store,
             iseq_id,
             self_class,
@@ -1397,8 +1443,29 @@ impl Codegen {
             entry_label,
             class_version,
             class_version_label,
-            is_recompile,
         );
+
+        if self.startup_flag {
+            #[cfg(feature = "jit-log")]
+            {
+                let elapsed = now.elapsed();
+                eprintln!("<== finished compile. elapsed:{:?}", elapsed);
+                self.jit_compile_time += elapsed;
+            }
+
+            #[cfg(any(feature = "jit-debug", feature = "jit-log"))]
+            {
+                self.jit.select_page(0);
+                eprintln!("    total bytes(0):{:?}", self.jit.get_current());
+                self.jit.select_page(1);
+                eprintln!("    total bytes(1):{:?}", self.jit.get_current());
+                self.jit.select_page(0);
+            }
+            #[cfg(feature = "emit-asm")]
+            eprintln!("<== finished compile.");
+        }
+
+        cache
     }
 
     ///
@@ -1413,7 +1480,7 @@ impl Codegen {
         class_version: u32,
         class_version_label: DestLabel,
         is_recompile: Option<RecompileReason>,
-    ) {
+    ) -> Vec<(bytecodegen::BcIndex, InlineCacheType)> {
         self.compile(
             globals,
             iseq_id,
@@ -1438,7 +1505,7 @@ impl Codegen {
         let jit_entry = self.jit.label();
         let class_version = self.class_version();
         let class_version_label = self.jit.const_i32(class_version as _);
-        self.compile_method(
+        let cache = self.compile_method(
             globals,
             iseq_id,
             self_class,
@@ -1450,6 +1517,7 @@ impl Codegen {
         // get_jit_code() must not be None.
         // After BOP redefinition occurs, recompilation in invalidated methods cause None.
         if let Some(patch_point) = globals.store[iseq_id].get_jit_entry(self_class) {
+            globals.store[iseq_id].set_cache_map(self_class, cache);
             let patch_point = self.jit.get_label_address(&patch_point);
             self.jit.apply_jmp_patch_address(patch_point, &jit_entry);
         } else {

@@ -540,46 +540,7 @@ impl Codegen {
         entry_label: DestLabel,
         class_version: u32,
         class_version_label: DestLabel,
-        _is_recompile: Option<RecompileReason>,
-    ) {
-        #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
-        if self.startup_flag {
-            let iseq = &store[iseq_id];
-            let start_pos = iseq.get_pc_index(position);
-            let name = store.func_description(iseq.func_id());
-            eprintln!(
-                "==> start {} {}compile: {}{:?} <{}> {}self_class: {} {}:{}",
-                if position.is_some() {
-                    "partial"
-                } else {
-                    "whole"
-                },
-                if _is_recompile.is_some() { "re" } else { "" },
-                if let Some(reason) = _is_recompile {
-                    format!("({:?}) ", reason)
-                } else {
-                    String::new()
-                },
-                iseq.func_id(),
-                name,
-                if position.is_some() {
-                    format!("start:[{}] ", start_pos)
-                } else {
-                    String::new()
-                },
-                store.debug_class_name(self_class),
-                iseq.sourceinfo.file_name(),
-                iseq.sourceinfo.get_line(&iseq.loc),
-            );
-        }
-        #[cfg(feature = "emit-asm")]
-        {
-            store.dump_iseq(iseq_id);
-        }
-
-        #[cfg(feature = "jit-log")]
-        let now = std::time::Instant::now();
-
+    ) -> Vec<(BcIndex, InlineCacheType)> {
         let jit_type = if let Some(pos) = position {
             JitType::Loop(pos)
         } else {
@@ -598,27 +559,14 @@ impl Codegen {
         ctx.compile(store);
         self.jit.finalize();
 
+        let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
+
         self.gen_machine_code(ctx, store, entry_label);
 
-        if self.startup_flag {
-            #[cfg(feature = "jit-log")]
-            {
-                let elapsed = now.elapsed();
-                eprintln!("<== finished compile. elapsed:{:?}", elapsed);
-                self.jit_compile_time += elapsed;
-            }
-
-            #[cfg(any(feature = "jit-debug", feature = "jit-log"))]
-            {
-                self.jit.select_page(0);
-                eprintln!("    total bytes(0):{:?}", self.jit.get_current());
-                self.jit.select_page(1);
-                eprintln!("    total bytes(1):{:?}", self.jit.get_current());
-                self.jit.select_page(0);
-            }
-            #[cfg(feature = "emit-asm")]
-            eprintln!("<== finished compile.");
-        }
+        inline_cache
+            .into_iter()
+            .map(|(pc, entry)| (pc, InlineCacheType::Method(entry)))
+            .collect()
     }
 
     fn gen_machine_code(&mut self, mut ctx: JitContext, store: &Store, entry_label: DestLabel) {

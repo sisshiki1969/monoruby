@@ -61,6 +61,7 @@ impl ISeqId {
 pub struct JitInfo {
     pub entry: DestLabel,
     pub class_version_label: DestLabel,
+    pub inline_cache_map: Vec<(BcIndex, InlineCacheType)>,
 }
 
 ///
@@ -131,10 +132,10 @@ pub struct ISeqInfo {
     pub sourceinfo: SourceInfoRef,
     is_block_style: bool,
     pub(crate) can_be_inlined: bool,
-    /// Cache map.
-    pub(crate) inline_cache_map: Vec<(BcIndex, CacheType)>,
-    /// JIT code entries for each class of *self*. (entry, class_version)
-    jit_entry: HashMap<ClassId, JitInfo>,
+    ///
+    /// JIT code info for each class of *self*.
+    ///
+    pub(super) jit_entry: HashMap<ClassId, JitInfo>,
     ///
     /// Basic block information.
     ///
@@ -192,7 +193,6 @@ impl ISeqInfo {
             sourceinfo,
             is_block_style,
             can_be_inlined: false,
-            inline_cache_map: vec![],
             jit_entry: HashMap::default(),
             bb_info: BasicBlockInfo::default(),
         }
@@ -390,6 +390,7 @@ impl ISeqInfo {
         self.exception_map
             .push(ExceptionMapEntry::new(range, rescue, ensure, err_reg));
     }
+
     pub(crate) fn no_exception(&mut self) -> bool {
         self.exception_map.is_empty()
     }
@@ -425,8 +426,23 @@ impl ISeqInfo {
             JitInfo {
                 entry,
                 class_version_label,
+                inline_cache_map: Vec::new(),
             },
         )
+    }
+
+    pub(crate) fn get_cache_map(&self, self_class: ClassId) -> &Vec<(BcIndex, InlineCacheType)> {
+        &self.jit_entry.get(&self_class).unwrap().inline_cache_map
+    }
+
+    pub(crate) fn set_cache_map(
+        &mut self,
+        self_class: ClassId,
+        cache: Vec<(BcIndex, InlineCacheType)>,
+    ) {
+        self.jit_entry
+            .get_mut(&self_class)
+            .map(|info| info.inline_cache_map = cache);
     }
 
     pub(crate) fn get_jit_entry(&self, self_class: ClassId) -> Option<DestLabel> {

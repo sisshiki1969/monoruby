@@ -572,18 +572,21 @@ impl Store {
             "<{}> {file_name}:{line}",
             self.func_description(iseq.func_id()),
         );
-        for (bc_idx, cache_type) in &iseq.inline_cache_map {
-            let pc = iseq.get_pc(*bc_idx);
-            if let Some(MethodCacheEntry {
-                recv_class,
-                func_id,
-                version,
-            }) = pc.method_cache()
-            {
-                eprintln!(
-                    "{:?} {:?} {:08x} {:?}",
-                    recv_class, func_id, version, cache_type
-                );
+        for (class, info) in &iseq.jit_entry {
+            eprintln!("  JitEntry: {}", class.get_name(self));
+            for (bc_idx, cache_type) in &info.inline_cache_map {
+                let pc = iseq.get_pc(*bc_idx);
+                if let Some(MethodCacheEntry {
+                    recv_class,
+                    func_id,
+                    version,
+                }) = pc.method_cache()
+                {
+                    eprintln!(
+                        "    {:?} {:?} {:08x} {:?}",
+                        recv_class, func_id, version, cache_type
+                    );
+                }
             }
         }
         eprintln!(

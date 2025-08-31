@@ -41,7 +41,7 @@ impl Codegen {
             class_version_label.clone(),
         );
         assert!(old_entry.is_none());
-        self.compile_method(
+        let cache = self.compile_method(
             globals,
             iseq_id,
             self_class,
@@ -50,6 +50,8 @@ impl Codegen {
             class_version_label,
             None,
         );
+
+        globals.store[iseq_id].set_cache_map(self_class, cache);
         self.jit.apply_jmp_patch_address(entry, &guard);
     }
 

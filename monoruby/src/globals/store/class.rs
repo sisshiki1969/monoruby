@@ -1065,40 +1065,43 @@ impl Store {
         });
     }
 
+    fn check_method_for_name(
+        &self,
+        lfp: Lfp,
+        recv_class: ClassId,
+        name: Option<IdentId>,
+    ) -> Option<FuncId> {
+        if let Some(method_name) = name {
+            self.check_method_for_class(recv_class, method_name)
+                .map(|entry| entry.func_id())
+                .flatten()
+        } else {
+            let func_id = lfp.method_func_id();
+            let owner = self[func_id].owner_class().unwrap();
+            let name = self[func_id].name().unwrap();
+            self.check_super(recv_class, owner, name)
+        }
+    }
+
     pub(crate) fn update_inline_cache(&mut self, lfp: Lfp) -> bool {
         let class_version = Globals::class_version();
         let func_id = lfp.func_id();
+        let self_class = lfp.self_val().class();
         let iseq_id = self[func_id].as_iseq();
         let iseq = &self[iseq_id];
-        for (bc_pos, ty) in &iseq.inline_cache_map {
+        for (bc_pos, ty) in iseq.get_cache_map(self_class) {
             let pc = iseq.get_pc(*bc_pos);
             match ty {
-                CacheType::Method => {
-                    if let Some(MethodCacheEntry {
+                InlineCacheType::Method(comptime_cache) => {
+                    let MethodCacheEntry {
                         recv_class,
-                        func_id: cached_fid,
-                        version: cached_version,
-                    }) = pc.method_cache()
-                        && cached_version != class_version
-                    {
-                        let func_id = if let Some(method_name) = self[pc.method_callsite()].name {
-                            self.check_method_for_class(recv_class, method_name)
-                                .map(|entry| entry.func_id())
-                                .flatten()
-                        } else {
-                            let func_id = lfp.method_func_id();
-                            let owner = self[func_id].owner_class().unwrap();
-                            let name = self[func_id].name().unwrap();
-                            self.check_super(recv_class, owner, name)
-                        };
-                        if func_id == Some(cached_fid) {
-                            pc.write_method_cache_version(class_version);
-                        } else {
-                            if let Some(fid) = func_id {
-                                eprintln!("changed {}", self.func_description(fid))
-                            } else {
-                                eprintln!("deleted {}", self.func_description(cached_fid))
-                            };
+                        func_id: comptime_fid,
+                        version: comptime_version,
+                    } = comptime_cache;
+                    if *comptime_version != class_version {
+                        let name = self[pc.method_callsite()].name;
+                        let func_id = self.check_method_for_name(lfp, *recv_class, name);
+                        if func_id != Some(*comptime_fid) {
                             return false;
                         }
                     };
@@ -1113,7 +1116,6 @@ impl Store {
                 .borrow_mut()
                 .set_class_version(class_version, &version_label);
         });
-        eprintln!("recovered {}", self.func_description(func_id));
 
         true
     }

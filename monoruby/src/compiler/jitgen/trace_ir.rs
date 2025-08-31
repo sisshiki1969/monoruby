@@ -23,6 +23,12 @@ pub(crate) struct MethodCacheEntry {
     pub version: u32,
 }
 
+impl std::cmp::PartialEq for MethodCacheEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.recv_class == other.recv_class && self.func_id == other.func_id
+    }
+}
+
 ///
 /// IR for JIT compiler.
 ///

@@ -155,6 +155,10 @@ pub struct JitContext {
     ///
     pub(super) specialized_methods: Vec<SpecializeInfo>,
     ///
+    /// Inline cache for method calls.
+    ///
+    pub(crate) inline_method_cache: HashMap<BcIndex, MethodCacheEntry>,
+    ///
     /// Source map for bytecode index and machine code position.
     ///
     #[cfg(feature = "emit-asm")]
@@ -213,6 +217,7 @@ impl JitContext {
             ivar_heap_accessed: false,
             specialize_level,
             specialized_methods: vec![],
+            inline_method_cache: HashMap::default(),
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -245,6 +250,7 @@ impl JitContext {
             ivar_heap_accessed: false,
             specialize_level: 0,
             specialized_methods: vec![],
+            inline_method_cache: HashMap::default(),
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
