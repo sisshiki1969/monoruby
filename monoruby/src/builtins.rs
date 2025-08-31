@@ -76,9 +76,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     dir::init(globals);
     match_data::init(globals);
     main_object::init(globals);
-    globals
-        .include_module(globals.object_class(), kernel)
-        .unwrap();
+    globals.object_class().include_module(kernel).unwrap();
 }
 
 #[derive(Debug, Clone, Copy)]

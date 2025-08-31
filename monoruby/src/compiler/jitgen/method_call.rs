@@ -13,6 +13,7 @@ impl JitContext {
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
         store: &Store,
+        bc_pos: BcIndex,
         cache: MethodCacheEntry,
         callsite: &CallSiteInfo,
     ) -> CompileResult {
@@ -25,8 +26,15 @@ impl JitContext {
         if (version != self.class_version()) || (recv.is_self() && self.self_class() != recv_class)
         {
             // the inline method cache is invalid because the receiver class is not matched.
-            recv_class = self.self_class();
+            if recv.is_self() {
+                recv_class = self.self_class()
+            };
             if let Some(fid) = self.jit_check_call(store, recv_class, callsite.name) {
+                store[self.iseq_id()].get_pc(bc_pos).write_method_cache(
+                    recv_class,
+                    fid,
+                    self.class_version(),
+                );
                 func_id = fid;
             } else {
                 return CompileResult::Recompile(RecompileReason::MethodNotFound);
@@ -39,6 +47,8 @@ impl JitContext {
         }
 
         self.recv_version_guard(bbctx, ir, recv, recv_class);
+
+        self.inline_method_cache.insert(bc_pos, cache);
 
         if callsite.block_fid.is_none()
             && let Some(info) = store.inline_info.get_inline(func_id)
@@ -109,9 +119,8 @@ impl JitContext {
         }
 
         // class version guard
-        let class_version = self.class_version();
         let deopt = ir.new_deopt(bbctx);
-        self.guard_class_version(bbctx, ir, class_version, deopt);
+        self.guard_class_version(bbctx, ir, false, deopt);
 
         // receiver class guard
         let BinOpInfo {
@@ -153,11 +162,9 @@ impl JitContext {
         recv: SlotId,
         recv_class: ClassId,
     ) {
-        let version = self.class_version();
-
         // class version guard
         let deopt = ir.new_deopt(bbctx);
-        self.guard_class_version(bbctx, ir, version, deopt);
+        self.guard_class_version(bbctx, ir, true, deopt);
 
         // receiver class guard
         bbctx.fetch(ir, recv, GP::Rdi);
@@ -181,7 +188,7 @@ impl JitContext {
         &self,
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
-        version: u32,
+        with_recovery: bool,
         deopt: AsmDeopt,
     ) {
         if bbctx.class_version_guarded {
@@ -189,16 +196,12 @@ impl JitContext {
         }
         match self.jit_type() {
             JitType::Specialized { idx, .. } => {
-                ir.push(AsmInst::GuardClassVersionSpecialized {
-                    version,
-                    idx: *idx,
-                    deopt,
-                });
+                ir.push(AsmInst::GuardClassVersionSpecialized { idx: *idx, deopt });
             }
             _ => {
                 ir.push(AsmInst::GuardClassVersion {
-                    version,
                     position: self.position(),
+                    with_recovery,
                     deopt,
                 });
             }
@@ -448,6 +451,7 @@ impl JitContext {
             iseq_id,
             jit_type,
             self.class_version(),
+            self.class_version_label(),
             self_class,
             specialize_level,
         );

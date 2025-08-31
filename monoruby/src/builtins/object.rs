@@ -188,9 +188,9 @@ fn extend(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
-    let class = globals.store.get_singleton(lfp.self_val());
+    let mut class = globals.store.get_singleton(lfp.self_val());
     for v in args.iter().cloned().rev() {
-        globals.include_module(class, v.expect_module(globals)?)?;
+        class.include_module(v.expect_module(globals)?)?;
     }
     Ok(lfp.self_val())
 }
@@ -346,7 +346,7 @@ fn object_respond_to(
         return false;
     };
     let b = if let Some(entry) =
-        store.check_method_for_class(recv_class, method_name, ctx.class_version())
+        store.check_method_for_class_with_version(recv_class, method_name, ctx.class_version())
     {
         include_all || entry.is_public()
     } else {

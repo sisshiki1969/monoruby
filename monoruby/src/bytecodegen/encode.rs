@@ -429,12 +429,12 @@ impl BytecodeGen {
                 let opcode = if callsite.is_simple() { 32 } else { 33 };
                 self.encode_call(store, opcode, callsite, loc)?
             }
-            BytecodeInst::InlineCache(box callsite) => self.encode_cache(130, callsite)?,
             BytecodeInst::Yield(box callsite) => {
                 // 34, 35
                 let opcode = if callsite.is_simple() { 34 } else { 35 };
                 self.encode_call(store, opcode, callsite, loc)?
             }
+            BytecodeInst::InlineCache(box callsite) => self.encode_cache(130, callsite)?,
             BytecodeInst::Array(ret, box callsite) => {
                 // 39
                 let op1 = self.slot_id(&ret);

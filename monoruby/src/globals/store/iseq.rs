@@ -2,7 +2,7 @@ use bytecodegen::{
     inst::{BrKind, DynVar, FnInitInfo},
     BinOpK, UnOpK,
 };
-use jitgen::trace_ir::{BinOpInfo, MethodCacheEntry, OpMode, TraceIr};
+use jitgen::trace_ir::{BinOpInfo, OpMode, TraceIr};
 use ruruby_parse::CmpKind;
 
 use super::*;
@@ -55,6 +55,13 @@ impl ISeqId {
     pub fn get(&self) -> usize {
         self.0
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct JitInfo {
+    pub entry: DestLabel,
+    pub class_version_label: DestLabel,
+    pub inline_cache_map: Vec<(BcIndex, InlineCacheType)>,
 }
 
 ///
@@ -125,8 +132,10 @@ pub struct ISeqInfo {
     pub sourceinfo: SourceInfoRef,
     is_block_style: bool,
     pub(crate) can_be_inlined: bool,
-    /// JIT code entries for each class of *self*.
-    jit_entry: HashMap<ClassId, DestLabel>,
+    ///
+    /// JIT code info for each class of *self*.
+    ///
+    pub(super) jit_entry: HashMap<ClassId, JitInfo>,
     ///
     /// Basic block information.
     ///
@@ -381,6 +390,7 @@ impl ISeqInfo {
         self.exception_map
             .push(ExceptionMapEntry::new(range, rescue, ensure, err_reg));
     }
+
     pub(crate) fn no_exception(&mut self) -> bool {
         self.exception_map.is_empty()
     }
@@ -409,12 +419,42 @@ impl ISeqInfo {
         &mut self,
         self_class: ClassId,
         entry: DestLabel,
-    ) -> Option<DestLabel> {
-        self.jit_entry.insert(self_class, entry)
+        class_version_label: DestLabel,
+    ) -> Option<JitInfo> {
+        self.jit_entry.insert(
+            self_class,
+            JitInfo {
+                entry,
+                class_version_label,
+                inline_cache_map: Vec::new(),
+            },
+        )
     }
 
-    pub(crate) fn get_jit_code(&self, self_class: ClassId) -> Option<DestLabel> {
-        self.jit_entry.get(&self_class).cloned()
+    pub(crate) fn get_cache_map(&self, self_class: ClassId) -> &Vec<(BcIndex, InlineCacheType)> {
+        &self.jit_entry.get(&self_class).unwrap().inline_cache_map
+    }
+
+    pub(crate) fn set_cache_map(
+        &mut self,
+        self_class: ClassId,
+        cache: Vec<(BcIndex, InlineCacheType)>,
+    ) {
+        self.jit_entry
+            .get_mut(&self_class)
+            .map(|info| info.inline_cache_map = cache);
+    }
+
+    pub(crate) fn get_jit_entry(&self, self_class: ClassId) -> Option<DestLabel> {
+        self.jit_entry
+            .get(&self_class)
+            .map(|info| info.entry.clone())
+    }
+
+    pub(crate) fn get_jit_class_version(&self, self_class: ClassId) -> Option<DestLabel> {
+        self.jit_entry
+            .get(&self_class)
+            .map(|info| info.class_version_label.clone())
     }
 
     pub(crate) fn invalidate_jit_code(&mut self) {
@@ -530,22 +570,15 @@ impl ISeqInfo {
                         1 => true,
                         _ => unreachable!(),
                     };
-                    if let Some(func_id) = pc.cached_fid() {
-                        TraceIr::MethodCall {
-                            _polymorphic: polymorphic,
-                            callid,
-                            cache: Some(MethodCacheEntry {
-                                recv_class: pc.cached_class1().unwrap(),
-                                func_id,
-                                version: (pc + 1).cached_version(),
-                            }),
-                        }
+                    let cache = if let Some(cache) = pc.method_cache() {
+                        Some(cache)
                     } else {
-                        TraceIr::MethodCall {
-                            _polymorphic: polymorphic,
-                            callid,
-                            cache: None,
-                        }
+                        None
+                    };
+                    TraceIr::MethodCall {
+                        _polymorphic: polymorphic,
+                        callid,
+                        cache,
                     }
                 }
                 34..=35 => TraceIr::Yield {

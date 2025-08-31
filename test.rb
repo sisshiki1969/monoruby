@@ -1,11 +1,6 @@
-class S
-  attr_accessor :foo
-end
-
-class C < S
-  def foo=(x)
-    super
+100000.times {
+  a = [*(0..1000)]
+  a.each_slice(20) do |slice|
+    # puts slice.sum
   end
-end
-
-C.new.foo = 42
+}

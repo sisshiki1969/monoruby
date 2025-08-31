@@ -473,7 +473,7 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
-    let class = lfp.self_val().as_class();
+    let mut class = lfp.self_val().as_class();
     for v in args.iter().cloned().rev() {
         vm.invoke_method_if_exists(
             globals,
@@ -483,7 +483,7 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
             None,
             None,
         )?;
-        globals.include_module(class, v.expect_module(globals)?)?;
+        class.include_module(v.expect_module(globals)?)?;
     }
     Ok(lfp.self_val())
 }
@@ -530,9 +530,9 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/prepend_features.html]
 #[monoruby_builtin]
 fn prepend_features(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let base = lfp.arg(0).expect_class_or_module(&globals.store)?;
+    let mut base = lfp.arg(0).expect_class_or_module(&globals.store)?;
     let prepend_module = lfp.self_val().as_class();
-    globals.prepend_module(base, prepend_module)?;
+    base.prepend_module(prepend_module)?;
     Ok(lfp.self_val())
 }
 

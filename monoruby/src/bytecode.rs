@@ -1,5 +1,7 @@
 use bytecodegen::BcIndex;
 
+use crate::compiler::jitgen::trace_ir::MethodCacheEntry;
+
 use super::*;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -303,5 +305,37 @@ impl BytecodePtr {
 
     pub fn cached_class0(self) -> Option<ClassId> {
         self.classid1()
+    }
+
+    pub fn method_cache(self) -> Option<MethodCacheEntry> {
+        if let Some(cached_class) = self.cached_class1() {
+            Some(MethodCacheEntry {
+                recv_class: cached_class,
+                func_id: self.cached_fid().unwrap(),
+                version: (self + 1).cached_version(),
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn method_callsite(self) -> CallSiteId {
+        CallSiteId(self.op1 as u32)
+    }
+
+    pub fn write_method_cache(self, recv_class: ClassId, fid: FuncId, version: u32) {
+        let p = self.as_ptr() as *mut u8;
+        unsafe {
+            (p.add(8) as *mut Option<FuncId>).write(Some(fid));
+            (p.add(24) as *mut Option<ClassId>).write(Some(recv_class));
+            (p.add(28) as *mut u32).write(version);
+        }
+    }
+
+    pub fn write_method_cache_version(self, version: u32) {
+        let p = self.as_ptr() as *mut u8;
+        unsafe {
+            (p.add(28) as *mut u32).write(version);
+        }
     }
 }

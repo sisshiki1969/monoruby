@@ -23,6 +23,12 @@ pub(crate) struct MethodCacheEntry {
     pub version: u32,
 }
 
+impl std::cmp::PartialEq for MethodCacheEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.recv_class == other.recv_class && self.func_id == other.func_id
+    }
+}
+
 ///
 /// IR for JIT compiler.
 ///
@@ -735,9 +741,9 @@ impl TraceIr {
                 let s = callsite.format_args();
                 let op1 = format!("{} = {:?}.{name}{s}", ret_str(*dst), recv,);
                 format!(
-                    "{:36} {} [{}] {}",
+                    "{:36} {}[{}] {}",
                     op1,
-                    if *polymorphic { "POLY" } else { "" },
+                    if *polymorphic { "POLYMORPHIC " } else { "" },
                     store.debug_class_name(if let Some(entry) = cache {
                         Some(entry.recv_class)
                     } else {

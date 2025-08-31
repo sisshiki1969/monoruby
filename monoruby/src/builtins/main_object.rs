@@ -20,9 +20,9 @@ fn include(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
-    let class = globals.store.object_class();
+    let mut class = globals.store.object_class();
     for v in args.iter().cloned().rev() {
-        globals.include_module(class, v.expect_module(globals)?)?;
+        class.include_module(v.expect_module(globals)?)?;
     }
     Ok(class.as_val())
 }

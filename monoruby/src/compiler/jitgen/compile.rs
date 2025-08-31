@@ -639,7 +639,14 @@ impl JitContext {
                 cache,
             } => {
                 if let Some(cache) = cache {
-                    return self.compile_method_call(bbctx, ir, store, cache, &store[callid]);
+                    return self.compile_method_call(
+                        bbctx,
+                        ir,
+                        store,
+                        bc_pos,
+                        cache,
+                        &store[callid],
+                    );
                 } else {
                     return CompileResult::Recompile(RecompileReason::NotCached);
                 }

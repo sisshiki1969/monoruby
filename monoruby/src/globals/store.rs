@@ -2,6 +2,8 @@ use inline::InlineTable;
 use monoasm::DestLabel;
 use ruruby_parse::{LvarCollector, ParseResult};
 
+use crate::compiler::jitgen::trace_ir::MethodCacheEntry;
+
 use super::*;
 use std::{cell::RefCell, pin::Pin};
 
@@ -502,7 +504,18 @@ impl Store {
     ///
     /// Check whether a method *name* of class *class_id* exists.
     ///
+    /// This fn does not consider visibility.
+    ///
     pub(crate) fn check_method_for_class(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Option<MethodTableEntry> {
+        let class_version = Globals::class_version();
+        self.check_method_for_class_with_version(class_id, name, class_version)
+    }
+
+    pub(crate) fn check_method_for_class_with_version(
         &self,
         class_id: ClassId,
         name: IdentId,
@@ -559,6 +572,23 @@ impl Store {
             "<{}> {file_name}:{line}",
             self.func_description(iseq.func_id()),
         );
+        for (class, info) in &iseq.jit_entry {
+            eprintln!("  JitEntry: {}", class.get_name(self));
+            for (bc_idx, cache_type) in &info.inline_cache_map {
+                let pc = iseq.get_pc(*bc_idx);
+                if let Some(MethodCacheEntry {
+                    recv_class,
+                    func_id,
+                    version,
+                }) = pc.method_cache()
+                {
+                    eprintln!(
+                        "    {:?} {:?} {:08x} {:?}",
+                        recv_class, func_id, version, cache_type
+                    );
+                }
+            }
+        }
         eprintln!(
             "{:?} owner:{:?} local_vars:{} temp:{}",
             self[iseq.func_id()].meta(),
@@ -609,15 +639,17 @@ impl Store {
 
         eprintln!();
         eprintln!("full method exploration stats (top 20)");
-        eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
-        eprintln!("------------------------------------------------------------------------");
+        eprintln!("{:25} {:45} {:10}", "func name", "class", "count");
+        eprintln!(
+            "----------------------------------------------------------------------------------"
+        );
         GLOBAL_METHOD_CACHE.with(|cache| {
             let c = cache.borrow();
             let mut v = c.method_exprolation_stats();
             v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
             for ((class_id, name), count) in v.into_iter().take(20) {
                 eprintln!(
-                    "{:30} {:30} {:10}",
+                    "{:25} {:45} {:10}",
                     name.to_string(),
                     self.debug_class_name(*class_id),
                     count

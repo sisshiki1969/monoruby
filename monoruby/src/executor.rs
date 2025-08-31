@@ -670,7 +670,7 @@ impl Executor {
         is_func_call: bool,
     ) -> Result<FuncId> {
         let class_id = recv.class();
-        match globals.check_method_for_class(class_id, func_name, globals.class_version()) {
+        match globals.check_method_for_class(class_id, func_name) {
             Some(entry) => {
                 match entry.visibility() {
                     Visibility::Private => {
@@ -1411,79 +1411,6 @@ pub enum RecompileReason {
     IvarIdNotFound = 2,
     MaybeError = 3,
     ClassVersionGuardFailed = 4,
-}
-
-pub(crate) extern "C" fn exec_jit_specialized_recompile(
-    globals: &mut Globals,
-    idx: usize,
-    reason: RecompileReason,
-) {
-    CODEGEN.with(|codegen| {
-        codegen
-            .borrow_mut()
-            .recompile_specialized(globals, idx, reason);
-    });
-}
-
-pub(crate) extern "C" fn exec_jit_compile_patch(
-    globals: &mut Globals,
-    lfp: Lfp,
-    entry_patch_point: monoasm::CodePtr,
-) {
-    CODEGEN.with(|codegen| {
-        codegen
-            .borrow_mut()
-            .compile_patch(globals, lfp, entry_patch_point);
-    });
-}
-
-pub(crate) extern "C" fn exec_jit_recompile_method(
-    globals: &mut Globals,
-    lfp: Lfp,
-    reason: RecompileReason,
-) {
-    CODEGEN.with(|codegen| {
-        codegen.borrow_mut().recompile_method(globals, lfp, reason);
-    });
-}
-
-///
-/// Compile the loop.
-///
-pub(crate) extern "C" fn exec_jit_partial_compile(
-    globals: &mut Globals,
-    lfp: Lfp,
-    pc: BytecodePtr,
-) {
-    if globals.no_jit {
-        return;
-    }
-    partial_compile(globals, lfp, pc, None);
-}
-
-///
-/// Recompile the loop.
-///
-pub(crate) extern "C" fn exec_jit_recompile_partial(
-    globals: &mut Globals,
-    lfp: Lfp,
-    pc: BytecodePtr,
-    reason: RecompileReason,
-) {
-    partial_compile(globals, lfp, pc, Some(reason));
-}
-
-fn partial_compile(
-    globals: &mut Globals,
-    lfp: Lfp,
-    pc: BytecodePtr,
-    is_recompile: Option<RecompileReason>,
-) {
-    CODEGEN.with(|codegen| {
-        codegen
-            .borrow_mut()
-            .compile_partial(globals, lfp, pc, is_recompile);
-    });
 }
 
 struct Root<'a, 'b> {

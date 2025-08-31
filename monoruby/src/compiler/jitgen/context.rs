@@ -98,6 +98,7 @@ pub struct JitContext {
     /// Class version at compile time.
     ///
     class_version: u32,
+    class_version_label: DestLabel,
     ///
     /// Level of inlining.
     ///
@@ -154,6 +155,10 @@ pub struct JitContext {
     ///
     pub(super) specialized_methods: Vec<SpecializeInfo>,
     ///
+    /// Inline cache for method calls.
+    ///
+    pub(crate) inline_method_cache: HashMap<BcIndex, MethodCacheEntry>,
+    ///
     /// Source map for bytecode index and machine code position.
     ///
     #[cfg(feature = "emit-asm")]
@@ -174,6 +179,7 @@ impl JitContext {
         iseq_id: ISeqId,
         jit_type: JitType,
         class_version: u32,
+        class_version_label: DestLabel,
         self_class: ClassId,
         specialize_level: usize,
     ) -> Self {
@@ -206,10 +212,12 @@ impl JitContext {
             inline_bridges: HashMap::default(),
             labels,
             class_version,
+            class_version_label,
             ir: vec![],
             ivar_heap_accessed: false,
             specialize_level,
             specialized_methods: vec![],
+            inline_method_cache: HashMap::default(),
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -237,10 +245,12 @@ impl JitContext {
             inline_bridges: HashMap::default(),
             labels: vec![],
             class_version: 0,
+            class_version_label: self.class_version_label(),
             ir: vec![],
             ivar_heap_accessed: false,
             specialize_level: 0,
             specialized_methods: vec![],
+            inline_method_cache: HashMap::default(),
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -302,6 +312,10 @@ impl JitContext {
 
     pub(crate) fn class_version(&self) -> u32 {
         self.class_version
+    }
+
+    pub(crate) fn class_version_label(&self) -> DestLabel {
+        self.class_version_label.clone()
     }
 
     pub(super) fn specialize_level(&self) -> usize {
@@ -479,7 +493,7 @@ impl JitContext {
     ) -> Option<FuncId> {
         let class_version = self.class_version;
         store
-            .check_method_for_class(class_id, name, class_version)?
+            .check_method_for_class_with_version(class_id, name, class_version)?
             .func_id()
     }
 
