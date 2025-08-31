@@ -1,46 +1,6 @@
-      __res = (
-        class C
-          a = 42
-          define_method :foo do |x|
-            a += x
-          end
-        end
-        c = C.new
-        g = 0
-        100.times { |x|
-            g += c.foo(x)
-        }
-        g
-        )
-      for __i in 0..1000 do
-          __res2 = (
-        class C
-          a = 42
-          define_method :foo do |x|
-            a += x
-          end
-        end
-        c = C.new
-        g = 0
-        100.times { |x|
-            puts "x:#{x} g:#{g}"
-            g += c.foo(x)
-        }
-        g
-        )
-          __assert(__res, __res2)
-      end
-      (
-        class C
-          a = 42
-          define_method :foo do |x|
-            a += x
-          end
-        end
-        c = C.new
-        g = 0
-        100.times { |x|
-            g += c.foo(x)
-        }
-        g
-        )
+100000.times {
+  a = [*(0..1000)]
+  a.each_slice(20) do |slice|
+    # puts slice.sum
+  end
+}

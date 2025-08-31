@@ -211,20 +211,17 @@ impl Codegen {
                 self.handle_error(&error);
             }
             AsmInst::GuardClassVersion {
-                version,
                 position,
                 with_recovery,
                 deopt,
             } => {
                 let deopt = &labels[deopt];
+                let version = ctx.class_version_label();
                 self.guard_class_version(version, position, with_recovery, deopt);
             }
-            AsmInst::GuardClassVersionSpecialized {
-                version,
-                idx,
-                deopt,
-            } => {
+            AsmInst::GuardClassVersionSpecialized { idx, deopt } => {
                 let deopt = &labels[deopt];
+                let version = ctx.class_version_label();
                 self.guard_class_version_specialized(version, self.specialized_base + idx, deopt);
             }
             AsmInst::Deopt(deopt) => {

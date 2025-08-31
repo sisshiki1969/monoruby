@@ -194,18 +194,12 @@ impl JitContext {
         if bbctx.class_version_guarded {
             return;
         }
-        let version = self.class_version_label();
         match self.jit_type() {
             JitType::Specialized { idx, .. } => {
-                ir.push(AsmInst::GuardClassVersionSpecialized {
-                    version,
-                    idx: *idx,
-                    deopt,
-                });
+                ir.push(AsmInst::GuardClassVersionSpecialized { idx: *idx, deopt });
             }
             _ => {
                 ir.push(AsmInst::GuardClassVersion {
-                    version,
                     position: self.position(),
                     with_recovery,
                     deopt,
