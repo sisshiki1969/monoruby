@@ -1,6 +1,6 @@
 use bytecodegen::BcIndex;
 
-use crate::compiler::jitgen::trace_ir::MethodCacheEntry;
+use crate::codegen::jitgen::trace_ir::MethodCacheEntry;
 
 use super::*;
 

@@ -831,7 +831,7 @@ impl Codegen {
                 movq rdi, r12;
                 movq rsi, r14;
                 lea  rdx, [r13 - 16];
-                movq rax, (exec_jit_partial_compile);
+                movq rax, (compiler::exec_jit_partial_compile);
                 call rax;
                 movq rax, [r13 - 8];
                 testq rax, rax;

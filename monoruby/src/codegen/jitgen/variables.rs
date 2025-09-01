@@ -1,7 +1,7 @@
 use super::*;
 
 impl JitContext {
-    pub(in crate::compiler::jitgen) fn load_ivar(
+    pub(in crate::codegen::jitgen) fn load_ivar(
         &mut self,
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
@@ -29,7 +29,7 @@ impl JitContext {
         ivar_heap
     }
 
-    pub(in crate::compiler::jitgen) fn store_ivar(
+    pub(in crate::codegen::jitgen) fn store_ivar(
         &mut self,
         bbctx: &mut BBContext,
         ir: &mut AsmIr,

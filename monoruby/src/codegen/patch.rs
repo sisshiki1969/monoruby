@@ -114,7 +114,7 @@ impl Codegen {
             movq rsi, r14;
             movq rdx, (patch_point_addr.as_ptr());
             subq rsp, 4088;
-            movq rax, (exec_jit_compile_patch as usize);
+            movq rax, (compiler::exec_jit_compile_patch as usize);
             call rax;
             addq rsp, 4088;
             jmp entry;

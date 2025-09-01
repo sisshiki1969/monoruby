@@ -2,7 +2,7 @@ use inline::InlineTable;
 use monoasm::DestLabel;
 use ruruby_parse::{LvarCollector, ParseResult};
 
-use crate::compiler::jitgen::trace_ir::MethodCacheEntry;
+use crate::codegen::jitgen::trace_ir::MethodCacheEntry;
 
 use super::*;
 use std::{cell::RefCell, pin::Pin};

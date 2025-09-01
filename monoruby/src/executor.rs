@@ -4,7 +4,7 @@ mod constants;
 pub mod frame;
 pub mod inline;
 pub mod op;
-pub use compiler::*;
+pub use codegen::*;
 pub use frame::*;
 pub use op::*;
 use ruruby_parse::{Loc, SourceInfoRef};

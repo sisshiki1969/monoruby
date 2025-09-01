@@ -6,9 +6,7 @@ use jitgen::trace_ir::{BinOpInfo, OpMode, TraceIr};
 use ruruby_parse::CmpKind;
 
 use super::*;
-use crate::{
-    bytecodegen::BcIndex, compiler::jitgen::BasicBlockId, compiler::jitgen::BasicBlockInfo,
-};
+use crate::{bytecodegen::BcIndex, codegen::jitgen::BasicBlockId, codegen::jitgen::BasicBlockInfo};
 
 #[derive(Clone, Debug)]
 struct ExceptionMapEntry {

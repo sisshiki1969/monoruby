@@ -720,11 +720,11 @@ impl std::fmt::Debug for Liveness {
 }
 
 impl Liveness {
-    pub(in crate::compiler::jitgen) fn new(total_reg_num: usize) -> Self {
+    pub(in crate::codegen::jitgen) fn new(total_reg_num: usize) -> Self {
         Self(vec![IsUsed::default(); total_reg_num])
     }
 
-    pub(in crate::compiler::jitgen) fn merge(&mut self, bbctx: &BBContext) {
+    pub(in crate::codegen::jitgen) fn merge(&mut self, bbctx: &BBContext) {
         for (i, is_used) in &mut self.0.iter_mut().enumerate() {
             is_used.merge(bbctx.is_used(SlotId(i as u16)));
         }
@@ -991,7 +991,7 @@ impl BBContext {
     ///
     /// Discard slots above *next_sp*.
     ///
-    pub(in crate::compiler::jitgen) fn clear_above_next_sp(&mut self) {
+    pub(in crate::codegen::jitgen) fn clear_above_next_sp(&mut self) {
         let sp = self.next_sp;
         for i in sp..SlotId(self.slots.len() as u16) {
             self.discard(i)
@@ -1001,7 +1001,7 @@ impl BBContext {
     ///
     /// Discard slots above *sp*.
     ///
-    pub(in crate::compiler::jitgen) fn clear_above_sp(&mut self) {
+    pub(in crate::codegen::jitgen) fn clear_above_sp(&mut self) {
         let sp = self.sp;
         for i in sp..SlotId(self.slots.len() as u16) {
             self.discard(i)
@@ -1259,7 +1259,7 @@ impl BBContext {
     ///  *2: if self == other, Const.
     ///
     /// ~~~
-    pub(in crate::compiler::jitgen) fn merge(&mut self, other: &BBContext) {
+    pub(in crate::codegen::jitgen) fn merge(&mut self, other: &BBContext) {
         for i in 0..self.slots.len() {
             let i = SlotId(i as u16);
             self.is_used_mut(i).merge(other.is_used(i));

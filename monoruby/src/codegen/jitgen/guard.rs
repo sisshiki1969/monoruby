@@ -162,7 +162,7 @@ impl Codegen {
             monoasm!( &mut self.jit,
                 movq rdx, (pc.as_ptr());
                 movl rcx, (reason as u32);
-                movq rax, (exec_jit_recompile_partial);
+                movq rax, (compiler::exec_jit_recompile_partial);
                 call rax;
             );
             self.jit.restore_registers();
@@ -170,7 +170,7 @@ impl Codegen {
             self.save_registers();
             monoasm!( &mut self.jit,
                 movl rdx, (reason as u32);
-                movq rax, (exec_jit_recompile_method_with_recovery);
+                movq rax, (compiler::exec_jit_recompile_method_with_recovery);
                 call rax;
             );
             self.restore_registers();
@@ -182,7 +182,7 @@ impl Codegen {
             self.save_registers();
             monoasm!( &mut self.jit,
                 movl rdx, (reason as u32);
-                movq rax, (exec_jit_recompile_method);
+                movq rax, (compiler::exec_jit_recompile_method);
                 call rax;
             );
             self.restore_registers();
@@ -201,7 +201,7 @@ impl Codegen {
             movq rdi, r12;
             movq rsi, (idx);
             movl rdx, (reason as u32);
-            movq rax, (exec_jit_specialized_recompile);
+            movq rax, (compiler::exec_jit_specialized_recompile);
             call rax;
         );
         self.jit.restore_registers();

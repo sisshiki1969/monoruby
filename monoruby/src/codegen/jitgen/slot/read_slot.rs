@@ -31,7 +31,7 @@ impl BBContext {
     /// ### destroy
     /// - rax, rcx
     ///
-    pub(in crate::compiler::jitgen) fn fetch_for_callee(
+    pub(in crate::codegen::jitgen) fn fetch_for_callee(
         &mut self,
         ir: &mut AsmIr,
         slot: SlotId,
@@ -52,7 +52,7 @@ impl BBContext {
         }
     }
 
-    pub(in crate::compiler::jitgen) fn fetch_rhs_for_callee(
+    pub(in crate::codegen::jitgen) fn fetch_rhs_for_callee(
         &mut self,
         ir: &mut AsmIr,
         mode: OpMode,

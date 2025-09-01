@@ -1,5 +1,5 @@
 use super::*;
-use crate::compiler::runtime::{PROCDATA_FUNCID, PROCDATA_OUTER};
+use crate::codegen::runtime::{PROCDATA_FUNCID, PROCDATA_OUTER};
 
 impl JitModule {
     pub(super) fn init_stack_limit(&mut self) -> extern "C" fn(&mut Executor) -> *const u8 {

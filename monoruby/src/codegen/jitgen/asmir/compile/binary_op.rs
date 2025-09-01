@@ -547,7 +547,7 @@ extern "C" fn rem_ff_f(lhs: f64, rhs: f64) -> f64 {
 macro_rules! cmp_main {
     ($op:ident) => {
         paste! {
-            pub(in crate::compiler) fn [<icmp_ $op>](&mut self) {
+            pub(in crate::codegen) fn [<icmp_ $op>](&mut self) {
                 monoasm! { &mut self.jit,
                     xorq rax, rax;
                     cmpq rdi, rsi;
@@ -557,7 +557,7 @@ macro_rules! cmp_main {
                 };
             }
 
-            pub(in crate::compiler) fn [<set_ $op>](&mut self) {
+            pub(in crate::codegen) fn [<set_ $op>](&mut self) {
                 monoasm! { &mut self.jit,
                     [<set $op>] rax;
                     shlq rax, 3;
