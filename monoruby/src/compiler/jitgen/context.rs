@@ -159,6 +159,10 @@ pub struct JitContext {
     ///
     pub(crate) inline_method_cache: HashMap<BcIndex, MethodCacheEntry>,
     ///
+    /// Stack frame for specialized compilation.
+    ///
+    pub(crate) stack_frame: Vec<(ISeqId, Option<ISeqId>)>,
+    ///
     /// Source map for bytecode index and machine code position.
     ///
     #[cfg(feature = "emit-asm")]
@@ -182,6 +186,7 @@ impl JitContext {
         class_version_label: DestLabel,
         self_class: ClassId,
         specialize_level: usize,
+        stack_frame: Vec<(ISeqId, Option<ISeqId>)>,
     ) -> Self {
         let iseq = &store[iseq_id];
         let self_ty = store[self_class].instance_ty();
@@ -218,6 +223,7 @@ impl JitContext {
             specialize_level,
             specialized_methods: vec![],
             inline_method_cache: HashMap::default(),
+            stack_frame,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -251,6 +257,7 @@ impl JitContext {
             specialize_level: 0,
             specialized_methods: vec![],
             inline_method_cache: HashMap::default(),
+            stack_frame: vec![],
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]

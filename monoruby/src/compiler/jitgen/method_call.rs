@@ -213,7 +213,7 @@ impl JitContext {
     /// ### in
     /// rdi: receiver: Value
     ///
-    pub(super) fn compile_yield_inlined(
+    pub(super) fn compile_yield_specialized(
         &mut self,
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
@@ -231,7 +231,7 @@ impl JitContext {
         bbctx.clear_above_next_sp();
         let error = ir.new_error(bbctx);
         bbctx.writeback_acc(ir);
-        let block_entry = self.compile_specialized_method(
+        let block_entry = self.compile_specialized_func(
             store,
             block_iseq,
             block_self,
@@ -368,7 +368,7 @@ impl JitContext {
                     && !(pos_num == 1 && store[fid].single_arg_expand())
                     && (bbctx.state(callsite.recv).is_concrete_value()
                         || (args..args + pos_num).any(|i| bbctx.state(i).is_concrete_value()));
-                if block_fid.is_some() || (specializable && self.specialize_level() < 3)
+                if block_fid.is_some() || (specializable && self.specialize_level() < 5)
                 /*name == Some(IdentId::NEW)*/
                 {
                     let mut slots = vec![];
@@ -403,7 +403,7 @@ impl JitContext {
                     } else {
                         Some(self.label())
                     };
-                    let entry = self.compile_specialized_method(
+                    let entry = self.compile_specialized_func(
                         store,
                         iseq_id,
                         recv_class,
@@ -432,7 +432,7 @@ impl JitContext {
         CompileResult::Continue
     }
 
-    fn compile_specialized_method(
+    fn compile_specialized_func(
         &mut self,
         store: &Store,
         iseq_id: ISeqId,
@@ -445,7 +445,14 @@ impl JitContext {
             JitType::Specialized { idx, .. } => *idx,
             _ => self.specialized_methods.len(),
         };
+        let block = args_info
+            .block
+            .as_ref()
+            .map(|info| info.is_iseq(store))
+            .flatten();
         let jit_type = JitType::Specialized { idx, args_info };
+        let mut stack_frame = self.stack_frame.clone();
+        stack_frame.push((iseq_id, block));
         let mut ctx = JitContext::new(
             store,
             iseq_id,
@@ -454,6 +461,7 @@ impl JitContext {
             self.class_version_label(),
             self_class,
             specialize_level,
+            stack_frame,
         );
         ctx.compile(store);
         let entry = self.label();
