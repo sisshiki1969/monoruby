@@ -24,6 +24,7 @@ mod binary_op;
 mod compile;
 mod context;
 mod definition;
+mod deoptimize;
 mod guard;
 mod index;
 mod init_method;

@@ -44,7 +44,7 @@ impl Codegen {
         };
 
         self.jit.select_page(1);
-        self.exec_recompile(
+        self.gen_recompile(
             position,
             fail,
             RecompileReason::ClassVersionGuardFailed,
@@ -65,146 +65,9 @@ impl Codegen {
         self.check_version(cached_version, &fail);
 
         self.jit.select_page(1);
-        self.exec_specialized_recompile(idx, fail, RecompileReason::ClassVersionGuardFailed);
+        self.gen_recompile_specialized(idx, fail, RecompileReason::ClassVersionGuardFailed);
         self.version_guard_fail(deopt);
         self.jit.select_page(0);
-    }
-
-    fn dec_counter(
-        &mut self,
-        dec: &DestLabel,
-        recompile: &DestLabel,
-        deopt: &DestLabel,
-        count: i32,
-    ) {
-        let counter = self.jit.data_i32(count);
-        monoasm!( &mut self.jit,
-            xorq rdi, rdi;
-            cmpl [rip + counter], 0;
-            jlt deopt;
-            jeq recompile;
-        dec:
-            subl [rip + counter], 1;
-            jmp deopt;
-        );
-    }
-
-    pub(super) fn recompile_and_deopt(
-        &mut self,
-        position: Option<BytecodePtr>,
-        deopt: &DestLabel,
-        reason: RecompileReason,
-    ) {
-        let recompile = self.jit.label();
-        let dec = self.jit.label();
-
-        self.dec_counter(&dec, &recompile, deopt, COUNT_DEOPT_RECOMPILE);
-
-        assert_eq!(0, self.jit.get_page());
-        self.jit.select_page(1);
-        self.exec_recompile(position, recompile, reason, None);
-        monoasm!( &mut self.jit,
-            xorq rdi, rdi;
-            jmp dec;
-        );
-        self.jit.select_page(0);
-        #[cfg(feature = "jit-debug")]
-        eprintln!(" => deopt");
-    }
-
-    pub(super) fn recompile_and_deopt_specialized(
-        &mut self,
-        deopt: &DestLabel,
-        idx: usize,
-        reason: RecompileReason,
-    ) {
-        let recompile = self.jit.label();
-        let dec = self.jit.label();
-
-        self.dec_counter(&dec, &recompile, deopt, COUNT_DEOPT_RECOMPILE_SPECIALIZED);
-
-        assert_eq!(0, self.jit.get_page());
-        self.jit.select_page(1);
-        self.exec_specialized_recompile(idx, recompile, reason);
-        monoasm! { &mut self.jit,
-            xorq rdi, rdi;
-            jmp dec;
-        }
-        self.jit.select_page(0);
-        #[cfg(feature = "jit-debug")]
-        eprintln!(" => deopt_specialized");
-    }
-
-    ///
-    /// Execute recompilation of the loop / method.
-    ///
-    /// ### in
-    /// - r12: &mut Globals
-    /// - r14: Lfp
-    ///
-    /// ### destroy
-    /// - rax
-    ///
-    fn exec_recompile(
-        &mut self,
-        position: Option<BytecodePtr>,
-        label: DestLabel,
-        reason: RecompileReason,
-        with_recovery: Option<DestLabel>,
-    ) {
-        self.jit.bind_label(label);
-        monoasm!( &mut self.jit,
-            movq rdi, r12;
-            movq rsi, r14;
-        );
-        if let Some(pc) = position {
-            self.jit.save_registers();
-            monoasm!( &mut self.jit,
-                movq rdx, (pc.as_ptr());
-                movl rcx, (reason as u32);
-                movq rax, (compiler::exec_jit_recompile_partial);
-                call rax;
-            );
-            self.jit.restore_registers();
-        } else if let Some(recover) = with_recovery {
-            self.save_registers();
-            monoasm!( &mut self.jit,
-                movl rdx, (reason as u32);
-                movq rax, (compiler::exec_jit_recompile_method_with_recovery);
-                call rax;
-            );
-            self.restore_registers();
-            monoasm!( &mut self.jit,
-                testq rax, rax;
-                jnz recover;
-            );
-        } else {
-            self.save_registers();
-            monoasm!( &mut self.jit,
-                movl rdx, (reason as u32);
-                movq rax, (compiler::exec_jit_recompile_method);
-                call rax;
-            );
-            self.restore_registers();
-        }
-    }
-
-    fn exec_specialized_recompile(
-        &mut self,
-        idx: usize,
-        label: DestLabel,
-        reason: RecompileReason,
-    ) {
-        self.jit.bind_label(label);
-        self.jit.save_registers();
-        monoasm!( &mut self.jit,
-            movq rdi, r12;
-            movq rsi, (idx);
-            movl rdx, (reason as u32);
-            movq rax, (compiler::exec_jit_specialized_recompile);
-            call rax;
-        );
-        self.jit.restore_registers();
     }
 
     ///

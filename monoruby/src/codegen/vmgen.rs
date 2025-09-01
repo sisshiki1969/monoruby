@@ -826,18 +826,7 @@ impl Codegen {
         self.jit.bind_label(cont.clone());
         self.fetch_and_dispatch();
         if !cfg!(feature = "no-jit") {
-            monoasm!( &mut self.jit,
-            compile:
-                movq rdi, r12;
-                movq rsi, r14;
-                lea  rdx, [r13 - 16];
-                movq rax, (compiler::exec_jit_partial_compile);
-                call rax;
-                movq rax, [r13 - 8];
-                testq rax, rax;
-                jeq cont;
-                jmp rax;
-            );
+            self.gen_compile_loop(&compile, &cont);
         }
         label
     }

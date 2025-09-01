@@ -93,31 +93,4 @@ impl Codegen {
         self.gen_compile_patch(&exit, &failed, COUNT_RECOMPILE_ARECV_CLASS);
         self.jit.select_page(0);
     }
-
-    pub(super) fn gen_compile_patch(
-        &mut self,
-        no_compile_exit: &DestLabel,
-        entry: &DestLabel,
-        counter: i32,
-    ) {
-        let counter = self.jit.data_i32(counter);
-        let cont = self.jit.label();
-        let patch_point_addr = self.jit.get_current_address();
-        monoasm! { &mut self.jit,
-        entry:
-            jmp cont;
-        cont:
-            subl [rip + counter], 1;
-            jne no_compile_exit;
-
-            movq rdi, r12;
-            movq rsi, r14;
-            movq rdx, (patch_point_addr.as_ptr());
-            subq rsp, 4088;
-            movq rax, (compiler::exec_jit_compile_patch as usize);
-            call rax;
-            addq rsp, 4088;
-            jmp entry;
-        }
-    }
 }

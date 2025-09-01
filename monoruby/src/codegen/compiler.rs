@@ -1,96 +1,5 @@
 use super::*;
 
-//
-// JIT Compiler API for asm codes.
-//
-
-pub(super) extern "C" fn exec_jit_specialized_recompile(
-    globals: &mut Globals,
-    idx: usize,
-    reason: RecompileReason,
-) {
-    CODEGEN.with(|codegen| {
-        codegen
-            .borrow_mut()
-            .recompile_specialized(globals, idx, reason);
-    });
-}
-
-pub(super) extern "C" fn exec_jit_compile_patch(
-    globals: &mut Globals,
-    lfp: Lfp,
-    entry_patch_point: monoasm::CodePtr,
-) {
-    CODEGEN.with(|codegen| {
-        codegen
-            .borrow_mut()
-            .compile_patch(globals, lfp, entry_patch_point);
-    });
-}
-
-pub(super) extern "C" fn exec_jit_recompile_method(
-    globals: &mut Globals,
-    lfp: Lfp,
-    reason: RecompileReason,
-) {
-    CODEGEN.with(|codegen| {
-        codegen.borrow_mut().recompile_method(globals, lfp, reason);
-    });
-}
-
-pub(super) extern "C" fn exec_jit_recompile_method_with_recovery(
-    globals: &mut Globals,
-    lfp: Lfp,
-    reason: RecompileReason,
-) -> u64 {
-    if globals.store.update_inline_cache(lfp) {
-        return 1;
-    };
-    CODEGEN.with(|codegen| {
-        codegen.borrow_mut().recompile_method(globals, lfp, reason);
-    });
-    0
-}
-
-///
-/// Compile the loop.
-///
-pub(super) extern "C" fn exec_jit_partial_compile(
-    globals: &mut Globals,
-    lfp: Lfp,
-    pc: BytecodePtr,
-) {
-    if globals.no_jit {
-        return;
-    }
-    partial_compile(globals, lfp, pc, None);
-}
-
-///
-/// Recompile the loop.
-///
-pub(super) extern "C" fn exec_jit_recompile_partial(
-    globals: &mut Globals,
-    lfp: Lfp,
-    pc: BytecodePtr,
-    reason: RecompileReason,
-) {
-    partial_compile(globals, lfp, pc, Some(reason));
-}
-
-fn partial_compile(
-    globals: &mut Globals,
-    lfp: Lfp,
-    pc: BytecodePtr,
-    is_recompile: Option<RecompileReason>,
-) {
-    CODEGEN.with(|codegen| {
-        codegen
-            .borrow_mut()
-            .compile_partial(globals, lfp, pc, is_recompile);
-    });
-}
-
 impl Codegen {
     ///
     /// Compile the Ruby method.
@@ -115,6 +24,120 @@ impl Codegen {
             class_version_label,
             is_recompile,
         )
+    }
+
+    pub(super) fn gen_compile_patch(
+        &mut self,
+        no_compile_exit: &DestLabel,
+        entry: &DestLabel,
+        counter: i32,
+    ) {
+        let counter = self.jit.data_i32(counter);
+        let cont = self.jit.label();
+        let patch_point_addr = self.jit.get_current_address();
+        monoasm! { &mut self.jit,
+        entry:
+            jmp cont;
+        cont:
+            subl [rip + counter], 1;
+            jne no_compile_exit;
+
+            movq rdi, r12;
+            movq rsi, r14;
+            movq rdx, (patch_point_addr.as_ptr());
+            subq rsp, 4088;
+            movq rax, (jit_compile_patch as usize);
+            call rax;
+            addq rsp, 4088;
+            jmp entry;
+        }
+    }
+
+    ///
+    /// Generate code for recompilation of the loop / method.
+    ///
+    /// ### in
+    /// - r12: &mut Globals
+    /// - r14: Lfp
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    pub(super) fn gen_recompile(
+        &mut self,
+        position: Option<BytecodePtr>,
+        label: DestLabel,
+        reason: RecompileReason,
+        with_recovery: Option<DestLabel>,
+    ) {
+        self.jit.bind_label(label);
+        monoasm!( &mut self.jit,
+            movq rdi, r12;
+            movq rsi, r14;
+        );
+        if let Some(pc) = position {
+            self.jit.save_registers();
+            monoasm!( &mut self.jit,
+                movq rdx, (pc.as_ptr());
+                movl rcx, (reason as u32);
+                movq rax, (jit_recompile_loop);
+                call rax;
+            );
+            self.jit.restore_registers();
+        } else if let Some(recover) = with_recovery {
+            self.save_registers();
+            monoasm!( &mut self.jit,
+                movl rdx, (reason as u32);
+                movq rax, (jit_recompile_method_with_recovery);
+                call rax;
+            );
+            self.restore_registers();
+            monoasm!( &mut self.jit,
+                testq rax, rax;
+                jnz recover;
+            );
+        } else {
+            self.save_registers();
+            monoasm!( &mut self.jit,
+                movl rdx, (reason as u32);
+                movq rax, (jit_recompile_method);
+                call rax;
+            );
+            self.restore_registers();
+        }
+    }
+
+    pub(super) fn gen_recompile_specialized(
+        &mut self,
+        idx: usize,
+        label: DestLabel,
+        reason: RecompileReason,
+    ) {
+        self.jit.bind_label(label);
+        self.jit.save_registers();
+        monoasm!( &mut self.jit,
+            movq rdi, r12;
+            movq rsi, (idx);
+            movl rdx, (reason as u32);
+            movq rax, (jit_recompile_specialized);
+            call rax;
+        );
+        self.jit.restore_registers();
+    }
+
+    pub(super) fn gen_compile_loop(&mut self, entry: &DestLabel, cont: &DestLabel) {
+        monoasm!( &mut self.jit,
+        entry:
+            movq rdi, r12;
+            movq rsi, r14;
+            lea  rdx, [r13 - 16];
+            movq rax, (jit_compile_loop);
+            call rax;
+            movq rax, [r13 - 8];
+            testq rax, rax;
+            jeq cont;
+            jmp rax;
+        );
     }
 
     fn compile(
@@ -288,4 +311,87 @@ impl Codegen {
         let patch_point = self.jit.get_label_address(&patch_point);
         self.jit.apply_jmp_patch_address(patch_point, &entry);
     }
+}
+
+//
+// JIT Compiler API for asm codes.
+//
+
+extern "C" fn jit_recompile_specialized(
+    globals: &mut Globals,
+    idx: usize,
+    reason: RecompileReason,
+) {
+    CODEGEN.with(|codegen| {
+        codegen
+            .borrow_mut()
+            .recompile_specialized(globals, idx, reason);
+    });
+}
+
+extern "C" fn jit_compile_patch(
+    globals: &mut Globals,
+    lfp: Lfp,
+    entry_patch_point: monoasm::CodePtr,
+) {
+    CODEGEN.with(|codegen| {
+        codegen
+            .borrow_mut()
+            .compile_patch(globals, lfp, entry_patch_point);
+    });
+}
+
+extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: RecompileReason) {
+    CODEGEN.with(|codegen| {
+        codegen.borrow_mut().recompile_method(globals, lfp, reason);
+    });
+}
+
+extern "C" fn jit_recompile_method_with_recovery(
+    globals: &mut Globals,
+    lfp: Lfp,
+    reason: RecompileReason,
+) -> u64 {
+    if globals.store.update_inline_cache(lfp) {
+        return 1;
+    };
+    CODEGEN.with(|codegen| {
+        codegen.borrow_mut().recompile_method(globals, lfp, reason);
+    });
+    0
+}
+
+///
+/// Compile the loop.
+///
+extern "C" fn jit_compile_loop(globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) {
+    if globals.no_jit {
+        return;
+    }
+    compile_loop(globals, lfp, pc, None);
+}
+
+///
+/// Recompile the loop.
+///
+extern "C" fn jit_recompile_loop(
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+    reason: RecompileReason,
+) {
+    compile_loop(globals, lfp, pc, Some(reason));
+}
+
+fn compile_loop(
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+    is_recompile: Option<RecompileReason>,
+) {
+    CODEGEN.with(|codegen| {
+        codegen
+            .borrow_mut()
+            .compile_partial(globals, lfp, pc, is_recompile);
+    });
 }
