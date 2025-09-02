@@ -292,7 +292,7 @@ impl Codegen {
         idx: usize,
         reason: RecompileReason,
     ) {
-        let (iseq_id, self_class, patch_point) = self.specialized_patch_point[idx].clone();
+        let (iseq_id, self_class, patch_point) = self.specialized_info[idx].clone();
 
         let entry = self.jit.label();
         let class_version = self.class_version();

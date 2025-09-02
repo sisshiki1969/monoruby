@@ -655,7 +655,7 @@ impl JitContext {
                 if let Some(block_info) = self.block_info()
                     && let Some(block_iseq) = block_info.is_iseq(store)
                 {
-                    self.compile_yield_inlined(
+                    self.compile_yield_specialized(
                         bbctx,
                         ir,
                         store,

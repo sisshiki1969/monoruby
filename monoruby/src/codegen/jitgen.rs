@@ -556,13 +556,14 @@ impl Codegen {
             class_version_label,
             self_class,
             0,
+            vec![],
         );
         ctx.compile(store);
         self.jit.finalize();
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 
-        self.gen_machine_code(ctx, store, entry_label);
+        self.gen_machine_code(ctx, store, entry_label, 0);
 
         inline_cache
             .into_iter()
@@ -570,24 +571,13 @@ impl Codegen {
             .collect()
     }
 
-    fn gen_machine_code(&mut self, mut ctx: JitContext, store: &Store, entry_label: DestLabel) {
-        for context::SpecializeInfo {
-            entry: specialized_entry,
-            ctx: specialized_ctx,
-            patch_point,
-        } in std::mem::take(&mut ctx.specialized_methods)
-        {
-            if !ctx.is_specialized() {
-                let patch_point = ctx.resolve_label(&mut self.jit, patch_point.unwrap());
-                self.specialized_patch_point.push((
-                    specialized_ctx.iseq_id(),
-                    specialized_ctx.self_class(),
-                    patch_point,
-                ));
-            }
-            let entry = ctx.resolve_label(&mut self.jit, specialized_entry);
-            self.gen_machine_code(specialized_ctx, store, entry);
-        }
+    fn gen_machine_code(
+        &mut self,
+        mut ctx: JitContext,
+        store: &Store,
+        entry_label: DestLabel,
+        level: usize,
+    ) {
         self.jit.bind_label(entry_label);
         #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
         {
@@ -595,12 +585,14 @@ impl Codegen {
                 let iseq = &store[ctx.iseq_id()];
                 let name = store.func_description(iseq.func_id());
                 eprintln!(
-                    "  >>>{:?}[{}] {:?} <{}> self_class: {}",
-                    ctx.jit_type(),
+                    "  {}>>> [{}] {:?} <{}> self_class:{} {:?} {:?}",
+                    " ".repeat(level * 3),
                     ctx.specialize_level(),
-                    iseq.func_id(),
+                    ctx.iseq_id(),
                     name,
                     store.debug_class_name(ctx.self_class()),
+                    ctx.stack_frame,
+                    ctx.jit_type(),
                 );
             }
         }
@@ -649,9 +641,27 @@ impl Codegen {
         }
 
         if !ctx.is_specialized() {
-            self.specialized_base = self.specialized_patch_point.len();
+            self.specialized_base = self.specialized_info.len();
         }
         self.jit.finalize();
+
+        for context::SpecializeInfo {
+            entry: specialized_entry,
+            ctx: specialized_ctx,
+            patch_point,
+        } in std::mem::take(&mut ctx.specialized_methods)
+        {
+            if !ctx.is_specialized() {
+                let patch_point = ctx.resolve_label(&mut self.jit, patch_point.unwrap());
+                self.specialized_info.push((
+                    specialized_ctx.iseq_id(),
+                    specialized_ctx.self_class(),
+                    patch_point,
+                ));
+            }
+            let entry = ctx.resolve_label(&mut self.jit, specialized_entry);
+            self.gen_machine_code(specialized_ctx, store, entry, level + 1);
+        }
 
         #[cfg(feature = "emit-asm")]
         if self.startup_flag {

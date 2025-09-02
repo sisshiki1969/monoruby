@@ -663,7 +663,7 @@ pub struct Codegen {
     /// return_addr => (patch_point, deopt)
     return_addr_table: HashMap<CodePtr, (Option<CodePtr>, DestLabel)>,
     asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
-    pub(crate) specialized_patch_point: Vec<(ISeqId, ClassId, DestLabel)>,
+    pub(crate) specialized_info: Vec<(ISeqId, ClassId, DestLabel)>,
     pub(crate) specialized_base: usize,
     vm_code_position: (Option<CodePtr>, usize, Option<CodePtr>, usize),
     vm_entry: DestLabel,
@@ -751,7 +751,7 @@ impl Codegen {
             const_version_addr,
             return_addr_table: HashMap::default(),
             asm_return_addr_table: HashMap::default(),
-            specialized_patch_point: Vec::new(),
+            specialized_info: Vec::new(),
             specialized_base: 0,
             vm_entry: entry_panic.clone(),
             vm_code_position: (None, 0, None, 0),
