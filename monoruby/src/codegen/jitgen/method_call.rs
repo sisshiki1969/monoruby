@@ -476,14 +476,16 @@ impl JitContext {
         };
         let jit_type = JitType::Specialized { idx, args_info };
         let mut stack_frame = self.stack_frame.clone();
-        stack_frame.push(JitStackFrame::new(iseq_id, outer, block));
+        let self_ty = store[self_class].instance_ty();
+        stack_frame.push(JitStackFrame::new(
+            iseq_id, outer, block, self_class, self_ty,
+        ));
         let mut ctx = JitContext::new_with_stack_frame(
             store,
             iseq_id,
             jit_type,
             self.class_version(),
             self.class_version_label(),
-            self_class,
             specialize_level,
             stack_frame,
         );

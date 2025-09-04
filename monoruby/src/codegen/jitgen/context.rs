@@ -23,10 +23,22 @@ pub(super) struct SpecializeInfo {
     pub(super) patch_point: Option<JitLabel>,
 }
 
+///
+/// The information of the given block for the frame.
+///
 #[derive(Clone)]
 pub struct JitBlockInfo {
+    ///
+    /// `ISeqId`` of the block.
+    ///
     pub iseq: ISeqId,
+    ///
+    /// `ClassId` of the *self*.
+    ///
     pub self_class: ClassId,
+    ///
+    /// Offset of the outer frame. this must be > 0.
+    ///
     pub outer: usize,
 }
 
@@ -67,19 +79,47 @@ impl JitArgumentInfo {
     }
 }
 
+///
+/// Virtual Stack frame for specialized compilation.
+///
 #[derive(Debug, Clone)]
 pub(crate) struct JitStackFrame {
+    ///
+    /// `ISeqId` of the frame.
+    ///
     iseq_id: ISeqId,
+    ///
+    /// Outer frame. (None for methods)
+    ///
     outer: Option<usize>,
+    ///
+    /// Given block for the frame.
+    ///
     given_block: Option<JitBlockInfo>,
+    ///
+    /// `ClassId`` of *self*.
+    ///
+    self_class: ClassId,
+    ///
+    /// Object type of *self*.
+    ///
+    self_ty: Option<ObjTy>,
 }
 
 impl JitStackFrame {
-    pub fn new(iseq_id: ISeqId, outer: Option<usize>, given_block: Option<JitBlockInfo>) -> Self {
+    pub fn new(
+        iseq_id: ISeqId,
+        outer: Option<usize>,
+        given_block: Option<JitBlockInfo>,
+        self_class: ClassId,
+        self_ty: Option<ObjTy>,
+    ) -> Self {
         Self {
             iseq_id,
             outer,
             given_block,
+            self_class,
+            self_ty,
         }
     }
     pub fn given_block(&self) -> Option<&JitBlockInfo> {
@@ -92,17 +132,11 @@ impl JitStackFrame {
 ///
 pub struct JitContext {
     ///
-    /// IseqId of the method / block.
-    ///
-    iseq_id: ISeqId,
-    ///
-    ///
+    /// the bytecode pointer.
     ///
     bytecode_top: BytecodePtrBase,
     ///
-    /// The start bytecode position of the loop to be compiled.
-    ///
-    /// None for method compilation.
+    /// Type of compilation for 1this frame.
     ///
     jit_type: JitType,
     ///
@@ -113,14 +147,6 @@ pub struct JitContext {
     /// Number of non-temp registers. (includes arguments and local variables, not `self`)
     ///
     local_num: usize,
-    ///
-    /// *self* for this loop/method.
-    ///
-    self_class: ClassId,
-    ///
-    /// Object type of *self*.
-    ///
-    self_ty: Option<ObjTy>,
     ///
     /// Class version at compile time.
     ///
@@ -211,18 +237,20 @@ impl JitContext {
         self_class: ClassId,
         specialize_level: usize,
     ) -> Self {
+        let self_ty = store[self_class].instance_ty();
         Self::new_with_stack_frame(
             store,
             iseq_id,
             jit_type,
             class_version,
             class_version_label,
-            self_class,
             specialize_level,
             vec![JitStackFrame {
                 iseq_id,
                 outer: None,
                 given_block: None,
+                self_class,
+                self_ty,
             }],
         )
     }
@@ -236,12 +264,10 @@ impl JitContext {
         jit_type: JitType,
         class_version: u32,
         class_version_label: DestLabel,
-        self_class: ClassId,
         specialize_level: usize,
         stack_frame: Vec<JitStackFrame>,
     ) -> Self {
         let iseq = &store[iseq_id];
-        let self_ty = store[self_class].instance_ty();
         let mut basic_block_labels = HashMap::default();
         let mut labels = vec![];
         for i in 0..iseq.bb_info.len() {
@@ -253,7 +279,6 @@ impl JitContext {
         let total_reg_num = iseq.total_reg_num();
         let local_num = iseq.local_num();
         Self {
-            iseq_id,
             bytecode_top: iseq.get_top_pc(),
             jit_type,
             basic_block_labels,
@@ -263,8 +288,6 @@ impl JitContext {
             backedge_map: HashMap::default(),
             total_reg_num,
             local_num,
-            self_class,
-            self_ty,
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
             labels,
@@ -287,7 +310,6 @@ impl JitContext {
         let total_reg_num = self.total_reg_num;
         let local_num = self.local_num;
         Self {
-            iseq_id: self.iseq_id,
             bytecode_top: self.bytecode_top,
             jit_type: self.jit_type.clone(),
             basic_block_labels: HashMap::default(),
@@ -297,8 +319,6 @@ impl JitContext {
             backedge_map: HashMap::default(),
             total_reg_num,
             local_num,
-            self_class: NIL_CLASS,
-            self_ty: None,
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
             labels: vec![],
@@ -318,7 +338,15 @@ impl JitContext {
     }
 
     pub(super) fn iseq_id(&self) -> ISeqId {
-        self.iseq_id
+        self.current_frame().iseq_id
+    }
+
+    pub(super) fn self_class(&self) -> ClassId {
+        self.current_frame().self_class
+    }
+
+    pub(super) fn self_ty(&self) -> Option<ObjTy> {
+        self.current_frame().self_ty
     }
 
     pub(crate) fn current_frame(&self) -> &JitStackFrame {
@@ -353,14 +381,6 @@ impl JitContext {
     ///
     pub(super) fn total_reg_num(&self) -> usize {
         self.total_reg_num
-    }
-
-    pub(super) fn self_class(&self) -> ClassId {
-        self.self_class
-    }
-
-    pub(super) fn self_ty(&self) -> Option<ObjTy> {
-        self.self_ty
     }
 
     pub(crate) fn class_version(&self) -> u32 {
@@ -555,7 +575,7 @@ impl JitContext {
     ///
     fn jit_check_super(&mut self, store: &Store, recv_class: ClassId) -> Option<FuncId> {
         // for super
-        let iseq_id = self.iseq_id;
+        let iseq_id = self.iseq_id();
         let mother = store[iseq_id].mother().0;
         let owner = store[mother].owner_class().unwrap();
         let func_name = store[mother].name().unwrap();
