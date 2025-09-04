@@ -652,17 +652,8 @@ impl JitContext {
                 }
             }
             TraceIr::Yield { callid } => {
-                if let Some(block_info) = self.block_info()
-                    && let Some(block_iseq) = block_info.is_iseq(store)
-                {
-                    self.compile_yield_specialized(
-                        bbctx,
-                        ir,
-                        store,
-                        callid,
-                        block_iseq,
-                        block_info.block_self(),
-                    );
+                if let Some(block_info) = self.current_frame_given_block() {
+                    self.compile_yield_specialized(bbctx, ir, store, callid, block_info.clone());
                 } else {
                     bbctx.compile_yield(ir, store, callid);
                 }

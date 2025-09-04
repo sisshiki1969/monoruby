@@ -965,8 +965,9 @@ pub(super) enum AsmInst {
     },
     YieldSpecialized {
         callid: CallSiteId,
-        block_iseq: ISeqId,
-        block_entry: JitLabel,
+        iseq: ISeqId,
+        outer: usize,
+        entry: JitLabel,
         error: AsmError,
         evict: AsmEvict,
     },

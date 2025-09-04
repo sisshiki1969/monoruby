@@ -556,7 +556,6 @@ impl Codegen {
             class_version_label,
             self_class,
             0,
-            vec![],
         );
         ctx.compile(store);
         self.jit.finalize();
@@ -578,6 +577,24 @@ impl Codegen {
         entry_label: DestLabel,
         level: usize,
     ) {
+        for context::SpecializeInfo {
+            entry: specialized_entry,
+            ctx: specialized_ctx,
+            patch_point,
+        } in std::mem::take(&mut ctx.specialized_methods)
+        {
+            if !ctx.is_specialized() {
+                let patch_point = ctx.resolve_label(&mut self.jit, patch_point.unwrap());
+                self.specialized_info.push((
+                    specialized_ctx.iseq_id(),
+                    specialized_ctx.self_class(),
+                    patch_point,
+                ));
+            }
+            let entry = ctx.resolve_label(&mut self.jit, specialized_entry);
+            self.gen_machine_code(specialized_ctx, store, entry, level + 1);
+        }
+
         self.jit.bind_label(entry_label);
         #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
         {
@@ -644,24 +661,6 @@ impl Codegen {
             self.specialized_base = self.specialized_info.len();
         }
         self.jit.finalize();
-
-        for context::SpecializeInfo {
-            entry: specialized_entry,
-            ctx: specialized_ctx,
-            patch_point,
-        } in std::mem::take(&mut ctx.specialized_methods)
-        {
-            if !ctx.is_specialized() {
-                let patch_point = ctx.resolve_label(&mut self.jit, patch_point.unwrap());
-                self.specialized_info.push((
-                    specialized_ctx.iseq_id(),
-                    specialized_ctx.self_class(),
-                    patch_point,
-                ));
-            }
-            let entry = ctx.resolve_label(&mut self.jit, specialized_entry);
-            self.gen_machine_code(specialized_ctx, store, entry, level + 1);
-        }
 
         #[cfg(feature = "emit-asm")]
         if self.startup_flag {

@@ -137,7 +137,7 @@ fn kernel_block_given(
         return false;
     }
     let dst = callsite.dst;
-    if let Some(true) = jitctx.has_block() {
+    if jitctx.current_frame_given_block().is_some() {
         if let Some(dst) = dst {
             bb.def_concrete_value(dst, Value::bool(true));
         }

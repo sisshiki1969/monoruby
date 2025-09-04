@@ -1,3 +1,5 @@
+use crate::codegen::jitgen::context::JitStackFrame;
+
 use super::{
     context::{JitArgumentInfo, JitBlockInfo},
     slot::SlotState,
@@ -219,30 +221,45 @@ impl JitContext {
         ir: &mut AsmIr,
         store: &Store,
         callid: CallSiteId,
-        block_iseq: ISeqId,
-        block_self: ClassId,
+        block: JitBlockInfo,
     ) {
         let dst = store[callid].dst;
         bbctx.exec_gc(ir, true);
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
-        bbctx.set_arguments(store, ir, &store[callid], store[block_iseq].func_id());
+        let JitBlockInfo {
+            iseq,
+            self_class,
+            outer,
+        } = block.add(1);
+        bbctx.set_arguments(store, ir, &store[callid], store[iseq].func_id());
         bbctx.discard(dst);
         bbctx.clear_above_next_sp();
         let error = ir.new_error(bbctx);
         bbctx.writeback_acc(ir);
-        let block_entry = self.compile_specialized_func(
+        let stack_len = self.stack_frame.len();
+        let block = if let Some(info) =
+            &self.stack_frame[stack_len.checked_sub(outer).unwrap()].given_block()
+        {
+            Some(info.add(outer))
+        } else {
+            None
+        };
+        let entry = self.compile_specialized_func(
             store,
-            block_iseq,
-            block_self,
+            iseq,
+            self_class,
             None,
             JitArgumentInfo::new(),
+            block,
+            Some(outer),
         );
         let evict = ir.new_evict();
         ir.push(AsmInst::YieldSpecialized {
             callid,
-            block_iseq,
-            block_entry,
+            iseq,
+            outer,
+            entry,
             error,
             evict,
         });
@@ -368,7 +385,11 @@ impl JitContext {
                     && !(pos_num == 1 && store[fid].single_arg_expand())
                     && (bbctx.state(callsite.recv).is_concrete_value()
                         || (args..args + pos_num).any(|i| bbctx.state(i).is_concrete_value()));
-                if block_fid.is_some() || (specializable && self.specialize_level() < 5)
+                if (if let Some(fid) = block_fid {
+                    store[fid].is_iseq().is_some()
+                } else {
+                    false
+                }) || (specializable && self.specialize_level() < 5)
                 /*name == Some(IdentId::NEW)*/
                 {
                     let mut slots = vec![];
@@ -394,10 +415,14 @@ impl JitContext {
                             slots.push(SlotState::default());
                         }
                     }
-                    let args_info = JitArgumentInfo {
-                        block: block_fid.map(|fid| JitBlockInfo::new(fid, self.self_class())),
-                        args: slots,
+                    let block = if let Some(fid) = block_fid
+                        && let Some(block_iseq) = store[fid].is_iseq()
+                    {
+                        Some(JitBlockInfo::new(block_iseq, self.self_class()))
+                    } else {
+                        None
                     };
+                    let args_info = JitArgumentInfo(slots);
                     let patch_point = if self.is_specialized() {
                         None
                     } else {
@@ -409,6 +434,8 @@ impl JitContext {
                         recv_class,
                         patch_point,
                         args_info,
+                        block,
+                        None,
                     );
                     self.send_specialized(
                         bbctx,
@@ -439,21 +466,18 @@ impl JitContext {
         self_class: ClassId,
         patch_point: Option<JitLabel>,
         args_info: JitArgumentInfo,
+        block: Option<JitBlockInfo>,
+        outer: Option<usize>,
     ) -> JitLabel {
         let specialize_level = self.specialize_level() + 1;
         let idx = match self.jit_type() {
             JitType::Specialized { idx, .. } => *idx,
             _ => self.specialized_methods.len(),
         };
-        let block = args_info
-            .block
-            .as_ref()
-            .map(|info| info.is_iseq(store))
-            .flatten();
         let jit_type = JitType::Specialized { idx, args_info };
         let mut stack_frame = self.stack_frame.clone();
-        stack_frame.push((iseq_id, block));
-        let mut ctx = JitContext::new(
+        stack_frame.push(JitStackFrame::new(iseq_id, outer, block));
+        let mut ctx = JitContext::new_with_stack_frame(
             store,
             iseq_id,
             jit_type,

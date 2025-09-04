@@ -1,6 +1,4 @@
-100000.times {
-  a = [*(0..1000)]
-  a.each_slice(20) do |slice|
-    # puts slice.sum
-  end
+22.times {        
+  ary = [0, 4, 7, 10, 12]
+  puts (0...ary.size).bsearch {|i| __dump; ary[i] >= 4 } # => 1
 }

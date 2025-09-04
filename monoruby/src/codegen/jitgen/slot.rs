@@ -35,7 +35,7 @@ impl SlotContext {
     pub(super) fn from_args(cc: &JitContext) -> Self {
         let mut ctx = Self::from(cc);
         if let JitType::Specialized {
-            args_info: JitArgumentInfo { args, .. },
+            args_info: JitArgumentInfo(args),
             ..
         } = cc.jit_type()
         {

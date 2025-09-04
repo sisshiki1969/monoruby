@@ -248,17 +248,18 @@ impl Codegen {
         &mut self,
         store: &Store,
         callid: CallSiteId,
-        block_iseq: ISeqId,
-        block_entry: DestLabel,
+        iseq: ISeqId,
+        outer: usize,
+        entry: DestLabel,
         error: &DestLabel,
     ) -> CodePtr {
         let caller = &store[callid];
-        let block_fid = store[block_iseq].func_id();
+        let block_fid = store[iseq].func_id();
         let callee = &store[block_fid];
         let meta = callee.meta();
-        self.setup_yield_frame(meta);
+        self.setup_yield_frame(meta, outer);
         self.setup_keyword_args(callid, caller, callee, error);
-        self.do_specialized_call(block_entry, None)
+        self.do_specialized_call(entry, None)
     }
 
     ///
@@ -321,10 +322,17 @@ impl Codegen {
     /// ### destroy
     /// - rax, rdi
     ///
-    fn setup_yield_frame(&mut self, meta: Meta) {
+    fn setup_yield_frame(&mut self, meta: Meta, outer: usize) {
+        let outer = outer - 1;
         monoasm! { &mut self.jit,
             movq rdi, [rbx + (EXECUTOR_CFP)];
-            movq rdi, [rdi];
+        }
+        for _ in 0..outer {
+            monoasm! { &mut self.jit,
+                movq rdi, [rdi];
+            }
+        }
+        monoasm! { &mut self.jit,
             movq rdi, [rdi - (CFP_LFP)];
             // rdi <- outer LFP
             subq  rsp, 16;

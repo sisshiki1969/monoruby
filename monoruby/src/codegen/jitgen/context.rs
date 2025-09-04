@@ -23,40 +23,67 @@ pub(super) struct SpecializeInfo {
     pub(super) patch_point: Option<JitLabel>,
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct JitBlockInfo {
-    block_fid: FuncId,
-    block_self: ClassId,
+#[derive(Clone)]
+pub struct JitBlockInfo {
+    pub iseq: ISeqId,
+    pub self_class: ClassId,
+    pub outer: usize,
+}
+
+impl std::fmt::Debug for JitBlockInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Block {{ {:?}, self:{:?}, outer:{} }}",
+            self.iseq, self.self_class, self.outer
+        )
+    }
 }
 
 impl JitBlockInfo {
-    pub(super) fn new(block_fid: FuncId, block_self: ClassId) -> Self {
+    pub(super) fn new(iseq: ISeqId, self_class: ClassId) -> Self {
         Self {
-            block_fid,
-            block_self,
+            iseq,
+            self_class,
+            outer: 1,
         }
     }
 
-    pub(super) fn is_iseq(&self, store: &Store) -> Option<ISeqId> {
-        store[self.block_fid].is_iseq()
+    pub(super) fn add(&self, outer: usize) -> Self {
+        Self {
+            iseq: self.iseq,
+            self_class: self.self_class,
+            outer: self.outer + outer,
+        }
     }
+}
 
-    pub(super) fn block_self(&self) -> ClassId {
-        self.block_self
-    }
-}
 #[derive(Debug, Clone)]
-pub(super) struct JitArgumentInfo {
-    pub(super) block: Option<JitBlockInfo>,
-    pub(super) args: Vec<slot::SlotState>,
-}
+pub(super) struct JitArgumentInfo(pub Vec<slot::SlotState>);
 
 impl JitArgumentInfo {
     pub(super) fn new() -> Self {
+        Self(vec![])
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct JitStackFrame {
+    iseq_id: ISeqId,
+    outer: Option<usize>,
+    given_block: Option<JitBlockInfo>,
+}
+
+impl JitStackFrame {
+    pub fn new(iseq_id: ISeqId, outer: Option<usize>, given_block: Option<JitBlockInfo>) -> Self {
         Self {
-            block: None,
-            args: vec![],
+            iseq_id,
+            outer,
+            given_block,
         }
+    }
+    pub fn given_block(&self) -> Option<&JitBlockInfo> {
+        self.given_block.as_ref()
     }
 }
 
@@ -159,9 +186,9 @@ pub struct JitContext {
     ///
     pub(crate) inline_method_cache: HashMap<BcIndex, MethodCacheEntry>,
     ///
-    /// Stack frame for specialized compilation.
+    /// Stack frame for specialized compilation. (iseq, outer_scope, block_iseq)
     ///
-    pub(crate) stack_frame: Vec<(ISeqId, Option<ISeqId>)>,
+    pub(crate) stack_frame: Vec<JitStackFrame>,
     ///
     /// Source map for bytecode index and machine code position.
     ///
@@ -175,9 +202,6 @@ pub struct JitContext {
 }
 
 impl JitContext {
-    ///
-    /// Create new JitContext.
-    ///
     pub(super) fn new(
         store: &Store,
         iseq_id: ISeqId,
@@ -186,7 +210,35 @@ impl JitContext {
         class_version_label: DestLabel,
         self_class: ClassId,
         specialize_level: usize,
-        stack_frame: Vec<(ISeqId, Option<ISeqId>)>,
+    ) -> Self {
+        Self::new_with_stack_frame(
+            store,
+            iseq_id,
+            jit_type,
+            class_version,
+            class_version_label,
+            self_class,
+            specialize_level,
+            vec![JitStackFrame {
+                iseq_id,
+                outer: None,
+                given_block: None,
+            }],
+        )
+    }
+
+    ///
+    /// Create new JitContext.
+    ///
+    pub(super) fn new_with_stack_frame(
+        store: &Store,
+        iseq_id: ISeqId,
+        jit_type: JitType,
+        class_version: u32,
+        class_version_label: DestLabel,
+        self_class: ClassId,
+        specialize_level: usize,
+        stack_frame: Vec<JitStackFrame>,
     ) -> Self {
         let iseq = &store[iseq_id];
         let self_ty = store[self_class].instance_ty();
@@ -257,7 +309,7 @@ impl JitContext {
             specialize_level: 0,
             specialized_methods: vec![],
             inline_method_cache: HashMap::default(),
-            stack_frame: vec![],
+            stack_frame: self.stack_frame.clone(),
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -267,6 +319,14 @@ impl JitContext {
 
     pub(super) fn iseq_id(&self) -> ISeqId {
         self.iseq_id
+    }
+
+    pub(crate) fn current_frame(&self) -> &JitStackFrame {
+        self.stack_frame.last().unwrap()
+    }
+
+    pub(crate) fn current_frame_given_block(&self) -> Option<&JitBlockInfo> {
+        self.current_frame().given_block.as_ref()
     }
 
     pub(super) fn bytecode(&self, i: BcIndex) -> BytecodePtr {
@@ -279,20 +339,6 @@ impl JitContext {
 
     pub(super) fn is_specialized(&self) -> bool {
         matches!(self.jit_type, JitType::Specialized { .. })
-    }
-
-    pub(super) fn block_info(&self) -> Option<&JitBlockInfo> {
-        match self.jit_type() {
-            JitType::Specialized { args_info, .. } => args_info.block.as_ref(),
-            _ => None,
-        }
-    }
-
-    pub fn has_block(&self) -> Option<bool> {
-        match self.jit_type() {
-            JitType::Specialized { args_info, .. } => Some(args_info.block.is_some()),
-            _ => None,
-        }
     }
 
     ///

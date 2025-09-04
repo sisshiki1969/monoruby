@@ -436,15 +436,16 @@ impl Codegen {
             }
             AsmInst::YieldSpecialized {
                 callid,
-                block_iseq,
-                block_entry,
+                iseq,
+                outer,
+                entry,
                 error,
                 evict,
             } => {
                 let error = &labels[error];
-                let block_entry = ctx.resolve_label(&mut self.jit, block_entry);
+                let block_entry = ctx.resolve_label(&mut self.jit, entry);
                 let return_addr =
-                    self.gen_yield_specialized(store, callid, block_iseq, block_entry, error);
+                    self.gen_yield_specialized(store, callid, iseq, outer, block_entry, error);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
 
