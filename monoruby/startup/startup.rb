@@ -214,6 +214,45 @@ module Enumerable
     false
   end
 
+  def one?
+    n = 0
+    if block_given?
+      self.each do |x|
+        if yield(x)
+          n += 1
+          return false if n > 1
+        end
+      end
+    else
+      self.each do |x|
+        if x
+          n += 1
+          return false if n > 1
+        end
+      end
+    end
+    n == 1
+  end
+
+  def min_by
+    return self.to_enum(:min_by) if !block_given?
+    elem = nil
+    res = nil
+    self.each do |x|
+      r = yield(x)
+      if res.nil?
+        elem = x
+        res = r
+      else
+        if r < res
+          elem = x
+          res = r
+        end
+      end
+    end
+    elem
+  end
+
   def to_a(*args)
     res = []
     self.each(*args) do |x|
