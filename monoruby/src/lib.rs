@@ -43,3 +43,4 @@ const MAX_STACK_SIZE: usize = 64 * 1024; // 256 KiB
 
 type RubyMap<K, V> = rubymap::RubyMap<K, V, Executor, Globals, MonorubyErr>;
 type RubySet<T> = rubymap::RubySet<T, Executor, Globals, MonorubyErr, fxhash::FxBuildHasher>;
+pub use rubymap::{RubyEql, RubyHash};

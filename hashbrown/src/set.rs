@@ -81,7 +81,7 @@ use crate::DefaultHashBuilder;
 ///     power: usize,
 /// }
 ///
-/// impl<E, G> equivalent::RubyEql<E, G, ()> for Viking {
+/// impl<E, G> ruby_traits::RubyEql<E, G, ()> for Viking {
 ///    fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, ()> {
 ///       Ok(self.name.eql(&other.name, e, g)? && self.power.eql(&other.power, e, g)?)
 ///     }
@@ -1662,7 +1662,7 @@ fn assert_covariance() {
 
 #[cfg(test)]
 mod test_set {
-    use equivalent::RubyEql;
+    use ruby_traits::RubyEql;
 
     use super::{make_hash, Equivalent, HashSet};
     use crate::DefaultHashBuilder;
@@ -1897,7 +1897,7 @@ mod test_set {
             }
         }
 
-        impl equivalent::RubyEql<E, G, ()> for Foo {
+        impl ruby_traits::RubyEql<E, G, ()> for Foo {
             fn eql(&self, other: &Self, _: &mut E, _: &mut G) -> Result<bool, ()> {
                 Ok(self == other)
             }

@@ -411,24 +411,6 @@ impl PartialEq for RValue {
     }
 }
 
-impl std::hash::Hash for RValue {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        unsafe {
-            match self.ty() {
-                //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
-                ObjTy::BIGNUM => self.as_bignum().hash(state),
-                ObjTy::FLOAT => self.as_float().to_bits().hash(state),
-                ObjTy::STRING => self.as_rstring().hash(state),
-                ObjTy::ARRAY => self.as_array().hash(state),
-                ObjTy::RANGE => self.as_range().hash(state),
-                ObjTy::HASH => self.as_hashmap().hash(state),
-                ObjTy::COMPLEX => self.as_complex().hash(state),
-                _ => self.hash(state),
-            }
-        }
-    }
-}
-
 impl RValue {
     pub fn swap_kind(&mut self, other: &mut Self) {
         std::mem::swap(&mut self.kind, &mut other.kind);

@@ -63,4 +63,4 @@ pub use crate::map::HashMap;
 pub use crate::set::HashSet;
 pub use crate::table::HashTable;
 
-pub use equivalent::{Equivalent, RubyEql};
+pub use ruby_traits::{Equivalent, RubyEql};

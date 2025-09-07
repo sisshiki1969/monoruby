@@ -102,6 +102,20 @@ impl std::iter::FromIterator<Value> for ArrayInner {
     }
 }
 
+impl RubyHash<Executor, Globals, MonorubyErr> for ArrayInner {
+    fn ruby_hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+        e: &mut Executor,
+        g: &mut Globals,
+    ) -> Result<()> {
+        for v in self.iter() {
+            v.ruby_hash(state, e, g)?;
+        }
+        Ok(())
+    }
+}
+
 impl ArrayInner {
     pub fn new() -> Self {
         ArrayInner(smallvec!())

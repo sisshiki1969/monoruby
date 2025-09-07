@@ -105,7 +105,7 @@ pub mod set;
 
 pub use crate::map::RubyMap;
 pub use crate::set::RubySet;
-pub use equivalent::{Equivalent, RubyEql};
+pub use ruby_traits::{Equivalent, RubyEql, RubyHash};
 
 // shared private items
 

@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Debug, Clone, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct RangeInner {
     start: Value,
@@ -20,6 +20,20 @@ impl RubyEql<Executor, Globals, MonorubyErr> for RangeInner {
         Ok(self.start.eql(&other.start, vm, globals)?
             && self.end.eql(&other.end, vm, globals)?
             && self.exclude_end() == other.exclude_end())
+    }
+}
+
+impl RubyHash<Executor, Globals, MonorubyErr> for RangeInner {
+    fn ruby_hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        self.start.ruby_hash(state, vm, globals)?;
+        self.end.ruby_hash(state, vm, globals)?;
+        self.exclude_end().hash(state);
+        Ok(())
     }
 }
 

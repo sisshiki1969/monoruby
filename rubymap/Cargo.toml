@@ -15,7 +15,7 @@ bench = false
 
 [dependencies]
 hashbrown = { path = "../hashbrown", default-features = false }
-equivalent = { path = "../equivalent" }
+ruby_traits = { path = "../ruby_traits" }
 
 [dev-dependencies]
 itertools = "0.14"

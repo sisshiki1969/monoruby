@@ -452,8 +452,8 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/hash.html]
 #[monoruby_builtin]
-fn hash(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let h = lfp.self_val().calculate_hash();
+fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let h = lfp.self_val().calculate_hash(vm, globals)?;
     Ok(Value::integer_from_u64(h))
 }
 

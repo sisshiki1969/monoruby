@@ -469,10 +469,6 @@ dependencies = [
 [[package]]
 name = "equivalent"
 version = "1.0.2"
-
-[[package]]
-name = "equivalent"
-version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
@@ -689,12 +685,12 @@ version = "0.15.4"
 dependencies = [
  "allocator-api2",
  "doc-comment",
- "equivalent 1.0.2",
  "fnv",
  "foldhash",
  "lazy_static",
  "rand",
  "rayon",
+ "ruby_traits",
  "rustc-std-workspace-alloc",
  "rustc-std-workspace-core",
  "serde_test",
@@ -991,7 +987,7 @@ version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe4cd85333e22411419a0bcae1297d25e58c9443848b11dc6a86fefe8c78a661"
 dependencies = [
- "equivalent 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "equivalent",
  "hashbrown 0.15.5",
 ]
 
@@ -1728,15 +1724,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruby_traits"
+version = "1.0.2"
+
+[[package]]
 name = "rubymap"
 version = "2.9.0"
 dependencies = [
- "equivalent 1.0.2",
  "fnv",
  "hashbrown 0.15.4",
  "itertools 0.14.0",
  "lazy_static",
  "rand",
+ "ruby_traits",
 ]
 
 [[package]]

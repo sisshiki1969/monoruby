@@ -154,7 +154,7 @@ use core::mem;
 ///     }
 /// }
 ///
-/// impl<E, G> equivalent::RubyEql<E, G, ()> for Viking {
+/// impl<E, G> ruby_traits::RubyEql<E, G, ()> for Viking {
 ///    fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, ()> {
 ///       Ok(self.name.eql(&other.name, e, g)? && self.country.eql(&other.country, e, g)?)
 ///     }
@@ -220,8 +220,8 @@ impl<K: PartialEq + RubyEql<(), (), ()> + Hash, V: PartialEq> PartialEq
 
 impl<K, Q: ?Sized, V, S> std::ops::Index<&Q> for HashMap<K, V, (), (), (), S>
 where
-    K: Hash + equivalent::RubyEql<(), (), ()> + Borrow<Q>,
-    Q: Hash + equivalent::RubyEql<(), (), ()>,
+    K: Hash + ruby_traits::RubyEql<(), (), ()> + Borrow<Q>,
+    Q: Hash + ruby_traits::RubyEql<(), (), ()>,
     S: BuildHasher,
 {
     type Output = V;
@@ -4040,8 +4040,8 @@ mod test_map {
     use super::Entry::{Occupied, Vacant};
     use super::EntryRef;
     use super::HashMap;
-    use equivalent::RubyEql;
     use rand::{rngs::SmallRng, Rng, SeedableRng};
+    use ruby_traits::RubyEql;
     use std::borrow::ToOwned;
     use std::cell::RefCell;
     use std::vec::Vec;
@@ -4174,7 +4174,7 @@ mod test_map {
         }
     }
 
-    impl equivalent::RubyEql<E, G, ()> for Droppable {
+    impl ruby_traits::RubyEql<E, G, ()> for Droppable {
         fn eql(&self, other: &Self, _: &mut E, _: &mut G) -> Result<bool, ()> {
             Ok(self.k == other.k)
         }

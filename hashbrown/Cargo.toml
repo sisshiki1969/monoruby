@@ -26,7 +26,7 @@ allocator-api2 = { version = "0.2.9", optional = true, default-features = false,
 ] }
 
 # Equivalent trait which can be shared with other hash table implementations.
-equivalent = { path = "../equivalent" }
+ruby_traits = { path = "../ruby_traits" }
 
 [dev-dependencies]
 lazy_static = "1.4"

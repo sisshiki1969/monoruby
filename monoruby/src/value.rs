@@ -57,8 +57,13 @@ impl GC<RValue> for Value {
     }
 }
 
-impl Hash for Value {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl RubyHash<Executor, Globals, MonorubyErr> for Value {
+    fn ruby_hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+        e: &mut Executor,
+        g: &mut Globals,
+    ) -> Result<()> {
         match self.try_rvalue() {
             None => self.0.hash(state),
             Some(lhs) => unsafe {
@@ -67,14 +72,15 @@ impl Hash for Value {
                     ObjTy::BIGNUM => lhs.as_bignum().hash(state),
                     ObjTy::FLOAT => lhs.as_float().to_bits().hash(state),
                     ObjTy::STRING => lhs.as_rstring().hash(state),
-                    ObjTy::ARRAY => lhs.as_array().hash(state),
-                    ObjTy::RANGE => lhs.as_range().hash(state),
-                    ObjTy::HASH => lhs.as_hashmap().hash(state),
+                    ObjTy::ARRAY => lhs.as_array().ruby_hash(state, e, g)?,
+                    ObjTy::RANGE => lhs.as_range().ruby_hash(state, e, g)?,
+                    ObjTy::HASH => lhs.as_hashmap().ruby_hash(state, e, g)?,
                     //ObjTy::METHOD => lhs.method().hash(state),
                     _ => self.0.hash(state),
                 }
             },
         }
+        Ok(())
     }
 }
 
@@ -92,10 +98,10 @@ impl RubyEql<Executor, Globals, MonorubyErr> for Value {
 }
 
 impl Value {
-    pub fn calculate_hash(self) -> u64 {
+    pub fn calculate_hash(self, e: &mut Executor, g: &mut Globals) -> Result<u64> {
         let mut s = std::hash::DefaultHasher::new();
-        self.hash(&mut s);
-        s.finish()
+        RubyHash::ruby_hash(&self, &mut s, e, g)?;
+        Ok(s.finish())
     }
 }
 

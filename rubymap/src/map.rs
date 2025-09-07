@@ -17,12 +17,12 @@ pub use self::slice::Slice;
 
 use ::core::cmp::Ordering;
 use ::core::fmt;
-use ::core::hash::{BuildHasher, Hash, Hasher};
+use ::core::hash::{BuildHasher, Hasher};
 use ::core::mem;
 use ::core::ops::{Index, IndexMut, RangeBounds};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use hashbrown::RubyEql;
+use ruby_traits::{RubyEql, RubyHash};
 
 use std::collections::hash_map::RandomState;
 
@@ -97,7 +97,7 @@ where
     }
 }
 
-impl<K: PartialEq + RubyEql<(), (), ()> + Hash, V: PartialEq> PartialEq
+impl<K: PartialEq + RubyEql<(), (), ()> + RubyHash<(), (), ()>, V: PartialEq> PartialEq
     for RubyMap<K, V, (), (), ()>
 {
     fn eq(&self, other: &Self) -> bool {
@@ -115,8 +115,8 @@ impl<K: PartialEq + RubyEql<(), (), ()> + Hash, V: PartialEq> PartialEq
 
 impl<K, Q: ?Sized, V, S> std::ops::Index<&Q> for RubyMap<K, V, (), (), (), S>
 where
-    K: Hash + equivalent::RubyEql<(), (), ()> + std::borrow::Borrow<Q>,
-    Q: Hash + equivalent::RubyEql<(), (), ()>,
+    K: RubyHash<(), (), ()> + ruby_traits::RubyEql<(), (), ()> + std::borrow::Borrow<Q>,
+    Q: RubyHash<(), (), ()> + ruby_traits::RubyEql<(), (), ()>,
     S: BuildHasher,
 {
     type Output = V;
@@ -363,7 +363,7 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
 
 impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S>
 where
-    K: Hash + RubyEql<E, G, R>,
+    K: RubyHash<E, G, R> + RubyEql<E, G, R>,
     S: BuildHasher,
 {
     /// Insert a key-value pair in the map.
@@ -403,7 +403,7 @@ where
         e: &mut E,
         g: &mut G,
     ) -> Result<(usize, Option<V>), R> {
-        let hash = self.hash(&key);
+        let hash = self.hash(&key, e, g)?;
         self.core.insert_full(hash, key, value, e, g)
     }
 
@@ -620,7 +620,7 @@ where
     ///
     /// Computes in **O(1)** time (amortized average).
     pub fn entry(&mut self, key: K, e: &mut E, g: &mut G) -> Result<Entry<'_, K, V, E, G, R>, R> {
-        let hash = self.hash(&key);
+        let hash = self.hash(&key, e, g)?;
         self.core.entry(hash, key, e, g)
     }
 
@@ -663,10 +663,15 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S>
 where
     S: BuildHasher,
 {
-    pub(crate) fn hash<Q: ?Sized + Hash>(&self, key: &Q) -> HashValue {
+    pub(crate) fn hash<Q: ?Sized + RubyHash<E, G, R>>(
+        &self,
+        key: &Q,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<HashValue, R> {
         let mut h = self.hash_builder.build_hasher();
-        key.hash(&mut h);
-        HashValue(h.finish() as usize)
+        key.ruby_hash(&mut h, e, g)?;
+        Ok(HashValue(h.finish() as usize))
     }
 
     /// Return `true` if an equivalent to `key` exists in the map.
@@ -674,7 +679,7 @@ where
     /// Computes in **O(1)** time (average).
     pub fn contains_key<Q>(&self, key: &Q, e: &mut E, g: &mut G) -> Result<bool, R>
     where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
         Ok(self.get_index_of(key, e, g)?.is_some())
     }
@@ -685,7 +690,7 @@ where
     /// Computes in **O(1)** time (average).
     pub fn get<Q>(&self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<&V>, R>
     where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
         Ok(if let Some(i) = self.get_index_of(key, e, g)? {
             let entry = &self.as_entries()[i];
@@ -701,7 +706,7 @@ where
     /// Computes in **O(1)** time (average).
     pub fn get_key_value<Q>(&self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<(&K, &V)>, R>
     where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
         Ok(if let Some(i) = self.get_index_of(key, e, g)? {
             let entry = &self.as_entries()[i];
@@ -714,7 +719,7 @@ where
     /// Return item index, key and value
     pub fn get_full<Q>(&self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<(usize, &K, &V)>, R>
     where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
         Ok(if let Some(i) = self.get_index_of(key, e, g)? {
             let entry = &self.as_entries()[i];
@@ -729,13 +734,13 @@ where
     /// Computes in **O(1)** time (average).
     pub fn get_index_of<Q>(&self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<usize>, R>
     where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
         Ok(match self.as_entries() {
             [] => None,
             [x] => key.equivalent(&x.key, e, g)?.then_some(0),
             _ => {
-                let hash = self.hash(key);
+                let hash = self.hash(key, e, g)?;
                 self.core.get_index_of(hash, key, e, g)?
             }
         })
@@ -743,7 +748,7 @@ where
 
     pub fn get_mut<Q>(&mut self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<&mut V>, R>
     where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
         Ok(if let Some(i) = self.get_index_of(key, e, g)? {
             let entry = &mut self.as_entries_mut()[i];
@@ -760,7 +765,7 @@ where
         g: &mut G,
     ) -> Result<Option<(usize, &K, &mut V)>, R>
     where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
         Ok(if let Some(i) = self.get_index_of(key, e, g)? {
             let entry = &mut self.as_entries_mut()[i];
@@ -785,7 +790,7 @@ where
         g: &mut G,
     ) -> Result<[Option<&mut V>; N], R>
     where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
         let mut indices: [Option<usize>; N] = [None; N];
         for (i, k) in keys.iter().enumerate() {
@@ -814,7 +819,7 @@ where
         use `swap_remove_entry` or `shift_remove_entry` for explicit behavior.")]
     pub fn remove_entry<Q>(&mut self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<(K, V)>, R>
     where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
         self.swap_remove_entry(key, e, g)
     }
@@ -831,7 +836,7 @@ where
     /// Computes in **O(1)** time (average).
     pub fn swap_remove<Q>(&mut self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<V>, R>
     where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
         Ok(self.swap_remove_full(key, e, g)?.map(third))
     }
@@ -852,7 +857,7 @@ where
         g: &mut G,
     ) -> Result<Option<(K, V)>, R>
     where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
         Ok(match self.swap_remove_full(key, e, g)? {
             Some((_, key, value)) => Some((key, value)),
@@ -877,7 +882,7 @@ where
         g: &mut G,
     ) -> Result<Option<(usize, K, V)>, R>
     where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
         match self.as_entries() {
             [x] if key.equivalent(&x.key, e, g)? => {
@@ -889,7 +894,7 @@ where
             }
             [_] | [] => Ok(None),
             _ => {
-                let hash = self.hash(key);
+                let hash = self.hash(key, e, g)?;
                 self.core.swap_remove_full(hash, key, e, g)
             }
         }
@@ -907,7 +912,7 @@ where
     /// Computes in **O(n)** time (average).
     pub fn shift_remove<Q>(&mut self, key: &Q, e: &mut E, g: &mut G) -> Result<Option<V>, R>
     where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
         Ok(self.shift_remove_full(key, e, g)?.map(third))
     }
@@ -928,7 +933,7 @@ where
         g: &mut G,
     ) -> Result<Option<(K, V)>, R>
     where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
         Ok(match self.shift_remove_full(key, e, g)? {
             Some((_, key, value)) => Some((key, value)),
@@ -953,7 +958,7 @@ where
         g: &mut G,
     ) -> Result<Option<(usize, K, V)>, R>
     where
-        Q: ?Sized + Hash + Equivalent<K, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
         match self.as_entries() {
             [x] if key.equivalent(&x.key, e, g)? => {
@@ -965,7 +970,7 @@ where
             }
             [_] | [] => Ok(None),
             _ => {
-                let hash = self.hash(key);
+                let hash = self.hash(key, e, g)?;
                 self.core.shift_remove_full(hash, key, e, g)
             }
         }
@@ -1450,7 +1455,7 @@ impl<K, V, E, G, R, S> IndexMut<usize> for RubyMap<K, V, E, G, R, S> {
 
 impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S>
 where
-    K: Hash + RubyEql<E, G, R>,
+    K: RubyHash<E, G, R> + RubyEql<E, G, R>,
     S: BuildHasher + Default,
 {
     /// Create an `IndexMap` from the sequence of key-value pairs in the
@@ -1473,7 +1478,7 @@ where
 
 impl<K, V, E, G, R> RubyMap<K, V, E, G, R, RandomState>
 where
-    K: Hash + RubyEql<E, G, R>,
+    K: RubyHash<E, G, R> + RubyEql<E, G, R>,
 {
     /// # Examples
     ///
@@ -1491,7 +1496,7 @@ where
 
 impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S>
 where
-    K: Hash + RubyEql<E, G, R>,
+    K: RubyHash<E, G, R> + RubyEql<E, G, R>,
     S: BuildHasher,
 {
     /// Extend the map with all key-value pairs in the iterable.
@@ -1540,7 +1545,7 @@ where
 
 impl<K, V, E, G, R> RubyEql<E, G, R> for RubyMap<K, V, E, G, R>
 where
-    K: Hash + RubyEql<E, G, R>,
+    K: RubyHash<E, G, R> + RubyEql<E, G, R>,
     V: RubyEql<E, G, R>,
 {
     fn eql(&self, other: &RubyMap<K, V, E, G, R>, e: &mut E, g: &mut G) -> Result<bool, R> {
