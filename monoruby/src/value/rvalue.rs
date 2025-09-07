@@ -411,24 +411,6 @@ impl PartialEq for RValue {
     }
 }
 
-impl std::hash::Hash for RValue {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        unsafe {
-            match self.ty() {
-                //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
-                ObjTy::BIGNUM => self.as_bignum().hash(state),
-                ObjTy::FLOAT => self.as_float().to_bits().hash(state),
-                ObjTy::STRING => self.as_rstring().hash(state),
-                ObjTy::ARRAY => self.as_array().hash(state),
-                ObjTy::RANGE => self.as_range().hash(state),
-                ObjTy::HASH => self.as_hashmap().hash(state),
-                ObjTy::COMPLEX => self.as_complex().hash(state),
-                _ => self.hash(state),
-            }
-        }
-    }
-}
-
 impl RValue {
     pub fn swap_kind(&mut self, other: &mut Self) {
         std::mem::swap(&mut self.kind, &mut other.kind);
@@ -563,53 +545,6 @@ impl RValue {
 
     fn proc_tos(&self) -> String {
         format!("#<Proc:0x{:016x}>", self.id())
-    }
-}
-
-impl RubyEql<Executor, Globals, MonorubyErr> for RValue {
-    // This type of equality is used for comparison for keys of Hash.
-    fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
-        unsafe {
-            Ok(match (self.ty(), other.ty()) {
-                (ObjTy::OBJECT, ObjTy::OBJECT) => self.id() == other.id(),
-                (ObjTy::BIGNUM, ObjTy::BIGNUM) => self.as_bignum() == other.as_bignum(),
-                (ObjTy::FLOAT, ObjTy::FLOAT) => self.as_float() == other.as_float(),
-                (ObjTy::COMPLEX, ObjTy::COMPLEX) => {
-                    self.as_complex().eql(other.as_complex(), vm, globals)?
-                }
-                (ObjTy::STRING, ObjTy::STRING) => self.as_rstring() == other.as_rstring(),
-                (ObjTy::ARRAY, ObjTy::ARRAY) => {
-                    let lhs = self.as_array();
-                    let rhs = other.as_array();
-                    if lhs.len() != rhs.len() {
-                        return Ok(false);
-                    }
-                    for (a1, a2) in lhs.iter().zip(rhs.iter()) {
-                        // Support self-containing arrays.
-                        if self.id() == a1.id() && other.id() == a2.id() {
-                        } else if self.id() == a1.id() || other.id() == a2.id() {
-                            return Ok(false);
-                        } else {
-                            if !a1.eql(a2, vm, globals)? {
-                                return Ok(false);
-                            }
-                        }
-                    }
-                    true
-                }
-                (ObjTy::RANGE, ObjTy::RANGE) => {
-                    self.as_range().eql(other.as_range(), vm, globals)?
-                }
-                (ObjTy::HASH, ObjTy::HASH) => {
-                    self.as_hashmap().eql(other.as_hashmap(), vm, globals)?
-                }
-                //(ObjTy::METHOD, ObjTy::METHOD) => *self.method() == *other.method(),
-                //(ObjTy::UNBOUND_METHOD, ObjTy::UNBOUND_METHOD) => *self.method() == *other.method(),
-                //(ObjTy::INVALID, _) => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
-                //(_, ObjTy::INVALID) => panic!("Invalid rvalue. (maybe GC problem) {:?}", other),
-                _ => false,
-            })
-        }
     }
 }
 

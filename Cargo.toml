@@ -1,5 +1,5 @@
 [workspace]
-members = ["monoruby", "monoruby_attr", "ruruby-parse", "rubymap", "hashbrown", "equivalent"]
+members = ["monoruby", "monoruby_attr", "ruruby-parse", "rubymap", "hashbrown", "ruby_traits"]
 resolver = "2"
 
 [profile.dev]

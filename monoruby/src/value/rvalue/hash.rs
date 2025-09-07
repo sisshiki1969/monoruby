@@ -1,5 +1,3 @@
-use rubymap::RubyEql;
-
 use super::*;
 use std::hash::Hash;
 use std::ops::Deref;
@@ -253,22 +251,28 @@ impl std::default::Default for HashContent {
     }
 }
 
-impl Hash for HashContent {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl RubyHash<Executor, Globals, MonorubyErr> for HashContent {
+    fn ruby_hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+        e: &mut Executor,
+        g: &mut Globals,
+    ) -> Result<()> {
         match self {
             HashContent::Map(h) => {
                 for (key, val) in h.iter() {
-                    key.hash(state);
-                    val.hash(state);
+                    key.ruby_hash(state, e, g)?;
+                    val.ruby_hash(state, e, g)?;
                 }
             }
             HashContent::IdentMap(h) => {
                 for (key, val) in h.iter() {
-                    key.hash(state);
-                    val.hash(state);
+                    key.ruby_hash(state, e, g)?;
+                    val.ruby_hash(state, e, g)?;
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -295,9 +299,15 @@ impl Deref for IdentKey {
     }
 }
 
-impl Hash for IdentKey {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl RubyHash<Executor, Globals, MonorubyErr> for IdentKey {
+    fn ruby_hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+        _: &mut Executor,
+        _: &mut Globals,
+    ) -> Result<()> {
         (self.0.id()).hash(state);
+        Ok(())
     }
 }
 

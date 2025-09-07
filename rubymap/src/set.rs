@@ -16,10 +16,10 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt;
-use core::hash::{BuildHasher, Hash};
+use core::hash::BuildHasher;
 use core::ops::RangeBounds;
 
-use super::{Entries, Equivalent, RubyEql, RubyMap};
+use super::{Entries, Equivalent, RubyEql, RubyHash, RubyMap};
 
 type Bucket<T> = super::Bucket<T, ()>;
 
@@ -90,7 +90,9 @@ where
     }
 }
 
-impl<T: PartialEq + RubyEql<(), (), ()> + Hash> PartialEq for RubySet<T, (), (), ()> {
+impl<T: PartialEq + RubyEql<(), (), ()> + RubyHash<(), (), ()>> PartialEq
+    for RubySet<T, (), (), ()>
+{
     fn eq(&self, other: &Self) -> bool {
         self.map == other.map
     }
@@ -293,7 +295,7 @@ impl<T, E, G, R, S> RubySet<T, E, G, R, S> {
 
 impl<T, E, G, R, S> RubySet<T, E, G, R, S>
 where
-    T: Hash + RubyEql<E, G, R>,
+    T: RubyHash<E, G, R> + RubyEql<E, G, R>,
     S: BuildHasher,
 {
     /// Insert the value into the set.
@@ -486,7 +488,7 @@ where
         e: &mut E,
         g: &mut G,
     ) -> Result<(usize, Option<T>), R> {
-        let hash = self.map.hash(&value);
+        let hash = self.map.hash(&value, e, g)?;
         Ok(match self.map.core.replace_full(hash, value, (), e, g)? {
             (i, Some((replaced, ()))) => (i, Some(replaced)),
             (i, None) => (i, None),
@@ -538,7 +540,7 @@ where
     /// Computes in **O(1)** time (average).
     pub fn contains<Q>(&self, value: &Q, e: &mut E, g: &mut G) -> Result<bool, R>
     where
-        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<T, E, G, R>,
     {
         Ok(self.map.contains_key(value, e, g)?)
     }
@@ -549,7 +551,7 @@ where
     /// Computes in **O(1)** time (average).
     pub fn get<Q>(&self, value: &Q, e: &mut E, g: &mut G) -> Result<Option<&T>, R>
     where
-        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<T, E, G, R>,
     {
         Ok(self.map.get_key_value(value, e, g)?.map(|(x, &())| x))
     }
@@ -557,7 +559,7 @@ where
     /// Return item index and value
     pub fn get_full<Q>(&self, value: &Q, e: &mut E, g: &mut G) -> Result<Option<(usize, &T)>, R>
     where
-        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<T, E, G, R>,
     {
         Ok(self.map.get_full(value, e, g)?.map(|(i, x, &())| (i, x)))
     }
@@ -567,7 +569,7 @@ where
     /// Computes in **O(1)** time (average).
     pub fn get_index_of<Q>(&self, value: &Q, e: &mut E, g: &mut G) -> Result<Option<usize>, R>
     where
-        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<T, E, G, R>,
     {
         self.map.get_index_of(value, e, g)
     }
@@ -583,7 +585,7 @@ where
     /// Computes in **O(1)** time (average).
     pub fn swap_remove<Q>(&mut self, value: &Q, e: &mut E, g: &mut G) -> Result<bool, R>
     where
-        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<T, E, G, R>,
     {
         Ok(self.map.swap_remove(value, e, g)?.is_some())
     }
@@ -599,7 +601,7 @@ where
     /// Computes in **O(n)** time (average).
     pub fn shift_remove<Q>(&mut self, value: &Q, e: &mut E, g: &mut G) -> Result<bool, R>
     where
-        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<T, E, G, R>,
     {
         Ok(self.map.shift_remove(value, e, g)?.is_some())
     }
@@ -616,7 +618,7 @@ where
     /// Computes in **O(1)** time (average).
     pub fn swap_take<Q>(&mut self, value: &Q, e: &mut E, g: &mut G) -> Result<Option<T>, R>
     where
-        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<T, E, G, R>,
     {
         Ok(self.map.swap_remove_entry(value, e, g)?.map(|(x, ())| x))
     }
@@ -633,7 +635,7 @@ where
     /// Computes in **O(n)** time (average).
     pub fn shift_take<Q>(&mut self, value: &Q, e: &mut E, g: &mut G) -> Result<Option<T>, R>
     where
-        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<T, E, G, R>,
     {
         Ok(self.map.shift_remove_entry(value, e, g)?.map(|(x, ())| x))
     }
@@ -652,7 +654,7 @@ where
         g: &mut G,
     ) -> Result<Option<(usize, T)>, R>
     where
-        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<T, E, G, R>,
     {
         Ok(self
             .map
@@ -674,7 +676,7 @@ where
         g: &mut G,
     ) -> Result<Option<(usize, T)>, R>
     where
-        Q: ?Sized + Hash + Equivalent<T, E, G, R>,
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<T, E, G, R>,
     {
         Ok(self
             .map
@@ -959,7 +961,7 @@ impl<T, E, G, R, S> RubySet<T, E, G, R, S> {
 
 impl<T, E, G, R, S> RubySet<T, E, G, R, S>
 where
-    T: Hash + RubyEql<E, G, R>,
+    T: RubyHash<E, G, R> + RubyEql<E, G, R>,
     S: BuildHasher + Default,
 {
     /// Create a new set from an iterator of values.
@@ -977,7 +979,7 @@ where
 
 impl<T, E, G, R> RubySet<T, E, G, R, RandomState>
 where
-    T: RubyEql<E, G, R> + Hash,
+    T: RubyEql<E, G, R> + RubyHash<E, G, R>,
 {
     /// # Examples
     ///
@@ -997,7 +999,7 @@ where
 
 impl<T, E, G, R, S> RubySet<T, E, G, R, S>
 where
-    T: Hash + RubyEql<E, G, R>,
+    T: RubyHash<E, G, R> + RubyEql<E, G, R>,
     S: BuildHasher,
 {
     pub fn extend<I: IntoIterator<Item = T>>(
@@ -1025,7 +1027,7 @@ where
 
 impl<T, E, G, R, S> RubyEql<E, G, R> for RubySet<T, E, G, R, S>
 where
-    T: Hash + RubyEql<E, G, R>,
+    T: RubyHash<E, G, R> + RubyEql<E, G, R>,
     S: BuildHasher,
 {
     fn eql(&self, other: &RubySet<T, E, G, R, S>, e: &mut E, g: &mut G) -> Result<bool, R> {
@@ -1035,7 +1037,7 @@ where
 
 impl<T, E, G, R, S> RubySet<T, E, G, R, S>
 where
-    T: RubyEql<E, G, R> + Hash,
+    T: RubyEql<E, G, R> + RubyHash<E, G, R>,
     S: BuildHasher,
 {
     /// Returns `true` if `self` has no elements in common with `other`.

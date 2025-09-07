@@ -57,8 +57,13 @@ impl GC<RValue> for Value {
     }
 }
 
-impl Hash for Value {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl RubyHash<Executor, Globals, MonorubyErr> for Value {
+    fn ruby_hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+        e: &mut Executor,
+        g: &mut Globals,
+    ) -> Result<()> {
         match self.try_rvalue() {
             None => self.0.hash(state),
             Some(lhs) => unsafe {
@@ -67,14 +72,19 @@ impl Hash for Value {
                     ObjTy::BIGNUM => lhs.as_bignum().hash(state),
                     ObjTy::FLOAT => lhs.as_float().to_bits().hash(state),
                     ObjTy::STRING => lhs.as_rstring().hash(state),
-                    ObjTy::ARRAY => lhs.as_array().hash(state),
-                    ObjTy::RANGE => lhs.as_range().hash(state),
-                    ObjTy::HASH => lhs.as_hashmap().hash(state),
+                    ObjTy::ARRAY => lhs.as_array().ruby_hash(state, e, g)?,
+                    ObjTy::RANGE => lhs.as_range().ruby_hash(state, e, g)?,
+                    ObjTy::HASH => lhs.as_hashmap().ruby_hash(state, e, g)?,
                     //ObjTy::METHOD => lhs.method().hash(state),
-                    _ => self.0.hash(state),
+                    _ => {
+                        e.invoke_method_inner(g, IdentId::HASH, *self, &[], None, None)?
+                            .0
+                            .hash(state);
+                    }
                 }
             },
         }
+        Ok(())
     }
 }
 
@@ -85,17 +95,67 @@ impl RubyEql<Executor, Globals, MonorubyErr> for Value {
         }
         match (self.try_rvalue(), other.try_rvalue()) {
             (None, None) => Ok(self.id() == other.id()),
-            (Some(lhs), Some(rhs)) => lhs.eql(rhs, vm, globals),
+            (Some(lhs), Some(rhs)) => {
+                unsafe {
+                    Ok(match (lhs.ty(), rhs.ty()) {
+                        (ObjTy::BIGNUM, ObjTy::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
+                        (ObjTy::FLOAT, ObjTy::FLOAT) => lhs.as_float() == rhs.as_float(),
+                        (ObjTy::COMPLEX, ObjTy::COMPLEX) => {
+                            lhs.as_complex().eql(rhs.as_complex(), vm, globals)?
+                        }
+                        (ObjTy::STRING, ObjTy::STRING) => lhs.as_rstring() == rhs.as_rstring(),
+                        (ObjTy::ARRAY, ObjTy::ARRAY) => {
+                            let lhs = lhs.as_array();
+                            let rhs = rhs.as_array();
+                            if lhs.len() != rhs.len() {
+                                return Ok(false);
+                            }
+                            for (a1, a2) in lhs.iter().zip(rhs.iter()) {
+                                // Support self-containing arrays.
+                                if self.id() == a1.id() && other.id() == a2.id() {
+                                } else if self.id() == a1.id() || other.id() == a2.id() {
+                                    return Ok(false);
+                                } else {
+                                    if !a1.eql(a2, vm, globals)? {
+                                        return Ok(false);
+                                    }
+                                }
+                            }
+                            true
+                        }
+                        (ObjTy::RANGE, ObjTy::RANGE) => {
+                            lhs.as_range().eql(rhs.as_range(), vm, globals)?
+                        }
+                        (ObjTy::HASH, ObjTy::HASH) => {
+                            lhs.as_hashmap().eql(rhs.as_hashmap(), vm, globals)?
+                        }
+                        //(ObjTy::METHOD, ObjTy::METHOD) => *self.method() == *other.method(),
+                        //(ObjTy::UNBOUND_METHOD, ObjTy::UNBOUND_METHOD) => *self.method() == *other.method(),
+                        //(ObjTy::INVALID, _) => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
+                        //(_, ObjTy::INVALID) => panic!("Invalid rvalue. (maybe GC problem) {:?}", other),
+                        _ => vm
+                            .invoke_method_inner(
+                                globals,
+                                IdentId::EQL_,
+                                *self,
+                                &[*other],
+                                None,
+                                None,
+                            )?
+                            .as_bool(),
+                    })
+                }
+            }
             _ => Ok(false),
         }
     }
 }
 
 impl Value {
-    pub fn calculate_hash(self) -> u64 {
+    pub fn calculate_hash(self, e: &mut Executor, g: &mut Globals) -> Result<u64> {
         let mut s = std::hash::DefaultHasher::new();
-        self.hash(&mut s);
-        s.finish()
+        RubyHash::ruby_hash(&self, &mut s, e, g)?;
+        Ok(s.finish())
     }
 }
 
