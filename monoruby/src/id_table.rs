@@ -116,6 +116,8 @@ impl IdentId {
     pub const TO_A: IdentId = id!(52);
     pub const ALLOCATE: IdentId = id!(53);
     pub const METHOD_ADDED: IdentId = id!(54);
+    pub const HASH: IdentId = id!(55);
+    pub const EQL_: IdentId = id!(56);
 }
 
 impl IdentId {
@@ -256,6 +258,8 @@ impl IdentifierTable {
         table.set_id("to_a", IdentId::TO_A);
         table.set_id("allocate", IdentId::ALLOCATE);
         table.set_id("method_added", IdentId::METHOD_ADDED);
+        table.set_id("hash", IdentId::HASH);
+        table.set_id("eql?", IdentId::EQL_);
         table
     }
 

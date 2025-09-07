@@ -10,6 +10,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "==", eq, 1);
     globals.define_builtin_func(OBJECT_CLASS, "!=", ne, 1);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "hash", hash, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "eql?", eql_, 1);
     globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
     globals.define_builtin_funcs_rest(OBJECT_CLASS, "enum_for", &["to_enum"], to_enum);
     globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_, 1);
@@ -377,6 +379,28 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 #[monoruby_builtin]
 fn class(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val().real_class(&globals.store).as_val())
+}
+
+///
+/// ### Object#hash
+///
+/// - hash -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/hash.html]
+#[monoruby_builtin]
+fn hash(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    Ok(Value::integer(lfp.self_val().id() as _))
+}
+
+///
+/// ### Object#eql?
+///
+/// - eql?(other) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/eql=3f.html]
+#[monoruby_builtin]
+fn eql_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().id() == lfp.arg(0).id()))
 }
 
 ///
