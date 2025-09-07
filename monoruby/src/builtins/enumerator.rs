@@ -502,4 +502,37 @@ mod tests {
         "##,
         );
     }
+
+    #[test]
+    fn one_() {
+        run_test(
+            r##"
+            require 'set'
+            res = []
+            res << Set['ant', 'bear', 'cat'].one? {|word| word.length == 4}  # => true
+            res << Set['ant', 'bear', 'cat'].one? {|word| word.length > 4}   # => false
+            # res << Set['ant', 'bear', 'cat'].one?(/t/)                       # => false
+            res << Set[nil, true, 99].one?                                   # => false
+            res << Set[nil, true, false].one?                                # => true
+            # res << Set[nil, true, 99].one?(Integer)                          # => true
+            res << Set[].one?                                                # => true
+            res
+        "##,
+        );
+    }
+
+    #[test]
+    fn min_by() {
+        run_test(
+            r##"
+            res = []
+            a = %w(albatross dog horse)
+            # res << a.min_by                    # => #<Enumerator: ["albatross", "dog", "horse"]:min_by>
+            res << a.min_by { |x| x.length }   # => "dog"
+            # res << a.min_by(2)                 # => #<Enumerator: ["albatross", "dog", "horse"]:min_by(2)>
+            # res << a.min_by(2) {|x| x.length } # => ["dog", "horse"]
+            res
+        "##,
+        );
+    }
 }

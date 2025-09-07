@@ -27,10 +27,31 @@ impl Globals {
             meta,
         );
         eprint!("    ");
+        let iseq = self.store[func_id].is_iseq();
+        let names = if let Some(iseq) = iseq {
+            let mut names = vec![None; self.store[iseq].local_num()];
+            for (name, i) in &self.store[iseq].locals {
+                names[i.0 as usize] = Some(*name);
+            }
+            names
+        } else {
+            vec![]
+        };
         for r in SlotId(0)..SlotId(0) + meta.reg_num() as usize {
             eprint!(
-                "{:?}:[{}] ",
+                "{:?}{}:[{}] ",
                 r,
+                if let Some(iseq) = iseq {
+                    if r.0 == 0 || r.0 as usize > self.store[iseq].local_num() {
+                        "".to_string()
+                    } else if let Some(name) = names[r.0 as usize - 1] {
+                        format!("({name})")
+                    } else {
+                        "".to_string()
+                    }
+                } else {
+                    "".to_string()
+                },
                 if let Some(v) = lfp.register(r) {
                     if let Some(s) = v.debug_check(&self.store) {
                         s
