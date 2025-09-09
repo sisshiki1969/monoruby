@@ -626,6 +626,20 @@ impl BytecodeGen {
         Ok(bc)
     }
 
+    pub(super) fn is_const_function(&self) -> Option<Value> {
+        if self.ir.len() == 3
+            && let BytecodeInst::Nil(r1) = &self.ir[1].0
+            && let BytecodeInst::Ret(r2) = &self.ir[2].0
+            && r1 == r2
+        {
+            // Handle the specific case for const-function
+            eprintln!("const!");
+            Some(Value::nil())
+        } else {
+            None
+        }
+    }
+
     fn encode_call(
         &self,
         store: &mut Store,

@@ -358,6 +358,19 @@ impl JitContext {
                 bbctx.rax2acc(ir, dst);
                 return CompileResult::Continue;
             }
+            FuncKind::Const { value } => {
+                assert_eq!(0, pos_num);
+                assert!(!callsite.kw_may_exists());
+                assert!(block_fid.is_none());
+                assert!(callsite.block_arg.is_none());
+                bbctx.discard(dst);
+                bbctx.writeback_acc(ir);
+                if dst.is_some() {
+                    ir.lit2reg(value, GP::Rax);
+                    bbctx.reg2acc_concrete_value(ir, GP::Rax, dst, value);
+                }
+                return CompileResult::Continue;
+            }
             FuncKind::Builtin { .. } => {
                 let evict = ir.new_evict();
                 self.send(bbctx, ir, store, callsite, fid, recv_class, evict, None);

@@ -14,6 +14,11 @@ mod method_call;
 mod statement;
 use inst::*;
 
+enum CompileResult {
+    ISeq,
+    Const(Value),
+}
+
 pub fn bytecode_compile_script(globals: &mut Globals, result: ParseResult) -> Result<FuncId> {
     let main_fid = globals.store.new_main(result)?;
     bytecode_compile(globals, main_fid, None)?;
@@ -126,6 +131,7 @@ fn bytecode_compile_func(
         gen.emit(BytecodeInst::LoopEnd, loc);
     }
     gen.replace_init(info);
+    if let Some(v) = gen.is_const_function() {}
     gen.into_bytecode(store, loc)?;
 
     Ok(())

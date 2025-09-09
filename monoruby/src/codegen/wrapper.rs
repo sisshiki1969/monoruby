@@ -1,10 +1,11 @@
 use super::*;
 
 impl Codegen {
-    pub(crate) fn gen_wrapper(&mut self, kind: &FuncKind, no_jit: bool) -> DestLabel {
+    pub(crate) fn gen_wrapper(&mut self, globals: &Globals, fid: FuncId) -> DestLabel {
+        let no_jit = globals.no_jit;
         let entry = self.jit.label();
         self.jit.bind_label(entry.clone());
-        match kind {
+        match &globals.store[fid].kind {
             FuncKind::ISeq(_) => {
                 if !no_jit && !cfg!(feature = "no-jit") {
                     self.gen_jit_stub();
@@ -33,9 +34,10 @@ impl Codegen {
                     jmp [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
                 }
             }
-            FuncKind::Builtin { abs_address } => self.wrap_native_func(*abs_address),
+            FuncKind::Builtin { abs_address } => self.gen_native_func_wrapper(*abs_address),
             FuncKind::AttrReader { ivar_name } => self.gen_attr_reader(*ivar_name),
             FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(*ivar_name),
+            FuncKind::Const { value } => self.gen_const_fn(value),
         };
         self.jit.finalize();
         entry
@@ -94,7 +96,7 @@ impl Codegen {
     ///   r13: pc (dummy for builtin funcions)
     /// ~~~
     ///
-    fn wrap_native_func(&mut self, abs_address: u64) {
+    fn gen_native_func_wrapper(&mut self, abs_address: u64) {
         // calculate stack offset
         monoasm!( &mut self.jit,
             pushq rbp;
@@ -112,6 +114,16 @@ impl Codegen {
             call rax;   // CALL_SITE
 
             leave;
+            ret;
+        );
+    }
+
+    ///
+    /// Generate a function that always returns the constant value.
+    ///
+    fn gen_const_fn(&mut self, value: &Value) {
+        monoasm!( &mut self.jit,
+            movq rax, (value.id());
             ret;
         );
     }

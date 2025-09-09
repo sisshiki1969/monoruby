@@ -523,8 +523,7 @@ impl Globals {
             let mut codegen = codegen.borrow_mut();
             #[cfg(feature = "perf")]
             let pair = codegen.get_address_pair();
-            let kind = self.store[func_id].kind.clone();
-            let entry = codegen.gen_wrapper(&kind, self.no_jit);
+            let entry = codegen.gen_wrapper(self, func_id);
             let codeptr = codegen.jit.get_label_address(&entry);
             self.store[func_id].set_entry(entry, codeptr);
             #[cfg(feature = "perf")]

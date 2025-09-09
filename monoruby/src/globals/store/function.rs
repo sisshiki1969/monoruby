@@ -606,6 +606,7 @@ pub(crate) enum FuncKind {
     Builtin { abs_address: u64 },
     AttrReader { ivar_name: IdentId },
     AttrWriter { ivar_name: IdentId },
+    Const { value: Value },
 }
 
 impl std::default::Default for FuncKind {
