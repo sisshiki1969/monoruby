@@ -184,9 +184,9 @@ impl Store {
         &self[iseq]
     }
 
-    pub fn iseq_mut(&mut self, func_id: FuncId) -> &mut ISeqInfo {
-        let iseq = self[func_id].as_iseq();
-        &mut self[iseq]
+    pub fn iseq_mut(&mut self, func_id: FuncId) -> Option<&mut ISeqInfo> {
+        let iseq = self[func_id].is_iseq()?;
+        Some(&mut self[iseq])
     }
 
     pub fn ancestors(&self, class_id: ClassId) -> Vec<Module> {

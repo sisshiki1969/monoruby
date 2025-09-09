@@ -359,10 +359,10 @@ impl JitContext {
                 return CompileResult::Continue;
             }
             FuncKind::Const { value } => {
-                assert_eq!(0, pos_num);
-                assert!(!callsite.kw_may_exists());
-                assert!(block_fid.is_none());
-                assert!(callsite.block_arg.is_none());
+                //assert_eq!(0, pos_num);
+                //assert!(!callsite.kw_may_exists());
+                //assert!(block_fid.is_none());
+                //assert!(callsite.block_arg.is_none());
                 bbctx.discard(dst);
                 bbctx.writeback_acc(ir);
                 if dst.is_some() {

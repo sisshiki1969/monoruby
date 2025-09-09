@@ -56,7 +56,7 @@ impl BytecodeGen {
 
         let can_be_inlined = self.ir.iter().all(|(inst, _)| inst.can_be_inlined());
         let (ops, sourcemap, bbinfo) = self.ir_to_bc(store)?;
-        let info = store.iseq_mut(func_id);
+        let info = store.iseq_mut(func_id).unwrap();
         info.temp_num = self.temp_num;
         info.non_temp_num = self.non_temp_num;
         info.literals = std::mem::take(&mut self.literals);
@@ -633,7 +633,6 @@ impl BytecodeGen {
             && r1 == r2
         {
             // Handle the specific case for const-function
-            eprintln!("const!");
             Some(Value::nil())
         } else {
             None

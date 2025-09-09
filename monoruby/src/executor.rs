@@ -624,33 +624,34 @@ impl Executor {
         if let Some(iseq) = globals.store[func].is_iseq() {
             globals.store[iseq].lexical_context =
                 globals.store.iseq(current_func).lexical_context.clone();
-            globals.add_method(class_id, name, func, visibility);
-            if module_function {
-                globals.add_singleton_method(class_id, name, func, visibility);
-            }
-            CODEGEN.with(|codegen| {
-                let mut codegen = codegen.borrow_mut();
-                if codegen.bop_redefine_flags() != 0 {
-                    codegen.immediate_eviction(self.cfp());
-                }
-            });
-            self.invoke_method_if_exists(
-                globals,
-                IdentId::METHOD_ADDED,
-                globals.store[class_id].get_module().into(),
-                &[Value::symbol(name)],
-                None,
-                None,
-            )?;
-            Ok(Value::nil())
         } else {
-            runtime::_dump_stacktrace(self, globals);
-            Err(MonorubyErr::runtimeerr(format!(
-                "define func: {:?} {:016x}",
-                name,
-                (func.get() as u64) + ((name.get() as u64) << 32)
-            )))
+            assert!(matches!(globals.store[func].kind, FuncKind::Const { .. }));
+            //runtime::_dump_stacktrace(self, globals);
+            //Err(MonorubyErr::runtimeerr(format!(
+            //    "define func: {:?} {:016x}",
+            //    name,
+            //    (func.get() as u64) + ((name.get() as u64) << 32)
+            //)))
         }
+        globals.add_method(class_id, name, func, visibility);
+        if module_function {
+            globals.add_singleton_method(class_id, name, func, visibility);
+        }
+        CODEGEN.with(|codegen| {
+            let mut codegen = codegen.borrow_mut();
+            if codegen.bop_redefine_flags() != 0 {
+                codegen.immediate_eviction(self.cfp());
+            }
+        });
+        self.invoke_method_if_exists(
+            globals,
+            IdentId::METHOD_ADDED,
+            globals.store[class_id].get_module().into(),
+            &[Value::symbol(name)],
+            None,
+            None,
+        )?;
+        Ok(Value::nil())
     }
 }
 

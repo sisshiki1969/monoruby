@@ -47,8 +47,14 @@ pub(super) extern "C" fn enter_classdef<'a>(
     let current_func = vm.method_func_id();
     let mut lexical_context = globals.store.iseq(current_func).lexical_context.clone();
     lexical_context.push(self_value.id());
-    globals.store.iseq_mut(func_id).lexical_context = lexical_context;
+    if let Some(info) = globals.store.iseq_mut(func_id) {
+        info.lexical_context = lexical_context;
+    }
     globals.get_func_data(func_id)
+}
+
+pub(super) extern "C" fn exit_classdef(vm: &mut Executor, _globals: &mut Globals) {
+    vm.pop_class_context();
 }
 
 #[derive(Debug, Clone, Default)]
@@ -698,10 +704,6 @@ pub(super) extern "C" fn define_singleton_class(
     Some(self_val.as_val())
 }
 
-pub(super) extern "C" fn exit_classdef(vm: &mut Executor, _globals: &mut Globals) {
-    vm.pop_class_context();
-}
-
 pub(super) extern "C" fn define_method(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -725,8 +727,10 @@ pub(super) extern "C" fn singleton_define_method(
     obj: Value,
 ) {
     let current_func = vm.method_func_id();
-    globals.store.iseq_mut(func).lexical_context =
-        globals.store.iseq(current_func).lexical_context.clone();
+    if let Some(iseq) = globals.store[func].is_iseq() {
+        globals.store[iseq].lexical_context =
+            globals.store.iseq(current_func).lexical_context.clone();
+    }
     let class_id = globals.store.get_singleton(obj).id();
     globals.add_public_method(class_id, name, func);
 }

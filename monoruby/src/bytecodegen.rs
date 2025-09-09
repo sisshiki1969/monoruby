@@ -14,11 +14,6 @@ mod method_call;
 mod statement;
 use inst::*;
 
-enum CompileResult {
-    ISeq,
-    Const(Value),
-}
-
 pub fn bytecode_compile_script(globals: &mut Globals, result: ParseResult) -> Result<FuncId> {
     let main_fid = globals.store.new_main(result)?;
     bytecode_compile(globals, main_fid, None)?;
@@ -44,13 +39,11 @@ fn bytecode_compile(
     binding: Option<LvarCollector>,
 ) -> Result<()> {
     assert!(globals.store.func_len() > main_fid.get() as usize);
-    bytecode_compile_func(&mut globals.store, main_fid, binding)?;
-    globals.gen_wrapper(main_fid);
+    bytecode_compile_func(globals, main_fid, binding)?;
     let mut fid = FuncId::new(main_fid.get() + 1);
 
     while globals.store.func_len() > fid.get() as usize {
-        bytecode_compile_func(&mut globals.store, fid, None)?;
-        globals.gen_wrapper(fid);
+        bytecode_compile_func(globals, fid, None)?;
         fid = FuncId::new(fid.get() + 1);
     }
 
@@ -58,7 +51,7 @@ fn bytecode_compile(
 }
 
 fn bytecode_compile_func(
-    store: &mut Store,
+    globals: &mut Globals,
     func_id: FuncId,
     binding: Option<LvarCollector>,
 ) -> Result<()> {
@@ -69,10 +62,10 @@ fn bytecode_compile_func(
         destruct_info,
         optional_info,
         loc,
-    } = store.functions.get_compile_info();
-    let info = store.iseq(func_id);
+    } = globals.functions.get_compile_info();
+    let info = globals.iseq(func_id);
     let (fid, outer) = info.mother();
-    let params = store.iseq(fid).args.clone();
+    let params = globals.iseq(fid).args.clone();
     let mut gen = BytecodeGen::new(info, (fid, params, outer), binding);
     // arguments preparation
     for ForParamInfo {
@@ -131,9 +124,14 @@ fn bytecode_compile_func(
         gen.emit(BytecodeInst::LoopEnd, loc);
     }
     gen.replace_init(info);
-    if let Some(v) = gen.is_const_function() {}
-    gen.into_bytecode(store, loc)?;
+    if let Some(value) = gen.is_const_function() {
+        globals.store[func_id].kind = FuncKind::Const { value };
+        globals.store[func_id].data.set_reg_num(1);
+    } else {
+        gen.into_bytecode(globals, loc)?;
+    }
 
+    globals.gen_wrapper(func_id);
     Ok(())
 }
 

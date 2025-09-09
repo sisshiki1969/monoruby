@@ -73,7 +73,7 @@ impl FuncData {
         self.pc = Some(pc);
     }
 
-    fn set_reg_num(&mut self, reg_num: u16) {
+    pub fn set_reg_num(&mut self, reg_num: u16) {
         self.meta.set_reg_num(reg_num);
         self.set_offset(reg_num);
     }
@@ -656,7 +656,7 @@ struct FuncExt {
 #[derive(Debug, Clone, Default)]
 pub struct FuncInfo {
     /// function data.
-    data: FuncData,
+    pub data: FuncData,
     pub(crate) kind: FuncKind,
     ext: Box<FuncExt>,
 }
