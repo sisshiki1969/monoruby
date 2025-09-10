@@ -365,10 +365,7 @@ impl JitContext {
                 //assert!(callsite.block_arg.is_none());
                 bbctx.discard(dst);
                 bbctx.writeback_acc(ir);
-                if dst.is_some() {
-                    ir.lit2reg(value, GP::Rax);
-                    bbctx.reg2acc_concrete_value(ir, GP::Rax, dst, value);
-                }
+                bbctx.def_concrete_value(dst, value);
                 return CompileResult::Continue;
             }
             FuncKind::Builtin { .. } => {
