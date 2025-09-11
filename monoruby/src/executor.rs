@@ -625,13 +625,12 @@ impl Executor {
             globals.store[iseq].lexical_context =
                 globals.store.iseq(current_func).lexical_context.clone();
         } else {
-            assert!(matches!(globals.store[func].kind, FuncKind::Const { .. }));
-            //runtime::_dump_stacktrace(self, globals);
-            //Err(MonorubyErr::runtimeerr(format!(
-            //    "define func: {:?} {:016x}",
-            //    name,
-            //    (func.get() as u64) + ((name.get() as u64) << 32)
-            //)))
+            runtime::_dump_stacktrace(self, globals);
+            return Err(MonorubyErr::runtimeerr(format!(
+                "define func: {:?} {:016x}",
+                name,
+                (func.get() as u64) + ((name.get() as u64) << 32)
+            )));
         }
         globals.add_method(class_id, name, func, visibility);
         if module_function {

@@ -125,12 +125,9 @@ fn bytecode_compile_func(
     }
     gen.replace_init(info);
     if let Some(value) = gen.is_const_function() {
-        globals.store[func_id].kind = FuncKind::Const { value };
-        globals.store[func_id].data.set_reg_num(1);
-    } else {
-        gen.into_bytecode(globals, loc)?;
+        globals.iseq_mut(func_id).unwrap().set_const_fn(value);
     }
-
+    gen.into_bytecode(globals, loc)?;
     globals.gen_wrapper(func_id);
     Ok(())
 }

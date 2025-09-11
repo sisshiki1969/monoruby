@@ -358,16 +358,6 @@ impl JitContext {
                 bbctx.rax2acc(ir, dst);
                 return CompileResult::Continue;
             }
-            FuncKind::Const { value } => {
-                //assert_eq!(0, pos_num);
-                //assert!(!callsite.kw_may_exists());
-                //assert!(block_fid.is_none());
-                //assert!(callsite.block_arg.is_none());
-                bbctx.discard(dst);
-                bbctx.writeback_acc(ir);
-                bbctx.def_concrete_value(dst, value);
-                return CompileResult::Continue;
-            }
             FuncKind::Builtin { .. } => {
                 let evict = ir.new_evict();
                 self.send(bbctx, ir, store, callsite, fid, recv_class, evict, None);
@@ -388,7 +378,12 @@ impl JitContext {
                 );
                 evict
             }
-            FuncKind::ISeq(iseq_id) => {
+            FuncKind::ISeq(iseq) => {
+                if let Some(v) = store[iseq].is_const_fn() {
+                    bbctx.discard(dst);
+                    bbctx.def_concrete_value(dst, v);
+                    return CompileResult::Continue;
+                }
                 let evict = ir.new_evict();
                 let specializable = callsite.splat_pos.is_empty()
                     && !store[fid].is_rest()
@@ -440,7 +435,7 @@ impl JitContext {
                     };
                     let entry = self.compile_specialized_func(
                         store,
-                        iseq_id,
+                        iseq,
                         recv_class,
                         patch_point,
                         args_info,

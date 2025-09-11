@@ -6,8 +6,11 @@ impl Codegen {
         let entry = self.jit.label();
         self.jit.bind_label(entry.clone());
         match &globals.store[fid].kind {
-            FuncKind::ISeq(_) => {
-                if !no_jit && !cfg!(feature = "no-jit") {
+            FuncKind::ISeq(iseq) => {
+                if let Some(v) = globals[*iseq].is_const_fn() {
+                    // constant function
+                    self.gen_const_fn(&v);
+                } else if !no_jit && !cfg!(feature = "no-jit") {
                     self.gen_jit_stub();
                 } else {
                     self.gen_vm_stub()
@@ -37,7 +40,6 @@ impl Codegen {
             FuncKind::Builtin { abs_address } => self.gen_native_func_wrapper(*abs_address),
             FuncKind::AttrReader { ivar_name } => self.gen_attr_reader(*ivar_name),
             FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(*ivar_name),
-            FuncKind::Const { value } => self.gen_const_fn(value),
         };
         self.jit.finalize();
         entry

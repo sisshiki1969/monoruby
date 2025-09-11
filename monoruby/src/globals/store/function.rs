@@ -606,7 +606,6 @@ pub(crate) enum FuncKind {
     Builtin { abs_address: u64 },
     AttrReader { ivar_name: IdentId },
     AttrWriter { ivar_name: IdentId },
-    Const { value: Value },
 }
 
 impl std::default::Default for FuncKind {
@@ -656,7 +655,7 @@ struct FuncExt {
 #[derive(Debug, Clone, Default)]
 pub struct FuncInfo {
     /// function data.
-    pub data: FuncData,
+    data: FuncData,
     pub(crate) kind: FuncKind,
     ext: Box<FuncExt>,
 }
@@ -1069,14 +1068,14 @@ impl FuncInfo {
 
     pub fn as_iseq(&self) -> ISeqId {
         match &self.kind {
-            FuncKind::ISeq(info) => *info,
+            FuncKind::ISeq(iseq) => *iseq,
             _ => unreachable!("{:?}", self),
         }
     }
 
     pub(crate) fn is_iseq(&self) -> Option<ISeqId> {
         match &self.kind {
-            FuncKind::ISeq(info) => Some(*info),
+            FuncKind::ISeq(iseq) => Some(*iseq),
             _ => None,
         }
     }
