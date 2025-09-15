@@ -351,10 +351,7 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
         let mut count = 0;
         for elem in lfp.self_val().as_array().iter() {
-            if vm
-                .invoke_method_inner(globals, IdentId::_EQ, arg0, &[*elem], None, None)?
-                .as_bool()
-            {
+            if vm.invoke_eq(globals, arg0, *elem)? {
                 count += 1;
             }
         }

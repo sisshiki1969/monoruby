@@ -106,9 +106,7 @@ impl Executor {
             (RV::Symbol(_), _) => false,
             (RV::String(lhs), RV::String(rhs)) => lhs.eq(rhs),
             (RV::String(_), _) => false,
-            _ => self
-                .invoke_method_inner(globals, IdentId::_EQ, lhs, &[rhs], None, None)?
-                .as_bool(),
+            _ => self.invoke_eq(globals, lhs, rhs)?,
         };
         Ok(b)
     }
@@ -119,10 +117,7 @@ impl Executor {
         lhs: Value,
         rhs: Value,
     ) -> Result<bool> {
-        let b = self
-            .invoke_method_inner(globals, IdentId::_EQ, lhs, &[rhs], None, None)?
-            .as_bool();
-        Ok(b)
+        self.invoke_eq(globals, lhs, rhs)
     }
 
     pub(crate) fn ne_values_bool(
@@ -140,7 +135,7 @@ impl Executor {
         lhs: Value,
         rhs: Value,
     ) -> Result<bool> {
-        Ok(!self.eq_values_bool_no_opt(globals, lhs, rhs)?)
+        Ok(!self.invoke_eq(globals, lhs, rhs)?)
     }
 }
 

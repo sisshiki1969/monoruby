@@ -589,6 +589,20 @@ impl Codegen {
         };
     }
 
+    fn vm_store_rdi(&mut self, reg: GP) {
+        let exit = self.jit.label();
+        let r = reg as u64;
+        monoasm! { &mut self.jit,
+            testq rdi, rdi;
+            jeq exit;
+        };
+        self.vm_get_slot_addr(GP::Rdi);
+        monoasm! { &mut self.jit,
+            movq [rdi], R(r);
+        exit:
+        };
+    }
+
     ///
     /// Save a class of the left-hand side value in the inline cache.
     ///

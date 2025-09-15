@@ -749,6 +749,17 @@ impl Executor {
         self.invoke_func_inner(globals, func_id, receiver, args, bh, kw_args)
     }
 
+    pub(crate) fn invoke_eq(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<bool> {
+        let func_id = self.find_method(globals, lhs, IdentId::_EQ, true)?;
+        let b = self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)?;
+        Ok(b.as_bool())
+    }
+
     pub(crate) fn invoke_method_missing(
         &mut self,
         globals: &mut Globals,
