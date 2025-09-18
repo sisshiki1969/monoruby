@@ -38,38 +38,27 @@ impl Codegen {
     /// - rdi, rsi, rdx
     ///
     pub(super) fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool, self_: bool) {
-        let ivar = ivarid.get() as i32;
+        let ivar = ivarid.get() as u32;
         let idx = if is_object_ty {
-            ivar - OBJECT_INLINE_IVAR as i32
+            ivar - OBJECT_INLINE_IVAR as u32
         } else {
             ivar
         };
-        if self_ {
-            let exit = self.jit.label();
-            monoasm! { &mut self.jit,
-                movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
-                movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
-                movq r15, [rdi + (idx * 8)];
-                testq r15, r15;
-                jne  exit;
-                movq r15, (NIL_VALUE);
-            exit:
-            }
-        } else {
-            let exit = self.jit.label();
-            monoasm! { &mut self.jit,
-                movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
-            }
-            self.check_len(idx, &exit);
-            monoasm! { &mut self.jit,
-                movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
-                movq r15, [rdi + (idx * 8)];
-                testq r15, r15;
-                jne  exit;
-                movq r15, (NIL_VALUE);
-            exit:
-            }
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
         }
+        if !self_ {
+            self.check_len(idx, &exit);
+        }
+        monoasm! { &mut self.jit,
+            movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
+            movq r15, [rdi + (idx as i32 * 8)];
+            testq r15, r15;
+            jne  exit;
+            movq r15, (NIL_VALUE);
+        }
+        self.jit.bind_label(exit);
     }
 }
 
@@ -100,30 +89,67 @@ impl Codegen {
         src: GP,
         ivarid: IvarId,
         is_object_ty: bool,
-        self_: bool,
         using: UsingXmm,
     ) {
+        self.store_ivar_heap_inner(src, ivarid, is_object_ty, Some(using));
+    }
+
+    ///
+    /// Store *src* in an instance var *ivarid* of the object *rdi*.
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    ///
+    /// #### destroy
+    /// - rdx
+    ///
+    pub(super) fn store_self_ivar_heap(&mut self, src: GP, ivarid: IvarId, is_object_ty: bool) {
+        self.store_ivar_heap_inner(src, ivarid, is_object_ty, None);
+    }
+
+    ///
+    /// Store *src* in an instance var *ivarid* of the object *rdi*.
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    ///
+    /// #### destroy (if using.is_some())
+    /// - caller-save registers
+    ///
+    /// #### destroy (if using.is_none())
+    /// - rdx
+    fn store_ivar_heap_inner(
+        &mut self,
+        src: GP,
+        ivarid: IvarId,
+        is_object_ty: bool,
+        using: Option<UsingXmm>,
+    ) {
         let exit = self.jit.label();
-        let generic = if self_ { None } else { Some(self.jit.label()) };
-        let ivar = ivarid.get() as i32;
+        let generic = if let Some(using) = using {
+            Some((using, self.jit.label()))
+        } else {
+            None
+        };
+        let ivar = ivarid.get() as u32;
         let idx = if is_object_ty {
-            ivar - OBJECT_INLINE_IVAR as i32
+            ivar - OBJECT_INLINE_IVAR as u32
         } else {
             ivar
         };
         monoasm! { &mut self.jit,
             movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
         }
-        if let Some(generic) = &generic {
+        if let Some((_, generic)) = &generic {
             self.check_len(idx, generic);
         }
         monoasm! { &mut self.jit,
             movq rdx, [rdx + (MONOVEC_PTR)]; // ptr
-            movq [rdx + (idx * 8)], R(src as _);
+            movq [rdx + (idx as i32 * 8)], R(src as _);
         exit:
         }
 
-        if let Some(generic) = &generic {
+        if let Some((using, generic)) = generic {
             self.jit.select_page(1);
             monoasm!( &mut self.jit,
             generic:
@@ -149,7 +175,7 @@ impl Codegen {
     /// #### in
     /// - rdx: ivar_table
     ///
-    fn check_len(&mut self, idx: i32, fail: &DestLabel) {
+    fn check_len(&mut self, idx: u32, fail: &DestLabel) {
         monoasm! { &mut self.jit,
             // check var_table is not None
             testq rdx, rdx;

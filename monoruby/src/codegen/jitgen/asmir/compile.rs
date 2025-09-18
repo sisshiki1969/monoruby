@@ -640,9 +640,13 @@ impl Codegen {
                 src,
                 ivarid,
                 is_object_ty,
-                self_,
                 using_xmm,
-            } => self.store_ivar_heap(src, ivarid, is_object_ty, self_, using_xmm),
+            } => self.store_ivar_heap(src, ivarid, is_object_ty, using_xmm),
+            AsmInst::StoreSelfIVarHeap {
+                src,
+                ivarid,
+                is_object_ty,
+            } => self.store_self_ivar_heap(src, ivarid, is_object_ty),
             AsmInst::StoreIVarInline { src, ivarid } => self.store_ivar_object_inline(src, ivarid),
 
             AsmInst::LoadCVar { name, using_xmm } => {
@@ -1009,6 +1013,30 @@ impl Codegen {
             call rax;
         };
         self.xmm_restore(using_xmm);
+    }
+
+    ///
+    /// Set req, opt and rest arguments.
+    ///
+    /// ### out
+    /// - rax: Some(Value)
+    /// - rdi: the number of arguments
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    fn jit_set_arguments(&mut self, callid: CallSiteId, offset: usize, meta: Meta) {
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, (callid.get());
+            lea  rcx, [rsp - (RSP_LOCAL_FRAME)];   // callee_lfp
+            movq r8, (meta.get());
+            subq rsp, (offset);
+            movq rax, (crate::runtime::jit_generic_set_arguments);
+            call rax;
+            addq rsp, (offset);
+        }
     }
 }
 

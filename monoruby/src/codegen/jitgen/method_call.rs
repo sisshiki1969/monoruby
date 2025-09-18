@@ -58,7 +58,7 @@ impl JitContext {
             }
         }
 
-        self.call(bbctx, ir, store, callsite, func_id, recv_class, pc)
+        self.call(bbctx, ir, store, callsite, func_id, recv_class)
     }
 
     /*pub(super) fn compile_index_call(
@@ -107,7 +107,6 @@ impl JitContext {
         store: &Store,
         fid: FuncId,
         info: BinOpInfo,
-        pc: BytecodePtr,
     ) -> CompileResult {
         assert!(matches!(
             store[fid].kind,
@@ -220,7 +219,6 @@ impl JitContext {
         store: &Store,
         callid: CallSiteId,
         block: JitBlockInfo,
-        pc: BytecodePtr,
     ) {
         let dst = store[callid].dst;
         bbctx.exec_gc(ir, true);
@@ -285,7 +283,6 @@ impl JitContext {
         callsite: &CallSiteInfo,
         mut fid: FuncId,
         recv_class: ClassId,
-        pc: BytecodePtr,
     ) -> CompileResult {
         let CallSiteInfo {
             args,
@@ -351,7 +348,6 @@ impl JitContext {
                         src,
                         ivarid,
                         using_xmm,
-                        self_: false,
                         is_object_ty,
                     });
                 }
@@ -360,7 +356,7 @@ impl JitContext {
             }
             FuncKind::Builtin { .. } => {
                 let evict = ir.new_evict();
-                self.send(bbctx, ir, store, callsite, fid, recv_class, evict, None, pc);
+                self.send(bbctx, ir, store, callsite, fid, recv_class, evict, None);
                 evict
             }
             FuncKind::Proc(proc) => {
@@ -375,7 +371,6 @@ impl JitContext {
                     recv_class,
                     evict,
                     Some(proc.outer_lfp()),
-                    pc,
                 );
                 evict
             }
@@ -449,13 +444,12 @@ impl JitContext {
                         store,
                         callsite,
                         fid,
-                        pc,
                         entry,
                         patch_point,
                         evict,
                     );
                 } else {
-                    self.send(bbctx, ir, store, callsite, fid, recv_class, evict, None, pc);
+                    self.send(bbctx, ir, store, callsite, fid, recv_class, evict, None);
                 }
                 evict
             }
@@ -520,7 +514,6 @@ impl JitContext {
         recv_class: ClassId,
         evict: AsmEvict,
         outer_lfp: Option<Lfp>,
-        pc: BytecodePtr,
     ) {
         ir.reg_move(GP::Rdi, GP::R13);
         bbctx.exec_gc(ir, true);
@@ -554,7 +547,6 @@ impl JitContext {
         store: &Store,
         callsite: &CallSiteInfo,
         callee_fid: FuncId,
-        pc: BytecodePtr,
         inlined_entry: JitLabel,
         patch_point: Option<JitLabel>,
         evict: AsmEvict,
@@ -602,13 +594,7 @@ impl JitContext {
 }
 
 impl BBContext {
-    pub(super) fn compile_yield(
-        &mut self,
-        ir: &mut AsmIr,
-        store: &Store,
-        callid: CallSiteId,
-        pc: BytecodePtr,
-    ) {
+    pub(super) fn compile_yield(&mut self, ir: &mut AsmIr, store: &Store, callid: CallSiteId) {
         let callinfo = &store[callid];
         let dst = callinfo.dst;
         self.write_back_callargs_and_dst(ir, &callinfo);

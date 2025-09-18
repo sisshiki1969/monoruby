@@ -14,30 +14,6 @@ use super::*;
 // ~~~
 
 impl Codegen {
-    ///
-    /// Set req, opt and rest arguments.
-    ///
-    /// ### out
-    /// - rax: Some(Value)
-    /// - rdi: the number of arguments
-    ///
-    /// ### destroy
-    /// - caller save registers
-    ///
-    pub(super) fn jit_set_arguments(&mut self, callid: CallSiteId, offset: usize, meta: Meta) {
-        monoasm! { &mut self.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            movl rdx, (callid.get());
-            lea  rcx, [rsp - (RSP_LOCAL_FRAME)];   // callee_lfp
-            movq r8, (meta.get());
-            subq rsp, (offset);
-            movq rax, (crate::runtime::jit_generic_set_arguments);
-            call rax;
-            addq rsp, (offset);
-        }
-    }
-
     /*///
     /// generate JIT code for a method call which was not cached.
     ///

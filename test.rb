@@ -1,11 +1,12 @@
-a = [*(1..100)]
-a << 4.2
-100.times do
-  x = 0
-  1.times do
-    a.each do |e|
-      x += e
-    end
+class C
+  def m
   end
-  puts x
+  def f
+    m
+  end
+end
+
+c = C.new
+100.times do
+  c.f
 end
