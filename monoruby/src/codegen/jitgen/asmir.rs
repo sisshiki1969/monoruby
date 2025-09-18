@@ -959,7 +959,6 @@ pub(super) enum AsmInst {
     Inline(InlineProcedure),
     Yield {
         callid: CallSiteId,
-        using_xmm: UsingXmm,
         error: AsmError,
         evict: AsmEvict,
     },

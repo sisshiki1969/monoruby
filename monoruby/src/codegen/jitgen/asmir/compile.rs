@@ -372,8 +372,8 @@ impl Codegen {
                     .and_modify(|e| e.0 = Some(patch_point));
             }
             AsmInst::BinopCached {
-                callee_fid,
                 recv_class,
+                callee_fid,
                 evict,
             } => {
                 let return_addr = self.gen_binop_cached(store, callee_fid, recv_class);
@@ -426,12 +426,11 @@ impl Codegen {
             }*/
             AsmInst::Yield {
                 callid,
-                using_xmm,
                 error,
                 evict,
             } => {
                 let error = &labels[error];
-                let return_addr = self.gen_yield(callid, using_xmm, error);
+                let return_addr = self.gen_yield(callid, error);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
             AsmInst::YieldSpecialized {

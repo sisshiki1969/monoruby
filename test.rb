@@ -1,4 +1,11 @@
-22.times {        
-  ary = [0, 4, 7, 10, 12]
-  puts (0...ary.size).bsearch {|i| __dump; ary[i] >= 4 } # => 1
-}
+a = [*(1..100)]
+a << 4.2
+100.times do
+  x = 0
+  1.times do
+    a.each do |e|
+      x += e
+    end
+  end
+  puts x
+end

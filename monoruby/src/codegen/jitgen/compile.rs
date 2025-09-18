@@ -443,8 +443,9 @@ impl JitContext {
             TraceIr::GBinOp { kind, info } => {
                 let recv_class = info.lhs_class;
                 let name = kind.to_id();
+                let pc = store[self.iseq_id()].get_pc(bc_pos);
                 if let Some(fid) = self.jit_check_method(store, recv_class, name) {
-                    return self.compile_binop_call(bbctx, ir, store, fid, info);
+                    return self.compile_binop_call(bbctx, ir, store, fid, info, pc);
                 } else {
                     return CompileResult::Recompile(RecompileReason::MethodNotFound);
                 }
@@ -460,7 +461,8 @@ impl JitContext {
                 let recv_class = info.lhs_class;
                 let name = Self::cmpkind_to_id(kind);
                 if let Some(fid) = self.jit_check_method(store, recv_class, name) {
-                    return self.compile_binop_call(bbctx, ir, store, fid, info);
+                    let pc = store[self.iseq_id()].get_pc(bc_pos);
+                    return self.compile_binop_call(bbctx, ir, store, fid, info, pc);
                 } else {
                     return CompileResult::Recompile(RecompileReason::MethodNotFound);
                 }
@@ -515,7 +517,8 @@ impl JitContext {
                 let recv_class = info.lhs_class;
                 let name = Self::cmpkind_to_id(kind);
                 if let Some(fid) = self.jit_check_method(store, recv_class, name) {
-                    match self.compile_binop_call(bbctx, ir, store, fid, info) {
+                    let pc = store[self.iseq_id()].get_pc(bc_pos);
+                    match self.compile_binop_call(bbctx, ir, store, fid, info, pc) {
                         CompileResult::Continue => {
                             let src_idx = bc_pos + 1;
                             bbctx.unset_class_version_guard();
@@ -566,7 +569,8 @@ impl JitContext {
                             lhs_class: base_class,
                             rhs_class: idx_class,
                         };
-                        return self.compile_binop_call(bbctx, ir, store, fid, info);
+                        let pc = store[self.iseq_id()].get_pc(bc_pos);
+                        return self.compile_binop_call(bbctx, ir, store, fid, info, pc);
                     }
                 }
                 return CompileResult::Recompile(RecompileReason::NotCached);
@@ -652,10 +656,18 @@ impl JitContext {
                 }
             }
             TraceIr::Yield { callid } => {
+                let pc = store[self.iseq_id()].get_pc(bc_pos);
                 if let Some(block_info) = self.current_frame_given_block() {
-                    self.compile_yield_specialized(bbctx, ir, store, callid, block_info.clone());
+                    self.compile_yield_specialized(
+                        bbctx,
+                        ir,
+                        store,
+                        callid,
+                        block_info.clone(),
+                        pc,
+                    );
                 } else {
-                    bbctx.compile_yield(ir, store, callid);
+                    bbctx.compile_yield(ir, store, callid, pc);
                 }
                 bbctx.unset_class_version_guard();
             }

@@ -207,13 +207,7 @@ impl Codegen {
         self.do_call(store, callee, codeptr, recv_class, pc)
     }
 
-    pub(super) fn gen_yield(
-        &mut self,
-        callid: CallSiteId,
-        using_xmm: UsingXmm,
-        error: &DestLabel,
-    ) -> CodePtr {
-        self.xmm_save(using_xmm);
+    pub(super) fn gen_yield(&mut self, callid: CallSiteId, error: &DestLabel) -> CodePtr {
         self.get_proc_data();
         self.handle_error(&error);
         // rax <- outer, rdx <- FuncId
@@ -238,10 +232,7 @@ impl Codegen {
             addq  rsp, 64;
         };
 
-        let return_addr = self.generic_call(callid, &error);
-        self.xmm_restore(using_xmm);
-        self.handle_error(&error);
-        return_addr
+        self.generic_call(callid, &error)
     }
 
     pub(super) fn gen_yield_specialized(
