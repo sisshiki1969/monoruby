@@ -49,9 +49,8 @@ impl Codegen {
         let get_class = self.get_class.clone();
         self.vm_check_stack();
         self.vm_execute_gc();
+        self.push_cont_frame();
         monoasm! { &mut self.jit,
-            pushq r13;
-            subq  rsp, 8;
             // set self (= receiver)
             movzxw rdi, [r13 + (RECV_REG)];
         };
@@ -78,13 +77,10 @@ impl Codegen {
         self.call(is_simple);
         monoasm! { &mut self.jit,
         done:
-            addq rsp, 8;
-            popq r13;   // pop pc
-            movzxw r15, [r13 + (RET_REG)];  // r15 <- :1
-            addq r13, 16;
         };
+        self.pop_cont_frame();
         self.vm_handle_error();
-        self.vm_store_r15(GP::Rax);
+        self.vm_store_rdi(GP::Rax);
         self.fetch_and_dispatch();
 
         self.slow_path(&exec, &slow_path1, &slow_path2);
@@ -129,20 +125,12 @@ impl Codegen {
         self.vm_handle_error();
         self.get_func_data();
         // rax: outer, r15: &FuncData
-        monoasm! { &mut self.jit,
-            pushq r13; // push pc
-            subq rsp, 8;
-        };
+        self.push_cont_frame();
         self.set_block_self_outer();
         self.call(is_simple);
-        monoasm! { &mut self.jit,
-            addq rsp, 8;
-            popq r13;   // pop pc
-            movzxw r15, [r13 + (RET_REG)];  // r15 <- :1
-            addq r13, 16;
-        };
+        self.pop_cont_frame();
         self.vm_handle_error();
-        self.vm_store_r15(GP::Rax);
+        self.vm_store_rdi(GP::Rax);
         self.fetch_and_dispatch();
         label
     }
@@ -162,6 +150,22 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movl r8, [r13 + (CALLSITE_ID)]; // r8 <- CallSiteId
         }
+    }
+
+    fn push_cont_frame(&mut self) {
+        monoasm! { &mut self.jit,
+            subq  rsp, 8;
+            pushq r13;
+        };
+    }
+
+    fn pop_cont_frame(&mut self) {
+        monoasm! { &mut self.jit,
+            popq r13;   // pop pc
+            addq rsp, 8;
+            movzxw rdi, [r13 + (RET_REG)];  // rdi <- :1
+            addq r13, 16;
+        };
     }
 
     ///

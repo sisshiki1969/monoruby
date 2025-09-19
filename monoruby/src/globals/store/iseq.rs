@@ -129,6 +129,7 @@ pub struct ISeqInfo {
     pub lexical_context: Vec<ClassId>,
     pub sourceinfo: SourceInfoRef,
     is_block_style: bool,
+    is_constant_fn: Option<Value>,
     pub(crate) can_be_inlined: bool,
     ///
     /// JIT code info for each class of *self*.
@@ -190,6 +191,7 @@ impl ISeqInfo {
             lexical_context: vec![],
             sourceinfo,
             is_block_style,
+            is_constant_fn: None,
             can_be_inlined: false,
             jit_entry: HashMap::default(),
             bb_info: BasicBlockInfo::default(),
@@ -198,6 +200,14 @@ impl ISeqInfo {
 
     pub fn is_block_style(&self) -> bool {
         self.is_block_style
+    }
+
+    pub fn is_const_fn(&self) -> Option<Value> {
+        self.is_constant_fn
+    }
+
+    pub fn set_const_fn(&mut self, v: Value) {
+        self.is_constant_fn = Some(v);
     }
 
     pub(super) fn new_block(

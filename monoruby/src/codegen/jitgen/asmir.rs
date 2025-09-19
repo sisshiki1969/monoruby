@@ -959,7 +959,6 @@ pub(super) enum AsmInst {
     Inline(InlineProcedure),
     Yield {
         callid: CallSiteId,
-        using_xmm: UsingXmm,
         error: AsmError,
         evict: AsmEvict,
     },
@@ -1307,8 +1306,21 @@ pub(super) enum AsmInst {
         src: GP,
         ivarid: IvarId,
         is_object_ty: bool,
-        self_: bool,
         using_xmm: UsingXmm,
+    },
+    ///
+    /// Store *src* in an instance var *ivarid* of the object *rdi*.
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    ///
+    /// #### destroy
+    /// - rdx
+    ///
+    StoreSelfIVarHeap {
+        src: GP,
+        ivarid: IvarId,
+        is_object_ty: bool,
     },
     ///
     /// Store *src* in ivar embedded to RValue `rdi`. (only for object type)

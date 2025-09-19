@@ -14,30 +14,6 @@ use super::*;
 // ~~~
 
 impl Codegen {
-    ///
-    /// Set req, opt and rest arguments.
-    ///
-    /// ### out
-    /// - rax: Some(Value)
-    /// - rdi: the number of arguments
-    ///
-    /// ### destroy
-    /// - caller save registers
-    ///
-    pub(super) fn jit_set_arguments(&mut self, callid: CallSiteId, offset: usize, meta: Meta) {
-        monoasm! { &mut self.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            movl rdx, (callid.get());
-            lea  rcx, [rsp - (RSP_LOCAL_FRAME)];   // callee_lfp
-            movq r8, (meta.get());
-            subq rsp, (offset);
-            movq rax, (crate::runtime::jit_generic_set_arguments);
-            call rax;
-            addq rsp, (offset);
-        }
-    }
-
     /*///
     /// generate JIT code for a method call which was not cached.
     ///
@@ -207,13 +183,7 @@ impl Codegen {
         self.do_call(store, callee, codeptr, recv_class, pc)
     }
 
-    pub(super) fn gen_yield(
-        &mut self,
-        callid: CallSiteId,
-        using_xmm: UsingXmm,
-        error: &DestLabel,
-    ) -> CodePtr {
-        self.xmm_save(using_xmm);
+    pub(super) fn gen_yield(&mut self, callid: CallSiteId, error: &DestLabel) -> CodePtr {
         self.get_proc_data();
         self.handle_error(&error);
         // rax <- outer, rdx <- FuncId
@@ -238,10 +208,7 @@ impl Codegen {
             addq  rsp, 64;
         };
 
-        let return_addr = self.generic_call(callid, &error);
-        self.xmm_restore(using_xmm);
-        self.handle_error(&error);
-        return_addr
+        self.generic_call(callid, &error)
     }
 
     pub(super) fn gen_yield_specialized(

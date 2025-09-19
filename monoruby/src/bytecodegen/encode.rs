@@ -56,7 +56,7 @@ impl BytecodeGen {
 
         let can_be_inlined = self.ir.iter().all(|(inst, _)| inst.can_be_inlined());
         let (ops, sourcemap, bbinfo) = self.ir_to_bc(store)?;
-        let info = store.iseq_mut(func_id);
+        let info = store.iseq_mut(func_id).unwrap();
         info.temp_num = self.temp_num;
         info.non_temp_num = self.non_temp_num;
         info.literals = std::mem::take(&mut self.literals);
@@ -624,6 +624,19 @@ impl BytecodeGen {
             }
         };
         Ok(bc)
+    }
+
+    pub(super) fn is_const_function(&self) -> Option<Value> {
+        if self.ir.len() == 3
+            && let BytecodeInst::Nil(r1) = &self.ir[1].0
+            && let BytecodeInst::Ret(r2) = &self.ir[2].0
+            && r1 == r2
+        {
+            // Handle the specific case for const-function
+            Some(Value::nil())
+        } else {
+            None
+        }
     }
 
     fn encode_call(

@@ -39,13 +39,11 @@ fn bytecode_compile(
     binding: Option<LvarCollector>,
 ) -> Result<()> {
     assert!(globals.store.func_len() > main_fid.get() as usize);
-    bytecode_compile_func(&mut globals.store, main_fid, binding)?;
-    globals.gen_wrapper(main_fid);
+    bytecode_compile_func(globals, main_fid, binding)?;
     let mut fid = FuncId::new(main_fid.get() + 1);
 
     while globals.store.func_len() > fid.get() as usize {
-        bytecode_compile_func(&mut globals.store, fid, None)?;
-        globals.gen_wrapper(fid);
+        bytecode_compile_func(globals, fid, None)?;
         fid = FuncId::new(fid.get() + 1);
     }
 
@@ -53,7 +51,7 @@ fn bytecode_compile(
 }
 
 fn bytecode_compile_func(
-    store: &mut Store,
+    globals: &mut Globals,
     func_id: FuncId,
     binding: Option<LvarCollector>,
 ) -> Result<()> {
@@ -64,10 +62,10 @@ fn bytecode_compile_func(
         destruct_info,
         optional_info,
         loc,
-    } = store.functions.get_compile_info();
-    let info = store.iseq(func_id);
+    } = globals.functions.get_compile_info();
+    let info = globals.iseq(func_id);
     let (fid, outer) = info.mother();
-    let params = store.iseq(fid).args.clone();
+    let params = globals.iseq(fid).args.clone();
     let mut gen = BytecodeGen::new(info, (fid, params, outer), binding);
     // arguments preparation
     for ForParamInfo {
@@ -126,8 +124,11 @@ fn bytecode_compile_func(
         gen.emit(BytecodeInst::LoopEnd, loc);
     }
     gen.replace_init(info);
-    gen.into_bytecode(store, loc)?;
-
+    if let Some(value) = gen.is_const_function() {
+        globals.iseq_mut(func_id).unwrap().set_const_fn(value);
+    }
+    gen.into_bytecode(globals, loc)?;
+    globals.gen_wrapper(func_id);
     Ok(())
 }
 

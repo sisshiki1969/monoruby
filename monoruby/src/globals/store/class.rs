@@ -1057,7 +1057,9 @@ impl Store {
             self.invalidate_jit_code();
             let vm_entry = codegen.vm_entry();
             for func in self.functions.functions() {
-                if let FuncKind::ISeq(_) = func.kind {
+                if let Some(iseq) = func.is_iseq()
+                    && self[iseq].is_const_fn().is_none()
+                {
                     let entry = codegen.jit.get_label_address(&func.entry_label());
                     codegen.jit.apply_jmp_patch_address(entry, &vm_entry);
                 }

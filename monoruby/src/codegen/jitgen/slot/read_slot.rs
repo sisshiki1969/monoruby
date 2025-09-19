@@ -174,7 +174,8 @@ impl SlotContext {
                 ir.reg2stack(GP::R15, slot);
                 self.guard_fixnum(ir, slot, GP::R15, deopt);
                 let x = self.set_new_both(slot, Guarded::Fixnum);
-                ir.fixnum2xmm(GP::R15, x);
+                ir.reg_move(GP::R15, GP::Rdi);
+                ir.fixnum2xmm(GP::Rdi, x);
                 x
             }
             LinkMode::ConcreteValue(v) => self.fetch_float_concrete_value_for_xmm(ir, slot, v),
@@ -208,7 +209,8 @@ impl SlotContext {
                 // -> Both
                 let x = self.set_new_both(slot, Guarded::Float);
                 ir.reg2stack(GP::R15, slot);
-                ir.float2xmm(GP::R15, x, deopt);
+                ir.reg_move(GP::R15, GP::Rdi);
+                ir.float2xmm(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::ConcreteValue(v) => self.fetch_float_concrete_value_for_xmm(ir, slot, v),

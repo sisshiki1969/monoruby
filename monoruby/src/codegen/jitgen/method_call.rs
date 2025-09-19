@@ -25,6 +25,7 @@ impl JitContext {
             mut func_id,
             version,
         } = cache;
+        let pc = store[self.iseq_id()].get_pc(bc_pos);
         if (version != self.class_version()) || (recv.is_self() && self.self_class() != recv_class)
         {
             // the inline method cache is invalid because the receiver class is not matched.
@@ -32,11 +33,7 @@ impl JitContext {
                 recv_class = self.self_class()
             };
             if let Some(fid) = self.jit_check_call(store, recv_class, callsite.name) {
-                store[self.iseq_id()].get_pc(bc_pos).write_method_cache(
-                    recv_class,
-                    fid,
-                    self.class_version(),
-                );
+                pc.write_method_cache(recv_class, fid, self.class_version());
                 func_id = fid;
             } else {
                 return CompileResult::Recompile(RecompileReason::MethodNotFound);
@@ -351,7 +348,6 @@ impl JitContext {
                         src,
                         ivarid,
                         using_xmm,
-                        self_: false,
                         is_object_ty,
                     });
                 }
@@ -378,7 +374,12 @@ impl JitContext {
                 );
                 evict
             }
-            FuncKind::ISeq(iseq_id) => {
+            FuncKind::ISeq(iseq) => {
+                if let Some(v) = store[iseq].is_const_fn() {
+                    bbctx.discard(dst);
+                    bbctx.def_concrete_value(dst, v);
+                    return CompileResult::Continue;
+                }
                 let evict = ir.new_evict();
                 let specializable = callsite.splat_pos.is_empty()
                     && !store[fid].is_rest()
@@ -430,7 +431,7 @@ impl JitContext {
                     };
                     let entry = self.compile_specialized_func(
                         store,
-                        iseq_id,
+                        iseq,
                         recv_class,
                         patch_point,
                         args_info,
@@ -602,12 +603,14 @@ impl BBContext {
         let error = ir.new_error(self);
         let evict = ir.new_evict();
         self.exec_gc(ir, true);
+        ir.xmm_save(using_xmm);
         ir.push(AsmInst::Yield {
             callid,
-            using_xmm,
             error,
             evict,
         });
+        ir.xmm_restore(using_xmm);
+        ir.handle_error(error);
         self.rax2acc(ir, dst);
         self.immediate_evict(ir, evict);
         self.unset_class_version_guard();

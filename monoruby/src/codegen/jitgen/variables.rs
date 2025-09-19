@@ -45,12 +45,10 @@ impl JitContext {
             ir.push(AsmInst::StoreIVarInline { src, ivarid });
             false
         } else {
-            ir.push(AsmInst::StoreIVarHeap {
+            ir.push(AsmInst::StoreSelfIVarHeap {
                 src,
                 ivarid,
                 is_object_ty,
-                self_: true,
-                using_xmm: bbctx.get_using_xmm(),
             });
             true
         }
