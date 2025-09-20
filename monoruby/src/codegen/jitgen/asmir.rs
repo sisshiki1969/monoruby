@@ -868,6 +868,7 @@ pub(super) enum AsmInst {
         reason: RecompileReason,
     },
     WriteBack(WriteBack),
+    WriteBackIfCaptured(WriteBack),
     HandleError(AsmError),
     ///
     /// Save floating point registers in use.

@@ -461,6 +461,10 @@ impl WriteBack {
     ) -> Self {
         Self { xmm, literal, r15 }
     }
+
+    fn is_empty(&self) -> bool {
+        self.xmm.is_empty() && self.literal.is_empty() && self.r15.is_none()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -849,6 +853,30 @@ impl JitModule {
     }
 
     ///
+    /// Test whether the current local frame is on the heap ("captured").
+    ///
+    /// if the frame is on the heap, jump to *label*.
+    ///
+    pub(super) fn branch_if_captured(&mut self, label: &DestLabel) {
+        monoasm! { &mut self.jit,
+            testb [r14 - (LFP_META - META_KIND)], (0b1000_0000_u8 as i8);
+            jnz label;
+        }
+    }
+
+    ///
+    /// Test whether the current local frame is on the stack.
+    ///
+    /// if the frame is not on the heap, jump to *label*.
+    ///
+    fn branch_if_not_captured(&mut self, label: &DestLabel) {
+        monoasm! { &mut self.jit,
+            testb [r14 - (LFP_META - META_KIND)], (0b1000_0000_u8 as i8);
+            jz label;
+        }
+    }
+
+    ///
     /// Generate a code which write back all xmm registers to corresponding stack slots.
     ///
     /// xmms are not deallocated.
@@ -867,6 +895,25 @@ impl JitModule {
         if let Some(slot) = wb.r15 {
             self.store_r15(slot);
         }
+    }
+
+    ///
+    /// Generate a code which write back all xmm registers to corresponding stack slots.
+    ///
+    /// xmms are not deallocated.
+    ///
+    /// ### destroy
+    ///
+    /// - rax, rcx
+    ///
+    pub(super) fn gen_write_back_if_captured(&mut self, wb: &WriteBack) {
+        if wb.is_empty() {
+            return;
+        }
+        let exit = self.jit.label();
+        self.branch_if_not_captured(&exit);
+        self.gen_write_back(wb);
+        self.bind_label(exit);
     }
 }
 

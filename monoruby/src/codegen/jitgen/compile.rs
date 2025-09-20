@@ -759,20 +759,20 @@ impl JitContext {
                 });
             }
             TraceIr::Ret(ret) => {
-                bbctx.write_back_locals(ir);
+                bbctx.write_back_locals_if_captured(ir);
                 bbctx.fetch(ir, ret, GP::Rax);
                 ir.push(AsmInst::Ret);
                 return CompileResult::Leave;
             }
             TraceIr::MethodRet(ret) => {
-                bbctx.write_back_locals(ir);
+                bbctx.write_back_locals_if_captured(ir);
                 bbctx.fetch(ir, ret, GP::Rax);
                 let pc = bbctx.pc();
                 ir.push(AsmInst::MethodRet(pc));
                 return CompileResult::Leave;
             }
             TraceIr::BlockBreak(ret) => {
-                bbctx.write_back_locals(ir);
+                bbctx.write_back_locals_if_captured(ir);
                 bbctx.fetch(ir, ret, GP::Rax);
                 ir.push(AsmInst::BlockBreak);
                 return CompileResult::Leave;

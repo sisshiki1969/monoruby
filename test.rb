@@ -1,12 +1,10 @@
 class C
-  def m
-  end
-  def f
-    m
+  def f(x,y)
+    x + y
   end
 end
 
 c = C.new
 100.times do
-  c.f
+  c.f(1,2)
 end

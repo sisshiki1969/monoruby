@@ -1237,6 +1237,12 @@ impl BBContext {
         self.release_locals();
     }
 
+    pub(super) fn write_back_locals_if_captured(&mut self, ir: &mut AsmIr) {
+        let wb = self.get_locals_write_back();
+        ir.push(AsmInst::WriteBackIfCaptured(wb));
+        //self.release_locals();
+    }
+
     ///
     /// ~~~text
     ///

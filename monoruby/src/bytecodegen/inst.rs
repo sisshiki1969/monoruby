@@ -309,8 +309,11 @@ impl BytecodeInst {
 
 #[derive(Clone, PartialEq, Default)]
 pub(crate) struct FnInitInfo {
+    /// number of registers (including arguments, locals and temps, and not `self`).
     pub reg_num: usize,
+    /// number of arguments (not including `self`).
     pub arg_num: usize,
+    /// stack offset (in 16 bytes unit) for local frame.
     pub stack_offset: usize,
 }
 

@@ -16,7 +16,7 @@ impl Codegen {
         );
 
         let l1 = self.jit.label();
-        self.branch_if_heap_frame(&l1);
+        self.branch_if_captured(&l1);
         // fill nil to temporary registers.
         let clear_len = reg_num - arg_num;
         if clear_len > 2 {
