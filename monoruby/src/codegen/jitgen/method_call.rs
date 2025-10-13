@@ -381,9 +381,7 @@ impl JitContext {
                     return CompileResult::Continue;
                 }
                 let evict = ir.new_evict();
-                let specializable = callsite.splat_pos.is_empty()
-                    && !store[fid].is_rest()
-                    && !(pos_num == 1 && store[fid].single_arg_expand())
+                let specializable = store[fid].is_simple_call(callsite)
                     && (bbctx.state(callsite.recv).is_concrete_value()
                         || (args..args + pos_num).any(|i| bbctx.state(i).is_concrete_value()));
                 if (if let Some(fid) = block_fid {

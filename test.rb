@@ -1,6 +1,6 @@
 class C
-  def f(x,y:10)
-    x + y
+  def f(*x,**y, &z)
+    
   end
 end
 

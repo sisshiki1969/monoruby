@@ -374,8 +374,8 @@ impl BBContext {
             });
             ir.handle_error(error);
         }
-
-        /*let CallSiteInfo {
+        // fill keyword arguments
+        let CallSiteInfo {
             kw_pos, kw_args, ..
         } = callsite;
         let mut callee_ofs = (callee.kw_reg_pos().0 as i32) * 8 + LFP_SELF;
@@ -391,7 +391,7 @@ impl BBContext {
                 }
             }
             callee_ofs += 8;
-        }*/
+        }
     }
 
     pub(super) fn set_binop_arguments(

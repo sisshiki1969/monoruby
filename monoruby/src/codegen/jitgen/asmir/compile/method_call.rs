@@ -335,9 +335,9 @@ impl Codegen {
         callee: &FuncInfo,
         error: &DestLabel,
     ) {
-        let meta = callee.meta();
-        self.copy_keyword_args(caller, callee);
+        //self.copy_keyword_args(caller, callee);
         if callee.kw_rest().is_some() || !caller.hash_splat_pos.is_empty() {
+            let meta = callee.meta();
             let offset = callee.get_offset();
             self.handle_hash_splat_kw_rest(callid, meta, offset, error);
         }
@@ -426,6 +426,7 @@ impl Codegen {
         }
     }
 
+    /*
     ///
     /// Handle keyword arguments
     ///
@@ -455,6 +456,7 @@ impl Codegen {
             callee_ofs += 8;
         }
     }
+    */
 
     ///
     /// Handle hash splat arguments and a keyword rest parameter.
