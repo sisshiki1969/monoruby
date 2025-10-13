@@ -1138,7 +1138,7 @@ impl Executor {
         } else if let Some(proc) = bh.try_proc() {
             Ok(proc)
         } else {
-            unimplemented!()
+            unimplemented!("bh: {bh:?}")
         }
     }
 

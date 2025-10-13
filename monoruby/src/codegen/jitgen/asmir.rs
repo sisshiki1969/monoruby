@@ -183,8 +183,14 @@ impl AsmIr {
         self.push(AsmInst::RegAnd(r, i));
     }
 
+    /// movq [rsp + (i)], R(r);
     pub(super) fn reg2rsp_offset(&mut self, r: GP, i: i32) {
         self.push(AsmInst::RegToRSPOffset(r, i));
+    }
+
+    /// movq [rsp + (i)], 0;
+    pub(super) fn zero2rsp_offset(&mut self, i: i32) {
+        self.push(AsmInst::ZeroToRSPOffset(i));
     }
 
     pub(super) fn i32torsp_offset(&mut self, val: i32, i: i32) {
@@ -689,9 +695,12 @@ pub(super) enum AsmInst {
     RegAdd(GP, i32),
     RegSub(GP, i32),
     RegAnd(GP, u64),
+    /// movq [rsp + (ofs)], R(r);
     RegToRSPOffset(GP, i32),
+    /// movq [rsp + (ofs)], 0;
+    ZeroToRSPOffset(i32),
+    /// movq [rsp + (ofs)], Value::integer(i).id();
     I32ToRSPOffset(i32, i32),
-
     RSPOffsetToArray(i32),
 
     XmmMove(Xmm, Xmm),

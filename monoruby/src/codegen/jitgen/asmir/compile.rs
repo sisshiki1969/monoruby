@@ -136,20 +136,25 @@ impl Codegen {
             AsmInst::RegToRSPOffset(r, ofs) => {
                 let r = r as u64;
                 monoasm!( &mut self.jit,
-                    movq [rsp + (ofs)], R(r);
+                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], R(r);
                 );
             }
-            AsmInst::RSPOffsetToArray(ofs) => {
+            AsmInst::ZeroToRSPOffset(ofs) => {
                 monoasm!( &mut self.jit,
-                    movq rdi, [rsp + (ofs)];
-                    movq rax, (to_array);
-                    call rax;
-                    movq [rsp + (ofs)], rax;
+                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], 0;
                 );
             }
             AsmInst::I32ToRSPOffset(i, ofs) => {
                 monoasm!( &mut self.jit,
-                    movq [rsp + (ofs)], (Value::i32(i).id());
+                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], (Value::i32(i).id());
+                );
+            }
+            AsmInst::RSPOffsetToArray(ofs) => {
+                monoasm!( &mut self.jit,
+                    movq rdi, [rsp + (ofs - RSP_LOCAL_FRAME)];
+                    movq rax, (to_array);
+                    call rax;
+                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], rax;
                 );
             }
 

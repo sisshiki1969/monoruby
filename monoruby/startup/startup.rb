@@ -14,8 +14,8 @@ class Object
     self
   end
 
-  #def initialize(*arg)
-  #end
+  def initialize(*arg)
+  end
 
   def tap
     yield self
@@ -23,13 +23,13 @@ class Object
   end
 end
 
-#class Class
-#  def new(...)
-#    o = allocate
-#    o.initialize(...)
-#    o
-#  end
-#end
+class Class
+  def new(...)
+    o = allocate
+    o.initialize(...)
+    o
+  end
+end
 
 module Comparable
   def ==(other)

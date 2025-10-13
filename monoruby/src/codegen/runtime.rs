@@ -138,6 +138,9 @@ pub(super) extern "C" fn block_arg(
             return Some(Value::nil());
         }
     };
+    if bh.get().is_nil() {
+        return Some(Value::nil());
+    }
     match vm.generate_proc(bh) {
         Ok(val) => Some(val.into()),
         Err(err) => {

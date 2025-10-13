@@ -136,7 +136,7 @@ pub struct JitContext {
     ///
     bytecode_top: BytecodePtrBase,
     ///
-    /// Type of compilation for 1this frame.
+    /// Type of compilation for this frame.
     ///
     jit_type: JitType,
     ///
