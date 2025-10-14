@@ -41,7 +41,7 @@ impl SlotContext {
         {
             for (i, arg) in args.iter().enumerate() {
                 match arg.link {
-                    LinkMode::ConcreteValue(_) => {
+                    LinkMode::C(_) => {
                         ctx.slots[i] = arg.clone();
                     }
                     _ => {}
@@ -129,16 +129,16 @@ impl SlotContext {
 
     fn clear(&mut self, slot: SlotId) {
         match self.mode(slot) {
-            LinkMode::Both(xmm) | LinkMode::Xmm(xmm) => {
+            LinkMode::Sf(xmm) | LinkMode::F(xmm) => {
                 assert!(self.xmm(xmm).contains(&slot));
                 self.xmm_remove(slot, xmm);
             }
-            LinkMode::ConcreteValue(_) => {}
-            LinkMode::Accumulator => {
+            LinkMode::C(_) => {}
+            LinkMode::G => {
                 assert_eq!(self.r15, Some(slot));
                 self.r15 = None;
             }
-            LinkMode::Stack => {}
+            LinkMode::S => {}
         }
     }
 
@@ -152,7 +152,7 @@ impl SlotContext {
             self.clear(slot);
             self.set_guarded(slot, Guarded::Value);
             self.is_used_mut(slot).kill();
-            self.set_mode(slot, LinkMode::Stack);
+            self.set_mode(slot, LinkMode::S);
         }
     }
 
@@ -161,7 +161,7 @@ impl SlotContext {
     ///
     fn set_stack(&mut self, slot: SlotId, guarded: Guarded) {
         self.clear(slot);
-        self.set_mode(slot, LinkMode::Stack);
+        self.set_mode(slot, LinkMode::S);
         self.set_guarded(slot, guarded);
     }
 
@@ -173,7 +173,7 @@ impl SlotContext {
         //    self.xmm_remove(slot, old_xmm);
         //}
         self.clear(slot);
-        self.set_mode(slot, LinkMode::Xmm(xmm));
+        self.set_mode(slot, LinkMode::F(xmm));
         self.xmm_add(slot, xmm);
         self.set_guarded(slot, Guarded::Float);
     }
@@ -186,7 +186,7 @@ impl SlotContext {
         //    self.xmm_remove(slot, old_xmm);
         //}
         self.clear(slot);
-        self.set_mode(slot, LinkMode::Both(xmm));
+        self.set_mode(slot, LinkMode::Sf(xmm));
         self.xmm_add(slot, xmm);
         self.set_guarded(slot, guarded);
     }
@@ -289,7 +289,7 @@ impl SlotContext {
         if let Some(slot) = slot.into() {
             let guarded = Guarded::from_concrete_value(v);
             self.discard(slot);
-            self.set_mode(slot, LinkMode::ConcreteValue(v));
+            self.set_mode(slot, LinkMode::C(v));
             self.set_guarded(slot, guarded);
         }
     }
@@ -319,7 +319,7 @@ impl SlotContext {
 
 impl SlotContext {
     pub fn is_symbol_literal(&self, slot: SlotId) -> Option<IdentId> {
-        if let LinkMode::ConcreteValue(v) = self.mode(slot) {
+        if let LinkMode::C(v) = self.mode(slot) {
             v.try_symbol()
         } else {
             None
@@ -327,7 +327,7 @@ impl SlotContext {
     }
 
     pub fn is_fixnum_literal(&self, slot: SlotId) -> Option<i64> {
-        if let LinkMode::ConcreteValue(v) = self.mode(slot) {
+        if let LinkMode::C(v) = self.mode(slot) {
             v.try_fixnum()
         } else {
             None
@@ -335,7 +335,7 @@ impl SlotContext {
     }
 
     pub fn is_float_literal(&self, slot: SlotId) -> Option<f64> {
-        if let LinkMode::ConcreteValue(v) = self.mode(slot) {
+        if let LinkMode::C(v) = self.mode(slot) {
             v.try_float()
         } else {
             None
@@ -343,7 +343,7 @@ impl SlotContext {
     }
 
     pub fn is_u16_literal(&self, slot: SlotId) -> Option<u16> {
-        if let LinkMode::ConcreteValue(v) = self.mode(slot) {
+        if let LinkMode::C(v) = self.mode(slot) {
             let i = v.try_fixnum()?;
             u16::try_from(i).ok()
         } else {
@@ -352,7 +352,7 @@ impl SlotContext {
     }
 
     pub fn is_u8_literal(&self, slot: SlotId) -> Option<u8> {
-        if let LinkMode::ConcreteValue(v) = self.mode(slot) {
+        if let LinkMode::C(v) = self.mode(slot) {
             let i = v.try_fixnum()?;
             u8::try_from(i).ok()
         } else {
@@ -367,8 +367,8 @@ impl SlotContext {
             false
         };
         match self.mode(slot) {
-            LinkMode::Xmm(_) => assert!(!b),
-            LinkMode::ConcreteValue(v) => assert_eq!(v.is_array_ty(), b),
+            LinkMode::F(_) => assert!(!b),
+            LinkMode::C(v) => assert_eq!(v.is_array_ty(), b),
             _ => {}
         };
         b
@@ -377,8 +377,8 @@ impl SlotContext {
     pub fn is_fixnum(&self, slot: SlotId) -> bool {
         let b = self.guarded(slot) == Guarded::Fixnum;
         match self.mode(slot) {
-            LinkMode::Xmm(_) => assert!(!b),
-            LinkMode::ConcreteValue(v) => assert_eq!(v.is_fixnum(), b),
+            LinkMode::F(_) => assert!(!b),
+            LinkMode::C(v) => assert_eq!(v.is_fixnum(), b),
             _ => {}
         };
         b
@@ -387,8 +387,8 @@ impl SlotContext {
     pub fn is_float(&self, slot: SlotId) -> bool {
         let b = self.guarded(slot) == Guarded::Float;
         match self.mode(slot) {
-            LinkMode::Xmm(_) => assert!(b),
-            LinkMode::ConcreteValue(v) => assert_eq!(v.is_float(), b),
+            LinkMode::F(_) => assert!(b),
+            LinkMode::C(v) => assert_eq!(v.is_float(), b),
             _ => {}
         };
         b
@@ -401,8 +401,8 @@ impl SlotContext {
             _ => {
                 let b = self.guarded(slot) == Guarded::Class(class);
                 match self.mode(slot) {
-                    LinkMode::Xmm(_) => assert!(!b),
-                    LinkMode::ConcreteValue(v) => assert_eq!(v.class() == class, b),
+                    LinkMode::F(_) => assert!(!b),
+                    LinkMode::C(v) => assert_eq!(v.class() == class, b),
                     _ => {}
                 };
                 b
@@ -412,9 +412,9 @@ impl SlotContext {
 
     pub fn is_truthy(&self, slot: SlotId) -> bool {
         match self.mode(slot) {
-            LinkMode::Xmm(_) => true,
-            LinkMode::Both(_) => true,
-            LinkMode::ConcreteValue(v) => v.as_bool(),
+            LinkMode::F(_) => true,
+            LinkMode::Sf(_) => true,
+            LinkMode::C(v) => v.as_bool(),
             _ => match self.guarded(slot) {
                 Guarded::Fixnum => true,
                 Guarded::Float => true,
@@ -426,9 +426,9 @@ impl SlotContext {
 
     pub fn is_falsy(&self, slot: SlotId) -> bool {
         match self.mode(slot) {
-            LinkMode::Xmm(_) => false,
-            LinkMode::Both(_) => false,
-            LinkMode::ConcreteValue(v) => !v.as_bool(),
+            LinkMode::F(_) => false,
+            LinkMode::Sf(_) => false,
+            LinkMode::C(v) => !v.as_bool(),
             _ => match self.guarded(slot) {
                 Guarded::Fixnum => false,
                 Guarded::Float => false,
@@ -440,9 +440,9 @@ impl SlotContext {
 
     pub fn is_nil(&self, slot: SlotId) -> bool {
         match self.mode(slot) {
-            LinkMode::Xmm(_) => false,
-            LinkMode::Both(_) => false,
-            LinkMode::ConcreteValue(v) => v.is_nil(),
+            LinkMode::F(_) => false,
+            LinkMode::Sf(_) => false,
+            LinkMode::C(v) => v.is_nil(),
             _ => match self.guarded(slot) {
                 Guarded::Fixnum => false,
                 Guarded::Float => false,
@@ -454,9 +454,9 @@ impl SlotContext {
 
     pub fn is_not_nil(&self, slot: SlotId) -> bool {
         match self.mode(slot) {
-            LinkMode::Xmm(_) => true,
-            LinkMode::Both(_) => true,
-            LinkMode::ConcreteValue(v) => !v.is_nil(),
+            LinkMode::F(_) => true,
+            LinkMode::Sf(_) => true,
+            LinkMode::C(v) => !v.is_nil(),
             _ => match self.guarded(slot) {
                 Guarded::Fixnum => true,
                 Guarded::Float => true,
@@ -497,7 +497,7 @@ impl SlotContext {
     ///
     pub(super) fn write_back_acc(&mut self, ir: &mut AsmIr, sp: SlotId) {
         if let Some(slot) = self.r15 {
-            self.set_mode(slot, LinkMode::Stack);
+            self.set_mode(slot, LinkMode::S);
             self.r15 = None;
             if slot < sp {
                 ir.acc2stack(slot);
@@ -506,7 +506,7 @@ impl SlotContext {
         assert!(!self
             .slots
             .iter()
-            .any(|SlotState { link, .. }| matches!(link, LinkMode::Accumulator)));
+            .any(|SlotState { link, .. }| matches!(link, LinkMode::G)));
         assert!(self.r15.is_none());
     }
 }
@@ -618,7 +618,7 @@ impl SlotContext {
         let mut guarded_r = None;
         for SlotState { link, guarded, .. } in self.slots.iter() {
             match link {
-                LinkMode::Xmm(x) | LinkMode::Both(x) => {
+                LinkMode::F(x) | LinkMode::Sf(x) => {
                     if *x == l {
                         if let Some(g) = guarded_l {
                             assert_eq!(&g, guarded);
@@ -638,7 +638,7 @@ impl SlotContext {
         self.slots
             .iter_mut()
             .for_each(|SlotState { link, guarded, .. }| match link {
-                LinkMode::Both(x) | LinkMode::Xmm(x) => {
+                LinkMode::Sf(x) | LinkMode::F(x) => {
                     if *x == l {
                         *x = r;
                         *guarded = guarded_r.unwrap();
@@ -647,7 +647,7 @@ impl SlotContext {
                         *guarded = guarded_l.unwrap();
                     }
                 }
-                LinkMode::Stack | LinkMode::ConcreteValue(_) | LinkMode::Accumulator => {}
+                LinkMode::S | LinkMode::C(_) | LinkMode::G => {}
             });
     }
 
@@ -661,7 +661,7 @@ impl SlotContext {
                 } else {
                     let v: Vec<_> = self.xmm[i]
                         .iter()
-                        .filter(|reg| f(**reg) && matches!(self.mode(**reg), LinkMode::Xmm(_)))
+                        .filter(|reg| f(**reg) && matches!(self.mode(**reg), LinkMode::F(_)))
                         .cloned()
                         .collect();
                     if v.is_empty() {
@@ -679,9 +679,7 @@ impl SlotContext {
             .iter()
             .enumerate()
             .filter_map(|(idx, SlotState { link, .. })| match link {
-                LinkMode::ConcreteValue(v) if f(SlotId(idx as u16)) => {
-                    Some((*v, SlotId(idx as u16)))
-                }
+                LinkMode::C(v) if f(SlotId(idx as u16)) => Some((*v, SlotId(idx as u16))),
                 _ => None,
             })
             .collect()
@@ -788,7 +786,7 @@ impl std::fmt::Debug for SlotState {
 
 impl SlotState {
     pub(super) fn is_concrete_value(&self) -> bool {
-        matches!(self.link, LinkMode::ConcreteValue(_))
+        matches!(self.link, LinkMode::C(_))
     }
 }
 
@@ -961,25 +959,25 @@ impl BBContext {
             unreachable!("{:?} >= {:?} in write_back_slot()", slot, self.sp);
         };
         match self.mode(slot) {
-            LinkMode::Xmm(xmm) => {
+            LinkMode::F(xmm) => {
                 // Xmm -> Both
                 self.set_both_float(slot, xmm);
                 ir.xmm2stack(xmm, slot);
             }
-            LinkMode::ConcreteValue(v) => {
+            LinkMode::C(v) => {
                 // Literal -> Stack
-                self.set_mode(slot, LinkMode::Stack);
+                self.set_mode(slot, LinkMode::S);
                 self.set_guarded(slot, Guarded::from_concrete_value(v));
                 ir.push(AsmInst::LitToStack(v, slot));
             }
-            LinkMode::Accumulator => {
+            LinkMode::G => {
                 // R15 -> Stack
                 ir.acc2stack(slot);
                 assert_eq!(self.r15, Some(slot));
                 self.r15 = None;
-                self.set_mode(slot, LinkMode::Stack);
+                self.set_mode(slot, LinkMode::S);
             }
-            LinkMode::Both(_) | LinkMode::Stack => {}
+            LinkMode::Sf(_) | LinkMode::S => {}
         }
     }
 
@@ -1020,23 +1018,23 @@ impl BBContext {
         }
         let guarded = self.guarded(src);
         match self.mode(src) {
-            LinkMode::Xmm(x) => {
+            LinkMode::F(x) => {
                 self.def_xmm(dst, x);
             }
-            LinkMode::Both(x) => {
+            LinkMode::Sf(x) => {
                 ir.stack2reg(src, GP::Rax);
                 ir.reg2stack(GP::Rax, dst);
                 self.def_both(dst, x, guarded);
             }
-            LinkMode::Stack => {
+            LinkMode::S => {
                 ir.stack2reg(src, GP::Rax);
                 ir.reg2stack(GP::Rax, dst);
                 self.def_stack(dst, guarded);
             }
-            LinkMode::ConcreteValue(v) => {
+            LinkMode::C(v) => {
                 self.def_concrete_value(dst, v);
             }
-            LinkMode::Accumulator => {
+            LinkMode::G => {
                 ir.reg2stack(GP::R15, src);
                 self.set_stack(src, guarded);
                 self.def_acc(ir, dst, guarded)
@@ -1056,7 +1054,7 @@ impl BBContext {
         if let Some(slot) = slot.into() {
             self.discard(slot);
             self.writeback_acc(ir);
-            self.set_mode(slot, LinkMode::Accumulator);
+            self.set_mode(slot, LinkMode::G);
             self.set_guarded(slot, guarded);
             self.r15 = Some(slot);
         }
@@ -1067,15 +1065,13 @@ impl BBContext {
     ///
     pub(super) fn xmm_write(&mut self, slot: SlotId) -> Xmm {
         match self.mode(slot) {
-            LinkMode::Xmm(x) if self.xmm(x).len() == 1 => {
+            LinkMode::F(x) if self.xmm(x).len() == 1 => {
                 assert_eq!(slot, self.xmm(x)[0]);
                 x
             }
-            LinkMode::Xmm(_)
-            | LinkMode::Both(_)
-            | LinkMode::Stack
-            | LinkMode::ConcreteValue(_)
-            | LinkMode::Accumulator => self.def_new_xmm(slot),
+            LinkMode::F(_) | LinkMode::Sf(_) | LinkMode::S | LinkMode::C(_) | LinkMode::G => {
+                self.def_new_xmm(slot)
+            }
         }
     }
 
@@ -1098,12 +1094,12 @@ impl BBContext {
     ) {
         let guarded = target.guarded(slot);
         match (self.mode(slot), target.mode(slot)) {
-            (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
+            (LinkMode::F(l), LinkMode::F(r)) => {
                 if l != r {
                     self.to_xmm(ir, slot, l, r);
                 }
             }
-            (LinkMode::Xmm(l), LinkMode::Both(r)) => {
+            (LinkMode::F(l), LinkMode::Sf(r)) => {
                 ir.xmm2stack(l, slot);
                 if l == r {
                     // Xmm(l) -> Both(l)
@@ -1125,17 +1121,17 @@ impl BBContext {
                     self.to_xmm(ir, slot, l, r);
                 }
             }*/
-            (LinkMode::Both(l), LinkMode::Both(r)) => {
+            (LinkMode::Sf(l), LinkMode::Sf(r)) => {
                 if l != r {
                     // Both(l) -> Both(r)
                     self.to_both(ir, slot, l, r, guarded);
                 }
             }
-            (LinkMode::Both(l), LinkMode::Stack) => {
+            (LinkMode::Sf(l), LinkMode::S) => {
                 self.xmm_remove(slot, l);
-                self.set_mode(slot, LinkMode::Stack);
+                self.set_mode(slot, LinkMode::S);
             }
-            (LinkMode::Stack, LinkMode::Stack) => {
+            (LinkMode::S, LinkMode::S) => {
                 if let Some(class) = guarded.class() {
                     let deopt = ir.new_deopt_with_pc(self, pc + 1);
                     self.guard_class_stack_slot(ir, slot, class, deopt);
@@ -1147,8 +1143,8 @@ impl BBContext {
                 ir.push(AsmInst::NumToXmm(GP::Rax, r, deopt));
                 self.set_both(slot, r, guarded);
             }*/
-            (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r)) if l == r => {}
-            (LinkMode::ConcreteValue(l), LinkMode::Xmm(r)) => {
+            (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
+            (LinkMode::C(l), LinkMode::F(r)) => {
                 if let Some(f) = l.try_float() {
                     self.set_xmm(slot, r);
                     ir.f64toxmm(f, r);
@@ -1156,7 +1152,7 @@ impl BBContext {
                     unreachable!()
                 }
             }
-            (LinkMode::ConcreteValue(l), LinkMode::Both(r)) => {
+            (LinkMode::C(l), LinkMode::Sf(r)) => {
                 if let Some(f) = l.try_float() {
                     self.set_both_float(slot, r);
                     ir.f64toxmm(f, r);
@@ -1166,7 +1162,7 @@ impl BBContext {
                     unreachable!()
                 }
             }
-            (_, LinkMode::Stack) => {
+            (_, LinkMode::S) => {
                 self.write_back_slot(ir, slot);
             }
             (l, r) => unreachable!("src:{:?} target:{:?}", l, r),
@@ -1273,16 +1269,14 @@ impl BBContext {
                 self.unset_class_version_guard();
             }
             match (self.mode(i), other.mode(i)) {
-                (LinkMode::Xmm(_), LinkMode::Xmm(_)) => {}
-                (LinkMode::Xmm(_), LinkMode::ConcreteValue(r)) if r.is_float() => {}
-                (LinkMode::Xmm(l), LinkMode::Both(_))
-                | (LinkMode::Both(l), LinkMode::Both(_) | LinkMode::Xmm(_)) => {
+                (LinkMode::F(_), LinkMode::F(_)) => {}
+                (LinkMode::F(_), LinkMode::C(r)) if r.is_float() => {}
+                (LinkMode::F(l), LinkMode::Sf(_))
+                | (LinkMode::Sf(l), LinkMode::Sf(_) | LinkMode::F(_)) => {
                     let guarded = self.guarded(i).union(&other.guarded(i));
                     self.set_both(i, l, guarded);
                 }
-                (LinkMode::Both(l), LinkMode::ConcreteValue(r))
-                    if r.is_float() || r.is_fixnum() =>
-                {
+                (LinkMode::Sf(l), LinkMode::C(r)) if r.is_float() || r.is_fixnum() => {
                     let guarded = self.guarded(i).union(&other.guarded(i));
                     self.set_both(i, l, guarded)
                 }
@@ -1290,19 +1284,15 @@ impl BBContext {
                     let guarded = self.guarded(i).union(&other.guarded(i));
                     self.set_both(i, l, guarded)
                 }*/
-                (LinkMode::ConcreteValue(l), LinkMode::Xmm(_)) if l.is_float() => {
+                (LinkMode::C(l), LinkMode::F(_)) if l.is_float() => {
                     self.set_new_xmm(i);
                 }
-                (LinkMode::ConcreteValue(l), LinkMode::Both(_))
-                    if l.is_float() || l.is_fixnum() =>
-                {
+                (LinkMode::C(l), LinkMode::Sf(_)) if l.is_float() || l.is_fixnum() => {
                     let guarded = self.guarded(i).union(&other.guarded(i));
                     self.set_new_both(i, guarded);
                 }
-                (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r)) if l == r => {}
-                (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r))
-                    if l.is_float() && r.is_float() =>
-                {
+                (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
+                (LinkMode::C(l), LinkMode::C(r)) if l.is_float() && r.is_float() => {
                     self.set_new_xmm(i);
                 }
                 _ => {

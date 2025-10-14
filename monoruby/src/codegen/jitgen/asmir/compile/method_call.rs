@@ -123,11 +123,15 @@ impl Codegen {
         recv_class: ClassId,
         error: &DestLabel,
         outer_lfp: Option<Lfp>,
+        simple: bool,
     ) -> CodePtr {
         let caller = &store[callid];
         let callee = &store[callee_fid];
         let (meta, codeptr, pc) = callee.get_data();
         self.setup_method_frame(meta, caller, outer_lfp);
+        if !simple {
+            self.copy_keyword_args(caller, callee);
+        }
         self.setup_keyword_args(callid, caller, callee, error);
         self.do_call(store, callee, codeptr, recv_class, pc)
     }
@@ -144,11 +148,15 @@ impl Codegen {
         entry_label: DestLabel,
         patch_point: Option<DestLabel>,
         error: &DestLabel,
+        simple: bool,
     ) -> CodePtr {
         let caller = &store[callid];
         let callee = &store[callee_fid];
         let meta = callee.meta();
         self.setup_method_frame(meta, caller, None);
+        if !simple {
+            self.copy_keyword_args(caller, callee);
+        }
         self.setup_keyword_args(callid, caller, callee, error);
         self.do_specialized_call(entry_label, patch_point)
     }
@@ -219,12 +227,16 @@ impl Codegen {
         outer: usize,
         entry: DestLabel,
         error: &DestLabel,
+        simple: bool,
     ) -> CodePtr {
         let caller = &store[callid];
         let block_fid = store[iseq].func_id();
         let callee = &store[block_fid];
         let meta = callee.meta();
         self.setup_yield_frame(meta, outer);
+        if !simple {
+            self.copy_keyword_args(caller, callee);
+        }
         self.setup_keyword_args(callid, caller, callee, error);
         self.do_specialized_call(entry, None)
     }
@@ -426,7 +438,6 @@ impl Codegen {
         }
     }
 
-    /*
     ///
     /// Handle keyword arguments
     ///
@@ -456,7 +467,6 @@ impl Codegen {
             callee_ofs += 8;
         }
     }
-    */
 
     ///
     /// Handle hash splat arguments and a keyword rest parameter.

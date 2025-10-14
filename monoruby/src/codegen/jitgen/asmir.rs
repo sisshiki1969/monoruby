@@ -183,18 +183,19 @@ impl AsmIr {
         self.push(AsmInst::RegAnd(r, i));
     }
 
-    /// movq [rsp + (i)], R(r);
-    pub(super) fn reg2rsp_offset(&mut self, r: GP, i: i32) {
-        self.push(AsmInst::RegToRSPOffset(r, i));
+    /// movq [rsp + (ofs)], R(r);
+    pub(super) fn reg2rsp_offset(&mut self, r: GP, ofs: i32) {
+        self.push(AsmInst::RegToRSPOffset(r, ofs));
     }
 
-    /// movq [rsp + (i)], 0;
-    pub(super) fn zero2rsp_offset(&mut self, i: i32) {
-        self.push(AsmInst::ZeroToRSPOffset(i));
+    /// movq [rsp + (ofs)], 0;
+    pub(super) fn zero2rsp_offset(&mut self, ofs: i32) {
+        self.push(AsmInst::ZeroToRSPOffset(ofs));
     }
 
-    pub(super) fn i32torsp_offset(&mut self, val: i32, i: i32) {
-        self.push(AsmInst::I32ToRSPOffset(val, i));
+    /// movq [rsp + (ofs)], (i);
+    pub(super) fn u64torsp_offset(&mut self, i: u64, ofs: i32) {
+        self.push(AsmInst::U64ToRSPOffset(i, ofs));
     }
 
     pub(crate) fn reg2stack(&mut self, src: GP, dst: impl Into<Option<SlotId>>) {
@@ -689,7 +690,6 @@ pub(super) enum AsmInst {
     /// move reg to stack
     StackToReg(SlotId, GP),
     LitToReg(Value, GP),
-    I32ToReg(i32, GP),
     /// move reg to reg
     RegMove(GP, GP),
     RegAdd(GP, i32),
@@ -699,8 +699,8 @@ pub(super) enum AsmInst {
     RegToRSPOffset(GP, i32),
     /// movq [rsp + (ofs)], 0;
     ZeroToRSPOffset(i32),
-    /// movq [rsp + (ofs)], Value::integer(i).id();
-    I32ToRSPOffset(i32, i32),
+    /// movq [rsp + (ofs)], (i);
+    U64ToRSPOffset(u64, i32),
     RSPOffsetToArray(i32),
 
     XmmMove(Xmm, Xmm),
@@ -942,6 +942,7 @@ pub(super) enum AsmInst {
         error: AsmError,
         evict: AsmEvict,
         outer_lfp: Option<Lfp>,
+        simple: bool,
     },
     ///
     /// Send specialized method
@@ -960,6 +961,7 @@ pub(super) enum AsmInst {
         patch_point: Option<JitLabel>,
         error: AsmError,
         evict: AsmEvict,
+        simple: bool,
     },
     BinopCached {
         recv_class: ClassId,
@@ -979,6 +981,7 @@ pub(super) enum AsmInst {
         entry: JitLabel,
         error: AsmError,
         evict: AsmEvict,
+        simple: bool,
     },
     ///
     /// Imnmediate eviction.

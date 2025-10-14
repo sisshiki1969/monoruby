@@ -103,19 +103,19 @@ impl JitContext {
         bbctx.set_guard_from(&target);
         for (slot, coerced) in use_set {
             match target.mode(slot) {
-                LinkMode::Stack => {}
-                LinkMode::ConcreteValue(v) => {
+                LinkMode::S => {}
+                LinkMode::C(v) => {
                     if v.is_float() {
                         bbctx.def_new_xmm(slot);
                     }
                 }
-                LinkMode::Xmm(r) if !coerced => {
+                LinkMode::F(r) if !coerced => {
                     bbctx.def_xmm(slot, r);
                 }
-                LinkMode::Both(r) | LinkMode::Xmm(r) => {
+                LinkMode::Sf(r) | LinkMode::F(r) => {
                     bbctx.def_both(slot, r, Guarded::Value);
                 }
-                LinkMode::Accumulator => unreachable!(),
+                LinkMode::G => unreachable!(),
             };
         }
         #[cfg(feature = "jit-debug")]

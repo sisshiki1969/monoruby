@@ -331,11 +331,4 @@ impl BytecodePtr {
             (p.add(28) as *mut u32).write(version);
         }
     }
-
-    pub fn write_method_cache_version(self, version: u32) {
-        let p = self.as_ptr() as *mut u8;
-        unsafe {
-            (p.add(28) as *mut u32).write(version);
-        }
-    }
 }

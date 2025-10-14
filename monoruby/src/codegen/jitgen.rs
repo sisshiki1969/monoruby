@@ -285,153 +285,6 @@ impl BBContext {
         }
     }
 
-    ///
-    /// Set positional arguments for callee.
-    ///
-    pub(super) fn set_arguments(
-        &mut self,
-        store: &Store,
-        ir: &mut AsmIr,
-        callsite: &CallSiteInfo,
-        callee_fid: FuncId,
-    ) {
-        let callee = &store[callee_fid];
-        let args = callsite.args;
-        let pos_num = callsite.pos_num;
-        let kw_pos = callsite.kw_pos;
-        let kw_num = callsite.kw_len();
-        if callee.is_simple_call(callsite) {
-            let stack_offset =
-                if (args..args + pos_num).any(|reg| matches!(self.mode(reg), LinkMode::Xmm(_))) {
-                    callee.get_offset() as i32
-                } else {
-                    0
-                };
-            ir.reg_sub(GP::Rsp, stack_offset);
-            // write back keyword arguments.
-            for arg in kw_pos..kw_pos + kw_num {
-                self.write_back_slot(ir, arg);
-            }
-            // write back block argument.
-            if let Some(block_arg) = callsite.block_arg {
-                self.write_back_slot(ir, block_arg);
-            }
-
-            // fetch positional arguments.
-            let (filled_req, filled_opt, filled_post) = callee.apply_args(pos_num);
-
-            // fill required params.
-            for i in 0..filled_req {
-                let reg = args + i;
-                let offset = stack_offset - (LFP_ARG0 + (8 * i) as i32);
-                self.fetch_for_callee(ir, reg, offset);
-            }
-            if filled_req != callee.req_num() {
-                ir.push(AsmInst::I32ToReg(NIL_VALUE as _, GP::Rax));
-                for i in filled_req..callee.req_num() {
-                    let offset = stack_offset - (LFP_ARG0 + (8 * i) as i32);
-                    ir.reg2rsp_offset(GP::Rax, offset);
-                }
-            }
-
-            // fill optional params.
-            for i in callee.req_num()..callee.req_num() + filled_opt {
-                let reg = args + filled_req + (i - callee.req_num());
-                let offset = stack_offset - (LFP_ARG0 + (8 * i) as i32);
-                self.fetch_for_callee(ir, reg, offset);
-            }
-            if filled_opt != callee.opt_num() {
-                ir.push(AsmInst::I32ToReg(0, GP::Rax));
-                for i in callee.req_num() + filled_opt..callee.reqopt_num() {
-                    let offset = stack_offset - (LFP_ARG0 + (8 * i) as i32);
-                    ir.reg2rsp_offset(GP::Rax, offset);
-                }
-            }
-
-            // fill post params.
-            let start = callee.reqopt_num() + callee.is_rest() as usize;
-            for i in start..start + filled_post {
-                let reg = args + filled_req + filled_opt + (i - start);
-                let offset = stack_offset - (LFP_ARG0 + (8 * i) as i32);
-                self.fetch_for_callee(ir, reg, offset);
-            }
-            if filled_post != callee.post_num() {
-                ir.push(AsmInst::I32ToReg(NIL_VALUE as _, GP::Rax));
-                for i in start + filled_post..start + callee.post_num() {
-                    let offset = stack_offset - (LFP_ARG0 + (8 * i) as i32);
-                    ir.reg2rsp_offset(GP::Rax, offset);
-                }
-            }
-
-            ir.reg_add(GP::Rsp, stack_offset);
-        } else {
-            self.write_back_args(ir, callsite);
-
-            let error = ir.new_error(self);
-            ir.push(AsmInst::SetArguments {
-                callid: callsite.id,
-                callee_fid,
-            });
-            ir.handle_error(error);
-        }
-        // fill keyword arguments
-        let CallSiteInfo {
-            kw_pos, kw_args, ..
-        } = callsite;
-        let mut callee_ofs = (callee.kw_reg_pos().0 as i32) * 8 + LFP_SELF;
-        for param_name in callee.kw_names() {
-            match kw_args.get(param_name) {
-                Some(i) => {
-                    let slot = *kw_pos + *i;
-                    ir.stack2reg(slot, GP::Rax);
-                    ir.reg2rsp_offset(GP::Rax, -callee_ofs);
-                }
-                None => {
-                    ir.zero2rsp_offset(-callee_ofs);
-                }
-            }
-            callee_ofs += 8;
-        }
-    }
-
-    pub(super) fn set_binop_arguments(
-        &mut self,
-        store: &Store,
-        ir: &mut AsmIr,
-        callee_fid: FuncId,
-        mode: OpMode,
-    ) {
-        let callee = &store[callee_fid];
-        // callee.req_num() <= 1 at this point.
-        // callee.is_rest() || callee.max_positional_args() >= 1 at this point.
-        let xmm_flag = match mode {
-            OpMode::RR(_, rhs) | OpMode::IR(_, rhs) => {
-                matches!(self.mode(rhs), LinkMode::Xmm(_))
-            }
-            OpMode::RI(_, _) => false,
-        };
-        let ofs = if xmm_flag || callee.is_rest() {
-            (RSP_LOCAL_FRAME + LFP_ARG0 + 16 as i32) & !0xf
-        } else {
-            0
-        };
-
-        ir.reg_sub(GP::Rsp, ofs);
-        let offset = ofs - LFP_ARG0;
-        self.fetch_rhs_for_callee(ir, mode, offset);
-        if 1 < callee.max_positional_args() {
-            ir.push(AsmInst::I32ToReg(0, GP::Rax));
-            for i in 1..callee.max_positional_args() {
-                let offset = ofs - (LFP_ARG0 as i32 + (8 * i) as i32);
-                ir.reg2rsp_offset(GP::Rax, offset);
-            }
-        }
-        if callee.is_rest() {
-            ir.push(AsmInst::RSPOffsetToArray(offset));
-        }
-        ir.reg_add(GP::Rsp, ofs);
-    }
-
     pub(super) fn generic_unop(&mut self, ir: &mut AsmIr, func: UnaryOpFn) {
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self);
@@ -529,28 +382,28 @@ impl UsingXmm {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 enum LinkMode {
     ///
-    /// No linkage with xmm regiter.
+    /// On the stack slot.
     ///
     #[default]
-    Stack,
+    S,
     ///
-    /// Linked to an xmm register and we can read and write.
+    /// On the floating point register (xmm).
     ///
-    /// mutation of the corresponding xmm register (lazily) affects the stack slot.
+    /// mutation of the corresponding FPR lazily affects the stack slot.
     ///
-    Xmm(Xmm),
+    F(Xmm),
     ///
-    /// Linked to an xmm register but we can only read to keep consistency.
+    /// On the stack slot and on the floating point register (xmm) which is read-only.
     ///
-    Both(Xmm),
+    Sf(Xmm),
     ///
-    /// Concrete value..
+    /// Concrete value.
     ///
-    ConcreteValue(Value),
+    C(Value),
     ///
-    /// On accumulator (r15).
+    /// On the general-purpose register (r15).
     ///
-    Accumulator,
+    G,
 }
 
 impl Codegen {

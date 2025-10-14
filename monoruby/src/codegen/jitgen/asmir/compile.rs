@@ -98,12 +98,6 @@ impl Codegen {
                     movq R(r), (v.id());
                 );
             }
-            AsmInst::I32ToReg(i, r) => {
-                let r = r as u64;
-                monoasm!( &mut self.jit,
-                    movl R(r), (i);
-                );
-            }
             AsmInst::RegMove(src, dst) => {
                 let src = src as u64;
                 let dst = dst as u64;
@@ -144,9 +138,9 @@ impl Codegen {
                     movq [rsp + (ofs - RSP_LOCAL_FRAME)], 0;
                 );
             }
-            AsmInst::I32ToRSPOffset(i, ofs) => {
+            AsmInst::U64ToRSPOffset(i, ofs) => {
                 monoasm!( &mut self.jit,
-                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], (Value::i32(i).id());
+                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], (i);
                 );
             }
             AsmInst::RSPOffsetToArray(ofs) => {
@@ -392,10 +386,12 @@ impl Codegen {
                 error,
                 evict,
                 outer_lfp,
+                simple,
             } => {
                 let error = &labels[error];
-                let return_addr =
-                    self.gen_send(store, callid, callee_fid, recv_class, error, outer_lfp);
+                let return_addr = self.gen_send(
+                    store, callid, callee_fid, recv_class, error, outer_lfp, simple,
+                );
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
             AsmInst::SendSpecialized {
@@ -405,6 +401,7 @@ impl Codegen {
                 patch_point,
                 error,
                 evict,
+                simple,
             } => {
                 let error = &labels[error];
                 let patch_point = patch_point.map(|label| ctx.resolve_label(&mut self.jit, label));
@@ -416,6 +413,7 @@ impl Codegen {
                     entry_label,
                     patch_point,
                     error,
+                    simple,
                 );
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
@@ -446,11 +444,19 @@ impl Codegen {
                 entry,
                 error,
                 evict,
+                simple,
             } => {
                 let error = &labels[error];
                 let block_entry = ctx.resolve_label(&mut self.jit, entry);
-                let return_addr =
-                    self.gen_yield_specialized(store, callid, iseq, outer, block_entry, error);
+                let return_addr = self.gen_yield_specialized(
+                    store,
+                    callid,
+                    iseq,
+                    outer,
+                    block_entry,
+                    error,
+                    simple,
+                );
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
 

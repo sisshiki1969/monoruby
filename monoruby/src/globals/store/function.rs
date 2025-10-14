@@ -1011,7 +1011,7 @@ impl FuncInfo {
     /// - no single argument expansion in block call
     /// - no extra positional argument
     /// - no rest param
-    /// - required + post <= (the number of positional arguments) <= required + optional + post
+    /// - if method_call, required + post <= (the number of positional arguments) <= required + optional + post
     ///
     pub(crate) fn is_simple_call(&self, callsite: &CallSiteInfo) -> bool {
         let pos_num = callsite.pos_num;
