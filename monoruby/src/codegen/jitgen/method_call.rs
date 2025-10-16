@@ -149,7 +149,7 @@ impl JitContext {
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
-        bbctx.rax2acc(ir, dst);
+        bbctx.def_rax2acc(ir, dst);
         bbctx.immediate_evict(ir, evict);
         CompileResult::Continue
     }
@@ -263,7 +263,7 @@ impl JitContext {
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
-        bbctx.rax2acc(ir, dst);
+        bbctx.def_rax2acc(ir, dst);
         bbctx.immediate_evict(ir, evict);
     }
 
@@ -322,7 +322,7 @@ impl JitContext {
                         });
                     }
                 }
-                bbctx.reg2acc(ir, GP::R15, dst);
+                bbctx.def_reg2acc(ir, GP::R15, dst);
                 return CompileResult::Continue;
             }
             FuncKind::AttrWriter { ivar_name } => {
@@ -352,7 +352,7 @@ impl JitContext {
                         is_object_ty,
                     });
                 }
-                bbctx.rax2acc(ir, dst);
+                bbctx.def_rax2acc(ir, dst);
                 return CompileResult::Continue;
             }
             FuncKind::Builtin { .. } => {
@@ -376,7 +376,6 @@ impl JitContext {
             }
             FuncKind::ISeq(iseq) => {
                 if let Some(v) = store[iseq].is_const_fn() {
-                    bbctx.discard(dst);
                     bbctx.def_concrete_value(dst, v);
                     return CompileResult::Continue;
                 }
@@ -443,7 +442,7 @@ impl JitContext {
                 evict
             }
         };
-        bbctx.rax2acc(ir, dst);
+        bbctx.def_rax2acc(ir, dst);
         bbctx.immediate_evict(ir, evict);
         bbctx.unset_class_version_guard();
         CompileResult::Continue
@@ -530,7 +529,9 @@ impl BBContext {
         let using_xmm = self.get_using_xmm();
         ir.xmm_save(using_xmm);
         let simple = self.set_arguments(store, ir, callsite, callee_fid);
-        self.discard(callsite.dst);
+        if let Some(dst) = callsite.dst {
+            self.def_stack(dst);
+        }
         self.clear_above_next_sp();
         let error = ir.new_error(self);
         self.writeback_acc(ir);
@@ -566,7 +567,9 @@ impl BBContext {
         let using_xmm = self.get_using_xmm();
         ir.xmm_save(using_xmm);
         let simple = self.set_arguments(store, ir, callsite, callee_fid);
-        self.discard(callsite.dst);
+        if let Some(dst) = callsite.dst {
+            self.def_stack(dst);
+        }
         self.clear_above_next_sp();
         let error = ir.new_error(self);
         self.writeback_acc(ir);
@@ -600,7 +603,7 @@ impl BBContext {
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
-        self.rax2acc(ir, dst);
+        self.def_rax2acc(ir, dst);
         self.immediate_evict(ir, evict);
         self.unset_class_version_guard();
     }

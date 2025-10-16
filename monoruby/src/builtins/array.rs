@@ -193,7 +193,7 @@ fn array_allocate(
         }
     });
 
-    bb.reg2acc(ir, GP::Rax, dst);
+    bb.def_reg2acc(ir, GP::Rax, dst);
     true
 }
 
@@ -285,7 +285,7 @@ fn array_size(
         }
     });
 
-    bb.reg2acc_fixnum(ir, GP::Rax, dst);
+    bb.def_reg2acc_fixnum(ir, GP::Rax, dst);
     true
 }
 
@@ -326,7 +326,7 @@ fn array_clone(
         }
     });
     ir.xmm_restore(using_xmm);
-    bb.reg2acc_class(ir, GP::Rax, dst, class_id);
+    bb.def_reg2acc_class(ir, GP::Rax, dst, class_id);
     true
 }
 
@@ -674,7 +674,7 @@ fn array_shl(
         );
     });
     ir.xmm_restore(using_xmm);
-    bb.reg2acc_class(ir, GP::Rax, dst, recv_class);
+    bb.def_reg2acc_class(ir, GP::Rax, dst, recv_class);
     true
 }
 

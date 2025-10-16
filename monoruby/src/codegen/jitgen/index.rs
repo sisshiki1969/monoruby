@@ -17,7 +17,7 @@ impl BBContext {
             self.fetch_fixnum(ir, idx, GP::Rsi, deopt);
             ir.array_index();
         }
-        self.rax2acc(ir, dst);
+        self.def_rax2acc(ir, dst);
     }
 
     pub(super) fn array_integer_index_assign(

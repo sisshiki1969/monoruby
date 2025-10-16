@@ -246,7 +246,7 @@ fn hash_index(
     });
     let error = ir.new_error(bb);
     ir.handle_error(error);
-    bb.rax2acc(ir, callsite.dst);
+    bb.def_rax2acc(ir, callsite.dst);
     true
 }
 

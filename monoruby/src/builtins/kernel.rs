@@ -120,7 +120,7 @@ fn kernel_nil(
                 cmoveqq rax, rsi;
             }
         });
-        bb.rax2acc(ir, dst);
+        bb.def_rax2acc(ir, dst);
     }
     true
 }
@@ -155,7 +155,7 @@ fn kernel_block_given(
             exit:
             }
         });
-        bb.rax2acc(ir, dst);
+        bb.def_rax2acc(ir, dst);
     }
 
     true

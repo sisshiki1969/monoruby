@@ -129,10 +129,7 @@ impl Codegen {
         let callee = &store[callee_fid];
         let (meta, codeptr, pc) = callee.get_data();
         self.setup_method_frame(meta, caller, outer_lfp);
-        if !simple {
-            self.copy_keyword_args(caller, callee);
-        }
-        self.setup_keyword_args(callid, caller, callee, error);
+        self.setup_keyword_args(callid, caller, callee, error, simple);
         self.do_call(store, callee, codeptr, recv_class, pc)
     }
 
@@ -154,10 +151,7 @@ impl Codegen {
         let callee = &store[callee_fid];
         let meta = callee.meta();
         self.setup_method_frame(meta, caller, None);
-        if !simple {
-            self.copy_keyword_args(caller, callee);
-        }
-        self.setup_keyword_args(callid, caller, callee, error);
+        self.setup_keyword_args(callid, caller, callee, error, simple);
         self.do_specialized_call(entry_label, patch_point)
     }
 
@@ -234,10 +228,7 @@ impl Codegen {
         let callee = &store[block_fid];
         let meta = callee.meta();
         self.setup_yield_frame(meta, outer);
-        if !simple {
-            self.copy_keyword_args(caller, callee);
-        }
-        self.setup_keyword_args(callid, caller, callee, error);
+        self.setup_keyword_args(callid, caller, callee, error, simple);
         self.do_specialized_call(entry, None)
     }
 
@@ -346,8 +337,11 @@ impl Codegen {
         caller: &CallSiteInfo,
         callee: &FuncInfo,
         error: &DestLabel,
+        simple: bool,
     ) {
-        //self.copy_keyword_args(caller, callee);
+        if !simple {
+            self.copy_keyword_args(caller, callee);
+        }
         if callee.kw_rest().is_some() || !caller.hash_splat_pos.is_empty() {
             let meta = callee.meta();
             let offset = callee.get_offset();

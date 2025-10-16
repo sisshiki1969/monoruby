@@ -411,7 +411,7 @@ fn integer_shr(
         bb.fetch_fixnum(ir, args, GP::Rcx, deopt);
         ir.inline(move |gen, _, labels| gen.gen_shr(&labels[deopt]));
     }
-    bb.reg2acc_fixnum(ir, GP::Rdi, dst);
+    bb.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
 }
 
@@ -452,7 +452,7 @@ fn integer_shl(
         bb.fetch_fixnum(ir, args, GP::Rcx, deopt);
         ir.inline(move |gen, _, labels| gen.gen_shl(&labels[deopt]));
     }
-    bb.reg2acc_fixnum(ir, GP::Rdi, dst);
+    bb.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
 }
 

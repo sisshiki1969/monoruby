@@ -69,8 +69,13 @@ impl Codegen {
                 let label = ctx.resolve_label(&mut self.jit, label);
                 self.jit.bind_label(label);
             }
-            AsmInst::AccToStack(r) => {
-                self.store_r15(r);
+            AsmInst::AccToStack(slot) => {
+                self.store_r15(slot);
+            }
+            AsmInst::ZeroToStack(slot) => {
+                monoasm! { &mut self.jit,
+                    movq [r14 - (conv(slot))], 0;
+                }
             }
             AsmInst::RegToAcc(r) => {
                 if r != GP::R15 {

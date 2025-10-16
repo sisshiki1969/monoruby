@@ -124,6 +124,9 @@ impl SlotContext {
             LinkMode::G => {
                 ir.reg_move(GP::R15, dst);
             }
+            LinkMode::V => {
+                unreachable!("fetch_gpr() on V");
+            }
         }
     }
 
@@ -179,6 +182,9 @@ impl SlotContext {
                 x
             }
             LinkMode::C(v) => self.fetch_float_concrete_value_for_xmm(ir, slot, v),
+            LinkMode::V => {
+                unreachable!("fetch_integer_for_xmm() on V");
+            }
         }
     }
 
@@ -214,6 +220,9 @@ impl SlotContext {
                 x
             }
             LinkMode::C(v) => self.fetch_float_concrete_value_for_xmm(ir, slot, v),
+            LinkMode::V => {
+                unreachable!("fetch_float_for_xmm() on V");
+            }
         }
     }
 

@@ -193,44 +193,44 @@ impl BBContext {
         self.slot_state.get_write_back(self.sp)
     }
 
-    pub(crate) fn rax2acc(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
-        self.reg2acc(ir, GP::Rax, dst);
+    pub(crate) fn def_rax2acc(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
+        self.def_reg2acc(ir, GP::Rax, dst);
     }
 
-    pub(crate) fn reg2acc(&mut self, ir: &mut AsmIr, src: GP, dst: impl Into<Option<SlotId>>) {
-        self.reg2acc_guarded(ir, src, dst, slot::Guarded::Value)
+    pub(crate) fn def_reg2acc(&mut self, ir: &mut AsmIr, src: GP, dst: impl Into<Option<SlotId>>) {
+        self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::Value)
     }
 
-    pub(crate) fn reg2acc_fixnum(
+    pub(crate) fn def_reg2acc_fixnum(
         &mut self,
         ir: &mut AsmIr,
         src: GP,
         dst: impl Into<Option<SlotId>>,
     ) {
-        self.reg2acc_guarded(ir, src, dst, slot::Guarded::Fixnum)
+        self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::Fixnum)
     }
 
-    pub(crate) fn reg2acc_class(
+    pub(crate) fn def_reg2acc_class(
         &mut self,
         ir: &mut AsmIr,
         src: GP,
         dst: impl Into<Option<SlotId>>,
         class: ClassId,
     ) {
-        self.reg2acc_guarded(ir, src, dst, slot::Guarded::Class(class))
+        self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::Class(class))
     }
 
-    pub(crate) fn reg2acc_concrete_value(
+    pub(crate) fn def_reg2acc_concrete_value(
         &mut self,
         ir: &mut AsmIr,
         src: GP,
         dst: impl Into<Option<SlotId>>,
         v: Value,
     ) {
-        self.reg2acc_guarded(ir, src, dst, Guarded::from_concrete_value(v))
+        self.def_reg2acc_guarded(ir, src, dst, Guarded::from_concrete_value(v))
     }
 
-    fn reg2acc_guarded(
+    fn def_reg2acc_guarded(
         &mut self,
         ir: &mut AsmIr,
         src: GP,
@@ -281,7 +281,7 @@ impl BBContext {
             ir.f64toxmm(f, fdst);
             ir.reg2stack(GP::Rax, dst);
         } else {
-            self.reg2acc(ir, GP::Rax, dst);
+            self.def_reg2acc(ir, GP::Rax, dst);
         }
     }
 
@@ -381,6 +381,12 @@ impl UsingXmm {
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 enum LinkMode {
+    ///
+    /// No Value.
+    ///
+    /// this is used for optional arguments with no actual value.
+    ///
+    V,
     ///
     /// On the stack slot.
     ///

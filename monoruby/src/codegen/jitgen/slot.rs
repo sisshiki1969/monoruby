@@ -139,7 +139,9 @@ impl SlotContext {
                 self.r15 = None;
             }
             LinkMode::S => {}
+            LinkMode::V => {}
         }
+        self.set_mode(slot, LinkMode::V);
     }
 
     ///
@@ -223,8 +225,16 @@ impl SlotContext {
     ///
     /// Link *slot* to stack.
     ///
-    pub(super) fn def_stack(&mut self, slot: SlotId, guarded: Guarded) {
+    pub(super) fn def_stack(&mut self, slot: SlotId) {
         self.discard(slot);
+        self.set_mode(slot, LinkMode::S);
+    }
+
+    ///
+    /// Link *slot* to stack with guard.
+    ///
+    pub(super) fn def_stack_guarded(&mut self, slot: SlotId, guarded: Guarded) {
+        self.def_stack(slot);
         self.set_guarded(slot, guarded);
     }
 
@@ -647,7 +657,7 @@ impl SlotContext {
                         *guarded = guarded_l.unwrap();
                     }
                 }
-                LinkMode::S | LinkMode::C(_) | LinkMode::G => {}
+                LinkMode::S | LinkMode::C(_) | LinkMode::G | LinkMode::V => {}
             });
     }
 
@@ -977,6 +987,9 @@ impl BBContext {
                 self.r15 = None;
                 self.set_mode(slot, LinkMode::S);
             }
+            LinkMode::V => {
+                ir.zero2stack(slot);
+            }
             LinkMode::Sf(_) | LinkMode::S => {}
         }
     }
@@ -1029,7 +1042,7 @@ impl BBContext {
             LinkMode::S => {
                 ir.stack2reg(src, GP::Rax);
                 ir.reg2stack(GP::Rax, dst);
-                self.def_stack(dst, guarded);
+                self.def_stack_guarded(dst, guarded);
             }
             LinkMode::C(v) => {
                 self.def_concrete_value(dst, v);
@@ -1038,6 +1051,9 @@ impl BBContext {
                 ir.reg2stack(GP::R15, src);
                 self.set_stack(src, guarded);
                 self.def_acc(ir, dst, guarded)
+            }
+            LinkMode::V => {
+                unreachable!("write_back_slot() on V");
             }
         }
     }
@@ -1069,9 +1085,12 @@ impl BBContext {
                 assert_eq!(slot, self.xmm(x)[0]);
                 x
             }
-            LinkMode::F(_) | LinkMode::Sf(_) | LinkMode::S | LinkMode::C(_) | LinkMode::G => {
-                self.def_new_xmm(slot)
-            }
+            LinkMode::F(_)
+            | LinkMode::Sf(_)
+            | LinkMode::S
+            | LinkMode::C(_)
+            | LinkMode::G
+            | LinkMode::V => self.def_new_xmm(slot),
         }
     }
 
@@ -1081,7 +1100,7 @@ impl BBContext {
 
     fn release_locals(&mut self) {
         for i in 1..1 + self.local_num as u16 {
-            self.discard(SlotId(i));
+            self.def_stack(SlotId(i));
         }
     }
 

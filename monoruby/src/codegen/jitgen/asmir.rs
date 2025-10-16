@@ -237,6 +237,10 @@ impl AsmIr {
         self.push(AsmInst::AccToStack(reg));
     }
 
+    pub fn zero2stack(&mut self, reg: SlotId) {
+        self.push(AsmInst::ZeroToStack(reg));
+    }
+
     ///
     /// Convert Fixnum to f64.
     ///
@@ -681,15 +685,20 @@ impl AsmIr {
 
 #[derive(Debug)]
 pub(super) enum AsmInst {
-    /// move acc to stack
-    AccToStack(SlotId),
-    /// move reg to acc
-    RegToAcc(GP),
     /// move reg to stack
     RegToStack(GP, SlotId),
+    /// move acc to stack
+    AccToStack(SlotId),
+    /// store zero in stack
+    ZeroToStack(SlotId),
+
+    /// move reg to acc
+    RegToAcc(GP),
+
     /// move reg to stack
     StackToReg(SlotId, GP),
     LitToReg(Value, GP),
+
     /// move reg to reg
     RegMove(GP, GP),
     RegAdd(GP, i32),

@@ -115,7 +115,7 @@ impl JitContext {
                 LinkMode::Sf(r) | LinkMode::F(r) => {
                     bbctx.def_both(slot, r, Guarded::Value);
                 }
-                LinkMode::G => unreachable!(),
+                LinkMode::G | LinkMode::V => unreachable!(),
             };
         }
         #[cfg(feature = "jit-debug")]

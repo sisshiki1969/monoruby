@@ -181,7 +181,7 @@ pub(super) fn gen_class_new(
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
-        bb.rax2acc(ir, dst);
+        bb.def_rax2acc(ir, dst);
         true
     }
 }
@@ -209,7 +209,7 @@ fn class_allocate(
         );
     });
     ir.xmm_restore(using_xmm);
-    bb.rax2acc(ir, dst);
+    bb.def_rax2acc(ir, dst);
     true
 }
 

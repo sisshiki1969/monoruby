@@ -118,7 +118,7 @@ fn object_object_id(
         }
     });
     ir.xmm_restore(using_xmm);
-    bb.rax2acc(ir, ret);
+    bb.def_rax2acc(ir, ret);
     true
 }
 
@@ -175,7 +175,7 @@ pub fn object_send(
         let error = &labels[error];
         gen.object_send_inline(callid, store, using_xmm, &error, no_splat);
     });
-    bb.reg2acc(ir, GP::Rax, callsite.dst);
+    bb.def_reg2acc(ir, GP::Rax, callsite.dst);
     true
 }
 
