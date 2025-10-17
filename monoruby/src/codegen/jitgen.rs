@@ -877,9 +877,9 @@ impl Codegen {
 
 #[test]
 fn float_test() {
-    let gen = Codegen::new();
+    let r#gen = Codegen::new();
 
-    let from_f64_entry = gen.jit.get_label_address(&gen.f64_to_val);
+    let from_f64_entry = r#gen.jit.get_label_address(&r#gen.f64_to_val);
     let from_f64: fn(f64) -> Value = unsafe { std::mem::transmute(from_f64_entry.as_ptr()) };
 
     for lhs in [
@@ -907,22 +907,22 @@ fn float_test() {
 
 #[test]
 fn float_test2() {
-    let mut gen = Codegen::new();
+    let mut r#gen = Codegen::new();
 
-    let assume_int_to_f64 = gen.jit.label();
+    let assume_int_to_f64 = r#gen.jit.label();
     let x = Xmm(0);
-    monoasm!(&mut gen.jit,
+    monoasm!(&mut r#gen.jit,
     assume_int_to_f64:
         pushq rbp;
     );
-    gen.integer_val_to_f64(GP::Rdi, x);
-    monoasm!(&mut gen.jit,
+    r#gen.integer_val_to_f64(GP::Rdi, x);
+    monoasm!(&mut r#gen.jit,
         movq xmm0, xmm(x.enc());
         popq rbp;
         ret;
     );
-    gen.jit.finalize();
-    let int_to_f64_entry = gen.jit.get_label_address(&assume_int_to_f64);
+    r#gen.jit.finalize();
+    let int_to_f64_entry = r#gen.jit.get_label_address(&assume_int_to_f64);
 
     let int_to_f64: fn(Value) -> f64 = unsafe { std::mem::transmute(int_to_f64_entry.as_ptr()) };
     assert_eq!(143.0, int_to_f64(Value::integer(143)));

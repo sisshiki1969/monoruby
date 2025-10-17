@@ -2,7 +2,7 @@
 name = "ruruby-parse"
 version = "0.0.1"
 authors = ["monochrome <sisshiki@mac.com>"]
-edition = "2018"
+edition = "2024"
 description = "Ruby parser written with Rust."
 license = "MIT OR Apache-2.0"
 

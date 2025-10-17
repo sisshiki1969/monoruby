@@ -71,9 +71,9 @@ fn fiber_yield_inline(
     let error = ir.new_error(bb);
     ir.xmm_save(using_xmm);
     if pos_num == 0 {
-        ir.inline(move |gen, _, _| {
+        ir.inline(move |r#gen, _, _| {
             // TODO: we must check if the parent fiber exits.
-            monoasm! { &mut gen.jit,
+            monoasm! { &mut r#gen.jit,
                 movq rsi, (Value::nil().id());
             }
         });
@@ -81,9 +81,9 @@ fn fiber_yield_inline(
         bb.fetch(ir, args, GP::Rsi);
     } else {
         bb.write_back_callargs_and_dst(ir, callsite);
-        ir.inline(move |gen, _, _| {
+        ir.inline(move |r#gen, _, _| {
             // TODO: we must check if the parent fiber exits.
-            monoasm! { &mut gen.jit,
+            monoasm! { &mut r#gen.jit,
                 lea rdi, [r14 - (jitgen::conv(args))];
                 movq rsi, (pos_num);
                 movq rax, (crate::runtime::create_array);
@@ -92,9 +92,9 @@ fn fiber_yield_inline(
             }
         });
     }
-    ir.inline(move |gen, _, _| {
-        let fiber_yield = gen.yield_fiber;
-        monoasm! { &mut gen.jit,
+    ir.inline(move |r#gen, _, _| {
+        let fiber_yield = r#gen.yield_fiber;
+        monoasm! { &mut r#gen.jit,
             movq rdi, rbx;
             movq rax, (fiber_yield);
             call rax;

@@ -1,13 +1,9 @@
 #![feature(box_patterns)]
 #![feature(int_roundings)]
-//#![feature(const_option)]
 #![allow(clippy::too_many_arguments)]
 #![feature(iter_next_chunk)]
-#![feature(let_chains)]
 #![feature(step_trait)]
 #![feature(iter_array_chunks)]
-#![feature(array_chunks)]
-//#![feature(offset_of_nested)]
 
 mod alloc;
 mod builtins;

@@ -186,8 +186,8 @@ fn array_allocate(
         return false;
     }
     let dst = callsite.dst;
-    ir.inline(move |gen, _, _| {
-        monoasm! { &mut gen.jit,
+    ir.inline(move |r#gen, _, _| {
+        monoasm! { &mut r#gen.jit,
             movq rax, (allocate_array);
             call rax;
         }
@@ -277,9 +277,9 @@ fn array_size(
         return false;
     }
     let dst = callsite.dst;
-    ir.inline(move |gen, _, _| {
-        gen.get_array_length();
-        monoasm! { &mut gen.jit,
+    ir.inline(move |r#gen, _, _| {
+        r#gen.get_array_length();
+        monoasm! { &mut r#gen.jit,
             salq  rax, 1;
             orq   rax, 1;
         }
@@ -319,8 +319,8 @@ fn array_clone(
     let dst = callsite.dst;
     let using_xmm = bb.get_using_xmm();
     ir.xmm_save(using_xmm);
-    ir.inline(move |gen, _, _| {
-        monoasm! { &mut gen.jit,
+    ir.inline(move |r#gen, _, _| {
+        monoasm! { &mut r#gen.jit,
             movq rax, (array_dup);
             call rax;
         }
@@ -421,7 +421,7 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                     return Err(MonorubyErr::typeerr(format!(
                         "wrong element type {} at {i} (expected array)",
                         elem.get_real_class_name(&globals.store)
-                    )))
+                    )));
                 }
             };
             if elem.len() != 2 {
@@ -493,7 +493,7 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                 globals,
                 lfp.arg(0),
                 ARRAY_CLASS,
-            ))
+            ));
         }
     };
     let mut v = vec![];
@@ -667,8 +667,8 @@ fn array_shl(
     bb.fetch(ir, args, GP::Rsi);
     let using_xmm = bb.get_using_xmm();
     ir.xmm_save(using_xmm);
-    ir.inline(move |gen, _, _| {
-        monoasm!( &mut gen.jit,
+    ir.inline(move |r#gen, _, _| {
+        monoasm!( &mut r#gen.jit,
             movq rax, (ary_shl);
             call rax;
         );

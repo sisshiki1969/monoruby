@@ -94,7 +94,7 @@ impl std::cmp::Ord for RStringInner {
 }
 
 impl RStringInner {
-    pub fn to_str(&self) -> Result<std::borrow::Cow<str>> {
+    pub fn to_str(&self) -> Result<std::borrow::Cow<'_, str>> {
         match self.ty {
             Encoding::Ascii8 => {
                 let mut res = String::new();

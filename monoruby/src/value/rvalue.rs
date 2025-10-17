@@ -666,7 +666,7 @@ impl RValue {
     }
 
     pub(crate) unsafe fn try_ty(&self) -> Option<ObjTy> {
-        self.header.meta.ty
+        unsafe { self.header.meta.ty }
     }
 
     ///
@@ -698,7 +698,7 @@ impl RValue {
         let mut i = id.into_usize();
         if self.ty() == ObjTy::OBJECT {
             if i < OBJECT_INLINE_IVAR {
-                return unsafe { self.as_object()[i] };
+                return self.as_object()[i];
             } else {
                 i -= OBJECT_INLINE_IVAR;
             }
@@ -715,7 +715,7 @@ impl RValue {
         let mut i = id.into_usize();
         if self.ty() == ObjTy::OBJECT {
             if i < OBJECT_INLINE_IVAR {
-                unsafe { self.as_object_mut()[i] = Some(val) };
+                self.as_object_mut()[i] = Some(val);
                 return;
             } else {
                 i -= OBJECT_INLINE_IVAR;
@@ -1231,7 +1231,7 @@ impl RValue {
 }
 
 impl RValue {
-    pub fn unpack(&self) -> RV {
+    pub fn unpack(&self) -> RV<'_> {
         unsafe {
             if let Some(ty) = self.try_ty() {
                 match ty {
@@ -1291,48 +1291,50 @@ impl RValue {
 }
 
 impl RValue {
-    unsafe fn as_object(&self) -> &[Option<value::Value>; OBJECT_INLINE_IVAR] {
-        &self.kind.object
+    fn as_object(&self) -> &[Option<value::Value>; OBJECT_INLINE_IVAR] {
+        assert!(self.ty() == ObjTy::OBJECT);
+        unsafe { &self.kind.object }
     }
 
-    unsafe fn as_object_mut(&mut self) -> &mut [Option<value::Value>; OBJECT_INLINE_IVAR] {
-        &mut self.kind.object
+    fn as_object_mut(&mut self) -> &mut [Option<value::Value>; OBJECT_INLINE_IVAR] {
+        assert!(self.ty() == ObjTy::OBJECT);
+        unsafe { &mut self.kind.object }
     }
 
     pub(super) unsafe fn as_module(&self) -> &ModuleInner {
-        &self.kind.class
+        unsafe { &self.kind.class }
     }
 
     pub(super) unsafe fn as_module_mut(&mut self) -> &mut ModuleInner {
-        &mut self.kind.class
+        unsafe { &mut self.kind.class }
     }
 
     unsafe fn as_class_id(&self) -> ClassId {
-        self.as_module().id()
+        unsafe { self.as_module().id() }
     }
 
     pub(super) unsafe fn as_float(&self) -> f64 {
-        self.kind.float
+        unsafe { self.kind.float }
     }
 
     pub(super) unsafe fn as_bignum(&self) -> &BigInt {
-        &self.kind.bignum
+        unsafe { &self.kind.bignum }
     }
 
     pub(super) unsafe fn as_complex(&self) -> &ComplexInner {
-        &self.kind.complex
+        unsafe { &self.kind.complex }
     }
 
     pub(super) unsafe fn as_rstring(&self) -> &RStringInner {
-        &self.kind.string
+        unsafe { &self.kind.string }
     }
 
     pub(super) unsafe fn as_rstring_mut(&mut self) -> &mut RStringInner {
-        &mut self.kind.string
+        unsafe { &mut self.kind.string }
     }
 
     pub(super) unsafe fn as_str(&self) -> &str {
-        self.kind.string.check_utf8().unwrap()
+        unsafe { self.kind.string.check_utf8().unwrap() }
     }
 
     /*pub(crate) fn as_string_mut(&mut self) -> &mut InnerVec {
@@ -1340,55 +1342,55 @@ impl RValue {
     }*/
 
     pub(crate) unsafe fn as_array(&self) -> &ArrayInner {
-        &self.kind.array
+        unsafe { &self.kind.array }
     }
 
     pub(super) unsafe fn as_array_mut(&mut self) -> &mut ArrayInner {
-        &mut self.kind.array
+        unsafe { &mut self.kind.array }
     }
 
     pub(super) unsafe fn as_range(&self) -> &RangeInner {
-        &self.kind.range
+        unsafe { &self.kind.range }
     }
 
     pub(super) unsafe fn as_exception(&self) -> &ExceptionInner {
-        &self.kind.exception
+        unsafe { &self.kind.exception }
     }
 
     pub(super) unsafe fn as_exception_mut(&mut self) -> &mut ExceptionInner {
-        &mut self.kind.exception
+        unsafe { &mut self.kind.exception }
     }
 
     pub(crate) unsafe fn as_hashmap(&self) -> &HashmapInner {
-        &self.kind.hash
+        unsafe { &self.kind.hash }
     }
 
     pub(super) unsafe fn as_hashmap_mut(&mut self) -> &mut HashmapInner {
-        &mut self.kind.hash
+        unsafe { &mut self.kind.hash }
     }
 
     pub(super) unsafe fn as_regex(&self) -> &RegexpInner {
-        &self.kind.regexp
+        unsafe { &self.kind.regexp }
     }
 
     pub(super) unsafe fn as_regex_mut(&mut self) -> &mut RegexpInner {
-        &mut self.kind.regexp
+        unsafe { &mut self.kind.regexp }
     }
 
     pub(super) unsafe fn as_io(&self) -> &IoInner {
-        &self.kind.io
+        unsafe { &self.kind.io }
     }
 
     pub(super) unsafe fn as_io_mut(&mut self) -> &mut IoInner {
-        &mut self.kind.io
+        unsafe { &mut self.kind.io }
     }
 
     pub(super) unsafe fn as_proc(&self) -> &ProcInner {
-        &self.kind.proc
+        unsafe { &self.kind.proc }
     }
 
     pub(super) unsafe fn as_proc_mut(&mut self) -> &mut ProcInner {
-        &mut self.kind.proc
+        unsafe { &mut self.kind.proc }
     }
 
     pub(super) fn as_time(&self) -> &TimeInner {
@@ -1411,40 +1413,40 @@ impl RValue {
 
     pub(super) unsafe fn as_fiber(&self) -> &FiberInner {
         assert_eq!(self.ty(), ObjTy::FIBER);
-        &self.kind.fiber
+        unsafe { &self.kind.fiber }
     }
 
     pub(super) unsafe fn as_fiber_mut(&mut self) -> &mut FiberInner {
         assert_eq!(self.ty(), ObjTy::FIBER);
-        &mut self.kind.fiber
+        unsafe { &mut self.kind.fiber }
     }
 
     pub(super) unsafe fn as_enumerator(&self) -> &EnumeratorInner {
-        &self.kind.enumerator
+        unsafe { &self.kind.enumerator }
     }
 
     pub(super) unsafe fn as_enumerator_mut(&mut self) -> &mut EnumeratorInner {
-        &mut self.kind.enumerator
+        unsafe { &mut self.kind.enumerator }
     }
 
     pub(super) unsafe fn as_generator(&self) -> &GeneratorInner {
-        &self.kind.generator
+        unsafe { &self.kind.generator }
     }
 
     pub(super) unsafe fn as_generator_mut(&mut self) -> &mut GeneratorInner {
-        &mut self.kind.generator
+        unsafe { &mut self.kind.generator }
     }
 
     pub(super) unsafe fn as_binding(&self) -> &BindingInner {
-        &self.kind.binding
+        unsafe { &self.kind.binding }
     }
 
     pub(super) unsafe fn as_binding_mut(&mut self) -> &mut BindingInner {
-        &mut self.kind.binding
+        unsafe { &mut self.kind.binding }
     }
 
     pub(super) unsafe fn as_match_data(&self) -> &MatchDataInner {
-        &self.kind.matchdata
+        unsafe { &self.kind.matchdata }
     }
 }
 

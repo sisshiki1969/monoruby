@@ -340,8 +340,8 @@ mod tests {
 
     #[test]
     fn guard_class() {
-        let mut gen = Codegen::new();
-        let side_exit = gen.entry_panic.clone();
+        let mut r#gen = Codegen::new();
+        let side_exit = r#gen.entry_panic.clone();
 
         for (class, value) in [
             (INTEGER_CLASS, Value::integer(-2558)),
@@ -356,13 +356,13 @@ mod tests {
             (TRUE_CLASS, Value::bool(true)),
             (FALSE_CLASS, Value::bool(false)),
         ] {
-            let entry_point = gen.jit.get_current_address();
-            gen.guard_class_rdi(class, &side_exit);
-            monoasm!( &mut gen.jit,
+            let entry_point = r#gen.jit.get_current_address();
+            r#gen.guard_class_rdi(class, &side_exit);
+            monoasm!( &mut r#gen.jit,
                 xorq rax, rax;
                 ret;
             );
-            gen.jit.finalize();
+            r#gen.jit.finalize();
 
             let func: fn(Value) -> u64 = unsafe { std::mem::transmute(entry_point.as_ptr()) };
             assert_eq!(0, func(value));
@@ -371,16 +371,16 @@ mod tests {
 
     #[test]
     fn unbox_float() {
-        let mut gen = Codegen::new();
-        let side_exit = gen.entry_panic.clone();
-        let entry_point = gen.jit.get_current_address();
+        let mut r#gen = Codegen::new();
+        let side_exit = r#gen.entry_panic.clone();
+        let entry_point = r#gen.jit.get_current_address();
         let x = Xmm(0);
-        gen.float_to_f64(GP::Rdi, x, &side_exit);
-        monoasm!( &mut gen.jit,
+        r#gen.float_to_f64(GP::Rdi, x, &side_exit);
+        monoasm!( &mut r#gen.jit,
             movq xmm0, xmm(x.enc());
             ret;
         );
-        gen.jit.finalize();
+        r#gen.jit.finalize();
 
         for expected in [
             1.44e-17,

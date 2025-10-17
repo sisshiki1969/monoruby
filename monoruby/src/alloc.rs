@@ -9,12 +9,12 @@ pub struct RurubyAlloc;
 unsafe impl GlobalAlloc for RurubyAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         MALLOC_AMOUNT.fetch_add(layout.size(), Ordering::SeqCst);
-        System.alloc(layout)
+        unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         MALLOC_AMOUNT.fetch_sub(layout.size(), Ordering::SeqCst);
-        System.dealloc(ptr, layout)
+        unsafe { System.dealloc(ptr, layout) }
     }
 }
 
