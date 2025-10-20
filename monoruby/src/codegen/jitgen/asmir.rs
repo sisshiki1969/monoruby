@@ -237,8 +237,8 @@ impl AsmIr {
         self.push(AsmInst::AccToStack(reg));
     }
 
-    pub fn zero2stack(&mut self, reg: SlotId) {
-        self.push(AsmInst::ZeroToStack(reg));
+    pub fn nil2stack(&mut self, reg: SlotId) {
+        self.push(AsmInst::NilToStack(reg));
     }
 
     ///
@@ -276,21 +276,21 @@ impl AsmIr {
     ///
     /// - rax, rdi
     ///
-    pub fn float2xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
+    pub fn float_to_xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
         self.push(AsmInst::FloatToXmm(reg, x, deopt));
     }
 
     ///
     /// Move *f*(f64) to Xmm(*x*).
     ///
-    pub fn f64toxmm(&mut self, f: f64, x: Xmm) {
+    pub fn f64_to_xmm(&mut self, f: f64, x: Xmm) {
         self.push(AsmInst::F64ToXmm(f, x));
     }
 
     ///
     /// Move *i*(i63) to the stack *slot* and Xmm(*x*).
     ///
-    pub fn i64toboth(&mut self, i: i64, slot: SlotId, x: Xmm) {
+    pub fn i64_to_stack_and_xmm(&mut self, i: i64, slot: SlotId, x: Xmm) {
         self.push(AsmInst::I64ToBoth(i, slot, x));
     }
 
@@ -690,7 +690,7 @@ pub(super) enum AsmInst {
     /// move acc to stack
     AccToStack(SlotId),
     /// store zero in stack
-    ZeroToStack(SlotId),
+    NilToStack(SlotId),
 
     /// move reg to acc
     RegToAcc(GP),

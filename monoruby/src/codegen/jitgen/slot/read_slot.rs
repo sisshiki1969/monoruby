@@ -165,18 +165,18 @@ impl SlotContext {
         match self.mode(slot) {
             LinkMode::Sf(x) | LinkMode::F(x) => x,
             LinkMode::S => {
-                // -> Both
+                // -> Sf
                 ir.stack2reg(slot, GP::Rdi);
                 self.guard_fixnum(ir, slot, GP::Rdi, deopt);
-                let x = self.set_new_both(slot, Guarded::Fixnum);
+                let x = self.set_new_Sf(slot, Guarded::Fixnum);
                 ir.fixnum2xmm(GP::Rdi, x);
                 x
             }
             LinkMode::G => {
-                // -> Both
+                // -> Sf
                 ir.reg2stack(GP::R15, slot);
                 self.guard_fixnum(ir, slot, GP::R15, deopt);
-                let x = self.set_new_both(slot, Guarded::Fixnum);
+                let x = self.set_new_Sf(slot, Guarded::Fixnum);
                 ir.reg_move(GP::R15, GP::Rdi);
                 ir.fixnum2xmm(GP::Rdi, x);
                 x
@@ -205,18 +205,18 @@ impl SlotContext {
         match self.mode(slot) {
             LinkMode::Sf(x) | LinkMode::F(x) => x,
             LinkMode::S => {
-                // -> Both
-                let x = self.set_new_both(slot, Guarded::Float);
+                // -> Sf
+                let x = self.set_new_Sf(slot, Guarded::Float);
                 ir.stack2reg(slot, GP::Rdi);
-                ir.float2xmm(GP::Rdi, x, deopt);
+                ir.float_to_xmm(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::G => {
-                // -> Both
-                let x = self.set_new_both(slot, Guarded::Float);
+                // -> Sf
+                let x = self.set_new_Sf(slot, Guarded::Float);
                 ir.reg2stack(GP::R15, slot);
                 ir.reg_move(GP::R15, GP::Rdi);
-                ir.float2xmm(GP::Rdi, x, deopt);
+                ir.float_to_xmm(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::C(v) => self.fetch_float_concrete_value_for_xmm(ir, slot, v),
@@ -233,14 +233,14 @@ impl SlotContext {
         v: Value,
     ) -> Xmm {
         if let Some(f) = v.try_float() {
-            // -> Xmm
-            let x = self.set_new_xmm(slot);
-            ir.f64toxmm(f, x);
+            // -> F
+            let x = self.set_new_F(slot);
+            ir.f64_to_xmm(f, x);
             x
         } else if let Some(i) = v.try_fixnum() {
-            // -> Both
-            let x = self.set_new_both(slot, Guarded::Fixnum);
-            ir.i64toboth(i, slot, x);
+            // -> Sf
+            let x = self.set_new_Sf(slot, Guarded::Fixnum);
+            ir.i64_to_stack_and_xmm(i, slot, x);
             x
         } else {
             unreachable!()

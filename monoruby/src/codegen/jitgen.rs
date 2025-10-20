@@ -168,7 +168,7 @@ impl BBContext {
         self.class_version_guarded = false;
     }
 
-    fn union(entries: &[BranchEntry]) -> Self {
+    fn join_entries(entries: &[BranchEntry]) -> Self {
         let mut merge_ctx = entries.last().unwrap().bbctx.clone();
         for BranchEntry {
             src_bb: _src_bb,
@@ -178,7 +178,7 @@ impl BBContext {
         {
             #[cfg(feature = "jit-debug")]
             eprintln!("  <-{:?}:[{:?}] {:?}", _src_bb, bbctx.sp, bbctx.slot_state);
-            merge_ctx.merge(bbctx);
+            merge_ctx.join(bbctx);
         }
         #[cfg(feature = "jit-debug")]
         eprintln!("  union_entries: {:?}", &merge_ctx);
@@ -277,8 +277,8 @@ impl BBContext {
         });
         ir.lit2reg(*value, GP::Rax);
         if let Some(f) = value.try_float() {
-            let fdst = self.def_new_both_float(dst);
-            ir.f64toxmm(f, fdst);
+            let fdst = self.def_new_Sf_float(dst);
+            ir.f64_to_xmm(f, fdst);
             ir.reg2stack(GP::Rax, dst);
         } else {
             self.def_reg2acc(ir, GP::Rax, dst);
@@ -384,7 +384,7 @@ enum LinkMode {
     ///
     /// No Value.
     ///
-    /// this is used for optional arguments with no actual value.
+    /// this is used for the temp slots above sp.
     ///
     V,
     ///

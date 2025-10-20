@@ -530,7 +530,7 @@ impl BBContext {
         ir.xmm_save(using_xmm);
         let simple = self.set_arguments(store, ir, callsite, callee_fid);
         if let Some(dst) = callsite.dst {
-            self.def_stack(dst);
+            self.def_S(dst);
         }
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -568,7 +568,7 @@ impl BBContext {
         ir.xmm_save(using_xmm);
         let simple = self.set_arguments(store, ir, callsite, callee_fid);
         if let Some(dst) = callsite.dst {
-            self.def_stack(dst);
+            self.def_S(dst);
         }
         self.clear_above_next_sp();
         let error = ir.new_error(self);

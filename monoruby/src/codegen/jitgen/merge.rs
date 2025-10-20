@@ -94,9 +94,9 @@ impl JitContext {
             eprintln!("  not used: {:?}", unused);
         }
 
-        let mut target = BBContext::union(&entries);
+        let mut target = BBContext::join_entries(&entries);
         if let Some(backedge) = backedge {
-            target.merge(&backedge);
+            target.join(&backedge);
         }
 
         let mut bbctx = BBContext::new(self);
@@ -106,14 +106,14 @@ impl JitContext {
                 LinkMode::S => {}
                 LinkMode::C(v) => {
                     if v.is_float() {
-                        bbctx.def_new_xmm(slot);
+                        bbctx.def_new_F(slot);
                     }
                 }
                 LinkMode::F(r) if !coerced => {
-                    bbctx.def_xmm(slot, r);
+                    bbctx.def_F(slot, r);
                 }
                 LinkMode::Sf(r) | LinkMode::F(r) => {
-                    bbctx.def_both(slot, r, Guarded::Value);
+                    bbctx.def_Sf(slot, r, Guarded::Value);
                 }
                 LinkMode::G | LinkMode::V => unreachable!(),
             };
@@ -136,7 +136,7 @@ impl JitContext {
     ) -> Option<BBContext> {
         let entries = self.branch_map.remove(&bbid)?;
 
-        let target_ctx = BBContext::union(&entries);
+        let target_ctx = BBContext::join_entries(&entries);
 
         let pc = iseq.get_bb_pc(bbid);
         self.gen_bridges_for_branches(&target_ctx, entries, bbid, pc, &[]);

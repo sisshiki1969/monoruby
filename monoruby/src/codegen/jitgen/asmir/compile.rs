@@ -72,9 +72,9 @@ impl Codegen {
             AsmInst::AccToStack(slot) => {
                 self.store_r15(slot);
             }
-            AsmInst::ZeroToStack(slot) => {
+            AsmInst::NilToStack(slot) => {
                 monoasm! { &mut self.jit,
-                    movq [r14 - (conv(slot))], 0;
+                    movq [r14 - (conv(slot))], (NIL_VALUE);
                 }
             }
             AsmInst::RegToAcc(r) => {

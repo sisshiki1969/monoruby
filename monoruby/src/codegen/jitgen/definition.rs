@@ -18,7 +18,7 @@ impl BBContext {
             self.write_back_slots(ir, &[superclass]);
         }
         if let Some(dst) = dst {
-            self.def_stack(dst);
+            self.def_S(dst);
         }
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self);
@@ -43,7 +43,7 @@ impl BBContext {
     ) {
         self.write_back_slots(ir, &[base]);
         if let Some(dst) = dst {
-            self.def_stack(dst);
+            self.def_S(dst);
         }
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self);

@@ -153,7 +153,7 @@ impl JitContext {
                 assert!(src_bb >= loop_start);
                 // backegde
                 if let Some(ctx) = &mut backedge {
-                    ctx.merge(&bbctx);
+                    ctx.join(&bbctx);
                 } else {
                     backedge = Some(bbctx);
                 }
@@ -306,11 +306,11 @@ impl JitContext {
                 ir.push(AsmInst::StoreConstant { id, using_xmm });
             }
             TraceIr::BlockArgProxy(ret, outer) => {
-                bbctx.def_stack(ret);
+                bbctx.def_S(ret);
                 ir.block_arg_proxy(ret, outer);
             }
             TraceIr::BlockArg(ret, outer) => {
-                bbctx.def_stack(ret);
+                bbctx.def_S(ret);
                 ir.block_arg(bbctx, ret, outer);
             }
             TraceIr::LoadIvar(dst, name, cache) => {
@@ -449,7 +449,7 @@ impl JitContext {
                 }
             }
             TraceIr::GBinOpNotrace { .. } => {
-                return CompileResult::Recompile(RecompileReason::NotCached)
+                return CompileResult::Recompile(RecompileReason::NotCached);
             }
             TraceIr::FCmp { kind, info } => {
                 bbctx.gen_cmp_float(ir, info, kind);
@@ -466,7 +466,7 @@ impl JitContext {
                 }
             }
             TraceIr::GCmpNotrace { .. } => {
-                return CompileResult::Recompile(RecompileReason::NotCached)
+                return CompileResult::Recompile(RecompileReason::NotCached);
             }
             TraceIr::FCmpBr {
                 kind,
@@ -529,7 +529,7 @@ impl JitContext {
                 }
             }
             TraceIr::GCmpBrNotrace { .. } => {
-                return CompileResult::Recompile(RecompileReason::NotCached)
+                return CompileResult::Recompile(RecompileReason::NotCached);
             }
             TraceIr::ArrayTEq { lhs, rhs } => {
                 bbctx.write_back_slot(ir, lhs);
@@ -623,7 +623,7 @@ impl JitContext {
             } => {
                 bbctx.fetch(ir, src, GP::Rdi);
                 for reg in dst.0..dst.0 + len {
-                    bbctx.def_stack(SlotId(reg));
+                    bbctx.def_S(SlotId(reg));
                 }
                 ir.expand_array(bbctx, dst, len, rest_pos);
             }
@@ -709,7 +709,7 @@ impl JitContext {
                 bbctx.unset_class_version_guard();
             }
             TraceIr::DefinedYield { dst } => {
-                bbctx.def_stack(dst);
+                bbctx.def_S(dst);
                 let using_xmm = bbctx.get_using_xmm();
                 ir.push(AsmInst::DefinedYield { dst, using_xmm });
             }
@@ -724,7 +724,7 @@ impl JitContext {
             }
             TraceIr::DefinedMethod { dst, recv, name } => {
                 bbctx.write_back_slots(ir, &[dst, recv]);
-                bbctx.def_stack(dst);
+                bbctx.def_S(dst);
                 let using_xmm = bbctx.get_using_xmm();
                 ir.push(AsmInst::DefinedMethod {
                     dst,
@@ -734,12 +734,12 @@ impl JitContext {
                 });
             }
             TraceIr::DefinedSuper { dst } => {
-                bbctx.def_stack(dst);
+                bbctx.def_S(dst);
                 let using_xmm = bbctx.get_using_xmm();
                 ir.push(AsmInst::DefinedSuper { dst, using_xmm });
             }
             TraceIr::DefinedGvar { dst, name } => {
-                bbctx.def_stack(dst);
+                bbctx.def_S(dst);
                 let using_xmm = bbctx.get_using_xmm();
                 ir.push(AsmInst::DefinedGvar {
                     dst,
