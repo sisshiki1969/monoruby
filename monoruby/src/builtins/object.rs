@@ -354,7 +354,7 @@ fn object_respond_to(
     } else {
         false
     };
-    bb.def_concrete_value(dst, Value::bool(b));
+    bb.def_C(dst, Value::bool(b));
     true
 }
 

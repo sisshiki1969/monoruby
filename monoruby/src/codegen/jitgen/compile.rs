@@ -20,7 +20,7 @@ impl JitContext {
             ir.push(AsmInst::GuardClass(GP::Rdi, self.self_class(), deopt));
         } else {
             for i in (1 + self.local_num())..self.total_reg_num() {
-                bbctx.def_concrete_value(SlotId(i as u16), Value::nil());
+                bbctx.def_C(SlotId(i as u16), Value::nil());
             }
             //bbctx.set_guard_class(SlotId::self_(), self.self_class());
             // for method JIT, class of *self* is already checked in an entry stub.
@@ -234,17 +234,17 @@ impl JitContext {
                 }
             }
             TraceIr::Integer(dst, i) => {
-                bbctx.def_concrete_value(dst, Value::i32(i));
+                bbctx.def_C(dst, Value::i32(i));
             }
             TraceIr::Symbol(dst, id) => {
-                bbctx.def_concrete_value(dst, Value::symbol(id));
+                bbctx.def_C(dst, Value::symbol(id));
             }
             TraceIr::Nil(dst) => {
-                bbctx.def_concrete_value(dst, Value::nil());
+                bbctx.def_C(dst, Value::nil());
             }
             TraceIr::Literal(dst, val) => {
                 if val.is_packed_value() || val.is_float() {
-                    bbctx.def_concrete_value(dst, val);
+                    bbctx.def_C(dst, val);
                 } else {
                     bbctx.discard(dst);
                     ir.deep_copy_lit(bbctx.get_using_xmm(), val);
@@ -377,9 +377,9 @@ impl JitContext {
             }
             TraceIr::Not { dst, src, .. } => {
                 if bbctx.is_truthy(src) {
-                    bbctx.def_concrete_value(dst, Value::bool(false));
+                    bbctx.def_C(dst, Value::bool(false));
                 } else if bbctx.is_falsy(src) {
-                    bbctx.def_concrete_value(dst, Value::bool(true));
+                    bbctx.def_C(dst, Value::bool(true));
                 } else {
                     bbctx.fetch(ir, src, GP::Rdi);
                     bbctx.discard(dst);

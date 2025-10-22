@@ -22,7 +22,7 @@ impl BBContext {
         T: PartialEq + PartialOrd,
     {
         let b = cmp(kind, lhs, rhs);
-        self.def_concrete_value(dst, Value::bool(b));
+        self.def_C(dst, Value::bool(b));
     }
 }
 
@@ -109,7 +109,7 @@ impl BBContext {
                 if let Some(result) = lhs.checked_add(rhs)
                     && Value::is_i63(result)
                 {
-                    self.def_fixnum_value(dst, result);
+                    self.def_C_fixnum(dst, result);
                     return true;
                 }
             }
@@ -117,7 +117,7 @@ impl BBContext {
                 if let Some(result) = lhs.checked_sub(rhs)
                     && Value::is_i63(result)
                 {
-                    self.def_fixnum_value(dst, result);
+                    self.def_C_fixnum(dst, result);
                     return true;
                 }
             }
@@ -125,7 +125,7 @@ impl BBContext {
                 if let Some(result) = lhs.checked_mul(rhs)
                     && Value::is_i63(result)
                 {
-                    self.def_fixnum_value(dst, result);
+                    self.def_C_fixnum(dst, result);
                     return true;
                 }
             }
@@ -133,7 +133,7 @@ impl BBContext {
                 if let Some(result) = lhs.checked_div(rhs)
                     && Value::is_i63(result)
                 {
-                    self.def_fixnum_value(dst, result);
+                    self.def_C_fixnum(dst, result);
                     return true;
                 }
             }
@@ -141,21 +141,21 @@ impl BBContext {
                 if let Some(result) = lhs.checked_rem(rhs)
                     && Value::is_i63(result)
                 {
-                    self.def_fixnum_value(dst, result);
+                    self.def_C_fixnum(dst, result);
                     return true;
                 }
             }
             BinOpK::Exp => {}
             BinOpK::BitOr => {
-                self.def_fixnum_value(dst, lhs | rhs);
+                self.def_C_fixnum(dst, lhs | rhs);
                 return true;
             }
             BinOpK::BitAnd => {
-                self.def_fixnum_value(dst, lhs & rhs);
+                self.def_C_fixnum(dst, lhs & rhs);
                 return true;
             }
             BinOpK::BitXor => {
-                self.def_fixnum_value(dst, lhs ^ rhs);
+                self.def_C_fixnum(dst, lhs ^ rhs);
                 return true;
             }
         }
@@ -233,19 +233,19 @@ impl BBContext {
         if let Some((lhs, rhs)) = self.check_concrete_float(info.mode) {
             match kind {
                 BinOpK::Add => {
-                    self.def_float_value(info.dst, lhs + rhs);
+                    self.def_C_float(info.dst, lhs + rhs);
                     return;
                 }
                 BinOpK::Sub => {
-                    self.def_float_value(info.dst, lhs - rhs);
+                    self.def_C_float(info.dst, lhs - rhs);
                     return;
                 }
                 BinOpK::Mul => {
-                    self.def_float_value(info.dst, lhs * rhs);
+                    self.def_C_float(info.dst, lhs * rhs);
                     return;
                 }
                 BinOpK::Div => {
-                    self.def_float_value(info.dst, lhs / rhs);
+                    self.def_C_float(info.dst, lhs / rhs);
                     return;
                 }
                 _ => {}

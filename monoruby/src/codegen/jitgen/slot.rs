@@ -219,7 +219,8 @@ impl SlotContext {
     ///
     /// F -> Sf
     ///
-    fn set_both_float(&mut self, slot: SlotId, xmm: Xmm) {
+    #[allow(non_snake_case)]
+    fn set_Sf_float(&mut self, slot: SlotId, xmm: Xmm) {
         self.set_Sf(slot, xmm, Guarded::Float)
     }
 }
@@ -291,23 +292,26 @@ impl SlotContext {
     ///
     /// Link *slot* to a concrete fixnum value *i*.
     ///
-    pub(crate) fn def_fixnum_value(&mut self, slot: impl Into<Option<SlotId>>, i: i64) {
+    #[allow(non_snake_case)]
+    pub(crate) fn def_C_fixnum(&mut self, slot: impl Into<Option<SlotId>>, i: i64) {
         if let Some(slot) = slot.into() {
-            self.def_concrete_value(slot, Value::fixnum(i));
+            self.def_C(slot, Value::fixnum(i));
         }
     }
 
     ///
     /// Link *slot* to a concrete flonum value *i*.
     ///
-    pub(crate) fn def_float_value(&mut self, slot: impl Into<Option<SlotId>>, f: f64) {
-        self.def_concrete_value(slot, Value::float(f));
+    #[allow(non_snake_case)]
+    pub(crate) fn def_C_float(&mut self, slot: impl Into<Option<SlotId>>, f: f64) {
+        self.def_C(slot, Value::float(f));
     }
 
     ///
     /// Link *slot* to a concrete value *v*.
     ///
-    pub(crate) fn def_concrete_value(&mut self, slot: impl Into<Option<SlotId>>, v: Value) {
+    #[allow(non_snake_case)]
+    pub(crate) fn def_C(&mut self, slot: impl Into<Option<SlotId>>, v: Value) {
         if let Some(slot) = slot.into() {
             let guarded = Guarded::from_concrete_value(v);
             self.discard(slot);
@@ -977,7 +981,7 @@ impl BBContext {
         match self.mode(slot) {
             LinkMode::F(xmm) => {
                 // Xmm -> Both
-                self.set_both_float(slot, xmm);
+                self.set_Sf_float(slot, xmm);
                 ir.xmm2stack(xmm, slot);
             }
             LinkMode::C(v) => {
@@ -1051,7 +1055,7 @@ impl BBContext {
                 self.def_S_guarded(dst, guarded);
             }
             LinkMode::C(v) => {
-                self.def_concrete_value(dst, v);
+                self.def_C(dst, v);
             }
             LinkMode::G => {
                 ir.reg2stack(GP::R15, src);
@@ -1128,7 +1132,7 @@ impl BBContext {
                 ir.xmm2stack(l, slot);
                 if l == r {
                     // Xmm(l) -> Both(l)
-                    self.set_both_float(slot, l);
+                    self.set_Sf_float(slot, l);
                 } else {
                     // Xmm(l) -> Both(r)
                     self.to_both(ir, slot, l, r, guarded);
@@ -1179,7 +1183,7 @@ impl BBContext {
             }
             (LinkMode::C(l), LinkMode::Sf(r)) => {
                 if let Some(f) = l.try_float() {
-                    self.set_both_float(slot, r);
+                    self.set_Sf_float(slot, r);
                     ir.f64_to_xmm(f, r);
                     ir.lit2reg(Value::float(f), GP::Rax);
                     ir.reg2stack(GP::Rax, slot);

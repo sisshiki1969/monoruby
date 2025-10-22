@@ -105,11 +105,11 @@ fn kernel_nil(
     let CallSiteInfo { recv, dst, .. } = *callsite;
     if bb.is_nil(recv) {
         if let Some(dst) = dst {
-            bb.def_concrete_value(dst, Value::bool(true));
+            bb.def_C(dst, Value::bool(true));
         }
     } else if bb.is_not_nil(recv) {
         if let Some(dst) = dst {
-            bb.def_concrete_value(dst, Value::bool(false));
+            bb.def_C(dst, Value::bool(false));
         }
     } else {
         ir.inline(|r#gen, _, _| {
@@ -139,7 +139,7 @@ fn kernel_block_given(
     let dst = callsite.dst;
     if jitctx.current_frame_given_block().is_some() {
         if let Some(dst) = dst {
-            bb.def_concrete_value(dst, Value::bool(true));
+            bb.def_C(dst, Value::bool(true));
         }
     } else {
         ir.inline(|r#gen, _, _| {

@@ -376,7 +376,7 @@ impl JitContext {
             }
             FuncKind::ISeq(iseq) => {
                 if let Some(v) = store[iseq].is_const_fn() {
-                    bbctx.def_concrete_value(dst, v);
+                    bbctx.def_C(dst, v);
                     return CompileResult::Continue;
                 }
                 let evict = ir.new_evict();

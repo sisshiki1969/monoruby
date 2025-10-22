@@ -107,7 +107,7 @@ impl SlotContext {
                 // Xmm(x) -> Both(x)
                 ir.xmm2stack(xmm, slot);
                 ir.reg_move(GP::Rax, dst);
-                self.set_both_float(slot, xmm);
+                self.set_Sf_float(slot, xmm);
             }
             LinkMode::C(v) => {
                 if dst == GP::R15 {
