@@ -99,7 +99,7 @@ impl JitContext {
             target.join(&backedge);
         }
 
-        let bbctx = BBContext::from_target(self, &target, &use_set);
+        let bbctx = BBContext::from_target(&target, &use_set);
         let target = bbctx.slot_state.clone();
         #[cfg(feature = "jit-debug")]
         eprintln!("  target_ctx:[{:?}]   {:?}", bbctx.sp, bbctx.slot_state);

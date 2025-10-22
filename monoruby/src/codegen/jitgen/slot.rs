@@ -51,6 +51,12 @@ impl SlotContext {
         ctx
     }
 
+    pub(super) fn from_target(target: &SlotContext) -> Self {
+        let mut ctx = Self::new(target.slots.len(), target.local_num);
+        ctx.set_guard_from(target);
+        ctx
+    }
+
     fn new(total_reg_num: usize, local_num: usize) -> Self {
         SlotContext {
             slots: vec![SlotState::default(); total_reg_num],
@@ -61,6 +67,25 @@ impl SlotContext {
             },
             r15: None,
             local_num,
+        }
+    }
+
+    fn temps(&self) -> std::ops::Range<SlotId> {
+        SlotId((1 + self.local_num) as u16)..SlotId(self.slots.len() as u16)
+    }
+
+    pub(super) fn temp_start(&self) -> SlotId {
+        SlotId((1 + self.local_num) as u16)
+    }
+
+    ///
+    /// Clear temporary slots.
+    ///
+    /// Temporary slots are set to V.
+    ///
+    pub(super) fn clear_temps(&mut self) {
+        for i in self.temps() {
+            self.clear(i);
         }
     }
 

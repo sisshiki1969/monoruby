@@ -19,9 +19,7 @@ impl JitContext {
             ir.self2reg(GP::Rdi);
             ir.push(AsmInst::GuardClass(GP::Rdi, self.self_class(), deopt));
         } else {
-            for i in (1 + self.local_num())..self.total_reg_num() {
-                bbctx.def_C(SlotId(i as u16), Value::nil());
-            }
+            bbctx.clear_temps();
             //bbctx.set_guard_class(SlotId::self_(), self.self_class());
             // for method JIT, class of *self* is already checked in an entry stub.
             match iseq.trace_ir(store, BcIndex::from(0)) {
