@@ -148,7 +148,30 @@ impl BBContext {
         }
     }
 
-    fn set_guard_from(&mut self, merger: &BBContext) {
+    fn from_target(ctx: &JitContext, target: &SlotContext, use_set: &[(SlotId, bool)]) -> Self {
+        let mut bbctx = BBContext::new(ctx);
+        bbctx.set_guard_from(target);
+        for (slot, coerced) in use_set {
+            match target.mode(*slot) {
+                LinkMode::S => {}
+                LinkMode::C(v) => {
+                    if v.is_float() {
+                        bbctx.def_new_F(*slot);
+                    }
+                }
+                LinkMode::F(r) if !coerced => {
+                    bbctx.def_F(*slot, r);
+                }
+                LinkMode::Sf(r) | LinkMode::F(r) => {
+                    bbctx.def_Sf(*slot, r, Guarded::Value);
+                }
+                LinkMode::G | LinkMode::V => unreachable!(),
+            };
+        }
+        bbctx
+    }
+
+    fn set_guard_from(&mut self, merger: &SlotContext) {
         self.slot_state.set_guard_from(merger)
     }
 

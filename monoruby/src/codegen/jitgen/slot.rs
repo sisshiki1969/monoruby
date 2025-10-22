@@ -320,6 +320,15 @@ impl SlotContext {
         }
     }
 
+    ///
+    /// Clear slots that are not to be used.
+    ///
+    pub(super) fn remove_unused(&mut self, unused: &[SlotId]) {
+        for r in unused {
+            self.discard(*r);
+        }
+    }
+
     // APIs for 'use'
 
     fn use_as_float(&mut self, slot: SlotId) {
@@ -1117,7 +1126,7 @@ impl BBContext {
     pub(super) fn gen_bridge(
         &mut self,
         ir: &mut AsmIr,
-        target: &BBContext,
+        target: &SlotContext,
         slot: SlotId,
         pc: BytecodePtr,
     ) {

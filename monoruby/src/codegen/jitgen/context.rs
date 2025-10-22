@@ -182,7 +182,7 @@ pub struct JitContext {
     ///
     /// Map for backward branches.
     ///
-    pub(super) backedge_map: HashMap<BasicBlockId, BBContext>,
+    pub(super) backedge_map: HashMap<BasicBlockId, SlotContext>,
     ///
     /// Information for bridges.
     ///
@@ -525,15 +525,10 @@ impl JitContext {
     ///
     /// Add new backward branch from *src_idx* to *dest* with the context *bbctx*.
     ///
-    pub(super) fn new_backedge(
-        &mut self,
-        iseq: &ISeqInfo,
-        mut target: BBContext,
-        bb_pos: BasicBlockId,
-    ) {
-        target.sp = iseq.get_sp(iseq.bb_info[bb_pos].begin);
+    pub(super) fn new_backedge(&mut self, target: SlotContext, bb_pos: BasicBlockId) {
+        //target.sp = iseq.get_sp(iseq.bb_info[bb_pos].begin);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_backedge:[{:?}] {:?}", target.sp, bb_pos);
+        eprintln!("   new_backedge:{:?}", bb_pos);
         self.backedge_map.insert(bb_pos, target);
     }
 
