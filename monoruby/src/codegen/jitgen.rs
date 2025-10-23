@@ -149,24 +149,7 @@ impl BBContext {
     }
 
     fn from_target(target: &SlotContext, use_set: &[(SlotId, bool)]) -> Self {
-        let mut slot_state = SlotContext::from_target(target);
-        for (slot, coerced) in use_set {
-            match target.mode(*slot) {
-                LinkMode::S => {}
-                LinkMode::C(v) => {
-                    if v.is_float() {
-                        slot_state.def_new_F(*slot);
-                    }
-                }
-                LinkMode::F(r) if !coerced => {
-                    slot_state.def_F(*slot, r);
-                }
-                LinkMode::Sf(r) | LinkMode::F(r) => {
-                    slot_state.def_Sf(*slot, r, Guarded::Value);
-                }
-                LinkMode::G | LinkMode::V => unreachable!(),
-            };
-        }
+        let slot_state = SlotContext::from_target(target, use_set);
         let sp = slot_state.temp_start();
         Self {
             slot_state,

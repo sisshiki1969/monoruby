@@ -885,7 +885,6 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
         reason: RecompileReason,
     },
-    WriteBack(WriteBack),
     WriteBackIfCaptured(WriteBack),
     HandleError(AsmError),
     ///

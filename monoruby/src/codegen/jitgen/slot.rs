@@ -51,9 +51,28 @@ impl SlotContext {
         ctx
     }
 
-    pub(super) fn from_target(target: &SlotContext) -> Self {
+    pub(super) fn from_target(target: &SlotContext, use_set: &[(SlotId, bool)]) -> Self {
         let mut ctx = Self::new(target.slots.len(), target.local_num);
-        ctx.set_guard_from(target);
+        for (i, state) in ctx.slots.iter_mut().enumerate() {
+            state.guarded = target.slots[i].guarded;
+        }
+        for (slot, coerced) in use_set {
+            match target.mode(*slot) {
+                LinkMode::S => {}
+                LinkMode::C(v) => {
+                    if v.is_float() {
+                        ctx.set_new_F(*slot);
+                    }
+                }
+                LinkMode::F(r) if !coerced => {
+                    ctx.set_F(*slot, r);
+                }
+                LinkMode::Sf(r) | LinkMode::F(r) => {
+                    ctx.set_Sf(*slot, r, Guarded::Value);
+                }
+                LinkMode::G | LinkMode::V => unreachable!(),
+            };
+        }
         ctx
     }
 
@@ -70,8 +89,12 @@ impl SlotContext {
         }
     }
 
+    fn locals(&self) -> std::ops::Range<SlotId> {
+        SlotId(1)..self.temp_start()
+    }
+
     fn temps(&self) -> std::ops::Range<SlotId> {
-        SlotId((1 + self.local_num) as u16)..SlotId(self.slots.len() as u16)
+        self.temp_start()..SlotId(self.slots.len() as u16)
     }
 
     pub(super) fn temp_start(&self) -> SlotId {
@@ -86,12 +109,6 @@ impl SlotContext {
     pub(super) fn clear_temps(&mut self) {
         for i in self.temps() {
             self.clear(i);
-        }
-    }
-
-    pub(super) fn set_guard_from(&mut self, other: &Self) {
-        for (i, state) in self.slots.iter_mut().enumerate() {
-            state.guarded = other.slots[i].guarded;
         }
     }
 
@@ -212,9 +229,6 @@ impl SlotContext {
     ///
     #[allow(non_snake_case)]
     fn set_Sf(&mut self, slot: SlotId, xmm: Xmm, guarded: Guarded) {
-        //if let LinkMode::Xmm(old_xmm) | LinkMode::Both(old_xmm) = self.mode(slot) {
-        //    self.xmm_remove(slot, old_xmm);
-        //}
         self.clear(slot);
         self.set_mode(slot, LinkMode::Sf(xmm));
         self.xmm_add(slot, xmm);
@@ -1003,7 +1017,7 @@ impl BBContext {
     ///
     /// Write back the value of the *slot* to the corresponding stack slot.
     ///
-    /// LinkMode of the *slot* is set to LinkMode::Stack or Both.
+    /// LinkMode of the *slot* is set to LinkMode::S or Sf or V.
     ///
     /// ### destroy
     /// - rax, rcx
@@ -1014,28 +1028,62 @@ impl BBContext {
         };
         match self.mode(slot) {
             LinkMode::F(xmm) => {
-                // Xmm -> Both
+                // F -> Sf
                 self.set_Sf_float(slot, xmm);
                 ir.xmm2stack(xmm, slot);
             }
             LinkMode::C(v) => {
-                // Literal -> Stack
+                // C -> S
                 self.set_mode(slot, LinkMode::S);
                 self.set_guarded(slot, Guarded::from_concrete_value(v));
                 ir.push(AsmInst::LitToStack(v, slot));
             }
             LinkMode::G => {
-                // R15 -> Stack
+                // G -> S
                 ir.acc2stack(slot);
                 assert_eq!(self.r15, Some(slot));
                 self.r15 = None;
                 self.set_mode(slot, LinkMode::S);
             }
             LinkMode::V => {
+                // We must write nil to the stack for GC.
                 ir.nil2stack(slot);
             }
             LinkMode::Sf(_) | LinkMode::S => {}
         }
+    }
+
+    ///
+    /// Write back the value of the *slot* to the corresponding stack slot.
+    ///
+    /// LinkMode of the *slot* is set to LinkMode::S or V.
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    ///
+    #[allow(non_snake_case)]
+    pub(super) fn to_S(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        if slot >= self.sp {
+            unreachable!("{:?} >= {:?} in to_S()", slot, self.sp);
+        };
+        match self.mode(slot) {
+            LinkMode::F(xmm) => {
+                ir.xmm2stack(xmm, slot);
+            }
+            LinkMode::C(v) => {
+                ir.push(AsmInst::LitToStack(v, slot));
+            }
+            LinkMode::G => {
+                ir.acc2stack(slot);
+            }
+            LinkMode::V => {
+                ir.nil2stack(slot);
+                return;
+            }
+            LinkMode::Sf(_) | LinkMode::S => {}
+        }
+        self.clear(slot);
+        self.set_mode(slot, LinkMode::S);
     }
 
     pub(super) fn xmm_swap(&mut self, ir: &mut AsmIr, l: Xmm, r: Xmm) {
@@ -1140,12 +1188,6 @@ impl BBContext {
 
     pub(crate) fn xmm_write_enc(&mut self, slot: SlotId) -> u64 {
         self.xmm_write(slot).enc()
-    }
-
-    fn release_locals(&mut self) {
-        for i in 1..1 + self.local_num as u16 {
-            self.def_S(SlotId(i));
-        }
     }
 
     pub(super) fn gen_bridge(
@@ -1291,15 +1333,14 @@ impl BBContext {
     }
 
     pub(super) fn write_back_locals(&mut self, ir: &mut AsmIr) {
-        let wb = self.get_locals_write_back();
-        ir.push(AsmInst::WriteBack(wb));
-        self.release_locals();
+        for i in self.locals() {
+            self.to_S(ir, i);
+        }
     }
 
     pub(super) fn write_back_locals_if_captured(&mut self, ir: &mut AsmIr) {
         let wb = self.get_locals_write_back();
         ir.push(AsmInst::WriteBackIfCaptured(wb));
-        //self.release_locals();
     }
 
     ///
