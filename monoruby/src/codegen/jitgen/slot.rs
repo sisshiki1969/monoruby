@@ -671,7 +671,8 @@ impl SlotContext {
 
     pub(super) fn get_gc_write_back(&self) -> WriteBack {
         let literal = self.wb_literal(|_| true);
-        WriteBack::new(vec![], literal, self.r15)
+        let void = self.wb_void();
+        WriteBack::new(vec![], literal, self.r15, void)
     }
 
     pub(super) fn get_write_back(&self, sp: SlotId) -> WriteBack {
@@ -682,7 +683,7 @@ impl SlotContext {
             Some(slot) if f(slot) => Some(slot),
             _ => None,
         };
-        WriteBack::new(xmm, literal, r15)
+        WriteBack::new(xmm, literal, r15, vec![])
     }
 
     fn xmm_swap(&mut self, l: Xmm, r: Xmm) {
@@ -757,16 +758,28 @@ impl SlotContext {
             .collect()
     }
 
+    fn wb_void(&self) -> Vec<SlotId> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, SlotState { link, .. })| match link {
+                LinkMode::V => Some(SlotId(idx as u16)),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn get_locals_write_back(&self) -> WriteBack {
         let local_num = self.local_num;
         let f = |reg: SlotId| reg.0 as usize <= local_num;
         let xmm = self.wb_xmm(f);
         let literal = self.wb_literal(f);
+        let void = self.wb_void();
         let r15 = match self.r15 {
             Some(slot) if f(slot) => Some(slot),
             _ => None,
         };
-        WriteBack::new(xmm, literal, r15)
+        WriteBack::new(xmm, literal, r15, void)
     }
 }
 
@@ -980,13 +993,13 @@ impl UsedAs {
         if self.killed {
             return;
         } else {
-            self.ty = self.ty.union(&other);
+            self.ty = self.ty.join(&other);
         }
     }
 
     fn merge(&self, other: &Self) -> Self {
         Self {
-            ty: self.ty.union(&other.ty),
+            ty: self.ty.join(&other.ty),
             killed: self.killed && other.killed,
         }
     }
@@ -1004,7 +1017,7 @@ enum UseTy {
 }
 
 impl UseTy {
-    fn union(&self, other: &Self) -> Self {
+    fn join(&self, other: &Self) -> Self {
         match (self, other) {
             (UseTy::Float, UseTy::Float) => UseTy::Float,
             (UseTy::NonFloat, UseTy::NonFloat) => UseTy::NonFloat,
@@ -1207,28 +1220,16 @@ impl BBContext {
             (LinkMode::F(l), LinkMode::Sf(r)) => {
                 ir.xmm2stack(l, slot);
                 if l == r {
-                    // Xmm(l) -> Both(l)
+                    // F(l) -> Sf(l)
                     self.set_Sf_float(slot, l);
                 } else {
-                    // Xmm(l) -> Both(r)
+                    // F(l) -> Sf(r)
                     self.to_both(ir, slot, l, r, guarded);
                 }
             }
-            /*(LinkMode::Both(l), LinkMode::Xmm(r)) => {
-                let deopt = self.new_deopt_with_pc(ir, pc + 1);
-                ir.stack2reg(slot, GP::Rax);
-                self.guard_class(ir, slot, GP::Rax, FLOAT_CLASS, deopt);
-                if l == r {
-                    // Both(l) -> Xmm(l)
-                    self.set_xmm(slot, l);
-                    } else {
-                    // Xmm/Both(l) -> Xmm(r)
-                    self.to_xmm(ir, slot, l, r);
-                }
-            }*/
             (LinkMode::Sf(l), LinkMode::Sf(r)) => {
                 if l != r {
-                    // Both(l) -> Both(r)
+                    // Sf(l) -> Sf(r)
                     self.to_both(ir, slot, l, r, guarded);
                 }
             }
@@ -1242,12 +1243,6 @@ impl BBContext {
                     self.guard_class_stack_slot(ir, slot, class, deopt);
                 }
             }
-            /*(LinkMode::Stack, LinkMode::Both(r)) => {
-                let deopt = self.new_deopt_with_pc(ir, pc + 1);
-                ir.stack2reg(slot, GP::Rax);
-                ir.push(AsmInst::NumToXmm(GP::Rax, r, deopt));
-                self.set_both(slot, r, guarded);
-            }*/
             (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
             (LinkMode::C(l), LinkMode::F(r)) => {
                 if let Some(f) = l.try_float() {
@@ -1274,7 +1269,9 @@ impl BBContext {
         }
     }
 
-    /// Generate bridge AsmIr from LinkMode::Xmm/Both(l) to LinkMode::Xmm(r).
+    ///
+    /// Generate bridge AsmIr from F/Sf(l) to F(r).
+    ///
     fn to_xmm(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm) {
         if self.is_xmm_vacant(r) {
             self.set_F(slot, r);
@@ -1284,7 +1281,9 @@ impl BBContext {
         }
     }
 
-    /// Generate bridge AsmIr from LinkMode::Xmm/Both(l) to LinkMode::Both(r).
+    ///
+    /// Generate bridge AsmIr from F/Sf(l) to Sf(r).
+    ///
     fn to_both(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm, guarded: Guarded) {
         if self.is_xmm_vacant(r) {
             self.set_Sf(slot, r, guarded);
@@ -1345,33 +1344,32 @@ impl BBContext {
 
     ///
     /// ~~~text
-    ///
     ///                              other
     ///       
-    ///                  Xmm     Both      f64     i63    Const
-    ///               +-------+--------+--------+-------+-------+
-    ///         Xmm   |  Xmm  |  Both  |   Xmm  | Stack | Stack |
-    ///               +-------+--------+--------+-------+-------+
-    ///         Both  |  Both |  Both  |  Both  | Both  | Stack |
-    ///  self         +-------+--------+--------+-------+-------|
-    ///         f64   |  Xmm  |  Both  |  Xmm*1 | Stack | Stack |
-    ///               +-------+--------+--------+-------+-------|
-    ///         i63   | Stack |  Both  |  Stack | Stack | Stack |
-    ///               +-------+--------+--------+-------+-------|
-    ///        Const  | Stack |  Stack |  Stack | Stack |Stack*2|
-    ///               +-------+--------+--------+-------+-------+
+    ///                  F      Sf      f64     i63      C
+    ///              +-------+-------+-------+-------+-------+
+    ///         F    |   F   |  Sf   |   F   |   S   |   S   |
+    ///              +-------+-------+-------+-------+-------+
+    ///         Sf   |   Sf  |  Sf   |   Sf  |  Sf   |   S   |
+    ///  self        +-------+-------+-------+-------+-------|
+    ///         f64  |   F   |  Sf   |  F*1  |   S   |   S   |
+    ///              +-------+-------+-------+-------+-------|
+    ///         i63  |   S   |  Sf   |   S   |   S   |   S   |
+    ///              +-------+-------+-------+-------+-------|
+    ///         C    |   S   |   S   |   S   |   S   |  S*2  |
+    ///              +-------+-------+-------+-------+-------+
     ///
     ///  *1: if self == other, f64.
     ///  *2: if self == other, Const.
     ///
     /// ~~~
     pub(in crate::codegen::jitgen) fn join(&mut self, other: &BBContext) {
+        if !other.class_version_guarded {
+            self.unset_class_version_guard();
+        }
         for i in 0..self.slots.len() {
             let i = SlotId(i as u16);
             self.is_used_mut(i).merge(other.is_used(i));
-            if !other.class_version_guarded {
-                self.unset_class_version_guard();
-            }
             match (self.mode(i), other.mode(i)) {
                 (LinkMode::V, LinkMode::V) => {}
                 (_, LinkMode::V) | (LinkMode::V, _) => {
@@ -1388,10 +1386,6 @@ impl BBContext {
                     let guarded = self.guarded(i).join(&other.guarded(i));
                     self.set_Sf(i, l, guarded)
                 }
-                /*(LinkMode::Both(l), LinkMode::ConcreteValue(r)) if r.is_fixnum() => {
-                    let guarded = self.guarded(i).union(&other.guarded(i));
-                    self.set_both(i, l, guarded)
-                }*/
                 (LinkMode::C(l), LinkMode::F(_)) if l.is_float() => {
                     self.set_new_F(i);
                 }

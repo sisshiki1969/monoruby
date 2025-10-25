@@ -19,11 +19,11 @@ impl JitContext {
             ir.self2reg(GP::Rdi);
             ir.push(AsmInst::GuardClass(GP::Rdi, self.self_class(), deopt));
         } else {
-            bbctx.clear_temps();
             //bbctx.set_guard_class(SlotId::self_(), self.self_class());
             // for method JIT, class of *self* is already checked in an entry stub.
             match iseq.trace_ir(store, BcIndex::from(0)) {
                 TraceIr::InitMethod(fn_info) => {
+                    bbctx.clear_temps();
                     ir.push(AsmInst::Init(fn_info));
                 }
                 _ => unreachable!(),

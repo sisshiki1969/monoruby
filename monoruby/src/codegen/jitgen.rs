@@ -189,7 +189,7 @@ impl BBContext {
             merge_ctx.join(bbctx);
         }
         #[cfg(feature = "jit-debug")]
-        eprintln!("  union_entries: {:?}", &merge_ctx);
+        eprintln!("  join_entries: {:?}", &merge_ctx);
         merge_ctx
     }
 
@@ -310,6 +310,7 @@ impl BBContext {
 pub(crate) struct WriteBack {
     xmm: Vec<(Xmm, Vec<SlotId>)>,
     literal: Vec<(Value, SlotId)>,
+    void: Vec<SlotId>,
     r15: Option<SlotId>,
 }
 
@@ -325,6 +326,9 @@ impl std::fmt::Debug for WriteBack {
         for (val, slot) in &self.literal {
             s.push_str(&format!(" {:?}->{:?}", val, slot));
         }
+        for slot in &self.void {
+            s.push_str(&format!(" nil->{:?}", slot));
+        }
         if let Some(slot) = self.r15 {
             s.push_str(&format!(" R15->{:?}", slot));
         }
@@ -337,12 +341,18 @@ impl WriteBack {
         xmm: Vec<(Xmm, Vec<SlotId>)>,
         literal: Vec<(Value, SlotId)>,
         r15: Option<SlotId>,
+        void: Vec<SlotId>,
     ) -> Self {
-        Self { xmm, literal, r15 }
+        Self {
+            xmm,
+            literal,
+            r15,
+            void,
+        }
     }
 
     fn is_empty(&self) -> bool {
-        self.xmm.is_empty() && self.literal.is_empty() && self.r15.is_none()
+        self.xmm.is_empty() && self.literal.is_empty() && self.r15.is_none() && self.void.is_empty()
     }
 }
 
@@ -776,6 +786,9 @@ impl JitModule {
         }
         for (v, slot) in &wb.literal {
             self.literal_to_stack(*slot, *v);
+        }
+        for slot in &wb.void {
+            self.literal_to_stack(*slot, Value::nil());
         }
         if let Some(slot) = wb.r15 {
             self.store_r15(slot);
