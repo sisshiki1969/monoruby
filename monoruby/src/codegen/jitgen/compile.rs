@@ -19,7 +19,6 @@ impl JitContext {
             ir.self2reg(GP::Rdi);
             ir.push(AsmInst::GuardClass(GP::Rdi, self.self_class(), deopt));
         } else {
-            //bbctx.set_guard_class(SlotId::self_(), self.self_class());
             // for method JIT, class of *self* is already checked in an entry stub.
             match iseq.trace_ir(store, BcIndex::from(0)) {
                 TraceIr::InitMethod(fn_info) => {
@@ -147,7 +146,7 @@ impl JitContext {
         let mut backedge: Option<BBContext> = None;
         if let Some(branches) = ctx.branch_map.remove(&loop_start) {
             for BranchEntry { src_bb, bbctx, .. } in branches {
-                liveness.merge(&bbctx);
+                liveness.join(&bbctx);
                 assert!(src_bb >= loop_start);
                 // backegde
                 if let Some(ctx) = &mut backedge {
@@ -184,7 +183,7 @@ impl JitContext {
                 CompileResult::Continue => {}
                 CompileResult::Branch => return,
                 CompileResult::Leave | CompileResult::Recompile(_) | CompileResult::ExitLoop => {
-                    liveness.merge(&bbctx);
+                    liveness.join(&bbctx);
                     return;
                 }
                 CompileResult::Abort => {
@@ -774,13 +773,13 @@ impl JitContext {
                 return CompileResult::Leave;
             }
             TraceIr::Raise(ret) => {
-                bbctx.write_back_locals(ir);
+                bbctx.locals_to_S(ir);
                 bbctx.fetch(ir, ret, GP::Rax);
                 ir.push(AsmInst::Raise);
                 return CompileResult::Leave;
             }
             TraceIr::EnsureEnd => {
-                bbctx.write_back_locals(ir);
+                bbctx.locals_to_S(ir);
                 ir.push(AsmInst::EnsureEnd);
             }
             TraceIr::Br(dest_idx) => {

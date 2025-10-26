@@ -42,7 +42,7 @@ impl JitContext {
 
         // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
         if callsite.block_fid.is_some() || store[func_id].meta().is_eval() {
-            bbctx.write_back_locals(ir);
+            bbctx.locals_to_S(ir);
         }
 
         self.recv_version_guard(bbctx, ir, recv, recv_class);
