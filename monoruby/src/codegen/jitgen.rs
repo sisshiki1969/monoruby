@@ -148,8 +148,16 @@ impl BBContext {
         }
     }
 
-    fn set_guard_from(&mut self, merger: &BBContext) {
-        self.slot_state.set_guard_from(merger)
+    fn from_target(target: &SlotContext, use_set: &[(SlotId, bool)]) -> Self {
+        let slot_state = SlotContext::from_target(target, use_set);
+        let sp = slot_state.temp_start();
+        Self {
+            slot_state,
+            sp,
+            next_sp: sp,
+            class_version_guarded: false,
+            pc: None,
+        }
     }
 
     fn pc(&self) -> BytecodePtr {
@@ -168,7 +176,7 @@ impl BBContext {
         self.class_version_guarded = false;
     }
 
-    fn union(entries: &[BranchEntry]) -> Self {
+    fn join_entries(entries: &[BranchEntry]) -> Self {
         let mut merge_ctx = entries.last().unwrap().bbctx.clone();
         for BranchEntry {
             src_bb: _src_bb,
@@ -178,10 +186,10 @@ impl BBContext {
         {
             #[cfg(feature = "jit-debug")]
             eprintln!("  <-{:?}:[{:?}] {:?}", _src_bb, bbctx.sp, bbctx.slot_state);
-            merge_ctx.merge(bbctx);
+            merge_ctx.join(bbctx);
         }
         #[cfg(feature = "jit-debug")]
-        eprintln!("  union_entries: {:?}", &merge_ctx);
+        eprintln!("  join_entries: {:?}", &merge_ctx);
         merge_ctx
     }
 
@@ -193,44 +201,44 @@ impl BBContext {
         self.slot_state.get_write_back(self.sp)
     }
 
-    pub(crate) fn rax2acc(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
-        self.reg2acc(ir, GP::Rax, dst);
+    pub(crate) fn def_rax2acc(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
+        self.def_reg2acc(ir, GP::Rax, dst);
     }
 
-    pub(crate) fn reg2acc(&mut self, ir: &mut AsmIr, src: GP, dst: impl Into<Option<SlotId>>) {
-        self.reg2acc_guarded(ir, src, dst, slot::Guarded::Value)
+    pub(crate) fn def_reg2acc(&mut self, ir: &mut AsmIr, src: GP, dst: impl Into<Option<SlotId>>) {
+        self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::Value)
     }
 
-    pub(crate) fn reg2acc_fixnum(
+    pub(crate) fn def_reg2acc_fixnum(
         &mut self,
         ir: &mut AsmIr,
         src: GP,
         dst: impl Into<Option<SlotId>>,
     ) {
-        self.reg2acc_guarded(ir, src, dst, slot::Guarded::Fixnum)
+        self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::Fixnum)
     }
 
-    pub(crate) fn reg2acc_class(
+    pub(crate) fn def_reg2acc_class(
         &mut self,
         ir: &mut AsmIr,
         src: GP,
         dst: impl Into<Option<SlotId>>,
         class: ClassId,
     ) {
-        self.reg2acc_guarded(ir, src, dst, slot::Guarded::Class(class))
+        self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::Class(class))
     }
 
-    pub(crate) fn reg2acc_concrete_value(
+    pub(crate) fn def_reg2acc_concrete_value(
         &mut self,
         ir: &mut AsmIr,
         src: GP,
         dst: impl Into<Option<SlotId>>,
         v: Value,
     ) {
-        self.reg2acc_guarded(ir, src, dst, Guarded::from_concrete_value(v))
+        self.def_reg2acc_guarded(ir, src, dst, Guarded::from_concrete_value(v))
     }
 
-    fn reg2acc_guarded(
+    fn def_reg2acc_guarded(
         &mut self,
         ir: &mut AsmIr,
         src: GP,
@@ -277,141 +285,12 @@ impl BBContext {
         });
         ir.lit2reg(*value, GP::Rax);
         if let Some(f) = value.try_float() {
-            let fdst = self.def_new_both_float(dst);
-            ir.f64toxmm(f, fdst);
+            let fdst = self.def_new_Sf_float(dst);
+            ir.f64_to_xmm(f, fdst);
             ir.reg2stack(GP::Rax, dst);
         } else {
-            self.reg2acc(ir, GP::Rax, dst);
+            self.def_reg2acc(ir, GP::Rax, dst);
         }
-    }
-
-    ///
-    /// Set positional arguments for callee.
-    ///
-    pub(super) fn set_arguments(
-        &mut self,
-        store: &Store,
-        ir: &mut AsmIr,
-        callsite: &CallSiteInfo,
-        callee_fid: FuncId,
-    ) {
-        let callee = &store[callee_fid];
-        let args = callsite.args;
-        let pos_num = callsite.pos_num;
-        let kw_pos = callsite.kw_pos;
-        let kw_num = callsite.kw_len();
-        if callee.is_simple_call(callsite) {
-            let stack_offset =
-                if (args..args + pos_num).any(|reg| matches!(self.mode(reg), LinkMode::Xmm(_))) {
-                    callee.get_offset() as i32
-                } else {
-                    0
-                };
-            ir.reg_sub(GP::Rsp, stack_offset);
-            // write back keyword arguments.
-            for arg in kw_pos..kw_pos + kw_num {
-                self.write_back_slot(ir, arg);
-            }
-            // write back block argument.
-            if let Some(block_arg) = callsite.block_arg {
-                self.write_back_slot(ir, block_arg);
-            }
-
-            // fetch positional arguments.
-            let (filled_req, filled_opt, filled_post) = callee.apply_args(pos_num);
-
-            // fill required params.
-            for i in 0..filled_req {
-                let reg = args + i;
-                let offset = stack_offset - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
-                self.fetch_for_callee(ir, reg, offset);
-            }
-            if filled_req != callee.req_num() {
-                ir.push(AsmInst::I32ToReg(NIL_VALUE as _, GP::Rax));
-                for i in filled_req..callee.req_num() {
-                    let offset = stack_offset - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
-                    ir.reg2rsp_offset(GP::Rax, offset);
-                }
-            }
-
-            // fill optional params.
-            for i in callee.req_num()..callee.req_num() + filled_opt {
-                let reg = args + filled_req + (i - callee.req_num());
-                let offset = stack_offset - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
-                self.fetch_for_callee(ir, reg, offset);
-            }
-            if filled_opt != callee.opt_num() {
-                ir.push(AsmInst::I32ToReg(0, GP::Rax));
-                for i in callee.req_num() + filled_opt..callee.reqopt_num() {
-                    let offset = stack_offset - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
-                    ir.reg2rsp_offset(GP::Rax, offset);
-                }
-            }
-
-            // fill post params.
-            let start = callee.reqopt_num() + callee.is_rest() as usize;
-            for i in start..start + filled_post {
-                let reg = args + filled_req + filled_opt + (i - start);
-                let offset = stack_offset - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
-                self.fetch_for_callee(ir, reg, offset);
-            }
-            if filled_post != callee.post_num() {
-                ir.push(AsmInst::I32ToReg(NIL_VALUE as _, GP::Rax));
-                for i in start + filled_post..start + callee.post_num() {
-                    let offset = stack_offset - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
-                    ir.reg2rsp_offset(GP::Rax, offset);
-                }
-            }
-
-            ir.reg_add(GP::Rsp, stack_offset);
-        } else {
-            self.write_back_args(ir, callsite);
-
-            let error = ir.new_error(self);
-            ir.push(AsmInst::SetArguments {
-                callid: callsite.id,
-                callee_fid,
-            });
-            ir.handle_error(error);
-        }
-    }
-
-    pub(super) fn set_binop_arguments(
-        &mut self,
-        store: &Store,
-        ir: &mut AsmIr,
-        callee_fid: FuncId,
-        mode: OpMode,
-    ) {
-        let callee = &store[callee_fid];
-        // callee.req_num() <= 1 at this point.
-        // callee.is_rest() || callee.max_positional_args() >= 1 at this point.
-        let xmm_flag = match mode {
-            OpMode::RR(_, rhs) | OpMode::IR(_, rhs) => {
-                matches!(self.mode(rhs), LinkMode::Xmm(_))
-            }
-            OpMode::RI(_, _) => false,
-        };
-        let ofs = if xmm_flag || callee.is_rest() {
-            (RSP_LOCAL_FRAME + LFP_ARG0 + 16 as i32) & !0xf
-        } else {
-            0
-        };
-
-        ir.reg_sub(GP::Rsp, ofs);
-        let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0);
-        self.fetch_rhs_for_callee(ir, mode, offset);
-        if 1 < callee.max_positional_args() {
-            ir.push(AsmInst::I32ToReg(0, GP::Rax));
-            for i in 1..callee.max_positional_args() {
-                let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * i) as i32);
-                ir.reg2rsp_offset(GP::Rax, offset);
-            }
-        }
-        if callee.is_rest() {
-            ir.push(AsmInst::RSPOffsetToArray(offset));
-        }
-        ir.reg_add(GP::Rsp, ofs);
     }
 
     pub(super) fn generic_unop(&mut self, ir: &mut AsmIr, func: UnaryOpFn) {
@@ -431,6 +310,7 @@ impl BBContext {
 pub(crate) struct WriteBack {
     xmm: Vec<(Xmm, Vec<SlotId>)>,
     literal: Vec<(Value, SlotId)>,
+    void: Vec<SlotId>,
     r15: Option<SlotId>,
 }
 
@@ -446,6 +326,9 @@ impl std::fmt::Debug for WriteBack {
         for (val, slot) in &self.literal {
             s.push_str(&format!(" {:?}->{:?}", val, slot));
         }
+        for slot in &self.void {
+            s.push_str(&format!(" nil->{:?}", slot));
+        }
         if let Some(slot) = self.r15 {
             s.push_str(&format!(" R15->{:?}", slot));
         }
@@ -458,12 +341,18 @@ impl WriteBack {
         xmm: Vec<(Xmm, Vec<SlotId>)>,
         literal: Vec<(Value, SlotId)>,
         r15: Option<SlotId>,
+        void: Vec<SlotId>,
     ) -> Self {
-        Self { xmm, literal, r15 }
+        Self {
+            xmm,
+            literal,
+            r15,
+            void,
+        }
     }
 
     fn is_empty(&self) -> bool {
-        self.xmm.is_empty() && self.literal.is_empty() && self.r15.is_none()
+        self.xmm.is_empty() && self.literal.is_empty() && self.r15.is_none() && self.void.is_empty()
     }
 }
 
@@ -511,28 +400,34 @@ impl UsingXmm {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 enum LinkMode {
     ///
-    /// No linkage with xmm regiter.
+    /// No Value.
+    ///
+    /// this is used for the temp slots above sp.
+    ///
+    V,
+    ///
+    /// On the stack slot.
     ///
     #[default]
-    Stack,
+    S,
     ///
-    /// Linked to an xmm register and we can read and write.
+    /// On the floating point register (xmm).
     ///
-    /// mutation of the corresponding xmm register (lazily) affects the stack slot.
+    /// mutation of the corresponding FPR lazily affects the stack slot.
     ///
-    Xmm(Xmm),
+    F(Xmm),
     ///
-    /// Linked to an xmm register but we can only read to keep consistency.
+    /// On the stack slot and on the floating point register (xmm) which is read-only.
     ///
-    Both(Xmm),
+    Sf(Xmm),
     ///
-    /// Concrete value..
+    /// Concrete value.
     ///
-    ConcreteValue(Value),
+    C(Value),
     ///
-    /// On accumulator (r15).
+    /// On the general-purpose register (r15).
     ///
-    Accumulator,
+    G,
 }
 
 impl Codegen {
@@ -892,6 +787,9 @@ impl JitModule {
         for (v, slot) in &wb.literal {
             self.literal_to_stack(*slot, *v);
         }
+        for slot in &wb.void {
+            self.literal_to_stack(*slot, Value::nil());
+        }
         if let Some(slot) = wb.r15 {
             self.store_r15(slot);
         }
@@ -1000,9 +898,9 @@ impl Codegen {
 
 #[test]
 fn float_test() {
-    let gen = Codegen::new();
+    let r#gen = Codegen::new();
 
-    let from_f64_entry = gen.jit.get_label_address(&gen.f64_to_val);
+    let from_f64_entry = r#gen.jit.get_label_address(&r#gen.f64_to_val);
     let from_f64: fn(f64) -> Value = unsafe { std::mem::transmute(from_f64_entry.as_ptr()) };
 
     for lhs in [
@@ -1030,22 +928,22 @@ fn float_test() {
 
 #[test]
 fn float_test2() {
-    let mut gen = Codegen::new();
+    let mut r#gen = Codegen::new();
 
-    let assume_int_to_f64 = gen.jit.label();
+    let assume_int_to_f64 = r#gen.jit.label();
     let x = Xmm(0);
-    monoasm!(&mut gen.jit,
+    monoasm!(&mut r#gen.jit,
     assume_int_to_f64:
         pushq rbp;
     );
-    gen.integer_val_to_f64(GP::Rdi, x);
-    monoasm!(&mut gen.jit,
+    r#gen.integer_val_to_f64(GP::Rdi, x);
+    monoasm!(&mut r#gen.jit,
         movq xmm0, xmm(x.enc());
         popq rbp;
         ret;
     );
-    gen.jit.finalize();
-    let int_to_f64_entry = gen.jit.get_label_address(&assume_int_to_f64);
+    r#gen.jit.finalize();
+    let int_to_f64_entry = r#gen.jit.get_label_address(&assume_int_to_f64);
 
     let int_to_f64: fn(Value) -> f64 = unsafe { std::mem::transmute(int_to_f64_entry.as_ptr()) };
     assert_eq!(143.0, int_to_f64(Value::integer(143)));

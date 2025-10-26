@@ -66,7 +66,7 @@ fn bytecode_compile_func(
     let info = globals.iseq(func_id);
     let (fid, outer) = info.mother();
     let params = globals.iseq(fid).args.clone();
-    let mut gen = BytecodeGen::new(info, (fid, params, outer), binding);
+    let mut r#gen = BytecodeGen::new(info, (fid, params, outer), binding);
     // arguments preparation
     for ForParamInfo {
         dst_outer,
@@ -74,7 +74,7 @@ fn bytecode_compile_func(
         src_reg,
     } in for_param_info
     {
-        gen.emit(
+        r#gen.emit(
             BytecodeInst::StoreDynVar {
                 dst: (dst_reg).into(),
                 outer: dst_outer,
@@ -84,50 +84,50 @@ fn bytecode_compile_func(
         );
     }
     for DestructureInfo { src, dst, len } in destruct_info {
-        gen.gen_expand_array(src, dst, len, None);
+        r#gen.gen_expand_array(src, dst, len, None);
     }
     for OptionalInfo { local, initializer } in optional_info {
         let local = local.into();
-        let next = gen.new_label();
-        gen.emit_check_local(local, next);
-        gen.gen_store_expr(local, initializer)?;
-        gen.apply_label(next);
+        let next = r#gen.new_label();
+        r#gen.emit_check_local(local, next);
+        r#gen.gen_store_expr(local, initializer)?;
+        r#gen.apply_label(next);
     }
     // keyword args preparation
     let kw_reg = info.args.total_positional_args();
     for (id, initializer) in keyword_initializers.into_iter().enumerate() {
         let local = BcLocal((kw_reg + id) as u16).into();
-        let next = gen.new_label();
-        gen.emit_check_local(local, next);
+        let next = r#gen.new_label();
+        r#gen.emit_check_local(local, next);
         if let Some(box init) = initializer {
-            gen.gen_store_expr(local, init)?;
+            r#gen.gen_store_expr(local, init)?;
         } else {
-            gen.emit_nil(local);
+            r#gen.emit_nil(local);
         }
-        gen.apply_label(next);
+        r#gen.apply_label(next);
     }
     // check keyword rest param. if nil, substitute with empty hash.
     if let Some(kw_rest) = info.args.kw_rest {
         let local = BcLocal(kw_rest.0 - 1).into();
-        gen.emit_check_kw_rest(local);
+        r#gen.emit_check_kw_rest(local);
     }
 
-    gen.apply_label(gen.redo_label);
+    r#gen.apply_label(r#gen.redo_label);
     // we must check whether redo exist in the function.
     let mut v = Visitor { redo_flag: false };
     v.visit(&ast);
     if v.redo_flag {
-        gen.emit(BytecodeInst::LoopStart, loc);
+        r#gen.emit(BytecodeInst::LoopStart, loc);
     }
-    gen.gen_expr(ast, UseMode2::Ret)?;
+    r#gen.gen_expr(ast, UseMode2::Ret)?;
     if v.redo_flag {
-        gen.emit(BytecodeInst::LoopEnd, loc);
+        r#gen.emit(BytecodeInst::LoopEnd, loc);
     }
-    gen.replace_init(info);
-    if let Some(value) = gen.is_const_function() {
+    r#gen.replace_init(info);
+    if let Some(value) = r#gen.is_const_function() {
         globals.iseq_mut(func_id).unwrap().set_const_fn(value);
     }
-    gen.into_bytecode(globals, loc)?;
+    r#gen.into_bytecode(globals, loc)?;
     globals.gen_wrapper(func_id);
     Ok(())
 }

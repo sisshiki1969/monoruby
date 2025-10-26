@@ -251,12 +251,12 @@ where
 
     unsafe fn get_and_increment<T>(ptr: &mut *mut T) -> *mut T {
         let old = *ptr;
-        *ptr = ptr.offset(1);
+        unsafe { *ptr = ptr.offset(1) };
         old
     }
 
     unsafe fn decrement_and_get<T>(ptr: &mut *mut T) -> *mut T {
-        *ptr = ptr.offset(-1);
+        unsafe { *ptr = ptr.offset(-1) };
         *ptr
     }
 

@@ -358,7 +358,7 @@ define_iter!(Iter, IterMut);
 macro_rules! define_iter_new {
     ($ty1: ident, $ty2: ty, $method: ident) => {
         impl<'a> $ty1<'a> {
-            fn new(hash: $ty2) -> $ty1 {
+            fn new(hash: $ty2) -> $ty1<'_> {
                 match hash {
                     HashContent::Map(map) => $ty1::Map(map.$method()),
                     HashContent::IdentMap(map) => $ty1::IdentMap(map.$method()),
@@ -417,7 +417,7 @@ impl HashContent {
         HashContent::Map(Box::new(map))
     }
 
-    pub(crate) fn iter(&self) -> Iter {
+    pub(crate) fn iter(&self) -> Iter<'_> {
         Iter::new(self)
     }
 

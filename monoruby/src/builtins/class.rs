@@ -128,15 +128,15 @@ pub(super) fn gen_class_new(
         let using_xmm = bb.get_using_xmm();
         let error = ir.new_error(bb);
         ir.xmm_save(using_xmm);
-        ir.inline(move |gen, _, _| {
-            let cached_version = gen.jit.data_i32(-1);
-            let cached_funcid = gen.jit.data_i32(-1);
-            let class_version = gen.class_version_label();
-            let slow_path = gen.jit.label();
-            let checked = gen.jit.label();
-            let initialize = gen.jit.label();
-            let exit = gen.jit.label();
-            monoasm!( &mut gen.jit,
+        ir.inline(move |r#gen, _, _| {
+            let cached_version = r#gen.jit.data_i32(-1);
+            let cached_funcid = r#gen.jit.data_i32(-1);
+            let class_version = r#gen.class_version_label();
+            let slow_path = r#gen.jit.label();
+            let checked = r#gen.jit.label();
+            let initialize = r#gen.jit.label();
+            let exit = r#gen.jit.label();
+            monoasm!( &mut r#gen.jit,
                 movq rax, (f);
                 call rax;
                 movq r15, rax; // r15 <- new instance
@@ -151,8 +151,8 @@ pub(super) fn gen_class_new(
                 movq rax, r15;
             );
 
-            gen.jit.select_page(1);
-            monoasm!( &mut gen.jit,
+            r#gen.jit.select_page(1);
+            monoasm!( &mut r#gen.jit,
             initialize:
                 movq rdi, rbx;
                 movq rsi, r12;
@@ -161,7 +161,7 @@ pub(super) fn gen_class_new(
                 lea r8, [r14 - (crate::executor::jitgen::conv(args))];
                 movl r9, (pos_num);
                 // TODO: Currently inline call does not support calling with block or keyword arguments.
-                movq rax, (gen.method_invoker2);
+                movq rax, (r#gen.method_invoker2);
                 call rax;
                 testq rax, rax;
                 jne  exit;
@@ -177,11 +177,11 @@ pub(super) fn gen_class_new(
                 movl [rip + cached_version], rdi;
                 jmp  checked;
             );
-            gen.jit.select_page(0);
+            r#gen.jit.select_page(0);
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
-        bb.rax2acc(ir, dst);
+        bb.def_rax2acc(ir, dst);
         true
     }
 }
@@ -202,14 +202,14 @@ fn class_allocate(
     ir.stack2reg(recv, GP::Rdi);
     let using_xmm = bb.get_using_xmm();
     ir.xmm_save(using_xmm);
-    ir.inline(move |gen, _, _| {
-        monoasm!( &mut gen.jit,
+    ir.inline(move |r#gen, _, _| {
+        monoasm!( &mut r#gen.jit,
             movq rax, (allocate_object);
             call rax;
         );
     });
     ir.xmm_restore(using_xmm);
-    bb.rax2acc(ir, dst);
+    bb.def_rax2acc(ir, dst);
     true
 }
 

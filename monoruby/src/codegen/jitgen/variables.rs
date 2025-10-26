@@ -25,7 +25,7 @@ impl JitContext {
             });
             true
         };
-        bbctx.reg2acc(ir, GP::R15, dst);
+        bbctx.def_reg2acc(ir, GP::R15, dst);
         ivar_heap
     }
 
@@ -60,7 +60,7 @@ impl BBContext {
         self.discard(dst);
         let using_xmm = self.get_using_xmm();
         ir.push(AsmInst::LoadGVar { name, using_xmm });
-        self.rax2acc(ir, dst);
+        self.def_rax2acc(ir, dst);
     }
 
     pub(super) fn jit_store_gvar(&mut self, ir: &mut AsmIr, name: IdentId, src: SlotId) {
@@ -79,14 +79,14 @@ impl BBContext {
         let error = ir.new_error(self);
         ir.push(AsmInst::LoadCVar { name, using_xmm });
         ir.handle_error(error);
-        self.rax2acc(ir, dst);
+        self.def_rax2acc(ir, dst);
     }
 
     pub(super) fn jit_check_cvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
         self.discard(dst);
         let using_xmm = self.get_using_xmm();
         ir.push(AsmInst::CheckCVar { name, using_xmm });
-        self.rax2acc(ir, dst);
+        self.def_rax2acc(ir, dst);
     }
 
     pub(super) fn jit_store_cvar(&mut self, ir: &mut AsmIr, name: IdentId, src: SlotId) {

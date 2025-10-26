@@ -111,14 +111,14 @@ fn object_object_id(
     bb.fetch(ir, recv, GP::Rdi);
     let using_xmm = bb.get_using_xmm();
     ir.xmm_save(using_xmm);
-    ir.inline(move |gen, _, _| {
-        monoasm! {&mut gen.jit,
+    ir.inline(move |r#gen, _, _| {
+        monoasm! {&mut r#gen.jit,
             movq rax, (crate::executor::op::i64_to_value);
             call rax;
         }
     });
     ir.xmm_restore(using_xmm);
-    bb.rax2acc(ir, ret);
+    bb.def_rax2acc(ir, ret);
     true
 }
 
@@ -171,11 +171,11 @@ pub fn object_send(
     let using_xmm = bb.get_using_xmm();
     let error = ir.new_error(bb);
     let callid = callsite.id;
-    ir.inline(move |gen, store, labels| {
+    ir.inline(move |r#gen, store, labels| {
         let error = &labels[error];
-        gen.object_send_inline(callid, store, using_xmm, &error, no_splat);
+        r#gen.object_send_inline(callid, store, using_xmm, &error, no_splat);
     });
-    bb.reg2acc(ir, GP::Rax, callsite.dst);
+    bb.def_reg2acc(ir, GP::Rax, callsite.dst);
     true
 }
 
@@ -354,7 +354,7 @@ fn object_respond_to(
     } else {
         false
     };
-    bb.def_concrete_value(dst, Value::bool(b));
+    bb.def_C(dst, Value::bool(b));
     true
 }
 

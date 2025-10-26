@@ -22,7 +22,7 @@ impl BBContext {
         T: PartialEq + PartialOrd,
     {
         let b = cmp(kind, lhs, rhs);
-        self.def_concrete_value(dst, Value::bool(b));
+        self.def_C(dst, Value::bool(b));
     }
 }
 
@@ -109,7 +109,7 @@ impl BBContext {
                 if let Some(result) = lhs.checked_add(rhs)
                     && Value::is_i63(result)
                 {
-                    self.def_fixnum_value(dst, result);
+                    self.def_C_fixnum(dst, result);
                     return true;
                 }
             }
@@ -117,7 +117,7 @@ impl BBContext {
                 if let Some(result) = lhs.checked_sub(rhs)
                     && Value::is_i63(result)
                 {
-                    self.def_fixnum_value(dst, result);
+                    self.def_C_fixnum(dst, result);
                     return true;
                 }
             }
@@ -125,7 +125,7 @@ impl BBContext {
                 if let Some(result) = lhs.checked_mul(rhs)
                     && Value::is_i63(result)
                 {
-                    self.def_fixnum_value(dst, result);
+                    self.def_C_fixnum(dst, result);
                     return true;
                 }
             }
@@ -133,7 +133,7 @@ impl BBContext {
                 if let Some(result) = lhs.checked_div(rhs)
                     && Value::is_i63(result)
                 {
-                    self.def_fixnum_value(dst, result);
+                    self.def_C_fixnum(dst, result);
                     return true;
                 }
             }
@@ -141,21 +141,21 @@ impl BBContext {
                 if let Some(result) = lhs.checked_rem(rhs)
                     && Value::is_i63(result)
                 {
-                    self.def_fixnum_value(dst, result);
+                    self.def_C_fixnum(dst, result);
                     return true;
                 }
             }
             BinOpK::Exp => {}
             BinOpK::BitOr => {
-                self.def_fixnum_value(dst, lhs | rhs);
+                self.def_C_fixnum(dst, lhs | rhs);
                 return true;
             }
             BinOpK::BitAnd => {
-                self.def_fixnum_value(dst, lhs & rhs);
+                self.def_C_fixnum(dst, lhs & rhs);
                 return true;
             }
             BinOpK::BitXor => {
-                self.def_fixnum_value(dst, lhs ^ rhs);
+                self.def_C_fixnum(dst, lhs ^ rhs);
                 return true;
             }
         }
@@ -191,39 +191,39 @@ impl BBContext {
                 let rhs = GP::Rsi;
                 let deopt = self.fetch_fixnum_comm(ir, lhs, rhs, mode);
                 ir.integer_binop(kind, lhs, rhs, mode, deopt);
-                self.reg2acc_fixnum(ir, lhs, dst);
+                self.def_reg2acc_fixnum(ir, lhs, dst);
             }
             BinOpK::Sub => {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
                 let deopt = self.fetch_fixnum_mode(ir, lhs, rhs, mode);
                 ir.integer_binop(kind, lhs, rhs, mode, deopt);
-                self.reg2acc_fixnum(ir, lhs, dst);
+                self.def_reg2acc_fixnum(ir, lhs, dst);
             }
             BinOpK::Exp => {
                 self.fetch_fixnum_binary(ir, GP::Rdi, GP::Rsi, mode);
                 ir.integer_exp(self);
-                self.reg2acc(ir, GP::Rax, dst);
+                self.def_reg2acc(ir, GP::Rax, dst);
             }
             BinOpK::Div => {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
                 let deopt = self.fetch_fixnum_binary(ir, lhs, rhs, mode);
                 ir.integer_binop(kind, lhs, rhs, mode, deopt);
-                self.reg2acc_fixnum(ir, GP::Rax, dst);
+                self.def_reg2acc_fixnum(ir, GP::Rax, dst);
             }
             BinOpK::Rem => match mode {
                 OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
                     self.fetch_fixnum_r_nodeopt(ir, lhs, GP::Rax);
                     ir.reg_and(GP::Rax, (rhs * 2 - 1) as i64 as u64);
-                    self.reg2acc_fixnum(ir, GP::Rax, dst);
+                    self.def_reg2acc_fixnum(ir, GP::Rax, dst);
                 }
                 _ => {
                     let lhs = GP::Rdi;
                     let rhs = GP::Rsi;
                     let deopt = self.fetch_fixnum_binary(ir, lhs, rhs, mode);
                     ir.integer_binop(kind, lhs, rhs, mode, deopt);
-                    self.reg2acc_fixnum(ir, GP::Rax, dst);
+                    self.def_reg2acc_fixnum(ir, GP::Rax, dst);
                 }
             },
         }
@@ -233,19 +233,19 @@ impl BBContext {
         if let Some((lhs, rhs)) = self.check_concrete_float(info.mode) {
             match kind {
                 BinOpK::Add => {
-                    self.def_float_value(info.dst, lhs + rhs);
+                    self.def_C_float(info.dst, lhs + rhs);
                     return;
                 }
                 BinOpK::Sub => {
-                    self.def_float_value(info.dst, lhs - rhs);
+                    self.def_C_float(info.dst, lhs - rhs);
                     return;
                 }
                 BinOpK::Mul => {
-                    self.def_float_value(info.dst, lhs * rhs);
+                    self.def_C_float(info.dst, lhs * rhs);
                     return;
                 }
                 BinOpK::Div => {
-                    self.def_float_value(info.dst, lhs / rhs);
+                    self.def_C_float(info.dst, lhs / rhs);
                     return;
                 }
                 _ => {}
@@ -281,7 +281,7 @@ impl BBContext {
         };
         let (lhs, rhs) = self.fetch_fixnum_mode_nodeopt(ir, mode);
         ir.integer_cmp(mode, kind, lhs, rhs);
-        self.rax2acc(ir, dst);
+        self.def_rax2acc(ir, dst);
     }
 
     pub(super) fn gen_cmp_float(&mut self, ir: &mut AsmIr, info: BinOpInfo, kind: CmpKind) {
@@ -290,10 +290,10 @@ impl BBContext {
             return;
         };
         let mode = self.fmode(ir, info);
-        self.discard(info.dst);
+        //self.discard(info.dst);
         self.clear_above_next_sp();
         ir.push(AsmInst::FloatCmp { kind, mode });
-        self.rax2acc(ir, info.dst);
+        self.def_rax2acc(ir, info.dst);
     }
 
     pub(super) fn gen_cmpbr_integer(

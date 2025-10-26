@@ -105,22 +105,22 @@ fn kernel_nil(
     let CallSiteInfo { recv, dst, .. } = *callsite;
     if bb.is_nil(recv) {
         if let Some(dst) = dst {
-            bb.def_concrete_value(dst, Value::bool(true));
+            bb.def_C(dst, Value::bool(true));
         }
     } else if bb.is_not_nil(recv) {
         if let Some(dst) = dst {
-            bb.def_concrete_value(dst, Value::bool(false));
+            bb.def_C(dst, Value::bool(false));
         }
     } else {
-        ir.inline(|gen, _, _| {
-            monoasm! { &mut gen.jit,
+        ir.inline(|r#gen, _, _| {
+            monoasm! { &mut r#gen.jit,
                 movq rax, (FALSE_VALUE);
                 movq rsi, (TRUE_VALUE);
                 cmpq rdi, (NIL_VALUE);
                 cmoveqq rax, rsi;
             }
         });
-        bb.rax2acc(ir, dst);
+        bb.def_rax2acc(ir, dst);
     }
     true
 }
@@ -139,12 +139,12 @@ fn kernel_block_given(
     let dst = callsite.dst;
     if jitctx.current_frame_given_block().is_some() {
         if let Some(dst) = dst {
-            bb.def_concrete_value(dst, Value::bool(true));
+            bb.def_C(dst, Value::bool(true));
         }
     } else {
-        ir.inline(|gen, _, _| {
-            let exit = gen.jit.label();
-            monoasm! { &mut gen.jit,
+        ir.inline(|r#gen, _, _| {
+            let exit = r#gen.jit.label();
+            monoasm! { &mut r#gen.jit,
                 movq rax, (FALSE_VALUE);
                 movq rdi, [r14 - (LFP_BLOCK)];
                 testq rdi, rdi;
@@ -155,7 +155,7 @@ fn kernel_block_given(
             exit:
             }
         });
-        bb.rax2acc(ir, dst);
+        bb.def_rax2acc(ir, dst);
     }
 
     true
@@ -658,11 +658,7 @@ fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
     let program = if include_meta {
         args.push(if cfg!(windows) { "/C" } else { "-c" }.to_string());
         args.push(input.to_string());
-        if cfg!(windows) {
-            "cmd"
-        } else {
-            "sh"
-        }
+        if cfg!(windows) { "cmd" } else { "sh" }
     } else {
         let input: Vec<&str> = input.split(' ').collect();
         input[1..].iter().for_each(|s| args.push(s.to_string()));
@@ -1047,7 +1043,7 @@ fn dlcall(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
             return Err(MonorubyErr::argumenterr(format!(
                 "arguments too many: {}",
                 x
-            )))
+            )));
         }
     };
     let res = match ret_type {

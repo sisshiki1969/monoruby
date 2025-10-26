@@ -183,12 +183,19 @@ impl AsmIr {
         self.push(AsmInst::RegAnd(r, i));
     }
 
-    pub(super) fn reg2rsp_offset(&mut self, r: GP, i: i32) {
-        self.push(AsmInst::RegToRSPOffset(r, i));
+    /// movq [rsp + (ofs)], R(r);
+    pub(super) fn reg2rsp_offset(&mut self, r: GP, ofs: i32) {
+        self.push(AsmInst::RegToRSPOffset(r, ofs));
     }
 
-    pub(super) fn i32torsp_offset(&mut self, val: i32, i: i32) {
-        self.push(AsmInst::I32ToRSPOffset(val, i));
+    /// movq [rsp + (ofs)], 0;
+    pub(super) fn zero2rsp_offset(&mut self, ofs: i32) {
+        self.push(AsmInst::ZeroToRSPOffset(ofs));
+    }
+
+    /// movq [rsp + (ofs)], (i);
+    pub(super) fn u64torsp_offset(&mut self, i: u64, ofs: i32) {
+        self.push(AsmInst::U64ToRSPOffset(i, ofs));
     }
 
     pub(crate) fn reg2stack(&mut self, src: GP, dst: impl Into<Option<SlotId>>) {
@@ -230,6 +237,10 @@ impl AsmIr {
         self.push(AsmInst::AccToStack(reg));
     }
 
+    pub fn nil2stack(&mut self, reg: SlotId) {
+        self.push(AsmInst::NilToStack(reg));
+    }
+
     ///
     /// Convert Fixnum to f64.
     ///
@@ -265,21 +276,21 @@ impl AsmIr {
     ///
     /// - rax, rdi
     ///
-    pub fn float2xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
+    pub fn float_to_xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
         self.push(AsmInst::FloatToXmm(reg, x, deopt));
     }
 
     ///
     /// Move *f*(f64) to Xmm(*x*).
     ///
-    pub fn f64toxmm(&mut self, f: f64, x: Xmm) {
+    pub fn f64_to_xmm(&mut self, f: f64, x: Xmm) {
         self.push(AsmInst::F64ToXmm(f, x));
     }
 
     ///
     /// Move *i*(i63) to the stack *slot* and Xmm(*x*).
     ///
-    pub fn i64toboth(&mut self, i: i64, slot: SlotId, x: Xmm) {
+    pub fn i64_to_stack_and_xmm(&mut self, i: i64, slot: SlotId, x: Xmm) {
         self.push(AsmInst::I64ToBoth(i, slot, x));
     }
 
@@ -674,24 +685,31 @@ impl AsmIr {
 
 #[derive(Debug)]
 pub(super) enum AsmInst {
-    /// move acc to stack
-    AccToStack(SlotId),
-    /// move reg to acc
-    RegToAcc(GP),
     /// move reg to stack
     RegToStack(GP, SlotId),
+    /// move acc to stack
+    AccToStack(SlotId),
+    /// store zero in stack
+    NilToStack(SlotId),
+
+    /// move reg to acc
+    RegToAcc(GP),
+
     /// move reg to stack
     StackToReg(SlotId, GP),
     LitToReg(Value, GP),
-    I32ToReg(i32, GP),
+
     /// move reg to reg
     RegMove(GP, GP),
     RegAdd(GP, i32),
     RegSub(GP, i32),
     RegAnd(GP, u64),
+    /// movq [rsp + (ofs)], R(r);
     RegToRSPOffset(GP, i32),
-    I32ToRSPOffset(i32, i32),
-
+    /// movq [rsp + (ofs)], 0;
+    ZeroToRSPOffset(i32),
+    /// movq [rsp + (ofs)], (i);
+    U64ToRSPOffset(u64, i32),
     RSPOffsetToArray(i32),
 
     XmmMove(Xmm, Xmm),
@@ -867,7 +885,6 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
         reason: RecompileReason,
     },
-    WriteBack(WriteBack),
     WriteBackIfCaptured(WriteBack),
     HandleError(AsmError),
     ///
@@ -933,6 +950,7 @@ pub(super) enum AsmInst {
         error: AsmError,
         evict: AsmEvict,
         outer_lfp: Option<Lfp>,
+        simple: bool,
     },
     ///
     /// Send specialized method
@@ -951,6 +969,7 @@ pub(super) enum AsmInst {
         patch_point: Option<JitLabel>,
         error: AsmError,
         evict: AsmEvict,
+        simple: bool,
     },
     BinopCached {
         recv_class: ClassId,
@@ -970,6 +989,7 @@ pub(super) enum AsmInst {
         entry: JitLabel,
         error: AsmError,
         evict: AsmEvict,
+        simple: bool,
     },
     ///
     /// Imnmediate eviction.

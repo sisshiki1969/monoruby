@@ -69,8 +69,13 @@ impl Codegen {
                 let label = ctx.resolve_label(&mut self.jit, label);
                 self.jit.bind_label(label);
             }
-            AsmInst::AccToStack(r) => {
-                self.store_r15(r);
+            AsmInst::AccToStack(slot) => {
+                self.store_r15(slot);
+            }
+            AsmInst::NilToStack(slot) => {
+                monoasm! { &mut self.jit,
+                    movq [r14 - (conv(slot))], (NIL_VALUE);
+                }
             }
             AsmInst::RegToAcc(r) => {
                 if r != GP::R15 {
@@ -96,12 +101,6 @@ impl Codegen {
                 let r = r as u64;
                 monoasm!( &mut self.jit,
                     movq R(r), (v.id());
-                );
-            }
-            AsmInst::I32ToReg(i, r) => {
-                let r = r as u64;
-                monoasm!( &mut self.jit,
-                    movl R(r), (i);
                 );
             }
             AsmInst::RegMove(src, dst) => {
@@ -136,20 +135,25 @@ impl Codegen {
             AsmInst::RegToRSPOffset(r, ofs) => {
                 let r = r as u64;
                 monoasm!( &mut self.jit,
-                    movq [rsp + (ofs)], R(r);
+                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], R(r);
+                );
+            }
+            AsmInst::ZeroToRSPOffset(ofs) => {
+                monoasm!( &mut self.jit,
+                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], 0;
+                );
+            }
+            AsmInst::U64ToRSPOffset(i, ofs) => {
+                monoasm!( &mut self.jit,
+                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], (i);
                 );
             }
             AsmInst::RSPOffsetToArray(ofs) => {
                 monoasm!( &mut self.jit,
-                    movq rdi, [rsp + (ofs)];
+                    movq rdi, [rsp + (ofs - RSP_LOCAL_FRAME)];
                     movq rax, (to_array);
                     call rax;
-                    movq [rsp + (ofs)], rax;
-                );
-            }
-            AsmInst::I32ToRSPOffset(i, ofs) => {
-                monoasm!( &mut self.jit,
-                    movq [rsp + (ofs)], (Value::i32(i).id());
+                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], rax;
                 );
             }
 
@@ -260,7 +264,6 @@ impl Codegen {
                 );
                 self.jit.select_page(0);
             }
-            AsmInst::WriteBack(wb) => self.gen_write_back(&wb),
             AsmInst::WriteBackIfCaptured(wb) => self.gen_write_back_if_captured(&wb),
             AsmInst::XmmSave(using_xmm) => self.xmm_save(using_xmm),
             AsmInst::XmmRestore(using_xmm) => self.xmm_restore(using_xmm),
@@ -387,10 +390,12 @@ impl Codegen {
                 error,
                 evict,
                 outer_lfp,
+                simple,
             } => {
                 let error = &labels[error];
-                let return_addr =
-                    self.gen_send(store, callid, callee_fid, recv_class, error, outer_lfp);
+                let return_addr = self.gen_send(
+                    store, callid, callee_fid, recv_class, error, outer_lfp, simple,
+                );
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
             AsmInst::SendSpecialized {
@@ -400,6 +405,7 @@ impl Codegen {
                 patch_point,
                 error,
                 evict,
+                simple,
             } => {
                 let error = &labels[error];
                 let patch_point = patch_point.map(|label| ctx.resolve_label(&mut self.jit, label));
@@ -411,6 +417,7 @@ impl Codegen {
                     entry_label,
                     patch_point,
                     error,
+                    simple,
                 );
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
@@ -441,11 +448,19 @@ impl Codegen {
                 entry,
                 error,
                 evict,
+                simple,
             } => {
                 let error = &labels[error];
                 let block_entry = ctx.resolve_label(&mut self.jit, entry);
-                let return_addr =
-                    self.gen_yield_specialized(store, callid, iseq, outer, block_entry, error);
+                let return_addr = self.gen_yield_specialized(
+                    store,
+                    callid,
+                    iseq,
+                    outer,
+                    block_entry,
+                    error,
+                    simple,
+                );
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
 

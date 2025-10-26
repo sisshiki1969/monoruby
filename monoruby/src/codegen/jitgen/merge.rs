@@ -94,37 +94,20 @@ impl JitContext {
             eprintln!("  not used: {:?}", unused);
         }
 
-        let mut target = BBContext::union(&entries);
+        let mut target = BBContext::join_entries(&entries);
         if let Some(backedge) = backedge {
-            target.merge(&backedge);
+            target.join(&backedge);
         }
 
-        let mut bbctx = BBContext::new(self);
-        bbctx.set_guard_from(&target);
-        for (slot, coerced) in use_set {
-            match target.mode(slot) {
-                LinkMode::Stack => {}
-                LinkMode::ConcreteValue(v) => {
-                    if v.is_float() {
-                        bbctx.def_new_xmm(slot);
-                    }
-                }
-                LinkMode::Xmm(r) if !coerced => {
-                    bbctx.def_xmm(slot, r);
-                }
-                LinkMode::Both(r) | LinkMode::Xmm(r) => {
-                    bbctx.def_both(slot, r, Guarded::Value);
-                }
-                LinkMode::Accumulator => unreachable!(),
-            };
-        }
+        let bbctx = BBContext::from_target(&target, &use_set);
+        let target = bbctx.slot_state.clone();
         #[cfg(feature = "jit-debug")]
         eprintln!("  target_ctx:[{:?}]   {:?}", bbctx.sp, bbctx.slot_state);
 
         let pc = iseq.get_bb_pc(bbid);
-        self.gen_bridges_for_branches(&bbctx, entries, bbid, pc + 1, &unused);
+        self.gen_bridges_for_branches(&target, entries, bbid, pc + 1, &unused);
 
-        self.new_backedge(iseq, bbctx.clone(), bbid);
+        self.new_backedge(target, bbid);
 
         Some(bbctx)
     }
@@ -136,7 +119,7 @@ impl JitContext {
     ) -> Option<BBContext> {
         let entries = self.branch_map.remove(&bbid)?;
 
-        let target_ctx = BBContext::union(&entries);
+        let target_ctx = BBContext::join_entries(&entries);
 
         let pc = iseq.get_bb_pc(bbid);
         self.gen_bridges_for_branches(&target_ctx, entries, bbid, pc, &[]);
@@ -149,13 +132,13 @@ impl JitContext {
     ///
     fn gen_bridges_for_branches(
         &mut self,
-        target_bb: &BBContext,
+        target: &SlotContext,
         entries: Vec<BranchEntry>,
         bbid: BasicBlockId,
         pc: BytecodePtr,
         unused: &[SlotId],
     ) {
-        let mut target_ctx = target_bb.clone();
+        let mut target_ctx = target.clone();
         target_ctx.remove_unused(unused);
         for BranchEntry {
             src_bb,
@@ -191,18 +174,9 @@ impl JitContext {
 
 impl BBContext {
     ///
-    /// Clear slots that are not to be used.
-    ///
-    fn remove_unused(&mut self, unused: &[SlotId]) {
-        for r in unused {
-            self.discard(*r);
-        }
-    }
-
-    ///
     /// Generate bridge AsmIr to merge current state(*bbctx*) with target state(*target*)
     ///
-    fn gen_bridge_for_target(mut self, ir: &mut AsmIr, target: &BBContext, pc: BytecodePtr) {
+    fn gen_bridge_for_target(mut self, ir: &mut AsmIr, target: &SlotContext, pc: BytecodePtr) {
         let len = self.sp.0 as usize;
 
         for i in 0..len {

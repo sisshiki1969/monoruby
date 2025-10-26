@@ -778,7 +778,7 @@ impl Codegen {
         codegen.jit.finalize();
 
         unsafe {
-            use libc::{sighandler_t, SA_RESTART, SIGINT};
+            use libc::{SA_RESTART, SIGINT, sighandler_t};
             let mut sa: libc::sigaction = std::mem::zeroed();
 
             sa.sa_sigaction = signal_handler.as_ptr() as sighandler_t;
@@ -1141,11 +1141,7 @@ impl Codegen {
                 .iter()
                 .filter_map(
                     |(bc_pos, code_pos)| {
-                        if *code_pos == i {
-                            Some(*bc_pos)
-                        } else {
-                            None
-                        }
+                        if *code_pos == i { Some(*bc_pos) } else { None }
                     },
                 )
                 .for_each(|bc_pos| {
@@ -1235,7 +1231,7 @@ mod tests {
 
     #[test]
     fn guard_class() {
-        let mut gen = Codegen::new();
+        let mut r#gen = Codegen::new();
 
         for (class, value) in [
             (INTEGER_CLASS, Value::integer(-2558)),
@@ -1256,7 +1252,7 @@ mod tests {
             (HASH_CLASS, Value::hash(RubyMap::default())),
             (STRING_CLASS, Value::string_from_str("Ruby")),
         ] {
-            let func = gen.jit.get_label_addr(&gen.get_class);
+            let func = r#gen.jit.get_label_addr(&r#gen.get_class);
 
             assert_eq!(class, func(value))
         }
@@ -1264,7 +1260,7 @@ mod tests {
 
     #[test]
     fn test_f64_to_val() {
-        let mut gen = Codegen::new();
+        let mut r#gen = Codegen::new();
 
         for f in [
             1.44e-17,
@@ -1277,8 +1273,8 @@ mod tests {
             f64::MAX,
             f64::MIN,
         ] {
-            let f64_to_val = gen.f64_to_val.clone();
-            let func: extern "C" fn(f64) -> Value = gen.jit.get_label_addr(&f64_to_val);
+            let f64_to_val = r#gen.f64_to_val.clone();
+            let func: extern "C" fn(f64) -> Value = r#gen.jit.get_label_addr(&f64_to_val);
             if f.is_nan() {
                 assert!(func(f).try_float().unwrap().is_nan())
             } else {

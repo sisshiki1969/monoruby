@@ -35,19 +35,19 @@ impl BBContext {
         &mut self,
         ir: &mut AsmIr,
         slot: SlotId,
-        offset: i32,
+        ofs: i32,
     ) {
         if slot >= self.sp {
             unreachable!("{:?} >= {:?} in fetch_for_callee()", slot, self.sp);
         };
         self.use_as_value(slot);
         match self.mode(slot) {
-            LinkMode::Accumulator => {
-                ir.reg2rsp_offset(GP::R15, offset);
+            LinkMode::G => {
+                ir.reg2rsp_offset(GP::R15, ofs);
             }
             _ => {
                 self.fetch(ir, slot, GP::Rax);
-                ir.reg2rsp_offset(GP::Rax, offset);
+                ir.reg2rsp_offset(GP::Rax, ofs);
             }
         }
     }
@@ -65,7 +65,7 @@ impl BBContext {
                 };
                 self.fetch_for_callee_stack(ir, slot, offset);
             }
-            OpMode::RI(_, i) => ir.i32torsp_offset(i as i32, offset),
+            OpMode::RI(_, i) => ir.u64torsp_offset(Value::i32(i as i32).id(), offset),
         }
     }
 
@@ -100,29 +100,32 @@ impl SlotContext {
     fn fetch_gpr(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP) {
         self.use_as_value(slot);
         match self.mode(slot) {
-            LinkMode::Xmm(xmm) => {
+            LinkMode::F(xmm) => {
                 if dst == GP::R15 {
                     assert!(self.r15.is_none());
                 }
                 // Xmm(x) -> Both(x)
                 ir.xmm2stack(xmm, slot);
                 ir.reg_move(GP::Rax, dst);
-                self.set_both_float(slot, xmm);
+                self.set_Sf_float(slot, xmm);
             }
-            LinkMode::ConcreteValue(v) => {
+            LinkMode::C(v) => {
                 if dst == GP::R15 {
                     assert!(self.r15.is_none());
                 }
                 ir.lit2reg(v, dst);
             }
-            LinkMode::Both(_) | LinkMode::Stack => {
+            LinkMode::Sf(_) | LinkMode::S => {
                 if dst == GP::R15 {
                     assert!(self.r15.is_none());
                 }
                 ir.stack2reg(slot, dst);
             }
-            LinkMode::Accumulator => {
+            LinkMode::G => {
                 ir.reg_move(GP::R15, dst);
+            }
+            LinkMode::V => {
+                unreachable!("fetch_gpr() on V");
             }
         }
     }
@@ -135,7 +138,7 @@ impl SlotContext {
     ///
     fn fetch_for_callee_stack(&mut self, ir: &mut AsmIr, slot: SlotId, offset: i32) {
         match self.mode(slot) {
-            LinkMode::Accumulator => {
+            LinkMode::G => {
                 self.use_as_value(slot);
                 ir.reg2rsp_offset(GP::R15, offset);
             }
@@ -160,25 +163,28 @@ impl SlotContext {
     ) -> Xmm {
         self.use_as_float(slot);
         match self.mode(slot) {
-            LinkMode::Both(x) | LinkMode::Xmm(x) => x,
-            LinkMode::Stack => {
-                // -> Both
+            LinkMode::Sf(x) | LinkMode::F(x) => x,
+            LinkMode::S => {
+                // -> Sf
                 ir.stack2reg(slot, GP::Rdi);
                 self.guard_fixnum(ir, slot, GP::Rdi, deopt);
-                let x = self.set_new_both(slot, Guarded::Fixnum);
+                let x = self.set_new_Sf(slot, Guarded::Fixnum);
                 ir.fixnum2xmm(GP::Rdi, x);
                 x
             }
-            LinkMode::Accumulator => {
-                // -> Both
+            LinkMode::G => {
+                // -> Sf
                 ir.reg2stack(GP::R15, slot);
                 self.guard_fixnum(ir, slot, GP::R15, deopt);
-                let x = self.set_new_both(slot, Guarded::Fixnum);
+                let x = self.set_new_Sf(slot, Guarded::Fixnum);
                 ir.reg_move(GP::R15, GP::Rdi);
                 ir.fixnum2xmm(GP::Rdi, x);
                 x
             }
-            LinkMode::ConcreteValue(v) => self.fetch_float_concrete_value_for_xmm(ir, slot, v),
+            LinkMode::C(v) => self.fetch_float_concrete_value_for_xmm(ir, slot, v),
+            LinkMode::V => {
+                unreachable!("fetch_integer_for_xmm() on V");
+            }
         }
     }
 
@@ -197,23 +203,26 @@ impl SlotContext {
     ) -> Xmm {
         self.use_as_float(slot);
         match self.mode(slot) {
-            LinkMode::Both(x) | LinkMode::Xmm(x) => x,
-            LinkMode::Stack => {
-                // -> Both
-                let x = self.set_new_both(slot, Guarded::Float);
+            LinkMode::Sf(x) | LinkMode::F(x) => x,
+            LinkMode::S => {
+                // -> Sf
+                let x = self.set_new_Sf(slot, Guarded::Float);
                 ir.stack2reg(slot, GP::Rdi);
-                ir.float2xmm(GP::Rdi, x, deopt);
+                ir.float_to_xmm(GP::Rdi, x, deopt);
                 x
             }
-            LinkMode::Accumulator => {
-                // -> Both
-                let x = self.set_new_both(slot, Guarded::Float);
+            LinkMode::G => {
+                // -> Sf
+                let x = self.set_new_Sf(slot, Guarded::Float);
                 ir.reg2stack(GP::R15, slot);
                 ir.reg_move(GP::R15, GP::Rdi);
-                ir.float2xmm(GP::Rdi, x, deopt);
+                ir.float_to_xmm(GP::Rdi, x, deopt);
                 x
             }
-            LinkMode::ConcreteValue(v) => self.fetch_float_concrete_value_for_xmm(ir, slot, v),
+            LinkMode::C(v) => self.fetch_float_concrete_value_for_xmm(ir, slot, v),
+            LinkMode::V => {
+                unreachable!("fetch_float_for_xmm() on V");
+            }
         }
     }
 
@@ -224,14 +233,14 @@ impl SlotContext {
         v: Value,
     ) -> Xmm {
         if let Some(f) = v.try_float() {
-            // -> Xmm
-            let x = self.set_new_xmm(slot);
-            ir.f64toxmm(f, x);
+            // -> F
+            let x = self.set_new_F(slot);
+            ir.f64_to_xmm(f, x);
             x
         } else if let Some(i) = v.try_fixnum() {
-            // -> Both
-            let x = self.set_new_both(slot, Guarded::Fixnum);
-            ir.i64toboth(i, slot, x);
+            // -> Sf
+            let x = self.set_new_Sf(slot, Guarded::Fixnum);
+            ir.i64_to_stack_and_xmm(i, slot, x);
             x
         } else {
             unreachable!()

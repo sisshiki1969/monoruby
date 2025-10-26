@@ -113,8 +113,8 @@ fn math_sqrt(
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(dst) = dst {
         let fret = bb.xmm_write_enc(dst);
-        ir.inline(move |gen, _, _| {
-            monoasm!( &mut gen.jit,
+        ir.inline(move |r#gen, _, _| {
+            monoasm!( &mut r#gen.jit,
                 sqrtsd xmm(fret), xmm(fsrc);
             );
         });
@@ -139,15 +139,15 @@ fn math_cos(
     if let Some(ret) = dst {
         let fret = bb.xmm_write_enc(ret);
         let using_xmm = bb.get_using_xmm();
-        ir.inline(move |gen, _, _| {
-            gen.xmm_save(using_xmm);
-            monoasm!( &mut gen.jit,
+        ir.inline(move |r#gen, _, _| {
+            r#gen.xmm_save(using_xmm);
+            monoasm!( &mut r#gen.jit,
                 movq xmm0, xmm(fsrc);
                 movq rax, (extern_cos);
                 call rax;
             );
-            gen.xmm_restore(using_xmm);
-            monoasm!( &mut gen.jit,
+            r#gen.xmm_restore(using_xmm);
+            monoasm!( &mut r#gen.jit,
                 movq xmm(fret), xmm0;
             );
         });
@@ -172,15 +172,15 @@ fn math_sin(
     if let Some(ret) = ret {
         let fret = bb.xmm_write_enc(ret);
         let using_xmm = bb.get_using_xmm();
-        ir.inline(move |gen, _, _| {
-            gen.xmm_save(using_xmm);
-            monoasm! { &mut gen.jit,
+        ir.inline(move |r#gen, _, _| {
+            r#gen.xmm_save(using_xmm);
+            monoasm! { &mut r#gen.jit,
                 movq xmm0, xmm(fsrc);
                 movq rax, (extern_sin);
                 call rax;
             }
-            gen.xmm_restore(using_xmm);
-            monoasm! { &mut gen.jit,
+            r#gen.xmm_restore(using_xmm);
+            monoasm! { &mut r#gen.jit,
                 movq xmm(fret), xmm0;
             }
         });
@@ -212,7 +212,9 @@ mod tests {
     fn log() {
         run_test("Math.log10 149");
         run_test("Math.log10 14.9");
-        run_test("Math.log10 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+        run_test(
+            "Math.log10 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        );
     }
 
     #[test]

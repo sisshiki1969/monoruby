@@ -39,7 +39,7 @@ impl Cfp {
     /// Get base pointer address of *self*.
     ///
     pub unsafe fn return_addr(&self) -> Option<monoasm::CodePtr> {
-        *(self.as_ptr() as *const Option<monoasm::CodePtr>).add(1 + BP_CFP as usize / 8)
+        unsafe { *(self.as_ptr() as *const Option<monoasm::CodePtr>).add(1 + BP_CFP as usize / 8) }
     }
 
     ///
@@ -71,7 +71,7 @@ impl Cfp {
     /// Set LFP.
     ///
     pub unsafe fn set_lfp(&mut self, lfp: Lfp) {
-        *(self.as_ptr().sub(CFP_LFP as usize / 8) as *mut Lfp) = lfp;
+        unsafe { *(self.as_ptr().sub(CFP_LFP as usize / 8) as *mut Lfp) = lfp };
     }
 
     ///
@@ -390,7 +390,7 @@ impl Lfp {
     /// Set a value to a register *index*.
     ///
     pub(crate) unsafe fn set_register(&mut self, index: SlotId, val: Option<Value>) {
-        std::ptr::write(self.register_ptr(index), val);
+        unsafe { std::ptr::write(self.register_ptr(index), val) };
     }
 
     pub(crate) unsafe fn args_to_vec(&self, args: SlotId, args_len: usize) -> Vec<Value> {
@@ -398,9 +398,9 @@ impl Lfp {
         let p = if args_len == 0 {
             p
         } else {
-            p.sub(args_len - 1)
+            unsafe { p.sub(args_len - 1) }
         };
-        std::slice::from_raw_parts(p, args_len).to_vec()
+        unsafe { std::slice::from_raw_parts(p, args_len).to_vec() }
     }
 }
 
@@ -481,11 +481,7 @@ impl Lfp {
 
     pub fn try_arg(&self, i: usize) -> Option<Value> {
         let v = unsafe { *((self.0.as_ptr().sub(LFP_ARG0 as usize + i * 8)) as *const u64) };
-        if v == 0 {
-            None
-        } else {
-            Some(Value::from(v))
-        }
+        if v == 0 { None } else { Some(Value::from(v)) }
     }
 
     pub fn args_count(&self, max: usize) -> usize {

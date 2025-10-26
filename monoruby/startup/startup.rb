@@ -14,8 +14,8 @@ class Object
     self
   end
 
-  #def initialize(*arg)
-  #end
+  def initialize(...)
+  end
 
   def tap
     yield self

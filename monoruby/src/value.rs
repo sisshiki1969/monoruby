@@ -602,7 +602,7 @@ impl Value {
         RValue::new_match_data(captures, heystack, regex).pack()
     }
 
-    pub(crate) fn unpack(&self) -> RV {
+    pub(crate) fn unpack(&self) -> RV<'_> {
         if let Some(i) = self.try_fixnum() {
             RV::Fixnum(i)
         } else if let Some(f) = self.try_flonum() {

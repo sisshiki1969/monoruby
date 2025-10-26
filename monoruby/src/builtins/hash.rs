@@ -235,8 +235,8 @@ fn hash_index(
         return false;
     }
     bb.fetch(ir, callsite.args, GP::Rcx);
-    ir.inline(|gen, _, _| {
-        monoasm! {&mut gen.jit,
+    ir.inline(|r#gen, _, _| {
+        monoasm! {&mut r#gen.jit,
             movq rdx, rdi;
             movq rdi, rbx;
             movq rsi, r12;
@@ -246,7 +246,7 @@ fn hash_index(
     });
     let error = ir.new_error(bb);
     ir.handle_error(error);
-    bb.rax2acc(ir, callsite.dst);
+    bb.def_rax2acc(ir, callsite.dst);
     true
 }
 
@@ -743,7 +743,7 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                 return Err(MonorubyErr::keyerr(format!(
                     "key not found: {}",
                     lfp.arg(0).to_s(&globals.store)
-                )))
+                )));
             }
         }
     } else {

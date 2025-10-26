@@ -42,7 +42,7 @@ impl JitContext {
 
         // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
         if callsite.block_fid.is_some() || store[func_id].meta().is_eval() {
-            bbctx.write_back_locals(ir);
+            bbctx.locals_to_S(ir);
         }
 
         self.recv_version_guard(bbctx, ir, recv, recv_class);
@@ -149,7 +149,7 @@ impl JitContext {
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
-        bbctx.rax2acc(ir, dst);
+        bbctx.def_rax2acc(ir, dst);
         bbctx.immediate_evict(ir, evict);
         CompileResult::Continue
     }
@@ -229,7 +229,7 @@ impl JitContext {
             self_class,
             outer,
         } = block.add(1);
-        bbctx.set_arguments(store, ir, &store[callid], store[iseq].func_id());
+        let simple = bbctx.set_arguments(store, ir, &store[callid], store[iseq].func_id());
         bbctx.discard(dst);
         bbctx.clear_above_next_sp();
         let error = ir.new_error(bbctx);
@@ -259,10 +259,11 @@ impl JitContext {
             entry,
             error,
             evict,
+            simple,
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
-        bbctx.rax2acc(ir, dst);
+        bbctx.def_rax2acc(ir, dst);
         bbctx.immediate_evict(ir, evict);
     }
 
@@ -321,7 +322,7 @@ impl JitContext {
                         });
                     }
                 }
-                bbctx.reg2acc(ir, GP::R15, dst);
+                bbctx.def_reg2acc(ir, GP::R15, dst);
                 return CompileResult::Continue;
             }
             FuncKind::AttrWriter { ivar_name } => {
@@ -351,19 +352,18 @@ impl JitContext {
                         is_object_ty,
                     });
                 }
-                bbctx.rax2acc(ir, dst);
+                bbctx.def_rax2acc(ir, dst);
                 return CompileResult::Continue;
             }
             FuncKind::Builtin { .. } => {
                 let evict = ir.new_evict();
-                self.send(bbctx, ir, store, callsite, fid, recv_class, evict, None);
+                bbctx.send(ir, store, callsite, fid, recv_class, evict, None);
                 evict
             }
             FuncKind::Proc(proc) => {
                 let evict = ir.new_evict();
                 fid = proc.func_id();
-                self.send(
-                    bbctx,
+                bbctx.send(
                     ir,
                     store,
                     callsite,
@@ -376,14 +376,11 @@ impl JitContext {
             }
             FuncKind::ISeq(iseq) => {
                 if let Some(v) = store[iseq].is_const_fn() {
-                    bbctx.discard(dst);
-                    bbctx.def_concrete_value(dst, v);
+                    bbctx.def_C(dst, v);
                     return CompileResult::Continue;
                 }
                 let evict = ir.new_evict();
-                let specializable = callsite.splat_pos.is_empty()
-                    && !store[fid].is_rest()
-                    && !(pos_num == 1 && store[fid].single_arg_expand())
+                let specializable = store[fid].is_simple_call(callsite)
                     && (bbctx.state(callsite.recv).is_concrete_value()
                         || (args..args + pos_num).any(|i| bbctx.state(i).is_concrete_value()));
                 if (if let Some(fid) = block_fid {
@@ -438,23 +435,14 @@ impl JitContext {
                         block,
                         None,
                     );
-                    self.send_specialized(
-                        bbctx,
-                        ir,
-                        store,
-                        callsite,
-                        fid,
-                        entry,
-                        patch_point,
-                        evict,
-                    );
+                    bbctx.send_specialized(ir, store, callsite, fid, entry, patch_point, evict);
                 } else {
-                    self.send(bbctx, ir, store, callsite, fid, recv_class, evict, None);
+                    bbctx.send(ir, store, callsite, fid, recv_class, evict, None);
                 }
                 evict
             }
         };
-        bbctx.rax2acc(ir, dst);
+        bbctx.def_rax2acc(ir, dst);
         bbctx.immediate_evict(ir, evict);
         bbctx.unset_class_version_guard();
         CompileResult::Continue
@@ -500,78 +488,6 @@ impl JitContext {
         entry
     }
 
-    ///
-    /// ### in
-    /// rdi: receiver: Value
-    ///
-    fn send(
-        &mut self,
-        bbctx: &mut BBContext,
-        ir: &mut AsmIr,
-        store: &Store,
-        callsite: &CallSiteInfo,
-        callee_fid: FuncId,
-        recv_class: ClassId,
-        evict: AsmEvict,
-        outer_lfp: Option<Lfp>,
-    ) {
-        ir.reg_move(GP::Rdi, GP::R13);
-        bbctx.exec_gc(ir, true);
-        let using_xmm = bbctx.get_using_xmm();
-        ir.xmm_save(using_xmm);
-        bbctx.set_arguments(store, ir, callsite, callee_fid);
-        bbctx.discard(callsite.dst);
-        bbctx.clear_above_next_sp();
-        let error = ir.new_error(bbctx);
-        bbctx.writeback_acc(ir);
-        ir.push(AsmInst::Send {
-            callid: callsite.id,
-            callee_fid,
-            recv_class,
-            error,
-            evict,
-            outer_lfp,
-        });
-        ir.xmm_restore(using_xmm);
-        ir.handle_error(error);
-    }
-
-    ///
-    /// ### in
-    /// rdi: receiver: Value
-    ///
-    fn send_specialized(
-        &mut self,
-        bbctx: &mut BBContext,
-        ir: &mut AsmIr,
-        store: &Store,
-        callsite: &CallSiteInfo,
-        callee_fid: FuncId,
-        inlined_entry: JitLabel,
-        patch_point: Option<JitLabel>,
-        evict: AsmEvict,
-    ) {
-        ir.reg_move(GP::Rdi, GP::R13);
-        bbctx.exec_gc(ir, true);
-        let using_xmm = bbctx.get_using_xmm();
-        ir.xmm_save(using_xmm);
-        bbctx.set_arguments(store, ir, callsite, callee_fid);
-        bbctx.discard(callsite.dst);
-        bbctx.clear_above_next_sp();
-        let error = ir.new_error(bbctx);
-        bbctx.writeback_acc(ir);
-        ir.push(AsmInst::SendSpecialized {
-            callid: callsite.id,
-            callee_fid,
-            entry: inlined_entry,
-            patch_point,
-            error,
-            evict,
-        });
-        ir.xmm_restore(using_xmm);
-        ir.handle_error(error);
-    }
-
     fn inline_asm(
         &mut self,
         bbctx: &mut BBContext,
@@ -594,6 +510,82 @@ impl JitContext {
 }
 
 impl BBContext {
+    ///
+    /// ### in
+    /// rdi: receiver: Value
+    ///
+    fn send(
+        &mut self,
+        ir: &mut AsmIr,
+        store: &Store,
+        callsite: &CallSiteInfo,
+        callee_fid: FuncId,
+        recv_class: ClassId,
+        evict: AsmEvict,
+        outer_lfp: Option<Lfp>,
+    ) {
+        ir.reg_move(GP::Rdi, GP::R13);
+        self.exec_gc(ir, true);
+        let using_xmm = self.get_using_xmm();
+        ir.xmm_save(using_xmm);
+        let simple = self.set_arguments(store, ir, callsite, callee_fid);
+        if let Some(dst) = callsite.dst {
+            self.def_S(dst);
+        }
+        self.clear_above_next_sp();
+        let error = ir.new_error(self);
+        self.writeback_acc(ir);
+        ir.push(AsmInst::Send {
+            callid: callsite.id,
+            callee_fid,
+            recv_class,
+            error,
+            evict,
+            outer_lfp,
+            simple,
+        });
+        ir.xmm_restore(using_xmm);
+        ir.handle_error(error);
+    }
+
+    ///
+    /// ### in
+    /// rdi: receiver: Value
+    ///
+    fn send_specialized(
+        &mut self,
+        ir: &mut AsmIr,
+        store: &Store,
+        callsite: &CallSiteInfo,
+        callee_fid: FuncId,
+        inlined_entry: JitLabel,
+        patch_point: Option<JitLabel>,
+        evict: AsmEvict,
+    ) {
+        ir.reg_move(GP::Rdi, GP::R13);
+        self.exec_gc(ir, true);
+        let using_xmm = self.get_using_xmm();
+        ir.xmm_save(using_xmm);
+        let simple = self.set_arguments(store, ir, callsite, callee_fid);
+        if let Some(dst) = callsite.dst {
+            self.def_S(dst);
+        }
+        self.clear_above_next_sp();
+        let error = ir.new_error(self);
+        self.writeback_acc(ir);
+        ir.push(AsmInst::SendSpecialized {
+            callid: callsite.id,
+            callee_fid,
+            entry: inlined_entry,
+            patch_point,
+            error,
+            evict,
+            simple,
+        });
+        ir.xmm_restore(using_xmm);
+        ir.handle_error(error);
+    }
+
     pub(super) fn compile_yield(&mut self, ir: &mut AsmIr, store: &Store, callid: CallSiteId) {
         let callinfo = &store[callid];
         let dst = callinfo.dst;
@@ -611,7 +603,7 @@ impl BBContext {
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
-        self.rax2acc(ir, dst);
+        self.def_rax2acc(ir, dst);
         self.immediate_evict(ir, evict);
         self.unset_class_version_guard();
     }
@@ -620,5 +612,156 @@ impl BBContext {
         ir.push(AsmInst::ImmediateEvict { evict });
         let pc = self.pc();
         ir[evict] = SideExit::Evict(Some((pc + 2, self.get_write_back())));
+    }
+
+    ///
+    /// Set positional arguments for callee.
+    ///
+    fn set_arguments(
+        &mut self,
+        store: &Store,
+        ir: &mut AsmIr,
+        callsite: &CallSiteInfo,
+        callee_fid: FuncId,
+    ) -> bool {
+        let callee = &store[callee_fid];
+        let args = callsite.args;
+        let pos_num = callsite.pos_num;
+        let kw_pos = callsite.kw_pos;
+        let kw_num = callsite.kw_len();
+        if callee.is_simple_call(callsite) {
+            let stack_offset = if (args..args + pos_num)
+                .any(|reg| matches!(self.mode(reg), LinkMode::F(_)))
+                || (kw_pos..kw_pos + kw_num).any(|reg| matches!(self.mode(reg), LinkMode::F(_)))
+            {
+                callee.get_offset() as i32
+            } else {
+                0
+            };
+            ir.reg_sub(GP::Rsp, stack_offset);
+
+            // write back block argument.
+            if let Some(block_arg) = callsite.block_arg {
+                self.write_back_slot(ir, block_arg);
+            }
+
+            // fetch positional arguments.
+            let (filled_req, filled_opt, filled_post) = callee.apply_args(pos_num);
+
+            // fill required params.
+            for i in 0..filled_req {
+                let reg = args + i;
+                let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
+                self.fetch_for_callee(ir, reg, ofs);
+            }
+            if filled_req != callee.req_num() {
+                for i in filled_req..callee.req_num() {
+                    let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
+                    ir.u64torsp_offset(NIL_VALUE, ofs);
+                }
+            }
+
+            // fill optional params.
+            for i in callee.req_num()..callee.req_num() + filled_opt {
+                let reg = args + filled_req + (i - callee.req_num());
+                let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
+                self.fetch_for_callee(ir, reg, ofs);
+            }
+            if filled_opt != callee.opt_num() {
+                for i in callee.req_num() + filled_opt..callee.reqopt_num() {
+                    let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
+                    ir.zero2rsp_offset(ofs);
+                }
+            }
+
+            // fill post params.
+            let start = callee.reqopt_num() + callee.is_rest() as usize;
+            for i in start..start + filled_post {
+                let reg = args + filled_req + filled_opt + (i - start);
+                let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
+                self.fetch_for_callee(ir, reg, ofs);
+            }
+            if filled_post != callee.post_num() {
+                for i in start + filled_post..start + callee.post_num() {
+                    let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
+                    ir.u64torsp_offset(NIL_VALUE, ofs);
+                }
+            }
+
+            // fill keyword arguments
+            let CallSiteInfo { kw_args, .. } = callsite;
+            let mut used_kw = vec![];
+            for (i, param_name) in callee.kw_names().iter().enumerate() {
+                let ofs = stack_offset - (LFP_SELF + (callee.kw_reg_pos() + i).0 as i32 * 8);
+                match kw_args.get(param_name) {
+                    Some(i) => {
+                        used_kw.push(*i);
+                        let slot = kw_pos + *i;
+                        self.fetch_for_callee(ir, slot, ofs);
+                    }
+                    None => {
+                        ir.zero2rsp_offset(ofs);
+                    }
+                }
+            }
+
+            // write back unused keyword arguments.
+            for i in 0..kw_num {
+                if !used_kw.contains(&i) {
+                    self.write_back_slot(ir, kw_pos + i);
+                }
+            }
+
+            ir.reg_add(GP::Rsp, stack_offset);
+            true
+        } else {
+            self.write_back_args(ir, callsite);
+
+            let error = ir.new_error(self);
+            ir.push(AsmInst::SetArguments {
+                callid: callsite.id,
+                callee_fid,
+            });
+            ir.handle_error(error);
+            false
+        }
+    }
+
+    fn set_binop_arguments(
+        &mut self,
+        store: &Store,
+        ir: &mut AsmIr,
+        callee_fid: FuncId,
+        mode: OpMode,
+    ) {
+        let callee = &store[callee_fid];
+        // callee.req_num() <= 1 at this point.
+        // callee.is_rest() || callee.max_positional_args() >= 1 at this point.
+        let xmm_flag = match mode {
+            OpMode::RR(_, rhs) | OpMode::IR(_, rhs) => {
+                matches!(self.mode(rhs), LinkMode::F(_))
+            }
+            OpMode::RI(_, _) => false,
+        };
+        let ofs = if xmm_flag || callee.is_rest() {
+            (RSP_LOCAL_FRAME + LFP_ARG0 + 16 as i32) & !0xf
+        } else {
+            0
+        };
+
+        ir.reg_sub(GP::Rsp, ofs);
+        let offset = ofs - LFP_ARG0;
+        self.fetch_rhs_for_callee(ir, mode, offset);
+        if 1 < callee.max_positional_args() {
+            //ir.push(AsmInst::U32ToReg(0, GP::Rax));
+            for i in 1..callee.max_positional_args() {
+                let offset = ofs - (LFP_ARG0 as i32 + (8 * i) as i32);
+                ir.zero2rsp_offset(offset);
+            }
+        }
+        if callee.is_rest() {
+            ir.push(AsmInst::RSPOffsetToArray(offset));
+        }
+        ir.reg_add(GP::Rsp, ofs);
     }
 }

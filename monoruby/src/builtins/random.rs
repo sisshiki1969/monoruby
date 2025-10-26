@@ -70,7 +70,7 @@ fn urandom(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     };
     let pack_size = (size + 7) & !7;
     let mut v = vec![0; pack_size];
-    for chunk in v.array_chunks_mut() {
+    for chunk in v.as_chunks_mut().0 {
         *chunk = globals.random_gen::<[u8; 8]>();
     }
     v.truncate(size);
