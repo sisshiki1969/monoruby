@@ -1,9 +1,10 @@
-def f
-  yield 100
-end
-
-200.times do
-  f do |x, y|
-    puts "x: #{x}, y: #{y}"
+100.times do
+  r2 = 0
+  while r2 < 729
+    c2 = 0
+    while c2 < 4
+      c2 += 1
+    end
+    r2 += 1
   end
 end

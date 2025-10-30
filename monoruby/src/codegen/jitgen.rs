@@ -137,10 +137,10 @@ impl BBContext {
         }
     }
 
-    fn new_with_args(cc: &JitContext) -> Self {
+    fn new_with_args(cc: &JitContext, store: &Store) -> Self {
         let sp = SlotId(cc.local_num() as u16 + 1);
         Self {
-            slot_state: SlotContext::from_args(cc),
+            slot_state: SlotContext::from_args(cc, store),
             sp,
             next_sp: sp,
             class_version_guarded: false,
@@ -148,7 +148,7 @@ impl BBContext {
         }
     }
 
-    fn from_target(target: &SlotContext, use_set: &[(SlotId, bool)]) -> Self {
+    fn from_target(target: BBContext, use_set: &[(SlotId, bool)]) -> Self {
         let slot_state = SlotContext::from_target(target, use_set);
         let sp = slot_state.temp_start();
         Self {
@@ -176,7 +176,7 @@ impl BBContext {
         self.class_version_guarded = false;
     }
 
-    fn join_entries(entries: &[BranchEntry]) -> Self {
+    fn join_entries(entries: &[BranchEntry], backedge: Option<BBContext>) -> Self {
         let mut merge_ctx = entries.last().unwrap().bbctx.clone();
         for BranchEntry {
             src_bb: _src_bb,
@@ -187,6 +187,11 @@ impl BBContext {
             #[cfg(feature = "jit-debug")]
             eprintln!("  <-{:?}:[{:?}] {:?}", _src_bb, bbctx.sp, bbctx.slot_state);
             merge_ctx.join(bbctx);
+        }
+        if let Some(backedge) = backedge {
+            #[cfg(feature = "jit-debug")]
+            eprintln!("  <-backedge:[{:?}] {:?}", backedge.sp, backedge.slot_state);
+            merge_ctx.join(&backedge);
         }
         #[cfg(feature = "jit-debug")]
         eprintln!("  join_entries: {:?}", &merge_ctx);

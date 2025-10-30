@@ -124,7 +124,10 @@ impl SlotContext {
             LinkMode::G => {
                 ir.reg_move(GP::R15, dst);
             }
-            LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
+            LinkMode::MaybeNone => {
+                ir.stack2reg(slot, dst);
+            }
+            LinkMode::V | LinkMode::None => {
                 unreachable!("fetch_gpr() {:?}", self.mode(slot));
             }
         }

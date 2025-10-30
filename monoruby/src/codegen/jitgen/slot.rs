@@ -32,8 +32,18 @@ impl SlotContext {
         ctx
     }
 
-    pub(super) fn from_args(cc: &JitContext) -> Self {
+    pub(super) fn from_args(cc: &JitContext, store: &Store) -> Self {
         let mut ctx = Self::from(cc);
+        let fid = store[cc.iseq_id()].func_id();
+        let info = &store[fid];
+        for i in info.req_num()..info.reqopt_num() {
+            let slot = SlotId(1 + i as u16);
+            ctx.set_MaybeNone(slot);
+        }
+        let kw = info.kw_reg_pos();
+        for (i, _) in info.kw_names().iter().enumerate() {
+            ctx.set_MaybeNone(kw + i);
+        }
         if let JitType::Specialized {
             args_info: JitArgumentInfo(args),
             ..
@@ -41,7 +51,7 @@ impl SlotContext {
         {
             for (i, arg) in args.iter().enumerate() {
                 match arg.link {
-                    LinkMode::C(_) => {
+                    LinkMode::C(_) | LinkMode::MaybeNone | LinkMode::None => {
                         ctx.slots[i] = arg.clone();
                     }
                     _ => {}
@@ -51,31 +61,27 @@ impl SlotContext {
         ctx
     }
 
-    pub(super) fn from_target(target: &SlotContext, use_set: &[(SlotId, bool)]) -> Self {
-        let mut ctx = Self::new(target.slots.len(), target.local_num);
-        for (i, state) in ctx.slots.iter_mut().enumerate() {
-            state.guarded = target.slots[i].guarded;
-        }
+    pub(super) fn from_target(mut target: BBContext, use_set: &[(SlotId, bool)]) -> Self {
         for (slot, coerced) in use_set {
             match target.mode(*slot) {
                 LinkMode::S => {}
                 LinkMode::C(v) => {
                     if v.is_float() {
-                        ctx.set_new_F(*slot);
+                        target.set_new_F(*slot);
                     }
                 }
                 LinkMode::F(r) if !coerced => {
-                    ctx.set_F(*slot, r);
+                    target.set_F(*slot, r);
                 }
                 LinkMode::Sf(r) | LinkMode::F(r) => {
-                    ctx.set_Sf(*slot, r, Guarded::Value);
+                    target.set_Sf(*slot, r, Guarded::Value);
                 }
                 LinkMode::G | LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                     unreachable!("from_target {:?}", target.mode(*slot));
                 }
             };
         }
-        ctx
+        target.slot_state
     }
 
     fn new(total_reg_num: usize, local_num: usize) -> Self {
@@ -211,10 +217,28 @@ impl SlotContext {
     }
 
     ///
+    /// _ -> MaybeNone
+    ///
+    #[allow(non_snake_case)]
+    fn set_MaybeNone(&mut self, slot: SlotId) {
+        self.clear(slot);
+        self.set_mode(slot, LinkMode::MaybeNone);
+    }
+
+    ///
+    /// _ -> MaybeNone
+    ///
+    #[allow(non_snake_case)]
+    pub(super) fn set_None(&mut self, slot: SlotId) {
+        self.clear(slot);
+        self.set_mode(slot, LinkMode::None);
+    }
+
+    ///
     /// _ -> S
     ///
     #[allow(non_snake_case)]
-    fn set_S(&mut self, slot: SlotId, guarded: Guarded) {
+    pub(super) fn set_S(&mut self, slot: SlotId, guarded: Guarded) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::S);
         self.set_guarded(slot, guarded);
@@ -372,6 +396,7 @@ impl SlotContext {
     pub(super) fn remove_unused(&mut self, unused: &[SlotId]) {
         for r in unused {
             self.discard(*r);
+            self.set_MaybeNone(*r);
         }
     }
 
@@ -544,20 +569,6 @@ impl SlotContext {
                 Guarded::Value => false,
                 Guarded::Class(class) => !class.is_nil(),
             },
-        }
-    }
-
-    pub fn is_none(&self, slot: SlotId) -> bool {
-        match self.mode(slot) {
-            LinkMode::None => true,
-            _ => false,
-        }
-    }
-
-    pub fn is_not_none(&self, slot: SlotId) -> bool {
-        match self.mode(slot) {
-            LinkMode::None | LinkMode::MaybeNone => false,
-            _ => true,
         }
     }
 
@@ -925,14 +936,14 @@ impl std::fmt::Debug for SlotState {
 }
 
 impl SlotState {
-    pub(super) fn optional() -> Self {
+    fn none() -> Self {
         SlotState {
-            link: LinkMode::MaybeNone,
+            link: LinkMode::None,
             guarded: Guarded::Value,
         }
     }
 
-    pub(super) fn nil() -> Self {
+    fn nil() -> Self {
         SlotState {
             link: LinkMode::C(Value::nil()),
             guarded: Guarded::Class(NIL_CLASS),
@@ -969,7 +980,7 @@ impl SlotState {
             slots.push(bbctx.state(*args + i).clone());
         }
         for _ in filled_opt..info.opt_num() {
-            slots.push(SlotState::default());
+            slots.push(SlotState::none());
         }
         for i in filled_req + filled_opt..filled_req + filled_opt + filled_post {
             slots.push(bbctx.state(*args + i).clone());
@@ -983,12 +994,10 @@ impl SlotState {
         let kw = info.kw_reg_pos();
         assert_eq!(kw.0 as usize, slots.len());
         for k in info.kw_names() {
-            slots.push(SlotState::default());
             if let Some(p) = kw_args.get(k) {
-                //slots.push(bbctx.state(*kw_pos + *p).clone());
-                slots.push(SlotState::default());
+                slots.push(bbctx.state(*kw_pos + *p).clone());
             } else {
-                slots.push(SlotState::default());
+                slots.push(SlotState::none());
             }
         }
         slots
@@ -1291,72 +1300,6 @@ impl BBContext {
         self.xmm_write(slot).enc()
     }
 
-    pub(super) fn gen_bridge(
-        &mut self,
-        ir: &mut AsmIr,
-        target: &SlotContext,
-        slot: SlotId,
-        pc: BytecodePtr,
-    ) {
-        let guarded = target.guarded(slot);
-        match (self.mode(slot), target.mode(slot)) {
-            (LinkMode::F(l), LinkMode::F(r)) => {
-                if l != r {
-                    self.to_xmm(ir, slot, l, r);
-                }
-            }
-            (LinkMode::F(l), LinkMode::Sf(r)) => {
-                ir.xmm2stack(l, slot);
-                if l == r {
-                    // F(l) -> Sf(l)
-                    self.set_Sf_float(slot, l);
-                } else {
-                    // F(l) -> Sf(r)
-                    self.to_both(ir, slot, l, r, guarded);
-                }
-            }
-            (LinkMode::Sf(l), LinkMode::Sf(r)) => {
-                if l != r {
-                    // Sf(l) -> Sf(r)
-                    self.to_both(ir, slot, l, r, guarded);
-                }
-            }
-            (LinkMode::Sf(l), LinkMode::S) => {
-                self.xmm_remove(slot, l);
-                self.set_mode(slot, LinkMode::S);
-            }
-            (LinkMode::S, LinkMode::S) => {
-                if let Some(class) = guarded.class() {
-                    let deopt = ir.new_deopt_with_pc(self, pc + 1);
-                    self.guard_class_stack_slot(ir, slot, class, deopt);
-                }
-            }
-            (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
-            (LinkMode::C(l), LinkMode::F(r)) => {
-                if let Some(f) = l.try_float() {
-                    self.set_F(slot, r);
-                    ir.f64_to_xmm(f, r);
-                } else {
-                    unreachable!()
-                }
-            }
-            (LinkMode::C(l), LinkMode::Sf(r)) => {
-                if let Some(f) = l.try_float() {
-                    self.set_Sf_float(slot, r);
-                    ir.f64_to_xmm(f, r);
-                    ir.lit2reg(Value::float(f), GP::Rax);
-                    ir.reg2stack(GP::Rax, slot);
-                } else {
-                    unreachable!()
-                }
-            }
-            (_, LinkMode::S) => {
-                self.write_back_slot(ir, slot);
-            }
-            (l, r) => unreachable!("src:{:?} target:{:?}", l, r),
-        }
-    }
-
     ///
     /// Generate bridge AsmIr from F/Sf(l) to F(r).
     ///
@@ -1378,6 +1321,73 @@ impl BBContext {
             ir.xmm_move(l, r);
         } else {
             self.xmm_swap(ir, l, r);
+        }
+    }
+
+    ///
+    /// Generate bridge AsmIr to merge current state(*bbctx*) with target state(*target*)
+    ///
+    pub(super) fn gen_bridge(mut self, ir: &mut AsmIr, target: &SlotContext, pc: BytecodePtr) {
+        for slot in SlotId(0)..self.sp {
+            let guarded = target.guarded(slot);
+            match (self.mode(slot), target.mode(slot)) {
+                (LinkMode::F(l), LinkMode::F(r)) => {
+                    if l != r {
+                        self.to_xmm(ir, slot, l, r);
+                    }
+                }
+                (LinkMode::F(l), LinkMode::Sf(r)) => {
+                    ir.xmm2stack(l, slot);
+                    if l == r {
+                        // F(l) -> Sf(l)
+                        self.set_Sf_float(slot, l);
+                    } else {
+                        // F(l) -> Sf(r)
+                        self.to_both(ir, slot, l, r, guarded);
+                    }
+                }
+                (LinkMode::Sf(l), LinkMode::Sf(r)) => {
+                    if l != r {
+                        // Sf(l) -> Sf(r)
+                        self.to_both(ir, slot, l, r, guarded);
+                    }
+                }
+                (LinkMode::Sf(l), LinkMode::S) => {
+                    self.xmm_remove(slot, l);
+                    self.set_mode(slot, LinkMode::S);
+                }
+                (LinkMode::S, LinkMode::S) => {
+                    if let Some(class) = guarded.class() {
+                        let deopt = ir.new_deopt_with_pc(&self, pc + 1);
+                        self.guard_class_stack_slot(ir, slot, class, deopt);
+                    }
+                }
+                (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
+                (LinkMode::C(l), LinkMode::F(r)) => {
+                    if let Some(f) = l.try_float() {
+                        self.set_F(slot, r);
+                        ir.f64_to_xmm(f, r);
+                    } else {
+                        unreachable!()
+                    }
+                }
+                (LinkMode::C(l), LinkMode::Sf(r)) => {
+                    if let Some(f) = l.try_float() {
+                        self.set_Sf_float(slot, r);
+                        ir.f64_to_xmm(f, r);
+                        ir.lit2reg(Value::float(f), GP::Rax);
+                        ir.reg2stack(GP::Rax, slot);
+                    } else {
+                        unreachable!()
+                    }
+                }
+                (LinkMode::C(_) | LinkMode::F(_) | LinkMode::G, LinkMode::S) => {
+                    self.write_back_slot(ir, slot);
+                }
+                (LinkMode::None, LinkMode::None) => {}
+                (LinkMode::MaybeNone, LinkMode::MaybeNone) => {}
+                (l, r) => unreachable!("{slot:?} src:{l:?} target:{r:?}"),
+            }
         }
     }
 }
@@ -1459,6 +1469,11 @@ impl BBContext {
         for i in self.all_regs() {
             self.is_used_mut(i).join(other.is_used(i));
             match (self.mode(i), other.mode(i)) {
+                (LinkMode::None, LinkMode::None) => {}
+                (LinkMode::MaybeNone, _) => {}
+                (_, LinkMode::MaybeNone) => {
+                    self.set_MaybeNone(i);
+                }
                 (LinkMode::V, LinkMode::V) => {}
                 (_, LinkMode::V) | (LinkMode::V, _) => {
                     unreachable!("join() on (#{:?}, #{:?})", self.mode(i), other.mode(i));

@@ -26,7 +26,7 @@ impl JitContext {
                     eprintln!("    src:    {:?}", bbctx.slot_state);
                     eprintln!("    target: {:?}", target_ctx);
                 }
-                bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
+                bbctx.gen_bridge(&mut ir, &target_ctx, pc);
                 match cont {
                     BranchMode::Side { dest } => {
                         self.outline_bridges.push((ir, dest, bbid));
@@ -92,14 +92,12 @@ impl JitContext {
         {
             eprintln!("  use set:  {:?}", use_set);
             eprintln!("  not used: {:?}", unused);
+            eprintln!("  backedge: {:?}", backedge);
         }
 
-        let mut target = BBContext::join_entries(&entries);
-        if let Some(backedge) = backedge {
-            target.join(&backedge);
-        }
+        let target = BBContext::join_entries(&entries, backedge);
 
-        let bbctx = BBContext::from_target(&target, &use_set);
+        let bbctx = BBContext::from_target(target, &use_set);
         let target = bbctx.slot_state.clone();
         #[cfg(feature = "jit-debug")]
         eprintln!("  target_ctx:[{:?}]   {:?}", bbctx.sp, bbctx.slot_state);
@@ -119,7 +117,7 @@ impl JitContext {
     ) -> Option<BBContext> {
         let entries = self.branch_map.remove(&bbid)?;
 
-        let target_ctx = BBContext::join_entries(&entries);
+        let target_ctx = BBContext::join_entries(&entries, None);
 
         let pc = iseq.get_bb_pc(bbid);
         self.gen_bridges_for_branches(&target_ctx, entries, bbid, pc, &[]);
@@ -156,7 +154,7 @@ impl JitContext {
                 eprintln!("    src:    {:?}", bbctx.slot_state);
                 eprintln!("    target: {:?}", target_ctx);
             }
-            bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
+            bbctx.gen_bridge(&mut ir, &target_ctx, pc);
             match mode {
                 BranchMode::Side { dest } => self.outline_bridges.push((ir, dest, bbid)),
                 BranchMode::Branch => {
@@ -168,20 +166,6 @@ impl JitContext {
             }
             #[cfg(feature = "jit-debug")]
             eprintln!("  bridge end");
-        }
-    }
-}
-
-impl BBContext {
-    ///
-    /// Generate bridge AsmIr to merge current state(*bbctx*) with target state(*target*)
-    ///
-    fn gen_bridge_for_target(mut self, ir: &mut AsmIr, target: &SlotContext, pc: BytecodePtr) {
-        let len = self.sp.0 as usize;
-
-        for i in 0..len {
-            let slot = SlotId(i as u16);
-            self.gen_bridge(ir, target, slot, pc);
         }
     }
 }

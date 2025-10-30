@@ -72,11 +72,6 @@ impl Codegen {
             AsmInst::AccToStack(slot) => {
                 self.store_r15(slot);
             }
-            AsmInst::NilToStack(slot) => {
-                monoasm! { &mut self.jit,
-                    movq [r14 - (conv(slot))], (NIL_VALUE);
-                }
-            }
             AsmInst::RegToAcc(r) => {
                 if r != GP::R15 {
                     let r = r as u64;

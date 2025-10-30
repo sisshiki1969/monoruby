@@ -9,7 +9,7 @@ impl JitContext {
             self.analyse_loop(store, iseq_id, *loop_start, *loop_end);
         }
 
-        let mut bbctx = BBContext::new_with_args(&self);
+        let mut bbctx = BBContext::new_with_args(&self, store);
 
         let mut ir = AsmIr::new();
         if let Some(pc) = self.position() {
@@ -139,6 +139,11 @@ impl JitContext {
             }],
         );
 
+        #[cfg(feature = "jit-debug")]
+        eprintln!(
+            "analyse_loop: {loop_start:?}->{loop_end:?} {:?}",
+            &ctx.loop_info
+        );
         for bbid in loop_start..=loop_end {
             ctx.analyse_basic_block(store, iseq_id, &mut liveness, bbid, bbid == loop_end);
         }
@@ -156,6 +161,8 @@ impl JitContext {
                 }
             }
         }
+        #[cfg(feature = "jit-debug")]
+        eprintln!("analyse_end: {loop_start:?}->{loop_end:?}");
 
         self.loop_info.insert(loop_start, (liveness, backedge));
     }
@@ -815,12 +822,23 @@ impl JitContext {
                 }
             }
             TraceIr::CondBr(_, _, true, _) => {}
-            TraceIr::CheckLocal(local, dest_idx) => {
-                let branch_dest = self.label();
-                bbctx.fetch(ir, local, GP::Rax);
-                ir.push(AsmInst::CheckLocal(branch_dest));
-                self.new_side_branch(iseq, bc_pos, dest_idx, bbctx.clone(), branch_dest);
-            }
+            TraceIr::CheckLocal(local, dest_idx) => match bbctx.mode(local) {
+                LinkMode::S | LinkMode::C(_) => {
+                    self.gen_branch(bbctx, iseq, bc_pos, dest_idx);
+                    return CompileResult::Branch;
+                }
+                LinkMode::MaybeNone => {
+                    let branch_dest = self.label();
+                    bbctx.fetch(ir, local, GP::Rax);
+                    ir.push(AsmInst::CheckLocal(branch_dest));
+                    let mut side_bb = bbctx.clone();
+                    side_bb.set_S(local, Guarded::Value);
+                    self.new_side_branch(iseq, bc_pos, dest_idx, side_bb, branch_dest);
+                    bbctx.set_None(local);
+                }
+                LinkMode::None => {}
+                _ => unreachable!(),
+            },
             TraceIr::CheckKwRest(local) => {
                 ir.push(AsmInst::CheckKwRest(local));
             }

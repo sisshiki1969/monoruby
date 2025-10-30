@@ -313,7 +313,7 @@ impl JitContext {
             bytecode_top: self.bytecode_top,
             jit_type: self.jit_type.clone(),
             basic_block_labels: HashMap::default(),
-            loop_info: HashMap::default(),
+            loop_info: self.loop_info.clone(),
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
