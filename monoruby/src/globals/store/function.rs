@@ -917,14 +917,13 @@ impl FuncInfo {
         self.ext.params.reqopt_num()
     }
 
-    /// The number of required + optional arguments.
+    /// The number of post arguments.
     pub(crate) fn post_num(&self) -> usize {
         self.ext.params.post_num()
     }
 
     /// The posiiton of keyword arguments.
     pub(crate) fn kw_reg_pos(&self) -> SlotId {
-        // 1 is for self.
         self.ext.params.kw_reg_pos()
     }
 

@@ -390,29 +390,11 @@ impl JitContext {
                 }) || (specializable && self.specialize_level() < 5)
                 /*name == Some(IdentId::NEW)*/
                 {
-                    let mut slots = vec![];
-                    if specializable {
-                        slots.push(bbctx.state(callsite.recv).clone());
-                        let (filled_req, filled_opt, filled_post) = store[fid].apply_args(pos_num);
-                        for i in 0..filled_req {
-                            slots.push(bbctx.state(args + i).clone());
-                        }
-                        for _ in filled_req..store[fid].req_num() {
-                            slots.push(SlotState::default());
-                        }
-                        for i in filled_req..filled_req + filled_opt {
-                            slots.push(bbctx.state(args + i).clone());
-                        }
-                        for _ in filled_opt..store[fid].opt_num() {
-                            slots.push(SlotState::default());
-                        }
-                        for i in filled_req + filled_opt..filled_req + filled_opt + filled_post {
-                            slots.push(bbctx.state(args + i).clone());
-                        }
-                        for _ in filled_post..store[fid].post_num() {
-                            slots.push(SlotState::default());
-                        }
-                    }
+                    let slots = if specializable {
+                        SlotState::from_caller(&store[fid], callsite, bbctx)
+                    } else {
+                        vec![]
+                    };
                     let block = if let Some(fid) = block_fid
                         && let Some(block_iseq) = store[fid].is_iseq()
                     {

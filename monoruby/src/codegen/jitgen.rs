@@ -402,6 +402,18 @@ enum LinkMode {
     ///
     /// No Value.
     ///
+    /// this is for optional arguments with no passed value.
+    ///
+    None,
+    ///
+    /// Maybe No Value.
+    ///
+    /// this is for optional arguments which may have no passed value.
+    ///
+    MaybeNone,
+    ///
+    /// Void.
+    ///
     /// this is used for the temp slots above sp.
     ///
     V,

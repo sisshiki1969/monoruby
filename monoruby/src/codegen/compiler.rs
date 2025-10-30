@@ -188,10 +188,6 @@ impl Codegen {
                 iseq.sourceinfo.get_line(&iseq.loc),
             );
         }
-        #[cfg(feature = "emit-asm")]
-        {
-            globals.store.dump_iseq(iseq_id);
-        }
 
         #[cfg(feature = "jit-log")]
         let now = std::time::Instant::now();

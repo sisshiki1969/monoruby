@@ -1,6 +1,6 @@
 use bytecodegen::{
-    inst::{BrKind, DynVar, FnInitInfo},
     BinOpK, UnOpK,
+    inst::{BrKind, DynVar, FnInitInfo},
 };
 use jitgen::trace_ir::{BinOpInfo, OpMode, TraceIr};
 use ruruby_parse::CmpKind;
@@ -934,11 +934,7 @@ impl ISeqInfo {
                     src: SlotId::new(op1_w1),
                     dst: (SlotId::new(op2_w2), op3_w3, {
                         let rest = op2.get_u16();
-                        if rest == 0 {
-                            None
-                        } else {
-                            Some(rest - 1)
-                        }
+                        if rest == 0 { None } else { Some(rest - 1) }
                     }),
                 },
                 172 => {
@@ -1235,8 +1231,8 @@ impl ParamsInfo {
     pub fn total_args(&self) -> usize {
         self.required_num
             + self.optional_num
-            + self.rest.is_some() as usize
             + self.post_num
+            + self.rest.is_some() as usize
             + self.kw_names.len()
             + self.kw_rest.is_some() as usize
             + self.block_param.is_some() as usize

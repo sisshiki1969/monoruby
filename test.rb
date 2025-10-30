@@ -1,10 +1,9 @@
-class C
-  def f(*x,**y, &z)
-    
-  end
+def f
+  yield 100
 end
 
-c = C.new
-100.times do
-  c.f(1,y:2)
+200.times do
+  f do |x, y|
+    puts "x: #{x}, y: #{y}"
+  end
 end

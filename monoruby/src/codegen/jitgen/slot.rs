@@ -70,7 +70,9 @@ impl SlotContext {
                 LinkMode::Sf(r) | LinkMode::F(r) => {
                     ctx.set_Sf(*slot, r, Guarded::Value);
                 }
-                LinkMode::G | LinkMode::V => unreachable!(),
+                LinkMode::G | LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
+                    unreachable!("from_target {:?}", target.mode(*slot));
+                }
             };
         }
         ctx
@@ -182,12 +184,13 @@ impl SlotContext {
                 assert!(self.xmm(xmm).contains(&slot));
                 self.xmm_remove(slot, xmm);
             }
-            LinkMode::C(_) => {}
             LinkMode::G => {
                 assert_eq!(self.r15, Some(slot));
                 self.r15 = None;
             }
+            LinkMode::C(_) => {}
             LinkMode::S => {}
+            LinkMode::MaybeNone | LinkMode::None => {}
             LinkMode::V => return,
         }
         self.set_mode(slot, LinkMode::V);
@@ -544,6 +547,20 @@ impl SlotContext {
         }
     }
 
+    pub fn is_none(&self, slot: SlotId) -> bool {
+        match self.mode(slot) {
+            LinkMode::None => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_not_none(&self, slot: SlotId) -> bool {
+        match self.mode(slot) {
+            LinkMode::None | LinkMode::MaybeNone => false,
+            _ => true,
+        }
+    }
+
     pub(super) fn is_xmm_vacant(&self, xmm: Xmm) -> bool {
         self.xmm(xmm).is_empty()
     }
@@ -724,7 +741,12 @@ impl SlotContext {
                         *guarded = guarded_l.unwrap();
                     }
                 }
-                LinkMode::S | LinkMode::C(_) | LinkMode::G | LinkMode::V => {}
+                LinkMode::S
+                | LinkMode::C(_)
+                | LinkMode::G
+                | LinkMode::V
+                | LinkMode::MaybeNone
+                | LinkMode::None => {}
             });
     }
 
@@ -806,10 +828,10 @@ impl SlotContext {
             LinkMode::G => {
                 ir.acc2stack(slot);
             }
-            LinkMode::V => {
-                unreachable!("to_S() on V");
-            }
             LinkMode::Sf(_) | LinkMode::S => {}
+            LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
+                unreachable!("to_S() {:?}", self.mode(slot));
+            }
         }
         self.clear(slot);
         self.set_mode(slot, LinkMode::S);
@@ -903,8 +925,73 @@ impl std::fmt::Debug for SlotState {
 }
 
 impl SlotState {
+    pub(super) fn optional() -> Self {
+        SlotState {
+            link: LinkMode::MaybeNone,
+            guarded: Guarded::Value,
+        }
+    }
+
+    pub(super) fn nil() -> Self {
+        SlotState {
+            link: LinkMode::C(Value::nil()),
+            guarded: Guarded::Class(NIL_CLASS),
+        }
+    }
+
     pub(super) fn is_concrete_value(&self) -> bool {
         matches!(self.link, LinkMode::C(_))
+    }
+
+    pub(super) fn from_caller(
+        info: &FuncInfo,
+        callsite: &CallSiteInfo,
+        bbctx: &BBContext,
+    ) -> Vec<Self> {
+        let CallSiteInfo {
+            recv,
+            args,
+            pos_num,
+            kw_pos,
+            kw_args,
+            ..
+        } = callsite;
+        let mut slots = vec![];
+        slots.push(bbctx.state(*recv).clone());
+        let (filled_req, filled_opt, filled_post) = info.apply_args(*pos_num);
+        for i in 0..filled_req {
+            slots.push(bbctx.state(*args + i).clone());
+        }
+        for _ in filled_req..info.req_num() {
+            slots.push(SlotState::nil());
+        }
+        for i in filled_req..filled_req + filled_opt {
+            slots.push(bbctx.state(*args + i).clone());
+        }
+        for _ in filled_opt..info.opt_num() {
+            slots.push(SlotState::default());
+        }
+        for i in filled_req + filled_opt..filled_req + filled_opt + filled_post {
+            slots.push(bbctx.state(*args + i).clone());
+        }
+        for _ in filled_post..info.post_num() {
+            slots.push(SlotState::nil());
+        }
+        if info.is_rest() {
+            slots.push(SlotState::default());
+        }
+        let kw = info.kw_reg_pos();
+        assert_eq!(kw.0 as usize, slots.len());
+        for k in info.kw_names() {
+            slots.push(SlotState::default());
+            if let Some(p) = kw_args.get(k) {
+                //slots.push(bbctx.state(*kw_pos + *p).clone());
+                slots.push(SlotState::default());
+            } else {
+                slots.push(SlotState::default());
+            }
+        }
+        slots
     }
 }
 
@@ -1091,10 +1178,10 @@ impl BBContext {
                 self.r15 = None;
                 self.set_mode(slot, LinkMode::S);
             }
-            LinkMode::V => {
-                unreachable!("write_back_slot() on V");
+            LinkMode::Sf(_) | LinkMode::S | LinkMode::MaybeNone => {}
+            LinkMode::V | LinkMode::None => {
+                unreachable!("write_back_slot() {:?}", self.mode(slot));
             }
-            LinkMode::Sf(_) | LinkMode::S => {}
         }
     }
 
@@ -1156,8 +1243,8 @@ impl BBContext {
                 self.set_S(src, guarded);
                 self.def_acc(ir, dst, guarded)
             }
-            LinkMode::V => {
-                unreachable!("write_back_slot() on V");
+            LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
+                unreachable!("write_back_slot() {:?}", self.mode(src));
             }
         }
     }
@@ -1194,7 +1281,9 @@ impl BBContext {
             | LinkMode::S
             | LinkMode::C(_)
             | LinkMode::G
-            | LinkMode::V => self.def_new_F(slot),
+            | LinkMode::V
+            | LinkMode::MaybeNone
+            | LinkMode::None => self.def_new_F(slot),
         }
     }
 
