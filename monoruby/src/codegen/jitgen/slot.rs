@@ -61,27 +61,26 @@ impl SlotContext {
         ctx
     }
 
-    pub(super) fn from_target(mut target: BBContext, use_set: &[(SlotId, bool)]) -> Self {
+    pub(super) fn use_float(&mut self, use_set: &[(SlotId, bool)]) {
         for (slot, coerced) in use_set {
-            match target.mode(*slot) {
+            match self.mode(*slot) {
                 LinkMode::S => {}
                 LinkMode::C(v) => {
                     if v.is_float() {
-                        target.set_new_F(*slot);
+                        self.set_new_F(*slot);
                     }
                 }
                 LinkMode::F(r) if !coerced => {
-                    target.set_F(*slot, r);
+                    self.set_F(*slot, r);
                 }
                 LinkMode::Sf(r) | LinkMode::F(r) => {
-                    target.set_Sf(*slot, r, Guarded::Value);
+                    self.set_Sf(*slot, r, Guarded::Value);
                 }
                 LinkMode::G | LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
-                    unreachable!("from_target {:?}", target.mode(*slot));
+                    unreachable!("use_float {:?}", self.mode(*slot));
                 }
             };
         }
-        target.slot_state
     }
 
     fn new(total_reg_num: usize, local_num: usize) -> Self {
@@ -1395,6 +1394,8 @@ impl BBContext {
                 (l, r) => unreachable!("{slot:?} src:{l:?} target:{r:?}"),
             }
         }
+        #[cfg(feature = "jit-debug")]
+        eprintln!("  bridge end");
     }
 }
 

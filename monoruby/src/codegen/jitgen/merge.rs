@@ -37,29 +37,6 @@ impl JitContext {
     ///
     /// Merge incoming contexts for *bbid*.
     ///
-    pub(super) fn incoming_context(
-        &mut self,
-        iseq: &ISeqInfo,
-        bbid: BasicBlockId,
-    ) -> Option<BBContext> {
-        let is_loop = iseq.get_bb_pc(bbid).is_loop_start();
-        let res = if is_loop {
-            #[cfg(feature = "jit-debug")]
-            eprintln!("\n===gen_merge bb(loop): {:?}", bbid);
-            self.incoming_context_loop(iseq, bbid)
-        } else {
-            #[cfg(feature = "jit-debug")]
-            eprintln!("\n===gen_merge bb: {:?}", bbid);
-            self.incoming_context_method(iseq, bbid)
-        };
-
-        #[cfg(feature = "jit-debug")]
-        eprintln!("===merge_end");
-        res
-    }
-
-    ///
-    ///
     /// ```text
     ///                    
     ///      entries       
@@ -76,47 +53,49 @@ impl JitContext {
     ///  |    bbid    |
     ///  +------------+
     /// ```
-    ///
-    fn incoming_context_loop(&mut self, iseq: &ISeqInfo, bbid: BasicBlockId) -> Option<BBContext> {
-        let entries = self.branch_map.remove(&bbid)?;
-
-        let (use_set, unused, backedge) = self.loop_info(bbid);
-
-        #[cfg(feature = "jit-debug")]
-        {
-            eprintln!("  use set:  {:?}", use_set);
-            eprintln!("  not used: {:?}", unused);
-            eprintln!("  backedge: {:?}", backedge);
-        }
-
-        let target = BBContext::join_entries(&entries, backedge);
-
-        let bbctx = BBContext::from_target(target, &use_set);
-        let target = bbctx.slot_state.clone();
-        #[cfg(feature = "jit-debug")]
-        eprintln!("  target_ctx:[{:?}]   {:?}", bbctx.sp, bbctx.slot_state);
-
-        let pc = iseq.get_bb_pc(bbid);
-        self.gen_bridges_for_branches(&target, entries, bbid, pc + 1, &unused);
-
-        self.new_backedge(target, bbid);
-
-        Some(bbctx)
-    }
-
-    fn incoming_context_method(
+    pub(super) fn incoming_context(
         &mut self,
         iseq: &ISeqInfo,
         bbid: BasicBlockId,
     ) -> Option<BBContext> {
         let entries = self.branch_map.remove(&bbid)?;
-
-        let target_ctx = BBContext::join_entries(&entries, None);
-
         let pc = iseq.get_bb_pc(bbid);
-        self.gen_bridges_for_branches(&target_ctx, entries, bbid, pc, &[]);
 
-        Some(target_ctx)
+        let is_loop = iseq.get_bb_pc(bbid).is_loop_start();
+        let res = if is_loop {
+            #[cfg(feature = "jit-debug")]
+            eprintln!("\n===gen_merge bb(loop): {:?}", bbid);
+
+            let (use_set, unused, backedge) = self.loop_info(bbid);
+
+            #[cfg(feature = "jit-debug")]
+            {
+                eprintln!("  use set:  {:?}", use_set);
+                eprintln!("  not used: {:?}", unused);
+                eprintln!("  backedge: {:?}", backedge);
+            }
+
+            let target = BBContext::join_entries(&entries, backedge).use_float(&use_set);
+            #[cfg(feature = "jit-debug")]
+            eprintln!("  target:[{:?}]   {:?}", target.sp, target.slot_state);
+
+            self.gen_bridges_for_branches(&target, entries, bbid, pc + 1, &unused);
+            self.new_backedge(target.slot_state.clone(), bbid);
+
+            Some(target)
+        } else {
+            #[cfg(feature = "jit-debug")]
+            eprintln!("\n===gen_merge bb: {:?}", bbid);
+
+            let target = BBContext::join_entries(&entries, None);
+            self.gen_bridges_for_branches(&target, entries, bbid, pc, &[]);
+
+            Some(target)
+        };
+
+        #[cfg(feature = "jit-debug")]
+        eprintln!("===merge_end");
+        res
     }
 
     ///
@@ -153,8 +132,6 @@ impl JitContext {
                     self.inline_bridges.insert(src_bb, (ir, None));
                 }
             }
-            #[cfg(feature = "jit-debug")]
-            eprintln!("  bridge end");
         }
     }
 }

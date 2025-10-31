@@ -148,9 +148,10 @@ impl BBContext {
         }
     }
 
-    fn from_target(target: BBContext, use_set: &[(SlotId, bool)]) -> Self {
-        let slot_state = SlotContext::from_target(target, use_set);
-        let sp = slot_state.temp_start();
+    fn use_float(self, use_set: &[(SlotId, bool)]) -> Self {
+        let sp = self.temp_start();
+        let mut slot_state = self.slot_state;
+        slot_state.use_float(use_set);
         Self {
             slot_state,
             sp,
