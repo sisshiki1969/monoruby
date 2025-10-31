@@ -7,27 +7,21 @@ impl JitContext {
     pub(super) fn backedge_branches(&mut self, iseq: &ISeqInfo) {
         let branch_map = std::mem::take(&mut self.branch_map);
         for (bbid, entries) in branch_map.into_iter() {
-            let mut target_ctx = self.backedge_map.remove(&bbid).unwrap();
+            let target = self.backedge_map.remove(&bbid).unwrap();
             let unused = self.loop_info(bbid).1;
             let pc = iseq.get_bb_pc(bbid);
-            target_ctx.remove_unused(&unused);
             for BranchEntry {
                 src_bb,
-                mut bbctx,
-                mode: cont,
+                bbctx,
+                mode,
                 ..
             } in entries
             {
                 let mut ir = AsmIr::new();
-                bbctx.remove_unused(&unused);
                 #[cfg(feature = "jit-debug")]
-                {
-                    eprintln!("  backedge_write_back {src_bb:?}->{bbid:?}");
-                    eprintln!("    src:    {:?}", bbctx.slot_state);
-                    eprintln!("    target: {:?}", target_ctx);
-                }
-                bbctx.gen_bridge(&mut ir, &target_ctx, pc);
-                match cont {
+                eprintln!("  backedge_write_back {src_bb:?}->{bbid:?}");
+                bbctx.gen_bridge(&mut ir, &target, pc, &unused);
+                match mode {
                     BranchMode::Side { dest } => {
                         self.outline_bridges.push((ir, dest, bbid));
                     }
@@ -136,27 +130,22 @@ impl JitContext {
         pc: BytecodePtr,
         unused: &[SlotId],
     ) {
-        let mut target_ctx = target.clone();
-        target_ctx.remove_unused(unused);
+        let target = target.clone();
         for BranchEntry {
             src_bb,
-            mut bbctx,
+            bbctx,
             mode,
             ..
         } in entries
         {
+            let mut ir = AsmIr::new();
             #[cfg(feature = "jit-debug")]
             eprintln!("  bridge {mode:?} {src_bb:?}->{bbid:?}");
-            let mut ir = AsmIr::new();
-            bbctx.remove_unused(unused);
-            #[cfg(feature = "jit-debug")]
-            {
-                eprintln!("    src:    {:?}", bbctx.slot_state);
-                eprintln!("    target: {:?}", target_ctx);
-            }
-            bbctx.gen_bridge(&mut ir, &target_ctx, pc);
+            bbctx.gen_bridge(&mut ir, &target, pc, unused);
             match mode {
-                BranchMode::Side { dest } => self.outline_bridges.push((ir, dest, bbid)),
+                BranchMode::Side { dest } => {
+                    self.outline_bridges.push((ir, dest, bbid));
+                }
                 BranchMode::Branch => {
                     self.inline_bridges.insert(src_bb, (ir, Some(bbid)));
                 }

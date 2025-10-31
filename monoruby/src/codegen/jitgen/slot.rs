@@ -390,16 +390,6 @@ impl SlotContext {
         }
     }
 
-    ///
-    /// Clear slots that are not to be used.
-    ///
-    pub(super) fn remove_unused(&mut self, unused: &[SlotId]) {
-        for r in unused {
-            self.discard(*r);
-            self.set_MaybeNone(*r);
-        }
-    }
-
     // APIs for 'use'
 
     fn use_as_float(&mut self, slot: SlotId) {
@@ -1327,8 +1317,24 @@ impl BBContext {
     ///
     /// Generate bridge AsmIr to merge current state(*bbctx*) with target state(*target*)
     ///
-    pub(super) fn gen_bridge(mut self, ir: &mut AsmIr, target: &SlotContext, pc: BytecodePtr) {
+    pub(super) fn gen_bridge(
+        mut self,
+        ir: &mut AsmIr,
+        target: &SlotContext,
+        pc: BytecodePtr,
+        unused: &[SlotId],
+    ) {
+        #[cfg(feature = "jit-debug")]
+        {
+            eprintln!("    src:    {:?}", self.slot_state);
+            eprintln!("    target: {:?}", target);
+        }
         for slot in SlotId(0)..self.sp {
+            if unused.contains(&slot) {
+                self.discard(slot);
+                self.set_mode(slot, LinkMode::V);
+                continue;
+            }
             let guarded = target.guarded(slot);
             match (self.mode(slot), target.mode(slot)) {
                 (LinkMode::F(l), LinkMode::F(r)) => {
