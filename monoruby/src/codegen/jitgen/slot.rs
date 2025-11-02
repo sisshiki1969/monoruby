@@ -947,13 +947,15 @@ impl SlotState {
         }
     }
 
-    pub(super) fn is_concrete_value(&self) -> bool {
+    #[allow(non_snake_case)]
+    pub(super) fn is_C(&self) -> bool {
         matches!(self.link, LinkMode::C(_))
     }
 
     pub(super) fn from_caller(
-        info: &FuncInfo,
-        callsite: &CallSiteInfo,
+        store: &Store,
+        fid: FuncId,
+        callid: CallSiteId,
         bbctx: &BBContext,
     ) -> Vec<Self> {
         let CallSiteInfo {
@@ -963,7 +965,8 @@ impl SlotState {
             kw_pos,
             kw_args,
             ..
-        } = callsite;
+        } = &store[callid];
+        let info = &store[fid];
         let mut slots = vec![];
         slots.push(bbctx.state(*recv).clone());
         let (filled_req, filled_opt, filled_post) = info.apply_args(*pos_num);
@@ -1452,8 +1455,10 @@ impl BBContext {
     }
 
     pub(super) fn write_back_locals_if_captured(&mut self, ir: &mut AsmIr) {
-        let wb = self.get_locals_write_back();
-        ir.push(AsmInst::WriteBackIfCaptured(wb));
+        if !self.frame_capture_guarded {
+            let wb = self.get_locals_write_back();
+            ir.push(AsmInst::WriteBackIfCaptured(wb));
+        }
     }
 
     ///
@@ -1480,6 +1485,9 @@ impl BBContext {
     pub(in crate::codegen::jitgen) fn join(&mut self, other: &BBContext) {
         if !other.class_version_guarded {
             self.unset_class_version_guard();
+        }
+        if !other.frame_capture_guarded {
+            self.unset_frame_capture_guard();
         }
         for i in self.all_regs() {
             self.is_used_mut(i).join(other.is_used(i));

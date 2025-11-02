@@ -864,8 +864,23 @@ impl FuncInfo {
         self.ext.name
     }
 
+    ///
+    /// Whether this function is a method.
+    ///
+    /// return false for top-level, block, and class definition.
+    ///
     pub(crate) fn is_method(&self) -> bool {
         self.ext.ty == FuncType::Method
+    }
+
+    ///
+    /// Whether this function is a method, a class definition, or a top-level.
+    ///
+    pub(crate) fn is_method_type(&self) -> bool {
+        match self.ext.ty {
+            FuncType::Method | FuncType::ClassDef | FuncType::TopLevel => true,
+            _ => false,
+        }
     }
 
     pub(crate) fn owner_class(&self) -> Option<ClassId> {

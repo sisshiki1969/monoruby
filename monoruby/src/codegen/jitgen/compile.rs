@@ -25,7 +25,7 @@ impl JitContext {
                     bbctx.clear_temps();
                     ir.push(AsmInst::Init {
                         info: fn_info,
-                        is_method: store[iseq.func_id()].is_method(),
+                        is_method: store[iseq.func_id()].is_method_type(),
                     });
                 }
                 _ => unreachable!(),
@@ -648,14 +648,7 @@ impl JitContext {
                 cache,
             } => {
                 if let Some(cache) = cache {
-                    return self.compile_method_call(
-                        bbctx,
-                        ir,
-                        store,
-                        bc_pos,
-                        cache,
-                        &store[callid],
-                    );
+                    return self.compile_method_call(bbctx, ir, store, bc_pos, cache, callid);
                 } else {
                     return CompileResult::Recompile(RecompileReason::NotCached);
                 }

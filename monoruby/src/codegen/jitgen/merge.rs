@@ -75,7 +75,8 @@ impl JitContext {
                 eprintln!("  backedge: {:?}", backedge);
             }
 
-            let target = BBContext::join_entries(&entries, backedge).use_float(&use_set);
+            let mut target = BBContext::join_entries(&entries, backedge);
+            target.use_float(&use_set);
             #[cfg(feature = "jit-debug")]
             eprintln!("  target:[{:?}]   {:?}", target.sp, target.slot_state);
 

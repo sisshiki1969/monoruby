@@ -109,6 +109,7 @@ pub(crate) struct BBContext {
     sp: SlotId,
     next_sp: SlotId,
     class_version_guarded: bool,
+    frame_capture_guarded: bool,
     pc: Option<BytecodePtr>,
 }
 
@@ -133,6 +134,7 @@ impl BBContext {
             sp,
             next_sp: sp,
             class_version_guarded: false,
+            frame_capture_guarded: cc.is_method(),
             pc: None,
         }
     }
@@ -144,21 +146,17 @@ impl BBContext {
             sp,
             next_sp: sp,
             class_version_guarded: false,
+            frame_capture_guarded: cc.is_method(),
             pc: None,
         }
     }
 
-    fn use_float(self, use_set: &[(SlotId, bool)]) -> Self {
+    fn use_float(&mut self, use_set: &[(SlotId, bool)]) {
         let sp = self.temp_start();
-        let mut slot_state = self.slot_state;
-        slot_state.use_float(use_set);
-        Self {
-            slot_state,
-            sp,
-            next_sp: sp,
-            class_version_guarded: false,
-            pc: None,
-        }
+        self.slot_state.use_float(use_set);
+        self.sp = sp;
+        self.next_sp = sp;
+        self.pc = None;
     }
 
     fn pc(&self) -> BytecodePtr {
@@ -175,6 +173,10 @@ impl BBContext {
 
     fn unset_class_version_guard(&mut self) {
         self.class_version_guarded = false;
+    }
+
+    fn unset_frame_capture_guard(&mut self) {
+        self.frame_capture_guarded = false;
     }
 
     fn join_entries(entries: &[BranchEntry], backedge: Option<BBContext>) -> Self {
@@ -462,7 +464,7 @@ impl Codegen {
         let jit_type = if let Some(pos) = position {
             JitType::Loop(pos)
         } else {
-            JitType::Method
+            JitType::Generic
         };
 
         let mut ctx = JitContext::new(
