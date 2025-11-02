@@ -861,7 +861,10 @@ pub(super) enum AsmInst {
     },
 
     Preparation,
-    Init(FnInitInfo),
+    Init {
+        info: FnInitInfo,
+        is_method: bool,
+    },
     ///
     /// Deoptimize and fallback to interpreter.
     ///

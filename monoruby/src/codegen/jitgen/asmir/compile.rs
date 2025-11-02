@@ -26,8 +26,8 @@ impl Codegen {
         match inst {
             #[cfg(feature = "emit-asm")]
             AsmInst::BcIndex(_) => {}
-            AsmInst::Init(info) => {
-                self.init_func(&info);
+            AsmInst::Init { info, is_method } => {
+                self.init_func(&info, is_method);
             }
             AsmInst::Preparation => {
                 if !ctx.self_class().is_always_frozen() && ctx.ivar_heap_accessed {

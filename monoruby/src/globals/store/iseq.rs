@@ -128,7 +128,6 @@ pub struct ISeqInfo {
     ///
     pub lexical_context: Vec<ClassId>,
     pub sourceinfo: SourceInfoRef,
-    is_block_style: bool,
     is_constant_fn: Option<Value>,
     pub(crate) can_be_inlined: bool,
     ///
@@ -171,7 +170,6 @@ impl ISeqInfo {
         args: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
-        is_block_style: bool,
     ) -> Self {
         ISeqInfo {
             func_id: id,
@@ -190,16 +188,11 @@ impl ISeqInfo {
             temp_num: 0,
             lexical_context: vec![],
             sourceinfo,
-            is_block_style,
             is_constant_fn: None,
             can_be_inlined: false,
             jit_entry: HashMap::default(),
             bb_info: BasicBlockInfo::default(),
         }
-    }
-
-    pub fn is_block_style(&self) -> bool {
-        self.is_block_style
     }
 
     pub fn is_const_fn(&self) -> Option<Value> {
@@ -218,7 +211,7 @@ impl ISeqInfo {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(id, mother, outer.1, None, args, loc, sourceinfo, true)
+        Self::new(id, mother, outer.1, None, args, loc, sourceinfo)
     }
 
     pub(super) fn new_method(
@@ -236,7 +229,6 @@ impl ISeqInfo {
             args,
             loc,
             sourceinfo,
-            false,
         )
     }
 

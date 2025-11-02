@@ -222,6 +222,7 @@ impl SlotContext {
     fn set_MaybeNone(&mut self, slot: SlotId) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::MaybeNone);
+        self.set_guarded(slot, Guarded::Value);
     }
 
     ///
@@ -231,16 +232,25 @@ impl SlotContext {
     pub(super) fn set_None(&mut self, slot: SlotId) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::None);
+        self.set_guarded(slot, Guarded::Value);
     }
 
     ///
     /// _ -> S
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_S(&mut self, slot: SlotId, guarded: Guarded) {
+    pub(super) fn set_S_with_guard(&mut self, slot: SlotId, guarded: Guarded) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::S);
         self.set_guarded(slot, guarded);
+    }
+
+    ///
+    /// _ -> S
+    ///
+    #[allow(non_snake_case)]
+    pub(super) fn set_S(&mut self, slot: SlotId) {
+        self.set_S_with_guard(slot, Guarded::Value);
     }
 
     ///
@@ -363,9 +373,7 @@ impl SlotContext {
     ///
     #[allow(non_snake_case)]
     pub(super) fn def_C_fixnum(&mut self, slot: impl Into<Option<SlotId>>, i: i64) {
-        if let Some(slot) = slot.into() {
-            self.def_C(slot, Value::fixnum(i));
-        }
+        self.def_C(slot, Value::fixnum(i));
     }
 
     ///
@@ -817,7 +825,7 @@ impl SlotContext {
     /// - rax, rcx
     ///
     #[allow(non_snake_case)]
-    pub(super) fn to_S(&mut self, ir: &mut AsmIr, slot: SlotId) {
+    fn to_S(&mut self, ir: &mut AsmIr, slot: SlotId) {
         match self.mode(slot) {
             LinkMode::F(xmm) => {
                 ir.xmm2stack(xmm, slot);
@@ -1046,7 +1054,7 @@ enum IsUsed {
 impl IsUsed {
     fn join(&mut self, other: &Self) {
         *self = match (&self, other) {
-            (IsUsed::Used(l), IsUsed::Used(r)) => IsUsed::Used(l.merge(r)),
+            (IsUsed::Used(l), IsUsed::Used(r)) => IsUsed::Used(l.join(r)),
             (IsUsed::Used(x), _) | (_, IsUsed::Used(x)) => IsUsed::Used(*x),
             (IsUsed::Killed, IsUsed::Killed) => IsUsed::Killed,
             _ => IsUsed::ND,
@@ -1115,7 +1123,7 @@ impl UsedAs {
         }
     }
 
-    fn merge(&self, other: &Self) -> Self {
+    fn join(&self, other: &Self) -> Self {
         Self {
             ty: self.ty.join(&other.ty),
             killed: self.killed && other.killed,
@@ -1238,7 +1246,7 @@ impl BBContext {
             }
             LinkMode::G => {
                 ir.reg2stack(GP::R15, src);
-                self.set_S(src, guarded);
+                self.set_S_with_guard(src, guarded);
                 self.def_acc(ir, dst, guarded)
             }
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
@@ -1509,7 +1517,7 @@ impl BBContext {
                 }
                 _ => {
                     let guarded = self.guarded(i).join(&other.guarded(i));
-                    self.set_S(i, guarded);
+                    self.set_S_with_guard(i, guarded);
                 }
             };
         }

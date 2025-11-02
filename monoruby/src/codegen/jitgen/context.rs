@@ -184,11 +184,11 @@ pub struct JitContext {
     ///
     pub(super) backedge_map: HashMap<BasicBlockId, SlotContext>,
     ///
-    /// Information for bridges.
+    /// Information for outlined bridges.
     ///
     pub(super) outline_bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
     ///
-    /// Information for continue bridges.
+    /// Information for inlined bridges.
     ///
     pub(super) inline_bridges: HashMap<BasicBlockId, (AsmIr, Option<BasicBlockId>)>,
     ///

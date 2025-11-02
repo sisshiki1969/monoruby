@@ -23,7 +23,10 @@ impl JitContext {
             match iseq.trace_ir(store, BcIndex::from(0)) {
                 TraceIr::InitMethod(fn_info) => {
                     bbctx.clear_temps();
-                    ir.push(AsmInst::Init(fn_info));
+                    ir.push(AsmInst::Init {
+                        info: fn_info,
+                        is_method: store[iseq.func_id()].is_method(),
+                    });
                 }
                 _ => unreachable!(),
             }
@@ -832,7 +835,7 @@ impl JitContext {
                     bbctx.fetch(ir, local, GP::Rax);
                     ir.push(AsmInst::CheckLocal(branch_dest));
                     let mut side_bb = bbctx.clone();
-                    side_bb.set_S(local, Guarded::Value);
+                    side_bb.set_S(local);
                     self.new_side_branch(iseq, bc_pos, dest_idx, side_bb, branch_dest);
                     bbctx.set_None(local);
                 }

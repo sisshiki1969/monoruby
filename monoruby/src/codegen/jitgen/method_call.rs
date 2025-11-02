@@ -383,11 +383,9 @@ impl JitContext {
                 let specializable = store[fid].is_simple_call(callsite)
                     && (bbctx.state(callsite.recv).is_concrete_value()
                         || (args..args + pos_num).any(|i| bbctx.state(i).is_concrete_value()));
-                if (if let Some(fid) = block_fid {
-                    store[fid].is_iseq().is_some()
-                } else {
-                    false
-                }) || (specializable && self.specialize_level() < 5)
+                let iseq_block = block_fid.map(|fid| store[fid].is_iseq()).flatten();
+
+                if iseq_block.is_some() || (specializable && self.specialize_level() < 5)
                 /*name == Some(IdentId::NEW)*/
                 {
                     let slots = if specializable {
@@ -395,13 +393,8 @@ impl JitContext {
                     } else {
                         vec![]
                     };
-                    let block = if let Some(fid) = block_fid
-                        && let Some(block_iseq) = store[fid].is_iseq()
-                    {
-                        Some(JitBlockInfo::new(block_iseq, self.self_class()))
-                    } else {
-                        None
-                    };
+                    let block = iseq_block
+                        .map(|block_iseq| JitBlockInfo::new(block_iseq, self.self_class()));
                     let args_info = JitArgumentInfo(slots);
                     let patch_point = if self.is_specialized() {
                         None
