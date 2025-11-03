@@ -218,15 +218,8 @@ impl JitContext {
         } else {
             JitArgumentInfo::default()
         };
-        let entry = self.compile_specialized_func(
-            store,
-            iseq,
-            self_class,
-            None,
-            args_info,
-            block,
-            Some(outer),
-        );
+        let entry =
+            self.compile_inlined_func(store, iseq, self_class, None, args_info, block, Some(outer));
         let evict = ir.new_evict();
         ir.push(AsmInst::YieldSpecialized {
             callid,
@@ -377,7 +370,7 @@ impl JitContext {
                     } else {
                         Some(self.label())
                     };
-                    let entry = self.compile_specialized_func(
+                    let entry = self.compile_inlined_func(
                         store,
                         iseq,
                         recv_class,
@@ -399,7 +392,7 @@ impl JitContext {
         CompileResult::Continue
     }
 
-    fn compile_specialized_func(
+    fn compile_inlined_func(
         &mut self,
         store: &Store,
         iseq_id: ISeqId,
