@@ -22,6 +22,7 @@ jobs:
           toolchain: nightly
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: taiki-e/install-action@nextest
+      - run: cargo llvm-cov clean --workspace
       - run: cargo llvm-cov --workspace --all-targets --lcov --output-path lcov.info
       - run: cargo llvm-cov --workspace --doc --lcov --output-path lcov.info
 
