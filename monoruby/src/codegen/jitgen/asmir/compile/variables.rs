@@ -45,20 +45,22 @@ impl Codegen {
             ivar
         };
         let exit = self.jit.label();
+        let nil = self.jit.label();
         monoasm! { &mut self.jit,
             movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
         }
         if !self_ {
-            self.check_len(idx, &exit);
+            self.check_len(idx, &nil);
         }
         monoasm! { &mut self.jit,
             movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
             movq r15, [rdi + (idx as i32 * 8)];
             testq r15, r15;
             jne  exit;
+        nil:
             movq r15, (NIL_VALUE);
+        exit:
         }
-        self.jit.bind_label(exit);
     }
 }
 
