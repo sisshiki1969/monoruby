@@ -34,18 +34,9 @@ impl SlotContext {
 
     pub(super) fn from_args(cc: &JitContext, store: &Store) -> Self {
         let mut ctx = Self::from(cc);
-        let fid = store[cc.iseq_id()].func_id();
-        let info = &store[fid];
-        for i in info.req_num()..info.reqopt_num() {
-            let slot = SlotId(1 + i as u16);
-            ctx.set_MaybeNone(slot);
-        }
-        let kw = info.kw_reg_pos();
-        for (i, _) in info.kw_names().iter().enumerate() {
-            ctx.set_MaybeNone(kw + i);
-        }
+
         if let JitType::Specialized {
-            args_info: JitArgumentInfo(args),
+            args_info: JitArgumentInfo(Some(args)),
             ..
         } = cc.jit_type()
         {
@@ -56,6 +47,19 @@ impl SlotContext {
                     }
                     _ => {}
                 }
+            }
+        } else {
+            let fid = store[cc.iseq_id()].func_id();
+            let info = &store[fid];
+            // Set optional arguments to MaybeNone.
+            for i in info.req_num()..info.reqopt_num() {
+                let slot = SlotId(1 + i as u16);
+                ctx.set_MaybeNone(slot);
+            }
+            // Set keyword arguments to MaybeNone.
+            let kw = info.kw_reg_pos();
+            for (i, _) in info.kw_names().iter().enumerate() {
+                ctx.set_MaybeNone(kw + i);
             }
         }
         ctx

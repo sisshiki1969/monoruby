@@ -70,12 +70,12 @@ impl JitBlockInfo {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct JitArgumentInfo(pub Vec<slot::SlotState>);
+#[derive(Debug, Clone, Default)]
+pub(super) struct JitArgumentInfo(pub Option<Vec<slot::SlotState>>);
 
 impl JitArgumentInfo {
-    pub(super) fn new() -> Self {
-        Self(vec![])
+    pub(super) fn new(slot: Vec<slot::SlotState>) -> Self {
+        Self(Some(slot))
     }
 }
 
