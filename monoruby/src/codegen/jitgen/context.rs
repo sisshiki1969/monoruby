@@ -7,14 +7,14 @@ use super::*;
 #[derive(Debug, Clone)]
 pub(super) enum JitType {
     /// JIT for method / block.
-    Method,
-    /// JIT for loop.
-    Loop(BytecodePtr),
-    /// specialized JIT method.
+    Generic,
+    /// specialized JIT for method / block.
     Specialized {
         idx: usize,
         args_info: JitArgumentInfo,
     },
+    /// JIT for loop.
+    Loop(BytecodePtr),
 }
 
 pub(super) struct SpecializeInfo {
@@ -70,12 +70,12 @@ impl JitBlockInfo {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct JitArgumentInfo(pub Vec<slot::SlotState>);
+#[derive(Debug, Clone, Default)]
+pub(super) struct JitArgumentInfo(pub Option<Vec<slot::SlotState>>);
 
 impl JitArgumentInfo {
-    pub(super) fn new() -> Self {
-        Self(vec![])
+    pub(super) fn new(slot: Vec<slot::SlotState>) -> Self {
+        Self(Some(slot))
     }
 }
 
@@ -104,6 +104,10 @@ pub(crate) struct JitStackFrame {
     /// Object type of *self*.
     ///
     self_ty: Option<ObjTy>,
+    ///
+    /// Whether this function is a method, a class definition, or a top-level.
+    ///
+    is_method: bool,
 }
 
 impl JitStackFrame {
@@ -113,6 +117,7 @@ impl JitStackFrame {
         given_block: Option<JitBlockInfo>,
         self_class: ClassId,
         self_ty: Option<ObjTy>,
+        is_method: bool,
     ) -> Self {
         Self {
             iseq_id,
@@ -120,6 +125,7 @@ impl JitStackFrame {
             given_block,
             self_class,
             self_ty,
+            is_method,
         }
     }
     pub fn given_block(&self) -> Option<&JitBlockInfo> {
@@ -184,11 +190,11 @@ pub struct JitContext {
     ///
     pub(super) backedge_map: HashMap<BasicBlockId, SlotContext>,
     ///
-    /// Information for bridges.
+    /// Information for outlined bridges.
     ///
     pub(super) outline_bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
     ///
-    /// Information for continue bridges.
+    /// Information for inlined bridges.
     ///
     pub(super) inline_bridges: HashMap<BasicBlockId, (AsmIr, Option<BasicBlockId>)>,
     ///
@@ -238,6 +244,7 @@ impl JitContext {
         specialize_level: usize,
     ) -> Self {
         let self_ty = store[self_class].instance_ty();
+        let is_method = store[store[iseq_id].func_id()].is_method_type();
         Self::new_with_stack_frame(
             store,
             iseq_id,
@@ -251,6 +258,7 @@ impl JitContext {
                 given_block: None,
                 self_class,
                 self_ty,
+                is_method,
             }],
         )
     }
@@ -313,7 +321,7 @@ impl JitContext {
             bytecode_top: self.bytecode_top,
             jit_type: self.jit_type.clone(),
             basic_block_labels: HashMap::default(),
-            loop_info: HashMap::default(),
+            loop_info: self.loop_info.clone(),
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
@@ -347,6 +355,11 @@ impl JitContext {
 
     pub(super) fn self_ty(&self) -> Option<ObjTy> {
         self.current_frame().self_ty
+    }
+
+    /// Whether this function is a method, a class definition, or a top-level.
+    pub(super) fn is_method(&self) -> bool {
+        self.current_frame().is_method
     }
 
     pub(crate) fn current_frame(&self) -> &JitStackFrame {

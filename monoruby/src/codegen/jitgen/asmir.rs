@@ -237,10 +237,6 @@ impl AsmIr {
         self.push(AsmInst::AccToStack(reg));
     }
 
-    pub fn nil2stack(&mut self, reg: SlotId) {
-        self.push(AsmInst::NilToStack(reg));
-    }
-
     ///
     /// Convert Fixnum to f64.
     ///
@@ -689,8 +685,6 @@ pub(super) enum AsmInst {
     RegToStack(GP, SlotId),
     /// move acc to stack
     AccToStack(SlotId),
-    /// store zero in stack
-    NilToStack(SlotId),
 
     /// move reg to acc
     RegToAcc(GP),
@@ -867,7 +861,10 @@ pub(super) enum AsmInst {
     },
 
     Preparation,
-    Init(FnInitInfo),
+    Init {
+        info: FnInitInfo,
+        is_method: bool,
+    },
     ///
     /// Deoptimize and fallback to interpreter.
     ///

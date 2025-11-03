@@ -17,8 +17,9 @@ impl JitContext {
         store: &Store,
         bc_pos: BcIndex,
         cache: MethodCacheEntry,
-        callsite: &CallSiteInfo,
+        callid: CallSiteId,
     ) -> CompileResult {
+        let callsite = &store[callid];
         let recv = callsite.recv;
         let MethodCacheEntry {
             mut recv_class,
@@ -40,8 +41,9 @@ impl JitContext {
             }
         }
 
-        // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
-        if callsite.block_fid.is_some() || store[func_id].meta().is_eval() {
+        // We must write back and unlink all local vars when they are possibly accessed or captured from inner blocks.
+        let possibly_captured = callsite.block_fid.is_some() || store[func_id].meta().is_eval();
+        if possibly_captured {
             bbctx.locals_to_S(ir);
         }
 
@@ -54,51 +56,19 @@ impl JitContext {
         {
             let f = &info.inline_gen;
             if self.inline_asm(bbctx, ir, store, f, callsite, recv_class) {
+                if possibly_captured {
+                    bbctx.unset_frame_capture_guard();
+                }
                 return CompileResult::Continue;
             }
         }
 
-        self.call(bbctx, ir, store, callsite, func_id, recv_class)
+        let res = self.call(bbctx, ir, store, callid, func_id, recv_class);
+        if possibly_captured {
+            bbctx.unset_frame_capture_guard();
+        }
+        res
     }
-
-    /*pub(super) fn compile_index_call(
-        &mut self,
-        bbctx: &mut BBContext,
-        ir: &mut AsmIr,
-        store: &Store,
-        func_id: FuncId,
-        recv_class: ClassId,
-        base: SlotId,
-        idx: SlotId,
-        dst: SlotId,
-    ) -> CompileResult {
-        let callsite = CallSiteInfo {
-            id: CallSiteId(0),
-            name: Some(IdentId::get_id("[]")),
-            recv: base,
-            args: idx,
-            pos_num: 1,
-            dst: Some(dst),
-            block_fid: None,
-            block_arg: None,
-            splat_pos: vec![],
-            hash_splat_pos: vec![],
-            kw_pos: idx,
-            kw_args: Default::default(),
-        };
-
-        let recv = callsite.recv;
-        self.recv_version_guard(bbctx, ir, recv, recv_class);
-
-        if let Some(info) = store.inline_info.get_inline(func_id) {
-            let f = &info.inline_gen;
-            if self.inline_asm(bbctx, ir, store, f, &callsite, recv_class) {
-                return CompileResult::Continue;
-            }
-        }
-
-        self.call(bbctx, ir, store, &callsite, func_id, recv_class)
-    }*/
 
     pub(super) fn compile_binop_call(
         &mut self,
@@ -229,7 +199,7 @@ impl JitContext {
             self_class,
             outer,
         } = block.add(1);
-        let simple = bbctx.set_arguments(store, ir, &store[callid], store[iseq].func_id());
+        let simple = bbctx.set_arguments(store, ir, callid, store[iseq].func_id());
         bbctx.discard(dst);
         bbctx.clear_above_next_sp();
         let error = ir.new_error(bbctx);
@@ -242,15 +212,14 @@ impl JitContext {
         } else {
             None
         };
-        let entry = self.compile_specialized_func(
-            store,
-            iseq,
-            self_class,
-            None,
-            JitArgumentInfo::new(),
-            block,
-            Some(outer),
-        );
+        let fid = store[iseq].func_id();
+        let args_info = if store.is_simple_call(fid, callid) {
+            JitArgumentInfo::new(SlotState::from_caller(store, fid, callid, bbctx))
+        } else {
+            JitArgumentInfo::default()
+        };
+        let entry =
+            self.compile_inlined_func(store, iseq, self_class, None, args_info, block, Some(outer));
         let evict = ir.new_evict();
         ir.push(AsmInst::YieldSpecialized {
             callid,
@@ -281,10 +250,11 @@ impl JitContext {
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
         store: &Store,
-        callsite: &CallSiteInfo,
+        callid: CallSiteId,
         mut fid: FuncId,
         recv_class: ClassId,
     ) -> CompileResult {
+        let callsite = &store[callid];
         let CallSiteInfo {
             args,
             pos_num,
@@ -357,7 +327,7 @@ impl JitContext {
             }
             FuncKind::Builtin { .. } => {
                 let evict = ir.new_evict();
-                bbctx.send(ir, store, callsite, fid, recv_class, evict, None);
+                bbctx.send(ir, store, callid, fid, recv_class, evict, None);
                 evict
             }
             FuncKind::Proc(proc) => {
@@ -366,7 +336,7 @@ impl JitContext {
                 bbctx.send(
                     ir,
                     store,
-                    callsite,
+                    callid,
                     fid,
                     recv_class,
                     evict,
@@ -380,53 +350,27 @@ impl JitContext {
                     return CompileResult::Continue;
                 }
                 let evict = ir.new_evict();
-                let specializable = store[fid].is_simple_call(callsite)
-                    && (bbctx.state(callsite.recv).is_concrete_value()
-                        || (args..args + pos_num).any(|i| bbctx.state(i).is_concrete_value()));
-                if (if let Some(fid) = block_fid {
-                    store[fid].is_iseq().is_some()
-                } else {
-                    false
-                }) || (specializable && self.specialize_level() < 5)
+                let specializable = store.is_simple_call(fid, callid)
+                    && (bbctx.state(callsite.recv).is_C()
+                        || (args..args + pos_num).any(|i| bbctx.state(i).is_C()));
+                let iseq_block = block_fid.map(|fid| store[fid].is_iseq()).flatten();
+
+                if iseq_block.is_some() || (specializable && self.specialize_level() < 5)
                 /*name == Some(IdentId::NEW)*/
                 {
-                    let mut slots = vec![];
-                    if specializable {
-                        slots.push(bbctx.state(callsite.recv).clone());
-                        let (filled_req, filled_opt, filled_post) = store[fid].apply_args(pos_num);
-                        for i in 0..filled_req {
-                            slots.push(bbctx.state(args + i).clone());
-                        }
-                        for _ in filled_req..store[fid].req_num() {
-                            slots.push(SlotState::default());
-                        }
-                        for i in filled_req..filled_req + filled_opt {
-                            slots.push(bbctx.state(args + i).clone());
-                        }
-                        for _ in filled_opt..store[fid].opt_num() {
-                            slots.push(SlotState::default());
-                        }
-                        for i in filled_req + filled_opt..filled_req + filled_opt + filled_post {
-                            slots.push(bbctx.state(args + i).clone());
-                        }
-                        for _ in filled_post..store[fid].post_num() {
-                            slots.push(SlotState::default());
-                        }
-                    }
-                    let block = if let Some(fid) = block_fid
-                        && let Some(block_iseq) = store[fid].is_iseq()
-                    {
-                        Some(JitBlockInfo::new(block_iseq, self.self_class()))
+                    let args_info = if specializable {
+                        JitArgumentInfo::new(SlotState::from_caller(store, fid, callid, bbctx))
                     } else {
-                        None
+                        JitArgumentInfo::default()
                     };
-                    let args_info = JitArgumentInfo(slots);
+                    let block = iseq_block
+                        .map(|block_iseq| JitBlockInfo::new(block_iseq, self.self_class()));
                     let patch_point = if self.is_specialized() {
                         None
                     } else {
                         Some(self.label())
                     };
-                    let entry = self.compile_specialized_func(
+                    let entry = self.compile_inlined_func(
                         store,
                         iseq,
                         recv_class,
@@ -435,9 +379,9 @@ impl JitContext {
                         block,
                         None,
                     );
-                    bbctx.send_specialized(ir, store, callsite, fid, entry, patch_point, evict);
+                    bbctx.send_specialized(ir, store, callid, fid, entry, patch_point, evict);
                 } else {
-                    bbctx.send(ir, store, callsite, fid, recv_class, evict, None);
+                    bbctx.send(ir, store, callid, fid, recv_class, evict, None);
                 }
                 evict
             }
@@ -448,7 +392,7 @@ impl JitContext {
         CompileResult::Continue
     }
 
-    fn compile_specialized_func(
+    fn compile_inlined_func(
         &mut self,
         store: &Store,
         iseq_id: ISeqId,
@@ -466,8 +410,9 @@ impl JitContext {
         let jit_type = JitType::Specialized { idx, args_info };
         let mut stack_frame = self.stack_frame.clone();
         let self_ty = store[self_class].instance_ty();
+        let is_method = store[store[iseq_id].func_id()].is_method_type();
         stack_frame.push(JitStackFrame::new(
-            iseq_id, outer, block, self_class, self_ty,
+            iseq_id, outer, block, self_class, self_ty, is_method,
         ));
         let mut ctx = JitContext::new_with_stack_frame(
             store,
@@ -518,7 +463,7 @@ impl BBContext {
         &mut self,
         ir: &mut AsmIr,
         store: &Store,
-        callsite: &CallSiteInfo,
+        callid: CallSiteId,
         callee_fid: FuncId,
         recv_class: ClassId,
         evict: AsmEvict,
@@ -528,15 +473,15 @@ impl BBContext {
         self.exec_gc(ir, true);
         let using_xmm = self.get_using_xmm();
         ir.xmm_save(using_xmm);
-        let simple = self.set_arguments(store, ir, callsite, callee_fid);
-        if let Some(dst) = callsite.dst {
+        let simple = self.set_arguments(store, ir, callid, callee_fid);
+        if let Some(dst) = store[callid].dst {
             self.def_S(dst);
         }
         self.clear_above_next_sp();
         let error = ir.new_error(self);
         self.writeback_acc(ir);
         ir.push(AsmInst::Send {
-            callid: callsite.id,
+            callid,
             callee_fid,
             recv_class,
             error,
@@ -556,7 +501,7 @@ impl BBContext {
         &mut self,
         ir: &mut AsmIr,
         store: &Store,
-        callsite: &CallSiteInfo,
+        callid: CallSiteId,
         callee_fid: FuncId,
         inlined_entry: JitLabel,
         patch_point: Option<JitLabel>,
@@ -566,15 +511,15 @@ impl BBContext {
         self.exec_gc(ir, true);
         let using_xmm = self.get_using_xmm();
         ir.xmm_save(using_xmm);
-        let simple = self.set_arguments(store, ir, callsite, callee_fid);
-        if let Some(dst) = callsite.dst {
+        let simple = self.set_arguments(store, ir, callid, callee_fid);
+        if let Some(dst) = store[callid].dst {
             self.def_S(dst);
         }
         self.clear_above_next_sp();
         let error = ir.new_error(self);
         self.writeback_acc(ir);
         ir.push(AsmInst::SendSpecialized {
-            callid: callsite.id,
+            callid,
             callee_fid,
             entry: inlined_entry,
             patch_point,
@@ -614,6 +559,17 @@ impl BBContext {
         ir[evict] = SideExit::Evict(Some((pc + 2, self.get_write_back())));
     }
 
+    #[allow(non_snake_case)]
+    fn callsite_exists_F(&self, store: &Store, callid: CallSiteId) -> bool {
+        let callsite = &store[callid];
+        let args = callsite.args;
+        let pos_num = callsite.pos_num;
+        let kw_pos = callsite.kw_pos;
+        let kw_num = callsite.kw_len();
+        (args..args + pos_num).any(|reg| matches!(self.mode(reg), LinkMode::F(_)))
+            || (kw_pos..kw_pos + kw_num).any(|reg| matches!(self.mode(reg), LinkMode::F(_)))
+    }
+
     ///
     /// Set positional arguments for callee.
     ///
@@ -621,25 +577,23 @@ impl BBContext {
         &mut self,
         store: &Store,
         ir: &mut AsmIr,
-        callsite: &CallSiteInfo,
+        callid: CallSiteId,
         callee_fid: FuncId,
     ) -> bool {
         let callee = &store[callee_fid];
-        let args = callsite.args;
-        let pos_num = callsite.pos_num;
-        let kw_pos = callsite.kw_pos;
-        let kw_num = callsite.kw_len();
-        if callee.is_simple_call(callsite) {
-            let stack_offset = if (args..args + pos_num)
-                .any(|reg| matches!(self.mode(reg), LinkMode::F(_)))
-                || (kw_pos..kw_pos + kw_num).any(|reg| matches!(self.mode(reg), LinkMode::F(_)))
-            {
+        let callsite = &store[callid];
+        if store.is_simple_call(callee_fid, callid) {
+            let stack_offset = if self.callsite_exists_F(store, callid) {
                 callee.get_offset() as i32
             } else {
                 0
             };
             ir.reg_sub(GP::Rsp, stack_offset);
 
+            let args = callsite.args;
+            let pos_num = callsite.pos_num;
+            let kw_pos = callsite.kw_pos;
+            let kw_num = callsite.kw_len();
             // write back block argument.
             if let Some(block_arg) = callsite.block_arg {
                 self.write_back_slot(ir, block_arg);
@@ -718,10 +672,7 @@ impl BBContext {
             self.write_back_args(ir, callsite);
 
             let error = ir.new_error(self);
-            ir.push(AsmInst::SetArguments {
-                callid: callsite.id,
-                callee_fid,
-            });
+            ir.push(AsmInst::SetArguments { callid, callee_fid });
             ir.handle_error(error);
             false
         }

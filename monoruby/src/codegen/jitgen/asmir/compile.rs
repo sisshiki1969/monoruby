@@ -26,8 +26,8 @@ impl Codegen {
         match inst {
             #[cfg(feature = "emit-asm")]
             AsmInst::BcIndex(_) => {}
-            AsmInst::Init(info) => {
-                self.init_func(&info);
+            AsmInst::Init { info, is_method } => {
+                self.init_func(&info, is_method);
             }
             AsmInst::Preparation => {
                 if !ctx.self_class().is_always_frozen() && ctx.ivar_heap_accessed {
@@ -71,11 +71,6 @@ impl Codegen {
             }
             AsmInst::AccToStack(slot) => {
                 self.store_r15(slot);
-            }
-            AsmInst::NilToStack(slot) => {
-                monoasm! { &mut self.jit,
-                    movq [r14 - (conv(slot))], (NIL_VALUE);
-                }
             }
             AsmInst::RegToAcc(r) => {
                 if r != GP::R15 {
@@ -175,9 +170,6 @@ impl Codegen {
                 UnOpK::Pos => {}
             },
 
-            /*AsmInst::NumToXmm(reg, x, side_exit) => {
-                self.numeric_val_to_f64(reg, x, &labels[side_exit]);
-            }*/
             AsmInst::F64ToXmm(f, x) => {
                 let f = self.jit.const_f64(f);
                 monoasm!( &mut self.jit,
@@ -421,17 +413,6 @@ impl Codegen {
                 );
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
-            /*AsmInst::SendNotCached {
-                self_class,
-                callid,
-                pc,
-                error,
-                evict,
-            } => {
-                let error = labels[error];
-                let return_addr = self.send_not_cached(store, callid, self_class, pc, error);
-                self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
-            }*/
             AsmInst::Yield {
                 callid,
                 error,
@@ -493,9 +474,6 @@ impl Codegen {
                 self.xmm_restore(using_xmm);
             }
 
-            /*AsmInst::GenericBinOp { kind, using_xmm } => {
-                self.generic_binop(kind, using_xmm);
-            }*/
             AsmInst::IntegerBinOp {
                 kind,
                 lhs,
@@ -565,14 +543,6 @@ impl Codegen {
                 self.store_constant(id, using_xmm);
             }
 
-            /*AsmInst::GenericIndex {
-                base,
-                idx,
-                pc,
-                using_xmm,
-            } => {
-                self.generic_index(using_xmm, base, idx, pc);
-            }*/
             AsmInst::ArrayU16Index { idx } => {
                 self.gen_array_u16_index(idx);
             }

@@ -1,6 +1,6 @@
 use bytecodegen::{
-    inst::{BrKind, DynVar, FnInitInfo},
     BinOpK, UnOpK,
+    inst::{BrKind, DynVar, FnInitInfo},
 };
 use jitgen::trace_ir::{BinOpInfo, OpMode, TraceIr};
 use ruruby_parse::CmpKind;
@@ -128,7 +128,6 @@ pub struct ISeqInfo {
     ///
     pub lexical_context: Vec<ClassId>,
     pub sourceinfo: SourceInfoRef,
-    is_block_style: bool,
     is_constant_fn: Option<Value>,
     pub(crate) can_be_inlined: bool,
     ///
@@ -171,7 +170,6 @@ impl ISeqInfo {
         args: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
-        is_block_style: bool,
     ) -> Self {
         ISeqInfo {
             func_id: id,
@@ -190,16 +188,11 @@ impl ISeqInfo {
             temp_num: 0,
             lexical_context: vec![],
             sourceinfo,
-            is_block_style,
             is_constant_fn: None,
             can_be_inlined: false,
             jit_entry: HashMap::default(),
             bb_info: BasicBlockInfo::default(),
         }
-    }
-
-    pub fn is_block_style(&self) -> bool {
-        self.is_block_style
     }
 
     pub fn is_const_fn(&self) -> Option<Value> {
@@ -218,7 +211,7 @@ impl ISeqInfo {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(id, mother, outer.1, None, args, loc, sourceinfo, true)
+        Self::new(id, mother, outer.1, None, args, loc, sourceinfo)
     }
 
     pub(super) fn new_method(
@@ -236,7 +229,6 @@ impl ISeqInfo {
             args,
             loc,
             sourceinfo,
-            false,
         )
     }
 
@@ -934,11 +926,7 @@ impl ISeqInfo {
                     src: SlotId::new(op1_w1),
                     dst: (SlotId::new(op2_w2), op3_w3, {
                         let rest = op2.get_u16();
-                        if rest == 0 {
-                            None
-                        } else {
-                            Some(rest - 1)
-                        }
+                        if rest == 0 { None } else { Some(rest - 1) }
                     }),
                 },
                 172 => {
@@ -1235,8 +1223,8 @@ impl ParamsInfo {
     pub fn total_args(&self) -> usize {
         self.required_num
             + self.optional_num
-            + self.rest.is_some() as usize
             + self.post_num
+            + self.rest.is_some() as usize
             + self.kw_names.len()
             + self.kw_rest.is_some() as usize
             + self.block_param.is_some() as usize

@@ -1,7 +1,7 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn init_func(&mut self, fn_info: &FnInitInfo) {
+    pub(super) fn init_func(&mut self, fn_info: &FnInitInfo, is_method: bool) {
         let FnInitInfo {
             reg_num,
             arg_num,
@@ -16,8 +16,10 @@ impl Codegen {
         );
 
         let l1 = self.jit.label();
-        self.branch_if_captured(&l1);
-        // fill nil to temporary registers.
+        if !is_method {
+            self.branch_if_captured(&l1);
+        }
+        // fill nil to non-argument locals and temporary registers.
         let clear_len = reg_num - arg_num;
         if clear_len > 2 {
             monoasm!( &mut self.jit,

@@ -864,8 +864,23 @@ impl FuncInfo {
         self.ext.name
     }
 
+    ///
+    /// Whether this function is a method.
+    ///
+    /// return false for top-level, block, and class definition.
+    ///
     pub(crate) fn is_method(&self) -> bool {
         self.ext.ty == FuncType::Method
+    }
+
+    ///
+    /// Whether this function is a method, a class definition, or a top-level.
+    ///
+    pub(crate) fn is_method_type(&self) -> bool {
+        match self.ext.ty {
+            FuncType::Method | FuncType::ClassDef | FuncType::TopLevel => true,
+            _ => false,
+        }
     }
 
     pub(crate) fn owner_class(&self) -> Option<ClassId> {
@@ -917,14 +932,13 @@ impl FuncInfo {
         self.ext.params.reqopt_num()
     }
 
-    /// The number of required + optional arguments.
+    /// The number of post arguments.
     pub(crate) fn post_num(&self) -> usize {
         self.ext.params.post_num()
     }
 
     /// The posiiton of keyword arguments.
     pub(crate) fn kw_reg_pos(&self) -> SlotId {
-        // 1 is for self.
         self.ext.params.kw_reg_pos()
     }
 
@@ -1003,32 +1017,6 @@ impl FuncInfo {
     }
 
     ///
-    /// Check whether this function call is a *simple* call.
-    ///
-    /// *simple* call means that:
-    /// - no splat arguments
-    /// - no hash splat arguments
-    /// - no single argument expansion in block call
-    /// - no extra positional argument
-    /// - no rest param
-    /// - if method_call, required + post <= (the number of positional arguments) <= required + optional + post
-    ///
-    pub(crate) fn is_simple_call(&self, callsite: &CallSiteInfo) -> bool {
-        let pos_num = callsite.pos_num;
-        if pos_num == 1 && self.single_arg_expand() {
-            return false;
-        };
-        if self.no_keyword() && callsite.kw_may_exists() {
-            return false;
-        };
-        !callsite.has_splat()
-            && !callsite.has_hash_splat()
-            && !self.is_rest()
-            && (self.is_block_style()
-                || (pos_num <= self.max_positional_args() && self.min_positional_args() <= pos_num))
-    }
-
-    ///
     /// Set a program counter (BcPc) and the number of registers of this function.
     ///
     pub(super) fn set_pc_regnum(&mut self, pc: BytecodePtrBase, reg_num: u16) {
@@ -1079,5 +1067,40 @@ impl FuncInfo {
             FuncKind::ISeq(iseq) => Some(*iseq),
             _ => None,
         }
+    }
+
+    fn positional_within_range(&self, pos_num: usize) -> bool {
+        let min = self.min_positional_args();
+        let max = self.max_positional_args();
+        min <= pos_num && pos_num <= max
+    }
+}
+
+impl Store {
+    ///
+    /// Check whether this function call is a *simple* call.
+    ///
+    /// *simple* call means that:
+    /// - no splat arguments
+    /// - no hash splat arguments
+    /// - no single argument expansion in block call
+    /// - no extra positional argument
+    /// - no rest param
+    /// - if method_call, required + post <= (the number of positional arguments) <= required + optional + post
+    ///
+    pub(crate) fn is_simple_call(&self, fid: FuncId, callid: CallSiteId) -> bool {
+        let callsite = &self[callid];
+        let info = &self[fid];
+        let pos_num = callsite.pos_num;
+        if pos_num == 1 && info.single_arg_expand() {
+            return false;
+        };
+        if info.no_keyword() && callsite.kw_may_exists() {
+            return false;
+        };
+        !callsite.has_splat()
+            && !callsite.has_hash_splat()
+            && !info.is_rest()
+            && (info.is_block_style() || info.positional_within_range(pos_num))
     }
 }

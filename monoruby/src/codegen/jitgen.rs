@@ -109,6 +109,7 @@ pub(crate) struct BBContext {
     sp: SlotId,
     next_sp: SlotId,
     class_version_guarded: bool,
+    frame_capture_guarded: bool,
     pc: Option<BytecodePtr>,
 }
 
@@ -133,31 +134,29 @@ impl BBContext {
             sp,
             next_sp: sp,
             class_version_guarded: false,
+            frame_capture_guarded: cc.is_method(),
             pc: None,
         }
     }
 
-    fn new_with_args(cc: &JitContext) -> Self {
+    fn new_with_args(cc: &JitContext, store: &Store) -> Self {
         let sp = SlotId(cc.local_num() as u16 + 1);
         Self {
-            slot_state: SlotContext::from_args(cc),
+            slot_state: SlotContext::from_args(cc, store),
             sp,
             next_sp: sp,
             class_version_guarded: false,
+            frame_capture_guarded: cc.is_method(),
             pc: None,
         }
     }
 
-    fn from_target(target: &SlotContext, use_set: &[(SlotId, bool)]) -> Self {
-        let slot_state = SlotContext::from_target(target, use_set);
-        let sp = slot_state.temp_start();
-        Self {
-            slot_state,
-            sp,
-            next_sp: sp,
-            class_version_guarded: false,
-            pc: None,
-        }
+    fn use_float(&mut self, use_set: &[(SlotId, bool)]) {
+        let sp = self.temp_start();
+        self.slot_state.use_float(use_set);
+        self.sp = sp;
+        self.next_sp = sp;
+        self.pc = None;
     }
 
     fn pc(&self) -> BytecodePtr {
@@ -176,7 +175,11 @@ impl BBContext {
         self.class_version_guarded = false;
     }
 
-    fn join_entries(entries: &[BranchEntry]) -> Self {
+    fn unset_frame_capture_guard(&mut self) {
+        self.frame_capture_guarded = false;
+    }
+
+    fn join_entries(entries: &[BranchEntry], backedge: Option<BBContext>) -> Self {
         let mut merge_ctx = entries.last().unwrap().bbctx.clone();
         for BranchEntry {
             src_bb: _src_bb,
@@ -187,6 +190,11 @@ impl BBContext {
             #[cfg(feature = "jit-debug")]
             eprintln!("  <-{:?}:[{:?}] {:?}", _src_bb, bbctx.sp, bbctx.slot_state);
             merge_ctx.join(bbctx);
+        }
+        if let Some(backedge) = backedge {
+            #[cfg(feature = "jit-debug")]
+            eprintln!("  <-backedge:[{:?}] {:?}", backedge.sp, backedge.slot_state);
+            merge_ctx.join(&backedge);
         }
         #[cfg(feature = "jit-debug")]
         eprintln!("  join_entries: {:?}", &merge_ctx);
@@ -402,6 +410,18 @@ enum LinkMode {
     ///
     /// No Value.
     ///
+    /// this is for optional arguments with no passed value.
+    ///
+    None,
+    ///
+    /// Maybe No Value.
+    ///
+    /// this is for optional arguments which may have no passed value.
+    ///
+    MaybeNone,
+    ///
+    /// Void.
+    ///
     /// this is used for the temp slots above sp.
     ///
     V,
@@ -444,7 +464,7 @@ impl Codegen {
         let jit_type = if let Some(pos) = position {
             JitType::Loop(pos)
         } else {
-            JitType::Method
+            JitType::Generic
         };
 
         let mut ctx = JitContext::new(

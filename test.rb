@@ -1,10 +1,7 @@
-class C
-  def f(*x,**y, &z)
-    
-  end
+def f(a,b)
+  a + b
 end
 
-c = C.new
 100.times do
-  c.f(1,y:2)
+  f(1,2)
 end

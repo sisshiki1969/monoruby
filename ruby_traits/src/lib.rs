@@ -1,16 +1,3 @@
-//! [`Equivalent`] is a trait for key comparison in maps.
-//!
-//! These may be used in the implementation of maps where the lookup type `Q`
-//! may be different than the stored key type `K`.
-//!
-//! * `Q: Equivalent<K, E, G, R>` checks for equality, similar to the `HashMap<K, V>`
-//!   constraint `K: Borrow<Q>, Q: Eq`.
-//!
-//! These traits are not used by the maps in the standard library, but they may
-//! add more flexibility in third-party map implementations, especially in
-//! situations where a strict `K: Borrow<Q>` relationship is not available.
-//!
-
 use std::borrow::Borrow;
 
 /// Ruby-level Key equivalence trait.
