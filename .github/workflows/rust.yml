@@ -22,9 +22,8 @@ jobs:
           toolchain: nightly
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: taiki-e/install-action@nextest
-      - run: cargo llvm-cov --lcov --output-path lcov.info
-
-      - run: cargo llvm-cov --doc --lcov --output-path lcov.info
+      - run: cargo llvm-cov --workspace --all-targets --lcov --output-path lcov.info
+      - run: cargo llvm-cov --workspace --all-targets --doc --lcov --output-path lcov.info
 
       - name: Install ImageMagick
         run: sudo apt-get install imagemagick
@@ -34,7 +33,7 @@ jobs:
         run: bin/test
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
           files: lcov.info
