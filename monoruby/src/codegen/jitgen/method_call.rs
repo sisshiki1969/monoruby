@@ -195,11 +195,11 @@ impl JitContext {
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
         let JitBlockInfo {
-            iseq,
+            block_fid,
             self_class,
             outer,
         } = block.add(1);
-        let simple = bbctx.set_arguments(store, ir, callid, store[iseq].func_id());
+        let simple = bbctx.set_arguments(store, ir, callid, block_fid);
         bbctx.discard(dst);
         bbctx.clear_above_next_sp();
         let error = ir.new_error(bbctx);
@@ -212,18 +212,18 @@ impl JitContext {
         } else {
             None
         };
-        let fid = store[iseq].func_id();
-        let args_info = if store.is_simple_call(fid, callid) {
-            JitArgumentInfo::new(SlotState::from_caller(store, fid, callid, bbctx))
+        let args_info = if store.is_simple_call(block_fid, callid) {
+            JitArgumentInfo::new(SlotState::from_caller(store, block_fid, callid, bbctx))
         } else {
             JitArgumentInfo::default()
         };
+        let iseq = store[block_fid].is_iseq().unwrap();
         let entry =
             self.compile_inlined_func(store, iseq, self_class, None, args_info, block, Some(outer));
         let evict = ir.new_evict();
         ir.push(AsmInst::YieldSpecialized {
             callid,
-            iseq,
+            block_fid,
             outer,
             entry,
             error,
@@ -364,7 +364,7 @@ impl JitContext {
                         JitArgumentInfo::default()
                     };
                     let block = iseq_block
-                        .map(|block_iseq| JitBlockInfo::new(block_iseq, self.self_class()));
+                        .map(|_| JitBlockInfo::new(block_fid.unwrap(), self.self_class()));
                     let patch_point = if self.is_specialized() {
                         None
                     } else {

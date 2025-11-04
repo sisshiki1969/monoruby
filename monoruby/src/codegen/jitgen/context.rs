@@ -29,9 +29,9 @@ pub(super) struct SpecializeInfo {
 #[derive(Clone)]
 pub struct JitBlockInfo {
     ///
-    /// `ISeqId`` of the block.
+    /// `FuncId` of the block.
     ///
-    pub iseq: ISeqId,
+    pub block_fid: FuncId,
     ///
     /// `ClassId` of the *self*.
     ///
@@ -47,15 +47,15 @@ impl std::fmt::Debug for JitBlockInfo {
         write!(
             f,
             "Block {{ {:?}, self:{:?}, outer:{} }}",
-            self.iseq, self.self_class, self.outer
+            self.block_fid, self.self_class, self.outer
         )
     }
 }
 
 impl JitBlockInfo {
-    pub(super) fn new(iseq: ISeqId, self_class: ClassId) -> Self {
+    pub(super) fn new(block_fid: FuncId, self_class: ClassId) -> Self {
         Self {
-            iseq,
+            block_fid,
             self_class,
             outer: 1,
         }
@@ -63,7 +63,7 @@ impl JitBlockInfo {
 
     pub(super) fn add(&self, outer: usize) -> Self {
         Self {
-            iseq: self.iseq,
+            block_fid: self.block_fid,
             self_class: self.self_class,
             outer: self.outer + outer,
         }

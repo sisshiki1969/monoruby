@@ -424,7 +424,7 @@ impl Codegen {
             }
             AsmInst::YieldSpecialized {
                 callid,
-                iseq,
+                block_fid,
                 outer,
                 entry,
                 error,
@@ -436,7 +436,7 @@ impl Codegen {
                 let return_addr = self.gen_yield_specialized(
                     store,
                     callid,
-                    iseq,
+                    block_fid,
                     outer,
                     block_entry,
                     error,

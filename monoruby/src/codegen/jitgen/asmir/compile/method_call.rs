@@ -129,7 +129,7 @@ impl Codegen {
         let callee = &store[callee_fid];
         let (meta, codeptr, pc) = callee.get_data();
         self.setup_method_frame(meta, caller, outer_lfp);
-        self.setup_keyword_args(callid, caller, callee, error, simple);
+        self.setup_keyword_args(store, callid, callee, error, simple);
         self.do_call(store, callee, codeptr, recv_class, pc)
     }
 
@@ -151,7 +151,7 @@ impl Codegen {
         let callee = &store[callee_fid];
         let meta = callee.meta();
         self.setup_method_frame(meta, caller, None);
-        self.setup_keyword_args(callid, caller, callee, error, simple);
+        self.setup_keyword_args(store, callid, callee, error, simple);
         self.do_specialized_call(entry_label, patch_point)
     }
 
@@ -217,18 +217,16 @@ impl Codegen {
         &mut self,
         store: &Store,
         callid: CallSiteId,
-        iseq: ISeqId,
+        block_fid: FuncId,
         outer: usize,
         entry: DestLabel,
         error: &DestLabel,
         simple: bool,
     ) -> CodePtr {
-        let caller = &store[callid];
-        let block_fid = store[iseq].func_id();
         let callee = &store[block_fid];
         let meta = callee.meta();
         self.setup_yield_frame(meta, outer);
-        self.setup_keyword_args(callid, caller, callee, error, simple);
+        self.setup_keyword_args(store, callid, callee, error, simple);
         self.do_specialized_call(entry, None)
     }
 
@@ -333,12 +331,13 @@ impl Codegen {
     ///
     fn setup_keyword_args(
         &mut self,
+        store: &Store,
         callid: CallSiteId,
-        caller: &CallSiteInfo,
         callee: &FuncInfo,
         error: &DestLabel,
         simple: bool,
     ) {
+        let caller = &store[callid];
         if !simple {
             self.copy_keyword_args(caller, callee);
         }
