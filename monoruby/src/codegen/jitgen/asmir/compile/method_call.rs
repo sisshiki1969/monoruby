@@ -112,79 +112,15 @@ impl Codegen {
     }*/
 
     ///
-    /// ### in
-    /// - r13: receiver: Value.
+    /// Set up a callee block frame for yield.
     ///
-    pub(super) fn gen_send(
-        &mut self,
-        store: &Store,
-        callid: CallSiteId,
-        callee_fid: FuncId,
-        recv_class: ClassId,
-        error: &DestLabel,
-        outer_lfp: Option<Lfp>,
-        simple: bool,
-    ) -> CodePtr {
-        let caller = &store[callid];
-        let callee = &store[callee_fid];
-        let (meta, codeptr, pc) = callee.get_data();
-        self.setup_method_frame(meta, caller, outer_lfp);
-        self.setup_keyword_args(store, callid, callee, error, simple);
-        self.do_call(store, callee, codeptr, recv_class, pc)
-    }
-
+    /// ### out
+    /// - rax: return value
     ///
-    /// ### in
-    /// rdi: numer of args.
+    /// ### destroy
+    /// - caller save registers
+    /// - r15
     ///
-    pub(super) fn gen_send_specialized(
-        &mut self,
-        store: &Store,
-        callid: CallSiteId,
-        callee_fid: FuncId,
-        entry_label: DestLabel,
-        patch_point: Option<DestLabel>,
-        error: &DestLabel,
-        simple: bool,
-    ) -> CodePtr {
-        let caller = &store[callid];
-        let callee = &store[callee_fid];
-        let meta = callee.meta();
-        self.setup_method_frame(meta, caller, None);
-        self.setup_keyword_args(store, callid, callee, error, simple);
-        self.do_specialized_call(entry_label, patch_point)
-    }
-
-    ///
-    /// ### in
-    /// rdi: numer of args.
-    ///
-    pub(super) fn gen_binop_cached(
-        &mut self,
-        store: &Store,
-        callee_fid: FuncId,
-        recv_class: ClassId,
-    ) -> CodePtr {
-        let callee = &store[callee_fid];
-        let (meta, codeptr, pc) = callee.get_data();
-        monoasm! { &mut self.jit,
-            subq rsp, 32;
-            // set outer
-            xorq rax, rax;
-            pushq rax;
-            // set meta.
-            movq rax, (meta.get());
-            pushq rax;
-            // set block
-            xorq rax, rax;
-            pushq rax;
-            // set self
-            pushq r13;
-            addq rsp, 64;
-        }
-        self.do_call(store, callee, codeptr, recv_class, pc)
-    }
-
     pub(super) fn gen_yield(&mut self, callid: CallSiteId, error: &DestLabel) -> CodePtr {
         self.get_proc_data();
         self.handle_error(&error);
@@ -210,24 +146,12 @@ impl Codegen {
             addq  rsp, 64;
         };
 
-        self.generic_call(callid, &error)
-    }
-
-    pub(super) fn gen_yield_specialized(
-        &mut self,
-        store: &Store,
-        callid: CallSiteId,
-        block_fid: FuncId,
-        outer: usize,
-        entry: DestLabel,
-        error: &DestLabel,
-        simple: bool,
-    ) -> CodePtr {
-        let callee = &store[block_fid];
-        let meta = callee.meta();
-        self.setup_yield_frame(meta, outer);
-        self.setup_keyword_args(store, callid, callee, error, simple);
-        self.do_specialized_call(entry, None)
+        monoasm! { &mut self.jit,
+            movl r8, (callid.get()); // CallSiteId
+        }
+        self.generic_handle_arguments(runtime::jit_handle_arguments_no_block);
+        self.handle_error(error);
+        self.call_funcdata()
     }
 
     ///
@@ -239,7 +163,14 @@ impl Codegen {
     /// ### destroy
     /// - rax
     ///
-    fn setup_method_frame(&mut self, meta: Meta, callsite: &CallSiteInfo, outer_lfp: Option<Lfp>) {
+    pub(super) fn setup_method_frame(
+        &mut self,
+        store: &Store,
+        meta: Meta,
+        callid: CallSiteId,
+        outer_lfp: Option<Lfp>,
+    ) {
+        let callsite = &store[callid];
         monoasm! { &mut self.jit,
             subq rsp, 32;
         }
@@ -285,12 +216,39 @@ impl Codegen {
     }
 
     ///
+    /// Setup a callee frame for binop method call.
+    ///
+    /// ### in
+    /// - r13: receiver
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    pub(super) fn setup_binop_frame(&mut self, meta: Meta) {
+        monoasm! { &mut self.jit,
+            subq rsp, 32;
+            // set outer
+            xorq rax, rax;
+            pushq rax;
+            // set meta.
+            movq rax, (meta.get());
+            pushq rax;
+            // set block
+            xorq rax, rax;
+            pushq rax;
+            // set self
+            pushq r13;
+            addq rsp, 64;
+        };
+    }
+
+    ///
     /// Set up a callee block frame for yield.
     ///
     /// ### destroy
     /// - rax, rdi
     ///
-    fn setup_yield_frame(&mut self, meta: Meta, outer: usize) {
+    pub(super) fn setup_yield_frame(&mut self, meta: Meta, outer: usize) {
         let outer = outer - 1;
         monoasm! { &mut self.jit,
             movq rdi, [rbx + (EXECUTOR_CFP)];
@@ -323,39 +281,14 @@ impl Codegen {
         };
     }
 
-    ///
-    /// Set up keyword arguments for callee.
-    ///
-    /// ### destroy
-    /// - caller save registers
-    ///
-    fn setup_keyword_args(
+    pub(super) fn do_call(
         &mut self,
         store: &Store,
-        callid: CallSiteId,
-        callee: &FuncInfo,
-        error: &DestLabel,
-        simple: bool,
-    ) {
-        let caller = &store[callid];
-        if !simple {
-            self.copy_keyword_args(caller, callee);
-        }
-        if callee.kw_rest().is_some() || !caller.hash_splat_pos.is_empty() {
-            let meta = callee.meta();
-            let offset = callee.get_offset();
-            self.handle_hash_splat_kw_rest(callid, meta, offset, error);
-        }
-    }
-
-    fn do_call(
-        &mut self,
-        store: &Store,
-        callee: &FuncInfo,
-        codeptr: CodePtr,
+        callee_fid: FuncId,
         recv_class: ClassId,
-        pc: Option<BytecodePtrBase>,
     ) -> CodePtr {
+        let callee = &store[callee_fid];
+        let (_, codeptr, pc) = callee.get_data();
         self.set_lfp();
         self.push_frame();
 
@@ -383,7 +316,11 @@ impl Codegen {
         return_addr
     }
 
-    fn do_specialized_call(&mut self, entry: DestLabel, patch_point: Option<DestLabel>) -> CodePtr {
+    pub(super) fn do_specialized_call(
+        &mut self,
+        entry: DestLabel,
+        patch_point: Option<DestLabel>,
+    ) -> CodePtr {
         self.set_lfp();
         self.push_frame();
 
@@ -437,10 +374,11 @@ impl Codegen {
     /// ### destroy
     /// - rax
     ///
-    fn copy_keyword_args(&mut self, caller: &CallSiteInfo, callee: &FuncInfo) {
+    pub(super) fn copy_keyword_args(&mut self, store: &Store, callid: CallSiteId, callee: FuncId) {
         let CallSiteInfo {
             kw_pos, kw_args, ..
-        } = caller;
+        } = &store[callid];
+        let callee = &store[callee];
         let mut callee_ofs = (callee.kw_reg_pos().0 as i32) * 8 + LFP_SELF;
         for param_name in callee.kw_names() {
             match kw_args.get(param_name) {
@@ -467,7 +405,7 @@ impl Codegen {
     /// ### destroy
     /// - caller save registers
     ///
-    fn handle_hash_splat_kw_rest(
+    pub(super) fn handle_hash_splat_kw_rest(
         &mut self,
         callid: CallSiteId,
         meta: Meta,
@@ -486,24 +424,6 @@ impl Codegen {
             addq rsp, (offset);
         }
         self.handle_error(error);
-    }
-
-    ///
-    /// Invoke method.
-    ///
-    /// ### in
-    /// - r15: &FuncData
-    ///
-    /// ### out
-    /// - rax: return value
-    ///
-    fn generic_call(&mut self, callid: CallSiteId, error: &DestLabel) -> CodePtr {
-        monoasm! { &mut self.jit,
-            movl r8, (callid.get()); // CallSiteId
-        }
-        self.generic_handle_arguments(runtime::jit_handle_arguments_no_block);
-        self.handle_error(error);
-        self.call_funcdata()
     }
 }
 

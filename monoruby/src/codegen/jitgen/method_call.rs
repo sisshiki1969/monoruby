@@ -112,7 +112,10 @@ impl JitContext {
         let error = ir.new_error(bbctx);
         bbctx.writeback_acc(ir);
         let evict = ir.new_evict();
-        ir.push(AsmInst::BinopCached {
+        ir.push(AsmInst::SetupBinopFrame {
+            meta: callee.meta(),
+        });
+        ir.push(AsmInst::Call {
             callee_fid: fid,
             recv_class: lhs_class,
             evict,
@@ -195,11 +198,11 @@ impl JitContext {
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
         let JitBlockInfo {
-            block_fid,
+            block_fid: callee_fid,
             self_class,
             outer,
         } = block.add(1);
-        let simple = bbctx.set_arguments(store, ir, callid, block_fid);
+        let simple = bbctx.set_arguments(store, ir, callid, callee_fid);
         bbctx.discard(dst);
         bbctx.clear_above_next_sp();
         let error = ir.new_error(bbctx);
@@ -212,24 +215,19 @@ impl JitContext {
         } else {
             None
         };
-        let args_info = if store.is_simple_call(block_fid, callid) {
-            JitArgumentInfo::new(SlotState::from_caller(store, block_fid, callid, bbctx))
+        let args_info = if simple {
+            JitArgumentInfo::new(SlotState::from_caller(store, callee_fid, callid, bbctx))
         } else {
             JitArgumentInfo::default()
         };
-        let iseq = store[block_fid].is_iseq().unwrap();
+        let iseq = store[callee_fid].is_iseq().unwrap();
         let entry =
             self.compile_inlined_func(store, iseq, self_class, None, args_info, block, Some(outer));
         let evict = ir.new_evict();
-        ir.push(AsmInst::YieldSpecialized {
-            callid,
-            block_fid,
-            outer,
-            entry,
-            error,
-            evict,
-            simple,
-        });
+        let meta = store[callee_fid].meta();
+        ir.push(AsmInst::SetupYieldFrame { meta, outer });
+        ir.handle_hash_splat_kwrest(store, callid, callee_fid, error);
+        ir.push(AsmInst::SpecializedYield { entry, evict });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
         bbctx.def_rax2acc(ir, dst);
@@ -473,21 +471,24 @@ impl BBContext {
         self.exec_gc(ir, true);
         let using_xmm = self.get_using_xmm();
         ir.xmm_save(using_xmm);
-        let simple = self.set_arguments(store, ir, callid, callee_fid);
+        self.set_arguments(store, ir, callid, callee_fid);
         if let Some(dst) = store[callid].dst {
             self.def_S(dst);
         }
         self.clear_above_next_sp();
         let error = ir.new_error(self);
         self.writeback_acc(ir);
-        ir.push(AsmInst::Send {
+        let meta = store[callee_fid].meta();
+        ir.push(AsmInst::SetupMethodFrame {
+            meta,
             callid,
+            outer_lfp,
+        });
+        ir.handle_hash_splat_kwrest(store, callid, callee_fid, error);
+        ir.push(AsmInst::Call {
             callee_fid,
             recv_class,
-            error,
             evict,
-            outer_lfp,
-            simple,
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
@@ -511,21 +512,24 @@ impl BBContext {
         self.exec_gc(ir, true);
         let using_xmm = self.get_using_xmm();
         ir.xmm_save(using_xmm);
-        let simple = self.set_arguments(store, ir, callid, callee_fid);
+        self.set_arguments(store, ir, callid, callee_fid);
         if let Some(dst) = store[callid].dst {
             self.def_S(dst);
         }
         self.clear_above_next_sp();
         let error = ir.new_error(self);
         self.writeback_acc(ir);
-        ir.push(AsmInst::SendSpecialized {
+        let meta = store[callee_fid].meta();
+        ir.push(AsmInst::SetupMethodFrame {
+            meta,
             callid,
-            callee_fid,
+            outer_lfp: None,
+        });
+        ir.handle_hash_splat_kwrest(store, callid, callee_fid, error);
+        ir.push(AsmInst::SpecializedCall {
             entry: inlined_entry,
             patch_point,
-            error,
             evict,
-            simple,
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
@@ -674,6 +678,7 @@ impl BBContext {
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArguments { callid, callee_fid });
             ir.handle_error(error);
+            ir.push(AsmInst::CopyKeywordArgs { callid, callee_fid });
             false
         }
     }

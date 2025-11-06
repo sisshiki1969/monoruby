@@ -421,6 +421,32 @@ impl AsmIr {
         });
     }
 
+    pub(super) fn handle_hash_splat_kwrest(
+        &mut self,
+        store: &Store,
+        callid: CallSiteId,
+        callee_fid: FuncId,
+        error: AsmError,
+    ) {
+        let caller = &store[callid];
+        let callee = &store[callee_fid];
+        if callee.kw_rest().is_some() || !caller.hash_splat_pos.is_empty() {
+            let meta = callee.meta();
+            let offset = callee.get_offset();
+            self.push(AsmInst::SetupHashSplatKwRest {
+                callid,
+                meta,
+                offset,
+                error,
+            });
+        }
+    }
+
+    ///
+    /// Handle error.
+    ///
+    /// Check *rax*, and if it is 0, go to 'error'.
+    ///
     pub(crate) fn handle_error(&mut self, error: AsmError) {
         self.push(AsmInst::HandleError(error));
     }
@@ -883,6 +909,11 @@ pub(super) enum AsmInst {
         reason: RecompileReason,
     },
     WriteBackIfCaptured(WriteBack),
+    ///
+    /// Handle error.
+    ///
+    /// Check *rax*, and if it is 0, go to 'error'.
+    ///
     HandleError(AsmError),
     ///
     /// Save floating point registers in use.
@@ -932,7 +963,53 @@ pub(super) enum AsmInst {
     },
 
     ///
-    /// Send method
+    /// Set up a callee method frame for send.
+    ///
+    /// ### in
+    /// - r13: receiver
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    SetupMethodFrame {
+        meta: Meta,
+        callid: CallSiteId,
+        outer_lfp: Option<Lfp>,
+    },
+    ///
+    /// Set up a callee block frame for yield.
+    ///
+    /// ### destroy
+    /// - rax, rdi
+    ///
+    SetupYieldFrame {
+        meta: Meta,
+        outer: usize,
+    },
+    ///
+    /// Set up a callee frame for binop method call.
+    ///
+    /// ### in
+    /// - r13: receiver
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    SetupBinopFrame {
+        meta: Meta,
+    },
+    SetupHashSplatKwRest {
+        callid: CallSiteId,
+        meta: Meta,
+        offset: usize,
+        error: AsmError,
+    },
+    CopyKeywordArgs {
+        callid: CallSiteId,
+        callee_fid: FuncId,
+    },
+    ///
+    /// Call method
     ///
     /// ### in
     /// - r13: receiver: Value.
@@ -940,54 +1017,35 @@ pub(super) enum AsmInst {
     /// ### destroy
     /// - caller save registers
     ///
-    Send {
-        callid: CallSiteId,
-        recv_class: ClassId,
+    Call {
         callee_fid: FuncId,
-        error: AsmError,
+        recv_class: ClassId,
         evict: AsmEvict,
-        outer_lfp: Option<Lfp>,
-        simple: bool,
     },
     ///
-    /// Send specialized method
+    /// Call specialized method
     ///
     /// ### in
     /// - rdi: receiver: Value
     ///
     /// ### destroy
     /// - caller save registers
-    /// - r15
     ///
-    SendSpecialized {
-        callid: CallSiteId,
-        callee_fid: FuncId,
+    SpecializedCall {
         entry: JitLabel,
         patch_point: Option<JitLabel>,
-        error: AsmError,
-        evict: AsmEvict,
-        simple: bool,
-    },
-    BinopCached {
-        recv_class: ClassId,
-        callee_fid: FuncId,
         evict: AsmEvict,
     },
-    Inline(InlineProcedure),
     Yield {
         callid: CallSiteId,
         error: AsmError,
         evict: AsmEvict,
     },
-    YieldSpecialized {
-        callid: CallSiteId,
-        block_fid: FuncId,
-        outer: usize,
+    SpecializedYield {
         entry: JitLabel,
-        error: AsmError,
         evict: AsmEvict,
-        simple: bool,
     },
+    Inline(InlineProcedure),
     ///
     /// Imnmediate eviction.
     ///

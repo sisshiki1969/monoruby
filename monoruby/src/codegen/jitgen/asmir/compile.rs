@@ -367,50 +367,47 @@ impl Codegen {
                     .entry(*return_addr)
                     .and_modify(|e| e.0 = Some(patch_point));
             }
-            AsmInst::BinopCached {
-                recv_class,
-                callee_fid,
-                evict,
-            } => {
-                let return_addr = self.gen_binop_cached(store, callee_fid, recv_class);
-                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
+            AsmInst::SetupBinopFrame { meta } => {
+                self.setup_binop_frame(meta);
             }
-            AsmInst::Send {
+            AsmInst::SetupMethodFrame {
+                meta,
                 callid,
-                callee_fid,
-                recv_class,
-                error,
-                evict,
                 outer_lfp,
-                simple,
+            } => {
+                self.setup_method_frame(store, meta, callid, outer_lfp);
+            }
+            AsmInst::SetupYieldFrame { meta, outer } => {
+                self.setup_yield_frame(meta, outer);
+            }
+            AsmInst::SetupHashSplatKwRest {
+                callid,
+                meta,
+                offset,
+                error,
             } => {
                 let error = &labels[error];
-                let return_addr = self.gen_send(
-                    store, callid, callee_fid, recv_class, error, outer_lfp, simple,
-                );
+                self.handle_hash_splat_kw_rest(callid, meta, offset, error);
+            }
+            AsmInst::CopyKeywordArgs { callid, callee_fid } => {
+                self.copy_keyword_args(store, callid, callee_fid);
+            }
+            AsmInst::Call {
+                callee_fid,
+                recv_class,
+                evict,
+            } => {
+                let return_addr = self.do_call(store, callee_fid, recv_class);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
-            AsmInst::SendSpecialized {
-                callid,
-                callee_fid,
+            AsmInst::SpecializedCall {
                 entry,
                 patch_point,
-                error,
                 evict,
-                simple,
             } => {
-                let error = &labels[error];
                 let patch_point = patch_point.map(|label| ctx.resolve_label(&mut self.jit, label));
                 let entry_label = ctx.resolve_label(&mut self.jit, entry);
-                let return_addr = self.gen_send_specialized(
-                    store,
-                    callid,
-                    callee_fid,
-                    entry_label,
-                    patch_point,
-                    error,
-                    simple,
-                );
+                let return_addr = self.do_specialized_call(entry_label, patch_point);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
             AsmInst::Yield {
@@ -422,26 +419,9 @@ impl Codegen {
                 let return_addr = self.gen_yield(callid, error);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
-            AsmInst::YieldSpecialized {
-                callid,
-                block_fid,
-                outer,
-                entry,
-                error,
-                evict,
-                simple,
-            } => {
-                let error = &labels[error];
+            AsmInst::SpecializedYield { entry, evict } => {
                 let block_entry = ctx.resolve_label(&mut self.jit, entry);
-                let return_addr = self.gen_yield_specialized(
-                    store,
-                    callid,
-                    block_fid,
-                    outer,
-                    block_entry,
-                    error,
-                    simple,
-                );
+                let return_addr = self.do_specialized_call(block_entry, None);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
 
