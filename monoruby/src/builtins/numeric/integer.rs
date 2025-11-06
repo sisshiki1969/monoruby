@@ -243,7 +243,7 @@ fn integer_tof(
     }
     let CallSiteInfo { dst, .. } = *callsite;
     if let Some(ret) = dst {
-        let fret = bb.xmm_write_enc(ret);
+        let fret = bb.def_F(ret).enc();
         ir.inline(move |r#gen, _, _| {
             monoasm! { &mut r#gen.jit,
                 sarq  rdi, 1;

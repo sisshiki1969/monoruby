@@ -415,7 +415,7 @@ impl JitContext {
             TraceIr::FUnOp { kind, dst, src } => {
                 let deopt = ir.new_deopt(bbctx);
                 let fsrc = bbctx.fetch_float_for_xmm(ir, src, deopt);
-                let dst = bbctx.xmm_write(dst);
+                let dst = bbctx.def_F(dst);
                 ir.xmm_move(fsrc, dst);
                 ir.push(AsmInst::XmmUnOp { kind, dst });
             }

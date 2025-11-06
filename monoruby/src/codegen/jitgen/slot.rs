@@ -330,46 +330,30 @@ impl SlotContext {
     }
 
     ///
-    /// Link *slot* to the given xmm register *xmm*.
-    ///
-    #[allow(non_snake_case)]
-    pub(super) fn def_F(&mut self, slot: SlotId, xmm: Xmm) {
-        self.discard(slot);
-        self.set_F(slot, xmm);
-    }
-
-    ///
     /// Link *slot* to a new xmm register.
     ///
     #[allow(non_snake_case)]
-    pub(super) fn def_new_F(&mut self, slot: SlotId) -> Xmm {
+    pub(crate) fn def_F(&mut self, slot: SlotId) -> Xmm {
         let xmm = self.alloc_xmm();
-        self.def_F(slot, xmm);
-        xmm
-    }
-
-    ///
-    /// Link *slot* to both of the stack and the given xmm register *xmm*.
-    ///
-    #[allow(non_snake_case)]
-    pub(super) fn def_Sf(&mut self, slot: SlotId, xmm: Xmm, guarded: Guarded) {
         self.discard(slot);
-        self.set_Sf(slot, xmm, guarded);
+        self.set_F(slot, xmm);
+        xmm
     }
 
     ///
     /// Link *slot* to both of the stack and a new xmm register.
     ///
     #[allow(non_snake_case)]
-    fn def_new_Sf(&mut self, slot: SlotId, guarded: Guarded) -> Xmm {
-        let x = self.alloc_xmm();
-        self.def_Sf(slot, x, guarded);
-        x
+    fn def_Sf(&mut self, slot: SlotId, guarded: Guarded) -> Xmm {
+        let xmm = self.alloc_xmm();
+        self.discard(slot);
+        self.set_Sf(slot, xmm, guarded);
+        xmm
     }
 
     #[allow(non_snake_case)]
-    pub(super) fn def_new_Sf_float(&mut self, slot: SlotId) -> Xmm {
-        self.def_new_Sf(slot, Guarded::Float)
+    pub(super) fn def_Sf_float(&mut self, slot: SlotId) -> Xmm {
+        self.def_Sf(slot, Guarded::Float)
     }
 
     ///
@@ -1236,12 +1220,14 @@ impl BBContext {
         let guarded = self.guarded(src);
         match self.mode(src) {
             LinkMode::F(x) => {
-                self.def_F(dst, x);
+                self.discard(dst);
+                self.set_F(dst, x);
             }
             LinkMode::Sf(x) => {
                 ir.stack2reg(src, GP::Rax);
                 ir.reg2stack(GP::Rax, dst);
-                self.def_Sf(dst, x, guarded);
+                self.discard(dst);
+                self.set_Sf(dst, x, guarded);
             }
             LinkMode::S => {
                 ir.stack2reg(src, GP::Rax);
@@ -1278,30 +1264,6 @@ impl BBContext {
             self.set_guarded(slot, guarded);
             self.r15 = Some(slot);
         }
-    }
-
-    ///
-    /// Allocate new xmm register corresponding to the slot *reg* for read/write f64.
-    ///
-    pub(super) fn xmm_write(&mut self, slot: SlotId) -> Xmm {
-        match self.mode(slot) {
-            LinkMode::F(x) if self.xmm(x).len() == 1 => {
-                assert_eq!(slot, self.xmm(x)[0]);
-                x
-            }
-            LinkMode::F(_)
-            | LinkMode::Sf(_)
-            | LinkMode::S
-            | LinkMode::C(_)
-            | LinkMode::G
-            | LinkMode::V
-            | LinkMode::MaybeNone
-            | LinkMode::None => self.def_new_F(slot),
-        }
-    }
-
-    pub(crate) fn xmm_write_enc(&mut self, slot: SlotId) -> u64 {
-        self.xmm_write(slot).enc()
     }
 
     ///

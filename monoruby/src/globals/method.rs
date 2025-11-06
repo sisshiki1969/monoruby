@@ -506,7 +506,7 @@ impl Globals {
             kw_names,
             kw_rest,
         );
-        let info = inline::InlineFuncInfo { inline_gen };
+        let info = inline::InlineFuncInfo::new_inline_gen(inline_gen);
         self.store.inline_info.add_inline(fid, info);
         for alias in alias {
             self.add_method(class_id, IdentId::get_id(alias), fid, Visibility::Public);
@@ -715,7 +715,21 @@ impl Globals {
         arg_num: usize,
     ) -> FuncId {
         let fid = self.define_builtin_module_func(class_id, name, address, arg_num);
-        let info = inline::InlineFuncInfo { inline_gen };
+        let info = inline::InlineFuncInfo::new_inline_gen(inline_gen);
+        self.store.inline_info.add_inline(fid, info);
+        fid
+    }
+
+    pub(crate) fn define_builtin_module_cfunc_f_f(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        f: extern "C" fn(f64) -> f64,
+        arg_num: usize,
+    ) -> FuncId {
+        let fid = self.define_builtin_module_func(class_id, name, address, arg_num);
+        let info = inline::InlineFuncInfo::new_cfunc_f_f(f);
         self.store.inline_info.add_inline(fid, info);
         fid
     }

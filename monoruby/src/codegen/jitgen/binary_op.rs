@@ -254,7 +254,7 @@ impl BBContext {
 
         let fmode = self.fmode(ir, info);
         if let Some(dst) = info.dst {
-            let dst = self.xmm_write(dst);
+            let dst = self.def_F(dst);
             let using_xmm = self.get_using_xmm();
             ir.xmm_binop(kind, fmode, dst, using_xmm);
         }

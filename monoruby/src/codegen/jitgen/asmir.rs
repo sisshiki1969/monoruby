@@ -1046,6 +1046,12 @@ pub(super) enum AsmInst {
         evict: AsmEvict,
     },
     Inline(InlineProcedure),
+    CFunc {
+        f: extern "C" fn(f64) -> f64,
+        src: Xmm,
+        dst: Xmm,
+        using_xmm: UsingXmm,
+    },
     ///
     /// Imnmediate eviction.
     ///

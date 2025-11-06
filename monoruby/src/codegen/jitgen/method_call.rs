@@ -1,4 +1,4 @@
-use crate::codegen::jitgen::context::JitStackFrame;
+use crate::{codegen::jitgen::context::JitStackFrame, executor::inline::InlineFuncInfo};
 
 use super::{
     context::{JitArgumentInfo, JitBlockInfo},
@@ -54,12 +54,31 @@ impl JitContext {
         if callsite.block_fid.is_none()
             && let Some(info) = store.inline_info.get_inline(func_id)
         {
-            let f = &info.inline_gen;
-            if self.inline_asm(bbctx, ir, store, f, callsite, recv_class) {
-                if possibly_captured {
-                    bbctx.unset_frame_capture_guard();
+            match info {
+                InlineFuncInfo::InlineGen(f) => {
+                    if self.inline_asm(bbctx, ir, store, f, callsite, recv_class) {
+                        if possibly_captured {
+                            bbctx.unset_frame_capture_guard();
+                        }
+                        return CompileResult::Continue;
+                    }
                 }
-                return CompileResult::Continue;
+                InlineFuncInfo::CFunc_F_F(f) => {
+                    let CallSiteInfo { args, dst, .. } = *callsite;
+                    let deopt = ir.new_deopt(bbctx);
+                    let src = bbctx.fetch_float_for_xmm(ir, args, deopt);
+                    if let Some(dst) = dst {
+                        let dst = bbctx.def_F(dst);
+                        let using_xmm = bbctx.get_using_xmm();
+                        ir.push(AsmInst::CFunc {
+                            f: *f,
+                            src,
+                            dst,
+                            using_xmm,
+                        });
+                    }
+                    return CompileResult::Continue;
+                }
             }
         }
 

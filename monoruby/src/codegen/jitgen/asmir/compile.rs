@@ -774,6 +774,25 @@ impl Codegen {
             } => self.defined_ivar(dst, name, using_xmm),
 
             AsmInst::Inline(proc) => (proc.proc)(self, store, labels),
+            AsmInst::CFunc {
+                f,
+                src,
+                dst,
+                using_xmm,
+            } => {
+                let fsrc = src.enc();
+                let fret = dst.enc();
+                self.xmm_save(using_xmm);
+                monoasm!( &mut self.jit,
+                    movq xmm0, xmm(fsrc);
+                    movq rax, (f);
+                    call rax;
+                );
+                self.xmm_restore(using_xmm);
+                monoasm!( &mut self.jit,
+                    movq xmm(fret), xmm0;
+                );
+            }
         }
     }
 
