@@ -3,6 +3,7 @@ use super::*;
 impl JitContext {
     pub(super) fn compile(&mut self, store: &Store) {
         let iseq_id = self.iseq_id();
+        //store.dump_iseq(iseq_id);
 
         let iseq = &store[iseq_id];
         for (loop_start, loop_end) in iseq.bb_info.loops() {
@@ -202,8 +203,11 @@ impl JitContext {
                 }
             }
 
+            bbctx.clear_above_next_sp();
             bbctx.sp = bbctx.next_sp;
         }
+
+        bbctx.clear_above_next_sp();
         if !last {
             self.prepare_next(bbctx, iseq, end);
         }
@@ -224,8 +228,11 @@ impl JitContext {
         bc_pos: BcIndex,
     ) -> CompileResult {
         bbctx.set_pc(self.bytecode(bc_pos));
-        bbctx.clear_above_sp();
+        //bbctx.clear_above_sp();
         let trace_ir = iseq.trace_ir(store, bc_pos);
+        //if let Some(fmt) = trace_ir.format(store) {
+        //    eprintln!("{fmt}");
+        //}
         match trace_ir {
             TraceIr::InitMethod { .. } => {}
             TraceIr::LoopStart { .. } => {

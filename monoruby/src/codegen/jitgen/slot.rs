@@ -209,14 +209,14 @@ impl SlotContext {
     ///
     /// Discard slot *reg*.
     ///
-    /// *reg* is set to S / Guarded::Value.
+    /// *reg* is set to V.
     ///
     pub(super) fn discard(&mut self, slot: impl Into<Option<SlotId>>) {
         if let Some(slot) = slot.into() {
             self.clear(slot);
             self.set_guarded(slot, Guarded::Value);
             self.is_used_mut(slot).kill();
-            self.set_mode(slot, LinkMode::S);
+            //self.set_mode(slot, LinkMode::S);
         }
     }
 
@@ -1110,9 +1110,6 @@ impl BBContext {
     /// - rax, rcx
     ///
     pub(super) fn write_back_slot(&mut self, ir: &mut AsmIr, slot: SlotId) {
-        if slot >= self.sp {
-            unreachable!("{:?} >= {:?} in write_back_slot()", slot, self.sp);
-        };
         match self.mode(slot) {
             LinkMode::F(xmm) => {
                 // F -> Sf
@@ -1134,12 +1131,13 @@ impl BBContext {
             }
             LinkMode::Sf(_) | LinkMode::S | LinkMode::MaybeNone => {}
             LinkMode::V | LinkMode::None => {
-                unreachable!("write_back_slot() {:?}", self.mode(slot));
+                eprintln!("{:?}", self.slot_state);
+                unreachable!("write_back_slot() {slot:?} {:?}", self.mode(slot));
             }
         }
     }
 
-    pub(super) fn xmm_swap(&mut self, ir: &mut AsmIr, l: Xmm, r: Xmm) {
+    fn xmm_swap(&mut self, ir: &mut AsmIr, l: Xmm, r: Xmm) {
         self.slot_state.xmm_swap(l, r);
         ir.push(AsmInst::XmmSwap(l, r));
     }
@@ -1150,19 +1148,20 @@ impl BBContext {
     pub(in crate::codegen::jitgen) fn clear_above_next_sp(&mut self) {
         let sp = self.next_sp;
         for i in sp..SlotId(self.slots.len() as u16) {
-            self.discard(i)
+            self.discard(i);
         }
     }
 
-    ///
+    /*///
     /// Discard slots above *sp*.
     ///
     pub(in crate::codegen::jitgen) fn clear_above_sp(&mut self) {
         let sp = self.sp;
         for i in sp..SlotId(self.slots.len() as u16) {
-            self.discard(i)
+            self.discard(i);
+            self.set_mode(i, LinkMode::S);
         }
-    }
+    }*/
 
     ///
     /// Copy *src* to *dst*.
@@ -1197,7 +1196,7 @@ impl BBContext {
             LinkMode::G => {
                 ir.reg2stack(GP::R15, src);
                 self.set_S_with_guard(src, guarded);
-                self.def_acc(ir, dst, guarded)
+                self.def_G(ir, dst, guarded)
             }
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("write_back_slot() {:?}", self.mode(src));
@@ -1208,7 +1207,8 @@ impl BBContext {
     ///
     /// Link *slot* to the accumulator.
     ///
-    pub(super) fn def_acc(
+    #[allow(non_snake_case)]
+    pub(super) fn def_G(
         &mut self,
         ir: &mut AsmIr,
         slot: impl Into<Option<SlotId>>,

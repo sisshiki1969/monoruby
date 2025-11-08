@@ -255,7 +255,7 @@ impl BBContext {
     ) {
         if let Some(dst) = dst.into() {
             self.clear_above_next_sp();
-            self.def_acc(ir, dst, guarded);
+            self.def_G(ir, dst, guarded);
             ir.push(AsmInst::RegToAcc(src));
         }
     }

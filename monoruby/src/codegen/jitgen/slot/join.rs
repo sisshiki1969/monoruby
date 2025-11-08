@@ -39,9 +39,9 @@ impl BBContext {
                 (_, LinkMode::MaybeNone) => {
                     self.set_MaybeNone(i);
                 }
-                (LinkMode::V, LinkMode::V) => {}
-                (_, LinkMode::V) | (LinkMode::V, _) => {
-                    unreachable!("join() on (#{:?}, #{:?})", self.mode(i), other.mode(i));
+                (LinkMode::V, _) => {}
+                (_, LinkMode::V) => {
+                    self.discard(i);
                 }
                 (LinkMode::F(_), LinkMode::F(_)) => {}
                 (LinkMode::F(_), LinkMode::C(r)) if r.is_float() => {}
@@ -112,14 +112,17 @@ impl BBContext {
             eprintln!("    src:    {:?}", self.slot_state);
             eprintln!("    target: {:?}", target);
         }
-        for slot in SlotId(0)..self.sp {
+        for slot in self.all_regs() {
             if unused.contains(&slot) {
                 self.discard(slot);
-                self.set_mode(slot, LinkMode::V);
                 continue;
             }
             let guarded = target.guarded(slot);
             match (self.mode(slot), target.mode(slot)) {
+                (LinkMode::V, LinkMode::V) => {}
+                (_, LinkMode::V) => {
+                    self.discard(slot);
+                }
                 (LinkMode::F(l), LinkMode::F(r)) => {
                     if l != r {
                         self.to_xmm(ir, slot, l, r);
@@ -179,7 +182,11 @@ impl BBContext {
                 }
                 (LinkMode::None, LinkMode::None) => {}
                 (LinkMode::MaybeNone, LinkMode::MaybeNone) => {}
-                (l, r) => unreachable!("{slot:?} src:{l:?} target:{r:?}"),
+                (l, r) => {
+                    eprintln!("self: {:?}", self.slot_state);
+                    eprintln!("target: {:?}", target);
+                    unreachable!("{slot:?} src:{l:?} target:{r:?}");
+                }
             }
         }
         #[cfg(feature = "jit-debug")]
