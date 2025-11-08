@@ -1,6 +1,6 @@
 use bytecodegen::BcIndex;
 
-use crate::codegen::jitgen::trace_ir::MethodCacheEntry;
+use crate::codegen::jitgen::trace_ir::{FOpClass, MethodCacheEntry};
 
 use super::*;
 
@@ -32,14 +32,16 @@ impl Bytecode {
         self.classid1() == Some(INTEGER_CLASS) && self.classid2() == Some(INTEGER_CLASS)
     }
 
-    pub fn is_float_binop(&self) -> bool {
+    pub fn is_float_binop(&self) -> Option<(FOpClass, FOpClass)> {
         match (self.classid1(), self.classid2()) {
             (Some(class1), Some(class2)) => match (class1, class2) {
-                (INTEGER_CLASS, INTEGER_CLASS) => false,
-                (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => true,
-                _ => false,
+                (INTEGER_CLASS, INTEGER_CLASS) => None,
+                (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => {
+                    Some((FOpClass::from(class1), FOpClass::from(class2)))
+                }
+                _ => None,
             },
-            _ => false,
+            _ => None,
         }
     }
     pub fn classid1(&self) -> Option<ClassId> {
@@ -62,11 +64,7 @@ impl Bytecode {
 
     fn fid(&self) -> Option<FuncId> {
         let op = self.op2.0 as u32;
-        if op == 0 {
-            None
-        } else {
-            Some(FuncId::new(op))
-        }
+        if op == 0 { None } else { Some(FuncId::new(op)) }
     }
 
     pub fn into_jit_addr(self) -> *const u8 {

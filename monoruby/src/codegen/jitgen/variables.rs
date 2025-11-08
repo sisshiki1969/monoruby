@@ -38,7 +38,7 @@ impl JitContext {
         ivarid: IvarId,
     ) -> bool {
         assert!(!self_class.is_always_frozen());
-        let src = bbctx.fetch_or_reg(ir, src, GP::Rax);
+        let src = bbctx.load_or_reg(ir, src, GP::Rax);
         ir.self2reg(GP::Rdi);
         let is_object_ty = self.self_ty() == Some(ObjTy::OBJECT);
         if is_object_ty && ivarid.is_inline() {

@@ -109,8 +109,7 @@ fn math_sqrt(
         return false;
     }
     let CallSiteInfo { args, dst, .. } = *callsite;
-    let deopt = ir.new_deopt(bb);
-    let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
+    let fsrc = bb.load_xmm(ir, args).enc();
     if let Some(dst) = dst {
         let fret = bb.def_F(dst).enc();
         ir.inline(move |r#gen, _, _| {

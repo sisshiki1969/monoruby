@@ -272,7 +272,7 @@ impl BBContext {
     /// - rax
     ///
     pub fn guard_const_base_class(&mut self, ir: &mut AsmIr, slot: SlotId, base_class: Value) {
-        self.fetch(ir, slot, GP::Rax);
+        self.load(ir, slot, GP::Rax);
         let deopt = ir.new_deopt(self);
         ir.inst
             .push(AsmInst::GuardConstBaseClass { base_class, deopt });

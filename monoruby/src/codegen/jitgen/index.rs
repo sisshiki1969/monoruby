@@ -9,12 +9,11 @@ impl BBContext {
         base: SlotId,
         idx: SlotId,
     ) {
-        let deopt = ir.new_deopt(self);
-        self.fetch_array_ty(ir, store, base, GP::Rdi, deopt);
+        self.load_array_ty(ir, store, base, GP::Rdi);
         if let Some(idx) = self.is_u16_literal(idx) {
             ir.array_u16_index(idx);
         } else {
-            self.fetch_fixnum(ir, idx, GP::Rsi, deopt);
+            self.load_fixnum(ir, idx, GP::Rsi);
             ir.array_index();
         }
         self.def_rax2acc(ir, dst);
@@ -28,14 +27,13 @@ impl BBContext {
         base: SlotId,
         idx: SlotId,
     ) {
-        let deopt = ir.new_deopt(self);
-        self.fetch_array_ty(ir, store, base, GP::Rdi, deopt);
+        self.load_array_ty(ir, store, base, GP::Rdi);
         if let Some(idx) = self.is_u16_literal(idx) {
-            self.fetch(ir, src, GP::Rdx);
+            self.load(ir, src, GP::Rdx);
             ir.array_u16_index_assign(self, idx);
         } else {
-            self.fetch_fixnum(ir, idx, GP::Rsi, deopt);
-            self.fetch(ir, src, GP::Rdx);
+            self.load_fixnum(ir, idx, GP::Rsi);
+            self.load(ir, src, GP::Rdx);
             ir.array_index_assign(self);
         }
     }
