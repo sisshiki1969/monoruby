@@ -459,6 +459,23 @@ impl JitContext {
         }
     }
 
+    fn branch(
+        &mut self,
+        src_bb: BasicBlockId,
+        dest_bb: BasicBlockId,
+        bbctx: BBContext,
+        mode: BranchMode,
+    ) {
+        self.branch_map
+            .entry(dest_bb)
+            .or_default()
+            .push(BranchEntry {
+                src_bb,
+                bbctx,
+                mode,
+            });
+    }
+
     ///
     /// Add new branch from *src_idx* to *dest* with the context *bbctx*.
     ///
@@ -471,18 +488,10 @@ impl JitContext {
         dest: JitLabel,
     ) {
         bbctx.clear_above_next_sp();
-        bbctx.sp = iseq.get_sp(src_idx);
         let src_bb = iseq.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch: [{:?}]{src_idx}->{:?}", bbctx.sp, dest_bb);
-        self.branch_map
-            .entry(dest_bb)
-            .or_default()
-            .push(BranchEntry {
-                src_bb,
-                bbctx,
-                mode: BranchMode::Side { dest },
-            });
+        eprintln!("   new_branch: {src_idx}->{dest_bb:?}");
+        self.branch(src_bb, dest_bb, bbctx, BranchMode::Side { dest });
     }
 
     ///
@@ -496,18 +505,10 @@ impl JitContext {
         mut bbctx: BBContext,
     ) {
         bbctx.clear_above_next_sp();
-        bbctx.sp = iseq.get_sp(src_idx);
         let src_bb = iseq.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch: [{:?}]{src_idx}->{:?}", bbctx.sp, dest_bb);
-        self.branch_map
-            .entry(dest_bb)
-            .or_default()
-            .push(BranchEntry {
-                src_bb,
-                bbctx,
-                mode: BranchMode::Branch,
-            });
+        eprintln!("   new_branch: {src_idx}->{dest_bb:?}");
+        self.branch(src_bb, dest_bb, bbctx, BranchMode::Branch);
     }
 
     ///
@@ -521,25 +522,16 @@ impl JitContext {
         mut bbctx: BBContext,
     ) {
         bbctx.clear_above_next_sp();
-        bbctx.sp = iseq.get_sp(src_idx);
         let src_bb = iseq.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_continue:[{:?}] {src_idx}->{:?}", bbctx.sp, dest_bb);
-        self.branch_map
-            .entry(dest_bb)
-            .or_default()
-            .push(BranchEntry {
-                src_bb,
-                bbctx,
-                mode: BranchMode::Continue,
-            })
+        eprintln!("   new_continue: {src_idx}->{dest_bb:?}");
+        self.branch(src_bb, dest_bb, bbctx, BranchMode::Continue);
     }
 
     ///
     /// Add new backward branch from *src_idx* to *dest* with the context *bbctx*.
     ///
     pub(super) fn new_backedge(&mut self, target: SlotContext, bb_pos: BasicBlockId) {
-        //target.sp = iseq.get_sp(iseq.bb_info[bb_pos].begin);
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:{:?}", bb_pos);
         self.backedge_map.insert(bb_pos, target);

@@ -294,7 +294,6 @@ impl BBContext {
             return;
         };
         let mode = self.fmode(ir, info);
-        self.clear_above_next_sp();
         ir.push(AsmInst::FloatCmp { kind, mode });
         self.def_rax2acc(ir, info.dst);
     }

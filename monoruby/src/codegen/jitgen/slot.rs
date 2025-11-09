@@ -216,7 +216,6 @@ impl SlotContext {
             self.clear(slot);
             self.set_guarded(slot, Guarded::Value);
             self.is_used_mut(slot).kill();
-            //self.set_mode(slot, LinkMode::S);
         }
     }
 
@@ -583,13 +582,11 @@ impl SlotContext {
     ///
     /// The slot is set to LinkMode::Stack.
     ///
-    pub(super) fn write_back_acc(&mut self, ir: &mut AsmIr, sp: SlotId) {
+    pub(crate) fn writeback_acc(&mut self, ir: &mut AsmIr) {
         if let Some(slot) = self.r15 {
             self.set_mode(slot, LinkMode::S);
             self.r15 = None;
-            if slot < sp {
-                ir.acc2stack(slot);
-            }
+            ir.acc2stack(slot);
         }
         assert!(
             !self
@@ -633,10 +630,10 @@ impl BBContext {
 }
 
 impl SlotContext {
-    pub(super) fn get_using_xmm(&self, sp: SlotId) -> UsingXmm {
+    pub(crate) fn get_using_xmm(&self) -> UsingXmm {
         let mut b = UsingXmm::new();
         self.xmm.iter().enumerate().for_each(|(i, v)| {
-            if v.iter().any(|slot| slot < &sp) {
+            if !v.is_empty() {
                 b.set(i, true);
             }
         });
@@ -649,8 +646,8 @@ impl SlotContext {
         WriteBack::new(vec![], literal, self.r15, void)
     }
 
-    pub(super) fn get_write_back(&self, sp: SlotId) -> WriteBack {
-        let f = |reg: SlotId| reg < sp;
+    pub(crate) fn get_write_back(&self) -> WriteBack {
+        let f = |_| true;
         let xmm = self.wb_xmm(f);
         let literal = self.wb_literal(f);
         let r15 = match self.r15 {
@@ -1151,17 +1148,6 @@ impl BBContext {
             self.discard(i);
         }
     }
-
-    /*///
-    /// Discard slots above *sp*.
-    ///
-    pub(in crate::codegen::jitgen) fn clear_above_sp(&mut self) {
-        let sp = self.sp;
-        for i in sp..SlotId(self.slots.len() as u16) {
-            self.discard(i);
-            self.set_mode(i, LinkMode::S);
-        }
-    }*/
 
     ///
     /// Copy *src* to *dst*.

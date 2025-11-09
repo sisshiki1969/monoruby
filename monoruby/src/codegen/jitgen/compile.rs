@@ -10,7 +10,12 @@ impl JitContext {
             self.analyse_loop(store, iseq_id, *loop_start, *loop_end);
         }
 
-        let mut bbctx = BBContext::new_with_args(&self, store);
+        let pc = if let Some(pc) = self.position() {
+            pc
+        } else {
+            iseq.get_pc(BcIndex::from(0))
+        };
+        let mut bbctx = BBContext::new_with_args(&self, store, pc);
 
         let mut ir = AsmIr::new();
         if let Some(pc) = self.position() {
@@ -37,7 +42,7 @@ impl JitContext {
         assert!(self.ir.is_empty());
         self.ir.push((None, ir));
 
-        let start_pos = iseq.get_pc_index(self.position());
+        let start_pos = iseq.get_pc_index(Some(pc));
 
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
@@ -104,18 +109,18 @@ impl JitContext {
                     self.recompile_and_deopt(&mut bbctx, &mut ir, reason);
                     return ir;
                 }
-                CompileResult::ExitLoop => break,
+                CompileResult::ExitLoop => {
+                    bbctx.clear_above_next_sp();
+                    break;
+                }
                 CompileResult::Abort => {
                     store.dump_iseq(iseq_id);
                     unreachable!()
                 }
             }
-
             bbctx.clear_above_next_sp();
-            bbctx.sp = bbctx.next_sp;
         }
 
-        bbctx.clear_above_next_sp();
         if !last {
             self.prepare_next(bbctx, iseq, end)
         }
@@ -123,7 +128,7 @@ impl JitContext {
         ir
     }
 
-    pub(super) fn analyse_loop(
+    fn analyse_loop(
         &mut self,
         store: &Store,
         iseq_id: ISeqId,
@@ -132,8 +137,9 @@ impl JitContext {
     ) {
         let mut ctx = JitContext::from_ctx(self);
         let mut liveness = Liveness::new(self.total_reg_num());
+        let pc = store[iseq_id].get_bb_pc(loop_start);
 
-        let bbctx = BBContext::new(&ctx);
+        let bbctx = BBContext::new(&ctx, pc);
         ctx.branch_map.insert(
             loop_start,
             vec![BranchEntry {
@@ -202,12 +208,9 @@ impl JitContext {
                     unreachable!()
                 }
             }
-
             bbctx.clear_above_next_sp();
-            bbctx.sp = bbctx.next_sp;
         }
 
-        bbctx.clear_above_next_sp();
         if !last {
             self.prepare_next(bbctx, iseq, end);
         }
@@ -498,7 +501,6 @@ impl JitContext {
                 let dest = self.label();
                 let mode = bbctx.fmode(ir, info);
                 bbctx.discard(info.dst);
-                bbctx.clear_above_next_sp();
                 ir.float_cmp_br(mode, kind, brkind, dest);
                 self.new_side_branch(iseq, src_idx, dest_bb, bbctx.clone(), dest);
             }
