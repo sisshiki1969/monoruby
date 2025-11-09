@@ -1334,7 +1334,7 @@ pub enum FiberState {
     Terminated,
 }
 
-#[derive(Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Hash)]
 pub struct SlotId(pub u16);
 
 impl std::iter::Step for SlotId {
@@ -1370,11 +1370,7 @@ impl SlotId {
     }
 
     pub fn from(reg: u16) -> Option<Self> {
-        if reg == 0 {
-            None
-        } else {
-            Some(Self(reg))
-        }
+        if reg == 0 { None } else { Some(Self(reg)) }
     }
 
     pub fn self_() -> Self {

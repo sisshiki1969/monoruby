@@ -1657,21 +1657,33 @@ impl Codegen {
         exit: Option<BasicBlockId>,
     ) {
         let mut side_exits = SideExitLabels::new();
+        let mut deopt_table: HashMap<(BytecodePtr, WriteBack), DestLabel> = HashMap::default();
         for side_exit in ir.side_exit {
-            let label = self.jit.label();
-            side_exits.push(label.clone());
-            match side_exit {
+            let label = match side_exit {
                 SideExit::Evict(Some((pc, wb))) => {
-                    self.gen_evict_with_label(pc, &wb, label);
+                    let label = self.jit.label();
+                    self.gen_evict_with_label(pc, &wb, label.clone());
+                    label
                 }
                 SideExit::Deoptimize(pc, wb) => {
-                    self.gen_deopt_with_label(pc, &wb, label);
+                    let t = (pc, wb);
+                    if let Some(label) = deopt_table.get(&t) {
+                        label.clone()
+                    } else {
+                        let label = self.jit.label();
+                        self.gen_deopt_with_label(pc, &t.1, label.clone());
+                        deopt_table.insert(t, label.clone());
+                        label
+                    }
                 }
                 SideExit::Error(pc, wb) => {
-                    self.gen_handle_error(pc, wb, label);
+                    let label = self.jit.label();
+                    self.gen_handle_error(pc, wb, label.clone());
+                    label
                 }
                 _ => unreachable!(),
-            }
+            };
+            side_exits.push(label);
         }
 
         if entry.is_some() && exit.is_some() {

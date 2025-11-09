@@ -289,12 +289,33 @@ impl BBContext {
 ///
 /// Currently supports `literal`s, `xmm` registers and a `R15` register (as an accumulator).
 ///
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct WriteBack {
     xmm: Vec<(Xmm, Vec<SlotId>)>,
     literal: Vec<(Value, SlotId)>,
     void: Vec<SlotId>,
     r15: Option<SlotId>,
+}
+
+impl Hash for WriteBack {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for (xmm, slots) in &self.xmm {
+            xmm.hash(state);
+            for slot in slots {
+                slot.hash(state);
+            }
+        }
+        for (val, slot) in &self.literal {
+            val.id().hash(state);
+            slot.hash(state);
+        }
+        for slot in &self.void {
+            slot.hash(state);
+        }
+        if let Some(slot) = self.r15 {
+            slot.hash(state);
+        }
+    }
 }
 
 impl std::fmt::Debug for WriteBack {
