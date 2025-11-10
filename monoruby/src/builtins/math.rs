@@ -15,8 +15,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_class("DomainError", standarderr, klass);
     globals.set_constant_by_str(klass, "PI", Value::float(std::f64::consts::PI));
     globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, Box::new(math_sqrt), 1);
-    globals.define_builtin_module_inline_func(klass, "cos", cos, Box::new(math_cos), 1);
-    globals.define_builtin_module_inline_func(klass, "sin", sin, Box::new(math_sin), 1);
+    globals.define_builtin_module_cfunc_f_f(klass, "cos", cos, extern_cos, 1);
+    globals.define_builtin_module_cfunc_f_f(klass, "sin", sin, extern_sin, 1);
     globals.define_builtin_module_func(klass, "log10", log10, 1);
 }
 
@@ -109,80 +109,13 @@ fn math_sqrt(
         return false;
     }
     let CallSiteInfo { args, dst, .. } = *callsite;
-    let deopt = ir.new_deopt(bb);
-    let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
+    let fsrc = bb.load_xmm(ir, args).enc();
     if let Some(dst) = dst {
-        let fret = bb.xmm_write_enc(dst);
+        let fret = bb.def_F(dst).enc();
         ir.inline(move |r#gen, _, _| {
             monoasm!( &mut r#gen.jit,
                 sqrtsd xmm(fret), xmm(fsrc);
             );
-        });
-    }
-    true
-}
-
-fn math_cos(
-    bb: &mut BBContext,
-    ir: &mut AsmIr,
-    _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
-    _: ClassId,
-) -> bool {
-    if !callsite.is_simple() {
-        return false;
-    }
-    let CallSiteInfo { args, dst, .. } = *callsite;
-    let deopt = ir.new_deopt(bb);
-    let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
-    if let Some(ret) = dst {
-        let fret = bb.xmm_write_enc(ret);
-        let using_xmm = bb.get_using_xmm();
-        ir.inline(move |r#gen, _, _| {
-            r#gen.xmm_save(using_xmm);
-            monoasm!( &mut r#gen.jit,
-                movq xmm0, xmm(fsrc);
-                movq rax, (extern_cos);
-                call rax;
-            );
-            r#gen.xmm_restore(using_xmm);
-            monoasm!( &mut r#gen.jit,
-                movq xmm(fret), xmm0;
-            );
-        });
-    }
-    true
-}
-
-fn math_sin(
-    bb: &mut BBContext,
-    ir: &mut AsmIr,
-    _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
-    _: ClassId,
-) -> bool {
-    if !callsite.is_simple() {
-        return false;
-    }
-    let CallSiteInfo { args, dst: ret, .. } = *callsite;
-    let deopt = ir.new_deopt(bb);
-    let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
-    if let Some(ret) = ret {
-        let fret = bb.xmm_write_enc(ret);
-        let using_xmm = bb.get_using_xmm();
-        ir.inline(move |r#gen, _, _| {
-            r#gen.xmm_save(using_xmm);
-            monoasm! { &mut r#gen.jit,
-                movq xmm0, xmm(fsrc);
-                movq rax, (extern_sin);
-                call rax;
-            }
-            r#gen.xmm_restore(using_xmm);
-            monoasm! { &mut r#gen.jit,
-                movq xmm(fret), xmm0;
-            }
         });
     }
     true

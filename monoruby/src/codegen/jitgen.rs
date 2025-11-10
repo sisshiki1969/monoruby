@@ -106,11 +106,10 @@ pub(crate) struct BBContext {
     /// state stack slots.
     slot_state: SlotContext,
     /// stack top register.
-    sp: SlotId,
     next_sp: SlotId,
     class_version_guarded: bool,
     frame_capture_guarded: bool,
-    pc: Option<BytecodePtr>,
+    pc: BytecodePtr,
 }
 
 impl std::ops::Deref for BBContext {
@@ -127,44 +126,34 @@ impl std::ops::DerefMut for BBContext {
 }
 
 impl BBContext {
-    fn new(cc: &JitContext) -> Self {
-        let sp = SlotId(cc.local_num() as u16 + 1);
+    fn new(cc: &JitContext, pc: BytecodePtr) -> Self {
+        let next_sp = SlotId(cc.local_num() as u16 + 1);
         Self {
             slot_state: SlotContext::from(cc),
-            sp,
-            next_sp: sp,
+            next_sp,
             class_version_guarded: false,
             frame_capture_guarded: cc.is_method(),
-            pc: None,
+            pc,
         }
     }
 
-    fn new_with_args(cc: &JitContext, store: &Store) -> Self {
-        let sp = SlotId(cc.local_num() as u16 + 1);
+    fn new_with_args(cc: &JitContext, store: &Store, pc: BytecodePtr) -> Self {
+        let next_sp = SlotId(cc.local_num() as u16 + 1);
         Self {
             slot_state: SlotContext::from_args(cc, store),
-            sp,
-            next_sp: sp,
+            next_sp,
             class_version_guarded: false,
             frame_capture_guarded: cc.is_method(),
-            pc: None,
+            pc,
         }
-    }
-
-    fn use_float(&mut self, use_set: &[(SlotId, bool)]) {
-        let sp = self.temp_start();
-        self.slot_state.use_float(use_set);
-        self.sp = sp;
-        self.next_sp = sp;
-        self.pc = None;
     }
 
     fn pc(&self) -> BytecodePtr {
-        self.pc.unwrap()
+        self.pc
     }
 
     fn set_pc(&mut self, pc: BytecodePtr) {
-        self.pc = Some(pc);
+        self.pc = pc;
     }
 
     fn set_class_version_guard(&mut self) {
@@ -188,25 +177,17 @@ impl BBContext {
         } in entries.iter()
         {
             #[cfg(feature = "jit-debug")]
-            eprintln!("  <-{:?}:[{:?}] {:?}", _src_bb, bbctx.sp, bbctx.slot_state);
+            eprintln!("  <-{:?}: {:?}", _src_bb, bbctx.slot_state);
             merge_ctx.join(bbctx);
         }
         if let Some(backedge) = backedge {
             #[cfg(feature = "jit-debug")]
-            eprintln!("  <-backedge:[{:?}] {:?}", backedge.sp, backedge.slot_state);
+            eprintln!("  <-backedge: {:?}", backedge.slot_state);
             merge_ctx.join(&backedge);
         }
         #[cfg(feature = "jit-debug")]
         eprintln!("  join_entries: {:?}", &merge_ctx);
         merge_ctx
-    }
-
-    pub(crate) fn get_using_xmm(&self) -> UsingXmm {
-        self.slot_state.get_using_xmm(self.sp)
-    }
-
-    pub(crate) fn get_write_back(&self) -> WriteBack {
-        self.slot_state.get_write_back(self.sp)
     }
 
     pub(crate) fn def_rax2acc(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
@@ -254,15 +235,9 @@ impl BBContext {
         guarded: slot::Guarded,
     ) {
         if let Some(dst) = dst.into() {
-            self.clear_above_next_sp();
-            self.def_acc(ir, dst, guarded);
+            self.def_G(ir, dst, guarded);
             ir.push(AsmInst::RegToAcc(src));
         }
-    }
-
-    pub(crate) fn writeback_acc(&mut self, ir: &mut AsmIr) {
-        let sp = self.sp;
-        self.slot_state.write_back_acc(ir, sp);
     }
 
     ///
@@ -272,7 +247,7 @@ impl BBContext {
     /// - rax
     ///
     pub fn guard_const_base_class(&mut self, ir: &mut AsmIr, slot: SlotId, base_class: Value) {
-        self.fetch(ir, slot, GP::Rax);
+        self.load(ir, slot, GP::Rax);
         let deopt = ir.new_deopt(self);
         ir.inst
             .push(AsmInst::GuardConstBaseClass { base_class, deopt });
@@ -293,7 +268,7 @@ impl BBContext {
         });
         ir.lit2reg(*value, GP::Rax);
         if let Some(f) = value.try_float() {
-            let fdst = self.def_new_Sf_float(dst);
+            let fdst = self.def_Sf_float(dst);
             ir.f64_to_xmm(f, fdst);
             ir.reg2stack(GP::Rax, dst);
         } else {
@@ -314,12 +289,33 @@ impl BBContext {
 ///
 /// Currently supports `literal`s, `xmm` registers and a `R15` register (as an accumulator).
 ///
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct WriteBack {
     xmm: Vec<(Xmm, Vec<SlotId>)>,
     literal: Vec<(Value, SlotId)>,
     void: Vec<SlotId>,
     r15: Option<SlotId>,
+}
+
+impl Hash for WriteBack {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for (xmm, slots) in &self.xmm {
+            xmm.hash(state);
+            for slot in slots {
+                slot.hash(state);
+            }
+        }
+        for (val, slot) in &self.literal {
+            val.id().hash(state);
+            slot.hash(state);
+        }
+        for slot in &self.void {
+            slot.hash(state);
+        }
+        if let Some(slot) = self.r15 {
+            slot.hash(state);
+        }
+    }
 }
 
 impl std::fmt::Debug for WriteBack {

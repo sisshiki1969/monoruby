@@ -78,7 +78,7 @@ impl JitContext {
             let mut target = BBContext::join_entries(&entries, backedge);
             target.use_float(&use_set);
             #[cfg(feature = "jit-debug")]
-            eprintln!("  target:[{:?}]   {:?}", target.sp, target.slot_state);
+            eprintln!("  target:{:?}", target.slot_state);
 
             self.gen_bridges_for_branches(&target, entries, bbid, pc + 1, &unused);
             self.new_backedge(target.slot_state.clone(), bbid);

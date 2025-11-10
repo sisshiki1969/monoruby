@@ -664,7 +664,7 @@ fn array_shl(
         return false;
     }
     let CallSiteInfo { dst, args, .. } = *callsite;
-    bb.fetch(ir, args, GP::Rsi);
+    bb.load(ir, args, GP::Rsi);
     let using_xmm = bb.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _| {

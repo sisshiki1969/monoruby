@@ -109,7 +109,7 @@ pub(crate) enum GP {
 ///
 /// Floating point registers.
 ///
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub(crate) struct Xmm(u16);
 

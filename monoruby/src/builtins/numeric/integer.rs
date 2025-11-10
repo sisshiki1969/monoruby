@@ -243,7 +243,7 @@ fn integer_tof(
     }
     let CallSiteInfo { dst, .. } = *callsite;
     if let Some(ret) = dst {
-        let fret = bb.xmm_write_enc(ret);
+        let fret = bb.def_F(ret).enc();
         ir.inline(move |r#gen, _, _| {
             monoasm! { &mut r#gen.jit,
                 sarq  rdi, 1;
@@ -404,11 +404,11 @@ fn integer_shr(
         return false;
     }
     let CallSiteInfo { dst, args, .. } = *callsite;
-    let deopt = ir.new_deopt(bb);
     if let Some(rhs) = bb.is_u8_literal(args) {
         ir.inline(move |r#gen, _, _| r#gen.gen_shr_imm(rhs));
     } else {
-        bb.fetch_fixnum(ir, args, GP::Rcx, deopt);
+        bb.load_fixnum(ir, args, GP::Rcx);
+        let deopt = ir.new_deopt(bb);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shr(&labels[deopt]));
     }
     bb.def_reg2acc_fixnum(ir, GP::Rdi, dst);
@@ -440,16 +440,19 @@ fn integer_shl(
     let CallSiteInfo {
         dst, args, recv, ..
     } = *callsite;
-    let deopt = ir.new_deopt(bb);
+
     if let Some(rhs) = bb.is_u8_literal(args)
         && rhs < 64
     {
+        let deopt = ir.new_deopt(bb);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shl_rhs_imm(rhs, &labels[deopt]));
     } else if let Some(lhs) = bb.is_fixnum_literal(recv) {
-        bb.fetch_fixnum(ir, args, GP::Rcx, deopt);
+        bb.load_fixnum(ir, args, GP::Rcx);
+        let deopt = ir.new_deopt(bb);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shl_lhs_imm(lhs, &labels[deopt]));
     } else {
-        bb.fetch_fixnum(ir, args, GP::Rcx, deopt);
+        bb.load_fixnum(ir, args, GP::Rcx);
+        let deopt = ir.new_deopt(bb);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shl(&labels[deopt]));
     }
     bb.def_reg2acc_fixnum(ir, GP::Rdi, dst);

@@ -3,13 +3,19 @@ use super::*;
 impl JitContext {
     pub(super) fn compile(&mut self, store: &Store) {
         let iseq_id = self.iseq_id();
+        //store.dump_iseq(iseq_id);
 
         let iseq = &store[iseq_id];
         for (loop_start, loop_end) in iseq.bb_info.loops() {
             self.analyse_loop(store, iseq_id, *loop_start, *loop_end);
         }
 
-        let mut bbctx = BBContext::new_with_args(&self, store);
+        let pc = if let Some(pc) = self.position() {
+            pc
+        } else {
+            iseq.get_pc(BcIndex::from(0))
+        };
+        let mut bbctx = BBContext::new_with_args(&self, store, pc);
 
         let mut ir = AsmIr::new();
         if let Some(pc) = self.position() {
@@ -36,7 +42,7 @@ impl JitContext {
         assert!(self.ir.is_empty());
         self.ir.push((None, ir));
 
-        let start_pos = iseq.get_pc_index(self.position());
+        let start_pos = iseq.get_pc_index(Some(pc));
 
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
@@ -103,18 +109,18 @@ impl JitContext {
                     self.recompile_and_deopt(&mut bbctx, &mut ir, reason);
                     return ir;
                 }
-                CompileResult::ExitLoop => break,
+                CompileResult::ExitLoop => {
+                    bbctx.clear_above_next_sp();
+                    break;
+                }
                 CompileResult::Abort => {
                     store.dump_iseq(iseq_id);
                     unreachable!()
                 }
             }
-
             bbctx.clear_above_next_sp();
-            bbctx.sp = bbctx.next_sp;
         }
 
-        bbctx.clear_above_next_sp();
         if !last {
             self.prepare_next(bbctx, iseq, end)
         }
@@ -122,7 +128,7 @@ impl JitContext {
         ir
     }
 
-    pub(super) fn analyse_loop(
+    fn analyse_loop(
         &mut self,
         store: &Store,
         iseq_id: ISeqId,
@@ -131,8 +137,9 @@ impl JitContext {
     ) {
         let mut ctx = JitContext::from_ctx(self);
         let mut liveness = Liveness::new(self.total_reg_num());
+        let pc = store[iseq_id].get_bb_pc(loop_start);
 
-        let bbctx = BBContext::new(&ctx);
+        let bbctx = BBContext::new(&ctx, pc);
         ctx.branch_map.insert(
             loop_start,
             vec![BranchEntry {
@@ -201,9 +208,9 @@ impl JitContext {
                     unreachable!()
                 }
             }
-
-            bbctx.sp = bbctx.next_sp;
+            bbctx.clear_above_next_sp();
         }
+
         if !last {
             self.prepare_next(bbctx, iseq, end);
         }
@@ -224,8 +231,11 @@ impl JitContext {
         bc_pos: BcIndex,
     ) -> CompileResult {
         bbctx.set_pc(self.bytecode(bc_pos));
-        bbctx.clear_above_sp();
+        //bbctx.clear_above_sp();
         let trace_ir = iseq.trace_ir(store, bc_pos);
+        //if let Some(fmt) = trace_ir.format(store) {
+        //    eprintln!("{fmt}");
+        //}
         match trace_ir {
             TraceIr::InitMethod { .. } => {}
             TraceIr::LoopStart { .. } => {
@@ -308,7 +318,7 @@ impl JitContext {
                 }
             }
             TraceIr::StoreConst(src, id) => {
-                bbctx.fetch(ir, src, GP::Rax);
+                bbctx.load(ir, src, GP::Rax);
                 let using_xmm = bbctx.get_using_xmm();
                 ir.push(AsmInst::StoreConstant { id, using_xmm });
             }
@@ -379,7 +389,7 @@ impl JitContext {
                 }
             }
             TraceIr::StoreDynVar(dst, src) => {
-                bbctx.fetch(ir, src, GP::Rdi);
+                bbctx.load(ir, src, GP::Rdi);
                 ir.push(AsmInst::StoreDynVar { dst, src: GP::Rdi });
             }
             TraceIr::Not { dst, src, .. } => {
@@ -388,7 +398,7 @@ impl JitContext {
                 } else if bbctx.is_falsy(src) {
                     bbctx.def_C(dst, Value::bool(true));
                 } else {
-                    bbctx.fetch(ir, src, GP::Rdi);
+                    bbctx.load(ir, src, GP::Rdi);
                     bbctx.discard(dst);
                     ir.push(AsmInst::Not);
                     bbctx.def_rax2acc(ir, dst);
@@ -401,38 +411,38 @@ impl JitContext {
                 src_class,
             } => {
                 if let Some(INTEGER_CLASS) = src_class {
-                    let deopt = ir.new_deopt(bbctx);
-                    bbctx.fetch_fixnum(ir, src, GP::Rdi, deopt);
+                    bbctx.load_fixnum(ir, src, GP::Rdi);
                     ir.push(AsmInst::FixnumBitNot { reg: GP::Rdi });
                     bbctx.def_reg2acc_fixnum(ir, GP::Rdi, dst);
                 } else {
-                    bbctx.fetch(ir, src, GP::Rdi);
+                    bbctx.load(ir, src, GP::Rdi);
                     bbctx.generic_unop(ir, bitnot_value);
                     bbctx.def_rax2acc(ir, dst);
                     bbctx.unset_class_version_guard();
                 }
             }
             TraceIr::FUnOp { kind, dst, src } => {
-                let deopt = ir.new_deopt(bbctx);
-                let fsrc = bbctx.fetch_float_for_xmm(ir, src, deopt);
-                let dst = bbctx.xmm_write(dst);
+                let fsrc = bbctx.load_xmm(ir, src);
+                let dst = bbctx.def_F(dst);
                 ir.xmm_move(fsrc, dst);
                 ir.push(AsmInst::XmmUnOp { kind, dst });
             }
             TraceIr::IUnOp { kind, dst, src } => {
-                let deopt = ir.new_deopt(bbctx);
-                bbctx.fetch_fixnum(ir, src, GP::Rdi, deopt);
+                bbctx.load_fixnum(ir, src, GP::Rdi);
                 match kind {
-                    UnOpK::Neg => ir.push(AsmInst::FixnumNeg {
-                        reg: GP::Rdi,
-                        deopt,
-                    }),
+                    UnOpK::Neg => {
+                        let deopt = ir.new_deopt(bbctx);
+                        ir.push(AsmInst::FixnumNeg {
+                            reg: GP::Rdi,
+                            deopt,
+                        })
+                    }
                     UnOpK::Pos => {}
                 }
                 bbctx.def_reg2acc_fixnum(ir, GP::Rdi, dst);
             }
             TraceIr::UnOp { kind, dst, src, .. } => {
-                bbctx.fetch(ir, src, GP::Rdi);
+                bbctx.load(ir, src, GP::Rdi);
                 bbctx.generic_unop(ir, kind.generic_func());
                 bbctx.def_rax2acc(ir, dst);
                 bbctx.unset_class_version_guard();
@@ -440,7 +450,7 @@ impl JitContext {
             TraceIr::IBinOp {
                 kind, dst, mode, ..
             } => {
-                bbctx.gen_binop_integer(ir, kind, dst, mode);
+                bbctx.gen_binop_fixnum(ir, kind, dst, mode);
             }
             TraceIr::FBinOp { kind, info } => {
                 bbctx.gen_binop_float(ir, kind, info);
@@ -481,7 +491,7 @@ impl JitContext {
                 dest_bb,
                 brkind,
             } => {
-                if let Some(result) = bbctx.check_concrete_float_cmpbr(info.mode, kind, brkind) {
+                if let Some(result) = bbctx.check_concrete_f64_cmpbr(info.mode, kind, brkind) {
                     if let CompileResult::Branch = result {
                         self.gen_branch(bbctx, iseq, bc_pos, dest_bb);
                     }
@@ -491,7 +501,6 @@ impl JitContext {
                 let dest = self.label();
                 let mode = bbctx.fmode(ir, info);
                 bbctx.discard(info.dst);
-                bbctx.clear_above_next_sp();
                 ir.float_cmp_br(mode, kind, brkind, dest);
                 self.new_side_branch(iseq, src_idx, dest_bb, bbctx.clone(), dest);
             }
@@ -502,7 +511,7 @@ impl JitContext {
                 dest_bb,
                 brkind,
             } => {
-                if let Some(result) = bbctx.check_concrete_integer_cmpbr(mode, kind, brkind) {
+                if let Some(result) = bbctx.check_concrete_i64_cmpbr(mode, kind, brkind) {
                     if let CompileResult::Branch = result {
                         self.gen_branch(bbctx, iseq, bc_pos, dest_bb);
                     }
@@ -628,7 +637,7 @@ impl JitContext {
                 src,
                 dst: (dst, len, rest_pos),
             } => {
-                bbctx.fetch(ir, src, GP::Rdi);
+                bbctx.load(ir, src, GP::Rdi);
                 for reg in dst.0..dst.0 + len {
                     bbctx.def_S(SlotId(reg));
                 }
@@ -758,26 +767,26 @@ impl JitContext {
             }
             TraceIr::Ret(ret) => {
                 bbctx.write_back_locals_if_captured(ir);
-                bbctx.fetch(ir, ret, GP::Rax);
+                bbctx.load(ir, ret, GP::Rax);
                 ir.push(AsmInst::Ret);
                 return CompileResult::Leave;
             }
             TraceIr::MethodRet(ret) => {
                 bbctx.write_back_locals_if_captured(ir);
-                bbctx.fetch(ir, ret, GP::Rax);
+                bbctx.load(ir, ret, GP::Rax);
                 let pc = bbctx.pc();
                 ir.push(AsmInst::MethodRet(pc));
                 return CompileResult::Leave;
             }
             TraceIr::BlockBreak(ret) => {
                 bbctx.write_back_locals_if_captured(ir);
-                bbctx.fetch(ir, ret, GP::Rax);
+                bbctx.load(ir, ret, GP::Rax);
                 ir.push(AsmInst::BlockBreak);
                 return CompileResult::Leave;
             }
             TraceIr::Raise(ret) => {
                 bbctx.locals_to_S(ir);
-                bbctx.fetch(ir, ret, GP::Rax);
+                bbctx.load(ir, ret, GP::Rax);
                 ir.push(AsmInst::Raise);
                 return CompileResult::Leave;
             }
@@ -801,7 +810,7 @@ impl JitContext {
                         return CompileResult::Branch;
                     }
                 } else {
-                    bbctx.fetch(ir, cond_, GP::Rax);
+                    bbctx.load(ir, cond_, GP::Rax);
                     self.gen_cond_br(bbctx, ir, iseq, bc_pos, dest_idx, brkind);
                 }
             }
@@ -812,7 +821,7 @@ impl JitContext {
                 } else if bbctx.is_not_nil(cond_) {
                 } else {
                     let branch_dest = self.label();
-                    bbctx.fetch(ir, cond_, GP::Rax);
+                    bbctx.load(ir, cond_, GP::Rax);
                     ir.push(AsmInst::NilBr(branch_dest));
                     self.new_side_branch(iseq, bc_pos, dest_idx, bbctx.clone(), branch_dest);
                 }
@@ -825,7 +834,7 @@ impl JitContext {
                 }
                 LinkMode::MaybeNone => {
                     let branch_dest = self.label();
-                    bbctx.fetch(ir, local, GP::Rax);
+                    bbctx.load(ir, local, GP::Rax);
                     ir.push(AsmInst::CheckLocal(branch_dest));
                     let mut side_bb = bbctx.clone();
                     side_bb.set_S(local);
@@ -853,8 +862,7 @@ impl JitContext {
                     branch_labels.push(branch_dest);
                     self.new_side_branch(iseq, bc_pos, bbid, bbctx.clone(), branch_dest);
                 }
-                let deopt = ir.new_deopt(bbctx);
-                bbctx.fetch_fixnum(ir, cond, GP::Rdi, deopt);
+                bbctx.load_fixnum(ir, cond, GP::Rdi);
                 ir.opt_case(max, min, else_label, branch_labels.into());
                 return CompileResult::Branch;
             }

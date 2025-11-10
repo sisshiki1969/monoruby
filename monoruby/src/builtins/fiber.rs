@@ -78,7 +78,7 @@ fn fiber_yield_inline(
             }
         });
     } else if pos_num == 1 {
-        bb.fetch(ir, args, GP::Rsi);
+        bb.load(ir, args, GP::Rsi);
     } else {
         bb.write_back_callargs_and_dst(ir, callsite);
         ir.inline(move |r#gen, _, _| {

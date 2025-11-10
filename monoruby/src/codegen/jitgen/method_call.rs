@@ -1,4 +1,4 @@
-use crate::codegen::jitgen::context::JitStackFrame;
+use crate::{codegen::jitgen::context::JitStackFrame, executor::inline::InlineFuncInfo};
 
 use super::{
     context::{JitArgumentInfo, JitBlockInfo},
@@ -54,12 +54,30 @@ impl JitContext {
         if callsite.block_fid.is_none()
             && let Some(info) = store.inline_info.get_inline(func_id)
         {
-            let f = &info.inline_gen;
-            if self.inline_asm(bbctx, ir, store, f, callsite, recv_class) {
-                if possibly_captured {
-                    bbctx.unset_frame_capture_guard();
+            match info {
+                InlineFuncInfo::InlineGen(f) => {
+                    if self.inline_asm(bbctx, ir, store, f, callsite, recv_class) {
+                        if possibly_captured {
+                            bbctx.unset_frame_capture_guard();
+                        }
+                        return CompileResult::Continue;
+                    }
                 }
-                return CompileResult::Continue;
+                InlineFuncInfo::CFunc_F_F(f) => {
+                    let CallSiteInfo { args, dst, .. } = *callsite;
+                    let src = bbctx.load_xmm(ir, args);
+                    if let Some(dst) = dst {
+                        let dst = bbctx.def_F(dst);
+                        let using_xmm = bbctx.get_using_xmm();
+                        ir.push(AsmInst::CFunc {
+                            f: *f,
+                            src,
+                            dst,
+                            using_xmm,
+                        });
+                    }
+                    return CompileResult::Continue;
+                }
             }
         }
 
@@ -98,8 +116,15 @@ impl JitContext {
             lhs_class,
             ..
         } = info;
-        bbctx.fetch_lhs(ir, mode);
-        bbctx.guard_lhs_class_for_mode(ir, mode, lhs_class, deopt);
+        bbctx.load_lhs(ir, mode, GP::Rdi);
+        match mode {
+            OpMode::RR(lhs, _) | OpMode::RI(lhs, _) => {
+                bbctx.guard_class(ir, lhs, GP::Rdi, lhs_class, deopt);
+            }
+            OpMode::IR(_, _) => {
+                assert!(lhs_class == INTEGER_CLASS);
+            }
+        }
 
         ir.reg_move(GP::Rdi, GP::R13);
         let using_xmm = bbctx.get_using_xmm();
@@ -139,7 +164,7 @@ impl JitContext {
         self.guard_class_version(bbctx, ir, true, deopt);
 
         // receiver class guard
-        bbctx.fetch(ir, recv, GP::Rdi);
+        bbctx.load(ir, recv, GP::Rdi);
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
         if !recv.is_self() && !bbctx.is_class(recv, recv_class) {
@@ -307,7 +332,7 @@ impl JitContext {
                 } else {
                     return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
                 };
-                let src = bbctx.fetch_or_reg(ir, args, GP::Rax);
+                let src = bbctx.load_or_reg(ir, args, GP::Rax);
                 let is_object_ty = store[recv_class].is_object_ty_instance();
                 let using_xmm = bbctx.get_using_xmm();
                 if is_object_ty && ivarid.is_inline() {

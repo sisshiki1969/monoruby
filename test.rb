@@ -1,7 +1,9 @@
-def f(a,b)
-  a + b
-end
-
-100.times do
-  f(1,2)
-end
+  def release
+    @@release[self] ||= if prerelease?
+      segments = self.segments
+      segments.pop while segments.any? {|s| String === s }
+      self.class.new segments.join(".")
+    else
+      self
+    end
+  end

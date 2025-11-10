@@ -234,7 +234,7 @@ fn hash_index(
     if callsite.pos_num != 1 {
         return false;
     }
-    bb.fetch(ir, callsite.args, GP::Rcx);
+    bb.load(ir, callsite.args, GP::Rcx);
     ir.inline(|r#gen, _, _| {
         monoasm! {&mut r#gen.jit,
             movq rdx, rdi;
