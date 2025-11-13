@@ -117,7 +117,6 @@ impl BBContext {
                 self.discard(slot);
                 continue;
             }
-            let guarded = target.guarded(slot);
             match (self.mode(slot), target.mode(slot)) {
                 (LinkMode::V, LinkMode::V) => {}
                 (_, LinkMode::V) => {
@@ -134,12 +133,14 @@ impl BBContext {
                         // F(l) -> Sf(l)
                         self.set_Sf_float(slot, l);
                     } else {
+                        let guarded = target.guarded(slot);
                         // F(l) -> Sf(r)
                         self.to_both(ir, slot, l, r, guarded);
                     }
                 }
                 (LinkMode::Sf(l), LinkMode::Sf(r)) => {
                     if l != r {
+                        let guarded = target.guarded(slot);
                         // Sf(l) -> Sf(r)
                         self.to_both(ir, slot, l, r, guarded);
                     }
@@ -149,6 +150,7 @@ impl BBContext {
                     self.set_mode(slot, LinkMode::S);
                 }
                 (LinkMode::S, LinkMode::S) => {
+                    let guarded = target.guarded(slot);
                     if let Some(class) = guarded.class()
                         && !self.is_class(slot, class)
                     {

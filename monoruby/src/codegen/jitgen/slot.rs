@@ -27,14 +27,30 @@ impl std::fmt::Debug for SlotContext {
 }
 
 impl SlotContext {
-    pub(super) fn from(cc: &JitContext) -> Self {
-        let mut ctx = Self::new(cc.total_reg_num(), cc.local_num());
-        ctx.set_guard_class(SlotId::self_(), cc.self_class());
+    fn new(cc: &JitContext) -> Self {
+        let total_reg_num = cc.total_reg_num();
+        let local_num = cc.local_num();
+        let self_class = cc.self_class();
+        let mut ctx = SlotContext {
+            slots: vec![SlotState::default(); total_reg_num],
+            liveness: vec![IsUsed::default(); total_reg_num],
+            xmm: {
+                let v: Vec<Vec<SlotId>> = (0..14).map(|_| vec![]).collect();
+                v.try_into().unwrap()
+            },
+            r15: None,
+            local_num,
+        };
+        ctx.set_guard_class(SlotId::self_(), self_class);
         ctx
     }
 
-    pub(super) fn from_args(cc: &JitContext, store: &Store) -> Self {
-        let mut ctx = Self::from(cc);
+    pub(super) fn new_loop(cc: &JitContext) -> Self {
+        Self::new(cc)
+    }
+
+    pub(super) fn new_method(cc: &JitContext, store: &Store) -> Self {
+        let mut ctx = Self::new(cc);
 
         if let JitType::Specialized {
             args_info: JitArgumentInfo(Some(args)),
@@ -63,6 +79,7 @@ impl SlotContext {
                 ctx.set_MaybeNone(kw + i);
             }
         }
+        ctx.clear_temps();
         ctx
     }
 
@@ -85,19 +102,6 @@ impl SlotContext {
                     unreachable!("use_float {:?}", self.mode(*slot));
                 }
             };
-        }
-    }
-
-    fn new(total_reg_num: usize, local_num: usize) -> Self {
-        SlotContext {
-            slots: vec![SlotState::default(); total_reg_num],
-            liveness: vec![IsUsed::default(); total_reg_num],
-            xmm: {
-                let v: Vec<Vec<SlotId>> = (0..14).map(|_| vec![]).collect();
-                v.try_into().unwrap()
-            },
-            r15: None,
-            local_num,
         }
     }
 
@@ -133,6 +137,12 @@ impl SlotContext {
     }
 
     fn guarded(&self, slot: SlotId) -> Guarded {
+        match self.mode(slot) {
+            LinkMode::MaybeNone | LinkMode::None | LinkMode::V => {
+                panic!("guarded() {:?}", self);
+            }
+            _ => {}
+        }
         self.slots[slot.0 as usize].guarded
     }
 

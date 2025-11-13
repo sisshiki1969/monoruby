@@ -126,21 +126,21 @@ impl std::ops::DerefMut for BBContext {
 }
 
 impl BBContext {
-    fn new(cc: &JitContext, pc: BytecodePtr) -> Self {
+    fn new_loop(cc: &JitContext, pc: BytecodePtr) -> Self {
         let next_sp = SlotId(cc.local_num() as u16 + 1);
         Self {
-            slot_state: SlotContext::from(cc),
+            slot_state: SlotContext::new_loop(cc),
             next_sp,
             class_version_guarded: false,
-            frame_capture_guarded: cc.is_method(),
+            frame_capture_guarded: false,
             pc,
         }
     }
 
-    fn new_with_args(cc: &JitContext, store: &Store, pc: BytecodePtr) -> Self {
+    fn new_method(cc: &JitContext, store: &Store, pc: BytecodePtr) -> Self {
         let next_sp = SlotId(cc.local_num() as u16 + 1);
         Self {
-            slot_state: SlotContext::from_args(cc, store),
+            slot_state: SlotContext::new_method(cc, store),
             next_sp,
             class_version_guarded: false,
             frame_capture_guarded: cc.is_method(),

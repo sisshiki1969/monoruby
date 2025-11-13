@@ -10,13 +10,14 @@ impl JitContext {
             self.analyse_loop(store, iseq_id, *loop_start, *loop_end);
         }
 
-        let pc = if let Some(pc) = self.position() {
-            pc
+        let (bbctx, pc) = if let Some(pc) = self.position() {
+            let bbctx = BBContext::new_loop(&self, pc);
+            (bbctx, pc)
         } else {
-            iseq.get_pc(BcIndex::from(0))
+            let pc = iseq.get_pc(BcIndex::from(0));
+            let bbctx = BBContext::new_method(&self, store, pc);
+            (bbctx, pc)
         };
-        let mut bbctx = BBContext::new_with_args(&self, store, pc);
-
         let mut ir = AsmIr::new();
         if let Some(pc) = self.position() {
             // generate class guard of *self* for loop JIT
@@ -28,7 +29,6 @@ impl JitContext {
             // for method JIT, class of *self* is already checked in an entry stub.
             match iseq.trace_ir(store, BcIndex::from(0)) {
                 TraceIr::InitMethod(fn_info) => {
-                    bbctx.clear_temps();
                     ir.push(AsmInst::Init {
                         info: fn_info,
                         is_method: store[iseq.func_id()].is_method_type(),
@@ -36,7 +36,7 @@ impl JitContext {
                 }
                 _ => unreachable!(),
             }
-        }
+        };
         ir.push(AsmInst::Preparation);
 
         assert!(self.ir.is_empty());
@@ -135,11 +135,11 @@ impl JitContext {
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
     ) {
-        let mut ctx = JitContext::from_ctx(self);
-        let mut liveness = Liveness::new(self.total_reg_num());
         let pc = store[iseq_id].get_bb_pc(loop_start);
+        let mut ctx = JitContext::loop_analysis(self, pc);
+        let mut liveness = Liveness::new(self.total_reg_num());
 
-        let bbctx = BBContext::new(&ctx, pc);
+        let bbctx = BBContext::new_loop(&ctx, pc);
         ctx.branch_map.insert(
             loop_start,
             vec![BranchEntry {

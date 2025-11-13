@@ -314,12 +314,12 @@ impl JitContext {
         }
     }
 
-    pub(super) fn from_ctx(&self) -> Self {
+    pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
         let total_reg_num = self.total_reg_num;
         let local_num = self.local_num;
         Self {
             bytecode_top: self.bytecode_top,
-            jit_type: self.jit_type.clone(),
+            jit_type: JitType::Loop(pc),
             basic_block_labels: HashMap::default(),
             loop_info: self.loop_info.clone(),
             loop_count: 0,
