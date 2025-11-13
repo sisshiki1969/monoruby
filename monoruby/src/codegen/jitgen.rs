@@ -214,7 +214,7 @@ impl BBContext {
         dst: impl Into<Option<SlotId>>,
         class: ClassId,
     ) {
-        self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::Class(class))
+        self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::from_class(class))
     }
 
     pub(crate) fn def_reg2acc_concrete_value(
@@ -396,54 +396,6 @@ impl UsingXmm {
             inner: bitvec::prelude::BitArray::new([0; 1]),
         }
     }
-}
-
-///
-/// Mode of linkage between stack slot and xmm registers.
-///
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-enum LinkMode {
-    ///
-    /// No Value.
-    ///
-    /// this is for optional arguments with no passed value.
-    ///
-    None,
-    ///
-    /// Maybe No Value.
-    ///
-    /// this is for optional arguments which may have no passed value.
-    ///
-    MaybeNone,
-    ///
-    /// Void.
-    ///
-    /// this is used for the temp slots above sp.
-    ///
-    V,
-    ///
-    /// On the stack slot.
-    ///
-    #[default]
-    S,
-    ///
-    /// On the floating point register (xmm).
-    ///
-    /// mutation of the corresponding FPR lazily affects the stack slot.
-    ///
-    F(Xmm),
-    ///
-    /// On the stack slot and on the floating point register (xmm) which is read-only.
-    ///
-    Sf(Xmm),
-    ///
-    /// Concrete value.
-    ///
-    C(Value),
-    ///
-    /// On the general-purpose register (r15).
-    ///
-    G,
 }
 
 impl Codegen {

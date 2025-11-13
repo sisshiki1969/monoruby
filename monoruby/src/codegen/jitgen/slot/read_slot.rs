@@ -28,13 +28,13 @@ impl BBContext {
                 }
                 ir.lit2reg(v, dst);
             }
-            LinkMode::Sf(_) | LinkMode::S => {
+            LinkMode::Sf(_, _) | LinkMode::S(_) => {
                 if dst == GP::R15 {
                     assert!(self.r15.is_none());
                 }
                 ir.stack2reg(slot, dst);
             }
-            LinkMode::G => {
+            LinkMode::G(_) => {
                 ir.reg_move(GP::R15, dst);
             }
             LinkMode::MaybeNone => {
@@ -85,8 +85,8 @@ impl BBContext {
     pub(crate) fn load_xmm_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
         self.use_as_float(slot);
         match self.mode(slot) {
-            LinkMode::Sf(x) | LinkMode::F(x) => x,
-            LinkMode::S => {
+            LinkMode::Sf(x, _) | LinkMode::F(x) => x,
+            LinkMode::S(_) => {
                 // S -> Sf
                 ir.stack2reg(slot, GP::Rdi);
                 self.guard_fixnum(ir, slot, GP::Rdi);
@@ -94,7 +94,7 @@ impl BBContext {
                 ir.fixnum2xmm(GP::Rdi, x);
                 x
             }
-            LinkMode::G => {
+            LinkMode::G(_) => {
                 // G -> Sf
                 ir.reg2stack(GP::R15, slot);
                 self.guard_fixnum(ir, slot, GP::R15);
@@ -120,15 +120,15 @@ impl BBContext {
         let deopt = ir.new_deopt(self);
         self.use_as_float(slot);
         match self.mode(slot) {
-            LinkMode::Sf(x) | LinkMode::F(x) => x,
-            LinkMode::S => {
+            LinkMode::Sf(x, _) | LinkMode::F(x) => x,
+            LinkMode::S(_) => {
                 // -> Sf
                 let x = self.set_new_Sf(slot, Guarded::Float);
                 ir.stack2reg(slot, GP::Rdi);
                 ir.float_to_xmm(GP::Rdi, x, deopt);
                 x
             }
-            LinkMode::G => {
+            LinkMode::G(_) => {
                 // -> Sf
                 let x = self.set_new_Sf(slot, Guarded::Float);
                 ir.reg2stack(GP::R15, slot);
@@ -177,7 +177,7 @@ impl BBContext {
         ofs: i32,
     ) {
         match self.mode(slot) {
-            LinkMode::G => {
+            LinkMode::G(_) => {
                 self.use_as_value(slot);
                 ir.reg2rsp_offset(GP::R15, ofs);
             }

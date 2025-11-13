@@ -1,8 +1,10 @@
-use crate::{codegen::jitgen::context::JitStackFrame, executor::inline::InlineFuncInfo};
+use crate::{
+    codegen::jitgen::{context::JitStackFrame, slot::LinkMode},
+    executor::inline::InlineFuncInfo,
+};
 
 use super::{
     context::{JitArgumentInfo, JitBlockInfo},
-    slot::SlotState,
     *,
 };
 
@@ -241,7 +243,9 @@ impl JitContext {
             None
         };
         let args_info = if simple {
-            JitArgumentInfo::new(SlotState::from_caller(store, callee_fid, callid, bbctx))
+            JitArgumentInfo::new(slot::LinkMode::from_caller(
+                store, callee_fid, callid, bbctx,
+            ))
         } else {
             JitArgumentInfo::default()
         };
@@ -374,15 +378,14 @@ impl JitContext {
                 }
                 let evict = ir.new_evict();
                 let specializable = store.is_simple_call(fid, callid)
-                    && (bbctx.state(callsite.recv).is_C()
-                        || (args..args + pos_num).any(|i| bbctx.state(i).is_C()));
+                    && (bbctx.is_C(callsite.recv) || (args..args + pos_num).any(|i| bbctx.is_C(i)));
                 let iseq_block = block_fid.map(|fid| store[fid].is_iseq()).flatten();
 
                 if iseq_block.is_some() || (specializable && self.specialize_level() < 5)
                 /*name == Some(IdentId::NEW)*/
                 {
                     let args_info = if specializable {
-                        JitArgumentInfo::new(SlotState::from_caller(store, fid, callid, bbctx))
+                        JitArgumentInfo::new(LinkMode::from_caller(store, fid, callid, bbctx))
                     } else {
                         JitArgumentInfo::default()
                     };

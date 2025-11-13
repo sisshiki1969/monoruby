@@ -45,19 +45,19 @@ impl BBContext {
                 }
                 (LinkMode::F(_), LinkMode::F(_)) => {}
                 (LinkMode::F(_), LinkMode::C(r)) if r.is_float() => {}
-                (LinkMode::F(l), LinkMode::Sf(_))
-                | (LinkMode::Sf(l), LinkMode::Sf(_) | LinkMode::F(_)) => {
+                (LinkMode::F(l), LinkMode::Sf(_, _))
+                | (LinkMode::Sf(l, _), LinkMode::Sf(_, _) | LinkMode::F(_)) => {
                     let guarded = self.guarded(i).join(&other.guarded(i));
                     self.set_Sf(i, l, guarded);
                 }
-                (LinkMode::Sf(l), LinkMode::C(r)) if r.is_float() || r.is_fixnum() => {
+                (LinkMode::Sf(l, _), LinkMode::C(r)) if r.is_float() || r.is_fixnum() => {
                     let guarded = self.guarded(i).join(&other.guarded(i));
                     self.set_Sf(i, l, guarded)
                 }
                 (LinkMode::C(l), LinkMode::F(_)) if l.is_float() => {
                     self.set_new_F(i);
                 }
-                (LinkMode::C(l), LinkMode::Sf(_)) if l.is_float() || l.is_fixnum() => {
+                (LinkMode::C(l), LinkMode::Sf(_, _)) if l.is_float() || l.is_fixnum() => {
                     let guarded = self.guarded(i).join(&other.guarded(i));
                     self.set_new_Sf(i, guarded);
                 }
@@ -127,37 +127,33 @@ impl BBContext {
                         self.to_xmm(ir, slot, l, r);
                     }
                 }
-                (LinkMode::F(l), LinkMode::Sf(r)) => {
+                (LinkMode::F(l), LinkMode::Sf(r, guarded)) => {
                     ir.xmm2stack(l, slot);
                     if l == r {
                         // F(l) -> Sf(l)
                         self.set_Sf_float(slot, l);
                     } else {
-                        let guarded = target.guarded(slot);
                         // F(l) -> Sf(r)
                         self.to_both(ir, slot, l, r, guarded);
                     }
                 }
-                (LinkMode::Sf(l), LinkMode::Sf(r)) => {
+                (LinkMode::Sf(l, _), LinkMode::Sf(r, guarded)) => {
                     if l != r {
-                        let guarded = target.guarded(slot);
                         // Sf(l) -> Sf(r)
                         self.to_both(ir, slot, l, r, guarded);
                     }
                 }
-                (LinkMode::Sf(l), LinkMode::S) => {
-                    self.xmm_remove(slot, l);
-                    self.set_mode(slot, LinkMode::S);
+                (LinkMode::Sf(_, guarded), LinkMode::S(_)) => {
+                    self.set_S_with_guard(slot, guarded);
                 }
-                (LinkMode::S, LinkMode::S) => {
-                    let guarded = target.guarded(slot);
+                (LinkMode::S(_), LinkMode::S(guarded)) => {
                     if let Some(class) = guarded.class()
                         && !self.is_class(slot, class)
                     {
                         let deopt = ir.new_deopt_with_pc(&self, pc + 1);
                         ir.stack2reg(slot, GP::Rax);
                         ir.push(AsmInst::GuardClass(GP::Rax, class, deopt));
-                        self.set_guard_class(slot, class);
+                        self.set_S_with_guard(slot, guarded);
                     }
                 }
                 (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
@@ -169,7 +165,7 @@ impl BBContext {
                         unreachable!()
                     }
                 }
-                (LinkMode::C(l), LinkMode::Sf(r)) => {
+                (LinkMode::C(l), LinkMode::Sf(r, _)) => {
                     if let Some(f) = l.try_float() {
                         self.set_Sf_float(slot, r);
                         ir.f64_to_xmm(f, r);
@@ -179,7 +175,7 @@ impl BBContext {
                         unreachable!()
                     }
                 }
-                (LinkMode::C(_) | LinkMode::F(_) | LinkMode::G, LinkMode::S) => {
+                (LinkMode::C(_) | LinkMode::F(_) | LinkMode::G(_), LinkMode::S(_)) => {
                     self.write_back_slot(ir, slot);
                 }
                 (LinkMode::None, LinkMode::None) => {}

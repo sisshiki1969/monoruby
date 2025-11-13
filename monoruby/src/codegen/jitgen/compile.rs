@@ -1,3 +1,5 @@
+use crate::codegen::jitgen::slot::LinkMode;
+
 use super::*;
 
 impl JitContext {
@@ -828,7 +830,7 @@ impl JitContext {
             }
             TraceIr::CondBr(_, _, true, _) => {}
             TraceIr::CheckLocal(local, dest_idx) => match bbctx.mode(local) {
-                LinkMode::S | LinkMode::C(_) => {
+                LinkMode::S(_) | LinkMode::C(_) => {
                     self.gen_branch(bbctx, iseq, bc_pos, dest_idx);
                     return CompileResult::Branch;
                 }
