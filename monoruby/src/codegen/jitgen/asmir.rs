@@ -59,6 +59,7 @@ impl std::ops::Index<AsmEvict> for SideExitLabels {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct AsmIr {
     pub(super) inst: Vec<AsmInst>,
     side_exit: Vec<SideExit>,
@@ -1638,6 +1639,7 @@ pub(super) enum FMode {
     IR(i16, Xmm),
 }
 
+#[derive(Debug)]
 pub enum SideExit {
     Evict(Option<(BytecodePtr, WriteBack)>),
     Deoptimize(BytecodePtr, WriteBack),

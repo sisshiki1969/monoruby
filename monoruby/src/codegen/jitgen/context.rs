@@ -452,7 +452,7 @@ impl JitContext {
         match self.loop_info.get(&entry_bb) {
             Some((liveness, merger)) => (
                 liveness.get_loop_used_as_float(),
-                liveness.get_unused(),
+                liveness.get_killed(),
                 merger.clone(),
             ),
             None => (vec![], vec![], None),

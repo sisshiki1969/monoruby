@@ -83,14 +83,14 @@ impl BBContext {
     /// - rdi
     ///
     pub(crate) fn load_xmm_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
-        self.use_as_float(slot);
+        self.use_as_value(slot);
         match self.mode(slot) {
             LinkMode::Sf(x, _) | LinkMode::F(x) => x,
             LinkMode::S(_) => {
                 // S -> Sf
                 ir.stack2reg(slot, GP::Rdi);
                 self.guard_fixnum(ir, slot, GP::Rdi);
-                let x = self.set_new_Sf(slot, Guarded::Fixnum);
+                let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
                 ir.fixnum2xmm(GP::Rdi, x);
                 x
             }
@@ -98,7 +98,7 @@ impl BBContext {
                 // G -> Sf
                 ir.reg2stack(GP::R15, slot);
                 self.guard_fixnum(ir, slot, GP::R15);
-                let x = self.set_new_Sf(slot, Guarded::Fixnum);
+                let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
                 ir.fixnum2xmm(GP::R15, x);
                 x
             }
@@ -123,14 +123,14 @@ impl BBContext {
             LinkMode::Sf(x, _) | LinkMode::F(x) => x,
             LinkMode::S(_) => {
                 // -> Sf
-                let x = self.set_new_Sf(slot, Guarded::Float);
+                let x = self.set_new_Sf(slot, SfGuarded::Float);
                 ir.stack2reg(slot, GP::Rdi);
                 ir.float_to_xmm(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::G(_) => {
                 // -> Sf
-                let x = self.set_new_Sf(slot, Guarded::Float);
+                let x = self.set_new_Sf(slot, SfGuarded::Float);
                 ir.reg2stack(GP::R15, slot);
                 ir.float_to_xmm(GP::R15, x, deopt);
                 x
@@ -151,7 +151,7 @@ impl BBContext {
             x
         } else if let Some(i) = v.try_fixnum() {
             // -> Sf
-            let x = self.set_new_Sf(slot, Guarded::Fixnum);
+            let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
             ir.i64_to_stack_and_xmm(i, slot, x);
             x
         } else {

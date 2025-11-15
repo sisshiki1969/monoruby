@@ -283,6 +283,7 @@ impl Codegen {
     /// - if *reg* is Fixnum, cause UB.
     ///
     fn float_val_to_f64(&mut self, reg: GP, xmm: Xmm, side_exit: &DestLabel) {
+        assert_ne!(reg, GP::Rax);
         let heap = self.jit.label();
         let exit = self.jit.label();
         let r = reg as _;
@@ -296,12 +297,13 @@ impl Codegen {
             // in the case of 0.0
             je exit;
             movq rax, R(r);
+            movq rdi, R(r);
             sarq rax, 63;
             addq rax, 2;
-            andq R(r), (-4);
-            orq R(r), rax;
-            rolq R(r), 61;
-            movq xmm(dst), R(r);
+            andq rdi, (-4);
+            orq rdi, rax;
+            rolq rdi, 61;
+            movq xmm(dst), rdi;
         exit:
         }
 
@@ -322,7 +324,7 @@ impl Codegen {
     /// If the class of *reg* was not matched *class_id*, go to *deopt*.
     ///
     /// ### in
-    /// - R(*reg*): Value
+    /// - R(*reg*): RValue
     ///
     pub(super) fn guard_rvalue(&mut self, reg: GP, class_id: ClassId, deopt: &DestLabel) {
         monoasm!( &mut self.jit,

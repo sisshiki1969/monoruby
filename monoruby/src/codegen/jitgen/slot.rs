@@ -83,20 +83,20 @@ impl SlotContext {
         ctx
     }
 
-    pub(super) fn use_float(&mut self, use_set: &[(SlotId, bool)]) {
-        for (slot, coerced) in use_set {
+    pub(super) fn use_float(&mut self, used_as_float: &[(SlotId, bool)]) {
+        for (slot, as_f64) in used_as_float {
             match self.mode(*slot) {
-                LinkMode::S(_) => {}
-                LinkMode::C(v) => {
-                    if v.is_float() {
-                        self.set_new_F(*slot);
+                LinkMode::S(_) => {
+                    if *as_f64 {
+                        //self.set_new_Sf(*slot, SfGuarded::Float);
                     }
                 }
-                LinkMode::F(r) if !coerced => {
-                    self.set_F(*slot, r);
-                }
-                LinkMode::Sf(r, _) | LinkMode::F(r) => {
-                    self.set_Sf(*slot, r, Guarded::Value);
+                LinkMode::C(_) => {}
+                LinkMode::Sf(_, _) => {}
+                LinkMode::F(r) => {
+                    if !as_f64 {
+                        self.set_Sf(*slot, r, SfGuarded::Float);
+                    }
                 }
                 LinkMode::G(_) | LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                     unreachable!("use_float {:?}", self.mode(*slot));
@@ -268,7 +268,7 @@ impl SlotContext {
     /// F/Sf -> Sf
     ///
     #[allow(non_snake_case)]
-    fn set_Sf(&mut self, slot: SlotId, xmm: Xmm, guarded: Guarded) {
+    fn set_Sf(&mut self, slot: SlotId, xmm: Xmm, guarded: SfGuarded) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::Sf(xmm, guarded));
         self.xmm_add(slot, xmm);
@@ -288,7 +288,7 @@ impl SlotContext {
     /// C -> Sf
     ///
     #[allow(non_snake_case)]
-    fn set_new_Sf(&mut self, slot: SlotId, guarded: Guarded) -> Xmm {
+    fn set_new_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> Xmm {
         let x = self.alloc_xmm();
         self.set_Sf(slot, x, guarded);
         x
@@ -299,7 +299,7 @@ impl SlotContext {
     ///
     #[allow(non_snake_case)]
     fn set_Sf_float(&mut self, slot: SlotId, xmm: Xmm) {
-        self.set_Sf(slot, xmm, Guarded::Float)
+        self.set_Sf(slot, xmm, SfGuarded::Float)
     }
 }
 
@@ -338,7 +338,7 @@ impl SlotContext {
     /// Link *slot* to both of the stack and a new xmm register.
     ///
     #[allow(non_snake_case)]
-    fn def_Sf(&mut self, slot: SlotId, guarded: Guarded) -> Xmm {
+    fn def_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> Xmm {
         let xmm = self.alloc_xmm();
         self.discard(slot);
         self.set_Sf(slot, xmm, guarded);
@@ -347,7 +347,7 @@ impl SlotContext {
 
     #[allow(non_snake_case)]
     pub(super) fn def_Sf_float(&mut self, slot: SlotId) -> Xmm {
-        self.def_Sf(slot, Guarded::Float)
+        self.def_Sf(slot, SfGuarded::Float)
     }
 
     ///
@@ -379,6 +379,7 @@ impl SlotContext {
 
     // APIs for 'use'
 
+    /// used as f64 with no conversion
     fn use_as_float(&mut self, slot: SlotId) {
         self.is_used_mut(slot).use_as_float();
     }
@@ -597,7 +598,7 @@ impl BBContext {
         //}
         let class_guarded = Guarded::from_class(class);
         match &mut self.slots[slot.0 as usize] {
-            LinkMode::S(guarded) | LinkMode::G(guarded) | LinkMode::Sf(_, guarded) => {
+            LinkMode::S(guarded) | LinkMode::G(guarded) => {
                 if class_guarded == *guarded {
                     return;
                 } else if *guarded == Guarded::Value {
@@ -605,11 +606,22 @@ impl BBContext {
                 } else {
                     // in this case, Guard will always fail
                     *guarded = class_guarded;
-                    //unreachable!(
-                    //    "guard_class(): current:{:?} given:{:?}",
-                    //    self.mode(slot),
-                    //    class_guarded
-                    //);
+                }
+            }
+            LinkMode::Sf(_, guarded) => {
+                match (*guarded, class_guarded) {
+                    (SfGuarded::Fixnum, Guarded::Fixnum) | (SfGuarded::Float, Guarded::Float) => {
+                        return;
+                    }
+                    (SfGuarded::FixnumOrFloat, Guarded::Fixnum) => {
+                        *guarded = SfGuarded::Fixnum;
+                    }
+                    (SfGuarded::FixnumOrFloat, Guarded::Float) => {
+                        *guarded = SfGuarded::Float;
+                    }
+                    (_, _) => {
+                        // in this case, Guard will always fail
+                    }
                 }
             }
             LinkMode::F(_) => {
@@ -617,11 +629,6 @@ impl BBContext {
                     return;
                 } else {
                     // in this case, Guard will always fail
-                    //unreachable!(
-                    //    "guard_class(): current:{:?} given:{:?}",
-                    //    self.mode(slot),
-                    //    class_guarded
-                    //);
                 }
             }
             LinkMode::C(v) => {
@@ -629,11 +636,6 @@ impl BBContext {
                     return;
                 } else {
                     // in this case, Guard will always fail
-                    //unreachable!(
-                    //    "guard_class(): current:{:?} given:{:?}",
-                    //    self.mode(slot),
-                    //    class_guarded
-                    //);
                 }
             }
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
@@ -689,25 +691,25 @@ impl SlotContext {
                 LinkMode::F(x) => {
                     if *x == l {
                         if let Some(g) = guarded_l {
-                            assert_eq!(g, Guarded::Float);
+                            assert_eq!(g, SfGuarded::Float);
                         }
-                        guarded_l = Some(Guarded::Float);
+                        guarded_l = Some(SfGuarded::Float);
                     } else if *x == r {
                         if let Some(g) = guarded_r {
-                            assert_eq!(g, Guarded::Float);
+                            assert_eq!(g, SfGuarded::Float);
                         }
-                        guarded_r = Some(Guarded::Float);
+                        guarded_r = Some(SfGuarded::Float);
                     }
                 }
                 LinkMode::Sf(x, guarded) => {
                     if *x == l {
                         if let Some(g) = guarded_l {
-                            assert_eq!(&g, guarded);
+                            assert_eq!(g, *guarded);
                         }
                         guarded_l = Some(*guarded);
                     } else if *x == r {
                         if let Some(g) = guarded_r {
-                            assert_eq!(&g, guarded);
+                            assert_eq!(g, *guarded);
                         }
                         guarded_r = Some(*guarded);
                     }
@@ -729,10 +731,10 @@ impl SlotContext {
             LinkMode::F(x) => {
                 if *x == l {
                     *x = r;
-                    assert_eq!(guarded_r, Some(Guarded::Float));
+                    assert_eq!(guarded_r, Some(SfGuarded::Float));
                 } else if *x == r {
                     *x = l;
-                    assert_eq!(guarded_l, Some(Guarded::Float));
+                    assert_eq!(guarded_l, Some(SfGuarded::Float));
                 }
             }
             LinkMode::S(_)
@@ -833,6 +835,43 @@ impl SlotContext {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum SfGuarded {
+    Fixnum,
+    Float,
+    FixnumOrFloat,
+}
+
+impl Into<Guarded> for SfGuarded {
+    fn into(self) -> Guarded {
+        match self {
+            SfGuarded::Fixnum => Guarded::Fixnum,
+            SfGuarded::Float => Guarded::Float,
+            SfGuarded::FixnumOrFloat => Guarded::Value,
+        }
+    }
+}
+
+impl SfGuarded {
+    fn join(&mut self, other: SfGuarded) {
+        *self = match (*self, other) {
+            (SfGuarded::Fixnum, SfGuarded::Fixnum) => SfGuarded::Fixnum,
+            (SfGuarded::Float, SfGuarded::Float) => SfGuarded::Float,
+            _ => SfGuarded::FixnumOrFloat,
+        }
+    }
+
+    fn from_concrete_value(v: Value) -> Self {
+        if v.is_fixnum() {
+            SfGuarded::Fixnum
+        } else if v.is_float() {
+            SfGuarded::Float
+        } else {
+            panic!("SfGuarded::from_concrete_value(): not fixnum/float {:?}", v);
+        }
+    }
+}
+
 ///
 /// Mode of linkage between stack slot and xmm registers.
 ///
@@ -873,7 +912,7 @@ pub(super) enum LinkMode {
     ///
     /// On the stack slot and on the floating point register (xmm) which is read-only.
     ///
-    Sf(Xmm, Guarded),
+    Sf(Xmm, SfGuarded),
     ///
     /// Concrete value.
     ///
@@ -895,7 +934,8 @@ impl LinkMode {
 
     fn guarded(&self) -> Guarded {
         match self {
-            LinkMode::S(guarded) | LinkMode::G(guarded) | LinkMode::Sf(_, guarded) => *guarded,
+            LinkMode::S(guarded) | LinkMode::G(guarded) => *guarded,
+            LinkMode::Sf(_, guarded) => (*guarded).into(),
             LinkMode::F(_) => Guarded::Float,
             LinkMode::C(v) => Guarded::from_concrete_value(*v),
             _ => unreachable!("{:?}", self),
@@ -989,7 +1029,10 @@ impl Liveness {
         }
     }
 
-    pub fn get_unused(&self) -> Vec<SlotId> {
+    ///
+    /// Collect killed (and not used) slots.
+    ///
+    pub fn get_killed(&self) -> Vec<SlotId> {
         self.0
             .iter()
             .enumerate()
@@ -1091,6 +1134,9 @@ impl IsUsed {
         };
     }
 
+    ///
+    /// used as f64 with no conversion
+    ///
     fn use_as_float(&mut self) {
         match self {
             IsUsed::Killed => {}
@@ -1137,6 +1183,7 @@ impl UsedAs {
         }
     }
 
+    /// used as f64 with no conversion
     fn use_as_float(&mut self) {
         self.use_as(UseTy::Float);
     }
@@ -1167,6 +1214,7 @@ impl UsedAs {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum UseTy {
+    /// The slot is used as f64 with no conversion.
     Float,
     NonFloat,
     Both,

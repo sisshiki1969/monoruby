@@ -45,20 +45,31 @@ impl BBContext {
                 }
                 (LinkMode::F(_), LinkMode::F(_)) => {}
                 (LinkMode::F(_), LinkMode::C(r)) if r.is_float() => {}
-                (LinkMode::F(l), LinkMode::Sf(_, _))
-                | (LinkMode::Sf(l, _), LinkMode::Sf(_, _) | LinkMode::F(_)) => {
-                    let guarded = self.guarded(i).join(&other.guarded(i));
-                    self.set_Sf(i, l, guarded);
+                (LinkMode::F(x), LinkMode::Sf(_, _))
+                | (LinkMode::Sf(x, _), LinkMode::Sf(_, _) | LinkMode::F(_)) => {
+                    let mut guarded = match self.mode(i) {
+                        LinkMode::F(_) => SfGuarded::Float,
+                        LinkMode::Sf(_, guarded) => guarded,
+                        _ => unreachable!(),
+                    };
+                    let other = match other.mode(i) {
+                        LinkMode::F(_) => SfGuarded::Float,
+                        LinkMode::Sf(_, guarded) => guarded,
+                        _ => unreachable!(),
+                    };
+                    guarded.join(other);
+                    self.set_Sf(i, x, guarded);
                 }
-                (LinkMode::Sf(l, _), LinkMode::C(r)) if r.is_float() || r.is_fixnum() => {
-                    let guarded = self.guarded(i).join(&other.guarded(i));
-                    self.set_Sf(i, l, guarded)
+                (LinkMode::Sf(x, mut guarded), LinkMode::C(r)) if r.is_float() || r.is_fixnum() => {
+                    guarded.join(SfGuarded::from_concrete_value(r));
+                    self.set_Sf(i, x, guarded)
                 }
-                (LinkMode::C(l), LinkMode::F(_)) if l.is_float() => {
+                (LinkMode::C(v), LinkMode::F(_)) if v.is_float() => {
                     self.set_new_F(i);
                 }
-                (LinkMode::C(l), LinkMode::Sf(_, _)) if l.is_float() || l.is_fixnum() => {
-                    let guarded = self.guarded(i).join(&other.guarded(i));
+                (LinkMode::C(v), LinkMode::Sf(_, r)) if v.is_float() || v.is_fixnum() => {
+                    let mut guarded = SfGuarded::from_concrete_value(v);
+                    guarded.join(r);
                     self.set_new_Sf(i, guarded);
                 }
                 (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
@@ -74,21 +85,9 @@ impl BBContext {
     }
 
     ///
-    /// Generate bridge AsmIr from F/Sf(l) to F(r).
-    ///
-    fn to_xmm(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm) {
-        if self.is_xmm_vacant(r) {
-            self.set_F(slot, r);
-            ir.xmm_move(l, r);
-        } else {
-            self.xmm_swap(ir, l, r);
-        }
-    }
-
-    ///
     /// Generate bridge AsmIr from F/Sf(l) to Sf(r).
     ///
-    fn to_both(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm, guarded: Guarded) {
+    fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm, guarded: SfGuarded) {
         if self.is_xmm_vacant(r) {
             self.set_Sf(slot, r, guarded);
             ir.xmm_move(l, r);
@@ -105,7 +104,7 @@ impl BBContext {
         ir: &mut AsmIr,
         target: &SlotContext,
         pc: BytecodePtr,
-        unused: &[SlotId],
+        killed: &[SlotId],
     ) {
         #[cfg(feature = "jit-debug")]
         {
@@ -113,7 +112,7 @@ impl BBContext {
             eprintln!("    target: {:?}", target);
         }
         for slot in self.all_regs() {
-            if unused.contains(&slot) {
+            if killed.contains(&slot) {
                 self.discard(slot);
                 continue;
             }
@@ -124,27 +123,58 @@ impl BBContext {
                 }
                 (LinkMode::F(l), LinkMode::F(r)) => {
                     if l != r {
-                        self.to_xmm(ir, slot, l, r);
+                        if self.is_xmm_vacant(r) {
+                            self.set_F(slot, r);
+                            ir.xmm_move(l, r);
+                        } else {
+                            self.xmm_swap(ir, l, r);
+                        }
                     }
                 }
-                (LinkMode::F(l), LinkMode::Sf(r, guarded)) => {
+                (LinkMode::F(l), LinkMode::Sf(r, SfGuarded::Float)) => {
                     ir.xmm2stack(l, slot);
                     if l == r {
                         // F(l) -> Sf(l)
                         self.set_Sf_float(slot, l);
                     } else {
                         // F(l) -> Sf(r)
-                        self.to_both(ir, slot, l, r, guarded);
+                        self.to_sf(ir, slot, l, r, SfGuarded::Float);
                     }
                 }
                 (LinkMode::Sf(l, _), LinkMode::Sf(r, guarded)) => {
                     if l != r {
                         // Sf(l) -> Sf(r)
-                        self.to_both(ir, slot, l, r, guarded);
+                        self.to_sf(ir, slot, l, r, guarded);
                     }
                 }
                 (LinkMode::Sf(_, guarded), LinkMode::S(_)) => {
-                    self.set_S_with_guard(slot, guarded);
+                    self.set_S_with_guard(slot, guarded.into());
+                }
+                (LinkMode::S(_), LinkMode::Sf(x, SfGuarded::Float)) => {
+                    // S -> Sf
+                    ir.stack2reg(slot, GP::Rax);
+                    let deopt = ir.new_deopt_with_pc(&self, pc + 1);
+                    if self.is_xmm_vacant(x) {
+                        ir.float_to_xmm(GP::Rax, x, deopt);
+                        self.set_Sf_float(slot, x);
+                    } else {
+                        let tmp = self.set_new_Sf(slot, SfGuarded::Float);
+                        ir.float_to_xmm(GP::Rax, tmp, deopt);
+                        self.xmm_swap(ir, x, tmp);
+                    }
+                }
+                (LinkMode::G(_), LinkMode::Sf(x, SfGuarded::Float)) => {
+                    // G -> Sf
+                    //ir.stack2reg(slot, GP::Rax);
+                    let deopt = ir.new_deopt_with_pc(&self, pc + 1);
+                    if self.is_xmm_vacant(x) {
+                        ir.float_to_xmm(GP::R15, x, deopt);
+                        self.set_Sf_float(slot, x);
+                    } else {
+                        let tmp = self.set_new_Sf(slot, SfGuarded::Float);
+                        ir.float_to_xmm(GP::R15, tmp, deopt);
+                        self.xmm_swap(ir, x, tmp);
+                    }
                 }
                 (LinkMode::S(_), LinkMode::S(guarded)) => {
                     if let Some(class) = guarded.class()
