@@ -196,7 +196,7 @@ pub struct JitContext {
     ///
     /// Information for inlined bridges.
     ///
-    pub(super) inline_bridges: HashMap<BasicBlockId, (AsmIr, Option<BasicBlockId>)>,
+    pub(super) inline_bridges: HashMap<Option<BasicBlockId>, (AsmIr, Option<BasicBlockId>)>,
     ///
     /// Information for `JitLabel`s`.
     ///
@@ -470,7 +470,7 @@ impl JitContext {
             .entry(dest_bb)
             .or_default()
             .push(BranchEntry {
-                src_bb,
+                src_bb: Some(src_bb),
                 bbctx,
                 mode,
             });

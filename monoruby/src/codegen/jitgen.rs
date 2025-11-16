@@ -86,7 +86,7 @@ enum BranchMode {
 #[derive(Debug)]
 struct BranchEntry {
     /// source BasicBlockId of the branch.
-    src_bb: BasicBlockId,
+    src_bb: Option<BasicBlockId>,
     /// context of the source basic block.
     bbctx: BBContext,
     /// true if the branch is a continuation branch.
@@ -494,7 +494,7 @@ impl Codegen {
         let mut live_bb: HashSet<BasicBlockId> = HashSet::default();
         ir_vec.iter().for_each(|(bb, ir)| {
             if let Some(bb) = bb {
-                if !ir.inst.is_empty() || ctx.inline_bridges.contains_key(&bb) {
+                if !ir.inst.is_empty() || ctx.inline_bridges.contains_key(&Some(*bb)) {
                     live_bb.insert(*bb);
                 }
             }
@@ -503,14 +503,16 @@ impl Codegen {
         // generate machine code for a main context and inlined bridges.
         for (bbid, ir) in ir_vec.into_iter() {
             self.gen_asm(ir, store, &mut ctx, None, None);
-            // generate machine code for bridges
-            if let Some(bbid) = bbid
-                && let Some((ir, exit)) = ctx.inline_bridges.remove(&bbid)
-            {
-                let exit = if let Some(exit) = exit
-                    && (bbid >= exit || ((bbid + 1)..exit).any(|bb| live_bb.contains(&bb)))
-                {
-                    Some(exit)
+            // generate machine code for the inlined bridge
+            if let Some((ir, exit)) = ctx.inline_bridges.remove(&bbid) {
+                let exit = if let Some(bbid) = bbid {
+                    if let Some(exit) = exit
+                        && (bbid >= exit || ((bbid + 1)..exit).any(|bb| live_bb.contains(&bb)))
+                    {
+                        Some(exit)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };

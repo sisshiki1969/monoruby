@@ -88,14 +88,14 @@ impl SlotContext {
             match self.mode(*slot) {
                 LinkMode::S(_) => {
                     if *as_f64 {
-                        //self.set_new_Sf(*slot, SfGuarded::Float);
+                        self.set_new_Sf(*slot, SfGuarded::Float);
                     }
                 }
                 LinkMode::C(_) => {}
                 LinkMode::Sf(_, _) => {}
-                LinkMode::F(r) => {
+                LinkMode::F(x) => {
                     if !as_f64 {
-                        self.set_Sf(*slot, r, SfGuarded::Float);
+                        self.set_Sf(*slot, x, SfGuarded::Float);
                     }
                 }
                 LinkMode::G(_) | LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {

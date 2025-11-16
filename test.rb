@@ -1,11 +1,11 @@
 def calc
-  @a=4.2
+  f=4
   c=0
-  f=@a
-  while c < 100
-   "#{9.2*f} = 38.64"
-   c += 1
+  while c < 10
+    f = 1.2*f
+    c += 1
   end
+  puts f
 end
 
 100.times do calc end

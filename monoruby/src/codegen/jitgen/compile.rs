@@ -53,7 +53,7 @@ impl JitContext {
         self.branch_map.insert(
             bb_begin,
             vec![BranchEntry {
-                src_bb: BasicBlockId(0),
+                src_bb: None,
                 bbctx,
                 mode: BranchMode::Continue,
             }],
@@ -145,7 +145,7 @@ impl JitContext {
         ctx.branch_map.insert(
             loop_start,
             vec![BranchEntry {
-                src_bb: BasicBlockId(0),
+                src_bb: None,
                 bbctx,
                 mode: BranchMode::Continue,
             }],
@@ -164,7 +164,7 @@ impl JitContext {
         if let Some(branches) = ctx.branch_map.remove(&loop_start) {
             for BranchEntry { src_bb, bbctx, .. } in branches {
                 liveness.join(&bbctx);
-                assert!(src_bb >= loop_start);
+                assert!(src_bb.unwrap() >= loop_start);
                 // backegde
                 if let Some(ctx) = &mut backedge {
                     ctx.join(&bbctx);

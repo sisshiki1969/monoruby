@@ -201,6 +201,11 @@ impl BBContext {
                         ir.f64_to_xmm(f, r);
                         ir.lit2reg(Value::float(f), GP::Rax);
                         ir.reg2stack(GP::Rax, slot);
+                    } else if let Some(i) = l.try_fixnum() {
+                        self.set_Sf_float(slot, r);
+                        ir.f64_to_xmm(i as f64, r);
+                        ir.lit2reg(Value::fixnum(i), GP::Rax);
+                        ir.reg2stack(GP::Rax, slot);
                     } else {
                         unreachable!()
                     }
