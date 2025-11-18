@@ -27,9 +27,9 @@ impl std::fmt::Debug for SlotContext {
 }
 
 impl SlotContext {
-    fn new(cc: &JitContext) -> Self {
-        let total_reg_num = cc.total_reg_num();
-        let local_num = cc.local_num();
+    fn new(cc: &JitContext, store: &Store) -> Self {
+        let total_reg_num = cc.total_reg_num(store);
+        let local_num = cc.local_num(store);
         let self_class = Guarded::from_class(cc.self_class());
         let mut ctx = SlotContext {
             slots: vec![LinkMode::default(); total_reg_num],
@@ -45,12 +45,12 @@ impl SlotContext {
         ctx
     }
 
-    pub(super) fn new_loop(cc: &JitContext) -> Self {
-        Self::new(cc)
+    pub(super) fn new_loop(cc: &JitContext, store: &Store) -> Self {
+        Self::new(cc, store)
     }
 
     pub(super) fn new_method(cc: &JitContext, store: &Store) -> Self {
-        let mut ctx = Self::new(cc);
+        let mut ctx = Self::new(cc, store);
 
         if let JitType::Specialized {
             args_info: JitArgumentInfo(Some(args)),
@@ -649,8 +649,8 @@ impl BBContext {
         ir.push(AsmInst::GuardClass(r, class, deopt));
     }
 
-    pub(crate) fn guard_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) {
-        let deopt = ir.new_deopt(self);
+    pub(crate) fn guard_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP, pc: BytecodePtr) {
+        let deopt = ir.new_deopt(self, pc);
         self.guard_class(ir, slot, r, INTEGER_CLASS, deopt);
     }
 }

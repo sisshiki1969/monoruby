@@ -109,7 +109,6 @@ pub(crate) struct BBContext {
     next_sp: SlotId,
     class_version_guarded: bool,
     frame_capture_guarded: bool,
-    pc: BytecodePtr,
 }
 
 impl std::ops::Deref for BBContext {
@@ -126,34 +125,24 @@ impl std::ops::DerefMut for BBContext {
 }
 
 impl BBContext {
-    fn new_loop(cc: &JitContext, pc: BytecodePtr) -> Self {
-        let next_sp = SlotId(cc.local_num() as u16 + 1);
+    fn new_loop(cc: &JitContext, store: &Store) -> Self {
+        let next_sp = SlotId(cc.local_num(store) as u16 + 1);
         Self {
-            slot_state: SlotContext::new_loop(cc),
+            slot_state: SlotContext::new_loop(cc, store),
             next_sp,
             class_version_guarded: false,
             frame_capture_guarded: false,
-            pc,
         }
     }
 
-    fn new_method(cc: &JitContext, store: &Store, pc: BytecodePtr) -> Self {
-        let next_sp = SlotId(cc.local_num() as u16 + 1);
+    fn new_method(cc: &JitContext, store: &Store) -> Self {
+        let next_sp = SlotId(cc.local_num(store) as u16 + 1);
         Self {
             slot_state: SlotContext::new_method(cc, store),
             next_sp,
             class_version_guarded: false,
             frame_capture_guarded: cc.is_method(),
-            pc,
         }
-    }
-
-    fn pc(&self) -> BytecodePtr {
-        self.pc
-    }
-
-    fn set_pc(&mut self, pc: BytecodePtr) {
-        self.pc = pc;
     }
 
     fn set_class_version_guard(&mut self) {
@@ -246,22 +235,34 @@ impl BBContext {
     /// ### destroy
     /// - rax
     ///
-    pub fn guard_const_base_class(&mut self, ir: &mut AsmIr, slot: SlotId, base_class: Value) {
+    pub fn guard_const_base_class(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        base_class: Value,
+        pc: BytecodePtr,
+    ) {
         self.load(ir, slot, GP::Rax);
-        let deopt = ir.new_deopt(self);
+        let deopt = ir.new_deopt(self, pc);
         ir.inst
             .push(AsmInst::GuardConstBaseClass { base_class, deopt });
     }
 
-    pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool) {
+    pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool, pc: BytecodePtr) {
         let wb = self.get_gc_write_back();
-        let error = ir.new_error(self);
+        let error = ir.new_error(self, pc);
         ir.exec_gc(wb, error, check_stack);
     }
 
-    pub fn load_constant(&mut self, ir: &mut AsmIr, dst: SlotId, cache: &ConstCache) {
+    pub fn load_constant(
+        &mut self,
+        ir: &mut AsmIr,
+        dst: SlotId,
+        cache: &ConstCache,
+        pc: BytecodePtr,
+    ) {
         let ConstCache { version, value, .. } = cache;
-        let deopt = ir.new_deopt(self);
+        let deopt = ir.new_deopt(self, pc);
         ir.push(AsmInst::GuardConstVersion {
             const_version: *version,
             deopt,
@@ -276,9 +277,9 @@ impl BBContext {
         }
     }
 
-    pub(super) fn generic_unop(&mut self, ir: &mut AsmIr, func: UnaryOpFn) {
+    pub(super) fn generic_unop(&mut self, ir: &mut AsmIr, func: UnaryOpFn, pc: BytecodePtr) {
         let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self);
+        let error = ir.new_error(self, pc);
         ir.push(AsmInst::GenericUnOp { func, using_xmm });
         ir.handle_error(error);
     }

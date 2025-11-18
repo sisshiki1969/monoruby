@@ -146,14 +146,6 @@ pub struct JitContext {
     ///
     jit_type: JitType,
     ///
-    /// Number of slots.
-    ///
-    total_reg_num: usize,
-    ///
-    /// Number of non-temp registers. (includes arguments and local variables, not `self`)
-    ///
-    local_num: usize,
-    ///
     /// Class version at compile time.
     ///
     class_version: u32,
@@ -284,8 +276,6 @@ impl JitContext {
             labels.push(None);
         }
 
-        let total_reg_num = iseq.total_reg_num();
-        let local_num = iseq.local_num();
         Self {
             bytecode_top: iseq.get_top_pc(),
             jit_type,
@@ -294,8 +284,6 @@ impl JitContext {
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
-            total_reg_num,
-            local_num,
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
             labels,
@@ -315,8 +303,6 @@ impl JitContext {
     }
 
     pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
-        let total_reg_num = self.total_reg_num;
-        let local_num = self.local_num;
         Self {
             bytecode_top: self.bytecode_top,
             jit_type: JitType::Loop(pc),
@@ -325,8 +311,6 @@ impl JitContext {
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
-            total_reg_num,
-            local_num,
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
             labels: vec![],
@@ -385,15 +369,15 @@ impl JitContext {
     ///
     /// Get a number of non-temp registers. (includes arguments and local variables, not self)
     ///
-    pub(super) fn local_num(&self) -> usize {
-        self.local_num
+    pub(super) fn local_num(&self, store: &Store) -> usize {
+        store[self.iseq_id()].local_num()
     }
 
     ///
     /// Get a number of slots. (including `self`, arguments, local variables, and temp registers)
     ///
-    pub(super) fn total_reg_num(&self) -> usize {
-        self.total_reg_num
+    pub(super) fn total_reg_num(&self, store: &Store) -> usize {
+        store[self.iseq_id()].total_reg_num()
     }
 
     pub(crate) fn class_version(&self) -> u32 {
