@@ -51,7 +51,7 @@ impl JitContext {
 
         self.recv_version_guard(bbctx, ir, recv, recv_class, pc);
 
-        self.inline_method_cache.insert(bc_pos, cache);
+        self.inline_method_cache.insert(pc, cache);
 
         if callsite.block_fid.is_none()
             && let Some(info) = store.inline_info.get_inline(func_id)

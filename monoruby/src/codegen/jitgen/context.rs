@@ -208,7 +208,7 @@ pub struct JitContext {
     ///
     /// Inline cache for method calls.
     ///
-    pub(crate) inline_method_cache: HashMap<BcIndex, MethodCacheEntry>,
+    pub(crate) inline_method_cache: HashMap<BytecodePtr, MethodCacheEntry>,
     ///
     /// Stack frame for specialized compilation. (iseq, outer_scope, block_iseq)
     ///

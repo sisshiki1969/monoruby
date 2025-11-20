@@ -409,7 +409,7 @@ impl Codegen {
         entry_label: DestLabel,
         class_version: u32,
         class_version_label: DestLabel,
-    ) -> Vec<(BcIndex, InlineCacheType)> {
+    ) -> Vec<(BytecodePtr, InlineCacheType)> {
         let jit_type = if let Some(pos) = position {
             JitType::Loop(pos)
         } else {
