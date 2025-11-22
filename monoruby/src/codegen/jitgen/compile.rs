@@ -9,12 +9,7 @@ impl JitContext {
 
         let iseq = &store[iseq_id];
         for (loop_start, loop_end) in iseq.bb_info.loops() {
-            let pc = store[iseq_id].get_bb_pc(*loop_start);
-            let bbctx = BBContext::new_loop(self, store);
-            let ctx = JitContext::loop_analysis(self, pc);
-            let (liveness, backedge) =
-                ctx.analyse_loop(store, iseq_id, *loop_start, *loop_end, bbctx);
-            self.loop_info.insert(*loop_start, (liveness, backedge));
+            self.analyse_iterate(store, *loop_start, *loop_end);
         }
 
         let (bbctx, pc) = if let Some(pc) = self.position() {
@@ -113,7 +108,7 @@ impl JitContext {
                 CompileResult::Continue => {}
                 CompileResult::Branch | CompileResult::Leave => return ir,
                 CompileResult::Recompile(reason) => {
-                    let pc = self.bytecode(bc_pos);
+                    let pc = self.get_pc(store, bc_pos);
                     self.recompile_and_deopt(&mut bbctx, &mut ir, reason, pc);
                     return ir;
                 }
@@ -134,6 +129,15 @@ impl JitContext {
         }
 
         ir
+    }
+
+    fn analyse_iterate(&mut self, store: &Store, loop_start: BasicBlockId, loop_end: BasicBlockId) {
+        let iseq_id = self.iseq_id();
+        let pc = store[iseq_id].get_bb_pc(loop_start);
+        let bbctx = BBContext::new_loop(self, store);
+        let ctx = JitContext::loop_analysis(self, pc);
+        let (liveness, backedge) = ctx.analyse_loop(store, iseq_id, loop_start, loop_end, bbctx);
+        self.loop_info.insert(loop_start, (liveness, backedge));
     }
 
     fn analyse_loop(
@@ -236,7 +240,7 @@ impl JitContext {
         iseq: &ISeqInfo,
         bc_pos: BcIndex,
     ) -> CompileResult {
-        let pc = self.bytecode(bc_pos);
+        let pc = self.get_pc(store, bc_pos);
         let trace_ir = iseq.trace_ir(store, bc_pos);
         //if let Some(fmt) = trace_ir.format(store) {
         //    eprintln!("{fmt}");

@@ -138,10 +138,6 @@ impl JitStackFrame {
 ///
 pub struct JitContext {
     ///
-    /// the bytecode pointer.
-    ///
-    bytecode_top: BytecodePtrBase,
-    ///
     /// Type of compilation for this frame.
     ///
     jit_type: JitType,
@@ -277,7 +273,6 @@ impl JitContext {
         }
 
         Self {
-            bytecode_top: iseq.get_top_pc(),
             jit_type,
             basic_block_labels,
             loop_info: HashMap::default(),
@@ -304,7 +299,6 @@ impl JitContext {
 
     pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
         Self {
-            bytecode_top: self.bytecode_top,
             jit_type: JitType::Loop(pc),
             basic_block_labels: HashMap::default(),
             loop_info: self.loop_info.clone(),
@@ -354,8 +348,8 @@ impl JitContext {
         self.current_frame().given_block.as_ref()
     }
 
-    pub(super) fn bytecode(&self, i: BcIndex) -> BytecodePtr {
-        self.bytecode_top + i
+    pub(super) fn get_pc(&self, store: &Store, i: BcIndex) -> BytecodePtr {
+        store[self.iseq_id()].get_pc(i)
     }
 
     pub(super) fn jit_type(&self) -> &JitType {

@@ -1703,11 +1703,6 @@ impl Codegen {
         }
 
         for inst in ir.inst {
-            #[cfg(feature = "emit-asm")]
-            if let AsmInst::BcIndex(i) = &inst {
-                ctx.sourcemap
-                    .push((*i, self.jit.get_current() - ctx.start_codepos));
-            }
             self.compile_asmir(store, ctx, &side_exits, inst);
         }
 
