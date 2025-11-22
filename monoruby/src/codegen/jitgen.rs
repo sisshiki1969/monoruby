@@ -125,6 +125,10 @@ impl std::ops::DerefMut for BBContext {
 }
 
 impl BBContext {
+    fn equiv(&self, other: &Self) -> bool {
+        self.slot_state.equiv(&other.slot_state)
+    }
+
     fn new_loop(cc: &JitContext, store: &Store) -> Self {
         let next_sp = SlotId(cc.local_num(store) as u16 + 1);
         Self {

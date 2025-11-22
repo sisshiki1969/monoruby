@@ -83,6 +83,14 @@ impl SlotContext {
         ctx
     }
 
+    pub(super) fn equiv(&self, other: &Self) -> bool {
+        assert_eq!(self.slots.len(), other.slots.len());
+        self.slots
+            .iter()
+            .zip(other.slots.iter())
+            .all(|(lhs, rhs)| lhs.equiv(rhs))
+    }
+
     pub(super) fn use_float(&mut self, used_as_float: &[(SlotId, bool)]) {
         for (slot, as_f64) in used_as_float {
             match self.mode(*slot) {
@@ -939,6 +947,14 @@ impl LinkMode {
             LinkMode::F(_) => Guarded::Float,
             LinkMode::C(v) => Guarded::from_concrete_value(*v),
             _ => unreachable!("{:?}", self),
+        }
+    }
+
+    fn equiv(&self, other: &Self) -> bool {
+        match (self, other) {
+            (LinkMode::None | LinkMode::MaybeNone | LinkMode::V, _) => self == other,
+            (_, LinkMode::None | LinkMode::MaybeNone | LinkMode::V) => false,
+            (lhs, rhs) => lhs.guarded() == rhs.guarded(),
         }
     }
 

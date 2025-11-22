@@ -134,10 +134,35 @@ impl JitContext {
     fn analyse_iterate(&mut self, store: &Store, loop_start: BasicBlockId, loop_end: BasicBlockId) {
         let iseq_id = self.iseq_id();
         let pc = store[iseq_id].get_bb_pc(loop_start);
-        let bbctx = BBContext::new_loop(self, store);
-        let ctx = JitContext::loop_analysis(self, pc);
-        let (liveness, backedge) = ctx.analyse_loop(store, iseq_id, loop_start, loop_end, bbctx);
-        self.loop_info.insert(loop_start, (liveness, backedge));
+        for x in 0..10 {
+            let bbctx = BBContext::new_loop(self, store);
+            let ctx = JitContext::loop_analysis(self, pc);
+            let (liveness, backedge) =
+                ctx.analyse_loop(store, iseq_id, loop_start, loop_end, bbctx);
+            if let Some(backedge) = backedge {
+                if let Some(be) = &self
+                    .loop_info
+                    .get(&loop_start)
+                    .map(|(_, be)| be.clone())
+                    .flatten()
+                    && be.equiv(&backedge)
+                {
+                    if x > 1 {
+                        eprintln!("fixed: {x}");
+                    }
+                    break;
+                } else {
+                    self.loop_info
+                        .insert(loop_start, (liveness, Some(backedge)));
+                }
+            } else {
+                self.loop_info.insert(loop_start, (liveness, None));
+                break;
+            }
+            if x == 9 {
+                panic!("not fixed")
+            }
+        }
     }
 
     fn analyse_loop(
