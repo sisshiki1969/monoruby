@@ -1,3 +1,5 @@
+use crate::codegen::jitgen::context::JitBlockInfo;
+
 use super::*;
 
 mod join;
@@ -117,7 +119,7 @@ impl SlotContext {
         SlotId(1)..self.temp_start()
     }
 
-    fn all_regs(&self) -> std::ops::Range<SlotId> {
+    pub(super) fn all_regs(&self) -> std::ops::Range<SlotId> {
         SlotId(0)..SlotId(self.slots.len() as u16)
     }
 
@@ -144,7 +146,7 @@ impl SlotContext {
         self.slots[slot.0 as usize]
     }
 
-    fn guarded(&self, slot: SlotId) -> Guarded {
+    pub(super) fn guarded(&self, slot: SlotId) -> Guarded {
         self.mode(slot).guarded()
     }
 
@@ -222,6 +224,9 @@ impl SlotContext {
     ///
     pub(super) fn discard(&mut self, slot: impl Into<Option<SlotId>>) {
         if let Some(slot) = slot.into() {
+            if slot.is_self() {
+                panic!("{self:?}")
+            }
             self.clear(slot);
             self.is_used_mut(slot).kill();
         }
@@ -249,7 +254,7 @@ impl SlotContext {
     /// _ -> S
     ///
     #[allow(non_snake_case)]
-    fn set_S_with_guard(&mut self, slot: SlotId, guarded: Guarded) {
+    pub(super) fn set_S_with_guard(&mut self, slot: SlotId, guarded: Guarded) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::S(guarded));
     }
@@ -954,6 +959,9 @@ impl LinkMode {
         match (self, other) {
             (LinkMode::None | LinkMode::MaybeNone | LinkMode::V, _) => self == other,
             (_, LinkMode::None | LinkMode::MaybeNone | LinkMode::V) => false,
+            (LinkMode::C(l), LinkMode::C(r)) => l == r,
+            (LinkMode::C(_), _) => false,
+            (_, LinkMode::C(_)) => false,
             (lhs, rhs) => lhs.guarded() == rhs.guarded(),
         }
     }
@@ -969,8 +977,34 @@ impl LinkMode {
         callid: CallSiteId,
         bbctx: &BBContext,
     ) -> Vec<Self> {
+        let CallSiteInfo { recv, .. } = &store[callid];
+        let recv = bbctx.mode(*recv);
+        Self::from_caller_inner(store, fid, callid, bbctx, recv)
+    }
+
+    pub(super) fn from_caller_yield(
+        store: &Store,
+        fid: FuncId,
+        callid: CallSiteId,
+        bbctx: &BBContext,
+        block: &Option<JitBlockInfo>,
+    ) -> Vec<Self> {
+        let recv = if let Some(block) = block {
+            LinkMode::S(Guarded::Class(block.self_class))
+        } else {
+            LinkMode::S(Guarded::Value)
+        };
+        Self::from_caller_inner(store, fid, callid, bbctx, recv)
+    }
+
+    fn from_caller_inner(
+        store: &Store,
+        fid: FuncId,
+        callid: CallSiteId,
+        bbctx: &BBContext,
+        recv: LinkMode,
+    ) -> Vec<Self> {
         let CallSiteInfo {
-            recv,
             args,
             pos_num,
             kw_pos,
@@ -979,7 +1013,7 @@ impl LinkMode {
         } = &store[callid];
         let info = &store[fid];
         let mut slots = vec![];
-        slots.push(bbctx.mode(*recv));
+        slots.push(recv);
         let (filled_req, filled_opt, filled_post) = info.apply_args(*pos_num);
         for i in 0..filled_req {
             slots.push(bbctx.mode(*args + i));

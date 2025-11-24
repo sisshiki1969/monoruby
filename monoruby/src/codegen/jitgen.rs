@@ -161,25 +161,11 @@ impl BBContext {
         self.frame_capture_guarded = false;
     }
 
-    fn join_entries(entries: &[BranchEntry], backedge: Option<BBContext>) -> Self {
+    fn join_entries(entries: &[BranchEntry]) -> Self {
         let mut merge_ctx = entries.last().unwrap().bbctx.clone();
-        for BranchEntry {
-            src_bb: _src_bb,
-            bbctx,
-            ..
-        } in entries.iter()
-        {
-            #[cfg(feature = "jit-debug")]
-            eprintln!("  <-{:?}: {:?}", _src_bb, bbctx.slot_state);
+        for BranchEntry { bbctx, .. } in entries.iter() {
             merge_ctx.join(bbctx);
         }
-        if let Some(backedge) = backedge {
-            #[cfg(feature = "jit-debug")]
-            eprintln!("  <-backedge: {:?}", backedge.slot_state);
-            merge_ctx.join(&backedge);
-        }
-        #[cfg(feature = "jit-debug")]
-        eprintln!("  join_entries: {:?}", &merge_ctx);
         merge_ctx
     }
 

@@ -178,10 +178,6 @@ impl BasicBlockInfo {
             .find(|(begin, end)| (*begin..=*end).contains(&bb_id))
             .cloned()
     }
-
-    pub(super) fn loops(&self) -> &[(BasicBlockId, BasicBlockId)] {
-        &self.loops
-    }
 }
 
 #[derive(Clone, Default)]

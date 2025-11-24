@@ -164,7 +164,7 @@ pub struct JitContext {
     /// ### value
     /// liveness and backedge info in the loop head.
     ///
-    pub(super) loop_info: HashMap<BasicBlockId, (Liveness, Option<BBContext>)>,
+    pub(super) loop_info: indexmap::IndexMap<BasicBlockId, (Liveness, Option<BBContext>)>,
     ///
     /// Nested loop count.
     ///
@@ -174,7 +174,7 @@ pub struct JitContext {
     ///
     pub(super) branch_map: HashMap<BasicBlockId, Vec<BranchEntry>>,
     ///
-    /// Map for backward branches.
+    /// Map for target contexts of backward branches.
     ///
     pub(super) backedge_map: HashMap<BasicBlockId, SlotContext>,
     ///
@@ -275,7 +275,7 @@ impl JitContext {
         Self {
             jit_type,
             basic_block_labels,
-            loop_info: HashMap::default(),
+            loop_info: indexmap::IndexMap::default(),
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
@@ -301,7 +301,7 @@ impl JitContext {
         Self {
             jit_type: JitType::Loop(pc),
             basic_block_labels: HashMap::default(),
-            loop_info: self.loop_info.clone(),
+            loop_info: indexmap::IndexMap::default(),
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
@@ -468,7 +468,10 @@ impl JitContext {
         bbctx.clear_above_next_sp();
         let src_bb = iseq.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch: {src_idx}->{dest_bb:?}");
+        eprintln!(
+            "   new_side branch: {src_idx}->{dest_bb:?} {:?}",
+            bbctx.slot_state
+        );
         self.branch(src_bb, dest_bb, bbctx, BranchMode::Side { dest });
     }
 
@@ -485,7 +488,10 @@ impl JitContext {
         bbctx.clear_above_next_sp();
         let src_bb = iseq.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch: {src_idx}->{dest_bb:?}");
+        eprintln!(
+            "   new_branch: {src_idx}->{dest_bb:?} {:?}",
+            bbctx.slot_state
+        );
         self.branch(src_bb, dest_bb, bbctx, BranchMode::Branch);
     }
 
@@ -502,7 +508,10 @@ impl JitContext {
         bbctx.clear_above_next_sp();
         let src_bb = iseq.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_continue: {src_idx}->{dest_bb:?}");
+        eprintln!(
+            "   new_continue: {src_idx}->{dest_bb:?} {:?}",
+            bbctx.slot_state
+        );
         self.branch(src_bb, dest_bb, bbctx, BranchMode::Continue);
     }
 
@@ -511,7 +520,7 @@ impl JitContext {
     ///
     pub(super) fn new_backedge(&mut self, target: SlotContext, bb_pos: BasicBlockId) {
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_backedge:{:?}", bb_pos);
+        eprintln!("   new_backedge:{bb_pos:?} {target:?}");
         self.backedge_map.insert(bb_pos, target);
     }
 

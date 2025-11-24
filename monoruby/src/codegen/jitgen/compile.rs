@@ -8,9 +8,6 @@ impl JitContext {
         //store.dump_iseq(iseq_id);
 
         let iseq = &store[iseq_id];
-        for (loop_start, loop_end) in iseq.bb_info.loops() {
-            self.analyse_iterate(store, *loop_start, *loop_end);
-        }
 
         let (bbctx, pc) = if let Some(pc) = self.position() {
             let bbctx = BBContext::new_loop(&self, store);
@@ -20,6 +17,17 @@ impl JitContext {
             let bbctx = BBContext::new_method(&self, store);
             (bbctx, pc)
         };
+
+        let start_pos = iseq.get_pc_index(Some(pc));
+        let bb_begin = iseq.bb_info.get_bb_id(start_pos);
+        let bb_end = match iseq.bb_info.get_loop(bb_begin) {
+            Some((a, b)) => {
+                assert_eq!(a, bb_begin);
+                b
+            }
+            None => BasicBlockId(iseq.bb_info.len() - 1),
+        };
+
         let mut ir = AsmIr::new();
         if let Some(pc) = self.position() {
             // generate class guard of *self* for loop JIT
@@ -44,12 +52,6 @@ impl JitContext {
         assert!(self.ir.is_empty());
         self.ir.push((None, ir));
 
-        let start_pos = iseq.get_pc_index(Some(pc));
-
-        #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
-
-        let bb_begin = iseq.bb_info.get_bb_id(start_pos);
         self.branch_map.insert(
             bb_begin,
             vec![BranchEntry {
@@ -58,14 +60,6 @@ impl JitContext {
                 mode: BranchMode::Continue,
             }],
         );
-
-        let bb_end = match iseq.bb_info.get_loop(bb_begin) {
-            Some((a, b)) => {
-                assert_eq!(a, bb_begin);
-                b
-            }
-            None => BasicBlockId(iseq.bb_info.len() - 1),
-        };
 
         for bbid in bb_begin..=bb_end {
             let ir = self.compile_basic_block(store, iseq_id, bbid, bbid == bb_end);
@@ -88,11 +82,11 @@ impl JitContext {
         let mut ir = AsmIr::new();
         let iseq = &store[iseq_id];
 
-        let mut bbctx = match self.incoming_context(iseq, bbid) {
+        let mut bbctx = match self.incoming_context(store, iseq, bbid, false) {
             Some(bb) => bb,
             None => {
                 #[cfg(feature = "jit-debug")]
-                eprintln!("=== no entry");
+                eprintln!("=== no entry {bbid:?}");
                 return ir;
             }
         };
@@ -131,27 +125,33 @@ impl JitContext {
         ir
     }
 
-    fn analyse_iterate(&mut self, store: &Store, loop_start: BasicBlockId, loop_end: BasicBlockId) {
+    pub(super) fn analyse_backedge_fixpoint(
+        &mut self,
+        store: &Store,
+        bbctx: BBContext,
+        loop_start: BasicBlockId,
+        loop_end: BasicBlockId,
+    ) {
         let iseq_id = self.iseq_id();
-        let pc = store[iseq_id].get_bb_pc(loop_start);
         for x in 0..10 {
-            let bbctx = BBContext::new_loop(self, store);
-            let ctx = JitContext::loop_analysis(self, pc);
+            #[cfg(feature = "jit-debug")]
+            eprintln!("########## analyse iteration[{x}]");
             let (liveness, backedge) =
-                ctx.analyse_loop(store, iseq_id, loop_start, loop_end, bbctx);
+                self.analyse_loop(store, iseq_id, loop_start, loop_end, bbctx.clone());
             if let Some(backedge) = backedge {
-                if let Some(be) = &self
-                    .loop_info
-                    .get(&loop_start)
-                    .map(|(_, be)| be.clone())
-                    .flatten()
+                if let Some(be) = &self.loop_info.get(&loop_start)
+                    && let Some(be) = &be.1
                     && be.equiv(&backedge)
                 {
-                    if x > 1 {
-                        eprintln!("fixed: {x}");
-                    }
+                    #[cfg(feature = "jit-debug")]
+                    eprintln!("fixed: {x} {:?}=={:?}", be.slot_state, backedge.slot_state);
                     break;
                 } else {
+                    #[cfg(feature = "jit-debug")]
+                    eprintln!(
+                        "analyse_loop[{x}] backedge: {loop_end:?}->{loop_start:?} {:?}",
+                        backedge.slot_state
+                    );
                     self.loop_info
                         .insert(loop_start, (liveness, Some(backedge)));
                 }
@@ -166,16 +166,21 @@ impl JitContext {
     }
 
     fn analyse_loop(
-        mut self,
+        &self,
         store: &Store,
         iseq_id: ISeqId,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
-        bbctx: BBContext,
+        mut bbctx: BBContext,
     ) -> (Liveness, Option<BBContext>) {
-        let mut liveness = Liveness::new(self.total_reg_num(store));
+        let pc = store[iseq_id].get_bb_pc(loop_start);
+        let mut ctx = JitContext::loop_analysis(self, pc);
+        let mut liveness = Liveness::new(ctx.total_reg_num(store));
 
-        self.branch_map.insert(
+        if let (_, _, Some(backege)) = self.loop_info(loop_start) {
+            bbctx.join(&backege);
+        };
+        ctx.branch_map.insert(
             loop_start,
             vec![BranchEntry {
                 src_bb: None,
@@ -184,17 +189,20 @@ impl JitContext {
             }],
         );
 
-        #[cfg(feature = "jit-debug")]
-        eprintln!(
-            "analyse_loop: {loop_start:?}->{loop_end:?} {:?}",
-            &self.loop_info
-        );
+        let is_loop = store[iseq_id].bb_info.get_loop(loop_start).is_some();
         for bbid in loop_start..=loop_end {
-            self.analyse_basic_block(store, iseq_id, &mut liveness, bbid, bbid == loop_end);
+            ctx.analyse_basic_block(
+                store,
+                iseq_id,
+                &mut liveness,
+                bbid,
+                is_loop && bbid == loop_start,
+                is_loop && bbid == loop_end,
+            );
         }
 
         let mut backedge: Option<BBContext> = None;
-        if let Some(branches) = self.branch_map.remove(&loop_start) {
+        if let Some(branches) = ctx.branch_map.remove(&loop_start) {
             for BranchEntry { src_bb, bbctx, .. } in branches {
                 liveness.join(&bbctx);
                 assert!(src_bb.unwrap() >= loop_start);
@@ -206,8 +214,21 @@ impl JitContext {
                 }
             }
         }
+        if let Some(backedge) = &mut backedge {
+            for i in backedge.slot_state.all_regs() {
+                if let LinkMode::G(_) = backedge.mode(i) {
+                    let g = backedge.guarded(i);
+                    backedge.set_S_with_guard(i, g);
+                }
+            }
+        }
         #[cfg(feature = "jit-debug")]
-        eprintln!("analyse_end: {loop_start:?}->{loop_end:?}");
+        eprintln!(
+            "analyse_end: {loop_start:?}->{loop_end:?} {}",
+            backedge
+                .as_ref()
+                .map_or("no backedge".to_string(), |b| format!("{:?}", b.slot_state))
+        );
 
         (liveness, backedge)
     }
@@ -218,11 +239,12 @@ impl JitContext {
         iseq_id: ISeqId,
         liveness: &mut Liveness,
         bbid: BasicBlockId,
-        last: bool,
+        is_start: bool,
+        is_last: bool,
     ) {
         let mut ir = AsmIr::new();
         let iseq = &store[iseq_id];
-        let mut bbctx = match self.incoming_context(iseq, bbid) {
+        let mut bbctx = match self.incoming_context(store, iseq, bbid, is_start) {
             Some(bb) => bb,
             None => return,
         };
@@ -246,7 +268,7 @@ impl JitContext {
             bbctx.clear_above_next_sp();
         }
 
-        if !last {
+        if !is_last {
             self.prepare_next(bbctx, iseq, end);
         }
     }
@@ -267,9 +289,10 @@ impl JitContext {
     ) -> CompileResult {
         let pc = self.get_pc(store, bc_pos);
         let trace_ir = iseq.trace_ir(store, bc_pos);
-        //if let Some(fmt) = trace_ir.format(store) {
-        //    eprintln!("{fmt}");
-        //}
+        #[cfg(feature = "jit-debug")]
+        if let Some(fmt) = trace_ir.format(store) {
+            eprintln!("{fmt}");
+        }
         match trace_ir {
             TraceIr::InitMethod { .. } => {}
             TraceIr::LoopStart { .. } => {

@@ -7,6 +7,32 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "Debug 'optcarrot'",
+      "cargo": {
+        "args": [
+          "run",
+          "--features",
+          "jit-log",
+          "--features",
+          "emit-asm",
+          "--bin=monoruby",
+          "--package=monoruby",
+        ],
+        "filter": {
+          "name": "monoruby",
+          "kind": "bin"
+        }
+      },
+      "args": [
+        "/home/monochrome/optcarrot/bin/optcarrot",
+        "-b",
+        "/home/monochrome/optcarrot/examples/Lan_Master.nes",
+      ],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "Debug 'activerecord'",
       "cargo": {
         "args": [

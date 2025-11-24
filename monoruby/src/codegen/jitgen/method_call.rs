@@ -246,8 +246,8 @@ impl JitContext {
             None
         };
         let args_info = if simple {
-            JitArgumentInfo::new(slot::LinkMode::from_caller(
-                store, callee_fid, callid, bbctx,
+            JitArgumentInfo::new(slot::LinkMode::from_caller_yield(
+                store, callee_fid, callid, bbctx, &block,
             ))
         } else {
             JitArgumentInfo::default()
@@ -383,10 +383,11 @@ impl JitContext {
                 }
                 let evict = ir.new_evict();
                 let specializable = store.is_simple_call(fid, callid)
-                    && (bbctx.is_C(callsite.recv) || (args..args + pos_num).any(|i| bbctx.is_C(i)));
+                    && (bbctx.is_C(callsite.recv)
+                        || (pos_num != 0 && (args..args + pos_num).any(|i| bbctx.is_C(i))));
                 let iseq_block = block_fid.map(|fid| store[fid].is_iseq()).flatten();
 
-                if iseq_block.is_some() || (specializable && self.specialize_level() < 5)
+                if iseq_block.is_some() || (specializable && self.specialize_level() < 3)
                 /*name == Some(IdentId::NEW)*/
                 {
                     let args_info = if specializable {

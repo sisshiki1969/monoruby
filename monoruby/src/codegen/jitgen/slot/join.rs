@@ -102,15 +102,14 @@ impl BBContext {
     pub(in crate::codegen::jitgen) fn gen_bridge(
         mut self,
         ir: &mut AsmIr,
+        src_bb: Option<BasicBlockId>,
         target: &SlotContext,
         pc: BytecodePtr,
         killed: &[SlotId],
     ) {
         #[cfg(feature = "jit-debug")]
-        {
-            eprintln!("    src:    {:?}", self.slot_state);
-            eprintln!("    target: {:?}", target);
-        }
+        eprintln!("    from: {src_bb:?} {:?}", self.slot_state);
+
         for slot in self.all_regs() {
             if killed.contains(&slot) {
                 self.discard(slot);
@@ -216,13 +215,11 @@ impl BBContext {
                 (LinkMode::None, LinkMode::None) => {}
                 (LinkMode::MaybeNone, LinkMode::MaybeNone) => {}
                 (l, r) => {
-                    eprintln!("self: {:?}", self.slot_state);
+                    eprintln!("{src_bb:?}: {:?}", self.slot_state);
                     eprintln!("target: {:?}", target);
                     unreachable!("{slot:?} src:{l:?} target:{r:?}");
                 }
             }
         }
-        #[cfg(feature = "jit-debug")]
-        eprintln!("  bridge end");
     }
 }
