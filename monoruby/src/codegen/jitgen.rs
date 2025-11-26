@@ -129,23 +129,22 @@ impl BBContext {
         self.slot_state.equiv(&other.slot_state)
     }
 
-    fn new_loop(cc: &JitContext, store: &Store) -> Self {
+    fn new_entry(cc: &JitContext, store: &Store) -> Self {
         let next_sp = SlotId(cc.local_num(store) as u16 + 1);
-        Self {
-            slot_state: SlotContext::new_loop(cc, store),
-            next_sp,
-            class_version_guarded: false,
-            frame_capture_guarded: false,
-        }
-    }
-
-    fn new_method(cc: &JitContext, store: &Store) -> Self {
-        let next_sp = SlotId(cc.local_num(store) as u16 + 1);
-        Self {
-            slot_state: SlotContext::new_method(cc, store),
-            next_sp,
-            class_version_guarded: false,
-            frame_capture_guarded: cc.is_method(),
+        if cc.position().is_some() {
+            Self {
+                slot_state: SlotContext::new_loop(cc, store),
+                next_sp,
+                class_version_guarded: false,
+                frame_capture_guarded: false,
+            }
+        } else {
+            Self {
+                slot_state: SlotContext::new_method(cc, store),
+                next_sp,
+                class_version_guarded: false,
+                frame_capture_guarded: cc.is_method(),
+            }
         }
     }
 

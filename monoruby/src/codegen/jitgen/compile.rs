@@ -9,24 +9,16 @@ impl JitContext {
 
         let iseq = &store[iseq_id];
 
-        let (bbctx, pc) = if let Some(pc) = self.position() {
-            let bbctx = BBContext::new_loop(&self, store);
-            (bbctx, pc)
+        let bbctx = BBContext::new_entry(&self, store);
+        let (bbctx, start_pos) = if let Some(pc) = self.position() {
+            let start_pos = iseq.get_pc_index(Some(pc));
+            (bbctx, start_pos)
         } else {
-            let pc = iseq.get_pc(BcIndex::from(0));
-            let bbctx = BBContext::new_method(&self, store);
-            (bbctx, pc)
+            let start_pos = BcIndex::from(0);
+            (bbctx, start_pos)
         };
 
-        let start_pos = iseq.get_pc_index(Some(pc));
-        let bb_begin = iseq.bb_info.get_bb_id(start_pos);
-        let bb_end = match iseq.bb_info.get_loop(bb_begin) {
-            Some((a, b)) => {
-                assert_eq!(a, bb_begin);
-                b
-            }
-            None => BasicBlockId(iseq.bb_info.len() - 1),
-        };
+        let (bb_begin, bb_end) = iseq.get_bb_range(start_pos);
 
         let mut ir = AsmIr::new();
         if let Some(pc) = self.position() {
