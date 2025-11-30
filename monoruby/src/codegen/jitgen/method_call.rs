@@ -238,23 +238,21 @@ impl JitContext {
         let error = ir.new_error(bbctx, pc);
         bbctx.writeback_acc(ir);
         let stack_len = self.stack_frame.len();
-        let block = if let Some(info) =
-            &self.stack_frame[stack_len.checked_sub(outer).unwrap()].given_block()
-        {
-            Some(info.add(outer))
+        let block_self = if let Some(info) = &self.stack_frame[stack_len - outer].given_block() {
+            Some(info.self_class)
         } else {
             None
         };
         let args_info = if simple {
             JitArgumentInfo::new(slot::LinkMode::from_caller_yield(
-                store, callee_fid, callid, bbctx, &block,
+                store, callee_fid, callid, bbctx, block_self,
             ))
         } else {
             JitArgumentInfo::default()
         };
         let iseq = store[callee_fid].is_iseq().unwrap();
         let entry =
-            self.compile_inlined_func(store, iseq, self_class, None, args_info, block, Some(outer));
+            self.compile_inlined_func(store, iseq, self_class, None, args_info, None, Some(outer));
         let evict = ir.new_evict();
         let meta = store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
@@ -442,9 +440,14 @@ impl JitContext {
         let jit_type = JitType::Specialized { idx, args_info };
         let mut stack_frame = self.stack_frame.clone();
         let self_ty = store[self_class].instance_ty();
-        let is_method = store[store[iseq_id].func_id()].is_not_block();
+        let is_not_block = store[store[iseq_id].func_id()].is_not_block();
         stack_frame.push(JitStackFrame::new(
-            iseq_id, outer, block, self_class, self_ty, is_method,
+            iseq_id,
+            outer,
+            block,
+            self_class,
+            self_ty,
+            is_not_block,
         ));
         let mut ctx = JitContext::new_with_stack_frame(
             store,

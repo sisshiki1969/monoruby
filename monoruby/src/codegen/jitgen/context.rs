@@ -344,8 +344,21 @@ impl JitContext {
         self.stack_frame.last().unwrap()
     }
 
-    pub(crate) fn current_frame_given_block(&self) -> Option<&JitBlockInfo> {
-        self.current_frame().given_block.as_ref()
+    pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
+        let mut i = self.stack_frame.len() - 1;
+        loop {
+            let frame = &self.stack_frame[i];
+            if let Some(outer) = frame.outer {
+                i -= outer;
+            } else {
+                return if frame.is_not_block {
+                    let block = frame.given_block()?.clone();
+                    Some(block.add(self.stack_frame.len() - 1 - i))
+                } else {
+                    None
+                };
+            }
+        }
     }
 
     pub(super) fn get_pc(&self, store: &Store, i: BcIndex) -> BytecodePtr {

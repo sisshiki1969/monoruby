@@ -999,10 +999,10 @@ impl LinkMode {
         fid: FuncId,
         callid: CallSiteId,
         bbctx: &BBContext,
-        block: &Option<JitBlockInfo>,
+        self_class: Option<ClassId>,
     ) -> Vec<Self> {
-        let recv = if let Some(block) = block {
-            LinkMode::S(Guarded::Class(block.self_class))
+        let recv = if let Some(self_class) = self_class {
+            LinkMode::S(Guarded::Class(self_class))
         } else {
             LinkMode::S(Guarded::Value)
         };

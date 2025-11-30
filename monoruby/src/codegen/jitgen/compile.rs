@@ -710,8 +710,7 @@ impl JitContext {
                 }
             }
             TraceIr::Yield { callid } => {
-                //let pc = store[self.iseq_id()].get_pc(bc_pos);
-                if let Some(block_info) = self.current_frame_given_block() {
+                if let Some(block_info) = self.current_method_given_block() {
                     self.compile_yield_specialized(
                         bbctx,
                         ir,
