@@ -33,7 +33,7 @@ impl JitContext {
                 TraceIr::InitMethod(fn_info) => {
                     ir.push(AsmInst::Init {
                         info: fn_info,
-                        is_method: store[iseq.func_id()].is_method_type(),
+                        is_method: store[iseq.func_id()].is_not_block(),
                     });
                 }
                 _ => unreachable!(),

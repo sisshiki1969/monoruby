@@ -510,6 +510,7 @@ impl Funcs {
         let mut kw_rest_param = None;
         let mut block_param = None;
         let mut for_param_info = vec![];
+        let mut forwarding = false;
         for (dst_outer, dst_reg, _name) in for_params {
             for_param_info.push(ForParamInfo::new(dst_outer, dst_reg, args_names.len()));
             args_names.push(None);
@@ -552,6 +553,7 @@ impl Funcs {
                     kw_rest_param = Some(SlotId(1 + args_names.len() as u16));
                     args_names.push(None);
                     block_param = Some(IdentId::get_id(""));
+                    forwarding = true;
                 }
                 ParamKind::Keyword(name, init) => {
                     let name = IdentId::get_id_from_string(name);
@@ -594,6 +596,7 @@ impl Funcs {
             keyword_names,
             kw_rest_param,
             block_param,
+            forwarding,
         );
         Ok((params_info, compile_info))
     }
@@ -876,11 +879,8 @@ impl FuncInfo {
     ///
     /// Whether this function is a method, a class definition, or a top-level.
     ///
-    pub(crate) fn is_method_type(&self) -> bool {
-        match self.ext.ty {
-            FuncType::Method | FuncType::ClassDef | FuncType::TopLevel => true,
-            _ => false,
-        }
+    pub(crate) fn is_not_block(&self) -> bool {
+        self.ext.ty != FuncType::Block
     }
 
     pub(crate) fn owner_class(&self) -> Option<ClassId> {

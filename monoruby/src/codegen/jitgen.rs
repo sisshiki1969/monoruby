@@ -143,7 +143,7 @@ impl BBContext {
                 slot_state: SlotContext::new_method(cc, store),
                 next_sp,
                 class_version_guarded: false,
-                frame_capture_guarded: cc.is_method(),
+                frame_capture_guarded: cc.is_not_block(),
             }
         }
     }

@@ -54,7 +54,7 @@ impl BytecodeGen {
         };
 
         let callsite = CallSite::new(
-            method, pos_num, kw, splat_pos, block_fid, block_arg, args, recv, dst,
+            method, pos_num, kw, splat_pos, block_fid, block_arg, args, recv, dst, false,
         );
         Ok(callsite)
     }
@@ -127,6 +127,7 @@ impl BytecodeGen {
             args,
             recv,
             dst,
+            true,
         ))
     }
 
@@ -199,6 +200,7 @@ impl BytecodeGen {
             pos_start,
             BcReg::Self_,
             dst,
+            true,
         )
     }
 

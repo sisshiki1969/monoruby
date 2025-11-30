@@ -185,6 +185,7 @@ impl BytecodeGen {
             arg.into(),
             recv,
             dst,
+            false,
         );
         self.emit_call(callsite, loc);
         if use_mode.is_ret() {

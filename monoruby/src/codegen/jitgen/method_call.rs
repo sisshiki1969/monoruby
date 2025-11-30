@@ -442,7 +442,7 @@ impl JitContext {
         let jit_type = JitType::Specialized { idx, args_info };
         let mut stack_frame = self.stack_frame.clone();
         let self_ty = store[self_class].instance_ty();
-        let is_method = store[store[iseq_id].func_id()].is_method_type();
+        let is_method = store[store[iseq_id].func_id()].is_not_block();
         stack_frame.push(JitStackFrame::new(
             iseq_id, outer, block, self_class, self_ty, is_method,
         ));

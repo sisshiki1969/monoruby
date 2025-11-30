@@ -107,7 +107,7 @@ pub(crate) struct JitStackFrame {
     ///
     /// Whether this function is a method, a class definition, or a top-level.
     ///
-    is_method: bool,
+    is_not_block: bool,
 }
 
 impl JitStackFrame {
@@ -117,7 +117,7 @@ impl JitStackFrame {
         given_block: Option<JitBlockInfo>,
         self_class: ClassId,
         self_ty: Option<ObjTy>,
-        is_method: bool,
+        is_not_block: bool,
     ) -> Self {
         Self {
             iseq_id,
@@ -125,7 +125,7 @@ impl JitStackFrame {
             given_block,
             self_class,
             self_ty,
-            is_method,
+            is_not_block,
         }
     }
     pub fn given_block(&self) -> Option<&JitBlockInfo> {
@@ -232,7 +232,7 @@ impl JitContext {
         specialize_level: usize,
     ) -> Self {
         let self_ty = store[self_class].instance_ty();
-        let is_method = store[store[iseq_id].func_id()].is_method_type();
+        let is_not_block = store[store[iseq_id].func_id()].is_not_block();
         Self::new_with_stack_frame(
             store,
             iseq_id,
@@ -246,7 +246,7 @@ impl JitContext {
                 given_block: None,
                 self_class,
                 self_ty,
-                is_method,
+                is_not_block,
             }],
         )
     }
@@ -336,8 +336,8 @@ impl JitContext {
     }
 
     /// Whether this function is a method, a class definition, or a top-level.
-    pub(super) fn is_method(&self) -> bool {
-        self.current_frame().is_method
+    pub(super) fn is_not_block(&self) -> bool {
+        self.current_frame().is_not_block
     }
 
     pub(crate) fn current_frame(&self) -> &JitStackFrame {
