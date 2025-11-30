@@ -196,7 +196,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
 
     /// Add the `id` as a new block parameter in the current context.
     /// If a parameter with the same name already exists, return error.
-    fn new_delegate_param(&mut self, loc: Loc) -> Result<(), LexerErr> {
+    fn new_forwarding_param(&mut self, loc: Loc) -> Result<(), LexerErr> {
         if self.scope_mut().lvar.insert_delegate_param().is_none() {
             return Err(error_unexpected(loc, "Duplicated argument name."));
         }
@@ -558,11 +558,11 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 if state > Kind::Required {
                     return Err(error_unexpected(
                         loc,
-                        "parameter delegate is not allowed in ths position.",
+                        "parameter forwarding is not allowed in ths position.",
                     ));
                 }
-                args.push(FormalParam::delegeate(loc));
-                self.new_delegate_param(loc)?;
+                args.push(FormalParam::forwarding(loc));
+                self.new_forwarding_param(loc)?;
                 break;
             } else if self.consume_punct(Punct::BitAnd)? {
                 // Block param
@@ -622,7 +622,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                             return Err(error_unexpected(
                                 loc,
                                 "Optional parameter is not allowed in ths position.",
-                            ))
+                            ));
                         }
                     };
                     args.push(FormalParam::optional(name.clone(), default, loc));
@@ -671,7 +671,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                             return Err(error_unexpected(
                                 loc,
                                 "Required parameter is not allowed in ths position.",
-                            ))
+                            ));
                         }
                     }
                 };

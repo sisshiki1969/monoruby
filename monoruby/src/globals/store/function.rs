@@ -544,7 +544,7 @@ impl Funcs {
                     args_names.push(Some(IdentId::get_id_from_string(name)));
                     post_num += 1;
                 }
-                ParamKind::Delegate => {
+                ParamKind::Forwarding => {
                     assert_eq!(rest, None);
                     rest = Some(args_names.len());
                     args_names.push(None);
