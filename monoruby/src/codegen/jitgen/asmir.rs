@@ -59,6 +59,7 @@ impl std::ops::Index<AsmEvict> for SideExitLabels {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct AsmIr {
     pub(super) inst: Vec<AsmInst>,
     side_exit: Vec<SideExit>,
@@ -114,8 +115,8 @@ impl AsmIr {
         AsmEvict(i)
     }
 
-    pub(crate) fn new_deopt(&mut self, bb: &BBContext) -> AsmDeopt {
-        self.new_deopt_with_pc(bb, bb.pc())
+    pub(crate) fn new_deopt(&mut self, bb: &BBContext, pc: BytecodePtr) -> AsmDeopt {
+        self.new_deopt_with_pc(bb, pc)
     }
 
     pub(crate) fn new_deopt_with_pc(&mut self, bb: &BBContext, pc: BytecodePtr) -> AsmDeopt {
@@ -123,8 +124,8 @@ impl AsmIr {
         AsmDeopt(i)
     }
 
-    pub(crate) fn new_error(&mut self, bb: &BBContext) -> AsmError {
-        let i = self.new_label(SideExit::Error(bb.pc(), bb.get_write_back()));
+    pub(crate) fn new_error(&mut self, bb: &BBContext, pc: BytecodePtr) -> AsmError {
+        let i = self.new_label(SideExit::Error(pc, bb.get_write_back()));
         AsmError(i)
     }
 }
@@ -307,19 +308,19 @@ impl AsmIr {
         self.push(AsmInst::GuardArrayTy(r, deopt));
     }
 
-    pub(super) fn deopt(&mut self, bb: &BBContext) {
-        let exit = self.new_deopt(bb);
+    pub(super) fn deopt(&mut self, bb: &BBContext, pc: BytecodePtr) {
+        let exit = self.new_deopt(bb, pc);
         self.push(AsmInst::Deopt(exit));
     }
 
-    pub(super) fn check_bop(&mut self, bb: &BBContext) {
-        let deopt = self.new_deopt(bb);
+    pub(super) fn check_bop(&mut self, bb: &BBContext, pc: BytecodePtr) {
+        let deopt = self.new_deopt(bb, pc);
         self.push(AsmInst::CheckBOP { deopt });
     }
 
-    pub(super) fn block_arg(&mut self, bb: &BBContext, ret: SlotId, outer: usize) {
+    pub(super) fn block_arg(&mut self, bb: &BBContext, ret: SlotId, outer: usize, pc: BytecodePtr) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb);
+        let error = self.new_error(bb, pc);
         self.push(AsmInst::BlockArg {
             ret,
             outer,
@@ -388,16 +389,22 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn undef_method(&mut self, bb: &BBContext, undef: IdentId) {
+    pub(super) fn undef_method(&mut self, bb: &BBContext, undef: IdentId, pc: BytecodePtr) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb);
+        let error = self.new_error(bb, pc);
         self.push(AsmInst::UndefMethod { undef, using_xmm });
         self.handle_error(error);
     }
 
-    pub(super) fn alias_method(&mut self, bb: &BBContext, new: IdentId, old: IdentId) {
+    pub(super) fn alias_method(
+        &mut self,
+        bb: &BBContext,
+        new: IdentId,
+        old: IdentId,
+        pc: BytecodePtr,
+    ) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb);
+        let error = self.new_error(bb, pc);
         self.push(AsmInst::AliasMethod {
             new,
             old,
@@ -604,10 +611,10 @@ impl AsmIr {
         base: SlotId,
         idx: SlotId,
         src: SlotId,
+        pc: BytecodePtr,
     ) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb);
-        let pc = bb.pc();
+        let error = self.new_error(bb, pc);
         self.push(AsmInst::GenericIndexAssign {
             src,
             base,
@@ -628,9 +635,9 @@ impl AsmIr {
     /// ### destroy
     /// - caller save registers
     ///
-    pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, idx: u16) {
+    pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, idx: u16, pc: BytecodePtr) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb);
+        let error = self.new_error(bb, pc);
         self.push(AsmInst::ArrayU16IndexAssign {
             idx,
             using_xmm,
@@ -649,9 +656,9 @@ impl AsmIr {
     /// ### destroy
     /// - caller save registers
     ///
-    pub(super) fn array_index_assign(&mut self, bb: &BBContext) {
+    pub(super) fn array_index_assign(&mut self, bb: &BBContext, pc: BytecodePtr) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb);
+        let error = self.new_error(bb, pc);
         self.inst
             .push(AsmInst::ArrayIndexAssign { using_xmm, error });
     }
@@ -1638,6 +1645,7 @@ pub(super) enum FMode {
     IR(i16, Xmm),
 }
 
+#[derive(Debug)]
 pub enum SideExit {
     Evict(Option<(BytecodePtr, WriteBack)>),
     Deoptimize(BytecodePtr, WriteBack),
@@ -1695,11 +1703,6 @@ impl Codegen {
         }
 
         for inst in ir.inst {
-            #[cfg(feature = "emit-asm")]
-            if let AsmInst::BcIndex(i) = &inst {
-                ctx.sourcemap
-                    .push((*i, self.jit.get_current() - ctx.start_codepos));
-            }
             self.compile_asmir(store, ctx, &side_exits, inst);
         }
 

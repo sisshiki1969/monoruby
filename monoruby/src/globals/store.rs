@@ -574,8 +574,7 @@ impl Store {
         );
         for (class, info) in &iseq.jit_entry {
             eprintln!("  JitEntry: {}", class.get_name(self));
-            for (bc_idx, cache_type) in &info.inline_cache_map {
-                let pc = iseq.get_pc(*bc_idx);
+            for (pc, cache_type) in &info.inline_cache_map {
                 if let Some(MethodCacheEntry {
                     recv_class,
                     func_id,

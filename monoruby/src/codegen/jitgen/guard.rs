@@ -291,17 +291,31 @@ impl Codegen {
             testq R(r), 0b010;
             jz    heap;
             xorps xmm(dst), xmm(dst);
-            movq rax, (FLOAT_ZERO);
-            cmpq R(r), rax;
-            // in the case of 0.0
-            je exit;
-            movq rax, R(r);
+        }
+        if reg == GP::Rax {
+            monoasm! { &mut self.jit,
+                movq rdi, (FLOAT_ZERO);
+                cmpq R(r), rdi;
+                // in the case of 0.0
+                je exit;
+            }
+        } else {
+            monoasm! { &mut self.jit,
+                movq rax, (FLOAT_ZERO);
+                cmpq R(r), rax;
+                // in the case of 0.0
+                je exit;
+                movq rax, R(r);
+            }
+        }
+        monoasm! { &mut self.jit,
+            movq rdi, R(r);
             sarq rax, 63;
             addq rax, 2;
-            andq R(r), (-4);
-            orq R(r), rax;
-            rolq R(r), 61;
-            movq xmm(dst), R(r);
+            andq rdi, (-4);
+            orq rdi, rax;
+            rolq rdi, 61;
+            movq xmm(dst), rdi;
         exit:
         }
 
@@ -322,7 +336,7 @@ impl Codegen {
     /// If the class of *reg* was not matched *class_id*, go to *deopt*.
     ///
     /// ### in
-    /// - R(*reg*): Value
+    /// - R(*reg*): RValue
     ///
     pub(super) fn guard_rvalue(&mut self, reg: GP, class_id: ClassId, deopt: &DestLabel) {
         monoasm!( &mut self.jit,

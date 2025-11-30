@@ -104,12 +104,13 @@ fn math_sqrt(
     _: &Store,
     callsite: &CallSiteInfo,
     _: ClassId,
+    pc: BytecodePtr,
 ) -> bool {
     if !callsite.is_simple() {
         return false;
     }
     let CallSiteInfo { args, dst, .. } = *callsite;
-    let fsrc = bb.load_xmm(ir, args).enc();
+    let fsrc = bb.load_xmm(ir, args, pc).enc();
     if let Some(dst) = dst {
         let fret = bb.def_F(dst).enc();
         ir.inline(move |r#gen, _, _| {

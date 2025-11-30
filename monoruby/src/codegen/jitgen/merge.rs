@@ -8,8 +8,9 @@ impl JitContext {
         let branch_map = std::mem::take(&mut self.branch_map);
         for (bbid, entries) in branch_map.into_iter() {
             let target = self.backedge_map.remove(&bbid).unwrap();
-            let unused = self.loop_info(bbid).1;
             let pc = iseq.get_bb_pc(bbid);
+            #[cfg(feature = "jit-debug")]
+            eprintln!("  backedge_bridge to: {bbid:?} {target:?}");
             for BranchEntry {
                 src_bb,
                 bbctx,
@@ -17,10 +18,10 @@ impl JitContext {
                 ..
             } in entries
             {
-                let mut ir = AsmIr::new();
                 #[cfg(feature = "jit-debug")]
-                eprintln!("  backedge_write_back {src_bb:?}->{bbid:?}");
-                bbctx.gen_bridge(&mut ir, &target, pc, &unused);
+                eprintln!("    {mode:?}");
+                let mut ir = AsmIr::new();
+                bbctx.gen_bridge(&mut ir, src_bb, &target, pc);
                 match mode {
                     BranchMode::Side { dest } => {
                         self.outline_bridges.push((ir, dest, bbid));
@@ -31,6 +32,8 @@ impl JitContext {
                     BranchMode::Continue => unreachable!(),
                 }
             }
+            #[cfg(feature = "jit-debug")]
+            eprintln!("  backedge_bridge end");
         }
     }
 
@@ -55,8 +58,10 @@ impl JitContext {
     /// ```
     pub(super) fn incoming_context(
         &mut self,
+        store: &Store,
         iseq: &ISeqInfo,
         bbid: BasicBlockId,
+        no_calc_backedge: bool,
     ) -> Option<BBContext> {
         let entries = self.branch_map.remove(&bbid)?;
         let pc = iseq.get_bb_pc(bbid);
@@ -64,32 +69,37 @@ impl JitContext {
         let is_loop = iseq.get_bb_pc(bbid).is_loop_start();
         let res = if is_loop {
             #[cfg(feature = "jit-debug")]
-            eprintln!("\n===gen_merge bb(loop): {:?}", bbid);
+            eprintln!("\n===gen_merge loop: {bbid:?}");
 
-            let (use_set, unused, backedge) = self.loop_info(bbid);
-
-            #[cfg(feature = "jit-debug")]
-            {
-                eprintln!("  use set:  {:?}", use_set);
-                eprintln!("  not used: {:?}", unused);
-                eprintln!("  backedge: {:?}", backedge);
+            let (loop_start, loop_end) = iseq.bb_info.get_loop(bbid).unwrap();
+            let incoming = BBContext::join_entries(&entries);
+            if !no_calc_backedge {
+                self.analyse_backedge_fixpoint(store, incoming.clone(), loop_start, loop_end);
             }
 
-            let mut target = BBContext::join_entries(&entries, backedge);
-            target.use_float(&use_set);
-            #[cfg(feature = "jit-debug")]
-            eprintln!("  target:{:?}", target.slot_state);
+            let mut target = incoming;
+            if let Some((liveness, backedge)) = self.loop_info(bbid) {
+                if let Some(backedge) = backedge {
+                    #[cfg(feature = "jit-debug")]
+                    eprintln!("  backedge : {:?}", backedge.slot_state);
+                    target.join(&backedge);
+                }
 
-            self.gen_bridges_for_branches(&target, entries, bbid, pc + 1, &unused);
+                target.liveness_analysis(liveness);
+            }
+            #[cfg(feature = "jit-debug")]
+            eprintln!("  target:  {:?}", target.slot_state);
+
+            self.gen_bridges_for_branches(&target, entries, bbid, pc + 1);
             self.new_backedge(target.slot_state.clone(), bbid);
 
             Some(target)
         } else {
             #[cfg(feature = "jit-debug")]
-            eprintln!("\n===gen_merge bb: {:?}", bbid);
+            eprintln!("\n===gen_merge {bbid:?}");
 
-            let target = BBContext::join_entries(&entries, None);
-            self.gen_bridges_for_branches(&target, entries, bbid, pc, &[]);
+            let target = BBContext::join_entries(&entries);
+            self.gen_bridges_for_branches(&target, entries, bbid, pc);
 
             Some(target)
         };
@@ -108,9 +118,10 @@ impl JitContext {
         entries: Vec<BranchEntry>,
         bbid: BasicBlockId,
         pc: BytecodePtr,
-        unused: &[SlotId],
     ) {
         let target = target.clone();
+        #[cfg(feature = "jit-debug")]
+        eprintln!("  bridge to: {bbid:?} {target:?}");
         for BranchEntry {
             src_bb,
             bbctx,
@@ -118,10 +129,10 @@ impl JitContext {
             ..
         } in entries
         {
-            let mut ir = AsmIr::new();
             #[cfg(feature = "jit-debug")]
-            eprintln!("  bridge {mode:?} {src_bb:?}->{bbid:?}");
-            bbctx.gen_bridge(&mut ir, &target, pc, unused);
+            eprintln!("    {mode:?}");
+            let mut ir = AsmIr::new();
+            bbctx.gen_bridge(&mut ir, src_bb, &target, pc);
             match mode {
                 BranchMode::Side { dest } => {
                     self.outline_bridges.push((ir, dest, bbid));
@@ -134,5 +145,7 @@ impl JitContext {
                 }
             }
         }
+        #[cfg(feature = "jit-debug")]
+        eprintln!("  bridge end");
     }
 }

@@ -65,7 +65,7 @@ impl ISeqId {
 pub struct JitInfo {
     pub entry: DestLabel,
     pub class_version_label: DestLabel,
-    pub inline_cache_map: Vec<(BcIndex, InlineCacheType)>,
+    pub inline_cache_map: Vec<(BytecodePtr, InlineCacheType)>,
 }
 
 ///
@@ -294,6 +294,18 @@ impl ISeqInfo {
         map.into_iter().map(Value::symbol).collect()
     }
 
+    pub(crate) fn get_bb_range(&self, start_pos: BcIndex) -> (BasicBlockId, BasicBlockId) {
+        let bb_begin = self.bb_info.get_bb_id(start_pos);
+        let bb_end = match self.bb_info.get_loop(bb_begin) {
+            Some((a, b)) => {
+                assert_eq!(a, bb_begin);
+                b
+            }
+            None => BasicBlockId(self.bb_info.len() - 1),
+        };
+        (bb_begin, bb_end)
+    }
+
     ///
     /// Get the name of iseq.
     ///
@@ -437,14 +449,17 @@ impl ISeqInfo {
         )
     }
 
-    pub(crate) fn get_cache_map(&self, self_class: ClassId) -> &Vec<(BcIndex, InlineCacheType)> {
+    pub(crate) fn get_cache_map(
+        &self,
+        self_class: ClassId,
+    ) -> &Vec<(BytecodePtr, InlineCacheType)> {
         &self.jit_entry.get(&self_class).unwrap().inline_cache_map
     }
 
     pub(crate) fn set_cache_map(
         &mut self,
         self_class: ClassId,
-        cache: Vec<(BcIndex, InlineCacheType)>,
+        cache: Vec<(BytecodePtr, InlineCacheType)>,
     ) {
         self.jit_entry
             .get_mut(&self_class)

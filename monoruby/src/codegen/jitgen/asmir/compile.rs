@@ -25,7 +25,10 @@ impl Codegen {
     ) {
         match inst {
             #[cfg(feature = "emit-asm")]
-            AsmInst::BcIndex(_) => {}
+            AsmInst::BcIndex(i) => {
+                ctx.sourcemap
+                    .push((i, self.jit.get_current() - ctx.start_codepos));
+            }
             AsmInst::Init { info, is_method } => {
                 self.init_func(&info, is_method);
             }

@@ -86,7 +86,7 @@ enum BranchMode {
 #[derive(Debug)]
 struct BranchEntry {
     /// source BasicBlockId of the branch.
-    src_bb: BasicBlockId,
+    src_bb: Option<BasicBlockId>,
     /// context of the source basic block.
     bbctx: BBContext,
     /// true if the branch is a continuation branch.
@@ -109,7 +109,6 @@ pub(crate) struct BBContext {
     next_sp: SlotId,
     class_version_guarded: bool,
     frame_capture_guarded: bool,
-    pc: BytecodePtr,
 }
 
 impl std::ops::Deref for BBContext {
@@ -126,34 +125,27 @@ impl std::ops::DerefMut for BBContext {
 }
 
 impl BBContext {
-    fn new_loop(cc: &JitContext, pc: BytecodePtr) -> Self {
-        let next_sp = SlotId(cc.local_num() as u16 + 1);
-        Self {
-            slot_state: SlotContext::new_loop(cc),
-            next_sp,
-            class_version_guarded: false,
-            frame_capture_guarded: false,
-            pc,
+    fn equiv(&self, other: &Self) -> bool {
+        self.slot_state.equiv(&other.slot_state)
+    }
+
+    fn new_entry(cc: &JitContext, store: &Store) -> Self {
+        let next_sp = SlotId(cc.local_num(store) as u16 + 1);
+        if cc.position().is_some() {
+            Self {
+                slot_state: SlotContext::new_loop(cc, store),
+                next_sp,
+                class_version_guarded: false,
+                frame_capture_guarded: false,
+            }
+        } else {
+            Self {
+                slot_state: SlotContext::new_method(cc, store),
+                next_sp,
+                class_version_guarded: false,
+                frame_capture_guarded: cc.is_method(),
+            }
         }
-    }
-
-    fn new_method(cc: &JitContext, store: &Store, pc: BytecodePtr) -> Self {
-        let next_sp = SlotId(cc.local_num() as u16 + 1);
-        Self {
-            slot_state: SlotContext::new_method(cc, store),
-            next_sp,
-            class_version_guarded: false,
-            frame_capture_guarded: cc.is_method(),
-            pc,
-        }
-    }
-
-    fn pc(&self) -> BytecodePtr {
-        self.pc
-    }
-
-    fn set_pc(&mut self, pc: BytecodePtr) {
-        self.pc = pc;
     }
 
     fn set_class_version_guard(&mut self) {
@@ -168,25 +160,11 @@ impl BBContext {
         self.frame_capture_guarded = false;
     }
 
-    fn join_entries(entries: &[BranchEntry], backedge: Option<BBContext>) -> Self {
+    fn join_entries(entries: &[BranchEntry]) -> Self {
         let mut merge_ctx = entries.last().unwrap().bbctx.clone();
-        for BranchEntry {
-            src_bb: _src_bb,
-            bbctx,
-            ..
-        } in entries.iter()
-        {
-            #[cfg(feature = "jit-debug")]
-            eprintln!("  <-{:?}: {:?}", _src_bb, bbctx.slot_state);
+        for BranchEntry { bbctx, .. } in entries.iter() {
             merge_ctx.join(bbctx);
         }
-        if let Some(backedge) = backedge {
-            #[cfg(feature = "jit-debug")]
-            eprintln!("  <-backedge: {:?}", backedge.slot_state);
-            merge_ctx.join(&backedge);
-        }
-        #[cfg(feature = "jit-debug")]
-        eprintln!("  join_entries: {:?}", &merge_ctx);
         merge_ctx
     }
 
@@ -214,7 +192,7 @@ impl BBContext {
         dst: impl Into<Option<SlotId>>,
         class: ClassId,
     ) {
-        self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::Class(class))
+        self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::from_class(class))
     }
 
     pub(crate) fn def_reg2acc_concrete_value(
@@ -246,22 +224,34 @@ impl BBContext {
     /// ### destroy
     /// - rax
     ///
-    pub fn guard_const_base_class(&mut self, ir: &mut AsmIr, slot: SlotId, base_class: Value) {
+    pub fn guard_const_base_class(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        base_class: Value,
+        pc: BytecodePtr,
+    ) {
         self.load(ir, slot, GP::Rax);
-        let deopt = ir.new_deopt(self);
+        let deopt = ir.new_deopt(self, pc);
         ir.inst
             .push(AsmInst::GuardConstBaseClass { base_class, deopt });
     }
 
-    pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool) {
+    pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool, pc: BytecodePtr) {
         let wb = self.get_gc_write_back();
-        let error = ir.new_error(self);
+        let error = ir.new_error(self, pc);
         ir.exec_gc(wb, error, check_stack);
     }
 
-    pub fn load_constant(&mut self, ir: &mut AsmIr, dst: SlotId, cache: &ConstCache) {
+    pub fn load_constant(
+        &mut self,
+        ir: &mut AsmIr,
+        dst: SlotId,
+        cache: &ConstCache,
+        pc: BytecodePtr,
+    ) {
         let ConstCache { version, value, .. } = cache;
-        let deopt = ir.new_deopt(self);
+        let deopt = ir.new_deopt(self, pc);
         ir.push(AsmInst::GuardConstVersion {
             const_version: *version,
             deopt,
@@ -276,9 +266,9 @@ impl BBContext {
         }
     }
 
-    pub(super) fn generic_unop(&mut self, ir: &mut AsmIr, func: UnaryOpFn) {
+    pub(super) fn generic_unop(&mut self, ir: &mut AsmIr, func: UnaryOpFn, pc: BytecodePtr) {
         let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self);
+        let error = ir.new_error(self, pc);
         ir.push(AsmInst::GenericUnOp { func, using_xmm });
         ir.handle_error(error);
     }
@@ -398,54 +388,6 @@ impl UsingXmm {
     }
 }
 
-///
-/// Mode of linkage between stack slot and xmm registers.
-///
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-enum LinkMode {
-    ///
-    /// No Value.
-    ///
-    /// this is for optional arguments with no passed value.
-    ///
-    None,
-    ///
-    /// Maybe No Value.
-    ///
-    /// this is for optional arguments which may have no passed value.
-    ///
-    MaybeNone,
-    ///
-    /// Void.
-    ///
-    /// this is used for the temp slots above sp.
-    ///
-    V,
-    ///
-    /// On the stack slot.
-    ///
-    #[default]
-    S,
-    ///
-    /// On the floating point register (xmm).
-    ///
-    /// mutation of the corresponding FPR lazily affects the stack slot.
-    ///
-    F(Xmm),
-    ///
-    /// On the stack slot and on the floating point register (xmm) which is read-only.
-    ///
-    Sf(Xmm),
-    ///
-    /// Concrete value.
-    ///
-    C(Value),
-    ///
-    /// On the general-purpose register (r15).
-    ///
-    G,
-}
-
 impl Codegen {
     pub(super) fn jit_compile(
         &mut self,
@@ -456,7 +398,7 @@ impl Codegen {
         entry_label: DestLabel,
         class_version: u32,
         class_version_label: DestLabel,
-    ) -> Vec<(BcIndex, InlineCacheType)> {
+    ) -> Vec<(BytecodePtr, InlineCacheType)> {
         let jit_type = if let Some(pos) = position {
             JitType::Loop(pos)
         } else {
@@ -542,7 +484,7 @@ impl Codegen {
         let mut live_bb: HashSet<BasicBlockId> = HashSet::default();
         ir_vec.iter().for_each(|(bb, ir)| {
             if let Some(bb) = bb {
-                if !ir.inst.is_empty() || ctx.inline_bridges.contains_key(&bb) {
+                if !ir.inst.is_empty() || ctx.inline_bridges.contains_key(&Some(*bb)) {
                     live_bb.insert(*bb);
                 }
             }
@@ -551,14 +493,16 @@ impl Codegen {
         // generate machine code for a main context and inlined bridges.
         for (bbid, ir) in ir_vec.into_iter() {
             self.gen_asm(ir, store, &mut ctx, None, None);
-            // generate machine code for bridges
-            if let Some(bbid) = bbid
-                && let Some((ir, exit)) = ctx.inline_bridges.remove(&bbid)
-            {
-                let exit = if let Some(exit) = exit
-                    && (bbid >= exit || ((bbid + 1)..exit).any(|bb| live_bb.contains(&bb)))
-                {
-                    Some(exit)
+            // generate machine code for the inlined bridge
+            if let Some((ir, exit)) = ctx.inline_bridges.remove(&bbid) {
+                let exit = if let Some(bbid) = bbid {
+                    if let Some(exit) = exit
+                        && (bbid >= exit || ((bbid + 1)..exit).any(|bb| live_bb.contains(&bb)))
+                    {
+                        Some(exit)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };

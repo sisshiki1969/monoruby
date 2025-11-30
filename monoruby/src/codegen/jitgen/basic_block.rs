@@ -156,7 +156,7 @@ impl BasicBlockInfo {
         bb_info
     }
 
-    pub(super) fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.info.len()
     }
 
@@ -172,15 +172,11 @@ impl BasicBlockInfo {
         self.bb_map[i.0 as usize]
     }
 
-    pub(super) fn get_loop(&self, bb_id: BasicBlockId) -> Option<(BasicBlockId, BasicBlockId)> {
+    pub(crate) fn get_loop(&self, bb_id: BasicBlockId) -> Option<(BasicBlockId, BasicBlockId)> {
         self.loops
             .iter()
             .find(|(begin, end)| (*begin..=*end).contains(&bb_id))
             .cloned()
-    }
-
-    pub(super) fn loops(&self) -> &[(BasicBlockId, BasicBlockId)] {
-        &self.loops
     }
 }
 

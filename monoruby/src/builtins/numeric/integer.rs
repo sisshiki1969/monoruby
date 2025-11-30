@@ -237,6 +237,7 @@ fn integer_tof(
     _: &Store,
     callsite: &CallSiteInfo,
     _: ClassId,
+    _: BytecodePtr,
 ) -> bool {
     if !callsite.is_simple() {
         return false;
@@ -399,6 +400,7 @@ fn integer_shr(
     _: &Store,
     callsite: &CallSiteInfo,
     _: ClassId,
+    pc: BytecodePtr,
 ) -> bool {
     if !callsite.is_simple() {
         return false;
@@ -407,8 +409,8 @@ fn integer_shr(
     if let Some(rhs) = bb.is_u8_literal(args) {
         ir.inline(move |r#gen, _, _| r#gen.gen_shr_imm(rhs));
     } else {
-        bb.load_fixnum(ir, args, GP::Rcx);
-        let deopt = ir.new_deopt(bb);
+        bb.load_fixnum(ir, args, GP::Rcx, pc);
+        let deopt = ir.new_deopt(bb, pc);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shr(&labels[deopt]));
     }
     bb.def_reg2acc_fixnum(ir, GP::Rdi, dst);
@@ -433,6 +435,7 @@ fn integer_shl(
     _: &Store,
     callsite: &CallSiteInfo,
     _: ClassId,
+    pc: BytecodePtr,
 ) -> bool {
     if !callsite.is_simple() {
         return false;
@@ -444,15 +447,15 @@ fn integer_shl(
     if let Some(rhs) = bb.is_u8_literal(args)
         && rhs < 64
     {
-        let deopt = ir.new_deopt(bb);
+        let deopt = ir.new_deopt(bb, pc);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shl_rhs_imm(rhs, &labels[deopt]));
     } else if let Some(lhs) = bb.is_fixnum_literal(recv) {
-        bb.load_fixnum(ir, args, GP::Rcx);
-        let deopt = ir.new_deopt(bb);
+        bb.load_fixnum(ir, args, GP::Rcx, pc);
+        let deopt = ir.new_deopt(bb, pc);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shl_lhs_imm(lhs, &labels[deopt]));
     } else {
-        bb.load_fixnum(ir, args, GP::Rcx);
-        let deopt = ir.new_deopt(bb);
+        bb.load_fixnum(ir, args, GP::Rcx, pc);
+        let deopt = ir.new_deopt(bb, pc);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shl(&labels[deopt]));
     }
     bb.def_reg2acc_fixnum(ir, GP::Rdi, dst);

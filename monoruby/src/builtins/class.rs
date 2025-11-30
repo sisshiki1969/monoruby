@@ -105,13 +105,15 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 
 pub(super) fn gen_class_new(
     f: extern "C" fn(Value) -> Value,
-) -> impl Fn(&mut BBContext, &mut AsmIr, &JitContext, &Store, &CallSiteInfo, ClassId) -> bool {
+) -> impl Fn(&mut BBContext, &mut AsmIr, &JitContext, &Store, &CallSiteInfo, ClassId, BytecodePtr) -> bool
+{
     move |bb: &mut BBContext,
           ir: &mut AsmIr,
           _: &JitContext,
           _: &Store,
           callsite: &CallSiteInfo,
-          _: ClassId| {
+          _: ClassId,
+          pc: BytecodePtr| {
         if !callsite.is_simple() {
             return false;
         }
@@ -126,7 +128,7 @@ pub(super) fn gen_class_new(
         bb.write_back_callargs_and_dst(ir, callsite);
         ir.stack2reg(recv, GP::Rdi);
         let using_xmm = bb.get_using_xmm();
-        let error = ir.new_error(bb);
+        let error = ir.new_error(bb, pc);
         ir.xmm_save(using_xmm);
         ir.inline(move |r#gen, _, _| {
             let cached_version = r#gen.jit.data_i32(-1);
@@ -193,6 +195,7 @@ fn class_allocate(
     _: &Store,
     callsite: &CallSiteInfo,
     _: ClassId,
+    _: BytecodePtr,
 ) -> bool {
     if !callsite.is_simple() {
         return false;

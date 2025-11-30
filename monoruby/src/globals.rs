@@ -1,5 +1,5 @@
 use ruruby_parse::{BlockInfo, Loc, LvarCollector, Node, ParamKind, Parser, SourceInfoRef};
-use std::io::{stdout, BufWriter, Stdout};
+use std::io::{BufWriter, Stdout, stdout};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU8;
@@ -27,6 +27,7 @@ pub(crate) type InlineGen = dyn Fn(
     &Store,
     &CallSiteInfo,
     ClassId,
+    BytecodePtr,
 ) -> bool;
 
 pub(crate) const GLOBALS_FUNCINFO: usize =
@@ -840,7 +841,7 @@ impl Globals {
                     return Err(MonorubyErr::argumenterr(format!(
                         "malformed format string - %{}",
                         ch
-                    )))
+                    )));
                 }
             };
             format_str += &format;

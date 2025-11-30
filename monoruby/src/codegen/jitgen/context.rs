@@ -71,10 +71,10 @@ impl JitBlockInfo {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct JitArgumentInfo(pub Option<Vec<slot::SlotState>>);
+pub(super) struct JitArgumentInfo(pub Option<Vec<slot::LinkMode>>);
 
 impl JitArgumentInfo {
-    pub(super) fn new(slot: Vec<slot::SlotState>) -> Self {
+    pub(super) fn new(slot: Vec<slot::LinkMode>) -> Self {
         Self(Some(slot))
     }
 }
@@ -138,21 +138,9 @@ impl JitStackFrame {
 ///
 pub struct JitContext {
     ///
-    /// the bytecode pointer.
-    ///
-    bytecode_top: BytecodePtrBase,
-    ///
     /// Type of compilation for this frame.
     ///
     jit_type: JitType,
-    ///
-    /// Number of slots.
-    ///
-    total_reg_num: usize,
-    ///
-    /// Number of non-temp registers. (includes arguments and local variables, not `self`)
-    ///
-    local_num: usize,
     ///
     /// Class version at compile time.
     ///
@@ -176,7 +164,7 @@ pub struct JitContext {
     /// ### value
     /// liveness and backedge info in the loop head.
     ///
-    pub(super) loop_info: HashMap<BasicBlockId, (Liveness, Option<BBContext>)>,
+    pub(super) loop_info: indexmap::IndexMap<BasicBlockId, (Liveness, Option<BBContext>)>,
     ///
     /// Nested loop count.
     ///
@@ -186,7 +174,7 @@ pub struct JitContext {
     ///
     pub(super) branch_map: HashMap<BasicBlockId, Vec<BranchEntry>>,
     ///
-    /// Map for backward branches.
+    /// Map for target contexts of backward branches.
     ///
     pub(super) backedge_map: HashMap<BasicBlockId, SlotContext>,
     ///
@@ -196,7 +184,7 @@ pub struct JitContext {
     ///
     /// Information for inlined bridges.
     ///
-    pub(super) inline_bridges: HashMap<BasicBlockId, (AsmIr, Option<BasicBlockId>)>,
+    pub(super) inline_bridges: HashMap<Option<BasicBlockId>, (AsmIr, Option<BasicBlockId>)>,
     ///
     /// Information for `JitLabel`s`.
     ///
@@ -216,7 +204,7 @@ pub struct JitContext {
     ///
     /// Inline cache for method calls.
     ///
-    pub(crate) inline_method_cache: HashMap<BcIndex, MethodCacheEntry>,
+    pub(crate) inline_method_cache: HashMap<BytecodePtr, MethodCacheEntry>,
     ///
     /// Stack frame for specialized compilation. (iseq, outer_scope, block_iseq)
     ///
@@ -284,18 +272,13 @@ impl JitContext {
             labels.push(None);
         }
 
-        let total_reg_num = iseq.total_reg_num();
-        let local_num = iseq.local_num();
         Self {
-            bytecode_top: iseq.get_top_pc(),
             jit_type,
             basic_block_labels,
-            loop_info: HashMap::default(),
+            loop_info: indexmap::IndexMap::default(),
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
-            total_reg_num,
-            local_num,
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
             labels,
@@ -315,18 +298,13 @@ impl JitContext {
     }
 
     pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
-        let total_reg_num = self.total_reg_num;
-        let local_num = self.local_num;
         Self {
-            bytecode_top: self.bytecode_top,
             jit_type: JitType::Loop(pc),
             basic_block_labels: HashMap::default(),
-            loop_info: self.loop_info.clone(),
+            loop_info: indexmap::IndexMap::default(),
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
-            total_reg_num,
-            local_num,
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
             labels: vec![],
@@ -370,8 +348,8 @@ impl JitContext {
         self.current_frame().given_block.as_ref()
     }
 
-    pub(super) fn bytecode(&self, i: BcIndex) -> BytecodePtr {
-        self.bytecode_top + i
+    pub(super) fn get_pc(&self, store: &Store, i: BcIndex) -> BytecodePtr {
+        store[self.iseq_id()].get_pc(i)
     }
 
     pub(super) fn jit_type(&self) -> &JitType {
@@ -385,15 +363,15 @@ impl JitContext {
     ///
     /// Get a number of non-temp registers. (includes arguments and local variables, not self)
     ///
-    pub(super) fn local_num(&self) -> usize {
-        self.local_num
+    pub(super) fn local_num(&self, store: &Store) -> usize {
+        store[self.iseq_id()].local_num()
     }
 
     ///
     /// Get a number of slots. (including `self`, arguments, local variables, and temp registers)
     ///
-    pub(super) fn total_reg_num(&self) -> usize {
-        self.total_reg_num
+    pub(super) fn total_reg_num(&self, store: &Store) -> usize {
+        store[self.iseq_id()].total_reg_num()
     }
 
     pub(crate) fn class_version(&self) -> u32 {
@@ -448,15 +426,14 @@ impl JitContext {
     pub(super) fn loop_info(
         &self,
         entry_bb: BasicBlockId,
-    ) -> (Vec<(SlotId, bool)>, Vec<SlotId>, Option<BBContext>) {
-        match self.loop_info.get(&entry_bb) {
-            Some((liveness, merger)) => (
-                liveness.get_loop_used_as_float(),
-                liveness.get_unused(),
-                merger.clone(),
-            ),
-            None => (vec![], vec![], None),
-        }
+    ) -> Option<&(Liveness, Option<BBContext>)> {
+        self.loop_info.get(&entry_bb)
+    }
+
+    pub(super) fn loop_backedge(&self, entry_bb: BasicBlockId) -> Option<&BBContext> {
+        self.loop_info
+            .get(&entry_bb)
+            .and_then(|(_, be)| be.as_ref())
     }
 
     fn branch(
@@ -470,7 +447,7 @@ impl JitContext {
             .entry(dest_bb)
             .or_default()
             .push(BranchEntry {
-                src_bb,
+                src_bb: Some(src_bb),
                 bbctx,
                 mode,
             });
@@ -490,7 +467,10 @@ impl JitContext {
         bbctx.clear_above_next_sp();
         let src_bb = iseq.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch: {src_idx}->{dest_bb:?}");
+        eprintln!(
+            "   new_side branch: {src_idx}->{dest_bb:?} {:?}",
+            bbctx.slot_state
+        );
         self.branch(src_bb, dest_bb, bbctx, BranchMode::Side { dest });
     }
 
@@ -507,7 +487,10 @@ impl JitContext {
         bbctx.clear_above_next_sp();
         let src_bb = iseq.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch: {src_idx}->{dest_bb:?}");
+        eprintln!(
+            "   new_branch: {src_idx}->{dest_bb:?} {:?}",
+            bbctx.slot_state
+        );
         self.branch(src_bb, dest_bb, bbctx, BranchMode::Branch);
     }
 
@@ -524,7 +507,10 @@ impl JitContext {
         bbctx.clear_above_next_sp();
         let src_bb = iseq.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_continue: {src_idx}->{dest_bb:?}");
+        eprintln!(
+            "   new_continue: {src_idx}->{dest_bb:?} {:?}",
+            bbctx.slot_state
+        );
         self.branch(src_bb, dest_bb, bbctx, BranchMode::Continue);
     }
 
@@ -533,7 +519,7 @@ impl JitContext {
     ///
     pub(super) fn new_backedge(&mut self, target: SlotContext, bb_pos: BasicBlockId) {
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_backedge:{:?}", bb_pos);
+        eprintln!("   new_backedge:{bb_pos:?} {target:?}");
         self.backedge_map.insert(bb_pos, target);
     }
 

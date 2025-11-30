@@ -133,11 +133,7 @@ impl ClassId {
     }
 
     pub const fn from(id: u32) -> Option<Self> {
-        if id == 0 {
-            None
-        } else {
-            Some(Self::new(id))
-        }
+        if id == 0 { None } else { Some(Self::new(id)) }
     }
 
     pub fn u32(&self) -> u32 {
@@ -1091,8 +1087,7 @@ impl Store {
         let self_class = lfp.self_val().class();
         let iseq_id = self[func_id].as_iseq();
         let iseq = &self[iseq_id];
-        for (bc_pos, ty) in iseq.get_cache_map(self_class) {
-            let pc = iseq.get_pc(*bc_pos);
+        for (pc, ty) in iseq.get_cache_map(self_class) {
             match ty {
                 InlineCacheType::Method(comptime_cache) => {
                     let MethodCacheEntry {

@@ -181,6 +181,7 @@ fn array_allocate(
     _: &Store,
     callsite: &CallSiteInfo,
     _: ClassId,
+    _: BytecodePtr,
 ) -> bool {
     if !callsite.is_simple() {
         return false;
@@ -272,6 +273,7 @@ fn array_size(
     _: &Store,
     callsite: &CallSiteInfo,
     _: ClassId,
+    _: BytecodePtr,
 ) -> bool {
     if !callsite.is_simple() {
         return false;
@@ -312,6 +314,7 @@ fn array_clone(
     _: &Store,
     callsite: &CallSiteInfo,
     class_id: ClassId,
+    _: BytecodePtr,
 ) -> bool {
     if !callsite.is_simple() {
         return false;
@@ -659,6 +662,7 @@ fn array_shl(
     _: &Store,
     callsite: &CallSiteInfo,
     recv_class: ClassId,
+    _: BytecodePtr,
 ) -> bool {
     if !callsite.is_simple() {
         return false;

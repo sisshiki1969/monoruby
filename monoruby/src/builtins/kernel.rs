@@ -98,6 +98,7 @@ fn kernel_nil(
     _: &Store,
     callsite: &CallSiteInfo,
     _: ClassId,
+    _: BytecodePtr,
 ) -> bool {
     if !callsite.is_simple() {
         return false;
@@ -132,6 +133,7 @@ fn kernel_block_given(
     _: &Store,
     callsite: &CallSiteInfo,
     _: ClassId,
+    _: BytecodePtr,
 ) -> bool {
     if !callsite.is_simple() {
         return false;

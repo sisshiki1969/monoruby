@@ -10,6 +10,7 @@ impl BBContext {
         name: IdentId,
         func_id: FuncId,
         is_module: bool,
+        pc: BytecodePtr,
     ) {
         if let Some(base) = base {
             self.write_back_slots(ir, &[base]);
@@ -21,7 +22,7 @@ impl BBContext {
             self.def_S(dst);
         }
         let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self);
+        let error = ir.new_error(self, pc);
         ir.push(AsmInst::ClassDef {
             base,
             superclass,
@@ -40,13 +41,14 @@ impl BBContext {
         dst: Option<SlotId>,
         base: SlotId,
         func_id: FuncId,
+        pc: BytecodePtr,
     ) {
         self.write_back_slots(ir, &[base]);
         if let Some(dst) = dst {
             self.def_S(dst);
         }
         let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self);
+        let error = ir.new_error(self, pc);
         ir.push(AsmInst::SingletonClassDef {
             base,
             dst,
