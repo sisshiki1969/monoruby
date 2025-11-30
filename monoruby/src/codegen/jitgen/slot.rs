@@ -93,25 +93,37 @@ impl SlotContext {
             .all(|(lhs, rhs)| lhs.equiv(rhs))
     }
 
-    pub(super) fn use_float(&mut self, used_as_float: &[(SlotId, bool)]) {
+    pub(super) fn liveness_analysis(&mut self, liveness: &Liveness) {
+        let (used_as_float, killed) = (liveness.loop_used_as_float(), liveness.killed());
+        self.use_float(used_as_float);
+        self.kill_unused(killed);
+    }
+
+    fn use_float(&mut self, used_as_float: impl Iterator<Item = (SlotId, bool)>) {
         for (slot, as_f64) in used_as_float {
-            match self.mode(*slot) {
+            match self.mode(slot) {
                 LinkMode::S(_) => {
-                    if *as_f64 {
-                        self.set_new_Sf(*slot, SfGuarded::Float);
+                    if as_f64 {
+                        self.set_new_Sf(slot, SfGuarded::Float);
                     }
                 }
                 LinkMode::C(_) => {}
                 LinkMode::Sf(_, _) => {}
                 LinkMode::F(x) => {
                     if !as_f64 {
-                        self.set_Sf(*slot, x, SfGuarded::Float);
+                        self.set_Sf(slot, x, SfGuarded::Float);
                     }
                 }
                 LinkMode::G(_) | LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
-                    unreachable!("use_float {:?}", self.mode(*slot));
+                    unreachable!("use_float {:?}", self.mode(slot));
                 }
             };
+        }
+    }
+
+    fn kill_unused(&mut self, unused: impl Iterator<Item = SlotId>) {
+        for slot in unused {
+            self.discard(slot);
         }
     }
 
@@ -1082,37 +1094,29 @@ impl Liveness {
     ///
     /// Collect killed (and not used) slots.
     ///
-    pub fn get_killed(&self) -> Vec<SlotId> {
-        self.0
-            .iter()
-            .enumerate()
-            .filter_map(|(i, is_used)| {
-                if is_used == &IsUsed::Killed {
-                    Some(SlotId(i as u16))
-                } else {
-                    None
-                }
-            })
-            .collect()
+    pub fn killed(&self) -> impl Iterator<Item = SlotId> {
+        self.0.iter().enumerate().filter_map(|(i, is_used)| {
+            if is_used == &IsUsed::Killed {
+                Some(SlotId(i as u16))
+            } else {
+                None
+            }
+        })
     }
 
     ///
     /// Extract a set of registers which will be used as Float in this loop,
     /// *and* xmm-linked on the back-edge.
     ///
-    pub fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
-        self.0
-            .iter()
-            .enumerate()
-            .flat_map(|(i, b)| match b {
-                IsUsed::Used(used) => match used.ty {
-                    UseTy::Float => Some((SlotId(i as u16), true)),
-                    UseTy::Both => Some((SlotId(i as u16), false)),
-                    _ => None,
-                },
+    pub fn loop_used_as_float(&self) -> impl Iterator<Item = (SlotId, bool)> {
+        self.0.iter().enumerate().flat_map(|(i, b)| match b {
+            IsUsed::Used(used) => match used.ty {
+                UseTy::Float => Some((SlotId(i as u16), true)),
+                UseTy::Both => Some((SlotId(i as u16), false)),
                 _ => None,
-            })
-            .collect()
+            },
+            _ => None,
+        })
     }
 }
 

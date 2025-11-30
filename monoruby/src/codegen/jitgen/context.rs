@@ -426,15 +426,14 @@ impl JitContext {
     pub(super) fn loop_info(
         &self,
         entry_bb: BasicBlockId,
-    ) -> (Vec<(SlotId, bool)>, Vec<SlotId>, Option<BBContext>) {
-        match self.loop_info.get(&entry_bb) {
-            Some((liveness, merger)) => (
-                liveness.get_loop_used_as_float(),
-                liveness.get_killed(),
-                merger.clone(),
-            ),
-            None => (vec![], vec![], None),
-        }
+    ) -> Option<&(Liveness, Option<BBContext>)> {
+        self.loop_info.get(&entry_bb)
+    }
+
+    pub(super) fn loop_backedge(&self, entry_bb: BasicBlockId) -> Option<&BBContext> {
+        self.loop_info
+            .get(&entry_bb)
+            .and_then(|(_, be)| be.as_ref())
     }
 
     fn branch(

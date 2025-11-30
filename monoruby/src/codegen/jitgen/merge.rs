@@ -8,7 +8,6 @@ impl JitContext {
         let branch_map = std::mem::take(&mut self.branch_map);
         for (bbid, entries) in branch_map.into_iter() {
             let target = self.backedge_map.remove(&bbid).unwrap();
-            let (_, killed, _) = self.loop_info(bbid);
             let pc = iseq.get_bb_pc(bbid);
             #[cfg(feature = "jit-debug")]
             eprintln!("  backedge_bridge to: {bbid:?} {target:?}");
@@ -22,7 +21,7 @@ impl JitContext {
                 #[cfg(feature = "jit-debug")]
                 eprintln!("    {mode:?}");
                 let mut ir = AsmIr::new();
-                bbctx.gen_bridge(&mut ir, src_bb, &target, pc, &killed);
+                bbctx.gen_bridge(&mut ir, src_bb, &target, pc);
                 match mode {
                     BranchMode::Side { dest } => {
                         self.outline_bridges.push((ir, dest, bbid));
@@ -77,27 +76,21 @@ impl JitContext {
             if !no_calc_backedge {
                 self.analyse_backedge_fixpoint(store, incoming.clone(), loop_start, loop_end);
             }
-            let (used_as_float, killed, backedge) = self.loop_info(bbid);
-
-            #[cfg(feature = "jit-debug")]
-            {
-                eprintln!("  used as f:  {:?}", used_as_float);
-                eprintln!("  killed   : {:?}", killed);
-                eprintln!("  incoming : {:?}", incoming.slot_state);
-                if let Some(backedge) = &backedge {
-                    eprintln!("  backedge : {:?}", backedge.slot_state);
-                }
-            }
 
             let mut target = incoming;
-            if let Some(backedge_ctx) = backedge {
-                target.join(&backedge_ctx);
+            if let Some((liveness, backedge)) = self.loop_info(bbid) {
+                if let Some(backedge) = backedge {
+                    #[cfg(feature = "jit-debug")]
+                    eprintln!("  backedge : {:?}", backedge.slot_state);
+                    target.join(&backedge);
+                }
+
+                target.liveness_analysis(liveness);
             }
-            target.use_float(&used_as_float);
             #[cfg(feature = "jit-debug")]
             eprintln!("  target:  {:?}", target.slot_state);
 
-            self.gen_bridges_for_branches(&target, entries, bbid, pc + 1, &killed);
+            self.gen_bridges_for_branches(&target, entries, bbid, pc + 1);
             self.new_backedge(target.slot_state.clone(), bbid);
 
             Some(target)
@@ -106,7 +99,7 @@ impl JitContext {
             eprintln!("\n===gen_merge {bbid:?}");
 
             let target = BBContext::join_entries(&entries);
-            self.gen_bridges_for_branches(&target, entries, bbid, pc, &[]);
+            self.gen_bridges_for_branches(&target, entries, bbid, pc);
 
             Some(target)
         };
@@ -125,7 +118,6 @@ impl JitContext {
         entries: Vec<BranchEntry>,
         bbid: BasicBlockId,
         pc: BytecodePtr,
-        killed: &[SlotId],
     ) {
         let target = target.clone();
         #[cfg(feature = "jit-debug")]
@@ -140,7 +132,7 @@ impl JitContext {
             #[cfg(feature = "jit-debug")]
             eprintln!("    {mode:?}");
             let mut ir = AsmIr::new();
-            bbctx.gen_bridge(&mut ir, src_bb, &target, pc, killed);
+            bbctx.gen_bridge(&mut ir, src_bb, &target, pc);
             match mode {
                 BranchMode::Side { dest } => {
                     self.outline_bridges.push((ir, dest, bbid));

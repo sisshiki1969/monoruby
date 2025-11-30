@@ -131,8 +131,7 @@ impl JitContext {
             let (liveness, backedge) =
                 self.analyse_loop(store, iseq_id, loop_start, loop_end, bbctx.clone());
             if let Some(backedge) = backedge {
-                if let Some(be) = &self.loop_info.get(&loop_start)
-                    && let Some(be) = &be.1
+                if let Some(be) = self.loop_backedge(loop_start)
                     && be.equiv(&backedge)
                 {
                     #[cfg(feature = "jit-debug")]
@@ -169,8 +168,8 @@ impl JitContext {
         let mut ctx = JitContext::loop_analysis(self, pc);
         let mut liveness = Liveness::new(ctx.total_reg_num(store));
 
-        if let (_, _, Some(backege)) = self.loop_info(loop_start) {
-            bbctx.join(&backege);
+        if let Some(backedge) = self.loop_backedge(loop_start) {
+            bbctx.join(backedge);
         };
         ctx.branch_map.insert(
             loop_start,
@@ -181,15 +180,14 @@ impl JitContext {
             }],
         );
 
-        let is_loop = store[iseq_id].bb_info.get_loop(loop_start).is_some();
         for bbid in loop_start..=loop_end {
             ctx.analyse_basic_block(
                 store,
                 iseq_id,
                 &mut liveness,
                 bbid,
-                is_loop && bbid == loop_start,
-                is_loop && bbid == loop_end,
+                bbid == loop_start,
+                bbid == loop_end,
             );
         }
 

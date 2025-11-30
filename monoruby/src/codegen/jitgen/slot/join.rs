@@ -105,16 +105,11 @@ impl BBContext {
         src_bb: Option<BasicBlockId>,
         target: &SlotContext,
         pc: BytecodePtr,
-        killed: &[SlotId],
     ) {
         #[cfg(feature = "jit-debug")]
         eprintln!("    from: {src_bb:?} {:?}", self.slot_state);
 
         for slot in self.all_regs() {
-            if killed.contains(&slot) {
-                self.discard(slot);
-                continue;
-            }
             match (self.mode(slot), target.mode(slot)) {
                 (LinkMode::V, LinkMode::V) => {}
                 (_, LinkMode::V) => {
