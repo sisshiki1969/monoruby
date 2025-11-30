@@ -4,6 +4,8 @@ source <(cargo llvm-cov show-env --export-prefix)
 cargo llvm-cov clean --workspace
 cargo build --features gc-stress
 
+cargo test
+
 target/debug/monoruby benchmark/app_fib.rb > monoruby.log
 ruby benchmark/app_fib.rb > ruby.log
 diff -s monoruby.log ruby.log
@@ -53,4 +55,4 @@ ruby --yjit ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/La
 diff -s monoruby.log ruby.log
 rm *.log
 
-cargo llvm-cov report --lcov
+cargo llvm-cov report --lcov --output-path lcov.info
