@@ -354,7 +354,7 @@ impl JitContext {
         self.stack_frame.last().unwrap()
     }
 
-    pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
+    pub(crate) fn current_method_frame(&self) -> Option<(&JitStackFrame, usize)> {
         let mut i = self.stack_frame.len() - 1;
         loop {
             let frame = &self.stack_frame[i];
@@ -362,8 +362,7 @@ impl JitContext {
                 i -= outer;
             } else {
                 return if frame.is_not_block {
-                    let block = frame.given_block()?.clone();
-                    Some(block.add(self.stack_frame.len() - 1 - i))
+                    Some((frame, self.stack_frame.len() - 1 - i))
                 } else {
                     None
                 };
@@ -371,20 +370,13 @@ impl JitContext {
         }
     }
 
+    pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
+        let (frame, i) = self.current_method_frame()?;
+        Some(frame.given_block()?.add(i))
+    }
+
     pub(crate) fn current_method_callsite(&self) -> Option<CallSiteId> {
-        let mut i = self.stack_frame.len() - 1;
-        loop {
-            let frame = &self.stack_frame[i];
-            if let Some(outer) = frame.outer {
-                i -= outer;
-            } else {
-                return if frame.is_not_block {
-                    frame.callid
-                } else {
-                    None
-                };
-            }
-        }
+        self.current_method_frame()?.0.callid
     }
 
     pub(super) fn get_pc(&self, store: &Store, i: BcIndex) -> BytecodePtr {
