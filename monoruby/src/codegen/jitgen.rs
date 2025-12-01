@@ -405,7 +405,7 @@ impl Codegen {
             JitType::Generic
         };
 
-        let mut ctx = JitContext::new(
+        let mut ctx = JitContext::create(
             store,
             iseq_id,
             jit_type,

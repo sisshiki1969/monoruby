@@ -10,12 +10,10 @@ impl JitContext {
         let iseq = &store[iseq_id];
 
         let bbctx = BBContext::new_entry(&self, store);
-        let (bbctx, start_pos) = if let Some(pc) = self.position() {
-            let start_pos = iseq.get_pc_index(Some(pc));
-            (bbctx, start_pos)
+        let start_pos = if let Some(pc) = self.position() {
+            iseq.get_pc_index(Some(pc))
         } else {
-            let start_pos = BcIndex::from(0);
-            (bbctx, start_pos)
+            BcIndex::from(0)
         };
 
         let (bb_begin, bb_end) = iseq.get_bb_range(start_pos);
@@ -713,15 +711,7 @@ impl JitContext {
                 if let Some(block_info) = self.current_method_given_block()
                     && let Some(iseq) = store[block_info.block_fid].is_iseq()
                 {
-                    self.compile_yield_specialized(
-                        bbctx,
-                        ir,
-                        store,
-                        callid,
-                        block_info.clone(),
-                        iseq,
-                        pc,
-                    );
+                    self.compile_yield_specialized(bbctx, ir, store, callid, &block_info, iseq, pc);
                 } else {
                     bbctx.compile_yield(ir, store, callid, pc);
                 }

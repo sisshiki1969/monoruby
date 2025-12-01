@@ -220,7 +220,7 @@ impl JitContext {
         ir: &mut AsmIr,
         store: &Store,
         callid: CallSiteId,
-        block: JitBlockInfo,
+        block: &JitBlockInfo,
         iseq: ISeqId,
         pc: BytecodePtr,
     ) {
@@ -435,7 +435,6 @@ impl JitContext {
         outer: Option<usize>,
         callid: CallSiteId,
     ) -> JitLabel {
-        let specialize_level = self.specialize_level() + 1;
         let idx = match self.jit_type() {
             JitType::Specialized { idx, .. } => *idx,
             _ => self.specialized_methods.len(),
@@ -450,15 +449,7 @@ impl JitContext {
             Some(callid),
             self_class,
         ));
-        let mut ctx = JitContext::new_with_stack_frame(
-            store,
-            iseq_id,
-            jit_type,
-            self.class_version(),
-            self.class_version_label(),
-            specialize_level,
-            stack_frame,
-        );
+        let mut ctx = self.create_inline_ctx(store, iseq_id, jit_type, stack_frame);
         ctx.compile(store);
         let entry = self.label();
         self.specialized_methods.push(context::SpecializeInfo {

@@ -230,50 +230,14 @@ pub struct JitContext {
 }
 
 impl JitContext {
-    pub(super) fn new(
-        store: &Store,
-        iseq_id: ISeqId,
-        jit_type: JitType,
-        class_version: u32,
-        class_version_label: DestLabel,
-        self_class: ClassId,
-        specialize_level: usize,
-        callid: Option<CallSiteId>,
-    ) -> Self {
-        let self_ty = store[self_class].instance_ty();
-        let is_not_block = store[store[iseq_id].func_id()].is_not_block();
-        Self::new_with_stack_frame(
-            store,
-            iseq_id,
-            jit_type,
-            class_version,
-            class_version_label,
-            specialize_level,
-            vec![JitStackFrame {
-                iseq_id,
-                outer: None,
-                given_block: None,
-                callid,
-                self_class,
-                self_ty,
-                is_not_block,
-            }],
-        )
-    }
-
-    ///
-    /// Create new JitContext.
-    ///
-    pub(super) fn new_with_stack_frame(
-        store: &Store,
-        iseq_id: ISeqId,
+    fn new(
+        iseq: &ISeqInfo,
         jit_type: JitType,
         class_version: u32,
         class_version_label: DestLabel,
         specialize_level: usize,
         stack_frame: Vec<JitStackFrame>,
     ) -> Self {
-        let iseq = &store[iseq_id];
         let mut basic_block_labels = HashMap::default();
         let mut labels = vec![];
         for i in 0..iseq.bb_info.len() {
@@ -307,6 +271,60 @@ impl JitContext {
         }
     }
 
+    pub(super) fn create(
+        store: &Store,
+        iseq_id: ISeqId,
+        jit_type: JitType,
+        class_version: u32,
+        class_version_label: DestLabel,
+        self_class: ClassId,
+        specialize_level: usize,
+        callid: Option<CallSiteId>,
+    ) -> Self {
+        let self_ty = store[self_class].instance_ty();
+        let is_not_block = store[store[iseq_id].func_id()].is_not_block();
+        let iseq = &store[iseq_id];
+        let stack_frame = vec![JitStackFrame {
+            iseq_id,
+            outer: None,
+            given_block: None,
+            callid,
+            self_class,
+            self_ty,
+            is_not_block,
+        }];
+
+        Self::new(
+            iseq,
+            jit_type,
+            class_version,
+            class_version_label,
+            specialize_level,
+            stack_frame,
+        )
+    }
+
+    ///
+    /// Create new JitContext.
+    ///
+    pub(super) fn create_inline_ctx(
+        &self,
+        store: &Store,
+        iseq_id: ISeqId,
+        jit_type: JitType,
+        stack_frame: Vec<JitStackFrame>,
+    ) -> Self {
+        let iseq = &store[iseq_id];
+        Self::new(
+            iseq,
+            jit_type,
+            self.class_version,
+            self.class_version_label(),
+            self.specialize_level() + 1,
+            stack_frame,
+        )
+    }
+
     pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
         Self {
             jit_type: JitType::Loop(pc),
@@ -318,11 +336,11 @@ impl JitContext {
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
             labels: vec![],
-            class_version: 0,
+            class_version: self.class_version,
             class_version_label: self.class_version_label(),
             ir: vec![],
             ivar_heap_accessed: false,
-            specialize_level: 0,
+            specialize_level: self.specialize_level,
             specialized_methods: vec![],
             inline_method_cache: HashMap::default(),
             stack_frame: self.stack_frame.clone(),
@@ -354,7 +372,7 @@ impl JitContext {
         self.stack_frame.last().unwrap()
     }
 
-    pub(crate) fn current_method_frame(&self) -> Option<(&JitStackFrame, usize)> {
+    fn current_method_frame(&self) -> Option<(&JitStackFrame, usize)> {
         let mut i = self.stack_frame.len() - 1;
         loop {
             let frame = &self.stack_frame[i];
