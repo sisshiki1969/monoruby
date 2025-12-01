@@ -413,6 +413,7 @@ impl Codegen {
             class_version_label,
             self_class,
             0,
+            None,
         );
         ctx.compile(store);
         self.jit.finalize();

@@ -830,6 +830,23 @@ impl CallSiteInfo {
         self.recv.is_self()
     }
 
+    ///
+    /// whether a block (or a block argument) is given
+    ///
+    /// - Some(true): a block is given
+    /// - Some(false): no block is given
+    /// - None: statically unknown
+    ///
+    pub fn block_given(&self) -> Option<bool> {
+        if self.block_fid.is_some() {
+            Some(true)
+        } else if self.block_arg.is_some() {
+            None
+        } else {
+            Some(false)
+        }
+    }
+
     pub fn block_handler(&self, lfp: Lfp) -> Option<BlockHandler> {
         if let Some(block_fid) = self.block_fid {
             let bh = BlockHandler::from_caller(block_fid);

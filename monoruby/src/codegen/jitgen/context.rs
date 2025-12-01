@@ -97,6 +97,10 @@ pub(crate) struct JitStackFrame {
     ///
     given_block: Option<JitBlockInfo>,
     ///
+    /// Callsite Id.
+    ///
+    callid: Option<CallSiteId>,
+    ///
     /// `ClassId`` of *self*.
     ///
     self_class: ClassId,
@@ -112,22 +116,26 @@ pub(crate) struct JitStackFrame {
 
 impl JitStackFrame {
     pub fn new(
+        store: &Store,
         iseq_id: ISeqId,
         outer: Option<usize>,
         given_block: Option<JitBlockInfo>,
+        callid: Option<CallSiteId>,
         self_class: ClassId,
-        self_ty: Option<ObjTy>,
-        is_not_block: bool,
     ) -> Self {
+        let self_ty = store[self_class].instance_ty();
+        let is_not_block = store[store[iseq_id].func_id()].is_not_block();
         Self {
             iseq_id,
             outer,
             given_block,
+            callid,
             self_class,
             self_ty,
             is_not_block,
         }
     }
+
     pub fn given_block(&self) -> Option<&JitBlockInfo> {
         self.given_block.as_ref()
     }
@@ -230,6 +238,7 @@ impl JitContext {
         class_version_label: DestLabel,
         self_class: ClassId,
         specialize_level: usize,
+        callid: Option<CallSiteId>,
     ) -> Self {
         let self_ty = store[self_class].instance_ty();
         let is_not_block = store[store[iseq_id].func_id()].is_not_block();
@@ -244,6 +253,7 @@ impl JitContext {
                 iseq_id,
                 outer: None,
                 given_block: None,
+                callid,
                 self_class,
                 self_ty,
                 is_not_block,
@@ -361,7 +371,7 @@ impl JitContext {
         }
     }
 
-    pub(crate) fn current_method_block_given(&self) -> Option<bool> {
+    pub(crate) fn current_method_callsite(&self) -> Option<CallSiteId> {
         let mut i = self.stack_frame.len() - 1;
         loop {
             let frame = &self.stack_frame[i];
@@ -369,7 +379,7 @@ impl JitContext {
                 i -= outer;
             } else {
                 return if frame.is_not_block {
-                    Some(frame.given_block.is_some())
+                    frame.callid
                 } else {
                     None
                 };

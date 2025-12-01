@@ -710,13 +710,16 @@ impl JitContext {
                 }
             }
             TraceIr::Yield { callid } => {
-                if let Some(block_info) = self.current_method_given_block() {
+                if let Some(block_info) = self.current_method_given_block()
+                    && let Some(iseq) = store[block_info.block_fid].is_iseq()
+                {
                     self.compile_yield_specialized(
                         bbctx,
                         ir,
                         store,
                         callid,
                         block_info.clone(),
+                        iseq,
                         pc,
                     );
                 } else {
