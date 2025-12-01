@@ -237,15 +237,9 @@ impl JitContext {
         bbctx.clear_above_next_sp();
         let error = ir.new_error(bbctx, pc);
         bbctx.writeback_acc(ir);
-        let stack_len = self.stack_frame.len();
-        let block_self = if let Some(info) = &self.stack_frame[stack_len - outer].given_block() {
-            Some(info.self_class)
-        } else {
-            None
-        };
         let args_info = if simple {
             JitArgumentInfo::new(slot::LinkMode::from_caller_yield(
-                store, callee_fid, callid, bbctx, block_self,
+                store, callee_fid, callid, bbctx, self_class,
             ))
         } else {
             JitArgumentInfo::default()

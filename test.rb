@@ -1,22 +1,22 @@
-class Class
-  def new(...)
-    o = allocate
-    o.initialize(...)
-    o
+def a
+  1.times do
+    # block1 in a
+    yield
   end
 end
 
-class C
-  def initialize(x)
-    @x = x
-  end
-
-  def show
-    @x
+60.times do
+  # block2 in main
+  a do
+    # block3 in main
+    puts 100
   end
 end
 
-100.times do
-  c = C.new(10)
-  puts c.show  # Output: 10
-end
+#
+#   +---------------------------------+
+#   |       +---------------+         |
+#   v       v               |         |
+# block2 -> a -> times -> block1 -> block3
+#
+#

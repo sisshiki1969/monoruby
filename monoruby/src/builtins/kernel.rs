@@ -139,7 +139,7 @@ fn kernel_block_given(
         return false;
     }
     let dst = callsite.dst;
-    if jitctx.current_method_given_block().is_some() {
+    if let Some(true) = jitctx.current_method_block_given() {
         if let Some(dst) = dst {
             bb.def_C(dst, Value::bool(true));
         }

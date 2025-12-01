@@ -465,7 +465,7 @@ impl Codegen {
                     ctx.iseq_id(),
                     name,
                     store.debug_class_name(ctx.self_class()),
-                    ctx.stack_frame,
+                    ctx.stack_frame.last().unwrap(),
                     ctx.jit_type(),
                 );
             }

@@ -1,5 +1,3 @@
-use crate::codegen::jitgen::context::JitBlockInfo;
-
 use super::*;
 
 mod join;
@@ -999,13 +997,9 @@ impl LinkMode {
         fid: FuncId,
         callid: CallSiteId,
         bbctx: &BBContext,
-        self_class: Option<ClassId>,
+        self_class: ClassId,
     ) -> Vec<Self> {
-        let recv = if let Some(self_class) = self_class {
-            LinkMode::S(Guarded::Class(self_class))
-        } else {
-            LinkMode::S(Guarded::Value)
-        };
+        let recv = LinkMode::S(Guarded::Class(self_class));
         Self::from_caller_inner(store, fid, callid, bbctx, recv)
     }
 

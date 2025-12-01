@@ -361,6 +361,22 @@ impl JitContext {
         }
     }
 
+    pub(crate) fn current_method_block_given(&self) -> Option<bool> {
+        let mut i = self.stack_frame.len() - 1;
+        loop {
+            let frame = &self.stack_frame[i];
+            if let Some(outer) = frame.outer {
+                i -= outer;
+            } else {
+                return if frame.is_not_block {
+                    Some(frame.given_block.is_some())
+                } else {
+                    None
+                };
+            }
+        }
+    }
+
     pub(super) fn get_pc(&self, store: &Store, i: BcIndex) -> BytecodePtr {
         store[self.iseq_id()].get_pc(i)
     }
