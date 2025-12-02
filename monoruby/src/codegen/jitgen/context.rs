@@ -112,6 +112,28 @@ pub(crate) struct JitStackFrame {
     /// Whether this function is a method, a class definition, or a top-level.
     ///
     is_not_block: bool,
+    ///
+    /// Loop information.
+    ///
+    /// ### key
+    /// the entry basic block of the loop.
+    ///
+    /// ### value
+    /// liveness and backedge info in the loop head.
+    ///
+    loop_info: indexmap::IndexMap<BasicBlockId, (Liveness, Option<BBContext>)>,
+    ///
+    /// Nested loop count.
+    ///
+    loop_count: usize,
+    ///
+    /// Map for bytecode position and branches.
+    ///
+    branch_map: HashMap<BasicBlockId, Vec<BranchEntry>>,
+    ///
+    /// Map for target contexts of backward branches.
+    ///
+    backedge_map: HashMap<BasicBlockId, SlotContext>,
 }
 
 impl JitStackFrame {
@@ -133,6 +155,10 @@ impl JitStackFrame {
             self_class,
             self_ty,
             is_not_block,
+            loop_info: indexmap::IndexMap::default(),
+            loop_count: 0,
+            branch_map: HashMap::default(),
+            backedge_map: HashMap::default(),
         }
     }
 
@@ -163,28 +189,7 @@ pub struct JitContext {
     /// Destination labels for each BasicBlock.
     ///
     basic_block_labels: HashMap<BasicBlockId, JitLabel>,
-    ///
-    /// Loop information.
-    ///
-    /// ### key
-    /// the entry basic block of the loop.
-    ///
-    /// ### value
-    /// liveness and backedge info in the loop head.
-    ///
-    pub(super) loop_info: indexmap::IndexMap<BasicBlockId, (Liveness, Option<BBContext>)>,
-    ///
-    /// Nested loop count.
-    ///
-    pub(super) loop_count: usize,
-    ///
-    /// Map for bytecode position and branches.
-    ///
-    pub(super) branch_map: HashMap<BasicBlockId, Vec<BranchEntry>>,
-    ///
-    /// Map for target contexts of backward branches.
-    ///
-    pub(super) backedge_map: HashMap<BasicBlockId, SlotContext>,
+
     ///
     /// Information for outlined bridges.
     ///
@@ -249,10 +254,6 @@ impl JitContext {
         Self {
             jit_type,
             basic_block_labels,
-            loop_info: indexmap::IndexMap::default(),
-            loop_count: 0,
-            branch_map: HashMap::default(),
-            backedge_map: HashMap::default(),
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
             labels,
@@ -292,6 +293,10 @@ impl JitContext {
             self_class,
             self_ty,
             is_not_block,
+            loop_info: indexmap::IndexMap::default(),
+            loop_count: 0,
+            branch_map: HashMap::default(),
+            backedge_map: HashMap::default(),
         }];
 
         Self::new(
@@ -329,10 +334,6 @@ impl JitContext {
         Self {
             jit_type: JitType::Loop(pc),
             basic_block_labels: HashMap::default(),
-            loop_info: indexmap::IndexMap::default(),
-            loop_count: 0,
-            branch_map: HashMap::default(),
-            backedge_map: HashMap::default(),
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
             labels: vec![],
@@ -368,8 +369,12 @@ impl JitContext {
         self.current_frame().is_not_block
     }
 
-    pub(crate) fn current_frame(&self) -> &JitStackFrame {
+    fn current_frame(&self) -> &JitStackFrame {
         self.stack_frame.last().unwrap()
+    }
+
+    fn current_frame_mut(&mut self) -> &mut JitStackFrame {
+        self.stack_frame.last_mut().unwrap()
     }
 
     fn current_method_frame(&self) -> Option<(&JitStackFrame, usize)> {
@@ -476,13 +481,60 @@ impl JitContext {
         &self,
         entry_bb: BasicBlockId,
     ) -> Option<&(Liveness, Option<BBContext>)> {
-        self.loop_info.get(&entry_bb)
+        self.current_frame().loop_info.get(&entry_bb)
     }
 
     pub(super) fn loop_backedge(&self, entry_bb: BasicBlockId) -> Option<&BBContext> {
-        self.loop_info
+        self.current_frame()
+            .loop_info
             .get(&entry_bb)
             .and_then(|(_, be)| be.as_ref())
+    }
+
+    pub(super) fn add_loop_info(
+        &mut self,
+        entry_bb: BasicBlockId,
+        liveness: Liveness,
+        backedge: Option<BBContext>,
+    ) {
+        self.current_frame_mut()
+            .loop_info
+            .insert(entry_bb, (liveness, backedge));
+    }
+
+    pub(super) fn loop_count(&self) -> usize {
+        self.current_frame().loop_count
+    }
+
+    pub(super) fn inc_loop_count(&mut self) {
+        self.current_frame_mut().loop_count += 1;
+    }
+
+    pub(super) fn dec_loop_count(&mut self) {
+        self.current_frame_mut().loop_count -= 1;
+    }
+
+    pub(super) fn branch_continue(&mut self, bb_begin: BasicBlockId, bbctx: BBContext) {
+        self.current_frame_mut().branch_map.insert(
+            bb_begin,
+            vec![BranchEntry {
+                src_bb: None,
+                bbctx,
+                mode: BranchMode::Continue,
+            }],
+        );
+    }
+
+    pub(super) fn remove_branch(&mut self, bb: BasicBlockId) -> Option<Vec<BranchEntry>> {
+        self.current_frame_mut().branch_map.remove(&bb)
+    }
+
+    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<SlotContext> {
+        self.current_frame_mut().backedge_map.remove(&bb)
+    }
+
+    pub(super) fn detach_branch_map(&mut self) -> HashMap<BasicBlockId, Vec<BranchEntry>> {
+        std::mem::take(&mut self.current_frame_mut().branch_map)
     }
 
     fn branch(
@@ -492,7 +544,8 @@ impl JitContext {
         bbctx: BBContext,
         mode: BranchMode,
     ) {
-        self.branch_map
+        self.current_frame_mut()
+            .branch_map
             .entry(dest_bb)
             .or_default()
             .push(BranchEntry {
@@ -569,7 +622,7 @@ impl JitContext {
     pub(super) fn new_backedge(&mut self, target: SlotContext, bb_pos: BasicBlockId) {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:{bb_pos:?} {target:?}");
-        self.backedge_map.insert(bb_pos, target);
+        self.current_frame_mut().backedge_map.insert(bb_pos, target);
     }
 
     ///

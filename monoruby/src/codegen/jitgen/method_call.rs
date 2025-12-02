@@ -512,7 +512,7 @@ impl BBContext {
         ir.xmm_save(using_xmm);
         self.set_arguments(store, ir, callid, callee_fid, pc);
         if let Some(dst) = store[callid].dst {
-            self.def_S(dst);
+            self.discard(dst);
         }
         self.clear_above_next_sp();
         let error = ir.new_error(self, pc);
@@ -554,7 +554,7 @@ impl BBContext {
         ir.xmm_save(using_xmm);
         self.set_arguments(store, ir, callid, callee_fid, pc);
         if let Some(dst) = store[callid].dst {
-            self.def_S(dst);
+            self.discard(dst);
         }
         self.clear_above_next_sp();
         let error = ir.new_error(self, pc);

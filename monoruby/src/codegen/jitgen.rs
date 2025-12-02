@@ -58,7 +58,7 @@ enum CompileResult {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct JitLabel(usize);
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum BranchMode {
     ///
     /// Continuation branch.
@@ -83,7 +83,7 @@ enum BranchMode {
 ///
 /// The information for branches.
 ///
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct BranchEntry {
     /// source BasicBlockId of the branch.
     src_bb: Option<BasicBlockId>,

@@ -45,14 +45,7 @@ impl JitContext {
         assert!(self.ir.is_empty());
         self.ir.push((None, ir));
 
-        self.branch_map.insert(
-            bb_begin,
-            vec![BranchEntry {
-                src_bb: None,
-                bbctx,
-                mode: BranchMode::Continue,
-            }],
-        );
+        self.branch_continue(bb_begin, bbctx);
 
         for bbid in bb_begin..=bb_end {
             let ir = self.compile_basic_block(store, iseq_id, bbid, bbid == bb_end);
@@ -144,11 +137,10 @@ impl JitContext {
                         "analyse_loop[{x}] backedge: {loop_end:?}->{loop_start:?} {:?}",
                         backedge.slot_state
                     );
-                    self.loop_info
-                        .insert(loop_start, (liveness, Some(backedge)));
+                    self.add_loop_info(loop_start, liveness, Some(backedge));
                 }
             } else {
-                self.loop_info.insert(loop_start, (liveness, None));
+                self.add_loop_info(loop_start, liveness, None);
                 break;
             }
             if x == 9 {
@@ -172,14 +164,7 @@ impl JitContext {
         if let Some(backedge) = self.loop_backedge(loop_start) {
             bbctx.join(backedge);
         };
-        ctx.branch_map.insert(
-            loop_start,
-            vec![BranchEntry {
-                src_bb: None,
-                bbctx,
-                mode: BranchMode::Continue,
-            }],
-        );
+        ctx.branch_continue(loop_start, bbctx);
 
         for bbid in loop_start..=loop_end {
             ctx.analyse_basic_block(
@@ -193,7 +178,7 @@ impl JitContext {
         }
 
         let mut backedge: Option<BBContext> = None;
-        if let Some(branches) = ctx.branch_map.remove(&loop_start) {
+        if let Some(branches) = ctx.remove_branch(loop_start) {
             for BranchEntry { src_bb, bbctx, .. } in branches {
                 liveness.join(&bbctx);
                 assert!(src_bb.unwrap() >= loop_start);
@@ -287,13 +272,13 @@ impl JitContext {
         match trace_ir {
             TraceIr::InitMethod { .. } => {}
             TraceIr::LoopStart { .. } => {
-                self.loop_count += 1;
+                self.inc_loop_count();
                 bbctx.exec_gc(ir, false, pc);
             }
             TraceIr::LoopEnd => {
-                assert_ne!(0, self.loop_count);
-                self.loop_count -= 1;
-                if self.is_loop() && self.loop_count == 0 {
+                assert_ne!(0, self.loop_count());
+                self.dec_loop_count();
+                if self.is_loop() && self.loop_count() == 0 {
                     ir.deopt(bbctx, pc);
                     return CompileResult::ExitLoop;
                 }

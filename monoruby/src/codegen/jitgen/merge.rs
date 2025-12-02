@@ -5,9 +5,9 @@ impl JitContext {
     /// Generate bridge AsmIr for backedge branches.
     ///
     pub(super) fn backedge_branches(&mut self, iseq: &ISeqInfo) {
-        let branch_map = std::mem::take(&mut self.branch_map);
+        let branch_map = self.detach_branch_map();
         for (bbid, entries) in branch_map.into_iter() {
-            let target = self.backedge_map.remove(&bbid).unwrap();
+            let target = self.remove_backedge(bbid).unwrap();
             let pc = iseq.get_bb_pc(bbid);
             #[cfg(feature = "jit-debug")]
             eprintln!("  backedge_bridge to: {bbid:?} {target:?}");
@@ -63,7 +63,7 @@ impl JitContext {
         bbid: BasicBlockId,
         no_calc_backedge: bool,
     ) -> Option<BBContext> {
-        let entries = self.branch_map.remove(&bbid)?;
+        let entries = self.remove_branch(bbid)?;
         let pc = iseq.get_bb_pc(bbid);
 
         let res = if let Some((loop_start, loop_end)) = iseq.bb_info.is_loop_begin(bbid) {
