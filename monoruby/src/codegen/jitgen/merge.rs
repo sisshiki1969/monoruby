@@ -66,12 +66,10 @@ impl JitContext {
         let entries = self.branch_map.remove(&bbid)?;
         let pc = iseq.get_bb_pc(bbid);
 
-        let is_loop = iseq.get_bb_pc(bbid).is_loop_start();
-        let res = if is_loop {
+        let res = if let Some((loop_start, loop_end)) = iseq.bb_info.is_loop_begin(bbid) {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge loop: {bbid:?}");
 
-            let (loop_start, loop_end) = iseq.bb_info.get_loop(bbid).unwrap();
             let incoming = BBContext::join_entries(&entries);
             if !no_calc_backedge {
                 self.analyse_backedge_fixpoint(store, incoming.clone(), loop_start, loop_end);

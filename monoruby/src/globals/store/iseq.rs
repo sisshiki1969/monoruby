@@ -294,18 +294,6 @@ impl ISeqInfo {
         map.into_iter().map(Value::symbol).collect()
     }
 
-    pub(crate) fn get_bb_range(&self, start_pos: BcIndex) -> (BasicBlockId, BasicBlockId) {
-        let bb_begin = self.bb_info.get_bb_id(start_pos);
-        let bb_end = match self.bb_info.get_loop(bb_begin) {
-            Some((a, b)) => {
-                assert_eq!(a, bb_begin);
-                b
-            }
-            None => BasicBlockId(self.bb_info.len() - 1),
-        };
-        (bb_begin, bb_end)
-    }
-
     ///
     /// Get the name of iseq.
     ///

@@ -10,13 +10,16 @@ impl JitContext {
         let iseq = &store[iseq_id];
 
         let bbctx = BBContext::new_entry(&self, store);
-        let start_pos = if let Some(pc) = self.position() {
-            iseq.get_pc_index(Some(pc))
+        let (bb_begin, bb_end) = if let Some(pc) = self.position() {
+            let start_pos = iseq.get_pc_index(Some(pc));
+            let bb_begin = iseq.bb_info.get_bb_id(start_pos);
+            iseq.bb_info.is_loop_begin(bb_begin).unwrap()
         } else {
-            BcIndex::from(0)
+            let start_pos = BcIndex::from(0);
+            let bb_begin = iseq.bb_info.get_bb_id(start_pos);
+            let bb_end = BasicBlockId(iseq.bb_info.len() - 1);
+            (bb_begin, bb_end)
         };
-
-        let (bb_begin, bb_end) = iseq.get_bb_range(start_pos);
 
         let mut ir = AsmIr::new();
         if let Some(pc) = self.position() {
