@@ -372,7 +372,7 @@ impl JitContext {
                         assert_eq!(ivarid, cached_ivarid);
                     }
                     if self.load_ivar(bbctx, ir, dst, self_class, ivarid) {
-                        self.ivar_heap_accessed = true;
+                        self.set_ivar_heap_accessed();
                     }
                 } else {
                     return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
@@ -387,7 +387,7 @@ impl JitContext {
                         assert_eq!(ivarid, cached_ivarid);
                     }
                     if self.store_ivar(bbctx, ir, src, self_class, ivarid) {
-                        self.ivar_heap_accessed = true;
+                        self.set_ivar_heap_accessed();
                     }
                 } else {
                     return CompileResult::Recompile(RecompileReason::IvarIdNotFound);

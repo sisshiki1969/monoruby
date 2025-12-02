@@ -19,23 +19,25 @@ impl Codegen {
     pub(super) fn compile_asmir(
         &mut self,
         store: &Store,
-        ctx: &mut JitContext,
+        frame: &mut JitStackFrame,
         labels: &SideExitLabels,
         inst: AsmInst,
+        class_version: DestLabel,
     ) {
         match inst {
             #[cfg(feature = "emit-asm")]
             AsmInst::BcIndex(i) => {
-                ctx.sourcemap
-                    .push((i, self.jit.get_current() - ctx.start_codepos));
+                frame
+                    .sourcemap
+                    .push((i, self.jit.get_current() - frame.start_codepos));
             }
             AsmInst::Init { info, is_method } => {
                 self.init_func(&info, is_method);
             }
             AsmInst::Preparation => {
-                if !ctx.self_class().is_always_frozen() && ctx.ivar_heap_accessed {
-                    let ivar_len = store[ctx.self_class()].ivar_len();
-                    let heap_len = if ctx.self_ty() == Some(ObjTy::OBJECT) {
+                if !frame.self_class().is_always_frozen() && frame.ivar_heap_accessed() {
+                    let ivar_len = store[frame.self_class()].ivar_len();
+                    let heap_len = if frame.self_ty() == Some(ObjTy::OBJECT) {
                         ivar_len - OBJECT_INLINE_IVAR
                     } else {
                         ivar_len
@@ -69,7 +71,7 @@ impl Codegen {
                 }
             }
             AsmInst::Label(label) => {
-                let label = ctx.resolve_label(&mut self.jit, label);
+                let label = frame.resolve_label(&mut self.jit, label);
                 self.jit.bind_label(label);
             }
             AsmInst::AccToStack(slot) => {
@@ -215,13 +217,15 @@ impl Codegen {
                 deopt,
             } => {
                 let deopt = &labels[deopt];
-                let version = ctx.class_version_label();
-                self.guard_class_version(version, position, with_recovery, deopt);
+                self.guard_class_version(class_version, position, with_recovery, deopt);
             }
             AsmInst::GuardClassVersionSpecialized { idx, deopt } => {
                 let deopt = &labels[deopt];
-                let version = ctx.class_version_label();
-                self.guard_class_version_specialized(version, self.specialized_base + idx, deopt);
+                self.guard_class_version_specialized(
+                    class_version,
+                    self.specialized_base + idx,
+                    deopt,
+                );
             }
             AsmInst::Deopt(deopt) => {
                 let deopt = &labels[deopt];
@@ -310,18 +314,18 @@ impl Codegen {
                 };
             }
             AsmInst::CondBr(brkind, dest) => {
-                let branch_dest = ctx.resolve_label(&mut self.jit, dest);
+                let branch_dest = frame.resolve_label(&mut self.jit, dest);
                 self.cond_br(branch_dest, brkind);
             }
             AsmInst::NilBr(dest) => {
-                let dest = ctx.resolve_label(&mut self.jit, dest);
+                let dest = frame.resolve_label(&mut self.jit, dest);
                 monoasm!( &mut self.jit,
                     cmpq rax, (NIL_VALUE);
                     jeq  dest;
                 );
             }
             AsmInst::CheckLocal(dest) => {
-                let dest = ctx.resolve_label(&mut self.jit, dest);
+                let dest = frame.resolve_label(&mut self.jit, dest);
                 monoasm!( &mut self.jit,
                     testq rax, rax;
                     jnz  dest;
@@ -347,11 +351,11 @@ impl Codegen {
                 // generate a jump table.
                 let jump_table = self.jit.const_align8();
                 for label in branch_labels.iter() {
-                    let dest_label = ctx.resolve_label(&mut self.jit, *label);
+                    let dest_label = frame.resolve_label(&mut self.jit, *label);
                     self.jit.abs_address(dest_label);
                 }
 
-                let else_dest = ctx.resolve_label(&mut self.jit, else_label);
+                let else_dest = frame.resolve_label(&mut self.jit, else_label);
                 monoasm! {&mut self.jit,
                     sarq rdi, 1;
                     cmpq rdi, (max);
@@ -408,8 +412,9 @@ impl Codegen {
                 patch_point,
                 evict,
             } => {
-                let patch_point = patch_point.map(|label| ctx.resolve_label(&mut self.jit, label));
-                let entry_label = ctx.resolve_label(&mut self.jit, entry);
+                let patch_point =
+                    patch_point.map(|label| frame.resolve_label(&mut self.jit, label));
+                let entry_label = frame.resolve_label(&mut self.jit, entry);
                 let return_addr = self.do_specialized_call(entry_label, patch_point);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
@@ -423,7 +428,7 @@ impl Codegen {
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
             AsmInst::SpecializedYield { entry, evict } => {
-                let block_entry = ctx.resolve_label(&mut self.jit, entry);
+                let block_entry = frame.resolve_label(&mut self.jit, entry);
                 let return_addr = self.do_specialized_call(block_entry, None);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
@@ -485,7 +490,7 @@ impl Codegen {
                 brkind,
                 branch_dest,
             } => {
-                let branch_dest = ctx.resolve_label(&mut self.jit, branch_dest);
+                let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
                 self.cmp_integer(&mode, lhs, rhs);
                 self.condbr_int(kind, branch_dest, brkind);
             }
@@ -502,7 +507,7 @@ impl Codegen {
                 brkind,
                 branch_dest,
             } => {
-                let branch_dest = ctx.resolve_label(&mut self.jit, branch_dest);
+                let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
                 self.cmp_float(&mode);
                 self.condbr_float(kind, branch_dest, brkind);
             }

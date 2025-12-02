@@ -151,6 +151,21 @@ pub(crate) struct JitStackFrame {
     /// Map for target contexts of backward branches.
     ///
     backedge_map: HashMap<BasicBlockId, SlotContext>,
+
+    ///
+    /// Flag whether ivar on the heap is accessed in this context.
+    ///
+    ivar_heap_accessed: bool,
+    ///
+    /// Source map for bytecode index and machine code position.
+    ///
+    #[cfg(feature = "emit-asm")]
+    pub(super) sourcemap: Vec<(BcIndex, usize)>,
+    ///
+    /// Start offset of a machine code corresponding to the current basic block.
+    ///
+    #[cfg(feature = "emit-asm")]
+    pub(super) start_codepos: usize,
 }
 
 impl JitStackFrame {
@@ -189,11 +204,44 @@ impl JitStackFrame {
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
+            ivar_heap_accessed: false,
+            #[cfg(feature = "emit-asm")]
+            sourcemap: vec![],
+            #[cfg(feature = "emit-asm")]
+            start_codepos: 0,
         }
     }
 
     pub fn given_block(&self) -> Option<&JitBlockInfo> {
         self.given_block.as_ref()
+    }
+
+    pub(super) fn self_class(&self) -> ClassId {
+        self.self_class
+    }
+
+    pub(super) fn self_ty(&self) -> Option<ObjTy> {
+        self.self_ty
+    }
+
+    pub(super) fn iseq_id(&self) -> ISeqId {
+        self.iseq_id
+    }
+
+    pub(super) fn is_specialized(&self) -> bool {
+        matches!(self.jit_type, JitType::Specialized { .. })
+    }
+
+    pub(super) fn jit_type(&self) -> &JitType {
+        &self.jit_type
+    }
+
+    pub(super) fn specialize_level(&self) -> usize {
+        self.specialize_level
+    }
+
+    pub(super) fn ivar_heap_accessed(&mut self) -> bool {
+        self.ivar_heap_accessed
     }
 
     ///
@@ -246,14 +294,7 @@ pub struct JitContext {
     /// Generated AsmIr.
     ///
     pub(super) ir: Vec<(Option<BasicBlockId>, AsmIr)>,
-    ///
-    /// Flag whether ivar on the heap is accessed in this context.
-    ///
-    pub ivar_heap_accessed: bool,
-    ///
-    /// Information for specialized method / block.
-    ///
-    pub(super) specialized_methods: Vec<SpecializeInfo>,
+
     ///
     /// Inline cache for method calls.
     ///
@@ -263,15 +304,9 @@ pub struct JitContext {
     ///
     pub(crate) stack_frame: Vec<JitStackFrame>,
     ///
-    /// Source map for bytecode index and machine code position.
+    /// Information for specialized method / block.
     ///
-    #[cfg(feature = "emit-asm")]
-    pub(crate) sourcemap: Vec<(BcIndex, usize)>,
-    ///
-    /// Start offset of a machine code corresponding to the current basic block.
-    ///
-    #[cfg(feature = "emit-asm")]
-    pub(crate) start_codepos: usize,
+    pub(super) specialized_methods: Vec<SpecializeInfo>,
 }
 
 impl JitContext {
@@ -286,14 +321,9 @@ impl JitContext {
             class_version,
             class_version_label,
             ir: vec![],
-            ivar_heap_accessed: false,
             specialized_methods: vec![],
             inline_method_cache: HashMap::default(),
             stack_frame,
-            #[cfg(feature = "emit-asm")]
-            sourcemap: vec![],
-            #[cfg(feature = "emit-asm")]
-            start_codepos: 0,
         }
     }
 
@@ -337,14 +367,9 @@ impl JitContext {
             class_version: self.class_version,
             class_version_label: self.class_version_label(),
             ir: vec![],
-            ivar_heap_accessed: false,
             specialized_methods: vec![],
             inline_method_cache: HashMap::default(),
             stack_frame,
-            #[cfg(feature = "emit-asm")]
-            sourcemap: vec![],
-            #[cfg(feature = "emit-asm")]
-            start_codepos: 0,
         }
     }
 
@@ -373,6 +398,10 @@ impl JitContext {
         self.stack_frame.last_mut().unwrap()
     }
 
+    pub(super) fn detach_current_frame(&mut self) -> JitStackFrame {
+        self.stack_frame.pop().unwrap()
+    }
+
     fn current_method_frame(&self) -> Option<(&JitStackFrame, usize)> {
         let mut i = self.stack_frame.len() - 1;
         loop {
@@ -396,6 +425,10 @@ impl JitContext {
 
     pub(crate) fn current_method_callsite(&self) -> Option<CallSiteId> {
         self.current_method_frame()?.0.callid
+    }
+
+    pub(super) fn set_ivar_heap_accessed(&mut self) {
+        self.current_frame_mut().ivar_heap_accessed = true;
     }
 
     pub(super) fn get_pc(&self, store: &Store, i: BcIndex) -> BytecodePtr {
@@ -444,13 +477,6 @@ impl JitContext {
     }
     pub(super) fn is_loop(&self) -> bool {
         matches!(self.jit_type(), JitType::Loop(_))
-    }
-
-    ///
-    /// Resolve *JitLabel* and return *DestLabel*.
-    ///
-    pub(super) fn resolve_label(&mut self, jit: &mut JitMemory, label: JitLabel) -> DestLabel {
-        self.current_frame_mut().resolve_label(jit, label)
     }
 
     pub(super) fn get_bb_label(&self, bb: BasicBlockId) -> JitLabel {

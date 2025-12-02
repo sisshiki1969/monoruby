@@ -434,21 +434,24 @@ impl Codegen {
         entry_label: DestLabel,
         level: usize,
     ) {
+        let mut frame = ctx.detach_current_frame();
+        let class_version = ctx.class_version_label();
+
         for context::SpecializeInfo {
             entry: specialized_entry,
             ctx: specialized_ctx,
             patch_point,
         } in std::mem::take(&mut ctx.specialized_methods)
         {
-            if !ctx.is_specialized() {
-                let patch_point = ctx.resolve_label(&mut self.jit, patch_point.unwrap());
+            if !frame.is_specialized() {
+                let patch_point = frame.resolve_label(&mut self.jit, patch_point.unwrap());
                 self.specialized_info.push((
                     specialized_ctx.iseq_id(),
                     specialized_ctx.self_class(),
                     patch_point,
                 ));
             }
-            let entry = ctx.resolve_label(&mut self.jit, specialized_entry);
+            let entry = frame.resolve_label(&mut self.jit, specialized_entry);
             self.gen_machine_code(specialized_ctx, store, entry, level + 1);
         }
 
@@ -456,24 +459,24 @@ impl Codegen {
         #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
         {
             if self.startup_flag {
-                let iseq = &store[ctx.iseq_id()];
+                let iseq = &store[frame.iseq_id()];
                 let name = store.func_description(iseq.func_id());
                 eprintln!(
                     "  {}>>> [{}] {:?} <{}> self_class:{} {:?} {:?}",
                     " ".repeat(level * 3),
-                    ctx.specialize_level(),
-                    ctx.iseq_id(),
+                    frame.specialize_level(),
+                    frame.iseq_id(),
                     name,
-                    store.debug_class_name(ctx.self_class()),
-                    ctx.stack_frame.last().unwrap(),
-                    ctx.jit_type(),
+                    store.debug_class_name(frame.self_class()),
+                    frame,
+                    frame.jit_type(),
                 );
             }
         }
 
         #[cfg(feature = "emit-asm")]
         {
-            ctx.start_codepos = self.jit.get_current();
+            frame.start_codepos = self.jit.get_current();
         }
 
         #[cfg(feature = "perf")]
@@ -492,7 +495,7 @@ impl Codegen {
 
         // generate machine code for a main context and inlined bridges.
         for (bbid, ir) in ir_vec.into_iter() {
-            self.gen_asm(ir, store, &mut ctx, None, None);
+            self.gen_asm(ir, store, &mut frame, None, None, class_version.clone());
             // generate machine code for the inlined bridge
             if let Some((ir, exit)) = ctx.remove_inline_bridge(bbid) {
                 let exit = if let Some(bbid) = bbid {
@@ -506,31 +509,38 @@ impl Codegen {
                 } else {
                     None
                 };
-                self.gen_asm(ir, store, &mut ctx, None, exit);
+                self.gen_asm(ir, store, &mut frame, None, exit, class_version.clone());
             }
         }
 
         // generate machine code for outlined bridges
         for (ir, entry, exit) in ctx.detach_outline_bridges() {
-            let entry = ctx.resolve_label(&mut self.jit, entry);
-            self.gen_asm(ir, store, &mut ctx, Some(entry), Some(exit));
+            let entry = frame.resolve_label(&mut self.jit, entry);
+            self.gen_asm(
+                ir,
+                store,
+                &mut frame,
+                Some(entry),
+                Some(exit),
+                class_version.clone(),
+            );
         }
 
-        if !ctx.is_specialized() {
+        if !frame.is_specialized() {
             self.specialized_base = self.specialized_info.len();
         }
         self.jit.finalize();
 
         #[cfg(feature = "emit-asm")]
         if self.startup_flag {
-            let iseq_id = ctx.iseq_id();
-            self.dump_disas(store, &ctx.sourcemap, iseq_id);
+            let iseq_id = frame.iseq_id();
+            self.dump_disas(store, &frame.sourcemap, iseq_id);
             eprintln!("  <<<");
         }
 
         #[cfg(feature = "perf")]
         {
-            let iseq_id = ctx.iseq_id();
+            let iseq_id = frame.iseq_id();
             let fid = store[iseq_id].func_id();
             let desc = format!("JIT:<{}>", store.func_description(fid));
             self.perf_info(pair, &desc);

@@ -1,4 +1,4 @@
-use crate::bytecodegen::BinOpK;
+use crate::{bytecodegen::BinOpK, codegen::jitgen::context::JitStackFrame};
 
 use super::*;
 
@@ -1660,9 +1660,10 @@ impl Codegen {
         &mut self,
         ir: AsmIr,
         store: &Store,
-        ctx: &mut JitContext,
+        frame: &mut JitStackFrame,
         entry: Option<DestLabel>,
         exit: Option<BasicBlockId>,
+        class_version: DestLabel,
     ) {
         let mut side_exits = SideExitLabels::new();
         let mut deopt_table: HashMap<(BytecodePtr, WriteBack), DestLabel> = HashMap::default();
@@ -1703,12 +1704,12 @@ impl Codegen {
         }
 
         for inst in ir.inst {
-            self.compile_asmir(store, ctx, &side_exits, inst);
+            self.compile_asmir(store, frame, &side_exits, inst, class_version.clone());
         }
 
         if let Some(exit) = exit {
-            let exit = ctx.get_bb_label(exit);
-            let exit = ctx.resolve_label(&mut self.jit, exit);
+            let exit = frame.get_bb_label(exit);
+            let exit = frame.resolve_label(&mut self.jit, exit);
             monoasm! { &mut self.jit,
                 jmp exit;
             }
