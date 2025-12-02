@@ -3,7 +3,7 @@ use crate::codegen::jitgen::slot::LinkMode;
 use super::*;
 
 impl JitContext {
-    pub(super) fn compile(&mut self, store: &Store) {
+    pub(super) fn traceir_to_asmir(&mut self, store: &Store) {
         let iseq_id = self.iseq_id();
         //store.dump_iseq(iseq_id);
 

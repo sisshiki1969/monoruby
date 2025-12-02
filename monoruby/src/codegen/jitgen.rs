@@ -415,8 +415,7 @@ impl Codegen {
             0,
             None,
         );
-        ctx.compile(store);
-        self.jit.finalize();
+        ctx.traceir_to_asmir(store);
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 
@@ -485,7 +484,7 @@ impl Codegen {
         let mut live_bb: HashSet<BasicBlockId> = HashSet::default();
         ir_vec.iter().for_each(|(bb, ir)| {
             if let Some(bb) = bb {
-                if !ir.inst.is_empty() || ctx.inline_bridges.contains_key(&Some(*bb)) {
+                if !ir.inst.is_empty() || ctx.inline_bridge_exists(*bb) {
                     live_bb.insert(*bb);
                 }
             }
@@ -495,7 +494,7 @@ impl Codegen {
         for (bbid, ir) in ir_vec.into_iter() {
             self.gen_asm(ir, store, &mut ctx, None, None);
             // generate machine code for the inlined bridge
-            if let Some((ir, exit)) = ctx.inline_bridges.remove(&bbid) {
+            if let Some((ir, exit)) = ctx.remove_inline_bridge(bbid) {
                 let exit = if let Some(bbid) = bbid {
                     if let Some(exit) = exit
                         && (bbid >= exit || ((bbid + 1)..exit).any(|bb| live_bb.contains(&bb)))
@@ -512,7 +511,7 @@ impl Codegen {
         }
 
         // generate machine code for outlined bridges
-        for (ir, entry, exit) in std::mem::take(&mut ctx.outline_bridges) {
+        for (ir, entry, exit) in ctx.detach_outline_bridges() {
             let entry = ctx.resolve_label(&mut self.jit, entry);
             self.gen_asm(ir, store, &mut ctx, Some(entry), Some(exit));
         }

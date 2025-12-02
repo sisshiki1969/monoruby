@@ -24,10 +24,10 @@ impl JitContext {
                 bbctx.gen_bridge(&mut ir, src_bb, &target, pc);
                 match mode {
                     BranchMode::Side { dest } => {
-                        self.outline_bridges.push((ir, dest, bbid));
+                        self.add_outline_bridge(ir, dest, bbid);
                     }
                     BranchMode::Branch => {
-                        self.inline_bridges.insert(src_bb, (ir, Some(bbid)));
+                        self.add_inline_bridge(src_bb, ir, Some(bbid));
                     }
                     BranchMode::Continue => unreachable!(),
                 }
@@ -133,13 +133,13 @@ impl JitContext {
             bbctx.gen_bridge(&mut ir, src_bb, &target, pc);
             match mode {
                 BranchMode::Side { dest } => {
-                    self.outline_bridges.push((ir, dest, bbid));
+                    self.add_outline_bridge(ir, dest, bbid);
                 }
                 BranchMode::Branch => {
-                    self.inline_bridges.insert(src_bb, (ir, Some(bbid)));
+                    self.add_inline_bridge(src_bb, ir, Some(bbid));
                 }
                 BranchMode::Continue => {
-                    self.inline_bridges.insert(src_bb, (ir, None));
+                    self.add_inline_bridge(src_bb, ir, None);
                 }
             }
         }

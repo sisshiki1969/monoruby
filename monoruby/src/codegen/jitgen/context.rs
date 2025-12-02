@@ -85,6 +85,14 @@ impl JitArgumentInfo {
 #[derive(Debug, Clone)]
 pub(crate) struct JitStackFrame {
     ///
+    /// Type of compilation for this frame.
+    ///
+    jit_type: JitType,
+    ///
+    /// Level of inlining.
+    ///
+    specialize_level: usize,
+    ///
     /// `ISeqId` of the frame.
     ///
     iseq_id: ISeqId,
@@ -112,6 +120,15 @@ pub(crate) struct JitStackFrame {
     /// Whether this function is a method, a class definition, or a top-level.
     ///
     is_not_block: bool,
+
+    ///
+    /// Information for `JitLabel`s`.
+    ///
+    labels: Vec<Option<DestLabel>>,
+    ///
+    /// Destination labels for each BasicBlock.
+    ///
+    basic_block_labels: HashMap<BasicBlockId, JitLabel>,
     ///
     /// Loop information.
     ///
@@ -137,8 +154,10 @@ pub(crate) struct JitStackFrame {
 }
 
 impl JitStackFrame {
-    pub fn new(
+    pub(super) fn new(
         store: &Store,
+        jit_type: JitType,
+        specialize_level: usize,
         iseq_id: ISeqId,
         outer: Option<usize>,
         given_block: Option<JitBlockInfo>,
@@ -147,7 +166,16 @@ impl JitStackFrame {
     ) -> Self {
         let self_ty = store[self_class].instance_ty();
         let is_not_block = store[store[iseq_id].func_id()].is_not_block();
+        let mut basic_block_labels = HashMap::default();
+        let mut labels = vec![];
+        for i in 0..store[iseq_id].bb_info.len() {
+            let idx = BasicBlockId(i);
+            basic_block_labels.insert(idx, JitLabel(labels.len()));
+            labels.push(None);
+        }
         Self {
+            jit_type,
+            specialize_level,
             iseq_id,
             outer,
             given_block,
@@ -155,6 +183,8 @@ impl JitStackFrame {
             self_class,
             self_ty,
             is_not_block,
+            labels,
+            basic_block_labels,
             loop_info: indexmap::IndexMap::default(),
             loop_count: 0,
             branch_map: HashMap::default(),
@@ -165,6 +195,33 @@ impl JitStackFrame {
     pub fn given_block(&self) -> Option<&JitBlockInfo> {
         self.given_block.as_ref()
     }
+
+    ///
+    /// Resolve *JitLabel* and return *DestLabel*.
+    ///
+    pub(super) fn resolve_label(&mut self, jit: &mut JitMemory, label: JitLabel) -> DestLabel {
+        match &self.labels[label.0] {
+            Some(l) => l.clone(),
+            None => {
+                let l = jit.label();
+                self.labels[label.0] = Some(l.clone());
+                l
+            }
+        }
+    }
+
+    pub(super) fn get_bb_label(&self, bb: BasicBlockId) -> JitLabel {
+        self.basic_block_labels.get(&bb).copied().unwrap()
+    }
+
+    ///
+    /// Create a new *JitLabel*.
+    ///
+    pub(super) fn label(&mut self) -> JitLabel {
+        let id = self.labels.len();
+        self.labels.push(None);
+        JitLabel(id)
+    }
 }
 
 ///
@@ -172,24 +229,10 @@ impl JitStackFrame {
 ///
 pub struct JitContext {
     ///
-    /// Type of compilation for this frame.
-    ///
-    jit_type: JitType,
-    ///
     /// Class version at compile time.
     ///
     class_version: u32,
     class_version_label: DestLabel,
-    ///
-    /// Level of inlining.
-    ///
-    specialize_level: usize,
-
-    ///
-    /// Destination labels for each BasicBlock.
-    ///
-    basic_block_labels: HashMap<BasicBlockId, JitLabel>,
-
     ///
     /// Information for outlined bridges.
     ///
@@ -198,10 +241,7 @@ pub struct JitContext {
     /// Information for inlined bridges.
     ///
     pub(super) inline_bridges: HashMap<Option<BasicBlockId>, (AsmIr, Option<BasicBlockId>)>,
-    ///
-    /// Information for `JitLabel`s`.
-    ///
-    labels: Vec<Option<DestLabel>>,
+
     ///
     /// Generated AsmIr.
     ///
@@ -236,32 +276,17 @@ pub struct JitContext {
 
 impl JitContext {
     fn new(
-        iseq: &ISeqInfo,
-        jit_type: JitType,
         class_version: u32,
         class_version_label: DestLabel,
-        specialize_level: usize,
         stack_frame: Vec<JitStackFrame>,
     ) -> Self {
-        let mut basic_block_labels = HashMap::default();
-        let mut labels = vec![];
-        for i in 0..iseq.bb_info.len() {
-            let idx = BasicBlockId(i);
-            basic_block_labels.insert(idx, JitLabel(labels.len()));
-            labels.push(None);
-        }
-
         Self {
-            jit_type,
-            basic_block_labels,
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
-            labels,
             class_version,
             class_version_label,
             ir: vec![],
             ivar_heap_accessed: false,
-            specialize_level,
             specialized_methods: vec![],
             inline_method_cache: HashMap::default(),
             stack_frame,
@@ -282,69 +307,40 @@ impl JitContext {
         specialize_level: usize,
         callid: Option<CallSiteId>,
     ) -> Self {
-        let self_ty = store[self_class].instance_ty();
-        let is_not_block = store[store[iseq_id].func_id()].is_not_block();
-        let iseq = &store[iseq_id];
-        let stack_frame = vec![JitStackFrame {
+        let stack_frame = vec![JitStackFrame::new(
+            store,
+            jit_type,
+            specialize_level,
             iseq_id,
-            outer: None,
-            given_block: None,
+            None,
+            None,
             callid,
             self_class,
-            self_ty,
-            is_not_block,
-            loop_info: indexmap::IndexMap::default(),
-            loop_count: 0,
-            branch_map: HashMap::default(),
-            backedge_map: HashMap::default(),
-        }];
+        )];
 
-        Self::new(
-            iseq,
-            jit_type,
-            class_version,
-            class_version_label,
-            specialize_level,
-            stack_frame,
-        )
+        Self::new(class_version, class_version_label, stack_frame)
     }
 
     ///
     /// Create new JitContext.
     ///
-    pub(super) fn create_inline_ctx(
-        &self,
-        store: &Store,
-        iseq_id: ISeqId,
-        jit_type: JitType,
-        stack_frame: Vec<JitStackFrame>,
-    ) -> Self {
-        let iseq = &store[iseq_id];
-        Self::new(
-            iseq,
-            jit_type,
-            self.class_version,
-            self.class_version_label(),
-            self.specialize_level() + 1,
-            stack_frame,
-        )
+    pub(super) fn create_inline_ctx(&self, stack_frame: Vec<JitStackFrame>) -> Self {
+        Self::new(self.class_version, self.class_version_label(), stack_frame)
     }
 
     pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
+        let mut stack_frame = self.stack_frame.clone();
+        stack_frame.last_mut().unwrap().jit_type = JitType::Loop(pc);
         Self {
-            jit_type: JitType::Loop(pc),
-            basic_block_labels: HashMap::default(),
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
-            labels: vec![],
             class_version: self.class_version,
             class_version_label: self.class_version_label(),
             ir: vec![],
             ivar_heap_accessed: false,
-            specialize_level: self.specialize_level,
             specialized_methods: vec![],
             inline_method_cache: HashMap::default(),
-            stack_frame: self.stack_frame.clone(),
+            stack_frame,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -407,11 +403,11 @@ impl JitContext {
     }
 
     pub(super) fn jit_type(&self) -> &JitType {
-        &self.jit_type
+        &self.current_frame().jit_type
     }
 
     pub(super) fn is_specialized(&self) -> bool {
-        matches!(self.jit_type, JitType::Specialized { .. })
+        matches!(self.jit_type(), JitType::Specialized { .. })
     }
 
     ///
@@ -437,44 +433,35 @@ impl JitContext {
     }
 
     pub(super) fn specialize_level(&self) -> usize {
-        self.specialize_level
+        self.current_frame().specialize_level
     }
 
     pub(super) fn position(&self) -> Option<BytecodePtr> {
-        match &self.jit_type {
+        match &self.jit_type() {
             JitType::Loop(pos) => Some(*pos),
             _ => None,
         }
     }
     pub(super) fn is_loop(&self) -> bool {
-        matches!(self.jit_type, JitType::Loop(_))
+        matches!(self.jit_type(), JitType::Loop(_))
     }
 
     ///
     /// Resolve *JitLabel* and return *DestLabel*.
     ///
     pub(super) fn resolve_label(&mut self, jit: &mut JitMemory, label: JitLabel) -> DestLabel {
-        match &self.labels[label.0] {
-            Some(l) => l.clone(),
-            None => {
-                let l = jit.label();
-                self.labels[label.0] = Some(l.clone());
-                l
-            }
-        }
+        self.current_frame_mut().resolve_label(jit, label)
     }
 
     pub(super) fn get_bb_label(&self, bb: BasicBlockId) -> JitLabel {
-        self.basic_block_labels.get(&bb).copied().unwrap()
+        self.current_frame().get_bb_label(bb)
     }
 
     ///
     /// Create a new *JitLabel*.
     ///
     pub(super) fn label(&mut self) -> JitLabel {
-        let id = self.labels.len();
-        self.labels.push(None);
-        JitLabel(id)
+        self.current_frame_mut().label()
     }
 
     pub(super) fn loop_info(
@@ -623,6 +610,34 @@ impl JitContext {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:{bb_pos:?} {target:?}");
         self.current_frame_mut().backedge_map.insert(bb_pos, target);
+    }
+
+    pub(super) fn inline_bridge_exists(&self, src_bb: BasicBlockId) -> bool {
+        self.inline_bridges.contains_key(&Some(src_bb))
+    }
+
+    pub(super) fn add_inline_bridge(
+        &mut self,
+        src_bb: Option<BasicBlockId>,
+        ir: AsmIr,
+        dest_bb: Option<BasicBlockId>,
+    ) {
+        self.inline_bridges.insert(src_bb, (ir, dest_bb));
+    }
+
+    pub(super) fn remove_inline_bridge(
+        &mut self,
+        src_bb: Option<BasicBlockId>,
+    ) -> Option<(AsmIr, Option<BasicBlockId>)> {
+        self.inline_bridges.remove(&src_bb)
+    }
+
+    pub(super) fn add_outline_bridge(&mut self, ir: AsmIr, dest: JitLabel, bbid: BasicBlockId) {
+        self.outline_bridges.push((ir, dest, bbid));
+    }
+
+    pub(super) fn detach_outline_bridges(&mut self) -> Vec<(AsmIr, JitLabel, BasicBlockId)> {
+        std::mem::take(&mut self.outline_bridges)
     }
 
     ///

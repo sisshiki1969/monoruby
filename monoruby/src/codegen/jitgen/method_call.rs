@@ -443,14 +443,18 @@ impl JitContext {
         let mut stack_frame = self.stack_frame.clone();
         stack_frame.push(JitStackFrame::new(
             store,
+            jit_type,
+            self.specialize_level() + 1,
             iseq_id,
             outer,
             block,
             Some(callid),
             self_class,
         ));
-        let mut ctx = self.create_inline_ctx(store, iseq_id, jit_type, stack_frame);
-        ctx.compile(store);
+        let i = stack_frame.len();
+        let mut ctx = self.create_inline_ctx(stack_frame);
+        ctx.traceir_to_asmir(store);
+        assert_eq!(i, ctx.stack_frame.len());
         let entry = self.label();
         self.specialized_methods.push(context::SpecializeInfo {
             entry,
