@@ -437,28 +437,30 @@ impl JitContext {
     ) -> JitLabel {
         let idx = match self.jit_type() {
             JitType::Specialized { idx, .. } => *idx,
-            _ => self.specialized_methods.len(),
+            _ => self.specialized_methods_len(),
         };
         let jit_type = JitType::Specialized { idx, args_info };
-        let mut stack_frame = self.stack_frame.clone();
+        let specialize_level = self.specialize_level() + 1;
+        let mut stack_frame = std::mem::take(&mut self.stack_frame);
         stack_frame.push(JitStackFrame::new(
             store,
             jit_type,
-            self.specialize_level() + 1,
+            specialize_level,
             iseq_id,
             outer,
             block,
             Some(callid),
             self_class,
         ));
-        let i = stack_frame.len();
         let mut ctx = self.create_inline_ctx(stack_frame);
         ctx.traceir_to_asmir(store);
-        assert_eq!(i, ctx.stack_frame.len());
+        let mut stack_frame = std::mem::take(&mut ctx.stack_frame);
+        let frame = stack_frame.pop().unwrap();
+        self.stack_frame = stack_frame;
         let entry = self.label();
-        self.specialized_methods.push(context::SpecializeInfo {
+        self.specialized_methods_push(context::SpecializeInfo {
             entry,
-            ctx,
+            frame,
             patch_point,
         });
         entry
