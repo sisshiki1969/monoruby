@@ -144,8 +144,9 @@ pub(crate) struct JitStackFrame {
     /// Nested loop count.
     ///
     loop_count: usize,
+
     ///
-    /// Map for bytecode position and branches.
+    /// Map for forward branches.
     ///
     branch_map: HashMap<BasicBlockId, Vec<BranchEntry>>,
     ///
@@ -175,6 +176,7 @@ pub(crate) struct JitStackFrame {
     /// Flag whether ivar on the heap is accessed in this context.
     ///
     ivar_heap_accessed: bool,
+
     ///
     /// Source map for bytecode index and machine code position.
     ///
@@ -270,9 +272,7 @@ impl JitStackFrame {
         }
     }
 
-    pub fn given_block(&self) -> Option<&JitBlockInfo> {
-        self.given_block.as_ref()
-    }
+    // accessors
 
     pub(super) fn self_class(&self) -> ClassId {
         self.self_class
@@ -302,21 +302,10 @@ impl JitStackFrame {
         self.ivar_heap_accessed
     }
 
+    // bridge operations
+
     pub(super) fn inline_bridge_exists(&self, src_bb: BasicBlockId) -> bool {
         self.inline_bridges.contains_key(&Some(src_bb))
-    }
-
-    pub(super) fn add_inline_bridge(
-        &mut self,
-        src_bb: Option<BasicBlockId>,
-        ir: AsmIr,
-        dest_bb: Option<BasicBlockId>,
-    ) {
-        self.inline_bridges.insert(src_bb, (ir, dest_bb));
-    }
-
-    pub(super) fn add_outline_bridge(&mut self, ir: AsmIr, dest: JitLabel, bbid: BasicBlockId) {
-        self.outline_bridges.push((ir, dest, bbid));
     }
 
     pub(super) fn remove_inline_bridge(
@@ -332,6 +321,17 @@ impl JitStackFrame {
 
     pub(super) fn detach_ir(&mut self) -> Vec<(Option<BasicBlockId>, AsmIr)> {
         std::mem::take(&mut self.ir)
+    }
+
+    // handling labels
+
+    ///
+    /// Create a new *JitLabel*.
+    ///
+    pub(super) fn label(&mut self) -> JitLabel {
+        let id = self.labels.len();
+        self.labels.push(None);
+        JitLabel(id)
     }
 
     ///
@@ -350,15 +350,6 @@ impl JitStackFrame {
 
     pub(super) fn get_bb_label(&self, bb: BasicBlockId) -> JitLabel {
         self.basic_block_labels.get(&bb).copied().unwrap()
-    }
-
-    ///
-    /// Create a new *JitLabel*.
-    ///
-    pub(super) fn label(&mut self) -> JitLabel {
-        let id = self.labels.len();
-        self.labels.push(None);
-        JitLabel(id)
     }
 }
 
@@ -493,7 +484,7 @@ impl JitContext {
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
         let (frame, i) = self.current_method_frame()?;
-        Some(frame.given_block()?.add(i))
+        Some(frame.given_block.as_ref()?.add(i))
     }
 
     pub(crate) fn current_method_callsite(&self) -> Option<CallSiteId> {
@@ -723,11 +714,14 @@ impl JitContext {
         dest_bb: Option<BasicBlockId>,
     ) {
         self.current_frame_mut()
-            .add_inline_bridge(src_bb, ir, dest_bb);
+            .inline_bridges
+            .insert(src_bb, (ir, dest_bb));
     }
 
     pub(super) fn add_outline_bridge(&mut self, ir: AsmIr, dest: JitLabel, bbid: BasicBlockId) {
-        self.current_frame_mut().add_outline_bridge(ir, dest, bbid);
+        self.current_frame_mut()
+            .outline_bridges
+            .push((ir, dest, bbid));
     }
 
     ///
