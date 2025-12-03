@@ -10,9 +10,9 @@ impl BytecodeGen {
         loc: Loc,
     ) -> Result<CallSite> {
         if arglist.forwarding {
-            self.handle_delegate(arglist, method, recv, dst, loc)
+            self.handle_forward(arglist, method, recv, dst, loc)
         } else {
-            self.handle_no_delegate(arglist, method, recv, dst, loc)
+            self.handle_no_forward(arglist, method, recv, dst, loc)
         }
     }
 
@@ -25,11 +25,11 @@ impl BytecodeGen {
         if let Some(arglist) = arglist {
             self.handle_arguments(arglist, None, BcReg::Self_, dst, loc)
         } else {
-            Ok(self.handle_super_delegate(dst, loc))
+            Ok(self.handle_super_forward(dst, loc))
         }
     }
 
-    pub(super) fn handle_no_delegate(
+    pub(super) fn handle_no_forward(
         &mut self,
         mut arglist: ArgList,
         method: impl Into<Option<IdentId>>,
@@ -54,12 +54,12 @@ impl BytecodeGen {
         };
 
         let callsite = CallSite::new(
-            method, pos_num, kw, splat_pos, block_fid, block_arg, args, recv, dst,
+            method, pos_num, kw, splat_pos, block_fid, block_arg, args, recv, dst, false,
         );
         Ok(callsite)
     }
 
-    fn handle_delegate(
+    fn handle_forward(
         &mut self,
         arglist: ArgList,
         name: impl Into<Option<IdentId>>,
@@ -127,10 +127,11 @@ impl BytecodeGen {
             args,
             recv,
             dst,
+            true,
         ))
     }
 
-    fn handle_super_delegate(&mut self, dst: Option<BcReg>, loc: Loc) -> CallSite {
+    fn handle_super_forward(&mut self, dst: Option<BcReg>, loc: Loc) -> CallSite {
         let (_, mother_args, outer) = self.mother.clone();
         let pos_len = mother_args.total_positional_args();
         let splat_pos = if let Some(rest_pos) = mother_args.is_rest() {
@@ -199,6 +200,7 @@ impl BytecodeGen {
             pos_start,
             BcReg::Self_,
             dst,
+            true,
         )
     }
 
@@ -225,13 +227,13 @@ impl BytecodeGen {
                     return Ok((local, 1, vec![]));
                 }
             } /*  else if let NodeKind::Splat(box node) = &arglist.args[0].kind {
-                  // in the case of "f(*a)"
-                  if let NodeKind::LocalVar(0, ident) = &node.kind {
-                      if let Some(local) = self.refer_local(ident) {
-                          return Ok((local, 1, vec![0]));
-                      }
-                  }
-              }*/
+            // in the case of "f(*a)"
+            if let NodeKind::LocalVar(0, ident) = &node.kind {
+            if let Some(local) = self.refer_local(ident) {
+            return Ok((local, 1, vec![0]));
+            }
+            }
+            }*/
         };
 
         self.ordinary_args(std::mem::take(&mut arglist.args))

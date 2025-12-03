@@ -294,18 +294,6 @@ impl ISeqInfo {
         map.into_iter().map(Value::symbol).collect()
     }
 
-    pub(crate) fn get_bb_range(&self, start_pos: BcIndex) -> (BasicBlockId, BasicBlockId) {
-        let bb_begin = self.bb_info.get_bb_id(start_pos);
-        let bb_end = match self.bb_info.get_loop(bb_begin) {
-            Some((a, b)) => {
-                assert_eq!(a, bb_begin);
-                b
-            }
-            None => BasicBlockId(self.bb_info.len() - 1),
-        };
-        (bb_begin, bb_end)
-    }
-
     ///
     /// Get the name of iseq.
     ///
@@ -1109,6 +1097,7 @@ pub(crate) struct ParamsInfo {
     pub kw_names: Vec<IdentId>,
     pub kw_rest: Option<SlotId>,
     block_param: Option<IdentId>,
+    forwarding: bool,
 }
 
 impl ParamsInfo {
@@ -1121,6 +1110,7 @@ impl ParamsInfo {
         keyword_names: Vec<IdentId>,
         kw_rest: Option<SlotId>,
         block_param: Option<IdentId>,
+        forwarding: bool,
     ) -> Self {
         ParamsInfo {
             required_num,
@@ -1131,6 +1121,7 @@ impl ParamsInfo {
             kw_names: keyword_names,
             kw_rest,
             block_param,
+            forwarding,
         }
     }
 
@@ -1148,6 +1139,7 @@ impl ParamsInfo {
             kw_names: vec![],
             kw_rest: None,
             block_param: None,
+            forwarding: false,
         }
     }
 
@@ -1178,6 +1170,7 @@ impl ParamsInfo {
                 None
             },
             block_param: None,
+            forwarding: false,
         }
     }
 
@@ -1212,6 +1205,10 @@ impl ParamsInfo {
     ///
     pub fn is_rest(&self) -> Option<u16> {
         self.rest.map(|i| i as u16)
+    }
+
+    pub fn forwarding(&self) -> bool {
+        self.forwarding
     }
 
     ///

@@ -130,7 +130,7 @@ fn kernel_block_given(
     bb: &mut BBContext,
     ir: &mut AsmIr,
     jitctx: &JitContext,
-    _: &Store,
+    store: &Store,
     callsite: &CallSiteInfo,
     _: ClassId,
     _: BytecodePtr,
@@ -139,9 +139,11 @@ fn kernel_block_given(
         return false;
     }
     let dst = callsite.dst;
-    if jitctx.current_frame_given_block().is_some() {
+    if let Some(callid) = jitctx.current_method_callsite()
+        && let Some(b) = store[callid].block_given()
+    {
         if let Some(dst) = dst {
-            bb.def_C(dst, Value::bool(true));
+            bb.def_C(dst, Value::bool(b));
         }
     } else {
         ir.inline(|r#gen, _, _| {

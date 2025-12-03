@@ -3,22 +3,23 @@ use crate::codegen::jitgen::slot::LinkMode;
 use super::*;
 
 impl JitContext {
-    pub(super) fn compile(&mut self, store: &Store) {
+    pub(super) fn traceir_to_asmir(&mut self, store: &Store) {
         let iseq_id = self.iseq_id();
         //store.dump_iseq(iseq_id);
 
         let iseq = &store[iseq_id];
 
         let bbctx = BBContext::new_entry(&self, store);
-        let (bbctx, start_pos) = if let Some(pc) = self.position() {
+        let (bb_begin, bb_end) = if let Some(pc) = self.position() {
             let start_pos = iseq.get_pc_index(Some(pc));
-            (bbctx, start_pos)
+            let bb_begin = iseq.bb_info.get_bb_id(start_pos);
+            iseq.bb_info.is_loop_begin(bb_begin).unwrap()
         } else {
             let start_pos = BcIndex::from(0);
-            (bbctx, start_pos)
+            let bb_begin = iseq.bb_info.get_bb_id(start_pos);
+            let bb_end = BasicBlockId(iseq.bb_info.len() - 1);
+            (bb_begin, bb_end)
         };
-
-        let (bb_begin, bb_end) = iseq.get_bb_range(start_pos);
 
         let mut ir = AsmIr::new();
         if let Some(pc) = self.position() {
@@ -33,7 +34,7 @@ impl JitContext {
                 TraceIr::InitMethod(fn_info) => {
                     ir.push(AsmInst::Init {
                         info: fn_info,
-                        is_method: store[iseq.func_id()].is_method_type(),
+                        is_method: store[iseq.func_id()].is_not_block(),
                     });
                 }
                 _ => unreachable!(),
@@ -41,21 +42,14 @@ impl JitContext {
         };
         ir.push(AsmInst::Preparation);
 
-        assert!(self.ir.is_empty());
-        self.ir.push((None, ir));
+        //assert!(self.ir.is_empty());
+        self.push_ir(None, ir);
 
-        self.branch_map.insert(
-            bb_begin,
-            vec![BranchEntry {
-                src_bb: None,
-                bbctx,
-                mode: BranchMode::Continue,
-            }],
-        );
+        self.branch_continue(bb_begin, bbctx);
 
         for bbid in bb_begin..=bb_end {
             let ir = self.compile_basic_block(store, iseq_id, bbid, bbid == bb_end);
-            self.ir.push((Some(bbid), ir));
+            self.push_ir(Some(bbid), ir);
         }
 
         self.backedge_branches(iseq);
@@ -143,11 +137,10 @@ impl JitContext {
                         "analyse_loop[{x}] backedge: {loop_end:?}->{loop_start:?} {:?}",
                         backedge.slot_state
                     );
-                    self.loop_info
-                        .insert(loop_start, (liveness, Some(backedge)));
+                    self.add_loop_info(loop_start, liveness, Some(backedge));
                 }
             } else {
-                self.loop_info.insert(loop_start, (liveness, None));
+                self.add_loop_info(loop_start, liveness, None);
                 break;
             }
             if x == 9 {
@@ -171,14 +164,7 @@ impl JitContext {
         if let Some(backedge) = self.loop_backedge(loop_start) {
             bbctx.join(backedge);
         };
-        ctx.branch_map.insert(
-            loop_start,
-            vec![BranchEntry {
-                src_bb: None,
-                bbctx,
-                mode: BranchMode::Continue,
-            }],
-        );
+        ctx.branch_continue(loop_start, bbctx);
 
         for bbid in loop_start..=loop_end {
             ctx.analyse_basic_block(
@@ -192,7 +178,7 @@ impl JitContext {
         }
 
         let mut backedge: Option<BBContext> = None;
-        if let Some(branches) = ctx.branch_map.remove(&loop_start) {
+        if let Some(branches) = ctx.remove_branch(loop_start) {
             for BranchEntry { src_bb, bbctx, .. } in branches {
                 liveness.join(&bbctx);
                 assert!(src_bb.unwrap() >= loop_start);
@@ -286,13 +272,13 @@ impl JitContext {
         match trace_ir {
             TraceIr::InitMethod { .. } => {}
             TraceIr::LoopStart { .. } => {
-                self.loop_count += 1;
+                self.inc_loop_count();
                 bbctx.exec_gc(ir, false, pc);
             }
             TraceIr::LoopEnd => {
-                assert_ne!(0, self.loop_count);
-                self.loop_count -= 1;
-                if self.is_loop() && self.loop_count == 0 {
+                assert_ne!(0, self.loop_count());
+                self.dec_loop_count();
+                if self.is_loop() && self.loop_count() == 0 {
                     ir.deopt(bbctx, pc);
                     return CompileResult::ExitLoop;
                 }
@@ -386,7 +372,7 @@ impl JitContext {
                         assert_eq!(ivarid, cached_ivarid);
                     }
                     if self.load_ivar(bbctx, ir, dst, self_class, ivarid) {
-                        self.ivar_heap_accessed = true;
+                        self.set_ivar_heap_accessed();
                     }
                 } else {
                     return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
@@ -401,7 +387,7 @@ impl JitContext {
                         assert_eq!(ivarid, cached_ivarid);
                     }
                     if self.store_ivar(bbctx, ir, src, self_class, ivarid) {
-                        self.ivar_heap_accessed = true;
+                        self.set_ivar_heap_accessed();
                     }
                 } else {
                     return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
@@ -540,7 +526,7 @@ impl JitContext {
             } => {
                 if let Some(result) = bbctx.check_concrete_f64_cmpbr(info.mode, kind, brkind) {
                     if let CompileResult::Branch = result {
-                        self.gen_branch(bbctx, iseq, bc_pos, dest_bb);
+                        self.new_branch(iseq, bc_pos, dest_bb, bbctx);
                     }
                     return result;
                 }
@@ -560,7 +546,7 @@ impl JitContext {
             } => {
                 if let Some(result) = bbctx.check_concrete_i64_cmpbr(mode, kind, brkind) {
                     if let CompileResult::Branch = result {
-                        self.gen_branch(bbctx, iseq, bc_pos, dest_bb);
+                        self.new_branch(iseq, bc_pos, dest_bb, bbctx);
                     }
                     return result;
                 }
@@ -710,16 +696,10 @@ impl JitContext {
                 }
             }
             TraceIr::Yield { callid } => {
-                //let pc = store[self.iseq_id()].get_pc(bc_pos);
-                if let Some(block_info) = self.current_frame_given_block() {
-                    self.compile_yield_specialized(
-                        bbctx,
-                        ir,
-                        store,
-                        callid,
-                        block_info.clone(),
-                        pc,
-                    );
+                if let Some(block_info) = self.current_method_given_block()
+                    && let Some(iseq) = store[block_info.block_fid].is_iseq()
+                {
+                    self.compile_yield_specialized(bbctx, ir, store, callid, &block_info, iseq, pc);
                 } else {
                     bbctx.compile_yield(ir, store, callid, pc);
                 }
@@ -847,42 +827,42 @@ impl JitContext {
                 bbctx.locals_to_S(ir);
                 ir.push(AsmInst::EnsureEnd);
             }
-            TraceIr::Br(dest_idx) => {
-                self.gen_branch(bbctx, iseq, bc_pos, dest_idx);
+            TraceIr::Br(dest_bb) => {
+                self.new_branch(iseq, bc_pos, dest_bb, bbctx);
                 return CompileResult::Branch;
             }
-            TraceIr::CondBr(cond_, dest_idx, false, brkind) => {
+            TraceIr::CondBr(cond_, dest_bb, false, brkind) => {
                 if bbctx.is_truthy(cond_) {
                     if brkind == BrKind::BrIf {
-                        self.gen_branch(bbctx, iseq, bc_pos, dest_idx);
+                        self.new_branch(iseq, bc_pos, dest_bb, bbctx);
                         return CompileResult::Branch;
                     }
                 } else if bbctx.is_falsy(cond_) {
                     if brkind == BrKind::BrIfNot {
-                        self.gen_branch(bbctx, iseq, bc_pos, dest_idx);
+                        self.new_branch(iseq, bc_pos, dest_bb, bbctx);
                         return CompileResult::Branch;
                     }
                 } else {
                     bbctx.load(ir, cond_, GP::Rax);
-                    self.gen_cond_br(bbctx, ir, iseq, bc_pos, dest_idx, brkind);
+                    self.gen_cond_br(bbctx, ir, iseq, bc_pos, dest_bb, brkind);
                 }
             }
-            TraceIr::NilBr(cond_, dest_idx) => {
+            TraceIr::NilBr(cond_, dest_bb) => {
                 if bbctx.is_nil(cond_) {
-                    self.gen_branch(bbctx, iseq, bc_pos, dest_idx);
+                    self.new_branch(iseq, bc_pos, dest_bb, bbctx);
                     return CompileResult::Branch;
                 } else if bbctx.is_not_nil(cond_) {
                 } else {
                     let branch_dest = self.label();
                     bbctx.load(ir, cond_, GP::Rax);
                     ir.push(AsmInst::NilBr(branch_dest));
-                    self.new_side_branch(iseq, bc_pos, dest_idx, bbctx.clone(), branch_dest);
+                    self.new_side_branch(iseq, bc_pos, dest_bb, bbctx.clone(), branch_dest);
                 }
             }
             TraceIr::CondBr(_, _, true, _) => {}
             TraceIr::CheckLocal(local, dest_idx) => match bbctx.mode(local) {
                 LinkMode::S(_) | LinkMode::C(_) => {
-                    self.gen_branch(bbctx, iseq, bc_pos, dest_idx);
+                    self.new_branch(iseq, bc_pos, dest_idx, bbctx);
                     return CompileResult::Branch;
                 }
                 LinkMode::MaybeNone => {
@@ -935,16 +915,6 @@ impl JitContext {
         let branch_dest = self.label();
         ir.push(AsmInst::CondBr(brkind, branch_dest));
         self.new_side_branch(iseq, src_idx, dest, bbctx.clone(), branch_dest);
-    }
-
-    fn gen_branch(
-        &mut self,
-        bbctx: &mut BBContext,
-        iseq: &ISeqInfo,
-        bc_pos: BcIndex,
-        dest: BasicBlockId,
-    ) {
-        self.new_branch(iseq, bc_pos, dest, bbctx.clone());
     }
 
     fn cmpkind_to_id(kind: CmpKind) -> IdentId {

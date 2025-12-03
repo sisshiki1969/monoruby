@@ -438,6 +438,7 @@ impl Store {
         args: SlotId,
         recv: SlotId,
         dst: Option<SlotId>,
+        forwarding: bool,
     ) -> CallSiteId {
         let id = CallSiteId(self.callsite_info.len() as u32);
         self.callsite_info.push(CallSiteInfo {
@@ -453,6 +454,7 @@ impl Store {
             args,
             recv,
             dst,
+            forwarding,
         });
         id
     }
@@ -804,6 +806,7 @@ pub struct CallSiteInfo {
     pub(crate) hash_splat_pos: Vec<SlotId>,
     /// Position where the result is to be stored to.
     pub(crate) dst: Option<SlotId>,
+    pub(crate) forwarding: bool,
 }
 
 impl CallSiteInfo {
@@ -825,6 +828,23 @@ impl CallSiteInfo {
 
     pub fn is_func_call(&self) -> bool {
         self.recv.is_self()
+    }
+
+    ///
+    /// whether a block (or a block argument) is given
+    ///
+    /// - Some(true): a block is given
+    /// - Some(false): no block is given
+    /// - None: statically unknown
+    ///
+    pub fn block_given(&self) -> Option<bool> {
+        if self.block_fid.is_some() {
+            Some(true)
+        } else if self.block_arg.is_some() {
+            None
+        } else {
+            Some(false)
+        }
     }
 
     pub fn block_handler(&self, lfp: Lfp) -> Option<BlockHandler> {

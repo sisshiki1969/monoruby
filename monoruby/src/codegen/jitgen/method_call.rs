@@ -220,7 +220,8 @@ impl JitContext {
         ir: &mut AsmIr,
         store: &Store,
         callid: CallSiteId,
-        block: JitBlockInfo,
+        block: &JitBlockInfo,
+        iseq: ISeqId,
         pc: BytecodePtr,
     ) {
         let dst = store[callid].dst;
@@ -237,24 +238,23 @@ impl JitContext {
         bbctx.clear_above_next_sp();
         let error = ir.new_error(bbctx, pc);
         bbctx.writeback_acc(ir);
-        let stack_len = self.stack_frame.len();
-        let block = if let Some(info) =
-            &self.stack_frame[stack_len.checked_sub(outer).unwrap()].given_block()
-        {
-            Some(info.add(outer))
-        } else {
-            None
-        };
         let args_info = if simple {
             JitArgumentInfo::new(slot::LinkMode::from_caller_yield(
-                store, callee_fid, callid, bbctx, &block,
+                store, callee_fid, callid, bbctx, self_class,
             ))
         } else {
             JitArgumentInfo::default()
         };
-        let iseq = store[callee_fid].is_iseq().unwrap();
-        let entry =
-            self.compile_inlined_func(store, iseq, self_class, None, args_info, block, Some(outer));
+        let entry = self.compile_inlined_func(
+            store,
+            iseq,
+            self_class,
+            None,
+            args_info,
+            None,
+            Some(outer),
+            callid,
+        );
         let evict = ir.new_evict();
         let meta = store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
@@ -395,8 +395,7 @@ impl JitContext {
                     } else {
                         JitArgumentInfo::default()
                     };
-                    let block = iseq_block
-                        .map(|_| JitBlockInfo::new(block_fid.unwrap(), self.self_class()));
+                    let block = block_fid.map(|fid| JitBlockInfo::new(fid, self.self_class()));
                     let patch_point = if self.is_specialized() {
                         None
                     } else {
@@ -410,6 +409,7 @@ impl JitContext {
                         args_info,
                         block,
                         None,
+                        callid,
                     );
                     bbctx.send_specialized(ir, store, callid, fid, entry, patch_point, evict, pc);
                 } else {
@@ -433,33 +433,34 @@ impl JitContext {
         args_info: JitArgumentInfo,
         block: Option<JitBlockInfo>,
         outer: Option<usize>,
+        callid: CallSiteId,
     ) -> JitLabel {
-        let specialize_level = self.specialize_level() + 1;
         let idx = match self.jit_type() {
             JitType::Specialized { idx, .. } => *idx,
-            _ => self.specialized_methods.len(),
+            _ => self.specialized_methods_len(),
         };
         let jit_type = JitType::Specialized { idx, args_info };
-        let mut stack_frame = self.stack_frame.clone();
-        let self_ty = store[self_class].instance_ty();
-        let is_method = store[store[iseq_id].func_id()].is_method_type();
+        let specialize_level = self.specialize_level() + 1;
+        let mut stack_frame = std::mem::take(&mut self.stack_frame);
         stack_frame.push(JitStackFrame::new(
-            iseq_id, outer, block, self_class, self_ty, is_method,
-        ));
-        let mut ctx = JitContext::new_with_stack_frame(
             store,
-            iseq_id,
             jit_type,
-            self.class_version(),
-            self.class_version_label(),
             specialize_level,
-            stack_frame,
-        );
-        ctx.compile(store);
+            iseq_id,
+            outer,
+            block,
+            Some(callid),
+            self_class,
+        ));
+        let mut ctx = self.create_inline_ctx(stack_frame);
+        ctx.traceir_to_asmir(store);
+        let mut stack_frame = std::mem::take(&mut ctx.stack_frame);
+        let frame = stack_frame.pop().unwrap();
+        self.stack_frame = stack_frame;
         let entry = self.label();
-        self.specialized_methods.push(context::SpecializeInfo {
+        self.specialized_methods_push(context::SpecializeInfo {
             entry,
-            ctx,
+            frame,
             patch_point,
         });
         entry
@@ -517,7 +518,7 @@ impl BBContext {
         ir.xmm_save(using_xmm);
         self.set_arguments(store, ir, callid, callee_fid, pc);
         if let Some(dst) = store[callid].dst {
-            self.def_S(dst);
+            self.discard(dst);
         }
         self.clear_above_next_sp();
         let error = ir.new_error(self, pc);
@@ -559,7 +560,7 @@ impl BBContext {
         ir.xmm_save(using_xmm);
         self.set_arguments(store, ir, callid, callee_fid, pc);
         if let Some(dst) = store[callid].dst {
-            self.def_S(dst);
+            self.discard(dst);
         }
         self.clear_above_next_sp();
         let error = ir.new_error(self, pc);

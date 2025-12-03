@@ -17,9 +17,10 @@ pub(super) enum JitType {
     Loop(BytecodePtr),
 }
 
+#[derive(Debug)]
 pub(super) struct SpecializeInfo {
     pub(super) entry: JitLabel,
-    pub(super) ctx: JitContext,
+    pub(super) frame: JitStackFrame,
     pub(super) patch_point: Option<JitLabel>,
 }
 
@@ -82,8 +83,16 @@ impl JitArgumentInfo {
 ///
 /// Virtual Stack frame for specialized compilation.
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct JitStackFrame {
+    ///
+    /// Type of compilation for this frame.
+    ///
+    jit_type: JitType,
+    ///
+    /// Level of inlining.
+    ///
+    specialize_level: usize,
     ///
     /// `ISeqId` of the frame.
     ///
@@ -97,6 +106,10 @@ pub(crate) struct JitStackFrame {
     ///
     given_block: Option<JitBlockInfo>,
     ///
+    /// Callsite Id.
+    ///
+    callid: Option<CallSiteId>,
+    ///
     /// `ClassId`` of *self*.
     ///
     self_class: ClassId,
@@ -107,50 +120,12 @@ pub(crate) struct JitStackFrame {
     ///
     /// Whether this function is a method, a class definition, or a top-level.
     ///
-    is_method: bool,
-}
+    is_not_block: bool,
 
-impl JitStackFrame {
-    pub fn new(
-        iseq_id: ISeqId,
-        outer: Option<usize>,
-        given_block: Option<JitBlockInfo>,
-        self_class: ClassId,
-        self_ty: Option<ObjTy>,
-        is_method: bool,
-    ) -> Self {
-        Self {
-            iseq_id,
-            outer,
-            given_block,
-            self_class,
-            self_ty,
-            is_method,
-        }
-    }
-    pub fn given_block(&self) -> Option<&JitBlockInfo> {
-        self.given_block.as_ref()
-    }
-}
-
-///
-/// Context for JIT compilation.
-///
-pub struct JitContext {
     ///
-    /// Type of compilation for this frame.
+    /// Information for `JitLabel`s`.
     ///
-    jit_type: JitType,
-    ///
-    /// Class version at compile time.
-    ///
-    class_version: u32,
-    class_version_label: DestLabel,
-    ///
-    /// Level of inlining.
-    ///
-    specialize_level: usize,
-
+    labels: Vec<Option<DestLabel>>,
     ///
     /// Destination labels for each BasicBlock.
     ///
@@ -164,43 +139,230 @@ pub struct JitContext {
     /// ### value
     /// liveness and backedge info in the loop head.
     ///
-    pub(super) loop_info: indexmap::IndexMap<BasicBlockId, (Liveness, Option<BBContext>)>,
+    loop_info: indexmap::IndexMap<BasicBlockId, (Liveness, Option<BBContext>)>,
     ///
     /// Nested loop count.
     ///
-    pub(super) loop_count: usize,
+    loop_count: usize,
+
     ///
-    /// Map for bytecode position and branches.
+    /// Map for forward branches.
     ///
-    pub(super) branch_map: HashMap<BasicBlockId, Vec<BranchEntry>>,
+    branch_map: HashMap<BasicBlockId, Vec<BranchEntry>>,
     ///
     /// Map for target contexts of backward branches.
     ///
-    pub(super) backedge_map: HashMap<BasicBlockId, SlotContext>,
-    ///
-    /// Information for outlined bridges.
-    ///
-    pub(super) outline_bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
-    ///
-    /// Information for inlined bridges.
-    ///
-    pub(super) inline_bridges: HashMap<Option<BasicBlockId>, (AsmIr, Option<BasicBlockId>)>,
-    ///
-    /// Information for `JitLabel`s`.
-    ///
-    labels: Vec<Option<DestLabel>>,
+    backedge_map: HashMap<BasicBlockId, SlotContext>,
+
     ///
     /// Generated AsmIr.
     ///
-    pub(super) ir: Vec<(Option<BasicBlockId>, AsmIr)>,
+    ir: Vec<(Option<BasicBlockId>, AsmIr)>,
     ///
-    /// Flag whether ivar on the heap is accessed in this context.
+    /// Information for outlined bridges.
     ///
-    pub ivar_heap_accessed: bool,
+    outline_bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
+    ///
+    /// Information for inlined bridges.
+    ///
+    inline_bridges: HashMap<Option<BasicBlockId>, (AsmIr, Option<BasicBlockId>)>,
+
     ///
     /// Information for specialized method / block.
     ///
     pub(super) specialized_methods: Vec<SpecializeInfo>,
+
+    ///
+    /// Flag whether ivar on the heap is accessed in this context.
+    ///
+    ivar_heap_accessed: bool,
+
+    ///
+    /// Source map for bytecode index and machine code position.
+    ///
+    #[cfg(feature = "emit-asm")]
+    pub(super) sourcemap: Vec<(BcIndex, usize)>,
+    ///
+    /// Start offset of a machine code corresponding to the current basic block.
+    ///
+    #[cfg(feature = "emit-asm")]
+    pub(super) start_codepos: usize,
+}
+
+impl Clone for JitStackFrame {
+    fn clone(&self) -> Self {
+        self.dup()
+    }
+}
+
+impl JitStackFrame {
+    pub(super) fn new(
+        store: &Store,
+        jit_type: JitType,
+        specialize_level: usize,
+        iseq_id: ISeqId,
+        outer: Option<usize>,
+        given_block: Option<JitBlockInfo>,
+        callid: Option<CallSiteId>,
+        self_class: ClassId,
+    ) -> Self {
+        let self_ty = store[self_class].instance_ty();
+        let is_not_block = store[store[iseq_id].func_id()].is_not_block();
+        let mut basic_block_labels = HashMap::default();
+        let mut labels = vec![];
+        for i in 0..store[iseq_id].bb_info.len() {
+            let idx = BasicBlockId(i);
+            basic_block_labels.insert(idx, JitLabel(labels.len()));
+            labels.push(None);
+        }
+        Self {
+            jit_type,
+            specialize_level,
+            iseq_id,
+            outer,
+            given_block,
+            callid,
+            self_class,
+            self_ty,
+            is_not_block,
+            labels,
+            basic_block_labels,
+            loop_info: indexmap::IndexMap::default(),
+            loop_count: 0,
+            branch_map: HashMap::default(),
+            backedge_map: HashMap::default(),
+            ir: vec![],
+            outline_bridges: vec![],
+            inline_bridges: HashMap::default(),
+            specialized_methods: vec![],
+            ivar_heap_accessed: false,
+            #[cfg(feature = "emit-asm")]
+            sourcemap: vec![],
+            #[cfg(feature = "emit-asm")]
+            start_codepos: 0,
+        }
+    }
+
+    fn dup(&self) -> Self {
+        Self {
+            jit_type: self.jit_type.clone(),
+            specialize_level: self.specialize_level,
+            iseq_id: self.iseq_id,
+            outer: self.outer,
+            given_block: self.given_block.clone(),
+            callid: self.callid,
+            self_class: self.self_class,
+            self_ty: self.self_ty,
+            is_not_block: self.is_not_block,
+            labels: self.labels.clone(),
+            basic_block_labels: self.basic_block_labels.clone(),
+            loop_info: indexmap::IndexMap::default(),
+            loop_count: 0,
+            branch_map: HashMap::default(),
+            backedge_map: HashMap::default(),
+            ir: vec![],
+            outline_bridges: vec![],
+            inline_bridges: HashMap::default(),
+            specialized_methods: vec![],
+            ivar_heap_accessed: false,
+            #[cfg(feature = "emit-asm")]
+            sourcemap: vec![],
+            #[cfg(feature = "emit-asm")]
+            start_codepos: 0,
+        }
+    }
+
+    // accessors
+
+    pub(super) fn self_class(&self) -> ClassId {
+        self.self_class
+    }
+
+    pub(super) fn self_ty(&self) -> Option<ObjTy> {
+        self.self_ty
+    }
+
+    pub(super) fn iseq_id(&self) -> ISeqId {
+        self.iseq_id
+    }
+
+    pub(super) fn is_specialized(&self) -> bool {
+        matches!(self.jit_type, JitType::Specialized { .. })
+    }
+
+    pub(super) fn jit_type(&self) -> &JitType {
+        &self.jit_type
+    }
+
+    pub(super) fn specialize_level(&self) -> usize {
+        self.specialize_level
+    }
+
+    pub(super) fn ivar_heap_accessed(&mut self) -> bool {
+        self.ivar_heap_accessed
+    }
+
+    // bridge operations
+
+    pub(super) fn inline_bridge_exists(&self, src_bb: BasicBlockId) -> bool {
+        self.inline_bridges.contains_key(&Some(src_bb))
+    }
+
+    pub(super) fn remove_inline_bridge(
+        &mut self,
+        src_bb: Option<BasicBlockId>,
+    ) -> Option<(AsmIr, Option<BasicBlockId>)> {
+        self.inline_bridges.remove(&src_bb)
+    }
+
+    pub(super) fn detach_outline_bridges(&mut self) -> Vec<(AsmIr, JitLabel, BasicBlockId)> {
+        std::mem::take(&mut self.outline_bridges)
+    }
+
+    pub(super) fn detach_ir(&mut self) -> Vec<(Option<BasicBlockId>, AsmIr)> {
+        std::mem::take(&mut self.ir)
+    }
+
+    // handling labels
+
+    ///
+    /// Create a new *JitLabel*.
+    ///
+    pub(super) fn label(&mut self) -> JitLabel {
+        let id = self.labels.len();
+        self.labels.push(None);
+        JitLabel(id)
+    }
+
+    ///
+    /// Resolve *JitLabel* and return *DestLabel*.
+    ///
+    pub(super) fn resolve_label(&mut self, jit: &mut JitMemory, label: JitLabel) -> DestLabel {
+        match &self.labels[label.0] {
+            Some(l) => l.clone(),
+            None => {
+                let l = jit.label();
+                self.labels[label.0] = Some(l.clone());
+                l
+            }
+        }
+    }
+
+    pub(super) fn get_bb_label(&self, bb: BasicBlockId) -> JitLabel {
+        self.basic_block_labels.get(&bb).copied().unwrap()
+    }
+}
+
+///
+/// Context for JIT compilation.
+///
+pub struct JitContext {
+    ///
+    /// Class version at compile time.
+    ///
+    class_version: u32,
+    class_version_label: DestLabel,
+
     ///
     /// Inline cache for method calls.
     ///
@@ -209,20 +371,23 @@ pub struct JitContext {
     /// Stack frame for specialized compilation. (iseq, outer_scope, block_iseq)
     ///
     pub(crate) stack_frame: Vec<JitStackFrame>,
-    ///
-    /// Source map for bytecode index and machine code position.
-    ///
-    #[cfg(feature = "emit-asm")]
-    pub(crate) sourcemap: Vec<(BcIndex, usize)>,
-    ///
-    /// Start offset of a machine code corresponding to the current basic block.
-    ///
-    #[cfg(feature = "emit-asm")]
-    pub(crate) start_codepos: usize,
 }
 
 impl JitContext {
-    pub(super) fn new(
+    fn new(
+        class_version: u32,
+        class_version_label: DestLabel,
+        stack_frame: Vec<JitStackFrame>,
+    ) -> Self {
+        Self {
+            class_version,
+            class_version_label,
+            inline_method_cache: HashMap::default(),
+            stack_frame,
+        }
+    }
+
+    pub(super) fn create(
         store: &Store,
         iseq_id: ISeqId,
         jit_type: JitType,
@@ -230,96 +395,37 @@ impl JitContext {
         class_version_label: DestLabel,
         self_class: ClassId,
         specialize_level: usize,
+        callid: Option<CallSiteId>,
     ) -> Self {
-        let self_ty = store[self_class].instance_ty();
-        let is_method = store[store[iseq_id].func_id()].is_method_type();
-        Self::new_with_stack_frame(
+        let stack_frame = vec![JitStackFrame::new(
             store,
-            iseq_id,
             jit_type,
-            class_version,
-            class_version_label,
             specialize_level,
-            vec![JitStackFrame {
-                iseq_id,
-                outer: None,
-                given_block: None,
-                self_class,
-                self_ty,
-                is_method,
-            }],
-        )
+            iseq_id,
+            None,
+            None,
+            callid,
+            self_class,
+        )];
+
+        Self::new(class_version, class_version_label, stack_frame)
     }
 
     ///
     /// Create new JitContext.
     ///
-    pub(super) fn new_with_stack_frame(
-        store: &Store,
-        iseq_id: ISeqId,
-        jit_type: JitType,
-        class_version: u32,
-        class_version_label: DestLabel,
-        specialize_level: usize,
-        stack_frame: Vec<JitStackFrame>,
-    ) -> Self {
-        let iseq = &store[iseq_id];
-        let mut basic_block_labels = HashMap::default();
-        let mut labels = vec![];
-        for i in 0..iseq.bb_info.len() {
-            let idx = BasicBlockId(i);
-            basic_block_labels.insert(idx, JitLabel(labels.len()));
-            labels.push(None);
-        }
-
-        Self {
-            jit_type,
-            basic_block_labels,
-            loop_info: indexmap::IndexMap::default(),
-            loop_count: 0,
-            branch_map: HashMap::default(),
-            backedge_map: HashMap::default(),
-            outline_bridges: vec![],
-            inline_bridges: HashMap::default(),
-            labels,
-            class_version,
-            class_version_label,
-            ir: vec![],
-            ivar_heap_accessed: false,
-            specialize_level,
-            specialized_methods: vec![],
-            inline_method_cache: HashMap::default(),
-            stack_frame,
-            #[cfg(feature = "emit-asm")]
-            sourcemap: vec![],
-            #[cfg(feature = "emit-asm")]
-            start_codepos: 0,
-        }
+    pub(super) fn create_inline_ctx(&self, stack_frame: Vec<JitStackFrame>) -> Self {
+        Self::new(self.class_version, self.class_version_label(), stack_frame)
     }
 
     pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
+        let mut stack_frame = self.stack_frame.clone();
+        stack_frame.last_mut().unwrap().jit_type = JitType::Loop(pc);
         Self {
-            jit_type: JitType::Loop(pc),
-            basic_block_labels: HashMap::default(),
-            loop_info: indexmap::IndexMap::default(),
-            loop_count: 0,
-            branch_map: HashMap::default(),
-            backedge_map: HashMap::default(),
-            outline_bridges: vec![],
-            inline_bridges: HashMap::default(),
-            labels: vec![],
-            class_version: 0,
+            class_version: self.class_version,
             class_version_label: self.class_version_label(),
-            ir: vec![],
-            ivar_heap_accessed: false,
-            specialize_level: 0,
-            specialized_methods: vec![],
             inline_method_cache: HashMap::default(),
-            stack_frame: self.stack_frame.clone(),
-            #[cfg(feature = "emit-asm")]
-            sourcemap: vec![],
-            #[cfg(feature = "emit-asm")]
-            start_codepos: 0,
+            stack_frame,
         }
     }
 
@@ -336,16 +442,57 @@ impl JitContext {
     }
 
     /// Whether this function is a method, a class definition, or a top-level.
-    pub(super) fn is_method(&self) -> bool {
-        self.current_frame().is_method
+    pub(super) fn is_not_block(&self) -> bool {
+        self.current_frame().is_not_block
     }
 
-    pub(crate) fn current_frame(&self) -> &JitStackFrame {
+    pub(super) fn specialized_methods_len(&self) -> usize {
+        self.current_frame().specialized_methods.len()
+    }
+
+    pub(super) fn specialized_methods_push(&mut self, info: SpecializeInfo) {
+        self.current_frame_mut().specialized_methods.push(info);
+    }
+
+    fn current_frame(&self) -> &JitStackFrame {
         self.stack_frame.last().unwrap()
     }
 
-    pub(crate) fn current_frame_given_block(&self) -> Option<&JitBlockInfo> {
-        self.current_frame().given_block.as_ref()
+    fn current_frame_mut(&mut self) -> &mut JitStackFrame {
+        self.stack_frame.last_mut().unwrap()
+    }
+
+    pub(super) fn detach_current_frame(&mut self) -> JitStackFrame {
+        self.stack_frame.pop().unwrap()
+    }
+
+    fn current_method_frame(&self) -> Option<(&JitStackFrame, usize)> {
+        let mut i = self.stack_frame.len() - 1;
+        loop {
+            let frame = &self.stack_frame[i];
+            if let Some(outer) = frame.outer {
+                i -= outer;
+            } else {
+                return if frame.is_not_block {
+                    Some((frame, self.stack_frame.len() - 1 - i))
+                } else {
+                    None
+                };
+            }
+        }
+    }
+
+    pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
+        let (frame, i) = self.current_method_frame()?;
+        Some(frame.given_block.as_ref()?.add(i))
+    }
+
+    pub(crate) fn current_method_callsite(&self) -> Option<CallSiteId> {
+        self.current_method_frame()?.0.callid
+    }
+
+    pub(super) fn set_ivar_heap_accessed(&mut self) {
+        self.current_frame_mut().ivar_heap_accessed = true;
     }
 
     pub(super) fn get_pc(&self, store: &Store, i: BcIndex) -> BytecodePtr {
@@ -353,11 +500,11 @@ impl JitContext {
     }
 
     pub(super) fn jit_type(&self) -> &JitType {
-        &self.jit_type
+        &self.current_frame().jit_type
     }
 
     pub(super) fn is_specialized(&self) -> bool {
-        matches!(self.jit_type, JitType::Specialized { .. })
+        matches!(self.jit_type(), JitType::Specialized { .. })
     }
 
     ///
@@ -383,57 +530,88 @@ impl JitContext {
     }
 
     pub(super) fn specialize_level(&self) -> usize {
-        self.specialize_level
+        self.current_frame().specialize_level
     }
 
     pub(super) fn position(&self) -> Option<BytecodePtr> {
-        match &self.jit_type {
+        match &self.jit_type() {
             JitType::Loop(pos) => Some(*pos),
             _ => None,
         }
     }
     pub(super) fn is_loop(&self) -> bool {
-        matches!(self.jit_type, JitType::Loop(_))
-    }
-
-    ///
-    /// Resolve *JitLabel* and return *DestLabel*.
-    ///
-    pub(super) fn resolve_label(&mut self, jit: &mut JitMemory, label: JitLabel) -> DestLabel {
-        match &self.labels[label.0] {
-            Some(l) => l.clone(),
-            None => {
-                let l = jit.label();
-                self.labels[label.0] = Some(l.clone());
-                l
-            }
-        }
+        matches!(self.jit_type(), JitType::Loop(_))
     }
 
     pub(super) fn get_bb_label(&self, bb: BasicBlockId) -> JitLabel {
-        self.basic_block_labels.get(&bb).copied().unwrap()
+        self.current_frame().get_bb_label(bb)
     }
 
     ///
     /// Create a new *JitLabel*.
     ///
     pub(super) fn label(&mut self) -> JitLabel {
-        let id = self.labels.len();
-        self.labels.push(None);
-        JitLabel(id)
+        self.current_frame_mut().label()
     }
 
     pub(super) fn loop_info(
         &self,
         entry_bb: BasicBlockId,
     ) -> Option<&(Liveness, Option<BBContext>)> {
-        self.loop_info.get(&entry_bb)
+        self.current_frame().loop_info.get(&entry_bb)
     }
 
     pub(super) fn loop_backedge(&self, entry_bb: BasicBlockId) -> Option<&BBContext> {
-        self.loop_info
+        self.current_frame()
+            .loop_info
             .get(&entry_bb)
             .and_then(|(_, be)| be.as_ref())
+    }
+
+    pub(super) fn add_loop_info(
+        &mut self,
+        entry_bb: BasicBlockId,
+        liveness: Liveness,
+        backedge: Option<BBContext>,
+    ) {
+        self.current_frame_mut()
+            .loop_info
+            .insert(entry_bb, (liveness, backedge));
+    }
+
+    pub(super) fn loop_count(&self) -> usize {
+        self.current_frame().loop_count
+    }
+
+    pub(super) fn inc_loop_count(&mut self) {
+        self.current_frame_mut().loop_count += 1;
+    }
+
+    pub(super) fn dec_loop_count(&mut self) {
+        self.current_frame_mut().loop_count -= 1;
+    }
+
+    pub(super) fn branch_continue(&mut self, bb_begin: BasicBlockId, bbctx: BBContext) {
+        self.current_frame_mut().branch_map.insert(
+            bb_begin,
+            vec![BranchEntry {
+                src_bb: None,
+                bbctx,
+                mode: BranchMode::Continue,
+            }],
+        );
+    }
+
+    pub(super) fn remove_branch(&mut self, bb: BasicBlockId) -> Option<Vec<BranchEntry>> {
+        self.current_frame_mut().branch_map.remove(&bb)
+    }
+
+    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<SlotContext> {
+        self.current_frame_mut().backedge_map.remove(&bb)
+    }
+
+    pub(super) fn detach_branch_map(&mut self) -> HashMap<BasicBlockId, Vec<BranchEntry>> {
+        std::mem::take(&mut self.current_frame_mut().branch_map)
     }
 
     fn branch(
@@ -443,7 +621,8 @@ impl JitContext {
         bbctx: BBContext,
         mode: BranchMode,
     ) {
-        self.branch_map
+        self.current_frame_mut()
+            .branch_map
             .entry(dest_bb)
             .or_default()
             .push(BranchEntry {
@@ -480,15 +659,16 @@ impl JitContext {
     pub(super) fn new_branch(
         &mut self,
         iseq: &ISeqInfo,
-        src_idx: BcIndex,
+        bc_pos: BcIndex,
         dest_bb: BasicBlockId,
-        mut bbctx: BBContext,
+        bbctx: &BBContext,
     ) {
+        let mut bbctx = bbctx.clone();
         bbctx.clear_above_next_sp();
-        let src_bb = iseq.bb_info.get_bb_id(src_idx);
+        let src_bb = iseq.bb_info.get_bb_id(bc_pos);
         #[cfg(feature = "jit-debug")]
         eprintln!(
-            "   new_branch: {src_idx}->{dest_bb:?} {:?}",
+            "   new_branch: {bc_pos}->{dest_bb:?} {:?}",
             bbctx.slot_state
         );
         self.branch(src_bb, dest_bb, bbctx, BranchMode::Branch);
@@ -520,7 +700,28 @@ impl JitContext {
     pub(super) fn new_backedge(&mut self, target: SlotContext, bb_pos: BasicBlockId) {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:{bb_pos:?} {target:?}");
-        self.backedge_map.insert(bb_pos, target);
+        self.current_frame_mut().backedge_map.insert(bb_pos, target);
+    }
+
+    pub(super) fn push_ir(&mut self, bb: Option<BasicBlockId>, ir: AsmIr) {
+        self.current_frame_mut().ir.push((bb, ir));
+    }
+
+    pub(super) fn add_inline_bridge(
+        &mut self,
+        src_bb: Option<BasicBlockId>,
+        ir: AsmIr,
+        dest_bb: Option<BasicBlockId>,
+    ) {
+        self.current_frame_mut()
+            .inline_bridges
+            .insert(src_bb, (ir, dest_bb));
+    }
+
+    pub(super) fn add_outline_bridge(&mut self, ir: AsmIr, dest: JitLabel, bbid: BasicBlockId) {
+        self.current_frame_mut()
+            .outline_bridges
+            .push((ir, dest, bbid));
     }
 
     ///

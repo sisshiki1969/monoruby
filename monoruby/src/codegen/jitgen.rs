@@ -4,7 +4,10 @@ use monoasm_macro::monoasm;
 use paste::paste;
 use ruruby_parse::CmpKind;
 
-use crate::bytecodegen::{BcIndex, UnOpK};
+use crate::{
+    bytecodegen::{BcIndex, UnOpK},
+    codegen::jitgen::context::JitStackFrame,
+};
 
 pub(crate) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId, BasicBlockInfo};
 pub use self::context::JitContext;
@@ -58,7 +61,7 @@ enum CompileResult {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct JitLabel(usize);
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum BranchMode {
     ///
     /// Continuation branch.
@@ -83,7 +86,7 @@ enum BranchMode {
 ///
 /// The information for branches.
 ///
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct BranchEntry {
     /// source BasicBlockId of the branch.
     src_bb: Option<BasicBlockId>,
@@ -143,7 +146,7 @@ impl BBContext {
                 slot_state: SlotContext::new_method(cc, store),
                 next_sp,
                 class_version_guarded: false,
-                frame_capture_guarded: cc.is_method(),
+                frame_capture_guarded: cc.is_not_block(),
             }
         }
     }
@@ -405,21 +408,27 @@ impl Codegen {
             JitType::Generic
         };
 
-        let mut ctx = JitContext::new(
+        let mut ctx = JitContext::create(
             store,
             iseq_id,
             jit_type,
             class_version,
-            class_version_label,
+            class_version_label.clone(),
             self_class,
             0,
+            None,
         );
-        ctx.compile(store);
-        self.jit.finalize();
+        ctx.traceir_to_asmir(store);
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 
-        self.gen_machine_code(ctx, store, entry_label, 0);
+        self.gen_machine_code(
+            ctx.detach_current_frame(),
+            store,
+            entry_label,
+            0,
+            class_version_label,
+        );
 
         inline_cache
             .into_iter()
@@ -429,62 +438,69 @@ impl Codegen {
 
     fn gen_machine_code(
         &mut self,
-        mut ctx: JitContext,
+        mut frame: JitStackFrame,
         store: &Store,
         entry_label: DestLabel,
         level: usize,
+        class_version: DestLabel,
     ) {
         for context::SpecializeInfo {
             entry: specialized_entry,
-            ctx: specialized_ctx,
+            frame: specialized_frame,
             patch_point,
-        } in std::mem::take(&mut ctx.specialized_methods)
+        } in std::mem::take(&mut frame.specialized_methods)
         {
-            if !ctx.is_specialized() {
-                let patch_point = ctx.resolve_label(&mut self.jit, patch_point.unwrap());
+            if !frame.is_specialized() {
+                let patch_point = frame.resolve_label(&mut self.jit, patch_point.unwrap());
                 self.specialized_info.push((
-                    specialized_ctx.iseq_id(),
-                    specialized_ctx.self_class(),
+                    specialized_frame.iseq_id(),
+                    specialized_frame.self_class(),
                     patch_point,
                 ));
             }
-            let entry = ctx.resolve_label(&mut self.jit, specialized_entry);
-            self.gen_machine_code(specialized_ctx, store, entry, level + 1);
+            let entry = frame.resolve_label(&mut self.jit, specialized_entry);
+            self.gen_machine_code(
+                specialized_frame,
+                store,
+                entry,
+                level + 1,
+                class_version.clone(),
+            );
         }
 
         self.jit.bind_label(entry_label);
         #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
         {
             if self.startup_flag {
-                let iseq = &store[ctx.iseq_id()];
+                let iseq = &store[frame.iseq_id()];
                 let name = store.func_description(iseq.func_id());
                 eprintln!(
                     "  {}>>> [{}] {:?} <{}> self_class:{} {:?} {:?}",
                     " ".repeat(level * 3),
-                    ctx.specialize_level(),
-                    ctx.iseq_id(),
+                    frame.specialize_level(),
+                    frame.iseq_id(),
                     name,
-                    store.debug_class_name(ctx.self_class()),
-                    ctx.stack_frame,
-                    ctx.jit_type(),
+                    store.debug_class_name(frame.self_class()),
+                    frame,
+                    frame.jit_type(),
                 );
             }
         }
 
         #[cfg(feature = "emit-asm")]
         {
-            ctx.start_codepos = self.jit.get_current();
+            frame.start_codepos = self.jit.get_current();
         }
 
         #[cfg(feature = "perf")]
         let pair = self.get_address_pair();
 
-        let ir_vec = std::mem::take(&mut ctx.ir);
+        let ir_vec = frame.detach_ir();
 
         let mut live_bb: HashSet<BasicBlockId> = HashSet::default();
         ir_vec.iter().for_each(|(bb, ir)| {
             if let Some(bb) = bb {
-                if !ir.inst.is_empty() || ctx.inline_bridges.contains_key(&Some(*bb)) {
+                if !ir.inst.is_empty() || frame.inline_bridge_exists(*bb) {
                     live_bb.insert(*bb);
                 }
             }
@@ -492,9 +508,9 @@ impl Codegen {
 
         // generate machine code for a main context and inlined bridges.
         for (bbid, ir) in ir_vec.into_iter() {
-            self.gen_asm(ir, store, &mut ctx, None, None);
+            self.gen_asm(ir, store, &mut frame, None, None, class_version.clone());
             // generate machine code for the inlined bridge
-            if let Some((ir, exit)) = ctx.inline_bridges.remove(&bbid) {
+            if let Some((ir, exit)) = frame.remove_inline_bridge(bbid) {
                 let exit = if let Some(bbid) = bbid {
                     if let Some(exit) = exit
                         && (bbid >= exit || ((bbid + 1)..exit).any(|bb| live_bb.contains(&bb)))
@@ -506,31 +522,38 @@ impl Codegen {
                 } else {
                     None
                 };
-                self.gen_asm(ir, store, &mut ctx, None, exit);
+                self.gen_asm(ir, store, &mut frame, None, exit, class_version.clone());
             }
         }
 
         // generate machine code for outlined bridges
-        for (ir, entry, exit) in std::mem::take(&mut ctx.outline_bridges) {
-            let entry = ctx.resolve_label(&mut self.jit, entry);
-            self.gen_asm(ir, store, &mut ctx, Some(entry), Some(exit));
+        for (ir, entry, exit) in frame.detach_outline_bridges() {
+            let entry = frame.resolve_label(&mut self.jit, entry);
+            self.gen_asm(
+                ir,
+                store,
+                &mut frame,
+                Some(entry),
+                Some(exit),
+                class_version.clone(),
+            );
         }
 
-        if !ctx.is_specialized() {
+        if !frame.is_specialized() {
             self.specialized_base = self.specialized_info.len();
         }
         self.jit.finalize();
 
         #[cfg(feature = "emit-asm")]
         if self.startup_flag {
-            let iseq_id = ctx.iseq_id();
-            self.dump_disas(store, &ctx.sourcemap, iseq_id);
+            let iseq_id = frame.iseq_id();
+            self.dump_disas(store, &frame.sourcemap, iseq_id);
             eprintln!("  <<<");
         }
 
         #[cfg(feature = "perf")]
         {
-            let iseq_id = ctx.iseq_id();
+            let iseq_id = frame.iseq_id();
             let fid = store[iseq_id].func_id();
             let desc = format!("JIT:<{}>", store.func_description(fid));
             self.perf_info(pair, &desc);

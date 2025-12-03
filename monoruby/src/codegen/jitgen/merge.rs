@@ -5,9 +5,9 @@ impl JitContext {
     /// Generate bridge AsmIr for backedge branches.
     ///
     pub(super) fn backedge_branches(&mut self, iseq: &ISeqInfo) {
-        let branch_map = std::mem::take(&mut self.branch_map);
+        let branch_map = self.detach_branch_map();
         for (bbid, entries) in branch_map.into_iter() {
-            let target = self.backedge_map.remove(&bbid).unwrap();
+            let target = self.remove_backedge(bbid).unwrap();
             let pc = iseq.get_bb_pc(bbid);
             #[cfg(feature = "jit-debug")]
             eprintln!("  backedge_bridge to: {bbid:?} {target:?}");
@@ -24,10 +24,10 @@ impl JitContext {
                 bbctx.gen_bridge(&mut ir, src_bb, &target, pc);
                 match mode {
                     BranchMode::Side { dest } => {
-                        self.outline_bridges.push((ir, dest, bbid));
+                        self.add_outline_bridge(ir, dest, bbid);
                     }
                     BranchMode::Branch => {
-                        self.inline_bridges.insert(src_bb, (ir, Some(bbid)));
+                        self.add_inline_bridge(src_bb, ir, Some(bbid));
                     }
                     BranchMode::Continue => unreachable!(),
                 }
@@ -63,15 +63,13 @@ impl JitContext {
         bbid: BasicBlockId,
         no_calc_backedge: bool,
     ) -> Option<BBContext> {
-        let entries = self.branch_map.remove(&bbid)?;
+        let entries = self.remove_branch(bbid)?;
         let pc = iseq.get_bb_pc(bbid);
 
-        let is_loop = iseq.get_bb_pc(bbid).is_loop_start();
-        let res = if is_loop {
+        let res = if let Some((loop_start, loop_end)) = iseq.bb_info.is_loop_begin(bbid) {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge loop: {bbid:?}");
 
-            let (loop_start, loop_end) = iseq.bb_info.get_loop(bbid).unwrap();
             let incoming = BBContext::join_entries(&entries);
             if !no_calc_backedge {
                 self.analyse_backedge_fixpoint(store, incoming.clone(), loop_start, loop_end);
@@ -135,13 +133,13 @@ impl JitContext {
             bbctx.gen_bridge(&mut ir, src_bb, &target, pc);
             match mode {
                 BranchMode::Side { dest } => {
-                    self.outline_bridges.push((ir, dest, bbid));
+                    self.add_outline_bridge(ir, dest, bbid);
                 }
                 BranchMode::Branch => {
-                    self.inline_bridges.insert(src_bb, (ir, Some(bbid)));
+                    self.add_inline_bridge(src_bb, ir, Some(bbid));
                 }
                 BranchMode::Continue => {
-                    self.inline_bridges.insert(src_bb, (ir, None));
+                    self.add_inline_bridge(src_bb, ir, None);
                 }
             }
         }

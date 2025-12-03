@@ -172,10 +172,13 @@ impl BasicBlockInfo {
         self.bb_map[i.0 as usize]
     }
 
-    pub(crate) fn get_loop(&self, bb_id: BasicBlockId) -> Option<(BasicBlockId, BasicBlockId)> {
+    pub(crate) fn is_loop_begin(
+        &self,
+        bb_id: BasicBlockId,
+    ) -> Option<(BasicBlockId, BasicBlockId)> {
         self.loops
             .iter()
-            .find(|(begin, end)| (*begin..=*end).contains(&bb_id))
+            .find(|(begin, _)| *begin == bb_id)
             .cloned()
     }
 }

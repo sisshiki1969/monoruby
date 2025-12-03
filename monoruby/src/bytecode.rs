@@ -281,10 +281,6 @@ impl BytecodePtr {
         self.0.as_ptr()
     }
 
-    pub fn is_loop_start(&self) -> bool {
-        self.opcode() == 14 // TraceIr::LoopStart(_))
-    }
-
     pub fn from_bc(bc: &Bytecode) -> Self {
         Self(std::ptr::NonNull::from(bc))
     }

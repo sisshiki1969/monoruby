@@ -297,6 +297,7 @@ struct CallSite {
     recv: BcReg,
     /// *BcReg* of the return value. If None, the return value is discarded.
     dst: Option<BcReg>,
+    forwarding: bool,
 }
 
 impl CallSite {
@@ -310,6 +311,7 @@ impl CallSite {
         args: BcReg,
         recv: BcReg,
         dst: Option<BcReg>,
+        forwarding: bool,
     ) -> Self {
         let name = name.into();
         CallSite {
@@ -322,6 +324,7 @@ impl CallSite {
             args,
             recv,
             dst,
+            forwarding,
         }
     }
 
@@ -332,7 +335,7 @@ impl CallSite {
         recv: BcReg,
         dst: Option<BcReg>,
     ) -> CallSite {
-        CallSite::new(name, len, None, vec![], None, None, args, recv, dst)
+        CallSite::new(name, len, None, vec![], None, None, args, recv, dst, false)
     }
 
     fn has_splat(&self) -> bool {
@@ -944,6 +947,7 @@ impl BytecodeGen {
             src,
             BcReg::Self_,
             Some(dst),
+            false,
         );
         self.emit(BytecodeInst::Array(dst, Box::new(calsite)), loc);
     }

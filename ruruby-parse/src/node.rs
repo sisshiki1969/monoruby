@@ -176,8 +176,8 @@ impl FormalParam {
         FormalParam::new(ParamKind::Block(name), loc)
     }
 
-    pub(crate) fn delegeate(loc: Loc) -> Self {
-        FormalParam::new(ParamKind::Delegate, loc)
+    pub(crate) fn forwarding(loc: Loc) -> Self {
+        FormalParam::new(ParamKind::Forwarding, loc)
     }
 
     pub(crate) fn destruct_param(params: Vec<(String, Loc)>) -> Self {
@@ -197,13 +197,13 @@ pub enum ParamKind {
     Keyword(String, Option<Box<Node>>), // name, default expr
     KWRest(String),
     Block(String),
-    Delegate,
+    Forwarding,
     Destruct(Vec<(String, Loc)>),
 }
 
 impl std::default::Default for ParamKind {
     fn default() -> Self {
-        Self::Delegate
+        Self::Forwarding
     }
 }
 

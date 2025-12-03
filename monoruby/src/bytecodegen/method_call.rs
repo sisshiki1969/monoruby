@@ -185,6 +185,7 @@ impl BytecodeGen {
             arg.into(),
             recv,
             dst,
+            false,
         );
         self.emit_call(callsite, loc);
         if use_mode.is_ret() {
@@ -215,7 +216,7 @@ impl BytecodeGen {
         }
 
         let callid =
-            self.handle_no_delegate(arglist, IdentId::get_id("<block>"), BcReg::Self_, dst, loc)?;
+            self.handle_no_forward(arglist, IdentId::get_id("<block>"), BcReg::Self_, dst, loc)?;
         self.emit_yield(callid, loc);
 
         self.temp = old;
