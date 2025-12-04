@@ -83,7 +83,6 @@ impl JitArgumentInfo {
 ///
 /// Virtual Stack frame for specialized compilation.
 ///
-#[derive(Debug)]
 pub(crate) struct JitStackFrame {
     ///
     /// Type of compilation for this frame.
@@ -156,7 +155,7 @@ pub(crate) struct JitStackFrame {
     ///
     /// Context for returning from this frame.
     ///
-    return_context: Option<BBContext>,
+    pub(super) return_context: Option<ResultState>,
 
     ///
     /// Generated AsmIr.
@@ -191,6 +190,16 @@ pub(crate) struct JitStackFrame {
     ///
     #[cfg(feature = "emit-asm")]
     pub(super) start_codepos: usize,
+}
+
+impl std::fmt::Debug for JitStackFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JitStackFrame")
+            .field("jit_type", &self.jit_type)
+            .field("outer", &self.outer)
+            .field("given_block", &self.given_block)
+            .finish()
+    }
 }
 
 impl Clone for JitStackFrame {
@@ -294,11 +303,6 @@ impl JitStackFrame {
 
     pub(super) fn is_specialized(&self) -> bool {
         matches!(self.jit_type, JitType::Specialized { .. })
-    }
-
-    #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
-    pub(super) fn jit_type(&self) -> &JitType {
-        &self.jit_type
     }
 
     #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
@@ -711,15 +715,15 @@ impl JitContext {
     ///
     /// Add new return branch with the context *bbctx*.
     ///
-    pub(super) fn new_return(&mut self, bbctx: BBContext) {
+    pub(super) fn new_return(&mut self, ret: ResultState) {
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_return:{:?}", bbctx.slot_state);
+        eprintln!("   new_return:{:?}", ret);
         match &mut self.current_frame_mut().return_context {
-            Some(ctx) => {
-                ctx.join(&bbctx);
+            Some(res) => {
+                res.join(&ret);
             }
             None => {
-                self.current_frame_mut().return_context = Some(bbctx);
+                self.current_frame_mut().return_context = Some(ret);
             }
         }
     }

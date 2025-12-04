@@ -16,16 +16,8 @@ impl Bytecode {
         self.classid1() == Some(INTEGER_CLASS)
     }
 
-    pub fn is_integer2(&self) -> bool {
-        self.classid2() == Some(INTEGER_CLASS)
-    }
-
     pub fn is_float1(&self) -> bool {
         self.classid1() == Some(FLOAT_CLASS)
-    }
-
-    pub fn is_float2(&self) -> bool {
-        self.classid2() == Some(FLOAT_CLASS)
     }
 
     pub fn is_integer_binop(&self) -> bool {

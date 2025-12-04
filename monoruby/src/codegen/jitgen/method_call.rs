@@ -96,7 +96,9 @@ impl JitContext {
         ir: &mut AsmIr,
         store: &Store,
         fid: FuncId,
-        info: BinOpInfo,
+        dst: Option<SlotId>,
+        mode: OpMode,
+        lhs_class: ClassId,
         pc: BytecodePtr,
     ) -> CompileResult {
         assert!(matches!(
@@ -113,12 +115,6 @@ impl JitContext {
         self.guard_class_version(bbctx, ir, false, deopt);
 
         // receiver class guard
-        let BinOpInfo {
-            dst,
-            mode,
-            lhs_class,
-            ..
-        } = info;
         bbctx.load_lhs(ir, mode, GP::Rdi);
         match mode {
             OpMode::RR(lhs, _) | OpMode::RI(lhs, _) => {
@@ -451,9 +447,9 @@ impl JitContext {
             Some(callid),
             self_class,
         ));
-        //let mut ctx = self.create_inline_ctx(stack_frame);
         self.traceir_to_asmir(store);
         let frame = self.stack_frame.pop().unwrap();
+        //dbg!(&frame.return_context);
         let entry = self.label();
         self.specialized_methods_push(context::SpecializeInfo {
             entry,

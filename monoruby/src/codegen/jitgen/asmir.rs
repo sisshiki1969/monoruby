@@ -1708,8 +1708,7 @@ impl Codegen {
         }
 
         if let Some(exit) = exit {
-            let exit = frame.get_bb_label(exit);
-            let exit = frame.resolve_label(&mut self.jit, exit);
+            let exit = frame.resolve_bb_label(&mut self.jit, exit);
             monoasm! { &mut self.jit,
                 jmp exit;
             }

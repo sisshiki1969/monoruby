@@ -93,11 +93,12 @@ impl JitContext {
                     self.new_branch(iseq, bc_pos, dest_bb, bbctx);
                     return ir;
                 }
-                CompileResult::Return => {
-                    self.new_return(bbctx);
+                CompileResult::Return(ret) => {
+                    self.new_return(ret);
                     return ir;
                 }
                 CompileResult::Recompile(reason) => {
+                    self.new_return(ResultState::Value);
                     let pc = self.get_pc(store, bc_pos);
                     self.recompile_and_deopt(&mut bbctx, &mut ir, reason, pc);
                     return ir;
@@ -247,7 +248,7 @@ impl JitContext {
                 }
                 CompileResult::SideBranch => return,
                 CompileResult::Leave
-                | CompileResult::Return
+                | CompileResult::Return(_)
                 | CompileResult::Recompile(_)
                 | CompileResult::ExitLoop => {
                     liveness.join(&bbctx);
@@ -459,8 +460,13 @@ impl JitContext {
             TraceIr::BitNot {
                 dst,
                 src,
-                src_class,
+                ic: src_class,
             } => {
+                let src_class = if let Some(class) = bbctx.guarded(src).class() {
+                    Some(class)
+                } else {
+                    src_class
+                };
                 if let Some(INTEGER_CLASS) = src_class {
                     bbctx.load_fixnum(ir, src, GP::Rdi, pc);
                     ir.push(AsmInst::FixnumBitNot { reg: GP::Rdi });
@@ -472,51 +478,92 @@ impl JitContext {
                     bbctx.unset_class_version_guard();
                 }
             }
-            TraceIr::FUnOp { kind, dst, src } => {
-                let fsrc = bbctx.load_xmm(ir, src, pc);
-                let dst = bbctx.def_F(dst);
-                ir.xmm_move(fsrc, dst);
-                ir.push(AsmInst::XmmUnOp { kind, dst });
-            }
-            TraceIr::IUnOp { kind, dst, src } => {
-                bbctx.load_fixnum(ir, src, GP::Rdi, pc);
-                match kind {
-                    UnOpK::Neg => {
-                        let deopt = ir.new_deopt(bbctx, pc);
-                        ir.push(AsmInst::FixnumNeg {
-                            reg: GP::Rdi,
-                            deopt,
-                        })
-                    }
-                    UnOpK::Pos => {}
-                }
-                bbctx.def_reg2acc_fixnum(ir, GP::Rdi, dst);
-            }
-            TraceIr::UnOp { kind, dst, src, .. } => {
-                bbctx.load(ir, src, GP::Rdi);
-                bbctx.generic_unop(ir, kind.generic_func(), pc);
-                bbctx.def_rax2acc(ir, dst);
-                bbctx.unset_class_version_guard();
-            }
-            TraceIr::IBinOp {
-                kind, dst, mode, ..
-            } => {
-                bbctx.gen_binop_fixnum(ir, kind, dst, mode, pc);
-            }
-            TraceIr::FBinOp { kind, info } => {
-                bbctx.gen_binop_float(ir, kind, info, pc);
-            }
-            TraceIr::GBinOp { kind, info } => {
-                let recv_class = info.lhs_class;
-                let name = kind.to_id();
-                //let pc = store[self.iseq_id()].get_pc(bc_pos);
-                if let Some(fid) = self.jit_check_method(store, recv_class, name) {
-                    return self.compile_binop_call(bbctx, ir, store, fid, info, pc);
+            TraceIr::UnOp { kind, dst, src, ic } => {
+                let class = if let Some(class) = bbctx.guarded(src).class() {
+                    Some(class)
                 } else {
-                    return CompileResult::Recompile(RecompileReason::MethodNotFound);
+                    ic
+                };
+                match class {
+                    Some(INTEGER_CLASS) => {
+                        bbctx.load_fixnum(ir, src, GP::Rdi, pc);
+                        match kind {
+                            UnOpK::Neg => {
+                                let deopt = ir.new_deopt(bbctx, pc);
+                                ir.push(AsmInst::FixnumNeg {
+                                    reg: GP::Rdi,
+                                    deopt,
+                                })
+                            }
+                            UnOpK::Pos => {}
+                        }
+                        bbctx.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+                    }
+                    Some(FLOAT_CLASS) => {
+                        let fsrc = bbctx.load_xmm(ir, src, pc);
+                        let dst = bbctx.def_F(dst);
+                        ir.xmm_move(fsrc, dst);
+                        ir.push(AsmInst::XmmUnOp { kind, dst });
+                    }
+                    _ => {
+                        bbctx.load(ir, src, GP::Rdi);
+                        bbctx.generic_unop(ir, kind.generic_func(), pc);
+                        bbctx.def_rax2acc(ir, dst);
+                        bbctx.unset_class_version_guard();
+                    }
                 }
             }
-            TraceIr::GBinOpNotrace { .. } => {
+
+            TraceIr::BinOp {
+                kind,
+                dst,
+                mode,
+                ic,
+            } => {
+                let (lhs_class, rhs_class) = match mode {
+                    OpMode::RR(l, r) => (bbctx.guarded(l).class(), bbctx.guarded(r).class()),
+                    OpMode::RI(l, _) => (bbctx.guarded(l).class(), Some(INTEGER_CLASS)),
+                    OpMode::IR(_, r) => (Some(INTEGER_CLASS), bbctx.guarded(r).class()),
+                };
+                let lhs_class = if lhs_class.is_some() {
+                    lhs_class
+                } else {
+                    ic.map(|(class, _)| class)
+                };
+                let rhs_class = if rhs_class.is_some() {
+                    rhs_class
+                } else {
+                    ic.map(|(_, class)| class)
+                };
+                match (lhs_class, rhs_class) {
+                    (Some(lhs_class), Some(rhs_class)) => match (lhs_class, rhs_class) {
+                        (INTEGER_CLASS, INTEGER_CLASS) => {
+                            bbctx.gen_binop_fixnum(ir, kind, dst, mode, pc);
+                            return CompileResult::Continue;
+                        }
+                        (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => {
+                            let info = FBinOpInfo {
+                                dst,
+                                mode,
+                                lhs_class: lhs_class.into(),
+                                rhs_class: rhs_class.into(),
+                            };
+                            bbctx.gen_binop_float(ir, kind, info, pc);
+                            return CompileResult::Continue;
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+                if let Some(lhs_class) = lhs_class {
+                    let name = kind.to_id();
+                    if let Some(fid) = self.jit_check_method(store, lhs_class, name) {
+                        return self
+                            .compile_binop_call(bbctx, ir, store, fid, dst, mode, lhs_class, pc);
+                    } else {
+                        return CompileResult::Recompile(RecompileReason::MethodNotFound);
+                    }
+                }
                 return CompileResult::Recompile(RecompileReason::NotCached);
             }
             TraceIr::FCmp { kind, info } => {
@@ -527,8 +574,9 @@ impl JitContext {
                 let recv_class = info.lhs_class;
                 let name = Self::cmpkind_to_id(kind);
                 if let Some(fid) = self.jit_check_method(store, recv_class, name) {
-                    //let pc = store[self.iseq_id()].get_pc(bc_pos);
-                    return self.compile_binop_call(bbctx, ir, store, fid, info, pc);
+                    return self.compile_binop_call(
+                        bbctx, ir, store, fid, info.dst, info.mode, recv_class, pc,
+                    );
                 } else {
                     return CompileResult::Recompile(RecompileReason::MethodNotFound);
                 }
@@ -579,7 +627,9 @@ impl JitContext {
                 let name = Self::cmpkind_to_id(kind);
                 if let Some(fid) = self.jit_check_method(store, recv_class, name) {
                     //let pc = store[self.iseq_id()].get_pc(bc_pos);
-                    match self.compile_binop_call(bbctx, ir, store, fid, info, pc) {
+                    match self.compile_binop_call(
+                        bbctx, ir, store, fid, info.dst, info.mode, recv_class, pc,
+                    ) {
                         CompileResult::Continue => {
                             let src_idx = bc_pos + 1;
                             bbctx.unset_class_version_guard();
@@ -624,14 +674,16 @@ impl JitContext {
                         } else {
                             OpMode::RR(base, idx)
                         };
-                        let info = BinOpInfo {
-                            dst: Some(dst),
+                        return self.compile_binop_call(
+                            bbctx,
+                            ir,
+                            store,
+                            fid,
+                            Some(dst),
                             mode,
-                            lhs_class: base_class,
-                            rhs_class: idx_class,
-                        };
-                        //let pc = store[self.iseq_id()].get_pc(bc_pos);
-                        return self.compile_binop_call(bbctx, ir, store, fid, info, pc);
+                            base_class,
+                            pc,
+                        );
                     }
                 }
                 return CompileResult::Recompile(RecompileReason::NotCached);
@@ -819,7 +871,7 @@ impl JitContext {
                 bbctx.write_back_locals_if_captured(ir);
                 bbctx.load(ir, ret, GP::Rax);
                 ir.push(AsmInst::Ret);
-                return CompileResult::Return;
+                return CompileResult::Return(bbctx.mode(ret).as_result());
             }
             TraceIr::MethodRet(ret) => {
                 bbctx.write_back_locals_if_captured(ir);

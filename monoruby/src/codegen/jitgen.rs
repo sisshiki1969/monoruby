@@ -53,12 +53,45 @@ enum CompileResult {
     /// leave the current method/block.
     Leave,
     /// return from the current method/block.
-    Return,
+    Return(ResultState),
     /// deoptimize and recompile.
     Recompile(RecompileReason),
     /// internal error.
     #[allow(dead_code)]
     Abort,
+}
+
+#[derive(Debug)]
+enum ResultState {
+    Const(Value),
+    Class(ClassId),
+    Value,
+}
+
+impl ResultState {
+    fn class(&self) -> Option<ClassId> {
+        match self {
+            Self::Const(v) => Some(v.class()),
+            Self::Class(class) => Some(*class),
+            _ => None,
+        }
+    }
+
+    fn join(&mut self, other: &Self) {
+        if let Self::Const(l) = self
+            && let Self::Const(r) = other
+            && l.id() == r.id()
+        {
+            return;
+        }
+        if let Some(class) = self.class()
+            && other.class() == Some(class)
+        {
+            *self = Self::Class(class);
+            return;
+        }
+        *self = Self::Value;
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -478,14 +511,13 @@ impl Codegen {
                 let iseq = &store[frame.iseq_id()];
                 let name = store.func_description(iseq.func_id());
                 eprintln!(
-                    "  {}>>> [{}] {:?} <{}> self_class:{} {:?} {:?}",
+                    "  {}>>> [{}] {:?} <{}> self_class:{} {:?}",
                     " ".repeat(level * 3),
                     frame.specialize_level(),
                     frame.iseq_id(),
                     name,
                     store.debug_class_name(frame.self_class()),
                     frame,
-                    frame.jit_type(),
                 );
             }
         }

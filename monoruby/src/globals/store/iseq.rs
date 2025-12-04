@@ -684,23 +684,17 @@ impl ISeqInfo {
                     let kind = UnOpK::Pos;
                     let dst = SlotId::new(op1_w1);
                     let src = SlotId::new(op2_w2);
-                    if pc.is_integer1() {
-                        TraceIr::IUnOp { kind, dst, src }
-                    } else if pc.is_float1() {
-                        TraceIr::FUnOp { kind, dst, src }
-                    } else {
-                        TraceIr::UnOp {
-                            kind,
-                            dst,
-                            src,
-                            src_class: pc.classid1(),
-                        }
+                    TraceIr::UnOp {
+                        kind,
+                        dst,
+                        src,
+                        ic: pc.classid1(),
                     }
                 }
                 127 => TraceIr::BitNot {
                     dst: SlotId::new(op1_w1),
                     src: SlotId::new(op2_w2),
-                    src_class: pc.classid1(),
+                    ic: pc.classid1(),
                 },
                 128 => TraceIr::Not {
                     dst: SlotId::new(op1_w1),
@@ -710,17 +704,11 @@ impl ISeqInfo {
                     let kind = UnOpK::Neg;
                     let dst = SlotId::new(op1_w1);
                     let src = SlotId::new(op2_w2);
-                    if pc.is_integer1() {
-                        TraceIr::IUnOp { kind, dst, src }
-                    } else if pc.is_float1() {
-                        TraceIr::FUnOp { kind, dst, src }
-                    } else {
-                        TraceIr::UnOp {
-                            kind,
-                            dst,
-                            src,
-                            src_class: pc.classid1(),
-                        }
+                    TraceIr::UnOp {
+                        kind,
+                        dst,
+                        src,
+                        ic: pc.classid1(),
                     }
                 }
                 130 => TraceIr::InlineCache,
@@ -971,98 +959,50 @@ impl ISeqInfo {
                     let kind = BinOpK::from(opcode - 180);
                     let dst = SlotId::from(op1_w1);
                     let mode = OpMode::IR(op2_w2 as i16, SlotId::new(op3_w3));
-                    let lhs_class = INTEGER_CLASS;
-                    let rhs_class = pc.classid2();
-                    if pc.is_integer2() {
-                        TraceIr::IBinOp { kind, dst, mode }
-                    } else if pc.is_float2() {
-                        TraceIr::FBinOp {
-                            kind,
-                            info: FBinOpInfo {
-                                dst,
-                                mode,
-                                lhs_class: FOpClass::Integer,
-                                rhs_class: FOpClass::Float,
-                            },
-                        }
-                    } else if let Some(rhs_class) = rhs_class {
-                        TraceIr::GBinOp {
-                            kind,
-                            info: BinOpInfo {
-                                dst,
-                                mode,
-                                lhs_class,
-                                rhs_class,
-                            },
-                        }
+                    let ic = if let Some(rhs_class) = pc.classid2() {
+                        Some((INTEGER_CLASS, rhs_class))
                     } else {
-                        TraceIr::GBinOpNotrace { kind, dst, mode }
+                        None
+                    };
+                    TraceIr::BinOp {
+                        kind,
+                        dst,
+                        mode,
+                        ic,
                     }
                 }
                 190..=199 => {
                     let kind = BinOpK::from(opcode - 190);
                     let dst = SlotId::from(op1_w1);
                     let mode = OpMode::RI(SlotId::new(op2_w2), op3_w3 as i16);
-                    let lhs_class = pc.classid1();
-                    let rhs_class = INTEGER_CLASS;
-                    if pc.is_integer1() {
-                        TraceIr::IBinOp { kind, dst, mode }
-                    } else if pc.is_float1() {
-                        TraceIr::FBinOp {
-                            kind,
-                            info: FBinOpInfo {
-                                dst,
-                                mode,
-                                lhs_class: FOpClass::Float,
-                                rhs_class: FOpClass::Integer,
-                            },
-                        }
-                    } else if let Some(lhs_class) = lhs_class {
-                        TraceIr::GBinOp {
-                            kind,
-                            info: BinOpInfo {
-                                dst,
-                                mode,
-                                lhs_class,
-                                rhs_class,
-                            },
-                        }
+                    let ic = if let Some(lhs_class) = pc.classid1() {
+                        Some((lhs_class, INTEGER_CLASS))
                     } else {
-                        TraceIr::GBinOpNotrace { kind, dst, mode }
+                        None
+                    };
+                    TraceIr::BinOp {
+                        kind,
+                        dst,
+                        mode,
+                        ic,
                     }
                 }
                 200..=209 => {
                     let kind = BinOpK::from(opcode - 200);
                     let dst = SlotId::from(op1_w1);
                     let mode = OpMode::RR(SlotId::new(op2_w2), SlotId::new(op3_w3));
-                    let lhs_class = pc.classid1();
-                    let rhs_class = pc.classid2();
-                    if pc.is_integer_binop() {
-                        TraceIr::IBinOp { kind, dst, mode }
-                    } else if let Some((lhs_class, rhs_class)) = pc.is_float_binop() {
-                        TraceIr::FBinOp {
-                            kind,
-                            info: FBinOpInfo {
-                                dst,
-                                mode,
-                                lhs_class,
-                                rhs_class,
-                            },
-                        }
-                    } else if let Some(lhs_class) = lhs_class
-                        && let Some(rhs_class) = rhs_class
+                    let ic = if let Some(lhs_class) = pc.classid1()
+                        && let Some(rhs_class) = pc.classid2()
                     {
-                        TraceIr::GBinOp {
-                            kind,
-                            info: BinOpInfo {
-                                dst,
-                                mode,
-                                lhs_class,
-                                rhs_class,
-                            },
-                        }
+                        Some((lhs_class, rhs_class))
                     } else {
-                        TraceIr::GBinOpNotrace { kind, dst, mode }
+                        None
+                    };
+                    TraceIr::BinOp {
+                        kind,
+                        dst,
+                        mode,
+                        ic,
                     }
                 }
                 _ => unreachable!("{:016x}", op1),

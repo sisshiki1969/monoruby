@@ -166,42 +166,19 @@ pub(crate) enum TraceIr {
     BitNot {
         dst: SlotId,
         src: SlotId,
-        src_class: Option<ClassId>,
+        ic: Option<ClassId>,
     },
     UnOp {
         kind: UnOpK,
         dst: SlotId,
         src: SlotId,
-        #[allow(dead_code)]
-        src_class: Option<ClassId>,
+        ic: Option<ClassId>,
     },
-    IUnOp {
-        kind: UnOpK,
-        dst: SlotId,
-        src: SlotId,
-    },
-    FUnOp {
-        kind: UnOpK,
-        dst: SlotId,
-        src: SlotId,
-    },
-    GBinOp {
-        kind: BinOpK,
-        info: BinOpInfo,
-    },
-    GBinOpNotrace {
+    BinOp {
         kind: BinOpK,
         dst: Option<SlotId>,
         mode: OpMode,
-    },
-    IBinOp {
-        kind: BinOpK,
-        dst: Option<SlotId>,
-        mode: OpMode,
-    },
-    FBinOp {
-        kind: BinOpK,
-        info: FBinOpInfo,
+        ic: Option<(ClassId, ClassId)>,
     },
 
     GCmp {
@@ -468,16 +445,6 @@ impl TraceIr {
             fmt(store, s, class)
         }
 
-        fn binop_fmt_info(store: &Store, kind: BinOpK, info: impl Into<BinOpInfo>) -> String {
-            let BinOpInfo {
-                dst,
-                mode,
-                lhs_class,
-                rhs_class,
-            } = info.into();
-            binop_fmt(store, kind, dst, &mode, (lhs_class, rhs_class))
-        }
-
         fn binop_fmt(
             store: &Store,
             kind: BinOpK,
@@ -689,7 +656,7 @@ impl TraceIr {
             TraceIr::BitNot {
                 dst,
                 src,
-                src_class,
+                ic: src_class,
             } => {
                 let op1 = format!("{:?} = ~{:?}", dst, src);
                 format!("{:36} [{}]", op1, store.debug_class_name(*src_class),)
@@ -698,30 +665,22 @@ impl TraceIr {
                 kind,
                 dst,
                 src,
-                src_class,
+                ic: src_class,
             } => {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
                 format!("{:36} [{}]", op1, store.debug_class_name(*src_class),)
-            }
-            TraceIr::IUnOp { kind, dst, src } => {
-                let op1 = format!("{:?} = {}{:?}", dst, kind, src);
-                format!("{:36} [{}]", op1, store.debug_class_name(INTEGER_CLASS),)
-            }
-            TraceIr::FUnOp { kind, dst, src } => {
-                let op1 = format!("{:?} = {}{:?}", dst, kind, src);
-                format!("{:36} [{}]", op1, store.debug_class_name(FLOAT_CLASS),)
             }
             TraceIr::Not { dst, src } => {
                 let op1 = format!("{:?} = !{:?}", dst, src);
                 format!("{:36}", op1)
             }
 
-            TraceIr::GBinOp { kind, info } => binop_fmt_info(store, *kind, info.clone()),
-            TraceIr::GBinOpNotrace { kind, dst, mode } => binop_fmt(store, *kind, *dst, mode, None),
-            TraceIr::FBinOp { kind, info } => binop_fmt_info(store, *kind, info.clone()),
-            TraceIr::IBinOp { kind, dst, mode } => {
-                binop_fmt(store, *kind, *dst, mode, (INTEGER_CLASS, INTEGER_CLASS))
-            }
+            TraceIr::BinOp {
+                kind,
+                dst,
+                mode,
+                ic,
+            } => binop_fmt(store, *kind, *dst, mode, ic.clone()),
 
             TraceIr::GCmp { kind, info } => cmp_fmt_info(store, *kind, info.clone(), false),
             TraceIr::GCmpNotrace { kind, dst, mode } => {
