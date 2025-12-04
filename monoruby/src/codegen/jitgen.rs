@@ -48,9 +48,12 @@ enum CompileResult {
     /// exit from the loop.
     ExitLoop,
     /// jump to another basic block.
-    Branch,
+    Branch(BasicBlockId),
+    SideBranch,
     /// leave the current method/block.
     Leave,
+    /// return from the current method/block.
+    Return,
     /// deoptimize and recompile.
     Recompile(RecompileReason),
     /// internal error.

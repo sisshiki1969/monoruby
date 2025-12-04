@@ -68,11 +68,12 @@ impl BBContext {
         mode: OpMode,
         kind: CmpKind,
         brkind: BrKind,
+        dest_bb: BasicBlockId,
     ) -> Option<CompileResult> {
         if let Some((lhs, rhs)) = self.check_concrete_i64(mode) {
             let b = cmp(kind, lhs, rhs) ^ (brkind == BrKind::BrIfNot);
             return Some(if b {
-                CompileResult::Branch
+                CompileResult::Branch(dest_bb)
             } else {
                 CompileResult::Continue
             });
@@ -85,11 +86,12 @@ impl BBContext {
         mode: OpMode,
         kind: CmpKind,
         brkind: BrKind,
+        dest_bb: BasicBlockId,
     ) -> Option<CompileResult> {
         if let Some((lhs, rhs)) = self.check_concrete_f64(mode) {
             let b = cmp(kind, lhs, rhs) ^ (brkind == BrKind::BrIfNot);
             return Some(if b {
-                CompileResult::Branch
+                CompileResult::Branch(dest_bb)
             } else {
                 CompileResult::Continue
             });

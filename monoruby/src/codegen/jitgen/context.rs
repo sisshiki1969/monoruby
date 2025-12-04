@@ -153,6 +153,10 @@ pub(crate) struct JitStackFrame {
     /// Map for target contexts of backward branches.
     ///
     backedge_map: HashMap<BasicBlockId, SlotContext>,
+    ///
+    /// Context for returning from this frame.
+    ///
+    return_context: Option<BBContext>,
 
     ///
     /// Generated AsmIr.
@@ -231,6 +235,7 @@ impl JitStackFrame {
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
+            return_context: None,
             ir: vec![],
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
@@ -260,6 +265,7 @@ impl JitStackFrame {
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
+            return_context: None,
             ir: vec![],
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
@@ -353,6 +359,11 @@ impl JitStackFrame {
     pub(super) fn get_bb_label(&self, bb: BasicBlockId) -> JitLabel {
         self.basic_block_labels.get(&bb).copied().unwrap()
     }
+
+    pub(super) fn resolve_bb_label(&mut self, jit: &mut JitMemory, bb: BasicBlockId) -> DestLabel {
+        let label = self.basic_block_labels.get(&bb).copied().unwrap();
+        self.resolve_label(jit, label)
+    }
 }
 
 ///
@@ -411,13 +422,6 @@ impl JitContext {
         )];
 
         Self::new(class_version, class_version_label, stack_frame)
-    }
-
-    ///
-    /// Create new JitContext.
-    ///
-    pub(super) fn create_inline_ctx(&self, stack_frame: Vec<JitStackFrame>) -> Self {
-        Self::new(self.class_version, self.class_version_label(), stack_frame)
     }
 
     pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
@@ -663,9 +667,8 @@ impl JitContext {
         iseq: &ISeqInfo,
         bc_pos: BcIndex,
         dest_bb: BasicBlockId,
-        bbctx: &BBContext,
+        mut bbctx: BBContext,
     ) {
-        let mut bbctx = bbctx.clone();
         bbctx.clear_above_next_sp();
         let src_bb = iseq.bb_info.get_bb_id(bc_pos);
         #[cfg(feature = "jit-debug")]
@@ -703,6 +706,22 @@ impl JitContext {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:{bb_pos:?} {target:?}");
         self.current_frame_mut().backedge_map.insert(bb_pos, target);
+    }
+
+    ///
+    /// Add new return branch with the context *bbctx*.
+    ///
+    pub(super) fn new_return(&mut self, bbctx: BBContext) {
+        #[cfg(feature = "jit-debug")]
+        eprintln!("   new_return:{:?}", bbctx.slot_state);
+        match &mut self.current_frame_mut().return_context {
+            Some(ctx) => {
+                ctx.join(&bbctx);
+            }
+            None => {
+                self.current_frame_mut().return_context = Some(bbctx);
+            }
+        }
     }
 
     pub(super) fn push_ir(&mut self, bb: Option<BasicBlockId>, ir: AsmIr) {

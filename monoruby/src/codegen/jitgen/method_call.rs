@@ -481,12 +481,12 @@ impl JitContext {
         recv_class: ClassId,
         pc: BytecodePtr,
     ) -> bool {
-        let mut ctx_save = bbctx.clone();
+        let bbctx_save = bbctx.clone();
         let ir_save = ir.save();
         if f(bbctx, ir, self, store, callsite, recv_class, pc) {
             true
         } else {
-            std::mem::swap(bbctx, &mut ctx_save);
+            *bbctx = bbctx_save;
             ir.restore(ir_save);
             false
         }
