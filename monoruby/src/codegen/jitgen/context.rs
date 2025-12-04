@@ -290,10 +290,12 @@ impl JitStackFrame {
         matches!(self.jit_type, JitType::Specialized { .. })
     }
 
+    #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
     pub(super) fn jit_type(&self) -> &JitType {
         &self.jit_type
     }
 
+    #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
     pub(super) fn specialize_level(&self) -> usize {
         self.specialize_level
     }

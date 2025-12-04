@@ -441,8 +441,7 @@ impl JitContext {
         };
         let jit_type = JitType::Specialized { idx, args_info };
         let specialize_level = self.specialize_level() + 1;
-        let mut stack_frame = std::mem::take(&mut self.stack_frame);
-        stack_frame.push(JitStackFrame::new(
+        self.stack_frame.push(JitStackFrame::new(
             store,
             jit_type,
             specialize_level,
@@ -452,11 +451,9 @@ impl JitContext {
             Some(callid),
             self_class,
         ));
-        let mut ctx = self.create_inline_ctx(stack_frame);
-        ctx.traceir_to_asmir(store);
-        let mut stack_frame = std::mem::take(&mut ctx.stack_frame);
-        let frame = stack_frame.pop().unwrap();
-        self.stack_frame = stack_frame;
+        //let mut ctx = self.create_inline_ctx(stack_frame);
+        self.traceir_to_asmir(store);
+        let frame = self.stack_frame.pop().unwrap();
         let entry = self.label();
         self.specialized_methods_push(context::SpecializeInfo {
             entry,
