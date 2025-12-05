@@ -671,8 +671,9 @@ impl JitContext {
         iseq: &ISeqInfo,
         bc_pos: BcIndex,
         dest_bb: BasicBlockId,
-        mut bbctx: BBContext,
+        bbctx: &BBContext,
     ) {
+        let mut bbctx = bbctx.clone();
         bbctx.clear_above_next_sp();
         let src_bb = iseq.bb_info.get_bb_id(bc_pos);
         #[cfg(feature = "jit-debug")]

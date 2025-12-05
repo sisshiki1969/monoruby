@@ -1,11 +1,22 @@
-@a = 2
-
-def f(a,b)
-  if @a == 2
-    a+b
-  else
-    a-b
+def a
+  1.times do
+    # block1 in a
+    yield
   end
 end
 
-100.times do f(2,3) end
+60.times do
+  # block2 in main
+  a do
+    # block3 in main
+    puts 100
+  end
+end
+
+#
+#   +---------------------------------+
+#   |       +---------------+         |
+#   v       v               |         |
+# block2 -> a -> times -> block1 -> block3
+#
+#
