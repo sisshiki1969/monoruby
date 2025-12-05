@@ -181,49 +181,19 @@ pub(crate) enum TraceIr {
         ic: Option<(ClassId, ClassId)>,
     },
 
-    GCmp {
-        kind: ruruby_parse::CmpKind,
-        info: BinOpInfo,
-    },
-    GCmpNotrace {
+    BinCmp {
         kind: ruruby_parse::CmpKind,
         dst: Option<SlotId>,
         mode: OpMode,
+        ic: Option<(ClassId, ClassId)>,
     },
-    ICmp {
+    BinCmpBr {
         kind: ruruby_parse::CmpKind,
-        dst: Option<SlotId>,
-        mode: OpMode,
-    },
-    FCmp {
-        kind: ruruby_parse::CmpKind,
-        info: FBinOpInfo,
-    },
-
-    GCmpBr {
-        kind: ruruby_parse::CmpKind,
-        info: BinOpInfo,
-        dest_bb: BasicBlockId,
-        brkind: BrKind,
-    },
-    GCmpBrNotrace {
-        kind: ruruby_parse::CmpKind,
-        dst: Option<SlotId>,
-        mode: OpMode,
-    },
-    ICmpBr {
-        kind: ruruby_parse::CmpKind,
-        #[allow(dead_code)]
         dst: Option<SlotId>,
         mode: OpMode,
         dest_bb: BasicBlockId,
         brkind: BrKind,
-    },
-    FCmpBr {
-        kind: ruruby_parse::CmpKind,
-        info: FBinOpInfo,
-        dest_bb: BasicBlockId,
-        brkind: BrKind,
+        ic: Option<(ClassId, ClassId)>,
     },
     ArrayTEq {
         lhs: SlotId,
@@ -395,21 +365,6 @@ impl TraceIr {
                     None
                 }),
             )
-        }
-
-        fn cmp_fmt_info(
-            store: &Store,
-            kind: ruruby_parse::CmpKind,
-            info: impl Into<BinOpInfo>,
-            optimizable: bool,
-        ) -> String {
-            let BinOpInfo {
-                dst,
-                mode,
-                lhs_class,
-                rhs_class,
-            } = info.into();
-            cmp_fmt(store, kind, dst, &mode, (lhs_class, rhs_class), optimizable)
         }
 
         fn cmp_fmt(
@@ -682,36 +637,20 @@ impl TraceIr {
                 ic,
             } => binop_fmt(store, *kind, *dst, mode, ic.clone()),
 
-            TraceIr::GCmp { kind, info } => cmp_fmt_info(store, *kind, info.clone(), false),
-            TraceIr::GCmpNotrace { kind, dst, mode } => {
-                cmp_fmt(store, *kind, *dst, mode, None, false)
-            }
-            TraceIr::GCmpBr { kind, info, .. } => cmp_fmt_info(store, *kind, info.clone(), true),
-            TraceIr::GCmpBrNotrace {
-                kind, dst, mode, ..
-            } => cmp_fmt(store, *kind, *dst, mode, None, true),
-
-            TraceIr::FCmp { kind, info } => cmp_fmt_info(store, *kind, info.clone(), false),
-            TraceIr::FCmpBr { kind, info, .. } => cmp_fmt_info(store, *kind, info.clone(), true),
-
-            TraceIr::ICmp { kind, dst, mode } => cmp_fmt(
-                store,
-                *kind,
-                *dst,
+            TraceIr::BinCmp {
+                kind,
+                dst,
                 mode,
-                (INTEGER_CLASS, INTEGER_CLASS),
-                false,
-            ),
-            TraceIr::ICmpBr {
-                kind, dst, mode, ..
-            } => cmp_fmt(
-                store,
-                *kind,
-                *dst,
+                ic,
+            } => cmp_fmt(store, *kind, *dst, mode, ic.clone(), false),
+            TraceIr::BinCmpBr {
+                kind,
+                dst,
                 mode,
-                (INTEGER_CLASS, INTEGER_CLASS),
-                true,
-            ),
+                ic,
+                ..
+            } => cmp_fmt(store, *kind, *dst, mode, ic.clone(), true),
+
             TraceIr::ArrayTEq { lhs, rhs } => {
                 format!("{lhs:?} = *{lhs:?} === {rhs:?}")
             }
