@@ -1,15 +1,15 @@
 def a
-  1.times do
+  50.times do
     # block1 in a
     yield
   end
 end
 
-60.times do
+50.times do
   # block2 in main
   a do
     # block3 in main
-    puts 100
+    100
   end
 end
 
