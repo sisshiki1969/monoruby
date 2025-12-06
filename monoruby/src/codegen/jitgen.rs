@@ -54,6 +54,8 @@ enum CompileResult {
     Return(ResultState),
     /// method return from the current method/block.
     MethodReturn(ResultState),
+    /// break from the current method/block.
+    Break(ResultState),
     /// deoptimize and recompile.
     Recompile(RecompileReason),
     /// internal error.

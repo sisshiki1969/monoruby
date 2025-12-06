@@ -502,6 +502,14 @@ impl JitContext {
         Some(&mut self.stack_frame[len - 1 - offset])
     }
 
+    fn iter_caller_frame_mut(&mut self) -> Option<&mut JitStackFrame> {
+        let len = self.stack_frame.len();
+        if len < 3 {
+            return None;
+        }
+        Some(&mut self.stack_frame[len - 3])
+    }
+
     pub(super) fn detach_current_frame(&mut self) -> JitStackFrame {
         self.stack_frame.pop().unwrap()
     }
@@ -760,6 +768,17 @@ impl JitContext {
         if let Some(caller_frame) = &mut self.method_caller_frame_mut() {
             #[cfg(feature = "jit-debug")]
             eprintln!("   new_method_return:{:?}", ret);
+            caller_frame.return_context.push(ret);
+        }
+    }
+
+    ///
+    /// Add new return branch with the context *bbctx*.
+    ///
+    pub(super) fn new_break(&mut self, ret: ResultState) {
+        if let Some(caller_frame) = &mut self.iter_caller_frame_mut() {
+            #[cfg(feature = "jit-debug")]
+            eprintln!("   new_break:{:?}", ret);
             caller_frame.return_context.push(ret);
         }
     }

@@ -4,7 +4,7 @@ def a(x)
     if x.odd?
       return yield(7)
     else
-      return yield(3)
+      break yield(3)
     end
   end
 end
@@ -16,7 +16,7 @@ end
     if 3 + x == 10
       100
     else
-      200
+      x * 2
     end
   end)
 end
