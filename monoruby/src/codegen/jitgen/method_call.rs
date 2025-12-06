@@ -450,6 +450,7 @@ impl JitContext {
         self.traceir_to_asmir(store);
         let frame = self.stack_frame.pop().unwrap();
         let return_context = self.detach_return_context();
+        #[cfg(feature = "jit-log")]
         if self.codegen_mode() {
             eprintln!(
                 "return: {} {:?} {:?}",

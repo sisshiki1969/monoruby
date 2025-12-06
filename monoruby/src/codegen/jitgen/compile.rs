@@ -99,6 +99,10 @@ impl JitContext {
                     self.new_return(ret);
                     return ir;
                 }
+                CompileResult::MethodReturn(ret) => {
+                    self.new_method_return(ret);
+                    return ir;
+                }
                 CompileResult::Recompile(reason) => {
                     self.new_return(ResultState::Value);
                     let pc = self.get_pc(store, bc_pos);
@@ -747,7 +751,7 @@ impl JitContext {
                 bbctx.write_back_locals_if_captured(ir);
                 bbctx.load(ir, ret, GP::Rax);
                 ir.push(AsmInst::MethodRet(pc));
-                return CompileResult::Leave;
+                return CompileResult::MethodReturn(bbctx.mode(ret).as_result());
             }
             TraceIr::BlockBreak(ret) => {
                 bbctx.write_back_locals_if_captured(ir);

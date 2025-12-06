@@ -128,6 +128,7 @@ impl JitContext {
                 CompileResult::SideBranch => return,
                 CompileResult::Leave
                 | CompileResult::Return(_)
+                | CompileResult::MethodReturn(_)
                 | CompileResult::Recompile(_)
                 | CompileResult::ExitLoop => {
                     liveness.join(&bbctx);

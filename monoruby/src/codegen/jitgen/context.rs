@@ -487,10 +487,19 @@ impl JitContext {
 
     fn caller_frame_mut(&mut self) -> Option<&mut JitStackFrame> {
         let len = self.stack_frame.len();
-        if len <= 1 {
+        if len < 2 {
             return None;
         }
         Some(&mut self.stack_frame[len - 2])
+    }
+
+    fn method_caller_frame_mut(&mut self) -> Option<&mut JitStackFrame> {
+        let offset = self.current_method_frame()?.1 + 1;
+        let len = self.stack_frame.len();
+        if len - 1 < offset {
+            return None;
+        }
+        Some(&mut self.stack_frame[len - 1 - offset])
     }
 
     pub(super) fn detach_current_frame(&mut self) -> JitStackFrame {
@@ -737,9 +746,20 @@ impl JitContext {
     /// Add new return branch with the context *bbctx*.
     ///
     pub(super) fn new_return(&mut self, ret: ResultState) {
-        #[cfg(feature = "jit-debug")]
-        eprintln!("   new_return:{:?}", ret);
         if let Some(caller_frame) = &mut self.caller_frame_mut() {
+            #[cfg(feature = "jit-debug")]
+            eprintln!("   new_return:{:?}", ret);
+            caller_frame.return_context.push(ret);
+        }
+    }
+
+    ///
+    /// Add new return branch with the context *bbctx*.
+    ///
+    pub(super) fn new_method_return(&mut self, ret: ResultState) {
+        if let Some(caller_frame) = &mut self.method_caller_frame_mut() {
+            #[cfg(feature = "jit-debug")]
+            eprintln!("   new_method_return:{:?}", ret);
             caller_frame.return_context.push(ret);
         }
     }
