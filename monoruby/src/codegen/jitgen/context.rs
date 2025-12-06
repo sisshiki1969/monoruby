@@ -153,9 +153,9 @@ pub(crate) struct JitStackFrame {
     ///
     backedge_map: HashMap<BasicBlockId, SlotContext>,
     ///
-    /// Context for returning from this frame.
+    /// Contexts for returning to this frame.
     ///
-    pub(super) return_context: Option<ResultState>,
+    pub(super) return_context: Vec<ResultState>,
 
     ///
     /// Generated AsmIr.
@@ -244,7 +244,7 @@ impl JitStackFrame {
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
-            return_context: None,
+            return_context: vec![],
             ir: vec![],
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
@@ -274,7 +274,7 @@ impl JitStackFrame {
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
-            return_context: None,
+            return_context: vec![],
             ir: vec![],
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
@@ -374,6 +374,8 @@ impl JitStackFrame {
 /// Context for JIT compilation.
 ///
 pub struct JitContext {
+    codegen_mode: bool,
+
     ///
     /// Class version at compile time.
     ///
@@ -392,11 +394,13 @@ pub struct JitContext {
 
 impl JitContext {
     fn new(
+        codegen_mode: bool,
         class_version: u32,
         class_version_label: DestLabel,
         stack_frame: Vec<JitStackFrame>,
     ) -> Self {
         Self {
+            codegen_mode,
             class_version,
             class_version_label,
             inline_method_cache: HashMap::default(),
@@ -425,18 +429,23 @@ impl JitContext {
             self_class,
         )];
 
-        Self::new(class_version, class_version_label, stack_frame)
+        Self::new(true, class_version, class_version_label, stack_frame)
     }
 
     pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
         let mut stack_frame = self.stack_frame.clone();
         stack_frame.last_mut().unwrap().jit_type = JitType::Loop(pc);
         Self {
+            codegen_mode: false,
             class_version: self.class_version,
             class_version_label: self.class_version_label(),
             inline_method_cache: HashMap::default(),
             stack_frame,
         }
+    }
+
+    pub(super) fn codegen_mode(&self) -> bool {
+        self.codegen_mode
     }
 
     pub(super) fn iseq_id(&self) -> ISeqId {
@@ -464,12 +473,24 @@ impl JitContext {
         self.current_frame_mut().specialized_methods.push(info);
     }
 
+    pub(super) fn detach_return_context(&mut self) -> Vec<ResultState> {
+        std::mem::take(&mut self.current_frame_mut().return_context)
+    }
+
     fn current_frame(&self) -> &JitStackFrame {
         self.stack_frame.last().unwrap()
     }
 
     fn current_frame_mut(&mut self) -> &mut JitStackFrame {
         self.stack_frame.last_mut().unwrap()
+    }
+
+    fn caller_frame_mut(&mut self) -> Option<&mut JitStackFrame> {
+        let len = self.stack_frame.len();
+        if len <= 1 {
+            return None;
+        }
+        Some(&mut self.stack_frame[len - 2])
     }
 
     pub(super) fn detach_current_frame(&mut self) -> JitStackFrame {
@@ -718,13 +739,8 @@ impl JitContext {
     pub(super) fn new_return(&mut self, ret: ResultState) {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_return:{:?}", ret);
-        match &mut self.current_frame_mut().return_context {
-            Some(res) => {
-                res.join(&ret);
-            }
-            None => {
-                self.current_frame_mut().return_context = Some(ret);
-            }
+        if let Some(caller_frame) = &mut self.caller_frame_mut() {
+            caller_frame.return_context.push(ret);
         }
     }
 

@@ -449,7 +449,15 @@ impl JitContext {
         ));
         self.traceir_to_asmir(store);
         let frame = self.stack_frame.pop().unwrap();
-        //dbg!(&frame.return_context);
+        let return_context = self.detach_return_context();
+        if self.codegen_mode() {
+            eprintln!(
+                "return: {} {:?} {:?}",
+                store.func_description(store[iseq_id].func_id()),
+                &return_context,
+                ResultState::join_all(&return_context)
+            );
+        }
         let entry = self.label();
         self.specialized_methods_push(context::SpecializeInfo {
             entry,

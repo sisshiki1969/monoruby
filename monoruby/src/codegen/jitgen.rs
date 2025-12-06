@@ -14,13 +14,11 @@ pub use self::context::JitContext;
 use self::slot::Guarded;
 
 use super::*;
-//use analysis::{ExitType, SlotInfo};
 use asmir::*;
 use context::{JitArgumentInfo, JitType};
 use slot::{Liveness, SlotContext};
 use trace_ir::*;
 
-//pub mod analysis;
 pub mod asmir;
 mod basic_block;
 mod binary_op;
@@ -61,7 +59,7 @@ enum CompileResult {
     Abort,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum ResultState {
     Const(Value),
     Class(ClassId),
@@ -91,6 +89,17 @@ impl ResultState {
             return;
         }
         *self = Self::Value;
+    }
+
+    fn join_all(states: &[Self]) -> Option<Self> {
+        if states.is_empty() {
+            return None;
+        }
+        let mut res = states[0].clone();
+        for state in &states[1..] {
+            res.join(state);
+        }
+        Some(res)
     }
 }
 
@@ -272,8 +281,7 @@ impl BBContext {
     ) {
         self.load(ir, slot, GP::Rax);
         let deopt = ir.new_deopt(self, pc);
-        ir.inst
-            .push(AsmInst::GuardConstBaseClass { base_class, deopt });
+        ir.push(AsmInst::GuardConstBaseClass { base_class, deopt });
     }
 
     pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool, pc: BytecodePtr) {
@@ -535,7 +543,7 @@ impl Codegen {
         let mut live_bb: HashSet<BasicBlockId> = HashSet::default();
         ir_vec.iter().for_each(|(bb, ir)| {
             if let Some(bb) = bb {
-                if !ir.inst.is_empty() || frame.inline_bridge_exists(*bb) {
+                if !ir.is_empty() || frame.inline_bridge_exists(*bb) {
                     live_bb.insert(*bb);
                 }
             }
