@@ -2,8 +2,6 @@ use inline::InlineTable;
 use monoasm::DestLabel;
 use ruruby_parse::{LvarCollector, ParseResult};
 
-use crate::codegen::jitgen::trace_ir::MethodCacheEntry;
-
 use super::*;
 use std::{cell::RefCell, pin::Pin};
 
@@ -576,19 +574,7 @@ impl Store {
         );
         for (class, info) in &iseq.jit_entry {
             eprintln!("  JitEntry: {}", class.get_name(self));
-            for (pc, cache_type) in &info.inline_cache_map {
-                if let Some(MethodCacheEntry {
-                    recv_class,
-                    func_id,
-                    version,
-                }) = pc.method_cache()
-                {
-                    eprintln!(
-                        "    {:?} {:?} {:08x} {:?}",
-                        recv_class, func_id, version, cache_type
-                    );
-                }
-            }
+            eprintln!("{:?}", &info.inline_cache_map);
         }
         eprintln!(
             "{:?} owner:{:?} local_vars:{} temp:{}",

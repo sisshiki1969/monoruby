@@ -17,31 +17,13 @@ impl JitContext {
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
         store: &Store,
-        bc_pos: BcIndex,
-        cache: MethodCacheEntry,
+        pc: BytecodePtr,
+        recv_class: ClassId,
+        func_id: FuncId,
         callid: CallSiteId,
     ) -> CompileResult {
         let callsite = &store[callid];
         let recv = callsite.recv;
-        let MethodCacheEntry {
-            mut recv_class,
-            mut func_id,
-            version,
-        } = cache;
-        let pc = store[self.iseq_id()].get_pc(bc_pos);
-        if (version != self.class_version()) || (recv.is_self() && self.self_class() != recv_class)
-        {
-            // the inline method cache is invalid because the receiver class is not matched.
-            if recv.is_self() {
-                recv_class = self.self_class()
-            };
-            if let Some(fid) = self.jit_check_call(store, recv_class, callsite.name) {
-                pc.write_method_cache(recv_class, fid, self.class_version());
-                func_id = fid;
-            } else {
-                return CompileResult::Recompile(RecompileReason::MethodNotFound);
-            }
-        }
 
         // We must write back and unlink all local vars when they are possibly accessed or captured from inner blocks.
         let possibly_captured = callsite.block_fid.is_some() || store[func_id].meta().is_eval();
@@ -50,8 +32,6 @@ impl JitContext {
         }
 
         self.recv_version_guard(bbctx, ir, recv, recv_class, pc);
-
-        self.inline_method_cache.insert(pc, cache);
 
         if callsite.block_fid.is_none()
             && let Some(info) = store.inline_info.get_inline(func_id)
@@ -165,11 +145,7 @@ impl JitContext {
 
         // receiver class guard
         bbctx.load(ir, recv, GP::Rdi);
-        // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
-        // Thus, we can omit a class guard.
-        if !recv.is_self() && !bbctx.is_class(recv, recv_class) {
-            bbctx.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
-        }
+        bbctx.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
     }
 
     ///

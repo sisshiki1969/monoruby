@@ -327,7 +327,7 @@ impl JitContext {
                 src,
                 ic: src_class,
             } => {
-                let src_class = if let Some(class) = bbctx.guarded(src).class() {
+                let src_class = if let Some(class) = bbctx.class(src) {
                     Some(class)
                 } else {
                     src_class
@@ -344,7 +344,7 @@ impl JitContext {
                 }
             }
             TraceIr::UnOp { kind, dst, src, ic } => {
-                let class = if let Some(class) = bbctx.guarded(src).class() {
+                let class = if let Some(class) = bbctx.class(src) {
                     Some(class)
                 } else {
                     ic
@@ -633,11 +633,50 @@ impl JitContext {
                 callid,
                 cache,
             } => {
-                if let Some(cache) = cache {
-                    return self.compile_method_call(bbctx, ir, store, bc_pos, cache, callid);
+                let callsite = &store[callid];
+                let recv_class = bbctx.class(callsite.recv);
+                let (recv_class, func_id) = if let Some(cache) = cache {
+                    if cache.version != self.class_version()
+                        || (recv_class.is_some() && Some(cache.recv_class) != recv_class)
+                    {
+                        // the inline method cache is invalid.
+                        let recv_class = if let Some(recv_class) = recv_class {
+                            recv_class
+                        } else {
+                            cache.recv_class
+                        };
+                        (
+                            recv_class,
+                            if let Some(fid) = self.jit_check_call(store, recv_class, callsite.name)
+                            {
+                                fid
+                            } else {
+                                return CompileResult::Recompile(RecompileReason::MethodNotFound);
+                            },
+                        )
+                    } else {
+                        // the inline method cache is valid.
+                        (cache.recv_class, cache.func_id)
+                    }
+                } else if let Some(recv_class) = recv_class {
+                    // no inline cache, but receiver class is known.
+                    if let Some(func_id) = self.jit_check_call(store, recv_class, callsite.name) {
+                        let cache = MethodCacheEntry {
+                            recv_class,
+                            func_id,
+                            version: self.class_version(),
+                        };
+                        pc.write_method_cache(&cache);
+                        (recv_class, func_id)
+                    } else {
+                        return CompileResult::Recompile(RecompileReason::MethodNotFound);
+                    }
                 } else {
                     return CompileResult::Recompile(RecompileReason::NotCached);
-                }
+                };
+                self.inline_method_cache
+                    .push((recv_class, callsite.name, func_id));
+                return self.compile_method_call(bbctx, ir, store, pc, recv_class, func_id, callid);
             }
             TraceIr::Yield { callid } => {
                 if let Some(block_info) = self.current_method_given_block()
@@ -894,6 +933,48 @@ impl JitContext {
     }
 }
 
+impl JitContext {
+    ///
+    /// Check whether a method or `super` of class *class_id* exists in compile time.
+    ///
+    fn jit_check_call(
+        &mut self,
+        store: &Store,
+        recv_class: ClassId,
+        name: Option<IdentId>,
+    ) -> Option<FuncId> {
+        if let Some(name) = name {
+            // for method call
+            self.jit_check_method(store, recv_class, name)
+        } else {
+            // for super
+            self.jit_check_super(store, recv_class)
+        }
+    }
+
+    ///
+    /// Check whether a method *name* of class *class_id* exists in compile time.
+    ///
+    fn jit_check_method(&self, store: &Store, class_id: ClassId, name: IdentId) -> Option<FuncId> {
+        let class_version = self.class_version();
+        store
+            .check_method_for_class_with_version(class_id, name, class_version)?
+            .func_id()
+    }
+
+    ///
+    /// Check whether `super` of class *class_id* exists in compile time.
+    ///
+    fn jit_check_super(&mut self, store: &Store, recv_class: ClassId) -> Option<FuncId> {
+        // for super
+        let iseq_id = self.iseq_id();
+        let mother = store[iseq_id].mother().0;
+        let owner = store[mother].owner_class().unwrap();
+        let func_name = store[mother].name().unwrap();
+        store.check_super(recv_class, owner, func_name)
+    }
+}
+
 #[cfg(feature = "emit-cfg")]
 fn dump_cfg(func: &ISeqInfo, store: &Store, bb_begin: BasicBlockId, bb_end: BasicBlockId) {
     let mut s = format!(
@@ -975,9 +1056,9 @@ impl BBContext {
         ic: Option<(ClassId, ClassId)>,
     ) -> (Option<ClassId>, Option<ClassId>) {
         let (lhs_class, rhs_class) = match mode {
-            OpMode::RR(l, r) => (self.guarded(l).class(), self.guarded(r).class()),
-            OpMode::RI(l, _) => (self.guarded(l).class(), Some(INTEGER_CLASS)),
-            OpMode::IR(_, r) => (Some(INTEGER_CLASS), self.guarded(r).class()),
+            OpMode::RR(l, r) => (self.class(l), self.class(r)),
+            OpMode::RI(l, _) => (self.class(l), Some(INTEGER_CLASS)),
+            OpMode::IR(_, r) => (Some(INTEGER_CLASS), self.class(r)),
         };
         let lhs_class = if lhs_class.is_some() {
             lhs_class

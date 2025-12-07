@@ -281,16 +281,12 @@ impl BytecodePtr {
         }
     }
 
-    pub fn method_callsite(self) -> CallSiteId {
-        CallSiteId(self.op1 as u32)
-    }
-
-    pub fn write_method_cache(self, recv_class: ClassId, fid: FuncId, version: u32) {
+    pub fn write_method_cache(self, cache: &MethodCacheEntry) {
         let p = self.as_ptr() as *mut u8;
         unsafe {
-            (p.add(8) as *mut Option<FuncId>).write(Some(fid));
-            (p.add(24) as *mut Option<ClassId>).write(Some(recv_class));
-            (p.add(28) as *mut u32).write(version);
+            (p.add(8) as *mut Option<FuncId>).write(Some(cache.func_id));
+            (p.add(24) as *mut Option<ClassId>).write(Some(cache.recv_class));
+            (p.add(28) as *mut u32).write(cache.version);
         }
     }
 }

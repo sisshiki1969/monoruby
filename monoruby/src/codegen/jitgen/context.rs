@@ -385,7 +385,7 @@ pub struct JitContext {
     ///
     /// Inline cache for method calls.
     ///
-    pub(crate) inline_method_cache: HashMap<BytecodePtr, MethodCacheEntry>,
+    pub(crate) inline_method_cache: Vec<(ClassId, Option<IdentId>, FuncId)>,
     ///
     /// Stack frame for specialized compilation. (iseq, outer_scope, block_iseq)
     ///
@@ -403,7 +403,7 @@ impl JitContext {
             codegen_mode,
             class_version,
             class_version_label,
-            inline_method_cache: HashMap::default(),
+            inline_method_cache: vec![],
             stack_frame,
         }
     }
@@ -439,7 +439,7 @@ impl JitContext {
             codegen_mode: false,
             class_version: self.class_version,
             class_version_label: self.class_version_label(),
-            inline_method_cache: HashMap::default(),
+            inline_method_cache: vec![],
             stack_frame,
         }
     }
@@ -802,50 +802,5 @@ impl JitContext {
         self.current_frame_mut()
             .outline_bridges
             .push((ir, dest, bbid));
-    }
-
-    ///
-    /// Check whether a method or `super` of class *class_id* exists in compile time.
-    ///
-    pub(super) fn jit_check_call(
-        &mut self,
-        store: &Store,
-        recv_class: ClassId,
-        name: Option<IdentId>,
-    ) -> Option<FuncId> {
-        if let Some(name) = name {
-            // for method call
-            self.jit_check_method(store, recv_class, name)
-        } else {
-            // for super
-            self.jit_check_super(store, recv_class)
-        }
-    }
-
-    ///
-    /// Check whether a method *name* of class *class_id* exists in compile time.
-    ///
-    pub(super) fn jit_check_method(
-        &self,
-        store: &Store,
-        class_id: ClassId,
-        name: IdentId,
-    ) -> Option<FuncId> {
-        let class_version = self.class_version;
-        store
-            .check_method_for_class_with_version(class_id, name, class_version)?
-            .func_id()
-    }
-
-    ///
-    /// Check whether `super` of class *class_id* exists in compile time.
-    ///
-    fn jit_check_super(&mut self, store: &Store, recv_class: ClassId) -> Option<FuncId> {
-        // for super
-        let iseq_id = self.iseq_id();
-        let mother = store[iseq_id].mother().0;
-        let owner = store[mother].owner_class().unwrap();
-        let func_name = store[mother].name().unwrap();
-        store.check_super(recv_class, owner, func_name)
     }
 }

@@ -95,15 +95,15 @@ impl ResultState {
         *self = Self::Value;
     }
 
-    fn join_all(states: &[Self]) -> Option<Self> {
+    fn join_all(states: &[Self]) -> Self {
         if states.is_empty() {
-            return None;
+            return ResultState::Value;
         }
         let mut res = states[0].clone();
         for state in &states[1..] {
             res.join(state);
         }
-        Some(res)
+        res
     }
 }
 
@@ -449,7 +449,7 @@ impl Codegen {
         entry_label: DestLabel,
         class_version: u32,
         class_version_label: DestLabel,
-    ) -> Vec<(BytecodePtr, InlineCacheType)> {
+    ) -> Vec<(ClassId, Option<IdentId>, FuncId)> {
         let jit_type = if let Some(pos) = position {
             JitType::Loop(pos)
         } else {
@@ -479,9 +479,6 @@ impl Codegen {
         );
 
         inline_cache
-            .into_iter()
-            .map(|(pc, entry)| (pc, InlineCacheType::Method(entry)))
-            .collect()
     }
 
     fn gen_machine_code(

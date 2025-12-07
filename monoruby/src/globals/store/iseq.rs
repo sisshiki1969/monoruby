@@ -62,7 +62,7 @@ impl ISeqId {
 pub struct JitInfo {
     pub entry: DestLabel,
     pub class_version_label: DestLabel,
-    pub inline_cache_map: Vec<(BytecodePtr, InlineCacheType)>,
+    pub inline_cache_map: Vec<(ClassId, Option<IdentId>, FuncId)>,
 }
 
 ///
@@ -437,14 +437,14 @@ impl ISeqInfo {
     pub(crate) fn get_cache_map(
         &self,
         self_class: ClassId,
-    ) -> &Vec<(BytecodePtr, InlineCacheType)> {
+    ) -> &Vec<(ClassId, Option<IdentId>, FuncId)> {
         &self.jit_entry.get(&self_class).unwrap().inline_cache_map
     }
 
     pub(crate) fn set_cache_map(
         &mut self,
         self_class: ClassId,
-        cache: Vec<(BytecodePtr, InlineCacheType)>,
+        cache: Vec<(ClassId, Option<IdentId>, FuncId)>,
     ) {
         self.jit_entry
             .get_mut(&self_class)
