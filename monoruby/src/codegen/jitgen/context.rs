@@ -83,7 +83,6 @@ impl JitArgumentInfo {
 ///
 /// Virtual Stack frame for specialized compilation.
 ///
-#[derive(Debug)]
 pub(crate) struct JitStackFrame {
     ///
     /// Type of compilation for this frame.
@@ -153,6 +152,10 @@ pub(crate) struct JitStackFrame {
     /// Map for target contexts of backward branches.
     ///
     backedge_map: HashMap<BasicBlockId, SlotContext>,
+    ///
+    /// Contexts for returning to this frame.
+    ///
+    pub(super) return_context: Vec<ResultState>,
 
     ///
     /// Generated AsmIr.
@@ -187,6 +190,16 @@ pub(crate) struct JitStackFrame {
     ///
     #[cfg(feature = "emit-asm")]
     pub(super) start_codepos: usize,
+}
+
+impl std::fmt::Debug for JitStackFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JitStackFrame")
+            .field("jit_type", &self.jit_type)
+            .field("outer", &self.outer)
+            .field("given_block", &self.given_block)
+            .finish()
+    }
 }
 
 impl Clone for JitStackFrame {
@@ -231,6 +244,7 @@ impl JitStackFrame {
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
+            return_context: vec![],
             ir: vec![],
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
@@ -260,6 +274,7 @@ impl JitStackFrame {
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
+            return_context: vec![],
             ir: vec![],
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
@@ -290,10 +305,7 @@ impl JitStackFrame {
         matches!(self.jit_type, JitType::Specialized { .. })
     }
 
-    pub(super) fn jit_type(&self) -> &JitType {
-        &self.jit_type
-    }
-
+    #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
     pub(super) fn specialize_level(&self) -> usize {
         self.specialize_level
     }
@@ -351,12 +363,19 @@ impl JitStackFrame {
     pub(super) fn get_bb_label(&self, bb: BasicBlockId) -> JitLabel {
         self.basic_block_labels.get(&bb).copied().unwrap()
     }
+
+    pub(super) fn resolve_bb_label(&mut self, jit: &mut JitMemory, bb: BasicBlockId) -> DestLabel {
+        let label = self.basic_block_labels.get(&bb).copied().unwrap();
+        self.resolve_label(jit, label)
+    }
 }
 
 ///
 /// Context for JIT compilation.
 ///
 pub struct JitContext {
+    codegen_mode: bool,
+
     ///
     /// Class version at compile time.
     ///
@@ -366,7 +385,7 @@ pub struct JitContext {
     ///
     /// Inline cache for method calls.
     ///
-    pub(crate) inline_method_cache: HashMap<BytecodePtr, MethodCacheEntry>,
+    pub(crate) inline_method_cache: Vec<(ClassId, Option<IdentId>, FuncId)>,
     ///
     /// Stack frame for specialized compilation. (iseq, outer_scope, block_iseq)
     ///
@@ -375,14 +394,16 @@ pub struct JitContext {
 
 impl JitContext {
     fn new(
+        codegen_mode: bool,
         class_version: u32,
         class_version_label: DestLabel,
         stack_frame: Vec<JitStackFrame>,
     ) -> Self {
         Self {
+            codegen_mode,
             class_version,
             class_version_label,
-            inline_method_cache: HashMap::default(),
+            inline_method_cache: vec![],
             stack_frame,
         }
     }
@@ -408,25 +429,23 @@ impl JitContext {
             self_class,
         )];
 
-        Self::new(class_version, class_version_label, stack_frame)
-    }
-
-    ///
-    /// Create new JitContext.
-    ///
-    pub(super) fn create_inline_ctx(&self, stack_frame: Vec<JitStackFrame>) -> Self {
-        Self::new(self.class_version, self.class_version_label(), stack_frame)
+        Self::new(true, class_version, class_version_label, stack_frame)
     }
 
     pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
         let mut stack_frame = self.stack_frame.clone();
         stack_frame.last_mut().unwrap().jit_type = JitType::Loop(pc);
         Self {
+            codegen_mode: false,
             class_version: self.class_version,
             class_version_label: self.class_version_label(),
-            inline_method_cache: HashMap::default(),
+            inline_method_cache: vec![],
             stack_frame,
         }
+    }
+
+    pub(super) fn codegen_mode(&self) -> bool {
+        self.codegen_mode
     }
 
     pub(super) fn iseq_id(&self) -> ISeqId {
@@ -454,12 +473,41 @@ impl JitContext {
         self.current_frame_mut().specialized_methods.push(info);
     }
 
+    pub(super) fn detach_return_context(&mut self) -> Vec<ResultState> {
+        std::mem::take(&mut self.current_frame_mut().return_context)
+    }
+
     fn current_frame(&self) -> &JitStackFrame {
         self.stack_frame.last().unwrap()
     }
 
     fn current_frame_mut(&mut self) -> &mut JitStackFrame {
         self.stack_frame.last_mut().unwrap()
+    }
+
+    fn caller_frame_mut(&mut self) -> Option<&mut JitStackFrame> {
+        let len = self.stack_frame.len();
+        if len < 2 {
+            return None;
+        }
+        Some(&mut self.stack_frame[len - 2])
+    }
+
+    fn method_caller_frame_mut(&mut self) -> Option<&mut JitStackFrame> {
+        let offset = self.current_method_frame()?.1 + 1;
+        let len = self.stack_frame.len();
+        if len - 1 < offset {
+            return None;
+        }
+        Some(&mut self.stack_frame[len - 1 - offset])
+    }
+
+    fn iter_caller_frame_mut(&mut self) -> Option<&mut JitStackFrame> {
+        let len = self.stack_frame.len();
+        if len < 3 {
+            return None;
+        }
+        Some(&mut self.stack_frame[len - 3])
     }
 
     pub(super) fn detach_current_frame(&mut self) -> JitStackFrame {
@@ -661,9 +709,8 @@ impl JitContext {
         iseq: &ISeqInfo,
         bc_pos: BcIndex,
         dest_bb: BasicBlockId,
-        bbctx: &BBContext,
+        mut bbctx: BBContext,
     ) {
-        let mut bbctx = bbctx.clone();
         bbctx.clear_above_next_sp();
         let src_bb = iseq.bb_info.get_bb_id(bc_pos);
         #[cfg(feature = "jit-debug")]
@@ -703,6 +750,39 @@ impl JitContext {
         self.current_frame_mut().backedge_map.insert(bb_pos, target);
     }
 
+    ///
+    /// Add new return branch with the context *bbctx*.
+    ///
+    pub(super) fn new_return(&mut self, ret: ResultState) {
+        if let Some(caller_frame) = &mut self.caller_frame_mut() {
+            #[cfg(feature = "jit-debug")]
+            eprintln!("   new_return:{:?}", ret);
+            caller_frame.return_context.push(ret);
+        }
+    }
+
+    ///
+    /// Add new return branch with the context *bbctx*.
+    ///
+    pub(super) fn new_method_return(&mut self, ret: ResultState) {
+        if let Some(caller_frame) = &mut self.method_caller_frame_mut() {
+            #[cfg(feature = "jit-debug")]
+            eprintln!("   new_method_return:{:?}", ret);
+            caller_frame.return_context.push(ret);
+        }
+    }
+
+    ///
+    /// Add new return branch with the context *bbctx*.
+    ///
+    pub(super) fn new_break(&mut self, ret: ResultState) {
+        if let Some(caller_frame) = &mut self.iter_caller_frame_mut() {
+            #[cfg(feature = "jit-debug")]
+            eprintln!("   new_break:{:?}", ret);
+            caller_frame.return_context.push(ret);
+        }
+    }
+
     pub(super) fn push_ir(&mut self, bb: Option<BasicBlockId>, ir: AsmIr) {
         self.current_frame_mut().ir.push((bb, ir));
     }
@@ -722,50 +802,5 @@ impl JitContext {
         self.current_frame_mut()
             .outline_bridges
             .push((ir, dest, bbid));
-    }
-
-    ///
-    /// Check whether a method or `super` of class *class_id* exists in compile time.
-    ///
-    pub(super) fn jit_check_call(
-        &mut self,
-        store: &Store,
-        recv_class: ClassId,
-        name: Option<IdentId>,
-    ) -> Option<FuncId> {
-        if let Some(name) = name {
-            // for method call
-            self.jit_check_method(store, recv_class, name)
-        } else {
-            // for super
-            self.jit_check_super(store, recv_class)
-        }
-    }
-
-    ///
-    /// Check whether a method *name* of class *class_id* exists in compile time.
-    ///
-    pub(super) fn jit_check_method(
-        &self,
-        store: &Store,
-        class_id: ClassId,
-        name: IdentId,
-    ) -> Option<FuncId> {
-        let class_version = self.class_version;
-        store
-            .check_method_for_class_with_version(class_id, name, class_version)?
-            .func_id()
-    }
-
-    ///
-    /// Check whether `super` of class *class_id* exists in compile time.
-    ///
-    fn jit_check_super(&mut self, store: &Store, recv_class: ClassId) -> Option<FuncId> {
-        // for super
-        let iseq_id = self.iseq_id();
-        let mother = store[iseq_id].mother().0;
-        let owner = store[mother].owner_class().unwrap();
-        let func_name = store[mother].name().unwrap();
-        store.check_super(recv_class, owner, func_name)
     }
 }

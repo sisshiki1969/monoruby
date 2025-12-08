@@ -1,0 +1,150 @@
+use super::*;
+
+impl JitContext {
+    pub(in crate::codegen::jitgen) fn analyse_backedge_fixpoint(
+        &mut self,
+        store: &Store,
+        bbctx: BBContext,
+        loop_start: BasicBlockId,
+        loop_end: BasicBlockId,
+    ) {
+        let iseq_id = self.iseq_id();
+        for x in 0..10 {
+            #[cfg(feature = "jit-debug")]
+            eprintln!("########## analyse iteration[{x}]");
+            let (liveness, backedge) =
+                self.analyse_loop(store, iseq_id, loop_start, loop_end, bbctx.clone());
+            if let Some(backedge) = backedge {
+                if let Some(be) = self.loop_backedge(loop_start)
+                    && be.equiv(&backedge)
+                {
+                    #[cfg(feature = "jit-debug")]
+                    eprintln!("fixed: {x} {:?}=={:?}", be.slot_state, backedge.slot_state);
+                    break;
+                } else {
+                    #[cfg(feature = "jit-debug")]
+                    eprintln!(
+                        "analyse_loop[{x}] backedge: {loop_end:?}->{loop_start:?} {:?}",
+                        backedge.slot_state
+                    );
+                    self.add_loop_info(loop_start, liveness, Some(backedge));
+                }
+            } else {
+                self.add_loop_info(loop_start, liveness, None);
+                break;
+            }
+            if x == 9 {
+                panic!("not fixed")
+            }
+        }
+    }
+
+    fn analyse_loop(
+        &self,
+        store: &Store,
+        iseq_id: ISeqId,
+        loop_start: BasicBlockId,
+        loop_end: BasicBlockId,
+        mut bbctx: BBContext,
+    ) -> (Liveness, Option<BBContext>) {
+        let pc = store[iseq_id].get_bb_pc(loop_start);
+        let mut ctx = JitContext::loop_analysis(self, pc);
+        let mut liveness = Liveness::new(ctx.total_reg_num(store));
+
+        if let Some(backedge) = self.loop_backedge(loop_start) {
+            bbctx.join(backedge);
+        };
+        ctx.branch_continue(loop_start, bbctx);
+
+        for bbid in loop_start..=loop_end {
+            ctx.analyse_basic_block(
+                store,
+                iseq_id,
+                &mut liveness,
+                bbid,
+                bbid == loop_start,
+                bbid == loop_end,
+            );
+        }
+
+        let mut backedge: Option<BBContext> = None;
+        if let Some(branches) = ctx.remove_branch(loop_start) {
+            for BranchEntry { src_bb, bbctx, .. } in branches {
+                liveness.join(&bbctx);
+                assert!(src_bb.unwrap() >= loop_start);
+                // backegde
+                if let Some(backedge) = &mut backedge {
+                    backedge.join(&bbctx);
+                } else {
+                    backedge = Some(bbctx);
+                }
+            }
+        }
+        if let Some(backedge) = &mut backedge {
+            for i in backedge.slot_state.all_regs() {
+                if let slot::LinkMode::G(_) = backedge.mode(i) {
+                    let g = backedge.guarded(i);
+                    backedge.set_S_with_guard(i, g);
+                }
+            }
+        }
+        #[cfg(feature = "jit-debug")]
+        eprintln!(
+            "analyse_end: {loop_start:?}->{loop_end:?} {}",
+            backedge
+                .as_ref()
+                .map_or("no backedge".to_string(), |b| format!("{:?}", b.slot_state))
+        );
+
+        (liveness, backedge)
+    }
+
+    fn analyse_basic_block(
+        &mut self,
+        store: &Store,
+        iseq_id: ISeqId,
+        liveness: &mut Liveness,
+        bbid: BasicBlockId,
+        is_start: bool,
+        is_last: bool,
+    ) {
+        let mut ir = AsmIr::new(self);
+        let iseq = &store[iseq_id];
+        let mut bbctx = match self.incoming_context(store, iseq, bbid, is_start) {
+            Some(bb) => bb,
+            None => return,
+        };
+
+        let BasciBlockInfoEntry { begin, end, .. } = iseq.bb_info[bbid];
+        for bc_pos in begin..=end {
+            bbctx.next_sp = iseq.get_sp(bc_pos);
+
+            match self.compile_instruction(&mut ir, &mut bbctx, store, iseq, bc_pos) {
+                CompileResult::Continue => {}
+                CompileResult::Branch(dest_bb) => {
+                    self.new_branch(iseq, bc_pos, dest_bb, bbctx);
+                    return;
+                }
+                CompileResult::SideBranch => return,
+                CompileResult::Leave
+                | CompileResult::Return(_)
+                | CompileResult::Break(_)
+                | CompileResult::MethodReturn(_)
+                | CompileResult::Recompile(_)
+                | CompileResult::ExitLoop => {
+                    liveness.join(&bbctx);
+                    return;
+                }
+                CompileResult::Abort => {
+                    store.dump_iseq(iseq_id);
+                    unreachable!()
+                }
+            }
+            bbctx.clear_above_next_sp();
+        }
+
+        if !is_last {
+            self.prepare_next(bbctx, iseq, end);
+        }
+    }
+}

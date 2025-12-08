@@ -13,7 +13,7 @@ impl Codegen {
         class_version: u32,
         class_version_label: DestLabel,
         is_recompile: Option<RecompileReason>,
-    ) -> Vec<(BytecodePtr, InlineCacheType)> {
+    ) -> Vec<(ClassId, Option<IdentId>, FuncId)> {
         self.compile(
             globals,
             iseq_id,
@@ -150,7 +150,7 @@ impl Codegen {
         class_version: u32,
         class_version_label: DestLabel,
         is_recompile: Option<RecompileReason>,
-    ) -> Vec<(BytecodePtr, InlineCacheType)> {
+    ) -> Vec<(ClassId, Option<IdentId>, FuncId)> {
         #[cfg(feature = "profile")]
         {
             if let Some(reason) = &is_recompile {

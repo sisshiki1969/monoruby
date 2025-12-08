@@ -17,31 +17,13 @@ impl JitContext {
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
         store: &Store,
-        bc_pos: BcIndex,
-        cache: MethodCacheEntry,
+        pc: BytecodePtr,
+        recv_class: ClassId,
+        func_id: FuncId,
         callid: CallSiteId,
     ) -> CompileResult {
         let callsite = &store[callid];
         let recv = callsite.recv;
-        let MethodCacheEntry {
-            mut recv_class,
-            mut func_id,
-            version,
-        } = cache;
-        let pc = store[self.iseq_id()].get_pc(bc_pos);
-        if (version != self.class_version()) || (recv.is_self() && self.self_class() != recv_class)
-        {
-            // the inline method cache is invalid because the receiver class is not matched.
-            if recv.is_self() {
-                recv_class = self.self_class()
-            };
-            if let Some(fid) = self.jit_check_call(store, recv_class, callsite.name) {
-                pc.write_method_cache(recv_class, fid, self.class_version());
-                func_id = fid;
-            } else {
-                return CompileResult::Recompile(RecompileReason::MethodNotFound);
-            }
-        }
 
         // We must write back and unlink all local vars when they are possibly accessed or captured from inner blocks.
         let possibly_captured = callsite.block_fid.is_some() || store[func_id].meta().is_eval();
@@ -50,8 +32,6 @@ impl JitContext {
         }
 
         self.recv_version_guard(bbctx, ir, recv, recv_class, pc);
-
-        self.inline_method_cache.insert(pc, cache);
 
         if callsite.block_fid.is_none()
             && let Some(info) = store.inline_info.get_inline(func_id)
@@ -96,7 +76,9 @@ impl JitContext {
         ir: &mut AsmIr,
         store: &Store,
         fid: FuncId,
-        info: BinOpInfo,
+        dst: Option<SlotId>,
+        mode: OpMode,
+        lhs_class: ClassId,
         pc: BytecodePtr,
     ) -> CompileResult {
         assert!(matches!(
@@ -113,12 +95,6 @@ impl JitContext {
         self.guard_class_version(bbctx, ir, false, deopt);
 
         // receiver class guard
-        let BinOpInfo {
-            dst,
-            mode,
-            lhs_class,
-            ..
-        } = info;
         bbctx.load_lhs(ir, mode, GP::Rdi);
         match mode {
             OpMode::RR(lhs, _) | OpMode::RI(lhs, _) => {
@@ -169,11 +145,7 @@ impl JitContext {
 
         // receiver class guard
         bbctx.load(ir, recv, GP::Rdi);
-        // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
-        // Thus, we can omit a class guard.
-        if !recv.is_self() && !bbctx.is_class(recv, recv_class) {
-            bbctx.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
-        }
+        bbctx.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
     }
 
     ///
@@ -441,8 +413,7 @@ impl JitContext {
         };
         let jit_type = JitType::Specialized { idx, args_info };
         let specialize_level = self.specialize_level() + 1;
-        let mut stack_frame = std::mem::take(&mut self.stack_frame);
-        stack_frame.push(JitStackFrame::new(
+        self.stack_frame.push(JitStackFrame::new(
             store,
             jit_type,
             specialize_level,
@@ -452,11 +423,18 @@ impl JitContext {
             Some(callid),
             self_class,
         ));
-        let mut ctx = self.create_inline_ctx(stack_frame);
-        ctx.traceir_to_asmir(store);
-        let mut stack_frame = std::mem::take(&mut ctx.stack_frame);
-        let frame = stack_frame.pop().unwrap();
-        self.stack_frame = stack_frame;
+        self.traceir_to_asmir(store);
+        let frame = self.stack_frame.pop().unwrap();
+        let return_context = self.detach_return_context();
+        #[cfg(feature = "jit-log")]
+        if self.codegen_mode() {
+            eprintln!(
+                "return: {} {:?} {:?}",
+                store.func_description(store[iseq_id].func_id()),
+                &return_context,
+                ResultState::join_all(&return_context)
+            );
+        }
         let entry = self.label();
         self.specialized_methods_push(context::SpecializeInfo {
             entry,
@@ -484,12 +462,12 @@ impl JitContext {
         recv_class: ClassId,
         pc: BytecodePtr,
     ) -> bool {
-        let mut ctx_save = bbctx.clone();
+        let bbctx_save = bbctx.clone();
         let ir_save = ir.save();
         if f(bbctx, ir, self, store, callsite, recv_class, pc) {
             true
         } else {
-            std::mem::swap(bbctx, &mut ctx_save);
+            *bbctx = bbctx_save;
             ir.restore(ir_save);
             false
         }

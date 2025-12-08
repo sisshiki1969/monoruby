@@ -14,13 +14,11 @@ pub use self::context::JitContext;
 use self::slot::Guarded;
 
 use super::*;
-//use analysis::{ExitType, SlotInfo};
 use asmir::*;
 use context::{JitArgumentInfo, JitType};
 use slot::{Liveness, SlotContext};
 use trace_ir::*;
 
-//pub mod analysis;
 pub mod asmir;
 mod basic_block;
 mod binary_op;
@@ -48,14 +46,65 @@ enum CompileResult {
     /// exit from the loop.
     ExitLoop,
     /// jump to another basic block.
-    Branch,
+    Branch(BasicBlockId),
+    SideBranch,
     /// leave the current method/block.
     Leave,
+    /// return from the current method/block.
+    Return(ResultState),
+    /// method return from the current method/block.
+    MethodReturn(ResultState),
+    /// break from the current method/block.
+    Break(ResultState),
     /// deoptimize and recompile.
     Recompile(RecompileReason),
     /// internal error.
     #[allow(dead_code)]
     Abort,
+}
+
+#[derive(Debug, Clone)]
+enum ResultState {
+    Const(Value),
+    Class(ClassId),
+    Value,
+}
+
+impl ResultState {
+    fn class(&self) -> Option<ClassId> {
+        match self {
+            Self::Const(v) => Some(v.class()),
+            Self::Class(class) => Some(*class),
+            _ => None,
+        }
+    }
+
+    fn join(&mut self, other: &Self) {
+        if let Self::Const(l) = self
+            && let Self::Const(r) = other
+            && l.id() == r.id()
+        {
+            return;
+        }
+        if let Some(class) = self.class()
+            && other.class() == Some(class)
+        {
+            *self = Self::Class(class);
+            return;
+        }
+        *self = Self::Value;
+    }
+
+    fn join_all(states: &[Self]) -> Self {
+        if states.is_empty() {
+            return ResultState::Value;
+        }
+        let mut res = states[0].clone();
+        for state in &states[1..] {
+            res.join(state);
+        }
+        res
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -236,8 +285,7 @@ impl BBContext {
     ) {
         self.load(ir, slot, GP::Rax);
         let deopt = ir.new_deopt(self, pc);
-        ir.inst
-            .push(AsmInst::GuardConstBaseClass { base_class, deopt });
+        ir.push(AsmInst::GuardConstBaseClass { base_class, deopt });
     }
 
     pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool, pc: BytecodePtr) {
@@ -401,7 +449,7 @@ impl Codegen {
         entry_label: DestLabel,
         class_version: u32,
         class_version_label: DestLabel,
-    ) -> Vec<(BytecodePtr, InlineCacheType)> {
+    ) -> Vec<(ClassId, Option<IdentId>, FuncId)> {
         let jit_type = if let Some(pos) = position {
             JitType::Loop(pos)
         } else {
@@ -431,9 +479,6 @@ impl Codegen {
         );
 
         inline_cache
-            .into_iter()
-            .map(|(pc, entry)| (pc, InlineCacheType::Method(entry)))
-            .collect()
     }
 
     fn gen_machine_code(
@@ -475,14 +520,13 @@ impl Codegen {
                 let iseq = &store[frame.iseq_id()];
                 let name = store.func_description(iseq.func_id());
                 eprintln!(
-                    "  {}>>> [{}] {:?} <{}> self_class:{} {:?} {:?}",
+                    "  {}>>> [{}] {:?} <{}> self_class:{} {:?}",
                     " ".repeat(level * 3),
                     frame.specialize_level(),
                     frame.iseq_id(),
                     name,
                     store.debug_class_name(frame.self_class()),
                     frame,
-                    frame.jit_type(),
                 );
             }
         }
@@ -500,7 +544,7 @@ impl Codegen {
         let mut live_bb: HashSet<BasicBlockId> = HashSet::default();
         ir_vec.iter().for_each(|(bb, ir)| {
             if let Some(bb) = bb {
-                if !ir.inst.is_empty() || frame.inline_bridge_exists(*bb) {
+                if !ir.is_empty() || frame.inline_bridge_exists(*bb) {
                     live_bb.insert(*bb);
                 }
             }

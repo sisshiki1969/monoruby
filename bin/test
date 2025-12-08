@@ -4,7 +4,7 @@ source <(cargo llvm-cov show-env --export-prefix)
 cargo llvm-cov clean --workspace
 cargo build --features gc-stress
 
-cargo test
+cargo llvm-cov nextest --no-report
 
 target/debug/monoruby benchmark/app_fib.rb > monoruby.log
 ruby benchmark/app_fib.rb > ruby.log

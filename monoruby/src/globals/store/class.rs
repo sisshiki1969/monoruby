@@ -1087,22 +1087,10 @@ impl Store {
         let self_class = lfp.self_val().class();
         let iseq_id = self[func_id].as_iseq();
         let iseq = &self[iseq_id];
-        for (pc, ty) in iseq.get_cache_map(self_class) {
-            match ty {
-                InlineCacheType::Method(comptime_cache) => {
-                    let MethodCacheEntry {
-                        recv_class,
-                        func_id: comptime_fid,
-                        version: comptime_version,
-                    } = comptime_cache;
-                    if *comptime_version != class_version {
-                        let name = self[pc.method_callsite()].name;
-                        let func_id = self.check_method_for_name(lfp, *recv_class, name);
-                        if func_id != Some(*comptime_fid) {
-                            return false;
-                        }
-                    };
-                }
+        for (recv_class, name, comptime_fid) in iseq.get_cache_map(self_class) {
+            let func_id = self.check_method_for_name(lfp, *recv_class, *name);
+            if func_id != Some(*comptime_fid) {
+                return false;
             }
         }
         let version_label = self[iseq_id]

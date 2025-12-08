@@ -1,6 +1,6 @@
 use bytecodegen::BcIndex;
 
-use crate::codegen::jitgen::trace_ir::{FOpClass, MethodCacheEntry};
+use crate::codegen::jitgen::trace_ir::MethodCacheEntry;
 
 use super::*;
 
@@ -12,38 +12,6 @@ pub(crate) struct Bytecode {
 }
 
 impl Bytecode {
-    pub fn is_integer1(&self) -> bool {
-        self.classid1() == Some(INTEGER_CLASS)
-    }
-
-    pub fn is_integer2(&self) -> bool {
-        self.classid2() == Some(INTEGER_CLASS)
-    }
-
-    pub fn is_float1(&self) -> bool {
-        self.classid1() == Some(FLOAT_CLASS)
-    }
-
-    pub fn is_float2(&self) -> bool {
-        self.classid2() == Some(FLOAT_CLASS)
-    }
-
-    pub fn is_integer_binop(&self) -> bool {
-        self.classid1() == Some(INTEGER_CLASS) && self.classid2() == Some(INTEGER_CLASS)
-    }
-
-    pub fn is_float_binop(&self) -> Option<(FOpClass, FOpClass)> {
-        match (self.classid1(), self.classid2()) {
-            (Some(class1), Some(class2)) => match (class1, class2) {
-                (INTEGER_CLASS, INTEGER_CLASS) => None,
-                (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => {
-                    Some((FOpClass::from(class1), FOpClass::from(class2)))
-                }
-                _ => None,
-            },
-            _ => None,
-        }
-    }
     pub fn classid1(&self) -> Option<ClassId> {
         ClassId::from(self.op2.0 as u32)
     }
@@ -313,16 +281,12 @@ impl BytecodePtr {
         }
     }
 
-    pub fn method_callsite(self) -> CallSiteId {
-        CallSiteId(self.op1 as u32)
-    }
-
-    pub fn write_method_cache(self, recv_class: ClassId, fid: FuncId, version: u32) {
+    pub fn write_method_cache(self, cache: &MethodCacheEntry) {
         let p = self.as_ptr() as *mut u8;
         unsafe {
-            (p.add(8) as *mut Option<FuncId>).write(Some(fid));
-            (p.add(24) as *mut Option<ClassId>).write(Some(recv_class));
-            (p.add(28) as *mut u32).write(version);
+            (p.add(8) as *mut Option<FuncId>).write(Some(cache.func_id));
+            (p.add(24) as *mut Option<ClassId>).write(Some(cache.recv_class));
+            (p.add(28) as *mut u32).write(cache.version);
         }
     }
 }

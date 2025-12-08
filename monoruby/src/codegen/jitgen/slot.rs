@@ -160,6 +160,10 @@ impl SlotContext {
         self.mode(slot).guarded()
     }
 
+    pub(super) fn class(&self, slot: SlotId) -> Option<ClassId> {
+        self.guarded(slot).class()
+    }
+
     #[allow(non_snake_case)]
     pub(super) fn is_C(&self, slot: SlotId) -> bool {
         self.mode(slot).is_C()
@@ -616,9 +620,9 @@ impl BBContext {
         class: ClassId,
         deopt: AsmDeopt,
     ) {
-        //if self.is_class(slot, class) {
-        //    return;
-        //}
+        if self.class(slot) == Some(class) {
+            return;
+        }
         let class_guarded = Guarded::from_class(class);
         match &mut self.slots[slot.0 as usize] {
             LinkMode::S(guarded) | LinkMode::G(guarded) => {
@@ -973,6 +977,19 @@ impl LinkMode {
             (LinkMode::C(_), _) => false,
             (_, LinkMode::C(_)) => false,
             (lhs, rhs) => lhs.guarded() == rhs.guarded(),
+        }
+    }
+
+    pub(super) fn as_result(&self) -> ResultState {
+        match self {
+            LinkMode::C(v) => ResultState::Const(*v),
+            LinkMode::MaybeNone | LinkMode::None | LinkMode::V => unreachable!(),
+            l => match l.guarded() {
+                Guarded::Class(class) => ResultState::Class(class),
+                Guarded::Fixnum => ResultState::Class(INTEGER_CLASS),
+                Guarded::Float => ResultState::Class(FLOAT_CLASS),
+                Guarded::Value => ResultState::Value,
+            },
         }
     }
 

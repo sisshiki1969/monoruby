@@ -123,14 +123,6 @@ impl Xmm {
     }
 }
 
-///
-/// Type of the inline cache.
-///
-#[derive(Debug, Clone)]
-pub(crate) enum InlineCacheType {
-    Method(jitgen::trace_ir::MethodCacheEntry),
-}
-
 pub struct JitModule {
     pub(crate) jit: JitMemory,
     class_version: DestLabel,

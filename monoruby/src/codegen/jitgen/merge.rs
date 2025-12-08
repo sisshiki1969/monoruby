@@ -20,7 +20,7 @@ impl JitContext {
             {
                 #[cfg(feature = "jit-debug")]
                 eprintln!("    {mode:?}");
-                let mut ir = AsmIr::new();
+                let mut ir = AsmIr::new(self);
                 bbctx.gen_bridge(&mut ir, src_bb, &target, pc);
                 match mode {
                     BranchMode::Side { dest } => {
@@ -129,7 +129,7 @@ impl JitContext {
         {
             #[cfg(feature = "jit-debug")]
             eprintln!("    {mode:?}");
-            let mut ir = AsmIr::new();
+            let mut ir = AsmIr::new(self);
             bbctx.gen_bridge(&mut ir, src_bb, &target, pc);
             match mode {
                 BranchMode::Side { dest } => {

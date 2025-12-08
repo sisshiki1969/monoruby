@@ -61,7 +61,9 @@ impl std::ops::Index<AsmEvict> for SideExitLabels {
 
 #[derive(Debug)]
 pub(crate) struct AsmIr {
-    pub(super) inst: Vec<AsmInst>,
+    codegen_mode: bool,
+    empty: bool,
+    inst: Vec<AsmInst>,
     side_exit: Vec<SideExit>,
 }
 
@@ -90,15 +92,24 @@ impl AsmIr {
 
 // public interface
 impl AsmIr {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(ctx: &JitContext) -> Self {
         Self {
+            codegen_mode: ctx.codegen_mode(),
+            empty: true,
             inst: vec![],
             side_exit: vec![],
         }
     }
 
     pub(super) fn push(&mut self, inst: AsmInst) {
-        self.inst.push(inst);
+        if self.codegen_mode {
+            self.inst.push(inst);
+            self.empty = false;
+        }
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.empty
     }
 
     pub(super) fn save(&mut self) -> (usize, usize) {
@@ -1708,8 +1719,7 @@ impl Codegen {
         }
 
         if let Some(exit) = exit {
-            let exit = frame.get_bb_label(exit);
-            let exit = frame.resolve_label(&mut self.jit, exit);
+            let exit = frame.resolve_bb_label(&mut self.jit, exit);
             monoasm! { &mut self.jit,
                 jmp exit;
             }
