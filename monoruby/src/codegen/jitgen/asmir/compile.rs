@@ -12,6 +12,10 @@ extern "C" fn extend_ivar(rvalue: &mut RValue, heap_len: usize) {
     rvalue.extend_ivar(heap_len);
 }
 
+extern "C" fn unreachable() {
+    unreachable!("reached unreachable code");
+}
+
 impl Codegen {
     ///
     /// Generate machine code for *inst*.
@@ -33,6 +37,12 @@ impl Codegen {
             }
             AsmInst::Init { info, is_method } => {
                 self.init_func(&info, is_method);
+            }
+            AsmInst::Unreachable => {
+                monoasm!( &mut self.jit,
+                    movq rax, (unreachable);
+                    call rax;
+                );
             }
             AsmInst::Preparation => {
                 if !frame.self_class().is_always_frozen() && frame.ivar_heap_accessed() {

@@ -195,7 +195,7 @@ impl JitContext {
         block: &JitBlockInfo,
         iseq: ISeqId,
         pc: BytecodePtr,
-    ) {
+    ) -> bool {
         let dst = store[callid].dst;
         bbctx.exec_gc(ir, true, pc);
         let using_xmm = bbctx.get_using_xmm();
@@ -234,8 +234,9 @@ impl JitContext {
         ir.push(AsmInst::SpecializedYield { entry, evict });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
-        bbctx.def_rax2acc_result(ir, dst, result);
+        let res = bbctx.def_rax2acc_result(ir, dst, result);
         bbctx.immediate_evict(ir, evict, pc);
+        res
     }
 
     ///
@@ -384,8 +385,11 @@ impl JitContext {
                         callid,
                     );
                     bbctx.send_specialized(ir, store, callid, fid, entry, patch_point, evict, pc);
-                    bbctx.def_rax2acc_result(ir, dst, result);
+                    let res = bbctx.def_rax2acc_result(ir, dst, result);
                     bbctx.immediate_evict(ir, evict, pc);
+                    if !res {
+                        return CompileResult::Cease;
+                    }
                     bbctx.unset_class_version_guard();
                     return CompileResult::Continue;
                 } else {
@@ -410,7 +414,7 @@ impl JitContext {
         block: Option<JitBlockInfo>,
         outer: Option<usize>,
         callid: CallSiteId,
-    ) -> (JitLabel, ResultState) {
+    ) -> (JitLabel, Option<ResultState>) {
         let idx = match self.jit_type() {
             JitType::Specialized { idx, .. } => *idx,
             _ => self.specialized_methods_len(),

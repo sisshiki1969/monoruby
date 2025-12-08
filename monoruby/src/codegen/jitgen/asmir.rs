@@ -725,6 +725,10 @@ impl AsmIr {
 
 #[derive(Debug)]
 pub(super) enum AsmInst {
+    #[cfg(feature = "emit-asm")]
+    BcIndex(BcIndex),
+    Label(JitLabel),
+    Unreachable,
     /// move reg to stack
     RegToStack(GP, SlotId),
     /// move acc to stack
@@ -1095,24 +1099,6 @@ pub(super) enum AsmInst {
         using_xmm: UsingXmm,
     },
 
-    /*///
-    /// Generic integer operation.
-    ///
-    /// ### in
-    /// - rdi: lhs
-    /// - rsi: rhs
-    ///
-    /// ### out
-    /// - rax: dst
-    ///
-    /// ### destroy
-    /// - caller save registers
-    /// - stack
-    ///
-    GenericBinOp {
-        kind: BinOpK,
-        using_xmm: UsingXmm,
-    },*/
     ///
     /// Integer binary operation.
     ///
@@ -1211,24 +1197,6 @@ pub(super) enum AsmInst {
         using_xmm: UsingXmm,
     },
 
-    /*///
-    /// Generic index operation.
-    ///
-    /// Execute `base`[[`idx`]] and store the result to *rax*.
-    ///
-    /// ### out
-    /// - rax: result Option<Value>
-    ///
-    /// ### destroy
-    ///
-    /// - caller save registers
-    ///
-    GenericIndex {
-        base: SlotId,
-        idx: SlotId,
-        pc: BytecodePtr,
-        using_xmm: UsingXmm,
-    },*/
     ///
     /// Array index operation with u16 index `idx``.
     ///
@@ -1558,9 +1526,6 @@ pub(super) enum AsmInst {
         name: IdentId,
         using_xmm: UsingXmm,
     },
-    #[cfg(feature = "emit-asm")]
-    BcIndex(BcIndex),
-    Label(JitLabel),
 }
 
 impl AsmInst {

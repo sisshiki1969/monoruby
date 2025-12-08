@@ -88,7 +88,7 @@ impl JitContext {
 
             match self.compile_instruction(&mut ir, &mut bbctx, store, iseq, bc_pos) {
                 CompileResult::Continue => {}
-                CompileResult::Leave | CompileResult::SideBranch => {
+                CompileResult::Leave | CompileResult::Cease => {
                     return ir;
                 }
                 CompileResult::Branch(dest_bb) => {
@@ -682,7 +682,17 @@ impl JitContext {
                 if let Some(block_info) = self.current_method_given_block()
                     && let Some(iseq) = store[block_info.block_fid].is_iseq()
                 {
-                    self.compile_yield_specialized(bbctx, ir, store, callid, &block_info, iseq, pc);
+                    if !self.compile_yield_specialized(
+                        bbctx,
+                        ir,
+                        store,
+                        callid,
+                        &block_info,
+                        iseq,
+                        pc,
+                    ) {
+                        return CompileResult::Cease;
+                    };
                 } else {
                     bbctx.compile_yield(ir, store, callid, pc);
                 }
@@ -878,7 +888,7 @@ impl JitContext {
                 let else_label = self.label();
                 self.new_side_branch(iseq, bc_pos, else_dest, bbctx.clone(), else_label);
                 ir.opt_case(max, min, else_label, branch_labels.into());
-                return CompileResult::SideBranch;
+                return CompileResult::Cease;
             }
         }
         CompileResult::Continue

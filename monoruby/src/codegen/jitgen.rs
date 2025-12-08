@@ -47,7 +47,7 @@ enum CompileResult {
     ExitLoop,
     /// jump to another basic block.
     Branch(BasicBlockId),
-    SideBranch,
+    Cease,
     /// leave the current method/block.
     Leave,
     /// return from the current method/block.
@@ -95,15 +95,15 @@ impl ResultState {
         *self = Self::Value;
     }
 
-    fn join_all(states: &[Self]) -> Self {
+    fn join_all(states: &[Self]) -> Option<Self> {
         if states.is_empty() {
-            return ResultState::Value;
+            return None;
         }
         let mut res = states[0].clone();
         for state in &states[1..] {
             res.join(state);
         }
-        res
+        Some(res)
     }
 }
 
@@ -274,18 +274,24 @@ impl BBContext {
         &mut self,
         ir: &mut AsmIr,
         dst: impl Into<Option<SlotId>>,
-        result: ResultState,
-    ) {
-        match result {
-            ResultState::Const(v) => {
-                self.def_C(dst, v);
+        result: Option<ResultState>,
+    ) -> bool {
+        if let Some(result) = result {
+            match result {
+                ResultState::Const(v) => {
+                    self.def_C(dst, v);
+                }
+                ResultState::Class(class) => {
+                    self.def_reg2acc_class(ir, GP::Rax, dst, class);
+                }
+                ResultState::Value => {
+                    self.def_rax2acc(ir, dst);
+                }
             }
-            ResultState::Class(class) => {
-                self.def_reg2acc_class(ir, GP::Rax, dst, class);
-            }
-            ResultState::Value => {
-                self.def_rax2acc(ir, dst);
-            }
+            true
+        } else {
+            ir.push(AsmInst::Unreachable);
+            false
         }
     }
 
