@@ -270,6 +270,25 @@ impl BBContext {
         }
     }
 
+    fn def_rax2acc_result(
+        &mut self,
+        ir: &mut AsmIr,
+        dst: impl Into<Option<SlotId>>,
+        result: ResultState,
+    ) {
+        match result {
+            ResultState::Const(v) => {
+                self.def_C(dst, v);
+            }
+            ResultState::Class(class) => {
+                self.def_reg2acc_class(ir, GP::Rax, dst, class);
+            }
+            ResultState::Value => {
+                self.def_rax2acc(ir, dst);
+            }
+        }
+    }
+
     ///
     /// Guard for the base class object of the constant in *slot*.
     ///

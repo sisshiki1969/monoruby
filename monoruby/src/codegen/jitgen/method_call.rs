@@ -217,7 +217,7 @@ impl JitContext {
         } else {
             JitArgumentInfo::default()
         };
-        let entry = self.compile_inlined_func(
+        let (entry, result) = self.compile_inlined_func(
             store,
             iseq,
             self_class,
@@ -234,7 +234,7 @@ impl JitContext {
         ir.push(AsmInst::SpecializedYield { entry, evict });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
-        bbctx.def_rax2acc(ir, dst);
+        bbctx.def_rax2acc_result(ir, dst, result);
         bbctx.immediate_evict(ir, evict, pc);
     }
 
@@ -373,7 +373,7 @@ impl JitContext {
                     } else {
                         Some(self.label())
                     };
-                    let entry = self.compile_inlined_func(
+                    let (entry, result) = self.compile_inlined_func(
                         store,
                         iseq,
                         recv_class,
@@ -384,6 +384,10 @@ impl JitContext {
                         callid,
                     );
                     bbctx.send_specialized(ir, store, callid, fid, entry, patch_point, evict, pc);
+                    bbctx.def_rax2acc_result(ir, dst, result);
+                    bbctx.immediate_evict(ir, evict, pc);
+                    bbctx.unset_class_version_guard();
+                    return CompileResult::Continue;
                 } else {
                     bbctx.send(ir, store, callid, fid, recv_class, evict, None, pc);
                 }
@@ -406,7 +410,7 @@ impl JitContext {
         block: Option<JitBlockInfo>,
         outer: Option<usize>,
         callid: CallSiteId,
-    ) -> JitLabel {
+    ) -> (JitLabel, ResultState) {
         let idx = match self.jit_type() {
             JitType::Specialized { idx, .. } => *idx,
             _ => self.specialized_methods_len(),
@@ -426,13 +430,14 @@ impl JitContext {
         self.traceir_to_asmir(store);
         let frame = self.stack_frame.pop().unwrap();
         let return_context = self.detach_return_context();
+        let result = ResultState::join_all(&return_context);
         #[cfg(feature = "jit-log")]
         if self.codegen_mode() {
             eprintln!(
                 "return: {} {:?} {:?}",
                 store.func_description(store[iseq_id].func_id()),
                 &return_context,
-                ResultState::join_all(&return_context)
+                result
             );
         }
         let entry = self.label();
@@ -441,7 +446,7 @@ impl JitContext {
             frame,
             patch_point,
         });
-        entry
+        (entry, result)
     }
 
     fn inline_asm(
