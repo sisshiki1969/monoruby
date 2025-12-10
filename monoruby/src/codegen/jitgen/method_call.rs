@@ -432,15 +432,22 @@ impl JitContext {
             self_class,
         ));
         self.traceir_to_asmir(store);
-        let frame = self.stack_frame.pop().unwrap();
-        let return_context = self.detach_return_context();
-        let result = ResultState::join_all(&return_context);
+        let mut frame = self.stack_frame.pop().unwrap();
+        let pos = self.stack_frame.len() - 1;
+        let mut return_context = frame.detach_return_context();
+        let context = return_context.remove(&pos);
+        let result = if let Some(ctx) = &context {
+            ResultState::join_all(ctx)
+        } else {
+            None
+        };
+        self.merge_return_context(return_context);
         #[cfg(feature = "jit-log")]
         if self.codegen_mode() {
             eprintln!(
                 "return: {} {:?} {:?}",
                 store.func_description(store[iseq_id].func_id()),
-                &return_context,
+                &context,
                 result
             );
         }
