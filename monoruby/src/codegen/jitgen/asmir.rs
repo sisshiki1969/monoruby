@@ -1529,19 +1529,18 @@ pub(super) enum AsmInst {
 }
 
 impl AsmInst {
-    /*pub fn dump(&self, store: &Store) -> String {
+    #[cfg(feature = "emit-asm")]
+    pub fn dump(&self, store: &Store) -> String {
         match self {
             Self::AccToStack(slot) => format!("{:?} = R15", slot),
             Self::RegToAcc(gpr) => format!("R15 = {:?}", gpr),
             Self::RegToStack(gpr, slot) => format!("{:?} = {:?}", slot, gpr),
             Self::StackToReg(slot, gpr) => format!("{:?} = {:?}", gpr, slot),
             Self::LitToReg(val, gpr) => format!("{:?} = {}", gpr, val.debug(store)),
-            Self::I32ToReg(i, gpr) => format!("{:?} = {i}", gpr),
             Self::RegMove(src, dst) => format!("{:?} = {:?}", dst, src),
             Self::RegAdd(gpr, i) => format!("{:?} += {i}", gpr),
             Self::RegSub(gpr, i) => format!("{:?} -= {i}", gpr,),
             Self::RegToRSPOffset(gpr, offset) => format!("RSP[{offset}] = {:?}", gpr),
-            Self::I32ToRSPOffset(i, offset) => format!("RSP[{offset}] = {i}"),
             Self::XmmMove(src, dst) => format!("{:?} = {:?}", dst, src),
             Self::XmmSwap(fp1, fp2) => format!("{:?} <-> {:?}", fp1, fp2),
             Self::XmmBinOp {
@@ -1557,15 +1556,15 @@ impl AsmInst {
             Self::XmmToStack(fpr, slots) => format!("{:?} = {:?}", slots, fpr),
             Self::LitToStack(val, slot) => format!("{:?} = {}", slot, val.debug(store)),
             Self::DeepCopyLit(val, _using_xmm) => format!("DeepCopyLiteral {}", val.debug(store)),
-            Self::NumToXmm(gpr, fpr, _deopt) => format!("{:?} = {:?} Numeric to f64", fpr, gpr),
-            Self::IntToXmm(gpr, fpr, _deopt) => format!("{:?} = {:?} Integer to f64", fpr, gpr),
             Self::FloatToXmm(gpr, fpr, _deopt) => format!("{:?} = {:?} Float to f64", fpr, gpr),
-            Self::GuardFloat(gpr, _deopt) => format!("Guard Float {:?}", gpr),
-            Self::GuardFixnum(gpr, _deopt) => format!("Guard Fixnum {:?}", gpr),
             Self::GuardArrayTy(gpr, _deopt) => format!("Guard ArrayTy {:?}", gpr),
 
-            Self::GuardClassVersion(fid, version, _callid, _using_xmm, _deopt, _error) => {
-                format!("GuardVersion fid={:?} version={version}", fid)
+            Self::GuardClassVersion {
+                position: _,
+                with_recovery: _,
+                deopt: _,
+            } => {
+                format!("GuardClassVersion")
             }
             Self::GuardClass(gpr, class, _deopt) => format!("GuardClass {:?} {:?}", class, gpr),
             Self::Ret => "ret".to_string(),
@@ -1574,44 +1573,36 @@ impl AsmInst {
             Self::MethodRet(_pc) => format!("method_return"),
             Self::EnsureEnd => "ensure_end".to_string(),
 
-            Self::Br(label) => format!("br {:?}", label),
             Self::CondBr(kind, label) => format!("condbr {:?} {:?}", kind, label),
             Self::NilBr(label) => format!("nil_br {:?}", label),
             Self::CheckLocal(label) => format!("check_local {:?}", label),
-            Self::GenericCondBr {
-                brkind,
-                branch_dest,
-            } => format!("condbr {:?} {:?}", brkind, branch_dest),
             Self::OptCase {
                 max,
                 min,
-                branch_table,
-                else_dest,
+                else_label,
+                branch_labels,
             } => format!(
                 "opt_case {:?}..{:?} {:?} else {:?}",
-                min, max, branch_table, else_dest
+                min, max, branch_labels, else_label
             ),
             Self::Deopt(deopt) => format!("deopt {:?}", deopt),
-            Self::RecompileDeopt { position, deopt } => {
-                format!("recompile_deopt {:?} {:?}", position, deopt)
+            Self::RecompileDeopt {
+                position,
+                deopt: _,
+                reason,
+            } => {
+                format!("recompile_deopt {:?} {:?}", position, reason)
             }
-            Self::WriteBack(wb) => format!("write_back {:?}", wb),
             Self::HandleError(error) => format!("handle_error {:?}", error),
             Self::XmmSave(using_xmm) => format!("xmm_save {:?}", using_xmm),
             Self::XmmRestore(using_xmm) => format!("xmm_restore {:?}", using_xmm),
-            Self::ExecGc(wb) => format!("exec_gc {:?}", wb),
-            Self::LoadGenericConstant {
-                cached_val,
-                cached_version,
-                deopt: _,
-            } => format!(
-                "load_generic_constant {} {}",
-                cached_val.debug(store),
-                cached_version
-            ),
+            Self::ExecGc {
+                write_back,
+                error: _,
+            } => format!("exec_gc {:?}", write_back),
             _ => format!("{:?}", self),
         }
-    }*/
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1680,6 +1671,10 @@ impl Codegen {
         }
 
         for inst in ir.inst {
+            #[cfg(feature = "emit-asm")]
+            {
+                println!("  ; {}", inst.dump(store));
+            }
             self.compile_asmir(store, frame, &side_exits, inst, class_version.clone());
         }
 

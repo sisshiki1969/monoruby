@@ -30,19 +30,8 @@ impl JitContext {
             let deopt = ir.new_deopt_with_pc(&bbctx, pc + 1);
             ir.self2reg(GP::Rdi);
             ir.push(AsmInst::GuardClass(GP::Rdi, self.self_class(), deopt));
-        } else {
-            // for method JIT, class of *self* is already checked in an entry stub.
-            match iseq.trace_ir(store, BcIndex::from(0)) {
-                TraceIr::InitMethod(fn_info) => {
-                    ir.push(AsmInst::Init {
-                        info: fn_info,
-                        is_method: store[iseq.func_id()].is_not_block(),
-                    });
-                }
-                _ => unreachable!(),
-            }
+            ir.push(AsmInst::Preparation);
         };
-        ir.push(AsmInst::Preparation);
 
         //assert!(self.ir.is_empty());
         self.push_ir(None, ir);
@@ -153,7 +142,15 @@ impl JitContext {
             eprintln!("{fmt}");
         }
         match trace_ir {
-            TraceIr::InitMethod { .. } => {}
+            TraceIr::InitMethod(fn_info) => {
+                if !self.is_loop() {
+                    ir.push(AsmInst::Init {
+                        info: fn_info,
+                        is_method: store[iseq.func_id()].is_not_block(),
+                    });
+                    ir.push(AsmInst::Preparation);
+                }
+            }
             TraceIr::LoopStart { .. } => {
                 self.inc_loop_count();
                 bbctx.exec_gc(ir, false, pc);

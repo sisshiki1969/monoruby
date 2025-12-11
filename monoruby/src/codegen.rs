@@ -1104,7 +1104,7 @@ impl Codegen {
     ) {
         let (start, code_end, end) = self.jit.code_block.last().unwrap();
         eprintln!(
-            "offset:{:?} code: {} bytes  data: {} bytes",
+            "      offset:{:?} code: {} bytes  data: {} bytes",
             start,
             *code_end - *start,
             *end - *code_end

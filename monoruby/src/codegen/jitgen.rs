@@ -495,6 +495,7 @@ impl Codegen {
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 
+        self.jit.finalize();
         self.gen_machine_code(
             ctx.detach_current_frame(),
             store,
