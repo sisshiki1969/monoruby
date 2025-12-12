@@ -107,6 +107,8 @@ impl JitContext {
 
         ir.reg_move(GP::Rdi, GP::R13);
         let using_xmm = bbctx.get_using_xmm();
+        // stack pointer adjustment
+        // -using_xmm.offset()
         ir.xmm_save(using_xmm);
 
         bbctx.set_binop_arguments(store, ir, fid, mode);
@@ -199,6 +201,8 @@ impl JitContext {
         let dst = store[callid].dst;
         bbctx.exec_gc(ir, true, pc);
         let using_xmm = bbctx.get_using_xmm();
+        // stack pointer adjustment
+        // -using_xmm.offset()
         ir.xmm_save(using_xmm);
         let JitBlockInfo {
             block_fid: callee_fid,
@@ -509,6 +513,8 @@ impl BBContext {
         ir.reg_move(GP::Rdi, GP::R13);
         self.exec_gc(ir, true, pc);
         let using_xmm = self.get_using_xmm();
+        // stack pointer adjustment
+        // -using_xmm.offset()
         ir.xmm_save(using_xmm);
         self.set_arguments(store, ir, callid, callee_fid, pc);
         if let Some(dst) = store[callid].dst {
@@ -551,6 +557,8 @@ impl BBContext {
         ir.reg_move(GP::Rdi, GP::R13);
         self.exec_gc(ir, true, pc);
         let using_xmm = self.get_using_xmm();
+        // stack pointer adjustment
+        // -using_xmm.offset()
         ir.xmm_save(using_xmm);
         self.set_arguments(store, ir, callid, callee_fid, pc);
         if let Some(dst) = store[callid].dst {
@@ -590,6 +598,8 @@ impl BBContext {
         let error = ir.new_error(self, pc);
         let evict = ir.new_evict();
         self.exec_gc(ir, true, pc);
+        // stack pointer adjustment
+        // -using_xmm.offset()
         ir.xmm_save(using_xmm);
         ir.push(AsmInst::Yield {
             callid,

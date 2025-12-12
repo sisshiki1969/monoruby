@@ -462,6 +462,11 @@ impl UsingXmm {
             inner: bitvec::prelude::BitArray::new([0; 1]),
         }
     }
+
+    fn offset(&self) -> usize {
+        let len = self.count_ones();
+        (len + len % 2) * 8
+    }
 }
 
 impl Codegen {
@@ -693,12 +698,14 @@ impl JitModule {
     ///
     /// Save floating point registers in use.
     ///
+    /// ### stack pointer adjustment
+    /// - -`using_xmm`.offset()
+    ///
     pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
         if using_xmm.not_any() {
             return;
         }
-        let len = using_xmm.count_ones();
-        let sp_offset = (len + len % 2) * 8;
+        let sp_offset = using_xmm.offset();
         monoasm!( &mut self.jit,
             subq rsp, (sp_offset);
         );
@@ -720,8 +727,7 @@ impl JitModule {
         if using_xmm.not_any() {
             return;
         }
-        let len = using_xmm.count_ones();
-        let sp_offset = (len + len % 2) * 8;
+        let sp_offset = using_xmm.offset();
         let mut i = 0;
         for (x, b) in using_xmm.iter().enumerate() {
             if *b {

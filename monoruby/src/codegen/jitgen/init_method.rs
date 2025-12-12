@@ -1,6 +1,12 @@
 use super::*;
 
 impl Codegen {
+    ///
+    /// Initialize function stack frame.
+    ///
+    /// ### stack pointer adjustment
+    /// - `fn_info`.`stack_offset` * 16
+    ///
     pub(super) fn init_func(&mut self, fn_info: &FnInitInfo, is_method: bool) {
         let FnInitInfo {
             reg_num,

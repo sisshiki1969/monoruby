@@ -145,6 +145,9 @@ impl AsmIr {
     ///
     /// Save floating point registers in use.
     ///
+    /// ### stack pointer adjustment
+    /// - -`using_xmm`.offset()
+    ///
     pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
         self.push(AsmInst::XmmSave(using_xmm));
     }
@@ -909,6 +912,12 @@ pub(super) enum AsmInst {
     },
 
     Preparation,
+    ///
+    /// Initialize function frame.
+    ///
+    /// ### stack pointer adjustment
+    /// - `fn_info`.`stack_offset` * 16
+    ///
     Init {
         info: FnInitInfo,
         is_method: bool,
@@ -939,6 +948,9 @@ pub(super) enum AsmInst {
     HandleError(AsmError),
     ///
     /// Save floating point registers in use.
+    ///
+    /// ### stack pointer adjustment
+    /// - -`using_xmm`.offset()
     ///
     XmmSave(UsingXmm),
     ///

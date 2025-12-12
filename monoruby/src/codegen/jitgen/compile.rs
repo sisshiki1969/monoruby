@@ -143,13 +143,12 @@ impl JitContext {
         }
         match trace_ir {
             TraceIr::InitMethod(fn_info) => {
-                if !self.is_loop() {
-                    ir.push(AsmInst::Init {
-                        info: fn_info,
-                        is_method: store[iseq.func_id()].is_not_block(),
-                    });
-                    ir.push(AsmInst::Preparation);
-                }
+                assert!(!self.is_loop());
+                ir.push(AsmInst::Init {
+                    info: fn_info,
+                    is_method: store[iseq.func_id()].is_not_block(),
+                });
+                ir.push(AsmInst::Preparation);
             }
             TraceIr::LoopStart { .. } => {
                 self.inc_loop_count();
