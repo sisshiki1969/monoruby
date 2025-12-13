@@ -1,6 +1,7 @@
 def a(x)
   1.times do
     # block1 in a
+    #if x == 24 then __dump end
     if x.odd?
       return yield(7)
     else

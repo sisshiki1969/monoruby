@@ -612,7 +612,13 @@ impl Codegen {
             }
 
             AsmInst::LoadDynVar { src } => self.load_dyn_var(src),
+            AsmInst::LoadDynVarSpecialized { offset, src: reg } => {
+                self.load_dyn_var_specialized(offset, reg)
+            }
             AsmInst::StoreDynVar { dst, src } => self.store_dyn_var(dst, src),
+            AsmInst::StoreDynVarSpecialized { offset, dst, src } => {
+                self.store_dyn_var_specialized(offset, dst, src)
+            }
 
             AsmInst::LoadIVarHeap {
                 ivarid,

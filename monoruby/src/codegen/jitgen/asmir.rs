@@ -1417,9 +1417,20 @@ pub(super) enum AsmInst {
     LoadDynVar {
         src: DynVar,
     },
+    /// rax = DynVar(src)
+    LoadDynVarSpecialized {
+        offset: usize,
+        src: SlotId,
+    },
     /// DynVar(dst) = src
     StoreDynVar {
         dst: DynVar,
+        src: GP,
+    },
+    /// DynVar(dst) = src
+    StoreDynVarSpecialized {
+        offset: usize,
+        dst: SlotId,
         src: GP,
     },
     LoadCVar {

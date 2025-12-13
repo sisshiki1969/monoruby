@@ -176,6 +176,10 @@ pub(crate) struct JitStackFrame {
     pub(super) specialized_methods: Vec<SpecializeInfo>,
 
     ///
+    /// Stack offset for this frame.
+    ///
+    stack_offset: usize,
+    ///
     /// Flag whether ivar on the heap is accessed in this context.
     ///
     ivar_heap_accessed: bool,
@@ -198,6 +202,7 @@ impl std::fmt::Debug for JitStackFrame {
             .field("jit_type", &self.jit_type)
             .field("outer", &self.outer)
             .field("given_block", &self.given_block)
+            .field("stack_offset", &self.stack_offset)
             .finish()
     }
 }
@@ -228,6 +233,7 @@ impl JitStackFrame {
             basic_block_labels.insert(idx, JitLabel(labels.len()));
             labels.push(None);
         }
+        let stack_offset = store[iseq_id].stack_offset();
         Self {
             jit_type,
             specialize_level,
@@ -249,6 +255,7 @@ impl JitStackFrame {
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
             specialized_methods: vec![],
+            stack_offset,
             ivar_heap_accessed: false,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
@@ -279,6 +286,7 @@ impl JitStackFrame {
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
             specialized_methods: vec![],
+            stack_offset: self.stack_offset,
             ivar_heap_accessed: false,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
@@ -477,6 +485,14 @@ impl JitContext {
         self.current_frame_mut().specialized_methods.push(info);
     }
 
+    pub(super) fn xmm_save(&mut self, using_xmm: UsingXmm) {
+        self.current_frame_mut().stack_offset += using_xmm.offset();
+    }
+
+    pub(super) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
+        self.current_frame_mut().stack_offset -= using_xmm.offset();
+    }
+
     pub(super) fn push_return_context(&mut self, pos: usize, ctx: ResultState) {
         if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
             frame.push(ctx);
@@ -548,6 +564,30 @@ impl JitContext {
                 };
             }
         }
+    }
+
+    fn outer_frame(&self, mut outer: usize) -> Option<usize> {
+        let mut i = self.stack_frame.len() - 1;
+        loop {
+            if outer == 0 {
+                return Some(i);
+            }
+            outer -= 1;
+            if let Some(outer_ofs) = self.stack_frame[i].outer {
+                i -= outer_ofs;
+            } else {
+                return None;
+            }
+        }
+    }
+
+    pub(super) fn outer_offset(&self, outer: usize) -> Option<usize> {
+        let mut offset = 0;
+        let outer = self.outer_frame(outer)?;
+        for i in outer..self.stack_frame.len() - 1 {
+            offset += self.stack_frame[i].stack_offset;
+        }
+        Some(offset)
     }
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {

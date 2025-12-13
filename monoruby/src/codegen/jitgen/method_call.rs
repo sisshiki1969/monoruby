@@ -230,6 +230,7 @@ impl JitContext {
             None,
             Some(outer),
             callid,
+            using_xmm,
         );
         let evict = ir.new_evict();
         let meta = store[callee_fid].meta();
@@ -387,6 +388,7 @@ impl JitContext {
                         block,
                         None,
                         callid,
+                        bbctx.get_using_xmm(),
                     );
                     bbctx.send_specialized(ir, store, callid, fid, entry, patch_point, evict, pc);
                     let res = bbctx.def_rax2acc_result(ir, dst, result);
@@ -418,6 +420,7 @@ impl JitContext {
         block: Option<JitBlockInfo>,
         outer: Option<usize>,
         callid: CallSiteId,
+        using_xmm: UsingXmm,
     ) -> (JitLabel, Option<ResultState>) {
         let idx = match self.jit_type() {
             JitType::Specialized { idx, .. } => *idx,
@@ -425,6 +428,7 @@ impl JitContext {
         };
         let jit_type = JitType::Specialized { idx, args_info };
         let specialize_level = self.specialize_level() + 1;
+        self.xmm_save(using_xmm);
         self.stack_frame.push(JitStackFrame::new(
             store,
             jit_type,
@@ -437,6 +441,7 @@ impl JitContext {
         ));
         self.traceir_to_asmir(store);
         let mut frame = self.stack_frame.pop().unwrap();
+        self.xmm_restore(using_xmm);
         let pos = self.stack_frame.len() - 1;
         let mut return_context = frame.detach_return_context();
         let context = return_context.remove(&pos);

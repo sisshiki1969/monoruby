@@ -205,11 +205,25 @@ impl Codegen {
         );
     }
 
+    pub(super) fn load_dyn_var_specialized(&mut self, offset: usize, reg: SlotId) {
+        monoasm!( &mut self.jit,
+            movq rax, [rbp + ((offset - (BP_CFP + CFP_LFP) as usize))];
+            movq rax, [rax - (conv(reg))];
+        );
+    }
+
     pub(super) fn store_dyn_var(&mut self, dst: DynVar, src: GP) {
         self.get_outer(dst.outer);
         let offset = conv(dst.reg) - LFP_OUTER;
         monoasm!( &mut self.jit,
             movq [rax - (offset)], R(src as _);
+        );
+    }
+
+    pub(super) fn store_dyn_var_specialized(&mut self, offset: usize, dst: SlotId, src: GP) {
+        monoasm!( &mut self.jit,
+            movq rax, [rbp + ((offset - (BP_CFP + CFP_LFP) as usize))];
+            movq [rax - (conv(dst))], R(src as _);
         );
     }
 

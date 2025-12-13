@@ -285,16 +285,28 @@ impl JitContext {
             }
             TraceIr::LoadDynVar(dst, src) => {
                 //bbctx.discard(dst);
-                if !dst.is_self() {
-                    ir.push(AsmInst::LoadDynVar { src });
-                    bbctx.def_rax2acc(ir, dst);
+                assert!(!dst.is_self());
+                if let Some(offset) = self.outer_offset(src.outer) {
+                    ir.push(AsmInst::LoadDynVarSpecialized {
+                        offset,
+                        src: src.reg,
+                    });
                 } else {
-                    unreachable!()
+                    ir.push(AsmInst::LoadDynVar { src });
                 }
+                bbctx.def_rax2acc(ir, dst);
             }
             TraceIr::StoreDynVar(dst, src) => {
                 bbctx.load(ir, src, GP::Rdi);
-                ir.push(AsmInst::StoreDynVar { dst, src: GP::Rdi });
+                if let Some(offset) = self.outer_offset(dst.outer) {
+                    ir.push(AsmInst::StoreDynVarSpecialized {
+                        offset,
+                        dst: dst.reg,
+                        src: GP::Rdi,
+                    });
+                } else {
+                    ir.push(AsmInst::StoreDynVar { dst, src: GP::Rdi });
+                }
             }
             TraceIr::BlockArgProxy(ret, outer) => {
                 bbctx.def_S(ret);

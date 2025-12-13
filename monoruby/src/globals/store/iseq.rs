@@ -264,6 +264,11 @@ impl ISeqInfo {
         self.non_temp_num as usize
     }
 
+    pub(crate) fn stack_offset(&self) -> usize {
+        let reg_num = self.total_reg_num() - 1;
+        (reg_num * 8 + (RSP_LOCAL_FRAME + LFP_ARG0) as usize + 31) / 16 * 16 + 16
+    }
+
     ///
     /// Get a block argument name.
     ///
