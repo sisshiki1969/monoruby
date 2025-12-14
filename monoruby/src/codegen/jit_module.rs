@@ -355,7 +355,7 @@ pub(super) extern "C" fn handle_error(
                 };
             }
             let sourceinfo = info.sourceinfo.clone();
-            let loc = info.sourcemap[pc.0 as usize];
+            let loc = info.sourcemap[pc.to_usize()];
             let fid = info.func_id();
             vm.push_error_location(loc, sourceinfo, fid);
             if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {

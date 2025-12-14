@@ -324,7 +324,7 @@ impl ISeqInfo {
     /// Get pc(*BytecodePtr*) for instruction index(*idx*).
     ///
     pub(crate) fn get_pc(&self, idx: BcIndex) -> BytecodePtr {
-        BytecodePtr::from_bc(&self.bytecode()[idx.0 as usize])
+        BytecodePtr::from_bc(&self.bytecode()[idx.to_usize()])
     }
 
     ///
@@ -353,7 +353,7 @@ impl ISeqInfo {
     }
 
     pub(crate) fn get_sp(&self, i: BcIndex) -> SlotId {
-        self.sp[i.0 as usize]
+        self.sp[i.to_usize()]
     }
 
     fn get_bb(&self, bc_pos: BcIndex) -> BasicBlockId {
