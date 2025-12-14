@@ -125,7 +125,7 @@ impl JitContext {
                     self.new_branch(iseq, bc_pos, dest_bb, bbctx);
                     return;
                 }
-                CompileResult::SideBranch => return,
+                CompileResult::Cease => return,
                 CompileResult::Leave
                 | CompileResult::Return(_)
                 | CompileResult::Break(_)

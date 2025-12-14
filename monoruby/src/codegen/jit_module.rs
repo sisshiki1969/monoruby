@@ -61,7 +61,6 @@ impl JitModule {
     fn init(&mut self) {
         let raise = self.entry_raise.clone();
         let overflow = self.vm_stack_overflow.clone();
-        let leave = self.jit.label();
         let goto = self.jit.label();
         monoasm! { &mut self.jit,
         raise:
@@ -72,21 +71,16 @@ impl JitModule {
             subq rcx, 16;
             movq rax, (handle_error);
             call rax;
-            testq rax, rax;
-            jne  goto;
+            // rax: Option<Value>
+            // rdx: Option<BytecodePtr>
             testq rdx, rdx;
-            jz   leave;
-            movq rax, rdx;
-            jmp  leave;
-        goto:
-            movq r13, rax;
-        }
-        self.fetch_and_dispatch();
-        monoasm! { &mut self.jit,
-        leave:
+            jne  goto;
             leave;
             ret;
+        goto:
+            movq r13, rdx;
         }
+        self.fetch_and_dispatch();
 
         let label = self.entry_panic.clone();
         self.gen_entry_panic(label);
@@ -296,29 +290,29 @@ extern "C" fn unimplemented_inst(vm: &mut Executor, _: &mut Globals, opcode: u16
 
 #[repr(C)]
 pub(super) struct ErrorReturn {
-    dest: Option<BytecodePtr>,
     value: Option<Value>,
+    dest: Option<BytecodePtr>,
 }
 
 impl ErrorReturn {
     fn return_err() -> Self {
         Self {
-            dest: None,
             value: None,
+            dest: None,
         }
     }
 
     fn return_normal(val: Value) -> Self {
         Self {
-            dest: None,
             value: Some(val),
+            dest: None,
         }
     }
 
     fn goto(dest: BytecodePtr) -> Self {
         Self {
-            dest: Some(dest),
             value: None,
+            dest: Some(dest),
         }
     }
 }
@@ -330,19 +324,19 @@ pub(super) extern "C" fn handle_error(
     pc: BytecodePtr,
 ) -> ErrorReturn {
     let func_info = &globals.store[meta.func_id()];
+    if vm.exception().is_none() {
+        vm.set_error(MonorubyErr::runtimeerr(
+            "[FATAL] internal error: unknown exception.",
+        ));
+    }
     match &func_info.kind {
         FuncKind::ISeq(info) => {
             let bc_base = globals.store[*info].get_top_pc();
             let pc = pc - bc_base;
-            // check exception table.
             let mut lfp = vm.cfp().lfp();
-            // First, we check method_return.
             let info = &globals.store[*info];
-            if vm.exception().is_none() {
-                vm.set_error(MonorubyErr::runtimeerr(
-                    "[FATAL] internal error: unknown exception.",
-                ));
-            }
+            // check exception table.
+            // First, we check method_return.
             if let MonorubyErrKind::MethodReturn(val, target_lfp) = vm.exception().unwrap().kind() {
                 return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
                     ErrorReturn::goto(bc_base + ensure)
@@ -355,7 +349,7 @@ pub(super) extern "C" fn handle_error(
                 };
             }
             let sourceinfo = info.sourceinfo.clone();
-            let loc = info.sourcemap[pc.0 as usize];
+            let loc = info.sourcemap[pc.to_usize()];
             let fid = info.func_id();
             vm.push_error_location(loc, sourceinfo, fid);
             if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {
@@ -368,11 +362,16 @@ pub(super) extern "C" fn handle_error(
             }
         }
         FuncKind::Builtin { .. } => {
+            let lfp = vm.cfp().lfp();
             // First, we check method_return.
-            if vm.exception().is_none() {
-                vm.set_error(MonorubyErr::runtimeerr(
-                    "[FATAL] internal error: unknown exception.",
-                ));
+            if let MonorubyErrKind::MethodReturn(val, target_lfp) = vm.exception().unwrap().kind() {
+                return if lfp == *target_lfp {
+                    let val = *val;
+                    vm.take_error();
+                    ErrorReturn::return_normal(val)
+                } else {
+                    ErrorReturn::return_err()
+                };
             }
             vm.push_internal_error_location(meta.func_id());
         }

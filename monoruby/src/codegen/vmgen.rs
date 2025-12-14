@@ -160,11 +160,10 @@ impl Codegen {
         //BcOp::Break
         let block_break = self.jit.get_current_address();
         self.fetch_val_r15();
-        self.block_break();
         monoasm! { &mut self.jit,
             movq rax, r15;
         };
-        self.epilogue();
+        self.block_break();
 
         //BcOp::Raise
         let raise_err = self.jit.get_current_address();

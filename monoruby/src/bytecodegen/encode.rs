@@ -6,16 +6,16 @@ struct IncomingBranches {
     branches: Vec<Vec<BcIndex>>,
 }
 
-impl std::ops::Deref for IncomingBranches {
-    type Target = Vec<Vec<BcIndex>>;
-    fn deref(&self) -> &Self::Target {
-        &self.branches
+impl std::ops::Index<BcIndex> for IncomingBranches {
+    type Output = Vec<BcIndex>;
+    fn index(&self, index: BcIndex) -> &Self::Output {
+        &self.branches[index.to_usize()]
     }
 }
 
-impl std::ops::DerefMut for IncomingBranches {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.branches
+impl std::ops::IndexMut<BcIndex> for IncomingBranches {
+    fn index_mut(&mut self, index: BcIndex) -> &mut Self::Output {
+        &mut self.branches[index.to_usize()]
     }
 }
 
@@ -24,11 +24,15 @@ impl IncomingBranches {
         let branches = vec![vec![]; len + 1];
         Self { branches }
     }
-    fn push(&mut self, src: usize, dst: usize) {
-        let src = BcIndex::from(src);
+
+    fn push(&mut self, src: BcIndex, dst: BcIndex) {
         if !self[dst].contains(&src) {
             self[dst].push(src);
         }
+    }
+
+    fn pop(&mut self) -> Option<Vec<BcIndex>> {
+        self.branches.pop()
     }
 }
 
@@ -99,11 +103,13 @@ impl BytecodeGen {
         let ir = std::mem::take(&mut self.ir);
         let mut incoming = IncomingBranches::new(ir.len());
         for (idx, (inst, loc)) in ir.iter().enumerate() {
+            let idx = BcIndex::from(idx);
             let op = self.inst_to_bc(store, &mut incoming, inst.clone(), idx, *loc)?;
             ops.push(op);
             sourcemap.push(*loc);
         }
         for (idx, (inst, _)) in ir.iter().enumerate() {
+            let idx = BcIndex::from(idx);
             if !incoming[idx + 1].is_empty() && !inst.is_terminal() {
                 incoming.push(idx, idx + 1);
             }
@@ -120,25 +126,25 @@ impl BytecodeGen {
         store: &mut Store,
         incoming: &mut IncomingBranches,
         inst: BytecodeInst,
-        idx: usize,
+        bc_pos: BcIndex,
         loc: Loc,
     ) -> Result<Bytecode> {
         let bc = match inst {
             BytecodeInst::Br(dst) => {
                 // 3
-                let dst = self[dst].to_usize();
-                incoming.push(idx, dst);
-                let op1 = dst as isize - idx as isize - 1;
+                let dst = self[dst];
+                incoming.push(bc_pos, dst);
+                let op1 = dst - bc_pos - 1;
                 // terminal inst.
                 Bytecode::from(enc_l(3, op1 as u32))
             }
             BytecodeInst::CondBr(reg, dst, optimizable, kind) => {
                 // 4, 5, 12, 13
-                let dst = self[dst].to_usize();
-                incoming.push(idx, dst);
-                incoming.push(idx, idx + 1);
+                let dst = self[dst];
+                incoming.push(bc_pos, dst);
+                incoming.push(bc_pos, bc_pos + 1);
                 let op1 = self.slot_id(&reg);
-                let op2 = dst as isize - idx as isize - 1;
+                let op2 = dst - bc_pos - 1;
                 let kind = kind as u16;
                 let op = enc_wl(
                     if optimizable { 12 + kind } else { 4 + kind },
@@ -149,21 +155,21 @@ impl BytecodeGen {
             }
             BytecodeInst::NilBr(reg, dst) => {
                 // 37
-                let dst = self[dst].to_usize();
-                incoming.push(idx, dst);
-                incoming.push(idx, idx + 1);
+                let dst = self[dst];
+                incoming.push(bc_pos, dst);
+                incoming.push(bc_pos, bc_pos + 1);
                 let op1 = self.slot_id(&reg);
-                let op2 = dst as isize - idx as isize - 1;
+                let op2 = dst - bc_pos - 1;
                 let op = enc_wl(37, op1.0, op2 as u32);
                 Bytecode::from(op)
             }
             BytecodeInst::CheckLocal(local, dst) => {
                 // 20
                 let op1 = self.slot_id(&local);
-                let dst = self[dst].to_usize();
-                incoming.push(idx, dst);
-                incoming.push(idx, idx + 1);
-                let op2 = dst as isize - idx as isize - 1;
+                let dst = self[dst];
+                incoming.push(bc_pos, dst);
+                incoming.push(bc_pos, bc_pos + 1);
+                let op2 = dst - bc_pos - 1;
                 Bytecode::from(enc_wl(20, op1.0, op2 as u32))
             }
             BytecodeInst::CheckKwRest(local) => {
@@ -180,17 +186,17 @@ impl BytecodeGen {
             } => {
                 // 36
                 let else_ = labels[0];
-                let else_ofs = self[else_].0 - idx as u32 - 1;
+                let else_ofs = u32::try_from(self[else_] - bc_pos - 1).unwrap();
                 let mut branch_table = vec![else_ofs; (max - min + 1) as usize];
                 for (i, label) in table {
-                    branch_table[i as usize] = self[label].0 - idx as u32 - 1;
+                    branch_table[i as usize] = u32::try_from(self[label] - bc_pos - 1).unwrap();
                 }
                 for label in &labels {
-                    incoming.push(idx, self[*label].to_usize());
+                    incoming.push(bc_pos, self[*label]);
                 }
                 let offsets = labels
                     .iter()
-                    .map(|label| self[*label].0 - idx as u32 - 1)
+                    .map(|label| u32::try_from(self[*label] - bc_pos - 1).unwrap())
                     .collect::<Vec<_>>();
                 let id = store.new_optcase(min, max, branch_table, offsets);
                 let op1 = self.slot_id(&reg);
@@ -227,7 +233,7 @@ impl BytecodeGen {
             }
             BytecodeInst::LoopEnd => {
                 // 15
-                incoming.push(idx, idx + 1);
+                incoming.push(bc_pos, bc_pos + 1);
                 Bytecode::from(enc_l(15, 0))
             }
             BytecodeInst::SingletonMethodDef {
@@ -422,23 +428,23 @@ impl BytecodeGen {
             BytecodeInst::MethodCall(box callsite) => {
                 // 30, 31
                 let opcode = if callsite.is_simple() { 30 } else { 31 };
-                self.encode_call(store, opcode, callsite, loc)?
+                self.encode_call(store, opcode, callsite, bc_pos, loc)?
             }
             BytecodeInst::MethodCallBlock(box callsite) => {
                 // 32, 33
                 let opcode = if callsite.is_simple() { 32 } else { 33 };
-                self.encode_call(store, opcode, callsite, loc)?
+                self.encode_call(store, opcode, callsite, bc_pos, loc)?
             }
             BytecodeInst::Yield(box callsite) => {
                 // 34, 35
                 let opcode = if callsite.is_simple() { 34 } else { 35 };
-                self.encode_call(store, opcode, callsite, loc)?
+                self.encode_call(store, opcode, callsite, bc_pos, loc)?
             }
             BytecodeInst::InlineCache(box callsite) => self.encode_cache(130, callsite)?,
             BytecodeInst::Array(ret, box callsite) => {
                 // 39
                 let op1 = self.slot_id(&ret);
-                let callid = self.new_callsite(store, callsite, loc)?;
+                let callid = self.new_callsite(store, callsite, bc_pos, loc)?;
                 Bytecode::from(enc_wl(39, op1.0, callid.get()))
             }
             BytecodeInst::DefinedYield { dst } => {
@@ -644,6 +650,7 @@ impl BytecodeGen {
         store: &mut Store,
         opcode: u16,
         callsite: CallSite,
+        bc_pos: BcIndex,
         loc: Loc,
     ) -> Result<Bytecode> {
         let CallSite { dst, .. } = callsite;
@@ -651,7 +658,7 @@ impl BytecodeGen {
             None => 0,
             Some(ret) => self.slot_id(&ret).0,
         };
-        let callid = self.new_callsite(store, callsite, loc)?;
+        let callid = self.new_callsite(store, callsite, bc_pos, loc)?;
         Ok(Bytecode::from(enc_wl(opcode, ret, callid.get())))
     }
 
@@ -674,7 +681,13 @@ impl BytecodeGen {
         ))
     }
 
-    fn new_callsite(&self, store: &mut Store, callsite: CallSite, loc: Loc) -> Result<CallSiteId> {
+    fn new_callsite(
+        &self,
+        store: &mut Store,
+        callsite: CallSite,
+        bc_pos: BcIndex,
+        loc: Loc,
+    ) -> Result<CallSiteId> {
         let CallSite {
             name,
             pos_num,
@@ -715,6 +728,7 @@ impl BytecodeGen {
         };
         Ok(store.new_callsite(
             name,
+            bc_pos,
             pos_num,
             kw_pos,
             kw_args,

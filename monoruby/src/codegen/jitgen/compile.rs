@@ -30,19 +30,8 @@ impl JitContext {
             let deopt = ir.new_deopt_with_pc(&bbctx, pc + 1);
             ir.self2reg(GP::Rdi);
             ir.push(AsmInst::GuardClass(GP::Rdi, self.self_class(), deopt));
-        } else {
-            // for method JIT, class of *self* is already checked in an entry stub.
-            match iseq.trace_ir(store, BcIndex::from(0)) {
-                TraceIr::InitMethod(fn_info) => {
-                    ir.push(AsmInst::Init {
-                        info: fn_info,
-                        is_method: store[iseq.func_id()].is_not_block(),
-                    });
-                }
-                _ => unreachable!(),
-            }
+            ir.push(AsmInst::Preparation);
         };
-        ir.push(AsmInst::Preparation);
 
         //assert!(self.ir.is_empty());
         self.push_ir(None, ir);
@@ -88,7 +77,7 @@ impl JitContext {
 
             match self.compile_instruction(&mut ir, &mut bbctx, store, iseq, bc_pos) {
                 CompileResult::Continue => {}
-                CompileResult::Leave | CompileResult::SideBranch => {
+                CompileResult::Leave | CompileResult::Cease => {
                     return ir;
                 }
                 CompileResult::Branch(dest_bb) => {
@@ -153,7 +142,14 @@ impl JitContext {
             eprintln!("{fmt}");
         }
         match trace_ir {
-            TraceIr::InitMethod { .. } => {}
+            TraceIr::InitMethod(fn_info) => {
+                assert!(!self.is_loop());
+                ir.push(AsmInst::Init {
+                    info: fn_info,
+                    is_method: store[iseq.func_id()].is_not_block(),
+                });
+                ir.push(AsmInst::Preparation);
+            }
             TraceIr::LoopStart { .. } => {
                 self.inc_loop_count();
                 bbctx.exec_gc(ir, false, pc);
@@ -289,16 +285,28 @@ impl JitContext {
             }
             TraceIr::LoadDynVar(dst, src) => {
                 //bbctx.discard(dst);
-                if !dst.is_self() {
-                    ir.push(AsmInst::LoadDynVar { src });
-                    bbctx.def_rax2acc(ir, dst);
+                assert!(!dst.is_self());
+                if let Some(offset) = self.outer_stack_offset(src.outer) {
+                    ir.push(AsmInst::LoadDynVarSpecialized {
+                        offset,
+                        src: src.reg,
+                    });
                 } else {
-                    unreachable!()
+                    ir.push(AsmInst::LoadDynVar { src });
                 }
+                bbctx.def_rax2acc(ir, dst);
             }
             TraceIr::StoreDynVar(dst, src) => {
                 bbctx.load(ir, src, GP::Rdi);
-                ir.push(AsmInst::StoreDynVar { dst, src: GP::Rdi });
+                if let Some(offset) = self.outer_stack_offset(dst.outer) {
+                    ir.push(AsmInst::StoreDynVarSpecialized {
+                        offset,
+                        dst: dst.reg,
+                        src: GP::Rdi,
+                    });
+                } else {
+                    ir.push(AsmInst::StoreDynVar { dst, src: GP::Rdi });
+                }
             }
             TraceIr::BlockArgProxy(ret, outer) => {
                 bbctx.def_S(ret);
@@ -682,7 +690,17 @@ impl JitContext {
                 if let Some(block_info) = self.current_method_given_block()
                     && let Some(iseq) = store[block_info.block_fid].is_iseq()
                 {
-                    self.compile_yield_specialized(bbctx, ir, store, callid, &block_info, iseq, pc);
+                    if !self.compile_yield_specialized(
+                        bbctx,
+                        ir,
+                        store,
+                        callid,
+                        &block_info,
+                        iseq,
+                        pc,
+                    ) {
+                        return CompileResult::Cease;
+                    };
                 } else {
                     bbctx.compile_yield(ir, store, callid, pc);
                 }
@@ -793,13 +811,21 @@ impl JitContext {
             TraceIr::MethodRet(ret) => {
                 bbctx.write_back_locals_if_captured(ir);
                 bbctx.load(ir, ret, GP::Rax);
-                ir.push(AsmInst::MethodRet(pc));
+                if let Some(rbp_offset) = self.method_caller_stack_offset(store) {
+                    ir.push(AsmInst::MethodRetSpecialized { rbp_offset });
+                } else {
+                    ir.push(AsmInst::MethodRet(pc));
+                }
                 return CompileResult::MethodReturn(bbctx.mode(ret).as_result());
             }
             TraceIr::BlockBreak(ret) => {
                 bbctx.write_back_locals_if_captured(ir);
                 bbctx.load(ir, ret, GP::Rax);
-                ir.push(AsmInst::BlockBreak);
+                if let Some(rbp_offset) = self.iter_caller_stack_offset(store) {
+                    ir.push(AsmInst::BlockBreakSpecialized { rbp_offset });
+                } else {
+                    ir.push(AsmInst::BlockBreak(pc));
+                }
                 return CompileResult::Break(bbctx.mode(ret).as_result());
             }
             TraceIr::Raise(ret) => {
@@ -878,7 +904,7 @@ impl JitContext {
                 let else_label = self.label();
                 self.new_side_branch(iseq, bc_pos, else_dest, bbctx.clone(), else_label);
                 ir.opt_case(max, min, else_label, branch_labels.into());
-                return CompileResult::SideBranch;
+                return CompileResult::Cease;
             }
         }
         CompileResult::Continue

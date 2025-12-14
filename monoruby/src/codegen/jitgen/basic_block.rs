@@ -89,14 +89,14 @@ impl std::ops::Index<std::ops::RangeInclusive<BasicBlockId>> for BasicBlockInfo 
 impl std::ops::Index<BcIndex> for BasicBlockInfo {
     type Output = BasciBlockInfoEntry;
     fn index(&self, index: BcIndex) -> &Self::Output {
-        let id = self.bb_map[index.0 as usize];
+        let id = self.bb_map[index.to_usize()];
         &self[id]
     }
 }
 
 impl std::ops::IndexMut<BcIndex> for BasicBlockInfo {
     fn index_mut(&mut self, index: BcIndex) -> &mut Self::Output {
-        let id = self.bb_map[index.0 as usize];
+        let id = self.bb_map[index.to_usize()];
         &mut self[id]
     }
 }
@@ -161,7 +161,7 @@ impl BasicBlockInfo {
     }
 
     pub(crate) fn is_bb_head(&self, i: BcIndex) -> Option<BasicBlockId> {
-        if *self.bb_head.get(i.0 as usize)? {
+        if *self.bb_head.get(i.to_usize())? {
             Some(self.get_bb_id(i))
         } else {
             None
@@ -169,7 +169,7 @@ impl BasicBlockInfo {
     }
 
     pub(crate) fn get_bb_id(&self, i: BcIndex) -> BasicBlockId {
-        self.bb_map[i.0 as usize]
+        self.bb_map[i.to_usize()]
     }
 
     pub(crate) fn is_loop_begin(

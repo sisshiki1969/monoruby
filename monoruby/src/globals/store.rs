@@ -426,6 +426,7 @@ impl Store {
     pub(crate) fn new_callsite(
         &mut self,
         name: Option<IdentId>,
+        bc_pos: BcIndex,
         pos_num: usize,
         kw_pos: SlotId,
         kw_args: indexmap::IndexMap<IdentId, usize>,
@@ -442,6 +443,7 @@ impl Store {
         self.callsite_info.push(CallSiteInfo {
             id,
             name,
+            bc_pos,
             pos_num,
             kw_pos,
             kw_args,
@@ -772,6 +774,8 @@ pub struct CallSiteInfo {
     pub id: CallSiteId,
     /// Name of method. (None for *super*)
     pub name: Option<IdentId>,
+    /// Position of the callsite in bytecode.
+    pub(crate) bc_pos: BcIndex,
     /// Position of the receiver.
     pub(crate) recv: SlotId,
     /// Position of the first argument.

@@ -47,7 +47,7 @@ enum CompileResult {
     ExitLoop,
     /// jump to another basic block.
     Branch(BasicBlockId),
-    SideBranch,
+    Cease,
     /// leave the current method/block.
     Leave,
     /// return from the current method/block.
@@ -95,15 +95,15 @@ impl ResultState {
         *self = Self::Value;
     }
 
-    fn join_all(states: &[Self]) -> Self {
+    fn join_all(states: &[Self]) -> Option<Self> {
         if states.is_empty() {
-            return ResultState::Value;
+            return None;
         }
         let mut res = states[0].clone();
         for state in &states[1..] {
             res.join(state);
         }
-        res
+        Some(res)
     }
 }
 
@@ -267,6 +267,31 @@ impl BBContext {
         if let Some(dst) = dst.into() {
             self.def_G(ir, dst, guarded);
             ir.push(AsmInst::RegToAcc(src));
+        }
+    }
+
+    fn def_rax2acc_result(
+        &mut self,
+        ir: &mut AsmIr,
+        dst: impl Into<Option<SlotId>>,
+        result: Option<ResultState>,
+    ) -> bool {
+        if let Some(result) = result {
+            match result {
+                ResultState::Const(v) => {
+                    self.def_C(dst, v);
+                }
+                ResultState::Class(class) => {
+                    self.def_reg2acc_class(ir, GP::Rax, dst, class);
+                }
+                ResultState::Value => {
+                    self.def_rax2acc(ir, dst);
+                }
+            }
+            true
+        } else {
+            ir.push(AsmInst::Unreachable);
+            false
         }
     }
 
@@ -437,6 +462,11 @@ impl UsingXmm {
             inner: bitvec::prelude::BitArray::new([0; 1]),
         }
     }
+
+    fn offset(&self) -> usize {
+        let len = self.count_ones();
+        (len + len % 2) * 8
+    }
 }
 
 impl Codegen {
@@ -464,12 +494,12 @@ impl Codegen {
             class_version_label.clone(),
             self_class,
             0,
-            None,
         );
         ctx.traceir_to_asmir(store);
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 
+        self.jit.finalize();
         self.gen_machine_code(
             ctx.detach_current_frame(),
             store,
@@ -667,12 +697,14 @@ impl JitModule {
     ///
     /// Save floating point registers in use.
     ///
+    /// ### stack pointer adjustment
+    /// - -`using_xmm`.offset()
+    ///
     pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
         if using_xmm.not_any() {
             return;
         }
-        let len = using_xmm.count_ones();
-        let sp_offset = (len + len % 2) * 8;
+        let sp_offset = using_xmm.offset();
         monoasm!( &mut self.jit,
             subq rsp, (sp_offset);
         );
@@ -694,8 +726,7 @@ impl JitModule {
         if using_xmm.not_any() {
             return;
         }
-        let len = using_xmm.count_ones();
-        let sp_offset = (len + len % 2) * 8;
+        let sp_offset = using_xmm.offset();
         let mut i = 0;
         for (x, b) in using_xmm.iter().enumerate() {
             if *b {

@@ -67,6 +67,18 @@ impl Cfp {
         self.outermost_lfp().block().is_some()
     }
 
+    pub(crate) fn caller(&self) -> Cfp {
+        let target_lfp = self.lfp().outer().unwrap();
+        let mut cfp = *self;
+        loop {
+            let cfp_prev = cfp.prev().unwrap();
+            if cfp_prev.lfp() == target_lfp {
+                return cfp;
+            }
+            cfp = cfp_prev;
+        }
+    }
+
     ///
     /// Set LFP.
     ///

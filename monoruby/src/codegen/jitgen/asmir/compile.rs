@@ -12,6 +12,10 @@ extern "C" fn extend_ivar(rvalue: &mut RValue, heap_len: usize) {
     rvalue.extend_ivar(heap_len);
 }
 
+extern "C" fn unreachable() {
+    unreachable!("reached unreachable code");
+}
+
 impl Codegen {
     ///
     /// Generate machine code for *inst*.
@@ -33,6 +37,12 @@ impl Codegen {
             }
             AsmInst::Init { info, is_method } => {
                 self.init_func(&info, is_method);
+            }
+            AsmInst::Unreachable => {
+                monoasm!( &mut self.jit,
+                    movq rax, (unreachable);
+                    call rax;
+                );
             }
             AsmInst::Preparation => {
                 if !frame.self_class().is_always_frozen() && frame.ivar_heap_accessed() {
@@ -289,9 +299,17 @@ impl Codegen {
                 };
                 self.method_return();
             }
-            AsmInst::BlockBreak => {
+            AsmInst::BlockBreak(pc) => {
+                monoasm! { &mut self.jit,
+                    movq r13, ((pc + 1).as_ptr());
+                };
                 self.block_break();
-                self.epilogue();
+            }
+            AsmInst::MethodRetSpecialized { rbp_offset } => {
+                self.method_return_specialized(rbp_offset);
+            }
+            AsmInst::BlockBreakSpecialized { rbp_offset } => {
+                self.method_return_specialized(rbp_offset);
             }
             AsmInst::Raise => {
                 let raise = self.entry_raise();
@@ -602,7 +620,13 @@ impl Codegen {
             }
 
             AsmInst::LoadDynVar { src } => self.load_dyn_var(src),
+            AsmInst::LoadDynVarSpecialized { offset, src: reg } => {
+                self.load_dyn_var_specialized(offset, reg)
+            }
             AsmInst::StoreDynVar { dst, src } => self.store_dyn_var(dst, src),
+            AsmInst::StoreDynVarSpecialized { offset, dst, src } => {
+                self.store_dyn_var_specialized(offset, dst, src)
+            }
 
             AsmInst::LoadIVarHeap {
                 ivarid,

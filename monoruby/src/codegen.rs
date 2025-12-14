@@ -993,19 +993,14 @@ impl Codegen {
     /// rbp <- bp for a context of the outer of the block.
     ///
     fn block_break(&mut self) {
-        let loop_ = self.jit.label();
-        let exit = self.jit.label();
+        let raise = self.entry_raise();
         monoasm! { &mut self.jit,
-            movq r14, [r14];
-            movq rdi, [rbx + (EXECUTOR_CFP)];
-        loop_:
-            movq rsi, [rdi];    // rdi <- caller's cfp
-            cmpq r14, [rsi - (CFP_LFP)];
-            je  exit;
-            movq rdi, rsi;
-            jmp loop_;
-        exit:
-            lea  rbp, [rdi + (BP_CFP)];
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, rax;
+            movq rax, (runtime::err_block_break);
+            call rax;
+            jmp  raise;
         }
     }
 
@@ -1025,6 +1020,14 @@ impl Codegen {
             movq rax, (runtime::err_method_return);
             call rax;
             jmp  raise;
+        }
+    }
+
+    fn method_return_specialized(&mut self, rbp_offset: usize) {
+        monoasm! { &mut self.jit,
+            lea  rbp, [rbp + (rbp_offset)];
+            leave;
+            ret;
         }
     }
 
@@ -1104,7 +1107,7 @@ impl Codegen {
     ) {
         let (start, code_end, end) = self.jit.code_block.last().unwrap();
         eprintln!(
-            "offset:{:?} code: {} bytes  data: {} bytes",
+            "      offset:{:?} code: {} bytes  data: {} bytes",
             start,
             *code_end - *start,
             *end - *code_end

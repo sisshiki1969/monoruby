@@ -1,8 +1,86 @@
-use bytecodegen::BcIndex;
-
 use crate::codegen::jitgen::trace_ir::MethodCacheEntry;
 
 use super::*;
+
+///
+/// an index of bytecode instruction.
+///
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd)]
+#[repr(transparent)]
+pub(crate) struct BcIndex(u32);
+
+impl std::fmt::Debug for BcIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, ":{:05}", self.0)
+    }
+}
+
+impl std::fmt::Display for BcIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, ":{:05}", self.0)
+    }
+}
+
+impl std::ops::Add<usize> for BcIndex {
+    type Output = Self;
+    fn add(self, rhs: usize) -> Self::Output {
+        Self((self.0 as usize + rhs) as u32)
+    }
+}
+
+impl std::ops::Add<i64> for BcIndex {
+    type Output = Self;
+    fn add(self, rhs: i64) -> Self::Output {
+        Self((self.0 as i64 + rhs) as u32)
+    }
+}
+
+impl std::ops::Add<i32> for BcIndex {
+    type Output = Self;
+    fn add(self, rhs: i32) -> Self::Output {
+        Self((self.0 as i64 + rhs as i64) as u32)
+    }
+}
+
+impl std::ops::Sub<Self> for BcIndex {
+    type Output = isize;
+    fn sub(self, rhs: Self) -> Self::Output {
+        (self.0 as isize) - (rhs.0 as isize)
+    }
+}
+
+impl std::iter::Step for BcIndex {
+    fn steps_between(start: &Self, end: &Self) -> (usize, Option<usize>) {
+        if start > end {
+            (0, None)
+        } else {
+            let d = end.0 as usize - start.0 as usize;
+            (d, Some(d))
+        }
+    }
+
+    fn forward_checked(start: Self, count: usize) -> Option<Self> {
+        Some(start + count)
+    }
+
+    fn backward_checked(start: Self, count: usize) -> Option<Self> {
+        if (start.0 as usize) < count {
+            None
+        } else {
+            Some(BcIndex((start.0 as usize - count) as _))
+        }
+    }
+}
+
+impl BcIndex {
+    pub(crate) fn from(i: usize) -> Self {
+        Self(i as u32)
+    }
+
+    pub(crate) fn to_usize(self) -> usize {
+        self.0 as usize
+    }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 #[repr(C)]

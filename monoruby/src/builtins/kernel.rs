@@ -139,7 +139,7 @@ fn kernel_block_given(
         return false;
     }
     let dst = callsite.dst;
-    if let Some(callid) = jitctx.current_method_callsite()
+    if let Some(callid) = jitctx.method_caller_callsite()
         && let Some(b) = store[callid].block_given()
     {
         if let Some(dst) = dst {

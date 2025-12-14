@@ -107,6 +107,8 @@ impl JitContext {
 
         ir.reg_move(GP::Rdi, GP::R13);
         let using_xmm = bbctx.get_using_xmm();
+        // stack pointer adjustment
+        // -using_xmm.offset()
         ir.xmm_save(using_xmm);
 
         bbctx.set_binop_arguments(store, ir, fid, mode);
@@ -195,10 +197,12 @@ impl JitContext {
         block: &JitBlockInfo,
         iseq: ISeqId,
         pc: BytecodePtr,
-    ) {
+    ) -> bool {
         let dst = store[callid].dst;
         bbctx.exec_gc(ir, true, pc);
         let using_xmm = bbctx.get_using_xmm();
+        // stack pointer adjustment
+        // -using_xmm.offset()
         ir.xmm_save(using_xmm);
         let JitBlockInfo {
             block_fid: callee_fid,
@@ -217,7 +221,7 @@ impl JitContext {
         } else {
             JitArgumentInfo::default()
         };
-        let entry = self.compile_inlined_func(
+        let (entry, result) = self.compile_inlined_func(
             store,
             iseq,
             self_class,
@@ -226,6 +230,7 @@ impl JitContext {
             None,
             Some(outer),
             callid,
+            using_xmm,
         );
         let evict = ir.new_evict();
         let meta = store[callee_fid].meta();
@@ -234,8 +239,9 @@ impl JitContext {
         ir.push(AsmInst::SpecializedYield { entry, evict });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
-        bbctx.def_rax2acc(ir, dst);
+        let res = bbctx.def_rax2acc_result(ir, dst, result);
         bbctx.immediate_evict(ir, evict, pc);
+        res
     }
 
     ///
@@ -373,7 +379,7 @@ impl JitContext {
                     } else {
                         Some(self.label())
                     };
-                    let entry = self.compile_inlined_func(
+                    let (entry, result) = self.compile_inlined_func(
                         store,
                         iseq,
                         recv_class,
@@ -382,8 +388,16 @@ impl JitContext {
                         block,
                         None,
                         callid,
+                        bbctx.get_using_xmm(),
                     );
                     bbctx.send_specialized(ir, store, callid, fid, entry, patch_point, evict, pc);
+                    let res = bbctx.def_rax2acc_result(ir, dst, result);
+                    bbctx.immediate_evict(ir, evict, pc);
+                    if !res {
+                        return CompileResult::Cease;
+                    }
+                    bbctx.unset_class_version_guard();
+                    return CompileResult::Continue;
                 } else {
                     bbctx.send(ir, store, callid, fid, recv_class, evict, None, pc);
                 }
@@ -396,6 +410,32 @@ impl JitContext {
         CompileResult::Continue
     }
 
+    fn new_specialized_frame(
+        &self,
+        store: &Store,
+        iseq_id: ISeqId,
+        outer: Option<usize>,
+        args_info: JitArgumentInfo,
+        given_block: Option<JitBlockInfo>,
+        self_class: ClassId,
+    ) -> JitStackFrame {
+        let idx = match self.jit_type() {
+            JitType::Specialized { idx, .. } => *idx,
+            _ => self.specialized_methods_len(),
+        };
+        let jit_type = JitType::Specialized { idx, args_info };
+        let specialize_level = self.specialize_level() + 1;
+        JitStackFrame::new(
+            store,
+            jit_type,
+            specialize_level,
+            iseq_id,
+            outer,
+            given_block,
+            self_class,
+        )
+    }
+
     fn compile_inlined_func(
         &mut self,
         store: &Store,
@@ -406,33 +446,32 @@ impl JitContext {
         block: Option<JitBlockInfo>,
         outer: Option<usize>,
         callid: CallSiteId,
-    ) -> JitLabel {
-        let idx = match self.jit_type() {
-            JitType::Specialized { idx, .. } => *idx,
-            _ => self.specialized_methods_len(),
-        };
-        let jit_type = JitType::Specialized { idx, args_info };
-        let specialize_level = self.specialize_level() + 1;
-        self.stack_frame.push(JitStackFrame::new(
-            store,
-            jit_type,
-            specialize_level,
-            iseq_id,
-            outer,
-            block,
-            Some(callid),
-            self_class,
-        ));
+        using_xmm: UsingXmm,
+    ) -> (JitLabel, Option<ResultState>) {
+        self.xmm_save(using_xmm);
+        self.set_callsite(callid);
+        let frame = self.new_specialized_frame(store, iseq_id, outer, args_info, block, self_class);
+        self.stack_frame.push(frame);
         self.traceir_to_asmir(store);
-        let frame = self.stack_frame.pop().unwrap();
-        let return_context = self.detach_return_context();
+        let mut frame = self.stack_frame.pop().unwrap();
+        self.unset_callsite();
+        self.xmm_restore(using_xmm);
+        let pos = self.stack_frame.len() - 1;
+        let mut return_context = frame.detach_return_context();
+        let context = return_context.remove(&pos);
+        let result = if let Some(ctx) = &context {
+            ResultState::join_all(ctx)
+        } else {
+            None
+        };
+        self.merge_return_context(return_context);
         #[cfg(feature = "jit-log")]
         if self.codegen_mode() {
             eprintln!(
                 "return: {} {:?} {:?}",
                 store.func_description(store[iseq_id].func_id()),
-                &return_context,
-                ResultState::join_all(&return_context)
+                &context,
+                result
             );
         }
         let entry = self.label();
@@ -441,7 +480,7 @@ impl JitContext {
             frame,
             patch_point,
         });
-        entry
+        (entry, result)
     }
 
     fn inline_asm(
@@ -493,6 +532,8 @@ impl BBContext {
         ir.reg_move(GP::Rdi, GP::R13);
         self.exec_gc(ir, true, pc);
         let using_xmm = self.get_using_xmm();
+        // stack pointer adjustment
+        // -using_xmm.offset()
         ir.xmm_save(using_xmm);
         self.set_arguments(store, ir, callid, callee_fid, pc);
         if let Some(dst) = store[callid].dst {
@@ -535,6 +576,8 @@ impl BBContext {
         ir.reg_move(GP::Rdi, GP::R13);
         self.exec_gc(ir, true, pc);
         let using_xmm = self.get_using_xmm();
+        // stack pointer adjustment
+        // -using_xmm.offset()
         ir.xmm_save(using_xmm);
         self.set_arguments(store, ir, callid, callee_fid, pc);
         if let Some(dst) = store[callid].dst {
@@ -574,6 +617,8 @@ impl BBContext {
         let error = ir.new_error(self, pc);
         let evict = ir.new_evict();
         self.exec_gc(ir, true, pc);
+        // stack pointer adjustment
+        // -using_xmm.offset()
         ir.xmm_save(using_xmm);
         ir.push(AsmInst::Yield {
             callid,

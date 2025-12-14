@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
 use quote::{__private::Span, quote};
-use syn::{parse_macro_input, parse_quote, ItemFn, ItemImpl, ItemStruct};
+use syn::{ItemFn, ItemImpl, ItemStruct, parse_macro_input, parse_quote};
 
 #[proc_macro_attribute]
 pub fn monoruby_builtin(_attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -21,6 +21,9 @@ pub fn monoruby_builtin(_attr: TokenStream, item: TokenStream) -> TokenStream {
             match #wrapped(vm, globals, lfp) {
                 Ok(val) => Some(val),
                 Err(mut err) => {
+                    if let MonorubyErrKind::MethodReturn(val, target_lfp) = err.kind() && lfp == *target_lfp {
+                        return Some(*val);
+                    }
                     let fid = lfp.func_id();
                     err.push_internal_trace(fid);
                     vm.set_error(err);
@@ -29,13 +32,13 @@ pub fn monoruby_builtin(_attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
     );
-    let gen = quote! {
+    let r#gen = quote! {
         #ast
 
         #ast2
     };
 
-    gen.into()
+    r#gen.into()
 }
 
 #[proc_macro_attribute]
@@ -80,7 +83,7 @@ pub fn monoruby_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     );*/
 
-    let gen = quote! {
+    let r#gen = quote! {
         #[repr(transparent)]
         #[derive(Debug, Clone, Copy)]
         #ast
@@ -116,5 +119,5 @@ pub fn monoruby_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
-    gen.into()
+    r#gen.into()
 }

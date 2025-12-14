@@ -53,6 +53,7 @@ impl Codegen {
 
         globals.store[iseq_id].set_cache_map(self_class, cache);
         self.jit.apply_jmp_patch_address(entry, &guard);
+        self.jit.finalize();
     }
 
     ///

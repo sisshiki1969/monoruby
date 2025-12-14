@@ -155,7 +155,7 @@ pub(crate) struct JitStackFrame {
     ///
     /// Contexts for returning to this frame.
     ///
-    pub(super) return_context: Vec<ResultState>,
+    return_context: HashMap<usize, Vec<ResultState>>,
 
     ///
     /// Generated AsmIr.
@@ -175,6 +175,10 @@ pub(crate) struct JitStackFrame {
     ///
     pub(super) specialized_methods: Vec<SpecializeInfo>,
 
+    ///
+    /// Stack offset for this frame.
+    ///
+    stack_offset: usize,
     ///
     /// Flag whether ivar on the heap is accessed in this context.
     ///
@@ -198,6 +202,7 @@ impl std::fmt::Debug for JitStackFrame {
             .field("jit_type", &self.jit_type)
             .field("outer", &self.outer)
             .field("given_block", &self.given_block)
+            .field("stack_offset", &self.stack_offset)
             .finish()
     }
 }
@@ -216,7 +221,6 @@ impl JitStackFrame {
         iseq_id: ISeqId,
         outer: Option<usize>,
         given_block: Option<JitBlockInfo>,
-        callid: Option<CallSiteId>,
         self_class: ClassId,
     ) -> Self {
         let self_ty = store[self_class].instance_ty();
@@ -228,13 +232,14 @@ impl JitStackFrame {
             basic_block_labels.insert(idx, JitLabel(labels.len()));
             labels.push(None);
         }
+        let stack_offset = store[iseq_id].stack_offset();
         Self {
             jit_type,
             specialize_level,
             iseq_id,
             outer,
             given_block,
-            callid,
+            callid: None,
             self_class,
             self_ty,
             is_not_block,
@@ -244,11 +249,12 @@ impl JitStackFrame {
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
-            return_context: vec![],
+            return_context: HashMap::default(),
             ir: vec![],
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
             specialized_methods: vec![],
+            stack_offset,
             ivar_heap_accessed: false,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
@@ -274,11 +280,12 @@ impl JitStackFrame {
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
-            return_context: vec![],
+            return_context: HashMap::default(),
             ir: vec![],
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
             specialized_methods: vec![],
+            stack_offset: self.stack_offset,
             ivar_heap_accessed: false,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
@@ -333,6 +340,10 @@ impl JitStackFrame {
 
     pub(super) fn detach_ir(&mut self) -> Vec<(Option<BasicBlockId>, AsmIr)> {
         std::mem::take(&mut self.ir)
+    }
+
+    pub(super) fn detach_return_context(&mut self) -> HashMap<usize, Vec<ResultState>> {
+        std::mem::take(&mut self.return_context)
     }
 
     // handling labels
@@ -416,7 +427,6 @@ impl JitContext {
         class_version_label: DestLabel,
         self_class: ClassId,
         specialize_level: usize,
-        callid: Option<CallSiteId>,
     ) -> Self {
         let stack_frame = vec![JitStackFrame::new(
             store,
@@ -425,7 +435,6 @@ impl JitContext {
             iseq_id,
             None,
             None,
-            callid,
             self_class,
         )];
 
@@ -473,8 +482,32 @@ impl JitContext {
         self.current_frame_mut().specialized_methods.push(info);
     }
 
-    pub(super) fn detach_return_context(&mut self) -> Vec<ResultState> {
-        std::mem::take(&mut self.current_frame_mut().return_context)
+    pub(super) fn xmm_save(&mut self, using_xmm: UsingXmm) {
+        self.current_frame_mut().stack_offset += using_xmm.offset();
+    }
+
+    pub(super) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
+        self.current_frame_mut().stack_offset -= using_xmm.offset();
+    }
+
+    pub(super) fn push_return_context(&mut self, pos: usize, ctx: ResultState) {
+        if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
+            frame.push(ctx);
+        } else {
+            self.current_frame_mut()
+                .return_context
+                .insert(pos, vec![ctx]);
+        }
+    }
+
+    pub(super) fn merge_return_context(&mut self, context: HashMap<usize, Vec<ResultState>>) {
+        for (pos, ctx) in context {
+            if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
+                frame.extend(ctx);
+            } else {
+                self.current_frame_mut().return_context.insert(pos, ctx);
+            }
+        }
     }
 
     fn current_frame(&self) -> &JitStackFrame {
@@ -485,33 +518,63 @@ impl JitContext {
         self.stack_frame.last_mut().unwrap()
     }
 
-    fn caller_frame_mut(&mut self) -> Option<&mut JitStackFrame> {
+    pub(super) fn detach_current_frame(&mut self) -> JitStackFrame {
+        self.stack_frame.pop().unwrap()
+    }
+
+    pub(super) fn set_callsite(&mut self, callid: CallSiteId) {
+        self.current_frame_mut().callid = Some(callid);
+    }
+
+    pub(super) fn unset_callsite(&mut self) {
+        self.current_frame_mut().callid = None;
+    }
+
+    pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
+        let (frame, i) = self.current_method_frame()?;
+        Some(frame.given_block.as_ref()?.add(i))
+    }
+
+    pub(crate) fn method_caller_callsite(&self) -> Option<CallSiteId> {
+        let caller = self.method_caller_pos()?;
+        self.stack_frame[caller].callid
+    }
+
+    pub(super) fn set_ivar_heap_accessed(&mut self) {
+        self.current_frame_mut().ivar_heap_accessed = true;
+    }
+
+    fn caller_pos(&self) -> Option<usize> {
         let len = self.stack_frame.len();
         if len < 2 {
             return None;
         }
-        Some(&mut self.stack_frame[len - 2])
+        Some(len - 2)
     }
 
-    fn method_caller_frame_mut(&mut self) -> Option<&mut JitStackFrame> {
+    fn method_caller_pos(&self) -> Option<usize> {
         let offset = self.current_method_frame()?.1 + 1;
         let len = self.stack_frame.len();
         if len - 1 < offset {
             return None;
         }
-        Some(&mut self.stack_frame[len - 1 - offset])
+        Some(len - 1 - offset)
     }
 
-    fn iter_caller_frame_mut(&mut self) -> Option<&mut JitStackFrame> {
+    fn iter_caller_pos(&self) -> Option<usize> {
         let len = self.stack_frame.len();
         if len < 3 {
             return None;
         }
-        Some(&mut self.stack_frame[len - 3])
+        Some(len - 3)
     }
 
-    pub(super) fn detach_current_frame(&mut self) -> JitStackFrame {
-        self.stack_frame.pop().unwrap()
+    fn outer_pos(&self, outer: usize) -> Option<usize> {
+        let mut i = self.stack_frame.len() - 1;
+        for _ in 0..outer {
+            i -= self.stack_frame[i].outer?;
+        }
+        Some(i)
     }
 
     fn current_method_frame(&self) -> Option<(&JitStackFrame, usize)> {
@@ -530,17 +593,44 @@ impl JitContext {
         }
     }
 
-    pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
-        let (frame, i) = self.current_method_frame()?;
-        Some(frame.given_block.as_ref()?.add(i))
+    fn calc_stack_offset(&self, begin: usize, end: usize) -> usize {
+        self.stack_frame[begin..end]
+            .iter()
+            .fold(0, |acc, f| acc + f.stack_offset)
     }
 
-    pub(crate) fn current_method_callsite(&self) -> Option<CallSiteId> {
-        self.current_method_frame()?.0.callid
+    fn check_exception_handler(&self, store: &Store, begin: usize, end: usize) -> bool {
+        self.stack_frame[begin..end].iter().any(|f| {
+            let iseq_id = f.iseq_id();
+            let callsite = f.callid.unwrap();
+            let pc = store[callsite].bc_pos;
+            store[iseq_id].get_exception_dest(pc).is_some()
+        })
     }
 
-    pub(super) fn set_ivar_heap_accessed(&mut self) {
-        self.current_frame_mut().ivar_heap_accessed = true;
+    pub(super) fn outer_stack_offset(&self, outer: usize) -> Option<usize> {
+        let outer = self.outer_pos(outer)?;
+        Some(self.calc_stack_offset(outer, self.stack_frame.len() - 1))
+    }
+
+    pub(super) fn method_caller_stack_offset(&self, store: &Store) -> Option<usize> {
+        let caller = self.method_caller_pos()?;
+        let begin = caller + 1;
+        let end = self.stack_frame.len() - 1;
+        if self.check_exception_handler(store, begin, end) {
+            return None;
+        }
+        Some(self.calc_stack_offset(begin, end))
+    }
+
+    pub(super) fn iter_caller_stack_offset(&self, store: &Store) -> Option<usize> {
+        let caller = self.iter_caller_pos()?;
+        let begin = caller + 1;
+        let end = self.stack_frame.len() - 1;
+        if self.check_exception_handler(store, begin, end) {
+            return None;
+        }
+        Some(self.calc_stack_offset(begin, end))
     }
 
     pub(super) fn get_pc(&self, store: &Store, i: BcIndex) -> BytecodePtr {
@@ -754,10 +844,10 @@ impl JitContext {
     /// Add new return branch with the context *bbctx*.
     ///
     pub(super) fn new_return(&mut self, ret: ResultState) {
-        if let Some(caller_frame) = &mut self.caller_frame_mut() {
+        if let Some(pos) = self.caller_pos() {
             #[cfg(feature = "jit-debug")]
             eprintln!("   new_return:{:?}", ret);
-            caller_frame.return_context.push(ret);
+            self.push_return_context(pos, ret);
         }
     }
 
@@ -765,10 +855,10 @@ impl JitContext {
     /// Add new return branch with the context *bbctx*.
     ///
     pub(super) fn new_method_return(&mut self, ret: ResultState) {
-        if let Some(caller_frame) = &mut self.method_caller_frame_mut() {
+        if let Some(pos) = self.method_caller_pos() {
             #[cfg(feature = "jit-debug")]
             eprintln!("   new_method_return:{:?}", ret);
-            caller_frame.return_context.push(ret);
+            self.push_return_context(pos, ret);
         }
     }
 
@@ -776,10 +866,10 @@ impl JitContext {
     /// Add new return branch with the context *bbctx*.
     ///
     pub(super) fn new_break(&mut self, ret: ResultState) {
-        if let Some(caller_frame) = &mut self.iter_caller_frame_mut() {
+        if let Some(pos) = self.iter_caller_pos() {
             #[cfg(feature = "jit-debug")]
             eprintln!("   new_break:{:?}", ret);
-            caller_frame.return_context.push(ret);
+            self.push_return_context(pos, ret);
         }
     }
 
