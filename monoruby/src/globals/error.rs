@@ -143,7 +143,7 @@ impl MonorubyErr {
             MonorubyErrKind::StopIteration => "StopIteration",
             MonorubyErrKind::SystemExit(..) => "SystemExit",
             MonorubyErrKind::Other(class_id) => return class_id.get_name(store),
-            MonorubyErrKind::MethodReturn(..) => unreachable!(),
+            MonorubyErrKind::MethodReturn(..) => "MethodReturn",
         }
         .to_string()
     }

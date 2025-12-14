@@ -875,7 +875,7 @@ pub(super) extern "C" fn err_method_return(vm: &mut Executor, _globals: &mut Glo
 }
 
 pub(super) extern "C" fn err_block_break(vm: &mut Executor, _globals: &mut Globals, val: Value) {
-    let target_lfp = vm.cfp().prev().unwrap().prev().unwrap().lfp();
+    let target_lfp = vm.cfp().caller().lfp();
     vm.set_error(MonorubyErr::method_return(val, target_lfp));
 }
 

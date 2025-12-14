@@ -1106,12 +1106,12 @@ fn test_module() {
         "#,
     );
     run_test_with_prelude(
-            "[C.new.class == C, C.singleton_class.superclass == Object.singleton_class, D.superclass == C]",
-            r#"
+        "[C.new.class == C, C.singleton_class.superclass == Object.singleton_class, D.superclass == C]",
+        r#"
             C = Class.new
             D = Class.new(C)
             "#,
-        );
+    );
     run_test(
         r#"
         $res = []
@@ -1469,6 +1469,36 @@ fn method_return() {
 }
 
 #[test]
+fn method_return2() {
+    run_test_with_prelude(
+        r##"            
+        $res = []
+        $res << f
+        $res
+        "##,
+        r##"
+        def g
+          begin
+            yield
+          ensure
+            $res << "ensure in g"
+          end
+        end
+
+        def f
+          g do
+            begin
+              return 42
+            ensure
+              $res << "ensure in f"
+            end
+          end
+        end
+"##,
+    );
+}
+
+#[test]
 fn block_break() {
     run_test_with_prelude(
         r#"
@@ -1504,6 +1534,36 @@ fn block_break() {
                 $res << 100
             end
             "#,
+    );
+}
+
+#[test]
+fn block_break2() {
+    run_test_with_prelude(
+        r##"            
+        $res = []
+        $res << f
+        $res
+        "##,
+        r##"
+        def g
+          begin
+            yield
+          ensure
+            $res << "ensure in g"
+          end
+        end
+
+        def f
+          g do
+            begin
+              break 42
+            ensure
+              $res << "ensure in f"
+            end
+          end
+        end
+"##,
     );
 }
 

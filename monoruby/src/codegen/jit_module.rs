@@ -324,19 +324,19 @@ pub(super) extern "C" fn handle_error(
     pc: BytecodePtr,
 ) -> ErrorReturn {
     let func_info = &globals.store[meta.func_id()];
+    if vm.exception().is_none() {
+        vm.set_error(MonorubyErr::runtimeerr(
+            "[FATAL] internal error: unknown exception.",
+        ));
+    }
     match &func_info.kind {
         FuncKind::ISeq(info) => {
             let bc_base = globals.store[*info].get_top_pc();
             let pc = pc - bc_base;
-            // check exception table.
             let mut lfp = vm.cfp().lfp();
-            // First, we check method_return.
             let info = &globals.store[*info];
-            if vm.exception().is_none() {
-                vm.set_error(MonorubyErr::runtimeerr(
-                    "[FATAL] internal error: unknown exception.",
-                ));
-            }
+            // check exception table.
+            // First, we check method_return.
             if let MonorubyErrKind::MethodReturn(val, target_lfp) = vm.exception().unwrap().kind() {
                 return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
                     ErrorReturn::goto(bc_base + ensure)
@@ -362,11 +362,16 @@ pub(super) extern "C" fn handle_error(
             }
         }
         FuncKind::Builtin { .. } => {
+            let lfp = vm.cfp().lfp();
             // First, we check method_return.
-            if vm.exception().is_none() {
-                vm.set_error(MonorubyErr::runtimeerr(
-                    "[FATAL] internal error: unknown exception.",
-                ));
+            if let MonorubyErrKind::MethodReturn(val, target_lfp) = vm.exception().unwrap().kind() {
+                return if lfp == *target_lfp {
+                    let val = *val;
+                    vm.take_error();
+                    ErrorReturn::return_normal(val)
+                } else {
+                    ErrorReturn::return_err()
+                };
             }
             vm.push_internal_error_location(meta.func_id());
         }

@@ -300,8 +300,10 @@ impl Codegen {
                 self.method_return();
             }
             AsmInst::BlockBreak(pc) => {
+                monoasm! { &mut self.jit,
+                    movq r13, ((pc + 1).as_ptr());
+                };
                 self.block_break();
-                self.epilogue();
             }
             AsmInst::MethodRetSpecialized { rbp_offset } => {
                 self.method_return_specialized(rbp_offset);

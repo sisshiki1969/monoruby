@@ -993,19 +993,14 @@ impl Codegen {
     /// rbp <- bp for a context of the outer of the block.
     ///
     fn block_break(&mut self) {
-        let loop_ = self.jit.label();
-        let exit = self.jit.label();
+        let raise = self.entry_raise();
         monoasm! { &mut self.jit,
-            movq r14, [r14];
-            movq rdi, [rbx + (EXECUTOR_CFP)];
-        loop_:
-            movq rsi, [rdi];    // rdi <- caller's cfp
-            cmpq r14, [rsi - (CFP_LFP)];
-            je  exit;
-            movq rdi, rsi;
-            jmp loop_;
-        exit:
-            lea  rbp, [rdi + (BP_CFP)];
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, rax;
+            movq rax, (runtime::err_block_break);
+            call rax;
+            jmp  raise;
         }
     }
 
