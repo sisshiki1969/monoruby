@@ -299,12 +299,12 @@ impl Codegen {
                 };
                 self.method_return();
             }
-            AsmInst::MethodRetSpecialized { rbp_offset } => {
-                self.method_return_specialized(rbp_offset);
-            }
-            AsmInst::BlockBreak => {
+            AsmInst::BlockBreak(pc) => {
                 self.block_break();
                 self.epilogue();
+            }
+            AsmInst::MethodRetSpecialized { rbp_offset } => {
+                self.method_return_specialized(rbp_offset);
             }
             AsmInst::BlockBreakSpecialized { rbp_offset } => {
                 self.method_return_specialized(rbp_offset);

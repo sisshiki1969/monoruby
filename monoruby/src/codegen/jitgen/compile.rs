@@ -824,7 +824,7 @@ impl JitContext {
                 if let Some(rbp_offset) = self.iter_caller_stack_offset(store) {
                     ir.push(AsmInst::BlockBreakSpecialized { rbp_offset });
                 } else {
-                    ir.push(AsmInst::BlockBreak);
+                    ir.push(AsmInst::BlockBreak(pc));
                 }
                 return CompileResult::Break(bbctx.mode(ret).as_result());
             }

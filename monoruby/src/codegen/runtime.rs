@@ -507,7 +507,7 @@ pub(super) extern "C" fn get_index(
                     vm.set_error(err);
                     None
                 }
-            }
+            };
         }
         HASH_CLASS => {
             return match Hashmap::new(base).index(vm, globals, index) {
@@ -516,7 +516,7 @@ pub(super) extern "C" fn get_index(
                     vm.set_error(err);
                     None
                 }
-            }
+            };
         }
         INTEGER_CLASS => {
             return match op::integer_index1(globals, base, index) {
@@ -525,7 +525,7 @@ pub(super) extern "C" fn get_index(
                     vm.set_error(err);
                     None
                 }
-            }
+            };
         }
         METHOD_CLASS => {
             let method = base.as_method();
@@ -871,6 +871,11 @@ pub(super) extern "C" fn err_divide_by_zero(vm: &mut Executor) {
 
 pub(super) extern "C" fn err_method_return(vm: &mut Executor, _globals: &mut Globals, val: Value) {
     let target_lfp = vm.cfp().outermost_lfp();
+    vm.set_error(MonorubyErr::method_return(val, target_lfp));
+}
+
+pub(super) extern "C" fn err_block_break(vm: &mut Executor, _globals: &mut Globals, val: Value) {
+    let target_lfp = vm.cfp().prev().unwrap().prev().unwrap().lfp();
     vm.set_error(MonorubyErr::method_return(val, target_lfp));
 }
 

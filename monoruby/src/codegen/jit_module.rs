@@ -61,7 +61,6 @@ impl JitModule {
     fn init(&mut self) {
         let raise = self.entry_raise.clone();
         let overflow = self.vm_stack_overflow.clone();
-        let leave = self.jit.label();
         let goto = self.jit.label();
         monoasm! { &mut self.jit,
         raise:
@@ -72,21 +71,16 @@ impl JitModule {
             subq rcx, 16;
             movq rax, (handle_error);
             call rax;
-            testq rax, rax;
-            jne  goto;
+            // rax: Option<Value>
+            // rdx: Option<BytecodePtr>
             testq rdx, rdx;
-            jz   leave;
-            movq rax, rdx;
-            jmp  leave;
-        goto:
-            movq r13, rax;
-        }
-        self.fetch_and_dispatch();
-        monoasm! { &mut self.jit,
-        leave:
+            jne  goto;
             leave;
             ret;
+        goto:
+            movq r13, rdx;
         }
+        self.fetch_and_dispatch();
 
         let label = self.entry_panic.clone();
         self.gen_entry_panic(label);
@@ -296,29 +290,29 @@ extern "C" fn unimplemented_inst(vm: &mut Executor, _: &mut Globals, opcode: u16
 
 #[repr(C)]
 pub(super) struct ErrorReturn {
-    dest: Option<BytecodePtr>,
     value: Option<Value>,
+    dest: Option<BytecodePtr>,
 }
 
 impl ErrorReturn {
     fn return_err() -> Self {
         Self {
-            dest: None,
             value: None,
+            dest: None,
         }
     }
 
     fn return_normal(val: Value) -> Self {
         Self {
-            dest: None,
             value: Some(val),
+            dest: None,
         }
     }
 
     fn goto(dest: BytecodePtr) -> Self {
         Self {
-            dest: Some(dest),
             value: None,
+            dest: Some(dest),
         }
     }
 }

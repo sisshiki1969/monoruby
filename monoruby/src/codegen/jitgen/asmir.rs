@@ -888,15 +888,15 @@ pub(super) enum AsmInst {
     GuardArrayTy(GP, AsmDeopt),
 
     Ret,
-    BlockBreak,
+    BlockBreak(BytecodePtr),
+    MethodRet(BytecodePtr),
     BlockBreakSpecialized {
         rbp_offset: usize,
     },
-    Raise,
-    MethodRet(BytecodePtr),
     MethodRetSpecialized {
         rbp_offset: usize,
     },
+    Raise,
     EnsureEnd,
     ///
     /// Conditional branch

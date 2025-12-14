@@ -1,30 +1,19 @@
-def a(x)                # => 100 or 6
-  1.times do
-    # block1 in a
-    if x.odd?
-      return yield(7)   # => 100
-    else
-      break yield(3)    # => 6
+def g
+  begin
+    yield
+  ensure
+    puts "ensure in g"
+  end
+end
+
+def f
+  g do
+    begin
+      break 42
+    ensure
+      puts "ensure in f"
     end
   end
 end
 
-25.times do |x|
-  # block2 in main
-  puts (a(x) do |x|
-    # block3 in main
-    if 3 + x == 10
-      100
-    else
-      x * 2
-    end
-  end)
-end
-
-#
-#   +---------------------------------+
-#   |       +---------------+         |
-#   v       v               |         |
-# block2 -> a -> times -> block1 -> block3
-#
-#
+puts f
