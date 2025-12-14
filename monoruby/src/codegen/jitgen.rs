@@ -494,7 +494,6 @@ impl Codegen {
             class_version_label.clone(),
             self_class,
             0,
-            None,
         );
         ctx.traceir_to_asmir(store);
 

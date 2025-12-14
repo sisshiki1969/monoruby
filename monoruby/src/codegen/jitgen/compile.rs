@@ -286,7 +286,7 @@ impl JitContext {
             TraceIr::LoadDynVar(dst, src) => {
                 //bbctx.discard(dst);
                 assert!(!dst.is_self());
-                if let Some(offset) = self.outer_offset(src.outer) {
+                if let Some(offset) = self.outer_stack_offset(src.outer) {
                     ir.push(AsmInst::LoadDynVarSpecialized {
                         offset,
                         src: src.reg,
@@ -298,7 +298,7 @@ impl JitContext {
             }
             TraceIr::StoreDynVar(dst, src) => {
                 bbctx.load(ir, src, GP::Rdi);
-                if let Some(offset) = self.outer_offset(dst.outer) {
+                if let Some(offset) = self.outer_stack_offset(dst.outer) {
                     ir.push(AsmInst::StoreDynVarSpecialized {
                         offset,
                         dst: dst.reg,
@@ -811,13 +811,21 @@ impl JitContext {
             TraceIr::MethodRet(ret) => {
                 bbctx.write_back_locals_if_captured(ir);
                 bbctx.load(ir, ret, GP::Rax);
-                ir.push(AsmInst::MethodRet(pc));
+                if let Some(rbp_offset) = self.method_caller_stack_offset() {
+                    ir.push(AsmInst::MethodRetSpecialized { rbp_offset });
+                } else {
+                    ir.push(AsmInst::MethodRet(pc));
+                }
                 return CompileResult::MethodReturn(bbctx.mode(ret).as_result());
             }
             TraceIr::BlockBreak(ret) => {
                 bbctx.write_back_locals_if_captured(ir);
                 bbctx.load(ir, ret, GP::Rax);
-                ir.push(AsmInst::BlockBreak);
+                if let Some(rbp_offset) = self.iter_caller_stack_offset() {
+                    ir.push(AsmInst::BlockBreakSpecialized { rbp_offset });
+                } else {
+                    ir.push(AsmInst::BlockBreak);
+                }
                 return CompileResult::Break(bbctx.mode(ret).as_result());
             }
             TraceIr::Raise(ret) => {

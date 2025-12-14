@@ -1028,6 +1028,14 @@ impl Codegen {
         }
     }
 
+    fn method_return_specialized(&mut self, rbp_offset: usize) {
+        monoasm! { &mut self.jit,
+            lea  rbp, [rbp + (rbp_offset)];
+            leave;
+            ret;
+        }
+    }
+
     /// Check whether *rdi*(Value) is true or not, and store boolean result (Value) to *rax*.
     ///
     /// #### destoroy

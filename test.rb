@@ -1,11 +1,10 @@
-def a(x)
+def a(x)                # => 100 or 6
   1.times do
     # block1 in a
-    #if x == 24 then __dump end
     if x.odd?
-      return yield(7)
+      return yield(7)   # => 100
     else
-      break yield(3)
+      break yield(3)    # => 6
     end
   end
 end

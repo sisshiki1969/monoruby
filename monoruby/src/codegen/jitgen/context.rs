@@ -221,7 +221,6 @@ impl JitStackFrame {
         iseq_id: ISeqId,
         outer: Option<usize>,
         given_block: Option<JitBlockInfo>,
-        callid: Option<CallSiteId>,
         self_class: ClassId,
     ) -> Self {
         let self_ty = store[self_class].instance_ty();
@@ -240,7 +239,7 @@ impl JitStackFrame {
             iseq_id,
             outer,
             given_block,
-            callid,
+            callid: None,
             self_class,
             self_ty,
             is_not_block,
@@ -428,7 +427,6 @@ impl JitContext {
         class_version_label: DestLabel,
         self_class: ClassId,
         specialize_level: usize,
-        callid: Option<CallSiteId>,
     ) -> Self {
         let stack_frame = vec![JitStackFrame::new(
             store,
@@ -437,7 +435,6 @@ impl JitContext {
             iseq_id,
             None,
             None,
-            callid,
             self_class,
         )];
 
@@ -521,6 +518,32 @@ impl JitContext {
         self.stack_frame.last_mut().unwrap()
     }
 
+    pub(super) fn detach_current_frame(&mut self) -> JitStackFrame {
+        self.stack_frame.pop().unwrap()
+    }
+
+    pub(super) fn set_callsite(&mut self, callid: CallSiteId) {
+        self.current_frame_mut().callid = Some(callid);
+    }
+
+    pub(super) fn unset_callsite(&mut self) {
+        self.current_frame_mut().callid = None;
+    }
+
+    pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
+        let (frame, i) = self.current_method_frame()?;
+        Some(frame.given_block.as_ref()?.add(i))
+    }
+
+    pub(crate) fn method_caller_callsite(&self) -> Option<CallSiteId> {
+        let caller = self.method_caller_pos()?;
+        self.stack_frame[caller].callid
+    }
+
+    pub(super) fn set_ivar_heap_accessed(&mut self) {
+        self.current_frame_mut().ivar_heap_accessed = true;
+    }
+
     fn caller_pos(&self) -> Option<usize> {
         let len = self.stack_frame.len();
         if len < 2 {
@@ -546,8 +569,12 @@ impl JitContext {
         Some(len - 3)
     }
 
-    pub(super) fn detach_current_frame(&mut self) -> JitStackFrame {
-        self.stack_frame.pop().unwrap()
+    fn outer_pos(&self, outer: usize) -> Option<usize> {
+        let mut i = self.stack_frame.len() - 1;
+        for _ in 0..outer {
+            i -= self.stack_frame[i].outer?;
+        }
+        Some(i)
     }
 
     fn current_method_frame(&self) -> Option<(&JitStackFrame, usize)> {
@@ -566,41 +593,25 @@ impl JitContext {
         }
     }
 
-    fn outer_frame(&self, mut outer: usize) -> Option<usize> {
-        let mut i = self.stack_frame.len() - 1;
-        loop {
-            if outer == 0 {
-                return Some(i);
-            }
-            outer -= 1;
-            if let Some(outer_ofs) = self.stack_frame[i].outer {
-                i -= outer_ofs;
-            } else {
-                return None;
-            }
-        }
+    fn calc_stack_offset(&self, begin: usize, end: usize) -> usize {
+        self.stack_frame[begin..end]
+            .iter()
+            .fold(0, |acc, f| acc + f.stack_offset)
     }
 
-    pub(super) fn outer_offset(&self, outer: usize) -> Option<usize> {
-        let mut offset = 0;
-        let outer = self.outer_frame(outer)?;
-        for i in outer..self.stack_frame.len() - 1 {
-            offset += self.stack_frame[i].stack_offset;
-        }
-        Some(offset)
+    pub(super) fn outer_stack_offset(&self, outer: usize) -> Option<usize> {
+        let outer = self.outer_pos(outer)?;
+        Some(self.calc_stack_offset(outer, self.stack_frame.len() - 1))
     }
 
-    pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
-        let (frame, i) = self.current_method_frame()?;
-        Some(frame.given_block.as_ref()?.add(i))
+    pub(super) fn method_caller_stack_offset(&self) -> Option<usize> {
+        let caller = self.method_caller_pos()?;
+        Some(self.calc_stack_offset(caller + 1, self.stack_frame.len() - 1))
     }
 
-    pub(crate) fn current_method_callsite(&self) -> Option<CallSiteId> {
-        self.current_method_frame()?.0.callid
-    }
-
-    pub(super) fn set_ivar_heap_accessed(&mut self) {
-        self.current_frame_mut().ivar_heap_accessed = true;
+    pub(super) fn iter_caller_stack_offset(&self) -> Option<usize> {
+        let caller = self.iter_caller_pos()?;
+        Some(self.calc_stack_offset(caller + 1, self.stack_frame.len() - 1))
     }
 
     pub(super) fn get_pc(&self, store: &Store, i: BcIndex) -> BytecodePtr {

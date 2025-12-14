@@ -410,6 +410,32 @@ impl JitContext {
         CompileResult::Continue
     }
 
+    fn new_specialized_frame(
+        &self,
+        store: &Store,
+        iseq_id: ISeqId,
+        outer: Option<usize>,
+        args_info: JitArgumentInfo,
+        given_block: Option<JitBlockInfo>,
+        self_class: ClassId,
+    ) -> JitStackFrame {
+        let idx = match self.jit_type() {
+            JitType::Specialized { idx, .. } => *idx,
+            _ => self.specialized_methods_len(),
+        };
+        let jit_type = JitType::Specialized { idx, args_info };
+        let specialize_level = self.specialize_level() + 1;
+        JitStackFrame::new(
+            store,
+            jit_type,
+            specialize_level,
+            iseq_id,
+            outer,
+            given_block,
+            self_class,
+        )
+    }
+
     fn compile_inlined_func(
         &mut self,
         store: &Store,
@@ -422,25 +448,13 @@ impl JitContext {
         callid: CallSiteId,
         using_xmm: UsingXmm,
     ) -> (JitLabel, Option<ResultState>) {
-        let idx = match self.jit_type() {
-            JitType::Specialized { idx, .. } => *idx,
-            _ => self.specialized_methods_len(),
-        };
-        let jit_type = JitType::Specialized { idx, args_info };
-        let specialize_level = self.specialize_level() + 1;
         self.xmm_save(using_xmm);
-        self.stack_frame.push(JitStackFrame::new(
-            store,
-            jit_type,
-            specialize_level,
-            iseq_id,
-            outer,
-            block,
-            Some(callid),
-            self_class,
-        ));
+        self.set_callsite(callid);
+        let frame = self.new_specialized_frame(store, iseq_id, outer, args_info, block, self_class);
+        self.stack_frame.push(frame);
         self.traceir_to_asmir(store);
         let mut frame = self.stack_frame.pop().unwrap();
+        self.unset_callsite();
         self.xmm_restore(using_xmm);
         let pos = self.stack_frame.len() - 1;
         let mut return_context = frame.detach_return_context();

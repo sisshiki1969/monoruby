@@ -299,9 +299,15 @@ impl Codegen {
                 };
                 self.method_return();
             }
+            AsmInst::MethodRetSpecialized { rbp_offset } => {
+                self.method_return_specialized(rbp_offset);
+            }
             AsmInst::BlockBreak => {
                 self.block_break();
                 self.epilogue();
+            }
+            AsmInst::BlockBreakSpecialized { rbp_offset } => {
+                self.method_return_specialized(rbp_offset);
             }
             AsmInst::Raise => {
                 let raise = self.entry_raise();

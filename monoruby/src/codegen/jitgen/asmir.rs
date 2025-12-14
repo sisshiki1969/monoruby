@@ -889,8 +889,14 @@ pub(super) enum AsmInst {
 
     Ret,
     BlockBreak,
+    BlockBreakSpecialized {
+        rbp_offset: usize,
+    },
     Raise,
     MethodRet(BytecodePtr),
+    MethodRetSpecialized {
+        rbp_offset: usize,
+    },
     EnsureEnd,
     ///
     /// Conditional branch
@@ -1590,11 +1596,6 @@ impl AsmInst {
                 format!("GuardClassVersion")
             }
             Self::GuardClass(gpr, class, _deopt) => format!("GuardClass {:?} {:?}", class, gpr),
-            Self::Ret => "ret".to_string(),
-            Self::BlockBreak => "break".to_string(),
-            Self::Raise => "raise".to_string(),
-            Self::MethodRet(_pc) => format!("method_return"),
-            Self::EnsureEnd => "ensure_end".to_string(),
 
             Self::CondBr(kind, label) => format!("condbr {:?} {:?}", kind, label),
             Self::NilBr(label) => format!("nil_br {:?}", label),
