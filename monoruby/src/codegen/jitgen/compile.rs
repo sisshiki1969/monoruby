@@ -811,7 +811,7 @@ impl JitContext {
             TraceIr::MethodRet(ret) => {
                 bbctx.write_back_locals_if_captured(ir);
                 bbctx.load(ir, ret, GP::Rax);
-                if let Some(rbp_offset) = self.method_caller_stack_offset() {
+                if let Some(rbp_offset) = self.method_caller_stack_offset(store) {
                     ir.push(AsmInst::MethodRetSpecialized { rbp_offset });
                 } else {
                     ir.push(AsmInst::MethodRet(pc));
@@ -821,7 +821,7 @@ impl JitContext {
             TraceIr::BlockBreak(ret) => {
                 bbctx.write_back_locals_if_captured(ir);
                 bbctx.load(ir, ret, GP::Rax);
-                if let Some(rbp_offset) = self.iter_caller_stack_offset() {
+                if let Some(rbp_offset) = self.iter_caller_stack_offset(store) {
                     ir.push(AsmInst::BlockBreakSpecialized { rbp_offset });
                 } else {
                     ir.push(AsmInst::BlockBreak);

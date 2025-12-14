@@ -599,19 +599,38 @@ impl JitContext {
             .fold(0, |acc, f| acc + f.stack_offset)
     }
 
+    fn check_exception_handler(&self, store: &Store, begin: usize, end: usize) -> bool {
+        self.stack_frame[begin..end].iter().any(|f| {
+            let iseq_id = f.iseq_id();
+            let callsite = f.callid.unwrap();
+            let pc = store[callsite].bc_pos;
+            store[iseq_id].get_exception_dest(pc).is_some()
+        })
+    }
+
     pub(super) fn outer_stack_offset(&self, outer: usize) -> Option<usize> {
         let outer = self.outer_pos(outer)?;
         Some(self.calc_stack_offset(outer, self.stack_frame.len() - 1))
     }
 
-    pub(super) fn method_caller_stack_offset(&self) -> Option<usize> {
+    pub(super) fn method_caller_stack_offset(&self, store: &Store) -> Option<usize> {
         let caller = self.method_caller_pos()?;
-        Some(self.calc_stack_offset(caller + 1, self.stack_frame.len() - 1))
+        let begin = caller + 1;
+        let end = self.stack_frame.len() - 1;
+        if self.check_exception_handler(store, begin, end) {
+            return None;
+        }
+        Some(self.calc_stack_offset(begin, end))
     }
 
-    pub(super) fn iter_caller_stack_offset(&self) -> Option<usize> {
+    pub(super) fn iter_caller_stack_offset(&self, store: &Store) -> Option<usize> {
         let caller = self.iter_caller_pos()?;
-        Some(self.calc_stack_offset(caller + 1, self.stack_frame.len() - 1))
+        let begin = caller + 1;
+        let end = self.stack_frame.len() - 1;
+        if self.check_exception_handler(store, begin, end) {
+            return None;
+        }
+        Some(self.calc_stack_offset(begin, end))
     }
 
     pub(super) fn get_pc(&self, store: &Store, i: BcIndex) -> BytecodePtr {
