@@ -27,8 +27,6 @@ impl BrKind {
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum BinopMode {
     RR(BcReg, BcReg),
-    RI(BcReg, i16),
-    IR(i16, BcReg),
 }
 
 pub(crate) struct BytecodeIr(Vec<(BytecodeInst, Loc)>);

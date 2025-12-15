@@ -208,15 +208,6 @@ impl std::fmt::Debug for BcLocal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 struct Label(usize);
 
-fn is_smi(node: &Node) -> Option<i16> {
-    if let NodeKind::Integer(i) = &node.kind {
-        if *i == *i as i16 as i64 {
-            return Some(*i as i16);
-        }
-    }
-    None
-}
-
 #[derive(Debug, Clone, PartialEq)]
 enum LvalueKind {
     Const {

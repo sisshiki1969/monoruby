@@ -535,16 +535,6 @@ impl BytecodeGen {
                         };
                         Bytecode::from_with_class2(op)
                     }
-                    BinopMode::RI(lhs, rhs) => {
-                        let op2 = self.slot_id(&lhs);
-                        let op = if optimizable {
-                            enc_wwsw(162 + kind as u16, op1.0, op2.0, rhs)
-                        } else {
-                            enc_wwsw(142 + kind as u16, op1.0, op2.0, rhs)
-                        };
-                        Bytecode::from_with_class2(op)
-                    }
-                    _ => unreachable!(),
                 }
             }
             BytecodeInst::ArrayTEq { lhs, rhs } => {
@@ -613,14 +603,6 @@ impl BytecodeGen {
             BytecodeInst::BinOp(kind, ret, mode) => {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
                 match mode {
-                    BinopMode::IR(lhs, rhs) => {
-                        let op3 = self.slot_id(&rhs);
-                        Bytecode::from_with_class2(enc_wsww(180 + kind as u16, op1.0, lhs, op3.0))
-                    }
-                    BinopMode::RI(lhs, rhs) => {
-                        let op2 = self.slot_id(&lhs);
-                        Bytecode::from_with_class2(enc_wwsw(190 + kind as u16, op1.0, op2.0, rhs))
-                    }
                     BinopMode::RR(lhs, rhs) => {
                         let op2 = self.slot_id(&lhs);
                         let op3 = self.slot_id(&rhs);
@@ -802,12 +784,4 @@ fn enc_www_fn_info(opcode: u16, fn_info: &FnInitInfo) -> u64 {
         *arg_num as u16,
         *stack_offset as u16,
     )
-}
-
-fn enc_wsww(opcode: u16, op1: u16, op2: i16, op3: u16) -> u64 {
-    enc_www(opcode, op1, op2 as u16, op3)
-}
-
-fn enc_wwsw(opcode: u16, op1: u16, op2: u16, op3: i16) -> u64 {
-    enc_www(opcode, op1, op2, op3 as u16)
 }

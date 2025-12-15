@@ -160,17 +160,9 @@ impl BytecodeGen {
     ///
     fn gen_mode(&mut self, lhs: Node, rhs: Node) -> Result<BinopMode> {
         let old = self.temp;
-        let mode = if let Some(i) = is_smi(&rhs) {
-            let lhs = self.gen_expr_reg(lhs)?;
-            BinopMode::RI(lhs, i)
-        } else if let Some(i) = is_smi(&lhs) {
-            let rhs = self.gen_expr_reg(rhs)?;
-            BinopMode::IR(i, rhs)
-        } else {
-            let lhs = self.gen_expr_reg(lhs)?;
-            let rhs = self.gen_expr_reg(rhs)?;
-            BinopMode::RR(lhs, rhs)
-        };
+        let lhs = self.gen_expr_reg(lhs)?;
+        let rhs = self.gen_expr_reg(rhs)?;
+        let mode = BinopMode::RR(lhs, rhs);
         self.temp = old;
         Ok(mode)
     }
@@ -212,14 +204,9 @@ impl BytecodeGen {
         loc: Loc,
     ) -> Result<()> {
         let old = self.temp;
-        let mode = if let Some(i) = is_smi(&rhs) {
-            let lhs = self.gen_expr_reg(lhs)?;
-            BinopMode::RI(lhs, i)
-        } else {
-            let lhs = self.gen_expr_reg(lhs)?;
-            let rhs = self.gen_expr_reg(rhs)?;
-            BinopMode::RR(lhs, rhs)
-        };
+        let lhs = self.gen_expr_reg(lhs)?;
+        let rhs = self.gen_expr_reg(rhs)?;
+        let mode = BinopMode::RR(lhs, rhs);
         self.temp = old;
         let dst = match use_mode {
             UseMode2::Store(dst) => Some(dst),

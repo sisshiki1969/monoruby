@@ -390,10 +390,11 @@ impl JitContext {
             TraceIr::BinOp {
                 kind,
                 dst,
-                mode,
+                lhs,
+                rhs,
                 ic,
             } => {
-                let (lhs, rhs) = bbctx.binary_class(mode, ic);
+                let (mode, lhs, rhs) = bbctx.binary_class(lhs, rhs, ic);
                 match (lhs, rhs) {
                     (Some(lhs), Some(rhs)) => match (lhs, rhs) {
                         (INTEGER_CLASS, INTEGER_CLASS) => {
@@ -424,14 +425,14 @@ impl JitContext {
                 }
                 return CompileResult::Recompile(RecompileReason::NotCached);
             }
-
             TraceIr::BinCmp {
                 kind,
                 dst,
-                mode,
+                lhs,
+                rhs,
                 ic,
             } => {
-                let (lhs, rhs) = bbctx.binary_class(mode, ic);
+                let (mode, lhs, rhs) = bbctx.binary_class(lhs, rhs, ic);
                 match (lhs, rhs) {
                     (Some(lhs), Some(rhs)) => match (lhs, rhs) {
                         (INTEGER_CLASS, INTEGER_CLASS) => {
@@ -462,16 +463,16 @@ impl JitContext {
                 }
                 return CompileResult::Recompile(RecompileReason::NotCached);
             }
-
             TraceIr::BinCmpBr {
                 kind,
                 dst,
-                mode,
+                lhs,
+                rhs,
                 dest_bb,
                 brkind,
                 ic,
             } => {
-                let (lhs, rhs) = bbctx.binary_class(mode, ic);
+                let (mode, lhs, rhs) = bbctx.binary_class(lhs, rhs, ic);
                 match (lhs, rhs) {
                     (Some(lhs), Some(rhs)) => match (lhs, rhs) {
                         (INTEGER_CLASS, INTEGER_CLASS) => {
@@ -530,6 +531,7 @@ impl JitContext {
                 }
                 return CompileResult::Recompile(RecompileReason::NotCached);
             }
+
             TraceIr::ArrayTEq { lhs, rhs } => {
                 bbctx.write_back_slot(ir, lhs);
                 bbctx.write_back_slot(ir, rhs);
@@ -1078,14 +1080,19 @@ fn dump_cfg(func: &ISeqInfo, store: &Store, bb_begin: BasicBlockId, bb_end: Basi
 impl BBContext {
     fn binary_class(
         &self,
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         ic: Option<(ClassId, ClassId)>,
-    ) -> (Option<ClassId>, Option<ClassId>) {
-        let (lhs_class, rhs_class) = match mode {
-            OpMode::RR(l, r) => (self.class(l), self.class(r)),
-            OpMode::RI(l, _) => (self.class(l), Some(INTEGER_CLASS)),
-            OpMode::IR(_, r) => (Some(INTEGER_CLASS), self.class(r)),
+    ) -> (OpMode, Option<ClassId>, Option<ClassId>) {
+        let mode = if let Some(rhs) = self.is_i16_literal(rhs) {
+            OpMode::RI(lhs, rhs)
+        } else if let Some(lhs) = self.is_i16_literal(lhs) {
+            OpMode::IR(lhs, rhs)
+        } else {
+            OpMode::RR(lhs, rhs)
         };
+        let (lhs_class, rhs_class) = (self.class(lhs), self.class(rhs));
+
         let lhs_class = if lhs_class.is_some() {
             lhs_class
         } else {
@@ -1096,6 +1103,6 @@ impl BBContext {
         } else {
             ic.map(|(_, class)| class)
         };
-        (lhs_class, rhs_class)
+        (mode, lhs_class, rhs_class)
     }
 }

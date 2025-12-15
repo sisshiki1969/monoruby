@@ -441,10 +441,19 @@ impl SlotContext {
         }
     }
 
-    pub fn is_u16_literal(&self, slot: SlotId) -> Option<u16> {
+    pub fn is_u16(&self, slot: SlotId) -> Option<u16> {
         if let LinkMode::C(v) = self.mode(slot) {
             let i = v.try_fixnum()?;
             u16::try_from(i).ok()
+        } else {
+            None
+        }
+    }
+
+    pub fn is_i16_literal(&self, slot: SlotId) -> Option<i16> {
+        if let LinkMode::C(v) = self.mode(slot) {
+            let i = v.try_fixnum()?;
+            i16::try_from(i).ok()
         } else {
             None
         }

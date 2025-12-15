@@ -11,7 +11,7 @@ impl BBContext {
         pc: BytecodePtr,
     ) {
         self.load_array_ty(ir, store, base, GP::Rdi, pc);
-        if let Some(idx) = self.is_u16_literal(idx) {
+        if let Some(idx) = self.is_u16(idx) {
             ir.array_u16_index(idx);
         } else {
             self.load_fixnum(ir, idx, GP::Rsi, pc);
@@ -30,7 +30,7 @@ impl BBContext {
         pc: BytecodePtr,
     ) {
         self.load_array_ty(ir, store, base, GP::Rdi, pc);
-        if let Some(idx) = self.is_u16_literal(idx) {
+        if let Some(idx) = self.is_u16(idx) {
             self.load(ir, src, GP::Rdx);
             ir.array_u16_index_assign(self, idx, pc);
         } else {
