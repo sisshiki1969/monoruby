@@ -521,7 +521,13 @@ impl AsmIr {
     /// - caller save registers
     /// - stack
     ///
-    pub(super) fn xmm_binop(&mut self, kind: BinOpK, mode: FMode, dst: Xmm, using_xmm: UsingXmm) {
+    pub(super) fn xmm_binop(
+        &mut self,
+        kind: BinOpK,
+        mode: (Xmm, Xmm),
+        dst: Xmm,
+        using_xmm: UsingXmm,
+    ) {
         self.push(AsmInst::XmmBinOp {
             kind,
             mode,
@@ -572,7 +578,7 @@ impl AsmIr {
 
     pub(super) fn float_cmp_br(
         &mut self,
-        mode: FMode,
+        mode: (Xmm, Xmm),
         kind: CmpKind,
         brkind: BrKind,
         branch_dest: JitLabel,
@@ -761,7 +767,7 @@ pub(super) enum AsmInst {
     XmmSwap(Xmm, Xmm),
     XmmBinOp {
         kind: BinOpK,
-        mode: FMode,
+        mode: (Xmm, Xmm),
         dst: Xmm,
         using_xmm: UsingXmm,
     },
@@ -1171,11 +1177,11 @@ pub(super) enum AsmInst {
     },
     FloatCmp {
         kind: CmpKind,
-        mode: FMode,
+        mode: (Xmm, Xmm),
     },
     FloatCmpBr {
         kind: CmpKind,
-        mode: FMode,
+        mode: (Xmm, Xmm),
         brkind: BrKind,
         branch_dest: JitLabel,
     },
@@ -1627,13 +1633,6 @@ impl AsmInst {
             _ => format!("{:?}", self),
         }
     }
-}
-
-#[derive(Clone, Debug)]
-pub(super) enum FMode {
-    RR(Xmm, Xmm),
-    RI(Xmm, i16),
-    IR(i16, Xmm),
 }
 
 #[derive(Debug)]

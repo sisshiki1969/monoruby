@@ -153,9 +153,7 @@ impl BBContext {
     fn load_xmm_from_C(&mut self, ir: &mut AsmIr, slot: SlotId, v: Value) -> Xmm {
         if let Some(f) = v.try_float() {
             // -> F
-            let x = self.set_new_F(slot);
-            ir.f64_to_xmm(f, x);
-            x
+            self.load_xmm_from_f64(ir, slot, f)
         } else if let Some(i) = v.try_fixnum() {
             // -> Sf
             let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
@@ -164,6 +162,12 @@ impl BBContext {
         } else {
             unreachable!()
         }
+    }
+
+    pub(super) fn load_xmm_from_f64(&mut self, ir: &mut AsmIr, slot: SlotId, f: f64) -> Xmm {
+        let x = self.set_new_F(slot);
+        ir.f64_to_xmm(f, x);
+        x
     }
 }
 

@@ -49,7 +49,8 @@ impl From<ClassId> for FOpClass {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct FBinOpInfo {
     pub dst: Option<SlotId>,
-    pub mode: OpMode,
+    pub lhs: SlotId,
+    pub rhs: SlotId,
     pub lhs_class: FOpClass,
     pub rhs_class: FOpClass,
 }
@@ -58,7 +59,7 @@ impl Into<BinOpInfo> for FBinOpInfo {
     fn into(self) -> BinOpInfo {
         BinOpInfo {
             dst: self.dst,
-            mode: self.mode,
+            mode: OpMode::RR(self.lhs, self.rhs),
             lhs_class: self.lhs_class.into(),
             rhs_class: self.rhs_class.into(),
         }

@@ -45,22 +45,10 @@ impl BBContext {
         }
     }
 
-    fn check_concrete_f64(&self, mode: OpMode) -> Option<(f64, f64)> {
-        match mode {
-            OpMode::RR(lhs, rhs) => {
-                let lhs = self.is_float_literal(lhs)?;
-                let rhs = self.is_float_literal(rhs)?;
-                Some((lhs, rhs))
-            }
-            OpMode::RI(lhs, rhs) => {
-                let lhs = self.is_float_literal(lhs)?;
-                Some((lhs, rhs as f64))
-            }
-            OpMode::IR(lhs, rhs) => {
-                let rhs = self.is_float_literal(rhs)?;
-                Some((lhs as f64, rhs))
-            }
-        }
+    fn check_concrete_f64(&self, lhs: SlotId, rhs: SlotId) -> Option<(f64, f64)> {
+        let lhs = self.is_float_literal(lhs)?;
+        let rhs = self.is_float_literal(rhs)?;
+        Some((lhs, rhs))
     }
 
     pub(super) fn check_concrete_i64_cmpbr(
@@ -83,12 +71,13 @@ impl BBContext {
 
     pub(super) fn check_concrete_f64_cmpbr(
         &mut self,
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         kind: CmpKind,
         brkind: BrKind,
         dest_bb: BasicBlockId,
     ) -> Option<CompileResult> {
-        if let Some((lhs, rhs)) = self.check_concrete_f64(mode) {
+        if let Some((lhs, rhs)) = self.check_concrete_f64(lhs, rhs) {
             let b = cmp(kind, lhs, rhs) ^ (brkind == BrKind::BrIfNot);
             return Some(if b {
                 CompileResult::Branch(dest_bb)
@@ -262,7 +251,7 @@ impl BBContext {
         info: FBinOpInfo,
         pc: BytecodePtr,
     ) {
-        if let Some((lhs, rhs)) = self.check_concrete_f64(info.mode)
+        if let Some((lhs, rhs)) = self.check_concrete_f64(info.lhs, info.rhs)
             && let Some(result) = self.binop_float_folded(kind, lhs, rhs)
         {
             self.def_C_float(info.dst, result);
@@ -309,7 +298,7 @@ impl BBContext {
         kind: CmpKind,
         pc: BytecodePtr,
     ) {
-        if let Some((lhs, rhs)) = self.check_concrete_f64(info.mode) {
+        if let Some((lhs, rhs)) = self.check_concrete_f64(info.lhs, info.rhs) {
             self.fold_constant_cmp(kind, lhs, rhs, info.dst);
             return;
         };
@@ -462,34 +451,27 @@ impl BBContext {
         }
     }
 
-    pub(super) fn fmode(&mut self, ir: &mut AsmIr, info: FBinOpInfo, pc: BytecodePtr) -> FMode {
+    pub(super) fn fmode(
+        &mut self,
+        ir: &mut AsmIr,
+        info: FBinOpInfo,
+        pc: BytecodePtr,
+    ) -> (Xmm, Xmm) {
         let FBinOpInfo {
-            mode,
+            lhs,
+            rhs,
             lhs_class,
             rhs_class,
             ..
         } = info;
-        match mode {
-            OpMode::RR(l, r) => {
-                let (flhs, frhs) = if l != r {
-                    (
-                        self.fetch_float_assume(ir, l, lhs_class, pc),
-                        self.fetch_float_assume(ir, r, rhs_class, pc),
-                    )
-                } else {
-                    let lhs = self.fetch_float_assume(ir, l, lhs_class, pc);
-                    (lhs, lhs)
-                };
-                FMode::RR(flhs, frhs)
-            }
-            OpMode::RI(l, r) => {
-                let l = self.load_xmm(ir, l, pc);
-                FMode::RI(l, r)
-            }
-            OpMode::IR(l, r) => {
-                let r = self.load_xmm(ir, r, pc);
-                FMode::IR(l, r)
-            }
+        if lhs != rhs {
+            (
+                self.fetch_float_assume(ir, lhs, lhs_class, pc),
+                self.fetch_float_assume(ir, rhs, rhs_class, pc),
+            )
+        } else {
+            let lhs = self.fetch_float_assume(ir, lhs, lhs_class, pc);
+            (lhs, lhs)
         }
     }
 

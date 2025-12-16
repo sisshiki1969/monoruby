@@ -394,28 +394,27 @@ impl JitContext {
                 rhs,
                 ic,
             } => {
-                let (mode, lhs, rhs) = bbctx.binary_class(lhs, rhs, ic);
-                match (lhs, rhs) {
-                    (Some(lhs), Some(rhs)) => match (lhs, rhs) {
-                        (INTEGER_CLASS, INTEGER_CLASS) => {
-                            bbctx.gen_binop_fixnum(ir, kind, dst, mode, pc);
-                            return CompileResult::Continue;
-                        }
-                        (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => {
-                            let info = FBinOpInfo {
-                                dst,
-                                mode,
-                                lhs_class: lhs.into(),
-                                rhs_class: rhs.into(),
-                            };
-                            bbctx.gen_binop_float(ir, kind, info, pc);
-                            return CompileResult::Continue;
-                        }
-                        _ => {}
-                    },
+                let (lhs_class, rhs_class) = bbctx.binary_class(lhs, rhs, ic);
+                let mode = bbctx.binary_integer_mode(lhs, rhs);
+                match (lhs_class, rhs_class) {
+                    (Some(INTEGER_CLASS), Some(INTEGER_CLASS)) => {
+                        bbctx.gen_binop_fixnum(ir, kind, dst, mode, pc);
+                        return CompileResult::Continue;
+                    }
+                    (Some(INTEGER_CLASS | FLOAT_CLASS), Some(INTEGER_CLASS | FLOAT_CLASS)) => {
+                        let info = FBinOpInfo {
+                            dst,
+                            lhs,
+                            rhs,
+                            lhs_class: lhs_class.unwrap().into(),
+                            rhs_class: rhs_class.unwrap().into(),
+                        };
+                        bbctx.gen_binop_float(ir, kind, info, pc);
+                        return CompileResult::Continue;
+                    }
                     _ => {}
                 }
-                if let Some(lhs) = lhs {
+                if let Some(lhs) = lhs_class {
                     let name = kind.to_id();
                     if let Some(fid) = self.jit_check_method(store, lhs, name) {
                         return self.compile_binop_call(bbctx, ir, store, fid, dst, mode, lhs, pc);
@@ -432,28 +431,27 @@ impl JitContext {
                 rhs,
                 ic,
             } => {
-                let (mode, lhs, rhs) = bbctx.binary_class(lhs, rhs, ic);
-                match (lhs, rhs) {
-                    (Some(lhs), Some(rhs)) => match (lhs, rhs) {
-                        (INTEGER_CLASS, INTEGER_CLASS) => {
-                            bbctx.gen_cmp_integer(ir, kind, dst, mode, pc);
-                            return CompileResult::Continue;
-                        }
-                        (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => {
-                            let info = FBinOpInfo {
-                                dst,
-                                mode,
-                                lhs_class: lhs.into(),
-                                rhs_class: rhs.into(),
-                            };
-                            bbctx.gen_cmp_float(ir, info, kind, pc);
-                            return CompileResult::Continue;
-                        }
-                        _ => {}
-                    },
+                let (lhs_class, rhs_class) = bbctx.binary_class(lhs, rhs, ic);
+                let mode = bbctx.binary_integer_mode(lhs, rhs);
+                match (lhs_class, rhs_class) {
+                    (Some(INTEGER_CLASS), Some(INTEGER_CLASS)) => {
+                        bbctx.gen_cmp_integer(ir, kind, dst, mode, pc);
+                        return CompileResult::Continue;
+                    }
+                    (Some(INTEGER_CLASS | FLOAT_CLASS), Some(INTEGER_CLASS | FLOAT_CLASS)) => {
+                        let info = FBinOpInfo {
+                            dst,
+                            lhs,
+                            rhs,
+                            lhs_class: lhs_class.unwrap().into(),
+                            rhs_class: rhs_class.unwrap().into(),
+                        };
+                        bbctx.gen_cmp_float(ir, info, kind, pc);
+                        return CompileResult::Continue;
+                    }
                     _ => {}
                 }
-                if let Some(lhs) = lhs {
+                if let Some(lhs) = lhs_class {
                     let name = Self::cmpkind_to_id(kind);
                     if let Some(fid) = self.jit_check_method(store, lhs, name) {
                         return self.compile_binop_call(bbctx, ir, store, fid, dst, mode, lhs, pc);
@@ -472,46 +470,45 @@ impl JitContext {
                 brkind,
                 ic,
             } => {
-                let (mode, lhs, rhs) = bbctx.binary_class(lhs, rhs, ic);
-                match (lhs, rhs) {
-                    (Some(lhs), Some(rhs)) => match (lhs, rhs) {
-                        (INTEGER_CLASS, INTEGER_CLASS) => {
-                            if let Some(result) =
-                                bbctx.check_concrete_i64_cmpbr(mode, kind, brkind, dest_bb)
-                            {
-                                return result;
-                            }
-                            let src_idx = bc_pos + 1;
-                            let dest = self.label();
-                            bbctx.gen_cmpbr_integer(ir, kind, mode, brkind, dest, pc);
-                            self.new_side_branch(iseq, src_idx, dest_bb, bbctx.clone(), dest);
-                            return CompileResult::Continue;
+                let (lhs_class, rhs_class) = bbctx.binary_class(lhs, rhs, ic);
+                let mode = bbctx.binary_integer_mode(lhs, rhs);
+                match (lhs_class, rhs_class) {
+                    (Some(INTEGER_CLASS), Some(INTEGER_CLASS)) => {
+                        if let Some(result) =
+                            bbctx.check_concrete_i64_cmpbr(mode, kind, brkind, dest_bb)
+                        {
+                            return result;
                         }
-                        (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => {
-                            if let Some(result) =
-                                bbctx.check_concrete_f64_cmpbr(mode, kind, brkind, dest_bb)
-                            {
-                                return result;
-                            }
-                            let info = FBinOpInfo {
-                                dst,
-                                mode,
-                                lhs_class: lhs.into(),
-                                rhs_class: rhs.into(),
-                            };
-                            let src_idx = bc_pos + 1;
-                            let dest = self.label();
-                            let mode = bbctx.fmode(ir, info, pc);
-                            bbctx.discard(dst);
-                            ir.float_cmp_br(mode, kind, brkind, dest);
-                            self.new_side_branch(iseq, src_idx, dest_bb, bbctx.clone(), dest);
-                            return CompileResult::Continue;
+                        let src_idx = bc_pos + 1;
+                        let dest = self.label();
+                        bbctx.gen_cmpbr_integer(ir, kind, mode, brkind, dest, pc);
+                        self.new_side_branch(iseq, src_idx, dest_bb, bbctx.clone(), dest);
+                        return CompileResult::Continue;
+                    }
+                    (Some(INTEGER_CLASS | FLOAT_CLASS), Some(INTEGER_CLASS | FLOAT_CLASS)) => {
+                        if let Some(result) =
+                            bbctx.check_concrete_f64_cmpbr(lhs, rhs, kind, brkind, dest_bb)
+                        {
+                            return result;
                         }
-                        _ => {}
-                    },
+                        let info = FBinOpInfo {
+                            dst,
+                            lhs,
+                            rhs,
+                            lhs_class: lhs_class.unwrap().into(),
+                            rhs_class: rhs_class.unwrap().into(),
+                        };
+                        let src_idx = bc_pos + 1;
+                        let dest = self.label();
+                        let mode = bbctx.fmode(ir, info, pc);
+                        bbctx.discard(dst);
+                        ir.float_cmp_br(mode, kind, brkind, dest);
+                        self.new_side_branch(iseq, src_idx, dest_bb, bbctx.clone(), dest);
+                        return CompileResult::Continue;
+                    }
                     _ => {}
                 }
-                if let Some(lhs_class) = lhs {
+                if let Some(lhs_class) = lhs_class {
                     let name = Self::cmpkind_to_id(kind);
                     if let Some(fid) = self.jit_check_method(store, lhs_class, name) {
                         match self
@@ -1078,31 +1075,32 @@ fn dump_cfg(func: &ISeqInfo, store: &Store, bb_begin: BasicBlockId, bb_end: Basi
 }
 
 impl BBContext {
-    fn binary_class(
-        &self,
-        lhs: SlotId,
-        rhs: SlotId,
-        ic: Option<(ClassId, ClassId)>,
-    ) -> (OpMode, Option<ClassId>, Option<ClassId>) {
-        let mode = if let Some(rhs) = self.is_i16_literal(rhs) {
+    fn binary_integer_mode(&self, lhs: SlotId, rhs: SlotId) -> OpMode {
+        if let Some(rhs) = self.is_i16_literal(rhs) {
             OpMode::RI(lhs, rhs)
         } else if let Some(lhs) = self.is_i16_literal(lhs) {
             OpMode::IR(lhs, rhs)
         } else {
             OpMode::RR(lhs, rhs)
-        };
-        let (lhs_class, rhs_class) = (self.class(lhs), self.class(rhs));
+        }
+    }
 
-        let lhs_class = if lhs_class.is_some() {
-            lhs_class
+    fn binary_class(
+        &self,
+        lhs: SlotId,
+        rhs: SlotId,
+        ic: Option<(ClassId, ClassId)>,
+    ) -> (Option<ClassId>, Option<ClassId>) {
+        let lhs_class = if let Some(class) = self.class(lhs) {
+            Some(class)
         } else {
             ic.map(|(class, _)| class)
         };
-        let rhs_class = if rhs_class.is_some() {
-            rhs_class
+        let rhs_class = if let Some(class) = self.class(rhs) {
+            Some(class)
         } else {
             ic.map(|(_, class)| class)
         };
-        (mode, lhs_class, rhs_class)
+        (lhs_class, rhs_class)
     }
 }

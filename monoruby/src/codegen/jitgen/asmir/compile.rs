@@ -516,7 +516,7 @@ impl Codegen {
                 monoasm! { &mut self.jit,
                     xorq rax, rax;
                 };
-                self.cmp_float(&mode);
+                self.cmp_float(mode);
                 self.setflag_float(kind);
             }
             AsmInst::FloatCmpBr {
@@ -526,7 +526,7 @@ impl Codegen {
                 branch_dest,
             } => {
                 let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
-                self.cmp_float(&mode);
+                self.cmp_float(mode);
                 self.condbr_float(kind, branch_dest, brkind);
             }
 
