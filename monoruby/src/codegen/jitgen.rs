@@ -181,18 +181,18 @@ impl BBContext {
         self.slot_state.equiv(&other.slot_state)
     }
 
-    fn new_entry(cc: &JitContext, store: &Store) -> Self {
-        let next_sp = SlotId(cc.local_num(store) as u16 + 1);
+    fn new_entry(cc: &JitContext) -> Self {
+        let next_sp = SlotId(cc.local_num() as u16 + 1);
         if cc.position().is_some() {
             Self {
-                slot_state: SlotContext::new_loop(cc, store),
+                slot_state: SlotContext::new_loop(cc),
                 next_sp,
                 class_version_guarded: false,
                 frame_capture_guarded: false,
             }
         } else {
             Self {
-                slot_state: SlotContext::new_method(cc, store),
+                slot_state: SlotContext::new_method(cc),
                 next_sp,
                 class_version_guarded: false,
                 frame_capture_guarded: cc.is_not_block(),
@@ -495,7 +495,7 @@ impl Codegen {
             self_class,
             0,
         );
-        ctx.traceir_to_asmir(store);
+        ctx.traceir_to_asmir();
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 

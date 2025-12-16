@@ -384,7 +384,8 @@ impl JitStackFrame {
 ///
 /// Context for JIT compilation.
 ///
-pub struct JitContext {
+pub struct JitContext<'a> {
+    pub store: &'a Store,
     codegen_mode: bool,
 
     ///
@@ -403,14 +404,16 @@ pub struct JitContext {
     pub(crate) stack_frame: Vec<JitStackFrame>,
 }
 
-impl JitContext {
+impl<'a> JitContext<'a> {
     fn new(
+        store: &'a Store,
         codegen_mode: bool,
         class_version: u32,
         class_version_label: DestLabel,
         stack_frame: Vec<JitStackFrame>,
     ) -> Self {
         Self {
+            store,
             codegen_mode,
             class_version,
             class_version_label,
@@ -420,7 +423,7 @@ impl JitContext {
     }
 
     pub(super) fn create(
-        store: &Store,
+        store: &'a Store,
         iseq_id: ISeqId,
         jit_type: JitType,
         class_version: u32,
@@ -438,13 +441,14 @@ impl JitContext {
             self_class,
         )];
 
-        Self::new(true, class_version, class_version_label, stack_frame)
+        Self::new(store, true, class_version, class_version_label, stack_frame)
     }
 
     pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
         let mut stack_frame = self.stack_frame.clone();
         stack_frame.last_mut().unwrap().jit_type = JitType::Loop(pc);
         Self {
+            store: self.store,
             codegen_mode: false,
             class_version: self.class_version,
             class_version_label: self.class_version_label(),
@@ -459,6 +463,14 @@ impl JitContext {
 
     pub(super) fn iseq_id(&self) -> ISeqId {
         self.current_frame().iseq_id
+    }
+
+    pub(super) fn iseq(&self) -> &ISeqInfo {
+        &self.store[self.current_frame().iseq_id]
+    }
+
+    pub(super) fn func_id(&self) -> FuncId {
+        self.store[self.iseq_id()].func_id()
     }
 
     pub(super) fn self_class(&self) -> ClassId {
@@ -599,12 +611,12 @@ impl JitContext {
             .fold(0, |acc, f| acc + f.stack_offset)
     }
 
-    fn check_exception_handler(&self, store: &Store, begin: usize, end: usize) -> bool {
+    fn check_exception_handler(&self, begin: usize, end: usize) -> bool {
         self.stack_frame[begin..end].iter().any(|f| {
             let iseq_id = f.iseq_id();
             let callsite = f.callid.unwrap();
-            let pc = store[callsite].bc_pos;
-            store[iseq_id].get_exception_dest(pc).is_some()
+            let pc = self.store[callsite].bc_pos;
+            self.store[iseq_id].get_exception_dest(pc).is_some()
         })
     }
 
@@ -613,28 +625,28 @@ impl JitContext {
         Some(self.calc_stack_offset(outer, self.stack_frame.len() - 1))
     }
 
-    pub(super) fn method_caller_stack_offset(&self, store: &Store) -> Option<usize> {
+    pub(super) fn method_caller_stack_offset(&self) -> Option<usize> {
         let caller = self.method_caller_pos()?;
         let begin = caller + 1;
         let end = self.stack_frame.len() - 1;
-        if self.check_exception_handler(store, begin, end) {
+        if self.check_exception_handler(begin, end) {
             return None;
         }
         Some(self.calc_stack_offset(begin, end))
     }
 
-    pub(super) fn iter_caller_stack_offset(&self, store: &Store) -> Option<usize> {
+    pub(super) fn iter_caller_stack_offset(&self) -> Option<usize> {
         let caller = self.iter_caller_pos()?;
         let begin = caller + 1;
         let end = self.stack_frame.len() - 1;
-        if self.check_exception_handler(store, begin, end) {
+        if self.check_exception_handler(begin, end) {
             return None;
         }
         Some(self.calc_stack_offset(begin, end))
     }
 
-    pub(super) fn get_pc(&self, store: &Store, i: BcIndex) -> BytecodePtr {
-        store[self.iseq_id()].get_pc(i)
+    pub(super) fn get_pc(&self, i: BcIndex) -> BytecodePtr {
+        self.store[self.iseq_id()].get_pc(i)
     }
 
     pub(super) fn jit_type(&self) -> &JitType {
@@ -648,15 +660,15 @@ impl JitContext {
     ///
     /// Get a number of non-temp registers. (includes arguments and local variables, not self)
     ///
-    pub(super) fn local_num(&self, store: &Store) -> usize {
-        store[self.iseq_id()].local_num()
+    pub(super) fn local_num(&self) -> usize {
+        self.store[self.iseq_id()].local_num()
     }
 
     ///
     /// Get a number of slots. (including `self`, arguments, local variables, and temp registers)
     ///
-    pub(super) fn total_reg_num(&self, store: &Store) -> usize {
-        store[self.iseq_id()].total_reg_num()
+    pub(super) fn total_reg_num(&self) -> usize {
+        self.store[self.iseq_id()].total_reg_num()
     }
 
     pub(crate) fn class_version(&self) -> u32 {
@@ -775,14 +787,13 @@ impl JitContext {
     ///
     pub(super) fn new_side_branch(
         &mut self,
-        iseq: &ISeqInfo,
         src_idx: BcIndex,
         dest_bb: BasicBlockId,
         mut bbctx: BBContext,
         dest: JitLabel,
     ) {
         bbctx.clear_above_next_sp();
-        let src_bb = iseq.bb_info.get_bb_id(src_idx);
+        let src_bb = self.iseq().bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
         eprintln!(
             "   new_side branch: {src_idx}->{dest_bb:?} {:?}",
@@ -796,13 +807,12 @@ impl JitContext {
     ///
     pub(super) fn new_branch(
         &mut self,
-        iseq: &ISeqInfo,
         bc_pos: BcIndex,
         dest_bb: BasicBlockId,
         mut bbctx: BBContext,
     ) {
         bbctx.clear_above_next_sp();
-        let src_bb = iseq.bb_info.get_bb_id(bc_pos);
+        let src_bb = self.store[self.iseq_id()].bb_info.get_bb_id(bc_pos);
         #[cfg(feature = "jit-debug")]
         eprintln!(
             "   new_branch: {bc_pos}->{dest_bb:?} {:?}",
@@ -816,13 +826,12 @@ impl JitContext {
     ///
     pub(super) fn new_continue(
         &mut self,
-        iseq: &ISeqInfo,
         src_idx: BcIndex,
         dest_bb: BasicBlockId,
         mut bbctx: BBContext,
     ) {
         bbctx.clear_above_next_sp();
-        let src_bb = iseq.bb_info.get_bb_id(src_idx);
+        let src_bb = self.store[self.iseq_id()].bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
         eprintln!(
             "   new_continue: {src_idx}->{dest_bb:?} {:?}",

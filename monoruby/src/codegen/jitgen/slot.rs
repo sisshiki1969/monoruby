@@ -27,9 +27,9 @@ impl std::fmt::Debug for SlotContext {
 }
 
 impl SlotContext {
-    fn new(cc: &JitContext, store: &Store) -> Self {
-        let total_reg_num = cc.total_reg_num(store);
-        let local_num = cc.local_num(store);
+    fn new(cc: &JitContext) -> Self {
+        let total_reg_num = cc.total_reg_num();
+        let local_num = cc.local_num();
         let self_class = Guarded::from_class(cc.self_class());
         let mut ctx = SlotContext {
             slots: vec![LinkMode::default(); total_reg_num],
@@ -45,12 +45,12 @@ impl SlotContext {
         ctx
     }
 
-    pub(super) fn new_loop(cc: &JitContext, store: &Store) -> Self {
-        Self::new(cc, store)
+    pub(super) fn new_loop(cc: &JitContext) -> Self {
+        Self::new(cc)
     }
 
-    pub(super) fn new_method(cc: &JitContext, store: &Store) -> Self {
-        let mut ctx = Self::new(cc, store);
+    pub(super) fn new_method(cc: &JitContext) -> Self {
+        let mut ctx = Self::new(cc);
 
         if let JitType::Specialized {
             args_info: JitArgumentInfo(Some(args)),
@@ -66,8 +66,8 @@ impl SlotContext {
                 }
             }
         } else {
-            let fid = store[cc.iseq_id()].func_id();
-            let info = &store[fid];
+            let fid = cc.func_id();
+            let info = &cc.store[fid];
             // Set optional arguments to MaybeNone.
             for i in info.req_num()..info.reqopt_num() {
                 let slot = SlotId(1 + i as u16);
