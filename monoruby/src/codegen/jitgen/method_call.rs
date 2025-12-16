@@ -70,63 +70,6 @@ impl JitContext {
         res
     }
 
-    pub(super) fn compile_binop_call(
-        &mut self,
-        bbctx: &mut BBContext,
-        ir: &mut AsmIr,
-        store: &Store,
-        fid: FuncId,
-        dst: Option<SlotId>,
-        lhs: SlotId,
-        rhs: SlotId,
-        lhs_class: ClassId,
-        pc: BytecodePtr,
-    ) -> CompileResult {
-        assert!(matches!(
-            store[fid].kind,
-            FuncKind::Builtin { .. } | FuncKind::ISeq(_)
-        ));
-        let callee = &store[fid];
-        if (!callee.is_rest() && callee.max_positional_args() < 1) || callee.req_num() > 1 {
-            return CompileResult::Recompile(RecompileReason::MaybeError);
-        }
-
-        // class version guard
-        let deopt = ir.new_deopt(bbctx, pc);
-        self.guard_class_version(bbctx, ir, false, deopt);
-
-        // receiver class guard
-        bbctx.load(ir, lhs, GP::Rdi);
-        bbctx.guard_class(ir, lhs, GP::Rdi, lhs_class, deopt);
-
-        ir.reg_move(GP::Rdi, GP::R13);
-        let using_xmm = bbctx.get_using_xmm();
-        // stack pointer adjustment
-        // -using_xmm.offset()
-        ir.xmm_save(using_xmm);
-
-        bbctx.set_binop_arguments(store, ir, fid, rhs);
-
-        bbctx.discard(dst);
-        bbctx.clear_above_next_sp();
-        let error = ir.new_error(bbctx, pc);
-        bbctx.writeback_acc(ir);
-        let evict = ir.new_evict();
-        ir.push(AsmInst::SetupBinopFrame {
-            meta: callee.meta(),
-        });
-        ir.push(AsmInst::Call {
-            callee_fid: fid,
-            recv_class: lhs_class,
-            evict,
-        });
-        ir.xmm_restore(using_xmm);
-        ir.handle_error(error);
-        bbctx.def_rax2acc(ir, dst);
-        bbctx.immediate_evict(ir, evict, pc);
-        CompileResult::Continue
-    }
-
     fn recv_version_guard(
         &self,
         bbctx: &mut BBContext,
@@ -750,38 +693,5 @@ impl BBContext {
             ir.push(AsmInst::CopyKeywordArgs { callid, callee_fid });
             false
         }
-    }
-
-    fn set_binop_arguments(
-        &mut self,
-        store: &Store,
-        ir: &mut AsmIr,
-        callee_fid: FuncId,
-        rhs: SlotId,
-    ) {
-        let callee = &store[callee_fid];
-        // callee.req_num() <= 1 at this point.
-        // callee.is_rest() || callee.max_positional_args() >= 1 at this point.
-        let xmm_flag = matches!(self.mode(rhs), LinkMode::F(_));
-        let ofs = if xmm_flag || callee.is_rest() {
-            (RSP_LOCAL_FRAME + LFP_ARG0 + 16 as i32) & !0xf
-        } else {
-            0
-        };
-
-        ir.reg_sub(GP::Rsp, ofs);
-        let offset = ofs - LFP_ARG0;
-        self.fetch_for_callee(ir, rhs, offset);
-        if 1 < callee.max_positional_args() {
-            //ir.push(AsmInst::U32ToReg(0, GP::Rax));
-            for i in 1..callee.max_positional_args() {
-                let offset = ofs - (LFP_ARG0 as i32 + (8 * i) as i32);
-                ir.zero2rsp_offset(offset);
-            }
-        }
-        if callee.is_rest() {
-            ir.push(AsmInst::RSPOffsetToArray(offset));
-        }
-        ir.reg_add(GP::Rsp, ofs);
     }
 }

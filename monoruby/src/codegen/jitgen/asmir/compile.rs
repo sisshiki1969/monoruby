@@ -158,14 +158,6 @@ impl Codegen {
                     movq [rsp + (ofs - RSP_LOCAL_FRAME)], (i);
                 );
             }
-            AsmInst::RSPOffsetToArray(ofs) => {
-                monoasm!( &mut self.jit,
-                    movq rdi, [rsp + (ofs - RSP_LOCAL_FRAME)];
-                    movq rax, (to_array);
-                    call rax;
-                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], rax;
-                );
-            }
 
             AsmInst::XmmMove(l, r) => self.xmm_mov(l, r),
             AsmInst::XmmSwap(l, r) => self.xmm_swap(l, r),
@@ -392,9 +384,7 @@ impl Codegen {
                     .entry(*return_addr)
                     .and_modify(|e| e.0 = Some(patch_point));
             }
-            AsmInst::SetupBinopFrame { meta } => {
-                self.setup_binop_frame(meta);
-            }
+
             AsmInst::SetupMethodFrame {
                 meta,
                 callid,
@@ -1055,8 +1045,4 @@ impl Codegen {
             addq rsp, (offset);
         }
     }
-}
-
-extern "C" fn to_array(val: Value) -> Value {
-    Value::array1(val)
 }

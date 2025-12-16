@@ -761,7 +761,6 @@ pub(super) enum AsmInst {
     ZeroToRSPOffset(i32),
     /// movq [rsp + (ofs)], (i);
     U64ToRSPOffset(u64, i32),
-    RSPOffsetToArray(i32),
 
     XmmMove(Xmm, Xmm),
     XmmSwap(Xmm, Xmm),
@@ -1031,18 +1030,6 @@ pub(super) enum AsmInst {
     SetupYieldFrame {
         meta: Meta,
         outer: usize,
-    },
-    ///
-    /// Set up a callee frame for binop method call.
-    ///
-    /// ### in
-    /// - r13: receiver
-    ///
-    /// ### destroy
-    /// - rax
-    ///
-    SetupBinopFrame {
-        meta: Meta,
     },
     SetupHashSplatKwRest {
         callid: CallSiteId,

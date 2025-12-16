@@ -395,34 +395,31 @@ impl JitContext {
                 ic,
             } => {
                 let (lhs_class, rhs_class) = bbctx.binary_class(lhs, rhs, ic);
-                match (lhs_class, rhs_class) {
-                    (Some(INTEGER_CLASS), Some(INTEGER_CLASS)) => {
-                        let mode = bbctx.binary_integer_mode(lhs, rhs);
-                        bbctx.gen_binop_fixnum(ir, kind, dst, mode, pc);
-                        return CompileResult::Continue;
+                if let (Some(lhs_class), Some(rhs_class)) = (lhs_class, rhs_class) {
+                    match (lhs_class, rhs_class) {
+                        (INTEGER_CLASS, INTEGER_CLASS) => {
+                            let mode = bbctx.binary_integer_mode(lhs, rhs);
+                            bbctx.gen_binop_fixnum(ir, kind, dst, mode, pc);
+                            return CompileResult::Continue;
+                        }
+                        (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => {
+                            let info = FBinOpInfo {
+                                dst,
+                                lhs,
+                                rhs,
+                                lhs_class: lhs_class.into(),
+                                rhs_class: rhs_class.into(),
+                            };
+                            bbctx.gen_binop_float(ir, kind, info, pc);
+                            return CompileResult::Continue;
+                        }
+                        _ => {}
                     }
-                    (Some(INTEGER_CLASS | FLOAT_CLASS), Some(INTEGER_CLASS | FLOAT_CLASS)) => {
-                        let info = FBinOpInfo {
-                            dst,
-                            lhs,
-                            rhs,
-                            lhs_class: lhs_class.unwrap().into(),
-                            rhs_class: rhs_class.unwrap().into(),
-                        };
-                        bbctx.gen_binop_float(ir, kind, info, pc);
-                        return CompileResult::Continue;
-                    }
-                    _ => {}
                 }
                 if let Some(lhs_class) = lhs_class {
-                    let name = kind.to_id();
-                    if let Some(fid) = self.jit_check_method(store, lhs_class, name) {
-                        return self.compile_binop_call(
-                            bbctx, ir, store, fid, dst, lhs, rhs, lhs_class, pc,
-                        );
-                    } else {
-                        return CompileResult::Recompile(RecompileReason::MethodNotFound);
-                    }
+                    return self.call_binary_method(
+                        store, bbctx, ir, lhs, rhs, lhs_class, kind, bc_pos, pc,
+                    );
                 }
                 return CompileResult::Recompile(RecompileReason::NotCached);
             }
@@ -434,34 +431,31 @@ impl JitContext {
                 ic,
             } => {
                 let (lhs_class, rhs_class) = bbctx.binary_class(lhs, rhs, ic);
-                match (lhs_class, rhs_class) {
-                    (Some(INTEGER_CLASS), Some(INTEGER_CLASS)) => {
-                        let mode = bbctx.binary_integer_mode(lhs, rhs);
-                        bbctx.gen_cmp_integer(ir, kind, dst, mode, pc);
-                        return CompileResult::Continue;
+                if let (Some(lhs_class), Some(rhs_class)) = (lhs_class, rhs_class) {
+                    match (lhs_class, rhs_class) {
+                        (INTEGER_CLASS, INTEGER_CLASS) => {
+                            let mode = bbctx.binary_integer_mode(lhs, rhs);
+                            bbctx.gen_cmp_integer(ir, kind, dst, mode, pc);
+                            return CompileResult::Continue;
+                        }
+                        (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => {
+                            let info = FBinOpInfo {
+                                dst,
+                                lhs,
+                                rhs,
+                                lhs_class: lhs_class.into(),
+                                rhs_class: rhs_class.into(),
+                            };
+                            bbctx.gen_cmp_float(ir, info, kind, pc);
+                            return CompileResult::Continue;
+                        }
+                        _ => {}
                     }
-                    (Some(INTEGER_CLASS | FLOAT_CLASS), Some(INTEGER_CLASS | FLOAT_CLASS)) => {
-                        let info = FBinOpInfo {
-                            dst,
-                            lhs,
-                            rhs,
-                            lhs_class: lhs_class.unwrap().into(),
-                            rhs_class: rhs_class.unwrap().into(),
-                        };
-                        bbctx.gen_cmp_float(ir, info, kind, pc);
-                        return CompileResult::Continue;
-                    }
-                    _ => {}
                 }
                 if let Some(lhs_class) = lhs_class {
-                    let name = Self::cmpkind_to_id(kind);
-                    if let Some(fid) = self.jit_check_method(store, lhs_class, name) {
-                        return self.compile_binop_call(
-                            bbctx, ir, store, fid, dst, lhs, rhs, lhs_class, pc,
-                        );
-                    } else {
-                        return CompileResult::Recompile(RecompileReason::MethodNotFound);
-                    }
+                    return self.call_binary_method(
+                        store, bbctx, ir, lhs, rhs, lhs_class, kind, bc_pos, pc,
+                    );
                 }
                 return CompileResult::Recompile(RecompileReason::NotCached);
             }
@@ -475,60 +469,82 @@ impl JitContext {
                 ic,
             } => {
                 let (lhs_class, rhs_class) = bbctx.binary_class(lhs, rhs, ic);
-                match (lhs_class, rhs_class) {
-                    (Some(INTEGER_CLASS), Some(INTEGER_CLASS)) => {
-                        let mode = bbctx.binary_integer_mode(lhs, rhs);
-                        if let Some(result) =
-                            bbctx.check_concrete_i64_cmpbr(mode, kind, brkind, dest_bb)
-                        {
-                            return result;
+                if let (Some(lhs_class), Some(rhs_class)) = (lhs_class, rhs_class) {
+                    match (lhs_class, rhs_class) {
+                        (INTEGER_CLASS, INTEGER_CLASS) => {
+                            let mode = bbctx.binary_integer_mode(lhs, rhs);
+                            if let Some(result) =
+                                bbctx.check_concrete_i64_cmpbr(mode, kind, brkind, dest_bb)
+                            {
+                                return result;
+                            }
+                            let src_idx = bc_pos + 1;
+                            let dest = self.label();
+                            bbctx.gen_cmpbr_integer(ir, kind, mode, brkind, dest, pc);
+                            self.new_side_branch(iseq, src_idx, dest_bb, bbctx.clone(), dest);
+                            return CompileResult::Continue;
                         }
-                        let src_idx = bc_pos + 1;
-                        let dest = self.label();
-                        bbctx.gen_cmpbr_integer(ir, kind, mode, brkind, dest, pc);
-                        self.new_side_branch(iseq, src_idx, dest_bb, bbctx.clone(), dest);
-                        return CompileResult::Continue;
-                    }
-                    (Some(INTEGER_CLASS | FLOAT_CLASS), Some(INTEGER_CLASS | FLOAT_CLASS)) => {
-                        if let Some(result) =
-                            bbctx.check_concrete_f64_cmpbr(lhs, rhs, kind, brkind, dest_bb)
-                        {
-                            return result;
+                        (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => {
+                            if let Some(result) =
+                                bbctx.check_concrete_f64_cmpbr(lhs, rhs, kind, brkind, dest_bb)
+                            {
+                                return result;
+                            }
+                            let info = FBinOpInfo {
+                                dst,
+                                lhs,
+                                rhs,
+                                lhs_class: lhs_class.into(),
+                                rhs_class: rhs_class.into(),
+                            };
+                            let src_idx = bc_pos + 1;
+                            let dest = self.label();
+                            let mode = bbctx.fmode(ir, info, pc);
+                            ir.float_cmp_br(mode, kind, brkind, dest);
+                            self.new_side_branch(iseq, src_idx, dest_bb, bbctx.clone(), dest);
+                            return CompileResult::Continue;
                         }
-                        let info = FBinOpInfo {
-                            dst,
-                            lhs,
-                            rhs,
-                            lhs_class: lhs_class.unwrap().into(),
-                            rhs_class: rhs_class.unwrap().into(),
-                        };
-                        let src_idx = bc_pos + 1;
-                        let dest = self.label();
-                        let mode = bbctx.fmode(ir, info, pc);
-                        bbctx.discard(dst);
-                        ir.float_cmp_br(mode, kind, brkind, dest);
-                        self.new_side_branch(iseq, src_idx, dest_bb, bbctx.clone(), dest);
-                        return CompileResult::Continue;
+                        _ => {}
                     }
-                    _ => {}
                 }
                 if let Some(lhs_class) = lhs_class {
-                    let name = Self::cmpkind_to_id(kind);
-                    if let Some(fid) = self.jit_check_method(store, lhs_class, name) {
-                        match self
-                            .compile_binop_call(bbctx, ir, store, fid, dst, lhs, rhs, lhs_class, pc)
-                        {
-                            CompileResult::Continue => {
-                                let src_idx = bc_pos + 1;
-                                bbctx.unset_class_version_guard();
-                                self.gen_cond_br(bbctx, ir, iseq, src_idx, dest_bb, brkind);
-                            }
-                            res => return res,
-                        }
-                        return CompileResult::Continue;
-                    } else {
-                        return CompileResult::Recompile(RecompileReason::MethodNotFound);
+                    let res = self.call_binary_method(
+                        store, bbctx, ir, lhs, rhs, lhs_class, kind, bc_pos, pc,
+                    );
+                    if let CompileResult::Continue = res {
+                        let src_idx = bc_pos + 1;
+                        bbctx.unset_class_version_guard();
+                        self.gen_cond_br(bbctx, ir, iseq, src_idx, dest_bb, brkind);
                     }
+                    return res;
+                }
+                return CompileResult::Recompile(RecompileReason::NotCached);
+            }
+            TraceIr::Index {
+                dst,
+                base,
+                idx,
+                class: ic,
+            } => {
+                let (base_class, idx_class) = bbctx.binary_class(base, idx, ic);
+                if let (Some(base_class), Some(INTEGER_CLASS)) = (base_class, idx_class) {
+                    if store[base_class].is_array_ty_instance() {
+                        bbctx.array_integer_index(ir, store, dst, base, idx, pc);
+                        return CompileResult::Continue;
+                    }
+                }
+                if let Some(base_class) = base_class {
+                    return self.call_binary_method(
+                        store,
+                        bbctx,
+                        ir,
+                        base,
+                        idx,
+                        base_class,
+                        IdentId::_INDEX,
+                        bc_pos,
+                        pc,
+                    );
                 }
                 return CompileResult::Recompile(RecompileReason::NotCached);
             }
@@ -543,34 +559,6 @@ impl JitContext {
                 bbctx.def_rax2acc(ir, lhs);
             }
 
-            TraceIr::Index {
-                dst,
-                base,
-                idx,
-                class,
-            } => {
-                if let Some((base_class, idx_class)) = class {
-                    if store[base_class].is_array_ty_instance() && idx_class == INTEGER_CLASS {
-                        bbctx.array_integer_index(ir, store, dst, base, idx, pc);
-                        return CompileResult::Continue;
-                    } else if let Some(fid) =
-                        self.jit_check_method(store, base_class, IdentId::_INDEX)
-                    {
-                        return self.compile_binop_call(
-                            bbctx,
-                            ir,
-                            store,
-                            fid,
-                            Some(dst),
-                            base,
-                            idx,
-                            base_class,
-                            pc,
-                        );
-                    }
-                }
-                return CompileResult::Recompile(RecompileReason::NotCached);
-            }
             TraceIr::IndexAssign {
                 src,
                 base,
@@ -907,6 +895,31 @@ impl JitContext {
         CompileResult::Continue
     }
 
+    fn call_binary_method(
+        &mut self,
+        store: &Store,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        lhs: SlotId,
+        rhs: SlotId,
+        lhs_class: ClassId,
+        name: impl Into<IdentId>,
+        bc_pos: BcIndex,
+        pc: BytecodePtr,
+    ) -> CompileResult {
+        if let Some(fid) = self.jit_check_method(store, lhs_class, name.into()) {
+            let callid = store
+                .get_callsite_id(store[self.iseq_id()].func_id(), bc_pos)
+                .unwrap();
+            assert_eq!(store[callid].recv, lhs);
+            assert_eq!(store[callid].args, rhs);
+            assert_eq!(store[callid].pos_num, 1);
+            self.compile_method_call(bbctx, ir, store, pc, lhs_class, fid, callid)
+        } else {
+            CompileResult::Recompile(RecompileReason::MethodNotFound)
+        }
+    }
+
     fn gen_cond_br(
         &mut self,
         bbctx: &mut BBContext,
@@ -919,18 +932,6 @@ impl JitContext {
         let branch_dest = self.label();
         ir.push(AsmInst::CondBr(brkind, branch_dest));
         self.new_side_branch(iseq, src_idx, dest, bbctx.clone(), branch_dest);
-    }
-
-    fn cmpkind_to_id(kind: CmpKind) -> IdentId {
-        match kind {
-            CmpKind::Eq => IdentId::_EQ,
-            CmpKind::Ne => IdentId::_NEQ,
-            CmpKind::Lt => IdentId::_LT,
-            CmpKind::Le => IdentId::_LE,
-            CmpKind::Gt => IdentId::_GT,
-            CmpKind::Ge => IdentId::_GE,
-            CmpKind::TEq => IdentId::_TEQ,
-        }
     }
 
     fn recompile_and_deopt(
