@@ -522,20 +522,16 @@ impl BytecodeGen {
                 let op3 = self.slot_id(&idx);
                 Bytecode::from_with_class2(enc_www(133, op1.0, op2.0, op3.0))
             }
-            BytecodeInst::Cmp(kind, ret, mode, optimizable) => {
+            BytecodeInst::Cmp(kind, ret, (lhs, rhs), optimizable) => {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
-                match mode {
-                    BinopMode::RR(lhs, rhs) => {
-                        let op2 = self.slot_id(&lhs);
-                        let op3 = self.slot_id(&rhs);
-                        let op = if optimizable {
-                            enc_www(154 + kind as u16, op1.0, op2.0, op3.0)
-                        } else {
-                            enc_www(134 + kind as u16, op1.0, op2.0, op3.0)
-                        };
-                        Bytecode::from_with_class2(op)
-                    }
-                }
+                let op2 = self.slot_id(&lhs);
+                let op3 = self.slot_id(&rhs);
+                let op = if optimizable {
+                    enc_www(154 + kind as u16, op1.0, op2.0, op3.0)
+                } else {
+                    enc_www(134 + kind as u16, op1.0, op2.0, op3.0)
+                };
+                Bytecode::from_with_class2(op)
             }
             BytecodeInst::ArrayTEq { lhs, rhs } => {
                 let op1 = self.slot_id(&lhs);
@@ -600,15 +596,11 @@ impl BytecodeGen {
                 let op2 = self.slot_id(&BcReg::from(arg));
                 Bytecode::from(enc_www(179, op1.0, op2.0, len as u16))
             }
-            BytecodeInst::BinOp(kind, ret, mode) => {
+            BytecodeInst::BinOp(kind, ret, (lhs, rhs)) => {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
-                match mode {
-                    BinopMode::RR(lhs, rhs) => {
-                        let op2 = self.slot_id(&lhs);
-                        let op3 = self.slot_id(&rhs);
-                        Bytecode::from_with_class2(enc_www(200 + kind as u16, op1.0, op2.0, op3.0))
-                    }
-                }
+                let op2 = self.slot_id(&lhs);
+                let op3 = self.slot_id(&rhs);
+                Bytecode::from_with_class2(enc_www(200 + kind as u16, op1.0, op2.0, op3.0))
             }
         };
         Ok(bc)

@@ -24,11 +24,6 @@ impl BrKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(super) enum BinopMode {
-    RR(BcReg, BcReg),
-}
-
 pub(crate) struct BytecodeIr(Vec<(BytecodeInst, Loc)>);
 
 impl BytecodeIr {
@@ -157,7 +152,7 @@ pub(super) enum BytecodeInst {
         ret: BcReg,
         src: BcReg,
     },
-    BinOp(BinOpK, Option<BcReg>, BinopMode), // kind, ret, (lhs, rhs)
+    BinOp(BinOpK, Option<BcReg>, (BcReg, BcReg)), // kind, ret, (lhs, rhs)
     ///
     /// Check equality of `lhs` and `rhs`.( `lhs` === `rhs`)
     ///
@@ -168,8 +163,8 @@ pub(super) enum BytecodeInst {
         lhs: BcReg,
         rhs: BcReg,
     },
-    Cmp(CmpKind, Option<BcReg>, BinopMode, bool), // kind, dst, (lhs, rhs), optimizable
-    Mov(BcReg, BcReg),                            // dst, offset
+    Cmp(CmpKind, Option<BcReg>, (BcReg, BcReg), bool), // kind, dst, (lhs, rhs), optimizable
+    Mov(BcReg, BcReg),                                 // dst, offset
     ToA {
         dst: BcReg,
         src: BcReg,
