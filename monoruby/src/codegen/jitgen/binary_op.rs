@@ -99,69 +99,62 @@ impl BBContext {
         None
     }
 
-    fn binop_fixnum_folded(
-        &mut self,
-        kind: BinOpK,
-        lhs: i64,
-        rhs: i64,
-        dst: Option<SlotId>,
-    ) -> bool {
+    fn binop_fixnum_folded(&mut self, kind: BinOpK, lhs: i64, rhs: i64) -> Option<i64> {
         match kind {
             BinOpK::Add => {
                 if let Some(result) = lhs.checked_add(rhs)
                     && Value::is_i63(result)
                 {
-                    self.def_C_fixnum(dst, result);
-                    return true;
+                    return Some(result);
                 }
             }
             BinOpK::Sub => {
                 if let Some(result) = lhs.checked_sub(rhs)
                     && Value::is_i63(result)
                 {
-                    self.def_C_fixnum(dst, result);
-                    return true;
+                    return Some(result);
                 }
             }
             BinOpK::Mul => {
                 if let Some(result) = lhs.checked_mul(rhs)
                     && Value::is_i63(result)
                 {
-                    self.def_C_fixnum(dst, result);
-                    return true;
+                    return Some(result);
                 }
             }
             BinOpK::Div => {
                 if let Some(result) = lhs.checked_div(rhs)
                     && Value::is_i63(result)
                 {
-                    self.def_C_fixnum(dst, result);
-                    return true;
+                    return Some(result);
                 }
             }
             BinOpK::Rem => {
                 if let Some(result) = lhs.checked_rem(rhs)
                     && Value::is_i63(result)
                 {
-                    self.def_C_fixnum(dst, result);
-                    return true;
+                    return Some(result);
                 }
             }
-            BinOpK::Exp => {}
+            BinOpK::Exp => {
+                if let Ok(rhs) = u32::try_from(rhs)
+                    && let Some(result) = lhs.checked_pow(rhs)
+                    && Value::is_i63(result)
+                {
+                    return Some(result);
+                }
+            }
             BinOpK::BitOr => {
-                self.def_C_fixnum(dst, lhs | rhs);
-                return true;
+                return Some(lhs | rhs);
             }
             BinOpK::BitAnd => {
-                self.def_C_fixnum(dst, lhs & rhs);
-                return true;
+                return Some(lhs & rhs);
             }
             BinOpK::BitXor => {
-                self.def_C_fixnum(dst, lhs ^ rhs);
-                return true;
+                return Some(lhs ^ rhs);
             }
         }
-        false
+        None
     }
 
     ///
@@ -183,8 +176,9 @@ impl BBContext {
         pc: BytecodePtr,
     ) {
         if let Some((lhs, rhs)) = self.check_concrete_i64(mode)
-            && self.binop_fixnum_folded(kind, lhs, rhs, dst)
+            && let Some(result) = self.binop_fixnum_folded(kind, lhs, rhs)
         {
+            self.def_C_fixnum(dst, result);
             return;
         };
 
@@ -236,6 +230,31 @@ impl BBContext {
         }
     }
 
+    fn binop_float_folded(&self, kind: BinOpK, lhs: f64, rhs: f64) -> Option<f64> {
+        match kind {
+            BinOpK::Add => {
+                return Some(lhs + rhs);
+            }
+            BinOpK::Sub => {
+                return Some(lhs - rhs);
+            }
+            BinOpK::Mul => {
+                return Some(lhs * rhs);
+            }
+            BinOpK::Div => {
+                return Some(lhs / rhs);
+            }
+            BinOpK::Exp => {
+                return Some(lhs.powf(rhs));
+            }
+            BinOpK::Rem => {
+                return Some(lhs.rem_euclid(rhs));
+            }
+            _ => {}
+        }
+        None
+    }
+
     pub(super) fn gen_binop_float(
         &mut self,
         ir: &mut AsmIr,
@@ -243,26 +262,11 @@ impl BBContext {
         info: FBinOpInfo,
         pc: BytecodePtr,
     ) {
-        if let Some((lhs, rhs)) = self.check_concrete_f64(info.mode) {
-            match kind {
-                BinOpK::Add => {
-                    self.def_C_float(info.dst, lhs + rhs);
-                    return;
-                }
-                BinOpK::Sub => {
-                    self.def_C_float(info.dst, lhs - rhs);
-                    return;
-                }
-                BinOpK::Mul => {
-                    self.def_C_float(info.dst, lhs * rhs);
-                    return;
-                }
-                BinOpK::Div => {
-                    self.def_C_float(info.dst, lhs / rhs);
-                    return;
-                }
-                _ => {}
-            }
+        if let Some((lhs, rhs)) = self.check_concrete_f64(info.mode)
+            && let Some(result) = self.binop_float_folded(kind, lhs, rhs)
+        {
+            self.def_C_float(info.dst, result);
+            return;
         };
 
         let fmode = self.fmode(ir, info, pc);
