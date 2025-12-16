@@ -198,18 +198,4 @@ impl BBContext {
             }
         }
     }
-
-    pub(in crate::codegen::jitgen) fn fetch_rhs_for_callee(
-        &mut self,
-        ir: &mut AsmIr,
-        mode: OpMode,
-        offset: i32,
-    ) {
-        match mode {
-            OpMode::IR(_, slot) | OpMode::RR(_, slot) => {
-                self.fetch_for_callee(ir, slot, offset);
-            }
-            OpMode::RI(_, i) => ir.u64torsp_offset(Value::i32(i as i32).id(), offset),
-        }
-    }
 }

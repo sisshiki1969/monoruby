@@ -395,9 +395,9 @@ impl JitContext {
                 ic,
             } => {
                 let (lhs_class, rhs_class) = bbctx.binary_class(lhs, rhs, ic);
-                let mode = bbctx.binary_integer_mode(lhs, rhs);
                 match (lhs_class, rhs_class) {
                     (Some(INTEGER_CLASS), Some(INTEGER_CLASS)) => {
+                        let mode = bbctx.binary_integer_mode(lhs, rhs);
                         bbctx.gen_binop_fixnum(ir, kind, dst, mode, pc);
                         return CompileResult::Continue;
                     }
@@ -414,10 +414,12 @@ impl JitContext {
                     }
                     _ => {}
                 }
-                if let Some(lhs) = lhs_class {
+                if let Some(lhs_class) = lhs_class {
                     let name = kind.to_id();
-                    if let Some(fid) = self.jit_check_method(store, lhs, name) {
-                        return self.compile_binop_call(bbctx, ir, store, fid, dst, mode, lhs, pc);
+                    if let Some(fid) = self.jit_check_method(store, lhs_class, name) {
+                        return self.compile_binop_call(
+                            bbctx, ir, store, fid, dst, lhs, rhs, lhs_class, pc,
+                        );
                     } else {
                         return CompileResult::Recompile(RecompileReason::MethodNotFound);
                     }
@@ -432,9 +434,9 @@ impl JitContext {
                 ic,
             } => {
                 let (lhs_class, rhs_class) = bbctx.binary_class(lhs, rhs, ic);
-                let mode = bbctx.binary_integer_mode(lhs, rhs);
                 match (lhs_class, rhs_class) {
                     (Some(INTEGER_CLASS), Some(INTEGER_CLASS)) => {
+                        let mode = bbctx.binary_integer_mode(lhs, rhs);
                         bbctx.gen_cmp_integer(ir, kind, dst, mode, pc);
                         return CompileResult::Continue;
                     }
@@ -451,10 +453,12 @@ impl JitContext {
                     }
                     _ => {}
                 }
-                if let Some(lhs) = lhs_class {
+                if let Some(lhs_class) = lhs_class {
                     let name = Self::cmpkind_to_id(kind);
-                    if let Some(fid) = self.jit_check_method(store, lhs, name) {
-                        return self.compile_binop_call(bbctx, ir, store, fid, dst, mode, lhs, pc);
+                    if let Some(fid) = self.jit_check_method(store, lhs_class, name) {
+                        return self.compile_binop_call(
+                            bbctx, ir, store, fid, dst, lhs, rhs, lhs_class, pc,
+                        );
                     } else {
                         return CompileResult::Recompile(RecompileReason::MethodNotFound);
                     }
@@ -471,9 +475,9 @@ impl JitContext {
                 ic,
             } => {
                 let (lhs_class, rhs_class) = bbctx.binary_class(lhs, rhs, ic);
-                let mode = bbctx.binary_integer_mode(lhs, rhs);
                 match (lhs_class, rhs_class) {
                     (Some(INTEGER_CLASS), Some(INTEGER_CLASS)) => {
+                        let mode = bbctx.binary_integer_mode(lhs, rhs);
                         if let Some(result) =
                             bbctx.check_concrete_i64_cmpbr(mode, kind, brkind, dest_bb)
                         {
@@ -512,7 +516,7 @@ impl JitContext {
                     let name = Self::cmpkind_to_id(kind);
                     if let Some(fid) = self.jit_check_method(store, lhs_class, name) {
                         match self
-                            .compile_binop_call(bbctx, ir, store, fid, dst, mode, lhs_class, pc)
+                            .compile_binop_call(bbctx, ir, store, fid, dst, lhs, rhs, lhs_class, pc)
                         {
                             CompileResult::Continue => {
                                 let src_idx = bc_pos + 1;
@@ -552,20 +556,14 @@ impl JitContext {
                     } else if let Some(fid) =
                         self.jit_check_method(store, base_class, IdentId::_INDEX)
                     {
-                        let mode = if let Some(idx) = bbctx.is_fixnum_literal(idx)
-                            && let Some(idx) = i16::try_from(idx).ok()
-                        {
-                            OpMode::RI(base, idx)
-                        } else {
-                            OpMode::RR(base, idx)
-                        };
                         return self.compile_binop_call(
                             bbctx,
                             ir,
                             store,
                             fid,
                             Some(dst),
-                            mode,
+                            base,
+                            idx,
                             base_class,
                             pc,
                         );

@@ -434,23 +434,6 @@ impl BBContext {
         }
     }
 
-    ///
-    /// Fetch lhs operands for binary operation according to *mode*.
-    ///
-    /// #### in
-    /// - rdi: lhs
-    ///
-    pub(super) fn load_lhs(&mut self, ir: &mut AsmIr, mode: OpMode, r: GP) {
-        match mode {
-            OpMode::RR(lhs, _) | OpMode::RI(lhs, _) => {
-                self.load(ir, lhs, r);
-            }
-            OpMode::IR(lhs, _) => {
-                ir.lit2reg(Value::i32(lhs as i32), r);
-            }
-        }
-    }
-
     pub(super) fn fmode(
         &mut self,
         ir: &mut AsmIr,

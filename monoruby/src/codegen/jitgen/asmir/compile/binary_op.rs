@@ -211,29 +211,6 @@ impl Codegen {
 
 impl Codegen {
     ///
-    /// Float binary operation
-    ///
-    /// ### in
-    /// - depends on *mode*
-    ///
-    /// ### out
-    /// - xmm(*dst*): dst
-    ///
-    /// ### destroy
-    /// - caller save registers
-    /// - stack
-    ///
-    //pub(super) fn float_binop(
-    //    &mut self,
-    //    kind: BinOpK,
-    //    using_xmm: UsingXmm,
-    //    dst: Xmm,
-    //    mode: (Xmm, Xmm),
-    //) {
-    //    self.binop_float_rr(kind, using_xmm, dst, mode);
-    //}
-
-    ///
     /// Float binary operation with registers.
     ///
     /// ### in

@@ -77,7 +77,8 @@ impl JitContext {
         store: &Store,
         fid: FuncId,
         dst: Option<SlotId>,
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         lhs_class: ClassId,
         pc: BytecodePtr,
     ) -> CompileResult {
@@ -95,15 +96,8 @@ impl JitContext {
         self.guard_class_version(bbctx, ir, false, deopt);
 
         // receiver class guard
-        bbctx.load_lhs(ir, mode, GP::Rdi);
-        match mode {
-            OpMode::RR(lhs, _) | OpMode::RI(lhs, _) => {
-                bbctx.guard_class(ir, lhs, GP::Rdi, lhs_class, deopt);
-            }
-            OpMode::IR(_, _) => {
-                assert!(lhs_class == INTEGER_CLASS);
-            }
-        }
+        bbctx.load(ir, lhs, GP::Rdi);
+        bbctx.guard_class(ir, lhs, GP::Rdi, lhs_class, deopt);
 
         ir.reg_move(GP::Rdi, GP::R13);
         let using_xmm = bbctx.get_using_xmm();
@@ -111,7 +105,7 @@ impl JitContext {
         // -using_xmm.offset()
         ir.xmm_save(using_xmm);
 
-        bbctx.set_binop_arguments(store, ir, fid, mode);
+        bbctx.set_binop_arguments(store, ir, fid, rhs);
 
         bbctx.discard(dst);
         bbctx.clear_above_next_sp();
@@ -763,17 +757,12 @@ impl BBContext {
         store: &Store,
         ir: &mut AsmIr,
         callee_fid: FuncId,
-        mode: OpMode,
+        rhs: SlotId,
     ) {
         let callee = &store[callee_fid];
         // callee.req_num() <= 1 at this point.
         // callee.is_rest() || callee.max_positional_args() >= 1 at this point.
-        let xmm_flag = match mode {
-            OpMode::RR(_, rhs) | OpMode::IR(_, rhs) => {
-                matches!(self.mode(rhs), LinkMode::F(_))
-            }
-            OpMode::RI(_, _) => false,
-        };
+        let xmm_flag = matches!(self.mode(rhs), LinkMode::F(_));
         let ofs = if xmm_flag || callee.is_rest() {
             (RSP_LOCAL_FRAME + LFP_ARG0 + 16 as i32) & !0xf
         } else {
@@ -782,7 +771,7 @@ impl BBContext {
 
         ir.reg_sub(GP::Rsp, ofs);
         let offset = ofs - LFP_ARG0;
-        self.fetch_rhs_for_callee(ir, mode, offset);
+        self.fetch_for_callee(ir, rhs, offset);
         if 1 < callee.max_positional_args() {
             //ir.push(AsmInst::U32ToReg(0, GP::Rax));
             for i in 1..callee.max_positional_args() {

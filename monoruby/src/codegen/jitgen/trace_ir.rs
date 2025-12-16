@@ -9,14 +9,6 @@ pub(crate) enum OpMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct BinOpInfo {
-    pub dst: Option<SlotId>,
-    pub mode: OpMode,
-    pub lhs_class: ClassId,
-    pub rhs_class: ClassId,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum FOpClass {
     Float,
     Integer,
@@ -53,17 +45,6 @@ pub(crate) struct FBinOpInfo {
     pub rhs: SlotId,
     pub lhs_class: FOpClass,
     pub rhs_class: FOpClass,
-}
-
-impl Into<BinOpInfo> for FBinOpInfo {
-    fn into(self) -> BinOpInfo {
-        BinOpInfo {
-            dst: self.dst,
-            mode: OpMode::RR(self.lhs, self.rhs),
-            lhs_class: self.lhs_class.into(),
-            rhs_class: self.rhs_class.into(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
