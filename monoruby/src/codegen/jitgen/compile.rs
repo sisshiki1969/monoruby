@@ -317,15 +317,11 @@ impl<'a> JitContext<'a> {
                     bbctx.unset_class_version_guard();
                 }
             }
-            TraceIr::BitNot {
-                dst,
-                src,
-                ic: src_class,
-            } => {
+            TraceIr::BitNot { dst, src, ic } => {
                 let src_class = if let Some(class) = bbctx.class(src) {
                     Some(class)
                 } else {
-                    src_class
+                    ic
                 };
                 if let Some(INTEGER_CLASS) = src_class {
                     bbctx.load_fixnum(ir, src, GP::Rdi, pc);
@@ -381,33 +377,22 @@ impl<'a> JitContext<'a> {
                 rhs,
                 ic,
             } => {
-                let (lhs_class, rhs_class) = bbctx.binary_class(lhs, rhs, ic);
-                if let (Some(lhs_class), Some(rhs_class)) = (lhs_class, rhs_class) {
-                    match (lhs_class, rhs_class) {
-                        (INTEGER_CLASS, INTEGER_CLASS) => {
-                            let mode = bbctx.binary_integer_mode(lhs, rhs);
-                            bbctx.gen_binop_fixnum(ir, kind, dst, mode, pc);
-                            return CompileResult::Continue;
-                        }
-                        (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => {
-                            let info = FBinOpInfo {
-                                dst,
-                                lhs,
-                                rhs,
-                                lhs_class: lhs_class.into(),
-                                rhs_class: rhs_class.into(),
-                            };
-                            bbctx.gen_binop_float(ir, kind, info, pc);
-                            return CompileResult::Continue;
-                        }
-                        _ => {}
+                return match bbctx.binop_type(lhs, rhs, ic) {
+                    BinaryOpType::Integer(mode) => {
+                        bbctx.gen_binop_integer(ir, kind, dst, mode, pc);
+                        CompileResult::Continue
                     }
-                }
-                if let Some(lhs_class) = lhs_class {
-                    return self
-                        .call_binary_method(bbctx, ir, lhs, rhs, lhs_class, kind, bc_pos, pc);
-                }
-                return CompileResult::Recompile(RecompileReason::NotCached);
+                    BinaryOpType::Float(info) => {
+                        bbctx.gen_binop_float(ir, kind, dst, info, pc);
+                        CompileResult::Continue
+                    }
+                    BinaryOpType::Other(Some(lhs_class)) => {
+                        self.call_binary_method(bbctx, ir, lhs, rhs, lhs_class, kind, bc_pos, pc)
+                    }
+                    BinaryOpType::Other(None) => {
+                        CompileResult::Recompile(RecompileReason::NotCached)
+                    }
+                };
             }
             TraceIr::BinCmp {
                 kind,
@@ -416,93 +401,72 @@ impl<'a> JitContext<'a> {
                 rhs,
                 ic,
             } => {
-                let (lhs_class, rhs_class) = bbctx.binary_class(lhs, rhs, ic);
-                if let (Some(lhs_class), Some(rhs_class)) = (lhs_class, rhs_class) {
-                    match (lhs_class, rhs_class) {
-                        (INTEGER_CLASS, INTEGER_CLASS) => {
-                            let mode = bbctx.binary_integer_mode(lhs, rhs);
-                            bbctx.gen_cmp_integer(ir, kind, dst, mode, pc);
-                            return CompileResult::Continue;
-                        }
-                        (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => {
-                            let info = FBinOpInfo {
-                                dst,
-                                lhs,
-                                rhs,
-                                lhs_class: lhs_class.into(),
-                                rhs_class: rhs_class.into(),
-                            };
-                            bbctx.gen_cmp_float(ir, info, kind, pc);
-                            return CompileResult::Continue;
-                        }
-                        _ => {}
+                return match bbctx.binop_type(lhs, rhs, ic) {
+                    BinaryOpType::Integer(mode) => {
+                        bbctx.gen_cmp_integer(ir, kind, dst, mode, pc);
+                        CompileResult::Continue
                     }
-                }
-                if let Some(lhs_class) = lhs_class {
-                    return self
-                        .call_binary_method(bbctx, ir, lhs, rhs, lhs_class, kind, bc_pos, pc);
-                }
-                return CompileResult::Recompile(RecompileReason::NotCached);
+                    BinaryOpType::Float(info) => {
+                        bbctx.gen_cmp_float(ir, dst, info, kind, pc);
+                        CompileResult::Continue
+                    }
+                    BinaryOpType::Other(Some(lhs_class)) => {
+                        self.call_binary_method(bbctx, ir, lhs, rhs, lhs_class, kind, bc_pos, pc)
+                    }
+                    BinaryOpType::Other(None) => {
+                        CompileResult::Recompile(RecompileReason::NotCached)
+                    }
+                };
             }
             TraceIr::BinCmpBr {
                 kind,
-                dst,
+                dst: _,
                 lhs,
                 rhs,
                 dest_bb,
                 brkind,
                 ic,
             } => {
-                let (lhs_class, rhs_class) = bbctx.binary_class(lhs, rhs, ic);
-                if let (Some(lhs_class), Some(rhs_class)) = (lhs_class, rhs_class) {
-                    match (lhs_class, rhs_class) {
-                        (INTEGER_CLASS, INTEGER_CLASS) => {
-                            let mode = bbctx.binary_integer_mode(lhs, rhs);
-                            if let Some(result) =
-                                bbctx.check_concrete_i64_cmpbr(mode, kind, brkind, dest_bb)
-                            {
-                                return result;
-                            }
-                            let src_idx = bc_pos + 1;
-                            let dest = self.label();
-                            bbctx.gen_cmpbr_integer(ir, kind, mode, brkind, dest, pc);
-                            self.new_side_branch(src_idx, dest_bb, bbctx.clone(), dest);
-                            return CompileResult::Continue;
+                return match bbctx.binop_type(lhs, rhs, ic) {
+                    BinaryOpType::Integer(mode) => {
+                        if let Some(result) =
+                            bbctx.check_concrete_i64_cmpbr(mode, kind, brkind, dest_bb)
+                        {
+                            return result;
                         }
-                        (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => {
-                            if let Some(result) =
-                                bbctx.check_concrete_f64_cmpbr(lhs, rhs, kind, brkind, dest_bb)
-                            {
-                                return result;
-                            }
-                            let info = FBinOpInfo {
-                                dst,
-                                lhs,
-                                rhs,
-                                lhs_class: lhs_class.into(),
-                                rhs_class: rhs_class.into(),
-                            };
-                            let src_idx = bc_pos + 1;
-                            let dest = self.label();
-                            let mode = bbctx.fmode(ir, info, pc);
-                            ir.float_cmp_br(mode, kind, brkind, dest);
-                            self.new_side_branch(src_idx, dest_bb, bbctx.clone(), dest);
-                            return CompileResult::Continue;
-                        }
-                        _ => {}
-                    }
-                }
-                if let Some(lhs_class) = lhs_class {
-                    let res =
-                        self.call_binary_method(bbctx, ir, lhs, rhs, lhs_class, kind, bc_pos, pc);
-                    if let CompileResult::Continue = res {
                         let src_idx = bc_pos + 1;
-                        bbctx.unset_class_version_guard();
-                        self.gen_cond_br(bbctx, ir, src_idx, dest_bb, brkind);
+                        let dest = self.label();
+                        bbctx.gen_cmpbr_integer(ir, kind, mode, brkind, dest, pc);
+                        self.new_side_branch(src_idx, dest_bb, bbctx.clone(), dest);
+                        CompileResult::Continue
                     }
-                    return res;
-                }
-                return CompileResult::Recompile(RecompileReason::NotCached);
+                    BinaryOpType::Float(info) => {
+                        if let Some(result) =
+                            bbctx.check_concrete_f64_cmpbr(lhs, rhs, kind, brkind, dest_bb)
+                        {
+                            return result;
+                        }
+                        let src_idx = bc_pos + 1;
+                        let dest = self.label();
+                        let mode = bbctx.load_binary_xmm(ir, info, pc);
+                        ir.float_cmp_br(mode, kind, brkind, dest);
+                        self.new_side_branch(src_idx, dest_bb, bbctx.clone(), dest);
+                        CompileResult::Continue
+                    }
+                    BinaryOpType::Other(Some(lhs_class)) => {
+                        let res = self
+                            .call_binary_method(bbctx, ir, lhs, rhs, lhs_class, kind, bc_pos, pc);
+                        if let CompileResult::Continue = res {
+                            let src_idx = bc_pos + 1;
+                            bbctx.unset_class_version_guard();
+                            self.gen_cond_br(bbctx, ir, src_idx, dest_bb, brkind);
+                        }
+                        res
+                    }
+                    BinaryOpType::Other(None) => {
+                        CompileResult::Recompile(RecompileReason::NotCached)
+                    }
+                };
             }
             TraceIr::Index {
                 dst,
@@ -1038,6 +1002,12 @@ fn dump_cfg(func: &ISeqInfo, store: &Store, bb_begin: BasicBlockId, bb_end: Basi
     std::fs::write(path.join(format!("fid-{}.dot", func.func_id().get())), s).unwrap();
 }
 
+enum BinaryOpType {
+    Integer(OpMode),
+    Float(FBinOpInfo),
+    Other(Option<ClassId>),
+}
+
 impl BBContext {
     fn binary_integer_mode(&self, lhs: SlotId, rhs: SlotId) -> OpMode {
         if let Some(rhs) = self.is_i16_literal(rhs) {
@@ -1066,5 +1036,28 @@ impl BBContext {
             ic.map(|(_, class)| class)
         };
         (lhs_class, rhs_class)
+    }
+
+    fn binop_type(&self, lhs: SlotId, rhs: SlotId, ic: Option<(ClassId, ClassId)>) -> BinaryOpType {
+        let (lhs_class, rhs_class) = self.binary_class(lhs, rhs, ic);
+        if let (Some(lhs_class), Some(rhs_class)) = (lhs_class, rhs_class) {
+            match (lhs_class, rhs_class) {
+                (INTEGER_CLASS, INTEGER_CLASS) => {
+                    let mode = self.binary_integer_mode(lhs, rhs);
+                    return BinaryOpType::Integer(mode);
+                }
+                (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => {
+                    let info = FBinOpInfo {
+                        lhs,
+                        rhs,
+                        lhs_class: lhs_class.into(),
+                        rhs_class: rhs_class.into(),
+                    };
+                    return BinaryOpType::Float(info);
+                }
+                _ => {}
+            }
+        }
+        BinaryOpType::Other(lhs_class)
     }
 }

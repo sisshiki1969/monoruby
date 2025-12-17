@@ -40,7 +40,6 @@ impl From<ClassId> for FOpClass {
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct FBinOpInfo {
-    pub dst: Option<SlotId>,
     pub lhs: SlotId,
     pub rhs: SlotId,
     pub lhs_class: FOpClass,

@@ -229,9 +229,9 @@ impl Codegen {
         kind: BinOpK,
         using_xmm: UsingXmm,
         dst: Xmm,
-        mode: (Xmm, Xmm),
+        binary_xmm: (Xmm, Xmm),
     ) {
-        let (l, r) = mode;
+        let (l, r) = binary_xmm;
         let lhs = l.enc();
         let rhs = r.enc();
         let ret = dst.enc();
@@ -388,8 +388,8 @@ macro_rules! jit_cmp_opt_main {
 }
 
 impl Codegen {
-    pub(super) fn cmp_float(&mut self, mode: (Xmm, Xmm)) {
-        let (l, r) = mode;
+    pub(super) fn cmp_float(&mut self, binary_xmm: (Xmm, Xmm)) {
+        let (l, r) = binary_xmm;
         monoasm! { &mut self.jit,
             ucomisd xmm(l.enc()), xmm(r.enc());
         };

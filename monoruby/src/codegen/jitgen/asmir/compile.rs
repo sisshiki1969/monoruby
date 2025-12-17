@@ -163,10 +163,10 @@ impl Codegen {
             AsmInst::XmmSwap(l, r) => self.xmm_swap(l, r),
             AsmInst::XmmBinOp {
                 kind,
-                mode,
+                binary_xmm,
                 dst,
                 using_xmm,
-            } => self.float_binop(kind, using_xmm, dst, mode),
+            } => self.float_binop(kind, using_xmm, dst, binary_xmm),
             AsmInst::XmmUnOp { kind, dst } => match kind {
                 UnOpK::Neg => {
                     let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
@@ -502,21 +502,21 @@ impl Codegen {
                 self.cmp_integer(&mode, lhs, rhs);
                 self.condbr_int(kind, branch_dest, brkind);
             }
-            AsmInst::FloatCmp { kind, mode } => {
+            AsmInst::FloatCmp { kind, binary_xmm } => {
                 monoasm! { &mut self.jit,
                     xorq rax, rax;
                 };
-                self.cmp_float(mode);
+                self.cmp_float(binary_xmm);
                 self.setflag_float(kind);
             }
             AsmInst::FloatCmpBr {
                 kind,
-                mode,
+                binary_xmm,
                 brkind,
                 branch_dest,
             } => {
                 let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
-                self.cmp_float(mode);
+                self.cmp_float(binary_xmm);
                 self.condbr_float(kind, branch_dest, brkind);
             }
 

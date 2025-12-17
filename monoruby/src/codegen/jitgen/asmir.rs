@@ -524,13 +524,13 @@ impl AsmIr {
     pub(super) fn xmm_binop(
         &mut self,
         kind: BinOpK,
-        mode: (Xmm, Xmm),
+        binary_xmm: (Xmm, Xmm),
         dst: Xmm,
         using_xmm: UsingXmm,
     ) {
         self.push(AsmInst::XmmBinOp {
             kind,
-            mode,
+            binary_xmm,
             dst,
             using_xmm,
         });
@@ -578,13 +578,13 @@ impl AsmIr {
 
     pub(super) fn float_cmp_br(
         &mut self,
-        mode: (Xmm, Xmm),
+        binary_xmm: (Xmm, Xmm),
         kind: CmpKind,
         brkind: BrKind,
         branch_dest: JitLabel,
     ) {
         self.push(AsmInst::FloatCmpBr {
-            mode,
+            binary_xmm,
             kind,
             brkind,
             branch_dest,
@@ -766,7 +766,7 @@ pub(super) enum AsmInst {
     XmmSwap(Xmm, Xmm),
     XmmBinOp {
         kind: BinOpK,
-        mode: (Xmm, Xmm),
+        binary_xmm: (Xmm, Xmm),
         dst: Xmm,
         using_xmm: UsingXmm,
     },
@@ -1164,11 +1164,11 @@ pub(super) enum AsmInst {
     },
     FloatCmp {
         kind: CmpKind,
-        mode: (Xmm, Xmm),
+        binary_xmm: (Xmm, Xmm),
     },
     FloatCmpBr {
         kind: CmpKind,
-        mode: (Xmm, Xmm),
+        binary_xmm: (Xmm, Xmm),
         brkind: BrKind,
         branch_dest: JitLabel,
     },
@@ -1567,10 +1567,10 @@ impl AsmInst {
             Self::XmmSwap(fp1, fp2) => format!("{:?} <-> {:?}", fp1, fp2),
             Self::XmmBinOp {
                 kind,
-                mode,
+                binary_xmm,
                 dst,
                 using_xmm,
-            } => format!("{:?} = {:?} {:?}  {:?}", dst, kind, mode, using_xmm),
+            } => format!("{:?} = {:?} {:?}  {:?}", dst, kind, binary_xmm, using_xmm),
             Self::XmmUnOp { kind, dst } => format!("{:?} = {:?} {:?}", dst, kind, dst),
 
             Self::F64ToXmm(f, dst) => format!("{:?} = {}", dst, f),

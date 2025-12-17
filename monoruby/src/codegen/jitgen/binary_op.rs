@@ -88,7 +88,7 @@ impl BBContext {
         None
     }
 
-    fn binop_fixnum_folded(&mut self, kind: BinOpK, lhs: i64, rhs: i64) -> Option<i64> {
+    fn binop_integer_folded(&mut self, kind: BinOpK, lhs: i64, rhs: i64) -> Option<i64> {
         match kind {
             BinOpK::Add => {
                 if let Some(result) = lhs.checked_add(rhs)
@@ -156,7 +156,7 @@ impl BBContext {
     /// ### out
     /// - r15: dst
     ///
-    pub(super) fn gen_binop_fixnum(
+    pub(super) fn gen_binop_integer(
         &mut self,
         ir: &mut AsmIr,
         kind: BinOpK,
@@ -165,7 +165,7 @@ impl BBContext {
         pc: BytecodePtr,
     ) {
         if let Some((lhs, rhs)) = self.check_concrete_i64(mode)
-            && let Some(result) = self.binop_fixnum_folded(kind, lhs, rhs)
+            && let Some(result) = self.binop_integer_folded(kind, lhs, rhs)
         {
             self.def_C_fixnum(dst, result);
             return;
@@ -220,49 +220,37 @@ impl BBContext {
     }
 
     fn binop_float_folded(&self, kind: BinOpK, lhs: f64, rhs: f64) -> Option<f64> {
-        match kind {
-            BinOpK::Add => {
-                return Some(lhs + rhs);
-            }
-            BinOpK::Sub => {
-                return Some(lhs - rhs);
-            }
-            BinOpK::Mul => {
-                return Some(lhs * rhs);
-            }
-            BinOpK::Div => {
-                return Some(lhs / rhs);
-            }
-            BinOpK::Exp => {
-                return Some(lhs.powf(rhs));
-            }
-            BinOpK::Rem => {
-                return Some(lhs.rem_euclid(rhs));
-            }
-            _ => {}
-        }
-        None
+        Some(match kind {
+            BinOpK::Add => lhs + rhs,
+            BinOpK::Sub => lhs - rhs,
+            BinOpK::Mul => lhs * rhs,
+            BinOpK::Div => lhs / rhs,
+            BinOpK::Exp => lhs.powf(rhs),
+            BinOpK::Rem => lhs.rem_euclid(rhs),
+            _ => return None,
+        })
     }
 
     pub(super) fn gen_binop_float(
         &mut self,
         ir: &mut AsmIr,
         kind: BinOpK,
+        dst: Option<SlotId>,
         info: FBinOpInfo,
         pc: BytecodePtr,
     ) {
         if let Some((lhs, rhs)) = self.check_concrete_f64(info.lhs, info.rhs)
             && let Some(result) = self.binop_float_folded(kind, lhs, rhs)
         {
-            self.def_C_float(info.dst, result);
+            self.def_C_float(dst, result);
             return;
         };
 
-        let fmode = self.fmode(ir, info, pc);
-        if let Some(dst) = info.dst {
+        let binary_xmm = self.load_binary_xmm(ir, info, pc);
+        if let Some(dst) = dst {
             let dst = self.def_F(dst);
             let using_xmm = self.get_using_xmm();
-            ir.xmm_binop(kind, fmode, dst, using_xmm);
+            ir.xmm_binop(kind, binary_xmm, dst, using_xmm);
         }
     }
 
@@ -294,17 +282,18 @@ impl BBContext {
     pub(super) fn gen_cmp_float(
         &mut self,
         ir: &mut AsmIr,
+        dst: Option<SlotId>,
         info: FBinOpInfo,
         kind: CmpKind,
         pc: BytecodePtr,
     ) {
         if let Some((lhs, rhs)) = self.check_concrete_f64(info.lhs, info.rhs) {
-            self.fold_constant_cmp(kind, lhs, rhs, info.dst);
+            self.fold_constant_cmp(kind, lhs, rhs, dst);
             return;
         };
-        let mode = self.fmode(ir, info, pc);
-        ir.push(AsmInst::FloatCmp { kind, mode });
-        self.def_rax2acc(ir, info.dst);
+        let binary_xmm = self.load_binary_xmm(ir, info, pc);
+        ir.push(AsmInst::FloatCmp { kind, binary_xmm });
+        self.def_rax2acc(ir, dst);
     }
 
     pub(super) fn gen_cmpbr_integer(
@@ -434,7 +423,7 @@ impl BBContext {
         }
     }
 
-    pub(super) fn fmode(
+    pub(super) fn load_binary_xmm(
         &mut self,
         ir: &mut AsmIr,
         info: FBinOpInfo,
