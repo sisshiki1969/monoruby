@@ -933,7 +933,7 @@ pub(super) enum AsmInst {
     ///
     Init {
         info: FnInitInfo,
-        is_method: bool,
+        not_captured: bool,
     },
     ///
     /// Deoptimize and fallback to interpreter.

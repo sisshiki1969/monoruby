@@ -452,7 +452,7 @@ impl BytecodeGen {
                     bc_pos,
                     loc,
                 )?;
-                store.new_callsite_map_entry(self.func_id, bc_pos, callid);
+                store.new_callsite_map_entry(self.iseq_id, bc_pos, callid);
                 Bytecode::from_with_class2(enc_www(200 + kind as u16, op1.0, op2.0, op3.0))
             }
             BytecodeInst::Cmp(kind, ret, (lhs, rhs), optimizable) => {
@@ -471,7 +471,7 @@ impl BytecodeGen {
                     bc_pos,
                     loc,
                 )?;
-                store.new_callsite_map_entry(self.func_id, bc_pos, callid);
+                store.new_callsite_map_entry(self.iseq_id, bc_pos, callid);
                 Bytecode::from_with_class2(op)
             }
             BytecodeInst::Index(ret, base, idx) => {
@@ -484,7 +484,7 @@ impl BytecodeGen {
                     bc_pos,
                     loc,
                 )?;
-                store.new_callsite_map_entry(self.func_id, bc_pos, callid);
+                store.new_callsite_map_entry(self.iseq_id, bc_pos, callid);
                 Bytecode::from_with_class2(enc_www(132, op1.0, op2.0, op3.0))
             }
             BytecodeInst::Array(ret, box callsite) => {

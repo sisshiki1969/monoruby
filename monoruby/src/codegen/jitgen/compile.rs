@@ -133,7 +133,7 @@ impl<'a> JitContext<'a> {
                 assert!(!self.is_loop());
                 ir.push(AsmInst::Init {
                     info: fn_info,
-                    is_method: self.store[self.func_id()].is_not_block(),
+                    not_captured: bbctx.frame_capture_guarded,
                 });
                 ir.push(AsmInst::Preparation);
             }
@@ -851,7 +851,7 @@ impl<'a> JitContext<'a> {
         pc: BytecodePtr,
     ) -> CompileResult {
         if let Some(fid) = self.jit_check_method(lhs_class, name.into()) {
-            let callid = self.store.get_callsite_id(self.func_id(), bc_pos).unwrap();
+            let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, lhs);
             assert_eq!(self.store[callid].args, rhs);
             assert_eq!(self.store[callid].pos_num, 1);

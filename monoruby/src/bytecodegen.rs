@@ -64,10 +64,11 @@ fn bytecode_compile_func(
         optional_info,
         loc,
     } = globals.functions.get_compile_info();
+    let iseq = globals[func_id].as_iseq();
     let info = globals.iseq(func_id);
     let (fid, outer) = info.mother();
     let params = globals.iseq(fid).args.clone();
-    let mut r#gen = BytecodeGen::new(info, (fid, params, outer), binding);
+    let mut r#gen = BytecodeGen::new(iseq, info, (fid, params, outer), binding);
     // arguments preparation
     for ForParamInfo {
         dst_outer,
@@ -494,6 +495,7 @@ struct MergeSourceInfo {
 
 #[derive(Debug)]
 struct BytecodeGen {
+    iseq_id: ISeqId,
     /// ID of this function.
     func_id: FuncId,
     /// ID of the mother method.
@@ -541,11 +543,13 @@ impl std::ops::Index<Label> for BytecodeGen {
 
 impl BytecodeGen {
     fn new(
+        iseq_id: ISeqId,
         info: &ISeqInfo,
         mother: (FuncId, ParamsInfo, usize),
         binding: Option<LvarCollector>,
     ) -> Self {
         let mut ir = Self {
+            iseq_id,
             func_id: info.func_id(),
             mother,
             ir: vec![],

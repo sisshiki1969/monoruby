@@ -160,6 +160,7 @@ pub(crate) struct BBContext {
     /// stack top register.
     next_sp: SlotId,
     class_version_guarded: bool,
+    /// guard for frame capture. true if guaranteed the frame is not captured.
     frame_capture_guarded: bool,
 }
 
@@ -188,6 +189,7 @@ impl BBContext {
                 slot_state: SlotContext::new_loop(cc),
                 next_sp,
                 class_version_guarded: false,
+                // not guarded frame capture in the compilation for loops
                 frame_capture_guarded: false,
             }
         } else {
@@ -195,7 +197,8 @@ impl BBContext {
                 slot_state: SlotContext::new_method(cc),
                 next_sp,
                 class_version_guarded: false,
-                frame_capture_guarded: cc.is_not_block(),
+                // methods and blocks are always guarded frame capture
+                frame_capture_guarded: true,
             }
         }
     }

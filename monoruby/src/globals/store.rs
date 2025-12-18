@@ -62,8 +62,6 @@ pub struct Store {
     optcase_info: Vec<OptCaseInfo>,
     /// inline info.
     pub(crate) inline_info: InlineTable,
-    /// Map for BcIndex to CallsiteId.
-    callsite_map: HashMap<(FuncId, BcIndex), CallSiteId>,
 }
 
 impl std::ops::Deref for Store {
@@ -176,7 +174,6 @@ impl Store {
             optcase_info: vec![],
             classes: ClassInfoTable::new(),
             inline_info: InlineTable::default(),
-            callsite_map: HashMap::default(),
         }
     }
 
@@ -501,15 +498,15 @@ impl Store {
 
     pub(crate) fn new_callsite_map_entry(
         &mut self,
-        func_id: FuncId,
+        iseq_id: ISeqId,
         bc_pos: BcIndex,
         callsite_id: CallSiteId,
     ) {
-        self.callsite_map.insert((func_id, bc_pos), callsite_id);
+        self[iseq_id].callsite_map.insert(bc_pos, callsite_id);
     }
 
-    pub(crate) fn get_callsite_id(&self, func_id: FuncId, bc_pos: BcIndex) -> Option<CallSiteId> {
-        self.callsite_map.get(&(func_id, bc_pos)).cloned()
+    pub(crate) fn get_callsite_id(&self, iseq_id: ISeqId, bc_pos: BcIndex) -> Option<CallSiteId> {
+        self[iseq_id].callsite_map.get(&bc_pos).cloned()
     }
 
     pub(crate) fn set_func_data(&mut self, func_id: FuncId) {

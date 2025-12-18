@@ -135,6 +135,10 @@ impl SlotContext {
         SlotId(0)..SlotId(self.slots.len() as u16)
     }
 
+    pub(super) fn all_regs_except_self(&self) -> std::ops::Range<SlotId> {
+        SlotId(1)..SlotId(self.slots.len() as u16)
+    }
+
     fn temps(&self) -> std::ops::Range<SlotId> {
         self.temp_start()..SlotId(self.slots.len() as u16)
     }

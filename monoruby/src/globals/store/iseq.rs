@@ -141,6 +141,8 @@ pub struct ISeqInfo {
     /// Basic block information.
     ///
     pub(crate) bb_info: BasicBlockInfo,
+    /// Map for BcIndex to CallsiteId.
+    pub(super) callsite_map: HashMap<BcIndex, CallSiteId>,
 }
 
 impl std::fmt::Debug for ISeqInfo {
@@ -195,6 +197,7 @@ impl ISeqInfo {
             can_be_inlined: false,
             jit_entry: HashMap::default(),
             bb_info: BasicBlockInfo::default(),
+            callsite_map: HashMap::default(),
         }
     }
 
