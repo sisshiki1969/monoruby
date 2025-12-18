@@ -246,11 +246,10 @@ impl BBContext {
             return;
         };
 
-        let binary_xmm = self.load_binary_xmm(ir, info, pc);
-        if let Some(dst) = dst {
-            let dst = self.def_F(dst);
+        let binary_xmm = self.load_binary_ret_xmm(ir, dst, info, pc);
+        if let Some(dst) = binary_xmm.2 {
             let using_xmm = self.get_using_xmm();
-            ir.xmm_binop(kind, binary_xmm, dst, using_xmm);
+            ir.xmm_binop(kind, binary_xmm.0, binary_xmm.1, dst, using_xmm);
         }
     }
 
@@ -292,7 +291,11 @@ impl BBContext {
             return;
         };
         let binary_xmm = self.load_binary_xmm(ir, info, pc);
-        ir.push(AsmInst::FloatCmp { kind, binary_xmm });
+        ir.push(AsmInst::FloatCmp {
+            kind,
+            lhs: binary_xmm.0,
+            rhs: binary_xmm.1,
+        });
         self.def_rax2acc(ir, dst);
     }
 
@@ -445,6 +448,25 @@ impl BBContext {
             let lhs = self.fetch_float_assume(ir, lhs, lhs_class, pc);
             (lhs, lhs)
         }
+    }
+
+    pub(super) fn load_binary_ret_xmm(
+        &mut self,
+        ir: &mut AsmIr,
+        dst: Option<SlotId>,
+        info: FBinOpInfo,
+        pc: BytecodePtr,
+    ) -> (Xmm, Xmm, Option<Xmm>) {
+        let (lhs, rhs) = self.load_binary_xmm(ir, info, pc);
+        let dst = dst.map(|dst| {
+            if dst == info.lhs {
+                self.def_F_with_xmm(dst, lhs);
+                lhs
+            } else {
+                self.def_F(dst)
+            }
+        });
+        (lhs, rhs, dst)
     }
 
     fn fetch_float_assume(

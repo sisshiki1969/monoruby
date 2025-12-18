@@ -524,13 +524,14 @@ impl AsmIr {
     pub(super) fn xmm_binop(
         &mut self,
         kind: BinOpK,
-        binary_xmm: (Xmm, Xmm),
+        lhs: Xmm,
+        rhs: Xmm,
         dst: Xmm,
         using_xmm: UsingXmm,
     ) {
         self.push(AsmInst::XmmBinOp {
             kind,
-            binary_xmm,
+            binary_xmm: (lhs, rhs),
             dst,
             using_xmm,
         });
@@ -584,7 +585,8 @@ impl AsmIr {
         branch_dest: JitLabel,
     ) {
         self.push(AsmInst::FloatCmpBr {
-            binary_xmm,
+            lhs: binary_xmm.0,
+            rhs: binary_xmm.1,
             kind,
             brkind,
             branch_dest,
@@ -1164,11 +1166,13 @@ pub(super) enum AsmInst {
     },
     FloatCmp {
         kind: CmpKind,
-        binary_xmm: (Xmm, Xmm),
+        lhs: Xmm,
+        rhs: Xmm,
     },
     FloatCmpBr {
         kind: CmpKind,
-        binary_xmm: (Xmm, Xmm),
+        lhs: Xmm,
+        rhs: Xmm,
         brkind: BrKind,
         branch_dest: JitLabel,
     },

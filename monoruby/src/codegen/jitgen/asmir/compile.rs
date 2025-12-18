@@ -502,21 +502,22 @@ impl Codegen {
                 self.cmp_integer(&mode, lhs, rhs);
                 self.condbr_int(kind, branch_dest, brkind);
             }
-            AsmInst::FloatCmp { kind, binary_xmm } => {
+            AsmInst::FloatCmp { kind, lhs, rhs } => {
                 monoasm! { &mut self.jit,
                     xorq rax, rax;
                 };
-                self.cmp_float(binary_xmm);
+                self.cmp_float((lhs, rhs));
                 self.setflag_float(kind);
             }
             AsmInst::FloatCmpBr {
                 kind,
-                binary_xmm,
+                lhs,
+                rhs,
                 brkind,
                 branch_dest,
             } => {
                 let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
-                self.cmp_float(binary_xmm);
+                self.cmp_float((lhs, rhs));
                 self.condbr_float(kind, branch_dest, brkind);
             }
 

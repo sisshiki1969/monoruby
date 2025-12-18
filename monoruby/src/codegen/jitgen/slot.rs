@@ -358,6 +358,13 @@ impl SlotContext {
         xmm
     }
 
+    #[allow(non_snake_case)]
+    pub(crate) fn def_F_with_xmm(&mut self, slot: SlotId, xmm: Xmm) -> Xmm {
+        self.discard(slot);
+        self.set_F(slot, xmm);
+        xmm
+    }
+
     ///
     /// Link *slot* to both of the stack and a new xmm register.
     ///
