@@ -664,6 +664,10 @@ impl<'a> JitContext<'a> {
         self.store[self.iseq_id()].local_num()
     }
 
+    pub(super) fn args(&self) -> std::ops::Range<SlotId> {
+        SlotId(1)..SlotId(self.store[self.iseq_id()].args.total_args() as u16 + 1)
+    }
+
     ///
     /// Get a number of slots. (including `self`, arguments, local variables, and temp registers)
     ///

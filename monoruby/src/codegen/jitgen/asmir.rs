@@ -1683,7 +1683,7 @@ impl Codegen {
         for inst in ir.inst {
             #[cfg(feature = "emit-asm")]
             {
-                println!("  ; {}", inst.dump(store));
+                //eprintln!("  ; {}", inst.dump(store));
             }
             self.compile_asmir(store, frame, &side_exits, inst, class_version.clone());
         }

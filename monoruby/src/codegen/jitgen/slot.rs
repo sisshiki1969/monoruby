@@ -27,12 +27,12 @@ impl std::fmt::Debug for SlotContext {
 }
 
 impl SlotContext {
-    fn new(cc: &JitContext) -> Self {
+    fn new(cc: &JitContext, default: LinkMode) -> Self {
         let total_reg_num = cc.total_reg_num();
         let local_num = cc.local_num();
         let self_class = Guarded::from_class(cc.self_class());
         let mut ctx = SlotContext {
-            slots: vec![LinkMode::default(); total_reg_num],
+            slots: vec![default; total_reg_num],
             liveness: vec![IsUsed::default(); total_reg_num],
             xmm: {
                 let v: Vec<Vec<SlotId>> = (0..14).map(|_| vec![]).collect();
@@ -46,11 +46,14 @@ impl SlotContext {
     }
 
     pub(super) fn new_loop(cc: &JitContext) -> Self {
-        Self::new(cc)
+        SlotContext::new(cc, LinkMode::default())
     }
 
     pub(super) fn new_method(cc: &JitContext) -> Self {
-        let mut ctx = Self::new(cc);
+        let mut ctx = SlotContext::new(cc, LinkMode::V);
+        for i in cc.args() {
+            ctx.set_mode(i, LinkMode::default());
+        }
 
         if let JitType::Specialized {
             args_info: JitArgumentInfo(Some(args)),
@@ -79,7 +82,6 @@ impl SlotContext {
                 ctx.set_MaybeNone(kw + i);
             }
         }
-        ctx.clear_temps();
         ctx
     }
 
@@ -139,17 +141,6 @@ impl SlotContext {
 
     pub(super) fn temp_start(&self) -> SlotId {
         SlotId((1 + self.local_num) as u16)
-    }
-
-    ///
-    /// Clear temporary slots.
-    ///
-    /// Temporary slots are set to V.
-    ///
-    pub(super) fn clear_temps(&mut self) {
-        for i in self.temps() {
-            self.clear(i);
-        }
     }
 
     pub(super) fn mode(&self, slot: SlotId) -> LinkMode {
@@ -243,6 +234,12 @@ impl SlotContext {
             }
             self.clear(slot);
             self.is_used_mut(slot).kill();
+        }
+    }
+
+    pub(super) fn discard_temps(&mut self) {
+        for slot in self.temps() {
+            self.discard(slot);
         }
     }
 
@@ -861,7 +858,10 @@ impl SlotContext {
                 ir.acc2stack(slot);
             }
             LinkMode::Sf(_, _) | LinkMode::S(_) => {}
-            LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
+            LinkMode::V => {
+                ir.push(AsmInst::LitToStack(Value::nil(), slot));
+            }
+            LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("to_S() {:?}", self.mode(slot));
             }
         }
@@ -974,6 +974,7 @@ impl LinkMode {
             LinkMode::Sf(_, guarded) => (*guarded).into(),
             LinkMode::F(_) => Guarded::Float,
             LinkMode::C(v) => Guarded::from_concrete_value(*v),
+            LinkMode::V => Guarded::Class(NIL_CLASS),
             _ => unreachable!("{:?}", self),
         }
     }

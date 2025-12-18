@@ -729,7 +729,9 @@ impl<'a> JitContext<'a> {
                 bbctx.write_back_locals_if_captured(ir);
                 bbctx.load(ir, ret, GP::Rax);
                 ir.push(AsmInst::Ret);
-                return CompileResult::Return(bbctx.mode(ret).as_result());
+                let result = bbctx.mode(ret).as_result();
+                bbctx.discard_temps();
+                return CompileResult::Return(result);
             }
             TraceIr::MethodRet(ret) => {
                 bbctx.write_back_locals_if_captured(ir);
@@ -739,7 +741,9 @@ impl<'a> JitContext<'a> {
                 } else {
                     ir.push(AsmInst::MethodRet(pc));
                 }
-                return CompileResult::MethodReturn(bbctx.mode(ret).as_result());
+                let result = bbctx.mode(ret).as_result();
+                bbctx.discard_temps();
+                return CompileResult::MethodReturn(result);
             }
             TraceIr::BlockBreak(ret) => {
                 bbctx.write_back_locals_if_captured(ir);
@@ -749,7 +753,9 @@ impl<'a> JitContext<'a> {
                 } else {
                     ir.push(AsmInst::BlockBreak(pc));
                 }
-                return CompileResult::Break(bbctx.mode(ret).as_result());
+                let result = bbctx.mode(ret).as_result();
+                bbctx.discard_temps();
+                return CompileResult::Break(result);
             }
             TraceIr::Raise(ret) => {
                 bbctx.locals_to_S(ir);
