@@ -50,7 +50,7 @@ impl MethodTableEntry {
 pub struct Store {
     /// function info.
     pub(crate) functions: function::Funcs,
-    /// ISEQ info.
+    /// ISeq info.
     pub(crate) iseqs: Vec<ISeqInfo>,
     /// class table.
     classes: ClassInfoTable,
@@ -494,6 +494,19 @@ impl Store {
             offsets,
         });
         OptCaseId::from(id as u32)
+    }
+
+    pub(crate) fn new_callsite_map_entry(
+        &mut self,
+        iseq_id: ISeqId,
+        bc_pos: BcIndex,
+        callsite_id: CallSiteId,
+    ) {
+        self[iseq_id].callsite_map.insert(bc_pos, callsite_id);
+    }
+
+    pub(crate) fn get_callsite_id(&self, iseq_id: ISeqId, bc_pos: BcIndex) -> Option<CallSiteId> {
+        self[iseq_id].callsite_map.get(&bc_pos).cloned()
     }
 
     pub(crate) fn set_func_data(&mut self, func_id: FuncId) {

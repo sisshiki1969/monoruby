@@ -1,3 +1,7 @@
+use ruruby_parse::CmpKind;
+
+use crate::bytecodegen::BinOpK;
+
 use super::*;
 use std::num::NonZeroU32;
 use std::sync::{LazyLock, RwLock};
@@ -49,6 +53,36 @@ impl From<u32> for IdentId {
     fn from(id: u32) -> Self {
         let id = NonZeroU32::new(id).unwrap();
         IdentId(id)
+    }
+}
+
+impl From<CmpKind> for IdentId {
+    fn from(kind: CmpKind) -> Self {
+        match kind {
+            CmpKind::Eq => IdentId::_EQ,
+            CmpKind::Ne => IdentId::_NEQ,
+            CmpKind::Lt => IdentId::_LT,
+            CmpKind::Le => IdentId::_LE,
+            CmpKind::Gt => IdentId::_GT,
+            CmpKind::Ge => IdentId::_GE,
+            CmpKind::TEq => IdentId::_TEQ,
+        }
+    }
+}
+
+impl From<BinOpK> for IdentId {
+    fn from(kind: BinOpK) -> Self {
+        match kind {
+            BinOpK::Add => IdentId::_ADD,
+            BinOpK::Sub => IdentId::_SUB,
+            BinOpK::Mul => IdentId::_MUL,
+            BinOpK::Div => IdentId::_DIV,
+            BinOpK::BitOr => IdentId::_BOR,
+            BinOpK::BitAnd => IdentId::_BAND,
+            BinOpK::BitXor => IdentId::_BXOR,
+            BinOpK::Rem => IdentId::_REM,
+            BinOpK::Exp => IdentId::_POW,
+        }
     }
 }
 

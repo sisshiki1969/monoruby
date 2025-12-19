@@ -64,7 +64,7 @@ impl BytecodeGen {
                         CmpKind::Gt
                     },
                     Some(dst),
-                    BinopMode::RR(counter.into(), end),
+                    (counter.into(), end),
                     true,
                 ),
                 loc,
@@ -75,14 +75,13 @@ impl BytecodeGen {
             self.gen_expr(*body.body, UseMode2::NotUse)?;
             self.apply_label(next_dest);
 
+            let inc = self.push().into();
+            self.emit_integer(inc, 1);
             self.emit(
-                BytecodeInst::BinOp(
-                    BinOpK::Add,
-                    Some(counter.into()),
-                    BinopMode::RI(counter.into(), 1),
-                ),
+                BytecodeInst::BinOp(BinOpK::Add, Some(counter.into()), (counter.into(), inc)),
                 loc,
             );
+            self.pop();
             self.emit_br(loop_start);
 
             self.apply_label(loop_exit);

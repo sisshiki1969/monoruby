@@ -1,14 +1,14 @@
 use super::*;
 
-impl JitContext {
+impl<'a> JitContext<'a> {
     ///
     /// Generate bridge AsmIr for backedge branches.
     ///
-    pub(super) fn backedge_branches(&mut self, iseq: &ISeqInfo) {
+    pub(super) fn backedge_branches(&mut self) {
         let branch_map = self.detach_branch_map();
         for (bbid, entries) in branch_map.into_iter() {
             let target = self.remove_backedge(bbid).unwrap();
-            let pc = iseq.get_bb_pc(bbid);
+            let pc = self.iseq().get_bb_pc(bbid);
             #[cfg(feature = "jit-debug")]
             eprintln!("  backedge_bridge to: {bbid:?} {target:?}");
             for BranchEntry {
@@ -58,12 +58,11 @@ impl JitContext {
     /// ```
     pub(super) fn incoming_context(
         &mut self,
-        store: &Store,
-        iseq: &ISeqInfo,
         bbid: BasicBlockId,
         no_calc_backedge: bool,
     ) -> Option<BBContext> {
         let entries = self.remove_branch(bbid)?;
+        let iseq = self.iseq();
         let pc = iseq.get_bb_pc(bbid);
 
         let res = if let Some((loop_start, loop_end)) = iseq.bb_info.is_loop_begin(bbid) {
@@ -72,21 +71,19 @@ impl JitContext {
 
             let incoming = BBContext::join_entries(&entries);
             if !no_calc_backedge {
-                self.analyse_backedge_fixpoint(store, incoming.clone(), loop_start, loop_end);
+                self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end);
             }
 
             let mut target = incoming;
             if let Some((liveness, backedge)) = self.loop_info(bbid) {
                 if let Some(backedge) = backedge {
-                    #[cfg(feature = "jit-debug")]
-                    eprintln!("  backedge : {:?}", backedge.slot_state);
                     target.join(&backedge);
                 }
 
                 target.liveness_analysis(liveness);
             }
             #[cfg(feature = "jit-debug")]
-            eprintln!("  target:  {:?}", target.slot_state);
+            eprintln!("  target:  {:?}\n", target.slot_state);
 
             self.gen_bridges_for_branches(&target, entries, bbid, pc + 1);
             self.new_backedge(target.slot_state.clone(), bbid);

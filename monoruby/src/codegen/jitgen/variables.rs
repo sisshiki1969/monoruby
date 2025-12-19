@@ -1,6 +1,6 @@
 use super::*;
 
-impl JitContext {
+impl<'a> JitContext<'a> {
     pub(in crate::codegen::jitgen) fn load_ivar(
         &mut self,
         bbctx: &mut BBContext,

@@ -38,7 +38,7 @@ impl IncomingBranches {
 
 impl BytecodeGen {
     pub(super) fn into_bytecode(mut self, store: &mut Store, loc: Loc) -> Result<()> {
-        let func_id = self.id;
+        let func_id = self.func_id;
         for (dst, (dst_sp, src)) in std::mem::take(&mut self.merge_info) {
             let dst_idx = self[dst];
             let dst_sp = dst_sp.unwrap();
@@ -48,7 +48,7 @@ impl BytecodeGen {
             } in src
             {
                 if dst_sp != src_sp {
-                    let name = store.iseq(self.id).name();
+                    let name = store.iseq(self.func_id).name();
                     eprintln!(
                         "warning: sp mismatch: {name} {:?}:{:?} <- {:?}:{:?}",
                         dst_idx, dst_sp, src_idx, src_sp
@@ -441,6 +441,52 @@ impl BytecodeGen {
                 self.encode_call(store, opcode, callsite, bc_pos, loc)?
             }
             BytecodeInst::InlineCache(box callsite) => self.encode_cache(130, callsite)?,
+            BytecodeInst::BinOp(kind, ret, (lhs, rhs)) => {
+                let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
+                let op2 = self.slot_id(&lhs);
+                let op3 = self.slot_id(&rhs);
+                let name = kind.into();
+                let callid = self.new_callsite(
+                    store,
+                    CallSite::binary(Some(name), lhs, rhs, ret),
+                    bc_pos,
+                    loc,
+                )?;
+                store.new_callsite_map_entry(self.iseq_id, bc_pos, callid);
+                Bytecode::from_with_class2(enc_www(200 + kind as u16, op1.0, op2.0, op3.0))
+            }
+            BytecodeInst::Cmp(kind, ret, (lhs, rhs), optimizable) => {
+                let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
+                let op2 = self.slot_id(&lhs);
+                let op3 = self.slot_id(&rhs);
+                let op = if optimizable {
+                    enc_www(154 + kind as u16, op1.0, op2.0, op3.0)
+                } else {
+                    enc_www(134 + kind as u16, op1.0, op2.0, op3.0)
+                };
+                let name = kind.into();
+                let callid = self.new_callsite(
+                    store,
+                    CallSite::binary(Some(name), lhs, rhs, ret),
+                    bc_pos,
+                    loc,
+                )?;
+                store.new_callsite_map_entry(self.iseq_id, bc_pos, callid);
+                Bytecode::from_with_class2(op)
+            }
+            BytecodeInst::Index(ret, base, idx) => {
+                let op1 = self.slot_id(&ret);
+                let op2 = self.slot_id(&base);
+                let op3 = self.slot_id(&idx);
+                let callid = self.new_callsite(
+                    store,
+                    CallSite::binary(Some(IdentId::_INDEX), base, idx, Some(ret)),
+                    bc_pos,
+                    loc,
+                )?;
+                store.new_callsite_map_entry(self.iseq_id, bc_pos, callid);
+                Bytecode::from_with_class2(enc_www(132, op1.0, op2.0, op3.0))
+            }
             BytecodeInst::Array(ret, box callsite) => {
                 // 39
                 let op1 = self.slot_id(&ret);
@@ -510,42 +556,11 @@ impl BytecodeGen {
                 let op2 = self.slot_id(&src);
                 Bytecode::from_with_class_and_version(enc_ww(129, op1.0, op2.0), None, -1i32 as u32)
             }
-            BytecodeInst::Index(ret, base, idx) => {
-                let op1 = self.slot_id(&ret);
-                let op2 = self.slot_id(&base);
-                let op3 = self.slot_id(&idx);
-                Bytecode::from_with_class2(enc_www(132, op1.0, op2.0, op3.0))
-            }
             BytecodeInst::StoreIndex(src, base, idx) => {
                 let op1 = self.slot_id(&src);
                 let op2 = self.slot_id(&base);
                 let op3 = self.slot_id(&idx);
                 Bytecode::from_with_class2(enc_www(133, op1.0, op2.0, op3.0))
-            }
-            BytecodeInst::Cmp(kind, ret, mode, optimizable) => {
-                let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
-                match mode {
-                    BinopMode::RR(lhs, rhs) => {
-                        let op2 = self.slot_id(&lhs);
-                        let op3 = self.slot_id(&rhs);
-                        let op = if optimizable {
-                            enc_www(154 + kind as u16, op1.0, op2.0, op3.0)
-                        } else {
-                            enc_www(134 + kind as u16, op1.0, op2.0, op3.0)
-                        };
-                        Bytecode::from_with_class2(op)
-                    }
-                    BinopMode::RI(lhs, rhs) => {
-                        let op2 = self.slot_id(&lhs);
-                        let op = if optimizable {
-                            enc_wwsw(162 + kind as u16, op1.0, op2.0, rhs)
-                        } else {
-                            enc_wwsw(142 + kind as u16, op1.0, op2.0, rhs)
-                        };
-                        Bytecode::from_with_class2(op)
-                    }
-                    _ => unreachable!(),
-                }
             }
             BytecodeInst::ArrayTEq { lhs, rhs } => {
                 let op1 = self.slot_id(&lhs);
@@ -609,24 +624,6 @@ impl BytecodeGen {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
                 let op2 = self.slot_id(&BcReg::from(arg));
                 Bytecode::from(enc_www(179, op1.0, op2.0, len as u16))
-            }
-            BytecodeInst::BinOp(kind, ret, mode) => {
-                let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
-                match mode {
-                    BinopMode::IR(lhs, rhs) => {
-                        let op3 = self.slot_id(&rhs);
-                        Bytecode::from_with_class2(enc_wsww(180 + kind as u16, op1.0, lhs, op3.0))
-                    }
-                    BinopMode::RI(lhs, rhs) => {
-                        let op2 = self.slot_id(&lhs);
-                        Bytecode::from_with_class2(enc_wwsw(190 + kind as u16, op1.0, op2.0, rhs))
-                    }
-                    BinopMode::RR(lhs, rhs) => {
-                        let op2 = self.slot_id(&lhs);
-                        let op3 = self.slot_id(&rhs);
-                        Bytecode::from_with_class2(enc_www(200 + kind as u16, op1.0, op2.0, op3.0))
-                    }
-                }
             }
         };
         Ok(bc)
@@ -802,12 +799,4 @@ fn enc_www_fn_info(opcode: u16, fn_info: &FnInitInfo) -> u64 {
         *arg_num as u16,
         *stack_offset as u16,
     )
-}
-
-fn enc_wsww(opcode: u16, op1: u16, op2: i16, op3: u16) -> u64 {
-    enc_www(opcode, op1, op2 as u16, op3)
-}
-
-fn enc_wwsw(opcode: u16, op1: u16, op2: u16, op3: i16) -> u64 {
-    enc_www(opcode, op1, op2, op3 as u16)
 }

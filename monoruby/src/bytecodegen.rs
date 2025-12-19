@@ -64,10 +64,11 @@ fn bytecode_compile_func(
         optional_info,
         loc,
     } = globals.functions.get_compile_info();
+    let iseq = globals[func_id].as_iseq();
     let info = globals.iseq(func_id);
     let (fid, outer) = info.mother();
     let params = globals.iseq(fid).args.clone();
-    let mut r#gen = BytecodeGen::new(info, (fid, params, outer), binding);
+    let mut r#gen = BytecodeGen::new(iseq, info, (fid, params, outer), binding);
     // arguments preparation
     for ForParamInfo {
         dst_outer,
@@ -208,15 +209,6 @@ impl std::fmt::Debug for BcLocal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 struct Label(usize);
 
-fn is_smi(node: &Node) -> Option<i16> {
-    if let NodeKind::Integer(i) = &node.kind {
-        if *i == *i as i16 as i64 {
-            return Some(*i as i16);
-        }
-    }
-    None
-}
-
 #[derive(Debug, Clone, PartialEq)]
 enum LvalueKind {
     Const {
@@ -337,6 +329,15 @@ impl CallSite {
         dst: Option<BcReg>,
     ) -> CallSite {
         CallSite::new(name, len, None, vec![], None, None, args, recv, dst, false)
+    }
+
+    fn binary(
+        name: impl Into<Option<IdentId>>,
+        lhs: BcReg,
+        rhs: BcReg,
+        dst: Option<BcReg>,
+    ) -> CallSite {
+        CallSite::simple(name, 1, rhs, lhs, dst)
     }
 
     fn has_splat(&self) -> bool {
@@ -494,8 +495,9 @@ struct MergeSourceInfo {
 
 #[derive(Debug)]
 struct BytecodeGen {
+    iseq_id: ISeqId,
     /// ID of this function.
-    id: FuncId,
+    func_id: FuncId,
     /// ID of the mother method.
     mother: (FuncId, ParamsInfo, usize),
     /// bytecode IR.
@@ -541,12 +543,14 @@ impl std::ops::Index<Label> for BytecodeGen {
 
 impl BytecodeGen {
     fn new(
+        iseq_id: ISeqId,
         info: &ISeqInfo,
         mother: (FuncId, ParamsInfo, usize),
         binding: Option<LvarCollector>,
     ) -> Self {
         let mut ir = Self {
-            id: info.func_id(),
+            iseq_id,
+            func_id: info.func_id(),
             mother,
             ir: vec![],
             sp: vec![],
@@ -795,7 +799,7 @@ impl BytecodeGen {
         let (mother, _, outer) = self.mother;
         self.add_block(
             (mother, outer + 1),
-            (self.id, outer_locals),
+            (self.func_id, outer_locals),
             optional_params,
             block,
         )
@@ -804,7 +808,7 @@ impl BytecodeGen {
     fn handle_lambda(&mut self, block: BlockInfo) -> Functions {
         let outer_locals = self.get_locals();
         let (mother, _, outer) = self.mother;
-        self.add_lambda((mother, outer + 1), (self.id, outer_locals), block)
+        self.add_lambda((mother, outer + 1), (self.func_id, outer_locals), block)
     }
 }
 
@@ -1427,23 +1431,23 @@ impl BytecodeGen {
 //
 impl BytecodeGen {
     fn syntax_error(&self, msg: impl Into<String>, loc: Loc) -> MonorubyErr {
-        MonorubyErr::syntax(msg.into(), loc, self.sourceinfo.clone(), self.id)
+        MonorubyErr::syntax(msg.into(), loc, self.sourceinfo.clone(), self.func_id)
     }
 
     fn unsupported_feature(&self, msg: &str, loc: Loc) -> MonorubyErr {
-        MonorubyErr::unsupported_feature(msg, loc, self.sourceinfo.clone(), self.id)
+        MonorubyErr::unsupported_feature(msg, loc, self.sourceinfo.clone(), self.func_id)
     }
 
     fn unsupported_lhs(&self, lhs: &Node) -> MonorubyErr {
-        MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone(), self.id)
+        MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone(), self.func_id)
     }
 
     fn unsupported_node(&self, expr: &Node) -> MonorubyErr {
-        MonorubyErr::unsupported_node(expr, self.sourceinfo.clone(), self.id)
+        MonorubyErr::unsupported_node(expr, self.sourceinfo.clone(), self.func_id)
     }
 
     fn escape_from_eval(&self, msg: &str, loc: Loc) -> MonorubyErr {
-        MonorubyErr::escape_from_eval(msg, loc, self.sourceinfo.clone(), self.id)
+        MonorubyErr::escape_from_eval(msg, loc, self.sourceinfo.clone(), self.func_id)
     }
 
     fn cant_set_variable(&self, id: u32, loc: Loc) -> MonorubyErr {
@@ -1534,20 +1538,6 @@ impl BinOpK {
             BinOpK::Exp => pow_values,
         }
     }*/
-
-    pub(crate) fn to_id(&self) -> IdentId {
-        match self {
-            BinOpK::Add => IdentId::_ADD,
-            BinOpK::Sub => IdentId::_SUB,
-            BinOpK::Mul => IdentId::_MUL,
-            BinOpK::Div => IdentId::_DIV,
-            BinOpK::BitOr => IdentId::_BOR,
-            BinOpK::BitAnd => IdentId::_BAND,
-            BinOpK::BitXor => IdentId::_BXOR,
-            BinOpK::Rem => IdentId::_REM,
-            BinOpK::Exp => IdentId::_POW,
-        }
-    }
 }
 
 ///

@@ -27,12 +27,12 @@ impl std::fmt::Debug for SlotContext {
 }
 
 impl SlotContext {
-    fn new(cc: &JitContext, store: &Store) -> Self {
-        let total_reg_num = cc.total_reg_num(store);
-        let local_num = cc.local_num(store);
+    fn new(cc: &JitContext, default: LinkMode) -> Self {
+        let total_reg_num = cc.total_reg_num();
+        let local_num = cc.local_num();
         let self_class = Guarded::from_class(cc.self_class());
         let mut ctx = SlotContext {
-            slots: vec![LinkMode::default(); total_reg_num],
+            slots: vec![default; total_reg_num],
             liveness: vec![IsUsed::default(); total_reg_num],
             xmm: {
                 let v: Vec<Vec<SlotId>> = (0..14).map(|_| vec![]).collect();
@@ -45,12 +45,15 @@ impl SlotContext {
         ctx
     }
 
-    pub(super) fn new_loop(cc: &JitContext, store: &Store) -> Self {
-        Self::new(cc, store)
+    pub(super) fn new_loop(cc: &JitContext) -> Self {
+        SlotContext::new(cc, LinkMode::default())
     }
 
-    pub(super) fn new_method(cc: &JitContext, store: &Store) -> Self {
-        let mut ctx = Self::new(cc, store);
+    pub(super) fn new_method(cc: &JitContext) -> Self {
+        let mut ctx = SlotContext::new(cc, LinkMode::V);
+        for i in cc.args() {
+            ctx.set_mode(i, LinkMode::default());
+        }
 
         if let JitType::Specialized {
             args_info: JitArgumentInfo(Some(args)),
@@ -66,8 +69,8 @@ impl SlotContext {
                 }
             }
         } else {
-            let fid = store[cc.iseq_id()].func_id();
-            let info = &store[fid];
+            let fid = cc.func_id();
+            let info = &cc.store[fid];
             // Set optional arguments to MaybeNone.
             for i in info.req_num()..info.reqopt_num() {
                 let slot = SlotId(1 + i as u16);
@@ -79,7 +82,6 @@ impl SlotContext {
                 ctx.set_MaybeNone(kw + i);
             }
         }
-        ctx.clear_temps();
         ctx
     }
 
@@ -133,23 +135,16 @@ impl SlotContext {
         SlotId(0)..SlotId(self.slots.len() as u16)
     }
 
+    pub(super) fn all_regs_except_self(&self) -> std::ops::Range<SlotId> {
+        SlotId(1)..SlotId(self.slots.len() as u16)
+    }
+
     fn temps(&self) -> std::ops::Range<SlotId> {
         self.temp_start()..SlotId(self.slots.len() as u16)
     }
 
     pub(super) fn temp_start(&self) -> SlotId {
         SlotId((1 + self.local_num) as u16)
-    }
-
-    ///
-    /// Clear temporary slots.
-    ///
-    /// Temporary slots are set to V.
-    ///
-    pub(super) fn clear_temps(&mut self) {
-        for i in self.temps() {
-            self.clear(i);
-        }
     }
 
     pub(super) fn mode(&self, slot: SlotId) -> LinkMode {
@@ -243,6 +238,12 @@ impl SlotContext {
             }
             self.clear(slot);
             self.is_used_mut(slot).kill();
+        }
+    }
+
+    pub(super) fn discard_temps(&mut self) {
+        for slot in self.temps() {
+            self.discard(slot);
         }
     }
 
@@ -361,6 +362,13 @@ impl SlotContext {
         xmm
     }
 
+    #[allow(non_snake_case)]
+    pub(crate) fn def_F_with_xmm(&mut self, slot: SlotId, xmm: Xmm) -> Xmm {
+        self.discard(slot);
+        self.set_F(slot, xmm);
+        xmm
+    }
+
     ///
     /// Link *slot* to both of the stack and a new xmm register.
     ///
@@ -441,10 +449,19 @@ impl SlotContext {
         }
     }
 
-    pub fn is_u16_literal(&self, slot: SlotId) -> Option<u16> {
+    pub fn is_u16(&self, slot: SlotId) -> Option<u16> {
         if let LinkMode::C(v) = self.mode(slot) {
             let i = v.try_fixnum()?;
             u16::try_from(i).ok()
+        } else {
+            None
+        }
+    }
+
+    pub fn is_i16_literal(&self, slot: SlotId) -> Option<i16> {
+        if let LinkMode::C(v) = self.mode(slot) {
+            let i = v.try_fixnum()?;
+            i16::try_from(i).ok()
         } else {
             None
         }
@@ -852,7 +869,10 @@ impl SlotContext {
                 ir.acc2stack(slot);
             }
             LinkMode::Sf(_, _) | LinkMode::S(_) => {}
-            LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
+            LinkMode::V => {
+                ir.push(AsmInst::LitToStack(Value::nil(), slot));
+            }
+            LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("to_S() {:?}", self.mode(slot));
             }
         }
@@ -965,6 +985,7 @@ impl LinkMode {
             LinkMode::Sf(_, guarded) => (*guarded).into(),
             LinkMode::F(_) => Guarded::Float,
             LinkMode::C(v) => Guarded::from_concrete_value(*v),
+            LinkMode::V => Guarded::Class(NIL_CLASS),
             _ => unreachable!("{:?}", self),
         }
     }

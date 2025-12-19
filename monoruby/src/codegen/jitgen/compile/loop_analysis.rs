@@ -1,19 +1,16 @@
 use super::*;
 
-impl JitContext {
+impl<'a> JitContext<'a> {
     pub(in crate::codegen::jitgen) fn analyse_backedge_fixpoint(
         &mut self,
-        store: &Store,
         bbctx: BBContext,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
     ) {
-        let iseq_id = self.iseq_id();
         for x in 0..10 {
             #[cfg(feature = "jit-debug")]
             eprintln!("########## analyse iteration[{x}]");
-            let (liveness, backedge) =
-                self.analyse_loop(store, iseq_id, loop_start, loop_end, bbctx.clone());
+            let (liveness, backedge) = self.analyse_loop(loop_start, loop_end, bbctx.clone());
             if let Some(backedge) = backedge {
                 if let Some(be) = self.loop_backedge(loop_start)
                     && be.equiv(&backedge)
@@ -41,15 +38,14 @@ impl JitContext {
 
     fn analyse_loop(
         &self,
-        store: &Store,
-        iseq_id: ISeqId,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
         mut bbctx: BBContext,
     ) -> (Liveness, Option<BBContext>) {
-        let pc = store[iseq_id].get_bb_pc(loop_start);
+        let iseq_id = self.iseq_id();
+        let pc = self.store[iseq_id].get_bb_pc(loop_start);
         let mut ctx = JitContext::loop_analysis(self, pc);
-        let mut liveness = Liveness::new(ctx.total_reg_num(store));
+        let mut liveness = Liveness::new(ctx.total_reg_num());
 
         if let Some(backedge) = self.loop_backedge(loop_start) {
             bbctx.join(backedge);
@@ -57,14 +53,7 @@ impl JitContext {
         ctx.branch_continue(loop_start, bbctx);
 
         for bbid in loop_start..=loop_end {
-            ctx.analyse_basic_block(
-                store,
-                iseq_id,
-                &mut liveness,
-                bbid,
-                bbid == loop_start,
-                bbid == loop_end,
-            );
+            ctx.analyse_basic_block(&mut liveness, bbid, bbid == loop_start, bbid == loop_end);
         }
 
         let mut backedge: Option<BBContext> = None;
@@ -101,16 +90,15 @@ impl JitContext {
 
     fn analyse_basic_block(
         &mut self,
-        store: &Store,
-        iseq_id: ISeqId,
         liveness: &mut Liveness,
         bbid: BasicBlockId,
         is_start: bool,
         is_last: bool,
     ) {
+        let iseq_id = self.iseq_id();
         let mut ir = AsmIr::new(self);
-        let iseq = &store[iseq_id];
-        let mut bbctx = match self.incoming_context(store, iseq, bbid, is_start) {
+        let iseq = &self.store[iseq_id];
+        let mut bbctx = match self.incoming_context(bbid, is_start) {
             Some(bb) => bb,
             None => return,
         };
@@ -119,10 +107,10 @@ impl JitContext {
         for bc_pos in begin..=end {
             bbctx.next_sp = iseq.get_sp(bc_pos);
 
-            match self.compile_instruction(&mut ir, &mut bbctx, store, iseq, bc_pos) {
+            match self.compile_instruction(&mut ir, &mut bbctx, bc_pos) {
                 CompileResult::Continue => {}
                 CompileResult::Branch(dest_bb) => {
-                    self.new_branch(iseq, bc_pos, dest_bb, bbctx);
+                    self.new_branch(bc_pos, dest_bb, bbctx);
                     return;
                 }
                 CompileResult::Cease => return,
@@ -136,7 +124,7 @@ impl JitContext {
                     return;
                 }
                 CompileResult::Abort => {
-                    store.dump_iseq(iseq_id);
+                    self.store.dump_iseq(iseq_id);
                     unreachable!()
                 }
             }
@@ -144,7 +132,7 @@ impl JitContext {
         }
 
         if !is_last {
-            self.prepare_next(bbctx, iseq, end);
+            self.prepare_next(bbctx, end);
         }
     }
 }

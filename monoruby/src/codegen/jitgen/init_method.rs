@@ -7,7 +7,7 @@ impl Codegen {
     /// ### stack pointer adjustment
     /// - `fn_info`.`stack_offset` * 16
     ///
-    pub(super) fn init_func(&mut self, fn_info: &FnInitInfo, is_method: bool) {
+    pub(super) fn init_func(&mut self, fn_info: &FnInitInfo, not_captured: bool) {
         let FnInitInfo {
             reg_num,
             arg_num,
@@ -22,7 +22,7 @@ impl Codegen {
         );
 
         let l1 = self.jit.label();
-        if !is_method {
+        if !not_captured {
             self.branch_if_captured(&l1);
         }
         // fill nil to non-argument locals and temporary registers.

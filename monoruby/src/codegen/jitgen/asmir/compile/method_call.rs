@@ -216,33 +216,6 @@ impl Codegen {
     }
 
     ///
-    /// Setup a callee frame for binop method call.
-    ///
-    /// ### in
-    /// - r13: receiver
-    ///
-    /// ### destroy
-    /// - rax
-    ///
-    pub(super) fn setup_binop_frame(&mut self, meta: Meta) {
-        monoasm! { &mut self.jit,
-            subq rsp, 32;
-            // set outer
-            xorq rax, rax;
-            pushq rax;
-            // set meta.
-            movq rax, (meta.get());
-            pushq rax;
-            // set block
-            xorq rax, rax;
-            pushq rax;
-            // set self
-            pushq r13;
-            addq rsp, 64;
-        };
-    }
-
-    ///
     /// Set up a callee block frame for yield.
     ///
     /// ### destroy

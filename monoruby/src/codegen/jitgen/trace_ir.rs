@@ -9,14 +9,6 @@ pub(crate) enum OpMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct BinOpInfo {
-    pub dst: Option<SlotId>,
-    pub mode: OpMode,
-    pub lhs_class: ClassId,
-    pub rhs_class: ClassId,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum FOpClass {
     Float,
     Integer,
@@ -48,21 +40,10 @@ impl From<ClassId> for FOpClass {
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct FBinOpInfo {
-    pub dst: Option<SlotId>,
-    pub mode: OpMode,
+    pub lhs: SlotId,
+    pub rhs: SlotId,
     pub lhs_class: FOpClass,
     pub rhs_class: FOpClass,
-}
-
-impl Into<BinOpInfo> for FBinOpInfo {
-    fn into(self) -> BinOpInfo {
-        BinOpInfo {
-            dst: self.dst,
-            mode: self.mode,
-            lhs_class: self.lhs_class.into(),
-            rhs_class: self.rhs_class.into(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -174,23 +155,26 @@ pub(crate) enum TraceIr {
         src: SlotId,
         ic: Option<ClassId>,
     },
+
     BinOp {
         kind: BinOpK,
         dst: Option<SlotId>,
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         ic: Option<(ClassId, ClassId)>,
     },
-
     BinCmp {
         kind: ruruby_parse::CmpKind,
         dst: Option<SlotId>,
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         ic: Option<(ClassId, ClassId)>,
     },
     BinCmpBr {
         kind: ruruby_parse::CmpKind,
         dst: Option<SlotId>,
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         dest_bb: BasicBlockId,
         brkind: BrKind,
         ic: Option<(ClassId, ClassId)>,
@@ -371,32 +355,20 @@ impl TraceIr {
             store: &Store,
             kind: ruruby_parse::CmpKind,
             dst: Option<SlotId>,
-            mode: &OpMode,
+            lhs: SlotId,
+            rhs: SlotId,
             class: impl Into<Option<(ClassId, ClassId)>>,
             optimizable: bool,
         ) -> String {
             let class: Option<(ClassId, ClassId)> = class.into();
-            let s = match mode {
-                OpMode::RR(lhs, rhs) => {
-                    format!(
-                        "{}{} = {:?} {:?} {:?}",
-                        optstr(optimizable),
-                        ret_str(dst),
-                        lhs,
-                        kind,
-                        rhs,
-                    )
-                }
-                OpMode::RI(lhs, rhs) => format!(
-                    "{}{} = {:?} {:?} {}: i16",
-                    optstr(optimizable),
-                    ret_str(dst),
-                    lhs,
-                    kind,
-                    rhs,
-                ),
-                _ => unreachable!(),
-            };
+            let s = format!(
+                "{}{} = {:?} {:?} {:?}",
+                optstr(optimizable),
+                ret_str(dst),
+                lhs,
+                kind,
+                rhs,
+            );
             fmt(store, s, class)
         }
 
@@ -404,32 +376,12 @@ impl TraceIr {
             store: &Store,
             kind: BinOpK,
             dst: Option<SlotId>,
-            mode: &OpMode,
+            lhs: SlotId,
+            rhs: SlotId,
             class: impl Into<Option<(ClassId, ClassId)>>,
         ) -> String {
             let class: Option<_> = class.into();
-            let (op1, class) = match mode {
-                OpMode::RR(lhs, rhs) => (
-                    format!("{} = {:?} {} {:?}", ret_str(dst), lhs, kind, rhs),
-                    class,
-                ),
-                OpMode::RI(lhs, rhs) => (
-                    format!("{} = {:?} {} {}: i16", ret_str(dst), lhs, kind, rhs),
-                    if let Some((lhs, _)) = class {
-                        Some((lhs, INTEGER_CLASS))
-                    } else {
-                        None
-                    },
-                ),
-                OpMode::IR(lhs, rhs) => (
-                    format!("{} = {}: i16 {} {:?}", ret_str(dst), lhs, kind, rhs),
-                    if let Some((_, rhs)) = class {
-                        Some((INTEGER_CLASS, rhs))
-                    } else {
-                        None
-                    },
-                ),
-            };
+            let op1 = format!("{} = {:?} {} {:?}", ret_str(dst), lhs, kind, rhs);
             fmt(store, op1, class)
         }
 
@@ -633,23 +585,26 @@ impl TraceIr {
             TraceIr::BinOp {
                 kind,
                 dst,
-                mode,
+                lhs,
+                rhs,
                 ic,
-            } => binop_fmt(store, *kind, *dst, mode, ic.clone()),
+            } => binop_fmt(store, *kind, *dst, *lhs, *rhs, ic.clone()),
 
             TraceIr::BinCmp {
                 kind,
                 dst,
-                mode,
+                lhs,
+                rhs,
                 ic,
-            } => cmp_fmt(store, *kind, *dst, mode, ic.clone(), false),
+            } => cmp_fmt(store, *kind, *dst, *lhs, *rhs, ic.clone(), false),
             TraceIr::BinCmpBr {
                 kind,
                 dst,
-                mode,
+                lhs,
+                rhs,
                 ic,
                 ..
-            } => cmp_fmt(store, *kind, *dst, mode, ic.clone(), true),
+            } => cmp_fmt(store, *kind, *dst, *lhs, *rhs, ic.clone(), true),
 
             TraceIr::ArrayTEq { lhs, rhs } => {
                 format!("{lhs:?} = *{lhs:?} === {rhs:?}")

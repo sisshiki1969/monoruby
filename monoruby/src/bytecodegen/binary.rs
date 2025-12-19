@@ -72,7 +72,7 @@ impl BytecodeGen {
         let old = self.temp;
         let lhs = self.push_expr(lhs)?.into();
         self.emit(
-            BytecodeInst::Cmp(CmpKind::TEq, Some(lhs), BinopMode::RR(lhs, rhs), true),
+            BytecodeInst::Cmp(CmpKind::TEq, Some(lhs), (lhs, rhs), true),
             loc,
         );
         self.temp = old;
@@ -158,21 +158,12 @@ impl BytecodeGen {
     /// ### note
     /// `temp` is not moved.
     ///
-    fn gen_mode(&mut self, lhs: Node, rhs: Node) -> Result<BinopMode> {
+    fn gen_mode(&mut self, lhs: Node, rhs: Node) -> Result<(BcReg, BcReg)> {
         let old = self.temp;
-        let mode = if let Some(i) = is_smi(&rhs) {
-            let lhs = self.gen_expr_reg(lhs)?;
-            BinopMode::RI(lhs, i)
-        } else if let Some(i) = is_smi(&lhs) {
-            let rhs = self.gen_expr_reg(rhs)?;
-            BinopMode::IR(i, rhs)
-        } else {
-            let lhs = self.gen_expr_reg(lhs)?;
-            let rhs = self.gen_expr_reg(rhs)?;
-            BinopMode::RR(lhs, rhs)
-        };
+        let lhs = self.gen_expr_reg(lhs)?;
+        let rhs = self.gen_expr_reg(rhs)?;
         self.temp = old;
-        Ok(mode)
+        Ok((lhs, rhs))
     }
 
     gen_ri_ops!(
@@ -212,20 +203,14 @@ impl BytecodeGen {
         loc: Loc,
     ) -> Result<()> {
         let old = self.temp;
-        let mode = if let Some(i) = is_smi(&rhs) {
-            let lhs = self.gen_expr_reg(lhs)?;
-            BinopMode::RI(lhs, i)
-        } else {
-            let lhs = self.gen_expr_reg(lhs)?;
-            let rhs = self.gen_expr_reg(rhs)?;
-            BinopMode::RR(lhs, rhs)
-        };
+        let lhs = self.gen_expr_reg(lhs)?;
+        let rhs = self.gen_expr_reg(rhs)?;
         self.temp = old;
         let dst = match use_mode {
             UseMode2::Store(dst) => Some(dst),
             UseMode2::Push | UseMode2::Ret | UseMode2::NotUse => Some(self.push().into()),
         };
-        self.emit(BytecodeInst::Cmp(kind, dst, mode, optimizable), loc);
+        self.emit(BytecodeInst::Cmp(kind, dst, (lhs, rhs), optimizable), loc);
         match use_mode {
             UseMode2::NotUse => {
                 self.pop();

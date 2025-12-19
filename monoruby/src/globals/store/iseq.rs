@@ -2,7 +2,7 @@ use bytecodegen::{
     BinOpK, UnOpK,
     inst::{BrKind, DynVar, FnInitInfo},
 };
-use jitgen::trace_ir::{OpMode, TraceIr};
+use jitgen::trace_ir::TraceIr;
 use ruruby_parse::CmpKind;
 
 use super::*;
@@ -141,6 +141,8 @@ pub struct ISeqInfo {
     /// Basic block information.
     ///
     pub(crate) bb_info: BasicBlockInfo,
+    /// Map for BcIndex to CallsiteId.
+    pub(super) callsite_map: HashMap<BcIndex, CallSiteId>,
 }
 
 impl std::fmt::Debug for ISeqInfo {
@@ -195,6 +197,7 @@ impl ISeqInfo {
             can_be_inlined: false,
             jit_entry: HashMap::default(),
             bb_info: BasicBlockInfo::default(),
+            callsite_map: HashMap::default(),
         }
     }
 
@@ -741,7 +744,8 @@ impl ISeqInfo {
                 134..=141 => {
                     let kind = CmpKind::from(opcode - 134);
                     let dst = SlotId::from(op1_w1);
-                    let mode = OpMode::RR(SlotId::new(op2_w2), SlotId::new(op3_w3));
+                    let lhs = SlotId::new(op2_w2);
+                    let rhs = SlotId::new(op3_w3);
                     let ic = if let Some(lhs_class) = pc.classid1()
                         && let Some(rhs_class) = pc.classid2()
                     {
@@ -752,26 +756,12 @@ impl ISeqInfo {
                     TraceIr::BinCmp {
                         kind,
                         dst,
-                        mode,
+                        lhs,
+                        rhs,
                         ic,
                     }
                 }
-                142..=149 => {
-                    let kind = CmpKind::from(opcode - 142);
-                    let dst = SlotId::from(op1_w1);
-                    let mode = OpMode::RI(SlotId::new(op2_w2), op3_w3 as i16);
-                    let ic = if let Some(lhs_class) = pc.classid1() {
-                        Some((lhs_class, INTEGER_CLASS))
-                    } else {
-                        None
-                    };
-                    TraceIr::BinCmp {
-                        kind,
-                        dst,
-                        mode,
-                        ic,
-                    }
-                }
+
                 150 => TraceIr::LoadDynVar(
                     SlotId::new(op1_w1),
                     DynVar {
@@ -789,7 +779,8 @@ impl ISeqInfo {
                 154..=161 => {
                     let kind = CmpKind::from(opcode - 154);
                     let dst = SlotId::from(op1_w1);
-                    let mode = OpMode::RR(SlotId(op2_w2), SlotId(op3_w3));
+                    let lhs = SlotId::new(op2_w2);
+                    let rhs = SlotId::new(op3_w3);
                     let ic = if let Some(lhs_class) = pc.classid1()
                         && let Some(rhs_class) = pc.classid2()
                     {
@@ -804,35 +795,14 @@ impl ISeqInfo {
                     TraceIr::BinCmpBr {
                         kind,
                         dst,
-                        mode,
+                        lhs,
+                        rhs,
                         dest_bb: dest,
                         brkind,
                         ic,
                     }
                 }
-                162..=169 => {
-                    let kind = CmpKind::from(opcode - 162);
-                    let dst = SlotId::from(op1_w1);
-                    let mode = OpMode::RI(SlotId::new(op2_w2), op3_w3 as i16);
-                    let ic = if let Some(lhs_class) = pc.classid1() {
-                        Some((lhs_class, INTEGER_CLASS))
-                    } else {
-                        None
-                    };
-                    let (dest, brkind) = match self.trace_ir(store, bc_pos + 1) {
-                        TraceIr::CondBr(_, dest, true, brkind) => (dest, brkind),
-                        _ => unreachable!(),
-                    };
 
-                    TraceIr::BinCmpBr {
-                        kind,
-                        dst,
-                        mode,
-                        dest_bb: dest,
-                        brkind,
-                        ic,
-                    }
-                }
                 170 => TraceIr::InitMethod(FnInitInfo {
                     reg_num: op1_w1 as usize,
                     arg_num: op2_w2 as usize,
@@ -874,42 +844,11 @@ impl ISeqInfo {
                     },
                 },
                 179 => TraceIr::ConcatStr(SlotId::from(op1_w1), SlotId::new(op2_w2), op3_w3),
-                180..=189 => {
-                    let kind = BinOpK::from(opcode - 180);
-                    let dst = SlotId::from(op1_w1);
-                    let mode = OpMode::IR(op2_w2 as i16, SlotId::new(op3_w3));
-                    let ic = if let Some(rhs_class) = pc.classid2() {
-                        Some((INTEGER_CLASS, rhs_class))
-                    } else {
-                        None
-                    };
-                    TraceIr::BinOp {
-                        kind,
-                        dst,
-                        mode,
-                        ic,
-                    }
-                }
-                190..=199 => {
-                    let kind = BinOpK::from(opcode - 190);
-                    let dst = SlotId::from(op1_w1);
-                    let mode = OpMode::RI(SlotId::new(op2_w2), op3_w3 as i16);
-                    let ic = if let Some(lhs_class) = pc.classid1() {
-                        Some((lhs_class, INTEGER_CLASS))
-                    } else {
-                        None
-                    };
-                    TraceIr::BinOp {
-                        kind,
-                        dst,
-                        mode,
-                        ic,
-                    }
-                }
                 200..=209 => {
                     let kind = BinOpK::from(opcode - 200);
                     let dst = SlotId::from(op1_w1);
-                    let mode = OpMode::RR(SlotId::new(op2_w2), SlotId::new(op3_w3));
+                    let lhs = SlotId::new(op2_w2);
+                    let rhs = SlotId::new(op3_w3);
                     let ic = if let Some(lhs_class) = pc.classid1()
                         && let Some(rhs_class) = pc.classid2()
                     {
@@ -920,7 +859,8 @@ impl ISeqInfo {
                     TraceIr::BinOp {
                         kind,
                         dst,
-                        mode,
+                        lhs,
+                        rhs,
                         ic,
                     }
                 }

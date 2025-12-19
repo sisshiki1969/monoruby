@@ -35,8 +35,11 @@ impl Codegen {
                     .sourcemap
                     .push((i, self.jit.get_current() - frame.start_codepos));
             }
-            AsmInst::Init { info, is_method } => {
-                self.init_func(&info, is_method);
+            AsmInst::Init {
+                info,
+                not_captured,
+            } => {
+                self.init_func(&info, not_captured);
             }
             AsmInst::Unreachable => {
                 monoasm!( &mut self.jit,
@@ -158,23 +161,15 @@ impl Codegen {
                     movq [rsp + (ofs - RSP_LOCAL_FRAME)], (i);
                 );
             }
-            AsmInst::RSPOffsetToArray(ofs) => {
-                monoasm!( &mut self.jit,
-                    movq rdi, [rsp + (ofs - RSP_LOCAL_FRAME)];
-                    movq rax, (to_array);
-                    call rax;
-                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], rax;
-                );
-            }
 
             AsmInst::XmmMove(l, r) => self.xmm_mov(l, r),
             AsmInst::XmmSwap(l, r) => self.xmm_swap(l, r),
             AsmInst::XmmBinOp {
                 kind,
-                mode,
+                binary_xmm,
                 dst,
                 using_xmm,
-            } => self.float_binop(kind, using_xmm, dst, mode),
+            } => self.float_binop(kind, using_xmm, dst, binary_xmm),
             AsmInst::XmmUnOp { kind, dst } => match kind {
                 UnOpK::Neg => {
                     let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
@@ -392,9 +387,7 @@ impl Codegen {
                     .entry(*return_addr)
                     .and_modify(|e| e.0 = Some(patch_point));
             }
-            AsmInst::SetupBinopFrame { meta } => {
-                self.setup_binop_frame(meta);
-            }
+
             AsmInst::SetupMethodFrame {
                 meta,
                 callid,
@@ -512,21 +505,22 @@ impl Codegen {
                 self.cmp_integer(&mode, lhs, rhs);
                 self.condbr_int(kind, branch_dest, brkind);
             }
-            AsmInst::FloatCmp { kind, mode } => {
+            AsmInst::FloatCmp { kind, lhs, rhs } => {
                 monoasm! { &mut self.jit,
                     xorq rax, rax;
                 };
-                self.cmp_float(&mode);
+                self.cmp_float((lhs, rhs));
                 self.setflag_float(kind);
             }
             AsmInst::FloatCmpBr {
                 kind,
-                mode,
+                lhs,
+                rhs,
                 brkind,
                 branch_dest,
             } => {
                 let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
-                self.cmp_float(&mode);
+                self.cmp_float((lhs, rhs));
                 self.condbr_float(kind, branch_dest, brkind);
             }
 
@@ -1055,8 +1049,4 @@ impl Codegen {
             addq rsp, (offset);
         }
     }
-}
-
-extern "C" fn to_array(val: Value) -> Value {
-    Value::array1(val)
 }
