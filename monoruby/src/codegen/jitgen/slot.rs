@@ -135,10 +135,6 @@ impl SlotContext {
         SlotId(0)..SlotId(self.slots.len() as u16)
     }
 
-    pub(super) fn all_regs_except_self(&self) -> std::ops::Range<SlotId> {
-        SlotId(1)..SlotId(self.slots.len() as u16)
-    }
-
     fn temps(&self) -> std::ops::Range<SlotId> {
         self.temp_start()..SlotId(self.slots.len() as u16)
     }
@@ -441,12 +437,16 @@ impl SlotContext {
         }
     }
 
-    pub fn is_float_literal(&self, slot: SlotId) -> Option<f64> {
+    #[allow(non_snake_case)]
+    pub fn coerce_C_f64(&self, slot: SlotId) -> Option<f64> {
         if let LinkMode::C(v) = self.mode(slot) {
-            v.try_float()
-        } else {
-            None
+            if let Some(f) = v.try_float() {
+                return Some(f);
+            } else if let Some(i) = v.try_fixnum() {
+                return Some(i as f64);
+            }
         }
+        None
     }
 
     pub fn is_u16(&self, slot: SlotId) -> Option<u16> {

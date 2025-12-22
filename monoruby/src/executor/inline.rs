@@ -4,6 +4,7 @@ use super::*;
 pub(crate) enum InlineFuncInfo {
     InlineGen(Box<InlineGen>),
     CFunc_F_F(extern "C" fn(f64) -> f64),
+    CFunc_FF_F(extern "C" fn(f64, f64) -> f64),
 }
 
 impl InlineFuncInfo {
@@ -13,6 +14,10 @@ impl InlineFuncInfo {
 
     pub(crate) fn new_cfunc_f_f(f: extern "C" fn(f64) -> f64) -> Self {
         InlineFuncInfo::CFunc_F_F(f)
+    }
+
+    pub(crate) fn new_cfunc_ff_f(f: extern "C" fn(f64, f64) -> f64) -> Self {
+        InlineFuncInfo::CFunc_FF_F(f)
     }
 }
 

@@ -22,6 +22,8 @@ impl<'a> JitContext<'a> {
         callid: CallSiteId,
     ) -> CompileResult {
         let callsite = &self.store[callid];
+        self.inline_method_cache
+            .push((recv_class, callsite.name, func_id));
         let recv = callsite.recv;
 
         // We must write back and unlink all local vars when they are possibly accessed or captured from inner blocks.
@@ -31,13 +33,22 @@ impl<'a> JitContext<'a> {
             bbctx.locals_to_S(ir);
         }
 
-        self.recv_version_guard(bbctx, ir, recv, recv_class, pc);
+        // class version guard
+        self.guard_class_version(bbctx, ir, true, pc);
+
+        // receiver class guard
+        if bbctx.class(recv) != Some(recv_class) {
+            let deopt = ir.new_deopt(bbctx, pc);
+            bbctx.load(ir, recv, GP::Rdi);
+            bbctx.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
+        }
 
         if callsite.block_fid.is_none()
             && let Some(info) = self.store.inline_info.get_inline(func_id)
         {
             match info {
                 InlineFuncInfo::InlineGen(f) => {
+                    bbctx.load(ir, recv, GP::Rdi);
                     if self.inline_asm(bbctx, ir, f, callsite, recv_class, pc) {
                         if possibly_captured {
                             bbctx.unset_frame_capture_guard();
@@ -47,13 +58,48 @@ impl<'a> JitContext<'a> {
                 }
                 InlineFuncInfo::CFunc_F_F(f) => {
                     let CallSiteInfo { args, dst, .. } = *callsite;
-                    let src = bbctx.load_xmm(ir, args, pc);
+                    if let Some(args) = bbctx.coerce_C_f64(args) {
+                        let res = f(args);
+                        if let Some(dst) = dst {
+                            bbctx.def_C_float(dst, res);
+                        }
+                        return CompileResult::Continue;
+                    }
                     if let Some(dst) = dst {
-                        let dst = bbctx.def_F(dst);
+                        let src = bbctx.load_xmm(ir, args, pc);
+                        bbctx.discard(dst);
                         let using_xmm = bbctx.get_using_xmm();
-                        ir.push(AsmInst::CFunc {
+                        let dst = bbctx.def_F(dst);
+                        ir.push(AsmInst::CFunc_F_F {
                             f: *f,
                             src,
+                            dst,
+                            using_xmm,
+                        });
+                    }
+                    return CompileResult::Continue;
+                }
+                InlineFuncInfo::CFunc_FF_F(f) => {
+                    let CallSiteInfo {
+                        recv, args, dst, ..
+                    } = *callsite;
+                    if let Some((lhs, rhs)) = bbctx.check_binary_C_f64(recv, args) {
+                        let res = f(lhs, rhs);
+                        if let Some(dst) = dst {
+                            bbctx.def_C_float(dst, res);
+                        }
+                        return CompileResult::Continue;
+                    }
+                    if let Some(dst) = dst {
+                        let lhs = bbctx.load_xmm(ir, recv, pc);
+                        let rhs = bbctx.load_xmm(ir, args, pc);
+                        bbctx.discard(dst);
+                        let using_xmm = bbctx.get_using_xmm();
+                        let dst = bbctx.def_F(dst);
+                        ir.push(AsmInst::CFunc_FF_F {
+                            f: *f,
+                            lhs,
+                            rhs,
                             dst,
                             using_xmm,
                         });
@@ -63,28 +109,12 @@ impl<'a> JitContext<'a> {
             }
         }
 
+        bbctx.load(ir, recv, GP::Rdi);
         let res = self.call(bbctx, ir, callid, func_id, recv_class, pc);
         if possibly_captured {
             bbctx.unset_frame_capture_guard();
         }
         res
-    }
-
-    fn recv_version_guard(
-        &self,
-        bbctx: &mut BBContext,
-        ir: &mut AsmIr,
-        recv: SlotId,
-        recv_class: ClassId,
-        pc: BytecodePtr,
-    ) {
-        // class version guard
-        let deopt = ir.new_deopt(bbctx, pc);
-        self.guard_class_version(bbctx, ir, true, deopt);
-
-        // receiver class guard
-        bbctx.load(ir, recv, GP::Rdi);
-        bbctx.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
     }
 
     ///
@@ -101,11 +131,12 @@ impl<'a> JitContext<'a> {
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
         with_recovery: bool,
-        deopt: AsmDeopt,
+        pc: BytecodePtr,
     ) {
         if bbctx.class_version_guarded {
             return;
         }
+        let deopt = ir.new_deopt(bbctx, pc);
         match self.jit_type() {
             JitType::Specialized { idx, .. } => {
                 ir.push(AsmInst::GuardClassVersionSpecialized { idx: *idx, deopt });

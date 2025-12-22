@@ -224,13 +224,7 @@ impl Codegen {
     /// - caller save registers
     /// - stack
     ///
-    pub(super) fn float_binop(
-        &mut self,
-        kind: BinOpK,
-        using_xmm: UsingXmm,
-        dst: Xmm,
-        binary_xmm: (Xmm, Xmm),
-    ) {
+    pub(super) fn float_binop(&mut self, kind: BinOpK, dst: Xmm, binary_xmm: (Xmm, Xmm)) {
         let (l, r) = binary_xmm;
         let lhs = l.enc();
         let rhs = r.enc();
@@ -288,43 +282,9 @@ impl Codegen {
                     );
                 }
             }
-            BinOpK::Exp => {
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq xmm0, xmm(lhs);
-                    movq xmm1, xmm(rhs);
-                    movq rax, (pow_ff_f as u64);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq xmm(ret), xmm0;
-                );
-            }
-            BinOpK::Rem => {
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq xmm0, xmm(lhs);
-                    movq xmm1, xmm(rhs);
-                    movq rax, (rem_ff_f as u64);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq xmm(ret), xmm0;
-                );
-            }
-            _ => unimplemented!(),
+            _ => unreachable!(),
         }
     }
-}
-
-extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
-    lhs.powf(rhs)
-}
-
-extern "C" fn rem_ff_f(lhs: f64, rhs: f64) -> f64 {
-    lhs.rem_euclid(rhs)
 }
 
 macro_rules! cmp_main {

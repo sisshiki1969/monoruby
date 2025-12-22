@@ -481,11 +481,6 @@ impl<'a> JitContext<'a> {
         self.current_frame().self_ty
     }
 
-    /// Whether this function is a method, a class definition, or a top-level.
-    pub(super) fn is_not_block(&self) -> bool {
-        self.current_frame().is_not_block
-    }
-
     pub(super) fn specialized_methods_len(&self) -> usize {
         self.current_frame().specialized_methods.len()
     }

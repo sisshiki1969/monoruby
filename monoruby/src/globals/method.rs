@@ -734,6 +734,20 @@ impl Globals {
         fid
     }
 
+    pub(crate) fn define_builtin_cfunc_ff_f(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        f: extern "C" fn(f64, f64) -> f64,
+        arg_num: usize,
+    ) -> FuncId {
+        let fid = self.define_builtin_func(class_id, name, address, arg_num);
+        let info = inline::InlineFuncInfo::new_cfunc_ff_f(f);
+        self.store.inline_info.add_inline(fid, info);
+        fid
+    }
+
     pub(crate) fn define_proc_method(&mut self, proc: Proc) -> FuncId {
         let func_id = self.store.new_proc_method(proc);
         self.gen_wrapper(func_id);

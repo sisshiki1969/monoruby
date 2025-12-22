@@ -1,4 +1,4 @@
-use crate::codegen::jitgen::slot::LinkMode;
+use crate::{bytecodegen::BinOpK, codegen::jitgen::slot::LinkMode};
 
 use super::*;
 
@@ -383,6 +383,21 @@ impl<'a> JitContext<'a> {
                         CompileResult::Continue
                     }
                     BinaryOpType::Float(info) => {
+                        match kind {
+                            BinOpK::Exp | BinOpK::Rem => {
+                                return self.call_binary_method(
+                                    bbctx,
+                                    ir,
+                                    lhs,
+                                    rhs,
+                                    info.lhs_class.into(),
+                                    kind,
+                                    bc_pos,
+                                    pc,
+                                );
+                            }
+                            _ => {}
+                        }
                         bbctx.gen_binop_float(ir, kind, dst, info, pc);
                         CompileResult::Continue
                     }
@@ -613,8 +628,7 @@ impl<'a> JitContext<'a> {
                 } else {
                     return CompileResult::Recompile(RecompileReason::NotCached);
                 };
-                self.inline_method_cache
-                    .push((recv_class, callsite.name, func_id));
+
                 return self.compile_method_call(bbctx, ir, pc, recv_class, func_id, callid);
             }
             TraceIr::Yield { callid } => {

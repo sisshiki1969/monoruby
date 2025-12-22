@@ -521,19 +521,11 @@ impl AsmIr {
     /// - caller save registers
     /// - stack
     ///
-    pub(super) fn xmm_binop(
-        &mut self,
-        kind: BinOpK,
-        lhs: Xmm,
-        rhs: Xmm,
-        dst: Xmm,
-        using_xmm: UsingXmm,
-    ) {
+    pub(super) fn xmm_binop(&mut self, kind: BinOpK, lhs: Xmm, rhs: Xmm, dst: Xmm) {
         self.push(AsmInst::XmmBinOp {
             kind,
             binary_xmm: (lhs, rhs),
             dst,
-            using_xmm,
         });
     }
 
@@ -770,7 +762,6 @@ pub(super) enum AsmInst {
         kind: BinOpK,
         binary_xmm: (Xmm, Xmm),
         dst: Xmm,
-        using_xmm: UsingXmm,
     },
     XmmUnOp {
         kind: UnOpK,
@@ -1081,9 +1072,18 @@ pub(super) enum AsmInst {
         evict: AsmEvict,
     },
     Inline(InlineProcedure),
-    CFunc {
+    #[allow(non_camel_case_types)]
+    CFunc_F_F {
         f: extern "C" fn(f64) -> f64,
         src: Xmm,
+        dst: Xmm,
+        using_xmm: UsingXmm,
+    },
+    #[allow(non_camel_case_types)]
+    CFunc_FF_F {
+        f: extern "C" fn(f64, f64) -> f64,
+        lhs: Xmm,
+        rhs: Xmm,
         dst: Xmm,
         using_xmm: UsingXmm,
     },
@@ -1573,8 +1573,10 @@ impl AsmInst {
                 kind,
                 binary_xmm,
                 dst,
-                using_xmm,
-            } => format!("{:?} = {:?} {:?}  {:?}", dst, kind, binary_xmm, using_xmm),
+            } => format!(
+                "{:?} = {:?} {:?} {:?}",
+                dst, binary_xmm.0, kind, binary_xmm.1
+            ),
             Self::XmmUnOp { kind, dst } => format!("{:?} = {:?} {:?}", dst, kind, dst),
 
             Self::F64ToXmm(f, dst) => format!("{:?} = {}", dst, f),

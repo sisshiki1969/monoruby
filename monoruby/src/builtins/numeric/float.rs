@@ -22,7 +22,8 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_basic_op(FLOAT_CLASS, "-", sub, 1);
     globals.define_basic_op(FLOAT_CLASS, "*", mul, 1);
     globals.define_basic_op(FLOAT_CLASS, "/", div, 1);
-    globals.define_basic_op(FLOAT_CLASS, "%", rem, 1);
+    globals.define_builtin_cfunc_ff_f(FLOAT_CLASS, "%", rem, rem_ff_f, 1);
+    globals.define_builtin_cfunc_ff_f(FLOAT_CLASS, "**", pow, pow_ff_f, 1);
     globals.define_builtin_func(FLOAT_CLASS, "div", div_floor, 1);
     globals.define_builtin_func(FLOAT_CLASS, "modulo", rem, 1);
     globals.define_builtin_func(FLOAT_CLASS, "divmod", divmod, 1);
@@ -40,6 +41,14 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(FLOAT_CLASS, "infinite?", infinite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "nan?", nan, 0);
     globals.define_builtin_funcs(FLOAT_CLASS, "abs", &["magnitude"], abs, 0);
+}
+
+extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
+    lhs.powf(rhs)
+}
+
+extern "C" fn rem_ff_f(lhs: f64, rhs: f64) -> f64 {
+    lhs.rem_euclid(rhs)
 }
 
 ///
