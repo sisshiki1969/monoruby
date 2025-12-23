@@ -200,7 +200,7 @@ impl<'a> JitContext<'a> {
             None,
             Some(outer),
             callid,
-            using_xmm,
+            &bbctx,
         );
         let evict = ir.new_evict();
         let meta = self.store[callee_fid].meta();
@@ -356,7 +356,7 @@ impl<'a> JitContext<'a> {
                         block,
                         None,
                         callid,
-                        bbctx.get_using_xmm(),
+                        &bbctx,
                     );
                     bbctx.send_specialized(
                         ir,
@@ -421,10 +421,12 @@ impl<'a> JitContext<'a> {
         block: Option<JitBlockInfo>,
         outer: Option<usize>,
         callid: CallSiteId,
-        using_xmm: UsingXmm,
+        bbctx: &BBContext,
     ) -> (JitLabel, Option<ResultState>) {
+        let using_xmm = bbctx.get_using_xmm();
         self.xmm_save(using_xmm);
         self.set_callsite(callid);
+        self.set_not_captured(bbctx.frame_capture_guarded);
         let frame = self.new_specialized_frame(iseq_id, outer, args_info, block, self_class);
         self.stack_frame.push(frame);
         self.traceir_to_asmir();

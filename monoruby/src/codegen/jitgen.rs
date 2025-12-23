@@ -184,21 +184,33 @@ impl BBContext {
 
     fn new_entry(cc: &JitContext) -> Self {
         let next_sp = SlotId(cc.local_num() as u16 + 1);
-        if cc.position().is_some() {
-            Self {
-                slot_state: SlotContext::new_loop(cc),
-                next_sp,
-                class_version_guarded: false,
-                // not guarded frame capture in the compilation for loops
-                frame_capture_guarded: false,
+        match cc.jit_type() {
+            JitType::Generic => {
+                Self {
+                    slot_state: SlotContext::new_method(cc),
+                    next_sp,
+                    class_version_guarded: false,
+                    // mehtods are always guarded frame capture but block are not.
+                    frame_capture_guarded: !cc.is_block(),
+                }
             }
-        } else {
-            Self {
-                slot_state: SlotContext::new_method(cc),
-                next_sp,
-                class_version_guarded: false,
-                // methods and blocks are always guarded frame capture
-                frame_capture_guarded: true,
+            JitType::Loop(_) => {
+                Self {
+                    slot_state: SlotContext::new_loop(cc),
+                    next_sp,
+                    class_version_guarded: false,
+                    // not guarded frame capture in the compilation for loops
+                    frame_capture_guarded: false,
+                }
+            }
+            JitType::Specialized { .. } => {
+                Self {
+                    slot_state: SlotContext::new_method(cc),
+                    next_sp,
+                    class_version_guarded: false,
+                    // specialized methods and blocks are always guarded frame capture
+                    frame_capture_guarded: true,
+                }
             }
         }
     }

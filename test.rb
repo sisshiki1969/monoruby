@@ -1,19 +1,7 @@
-def g
-  begin
-    yield
-  ensure
-    puts "ensure in g"
-  end
-end
+a = 100
 
-def f
-  g do
-    begin
-      break 42
-    ensure
-      puts "ensure in f"
-    end
-  end
-end
+p = Proc.new{ puts a}
 
-puts f
+100.times {
+  p.call
+}

@@ -183,6 +183,10 @@ pub(crate) struct JitStackFrame {
     /// Flag whether ivar on the heap is accessed in this context.
     ///
     ivar_heap_accessed: bool,
+    ///
+    ///
+    /// the frame is guaranteed not to be captured
+    not_captured: bool,
 
     ///
     /// Source map for bytecode index and machine code position.
@@ -256,6 +260,7 @@ impl JitStackFrame {
             specialized_methods: vec![],
             stack_offset,
             ivar_heap_accessed: false,
+            not_captured: false,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -287,6 +292,7 @@ impl JitStackFrame {
             specialized_methods: vec![],
             stack_offset: self.stack_offset,
             ivar_heap_accessed: false,
+            not_captured: self.not_captured,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -481,6 +487,10 @@ impl<'a> JitContext<'a> {
         self.current_frame().self_ty
     }
 
+    pub(super) fn is_block(&self) -> bool {
+        !self.store[self.func_id()].is_not_block()
+    }
+
     pub(super) fn specialized_methods_len(&self) -> usize {
         self.current_frame().specialized_methods.len()
     }
@@ -535,6 +545,10 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn unset_callsite(&mut self) {
         self.current_frame_mut().callid = None;
+    }
+
+    pub(super) fn set_not_captured(&mut self, not_captured: bool) {
+        self.current_frame_mut().not_captured = not_captured;
     }
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
@@ -615,9 +629,11 @@ impl<'a> JitContext<'a> {
         })
     }
 
-    pub(super) fn outer_stack_offset(&self, outer: usize) -> Option<usize> {
+    pub(super) fn outer_stack_offset(&self, outer: usize) -> Option<(usize, bool)> {
         let outer = self.outer_pos(outer)?;
-        Some(self.calc_stack_offset(outer, self.stack_frame.len() - 1))
+        let not_captured = self.stack_frame[outer].not_captured;
+        let offset = self.calc_stack_offset(outer, self.stack_frame.len() - 1);
+        Some((offset, not_captured))
     }
 
     pub(super) fn method_caller_stack_offset(&self) -> Option<usize> {
