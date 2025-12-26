@@ -399,16 +399,17 @@ impl Store {
             .new_native_basic_op(name, address, min, max, rest)
     }
 
-    pub(super) fn new_builtin_func_eval(
+    pub(super) fn new_builtin_func_with_effect(
         &mut self,
         name: String,
         address: BuiltinFn,
         min: usize,
         max: usize,
         rest: bool,
+        effect: Effect,
     ) -> FuncId {
         self.functions
-            .new_native_func_eval(name, address, min, max, rest)
+            .new_native_func_with_effect(name, address, min, max, rest, effect)
     }
 
     pub(super) fn new_proc_method(&mut self, proc: Proc) -> FuncId {

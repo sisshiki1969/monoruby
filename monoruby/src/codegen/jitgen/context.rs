@@ -185,7 +185,7 @@ pub(crate) struct JitStackFrame {
     ivar_heap_accessed: bool,
     ///
     ///
-    /// the frame is guaranteed not to be captured
+    /// the frame is not captured
     not_captured: bool,
 
     ///
@@ -260,7 +260,7 @@ impl JitStackFrame {
             specialized_methods: vec![],
             stack_offset,
             ivar_heap_accessed: false,
-            not_captured: false,
+            not_captured: true,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -507,13 +507,13 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().stack_offset -= using_xmm.offset();
     }
 
-    pub(super) fn push_return_context(&mut self, pos: usize, ctx: ResultState) {
+    pub(super) fn push_return_context(&mut self, pos: usize, ret: ResultState) {
         if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
-            frame.push(ctx);
+            frame.push(ret);
         } else {
             self.current_frame_mut()
                 .return_context
-                .insert(pos, vec![ctx]);
+                .insert(pos, vec![ret]);
         }
     }
 
@@ -549,6 +549,10 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn set_not_captured(&mut self, not_captured: bool) {
         self.current_frame_mut().not_captured = not_captured;
+    }
+
+    pub(super) fn not_captured(&self) -> bool {
+        self.current_frame().not_captured
     }
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
@@ -610,6 +614,21 @@ impl<'a> JitContext<'a> {
                 } else {
                     None
                 };
+            }
+        }
+    }
+
+    ///
+    /// Unset frame capture guard in the outer `JitFrame`s.
+    pub(super) fn unset_frame_capture_guard(&mut self) {
+        let mut i = self.stack_frame.len() - 1;
+        loop {
+            let frame = &mut self.stack_frame[i];
+            if let Some(outer) = frame.outer {
+                i -= outer;
+                self.stack_frame[i].not_captured = false;
+            } else {
+                return;
             }
         }
     }

@@ -1001,15 +1001,15 @@ impl LinkMode {
         }
     }
 
-    pub(super) fn as_result(&self) -> ResultState {
+    pub(super) fn as_result(&self) -> ReturnValue {
         match self {
-            LinkMode::C(v) => ResultState::Const(*v),
+            LinkMode::C(v) => ReturnValue::Const(*v),
             LinkMode::MaybeNone | LinkMode::None | LinkMode::V => unreachable!(),
             l => match l.guarded() {
-                Guarded::Class(class) => ResultState::Class(class),
-                Guarded::Fixnum => ResultState::Class(INTEGER_CLASS),
-                Guarded::Float => ResultState::Class(FLOAT_CLASS),
-                Guarded::Value => ResultState::Value,
+                Guarded::Class(class) => ReturnValue::Class(class),
+                Guarded::Fixnum => ReturnValue::Class(INTEGER_CLASS),
+                Guarded::Float => ReturnValue::Class(FLOAT_CLASS),
+                Guarded::Value => ReturnValue::Value,
             },
         }
     }
@@ -1472,7 +1472,7 @@ impl BBContext {
     }
 
     pub(super) fn write_back_locals_if_captured(&mut self, ir: &mut AsmIr) {
-        if !self.frame_capture_guarded {
+        if !self.class_version_guarded {
             let wb = self.get_locals_write_back();
             ir.push(AsmInst::WriteBackIfCaptured(wb));
         }

@@ -16,7 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_reader", attr_reader);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_writer", attr_writer);
     globals.define_builtin_func(MODULE_CLASS, "autoload", autoload, 2);
-    globals.define_builtin_funcs_eval_with(
+    globals.define_builtin_funcs_with_effect(
         MODULE_CLASS,
         "class_eval",
         &["module_eval"],
@@ -24,6 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
         0,
         3,
         false,
+        Effect::EVAL,
     );
     globals.define_builtin_func(MODULE_CLASS, "ancestors", ancestors, 0);
     globals.define_builtin_func_with(MODULE_CLASS, "const_defined?", const_defined, 1, 2, false);
@@ -31,7 +32,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MODULE_CLASS, "const_set", const_set, 2);
     globals.define_builtin_func(MODULE_CLASS, "remove_const", remove_const, 1);
     globals.define_builtin_func_with(MODULE_CLASS, "constants", constants, 0, 1, false);
-    globals.define_builtin_func_with(MODULE_CLASS, "define_method", define_method, 1, 2, false);
+    globals.define_builtin_funcs_with_effect(
+        MODULE_CLASS,
+        "define_method",
+        &[],
+        define_method,
+        1,
+        2,
+        false,
+        Effect::CAPTURE,
+    );
     globals.define_builtin_func_rest(MODULE_CLASS, "deprecate_constant", deprecate_constant);
     globals.define_builtin_func_with(
         MODULE_CLASS,

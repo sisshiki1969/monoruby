@@ -53,7 +53,7 @@ impl Globals {
         func_id
     }
 
-    fn new_builtin_fn_eval(
+    fn new_builtin_fn_with_effect(
         &mut self,
         class_id: ClassId,
         name: &str,
@@ -62,10 +62,16 @@ impl Globals {
         min: usize,
         max: usize,
         rest: bool,
+        effect: Effect,
     ) -> FuncId {
-        let func_id = self
-            .store
-            .new_builtin_func_eval(name.to_string(), address, min, max, rest);
+        let func_id = self.store.new_builtin_func_with_effect(
+            name.to_string(),
+            address,
+            min,
+            max,
+            rest,
+            effect,
+        );
         let method_name = IdentId::get_id(name);
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
@@ -92,7 +98,7 @@ impl Globals {
         fid
     }
 
-    fn new_builtin_fns_eval(
+    fn new_builtin_fns_with_effect(
         &mut self,
         class_id: ClassId,
         name: &str,
@@ -102,8 +108,10 @@ impl Globals {
         min: usize,
         max: usize,
         rest: bool,
+        effect: Effect,
     ) -> FuncId {
-        let fid = self.new_builtin_fn_eval(class_id, name, address, visi, min, max, rest);
+        let fid =
+            self.new_builtin_fn_with_effect(class_id, name, address, visi, min, max, rest, effect);
         for alias in alias {
             self.add_method(class_id, IdentId::get_id(alias), fid, visi);
         }
@@ -198,7 +206,7 @@ impl Globals {
         )
     }
 
-    pub(crate) fn define_builtin_funcs_eval_with(
+    pub(crate) fn define_builtin_funcs_with_effect(
         &mut self,
         class_id: ClassId,
         name: &str,
@@ -207,8 +215,9 @@ impl Globals {
         min: usize,
         max: usize,
         rest: bool,
+        effect: Effect,
     ) -> FuncId {
-        self.new_builtin_fns_eval(
+        self.new_builtin_fns_with_effect(
             class_id,
             name,
             alias,
@@ -217,6 +226,7 @@ impl Globals {
             min,
             max,
             rest,
+            effect,
         )
     }
 
@@ -394,7 +404,7 @@ impl Globals {
         func_id
     }
 
-    pub(crate) fn define_builtin_module_func_eval_with(
+    pub(crate) fn define_builtin_module_func_with_effect(
         &mut self,
         class_id: ClassId,
         name: &str,
@@ -402,10 +412,16 @@ impl Globals {
         min: usize,
         max: usize,
         rest: bool,
+        effect: Effect,
     ) -> FuncId {
-        let func_id = self
-            .store
-            .new_builtin_func_eval(name.to_string(), address, min, max, rest);
+        let func_id = self.store.new_builtin_func_with_effect(
+            name.to_string(),
+            address,
+            min,
+            max,
+            rest,
+            effect,
+        );
         self.new_builtin_module_fn(class_id, name, func_id);
         func_id
     }
@@ -523,6 +539,19 @@ impl Globals {
     ) -> FuncId {
         let class_id = self.store.get_metaclass(class_id).id();
         self.define_builtin_func(class_id, name, address, arg_num)
+    }
+
+    pub(crate) fn define_builtin_class_func_with_effect(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        effect: Effect,
+    ) -> FuncId {
+        let class_id = self.store.get_metaclass(class_id).id();
+        self.define_builtin_funcs_with_effect(class_id, name, &[], address, min, max, false, effect)
     }
 
     pub(crate) fn define_builtin_class_funcs(

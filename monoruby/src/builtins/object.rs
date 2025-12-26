@@ -54,7 +54,7 @@ pub(super) fn init(globals: &mut Globals) {
         &[],
         true,
     );
-    globals.define_builtin_funcs_eval_with(
+    globals.define_builtin_funcs_with_effect(
         OBJECT_CLASS,
         "instance_eval",
         &[],
@@ -62,6 +62,7 @@ pub(super) fn init(globals: &mut Globals) {
         0,
         3,
         false,
+        Effect::EVAL,
     );
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
     globals.define_builtin_func_with(OBJECT_CLASS, "methods", methods, 0, 1, false);

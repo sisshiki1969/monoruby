@@ -118,7 +118,6 @@ pub struct Meta {
     mode: u8,
     /// bit 7:  0:on_stack 1:on_heap
     /// bit 4:  1:simple (no optional, no rest, no keyword, no block)
-    /// bit 3:  0:no eval 1:eval(which possibly manipulates stack slots in outer frames)
     /// bit 2:  0:method_style arg 1:block_style arg
     /// bit 1:  0:Ruby 1:native
     /// bit 0:  0:method 1:class_def
@@ -149,7 +148,6 @@ impl Meta {
         func_id: Option<FuncId>,
         reg_num: u16,
         is_simple: bool,
-        is_eval: bool,
         is_native: bool,
         is_class_def: bool,
         is_block_style: bool,
@@ -159,7 +157,6 @@ impl Meta {
             reg_num,
             mode: 0,
             kind: (is_simple as u8) << 4
-                | (is_eval as u8) << 3
                 | (is_block_style as u8) << 2
                 | (is_native as u8) << 1
                 | is_class_def as u8,
@@ -183,14 +180,13 @@ impl Meta {
             is_simple,
             false,
             false,
-            false,
             is_block_style,
         )
     }
 
     fn vm_classdef(func_id: impl Into<Option<FuncId>>, reg_num: i64) -> Self {
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id.into(), reg_num, true, false, false, true, false)
+        Self::new(func_id.into(), reg_num, true, false, true, false)
     }
 
     fn proc(func_id: FuncId, reg_num: usize, is_simple: bool, is_block_style: bool) -> Self {
@@ -200,33 +196,12 @@ impl Meta {
             is_simple,
             false,
             false,
-            false,
             is_block_style,
         )
     }
 
     fn native(func_id: FuncId, reg_num: usize, is_simple: bool) -> Self {
-        Self::new(
-            Some(func_id),
-            reg_num as u16,
-            is_simple,
-            false,
-            true,
-            false,
-            false,
-        )
-    }
-
-    fn native_eval(func_id: FuncId, reg_num: usize, is_simple: bool) -> Self {
-        Self::new(
-            Some(func_id),
-            reg_num as u16,
-            is_simple,
-            true,
-            true,
-            false,
-            false,
-        )
+        Self::new(Some(func_id), reg_num as u16, is_simple, true, false, false)
     }
 
     pub fn func_id(&self) -> FuncId {
@@ -244,13 +219,6 @@ impl Meta {
     ///
     pub fn is_simple(&self) -> bool {
         (self.kind & 0b1_0000) != 0
-    }
-
-    ///
-    /// Returns true if this function possibly manipulates outer local variables.
-    ///
-    pub fn is_eval(&self) -> bool {
-        (self.kind & 0b1000) != 0
     }
 
     pub fn is_block_style(&self) -> bool {
@@ -449,23 +417,32 @@ impl Funcs {
         rest: bool,
     ) -> FuncId {
         let id = self.next_func_id();
-        self.info.push(FuncInfo::new_native_basic_op(
-            id, name, address, min, max, rest,
+        self.info.push(FuncInfo::new_native(
+            id,
+            name,
+            address,
+            min,
+            max,
+            rest,
+            &[],
+            false,
         ));
         id
     }
 
-    pub(super) fn new_native_func_eval(
+    pub(super) fn new_native_func_with_effect(
         &mut self,
         name: String,
         address: BuiltinFn,
         min: usize,
         max: usize,
         rest: bool,
+        effect: Effect,
     ) -> FuncId {
         let id = self.next_func_id();
-        self.info
-            .push(FuncInfo::new_native_eval(id, name, address, min, max, rest));
+        self.info.push(FuncInfo::new_native_with_effect(
+            id, name, address, min, max, rest, effect,
+        ));
         id
     }
 
@@ -641,6 +618,38 @@ enum FuncType {
     ClassDef,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Effect(u64);
+
+impl std::ops::BitOr for Effect {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitAnd for Effect {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
+
+impl Effect {
+    pub(crate) const NONE: Self = Self(0);
+    pub(crate) const EVAL: Self = Self(1 << 0);
+    pub(crate) const CAPTURE: Self = Self(1 << 1);
+    pub(crate) const BINDING: Self = Self(1 << 2);
+
+    pub(crate) fn is_eval(self) -> bool {
+        self & Self::EVAL != Self::NONE
+    }
+
+    pub(crate) fn is_binding(self) -> bool {
+        self & Self::BINDING != Self::NONE
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct FuncExt {
     /// name of this function.
@@ -651,6 +660,8 @@ struct FuncExt {
     entry: Option<DestLabel>,
     /// parameter information of this function.
     params: ParamsInfo,
+    /// the `Effect`` of this function.
+    effect: Effect,
     #[cfg(feature = "perf")]
     wrapper: Option<(monoasm::CodePtr, usize, monoasm::CodePtr, usize)>,
 }
@@ -679,6 +690,17 @@ impl FuncInfo {
         meta: Meta,
         params: ParamsInfo,
     ) -> Self {
+        Self::new_with_effect(name, kind, ty, meta, Effect::NONE, params)
+    }
+
+    fn new_with_effect(
+        name: impl Into<Option<IdentId>>,
+        kind: FuncKind,
+        ty: FuncType,
+        meta: Meta,
+        effect: Effect,
+        params: ParamsInfo,
+    ) -> Self {
         let name = name.into();
         let min = params.req_num() as u16;
         let max = params.max_positional_args() as u16;
@@ -700,6 +722,7 @@ impl FuncInfo {
                 ty,
                 entry: None,
                 params,
+                effect,
                 #[cfg(feature = "perf")]
                 wrapper: None,
             }),
@@ -793,44 +816,25 @@ impl FuncInfo {
         )
     }
 
-    fn new_native_basic_op(
+    fn new_native_with_effect(
         func_id: FuncId,
         name: String,
         address: BuiltinFn,
         min: usize,
         max: usize,
         rest: bool,
+        effect: Effect,
     ) -> Self {
         let params = ParamsInfo::new_native(min, max, rest, vec![], false);
         let reg_num = params.total_args() + 1;
-        Self::new(
+        Self::new_with_effect(
             IdentId::get_id_from_string(name),
             FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
             },
             FuncType::Method,
             Meta::native(func_id, reg_num, params.is_simple()),
-            params,
-        )
-    }
-
-    fn new_native_eval(
-        func_id: FuncId,
-        name: String,
-        address: BuiltinFn,
-        min: usize,
-        max: usize,
-        rest: bool,
-    ) -> Self {
-        let params = ParamsInfo::new_native(min, max, rest, vec![], false);
-        let reg_num = params.total_args() + 1;
-        Self::new(
-            IdentId::get_id_from_string(name),
-            FuncKind::Builtin {
-                abs_address: address as *const u8 as u64,
-            },
-            FuncType::Method,
-            Meta::native_eval(func_id, reg_num, params.is_simple()),
+            effect,
             params,
         )
     }
@@ -881,6 +885,13 @@ impl FuncInfo {
     ///
     pub(crate) fn is_not_block(&self) -> bool {
         self.ext.ty != FuncType::Block
+    }
+
+    ///
+    /// Whether this function possibly captures variables without block (has `Effect::EVAL` or `Effect::BINDING`).
+    ///
+    pub(crate) fn possibly_capture_without_block(&self) -> bool {
+        self.ext.effect.clone().is_eval() || self.ext.effect.clone().is_binding()
     }
 
     pub(crate) fn owner_class(&self) -> Option<ClassId> {

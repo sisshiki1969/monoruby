@@ -86,7 +86,10 @@ impl<'a> JitContext<'a> {
                     return ir;
                 }
                 CompileResult::Recompile(reason) => {
-                    self.new_return(ResultState::Value);
+                    self.new_return(ResultState {
+                        ret: ReturnValue::Value,
+                        class_version_guard: false,
+                    });
                     let pc = self.get_pc(bc_pos);
                     self.recompile_and_deopt(&mut bbctx, &mut ir, reason, pc);
                     return ir;
@@ -277,7 +280,7 @@ impl<'a> JitContext<'a> {
                     ir.push(AsmInst::LoadDynVarSpecialized {
                         offset,
                         reg: src.reg,
-                        on_stack: not_captured,
+                        on_stack: not_captured & bbctx.frame_capture_guarded,
                     });
                 } else {
                     ir.push(AsmInst::LoadDynVar { src });
@@ -291,7 +294,7 @@ impl<'a> JitContext<'a> {
                         offset,
                         dst: dst.reg,
                         src: GP::Rdi,
-                        on_stack: not_captured,
+                        on_stack: not_captured & bbctx.frame_capture_guarded,
                     });
                 } else {
                     ir.push(AsmInst::StoreDynVar { dst, src: GP::Rdi });
@@ -316,7 +319,6 @@ impl<'a> JitContext<'a> {
                     bbctx.discard(dst);
                     ir.push(AsmInst::Not);
                     bbctx.def_rax2acc(ir, dst);
-                    bbctx.unset_class_version_guard();
                 }
             }
             TraceIr::BitNot { dst, src, ic } => {
@@ -745,7 +747,7 @@ impl<'a> JitContext<'a> {
                 bbctx.write_back_locals_if_captured(ir);
                 bbctx.load(ir, ret, GP::Rax);
                 ir.push(AsmInst::Ret);
-                let result = bbctx.mode(ret).as_result();
+                let result = bbctx.as_result(ret);
                 bbctx.discard_temps();
                 return CompileResult::Return(result);
             }
@@ -757,7 +759,7 @@ impl<'a> JitContext<'a> {
                 } else {
                     ir.push(AsmInst::MethodRet(pc));
                 }
-                let result = bbctx.mode(ret).as_result();
+                let result = bbctx.as_result(ret);
                 bbctx.discard_temps();
                 return CompileResult::MethodReturn(result);
             }
@@ -769,7 +771,7 @@ impl<'a> JitContext<'a> {
                 } else {
                     ir.push(AsmInst::BlockBreak(pc));
                 }
-                let result = bbctx.mode(ret).as_result();
+                let result = bbctx.as_result(ret);
                 bbctx.discard_temps();
                 return CompileResult::Break(result);
             }

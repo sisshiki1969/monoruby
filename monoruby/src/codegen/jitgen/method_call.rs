@@ -27,9 +27,7 @@ impl<'a> JitContext<'a> {
         let recv = callsite.recv;
 
         // We must write back and unlink all local vars when they are possibly accessed or captured from inner blocks.
-        let possibly_captured =
-            callsite.block_fid.is_some() || self.store[func_id].meta().is_eval();
-        if possibly_captured {
+        if callsite.block_fid.is_some() || self.store[func_id].possibly_capture_without_block() {
             bbctx.locals_to_S(ir);
         }
 
@@ -50,8 +48,8 @@ impl<'a> JitContext<'a> {
                 InlineFuncInfo::InlineGen(f) => {
                     bbctx.load(ir, recv, GP::Rdi);
                     if self.inline_asm(bbctx, ir, f, callsite, recv_class, pc) {
-                        if possibly_captured {
-                            bbctx.unset_frame_capture_guard();
+                        if self.store[func_id].possibly_capture_without_block() {
+                            bbctx.unset_frame_capture_guard(self);
                         }
                         return CompileResult::Continue;
                     }
@@ -110,11 +108,7 @@ impl<'a> JitContext<'a> {
         }
 
         bbctx.load(ir, recv, GP::Rdi);
-        let res = self.call(bbctx, ir, callid, func_id, recv_class, pc);
-        if possibly_captured {
-            bbctx.unset_frame_capture_guard();
-        }
-        res
+        self.call(bbctx, ir, callid, func_id, recv_class, pc)
     }
 
     ///
@@ -200,7 +194,7 @@ impl<'a> JitContext<'a> {
             None,
             Some(outer),
             callid,
-            &bbctx,
+            bbctx,
         );
         let evict = ir.new_evict();
         let meta = self.store[callee_fid].meta();
@@ -306,6 +300,9 @@ impl<'a> JitContext<'a> {
             FuncKind::Builtin { .. } => {
                 let evict = ir.new_evict();
                 bbctx.send(ir, &self.store, callid, fid, recv_class, evict, None, pc);
+                if self.store[fid].possibly_capture_without_block() || block_fid.is_some() {
+                    bbctx.unset_frame_capture_guard(self);
+                }
                 evict
             }
             FuncKind::Proc(proc) => {
@@ -356,7 +353,7 @@ impl<'a> JitContext<'a> {
                         block,
                         None,
                         callid,
-                        &bbctx,
+                        bbctx,
                     );
                     bbctx.send_specialized(
                         ir,
@@ -373,7 +370,6 @@ impl<'a> JitContext<'a> {
                     if !res {
                         return CompileResult::Cease;
                     }
-                    bbctx.unset_class_version_guard();
                     return CompileResult::Continue;
                 } else {
                     bbctx.send(ir, &self.store, callid, fid, recv_class, evict, None, pc);
@@ -381,6 +377,9 @@ impl<'a> JitContext<'a> {
                 evict
             }
         };
+        if block_fid.is_some() {
+            bbctx.unset_frame_capture_guard(self);
+        }
         bbctx.def_rax2acc(ir, dst);
         bbctx.immediate_evict(ir, evict, pc);
         bbctx.unset_class_version_guard();
@@ -421,7 +420,7 @@ impl<'a> JitContext<'a> {
         block: Option<JitBlockInfo>,
         outer: Option<usize>,
         callid: CallSiteId,
-        bbctx: &BBContext,
+        bbctx: &mut BBContext,
     ) -> (JitLabel, Option<ResultState>) {
         let using_xmm = bbctx.get_using_xmm();
         self.xmm_save(using_xmm);
@@ -431,6 +430,7 @@ impl<'a> JitContext<'a> {
         self.stack_frame.push(frame);
         self.traceir_to_asmir();
         let mut frame = self.stack_frame.pop().unwrap();
+        bbctx.frame_capture_guarded &= self.not_captured();
         self.unset_callsite();
         self.xmm_restore(using_xmm);
         let pos = self.stack_frame.len() - 1;
