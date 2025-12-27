@@ -97,7 +97,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                         return Err(error_unexpected(
                             loc,
                             format!("Unexpected token: {:?}", tok.kind),
-                        ))
+                        ));
                     }
                 },
                 Punct::LParen => {
@@ -126,6 +126,16 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 Punct::Question => self.parse_char_literal(),
                 Punct::Shl => self.parse_heredocument(),
                 Punct::Mul => self.parse_splat(loc),
+                Punct::Range2 => {
+                    let rhs = self.parse_arg_logical_or()?;
+                    let loc = loc.merge(rhs.loc());
+                    Ok(Node::new_range(None, Some(rhs), false, loc))
+                }
+                Punct::Range3 => {
+                    let rhs = self.parse_arg_logical_or()?;
+                    let loc = loc.merge(rhs.loc());
+                    Ok(Node::new_range(None, Some(rhs), true, loc))
+                }
                 _ => Err(error_unexpected(
                     loc,
                     format!("Unexpected token: {:?}", tok.kind),

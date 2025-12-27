@@ -289,19 +289,27 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             return Ok(lhs);
         }
         if self.consume_punct(Punct::Range2)? {
-            let rhs = self.parse_arg_logical_or()?;
-            let loc = lhs.loc().merge(rhs.loc());
-            Ok(Node::new_range(lhs, rhs, false, loc))
+            self.parse_range(lhs, false)
         } else if self.consume_punct(Punct::Range3)? {
-            let rhs = self.parse_arg_logical_or()?;
-            let loc = lhs.loc().merge(rhs.loc());
-            Ok(Node::new_range(lhs, rhs, true, loc))
+            self.parse_range(lhs, true)
         } else {
             Ok(lhs)
         }
     }
 
-    fn parse_arg_logical_or(&mut self) -> Result<Node, LexerErr> {
+    fn parse_range(&mut self, lhs: Node, exclude_end: bool) -> Result<Node, LexerErr> {
+        let save = self.save_state();
+        if let Ok(rhs) = self.parse_arg_logical_or() {
+            let loc = lhs.loc().merge(rhs.loc());
+            Ok(Node::new_range(Some(lhs), Some(rhs), exclude_end, loc))
+        } else {
+            self.restore_state(save);
+            let loc = lhs.loc();
+            Ok(Node::new_range(Some(lhs), None, exclude_end, loc))
+        }
+    }
+
+    pub(super) fn parse_arg_logical_or(&mut self) -> Result<Node, LexerErr> {
         let mut lhs = self.parse_arg_logical_and()?;
         while self.consume_punct_no_term(Punct::LOr)? {
             let rhs = self.parse_arg_logical_and()?;
@@ -740,7 +748,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 match c.kind {
                     ScopeKind::Class | ScopeKind::Eval => return Ok(lhs),
                     ScopeKind::Method => {
-                        return Err(error_unexpected(lhs.loc(), "Dynamic constant assignment."))
+                        return Err(error_unexpected(lhs.loc(), "Dynamic constant assignment."));
                     }
                     _ => {}
                 }

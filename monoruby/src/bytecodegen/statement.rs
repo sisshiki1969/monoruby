@@ -36,10 +36,19 @@ impl BytecodeGen {
             // +------+
             // | dst  |
             // +------+
+            let start = if let Some(start) = start {
+                start
+            } else {
+                return Err(self.syntax_error("can't iterate from NilClass", loc));
+            };
             self.gen_store_expr(counter.into(), start)?;
             let end = if use_value {
                 let iter = self.push();
-                let end = self.push_expr(end)?.into();
+                let end = if let Some(end) = end {
+                    self.push_expr(end)?.into()
+                } else {
+                    self.push_nil().into()
+                };
                 self.emit(
                     BytecodeInst::Range {
                         ret: iter.into(),
@@ -50,8 +59,10 @@ impl BytecodeGen {
                     loc,
                 );
                 end
-            } else {
+            } else if let Some(end) = end {
                 self.push_expr(end)?.into()
+            } else {
+                self.push_nil().into()
             };
             self.apply_label(loop_start);
             self.emit(BytecodeInst::LoopStart, loc);

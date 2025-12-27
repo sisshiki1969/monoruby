@@ -1496,8 +1496,16 @@ impl Value {
                 exclude_end,
                 ..
             } => {
-                let start = Self::from_ast_inner(start, vm, globals);
-                let end = Self::from_ast_inner(end, vm, globals);
+                let start = if let Some(start) = start {
+                    Self::from_ast_inner(start, vm, globals)
+                } else {
+                    Value::nil()
+                };
+                let end = if let Some(end) = end {
+                    Self::from_ast_inner(end, vm, globals)
+                } else {
+                    Value::nil()
+                };
                 Value::range(start, end, *exclude_end)
             }
             NodeKind::Hash(v) => {
@@ -1558,8 +1566,16 @@ impl Value {
                 exclude_end,
                 ..
             } => {
-                let start = Self::from_const_ast(start);
-                let end = Self::from_const_ast(end);
+                let start = if let Some(start) = start {
+                    Self::from_const_ast(start)
+                } else {
+                    Value::nil()
+                };
+                let end = if let Some(end) = end {
+                    Self::from_const_ast(end)
+                } else {
+                    Value::nil()
+                };
                 Value::range(start, end, *exclude_end)
             }
             _ => unreachable!("{:?}", node.kind),

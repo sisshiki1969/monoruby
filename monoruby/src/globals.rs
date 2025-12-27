@@ -681,7 +681,10 @@ impl Globals {
         end: Value,
         exclude_end: bool,
     ) -> Result<Value> {
-        if start.real_class(&self.store).id() != end.real_class(&self.store).id() {
+        if !start.is_nil()
+            && !end.is_nil()
+            && start.real_class(&self.store).id() != end.real_class(&self.store).id()
+        {
             return Err(MonorubyErr::bad_range(start, end));
         }
         Ok(Value::range(start, end, exclude_end))

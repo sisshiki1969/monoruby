@@ -18,8 +18,8 @@ pub enum NodeKind {
     Command(Box<Node>),
     Symbol(String),
     Range {
-        start: Box<Node>,
-        end: Box<Node>,
+        start: Box<Option<Node>>,
+        end: Box<Option<Node>>,
         exclude_end: bool,
         is_const: bool,
     }, // start, end, exclude_end
@@ -427,8 +427,17 @@ impl Node {
         Node::new(NodeKind::Array(nodes, is_const), loc)
     }
 
-    pub(crate) fn new_range(start: Node, end: Node, exclude_end: bool, loc: Loc) -> Self {
-        let is_const = start.is_integer() && end.is_integer();
+    pub(crate) fn new_range(
+        start: Option<Node>,
+        end: Option<Node>,
+        exclude_end: bool,
+        loc: Loc,
+    ) -> Self {
+        let is_const = if let (Some(s), Some(e)) = (start.as_ref(), end.as_ref()) {
+            s.is_integer() && e.is_integer()
+        } else {
+            false
+        };
         Node::new(
             NodeKind::Range {
                 start: Box::new(start),
