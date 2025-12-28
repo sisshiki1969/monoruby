@@ -562,10 +562,10 @@ impl Funcs {
                     keyword_initializers.push(init);
                 }
                 ParamKind::KWRest(name) => {
-                    let name = IdentId::get_id_from_string(name);
+                    let name = name.map(IdentId::get_id_from_string);
                     assert!(kw_rest_param.is_none());
                     kw_rest_param = Some(SlotId(1 + args_names.len() as u16));
-                    args_names.push(Some(name));
+                    args_names.push(name);
                 }
                 ParamKind::Block(name) => {
                     let name = IdentId::get_id_from_string(name.clone());

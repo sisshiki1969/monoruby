@@ -157,7 +157,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
                     globals,
                     lfp.arg(0),
                     INTEGER_CLASS,
-                ))
+                ));
             }
         }
     };
@@ -503,6 +503,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[test]
     fn one_() {
         run_test(

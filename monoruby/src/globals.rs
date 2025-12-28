@@ -249,6 +249,7 @@ impl Globals {
         let val = Value::string_from_str(&ruby_version.trim());
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", val);
+
         globals
     }
 
@@ -269,7 +270,7 @@ impl Globals {
             Some(name) => name.to_string_lossy().to_string(),
             None => ".".to_string(),
         };
-        let mut executor = Executor::init(self, &program_name);
+        let mut executor = Executor::init(self, &program_name)?;
         executor.init_stack_limit(self);
         let res = executor.exec_script(self, code, path);
         self.flush_stdout();
@@ -681,7 +682,10 @@ impl Globals {
         end: Value,
         exclude_end: bool,
     ) -> Result<Value> {
-        if start.real_class(&self.store).id() != end.real_class(&self.store).id() {
+        if !start.is_nil()
+            && !end.is_nil()
+            && start.real_class(&self.store).id() != end.real_class(&self.store).id()
+        {
             return Err(MonorubyErr::bad_range(start, end));
         }
         Ok(Value::range(start, end, exclude_end))

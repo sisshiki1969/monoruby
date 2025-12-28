@@ -33,7 +33,13 @@ fn main() {
         }
     }
 
-    let mut directories = vec![(std::path::PathBuf::from("startup"), lib_path)];
+    let mut directories = vec![
+        (std::path::PathBuf::from("startup"), lib_path.clone()),
+        (
+            std::path::PathBuf::from("builtins"),
+            lib_path.join("builtins"),
+        ),
+    ];
 
     while let Some((from_dir, to_dir)) = directories.pop() {
         directories.extend(copy_dir(from_dir, to_dir).unwrap());

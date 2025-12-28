@@ -18,8 +18,8 @@ pub enum NodeKind {
     Command(Box<Node>),
     Symbol(String),
     Range {
-        start: Box<Node>,
-        end: Box<Node>,
+        start: Box<Option<Node>>,
+        end: Box<Option<Node>>,
         exclude_end: bool,
         is_const: bool,
     }, // start, end, exclude_end
@@ -169,7 +169,11 @@ impl FormalParam {
     }
 
     pub(crate) fn kwrest(name: String, loc: Loc) -> Self {
-        FormalParam::new(ParamKind::KWRest(name), loc)
+        FormalParam::new(ParamKind::KWRest(Some(name)), loc)
+    }
+
+    pub(crate) fn kwrest_discard(loc: Loc) -> Self {
+        FormalParam::new(ParamKind::KWRest(None), loc)
     }
 
     pub(crate) fn block(name: String, loc: Loc) -> Self {
@@ -195,7 +199,7 @@ pub enum ParamKind {
     Optional(String, Box<Node>), // name, default expr
     Rest(Option<String>),
     Keyword(String, Option<Box<Node>>), // name, default expr
-    KWRest(String),
+    KWRest(Option<String>),
     Block(String),
     Forwarding,
     Destruct(Vec<(String, Loc)>),
@@ -427,8 +431,17 @@ impl Node {
         Node::new(NodeKind::Array(nodes, is_const), loc)
     }
 
-    pub(crate) fn new_range(start: Node, end: Node, exclude_end: bool, loc: Loc) -> Self {
-        let is_const = start.is_integer() && end.is_integer();
+    pub(crate) fn new_range(
+        start: Option<Node>,
+        end: Option<Node>,
+        exclude_end: bool,
+        loc: Loc,
+    ) -> Self {
+        let is_const = if let (Some(s), Some(e)) = (start.as_ref(), end.as_ref()) {
+            s.is_integer() && e.is_integer()
+        } else {
+            false
+        };
         Node::new(
             NodeKind::Range {
                 start: Box::new(start),

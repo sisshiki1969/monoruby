@@ -972,14 +972,22 @@ impl BytecodeGen {
     fn gen_range(
         &mut self,
         ret: BcReg,
-        start: Node,
-        end: Node,
+        start: Option<Node>,
+        end: Option<Node>,
         exclude_end: bool,
         loc: Loc,
     ) -> Result<()> {
         let old = self.temp;
-        let start = self.gen_expr_reg(start)?;
-        let end = self.gen_expr_reg(end)?;
+        let start = if let Some(start) = start {
+            self.gen_expr_reg(start)?
+        } else {
+            self.push_nil()
+        };
+        let end = if let Some(end) = end {
+            self.gen_expr_reg(end)?
+        } else {
+            self.push_nil()
+        };
         self.temp = old;
         self.emit(
             BytecodeInst::Range {

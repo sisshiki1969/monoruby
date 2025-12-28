@@ -310,11 +310,6 @@ impl BytecodeGen {
             }
             NodeKind::BinOp(_, box n1, box n2)
             | NodeKind::AssignOp(_, box n1, box n2)
-            | NodeKind::Range {
-                start: box n1,
-                end: box n2,
-                ..
-            }
             | NodeKind::While {
                 cond: box n1,
                 body: box n2,
@@ -323,6 +318,18 @@ impl BytecodeGen {
             | NodeKind::AliasMethod(box n1, box n2) => {
                 self.level_down(n1, level);
                 self.level_down(n2, level);
+            }
+            NodeKind::Range {
+                start: box n1,
+                end: box n2,
+                ..
+            } => {
+                if let Some(n1) = n1 {
+                    self.level_down(n1, level);
+                }
+                if let Some(n2) = n2 {
+                    self.level_down(n2, level);
+                }
             }
             NodeKind::UndefMethod(box n1) => {
                 self.level_down(n1, level);

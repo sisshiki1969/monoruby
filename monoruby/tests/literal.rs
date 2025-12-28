@@ -201,6 +201,23 @@ fn percent_i() {
 }
 
 #[test]
+fn range() {
+    run_test(r#"100..200"#);
+    run_test(r#"..200"#);
+    run_test(r#"100.."#);
+    run_test(r#"100...200"#);
+    run_test(r#"...200"#);
+    run_test(r#"100..."#);
+
+    run_test(r#"a = 100; b = 200; a..b"#);
+    run_test(r#"a = 100; b = 200; ..b"#);
+    run_test(r#"a = 100; b = 200; a.."#);
+    run_test(r#"a = 100; b = 200; a...b"#);
+    run_test(r#"a = 100; b = 200; ...b"#);
+    run_test(r#"a = 100; b = 200; a..."#);
+}
+
+#[test]
 fn imaginary() {
     run_test(r#"5i"#);
     run_test(r#"4+5i"#);

@@ -10,6 +10,19 @@ pub trait RubyEql<E, G, R> {
     fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R>;
 }
 
+//impl<T, E, G, R> RubyEql<E, G, R> for Option<T>
+//where
+//    T: RubyEql<E, G, R>,
+//{
+//    fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R> {
+//        match (self, other) {
+//            (Some(a), Some(b)) => a.eql(b, e, g),
+//            (None, None) => Ok(true),
+//            _ => Ok(false),
+//        }
+//    }
+//}
+
 impl<T, E, G, R> RubyEql<E, G, R> for Vec<T>
 where
     T: RubyEql<E, G, R>,

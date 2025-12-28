@@ -159,10 +159,9 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             return Err(error_unexpected(loc, "Expected '='."));
         }
 
-        let mrhs = self.parse_mul_assign_rhs_if_allowed()?;
+        let mrhs = self.parse_mul_assign_rhs(None, false)?;
         for lhs in &mut mlhs {
-            let mut node = self.check_lhs(std::mem::take(lhs))?;
-            std::mem::swap(lhs, &mut node);
+            *lhs = self.check_lhs(std::mem::take(lhs))?;
         }
 
         Ok(Node::new_mul_assign(mlhs, mrhs))
@@ -190,12 +189,20 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         let old = self.suppress_mul_assign;
         // multiple assignment must be suppressed in parsing arg list.
         self.suppress_mul_assign = true;
+        let res = self.parse_mul_assign_rhs_inner(term, allow_braceless_hash);
+        self.suppress_mul_assign = old;
+        res
+    }
 
+    pub(super) fn parse_mul_assign_rhs_inner(
+        &mut self,
+        term: Option<Punct>,
+        allow_braceless_hash: bool,
+    ) -> Result<Vec<Node>, LexerErr> {
         let mut args = vec![];
         loop {
             if let Some(term) = term {
                 if self.consume_punct(term)? {
-                    self.suppress_mul_assign = old;
                     return Ok(args);
                 }
             };
@@ -212,7 +219,6 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 break;
             }
         }
-        self.suppress_mul_assign = old;
         if let Some(term) = term {
             self.expect_punct(term)?;
         };
@@ -289,19 +295,27 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             return Ok(lhs);
         }
         if self.consume_punct(Punct::Range2)? {
-            let rhs = self.parse_arg_logical_or()?;
-            let loc = lhs.loc().merge(rhs.loc());
-            Ok(Node::new_range(lhs, rhs, false, loc))
+            self.parse_range(lhs, false)
         } else if self.consume_punct(Punct::Range3)? {
-            let rhs = self.parse_arg_logical_or()?;
-            let loc = lhs.loc().merge(rhs.loc());
-            Ok(Node::new_range(lhs, rhs, true, loc))
+            self.parse_range(lhs, true)
         } else {
             Ok(lhs)
         }
     }
 
-    fn parse_arg_logical_or(&mut self) -> Result<Node, LexerErr> {
+    fn parse_range(&mut self, lhs: Node, exclude_end: bool) -> Result<Node, LexerErr> {
+        let save = self.save_state();
+        if let Ok(rhs) = self.parse_arg_logical_or() {
+            let loc = lhs.loc().merge(rhs.loc());
+            Ok(Node::new_range(Some(lhs), Some(rhs), exclude_end, loc))
+        } else {
+            self.restore_state(save);
+            let loc = lhs.loc();
+            Ok(Node::new_range(Some(lhs), None, exclude_end, loc))
+        }
+    }
+
+    pub(super) fn parse_arg_logical_or(&mut self) -> Result<Node, LexerErr> {
         let mut lhs = self.parse_arg_logical_and()?;
         while self.consume_punct_no_term(Punct::LOr)? {
             let rhs = self.parse_arg_logical_and()?;
@@ -740,7 +754,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 match c.kind {
                     ScopeKind::Class | ScopeKind::Eval => return Ok(lhs),
                     ScopeKind::Method => {
-                        return Err(error_unexpected(lhs.loc(), "Dynamic constant assignment."))
+                        return Err(error_unexpected(lhs.loc(), "Dynamic constant assignment."));
                     }
                     _ => {}
                 }

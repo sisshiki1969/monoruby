@@ -152,6 +152,8 @@ impl IdentId {
     pub const METHOD_ADDED: IdentId = id!(54);
     pub const HASH: IdentId = id!(55);
     pub const EQL_: IdentId = id!(56);
+    pub const TO_STR: IdentId = id!(57);
+    pub const TO_PATH: IdentId = id!(58);
 }
 
 impl IdentId {
@@ -294,6 +296,8 @@ impl IdentifierTable {
         table.set_id("method_added", IdentId::METHOD_ADDED);
         table.set_id("hash", IdentId::HASH);
         table.set_id("eql?", IdentId::EQL_);
+        table.set_id("to_str", IdentId::TO_STR);
+        table.set_id("to_path", IdentId::TO_PATH);
         table
     }
 

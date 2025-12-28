@@ -1616,9 +1616,15 @@ impl Visitor {
             | NodeKind::Return(node)
             | NodeKind::Splat(node)
             | NodeKind::Command(node) => self.visit(node),
-            NodeKind::Range { start, end, .. } => {
-                self.visit(start);
-                self.visit(end);
+            NodeKind::Range {
+                box start, box end, ..
+            } => {
+                if let Some(start) = start {
+                    self.visit(start);
+                }
+                if let Some(end) = end {
+                    self.visit(end);
+                }
             }
             NodeKind::BinOp(_, lhs, rhs) | NodeKind::AssignOp(_, lhs, rhs) => {
                 self.visit(lhs);

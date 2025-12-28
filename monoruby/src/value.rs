@@ -696,6 +696,31 @@ impl Value {
     }
 }
 
+fn search_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    methods: &[IdentId],
+    recv: Value,
+) -> Result<RString> {
+    if let Some(s) = recv.is_rstring() {
+        return Ok(s);
+    }
+    for &method in methods {
+        if let Some(func_id) = globals.check_method(recv, method) {
+            let v = vm.invoke_func_inner(globals, func_id, recv, &[], None, None)?;
+            if let Some(s) = v.is_rstring() {
+                return Ok(s);
+            }
+            break;
+        }
+    }
+    Err(MonorubyErr::no_implicit_conversion(
+        globals,
+        recv,
+        STRING_CLASS,
+    ))
+}
+
 impl Value {
     ///
     /// Check if `self` is a packed value.
@@ -1221,19 +1246,7 @@ impl Value {
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<RString> {
-        if let Some(s) = self.is_rstring() {
-            return Ok(s);
-        } else if let Some(fid) = globals.check_method(*self, IdentId::get_id("to_str")) {
-            let v = vm.invoke_func_inner(globals, fid, *self, &[], None, None)?;
-            if let Some(s) = v.is_rstring() {
-                return Ok(s);
-            }
-        }
-        Err(MonorubyErr::no_implicit_conversion(
-            globals,
-            *self,
-            STRING_CLASS,
-        ))
+        search_method(vm, globals, &[IdentId::TO_STR], *self)
     }
 
     pub(crate) fn coerce_to_string(
@@ -1242,6 +1255,14 @@ impl Value {
         globals: &mut Globals,
     ) -> Result<String> {
         Ok(self.coerce_to_rstring(vm, globals)?.to_str()?.to_string())
+    }
+
+    pub(crate) fn coerce_to_path_rstring(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<RString> {
+        search_method(vm, globals, &[IdentId::TO_STR, IdentId::TO_PATH], *self)
     }
 
     pub(crate) fn expect_regexp_or_string(&self, store: &Store) -> Result<Regexp> {
@@ -1496,8 +1517,16 @@ impl Value {
                 exclude_end,
                 ..
             } => {
-                let start = Self::from_ast_inner(start, vm, globals);
-                let end = Self::from_ast_inner(end, vm, globals);
+                let start = if let Some(start) = start {
+                    Self::from_ast_inner(start, vm, globals)
+                } else {
+                    Value::nil()
+                };
+                let end = if let Some(end) = end {
+                    Self::from_ast_inner(end, vm, globals)
+                } else {
+                    Value::nil()
+                };
                 Value::range(start, end, *exclude_end)
             }
             NodeKind::Hash(v) => {
@@ -1558,8 +1587,16 @@ impl Value {
                 exclude_end,
                 ..
             } => {
-                let start = Self::from_const_ast(start);
-                let end = Self::from_const_ast(end);
+                let start = if let Some(start) = start {
+                    Self::from_const_ast(start)
+                } else {
+                    Value::nil()
+                };
+                let end = if let Some(end) = end {
+                    Self::from_const_ast(end)
+                } else {
+                    Value::nil()
+                };
                 Value::range(start, end, *exclude_end)
             }
             _ => unreachable!("{:?}", node.kind),

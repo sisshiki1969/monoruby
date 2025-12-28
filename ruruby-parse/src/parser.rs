@@ -579,9 +579,8 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                         loc,
                         "Rest parameter is not allowed in ths position.",
                     ));
-                } else {
-                    state = Kind::Rest;
                 };
+                state = Kind::Rest;
                 match self.consume_ident()? {
                     Some(name) => {
                         args.push(FormalParam::rest(name.clone(), loc));
@@ -591,19 +590,21 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 }
             } else if self.consume_punct(Punct::DMul)? {
                 // Keyword rest param
-                let name = self.expect_ident()?;
                 loc = loc.merge(self.prev_loc());
                 if state >= Kind::KWRest {
                     return Err(error_unexpected(
                         loc,
                         "Keyword rest parameter is not allowed in ths position.",
                     ));
-                } else {
-                    state = Kind::KWRest;
                 }
-
-                args.push(FormalParam::kwrest(name.clone(), loc));
-                self.new_kwrest_param(name, self.prev_loc())?;
+                state = Kind::KWRest;
+                match self.consume_ident()? {
+                    Some(name) => {
+                        args.push(FormalParam::kwrest(name.clone(), loc));
+                        self.new_kwrest_param(name, self.prev_loc())?;
+                    }
+                    None => args.push(FormalParam::kwrest_discard(loc)),
+                }
             } else {
                 let name = self.expect_ident()?;
                 if self.consume_punct(Punct::Assign)? {
