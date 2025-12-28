@@ -269,7 +269,7 @@ impl Globals {
             Some(name) => name.to_string_lossy().to_string(),
             None => ".".to_string(),
         };
-        let mut executor = Executor::init(self, &program_name);
+        let mut executor = Executor::init(self, &program_name)?;
         executor.init_stack_limit(self);
         let res = executor.exec_script(self, code, path);
         self.flush_stdout();

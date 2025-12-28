@@ -1,5 +1,5 @@
-use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 
 use monoruby::*;
 
@@ -34,7 +34,7 @@ fn main() {
     let mut cont_mode = false;
     let mut buf = String::new();
     let mut script_line = 0;
-    let mut executor = Executor::init(&mut globals, "irm");
+    let mut executor = Executor::init(&mut globals, "irm").unwrap();
     executor.init_stack_limit(&globals);
 
     let parse_result = ruruby_parse::Parser::parse_program(

@@ -14,26 +14,29 @@ pub(super) fn init(globals: &mut Globals) {
         .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("IO"))
         .unwrap()
         .as_class();
-    let klass = globals
+    let file = globals
         .define_builtin_class("File", FILE_CLASS, io_class, OBJECT_CLASS, ObjTy::IO)
         .id();
-    globals.define_builtin_class_func(klass, "write", file_write, 2);
-    globals.define_builtin_class_func(klass, "read", file_read, 1);
-    globals.define_builtin_class_func_with(klass, "binread", binread, 1, 3, false);
-    globals.define_builtin_class_func_rest(klass, "join", join);
-    globals.define_builtin_class_func_with(klass, "expand_path", expand_path, 1, 2, false);
-    globals.define_builtin_class_func(klass, "directory?", directory_, 1);
-    globals.define_builtin_class_func(klass, "symlink?", symlink_, 1);
-    globals.define_builtin_class_func(klass, "dirname", dirname, 1);
-    globals.define_builtin_class_func_with(klass, "basename", basename, 1, 2, false);
-    globals.define_builtin_class_func(klass, "extname", extname, 1);
-    globals.define_builtin_class_func(klass, "exist?", exist, 1);
-    globals.define_builtin_class_func(klass, "file?", file_, 1);
-    globals.define_builtin_class_func(klass, "path", path, 1);
-    globals.define_builtin_class_func_with(klass, "realpath", realpath, 1, 2, false);
-    globals.define_builtin_class_func_with(klass, "open", open, 1, 3, false);
+    let file_test = globals.define_toplevel_module("FileTest").id();
+    globals.define_builtin_class_func(file, "write", file_write, 2);
+    globals.define_builtin_class_func(file, "read", file_read, 1);
+    globals.define_builtin_class_func_with(file, "binread", binread, 1, 3, false);
+    globals.define_builtin_class_func_rest(file, "join", join);
+    globals.define_builtin_class_func_with(file, "expand_path", expand_path, 1, 2, false);
+    globals.define_builtin_class_func(file, "directory?", directory_, 1);
+    globals.define_builtin_class_func(file, "symlink?", symlink_, 1);
+    globals.define_builtin_class_func(file, "dirname", dirname, 1);
+    globals.define_builtin_class_func_with(file, "basename", basename, 1, 2, false);
+    globals.define_builtin_class_func(file, "extname", extname, 1);
+    globals.define_builtin_class_func(file, "exist?", exist, 1);
+    globals.define_builtin_module_func(file_test, "exist?", exist, 1);
+    globals.define_builtin_class_func(file, "file?", file_, 1);
+    globals.define_builtin_module_func(file_test, "file?", file_, 1);
+    globals.define_builtin_class_func(file, "path", path, 1);
+    globals.define_builtin_class_func_with(file, "realpath", realpath, 1, 2, false);
+    globals.define_builtin_class_func_with(file, "open", open, 1, 3, false);
 
-    globals.define_builtin_func_rest(klass, "write", write);
+    globals.define_builtin_func_rest(file, "write", write);
 }
 
 ///
@@ -74,8 +77,8 @@ fn file_write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/read.html]
 #[monoruby_builtin]
-fn file_read(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let filename = string_to_path(lfp.arg(0), globals)?;
+fn file_read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let filename = to_path(vm, globals, lfp.arg(0))?;
     let mut file = match File::open(&filename) {
         Ok(file) => file,
         Err(_) => {
@@ -102,8 +105,8 @@ fn file_read(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/binread.html]
 #[monoruby_builtin]
-fn binread(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let filename = string_to_path(lfp.arg(0), globals)?;
+fn binread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let filename = to_path(vm, globals, lfp.arg(0))?;
     let length = if let Some(arg1) = lfp.try_arg(1) {
         Some(arg1.coerce_to_i64(globals)?)
     } else {
@@ -196,15 +199,13 @@ fn expand_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
             return Err(MonorubyErr::runtimeerr(err));
         }
     };
-
-    let arg0 = lfp.arg(0);
-    let path = if lfp.try_arg(1).is_none() {
-        stringish_to_path(arg0, vm, globals)?
-    } else {
-        let mut path = string_to_path(lfp.arg(1), globals)?;
-        let rel_path = stringish_to_path(arg0, vm, globals)?;
-        path.push(rel_path);
+    let arg0 = to_path(vm, globals, lfp.arg(0))?;
+    let path = if let Some(arg1) = lfp.try_arg(1) {
+        let mut path = to_path(vm, globals, arg1)?;
+        path.push(arg0);
         path
+    } else {
+        arg0
     };
 
     let mut res_path = std::path::PathBuf::new();
@@ -228,8 +229,8 @@ fn expand_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/dirname.html]
 #[monoruby_builtin]
-fn dirname(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let filename = string_to_path(lfp.arg(0), globals)?;
+fn dirname(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let filename = to_path(vm, globals, lfp.arg(0))?;
     let mut dirname = match filename.parent() {
         Some(ostr) => conv_pathbuf(ostr),
         None => "".to_string(),
@@ -247,7 +248,7 @@ fn dirname(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/basename.html]
 #[monoruby_builtin]
 fn basename(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let filename = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let filename = lfp.arg(0).coerce_to_path_rstring(vm, globals)?;
     let suffix = if let Some(arg1) = lfp.try_arg(1) {
         let s = arg1.expect_str(globals)?;
         if s.is_empty() {
@@ -261,6 +262,7 @@ fn basename(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     if filename.is_empty() {
         return Ok(Value::string_from_str(""));
     }
+    let filename = filename.to_str()?.to_string();
     let basename = if let Some(s) = filename.split('/').rev().find(|s| !s.is_empty()) {
         s
     } else {
@@ -282,8 +284,8 @@ fn basename(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/directory=3f.html]
 #[monoruby_builtin]
-fn directory_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match string_to_canonicalized_path(globals, lfp.arg(0), "1st arg") {
+fn directory_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    match to_canonicalized_path(vm, globals, lfp.arg(0), "1st arg") {
         Ok(path) => Ok(Value::bool(path.is_dir())),
         Err(_) => Ok(Value::bool(false)),
     }
@@ -295,8 +297,8 @@ fn directory_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/symlink=3f.html]
 #[monoruby_builtin]
-fn symlink_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match string_to_canonicalized_path(globals, lfp.arg(0), "1st arg") {
+fn symlink_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    match to_canonicalized_path(vm, globals, lfp.arg(0), "1st arg") {
         Ok(path) => Ok(Value::bool(path.is_symlink())),
         Err(_) => Ok(Value::bool(false)),
     }
@@ -308,8 +310,8 @@ fn symlink_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/extname.html]
 #[monoruby_builtin]
-fn extname(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let filename = string_to_path(lfp.arg(0), globals)?;
+fn extname(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let filename = to_path(vm, globals, lfp.arg(0))?;
     let extname = match filename.extension() {
         Some(ostr) => format!(".{}", ostr.to_string_lossy()),
         None => "".to_string(),
@@ -323,8 +325,8 @@ fn extname(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/exist=3f.html]
 #[monoruby_builtin]
-fn exist(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let b = string_to_canonicalized_path(globals, lfp.arg(0), "1st arg").is_ok();
+fn exist(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let b = to_canonicalized_path(vm, globals, lfp.arg(0), "1st arg").is_ok();
     Ok(Value::bool(b))
 }
 
@@ -334,8 +336,8 @@ fn exist(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/file=3f.html]
 #[monoruby_builtin]
-fn file_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match string_to_canonicalized_path(globals, lfp.arg(0), "1st arg") {
+fn file_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    match to_canonicalized_path(vm, globals, lfp.arg(0), "1st arg") {
         Ok(path) => Ok(Value::bool(path.is_file())),
         Err(_) => Ok(Value::bool(false)),
     }
@@ -348,18 +350,7 @@ fn file_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/path.html]
 #[monoruby_builtin]
 fn path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    if lfp.arg(0).is_str().is_some() {
-        Ok(lfp.arg(0))
-    } else {
-        vm.invoke_method_inner(
-            globals,
-            IdentId::get_id("to_path"),
-            lfp.arg(0),
-            &[],
-            None,
-            None,
-        )
-    }
+    Ok(Value::string(to_path_str(vm, globals, lfp.arg(0))?))
 }
 
 ///
@@ -378,7 +369,7 @@ fn realpath(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
                     "{}:{}",
                     arg1.as_str(),
                     err
-                )))
+                )));
             }
         }
     } else {
@@ -426,10 +417,10 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             return Err(MonorubyErr::argumenterr(format!(
                 "Invalid access mode {}",
                 mode
-            )))
+            )));
         }
     };
-    let path = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let path = to_path_str(vm, globals, lfp.arg(0))?;
     let file = match opt.open(&path) {
         Ok(file) => file,
         Err(err) => {
@@ -492,12 +483,13 @@ fn extend(path: &mut std::path::PathBuf, extend: std::path::PathBuf) -> Result<(
 }
 
 /// Convert `file` to canonicalized PathBuf.
-fn string_to_canonicalized_path(
+fn to_canonicalized_path(
+    vm: &mut Executor,
     globals: &mut Globals,
     file: Value,
     msg: &str,
 ) -> Result<std::path::PathBuf> {
-    let path = string_to_path(file, globals)?;
+    let path = to_path(vm, globals, file)?;
     match path.canonicalize() {
         Ok(file) => Ok(file),
         Err(_) => Err(MonorubyErr::argumenterr(format!(
@@ -508,8 +500,8 @@ fn string_to_canonicalized_path(
 }
 
 /// Convert `file` to PathBuf.
-fn string_to_path(file: Value, globals: &mut Globals) -> Result<std::path::PathBuf> {
-    let file = file.expect_string(globals)?;
+fn to_path(vm: &mut Executor, globals: &mut Globals, file: Value) -> Result<std::path::PathBuf> {
+    let file = to_path_str(vm, globals, file)?;
     let mut path = std::path::PathBuf::new();
     for p in std::path::PathBuf::from(file).iter() {
         if p == ".." && path.file_name().is_some() {
@@ -521,22 +513,11 @@ fn string_to_path(file: Value, globals: &mut Globals) -> Result<std::path::PathB
     Ok(path)
 }
 
-/// Convert `file` to PathBuf.
-fn stringish_to_path(
-    file: Value,
-    vm: &mut Executor,
-    globals: &mut Globals,
-) -> Result<std::path::PathBuf> {
-    let file = file.coerce_to_string(vm, globals)?;
-    let mut path = std::path::PathBuf::new();
-    for p in std::path::PathBuf::from(file).iter() {
-        if p == ".." && path.file_name().is_some() {
-            path.pop();
-        } else {
-            path.push(p);
-        };
-    }
-    Ok(path)
+fn to_path_str(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<String> {
+    Ok(val
+        .coerce_to_path_rstring(vm, globals)?
+        .to_str()?
+        .to_string())
 }
 
 #[cfg(not(windows))]
