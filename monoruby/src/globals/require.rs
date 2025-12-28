@@ -31,7 +31,7 @@ impl Globals {
         Err(MonorubyErr::cant_load(None, file_name))
     }
 
-    fn search_lib(&mut self, file_name: &std::path::Path) -> Option<PathBuf> {
+    pub(crate) fn search_lib(&mut self, file_name: &std::path::Path) -> Option<PathBuf> {
         for lib in self.load_path.as_array().iter() {
             let lib = match lib.is_str() {
                 Some(s) => s,

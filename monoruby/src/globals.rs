@@ -249,6 +249,7 @@ impl Globals {
         let val = Value::string_from_str(&ruby_version.trim());
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", val);
+
         globals
     }
 

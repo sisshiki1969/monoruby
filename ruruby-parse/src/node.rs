@@ -169,7 +169,11 @@ impl FormalParam {
     }
 
     pub(crate) fn kwrest(name: String, loc: Loc) -> Self {
-        FormalParam::new(ParamKind::KWRest(name), loc)
+        FormalParam::new(ParamKind::KWRest(Some(name)), loc)
+    }
+
+    pub(crate) fn kwrest_discard(loc: Loc) -> Self {
+        FormalParam::new(ParamKind::KWRest(None), loc)
     }
 
     pub(crate) fn block(name: String, loc: Loc) -> Self {
@@ -195,7 +199,7 @@ pub enum ParamKind {
     Optional(String, Box<Node>), // name, default expr
     Rest(Option<String>),
     Keyword(String, Option<Box<Node>>), // name, default expr
-    KWRest(String),
+    KWRest(Option<String>),
     Block(String),
     Forwarding,
     Destruct(Vec<(String, Loc)>),

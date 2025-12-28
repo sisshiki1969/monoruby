@@ -35,8 +35,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(file, "path", path, 1);
     globals.define_builtin_class_func_with(file, "realpath", realpath, 1, 2, false);
     globals.define_builtin_class_func_with(file, "open", open, 1, 3, false);
-
     globals.define_builtin_func_rest(file, "write", write);
+
+    globals.define_builtin_singleton_func(
+        globals.get_load_path(),
+        "resolve_feature_path",
+        resolve_feature_path,
+        1,
+    );
 }
 
 ///
@@ -193,6 +199,12 @@ fn join(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/expand_path.html]
 #[monoruby_builtin]
 fn expand_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    //eprintln!("arg0: {}", lfp.arg(0).inspect(globals));
+    //if let Some(arg1) = lfp.try_arg(1) {
+    //    eprintln!("arg1: {}", arg1.inspect(globals));
+    //} else {
+    //    eprintln!("arg1: None");
+    //}
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(err) => {
@@ -450,6 +462,33 @@ fn write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         self_.as_io_inner_mut().write(s)?;
     }
     Ok(Value::integer(count))
+}
+
+///
+/// ### $LOAD_PATH#resolve_feature_path
+///
+/// - file_name -> [ext: Symbol, path: String]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/length.html]
+#[monoruby_builtin]
+fn resolve_feature_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let file_name = to_path(vm, globals, lfp.arg(0))?;
+    match globals.search_lib(&file_name) {
+        Some(path) => {
+            let ext = match path.extension().and_then(|s| s.to_str()) {
+                Some(ext) => Value::symbol_from_str(ext),
+                _ => {
+                    return Err(MonorubyErr::runtimeerr(
+                        "resolve_feature_path: Failed to get file extension.",
+                    ));
+                }
+            };
+            let path_str = Value::string_from_str(&conv_pathbuf(&path));
+            let arr = Value::array2(ext, path_str);
+            Ok(arr)
+        }
+        None => Ok(Value::nil()),
+    }
 }
 
 // Utils

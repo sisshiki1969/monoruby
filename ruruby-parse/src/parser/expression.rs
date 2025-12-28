@@ -159,10 +159,9 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             return Err(error_unexpected(loc, "Expected '='."));
         }
 
-        let mrhs = self.parse_mul_assign_rhs_if_allowed()?;
+        let mrhs = self.parse_mul_assign_rhs(None, false)?;
         for lhs in &mut mlhs {
-            let mut node = self.check_lhs(std::mem::take(lhs))?;
-            std::mem::swap(lhs, &mut node);
+            *lhs = self.check_lhs(std::mem::take(lhs))?;
         }
 
         Ok(Node::new_mul_assign(mlhs, mrhs))
@@ -190,12 +189,20 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         let old = self.suppress_mul_assign;
         // multiple assignment must be suppressed in parsing arg list.
         self.suppress_mul_assign = true;
+        let res = self.parse_mul_assign_rhs_inner(term, allow_braceless_hash);
+        self.suppress_mul_assign = old;
+        res
+    }
 
+    pub(super) fn parse_mul_assign_rhs_inner(
+        &mut self,
+        term: Option<Punct>,
+        allow_braceless_hash: bool,
+    ) -> Result<Vec<Node>, LexerErr> {
         let mut args = vec![];
         loop {
             if let Some(term) = term {
                 if self.consume_punct(term)? {
-                    self.suppress_mul_assign = old;
                     return Ok(args);
                 }
             };
@@ -212,7 +219,6 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 break;
             }
         }
-        self.suppress_mul_assign = old;
         if let Some(term) = term {
             self.expect_punct(term)?;
         };

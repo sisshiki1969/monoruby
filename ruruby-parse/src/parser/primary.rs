@@ -103,9 +103,10 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 Punct::LParen => {
                     let old = self.suppress_mul_assign;
                     self.suppress_mul_assign = false;
-                    let node = self.parse_comp_stmt()?;
-                    self.expect_punct(Punct::RParen)?;
+                    let node = self.parse_comp_stmt();
                     self.suppress_mul_assign = old;
+                    let node = node?;
+                    self.expect_punct(Punct::RParen)?;
                     Ok(node)
                 }
                 Punct::LBracket => {
