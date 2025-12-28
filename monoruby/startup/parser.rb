@@ -1,11 +1,11 @@
 #frozen_string_literal: true
-require 'strscan'
+#require 'strscan'
 
 module JSON
-  #module Pure
+  module Ext
     # This class implements the JSON parser that is used to parse a JSON string
     # into a Ruby data structure.
-    class Parser < StringScanner
+    class Parser
       STRING                = /" ((?:[^\x0-\x1f"\\] |
                                    # escaped special characters:
                                   \\["\\\/bfnrt] |
@@ -79,7 +79,7 @@ module JSON
       def initialize(source, opts = nil)
         opts ||= {}
         source = convert_encoding source
-        super source
+        @source = source
         if !opts.key?(:max_nesting) # defaults to 100
           @max_nesting = 100
         elsif opts[:max_nesting]
@@ -106,6 +106,10 @@ module JSON
         @array_class  = opts[:array_class] || Array
         @decimal_class = opts[:decimal_class]
         @match_string = opts[:match_string]
+      end
+
+      def string
+        @source
       end
 
       alias source string
@@ -333,5 +337,8 @@ module JSON
         result
       end
     end
-  #end
+
+    class ParserConfig
+    end
+  end
 end
