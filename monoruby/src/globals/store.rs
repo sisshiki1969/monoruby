@@ -349,7 +349,7 @@ impl Store {
         top_level: bool,
     ) -> Result<FuncId> {
         let func_id = self.functions.next_func_id();
-        let params_info = compile_info.params_info.clone();
+        let params_info = compile_info.params.clone();
         self.functions.add_compile_info(compile_info);
         let info = ISeqInfo::new_method(
             func_id,
@@ -375,7 +375,7 @@ impl Store {
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         let func_id = self.functions.next_func_id();
-        let params_info = compile_info.params_info.clone();
+        let params_info = compile_info.params.clone();
         self.functions.add_compile_info(compile_info);
         let info =
             ISeqInfo::new_block(func_id, mother, outer, params_info.clone(), loc, sourceinfo);
@@ -628,7 +628,7 @@ impl Store {
             iseq.local_num(),
             iseq.temp_num
         );
-        eprintln!("{:?}", iseq.args);
+        eprintln!("{:?}", self[iseq.func_id()].params());
         eprintln!("{:?}", iseq.get_exception_map());
         for i in 0..iseq.bytecode_len() {
             let bc_pos = BcIndex::from(i);

@@ -695,7 +695,7 @@ impl<'a> JitContext<'a> {
     }
 
     pub(super) fn args(&self) -> std::ops::Range<SlotId> {
-        SlotId(1)..SlotId(self.store[self.iseq_id()].args.total_args() as u16 + 1)
+        SlotId(1)..SlotId(self.store[self.func_id()].params().total_args() as u16 + 1)
     }
 
     ///

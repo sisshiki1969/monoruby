@@ -23,18 +23,25 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with(file, "binread", binread, 1, 3, false);
     globals.define_builtin_class_func_rest(file, "join", join);
     globals.define_builtin_class_func_with(file, "expand_path", expand_path, 1, 2, false);
-    globals.define_builtin_class_func(file, "directory?", directory_, 1);
-    globals.define_builtin_class_func(file, "symlink?", symlink_, 1);
     globals.define_builtin_class_func(file, "dirname", dirname, 1);
     globals.define_builtin_class_func_with(file, "basename", basename, 1, 2, false);
     globals.define_builtin_class_func(file, "extname", extname, 1);
-    globals.define_builtin_class_func(file, "exist?", exist, 1);
-    globals.define_builtin_module_func(file_test, "exist?", exist, 1);
-    globals.define_builtin_class_func(file, "file?", file_, 1);
-    globals.define_builtin_module_func(file_test, "file?", file_, 1);
     globals.define_builtin_class_func(file, "path", path, 1);
     globals.define_builtin_class_func_with(file, "realpath", realpath, 1, 2, false);
     globals.define_builtin_class_func_with(file, "open", open, 1, 3, false);
+
+    globals.define_builtin_class_func(file, "directory?", directory_, 1);
+    globals.define_builtin_module_func(file_test, "directory?", directory_, 1);
+
+    globals.define_builtin_class_func(file, "symlink?", symlink_, 1);
+    globals.define_builtin_module_func(file_test, "symlink?", symlink_, 1);
+
+    globals.define_builtin_class_func(file, "exist?", exist, 1);
+    globals.define_builtin_module_func(file_test, "exist?", exist, 1);
+
+    globals.define_builtin_class_func(file, "file?", file_, 1);
+    globals.define_builtin_module_func(file_test, "file?", file_, 1);
+
     globals.define_builtin_func_rest(file, "write", write);
 
     globals.define_builtin_singleton_func(
@@ -668,5 +675,11 @@ mod tests {
         run_test(r##"File.realpath("../monoruby")"##);
         run_test(r##"File.realpath("..", "/tmp")"##);
         run_test(r##"File.realpath("tmp", "/")"##);
+    }
+
+    #[test]
+    fn open() {
+        run_test(r##"$LOAD_PATH.resolve_feature_path("json")"##);
+        run_test(r##"$LOAD_PATH.resolve_feature_path("zzzz")"##);
     }
 }

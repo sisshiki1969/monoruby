@@ -243,7 +243,7 @@ impl BytecodeGen {
             }
             NodeKind::SpecialVar(..) => {}
             NodeKind::ClassVar(..) | NodeKind::Lambda(_) => {
-                return Err(self.unsupported_node(&node))
+                return Err(self.unsupported_node(&node));
             }
             _ => {}
         };
