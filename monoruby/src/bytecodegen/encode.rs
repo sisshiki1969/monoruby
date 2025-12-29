@@ -122,7 +122,7 @@ impl BytecodeGen {
     }
 
     fn inst_to_bc(
-        &self,
+        &mut self,
         store: &mut Store,
         incoming: &mut IncomingBranches,
         inst: BytecodeInst,
@@ -236,22 +236,18 @@ impl BytecodeGen {
                 incoming.push(bc_pos, bc_pos + 1);
                 Bytecode::from(enc_l(15, 0))
             }
-            BytecodeInst::SingletonMethodDef {
-                obj,
-                name,
-                box func,
-            } => {
+            BytecodeInst::SingletonMethodDef { obj, name, func } => {
                 // 1
                 let op1 = self.slot_id(&obj);
                 let func_id = self.new_function(store, func, loc)?;
                 Bytecode::from_with_func_name_id(enc_wl(1, op1.0, 0), Some(name), func_id)
             }
-            BytecodeInst::MethodDef { name, box func } => {
+            BytecodeInst::MethodDef { name, func } => {
                 // 2
                 let func_id = self.new_function(store, func, loc)?;
                 Bytecode::from_with_func_name_id(enc_l(2, 0), Some(name), func_id)
             }
-            BytecodeInst::Lambda { dst, box func } => {
+            BytecodeInst::Lambda { dst, func } => {
                 // 38
                 let op1 = self.slot_id(&dst);
                 let func_id = self.new_function(store, func, loc)?;
@@ -331,7 +327,7 @@ impl BytecodeGen {
                 base,
                 superclass,
                 name,
-                box func,
+                func,
             } => {
                 // 70
                 let op1 = match ret {
@@ -357,7 +353,7 @@ impl BytecodeGen {
                 ret,
                 base,
                 name,
-                box func,
+                func,
             } => {
                 // 71
                 let op1 = match ret {
@@ -376,11 +372,7 @@ impl BytecodeGen {
                 let op1 = self.slot_id(&dst);
                 Bytecode::from(enc_wl(21, op1.0, outer as u32))
             }
-            BytecodeInst::SingletonClassDef {
-                ret,
-                base,
-                box func,
-            } => {
+            BytecodeInst::SingletonClassDef { ret, base, func } => {
                 // 22
                 let op1 = match ret {
                     None => SlotId::new(0),
@@ -643,7 +635,7 @@ impl BytecodeGen {
     }
 
     fn encode_call(
-        &self,
+        &mut self,
         store: &mut Store,
         opcode: u16,
         callsite: CallSite,
@@ -679,7 +671,7 @@ impl BytecodeGen {
     }
 
     fn new_callsite(
-        &self,
+        &mut self,
         store: &mut Store,
         callsite: CallSite,
         bc_pos: BcIndex,
@@ -740,9 +732,9 @@ impl BytecodeGen {
         ))
     }
 
-    fn new_function(&self, store: &mut Store, func: Functions, loc: Loc) -> Result<FuncId> {
+    fn new_function(&mut self, store: &mut Store, func: FunctionId, loc: Loc) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
-        match func {
+        match self.get_function(func) {
             Functions::Method { name, info } => {
                 store.new_iseq_method(name, info, loc, sourceinfo, false)
             }

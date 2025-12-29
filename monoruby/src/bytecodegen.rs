@@ -282,7 +282,7 @@ struct CallSite {
     /// Positions of splat arguments.
     splat_pos: Vec<usize>,
     /// *FuncId* of passed block.
-    block_fid: Option<Functions>,
+    block_fid: Option<FunctionId>,
     block_arg: Option<BcReg>,
     /// *BcReg* of the first arguments.
     args: BcReg,
@@ -299,7 +299,7 @@ impl CallSite {
         pos_num: usize,
         kw: Option<KeywordArgs>,
         splat_pos: Vec<usize>,
-        block_fid: Option<Functions>,
+        block_fid: Option<FunctionId>,
         block_arg: Option<BcReg>,
         args: BcReg,
         recv: BcReg,
@@ -493,6 +493,9 @@ struct MergeSourceInfo {
     sp: BcTemp,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FunctionId(usize);
+
 #[derive(Debug)]
 struct BytecodeGen {
     iseq_id: ISeqId,
@@ -532,6 +535,8 @@ struct BytecodeGen {
     exception_table: Vec<ExceptionEntry>,
     /// Merge info.
     merge_info: HashMap<Label, (Option<BcTemp>, Vec<MergeSourceInfo>)>,
+    /// Function info.
+    functions: Vec<Option<Box<Functions>>>,
 }
 
 impl std::ops::Index<Label> for BytecodeGen {
@@ -568,6 +573,7 @@ impl BytecodeGen {
             sourceinfo: info.sourceinfo.clone(),
             exception_table: vec![],
             merge_info: HashMap::default(),
+            functions: vec![],
         };
         if let Some(lvc) = binding {
             assert!(info.args.args_names.is_empty());
@@ -588,12 +594,16 @@ impl BytecodeGen {
         !self.outer_locals.is_empty()
     }
 
-    fn add_method(&mut self, name: Option<IdentId>, info: BlockInfo) -> Functions {
-        Functions::Method { name, info }
+    fn add_method(&mut self, name: Option<IdentId>, info: BlockInfo) -> FunctionId {
+        let info = Functions::Method { name, info };
+        self.functions.push(Some(Box::new(info)));
+        FunctionId(self.functions.len() - 1)
     }
 
-    fn add_classdef(&mut self, name: Option<IdentId>, info: BlockInfo) -> Functions {
-        Functions::ClassDef { name, info }
+    fn add_classdef(&mut self, name: Option<IdentId>, info: BlockInfo) -> FunctionId {
+        let info = Functions::ClassDef { name, info };
+        self.functions.push(Some(Box::new(info)));
+        FunctionId(self.functions.len() - 1)
     }
 
     fn add_block(
@@ -602,14 +612,16 @@ impl BytecodeGen {
         outer: (FuncId, ExternalContext),
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
-    ) -> Functions {
-        Functions::Block {
+    ) -> FunctionId {
+        let info = Functions::Block {
             mother,
             outer,
             optional_params,
             info,
             is_block_style: true,
-        }
+        };
+        self.functions.push(Some(Box::new(info)));
+        FunctionId(self.functions.len() - 1)
     }
 
     fn add_lambda(
@@ -617,14 +629,20 @@ impl BytecodeGen {
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
         info: BlockInfo,
-    ) -> Functions {
-        Functions::Block {
+    ) -> FunctionId {
+        let info = Functions::Block {
             mother,
             outer,
             optional_params: vec![],
             info,
             is_block_style: false,
-        }
+        };
+        self.functions.push(Some(Box::new(info)));
+        FunctionId(self.functions.len() - 1)
+    }
+
+    fn get_function(&mut self, id: FunctionId) -> Functions {
+        *std::mem::take(&mut self.functions[id.0]).unwrap()
     }
 
     fn loop_push(
@@ -794,7 +812,7 @@ impl BytecodeGen {
         &mut self,
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         block: BlockInfo,
-    ) -> Functions {
+    ) -> FunctionId {
         let outer_locals = self.get_locals();
         let (mother, _, outer) = self.mother;
         self.add_block(
@@ -805,7 +823,7 @@ impl BytecodeGen {
         )
     }
 
-    fn handle_lambda(&mut self, block: BlockInfo) -> Functions {
+    fn handle_lambda(&mut self, block: BlockInfo) -> FunctionId {
         let outer_locals = self.get_locals();
         let (mother, _, outer) = self.mother;
         self.add_lambda((mother, outer + 1), (self.func_id, outer_locals), block)
