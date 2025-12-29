@@ -1002,7 +1002,7 @@ impl BytecodeGen {
     }
 
     fn gen_lambda(&mut self, dst: BcReg, info: Box<BlockInfo>, loc: Loc) -> Result<()> {
-        let func = self.handle_lambda(*info);
+        let func = self.handle_lambda(*info)?;
         self.emit(BytecodeInst::Lambda { dst, func }, loc);
         Ok(())
     }
@@ -1055,7 +1055,8 @@ impl BytecodeGen {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let func = self.add_method(Some(name), block);
+        let (params_info, compile_info) = Store::handle_args(block, vec![])?;
+        let func = self.add_method(Some(name), params_info, compile_info);
         self.emit(BytecodeInst::MethodDef { name, func }, loc);
         self.gen_symbol(name, use_mode)?;
         Ok(())
@@ -1068,7 +1069,8 @@ impl BytecodeGen {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let func = self.add_method(Some(name), block);
+        let (params_info, compile_info) = Store::handle_args(block, vec![])?;
+        let func = self.add_method(Some(name), params_info, compile_info);
         let obj = self.pop().into();
         self.emit(BytecodeInst::SingletonMethodDef { obj, name, func }, loc);
         self.gen_symbol(name, use_mode)?;
@@ -1103,7 +1105,8 @@ impl BytecodeGen {
         } else {
             None
         };
-        let func = self.add_classdef(Some(name), info);
+        let (_, compile_info) = Store::handle_args(info, vec![])?;
+        let func = self.add_classdef(Some(name), compile_info);
         let superclass = match superclass {
             Some(box superclass) => Some(self.push_expr(superclass)?.into()),
             None => None,
@@ -1147,7 +1150,8 @@ impl BytecodeGen {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let func = self.add_classdef(None, info);
+        let (_, compile_info) = Store::handle_args(info, vec![])?;
+        let func = self.add_classdef(None, compile_info);
         let old = self.temp;
         let base = self.gen_expr_reg(base)?;
         self.temp = old;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::bytecodegen::{BcLocal, CompileInfo, DestructureInfo, ForParamInfo, OptionalInfo};
+use crate::bytecodegen::CompileInfo;
 
 pub(crate) const FUNCDATA_CODEPTR: u64 = std::mem::offset_of!(FuncData, codeptr) as _;
 pub(crate) const FUNCDATA_META: u64 = std::mem::offset_of!(FuncData, meta) as _;
@@ -366,29 +366,8 @@ impl Funcs {
         func_id
     }
 
-    pub(super) fn add_iseq_method(&mut self, info: BlockInfo) -> Result<(FuncId, ParamsInfo)> {
-        let (params_info, compile_info) = Self::handle_args(info, vec![])?;
+    pub(super) fn add_compile_info(&mut self, compile_info: CompileInfo) {
         self.compile_info.push(compile_info);
-        let func_id = self.next_func_id();
-        Ok((func_id, params_info))
-    }
-
-    pub(super) fn add_block(
-        &mut self,
-        for_params: Vec<(usize, BcLocal, IdentId)>,
-        info: BlockInfo,
-    ) -> Result<(FuncId, ParamsInfo)> {
-        let (params_info, compile_info) = Self::handle_args(info, for_params)?;
-        self.compile_info.push(compile_info);
-        let func_id = self.next_func_id();
-        Ok((func_id, params_info))
-    }
-
-    pub(super) fn add_classdef(&mut self, info: BlockInfo) -> Result<FuncId> {
-        let (_, compile_info) = Self::handle_args(info, vec![])?;
-        self.compile_info.push(compile_info);
-        let func_id = self.next_func_id();
-        Ok(func_id)
     }
 
     pub(super) fn new_native_func(
@@ -460,122 +439,8 @@ impl Funcs {
         id
     }
 
-    fn next_func_id(&self) -> FuncId {
+    pub(super) fn next_func_id(&self) -> FuncId {
         FuncId::new(self.info.len() as u32)
-    }
-
-    fn handle_args(
-        info: BlockInfo,
-        for_params: Vec<(usize, BcLocal, IdentId)>,
-    ) -> Result<(ParamsInfo, CompileInfo)> {
-        let BlockInfo {
-            params,
-            box body,
-            loc,
-            ..
-        } = info;
-        let mut args_names = vec![];
-        let mut keyword_names = vec![];
-        let mut keyword_initializers = vec![];
-        let mut destruct_args = vec![];
-        let mut expand = vec![];
-        let mut optional_info = vec![];
-        let mut required_num = 0;
-        let mut optional_num = 0;
-        let mut post_num = 0;
-        let mut rest = None;
-        let mut kw_rest_param = None;
-        let mut block_param = None;
-        let mut for_param_info = vec![];
-        let mut forwarding = false;
-        for (dst_outer, dst_reg, _name) in for_params {
-            for_param_info.push(ForParamInfo::new(dst_outer, dst_reg, args_names.len()));
-            args_names.push(None);
-            required_num += 1;
-        }
-        for param in params {
-            match param.kind {
-                ParamKind::Param(name) => {
-                    args_names.push(Some(IdentId::get_id_from_string(name)));
-                    required_num += 1;
-                }
-                ParamKind::Destruct(names) => {
-                    expand.push((args_names.len(), destruct_args.len(), names.len()));
-                    args_names.push(None);
-                    required_num += 1;
-                    names.into_iter().for_each(|(name, _)| {
-                        destruct_args.push(Some(IdentId::get_id_from_string(name)));
-                    });
-                }
-                ParamKind::Optional(name, box initializer) => {
-                    let local = BcLocal(args_names.len() as u16);
-                    args_names.push(Some(IdentId::get_id_from_string(name)));
-                    optional_num += 1;
-                    optional_info.push(OptionalInfo::new(local, initializer));
-                }
-                ParamKind::Rest(name) => {
-                    assert_eq!(rest, None);
-                    rest = Some(args_names.len());
-                    args_names.push(name.map(IdentId::get_id_from_string));
-                }
-                ParamKind::Post(name) => {
-                    args_names.push(Some(IdentId::get_id_from_string(name)));
-                    post_num += 1;
-                }
-                ParamKind::Forwarding => {
-                    assert_eq!(rest, None);
-                    rest = Some(args_names.len());
-                    args_names.push(None);
-                    assert!(kw_rest_param.is_none());
-                    kw_rest_param = Some(SlotId(1 + args_names.len() as u16));
-                    args_names.push(None);
-                    block_param = Some(IdentId::get_id(""));
-                    forwarding = true;
-                }
-                ParamKind::Keyword(name, init) => {
-                    let name = IdentId::get_id_from_string(name);
-                    args_names.push(Some(name));
-                    keyword_names.push(name);
-                    keyword_initializers.push(init);
-                }
-                ParamKind::KWRest(name) => {
-                    let name = name.map(IdentId::get_id_from_string);
-                    assert!(kw_rest_param.is_none());
-                    kw_rest_param = Some(SlotId(1 + args_names.len() as u16));
-                    args_names.push(name);
-                }
-                ParamKind::Block(name) => {
-                    let name = IdentId::get_id_from_string(name.clone());
-                    block_param = Some(name);
-                }
-            }
-        }
-
-        let expand_info: Vec<_> = expand
-            .into_iter()
-            .map(|(src, dst, len)| DestructureInfo::new(src, args_names.len() + dst, len))
-            .collect();
-        args_names.append(&mut destruct_args);
-        let compile_info = CompileInfo::new(
-            body,
-            keyword_initializers,
-            expand_info,
-            optional_info,
-            for_param_info,
-            loc,
-        );
-        let params_info = ParamsInfo::new(
-            required_num,
-            optional_num,
-            rest,
-            post_num,
-            args_names,
-            keyword_names,
-            kw_rest_param,
-            block_param,
-            forwarding,
-        );
-        Ok((params_info, compile_info))
     }
 }
 

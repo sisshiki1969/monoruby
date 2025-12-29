@@ -161,7 +161,7 @@ impl BytecodeGen {
 
         let old_temp = self.temp;
         let arg = self.sp();
-        let block_fid = self.handle_block(optional_params, block);
+        let block_fid = self.handle_block(optional_params, block)?;
         self.push_nil();
         self.temp = old_temp;
 

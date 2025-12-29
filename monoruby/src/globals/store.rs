@@ -2,6 +2,8 @@ use inline::InlineTable;
 use monoasm::DestLabel;
 use ruruby_parse::{LvarCollector, ParseResult};
 
+use crate::bytecodegen::{BcLocal, CompileInfo, DestructureInfo, ForParamInfo, OptionalInfo};
+
 use super::*;
 use std::{cell::RefCell, pin::Pin};
 
@@ -294,28 +296,32 @@ impl Store {
     }
 
     pub(crate) fn new_main(&mut self, result: ParseResult) -> Result<FuncId> {
+        let info = BlockInfo {
+            params: vec![],
+            body: Box::new(result.node),
+            lvar: LvarCollector::new(),
+            loc: Loc::default(),
+        };
+        let (params_info, compile_info) = Store::handle_args(info, vec![])?;
         self.new_iseq_method(
             Some(IdentId::get_id("/main")),
-            BlockInfo {
-                params: vec![],
-                body: Box::new(result.node),
-                lvar: LvarCollector::new(),
-                loc: Loc::default(),
-            },
+            params_info,
+            compile_info,
             Loc::default(),
             result.source_info,
             true,
         )
     }
 
-    pub fn new_classdef(
+    pub(crate) fn new_classdef(
         &mut self,
         name: Option<IdentId>,
-        info: BlockInfo,
+        compile_info: CompileInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let func_id = self.functions.add_classdef(info)?;
+        let func_id = self.functions.next_func_id();
+        self.functions.add_compile_info(compile_info);
         let info = ISeqInfo::new_method(func_id, name, ParamsInfo::default(), loc, sourceinfo);
         let iseq = self.new_iseq(info);
         let info = FuncInfo::new_classdef_iseq(name, func_id, iseq);
@@ -323,18 +329,20 @@ impl Store {
         Ok(func_id)
     }
 
-    pub fn new_iseq_method(
+    pub(crate) fn new_iseq_method(
         &mut self,
         name: Option<IdentId>,
-        info: BlockInfo,
+        params_info: ParamsInfo,
+        compile_info: CompileInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
         top_level: bool,
     ) -> Result<FuncId> {
-        let (func_id, params) = self.functions.add_iseq_method(info)?;
-        let info = ISeqInfo::new_method(func_id, name, params.clone(), loc, sourceinfo);
+        let func_id = self.functions.next_func_id();
+        self.functions.add_compile_info(compile_info);
+        let info = ISeqInfo::new_method(func_id, name, params_info.clone(), loc, sourceinfo);
         let iseq = self.new_iseq(info);
-        let info = FuncInfo::new_method_iseq(name, func_id, iseq, params, top_level);
+        let info = FuncInfo::new_method_iseq(name, func_id, iseq, params_info, top_level);
         self.functions.info.push(info);
         Ok(func_id)
     }
@@ -343,16 +351,18 @@ impl Store {
         &mut self,
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
-        optional_params: Vec<(usize, bytecodegen::BcLocal, IdentId)>,
+        params_info: ParamsInfo,
+        compile_info: CompileInfo,
         is_block_style: bool,
-        info: BlockInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let (func_id, params) = self.functions.add_block(optional_params, info)?;
-        let info = ISeqInfo::new_block(func_id, mother, outer, params.clone(), loc, sourceinfo);
+        let func_id = self.functions.next_func_id();
+        self.functions.add_compile_info(compile_info);
+        let info =
+            ISeqInfo::new_block(func_id, mother, outer, params_info.clone(), loc, sourceinfo);
         let iseq = self.new_iseq(info);
-        let info = FuncInfo::new_block_iseq(func_id, iseq, params, is_block_style);
+        let info = FuncInfo::new_block_iseq(func_id, iseq, params_info, is_block_style);
         self.functions.info.push(info);
         Ok(func_id)
     }
@@ -370,7 +380,16 @@ impl Store {
             lvar: LvarCollector::new(),
             loc,
         };
-        self.new_block(mother, outer, vec![], false, info, loc, result.source_info)
+        let (params_info, compile_info) = Store::handle_args(info, vec![])?;
+        self.new_block(
+            mother,
+            outer,
+            params_info,
+            compile_info,
+            false,
+            loc,
+            result.source_info,
+        )
     }
 
     pub(super) fn new_builtin_func(
@@ -659,6 +678,122 @@ impl Store {
                 );
             }
         });
+    }
+}
+
+impl Store {
+    pub(crate) fn handle_args(
+        info: BlockInfo,
+        for_params: Vec<(usize, BcLocal, IdentId)>,
+    ) -> Result<(ParamsInfo, CompileInfo)> {
+        let BlockInfo {
+            params,
+            box body,
+            loc,
+            ..
+        } = info;
+        let mut args_names = vec![];
+        let mut keyword_names = vec![];
+        let mut keyword_initializers = vec![];
+        let mut destruct_args = vec![];
+        let mut expand = vec![];
+        let mut optional_info = vec![];
+        let mut required_num = 0;
+        let mut optional_num = 0;
+        let mut post_num = 0;
+        let mut rest = None;
+        let mut kw_rest_param = None;
+        let mut block_param = None;
+        let mut for_param_info = vec![];
+        let mut forwarding = false;
+        for (dst_outer, dst_reg, _name) in for_params {
+            for_param_info.push(ForParamInfo::new(dst_outer, dst_reg, args_names.len()));
+            args_names.push(None);
+            required_num += 1;
+        }
+        for param in params {
+            match param.kind {
+                ParamKind::Param(name) => {
+                    args_names.push(Some(IdentId::get_id_from_string(name)));
+                    required_num += 1;
+                }
+                ParamKind::Destruct(names) => {
+                    expand.push((args_names.len(), destruct_args.len(), names.len()));
+                    args_names.push(None);
+                    required_num += 1;
+                    names.into_iter().for_each(|(name, _)| {
+                        destruct_args.push(Some(IdentId::get_id_from_string(name)));
+                    });
+                }
+                ParamKind::Optional(name, box initializer) => {
+                    let local = BcLocal(args_names.len() as u16);
+                    args_names.push(Some(IdentId::get_id_from_string(name)));
+                    optional_num += 1;
+                    optional_info.push(OptionalInfo::new(local, initializer));
+                }
+                ParamKind::Rest(name) => {
+                    assert_eq!(rest, None);
+                    rest = Some(args_names.len());
+                    args_names.push(name.map(IdentId::get_id_from_string));
+                }
+                ParamKind::Post(name) => {
+                    args_names.push(Some(IdentId::get_id_from_string(name)));
+                    post_num += 1;
+                }
+                ParamKind::Forwarding => {
+                    assert_eq!(rest, None);
+                    rest = Some(args_names.len());
+                    args_names.push(None);
+                    assert!(kw_rest_param.is_none());
+                    kw_rest_param = Some(SlotId(1 + args_names.len() as u16));
+                    args_names.push(None);
+                    block_param = Some(IdentId::get_id(""));
+                    forwarding = true;
+                }
+                ParamKind::Keyword(name, init) => {
+                    let name = IdentId::get_id_from_string(name);
+                    args_names.push(Some(name));
+                    keyword_names.push(name);
+                    keyword_initializers.push(init);
+                }
+                ParamKind::KWRest(name) => {
+                    let name = name.map(IdentId::get_id_from_string);
+                    assert!(kw_rest_param.is_none());
+                    kw_rest_param = Some(SlotId(1 + args_names.len() as u16));
+                    args_names.push(name);
+                }
+                ParamKind::Block(name) => {
+                    let name = IdentId::get_id_from_string(name.clone());
+                    block_param = Some(name);
+                }
+            }
+        }
+
+        let expand_info: Vec<_> = expand
+            .into_iter()
+            .map(|(src, dst, len)| DestructureInfo::new(src, args_names.len() + dst, len))
+            .collect();
+        args_names.append(&mut destruct_args);
+        let compile_info = CompileInfo::new(
+            body,
+            keyword_initializers,
+            expand_info,
+            optional_info,
+            for_param_info,
+            loc,
+        );
+        let params_info = ParamsInfo::new(
+            required_num,
+            optional_num,
+            rest,
+            post_num,
+            args_names,
+            keyword_names,
+            kw_rest_param,
+            block_param,
+            forwarding,
+        );
+        Ok((params_info, compile_info))
     }
 }
 

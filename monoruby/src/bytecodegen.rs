@@ -369,17 +369,18 @@ struct KeywordArgs {
 enum Functions {
     Method {
         name: Option<IdentId>,
-        info: BlockInfo,
+        params_info: ParamsInfo,
+        compile_info: CompileInfo,
     },
     ClassDef {
         name: Option<IdentId>,
-        info: BlockInfo,
+        compile_info: CompileInfo,
     },
     Block {
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
-        optional_params: Vec<(usize, BcLocal, IdentId)>,
-        info: BlockInfo,
+        params_info: ParamsInfo,
+        compile_info: CompileInfo,
         is_block_style: bool,
     },
 }
@@ -405,6 +406,7 @@ struct ExceptionEntry {
 ///
 /// this includes AST and information for initialization of optional, keyword, destructuring parameters.
 ///
+#[derive(Debug, Clone)]
 pub(crate) struct CompileInfo {
     /// AST.
     ast: Node,
@@ -594,14 +596,23 @@ impl BytecodeGen {
         !self.outer_locals.is_empty()
     }
 
-    fn add_method(&mut self, name: Option<IdentId>, info: BlockInfo) -> FunctionId {
-        let info = Functions::Method { name, info };
+    fn add_method(
+        &mut self,
+        name: Option<IdentId>,
+        params_info: ParamsInfo,
+        compile_info: CompileInfo,
+    ) -> FunctionId {
+        let info = Functions::Method {
+            name,
+            params_info,
+            compile_info,
+        };
         self.functions.push(Some(Box::new(info)));
         FunctionId(self.functions.len() - 1)
     }
 
-    fn add_classdef(&mut self, name: Option<IdentId>, info: BlockInfo) -> FunctionId {
-        let info = Functions::ClassDef { name, info };
+    fn add_classdef(&mut self, name: Option<IdentId>, compile_info: CompileInfo) -> FunctionId {
+        let info = Functions::ClassDef { name, compile_info };
         self.functions.push(Some(Box::new(info)));
         FunctionId(self.functions.len() - 1)
     }
@@ -610,14 +621,14 @@ impl BytecodeGen {
         &mut self,
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
-        optional_params: Vec<(usize, BcLocal, IdentId)>,
-        info: BlockInfo,
+        params_info: ParamsInfo,
+        compile_info: CompileInfo,
     ) -> FunctionId {
         let info = Functions::Block {
             mother,
             outer,
-            optional_params,
-            info,
+            params_info,
+            compile_info,
             is_block_style: true,
         };
         self.functions.push(Some(Box::new(info)));
@@ -628,13 +639,14 @@ impl BytecodeGen {
         &mut self,
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
-        info: BlockInfo,
+        params_info: ParamsInfo,
+        compile_info: CompileInfo,
     ) -> FunctionId {
         let info = Functions::Block {
             mother,
             outer,
-            optional_params: vec![],
-            info,
+            params_info,
+            compile_info,
             is_block_style: false,
         };
         self.functions.push(Some(Box::new(info)));
@@ -812,21 +824,28 @@ impl BytecodeGen {
         &mut self,
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         block: BlockInfo,
-    ) -> FunctionId {
+    ) -> Result<FunctionId> {
         let outer_locals = self.get_locals();
         let (mother, _, outer) = self.mother;
-        self.add_block(
+        let (params_info, compile_info) = Store::handle_args(block, optional_params)?;
+        Ok(self.add_block(
             (mother, outer + 1),
             (self.func_id, outer_locals),
-            optional_params,
-            block,
-        )
+            params_info,
+            compile_info,
+        ))
     }
 
-    fn handle_lambda(&mut self, block: BlockInfo) -> FunctionId {
+    fn handle_lambda(&mut self, block: BlockInfo) -> Result<FunctionId> {
         let outer_locals = self.get_locals();
         let (mother, _, outer) = self.mother;
-        self.add_lambda((mother, outer + 1), (self.func_id, outer_locals), block)
+        let (params_info, compile_info) = Store::handle_args(block, vec![])?;
+        Ok(self.add_lambda(
+            (mother, outer + 1),
+            (self.func_id, outer_locals),
+            params_info,
+            compile_info,
+        ))
     }
 }
 

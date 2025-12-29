@@ -735,22 +735,26 @@ impl BytecodeGen {
     fn new_function(&mut self, store: &mut Store, func: FunctionId, loc: Loc) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
         match self.get_function(func) {
-            Functions::Method { name, info } => {
-                store.new_iseq_method(name, info, loc, sourceinfo, false)
+            Functions::Method {
+                name,
+                params_info,
+                compile_info,
+            } => store.new_iseq_method(name, params_info, compile_info, loc, sourceinfo, false),
+            Functions::ClassDef { name, compile_info } => {
+                store.new_classdef(name, compile_info, loc, sourceinfo)
             }
-            Functions::ClassDef { name, info } => store.new_classdef(name, info, loc, sourceinfo),
             Functions::Block {
                 mother,
                 outer,
-                optional_params,
-                info,
+                params_info,
+                compile_info,
                 is_block_style,
             } => store.new_block(
                 mother,
                 outer,
-                optional_params,
+                params_info,
+                compile_info,
                 is_block_style,
-                info,
                 loc,
                 sourceinfo,
             ),
