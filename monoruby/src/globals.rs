@@ -300,7 +300,8 @@ impl Globals {
         caller_cfp: Cfp,
     ) -> Result<FuncId> {
         let outer_fid = caller_cfp.lfp().func_id();
-        let mother = caller_cfp.method_func_id_depth();
+        let (mother_fid, depth) = caller_cfp.method_func_id_depth();
+        let mother = (self.store[mother_fid].as_iseq(), depth);
         let mut ex_scope = HashMap::default();
         for (name, idx) in &self.store.iseq(outer_fid).locals {
             ex_scope.insert(*name, *idx);
@@ -334,7 +335,7 @@ impl Globals {
     ) -> Result<()> {
         let outer_fid = binding.outer_lfp().func_id();
         let (lfp, outer) = binding.outer_lfp().outermost();
-        let mother = (lfp.func_id(), outer);
+        let mother = (self.store[lfp.func_id()].as_iseq(), outer);
         let mut ex_scope = HashMap::default();
         for (name, idx) in &self.store.iseq(outer_fid).locals {
             ex_scope.insert(*name, *idx);

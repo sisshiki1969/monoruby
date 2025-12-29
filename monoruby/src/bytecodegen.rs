@@ -24,7 +24,7 @@ pub fn bytecode_compile_script(globals: &mut Globals, result: ParseResult) -> Re
 pub fn bytecode_compile_eval(
     globals: &mut Globals,
     result: ParseResult,
-    mother: (FuncId, usize),
+    mother: (ISeqId, usize),
     outer: (FuncId, ExternalContext),
     loc: Loc,
     binding: Option<LvarCollector>,
@@ -56,76 +56,14 @@ fn bytecode_compile_func(
     func_id: FuncId,
     binding: Option<LvarCollector>,
 ) -> Result<()> {
-    let CompileInfo {
-        ast,
-        for_param_info,
-        keyword_initializers,
-        destruct_info,
-        optional_info,
-        loc,
-    } = globals.functions.get_compile_info();
+    let compile_info = globals.functions.get_compile_info();
+    let loc = compile_info.loc;
     let iseq = globals[func_id].as_iseq();
-    let info = globals.iseq(func_id);
-    let (fid, outer) = info.mother();
-    let params = globals.iseq(fid).args.clone();
-    let mut r#gen = BytecodeGen::new(iseq, info, (fid, params, outer), binding);
-    // arguments preparation
-    for ForParamInfo {
-        dst_outer,
-        dst_reg,
-        src_reg,
-    } in for_param_info
-    {
-        r#gen.emit(
-            BytecodeInst::StoreDynVar {
-                dst: (dst_reg).into(),
-                outer: dst_outer,
-                src: BcLocal(src_reg as u16).into(),
-            },
-            Loc::default(),
-        );
-    }
-    for DestructureInfo { src, dst, len } in destruct_info {
-        r#gen.gen_expand_array(src, dst, len, None);
-    }
-    for OptionalInfo { local, initializer } in optional_info {
-        let local = local.into();
-        let next = r#gen.new_label();
-        r#gen.emit_check_local(local, next);
-        r#gen.gen_store_expr(local, initializer)?;
-        r#gen.apply_label(next);
-    }
-    // keyword args preparation
-    let kw_reg = info.args.total_positional_args();
-    for (id, initializer) in keyword_initializers.into_iter().enumerate() {
-        let local = BcLocal((kw_reg + id) as u16).into();
-        let next = r#gen.new_label();
-        r#gen.emit_check_local(local, next);
-        if let Some(box init) = initializer {
-            r#gen.gen_store_expr(local, init)?;
-        } else {
-            r#gen.emit_nil(local);
-        }
-        r#gen.apply_label(next);
-    }
-    // check keyword rest param. if nil, substitute with empty hash.
-    if let Some(kw_rest) = info.args.kw_rest {
-        let local = BcLocal(kw_rest.0 - 1).into();
-        r#gen.emit_check_kw_rest(local);
-    }
+    let info = &globals.store[iseq];
 
-    r#gen.apply_label(r#gen.redo_label);
-    // we must check whether redo exist in the function.
-    let mut v = Visitor { redo_flag: false };
-    v.visit(&ast);
-    if v.redo_flag {
-        r#gen.emit(BytecodeInst::LoopStart, loc);
-    }
-    r#gen.gen_expr(ast, UseMode2::Ret)?;
-    if v.redo_flag {
-        r#gen.emit(BytecodeInst::LoopEnd, loc);
-    }
-    r#gen.replace_init(info);
+    let mut r#gen = BytecodeGen::new(&globals.store, iseq, binding);
+    r#gen.compile(compile_info, info)?;
+
     if let Some(value) = r#gen.is_const_function() {
         globals.iseq_mut(func_id).unwrap().set_const_fn(value);
     }
@@ -369,7 +307,6 @@ struct KeywordArgs {
 enum Functions {
     Method {
         name: Option<IdentId>,
-        params_info: ParamsInfo,
         compile_info: CompileInfo,
     },
     ClassDef {
@@ -377,9 +314,8 @@ enum Functions {
         compile_info: CompileInfo,
     },
     Block {
-        mother: (FuncId, usize),
+        mother: (ISeqId, usize),
         outer: (FuncId, ExternalContext),
-        params_info: ParamsInfo,
         compile_info: CompileInfo,
         is_block_style: bool,
     },
@@ -410,6 +346,8 @@ struct ExceptionEntry {
 pub(crate) struct CompileInfo {
     /// AST.
     ast: Node,
+    /// parameter information.
+    pub(crate) params_info: ParamsInfo,
     /// keyword params initializers.
     keyword_initializers: Vec<Option<Box<Node>>>,
     /// param expansion info
@@ -425,6 +363,7 @@ pub(crate) struct CompileInfo {
 impl CompileInfo {
     pub fn new(
         ast: Node,
+        params_info: ParamsInfo,
         keyword_initializers: Vec<Option<Box<Node>>>,
         expand_info: Vec<DestructureInfo>,
         optional_info: Vec<OptionalInfo>,
@@ -433,6 +372,7 @@ impl CompileInfo {
     ) -> Self {
         Self {
             ast,
+            params_info,
             keyword_initializers,
             destruct_info: expand_info,
             optional_info,
@@ -504,7 +444,7 @@ struct BytecodeGen {
     /// ID of this function.
     func_id: FuncId,
     /// ID of the mother method.
-    mother: (FuncId, ParamsInfo, usize),
+    mother: (ISeqId, ParamsInfo, usize),
     /// bytecode IR.
     ir: Vec<(BytecodeInst, Loc)>,
     /// the temp stack pointer for each bytecode instruction.
@@ -549,16 +489,14 @@ impl std::ops::Index<Label> for BytecodeGen {
 }
 
 impl BytecodeGen {
-    fn new(
-        iseq_id: ISeqId,
-        info: &ISeqInfo,
-        mother: (FuncId, ParamsInfo, usize),
-        binding: Option<LvarCollector>,
-    ) -> Self {
-        let mut ir = Self {
+    fn new(store: &Store, iseq_id: ISeqId, binding: Option<LvarCollector>) -> Self {
+        let info = &store[iseq_id];
+        let (fid, outer) = info.mother();
+        let params = store[fid].args.clone();
+        let mut codegen = Self {
             iseq_id,
             func_id: info.func_id(),
-            mother,
+            mother: (fid, params, outer),
             ir: vec![],
             sp: vec![],
             labels: vec![None], // The first label is for redo.
@@ -580,33 +518,88 @@ impl BytecodeGen {
         if let Some(lvc) = binding {
             assert!(info.args.args_names.is_empty());
             lvc.table.0.iter().for_each(|name| {
-                ir.add_local(IdentId::get_id(name));
+                codegen.add_local(IdentId::get_id(name));
             });
         } else {
             info.args.args_names.iter().for_each(|name| {
-                ir.add_local(*name);
+                codegen.add_local(*name);
             });
         }
-        ir.gen_dummy_init();
 
-        ir
+        codegen
+    }
+
+    fn compile(&mut self, compile_info: CompileInfo, info: &ISeqInfo) -> Result<()> {
+        self.gen_dummy_init();
+        // arguments preparation
+        for ForParamInfo {
+            dst_outer,
+            dst_reg,
+            src_reg,
+        } in compile_info.for_param_info
+        {
+            self.emit(
+                BytecodeInst::StoreDynVar {
+                    dst: (dst_reg).into(),
+                    outer: dst_outer,
+                    src: BcLocal(src_reg as u16).into(),
+                },
+                Loc::default(),
+            );
+        }
+        for DestructureInfo { src, dst, len } in compile_info.destruct_info {
+            self.gen_expand_array(src, dst, len, None);
+        }
+        for OptionalInfo { local, initializer } in compile_info.optional_info {
+            let local = local.into();
+            let next = self.new_label();
+            self.emit_check_local(local, next);
+            self.gen_store_expr(local, initializer)?;
+            self.apply_label(next);
+        }
+        // keyword args preparation
+        let kw_reg = info.args.total_positional_args();
+        for (id, initializer) in compile_info.keyword_initializers.into_iter().enumerate() {
+            let local = BcLocal((kw_reg + id) as u16).into();
+            let next = self.new_label();
+            self.emit_check_local(local, next);
+            if let Some(box init) = initializer {
+                self.gen_store_expr(local, init)?;
+            } else {
+                self.emit_nil(local);
+            }
+            self.apply_label(next);
+        }
+
+        // check keyword rest param. if nil, substitute with empty hash.
+        if let Some(kw_rest) = info.args.kw_rest {
+            let local = BcLocal(kw_rest.0 - 1).into();
+            self.emit_check_kw_rest(local);
+        }
+
+        let ast = compile_info.ast;
+        let loc = compile_info.loc;
+        self.apply_label(self.redo_label);
+        // we must check whether redo exist in the function.
+        let mut v = Visitor { redo_flag: false };
+        v.visit(&ast);
+        if v.redo_flag {
+            self.emit(BytecodeInst::LoopStart, loc);
+        }
+        self.gen_expr(ast, UseMode2::Ret)?;
+        if v.redo_flag {
+            self.emit(BytecodeInst::LoopEnd, loc);
+        }
+        self.replace_init(info);
+        Ok(())
     }
 
     fn is_block(&self) -> bool {
         !self.outer_locals.is_empty()
     }
 
-    fn add_method(
-        &mut self,
-        name: Option<IdentId>,
-        params_info: ParamsInfo,
-        compile_info: CompileInfo,
-    ) -> FunctionId {
-        let info = Functions::Method {
-            name,
-            params_info,
-            compile_info,
-        };
+    fn add_method(&mut self, name: Option<IdentId>, compile_info: CompileInfo) -> FunctionId {
+        let info = Functions::Method { name, compile_info };
         self.functions.push(Some(Box::new(info)));
         FunctionId(self.functions.len() - 1)
     }
@@ -619,15 +612,13 @@ impl BytecodeGen {
 
     fn add_block(
         &mut self,
-        mother: (FuncId, usize),
+        mother: (ISeqId, usize),
         outer: (FuncId, ExternalContext),
-        params_info: ParamsInfo,
         compile_info: CompileInfo,
     ) -> FunctionId {
         let info = Functions::Block {
             mother,
             outer,
-            params_info,
             compile_info,
             is_block_style: true,
         };
@@ -637,15 +628,13 @@ impl BytecodeGen {
 
     fn add_lambda(
         &mut self,
-        mother: (FuncId, usize),
+        mother: (ISeqId, usize),
         outer: (FuncId, ExternalContext),
-        params_info: ParamsInfo,
         compile_info: CompileInfo,
     ) -> FunctionId {
         let info = Functions::Block {
             mother,
             outer,
-            params_info,
             compile_info,
             is_block_style: false,
         };
@@ -827,11 +816,10 @@ impl BytecodeGen {
     ) -> Result<FunctionId> {
         let outer_locals = self.get_locals();
         let (mother, _, outer) = self.mother;
-        let (params_info, compile_info) = Store::handle_args(block, optional_params)?;
+        let compile_info = Store::handle_args(block, optional_params)?;
         Ok(self.add_block(
             (mother, outer + 1),
             (self.func_id, outer_locals),
-            params_info,
             compile_info,
         ))
     }
@@ -839,11 +827,10 @@ impl BytecodeGen {
     fn handle_lambda(&mut self, block: BlockInfo) -> Result<FunctionId> {
         let outer_locals = self.get_locals();
         let (mother, _, outer) = self.mother;
-        let (params_info, compile_info) = Store::handle_args(block, vec![])?;
+        let compile_info = Store::handle_args(block, vec![])?;
         Ok(self.add_lambda(
             (mother, outer + 1),
             (self.func_id, outer_locals),
-            params_info,
             compile_info,
         ))
     }

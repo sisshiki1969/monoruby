@@ -77,7 +77,7 @@ pub struct ISeqInfo {
     ///
     /// Mother method.
     ///
-    mother: (FuncId, usize),
+    mother: (ISeqId, usize),
     ///
     /// Name of this function.
     ///
@@ -169,7 +169,7 @@ impl alloc::GC<RValue> for ISeqInfo {
 impl ISeqInfo {
     fn new(
         id: FuncId,
-        mother: (FuncId, usize),
+        mother: (ISeqId, usize),
         outer_locals: ExternalContext,
         name: Option<IdentId>,
         args: ParamsInfo,
@@ -211,7 +211,7 @@ impl ISeqInfo {
 
     pub(super) fn new_block(
         id: FuncId,
-        mother: (FuncId, usize),
+        mother: (ISeqId, usize),
         outer: (FuncId, ExternalContext),
         args: ParamsInfo,
         loc: Loc,
@@ -222,6 +222,7 @@ impl ISeqInfo {
 
     pub(super) fn new_method(
         id: FuncId,
+        iseq_id: ISeqId,
         name: Option<IdentId>,
         args: ParamsInfo,
         loc: Loc,
@@ -229,7 +230,7 @@ impl ISeqInfo {
     ) -> Self {
         Self::new(
             id,
-            (id, 0),
+            (iseq_id, 0),
             ExternalContext::new(),
             name,
             args,
@@ -242,7 +243,7 @@ impl ISeqInfo {
         self.func_id
     }
 
-    pub(crate) fn mother(&self) -> (FuncId, usize) {
+    pub(crate) fn mother(&self) -> (ISeqId, usize) {
         self.mother
     }
 

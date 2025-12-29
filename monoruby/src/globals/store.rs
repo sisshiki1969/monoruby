@@ -247,11 +247,11 @@ impl Store {
     ///
     pub(crate) fn func_description(&self, func_id: FuncId) -> String {
         let info = &self[func_id];
-        if let Some(iseq) = info.is_iseq() {
-            let iseq = &self[iseq];
+        if let Some(iseq_id) = info.is_iseq() {
+            let iseq = &self[iseq_id];
             let mother = iseq.mother().0;
-            if mother != func_id {
-                format!("block in {}", self.func_description(mother))
+            if mother != iseq_id {
+                format!("block in {}", self.func_description(self[mother].func_id()))
             } else {
                 match info.owner_class() {
                     Some(owner) => format!("{}#{}", owner.get_name(self), iseq.name()),
@@ -295,6 +295,11 @@ impl Store {
         ISeqId::new(id)
     }
 
+    fn next_iseq_id(&mut self) -> ISeqId {
+        let id = self.iseqs.len();
+        ISeqId::new(id)
+    }
+
     pub(crate) fn new_main(&mut self, result: ParseResult) -> Result<FuncId> {
         let info = BlockInfo {
             params: vec![],
@@ -302,10 +307,9 @@ impl Store {
             lvar: LvarCollector::new(),
             loc: Loc::default(),
         };
-        let (params_info, compile_info) = Store::handle_args(info, vec![])?;
+        let compile_info = Store::handle_args(info, vec![])?;
         self.new_iseq_method(
             Some(IdentId::get_id("/main")),
-            params_info,
             compile_info,
             Loc::default(),
             result.source_info,
@@ -322,7 +326,14 @@ impl Store {
     ) -> Result<FuncId> {
         let func_id = self.functions.next_func_id();
         self.functions.add_compile_info(compile_info);
-        let info = ISeqInfo::new_method(func_id, name, ParamsInfo::default(), loc, sourceinfo);
+        let info = ISeqInfo::new_method(
+            func_id,
+            self.next_iseq_id(),
+            name,
+            ParamsInfo::default(),
+            loc,
+            sourceinfo,
+        );
         let iseq = self.new_iseq(info);
         let info = FuncInfo::new_classdef_iseq(name, func_id, iseq);
         self.functions.info.push(info);
@@ -332,15 +343,22 @@ impl Store {
     pub(crate) fn new_iseq_method(
         &mut self,
         name: Option<IdentId>,
-        params_info: ParamsInfo,
         compile_info: CompileInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
         top_level: bool,
     ) -> Result<FuncId> {
         let func_id = self.functions.next_func_id();
+        let params_info = compile_info.params_info.clone();
         self.functions.add_compile_info(compile_info);
-        let info = ISeqInfo::new_method(func_id, name, params_info.clone(), loc, sourceinfo);
+        let info = ISeqInfo::new_method(
+            func_id,
+            self.next_iseq_id(),
+            name,
+            params_info.clone(),
+            loc,
+            sourceinfo,
+        );
         let iseq = self.new_iseq(info);
         let info = FuncInfo::new_method_iseq(name, func_id, iseq, params_info, top_level);
         self.functions.info.push(info);
@@ -349,15 +367,15 @@ impl Store {
 
     pub(crate) fn new_block(
         &mut self,
-        mother: (FuncId, usize),
+        mother: (ISeqId, usize),
         outer: (FuncId, ExternalContext),
-        params_info: ParamsInfo,
         compile_info: CompileInfo,
         is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         let func_id = self.functions.next_func_id();
+        let params_info = compile_info.params_info.clone();
         self.functions.add_compile_info(compile_info);
         let info =
             ISeqInfo::new_block(func_id, mother, outer, params_info.clone(), loc, sourceinfo);
@@ -369,7 +387,7 @@ impl Store {
 
     pub(crate) fn new_eval(
         &mut self,
-        mother: (FuncId, usize),
+        mother: (ISeqId, usize),
         result: ParseResult,
         outer: (FuncId, ExternalContext),
         loc: Loc,
@@ -380,16 +398,8 @@ impl Store {
             lvar: LvarCollector::new(),
             loc,
         };
-        let (params_info, compile_info) = Store::handle_args(info, vec![])?;
-        self.new_block(
-            mother,
-            outer,
-            params_info,
-            compile_info,
-            false,
-            loc,
-            result.source_info,
-        )
+        let compile_info = Store::handle_args(info, vec![])?;
+        self.new_block(mother, outer, compile_info, false, loc, result.source_info)
     }
 
     pub(super) fn new_builtin_func(
@@ -685,7 +695,7 @@ impl Store {
     pub(crate) fn handle_args(
         info: BlockInfo,
         for_params: Vec<(usize, BcLocal, IdentId)>,
-    ) -> Result<(ParamsInfo, CompileInfo)> {
+    ) -> Result<CompileInfo> {
         let BlockInfo {
             params,
             box body,
@@ -774,14 +784,6 @@ impl Store {
             .map(|(src, dst, len)| DestructureInfo::new(src, args_names.len() + dst, len))
             .collect();
         args_names.append(&mut destruct_args);
-        let compile_info = CompileInfo::new(
-            body,
-            keyword_initializers,
-            expand_info,
-            optional_info,
-            for_param_info,
-            loc,
-        );
         let params_info = ParamsInfo::new(
             required_num,
             optional_num,
@@ -793,7 +795,16 @@ impl Store {
             block_param,
             forwarding,
         );
-        Ok((params_info, compile_info))
+        let compile_info = CompileInfo::new(
+            body,
+            params_info,
+            keyword_initializers,
+            expand_info,
+            optional_info,
+            for_param_info,
+            loc,
+        );
+        Ok(compile_info)
     }
 }
 

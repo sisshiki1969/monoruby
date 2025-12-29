@@ -1055,8 +1055,8 @@ impl BytecodeGen {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let (params_info, compile_info) = Store::handle_args(block, vec![])?;
-        let func = self.add_method(Some(name), params_info, compile_info);
+        let compile_info = Store::handle_args(block, vec![])?;
+        let func = self.add_method(Some(name), compile_info);
         self.emit(BytecodeInst::MethodDef { name, func }, loc);
         self.gen_symbol(name, use_mode)?;
         Ok(())
@@ -1069,8 +1069,8 @@ impl BytecodeGen {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let (params_info, compile_info) = Store::handle_args(block, vec![])?;
-        let func = self.add_method(Some(name), params_info, compile_info);
+        let compile_info = Store::handle_args(block, vec![])?;
+        let func = self.add_method(Some(name), compile_info);
         let obj = self.pop().into();
         self.emit(BytecodeInst::SingletonMethodDef { obj, name, func }, loc);
         self.gen_symbol(name, use_mode)?;
@@ -1105,7 +1105,7 @@ impl BytecodeGen {
         } else {
             None
         };
-        let (_, compile_info) = Store::handle_args(info, vec![])?;
+        let compile_info = Store::handle_args(info, vec![])?;
         let func = self.add_classdef(Some(name), compile_info);
         let superclass = match superclass {
             Some(box superclass) => Some(self.push_expr(superclass)?.into()),
@@ -1150,7 +1150,7 @@ impl BytecodeGen {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let (_, compile_info) = Store::handle_args(info, vec![])?;
+        let compile_info = Store::handle_args(info, vec![])?;
         let func = self.add_classdef(None, compile_info);
         let old = self.temp;
         let base = self.gen_expr_reg(base)?;
