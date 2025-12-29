@@ -135,10 +135,6 @@ impl SlotContext {
         SlotId(0)..SlotId(self.slots.len() as u16)
     }
 
-    pub(super) fn all_regs_except_self(&self) -> std::ops::Range<SlotId> {
-        SlotId(1)..SlotId(self.slots.len() as u16)
-    }
-
     fn temps(&self) -> std::ops::Range<SlotId> {
         self.temp_start()..SlotId(self.slots.len() as u16)
     }
@@ -441,12 +437,16 @@ impl SlotContext {
         }
     }
 
-    pub fn is_float_literal(&self, slot: SlotId) -> Option<f64> {
+    #[allow(non_snake_case)]
+    pub fn coerce_C_f64(&self, slot: SlotId) -> Option<f64> {
         if let LinkMode::C(v) = self.mode(slot) {
-            v.try_float()
-        } else {
-            None
+            if let Some(f) = v.try_float() {
+                return Some(f);
+            } else if let Some(i) = v.try_fixnum() {
+                return Some(i as f64);
+            }
         }
+        None
     }
 
     pub fn is_u16(&self, slot: SlotId) -> Option<u16> {
@@ -1001,15 +1001,15 @@ impl LinkMode {
         }
     }
 
-    pub(super) fn as_result(&self) -> ResultState {
+    pub(super) fn as_result(&self) -> ReturnValue {
         match self {
-            LinkMode::C(v) => ResultState::Const(*v),
+            LinkMode::C(v) => ReturnValue::Const(*v),
             LinkMode::MaybeNone | LinkMode::None | LinkMode::V => unreachable!(),
             l => match l.guarded() {
-                Guarded::Class(class) => ResultState::Class(class),
-                Guarded::Fixnum => ResultState::Class(INTEGER_CLASS),
-                Guarded::Float => ResultState::Class(FLOAT_CLASS),
-                Guarded::Value => ResultState::Value,
+                Guarded::Class(class) => ReturnValue::Class(class),
+                Guarded::Fixnum => ReturnValue::Class(INTEGER_CLASS),
+                Guarded::Float => ReturnValue::Class(FLOAT_CLASS),
+                Guarded::Value => ReturnValue::Value,
             },
         }
     }
@@ -1472,7 +1472,7 @@ impl BBContext {
     }
 
     pub(super) fn write_back_locals_if_captured(&mut self, ir: &mut AsmIr) {
-        if !self.frame_capture_guarded {
+        if !self.class_version_guarded {
             let wb = self.get_locals_write_back();
             ir.push(AsmInst::WriteBackIfCaptured(wb));
         }

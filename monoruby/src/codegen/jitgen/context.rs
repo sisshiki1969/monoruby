@@ -183,6 +183,10 @@ pub(crate) struct JitStackFrame {
     /// Flag whether ivar on the heap is accessed in this context.
     ///
     ivar_heap_accessed: bool,
+    ///
+    ///
+    /// the frame is not captured
+    not_captured: bool,
 
     ///
     /// Source map for bytecode index and machine code position.
@@ -256,6 +260,7 @@ impl JitStackFrame {
             specialized_methods: vec![],
             stack_offset,
             ivar_heap_accessed: false,
+            not_captured: true,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -287,6 +292,7 @@ impl JitStackFrame {
             specialized_methods: vec![],
             stack_offset: self.stack_offset,
             ivar_heap_accessed: false,
+            not_captured: self.not_captured,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -481,9 +487,8 @@ impl<'a> JitContext<'a> {
         self.current_frame().self_ty
     }
 
-    /// Whether this function is a method, a class definition, or a top-level.
-    pub(super) fn is_not_block(&self) -> bool {
-        self.current_frame().is_not_block
+    pub(super) fn is_block(&self) -> bool {
+        !self.store[self.func_id()].is_not_block()
     }
 
     pub(super) fn specialized_methods_len(&self) -> usize {
@@ -502,13 +507,13 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().stack_offset -= using_xmm.offset();
     }
 
-    pub(super) fn push_return_context(&mut self, pos: usize, ctx: ResultState) {
+    pub(super) fn push_return_context(&mut self, pos: usize, ret: ResultState) {
         if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
-            frame.push(ctx);
+            frame.push(ret);
         } else {
             self.current_frame_mut()
                 .return_context
-                .insert(pos, vec![ctx]);
+                .insert(pos, vec![ret]);
         }
     }
 
@@ -540,6 +545,14 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn unset_callsite(&mut self) {
         self.current_frame_mut().callid = None;
+    }
+
+    pub(super) fn set_not_captured(&mut self, not_captured: bool) {
+        self.current_frame_mut().not_captured = not_captured;
+    }
+
+    pub(super) fn not_captured(&self) -> bool {
+        self.current_frame().not_captured
     }
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
@@ -605,6 +618,21 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    ///
+    /// Unset frame capture guard in the outer `JitFrame`s.
+    pub(super) fn unset_frame_capture_guard(&mut self) {
+        let mut i = self.stack_frame.len() - 1;
+        loop {
+            let frame = &mut self.stack_frame[i];
+            if let Some(outer) = frame.outer {
+                i -= outer;
+                self.stack_frame[i].not_captured = false;
+            } else {
+                return;
+            }
+        }
+    }
+
     fn calc_stack_offset(&self, begin: usize, end: usize) -> usize {
         self.stack_frame[begin..end]
             .iter()
@@ -620,9 +648,11 @@ impl<'a> JitContext<'a> {
         })
     }
 
-    pub(super) fn outer_stack_offset(&self, outer: usize) -> Option<usize> {
+    pub(super) fn outer_stack_offset(&self, outer: usize) -> Option<(usize, bool)> {
         let outer = self.outer_pos(outer)?;
-        Some(self.calc_stack_offset(outer, self.stack_frame.len() - 1))
+        let not_captured = self.stack_frame[outer].not_captured;
+        let offset = self.calc_stack_offset(outer, self.stack_frame.len() - 1);
+        Some((offset, not_captured))
     }
 
     pub(super) fn method_caller_stack_offset(&self) -> Option<usize> {

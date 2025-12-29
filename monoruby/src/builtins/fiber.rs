@@ -6,7 +6,14 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Fiber", FIBER_CLASS, ObjTy::FIBER);
-    globals.define_builtin_class_func(FIBER_CLASS, "new", fiber_new, 0);
+    globals.define_builtin_class_func_with_effect(
+        FIBER_CLASS,
+        "new",
+        fiber_new,
+        0,
+        0,
+        Effect::CAPTURE,
+    );
     globals.define_builtin_class_inline_func_rest(
         FIBER_CLASS,
         "yield",

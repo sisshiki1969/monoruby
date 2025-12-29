@@ -25,12 +25,8 @@ impl BBContext {
     ///
     /// ~~~
     pub(in crate::codegen::jitgen) fn join(&mut self, other: &BBContext) {
-        if !other.class_version_guarded {
-            self.unset_class_version_guard();
-        }
-        if !other.frame_capture_guarded {
-            self.unset_frame_capture_guard();
-        }
+        self.class_version_guarded &= other.class_version_guarded;
+        self.frame_capture_guarded &= other.frame_capture_guarded;
         for i in self.all_regs() {
             self.is_used_mut(i).join(other.is_used(i));
             match (self.mode(i), other.mode(i)) {

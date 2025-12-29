@@ -205,11 +205,17 @@ impl Codegen {
         );
     }
 
-    pub(super) fn load_dyn_var_specialized(&mut self, offset: usize, reg: SlotId) {
-        monoasm!( &mut self.jit,
-            movq rax, [rbp + ((offset - (BP_CFP + CFP_LFP) as usize))];
-            movq rax, [rax - (conv(reg))];
-        );
+    pub(super) fn load_dyn_var_specialized(&mut self, offset: usize, reg: SlotId, on_stack: bool) {
+        if on_stack {
+            monoasm!( &mut self.jit,
+                movq rax, [rbp + ((offset - (BP_CFP + CFP_LFP) as usize - 8 - conv(reg) as usize))];
+            );
+        } else {
+            monoasm!( &mut self.jit,
+                movq rax, [rbp + ((offset - (BP_CFP + CFP_LFP) as usize))];
+                movq rax, [rax - (conv(reg))];
+            );
+        }
     }
 
     pub(super) fn store_dyn_var(&mut self, dst: DynVar, src: GP) {
@@ -220,11 +226,23 @@ impl Codegen {
         );
     }
 
-    pub(super) fn store_dyn_var_specialized(&mut self, offset: usize, dst: SlotId, src: GP) {
-        monoasm!( &mut self.jit,
-            movq rax, [rbp + ((offset - (BP_CFP + CFP_LFP) as usize))];
-            movq [rax - (conv(dst))], R(src as _);
-        );
+    pub(super) fn store_dyn_var_specialized(
+        &mut self,
+        offset: usize,
+        dst: SlotId,
+        src: GP,
+        on_stack: bool,
+    ) {
+        if on_stack {
+            monoasm!( &mut self.jit,
+                movq [rbp + ((offset - (BP_CFP + CFP_LFP) as usize - 8 - conv(dst) as usize))], R(src as _);
+            );
+        } else {
+            monoasm!( &mut self.jit,
+                movq rax, [rbp + ((offset - (BP_CFP + CFP_LFP) as usize))];
+                movq [rax - (conv(dst))], R(src as _);
+            );
+        }
     }
 
     fn get_outer(&mut self, outer: usize) {

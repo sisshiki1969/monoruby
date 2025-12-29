@@ -45,9 +45,10 @@ impl BBContext {
         }
     }
 
-    fn check_concrete_f64(&self, lhs: SlotId, rhs: SlotId) -> Option<(f64, f64)> {
-        let lhs = self.is_float_literal(lhs)?;
-        let rhs = self.is_float_literal(rhs)?;
+    #[allow(non_snake_case)]
+    pub(super) fn check_binary_C_f64(&self, lhs: SlotId, rhs: SlotId) -> Option<(f64, f64)> {
+        let lhs = self.coerce_C_f64(lhs)?;
+        let rhs = self.coerce_C_f64(rhs)?;
         Some((lhs, rhs))
     }
 
@@ -77,7 +78,7 @@ impl BBContext {
         brkind: BrKind,
         dest_bb: BasicBlockId,
     ) -> Option<CompileResult> {
-        if let Some((lhs, rhs)) = self.check_concrete_f64(lhs, rhs) {
+        if let Some((lhs, rhs)) = self.check_binary_C_f64(lhs, rhs) {
             let b = cmp(kind, lhs, rhs) ^ (brkind == BrKind::BrIfNot);
             return Some(if b {
                 CompileResult::Branch(dest_bb)
@@ -239,17 +240,16 @@ impl BBContext {
         info: FBinOpInfo,
         pc: BytecodePtr,
     ) {
-        if let Some((lhs, rhs)) = self.check_concrete_f64(info.lhs, info.rhs)
+        if let Some((lhs, rhs)) = self.check_binary_C_f64(info.lhs, info.rhs)
             && let Some(result) = self.binop_float_folded(kind, lhs, rhs)
         {
             self.def_C_float(dst, result);
             return;
         };
 
-        let binary_xmm = self.load_binary_ret_xmm(ir, dst, info, pc);
-        if let Some(dst) = binary_xmm.2 {
-            let using_xmm = self.get_using_xmm();
-            ir.xmm_binop(kind, binary_xmm.0, binary_xmm.1, dst, using_xmm);
+        let (lhs, rhs, dst) = self.load_binary_ret_xmm(ir, dst, info, pc);
+        if let Some(dst) = dst {
+            ir.xmm_binop(kind, lhs, rhs, dst);
         }
     }
 
@@ -286,7 +286,7 @@ impl BBContext {
         kind: CmpKind,
         pc: BytecodePtr,
     ) {
-        if let Some((lhs, rhs)) = self.check_concrete_f64(info.lhs, info.rhs) {
+        if let Some((lhs, rhs)) = self.check_binary_C_f64(info.lhs, info.rhs) {
             self.fold_constant_cmp(kind, lhs, rhs, dst);
             return;
         };

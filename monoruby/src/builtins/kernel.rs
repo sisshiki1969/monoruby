@@ -15,9 +15,33 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
     globals.define_builtin_module_func(kernel_class, "gets", gets, 0);
     globals.define_builtin_module_func_rest(kernel_class, "print", print);
-    globals.define_builtin_module_func(kernel_class, "proc", proc, 0);
-    globals.define_builtin_module_func(kernel_class, "lambda", lambda, 0);
-    globals.define_builtin_module_func(kernel_class, "binding", binding, 0);
+    globals.define_builtin_module_func_with_effect(
+        kernel_class,
+        "proc",
+        proc,
+        0,
+        0,
+        false,
+        Effect::CAPTURE,
+    );
+    globals.define_builtin_module_func_with_effect(
+        kernel_class,
+        "lambda",
+        lambda,
+        0,
+        0,
+        false,
+        Effect::CAPTURE,
+    );
+    globals.define_builtin_module_func_with_effect(
+        kernel_class,
+        "binding",
+        binding,
+        0,
+        0,
+        false,
+        Effect::CAPTURE | Effect::BINDING,
+    );
     globals.define_builtin_module_func(kernel_class, "loop", loop_, 0);
     globals.define_builtin_module_func_with(kernel_class, "raise", raise, 0, 2, false);
     globals.define_builtin_module_func_with(kernel_class, "fail", raise, 0, 2, false);
@@ -37,7 +61,15 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func(kernel_class, "require", require, 1);
     globals.define_builtin_module_func(kernel_class, "require_relative", require_relative, 1);
     globals.define_builtin_module_func(kernel_class, "autoload", autoload, 2);
-    globals.define_builtin_module_func_eval_with(kernel_class, "eval", eval, 1, 4, false);
+    globals.define_builtin_module_func_with_effect(
+        kernel_class,
+        "eval",
+        eval,
+        1,
+        4,
+        false,
+        Effect::EVAL,
+    );
     globals.define_builtin_module_func_with(kernel_class, "system", system, 1, 1, true);
     globals.define_builtin_module_func(kernel_class, "`", command, 1);
     globals.define_builtin_module_func_with(kernel_class, "sleep", sleep, 0, 1, false);

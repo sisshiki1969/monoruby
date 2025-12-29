@@ -64,35 +64,42 @@ enum CompileResult {
 }
 
 #[derive(Debug, Clone)]
-enum ResultState {
+struct ResultState {
+    ret: ReturnValue,
+    class_version_guard: bool,
+}
+
+#[derive(Debug, Clone)]
+enum ReturnValue {
     Const(Value),
     Class(ClassId),
     Value,
 }
 
 impl ResultState {
-    fn class(&self) -> Option<ClassId> {
-        match self {
-            Self::Const(v) => Some(v.class()),
-            Self::Class(class) => Some(*class),
+    fn return_class(&self) -> Option<ClassId> {
+        match self.ret {
+            ReturnValue::Const(v) => Some(v.class()),
+            ReturnValue::Class(class) => Some(class),
             _ => None,
         }
     }
 
     fn join(&mut self, other: &Self) {
-        if let Self::Const(l) = self
-            && let Self::Const(r) = other
+        self.class_version_guard &= other.class_version_guard;
+        if let ReturnValue::Const(l) = self.ret
+            && let ReturnValue::Const(r) = other.ret
             && l.id() == r.id()
         {
             return;
         }
-        if let Some(class) = self.class()
-            && other.class() == Some(class)
+        if let Some(class) = self.return_class()
+            && other.return_class() == Some(class)
         {
-            *self = Self::Class(class);
+            self.ret = ReturnValue::Class(class);
             return;
         }
-        *self = Self::Value;
+        self.ret = ReturnValue::Value;
     }
 
     fn join_all(states: &[Self]) -> Option<Self> {
@@ -180,25 +187,39 @@ impl std::ops::DerefMut for BBContext {
 impl BBContext {
     fn equiv(&self, other: &Self) -> bool {
         self.slot_state.equiv(&other.slot_state)
+            && self.class_version_guarded == other.class_version_guarded
+            && self.frame_capture_guarded == other.frame_capture_guarded
     }
 
     fn new_entry(cc: &JitContext) -> Self {
         let next_sp = SlotId(cc.local_num() as u16 + 1);
-        if cc.position().is_some() {
-            Self {
-                slot_state: SlotContext::new_loop(cc),
-                next_sp,
-                class_version_guarded: false,
-                // not guarded frame capture in the compilation for loops
-                frame_capture_guarded: false,
+        match cc.jit_type() {
+            JitType::Generic => {
+                Self {
+                    slot_state: SlotContext::new_method(cc),
+                    next_sp,
+                    class_version_guarded: false,
+                    // mehtods are always guarded frame capture but block are not.
+                    frame_capture_guarded: !cc.is_block(),
+                }
             }
-        } else {
-            Self {
-                slot_state: SlotContext::new_method(cc),
-                next_sp,
-                class_version_guarded: false,
-                // methods and blocks are always guarded frame capture
-                frame_capture_guarded: true,
+            JitType::Loop(_) => {
+                Self {
+                    slot_state: SlotContext::new_loop(cc),
+                    next_sp,
+                    class_version_guarded: false,
+                    // not guarded frame capture in the compilation for loops
+                    frame_capture_guarded: false,
+                }
+            }
+            JitType::Specialized { .. } => {
+                Self {
+                    slot_state: SlotContext::new_method(cc),
+                    next_sp,
+                    class_version_guarded: false,
+                    // specialized methods and blocks are always guarded frame capture
+                    frame_capture_guarded: true,
+                }
             }
         }
     }
@@ -211,7 +232,8 @@ impl BBContext {
         self.class_version_guarded = false;
     }
 
-    fn unset_frame_capture_guard(&mut self) {
+    fn unset_frame_capture_guard(&mut self, jitctx: &mut JitContext) {
+        jitctx.unset_frame_capture_guard();
         self.frame_capture_guarded = false;
     }
 
@@ -221,6 +243,14 @@ impl BBContext {
             merge_ctx.join(bbctx);
         }
         merge_ctx
+    }
+
+    fn as_result(&self, slot: SlotId) -> ResultState {
+        let ret = self.mode(slot).as_result();
+        ResultState {
+            ret,
+            class_version_guard: self.class_version_guarded,
+        }
     }
 
     pub(crate) fn def_rax2acc(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
@@ -280,14 +310,15 @@ impl BBContext {
         result: Option<ResultState>,
     ) -> bool {
         if let Some(result) = result {
-            match result {
-                ResultState::Const(v) => {
+            self.class_version_guarded &= result.class_version_guard;
+            match result.ret {
+                ReturnValue::Const(v) => {
                     self.def_C(dst, v);
                 }
-                ResultState::Class(class) => {
+                ReturnValue::Class(class) => {
                     self.def_reg2acc_class(ir, GP::Rax, dst, class);
                 }
-                ResultState::Value => {
+                ReturnValue::Value => {
                     self.def_rax2acc(ir, dst);
                 }
             }

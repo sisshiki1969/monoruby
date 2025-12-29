@@ -47,6 +47,29 @@ mod tests {
     }
 
     #[test]
+    fn binding_new2() {
+        run_test(
+            r#"
+        a = 1
+        b = 2
+        def f(x, &block)
+          z = nil
+          1.times do
+            z = 10
+            1.times do
+              a = 100
+              b = 100
+              z = binding
+            end
+            return z
+          end
+        end
+        f(42){}.local_variables.sort
+        "#,
+        );
+    }
+
+    #[test]
     fn binding_eval() {
         run_test(
             r#"

@@ -1,4 +1,4 @@
-use crate::codegen::jitgen::slot::LinkMode;
+use crate::{bytecodegen::BinOpK, codegen::jitgen::slot::LinkMode};
 
 use super::*;
 
@@ -86,7 +86,10 @@ impl<'a> JitContext<'a> {
                     return ir;
                 }
                 CompileResult::Recompile(reason) => {
-                    self.new_return(ResultState::Value);
+                    self.new_return(ResultState {
+                        ret: ReturnValue::Value,
+                        class_version_guard: false,
+                    });
                     let pc = self.get_pc(bc_pos);
                     self.recompile_and_deopt(&mut bbctx, &mut ir, reason, pc);
                     return ir;
@@ -273,10 +276,11 @@ impl<'a> JitContext<'a> {
             TraceIr::LoadDynVar(dst, src) => {
                 //bbctx.discard(dst);
                 assert!(!dst.is_self());
-                if let Some(offset) = self.outer_stack_offset(src.outer) {
+                if let Some((offset, not_captured)) = self.outer_stack_offset(src.outer) {
                     ir.push(AsmInst::LoadDynVarSpecialized {
                         offset,
-                        src: src.reg,
+                        reg: src.reg,
+                        on_stack: not_captured & bbctx.frame_capture_guarded,
                     });
                 } else {
                     ir.push(AsmInst::LoadDynVar { src });
@@ -285,11 +289,12 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::StoreDynVar(dst, src) => {
                 bbctx.load(ir, src, GP::Rdi);
-                if let Some(offset) = self.outer_stack_offset(dst.outer) {
+                if let Some((offset, not_captured)) = self.outer_stack_offset(dst.outer) {
                     ir.push(AsmInst::StoreDynVarSpecialized {
                         offset,
                         dst: dst.reg,
                         src: GP::Rdi,
+                        on_stack: not_captured & bbctx.frame_capture_guarded,
                     });
                 } else {
                     ir.push(AsmInst::StoreDynVar { dst, src: GP::Rdi });
@@ -314,7 +319,6 @@ impl<'a> JitContext<'a> {
                     bbctx.discard(dst);
                     ir.push(AsmInst::Not);
                     bbctx.def_rax2acc(ir, dst);
-                    bbctx.unset_class_version_guard();
                 }
             }
             TraceIr::BitNot { dst, src, ic } => {
@@ -383,6 +387,21 @@ impl<'a> JitContext<'a> {
                         CompileResult::Continue
                     }
                     BinaryOpType::Float(info) => {
+                        match kind {
+                            BinOpK::Exp | BinOpK::Rem => {
+                                return self.call_binary_method(
+                                    bbctx,
+                                    ir,
+                                    lhs,
+                                    rhs,
+                                    info.lhs_class.into(),
+                                    kind,
+                                    bc_pos,
+                                    pc,
+                                );
+                            }
+                            _ => {}
+                        }
                         bbctx.gen_binop_float(ir, kind, dst, info, pc);
                         CompileResult::Continue
                     }
@@ -613,8 +632,7 @@ impl<'a> JitContext<'a> {
                 } else {
                     return CompileResult::Recompile(RecompileReason::NotCached);
                 };
-                self.inline_method_cache
-                    .push((recv_class, callsite.name, func_id));
+
                 return self.compile_method_call(bbctx, ir, pc, recv_class, func_id, callid);
             }
             TraceIr::Yield { callid } => {
@@ -729,7 +747,7 @@ impl<'a> JitContext<'a> {
                 bbctx.write_back_locals_if_captured(ir);
                 bbctx.load(ir, ret, GP::Rax);
                 ir.push(AsmInst::Ret);
-                let result = bbctx.mode(ret).as_result();
+                let result = bbctx.as_result(ret);
                 bbctx.discard_temps();
                 return CompileResult::Return(result);
             }
@@ -741,7 +759,7 @@ impl<'a> JitContext<'a> {
                 } else {
                     ir.push(AsmInst::MethodRet(pc));
                 }
-                let result = bbctx.mode(ret).as_result();
+                let result = bbctx.as_result(ret);
                 bbctx.discard_temps();
                 return CompileResult::MethodReturn(result);
             }
@@ -753,7 +771,7 @@ impl<'a> JitContext<'a> {
                 } else {
                     ir.push(AsmInst::BlockBreak(pc));
                 }
-                let result = bbctx.mode(ret).as_result();
+                let result = bbctx.as_result(ret);
                 bbctx.discard_temps();
                 return CompileResult::Break(result);
             }

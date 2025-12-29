@@ -35,10 +35,7 @@ impl Codegen {
                     .sourcemap
                     .push((i, self.jit.get_current() - frame.start_codepos));
             }
-            AsmInst::Init {
-                info,
-                not_captured,
-            } => {
+            AsmInst::Init { info, not_captured } => {
                 self.init_func(&info, not_captured);
             }
             AsmInst::Unreachable => {
@@ -168,8 +165,7 @@ impl Codegen {
                 kind,
                 binary_xmm,
                 dst,
-                using_xmm,
-            } => self.float_binop(kind, using_xmm, dst, binary_xmm),
+            } => self.float_binop(kind, dst, binary_xmm),
             AsmInst::XmmUnOp { kind, dst } => match kind {
                 UnOpK::Neg => {
                     let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
@@ -614,13 +610,18 @@ impl Codegen {
             }
 
             AsmInst::LoadDynVar { src } => self.load_dyn_var(src),
-            AsmInst::LoadDynVarSpecialized { offset, src: reg } => {
-                self.load_dyn_var_specialized(offset, reg)
-            }
+            AsmInst::LoadDynVarSpecialized {
+                offset,
+                reg,
+                on_stack,
+            } => self.load_dyn_var_specialized(offset, reg, on_stack),
             AsmInst::StoreDynVar { dst, src } => self.store_dyn_var(dst, src),
-            AsmInst::StoreDynVarSpecialized { offset, dst, src } => {
-                self.store_dyn_var_specialized(offset, dst, src)
-            }
+            AsmInst::StoreDynVarSpecialized {
+                offset,
+                dst,
+                src,
+                on_stack,
+            } => self.store_dyn_var_specialized(offset, dst, src, on_stack),
 
             AsmInst::LoadIVarHeap {
                 ivarid,
@@ -800,7 +801,7 @@ impl Codegen {
             } => self.defined_ivar(dst, name, using_xmm),
 
             AsmInst::Inline(proc) => (proc.proc)(self, store, labels),
-            AsmInst::CFunc {
+            AsmInst::CFunc_F_F {
                 f,
                 src,
                 dst,
@@ -811,6 +812,28 @@ impl Codegen {
                 self.xmm_save(using_xmm);
                 monoasm!( &mut self.jit,
                     movq xmm0, xmm(fsrc);
+                    movq rax, (f);
+                    call rax;
+                );
+                self.xmm_restore(using_xmm);
+                monoasm!( &mut self.jit,
+                    movq xmm(fret), xmm0;
+                );
+            }
+            AsmInst::CFunc_FF_F {
+                f,
+                lhs,
+                rhs,
+                dst,
+                using_xmm,
+            } => {
+                let flhs = lhs.enc();
+                let frhs = rhs.enc();
+                let fret = dst.enc();
+                self.xmm_save(using_xmm);
+                monoasm!( &mut self.jit,
+                    movq xmm0, xmm(flhs);
+                    movq xmm1, xmm(frhs);
                     movq rax, (f);
                     call rax;
                 );
