@@ -48,7 +48,7 @@ enum CompileResult {
     /// jump to another basic block.
     Branch(BasicBlockId),
     Cease,
-    /// leave the current method/block.
+    /// raise error.
     Raise,
     /// return from the current method/block.
     Return(ResultState),
@@ -69,8 +69,9 @@ struct ResultState {
     class_version_guard: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum ReturnValue {
+    UD,
     Const(Value),
     Class(ClassId),
     Value,
@@ -87,12 +88,19 @@ impl ResultState {
 
     fn join(&mut self, other: &Self) {
         self.class_version_guard &= other.class_version_guard;
-        if let ReturnValue::Const(l) = self.ret
-            && let ReturnValue::Const(r) = other.ret
-            && l.id() == r.id()
-        {
-            return;
+
+        match (&self.ret, &other.ret) {
+            (ReturnValue::UD, _) => {
+                self.ret = other.ret;
+                return;
+            }
+            (_, ReturnValue::UD) => return,
+            (ReturnValue::Const(l), ReturnValue::Const(r)) if l.id() == r.id() => {
+                return;
+            }
+            _ => {}
         }
+
         if let Some(class) = self.return_class()
             && other.return_class() == Some(class)
         {
@@ -100,17 +108,6 @@ impl ResultState {
             return;
         }
         self.ret = ReturnValue::Value;
-    }
-
-    fn join_all(states: &[Self]) -> Option<Self> {
-        if states.is_empty() {
-            return None;
-        }
-        let mut res = states[0].clone();
-        for state in &states[1..] {
-            res.join(state);
-        }
-        Some(res)
     }
 }
 
@@ -313,6 +310,10 @@ impl BBContext {
         if let Some(result) = result {
             self.class_version_guarded &= result.class_version_guard;
             match result.ret {
+                ReturnValue::UD => {
+                    ir.push(AsmInst::Unreachable);
+                    return false;
+                }
                 ReturnValue::Const(v) => {
                     self.def_C(dst, v);
                 }

@@ -140,7 +140,7 @@ pub(crate) struct JitStackFrame {
     ///
     /// Contexts for returning to this frame.
     ///
-    return_context: HashMap<usize, Vec<ResultState>>,
+    return_context: HashMap<usize, ResultState>,
 
     ///
     /// Generated AsmIr.
@@ -329,7 +329,7 @@ impl JitStackFrame {
         std::mem::take(&mut self.ir)
     }
 
-    pub(super) fn detach_return_context(&mut self) -> HashMap<usize, Vec<ResultState>> {
+    pub(super) fn detach_return_context(&mut self) -> HashMap<usize, ResultState> {
         std::mem::take(&mut self.return_context)
     }
 
@@ -460,7 +460,7 @@ impl<'a> JitContext<'a> {
     }
 
     pub(super) fn func_id(&self) -> FuncId {
-        self.store[self.iseq_id()].func_id()
+        self.iseq().func_id()
     }
 
     pub(super) fn self_class(&self) -> ClassId {
@@ -493,18 +493,16 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn push_return_context(&mut self, pos: usize, ret: ResultState) {
         if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
-            frame.push(ret);
+            frame.join(&ret);
         } else {
-            self.current_frame_mut()
-                .return_context
-                .insert(pos, vec![ret]);
+            self.current_frame_mut().return_context.insert(pos, ret);
         }
     }
 
-    pub(super) fn merge_return_context(&mut self, context: HashMap<usize, Vec<ResultState>>) {
+    pub(super) fn merge_return_context(&mut self, context: HashMap<usize, ResultState>) {
         for (pos, ctx) in context {
             if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
-                frame.extend(ctx);
+                frame.join(&ctx);
             } else {
                 self.current_frame_mut().return_context.insert(pos, ctx);
             }
@@ -670,7 +668,7 @@ impl<'a> JitContext<'a> {
     }
 
     pub(super) fn get_pc(&self, i: BcIndex) -> BytecodePtr {
-        self.store[self.iseq_id()].get_pc(i)
+        self.iseq().get_pc(i)
     }
 
     pub(super) fn jit_type(&self) -> &JitType {
@@ -685,7 +683,7 @@ impl<'a> JitContext<'a> {
     /// Get a number of non-temp registers. (includes arguments and local variables, not self)
     ///
     pub(super) fn local_num(&self) -> usize {
-        self.store[self.iseq_id()].local_num()
+        self.iseq().local_num()
     }
 
     pub(super) fn args(&self) -> std::ops::Range<SlotId> {
@@ -696,7 +694,7 @@ impl<'a> JitContext<'a> {
     /// Get a number of slots. (including `self`, arguments, local variables, and temp registers)
     ///
     pub(super) fn total_reg_num(&self) -> usize {
-        self.store[self.iseq_id()].total_reg_num()
+        self.iseq().total_reg_num()
     }
 
     pub(crate) fn class_version(&self) -> u32 {
@@ -840,7 +838,7 @@ impl<'a> JitContext<'a> {
         mut bbctx: BBContext,
     ) {
         bbctx.clear_above_next_sp();
-        let src_bb = self.store[self.iseq_id()].bb_info.get_bb_id(bc_pos);
+        let src_bb = self.iseq().bb_info.get_bb_id(bc_pos);
         #[cfg(feature = "jit-debug")]
         eprintln!(
             "   new_branch: {bc_pos}->{dest_bb:?} {:?}",
@@ -859,7 +857,7 @@ impl<'a> JitContext<'a> {
         mut bbctx: BBContext,
     ) {
         bbctx.clear_above_next_sp();
-        let src_bb = self.store[self.iseq_id()].bb_info.get_bb_id(src_idx);
+        let src_bb = self.iseq().bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
         eprintln!(
             "   new_continue: {src_idx}->{dest_bb:?} {:?}",

@@ -324,7 +324,7 @@ impl<'a> JitContext<'a> {
                     bbctx.def_C(dst, v);
                     return CompileResult::Continue;
                 }
-                let evict = ir.new_evict();
+
                 let specializable = self.store.is_simple_call(fid, callid)
                     && (bbctx.is_C(callsite.recv)
                         || (pos_num != 0 && (args..args + pos_num).any(|i| bbctx.is_C(i))));
@@ -352,6 +352,7 @@ impl<'a> JitContext<'a> {
                         callid,
                         bbctx,
                     );
+                    let evict = ir.new_evict();
                     bbctx.send_specialized(
                         ir,
                         &self.store,
@@ -369,9 +370,10 @@ impl<'a> JitContext<'a> {
                     }
                     return CompileResult::Continue;
                 } else {
+                    let evict = ir.new_evict();
                     bbctx.send(ir, &self.store, callid, fid, recv_class, evict, None, pc);
+                    evict
                 }
-                evict
             }
         };
         if block_fid.is_some() {
@@ -429,19 +431,13 @@ impl<'a> JitContext<'a> {
         self.xmm_restore(using_xmm);
         let pos = self.stack_frame.len() - 1;
         let mut return_context = frame.detach_return_context();
-        let context = return_context.remove(&pos);
-        let result = if let Some(ctx) = &context {
-            ResultState::join_all(ctx)
-        } else {
-            None
-        };
+        let result = return_context.remove(&pos);
         self.merge_return_context(return_context);
         #[cfg(feature = "jit-log")]
         if self.codegen_mode() {
             eprintln!(
-                "return: {} {:?} {:?}",
+                "return: {} {:?}",
                 self.store.func_description(self.store[iseq_id].func_id()),
-                &context,
                 result
             );
         }
@@ -487,6 +483,9 @@ impl BBContext {
     ///
     /// ### in
     /// rdi: receiver: Value
+    ///
+    /// ### guards
+    /// - side_effect_guard: false
     ///
     fn send(
         &mut self,
