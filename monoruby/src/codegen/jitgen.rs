@@ -49,7 +49,7 @@ enum CompileResult {
     Branch(BasicBlockId),
     Cease,
     /// leave the current method/block.
-    Leave,
+    Raise,
     /// return from the current method/block.
     Return(ResultState),
     /// method return from the current method/block.

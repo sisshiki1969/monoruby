@@ -455,6 +455,10 @@ impl<'a> JitContext<'a> {
         &self.store[self.current_frame().iseq_id]
     }
 
+    pub(super) fn dump_iseq(&self) {
+        self.store.dump_iseq(self.iseq_id());
+    }
+
     pub(super) fn func_id(&self) -> FuncId {
         self.store[self.iseq_id()].func_id()
     }

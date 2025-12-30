@@ -42,8 +42,7 @@ impl<'a> JitContext<'a> {
         loop_end: BasicBlockId,
         mut bbctx: BBContext,
     ) -> (Liveness, Option<BBContext>) {
-        let iseq_id = self.iseq_id();
-        let pc = self.store[iseq_id].get_bb_pc(loop_start);
+        let pc = self.iseq().get_bb_pc(loop_start);
         let mut ctx = JitContext::loop_analysis(self, pc);
         let mut liveness = Liveness::new(ctx.total_reg_num());
 
@@ -95,17 +94,15 @@ impl<'a> JitContext<'a> {
         is_start: bool,
         is_last: bool,
     ) {
-        let iseq_id = self.iseq_id();
         let mut ir = AsmIr::new(self);
-        let iseq = &self.store[iseq_id];
         let mut bbctx = match self.incoming_context(bbid, is_start) {
             Some(bb) => bb,
             None => return,
         };
 
-        let BasciBlockInfoEntry { begin, end, .. } = iseq.bb_info[bbid];
+        let BasciBlockInfoEntry { begin, end, .. } = self.iseq().bb_info[bbid];
         for bc_pos in begin..=end {
-            bbctx.next_sp = iseq.get_sp(bc_pos);
+            bbctx.next_sp = self.iseq().get_sp(bc_pos);
 
             match self.compile_instruction(&mut ir, &mut bbctx, bc_pos) {
                 CompileResult::Continue => {}
@@ -114,7 +111,7 @@ impl<'a> JitContext<'a> {
                     return;
                 }
                 CompileResult::Cease => return,
-                CompileResult::Leave
+                CompileResult::Raise
                 | CompileResult::Return(_)
                 | CompileResult::Break(_)
                 | CompileResult::MethodReturn(_)
@@ -124,7 +121,7 @@ impl<'a> JitContext<'a> {
                     return;
                 }
                 CompileResult::Abort => {
-                    self.store.dump_iseq(iseq_id);
+                    self.dump_iseq();
                     unreachable!()
                 }
             }

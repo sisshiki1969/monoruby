@@ -66,7 +66,10 @@ impl<'a> JitContext<'a> {
 
             match self.compile_instruction(&mut ir, &mut bbctx, bc_pos) {
                 CompileResult::Continue => {}
-                CompileResult::Leave | CompileResult::Cease => {
+                CompileResult::Raise => {
+                    return ir;
+                }
+                CompileResult::Cease => {
                     return ir;
                 }
                 CompileResult::Branch(dest_bb) => {
@@ -99,7 +102,7 @@ impl<'a> JitContext<'a> {
                     break;
                 }
                 CompileResult::Abort => {
-                    self.store.dump_iseq(self.iseq_id());
+                    self.dump_iseq();
                     unreachable!()
                 }
             }
@@ -779,7 +782,7 @@ impl<'a> JitContext<'a> {
                 bbctx.locals_to_S(ir);
                 bbctx.load(ir, ret, GP::Rax);
                 ir.push(AsmInst::Raise);
-                return CompileResult::Leave;
+                return CompileResult::Raise;
             }
 
             TraceIr::EnsureEnd => {
@@ -944,8 +947,7 @@ impl<'a> JitContext<'a> {
     ///
     fn jit_check_super(&mut self, recv_class: ClassId) -> Option<FuncId> {
         // for super
-        let iseq_id = self.iseq_id();
-        let mother = self.store[iseq_id].mother().0;
+        let mother = self.iseq().mother().0;
         let mother_fid = self.store[mother].func_id();
         let owner = self.store[mother_fid].owner_class().unwrap();
         let func_name = self.store[mother_fid].name().unwrap();

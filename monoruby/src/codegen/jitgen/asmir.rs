@@ -1675,7 +1675,7 @@ impl Codegen {
                     self.gen_handle_error(pc, wb, label.clone());
                     label
                 }
-                _ => unreachable!(),
+                _ => unreachable!("unexpected {side_exit:?}"),
             };
             side_exits.push(label);
         }
