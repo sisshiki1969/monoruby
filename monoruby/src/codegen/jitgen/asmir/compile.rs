@@ -613,14 +613,14 @@ impl Codegen {
             AsmInst::LoadDynVarSpecialized {
                 offset,
                 reg,
-                on_stack,
+                not_captured: on_stack,
             } => self.load_dyn_var_specialized(offset, reg, on_stack),
             AsmInst::StoreDynVar { dst, src } => self.store_dyn_var(dst, src),
             AsmInst::StoreDynVarSpecialized {
                 offset,
                 dst,
                 src,
-                on_stack,
+                not_captured: on_stack,
             } => self.store_dyn_var_specialized(offset, dst, src, on_stack),
 
             AsmInst::LoadIVarHeap {

@@ -1,7 +1,7 @@
-a = 100
+def f(x,y)
+  x + y
+end
 
-p = Proc.new{ puts a}
-
-100.times {
-  p.call
-}
+100.times do
+  f(1,2)
+end

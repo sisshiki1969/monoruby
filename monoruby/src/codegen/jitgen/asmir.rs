@@ -1424,7 +1424,7 @@ pub(super) enum AsmInst {
     LoadDynVarSpecialized {
         offset: usize,
         reg: SlotId,
-        on_stack: bool,
+        not_captured: bool,
     },
     /// DynVar(dst) = src
     StoreDynVar {
@@ -1436,7 +1436,7 @@ pub(super) enum AsmInst {
         offset: usize,
         dst: SlotId,
         src: GP,
-        on_stack: bool,
+        not_captured: bool,
     },
     LoadCVar {
         name: IdentId,

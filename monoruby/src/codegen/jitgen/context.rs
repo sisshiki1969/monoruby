@@ -547,10 +547,16 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().callid = None;
     }
 
+    ///
+    /// Set the *not_captured* status of the current frame to `not_captured`.
+    ///
     pub(super) fn set_not_captured(&mut self, not_captured: bool) {
         self.current_frame_mut().not_captured = not_captured;
     }
 
+    ///
+    /// Get the *not_captured* status of the current frame.
+    ///
     pub(super) fn not_captured(&self) -> bool {
         self.current_frame().not_captured
     }

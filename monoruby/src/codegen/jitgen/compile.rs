@@ -280,7 +280,7 @@ impl<'a> JitContext<'a> {
                     ir.push(AsmInst::LoadDynVarSpecialized {
                         offset,
                         reg: src.reg,
-                        on_stack: not_captured & bbctx.frame_capture_guarded,
+                        not_captured,
                     });
                 } else {
                     ir.push(AsmInst::LoadDynVar { src });
@@ -294,7 +294,7 @@ impl<'a> JitContext<'a> {
                         offset,
                         dst: dst.reg,
                         src: GP::Rdi,
-                        on_stack: not_captured & bbctx.frame_capture_guarded,
+                        not_captured,
                     });
                 } else {
                     ir.push(AsmInst::StoreDynVar { dst, src: GP::Rdi });

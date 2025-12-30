@@ -186,7 +186,7 @@ impl<'a> JitContext<'a> {
         } else {
             JitArgumentInfo::default()
         };
-        let (entry, result) = self.compile_inlined_func(
+        let (entry, result) = self.compile_specialized_func(
             iseq,
             self_class,
             None,
@@ -345,7 +345,7 @@ impl<'a> JitContext<'a> {
                     } else {
                         Some(self.label())
                     };
-                    let (entry, result) = self.compile_inlined_func(
+                    let (entry, result) = self.compile_specialized_func(
                         iseq,
                         recv_class,
                         patch_point,
@@ -411,7 +411,7 @@ impl<'a> JitContext<'a> {
         )
     }
 
-    fn compile_inlined_func(
+    fn compile_specialized_func(
         &mut self,
         iseq_id: ISeqId,
         self_class: ClassId,
