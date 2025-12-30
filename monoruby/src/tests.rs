@@ -20,7 +20,7 @@ pub fn run_test(code: &str) {
     let interp_val = run_test_main(&mut globals, &wrapped);
     let ruby_res = run_ruby(&mut globals, code);
 
-    Value::assert_eq(interp_val, ruby_res);
+    Value::assert_eq(&globals, interp_val, ruby_res);
 }
 
 pub fn run_test_once(code: &str) {
@@ -35,7 +35,7 @@ pub fn run_test_once(code: &str) {
     let interp_val = run_test_main(&mut globals, &wrapped);
     let ruby_res = run_ruby(&mut globals, code);
 
-    Value::assert_eq(interp_val, ruby_res);
+    Value::assert_eq(&globals, interp_val, ruby_res);
 }
 
 pub fn run_tests(codes: &[String]) {
@@ -60,7 +60,7 @@ pub fn run_tests(codes: &[String]) {
     let interp_val = run_test_main(&mut globals, &wrapped);
     let ruby_res = run_ruby(&mut globals, &code);
 
-    Value::assert_eq(interp_val, ruby_res);
+    Value::assert_eq(&globals, interp_val, ruby_res);
 }
 
 pub fn run_binop_tests(lhs: &[&str], op: &[&str], rhs: &[&str]) {
@@ -121,7 +121,7 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
     let interp_val = run_test_main(&mut globals, &wrapped);
     let ruby_res = run_ruby(&mut globals, &format!("{prelude}\n{code}"));
 
-    Value::assert_eq(interp_val, ruby_res);
+    Value::assert_eq(&globals, interp_val, ruby_res);
 }
 
 pub fn run_test2(code: &str) {
@@ -129,7 +129,7 @@ pub fn run_test2(code: &str) {
     let interp_val = run_test_main(&mut globals, code);
     let ruby_res = run_ruby(&mut globals, code);
 
-    Value::assert_eq(interp_val, ruby_res);
+    Value::assert_eq(&globals, interp_val, ruby_res);
 }
 
 pub fn run_test_no_result_check(code: &str) -> Value {

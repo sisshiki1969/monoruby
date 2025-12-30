@@ -439,7 +439,7 @@ fn assert(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
         expected.inspect(&globals.store),
         actual.inspect(&globals.store)
     );
-    Value::assert_eq(expected, actual);
+    Value::assert_eq(globals, expected, actual);
     Ok(Value::nil())
 }
 
