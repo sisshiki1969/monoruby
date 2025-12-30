@@ -499,6 +499,26 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    pub(super) fn unset_return_context_side_effect_guard(&mut self) {
+        let pos = if let Some(pos) = self.caller_pos() {
+            pos
+        } else {
+            return;
+        };
+        if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
+            frame.side_effect_guard = false;
+        } else {
+            self.current_frame_mut().return_context.insert(
+                pos,
+                ResultState {
+                    ret: ReturnValue::UD,
+                    class_version_guard: false,
+                    side_effect_guard: false,
+                },
+            );
+        }
+    }
+
     pub(super) fn merge_return_context(&mut self, context: HashMap<usize, ResultState>) {
         for (pos, ctx) in context {
             if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {

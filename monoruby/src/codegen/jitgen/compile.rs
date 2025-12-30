@@ -67,6 +67,7 @@ impl<'a> JitContext<'a> {
             match self.compile_instruction(&mut ir, &mut bbctx, bc_pos) {
                 CompileResult::Continue => {}
                 CompileResult::Raise => {
+                    self.unset_return_context_side_effect_guard();
                     return ir;
                 }
                 CompileResult::Cease => {
@@ -81,10 +82,12 @@ impl<'a> JitContext<'a> {
                     return ir;
                 }
                 CompileResult::MethodReturn(ret) => {
+                    self.unset_return_context_side_effect_guard();
                     self.new_method_return(ret);
                     return ir;
                 }
                 CompileResult::Break(ret) => {
+                    self.unset_return_context_side_effect_guard();
                     self.new_break(ret);
                     return ir;
                 }
@@ -92,6 +95,7 @@ impl<'a> JitContext<'a> {
                     self.new_return(ResultState {
                         ret: ReturnValue::Value,
                         class_version_guard: false,
+                        side_effect_guard: false,
                     });
                     let pc = self.get_pc(bc_pos);
                     self.recompile_and_deopt(&mut bbctx, &mut ir, reason, pc);
@@ -144,10 +148,12 @@ impl<'a> JitContext<'a> {
                 ir.push(AsmInst::Preparation);
             }
             TraceIr::LoopStart { .. } => {
+                bbctx.unset_side_effect_guard();
                 self.inc_loop_count();
                 bbctx.exec_gc(ir, false, pc);
             }
             TraceIr::LoopEnd => {
+                bbctx.unset_side_effect_guard();
                 assert_ne!(0, self.loop_count());
                 self.dec_loop_count();
                 if self.is_loop() && self.loop_count() == 0 {
@@ -181,6 +187,7 @@ impl<'a> JitContext<'a> {
                 bbctx.def_reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
             TraceIr::Lambda { dst, func_id } => {
+                bbctx.unset_side_effect_guard();
                 bbctx.discard(dst);
                 ir.new_lambda(bbctx.get_using_xmm(), func_id);
                 bbctx.def_rax2acc(ir, dst);
@@ -218,6 +225,7 @@ impl<'a> JitContext<'a> {
                         }
                     }
                     bbctx.load_constant(ir, dst, cache, pc);
+                    bbctx.unset_side_effect_guard();
                 } else {
                     return CompileResult::Recompile(RecompileReason::NotCached);
                 }
@@ -226,6 +234,7 @@ impl<'a> JitContext<'a> {
                 bbctx.load(ir, src, GP::Rax);
                 let using_xmm = bbctx.get_using_xmm();
                 ir.push(AsmInst::StoreConstant { id, using_xmm });
+                bbctx.unset_side_effect_guard();
             }
             TraceIr::LoadIvar(dst, name, cache) => {
                 let self_class = self.self_class();
@@ -253,24 +262,28 @@ impl<'a> JitContext<'a> {
                     if self.store_ivar(bbctx, ir, src, self_class, ivarid) {
                         self.set_ivar_heap_accessed();
                     }
+                    bbctx.unset_side_effect_guard();
                 } else {
                     return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
                 }
             }
             TraceIr::LoadCvar { dst, name } => {
                 bbctx.jit_load_cvar(ir, name, dst, pc);
+                bbctx.unset_side_effect_guard();
             }
             TraceIr::CheckCvar { dst, name } => {
                 bbctx.jit_check_cvar(ir, name, dst);
             }
             TraceIr::StoreCvar { src: val, name } => {
                 bbctx.jit_store_cvar(ir, name, val, pc);
+                bbctx.unset_side_effect_guard();
             }
             TraceIr::LoadGvar { dst, name } => {
                 bbctx.jit_load_gvar(ir, name, dst);
             }
             TraceIr::StoreGvar { src: val, name } => {
                 bbctx.jit_store_gvar(ir, name, val);
+                bbctx.unset_side_effect_guard();
             }
             TraceIr::LoadSvar { dst, id } => {
                 ir.load_svar(bbctx, id);
@@ -302,6 +315,7 @@ impl<'a> JitContext<'a> {
                 } else {
                     ir.push(AsmInst::StoreDynVar { dst, src: GP::Rdi });
                 }
+                bbctx.unset_side_effect_guard();
             }
             TraceIr::BlockArgProxy(ret, outer) => {
                 bbctx.def_S(ret);
@@ -310,6 +324,7 @@ impl<'a> JitContext<'a> {
             TraceIr::BlockArg(ret, outer) => {
                 bbctx.def_S(ret);
                 ir.block_arg(bbctx, ret, outer, pc);
+                bbctx.unset_side_effect_guard();
             }
 
             TraceIr::Not { dst, src, .. } => {
@@ -319,7 +334,6 @@ impl<'a> JitContext<'a> {
                     bbctx.def_C(dst, Value::bool(true));
                 } else {
                     bbctx.load(ir, src, GP::Rdi);
-                    bbctx.discard(dst);
                     ir.push(AsmInst::Not);
                     bbctx.def_rax2acc(ir, dst);
                 }
@@ -339,6 +353,7 @@ impl<'a> JitContext<'a> {
                     bbctx.generic_unop(ir, bitnot_value, pc);
                     bbctx.def_rax2acc(ir, dst);
                     bbctx.unset_class_version_guard();
+                    bbctx.unset_side_effect_guard();
                 }
             }
             TraceIr::UnOp { kind, dst, src, ic } => {
@@ -373,6 +388,7 @@ impl<'a> JitContext<'a> {
                         bbctx.generic_unop(ir, kind.generic_func(), pc);
                         bbctx.def_rax2acc(ir, dst);
                         bbctx.unset_class_version_guard();
+                        bbctx.unset_side_effect_guard();
                     }
                 }
             }
@@ -526,6 +542,7 @@ impl<'a> JitContext<'a> {
                 ir.array_teq(bbctx, lhs, rhs);
                 ir.handle_error(error);
                 bbctx.def_rax2acc(ir, lhs);
+                bbctx.unset_side_effect_guard();
             }
 
             TraceIr::IndexAssign {
@@ -542,6 +559,7 @@ impl<'a> JitContext<'a> {
                         ir.generic_index_assign(bbctx, base, idx, src, pc);
                         bbctx.unset_class_version_guard();
                     }
+                    bbctx.unset_side_effect_guard();
                 } else {
                     return CompileResult::Recompile(RecompileReason::NotCached);
                 }
@@ -552,6 +570,7 @@ impl<'a> JitContext<'a> {
                 ir.to_a(bbctx, src);
                 ir.handle_error(error);
                 bbctx.def_rax2acc(ir, dst);
+                bbctx.unset_side_effect_guard();
             }
             TraceIr::Mov(dst, src) => {
                 bbctx.copy_slot(ir, src, dst);
@@ -563,6 +582,7 @@ impl<'a> JitContext<'a> {
                 ir.concat_str(bbctx, arg, len);
                 ir.handle_error(error);
                 bbctx.def_rax2acc(ir, dst);
+                bbctx.unset_side_effect_guard();
             }
             TraceIr::ConcatRegexp(dst, arg, len) => {
                 bbctx.write_back_range(ir, arg, len);
@@ -571,6 +591,7 @@ impl<'a> JitContext<'a> {
                 ir.concat_regexp(bbctx, arg, len);
                 ir.handle_error(error);
                 bbctx.def_rax2acc(ir, dst);
+                bbctx.unset_side_effect_guard();
             }
             TraceIr::ExpandArray {
                 src,
@@ -585,10 +606,12 @@ impl<'a> JitContext<'a> {
             TraceIr::UndefMethod { undef } => {
                 ir.undef_method(bbctx, undef, pc);
                 bbctx.unset_class_version_guard();
+                bbctx.unset_side_effect_guard();
             }
             TraceIr::AliasMethod { new, old } => {
                 ir.alias_method(bbctx, new, old, pc);
                 bbctx.unset_class_version_guard();
+                bbctx.unset_side_effect_guard();
             }
             TraceIr::MethodCall {
                 _polymorphic: _,
@@ -642,13 +665,16 @@ impl<'a> JitContext<'a> {
                 if let Some(block_info) = self.current_method_given_block()
                     && let Some(iseq) = self.store[block_info.block_fid].is_iseq()
                 {
-                    if !self.compile_yield_specialized(bbctx, ir, callid, &block_info, iseq, pc) {
-                        return CompileResult::Cease;
-                    };
-                } else {
-                    bbctx.compile_yield(ir, &self.store, callid, pc);
+                    return self.compile_yield_specialized(
+                        bbctx,
+                        ir,
+                        callid,
+                        &block_info,
+                        iseq,
+                        pc,
+                    );
                 }
-                bbctx.unset_class_version_guard();
+                bbctx.compile_yield(ir, &self.store, callid, pc);
             }
             TraceIr::InlineCache => {}
             TraceIr::MethodDef { name, func_id } => {
@@ -660,6 +686,7 @@ impl<'a> JitContext<'a> {
                 });
                 ir.check_bop(bbctx, pc);
                 bbctx.unset_class_version_guard();
+                bbctx.unset_side_effect_guard();
             }
             TraceIr::SingletonMethodDef { obj, name, func_id } => {
                 bbctx.write_back_slots(ir, &[obj]);
@@ -672,6 +699,7 @@ impl<'a> JitContext<'a> {
                 });
                 ir.check_bop(bbctx, pc);
                 bbctx.unset_class_version_guard();
+                bbctx.unset_side_effect_guard();
             }
             TraceIr::ClassDef {
                 dst,
@@ -682,6 +710,7 @@ impl<'a> JitContext<'a> {
             } => {
                 bbctx.class_def(ir, dst, base, superclass, name, func_id, false, pc);
                 bbctx.unset_class_version_guard();
+                bbctx.unset_side_effect_guard();
             }
             TraceIr::ModuleDef {
                 dst,
@@ -691,10 +720,12 @@ impl<'a> JitContext<'a> {
             } => {
                 bbctx.class_def(ir, dst, base, None, name, func_id, true, pc);
                 bbctx.unset_class_version_guard();
+                bbctx.unset_side_effect_guard();
             }
             TraceIr::SingletonClassDef { dst, base, func_id } => {
                 bbctx.singleton_class_def(ir, dst, base, func_id, pc);
                 bbctx.unset_class_version_guard();
+                bbctx.unset_side_effect_guard();
             }
 
             TraceIr::DefinedYield { dst } => {

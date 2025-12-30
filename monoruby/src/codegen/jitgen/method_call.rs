@@ -48,6 +48,7 @@ impl<'a> JitContext<'a> {
                 InlineFuncInfo::InlineGen(f) => {
                     bbctx.load(ir, recv, GP::Rdi);
                     if self.inline_asm(bbctx, ir, f, callsite, recv_class, pc) {
+                        bbctx.unset_side_effect_guard();
                         if self.store[func_id].possibly_capture_without_block() {
                             bbctx.unset_frame_capture_guard(self);
                         }
@@ -158,7 +159,7 @@ impl<'a> JitContext<'a> {
         block: &JitBlockInfo,
         iseq: ISeqId,
         pc: BytecodePtr,
-    ) -> bool {
+    ) -> CompileResult {
         let dst = self.store[callid].dst;
         bbctx.exec_gc(ir, true, pc);
         let using_xmm = bbctx.get_using_xmm();
@@ -170,7 +171,8 @@ impl<'a> JitContext<'a> {
             self_class,
             outer,
         } = block.add(1);
-        let simple = bbctx.set_arguments(&self.store, ir, callid, callee_fid, pc);
+        let simple = self.store.is_simple_call(callee_fid, callid);
+        bbctx.set_arguments(&self.store, ir, callid, callee_fid, pc);
         bbctx.discard(dst);
         bbctx.clear_above_next_sp();
         let error = ir.new_error(bbctx, pc);
@@ -186,7 +188,7 @@ impl<'a> JitContext<'a> {
         } else {
             JitArgumentInfo::default()
         };
-        let (entry, result) = self.compile_specialized_func(
+        let (entry, result) = match self.compile_specialized_func(
             iseq,
             self_class,
             None,
@@ -194,7 +196,14 @@ impl<'a> JitContext<'a> {
             Some(outer),
             callid,
             bbctx,
-        );
+        ) {
+            SpecializedCompileResult::Const(v) => {
+                bbctx.def_C(dst, v);
+                ir.xmm_restore(using_xmm);
+                return CompileResult::Continue;
+            }
+            SpecializedCompileResult::Compiled { entry, result } => (entry, result),
+        };
         let evict = ir.new_evict();
         let meta = self.store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
@@ -221,7 +230,7 @@ impl<'a> JitContext<'a> {
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
         callid: CallSiteId,
-        mut fid: FuncId,
+        fid: FuncId,
         recv_class: ClassId,
         pc: BytecodePtr,
     ) -> CompileResult {
@@ -234,91 +243,15 @@ impl<'a> JitContext<'a> {
             ..
         } = *callsite;
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
-        let evict = match self.store[fid].kind {
+        let (fid, outer_lfp) = match self.store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
-                assert_eq!(0, pos_num);
-                assert!(!callsite.kw_may_exists());
-                assert!(block_fid.is_none());
-                assert!(callsite.block_arg.is_none());
-                bbctx.discard(dst);
-                bbctx.writeback_acc(ir);
-                if recv_class.is_always_frozen() {
-                    if dst.is_some() {
-                        ir.lit2reg(Value::nil(), GP::Rax);
-                    }
-                } else {
-                    let ivarid = if let Some(id) = self.store[recv_class].get_ivarid(ivar_name) {
-                        id
-                    } else {
-                        return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
-                    };
-                    let is_object_ty = self.store[recv_class].is_object_ty_instance();
-                    if is_object_ty && ivarid.is_inline() {
-                        ir.push(AsmInst::LoadIVarInline { ivarid })
-                    } else {
-                        ir.push(AsmInst::LoadIVarHeap {
-                            ivarid,
-                            is_object_ty,
-                            self_: false,
-                        });
-                    }
-                }
-                bbctx.def_reg2acc(ir, GP::R15, dst);
-                return CompileResult::Continue;
+                return self.attr_reader(bbctx, ir, callid, recv_class, ivar_name);
             }
             FuncKind::AttrWriter { ivar_name } => {
-                assert_eq!(1, pos_num);
-                assert!(!callsite.kw_may_exists());
-                assert!(block_fid.is_none());
-                /*if callsite.block_arg.is_some() {
-                    dbg!(ivar_name);
-                    dbg!(callsite);
-                    return CompileResult::Abort;
-                }*/
-                let ivarid = if let Some(id) = self.store[recv_class].get_ivarid(ivar_name) {
-                    id
-                } else {
-                    return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
-                };
-                let src = bbctx.load_or_reg(ir, args, GP::Rax);
-                let is_object_ty = self.store[recv_class].is_object_ty_instance();
-                let using_xmm = bbctx.get_using_xmm();
-                if is_object_ty && ivarid.is_inline() {
-                    ir.push(AsmInst::StoreIVarInline { src, ivarid })
-                } else {
-                    ir.push(AsmInst::StoreIVarHeap {
-                        src,
-                        ivarid,
-                        using_xmm,
-                        is_object_ty,
-                    });
-                }
-                bbctx.def_rax2acc(ir, dst);
-                return CompileResult::Continue;
+                return self.attr_writer(bbctx, ir, callid, recv_class, ivar_name);
             }
-            FuncKind::Builtin { .. } => {
-                let evict = ir.new_evict();
-                bbctx.send(ir, &self.store, callid, fid, recv_class, evict, None, pc);
-                if self.store[fid].possibly_capture_without_block() || block_fid.is_some() {
-                    bbctx.unset_frame_capture_guard(self);
-                }
-                evict
-            }
-            FuncKind::Proc(proc) => {
-                let evict = ir.new_evict();
-                fid = proc.func_id();
-                bbctx.send(
-                    ir,
-                    &self.store,
-                    callid,
-                    fid,
-                    recv_class,
-                    evict,
-                    Some(proc.outer_lfp()),
-                    pc,
-                );
-                evict
-            }
+            FuncKind::Builtin { .. } => (fid, None),
+            FuncKind::Proc(proc) => (proc.func_id(), Some(proc.outer_lfp())),
             FuncKind::ISeq(iseq) => {
                 if let Some(v) = self.store[iseq].is_const_fn() {
                     bbctx.def_C(dst, v);
@@ -333,58 +266,182 @@ impl<'a> JitContext<'a> {
                 if iseq_block.is_some() || (specializable && self.specialize_level() < 3)
                 /*name == Some(IdentId::NEW)*/
                 {
-                    let args_info = if specializable {
-                        JitArgumentInfo::new(LinkMode::from_caller(&self.store, fid, callid, bbctx))
-                    } else {
-                        JitArgumentInfo::default()
-                    };
-                    let patch_point = if self.is_specialized() {
-                        None
-                    } else {
-                        Some(self.label())
-                    };
-                    let (entry, result) = self.compile_specialized_func(
-                        iseq,
-                        recv_class,
-                        patch_point,
-                        args_info,
-                        None,
-                        callid,
+                    return self.specialized_iseq(
                         bbctx,
-                    );
-                    let evict = ir.new_evict();
-                    bbctx.send_specialized(
                         ir,
-                        &self.store,
                         callid,
+                        recv_class,
                         fid,
-                        entry,
-                        patch_point,
-                        evict,
+                        iseq,
+                        specializable,
                         pc,
                     );
-                    let res = bbctx.def_rax2acc_result(ir, dst, result);
-                    bbctx.immediate_evict(ir, evict, pc);
-                    if !res {
-                        return CompileResult::Cease;
-                    }
-                    return CompileResult::Continue;
-                } else {
-                    let evict = ir.new_evict();
-                    bbctx.send(ir, &self.store, callid, fid, recv_class, evict, None, pc);
-                    evict
                 }
+                (fid, None)
             }
         };
-        if block_fid.is_some() {
+        let evict = ir.new_evict();
+        bbctx.send(
+            ir,
+            &self.store,
+            callid,
+            fid,
+            recv_class,
+            evict,
+            outer_lfp,
+            pc,
+        );
+        if self.store[fid].possibly_capture_without_block() || block_fid.is_some() {
             bbctx.unset_frame_capture_guard(self);
         }
         bbctx.def_rax2acc(ir, dst);
         bbctx.immediate_evict(ir, evict, pc);
-        bbctx.unset_class_version_guard();
+
         CompileResult::Continue
     }
 
+    fn attr_reader(
+        &mut self,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        callid: CallSiteId,
+        recv_class: ClassId,
+        ivar_name: IdentId,
+    ) -> CompileResult {
+        let callsite = &self.store[callid];
+        let CallSiteInfo {
+            pos_num,
+            dst,
+            block_fid,
+            ..
+        } = *callsite;
+        assert_eq!(0, pos_num);
+        assert!(!callsite.kw_may_exists());
+        assert!(block_fid.is_none());
+        assert!(callsite.block_arg.is_none());
+        bbctx.discard(dst);
+        bbctx.writeback_acc(ir);
+        if recv_class.is_always_frozen() {
+            if dst.is_some() {
+                ir.lit2reg(Value::nil(), GP::Rax);
+            }
+        } else {
+            let ivarid = if let Some(id) = self.store[recv_class].get_ivarid(ivar_name) {
+                id
+            } else {
+                return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
+            };
+            let is_object_ty = self.store[recv_class].is_object_ty_instance();
+            if is_object_ty && ivarid.is_inline() {
+                ir.push(AsmInst::LoadIVarInline { ivarid })
+            } else {
+                ir.push(AsmInst::LoadIVarHeap {
+                    ivarid,
+                    is_object_ty,
+                    self_: false,
+                });
+            }
+        }
+        bbctx.def_reg2acc(ir, GP::R15, dst);
+        CompileResult::Continue
+    }
+
+    fn attr_writer(
+        &mut self,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        callid: CallSiteId,
+        recv_class: ClassId,
+        ivar_name: IdentId,
+    ) -> CompileResult {
+        let callsite = &self.store[callid];
+        let CallSiteInfo {
+            args,
+            pos_num,
+            dst,
+            block_fid,
+            ..
+        } = *callsite;
+        assert_eq!(1, pos_num);
+        assert!(!callsite.kw_may_exists());
+        assert!(block_fid.is_none());
+        let ivarid = if let Some(id) = self.store[recv_class].get_ivarid(ivar_name) {
+            id
+        } else {
+            return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
+        };
+        let src = bbctx.load_or_reg(ir, args, GP::Rax);
+        let is_object_ty = self.store[recv_class].is_object_ty_instance();
+        let using_xmm = bbctx.get_using_xmm();
+        if is_object_ty && ivarid.is_inline() {
+            ir.push(AsmInst::StoreIVarInline { src, ivarid })
+        } else {
+            ir.push(AsmInst::StoreIVarHeap {
+                src,
+                ivarid,
+                using_xmm,
+                is_object_ty,
+            });
+        }
+        bbctx.def_rax2acc(ir, dst);
+        bbctx.unset_side_effect_guard();
+        CompileResult::Continue
+    }
+
+    fn specialized_iseq(
+        &mut self,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        callid: CallSiteId,
+        recv_class: ClassId,
+        fid: FuncId,
+        iseq: ISeqId,
+        specializable: bool,
+        pc: BytecodePtr,
+    ) -> CompileResult {
+        let dst = self.store[callid].dst;
+        let args_info = if specializable {
+            JitArgumentInfo::new(LinkMode::from_caller(&self.store, fid, callid, bbctx))
+        } else {
+            JitArgumentInfo::default()
+        };
+        let patch_point = if self.is_specialized() {
+            None
+        } else {
+            Some(self.label())
+        };
+        let (entry, result) = match self.compile_specialized_func(
+            iseq,
+            recv_class,
+            patch_point,
+            args_info,
+            None,
+            callid,
+            bbctx,
+        ) {
+            SpecializedCompileResult::Const(v) => {
+                bbctx.def_C(dst, v);
+                return CompileResult::Continue;
+            }
+            SpecializedCompileResult::Compiled { entry, result } => (entry, result),
+        };
+        let evict = ir.new_evict();
+        bbctx.send_specialized(ir, &self.store, callid, fid, entry, patch_point, evict, pc);
+        let res = bbctx.def_rax2acc_result(ir, dst, result);
+        bbctx.immediate_evict(ir, evict, pc);
+        return res;
+    }
+}
+
+pub(super) enum SpecializedCompileResult {
+    Const(Value),
+    Compiled {
+        entry: JitLabel,
+        result: Option<ResultState>,
+    },
+}
+
+impl<'a> JitContext<'a> {
     fn new_specialized_frame(
         &self,
         iseq_id: ISeqId,
@@ -417,7 +474,7 @@ impl<'a> JitContext<'a> {
         outer: Option<usize>,
         callid: CallSiteId,
         bbctx: &mut BBContext,
-    ) -> (JitLabel, Option<ResultState>) {
+    ) -> SpecializedCompileResult {
         let using_xmm = bbctx.get_using_xmm();
         self.xmm_save(using_xmm);
         self.set_callsite(callid);
@@ -433,6 +490,19 @@ impl<'a> JitContext<'a> {
         let mut return_context = frame.detach_return_context();
         let result = return_context.remove(&pos);
         self.merge_return_context(return_context);
+        if let Some(result) = &result {
+            if let Some(v) = result.const_folded() {
+                #[cfg(feature = "jit-log")]
+                if self.codegen_mode() {
+                    eprintln!(
+                        "const folded: {} {:?}",
+                        self.store.func_description(self.store[iseq_id].func_id()),
+                        result
+                    );
+                }
+                return SpecializedCompileResult::Const(v);
+            }
+        }
         #[cfg(feature = "jit-log")]
         if self.codegen_mode() {
             eprintln!(
@@ -447,7 +517,7 @@ impl<'a> JitContext<'a> {
             frame,
             patch_point,
         });
-        (entry, result)
+        SpecializedCompileResult::Compiled { entry, result }
     }
 
     fn inline_asm(
@@ -485,7 +555,8 @@ impl BBContext {
     /// rdi: receiver: Value
     ///
     /// ### guards
-    /// - side_effect_guard: false
+    /// - unset side_effect_guard
+    /// - unset class_version_guard
     ///
     fn send(
         &mut self,
@@ -525,6 +596,8 @@ impl BBContext {
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
+        self.unset_class_version_guard();
+        self.unset_side_effect_guard();
     }
 
     ///
@@ -569,6 +642,7 @@ impl BBContext {
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
+        self.unset_side_effect_guard();
     }
 
     pub(super) fn compile_yield(
@@ -599,6 +673,7 @@ impl BBContext {
         self.def_rax2acc(ir, dst);
         self.immediate_evict(ir, evict, pc);
         self.unset_class_version_guard();
+        self.unset_side_effect_guard();
     }
 
     fn immediate_evict(&self, ir: &mut AsmIr, evict: AsmEvict, pc: BytecodePtr) {
@@ -618,7 +693,7 @@ impl BBContext {
     }
 
     ///
-    /// Set positional arguments for callee.
+    /// Set positional and keyword arguments for callee.
     ///
     fn set_arguments(
         &mut self,

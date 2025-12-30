@@ -1418,8 +1418,7 @@ pub enum RecompileReason {
     NotCached = 0,
     MethodNotFound = 1,
     IvarIdNotFound = 2,
-    MaybeError = 3,
-    ClassVersionGuardFailed = 4,
+    ClassVersionGuardFailed = 3,
 }
 
 struct Root<'a, 'b> {

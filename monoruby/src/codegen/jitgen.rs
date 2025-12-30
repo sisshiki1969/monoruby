@@ -67,6 +67,7 @@ enum CompileResult {
 struct ResultState {
     ret: ReturnValue,
     class_version_guard: bool,
+    side_effect_guard: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -86,8 +87,19 @@ impl ResultState {
         }
     }
 
+    fn const_folded(&self) -> Option<Value> {
+        if !self.side_effect_guard {
+            return None;
+        }
+        if let ReturnValue::Const(v) = self.ret {
+            return Some(v);
+        }
+        None
+    }
+
     fn join(&mut self, other: &Self) {
         self.class_version_guard &= other.class_version_guard;
+        self.side_effect_guard &= other.side_effect_guard;
 
         match (&self.ret, &other.ret) {
             (ReturnValue::UD, _) => {
@@ -167,6 +179,14 @@ pub(crate) struct BBContext {
     class_version_guarded: bool,
     /// guard for frame capture. true if guaranteed the frame is not captured.
     frame_capture_guarded: bool,
+    /// guard for side effect. true if guaranteed no side effects are not occurred.
+    ///
+    /// all of the following conditions must be satisfied:
+    /// 1) no exceptions
+    /// 2) no modifications to global variables, class variables, instance variables, and constans.
+    /// 3) no method calls that may have side effects.
+    /// 4) no ensure clauses
+    side_effect_guarded: bool,
 }
 
 impl std::ops::Deref for BBContext {
@@ -187,10 +207,12 @@ impl BBContext {
         self.slot_state.equiv(&other.slot_state)
             && self.class_version_guarded == other.class_version_guarded
             && self.frame_capture_guarded == other.frame_capture_guarded
+            && self.side_effect_guarded == other.side_effect_guarded
     }
 
     fn new_entry(cc: &JitContext) -> Self {
         let next_sp = SlotId(cc.local_num() as u16 + 1);
+        let side_effect_guarded = cc.iseq().no_ensure();
         match cc.jit_type() {
             JitType::Generic => {
                 Self {
@@ -199,6 +221,7 @@ impl BBContext {
                     class_version_guarded: false,
                     // mehtods are always guarded frame capture but block are not.
                     frame_capture_guarded: !cc.is_block(),
+                    side_effect_guarded,
                 }
             }
             JitType::Loop(_) => {
@@ -208,6 +231,7 @@ impl BBContext {
                     class_version_guarded: false,
                     // not guarded frame capture in the compilation for loops
                     frame_capture_guarded: false,
+                    side_effect_guarded: false,
                 }
             }
             JitType::Specialized { .. } => {
@@ -217,6 +241,7 @@ impl BBContext {
                     class_version_guarded: false,
                     // specialized methods and blocks are always guarded frame capture
                     frame_capture_guarded: true,
+                    side_effect_guarded,
                 }
             }
         }
@@ -235,6 +260,10 @@ impl BBContext {
         self.frame_capture_guarded = false;
     }
 
+    fn unset_side_effect_guard(&mut self) {
+        self.side_effect_guarded = false;
+    }
+
     fn join_entries(entries: &[BranchEntry]) -> Self {
         let mut merge_ctx = entries.last().unwrap().bbctx.clone();
         for BranchEntry { bbctx, .. } in entries.iter() {
@@ -248,6 +277,7 @@ impl BBContext {
         ResultState {
             ret,
             class_version_guard: self.class_version_guarded,
+            side_effect_guard: self.side_effect_guarded,
         }
     }
 
@@ -306,13 +336,14 @@ impl BBContext {
         ir: &mut AsmIr,
         dst: impl Into<Option<SlotId>>,
         result: Option<ResultState>,
-    ) -> bool {
+    ) -> CompileResult {
         if let Some(result) = result {
             self.class_version_guarded &= result.class_version_guard;
+            self.side_effect_guarded &= result.side_effect_guard;
             match result.ret {
                 ReturnValue::UD => {
                     ir.push(AsmInst::Unreachable);
-                    return false;
+                    return CompileResult::Cease;
                 }
                 ReturnValue::Const(v) => {
                     self.def_C(dst, v);
@@ -324,10 +355,10 @@ impl BBContext {
                     self.def_rax2acc(ir, dst);
                 }
             }
-            true
+            CompileResult::Continue
         } else {
             ir.push(AsmInst::Unreachable);
-            false
+            CompileResult::Cease
         }
     }
 

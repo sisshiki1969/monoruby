@@ -11,5 +11,7 @@ def h(x,y)
 end
 
 100.times do
-  f(1,2)
+  1.times do
+    f(1,2)
+  end
 end
