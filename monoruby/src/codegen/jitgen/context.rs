@@ -27,7 +27,6 @@ pub(super) struct SpecializeInfo {
 ///
 /// The information of the given block for the frame.
 ///
-#[derive(Clone)]
 pub struct JitBlockInfo {
     ///
     /// `FuncId` of the block.
@@ -43,22 +42,12 @@ pub struct JitBlockInfo {
     pub outer: usize,
 }
 
-impl std::fmt::Debug for JitBlockInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Block {{ {:?}, self:{:?}, outer:{} }}",
-            self.block_fid, self.self_class, self.outer
-        )
-    }
-}
-
 impl JitBlockInfo {
-    pub(super) fn new(block_fid: FuncId, self_class: ClassId) -> Self {
+    pub(super) fn new(block_fid: FuncId, self_class: ClassId, outer: usize) -> Self {
         Self {
             block_fid,
             self_class,
-            outer: 1,
+            outer,
         }
     }
 
@@ -100,10 +89,6 @@ pub(crate) struct JitStackFrame {
     /// Outer frame. (None for methods)
     ///
     outer: Option<usize>,
-    ///
-    /// Given block for the frame.
-    ///
-    given_block: Option<JitBlockInfo>,
     ///
     /// Callsite Id.
     ///
@@ -205,7 +190,6 @@ impl std::fmt::Debug for JitStackFrame {
         f.debug_struct("JitStackFrame")
             .field("jit_type", &self.jit_type)
             .field("outer", &self.outer)
-            .field("given_block", &self.given_block)
             .field("stack_offset", &self.stack_offset)
             .finish()
     }
@@ -224,7 +208,6 @@ impl JitStackFrame {
         specialize_level: usize,
         iseq_id: ISeqId,
         outer: Option<usize>,
-        given_block: Option<JitBlockInfo>,
         self_class: ClassId,
     ) -> Self {
         let self_ty = store[self_class].instance_ty();
@@ -242,7 +225,6 @@ impl JitStackFrame {
             specialize_level,
             iseq_id,
             outer,
-            given_block,
             callid: None,
             self_class,
             self_ty,
@@ -274,7 +256,6 @@ impl JitStackFrame {
             specialize_level: self.specialize_level,
             iseq_id: self.iseq_id,
             outer: self.outer,
-            given_block: self.given_block.clone(),
             callid: self.callid,
             self_class: self.self_class,
             self_ty: self.self_ty,
@@ -443,7 +424,6 @@ impl<'a> JitContext<'a> {
             specialize_level,
             iseq_id,
             None,
-            None,
             self_class,
         )];
 
@@ -562,8 +542,12 @@ impl<'a> JitContext<'a> {
     }
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
-        let (frame, i) = self.current_method_frame()?;
-        Some(frame.given_block.as_ref()?.add(i))
+        let caller = self.method_caller_pos()?;
+        let callid = self.stack_frame[caller].callid?;
+        let block_fid = self.store[callid].block_fid?;
+        let self_class = self.stack_frame[caller].self_class;
+        let outer = self.stack_frame.len() - 1 - caller;
+        Some(JitBlockInfo::new(block_fid, self_class, outer))
     }
 
     pub(crate) fn method_caller_callsite(&self) -> Option<CallSiteId> {

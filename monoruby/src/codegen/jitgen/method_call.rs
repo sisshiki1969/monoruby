@@ -191,7 +191,6 @@ impl<'a> JitContext<'a> {
             self_class,
             None,
             args_info,
-            None,
             Some(outer),
             callid,
             bbctx,
@@ -339,7 +338,6 @@ impl<'a> JitContext<'a> {
                     } else {
                         JitArgumentInfo::default()
                     };
-                    let block = block_fid.map(|fid| JitBlockInfo::new(fid, self.self_class()));
                     let patch_point = if self.is_specialized() {
                         None
                     } else {
@@ -350,7 +348,6 @@ impl<'a> JitContext<'a> {
                         recv_class,
                         patch_point,
                         args_info,
-                        block,
                         None,
                         callid,
                         bbctx,
@@ -391,7 +388,6 @@ impl<'a> JitContext<'a> {
         iseq_id: ISeqId,
         outer: Option<usize>,
         args_info: JitArgumentInfo,
-        given_block: Option<JitBlockInfo>,
         self_class: ClassId,
     ) -> JitStackFrame {
         let idx = match self.jit_type() {
@@ -406,7 +402,6 @@ impl<'a> JitContext<'a> {
             specialize_level,
             iseq_id,
             outer,
-            given_block,
             self_class,
         )
     }
@@ -417,7 +412,6 @@ impl<'a> JitContext<'a> {
         self_class: ClassId,
         patch_point: Option<JitLabel>,
         args_info: JitArgumentInfo,
-        block: Option<JitBlockInfo>,
         outer: Option<usize>,
         callid: CallSiteId,
         bbctx: &mut BBContext,
@@ -426,7 +420,7 @@ impl<'a> JitContext<'a> {
         self.xmm_save(using_xmm);
         self.set_callsite(callid);
         self.set_not_captured(bbctx.frame_capture_guarded);
-        let frame = self.new_specialized_frame(iseq_id, outer, args_info, block, self_class);
+        let frame = self.new_specialized_frame(iseq_id, outer, args_info, self_class);
         self.stack_frame.push(frame);
         self.traceir_to_asmir();
         let mut frame = self.stack_frame.pop().unwrap();
