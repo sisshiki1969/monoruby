@@ -166,6 +166,7 @@ pub(crate) struct BBContext {
     slot_state: SlotContext,
     /// stack top register.
     next_sp: SlotId,
+    /// guard for class version. true if guaranteed the class version is not changed.
     class_version_guarded: bool,
     /// guard for frame capture. true if guaranteed the frame is not captured.
     frame_capture_guarded: bool,
