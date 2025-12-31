@@ -161,22 +161,12 @@ impl<'a> JitContext<'a> {
         pc: BytecodePtr,
     ) -> CompileResult {
         let dst = self.store[callid].dst;
-        bbctx.exec_gc(ir, true, pc);
-        let using_xmm = bbctx.get_using_xmm();
-        // stack pointer adjustment
-        // -using_xmm.offset()
-        ir.xmm_save(using_xmm);
         let JitBlockInfo {
             block_fid: callee_fid,
             self_class,
             outer,
         } = block.add(1);
         let simple = self.store.is_simple_call(callee_fid, callid);
-        bbctx.set_arguments(&self.store, ir, callid, callee_fid, pc);
-        bbctx.discard(dst);
-        bbctx.clear_above_next_sp();
-        let error = ir.new_error(bbctx, pc);
-        bbctx.writeback_acc(ir);
         let args_info = if simple {
             JitArgumentInfo::new(slot::LinkMode::from_caller_yield(
                 &self.store,
@@ -199,11 +189,20 @@ impl<'a> JitContext<'a> {
         ) {
             SpecializedCompileResult::Const(v) => {
                 bbctx.def_C(dst, v);
-                ir.xmm_restore(using_xmm);
                 return CompileResult::Continue;
             }
             SpecializedCompileResult::Compiled { entry, result } => (entry, result),
         };
+        bbctx.exec_gc(ir, true, pc);
+        let using_xmm = bbctx.get_using_xmm();
+        // stack pointer adjustment
+        // -using_xmm.offset()
+        ir.xmm_save(using_xmm);
+        bbctx.set_arguments(&self.store, ir, callid, callee_fid, pc);
+        bbctx.discard(dst);
+        bbctx.clear_above_next_sp();
+        let error = ir.new_error(bbctx, pc);
+        bbctx.writeback_acc(ir);
         let evict = ir.new_evict();
         let meta = self.store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
@@ -263,7 +262,7 @@ impl<'a> JitContext<'a> {
                         || (pos_num != 0 && (args..args + pos_num).any(|i| bbctx.is_C(i))));
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
 
-                if iseq_block.is_some() || (specializable && self.specialize_level() < 3)
+                if iseq_block.is_some() || (specializable && self.specialize_level() < 5)
                 /*name == Some(IdentId::NEW)*/
                 {
                     return self.specialized_iseq(
@@ -654,7 +653,7 @@ impl BBContext {
     ) {
         let callinfo = &store[callid];
         let dst = callinfo.dst;
-        self.write_back_callargs_and_dst(ir, &callinfo);
+        self.write_back_recv_and_callargs(ir, &callinfo);
         self.writeback_acc(ir);
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self, pc);
@@ -702,7 +701,7 @@ impl BBContext {
         callid: CallSiteId,
         callee_fid: FuncId,
         pc: BytecodePtr,
-    ) -> bool {
+    ) {
         let callee = &store[callee_fid];
         let callsite = &store[callid];
         if store.is_simple_call(callee_fid, callid) {
@@ -790,7 +789,6 @@ impl BBContext {
             }
 
             ir.reg_add(GP::Rsp, stack_offset);
-            true
         } else {
             self.write_back_args(ir, callsite);
 
@@ -798,7 +796,6 @@ impl BBContext {
             ir.push(AsmInst::SetArguments { callid, callee_fid });
             ir.handle_error(error);
             ir.push(AsmInst::CopyKeywordArgs { callid, callee_fid });
-            false
         }
     }
 }

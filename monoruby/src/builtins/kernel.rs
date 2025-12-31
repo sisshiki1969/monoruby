@@ -145,6 +145,7 @@ fn kernel_nil(
             bb.def_C(dst, Value::bool(false));
         }
     } else {
+        bb.load(ir, recv, GP::Rdi);
         ir.inline(|r#gen, _, _| {
             monoasm! { &mut r#gen.jit,
                 movq rax, (FALSE_VALUE);

@@ -242,9 +242,10 @@ fn integer_tof(
     if !callsite.is_simple() {
         return false;
     }
-    let CallSiteInfo { dst, .. } = *callsite;
+    let CallSiteInfo { dst, recv, .. } = *callsite;
     if let Some(ret) = dst {
         let fret = bb.def_F(ret).enc();
+        bb.load(ir, recv, GP::Rdi);
         ir.inline(move |r#gen, _, _| {
             monoasm! { &mut r#gen.jit,
                 sarq  rdi, 1;
@@ -405,7 +406,10 @@ fn integer_shr(
     if !callsite.is_simple() {
         return false;
     }
-    let CallSiteInfo { dst, args, .. } = *callsite;
+    let CallSiteInfo {
+        dst, args, recv, ..
+    } = *callsite;
+    bb.load(ir, recv, GP::Rdi);
     if let Some(rhs) = bb.is_u8_literal(args) {
         ir.inline(move |r#gen, _, _| r#gen.gen_shr_imm(rhs));
     } else {
@@ -444,6 +448,7 @@ fn integer_shl(
         dst, args, recv, ..
     } = *callsite;
 
+    bb.load(ir, recv, GP::Rdi);
     if let Some(rhs) = bb.is_u8_literal(args)
         && rhs < 64
     {

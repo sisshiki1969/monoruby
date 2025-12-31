@@ -236,9 +236,9 @@ fn hash_index(
         return false;
     }
     bb.load(ir, callsite.args, GP::Rcx);
+    bb.load(ir, callsite.recv, GP::Rdx);
     ir.inline(|r#gen, _, _| {
         monoasm! {&mut r#gen.jit,
-            movq rdx, rdi;
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (hashindex);

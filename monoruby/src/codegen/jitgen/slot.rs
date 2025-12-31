@@ -1442,11 +1442,9 @@ impl BBContext {
         }
     }
 
-    pub(crate) fn write_back_callargs_and_dst(&mut self, ir: &mut AsmIr, callsite: &CallSiteInfo) {
-        let CallSiteInfo { recv, dst, .. } = callsite;
-        self.write_back_slot(ir, *recv);
+    pub(crate) fn write_back_recv_and_callargs(&mut self, ir: &mut AsmIr, callsite: &CallSiteInfo) {
+        self.write_back_slot(ir, callsite.recv);
         self.write_back_args(ir, callsite);
-        self.discard(*dst);
     }
 
     pub(super) fn write_back_args(&mut self, ir: &mut AsmIr, callsite: &CallSiteInfo) {

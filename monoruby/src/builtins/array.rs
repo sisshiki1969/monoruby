@@ -187,6 +187,7 @@ fn array_allocate(
         return false;
     }
     let dst = callsite.dst;
+    bb.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _| {
         monoasm! { &mut r#gen.jit,
             movq rax, (allocate_array);
@@ -279,6 +280,7 @@ fn array_size(
         return false;
     }
     let dst = callsite.dst;
+    bb.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _| {
         r#gen.get_array_length();
         monoasm! { &mut r#gen.jit,
@@ -320,6 +322,7 @@ fn array_clone(
         return false;
     }
     let dst = callsite.dst;
+    bb.load(ir, callsite.recv, GP::Rdi);
     let using_xmm = bb.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _| {
@@ -667,7 +670,10 @@ fn array_shl(
     if !callsite.is_simple() {
         return false;
     }
-    let CallSiteInfo { dst, args, .. } = *callsite;
+    let CallSiteInfo {
+        dst, args, recv, ..
+    } = *callsite;
+    bb.load(ir, recv, GP::Rdi);
     bb.load(ir, args, GP::Rsi);
     let using_xmm = bb.get_using_xmm();
     ir.xmm_save(using_xmm);

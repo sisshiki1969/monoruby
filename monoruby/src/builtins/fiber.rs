@@ -88,7 +88,7 @@ fn fiber_yield_inline(
     } else if pos_num == 1 {
         bb.load(ir, args, GP::Rsi);
     } else {
-        bb.write_back_callargs_and_dst(ir, callsite);
+        bb.write_back_recv_and_callargs(ir, callsite);
         ir.inline(move |r#gen, _, _| {
             // TODO: we must check if the parent fiber exits.
             monoasm! { &mut r#gen.jit,

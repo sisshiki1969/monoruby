@@ -473,7 +473,7 @@ impl Globals {
         )
     }
 
-    pub(crate) fn define_builtin_inline_funcs_with(
+    fn define_builtin_inline_funcs_with(
         &mut self,
         class_id: ClassId,
         name: &str,
