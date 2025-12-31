@@ -455,6 +455,7 @@ impl<'a> JitContext<'a> {
         &self.store[self.current_frame().iseq_id]
     }
 
+    #[cfg(feature = "emit-bc")]
     pub(super) fn dump_iseq(&self) {
         self.store.dump_iseq(self.iseq_id());
     }

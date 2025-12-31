@@ -106,6 +106,7 @@ impl<'a> JitContext<'a> {
                     break;
                 }
                 CompileResult::Abort => {
+                    #[cfg(feature = "emit-bc")]
                     self.dump_iseq();
                     unreachable!()
                 }
@@ -458,7 +459,7 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::BinCmpBr {
                 kind,
-                dst: _,
+                _dst: _,
                 lhs,
                 rhs,
                 dest_bb,
@@ -889,6 +890,26 @@ impl<'a> JitContext<'a> {
             }
         }
         CompileResult::Continue
+    }
+
+    fn call_unary_method(
+        &mut self,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        recv: SlotId,
+        recv_class: ClassId,
+        name: impl Into<IdentId>,
+        bc_pos: BcIndex,
+        pc: BytecodePtr,
+    ) -> CompileResult {
+        if let Some(func_id) = self.jit_check_method(recv_class, name.into()) {
+            let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
+            assert_eq!(self.store[callid].recv, recv);
+            assert_eq!(self.store[callid].pos_num, 0);
+            self.compile_method_call(bbctx, ir, pc, recv_class, func_id, callid)
+        } else {
+            CompileResult::Recompile(RecompileReason::MethodNotFound)
+        }
     }
 
     fn call_binary_method(

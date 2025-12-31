@@ -121,6 +121,7 @@ impl<'a> JitContext<'a> {
                     return;
                 }
                 CompileResult::Abort => {
+                    #[cfg(feature = "emit-bc")]
                     self.dump_iseq();
                     unreachable!()
                 }

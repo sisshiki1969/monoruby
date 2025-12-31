@@ -431,6 +431,47 @@ impl BytecodeGen {
                 self.encode_call(store, opcode, callsite, bc_pos, loc)?
             }
             BytecodeInst::InlineCache(box callsite) => self.encode_cache(130, callsite)?,
+            BytecodeInst::Not { ret, src } => {
+                let op1 = self.slot_id(&ret);
+                let op2 = self.slot_id(&src);
+                Bytecode::from(enc_ww(128, op1.0, op2.0))
+            }
+            BytecodeInst::BitNot { ret, src } => {
+                let op1 = self.slot_id(&ret);
+                let op2 = self.slot_id(&src);
+                let callid = self.new_callsite(
+                    store,
+                    CallSite::unary(Some(IdentId::_BNOT), src, Some(ret)),
+                    bc_pos,
+                    loc,
+                )?;
+                store.new_callsite_map_entry(self.iseq_id, bc_pos, callid);
+                Bytecode::from(enc_ww(127, op1.0, op2.0))
+            }
+            BytecodeInst::Pos { ret, src } => {
+                let op1 = self.slot_id(&ret);
+                let op2 = self.slot_id(&src);
+                let callid = self.new_callsite(
+                    store,
+                    CallSite::unary(Some(IdentId::_UPLUS), src, Some(ret)),
+                    bc_pos,
+                    loc,
+                )?;
+                store.new_callsite_map_entry(self.iseq_id, bc_pos, callid);
+                Bytecode::from_with_class_and_version(enc_ww(126, op1.0, op2.0), None, -1i32 as u32)
+            }
+            BytecodeInst::Neg { ret, src } => {
+                let op1 = self.slot_id(&ret);
+                let op2 = self.slot_id(&src);
+                let callid = self.new_callsite(
+                    store,
+                    CallSite::unary(Some(IdentId::_UMINUS), src, Some(ret)),
+                    bc_pos,
+                    loc,
+                )?;
+                store.new_callsite_map_entry(self.iseq_id, bc_pos, callid);
+                Bytecode::from_with_class_and_version(enc_ww(129, op1.0, op2.0), None, -1i32 as u32)
+            }
             BytecodeInst::BinOp(kind, ret, (lhs, rhs)) => {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
                 let op2 = self.slot_id(&lhs);
@@ -525,26 +566,6 @@ impl BytecodeGen {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
                 let op2 = self.slot_id(&BcReg::from(arg));
                 Bytecode::from(enc_www(86, op1.0, op2.0, len as u16))
-            }
-            BytecodeInst::Pos { ret, src } => {
-                let op1 = self.slot_id(&ret);
-                let op2 = self.slot_id(&src);
-                Bytecode::from_with_class_and_version(enc_ww(126, op1.0, op2.0), None, -1i32 as u32)
-            }
-            BytecodeInst::BitNot { ret, src } => {
-                let op1 = self.slot_id(&ret);
-                let op2 = self.slot_id(&src);
-                Bytecode::from(enc_ww(127, op1.0, op2.0))
-            }
-            BytecodeInst::Not { ret, src } => {
-                let op1 = self.slot_id(&ret);
-                let op2 = self.slot_id(&src);
-                Bytecode::from(enc_ww(128, op1.0, op2.0))
-            }
-            BytecodeInst::Neg { ret, src } => {
-                let op1 = self.slot_id(&ret);
-                let op2 = self.slot_id(&src);
-                Bytecode::from_with_class_and_version(enc_ww(129, op1.0, op2.0), None, -1i32 as u32)
             }
             BytecodeInst::StoreIndex(src, base, idx) => {
                 let op1 = self.slot_id(&src);

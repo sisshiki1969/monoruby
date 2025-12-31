@@ -604,7 +604,7 @@ impl Store {
         }
     }
 
-    //#[cfg(feature = "emit-bc")]
+    #[cfg(feature = "emit-bc")]
     pub fn dump_iseq(&self, iseq_id: ISeqId) {
         use bytecodegen::BcIndex;
 

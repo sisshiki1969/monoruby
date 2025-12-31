@@ -172,7 +172,7 @@ pub(crate) enum TraceIr {
     },
     BinCmpBr {
         kind: ruruby_parse::CmpKind,
-        dst: Option<SlotId>,
+        _dst: Option<SlotId>,
         lhs: SlotId,
         rhs: SlotId,
         dest_bb: BasicBlockId,
@@ -322,6 +322,7 @@ pub(crate) enum TraceIr {
 }
 
 impl TraceIr {
+    #[cfg(feature = "dump-traceir")]
     pub(crate) fn format(&self, store: &Store) -> Option<String> {
         fn optstr(opt: bool) -> &'static str {
             if opt { "_" } else { "" }
@@ -599,7 +600,7 @@ impl TraceIr {
             } => cmp_fmt(store, *kind, *dst, *lhs, *rhs, ic.clone(), false),
             TraceIr::BinCmpBr {
                 kind,
-                dst,
+                _dst: dst,
                 lhs,
                 rhs,
                 ic,

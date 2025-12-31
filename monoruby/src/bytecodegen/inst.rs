@@ -16,6 +16,7 @@ impl BrKind {
         }
     }
 
+    #[cfg(feature = "dump-traceir")]
     pub(crate) fn to_s(self) -> &'static str {
         match self {
             Self::BrIf => "",

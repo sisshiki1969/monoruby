@@ -268,6 +268,10 @@ impl CallSite {
         CallSite::new(name, len, None, vec![], None, None, args, recv, dst, false)
     }
 
+    fn unary(name: impl Into<Option<IdentId>>, recv: BcReg, dst: Option<BcReg>) -> CallSite {
+        CallSite::simple(name, 0, recv, recv, dst)
+    }
+
     fn binary(
         name: impl Into<Option<IdentId>>,
         lhs: BcReg,
@@ -1588,14 +1592,6 @@ impl std::fmt::Display for UnOpK {
 }
 
 impl UnOpK {
-    /*pub fn from(i: u16) -> Self {
-        match i {
-            0 => UnOpK::Pos,
-            1 => UnOpK::Neg,
-            _ => unreachable!(),
-        }
-    }*/
-
     pub(crate) fn generic_func(&self) -> UnaryOpFn {
         match self {
             UnOpK::Pos => pos_value,

@@ -318,6 +318,7 @@ impl ISeqInfo {
     ///
     /// Get length of bytecode.
     ///
+    #[cfg(feature = "emit-bc")]
     pub(crate) fn bytecode_len(&self) -> usize {
         self.bytecode.as_ref().unwrap().len()
     }
@@ -405,6 +406,7 @@ impl ISeqInfo {
         self.exception_map.iter().all(|map| map.ensure_pc.is_none())
     }
 
+    #[cfg(feature = "emit-bc")]
     pub(crate) fn get_exception_map(
         &self,
     ) -> Vec<(
@@ -793,7 +795,7 @@ impl ISeqInfo {
                     };
                     TraceIr::BinCmpBr {
                         kind,
-                        dst,
+                        _dst: dst,
                         lhs,
                         rhs,
                         dest_bb: dest,
