@@ -38,7 +38,7 @@ impl Codegen {
     /// version:  class version
     /// fid:      FuncId
     /// ~~~
-    pub(super) fn vm_call(&mut self, is_simple: bool) -> CodePtr {
+    pub(super) fn vm_send(&mut self, is_simple: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let exec = self.jit.label();
         let done = self.jit.label();
@@ -74,7 +74,7 @@ impl Codegen {
         };
         self.get_func_data();
         self.set_method_outer();
-        self.call(is_simple);
+        self.vm_call(is_simple);
         monoasm! { &mut self.jit,
         done:
         };
@@ -127,7 +127,7 @@ impl Codegen {
         // rax: outer, r15: &FuncData
         self.push_cont_frame();
         self.set_block_self_outer();
-        self.call(is_simple);
+        self.vm_call(is_simple);
         self.pop_cont_frame();
         self.vm_handle_error();
         self.vm_store_rdi(GP::Rax);
@@ -175,7 +175,7 @@ impl Codegen {
     /// - r13: pc
     /// - r15: &FuncData
     ///
-    fn call(
+    fn vm_call(
         &mut self,
         // The call site has no keyword arguments, no splat arguments, no hash splat arguments, and no block argument.
         is_simple: bool,
@@ -238,14 +238,6 @@ impl Codegen {
             self.vm_handle_error();
         }
         self.call_funcdata();
-        //monoasm! { &mut self.jit,
-        //    addq rsp, 8;
-        //    popq r13;   // pop pc
-        //    movzxw r15, [r13 + (RET_REG)];  // r15 <- :1
-        //    addq r13, 16;
-        //};
-        //self.vm_handle_error();
-        //self.vm_store_r15(GP::Rax);
     }
 
     ///

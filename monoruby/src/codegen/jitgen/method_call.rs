@@ -791,11 +791,9 @@ impl BBContext {
             ir.reg_add(GP::Rsp, stack_offset);
         } else {
             self.write_back_recv_and_callargs(ir, callsite);
-
             let error = ir.new_error(self, pc);
             ir.push(AsmInst::SetArguments { callid, callee_fid });
             ir.handle_error(error);
-            ir.push(AsmInst::CopyKeywordArgs { callid, callee_fid });
         }
     }
 }

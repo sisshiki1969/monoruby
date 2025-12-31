@@ -337,37 +337,6 @@ impl Codegen {
     }
 
     ///
-    /// Handle keyword arguments
-    ///
-    /// ### destroy
-    /// - rax
-    ///
-    pub(super) fn copy_keyword_args(&mut self, store: &Store, callid: CallSiteId, callee: FuncId) {
-        let CallSiteInfo {
-            kw_pos, kw_args, ..
-        } = &store[callid];
-        let callee = &store[callee];
-        let mut callee_ofs = (callee.kw_reg_pos().0 as i32) * 8 + LFP_SELF;
-        for param_name in callee.kw_names() {
-            match kw_args.get(param_name) {
-                Some(caller) => {
-                    let caller_ofs = (kw_pos.0 as i32 + *caller as i32) * 8 + LFP_SELF;
-                    monoasm! { &mut self.jit,
-                        movq  rax, [r14 - (caller_ofs)];
-                        movq  [rsp - (RSP_LOCAL_FRAME + callee_ofs)], rax;
-                    }
-                }
-                None => {
-                    monoasm! { &mut self.jit,
-                        movq  [rsp - (RSP_LOCAL_FRAME + callee_ofs)], 0;
-                    }
-                }
-            }
-            callee_ofs += 8;
-        }
-    }
-
-    ///
     /// Handle hash splat arguments and a keyword rest parameter.
     ///
     /// ### destroy

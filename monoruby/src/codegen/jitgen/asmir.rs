@@ -1027,10 +1027,6 @@ pub(super) enum AsmInst {
         offset: usize,
         error: AsmError,
     },
-    CopyKeywordArgs {
-        callid: CallSiteId,
-        callee_fid: FuncId,
-    },
     ///
     /// Call method
     ///

@@ -276,9 +276,8 @@ impl Codegen {
                 self.jit_check_stack(&write_back, error);
             }
             AsmInst::SetArguments { callid, callee_fid } => {
-                let meta = store[callee_fid].meta();
                 let offset = store[callee_fid].get_offset();
-                self.jit_set_arguments(callid, offset, meta);
+                self.jit_set_arguments(callid, callee_fid, offset);
             }
 
             AsmInst::Ret => {
@@ -402,9 +401,6 @@ impl Codegen {
             } => {
                 let error = &labels[error];
                 self.handle_hash_splat_kw_rest(callid, meta, offset, error);
-            }
-            AsmInst::CopyKeywordArgs { callid, callee_fid } => {
-                self.copy_keyword_args(store, callid, callee_fid);
             }
             AsmInst::Call {
                 callee_fid,
@@ -1058,13 +1054,13 @@ impl Codegen {
     /// ### destroy
     /// - caller save registers
     ///
-    fn jit_set_arguments(&mut self, callid: CallSiteId, offset: usize, meta: Meta) {
+    fn jit_set_arguments(&mut self, callid: CallSiteId, fid: FuncId, offset: usize) {
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (callid.get());
             lea  rcx, [rsp - (RSP_LOCAL_FRAME)];   // callee_lfp
-            movq r8, (meta.get());
+            movl r8, (fid.get());
             subq rsp, (offset);
             movq rax, (crate::runtime::jit_generic_set_arguments);
             call rax;
