@@ -264,31 +264,42 @@ impl Codegen {
         self.dispatch[83] = raise_err;
         self.dispatch[85] = ensure_end;
         self.dispatch[86] = self.vm_concat_regexp();
-        self.dispatch[126] = self.vm_pos();
-        self.dispatch[127] = self.vm_bitnot();
-        self.dispatch[128] = self.vm_not();
-        self.dispatch[129] = self.vm_neg();
+
+        self.dispatch[120] = self.vm_not();
+        self.dispatch[121] = self.vm_pos();
+        self.dispatch[122] = self.vm_neg();
+        self.dispatch[123] = self.vm_bitnot();
         self.dispatch[132] = self.vm_index();
         self.dispatch[133] = self.vm_index_assign();
 
-        self.dispatch[134] = self.vm_eq_opt_rr();
-        self.dispatch[135] = self.vm_ne_opt_rr();
-        self.dispatch[136] = self.vm_lt_opt_rr();
-        self.dispatch[137] = self.vm_le_opt_rr();
-        self.dispatch[138] = self.vm_gt_opt_rr();
-        self.dispatch[139] = self.vm_ge_opt_rr();
-        self.dispatch[140] = self.vm_teq_opt_rr();
+        self.dispatch[140] = self.vm_eq_opt_rr();
+        self.dispatch[141] = self.vm_ne_opt_rr();
+        self.dispatch[142] = self.vm_lt_opt_rr();
+        self.dispatch[143] = self.vm_le_opt_rr();
+        self.dispatch[144] = self.vm_gt_opt_rr();
+        self.dispatch[145] = self.vm_ge_opt_rr();
+        self.dispatch[146] = self.vm_teq_opt_rr();
 
-        self.dispatch[150] = self.vm_load_dvar();
-        self.dispatch[151] = self.vm_store_dvar();
+        self.dispatch[148] = self.vm_load_dvar();
+        self.dispatch[149] = self.vm_store_dvar();
 
-        self.dispatch[154] = self.vm_eq_opt_rr();
-        self.dispatch[155] = self.vm_ne_opt_rr();
-        self.dispatch[156] = self.vm_lt_opt_rr();
-        self.dispatch[157] = self.vm_le_opt_rr();
-        self.dispatch[158] = self.vm_gt_opt_rr();
-        self.dispatch[159] = self.vm_ge_opt_rr();
-        self.dispatch[160] = self.vm_teq_opt_rr();
+        self.dispatch[150] = self.vm_eq_opt_rr();
+        self.dispatch[151] = self.vm_ne_opt_rr();
+        self.dispatch[152] = self.vm_lt_opt_rr();
+        self.dispatch[153] = self.vm_le_opt_rr();
+        self.dispatch[154] = self.vm_gt_opt_rr();
+        self.dispatch[155] = self.vm_ge_opt_rr();
+        self.dispatch[156] = self.vm_teq_opt_rr();
+
+        self.dispatch[160] = add_rr;
+        self.dispatch[161] = sub_rr;
+        self.dispatch[162] = mul_rr;
+        self.dispatch[163] = div_rr;
+        self.dispatch[164] = or_rr;
+        self.dispatch[165] = and_rr;
+        self.dispatch[166] = xor_rr;
+        self.dispatch[167] = rem_rr;
+        self.dispatch[168] = pow_rr;
 
         self.dispatch[170] = self.vm_init();
         self.dispatch[171] = self.vm_expand_array();
@@ -300,16 +311,6 @@ impl Codegen {
         self.dispatch[177] = self.vm_range(false);
         self.dispatch[178] = self.vm_range(true);
         self.dispatch[179] = self.vm_concat();
-
-        self.dispatch[200] = add_rr;
-        self.dispatch[201] = sub_rr;
-        self.dispatch[202] = mul_rr;
-        self.dispatch[203] = div_rr;
-        self.dispatch[204] = or_rr;
-        self.dispatch[205] = and_rr;
-        self.dispatch[206] = xor_rr;
-        self.dispatch[207] = rem_rr;
-        self.dispatch[208] = pow_rr;
     }
 
     ///
@@ -318,48 +319,37 @@ impl Codegen {
     pub(super) fn remove_vm_bop_optimization(&mut self) {
         self.dispatch[14] = self.vm_loop_start_no_opt();
 
-        self.dispatch[126] = self.vm_pos_no_opt();
-        self.dispatch[127] = self.vm_bitnot_no_opt();
-        self.dispatch[128] = self.vm_not();
-        self.dispatch[129] = self.vm_neg_no_opt();
+        self.dispatch[120] = self.vm_not();
+        self.dispatch[121] = self.vm_pos_no_opt();
+        self.dispatch[122] = self.vm_neg_no_opt();
+        self.dispatch[123] = self.vm_bitnot_no_opt();
 
-        self.dispatch[134] = self.vm_eq_rr();
-        self.dispatch[135] = self.vm_ne_rr();
-        self.dispatch[136] = self.vm_lt_rr();
-        self.dispatch[137] = self.vm_le_rr();
-        self.dispatch[138] = self.vm_gt_rr();
-        self.dispatch[139] = self.vm_ge_rr();
-        self.dispatch[140] = self.vm_teq_rr();
-        //self.dispatch[141] = self.vm_cmp_rr();
+        self.dispatch[140] = self.vm_eq_rr();
+        self.dispatch[141] = self.vm_ne_rr();
+        self.dispatch[142] = self.vm_lt_rr();
+        self.dispatch[143] = self.vm_le_rr();
+        self.dispatch[144] = self.vm_gt_rr();
+        self.dispatch[145] = self.vm_ge_rr();
+        self.dispatch[146] = self.vm_teq_rr();
 
-        self.dispatch[154] = self.vm_eq_rr();
-        self.dispatch[155] = self.vm_ne_rr();
-        self.dispatch[156] = self.vm_lt_rr();
-        self.dispatch[157] = self.vm_le_rr();
-        self.dispatch[158] = self.vm_gt_rr();
-        self.dispatch[159] = self.vm_ge_rr();
-        self.dispatch[160] = self.vm_teq_rr();
-        //self.dispatch[161] = self.vm_cmp_rr();
+        self.dispatch[150] = self.vm_eq_rr();
+        self.dispatch[151] = self.vm_ne_rr();
+        self.dispatch[152] = self.vm_lt_rr();
+        self.dispatch[153] = self.vm_le_rr();
+        self.dispatch[154] = self.vm_gt_rr();
+        self.dispatch[155] = self.vm_ge_rr();
+        self.dispatch[156] = self.vm_teq_rr();
 
-        let add_rr = self.vm_binops(add_values_no_opt);
-        let sub_rr = self.vm_binops(sub_values_no_opt);
-        let or_rr = self.vm_binops(bitor_values_no_opt);
-        let and_rr = self.vm_binops(bitand_values_no_opt);
-        let xor_rr = self.vm_binops(bitxor_values_no_opt);
-        let div_rr = self.vm_binops(div_values_no_opt);
-        let mul_rr = self.vm_binops(mul_values_no_opt);
-        let rem_rr = self.vm_binops(rem_values_no_opt);
-        let pow_rr = self.vm_binops(pow_values_no_opt);
+        self.dispatch[160] = self.vm_binops(add_values_no_opt);
+        self.dispatch[161] = self.vm_binops(sub_values_no_opt);
+        self.dispatch[162] = self.vm_binops(mul_values_no_opt);
+        self.dispatch[163] = self.vm_binops(div_values_no_opt);
+        self.dispatch[164] = self.vm_binops(bitor_values_no_opt);
+        self.dispatch[165] = self.vm_binops(bitand_values_no_opt);
+        self.dispatch[166] = self.vm_binops(bitxor_values_no_opt);
+        self.dispatch[167] = self.vm_binops(rem_values_no_opt);
+        self.dispatch[168] = self.vm_binops(pow_values_no_opt);
 
-        self.dispatch[200] = add_rr;
-        self.dispatch[201] = sub_rr;
-        self.dispatch[202] = mul_rr;
-        self.dispatch[203] = div_rr;
-        self.dispatch[204] = or_rr;
-        self.dispatch[205] = and_rr;
-        self.dispatch[206] = xor_rr;
-        self.dispatch[207] = rem_rr;
-        self.dispatch[208] = pow_rr;
         self.jit.finalize();
     }
 

@@ -24,7 +24,7 @@ module Enumerable
     if n == 0 || n < 0
       raise ArgumentError, "invalid slice size"
     end
-    return self.to_enum(:each_slice, n) if !block_given?
+    return self.to_enum(:each_slice, n) unless block_given?
     slice = []
     self.each do |x|
       slice << x
@@ -38,7 +38,7 @@ module Enumerable
   end
   
   def each_with_index
-    return self.to_enum(:each_with_index) if !block_given?
+    return self.to_enum(:each_with_index) unless block_given?
     i = 0
     self.each do |x|
       yield x, i
@@ -48,7 +48,7 @@ module Enumerable
   end
 
   def each_with_object(obj)
-    return self.to_enum(:each_with_object) if !block_given?
+    return self.to_enum(:each_with_object) unless block_given?
     self.each do |x|
       yield x, obj
     end
@@ -56,7 +56,7 @@ module Enumerable
   end
 
   def map
-    return self.to_enum(:map) if !block_given?
+    return self.to_enum(:map) unless block_given?
     res = []
     self.each do |x|
       res << yield(x)
@@ -66,7 +66,7 @@ module Enumerable
   alias collect map
 
   def find(ifnone = nil)
-    return self.to_enum(:find) if !block_given?
+    return self.to_enum(:find) unless block_given?
     self.each do |x|
       if yield(x)
         return x
@@ -80,7 +80,7 @@ module Enumerable
   end
 
   def filter
-    return self.to_enum(:filter) if !block_given?
+    return self.to_enum(:filter) unless block_given?
     res = []
     self.each do |x|
       if yield(x)
@@ -92,7 +92,7 @@ module Enumerable
   alias select filter
 
   def filter_map
-    return self.to_enum(:filter_map) if !block_given?
+    return self.to_enum(:filter_map) unless block_given?
     res = []
     self.each do |x|
       y = yield(x)
@@ -102,7 +102,7 @@ module Enumerable
   end
 
   def take_while
-    return self.to_enum(:take_while) if !block_given?
+    return self.to_enum(:take_while) unless block_given?
     res = []
     self.each do |x|
       break unless yield(x)
@@ -145,7 +145,7 @@ module Enumerable
   end
 
   def min_by
-    return self.to_enum(:min_by) if !block_given?
+    return self.to_enum(:min_by) unless block_given?
     elem = nil
     res = nil
     self.each do |x|

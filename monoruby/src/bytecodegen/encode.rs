@@ -434,43 +434,27 @@ impl BytecodeGen {
             BytecodeInst::Not { ret, src } => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&src);
-                Bytecode::from(enc_ww(128, op1.0, op2.0))
+                Bytecode::from(enc_ww(120, op1.0, op2.0))
             }
-            BytecodeInst::BitNot { ret, src } => {
+            BytecodeInst::UnOp {
+                kind,
+                dst: ret,
+                recv: src,
+            } => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&src);
                 let callid = self.new_callsite(
                     store,
-                    CallSite::unary(Some(IdentId::_BNOT), src, Some(ret)),
+                    CallSite::unary(Some(kind.into()), src, Some(ret)),
                     bc_pos,
                     loc,
                 )?;
                 store.new_callsite_map_entry(self.iseq_id, bc_pos, callid);
-                Bytecode::from(enc_ww(127, op1.0, op2.0))
-            }
-            BytecodeInst::Pos { ret, src } => {
-                let op1 = self.slot_id(&ret);
-                let op2 = self.slot_id(&src);
-                let callid = self.new_callsite(
-                    store,
-                    CallSite::unary(Some(IdentId::_UPLUS), src, Some(ret)),
-                    bc_pos,
-                    loc,
-                )?;
-                store.new_callsite_map_entry(self.iseq_id, bc_pos, callid);
-                Bytecode::from_with_class_and_version(enc_ww(126, op1.0, op2.0), None, -1i32 as u32)
-            }
-            BytecodeInst::Neg { ret, src } => {
-                let op1 = self.slot_id(&ret);
-                let op2 = self.slot_id(&src);
-                let callid = self.new_callsite(
-                    store,
-                    CallSite::unary(Some(IdentId::_UMINUS), src, Some(ret)),
-                    bc_pos,
-                    loc,
-                )?;
-                store.new_callsite_map_entry(self.iseq_id, bc_pos, callid);
-                Bytecode::from_with_class_and_version(enc_ww(129, op1.0, op2.0), None, -1i32 as u32)
+                Bytecode::from_with_class_and_version(
+                    enc_ww(121 + kind as u16, op1.0, op2.0),
+                    None,
+                    -1i32 as u32,
+                )
             }
             BytecodeInst::BinOp(kind, ret, (lhs, rhs)) => {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
@@ -484,16 +468,16 @@ impl BytecodeGen {
                     loc,
                 )?;
                 store.new_callsite_map_entry(self.iseq_id, bc_pos, callid);
-                Bytecode::from_with_class2(enc_www(200 + kind as u16, op1.0, op2.0, op3.0))
+                Bytecode::from_with_class2(enc_www(160 + kind as u16, op1.0, op2.0, op3.0))
             }
             BytecodeInst::Cmp(kind, ret, (lhs, rhs), optimizable) => {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
                 let op2 = self.slot_id(&lhs);
                 let op3 = self.slot_id(&rhs);
                 let op = if optimizable {
-                    enc_www(154 + kind as u16, op1.0, op2.0, op3.0)
+                    enc_www(150 + kind as u16, op1.0, op2.0, op3.0)
                 } else {
-                    enc_www(134 + kind as u16, op1.0, op2.0, op3.0)
+                    enc_www(140 + kind as u16, op1.0, op2.0, op3.0)
                 };
                 let name = kind.into();
                 let callid = self.new_callsite(
@@ -582,13 +566,13 @@ impl BytecodeGen {
                 let op1 = self.slot_id(&dst);
                 let op2 = self.slot_id(&src);
                 let op3 = outer as u16;
-                Bytecode::from(enc_www(150, op1.0, op2.0, op3))
+                Bytecode::from(enc_www(148, op1.0, op2.0, op3))
             }
             BytecodeInst::StoreDynVar { dst, outer, src } => {
                 let op1 = self.slot_id(&dst);
                 let op2 = outer as u16;
                 let op3 = self.slot_id(&src);
-                Bytecode::from(enc_www(151, op1.0, op2, op3.0))
+                Bytecode::from(enc_www(149, op1.0, op2, op3.0))
             }
             BytecodeInst::InitMethod(fn_info) => Bytecode::from(enc_www_fn_info(170, &fn_info)),
             BytecodeInst::ExpandArray(src, dst, len, rest_pos) => {

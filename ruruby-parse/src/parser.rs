@@ -482,6 +482,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             Punct::Shr => Ok(">>"),
             Punct::BitAnd => Ok("&"),
             Punct::BitOr => Ok("|"),
+            Punct::BitNot => Ok("~"),
 
             Punct::Cmp => Ok("<=>"),
             Punct::Eq => Ok("=="),

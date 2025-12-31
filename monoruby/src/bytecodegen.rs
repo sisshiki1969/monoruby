@@ -1079,22 +1079,19 @@ impl BytecodeGen {
         self.emit(BytecodeInst::LoadSvar { ret, id }, loc);
     }
 
-    fn emit_pos(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
-        if let Some(rhs) = self.is_refer_local(&rhs) {
-            self.emit(BytecodeInst::Pos { ret, src: rhs }, loc);
+    fn emit_unary_op(&mut self, kind: UnOpK, dst: BcReg, recv: Node, loc: Loc) -> Result<()> {
+        if let Some(recv) = self.is_refer_local(&recv) {
+            self.emit(BytecodeInst::UnOp { kind, dst, recv }, loc);
         } else {
-            self.gen_store_expr(ret, rhs)?;
-            self.emit(BytecodeInst::Pos { ret, src: ret }, loc);
-        }
-        Ok(())
-    }
-
-    fn emit_neg(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
-        if let Some(rhs) = self.is_refer_local(&rhs) {
-            self.emit(BytecodeInst::Neg { ret, src: rhs }, loc);
-        } else {
-            self.gen_store_expr(ret, rhs)?;
-            self.emit(BytecodeInst::Neg { ret, src: ret }, loc);
+            self.gen_store_expr(dst, recv)?;
+            self.emit(
+                BytecodeInst::UnOp {
+                    kind,
+                    dst,
+                    recv: dst,
+                },
+                loc,
+            );
         }
         Ok(())
     }
@@ -1105,16 +1102,6 @@ impl BytecodeGen {
         } else {
             self.gen_store_expr(ret, rhs)?;
             self.emit(BytecodeInst::Not { ret, src: ret }, loc);
-        }
-        Ok(())
-    }
-
-    fn emit_bitnot(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
-        if let Some(rhs) = self.is_refer_local(&rhs) {
-            self.emit(BytecodeInst::BitNot { ret, src: rhs }, loc);
-        } else {
-            self.gen_store_expr(ret, rhs)?;
-            self.emit(BytecodeInst::BitNot { ret, src: ret }, loc);
         }
         Ok(())
     }
@@ -1579,6 +1566,7 @@ impl BinOpK {
 pub(crate) enum UnOpK {
     Pos = 0,
     Neg = 1,
+    BitNot = 2,
 }
 
 impl std::fmt::Display for UnOpK {
@@ -1586,18 +1574,28 @@ impl std::fmt::Display for UnOpK {
         let s = match *self {
             UnOpK::Pos => "+",
             UnOpK::Neg => "-",
+            UnOpK::BitNot => "~",
         };
         write!(f, "{}", s)
     }
 }
 
 impl UnOpK {
-    pub(crate) fn generic_func(&self) -> UnaryOpFn {
-        match self {
-            UnOpK::Pos => pos_value,
-            UnOpK::Neg => neg_value,
+    pub(crate) fn from(i: u8) -> Self {
+        match i {
+            0 => UnOpK::Pos,
+            1 => UnOpK::Neg,
+            2 => UnOpK::BitNot,
+            _ => unreachable!(),
         }
     }
+
+    //pub(crate) fn generic_func(&self) -> UnaryOpFn {
+    //    match self {
+    //        UnOpK::Pos => pos_value,
+    //        UnOpK::Neg => neg_value,
+    //    }
+    //}
 }
 
 struct Visitor {

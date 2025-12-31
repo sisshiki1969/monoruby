@@ -1665,3 +1665,28 @@ fn flow_control() {
     "##,
     );
 }
+
+#[test]
+fn define_unary() {
+    run_test_with_prelude(
+        r##"
+        c = C.new
+        [-c, +c, ~c, c.-@, c.+@, c.~]
+        "##,
+        r##"
+        class C
+          def -@
+            "-"
+          end
+            
+          def +@
+            "+"
+          end
+            
+          def ~
+            "~"
+          end
+        end
+        "##,
+    );
+}

@@ -140,7 +140,7 @@ impl BytecodeGen {
                         NodeKind::Integer(i) => self.emit_integer(dst, -i),
                         NodeKind::Imaginary(r) => self.emit_imaginary(dst, -Real::from(r)),
                         NodeKind::Float(f) => self.emit_float(dst, -f),
-                        _ => self.emit_neg(dst, rhs, loc)?,
+                        _ => self.emit_unary_op(UnOpK::Neg, dst, rhs, loc)?,
                     };
                 }
                 UnOp::Pos => {
@@ -148,11 +148,11 @@ impl BytecodeGen {
                         NodeKind::Integer(i) => self.emit_integer(dst, i),
                         NodeKind::Imaginary(r) => self.emit_imaginary(dst, r.into()),
                         NodeKind::Float(f) => self.emit_float(dst, f),
-                        _ => self.emit_pos(dst, rhs, loc)?,
+                        _ => self.emit_unary_op(UnOpK::Pos, dst, rhs, loc)?,
                     };
                 }
                 UnOp::Not => self.emit_not(dst, rhs, loc)?,
-                UnOp::BitNot => self.emit_bitnot(dst, rhs, loc)?,
+                UnOp::BitNot => self.emit_unary_op(UnOpK::BitNot, dst, rhs, loc)?,
             },
             NodeKind::BinOp(op, box lhs, box rhs) => {
                 self.gen_binop(op, lhs, rhs, UseMode2::Store(dst), loc)?;

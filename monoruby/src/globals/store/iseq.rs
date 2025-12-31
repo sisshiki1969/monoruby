@@ -686,28 +686,12 @@ impl ISeqInfo {
                 83 => TraceIr::Raise(SlotId::new(op1_w1)),
                 85 => TraceIr::EnsureEnd,
                 86 => TraceIr::ConcatRegexp(SlotId::from(op1_w1), SlotId::new(op2_w2), op3_w3),
-                126 => {
-                    let kind = UnOpK::Pos;
-                    let dst = SlotId::new(op1_w1);
-                    let src = SlotId::new(op2_w2);
-                    TraceIr::UnOp {
-                        kind,
-                        dst,
-                        src,
-                        ic: pc.classid1(),
-                    }
-                }
-                127 => TraceIr::BitNot {
-                    dst: SlotId::new(op1_w1),
-                    src: SlotId::new(op2_w2),
-                    ic: pc.classid1(),
-                },
-                128 => TraceIr::Not {
+                120 => TraceIr::Not {
                     dst: SlotId::new(op1_w1),
                     src: SlotId::new(op2_w2),
                 },
-                129 => {
-                    let kind = UnOpK::Neg;
+                121..=123 => {
+                    let kind = UnOpK::from(opcode - 121);
                     let dst = SlotId::new(op1_w1);
                     let src = SlotId::new(op2_w2);
                     TraceIr::UnOp {
@@ -742,8 +726,8 @@ impl ISeqInfo {
                         None
                     },
                 },
-                134..=141 => {
-                    let kind = CmpKind::from(opcode - 134);
+                140..=146 => {
+                    let kind = CmpKind::from(opcode - 140);
                     let dst = SlotId::from(op1_w1);
                     let lhs = SlotId::new(op2_w2);
                     let rhs = SlotId::new(op3_w3);
@@ -763,22 +747,22 @@ impl ISeqInfo {
                     }
                 }
 
-                150 => TraceIr::LoadDynVar(
+                148 => TraceIr::LoadDynVar(
                     SlotId::new(op1_w1),
                     DynVar {
                         reg: SlotId::new(op2_w2),
                         outer: op3_w3 as usize,
                     },
                 ),
-                151 => TraceIr::StoreDynVar(
+                149 => TraceIr::StoreDynVar(
                     DynVar {
                         reg: SlotId::new(op1_w1),
                         outer: op2_w2 as usize,
                     },
                     SlotId::new(op3_w3),
                 ),
-                154..=161 => {
-                    let kind = CmpKind::from(opcode - 154);
+                150..=156 => {
+                    let kind = CmpKind::from(opcode - 150);
                     let dst = SlotId::from(op1_w1);
                     let lhs = SlotId::new(op2_w2);
                     let rhs = SlotId::new(op3_w3);
@@ -800,6 +784,26 @@ impl ISeqInfo {
                         rhs,
                         dest_bb: dest,
                         brkind,
+                        ic,
+                    }
+                }
+                160..=168 => {
+                    let kind = BinOpK::from(opcode - 160);
+                    let dst = SlotId::from(op1_w1);
+                    let lhs = SlotId::new(op2_w2);
+                    let rhs = SlotId::new(op3_w3);
+                    let ic = if let Some(lhs_class) = pc.classid1()
+                        && let Some(rhs_class) = pc.classid2()
+                    {
+                        Some((lhs_class, rhs_class))
+                    } else {
+                        None
+                    };
+                    TraceIr::BinOp {
+                        kind,
+                        dst,
+                        lhs,
+                        rhs,
                         ic,
                     }
                 }
@@ -845,26 +849,6 @@ impl ISeqInfo {
                     },
                 },
                 179 => TraceIr::ConcatStr(SlotId::from(op1_w1), SlotId::new(op2_w2), op3_w3),
-                200..=209 => {
-                    let kind = BinOpK::from(opcode - 200);
-                    let dst = SlotId::from(op1_w1);
-                    let lhs = SlotId::new(op2_w2);
-                    let rhs = SlotId::new(op3_w3);
-                    let ic = if let Some(lhs_class) = pc.classid1()
-                        && let Some(rhs_class) = pc.classid2()
-                    {
-                        Some((lhs_class, rhs_class))
-                    } else {
-                        None
-                    };
-                    TraceIr::BinOp {
-                        kind,
-                        dst,
-                        lhs,
-                        rhs,
-                        ic,
-                    }
-                }
                 _ => unreachable!("{:016x}", op1),
             }
         }

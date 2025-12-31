@@ -137,21 +137,14 @@ pub(super) enum BytecodeInst {
     },
     LoadIvar(BcReg, IdentId),  // ret, id  - %ret = @id
     StoreIvar(BcReg, IdentId), // src, id  - @id = %src
-    BitNot {
-        ret: BcReg,
-        src: BcReg,
-    },
-    Pos {
-        ret: BcReg,
-        src: BcReg,
-    },
-    Neg {
-        ret: BcReg,
-        src: BcReg,
-    },
     Not {
         ret: BcReg,
         src: BcReg,
+    },
+    UnOp {
+        kind: UnOpK,
+        dst: BcReg,
+        recv: BcReg,
     },
     BinOp(BinOpK, Option<BcReg>, (BcReg, BcReg)), // kind, ret, (lhs, rhs)
     ///

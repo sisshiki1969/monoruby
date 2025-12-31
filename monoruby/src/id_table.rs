@@ -1,6 +1,6 @@
 use ruruby_parse::CmpKind;
 
-use crate::bytecodegen::BinOpK;
+use crate::bytecodegen::{BinOpK, UnOpK};
 
 use super::*;
 use std::num::NonZeroU32;
@@ -82,6 +82,16 @@ impl From<BinOpK> for IdentId {
             BinOpK::BitXor => IdentId::_BXOR,
             BinOpK::Rem => IdentId::_REM,
             BinOpK::Exp => IdentId::_POW,
+        }
+    }
+}
+
+impl From<UnOpK> for IdentId {
+    fn from(kind: UnOpK) -> Self {
+        match kind {
+            UnOpK::Neg => IdentId::_UMINUS,
+            UnOpK::Pos => IdentId::_UPLUS,
+            UnOpK::BitNot => IdentId::_BNOT,
         }
     }
 }

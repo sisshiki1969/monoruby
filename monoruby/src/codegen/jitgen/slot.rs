@@ -437,6 +437,14 @@ impl SlotContext {
         }
     }
 
+    pub fn is_float_literal(&self, slot: SlotId) -> Option<f64> {
+        if let LinkMode::C(v) = self.mode(slot) {
+            v.try_float()
+        } else {
+            None
+        }
+    }
+
     #[allow(non_snake_case)]
     pub fn coerce_C_f64(&self, slot: SlotId) -> Option<f64> {
         if let LinkMode::C(v) = self.mode(slot) {

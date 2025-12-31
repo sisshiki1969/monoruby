@@ -1100,10 +1100,6 @@ pub(super) enum AsmInst {
     FixnumBitNot {
         reg: GP,
     },
-    GenericUnOp {
-        func: UnaryOpFn,
-        using_xmm: UsingXmm,
-    },
 
     ///
     /// Integer binary operation.

@@ -144,11 +144,6 @@ pub(crate) enum TraceIr {
         dst: SlotId,
         src: SlotId,
     },
-    BitNot {
-        dst: SlotId,
-        src: SlotId,
-        ic: Option<ClassId>,
-    },
     UnOp {
         kind: UnOpK,
         dst: SlotId,
@@ -561,14 +556,6 @@ impl TraceIr {
                 )
             }
             TraceIr::Nil(reg) => format!("{:?} = nil", reg),
-            TraceIr::BitNot {
-                dst,
-                src,
-                ic: src_class,
-            } => {
-                let op1 = format!("{:?} = ~{:?}", dst, src);
-                format!("{:36} [{}]", op1, store.debug_class_name(*src_class),)
-            }
             TraceIr::UnOp {
                 kind,
                 dst,

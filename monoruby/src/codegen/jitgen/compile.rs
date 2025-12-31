@@ -339,24 +339,6 @@ impl<'a> JitContext<'a> {
                     bbctx.def_rax2acc(ir, dst);
                 }
             }
-            TraceIr::BitNot { dst, src, ic } => {
-                let src_class = if let Some(class) = bbctx.class(src) {
-                    Some(class)
-                } else {
-                    ic
-                };
-                if let Some(INTEGER_CLASS) = src_class {
-                    bbctx.load_fixnum(ir, src, GP::Rdi, pc);
-                    ir.push(AsmInst::FixnumBitNot { reg: GP::Rdi });
-                    bbctx.def_reg2acc_fixnum(ir, GP::Rdi, dst);
-                } else {
-                    bbctx.load(ir, src, GP::Rdi);
-                    bbctx.generic_unop(ir, bitnot_value, pc);
-                    bbctx.def_rax2acc(ir, dst);
-                    bbctx.unset_class_version_guard();
-                    bbctx.unset_side_effect_guard();
-                }
-            }
             TraceIr::UnOp { kind, dst, src, ic } => {
                 let class = if let Some(class) = bbctx.class(src) {
                     Some(class)
@@ -365,6 +347,25 @@ impl<'a> JitContext<'a> {
                 };
                 match class {
                     Some(INTEGER_CLASS) => {
+                        if let Some(src) = bbctx.is_fixnum_literal(src) {
+                            match kind {
+                                UnOpK::Neg => {
+                                    if let Some(res) = src.checked_neg()
+                                        && Value::is_i63(res)
+                                    {
+                                        bbctx.def_C(dst, Value::fixnum(res));
+                                        return CompileResult::Continue;
+                                    }
+                                }
+                                UnOpK::Pos => {
+                                    return CompileResult::Continue;
+                                }
+                                UnOpK::BitNot => {
+                                    bbctx.def_C(dst, Value::integer(!src));
+                                    return CompileResult::Continue;
+                                }
+                            };
+                        }
                         bbctx.load_fixnum(ir, src, GP::Rdi, pc);
                         match kind {
                             UnOpK::Neg => {
@@ -375,21 +376,33 @@ impl<'a> JitContext<'a> {
                                 })
                             }
                             UnOpK::Pos => {}
+                            UnOpK::BitNot => {
+                                ir.push(AsmInst::FixnumBitNot { reg: GP::Rdi });
+                            }
                         }
                         bbctx.def_reg2acc_fixnum(ir, GP::Rdi, dst);
                     }
-                    Some(FLOAT_CLASS) => {
+                    Some(FLOAT_CLASS) if kind != UnOpK::BitNot => {
+                        if let Some(f) = bbctx.is_float_literal(src) {
+                            let res = match kind {
+                                UnOpK::Neg => -f,
+                                UnOpK::Pos => f,
+                                UnOpK::BitNot => unreachable!(),
+                            };
+                            bbctx.def_C(dst, Value::float(res));
+                            return CompileResult::Continue;
+                        }
                         let fsrc = bbctx.load_xmm(ir, src, pc);
                         let dst = bbctx.def_F(dst);
                         ir.xmm_move(fsrc, dst);
                         ir.push(AsmInst::XmmUnOp { kind, dst });
                     }
+                    Some(recv_class) => {
+                        return self
+                            .call_unary_method(bbctx, ir, src, recv_class, kind, bc_pos, pc);
+                    }
                     _ => {
-                        bbctx.load(ir, src, GP::Rdi);
-                        bbctx.generic_unop(ir, kind.generic_func(), pc);
-                        bbctx.def_rax2acc(ir, dst);
-                        bbctx.unset_class_version_guard();
-                        bbctx.unset_side_effect_guard();
+                        return CompileResult::Recompile(RecompileReason::NotCached);
                     }
                 }
             }

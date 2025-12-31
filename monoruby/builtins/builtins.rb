@@ -59,7 +59,7 @@ class Array
   end
 
   def each
-    return self.to_enum(:each) if !block_given?
+    return self.to_enum(:each) unless block_given?
     i = 0
     while i < self.size
       yield self[i]
@@ -69,7 +69,7 @@ class Array
   end
 
   def reverse_each
-    return self.to_enum(:reverse_each) if !block_given?
+    return self.to_enum(:reverse_each) unless block_given?
     len = self.size
     if len == 0
       return self
@@ -83,7 +83,7 @@ class Array
   end
 
   def each_with_index
-    return self.to_enum(:each_with_index) if !block_given?
+    return self.to_enum(:each_with_index) unless block_given?
     i = 0
     while i < self.size
       yield self[i], i
@@ -93,7 +93,7 @@ class Array
   end
 
   def map!
-    return self.to_enum(:map!) if !block_given?
+    return self.to_enum(:map!) unless block_given?
     i = 0
     while i < self.size
       self[i] = yield(self[i])
@@ -104,7 +104,7 @@ class Array
   alias collect! map!
 
   def map
-    return self.to_enum(:map) if !block_given?
+    return self.to_enum(:map) unless block_given?
     res = self.dup
     i = 0
     while i < self.size
@@ -130,7 +130,7 @@ class Array
   #end
 
   def bsearch
-    return to_enum(:bsearch) if !block_given?
+    return to_enum(:bsearch) unless block_given?
     low = 0
     high = size
     # 判定モードを最初の呼び出しで決定
@@ -178,7 +178,7 @@ class Hash
   # to_h -> self
   # to_h {|key, value| block } -> Hash
   def to_h
-    return self if !block_given?
+    return self unless block_given?
     h = {}
     self.each {|k, v|
       new_kv = yield k, v
@@ -204,7 +204,7 @@ class Integer
   end
 
   def times
-    return self.to_enum(:times) if !block_given?
+    return self.to_enum(:times) unless block_given?
     i = 0
     while i < self
       yield i
@@ -214,7 +214,7 @@ class Integer
   end
 
   def step(limit, step = 1)
-    return self.to_enum(:step, limit, step) if !block_given?
+    return self.to_enum(:step, limit, step) unless block_given?
     i = self
     while i <= limit
       yield i
@@ -280,7 +280,7 @@ class Range
   alias first begin
   
   def reject
-    return self.to_enum(:reject) if !block_given?
+    return self.to_enum(:reject) unless block_given?
     elem = self.begin
     end_ = self.end
     res = []
@@ -294,7 +294,7 @@ class Range
   end
 
   def bsearch
-    return to_enum(:bsearch) if !block_given?
+    return to_enum(:bsearch) unless block_given?
     self.to_a.bsearch do |x|
       yield(x)
     end

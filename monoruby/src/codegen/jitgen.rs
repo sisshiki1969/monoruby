@@ -420,12 +420,12 @@ impl BBContext {
         }
     }
 
-    pub(super) fn generic_unop(&mut self, ir: &mut AsmIr, func: UnaryOpFn, pc: BytecodePtr) {
-        let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self, pc);
-        ir.push(AsmInst::GenericUnOp { func, using_xmm });
-        ir.handle_error(error);
-    }
+    //pub(super) fn generic_unop(&mut self, ir: &mut AsmIr, func: UnaryOpFn, pc: BytecodePtr) {
+    //    let using_xmm = self.get_using_xmm();
+    //    let error = ir.new_error(self, pc);
+    //    ir.push(AsmInst::GenericUnOp { func, using_xmm });
+    //    ir.handle_error(error);
+    //}
 }
 
 ///

@@ -174,6 +174,7 @@ impl Codegen {
                     );
                 }
                 UnOpK::Pos => {}
+                _ => unreachable!(),
             },
 
             AsmInst::F64ToXmm(f, x) => {
@@ -458,11 +459,6 @@ impl Codegen {
                     salq  R(r), 1;
                     orq   R(r), 1;
                 }
-            }
-            AsmInst::GenericUnOp { func, using_xmm } => {
-                self.xmm_save(using_xmm);
-                self.call_unop(func);
-                self.xmm_restore(using_xmm);
             }
 
             AsmInst::IntegerBinOp {
