@@ -185,9 +185,9 @@ pub(crate) enum TraceIr {
         class: Option<(ClassId, ClassId)>, // (base_class, idx_class)
     },
     IndexAssign {
-        src: SlotId,
         base: SlotId,
         idx: SlotId,
+        src: SlotId,
         class: Option<(ClassId, ClassId)>, // (base_class, idx_class)
     },
     MethodCall {
@@ -467,9 +467,9 @@ impl TraceIr {
                 fmt(store, op1, *class)
             }
             TraceIr::IndexAssign {
-                src,
                 base,
                 idx,
+                src,
                 class,
             } => {
                 let op1 = format!("{:?}:.[{:?}:] = {:?}", base, idx, src,);

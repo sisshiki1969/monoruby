@@ -537,15 +537,6 @@ impl Codegen {
             AsmInst::ArrayIndex => {
                 self.gen_array_index();
             }
-            AsmInst::GenericIndexAssign {
-                src,
-                base,
-                idx,
-                pc,
-                using_xmm,
-            } => {
-                self.generic_index_assign(using_xmm, base, idx, src, pc);
-            }
             AsmInst::ArrayU16IndexAssign {
                 idx,
                 using_xmm,

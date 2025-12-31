@@ -86,39 +86,6 @@ impl Codegen {
     }
 
     ///
-    /// Generic index assign operation.
-    ///
-    /// `base`[[`idx`]] = `src`
-    ///
-    /// ### out
-    /// - rax: result Value
-    ///    
-    /// ### destroy
-    /// - caller save registers
-    ///
-    pub(super) fn generic_index_assign(
-        &mut self,
-        using: UsingXmm,
-        base: SlotId,
-        idx: SlotId,
-        src: SlotId,
-        pc: BytecodePtr,
-    ) {
-        self.xmm_save(using);
-        monoasm! { &mut self.jit,
-            movq rdx, [r14 - (conv(base))]; // base: Value
-            movq rcx, [r14 - (conv(idx))]; // idx: Value
-            movq r8, [r14 - (conv(src))];  // src: Value
-            movq rdi, rbx; // &mut Interp
-            movq rsi, r12; // &mut Globals
-            movq r9, (pc.as_ptr() as usize + 8);
-            movq rax, (runtime::set_index);
-            call rax;
-        };
-        self.xmm_restore(using);
-    }
-
-    ///
     /// Array index assign operation with u16 index `idx`.
     ///
     /// ### in

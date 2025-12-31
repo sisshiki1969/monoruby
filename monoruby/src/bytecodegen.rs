@@ -161,13 +161,19 @@ enum LvalueKind {
         outer: usize,
         dst: BcReg,
     },
+    /// base[index] = src
+    /// src = index + 1
     Index {
         base: BcReg,
-        index: BcReg,
+        index: BcTemp,
     },
+    /// base[index1, index2] = src
+    /// src = index2 + 1
     Index2 {
         base: BcReg,
         index1: BcTemp,
+        // the number of indices
+        num: usize,
     },
     Send {
         recv: BcReg,
@@ -279,6 +285,15 @@ impl CallSite {
         dst: Option<BcReg>,
     ) -> CallSite {
         CallSite::simple(name, 1, rhs, lhs, dst)
+    }
+
+    fn ternary(
+        name: impl Into<Option<IdentId>>,
+        recv: BcReg,
+        idx: BcReg,
+        dst: Option<BcReg>,
+    ) -> CallSite {
+        CallSite::simple(name, 2, idx, recv, dst)
     }
 
     fn has_splat(&self) -> bool {
@@ -1247,19 +1262,18 @@ impl BytecodeGen {
             NodeKind::Index { box base, index } => {
                 if index.len() == 1 {
                     let base = self.push_expr(base.clone())?.into();
-                    let index = self.push_expr(index[0].clone())?.into();
+                    let index = self.push_expr(index[0].clone())?;
+                    self.push(); // register for src.
                     LvalueKind::Index { base, index }
-                } else if index.len() == 2 {
+                } else {
                     let base = self.push_expr(base.clone())?.into();
                     let index1 = self.push_expr(index[0].clone())?;
-                    self.push_expr(index[1].clone())?;
+                    let num = index.len();
+                    for i in 1..index.len() {
+                        self.push_expr(index[i].clone())?;
+                    }
                     self.push(); // register for src.
-                    LvalueKind::Index2 { base, index1 }
-                } else {
-                    return Err(self.unsupported_feature(
-                        &format!("unsupported index. {}", index.len()),
-                        lhs.loc,
-                    ));
+                    LvalueKind::Index2 { base, index1, num }
                 }
             }
             NodeKind::MethodCall {
@@ -1330,13 +1344,16 @@ impl BytecodeGen {
                 self.emit(BytecodeInst::StoreDynVar { dst, outer, src }, loc);
             }
             LvalueKind::Index { base, index } => {
+                self.emit_mov((index + 1).into(), src);
                 self.set_temp(old_temp);
-                self.emit(BytecodeInst::StoreIndex(src, base, index), loc);
+                let src = (index + 1).into();
+                let index = index.into();
+                self.emit(BytecodeInst::StoreIndex { base, index, src }, loc);
             }
-            LvalueKind::Index2 { base, index1 } => {
+            LvalueKind::Index2 { base, index1, num } => {
                 let callsite =
-                    CallSite::simple(IdentId::_INDEX_ASSIGN, 3, index1.into(), base, None);
-                self.emit_mov((index1 + 2).into(), src);
+                    CallSite::simple(IdentId::_INDEX_ASSIGN, num + 1, index1.into(), base, None);
+                self.emit_mov((index1 + num).into(), src);
                 self.set_temp(old_temp);
                 self.emit_call(callsite, loc);
             }

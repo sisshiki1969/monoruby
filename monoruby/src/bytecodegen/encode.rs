@@ -502,6 +502,19 @@ impl BytecodeGen {
                 store.new_callsite_map_entry(self.iseq_id, bc_pos, callid);
                 Bytecode::from_with_class2(enc_www(132, op1.0, op2.0, op3.0))
             }
+            BytecodeInst::StoreIndex { base, index, src } => {
+                let op1 = self.slot_id(&src);
+                let op2 = self.slot_id(&base);
+                let op3 = self.slot_id(&index);
+                let callid = self.new_callsite(
+                    store,
+                    CallSite::ternary(Some(IdentId::_INDEX_ASSIGN), base, index, None),
+                    bc_pos,
+                    loc,
+                )?;
+                store.new_callsite_map_entry(self.iseq_id, bc_pos, callid);
+                Bytecode::from_with_class2(enc_www(133, op1.0, op2.0, op3.0))
+            }
             BytecodeInst::Array(ret, box callsite) => {
                 // 39
                 let op1 = self.slot_id(&ret);
@@ -551,12 +564,7 @@ impl BytecodeGen {
                 let op2 = self.slot_id(&BcReg::from(arg));
                 Bytecode::from(enc_www(86, op1.0, op2.0, len as u16))
             }
-            BytecodeInst::StoreIndex(src, base, idx) => {
-                let op1 = self.slot_id(&src);
-                let op2 = self.slot_id(&base);
-                let op3 = self.slot_id(&idx);
-                Bytecode::from_with_class2(enc_www(133, op1.0, op2.0, op3.0))
-            }
+
             BytecodeInst::ArrayTEq { lhs, rhs } => {
                 let op1 = self.slot_id(&lhs);
                 let op2 = self.slot_id(&rhs);

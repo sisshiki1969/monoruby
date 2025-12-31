@@ -547,6 +547,31 @@ impl<'a> JitContext<'a> {
                 }
                 return CompileResult::Recompile(RecompileReason::NotCached);
             }
+            TraceIr::IndexAssign {
+                base: recv,
+                idx,
+                src,
+                class,
+            } => {
+                assert_eq!(idx.0 + 1, src.0);
+                if let Some((recv_class, idx_class)) = class {
+                    if self.store[recv_class].is_array_ty_instance() && idx_class == INTEGER_CLASS {
+                        bbctx.array_integer_index_assign(ir, self.store, src, recv, idx, pc);
+                        return CompileResult::Continue;
+                    }
+                    return self.call_ternary_method(
+                        bbctx,
+                        ir,
+                        recv,
+                        idx,
+                        recv_class,
+                        IdentId::_INDEX_ASSIGN,
+                        bc_pos,
+                        pc,
+                    );
+                }
+                return CompileResult::Recompile(RecompileReason::NotCached);
+            }
 
             TraceIr::ArrayTEq { lhs, rhs } => {
                 bbctx.write_back_slot(ir, lhs);
@@ -559,25 +584,6 @@ impl<'a> JitContext<'a> {
                 bbctx.unset_side_effect_guard();
             }
 
-            TraceIr::IndexAssign {
-                src,
-                base,
-                idx,
-                class,
-            } => {
-                if let Some((base_class, idx_class)) = class {
-                    if self.store[base_class].is_array_ty_instance() && idx_class == INTEGER_CLASS {
-                        bbctx.array_integer_index_assign(ir, self.store, src, base, idx, pc);
-                    } else {
-                        bbctx.write_back_slots(ir, &[base, idx, src]);
-                        ir.generic_index_assign(bbctx, base, idx, src, pc);
-                        bbctx.unset_class_version_guard();
-                    }
-                    bbctx.unset_side_effect_guard();
-                } else {
-                    return CompileResult::Recompile(RecompileReason::NotCached);
-                }
-            }
             TraceIr::ToA { dst, src } => {
                 let error = ir.new_error(bbctx, pc);
                 bbctx.write_back_slot(ir, src);
@@ -942,6 +948,28 @@ impl<'a> JitContext<'a> {
             assert_eq!(self.store[callid].args, rhs);
             assert_eq!(self.store[callid].pos_num, 1);
             self.compile_method_call(bbctx, ir, pc, lhs_class, fid, callid)
+        } else {
+            CompileResult::Recompile(RecompileReason::MethodNotFound)
+        }
+    }
+
+    fn call_ternary_method(
+        &mut self,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        recv: SlotId,
+        idx: SlotId,
+        recv_class: ClassId,
+        name: impl Into<IdentId>,
+        bc_pos: BcIndex,
+        pc: BytecodePtr,
+    ) -> CompileResult {
+        if let Some(fid) = self.jit_check_method(recv_class, name.into()) {
+            let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
+            assert_eq!(self.store[callid].recv, recv);
+            assert_eq!(self.store[callid].args, idx);
+            assert_eq!(self.store[callid].pos_num, 2);
+            self.compile_method_call(bbctx, ir, pc, recv_class, fid, callid)
         } else {
             CompileResult::Recompile(RecompileReason::MethodNotFound)
         }

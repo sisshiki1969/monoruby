@@ -715,9 +715,9 @@ impl ISeqInfo {
                     },
                 },
                 133 => TraceIr::IndexAssign {
-                    src: SlotId::new(op1_w1),
                     base: SlotId::new(op2_w2),
                     idx: SlotId::new(op3_w3),
+                    src: SlotId::new(op1_w1),
                     class: if let Some(base_class) = pc.classid1()
                         && let Some(idx_class) = pc.classid2()
                     {

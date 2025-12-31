@@ -619,26 +619,6 @@ impl AsmIr {
         self.push(AsmInst::ArrayIndex);
     }
 
-    pub(super) fn generic_index_assign(
-        &mut self,
-        bb: &BBContext,
-        base: SlotId,
-        idx: SlotId,
-        src: SlotId,
-        pc: BytecodePtr,
-    ) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
-        self.push(AsmInst::GenericIndexAssign {
-            src,
-            base,
-            idx,
-            pc,
-            using_xmm,
-        });
-        self.handle_error(error);
-    }
-
     ///
     /// Array index assign operation with u16 index `idx`.
     ///
@@ -1227,24 +1207,6 @@ pub(super) enum AsmInst {
     ///
     ArrayIndex,
 
-    ///
-    /// Generic index assign operation.
-    ///
-    /// Execute `base`[[`idx`]] = `src`.
-    ///
-    /// ### out
-    /// - rax: result Option<Value>
-    ///    
-    /// ### destroy
-    /// - caller save registers
-    ///
-    GenericIndexAssign {
-        src: SlotId,
-        base: SlotId,
-        idx: SlotId,
-        pc: BytecodePtr,
-        using_xmm: UsingXmm,
-    },
     ///
     /// Array index assign operation with u16 index `idx`.
     ///

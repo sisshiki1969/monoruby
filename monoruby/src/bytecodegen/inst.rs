@@ -70,8 +70,12 @@ pub(super) enum BytecodeInst {
         dst: BcReg,
         func: FunctionId,
     },
-    Index(BcReg, BcReg, BcReg),      // ret, base, index
-    StoreIndex(BcReg, BcReg, BcReg), // src, base, index
+    Index(BcReg, BcReg, BcReg), // ret, base, index
+    StoreIndex {
+        base: BcReg,
+        index: BcReg,
+        src: BcReg,
+    },
     LoadConst {
         dst: BcReg,
         base: Option<BcReg>,

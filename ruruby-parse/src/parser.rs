@@ -459,7 +459,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     /// Return IdentId of the operator.
     fn parse_op_definable(&mut self, punct: &Punct) -> Result<&'static str, LexerErr> {
         // TODO: must support
-        // **  ~  ` !  !~
+        // **  ` !  !~
         match punct {
             Punct::Plus => {
                 if self.consume_char('@') {

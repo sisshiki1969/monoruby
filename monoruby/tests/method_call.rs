@@ -1690,3 +1690,24 @@ fn define_unary() {
         "##,
     );
 }
+
+#[test]
+fn define_index() {
+    run_test_with_prelude(
+        r##"
+        c = C.new
+        [c[42], c[10] = 100]
+        "##,
+        r##"
+        class C
+          def [](idx)
+            idx.to_s
+          end
+            
+          def []=(idx, val)
+            idx.to_s + val.to_s
+          end
+        end
+        "##,
+    );
+}
