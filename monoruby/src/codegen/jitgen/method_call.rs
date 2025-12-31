@@ -46,7 +46,6 @@ impl<'a> JitContext<'a> {
         {
             match info {
                 InlineFuncInfo::InlineGen(f) => {
-                    bbctx.load(ir, recv, GP::Rdi);
                     if self.inline_asm(bbctx, ir, f, callsite, recv_class, pc) {
                         bbctx.unset_side_effect_guard();
                         if self.store[func_id].possibly_capture_without_block() {
@@ -108,7 +107,6 @@ impl<'a> JitContext<'a> {
             }
         }
 
-        bbctx.load(ir, recv, GP::Rdi);
         self.call(bbctx, ir, callid, func_id, recv_class, pc)
     }
 
@@ -312,12 +310,14 @@ impl<'a> JitContext<'a> {
             pos_num,
             dst,
             block_fid,
+            recv,
             ..
         } = *callsite;
         assert_eq!(0, pos_num);
         assert!(!callsite.kw_may_exists());
         assert!(block_fid.is_none());
         assert!(callsite.block_arg.is_none());
+        bbctx.load(ir, recv, GP::Rdi);
         bbctx.discard(dst);
         bbctx.writeback_acc(ir);
         if recv_class.is_always_frozen() {
@@ -359,6 +359,7 @@ impl<'a> JitContext<'a> {
             pos_num,
             dst,
             block_fid,
+            recv,
             ..
         } = *callsite;
         assert_eq!(1, pos_num);
@@ -369,6 +370,7 @@ impl<'a> JitContext<'a> {
         } else {
             return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
         };
+        bbctx.load(ir, recv, GP::Rdi);
         let src = bbctx.load_or_reg(ir, args, GP::Rax);
         let is_object_ty = self.store[recv_class].is_object_ty_instance();
         let using_xmm = bbctx.get_using_xmm();
@@ -568,16 +570,13 @@ impl BBContext {
         outer_lfp: Option<Lfp>,
         pc: BytecodePtr,
     ) {
-        ir.reg_move(GP::Rdi, GP::R13);
         self.exec_gc(ir, true, pc);
         let using_xmm = self.get_using_xmm();
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save(using_xmm);
         self.set_arguments(store, ir, callid, callee_fid, pc);
-        if let Some(dst) = store[callid].dst {
-            self.discard(dst);
-        }
+        self.discard(store[callid].dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self, pc);
         self.writeback_acc(ir);
@@ -614,16 +613,13 @@ impl BBContext {
         evict: AsmEvict,
         pc: BytecodePtr,
     ) {
-        ir.reg_move(GP::Rdi, GP::R13);
         self.exec_gc(ir, true, pc);
         let using_xmm = self.get_using_xmm();
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save(using_xmm);
         self.set_arguments(store, ir, callid, callee_fid, pc);
-        if let Some(dst) = store[callid].dst {
-            self.discard(dst);
-        }
+        self.discard(store[callid].dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self, pc);
         self.writeback_acc(ir);
@@ -721,6 +717,10 @@ impl BBContext {
                 self.write_back_slot(ir, block_arg);
             }
 
+            // fill self.
+            let ofs = stack_offset - LFP_SELF;
+            self.fetch_for_callee(ir, callsite.recv, ofs);
+
             // fetch positional arguments.
             let (filled_req, filled_opt, filled_post) = callee.apply_args(pos_num);
 
@@ -790,7 +790,7 @@ impl BBContext {
 
             ir.reg_add(GP::Rsp, stack_offset);
         } else {
-            self.write_back_args(ir, callsite);
+            self.write_back_recv_and_callargs(ir, callsite);
 
             let error = ir.new_error(self, pc);
             ir.push(AsmInst::SetArguments { callid, callee_fid });

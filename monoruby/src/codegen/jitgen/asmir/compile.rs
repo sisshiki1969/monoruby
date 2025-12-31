@@ -1050,11 +1050,10 @@ impl Codegen {
     }
 
     ///
-    /// Set req, opt and rest arguments.
+    /// Set self, req, opt and rest arguments on the callee frame.
     ///
     /// ### out
-    /// - rax: Some(Value)
-    /// - rdi: the number of arguments
+    /// - rax: None for error.
     ///
     /// ### destroy
     /// - caller save registers

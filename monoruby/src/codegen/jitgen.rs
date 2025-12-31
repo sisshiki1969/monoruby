@@ -380,6 +380,17 @@ impl BBContext {
         ir.push(AsmInst::GuardConstBaseClass { base_class, deopt });
     }
 
+    ///
+    /// Execute GC.
+    ///
+    /// ### in
+    /// - rbx: &mut Executor
+    /// - r12: &mut Globals
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    /// - stack
+    ///
     pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool, pc: BytecodePtr) {
         let wb = self.get_gc_write_back();
         let error = ir.new_error(self, pc);

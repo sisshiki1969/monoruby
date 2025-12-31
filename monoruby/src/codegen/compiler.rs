@@ -149,11 +149,11 @@ impl Codegen {
         entry_label: DestLabel,
         class_version: u32,
         class_version_label: DestLabel,
-        is_recompile: Option<RecompileReason>,
+        _is_recompile: Option<RecompileReason>,
     ) -> Vec<(ClassId, Option<IdentId>, FuncId)> {
         #[cfg(feature = "profile")]
         {
-            if let Some(reason) = &is_recompile {
+            if let Some(reason) = &_is_recompile {
                 globals.countup_recompile(globals.store[iseq_id].func_id(), self_class, reason);
             }
         }
@@ -170,8 +170,8 @@ impl Codegen {
                 } else {
                     "whole"
                 },
-                if is_recompile.is_some() { "re" } else { "" },
-                if let Some(reason) = is_recompile {
+                if _is_recompile.is_some() { "re" } else { "" },
+                if let Some(reason) = _is_recompile {
                     format!("({:?}) ", reason)
                 } else {
                     String::new()

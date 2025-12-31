@@ -97,6 +97,9 @@ pub(crate) fn set_frame_block(caller: &CallSiteInfo, callee_lfp: Lfp, caller_lfp
     callee_lfp.set_block(bh);
 }
 
+///
+/// Set self and positional arguments for the callee frame.
+///
 pub(crate) extern "C" fn jit_generic_set_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -106,6 +109,9 @@ pub(crate) extern "C" fn jit_generic_set_arguments(
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
     let callee_fid = meta.func_id();
+    let src = caller_lfp.register_ptr(globals[caller].recv);
+    let dst = callee_lfp.register_ptr(SlotId::self_());
+    unsafe { *dst = *src };
     match positional(vm, globals, caller, callee_fid, callee_lfp, caller_lfp) {
         Ok(_) => Some(Value::nil()),
         Err(mut err) => {

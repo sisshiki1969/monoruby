@@ -157,9 +157,6 @@ impl Codegen {
     ///
     /// Set up a callee method frame for send.
     ///
-    /// ### in
-    /// - r13: receiver
-    ///
     /// ### destroy
     /// - rax
     ///
@@ -208,10 +205,8 @@ impl Codegen {
                 pushq rax;
             );
         }
-        // set self
         monoasm! { &mut self.jit,
-            pushq r13;
-            addq rsp, 64;
+            addq rsp, 56;
         }
     }
 
