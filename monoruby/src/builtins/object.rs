@@ -169,7 +169,7 @@ pub fn object_send(
         return false;
     }
 
-    bb.write_back_callargs_and_dst(ir, callsite);
+    bb.write_back_recv_and_callargs(ir, callsite);
     bb.writeback_acc(ir);
     let using_xmm = bb.get_using_xmm();
     let error = ir.new_error(bb, pc);

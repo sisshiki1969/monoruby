@@ -987,10 +987,10 @@ pub(super) enum AsmInst {
         error: AsmError,
     },
     ///
-    /// Set arguments.
+    /// Set self, req, opt and rest arguments on the callee frame.
     ///
     /// ### out
-    /// - rdi: the number of arguments
+    /// - rax: None for error.
     ///
     /// ### destroy
     /// - caller save registers
@@ -1002,9 +1002,6 @@ pub(super) enum AsmInst {
 
     ///
     /// Set up a callee method frame for send.
-    ///
-    /// ### in
-    /// - r13: receiver
     ///
     /// ### destroy
     /// - rax
@@ -1029,10 +1026,6 @@ pub(super) enum AsmInst {
         meta: Meta,
         offset: usize,
         error: AsmError,
-    },
-    CopyKeywordArgs {
-        callid: CallSiteId,
-        callee_fid: FuncId,
     },
     ///
     /// Call method
@@ -1675,7 +1668,7 @@ impl Codegen {
                     self.gen_handle_error(pc, wb, label.clone());
                     label
                 }
-                _ => unreachable!(),
+                _ => unreachable!("unexpected {side_exit:?}"),
             };
             side_exits.push(label);
         }

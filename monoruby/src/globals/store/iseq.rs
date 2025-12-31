@@ -132,7 +132,6 @@ pub struct ISeqInfo {
     pub lexical_context: Vec<ClassId>,
     pub sourceinfo: SourceInfoRef,
     is_constant_fn: Option<Value>,
-    pub(crate) can_be_inlined: bool,
     ///
     /// JIT code info for each class of *self*.
     ///
@@ -194,7 +193,6 @@ impl ISeqInfo {
             lexical_context: vec![],
             sourceinfo,
             is_constant_fn: None,
-            can_be_inlined: false,
             jit_entry: HashMap::default(),
             bb_info: BasicBlockInfo::default(),
             callsite_map: HashMap::default(),
@@ -403,8 +401,8 @@ impl ISeqInfo {
             .push(ExceptionMapEntry::new(range, rescue, ensure, err_reg));
     }
 
-    pub(crate) fn no_exception(&mut self) -> bool {
-        self.exception_map.is_empty()
+    pub(crate) fn no_ensure(&self) -> bool {
+        self.exception_map.iter().all(|map| map.ensure_pc.is_none())
     }
 
     pub(crate) fn get_exception_map(

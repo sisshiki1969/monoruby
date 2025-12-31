@@ -157,9 +157,6 @@ impl Codegen {
     ///
     /// Set up a callee method frame for send.
     ///
-    /// ### in
-    /// - r13: receiver
-    ///
     /// ### destroy
     /// - rax
     ///
@@ -208,10 +205,8 @@ impl Codegen {
                 pushq rax;
             );
         }
-        // set self
         monoasm! { &mut self.jit,
-            pushq r13;
-            addq rsp, 64;
+            addq rsp, 56;
         }
     }
 
@@ -338,37 +333,6 @@ impl Codegen {
         let src_point = self.jit.get_current_address();
         monoasm! { &mut self.jit,
             call (codeptr - src_point - 5); // CALL_SITE
-        }
-    }
-
-    ///
-    /// Handle keyword arguments
-    ///
-    /// ### destroy
-    /// - rax
-    ///
-    pub(super) fn copy_keyword_args(&mut self, store: &Store, callid: CallSiteId, callee: FuncId) {
-        let CallSiteInfo {
-            kw_pos, kw_args, ..
-        } = &store[callid];
-        let callee = &store[callee];
-        let mut callee_ofs = (callee.kw_reg_pos().0 as i32) * 8 + LFP_SELF;
-        for param_name in callee.kw_names() {
-            match kw_args.get(param_name) {
-                Some(caller) => {
-                    let caller_ofs = (kw_pos.0 as i32 + *caller as i32) * 8 + LFP_SELF;
-                    monoasm! { &mut self.jit,
-                        movq  rax, [r14 - (caller_ofs)];
-                        movq  [rsp - (RSP_LOCAL_FRAME + callee_ofs)], rax;
-                    }
-                }
-                None => {
-                    monoasm! { &mut self.jit,
-                        movq  [rsp - (RSP_LOCAL_FRAME + callee_ofs)], 0;
-                    }
-                }
-            }
-            callee_ofs += 8;
         }
     }
 

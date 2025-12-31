@@ -125,8 +125,8 @@ pub(super) fn gen_class_new(
             ..
         } = *callsite;
         bb.writeback_acc(ir);
-        bb.write_back_callargs_and_dst(ir, callsite);
-        ir.stack2reg(recv, GP::Rdi);
+        bb.load(ir, recv, GP::Rdi);
+        bb.write_back_recv_and_callargs(ir, callsite);
         let using_xmm = bb.get_using_xmm();
         let error = ir.new_error(bb, pc);
         ir.xmm_save(using_xmm);
@@ -201,8 +201,8 @@ fn class_allocate(
         return false;
     }
     let CallSiteInfo { recv, dst, .. } = *callsite;
-    bb.write_back_callargs_and_dst(ir, callsite);
-    ir.stack2reg(recv, GP::Rdi);
+    bb.load(ir, recv, GP::Rdi);
+    bb.write_back_recv_and_callargs(ir, callsite);
     let using_xmm = bb.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _| {

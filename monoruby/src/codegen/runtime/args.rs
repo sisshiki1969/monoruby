@@ -28,14 +28,7 @@ pub(crate) fn set_frame_arguments(
     callid: CallSiteId,
 ) -> Result<()> {
     let callee_fid = callee_lfp.func_id();
-    positional(vm, globals, callid, callee_fid, callee_lfp, caller_lfp)?;
-    let callee = &globals.store[callee_fid];
-    let caller = &globals.store[callid];
-    if !callee.no_keyword() || !caller.kw_may_exists() {
-        handle_keyword(vm, globals, callee_fid, callid, callee_lfp, caller_lfp)?;
-    }
-
-    Ok(())
+    set_callee_frame_arguments(vm, globals, callid, callee_fid, callee_lfp, caller_lfp)
 }
 
 pub(crate) fn set_frame_arguments_simple(
@@ -97,23 +90,30 @@ pub(crate) fn set_frame_block(caller: &CallSiteInfo, callee_lfp: Lfp, caller_lfp
     callee_lfp.set_block(bh);
 }
 
+///
+/// Set self and positional arguments for the callee frame.
+///
 pub(crate) extern "C" fn jit_generic_set_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
-    caller: CallSiteId,
+    callid: CallSiteId,
     callee_lfp: Lfp,
-    meta: Meta,
+    callee_fid: FuncId,
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
-    let callee_fid = meta.func_id();
-    match positional(vm, globals, caller, callee_fid, callee_lfp, caller_lfp) {
-        Ok(_) => Some(Value::nil()),
+    let src = caller_lfp.register_ptr(globals[callid].recv);
+    let dst = callee_lfp.register_ptr(SlotId::self_());
+    unsafe { *dst = *src };
+    match set_callee_frame_arguments(vm, globals, callid, callee_fid, callee_lfp, caller_lfp) {
+        Ok(_) => {}
         Err(mut err) => {
-            err.push_internal_trace(meta.func_id());
+            err.push_internal_trace(callee_fid);
             vm.set_error(err);
-            None
+            return None;
         }
     }
+
+    Some(Value::nil())
 }
 
 fn check_single_arg_expand(
@@ -144,28 +144,28 @@ fn check_single_arg_expand(
 }
 
 ///
-/// Set positional arguments.
+/// Set arguments for the callee frame.
 ///
-fn positional(
+fn set_callee_frame_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
-    caller: CallSiteId,
-    callee: FuncId,
+    callid: CallSiteId,
+    callee_fid: FuncId,
     callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
-    let src = caller_lfp.register_ptr(globals[caller].args) as *mut Value;
+    let src = caller_lfp.register_ptr(globals[callid].args) as *mut Value;
     let dst = callee_lfp.register_ptr(SlotId(1));
-    let pos_args = globals[caller].pos_num;
+    let pos_args = globals[callid].pos_num;
 
-    let ex = if globals[callee].no_keyword() && globals[caller].kw_may_exists() {
+    let ex = if globals[callee_fid].no_keyword() && globals[callid].kw_may_exists() {
         // handle excessive keyword arguments
         let mut h = RubyMap::default();
-        for (k, id) in globals[caller].kw_args.clone().iter() {
-            let v = caller_lfp.register(globals[caller].kw_pos + *id).unwrap();
+        for (k, id) in globals[callid].kw_args.clone().iter() {
+            let v = caller_lfp.register(globals[callid].kw_pos + *id).unwrap();
             h.insert(Value::symbol(*k), v, vm, globals)?;
         }
-        for v in globals[caller]
+        for v in globals[callid]
             .hash_splat_pos
             .clone()
             .into_iter()
@@ -187,43 +187,47 @@ fn positional(
         None
     };
 
-    // single array argument expansion for blocks
-    let splat_pos = &globals[caller].splat_pos;
-    if globals[callee].single_arg_expand()
+    let splat_pos = &globals[callid].splat_pos;
+    if globals[callee_fid].single_arg_expand()
         && let Some((ptr, len)) = check_single_arg_expand(splat_pos, pos_args, src, ex)
     {
-        return fill_positional_args(dst, &globals[callee], ptr, len, true);
-    }
-
-    if splat_pos.is_empty() && ex.is_none() {
-        return fill_positional_args2(dst, &globals[callee], src, pos_args);
-    }
-
-    if pos_args == 1
+        // single array argument expansion for blocks
+        fill_positional_args(dst, &globals[callee_fid], ptr, len, true)?;
+    } else if splat_pos.is_empty() && ex.is_none() {
+        fill_positional_args2(dst, &globals[callee_fid], src, pos_args)?;
+    } else if pos_args == 1
         && ex.is_none()
         && splat_pos == &[0]
         && let Some(ary) = unsafe { *src }.try_array_ty()
     {
-        return fill_positional_args1(dst, &globals[callee], ary.as_ref());
-    }
-
-    let mut buf = vec![];
-    for i in 0..pos_args {
-        let v = unsafe { *src.sub(i) };
-        if splat_pos.contains(&i) {
-            let ary = v
-                .try_array_ty()
-                .expect("internal error: splat arguments must be an array");
-            buf.extend_from_slice(&ary);
-        } else {
+        fill_positional_args1(dst, &globals[callee_fid], ary.as_ref())?;
+    } else {
+        let mut buf = vec![];
+        for i in 0..pos_args {
+            let v = unsafe { *src.sub(i) };
+            if splat_pos.contains(&i) {
+                let ary = v
+                    .try_array_ty()
+                    .expect("internal error: splat arguments must be an array");
+                buf.extend_from_slice(&ary);
+            } else {
+                buf.push(v);
+            }
+        }
+        if let Some(v) = ex {
             buf.push(v);
         }
-    }
-    if let Some(v) = ex {
-        buf.push(v);
+
+        fill_positional_args1(dst, &globals[callee_fid], &buf)?;
     }
 
-    fill_positional_args1(dst, &globals[callee], &buf)
+    // fill keyword arguments
+    let callee = &globals.store[callee_fid];
+    let caller = &globals.store[callid];
+    if !callee.no_keyword() || !caller.kw_may_exists() {
+        handle_keyword(vm, globals, callee_fid, callid, callee_lfp, caller_lfp)?;
+    }
+    Ok(())
 }
 
 ///

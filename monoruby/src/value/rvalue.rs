@@ -1250,7 +1250,7 @@ impl RValue {
 
 impl RValue {
     /// This function is only used for system assertion.
-    pub(crate) fn eq(lhs: &Self, rhs: &Self) -> bool {
+    pub(crate) fn eq(store: &Store, lhs: &Self, rhs: &Self) -> bool {
         unsafe {
             match (lhs.ty(), rhs.ty()) {
                 (ObjTy::BIGNUM, ObjTy::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
@@ -1267,7 +1267,7 @@ impl RValue {
                         return false;
                     }
                     lhs.iter().zip(rhs.iter()).for_each(|(lhs, rhs)| {
-                        Value::assert_eq(*lhs, *rhs);
+                        Value::assert_eq(store, *lhs, *rhs);
                     });
                     true
                 }
@@ -1279,8 +1279,8 @@ impl RValue {
                         return false;
                     }
                     lhs.iter().zip(rhs.iter()).for_each(|(lhs, rhs)| {
-                        Value::assert_eq(lhs.0, rhs.0);
-                        Value::assert_eq(lhs.1, rhs.1);
+                        Value::assert_eq(store, lhs.0, rhs.0);
+                        Value::assert_eq(store, lhs.1, rhs.1);
                     });
                     true
                 }

@@ -145,6 +145,7 @@ fn kernel_nil(
             bb.def_C(dst, Value::bool(false));
         }
     } else {
+        bb.load(ir, recv, GP::Rdi);
         ir.inline(|r#gen, _, _| {
             monoasm! { &mut r#gen.jit,
                 movq rax, (FALSE_VALUE);
@@ -439,7 +440,7 @@ fn assert(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
         expected.inspect(&globals.store),
         actual.inspect(&globals.store)
     );
-    Value::assert_eq(expected, actual);
+    Value::assert_eq(globals, expected, actual);
     Ok(Value::nil())
 }
 

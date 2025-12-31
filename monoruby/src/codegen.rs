@@ -92,6 +92,7 @@ const COUNT_DEOPT_RECOMPILE_SPECIALIZED: i32 = 50;
 ///
 /// General purpose registers.
 ///
+#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum GP {
     Rax = 0,
@@ -100,9 +101,13 @@ pub(crate) enum GP {
     Rsp = 4,
     Rsi = 6,
     Rdi = 7,
-    //R8 = 8,
-    //R9 = 9,
+    R8 = 8,
+    R9 = 9,
+    R10 = 10,
+    R11 = 11,
+    R12 = 12,
     R13 = 13,
+    R14 = 14,
     R15 = 15,
 }
 

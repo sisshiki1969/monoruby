@@ -58,7 +58,6 @@ impl BytecodeGen {
             }
         }
 
-        let can_be_inlined = self.ir.iter().all(|(inst, _)| inst.can_be_inlined());
         let (ops, sourcemap, bbinfo) = self.ir_to_bc(store)?;
         let info = store.iseq_mut(func_id).unwrap();
         info.temp_num = self.temp_num;
@@ -85,7 +84,6 @@ impl BytecodeGen {
             let err_reg = err_reg.map(|reg| self.slot_id(&reg));
             info.exception_push(start..end, rescue, ensure, err_reg);
         }
-        info.can_be_inlined = can_be_inlined && info.no_exception();
         let sp = std::mem::take(&mut self.sp);
         info.sp = sp
             .into_iter()

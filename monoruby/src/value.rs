@@ -161,19 +161,19 @@ impl Value {
 
 impl Value {
     /// This function is only used for system assertion.
-    pub(crate) fn assert_eq(lhs: Self, rhs: Self) {
+    pub(crate) fn assert_eq(store: &Store, lhs: Self, rhs: Self) {
         if lhs == rhs {
             return;
         }
         match (lhs.try_rvalue(), rhs.try_rvalue()) {
             (Some(lhs), Some(rhs)) => {
-                if RValue::eq(lhs, rhs) {
+                if RValue::eq(store, lhs, rhs) {
                     return;
                 }
             }
             _ => {}
         }
-        panic!("{} != {}", lhs, rhs)
+        panic!("{} != {}", lhs.inspect(store), rhs.inspect(store))
     }
 }
 
