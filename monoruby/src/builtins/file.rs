@@ -206,12 +206,6 @@ fn join(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/expand_path.html]
 #[monoruby_builtin]
 fn expand_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    //eprintln!("arg0: {}", lfp.arg(0).inspect(globals));
-    //if let Some(arg1) = lfp.try_arg(1) {
-    //    eprintln!("arg1: {}", arg1.inspect(globals));
-    //} else {
-    //    eprintln!("arg1: None");
-    //}
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(err) => {
@@ -219,7 +213,9 @@ fn expand_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
         }
     };
     let arg0 = to_path(vm, globals, lfp.arg(0))?;
-    let path = if let Some(arg1) = lfp.try_arg(1) {
+    let path = if let Some(arg1) = lfp.try_arg(1)
+        && !arg1.is_nil()
+    {
         let mut path = to_path(vm, globals, arg1)?;
         path.push(arg0);
         path

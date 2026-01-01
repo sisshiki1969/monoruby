@@ -1301,19 +1301,22 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/sort_by.html]
 #[monoruby_builtin]
 fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let bh = lfp.expect_block()?;
-    let data = vm.get_block_data(globals, bh)?;
-    let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
-        let lhs = vm.invoke_block(globals, &data, &[lhs])?;
-        let rhs = vm.invoke_block(globals, &data, &[rhs])?;
-        Executor::compare_values(vm, globals, lhs, rhs)
-    };
-    let mut ary = lfp.self_val().dup().as_array();
-    let gc_enabled = Globals::gc_enable(false);
-    let res = executor::op::sort_by(&mut ary, f);
-    Globals::gc_enable(gc_enabled);
-    res?;
-    Ok(ary.into())
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
+            let lhs = vm.invoke_block(globals, &data, &[lhs])?;
+            let rhs = vm.invoke_block(globals, &data, &[rhs])?;
+            Executor::compare_values(vm, globals, lhs, rhs)
+        };
+        let mut ary = lfp.self_val().dup().as_array();
+        let gc_enabled = Globals::gc_enable(false);
+        let res = executor::op::sort_by(&mut ary, f);
+        Globals::gc_enable(gc_enabled);
+        res?;
+        Ok(ary.into())
+    } else {
+        vm.generate_enumerator(IdentId::get_id("sort_by"), lfp.self_val(), vec![])
+    }
 }
 
 ///
