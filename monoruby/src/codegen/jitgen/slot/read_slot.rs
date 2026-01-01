@@ -41,7 +41,12 @@ impl BBContext {
                 ir.stack2reg(slot, dst);
             }
             LinkMode::V | LinkMode::None => {
-                unreachable!("load() {:?}", self.mode(slot));
+                unreachable!(
+                    "load() {:?} {:?}: {:?}",
+                    slot,
+                    self.mode(slot),
+                    &self.slot_state
+                );
             }
         }
     }

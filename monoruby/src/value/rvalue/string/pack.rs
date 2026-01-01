@@ -3,7 +3,9 @@ use super::*;
 #[derive(Debug)]
 struct TemplateNode {
     template: Template,
-    endless: bool,
+    endian: Endianness,
+    /// repeat times. None for repeat until end.
+    repeat: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -12,17 +14,13 @@ enum Template {
     AsciiTrim,
     CString,
     BitString,
-    BitStringBigEndian,
     Hex,
-    HexBigEndian,
     I8,
     U8,
     I16,
     U16,
-    U16BigEndian,
     I32,
     U32,
-    U32BigEndian,
     I64,
     U64,
     Utf8,
@@ -30,42 +28,10 @@ enum Template {
     Back,
 }
 
-pub(crate) fn unpack1(packed: &[u8], template: &str) -> Result<Value> {
-    let b = packed.iter();
-
-    macro_rules! unpack {
-        ($size: expr, $type: ident, $big_endian: expr) => {
-            for chunk in b.array_chunks::<$size>() {
-                let bytes = chunk.map(|e| *e);
-                let i = if $big_endian {
-                    $type::from_be_bytes(bytes)
-                } else {
-                    $type::from_ne_bytes(bytes)
-                };
-                return Ok(Value::integer(i as i64));
-            }
-        };
-    }
-
-    match parse_template(template)[0].template {
-        Template::I64 => unpack!(8, i64, false),
-        Template::U64 => unpack!(8, u64, false),
-        Template::I32 => unpack!(4, i32, false),
-        Template::U32 => unpack!(4, u32, false),
-        Template::U32BigEndian => unpack!(4, u32, true),
-        Template::I16 => unpack!(2, i16, false),
-        Template::U16 => unpack!(2, u16, false),
-        Template::U16BigEndian => unpack!(2, u16, true),
-        Template::I8 => unpack!(1, i8, false),
-        Template::U8 => unpack!(1, u8, false),
-        Template::Null => {}
-        _ => {
-            return Err(MonorubyErr::argumenterr(
-                "Currently, the template character is not supported.",
-            ))
-        }
-    };
-    Ok(Value::nil())
+#[derive(Debug, Clone, Copy)]
+enum Endianness {
+    Big,
+    Little,
 }
 
 struct ByteIter<'a> {
@@ -86,6 +52,10 @@ impl<'a> ByteIter<'a> {
         } else {
             None
         }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.i >= self.slice.len()
     }
 
     fn back(&mut self) -> Option<()> {
@@ -109,14 +79,34 @@ impl<'a> ByteIter<'a> {
     }
 }
 
-pub(crate) fn unpack(packed: &[u8], template: &str) -> Result<Value> {
+pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value> {
+    let mut template = parse_template(template)?;
+    if once {
+        template.truncate(1);
+    }
+
     let mut b = ByteIter::new(packed);
     let mut ary = Vec::new();
-    let template = parse_template(template);
 
     macro_rules! unpack {
-        ($size: expr, $type: ident, $endless: expr, $big_endian: expr) => {
-            if $endless {
+        ($size: expr, $type: ident, $repeat: expr, $big_endian: expr) => {
+            if let Some(repeat) = $repeat {
+                for _ in 0..repeat {
+                    if let Some(chunk) = b.next_chunk::<$size>() {
+                        let i = if $big_endian {
+                            $type::from_be_bytes(chunk.clone())
+                        } else {
+                            $type::from_ne_bytes(chunk.clone())
+                        };
+                        ary.push(Value::integer(i as i64));
+                    } else {
+                        break;
+                    }
+                    if b.is_empty() {
+                        break;
+                    }
+                }
+            } else {
                 while let Some(chunk) = b.next_chunk::<$size>() {
                     let i = if $big_endian {
                         $type::from_be_bytes(chunk.clone())
@@ -125,66 +115,114 @@ pub(crate) fn unpack(packed: &[u8], template: &str) -> Result<Value> {
                     };
                     ary.push(Value::integer(i as i64));
                 }
-            } else {
-                if let Some(chunk) = b.next_chunk::<$size>() {
-                    let i = if $big_endian {
-                        $type::from_be_bytes(chunk.clone())
-                    } else {
-                        $type::from_ne_bytes(chunk.clone())
-                    };
-                    ary.push(Value::integer(i as i64));
-                } else {
-                    break;
-                }
             }
         };
     }
 
     for template in template {
-        let endless = template.endless;
+        let repeat = template.repeat;
+        let endian = matches!(template.endian, Endianness::Big);
         match template.template {
-            Template::I64 => unpack!(8, i64, endless, false),
-            Template::U64 => unpack!(8, u64, endless, false),
-            Template::I32 => unpack!(4, i32, endless, false),
-            Template::U32 => unpack!(4, u32, endless, false),
-            Template::U32BigEndian => unpack!(4, u32, endless, true),
-            Template::I16 => unpack!(2, i16, endless, false),
-            Template::U16 => unpack!(2, u16, endless, false),
-            Template::U16BigEndian => unpack!(2, u16, endless, true),
-            Template::I8 => unpack!(1, i8, endless, false),
-            Template::U8 => unpack!(1, u8, endless, false),
+            Template::I64 => unpack!(8, i64, repeat, endian),
+            Template::U64 => unpack!(8, u64, repeat, endian),
+            Template::I32 => unpack!(4, i32, repeat, endian),
+            Template::U32 => unpack!(4, u32, repeat, endian),
+            Template::I16 => unpack!(2, i16, repeat, endian),
+            Template::U16 => unpack!(2, u16, repeat, endian),
+            Template::I8 => unpack!(1, i8, repeat, endian),
+            Template::U8 => unpack!(1, u8, repeat, endian),
+            Template::Hex => {
+                let mut s = String::new();
+                if let Some(mut repeat) = repeat {
+                    while repeat > 0 {
+                        if let Some(chunk) = b.next() {
+                            let u = if endian {
+                                chunk
+                            } else {
+                                chunk << 4 | chunk >> 4
+                            };
+                            if repeat >= 2 {
+                                s.push_str(&format!("{:02x}", u));
+                                repeat -= 2;
+                            } else if repeat == 1 {
+                                s.push_str(&format!("{:x}", u >> 4));
+                                repeat -= 1;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                } else {
+                    while let Some(chunk) = b.next() {
+                        let u = if endian {
+                            chunk
+                        } else {
+                            chunk << 4 | chunk >> 4
+                        };
+                        s.push_str(&format!("{:02x}", u));
+                    }
+                }
+                ary.push(Value::string(s));
+            }
             Template::Null => {
-                if endless {
+                if let Some(repeat) = repeat {
+                    for _ in 0..repeat {
+                        if b.next().is_none() {
+                            return Err(MonorubyErr::argumenterr("x outside of string"));
+                        }
+                    }
+                } else {
                     while b.next().is_some() {}
-                } else if b.next().is_none() {
-                    return Err(MonorubyErr::argumenterr("x outside of string"));
                 }
             }
             Template::Back => {
-                if endless {
-                    while b.back().is_some() {}
+                if let Some(repeat) = repeat {
+                    for _ in 0..repeat {
+                        if b.back().is_none() {
+                            return Err(MonorubyErr::argumenterr("X outside of string"));
+                        }
+                    }
                 } else {
-                    b.back();
+                    while b.back().is_some() {}
                 }
             }
             _ => {
                 return Err(MonorubyErr::argumenterr(
                     "Currently, the template character is not supported.",
-                ))
+                ));
             }
         };
     }
-    Ok(Value::array_from_vec(ary))
+
+    Ok(if once {
+        if ary.is_empty() { Value::nil() } else { ary[0] }
+    } else {
+        Value::array_from_vec(ary)
+    })
 }
 
 pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value> {
     let mut packed = Vec::new();
-    let template = parse_template(template);
+    let template = parse_template(template)?;
     let mut iter = ary.iter();
 
     macro_rules! pack {
-        ($store:expr, $size: expr, $type: ident, $endless: expr, $big_endian: expr) => {
-            if $endless {
+        ($store:expr, $size: expr, $type: ident, $repeat: expr, $big_endian: expr) => {
+            if let Some(repeat) = $repeat {
+                for _ in 0..repeat {
+                    if let Some(value) = iter.next() {
+                        let i = value.coerce_to_i64($store)?;
+                        let bytes = if $big_endian {
+                            $type::to_be_bytes(i as $type)
+                        } else {
+                            $type::to_ne_bytes(i as $type)
+                        };
+                        packed.extend_from_slice(&bytes);
+                    } else {
+                        return Err(MonorubyErr::argumenterr("too few arguments"));
+                    }
+                }
+            } else {
                 while let Some(value) = iter.next() {
                     let i = value.coerce_to_i64($store)?;
                     let bytes = if $big_endian {
@@ -194,99 +232,105 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                     };
                     packed.extend_from_slice(&bytes);
                 }
-            } else {
-                if let Some(value) = iter.next() {
-                    let i = value.coerce_to_i64($store)?;
-                    let bytes = if $big_endian {
-                        $type::to_be_bytes(i as $type)
-                    } else {
-                        $type::to_ne_bytes(i as $type)
-                    };
-                    packed.extend_from_slice(&bytes);
-                } else {
-                    return Err(MonorubyErr::argumenterr("too few arguments"));
-                }
             }
         };
     }
 
     for template in template {
+        let endianness = matches!(template.endian, Endianness::Big);
+        let repeat = template.repeat;
         match template.template {
-            Template::I64 => pack!(store, 8, i64, template.endless, false),
-            Template::U64 => pack!(store, 8, u64, template.endless, false),
-            Template::I32 => pack!(store, 4, i32, template.endless, false),
-            Template::U32 => pack!(store, 4, u32, template.endless, false),
-            Template::U32BigEndian => pack!(store, 4, u32, template.endless, true),
-            Template::I16 => pack!(store, 2, i16, template.endless, false),
-            Template::U16 => pack!(store, 2, u16, template.endless, false),
-            Template::U16BigEndian => pack!(store, 2, u16, template.endless, true),
-            Template::I8 => pack!(store, 1, i8, template.endless, false),
-            Template::U8 => pack!(store, 1, u8, template.endless, false),
+            Template::I64 => pack!(store, 8, i64, repeat, endianness),
+            Template::U64 => pack!(store, 8, u64, repeat, endianness),
+            Template::I32 => pack!(store, 4, i32, repeat, endianness),
+            Template::U32 => pack!(store, 4, u32, repeat, endianness),
+            Template::I16 => pack!(store, 2, i16, repeat, endianness),
+            Template::U16 => pack!(store, 2, u16, repeat, endianness),
+            Template::I8 => pack!(store, 1, i8, repeat, endianness),
+            Template::U8 => pack!(store, 1, u8, repeat, endianness),
             Template::Null => {
-                packed.push(0);
+                if let Some(repeat) = repeat {
+                    for _ in 0..repeat {
+                        packed.push(0);
+                    }
+                } else {
+                    // do nothing
+                }
             }
             Template::Back => {
-                packed.pop();
+                if packed.pop().is_none() {
+                    return Err(MonorubyErr::argumenterr("X outside of string"));
+                }
             }
             _ => {
                 return Err(MonorubyErr::argumenterr(
                     "Currently, the template character is not supported.",
-                ))
+                ));
             }
         };
     }
     Ok(Value::bytes(packed))
 }
 
-fn parse_template(template: &str) -> Vec<TemplateNode> {
+fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
     let mut temp = vec![];
     let mut iter = template.chars().peekable();
     while let Some(ch) = iter.next() {
-        let template = match ch {
-            'a' => Template::Ascii,
-            'A' => Template::AsciiTrim,
-            'Z' => Template::CString,
-            'b' => Template::BitString,
-            'B' => Template::BitStringBigEndian,
-            'h' => Template::Hex,
-            'H' => Template::HexBigEndian,
-            'c' => Template::I8,
-            'C' => Template::U8,
-            's' => Template::I16,
-            'S' => Template::U16,
-            'l' | 'i' => Template::I32,
-            'L' | 'I' => Template::U32,
-            'q' => Template::I64,
-            'Q' => Template::U64,
-            'n' => Template::U16BigEndian,
-            'N' => Template::U32BigEndian,
-            'U' => Template::Utf8,
-            'x' => Template::Null,
-            'X' => Template::Back,
-            _ => panic!("Unknown template: {}", ch),
+        let (template, mut endian) = match ch {
+            'a' => (Template::Ascii, Endianness::Little),
+            'A' => (Template::AsciiTrim, Endianness::Little),
+            'Z' => (Template::CString, Endianness::Little),
+            'b' => (Template::BitString, Endianness::Little),
+            'B' => (Template::BitString, Endianness::Big),
+            'h' => (Template::Hex, Endianness::Little),
+            'H' => (Template::Hex, Endianness::Big),
+            'c' => (Template::I8, Endianness::Little),
+            'C' => (Template::U8, Endianness::Little),
+            's' => (Template::I16, Endianness::Little),
+            'S' => (Template::U16, Endianness::Little),
+            'l' | 'i' => (Template::I32, Endianness::Little),
+            'L' | 'I' => (Template::U32, Endianness::Little),
+            'q' => (Template::I64, Endianness::Little),
+            'Q' => (Template::U64, Endianness::Little),
+            'n' => (Template::U16, Endianness::Big),
+            'N' => (Template::U32, Endianness::Big),
+            'U' => (Template::Utf8, Endianness::Little),
+            'x' => (Template::Null, Endianness::Little),
+            'X' => (Template::Back, Endianness::Little),
+            _ => {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "String#pack/unpack Unknown template: {template}",
+                )));
+            }
         };
+        if iter.next_if(|c| c == &'>').is_some() {
+            endian = Endianness::Big;
+        } else if iter.next_if(|c| c == &'<').is_some() {
+            endian = Endianness::Little;
+        }
         if iter.next_if(|c| c == &'*').is_some() {
             temp.push(TemplateNode {
                 template,
-                endless: true,
+                endian,
+                repeat: None,
             });
         } else if let Some(d1) = iter.next_if(|c| c.is_ascii_digit()) {
             let mut count = (d1 as u32 - '0' as u32) as usize;
             while let Some(d) = iter.next_if(|c| c.is_ascii_digit()) {
                 count = count * 10 + (d as u32 - '0' as u32) as usize;
             }
-            for _ in 0..count {
-                temp.push(TemplateNode {
-                    template,
-                    endless: false,
-                });
-            }
+            temp.push(TemplateNode {
+                template,
+                endian,
+                repeat: Some(count),
+            });
         } else {
             temp.push(TemplateNode {
                 template,
-                endless: false,
+                endian,
+                repeat: Some(1),
             });
         }
     }
-    temp
+    Ok(temp)
 }

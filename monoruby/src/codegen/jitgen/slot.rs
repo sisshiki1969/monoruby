@@ -1411,7 +1411,12 @@ impl BBContext {
                 self.def_G(ir, dst, guarded)
             }
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
-                unreachable!("write_back_slot() {:?}", self.mode(src));
+                unreachable!(
+                    "copy_slot() {:?} {:?}: {:?}",
+                    src,
+                    self.mode(src),
+                    &self.slot_state
+                );
             }
         }
     }

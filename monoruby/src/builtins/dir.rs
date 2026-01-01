@@ -72,15 +72,17 @@ enum PathComponent {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/=5b=5d.html]
 #[monoruby_builtin]
-fn glob(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
     let pat_val = lfp.arg(0);
-    let base = if let Some(base) = lfp.try_arg(2) {
-        if base.is_nil() {
-            None
-        } else {
-            Some(base.expect_string(globals)?)
-        }
+    let base = if let Some(base) = lfp.try_arg(2)
+        && !base.is_nil()
+    {
+        Some(
+            base.coerce_to_path_rstring(vm, globals)?
+                .to_str()?
+                .to_string(),
+        )
     } else {
         None
     };
@@ -106,14 +108,23 @@ fn glob(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         PathPair::new(std::env::current_dir().unwrap(), PathBuf::new())
     };
 
-    let glob: Vec<_> = pattern
-        .map(|s| match s {
+    let mut glob: Vec<_> = vec![];
+    for pat in pattern {
+        glob.push(match pat {
             "." => PathComponent::Current,
             ".." => PathComponent::Parent,
             "" => PathComponent::None,
-            s => PathComponent::Name(globset::Glob::new(s).unwrap()),
-        })
-        .collect();
+            s => PathComponent::Name(match globset::Glob::new(s) {
+                Ok(g) => g,
+                Err(e) => {
+                    return Err(MonorubyErr::runtimeerr(format!(
+                        "invalid glob pattern {:?}: {}",
+                        s, e
+                    )));
+                }
+            }),
+        });
+    }
 
     let mut matches = vec![];
     traverse_dir(path, glob, &mut matches)?;

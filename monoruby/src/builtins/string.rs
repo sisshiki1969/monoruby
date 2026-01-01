@@ -59,6 +59,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(STRING_CLASS, "index", string_index, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "rindex", string_rindex, 1, 2, false);
     globals.define_builtin_funcs(STRING_CLASS, "length", &["size"], length, 0);
+    globals.define_builtin_funcs(STRING_CLASS, "bytesize", &[], bytesize, 0);
     globals.define_builtin_func(STRING_CLASS, "ord", ord, 0);
     globals.define_builtin_func_with(STRING_CLASS, "ljust", ljust, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "rjust", rjust, 1, 2, false);
@@ -566,7 +567,7 @@ fn index_assign(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 /// https://hackmd.io/@zuby/BklVXzZ6w
 ///
 pub fn str_next(self_: &str) -> String {
-    use unicode_general_category::{get_general_category, GeneralCategory};
+    use unicode_general_category::{GeneralCategory, get_general_category};
     #[derive(Clone, Copy)]
     struct Char(char);
 
@@ -1543,6 +1544,18 @@ fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 }
 
 ///
+/// ### String#bytesize
+///
+/// - bytesize -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/bytesize.html]
+#[monoruby_builtin]
+fn bytesize(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let length = lfp.self_val().as_rstring_inner().len();
+    Ok(Value::integer(length as i64))
+}
+
+///
 /// ### String#ord
 ///
 /// - ord -> Integer
@@ -1816,11 +1829,7 @@ fn parse_bigint(s: &str, radix: u32) -> BigInt {
         i = i * radix + d;
     }
 
-    if sign == Some(-1) {
-        -i
-    } else {
-        i
-    }
+    if sign == Some(-1) { -i } else { i }
 }
 
 ///
@@ -2293,7 +2302,11 @@ fn b(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn unpack(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    rvalue::unpack(self_.as_rstring_inner(), lfp.arg(0).expect_str(globals)?)
+    rvalue::unpack(
+        self_.as_rstring_inner(),
+        lfp.arg(0).expect_str(globals)?,
+        false,
+    )
 }
 
 ///
@@ -2305,7 +2318,11 @@ fn unpack(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn unpack1(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    rvalue::unpack1(self_.as_rstring_inner(), lfp.arg(0).expect_str(globals)?)
+    rvalue::unpack(
+        self_.as_rstring_inner(),
+        lfp.arg(0).expect_str(globals)?,
+        true,
+    )
 }
 
 ///
@@ -2782,6 +2799,9 @@ mod tests {
     #[test]
     fn length() {
         run_test(r##""本日は快晴なり".length"##);
+        run_test(r##""本日はsunnyなり".length"##);
+        run_test(r##""本日は快晴なり".bytesize"##);
+        run_test(r##""本日はsunnyなり".bytesize"##);
     }
 
     #[test]
@@ -3188,10 +3208,16 @@ mod tests {
 
         run_test(r#"[97, 98].pack("CxC")"#);
         run_test(r#"[97, 98].pack("Cx3C")"#);
+        run_test(r#"[97, 98].pack("Cx*C")"#);
         run_test(r#""abc".unpack("CxC")"#);
         run_test_error(r#""abc".unpack("Cx3C")"#);
         run_test(r#"[97, 98, 99].pack("CCXC")"#);
         run_test(r#""abcdef".unpack("x*XC")"#);
+
+        run_test(r#""\x01\xFE".unpack("h*")"#);
+        run_test(r#""\x01\xFE".unpack("h3")"#);
+        run_test(r#""\x01\xFE".unpack("H*")"#);
+        run_test(r#""\x01\xFE".unpack("H3")"#);
     }
 
     #[test]
