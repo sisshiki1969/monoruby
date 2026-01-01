@@ -124,7 +124,27 @@ module Enumerable
     false
   end
 
-  def one?
+  def none?(*pattern)
+    if block_given?
+      self.each do |x|
+        return false if yield(x)
+      end
+    elsif pattern.empty?
+      self.each do |x|
+        return false if x
+      end
+    elsif pattern.size == 1
+      pat = pattern[0]
+      self.each do |x|
+        return false if pat === x
+      end
+    else
+      raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
+    end
+    true
+  end
+
+  def one?(*pattern)
     n = 0
     if block_given?
       self.each do |x|
@@ -133,13 +153,23 @@ module Enumerable
           return false if n > 1
         end
       end
-    else
+    elsif pattern.empty?
       self.each do |x|
         if x
           n += 1
           return false if n > 1
         end
       end
+    elsif pattern.size == 1
+      pat = pattern[0]
+      self.each do |x|
+        if pat === x
+          n += 1
+          return false if n > 1
+        end
+      end
+    else
+      raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
     end
     n == 1
   end

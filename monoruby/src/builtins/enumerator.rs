@@ -517,20 +517,41 @@ mod tests {
         );
     }
 
-    #[ignore]
     #[test]
     fn one_() {
         run_test(
             r##"
-            require 'set'
             res = []
-            res << Set['ant', 'bear', 'cat'].one? {|word| word.length == 4}  # => true
-            res << Set['ant', 'bear', 'cat'].one? {|word| word.length > 4}   # => false
-            # res << Set['ant', 'bear', 'cat'].one?(/t/)                       # => false
-            res << Set[nil, true, 99].one?                                   # => false
-            res << Set[nil, true, false].one?                                # => true
-            # res << Set[nil, true, 99].one?(Integer)                          # => true
-            res << Set[].one?                                                # => true
+            res << ['ant', 'bear', 'cat'].one? {|word| word.length == 4}  # => true
+            res << ['ant', 'bear', 'cat'].one? {|word| word.length == 3}  # => false
+            res << ['ant', 'bear', 'cat'].one? {|word| word.length > 4}   # => false
+            res << ['ant', 'bear', 'cat'].one?(/t/)                       # => false
+            res << [nil, true, 99].one?                                   # => false
+            res << [nil, true, false].one?                                # => true
+            res << [nil, true, nil].one?                                  # => false
+            res << [nil, true, 99].one?(Integer)                          # => true
+            res << [nil, true, "99"].one?(Integer)                        # => false
+            res << [nil, 7, 99].one?(Integer)                             # => false
+            res << [].one?                                                # => true
+            res
+        "##,
+        );
+    }
+
+    #[test]
+    fn none_() {
+        run_test(
+            r##"
+            f = [nil, true, false]
+            t = [nil, false, nil]
+            a = ["ant", "bear", "cat"]
+            res = []
+            res << a.none? {|word| word.length == 4}  # => false
+            res << a.none? {|word| word.length > 4}   # => true
+            res << t.none?                            # => true
+            res << f.none?                            # => false
+            res << a.none?(Integer)                   # => true
+            res << [].none?                           # => true
             res
         "##,
         );
