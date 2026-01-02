@@ -105,9 +105,16 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 
 pub(super) fn gen_class_new(
     f: extern "C" fn(Value) -> Value,
-) -> impl Fn(&mut BBContext, &mut AsmIr, &JitContext, &Store, &CallSiteInfo, ClassId, BytecodePtr) -> bool
-{
-    move |bb: &mut BBContext,
+) -> impl Fn(
+    &mut AbstractContext,
+    &mut AsmIr,
+    &JitContext,
+    &Store,
+    &CallSiteInfo,
+    ClassId,
+    BytecodePtr,
+) -> bool {
+    move |bb: &mut AbstractContext,
           ir: &mut AsmIr,
           _: &JitContext,
           _: &Store,
@@ -189,7 +196,7 @@ pub(super) fn gen_class_new(
 }
 
 fn class_allocate(
-    bb: &mut BBContext,
+    bb: &mut AbstractContext,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,

@@ -221,7 +221,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn hash_index(
-    bb: &mut BBContext,
+    bb: &mut AbstractContext,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,

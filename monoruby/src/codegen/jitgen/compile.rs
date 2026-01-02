@@ -6,7 +6,7 @@ mod loop_analysis;
 
 impl<'a> JitContext<'a> {
     pub(super) fn traceir_to_asmir(&mut self) {
-        let bbctx = BBContext::new_entry(&self);
+        let bbctx = AbstractContext::new_entry(&self);
         let iseq = self.iseq();
         let (bb_begin, bb_end) = if let Some(pc) = self.position() {
             let start_pos = iseq.get_pc_index(Some(pc));
@@ -121,7 +121,7 @@ impl<'a> JitContext<'a> {
         ir
     }
 
-    fn prepare_next(&mut self, bbctx: BBContext, end: BcIndex) {
+    fn prepare_next(&mut self, bbctx: AbstractContext, end: BcIndex) {
         let next_idx = end + 1;
         let next_bbid = self.iseq().bb_info.is_bb_head(next_idx).unwrap();
         self.new_continue(end, next_bbid, bbctx);
@@ -130,7 +130,7 @@ impl<'a> JitContext<'a> {
     fn compile_instruction(
         &mut self,
         ir: &mut AsmIr,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         bc_pos: BcIndex,
     ) -> CompileResult {
         let pc = self.get_pc(bc_pos);
@@ -913,7 +913,7 @@ impl<'a> JitContext<'a> {
 
     fn call_unary_method(
         &mut self,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         ir: &mut AsmIr,
         recv: SlotId,
         recv_class: ClassId,
@@ -933,7 +933,7 @@ impl<'a> JitContext<'a> {
 
     fn call_binary_method(
         &mut self,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         ir: &mut AsmIr,
         lhs: SlotId,
         rhs: SlotId,
@@ -955,7 +955,7 @@ impl<'a> JitContext<'a> {
 
     fn call_ternary_method(
         &mut self,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         ir: &mut AsmIr,
         recv: SlotId,
         idx: SlotId,
@@ -977,7 +977,7 @@ impl<'a> JitContext<'a> {
 
     fn gen_cond_br(
         &mut self,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         ir: &mut AsmIr,
         src_idx: BcIndex,
         dest: BasicBlockId,
@@ -990,7 +990,7 @@ impl<'a> JitContext<'a> {
 
     fn recompile_and_deopt(
         &self,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         ir: &mut AsmIr,
         reason: RecompileReason,
         pc: BytecodePtr,
@@ -1128,7 +1128,7 @@ enum BinaryOpType {
     Other(Option<ClassId>),
 }
 
-impl BBContext {
+impl AbstractContext {
     fn binary_integer_mode(&self, lhs: SlotId, rhs: SlotId) -> OpMode {
         if let Some(rhs) = self.is_i16_literal(rhs) {
             OpMode::RI(lhs, rhs)

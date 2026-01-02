@@ -3,7 +3,7 @@ use super::*;
 impl<'a> JitContext<'a> {
     pub(in crate::codegen::jitgen) fn load_ivar(
         &mut self,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         ir: &mut AsmIr,
         dst: SlotId,
         self_class: ClassId,
@@ -31,7 +31,7 @@ impl<'a> JitContext<'a> {
 
     pub(in crate::codegen::jitgen) fn store_ivar(
         &mut self,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         ir: &mut AsmIr,
         src: SlotId,
         self_class: ClassId,
@@ -55,7 +55,7 @@ impl<'a> JitContext<'a> {
     }
 }
 
-impl BBContext {
+impl AbstractContext {
     pub(super) fn jit_load_gvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
         self.discard(dst);
         let using_xmm = self.get_using_xmm();

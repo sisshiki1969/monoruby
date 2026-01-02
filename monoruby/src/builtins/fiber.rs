@@ -61,7 +61,7 @@ fn fiber_yield(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Va
 }
 
 fn fiber_yield_inline(
-    bb: &mut BBContext,
+    bb: &mut AbstractContext,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,

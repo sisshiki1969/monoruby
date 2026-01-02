@@ -123,7 +123,7 @@ pub(crate) struct JitStackFrame {
     /// ### value
     /// liveness and backedge info in the loop head.
     ///
-    loop_info: indexmap::IndexMap<BasicBlockId, (Liveness, Option<BBContext>)>,
+    loop_info: indexmap::IndexMap<BasicBlockId, (Liveness, Option<AbstractContext>)>,
     ///
     /// Nested loop count.
     ///
@@ -758,11 +758,11 @@ impl<'a> JitContext<'a> {
     pub(super) fn loop_info(
         &self,
         entry_bb: BasicBlockId,
-    ) -> Option<&(Liveness, Option<BBContext>)> {
+    ) -> Option<&(Liveness, Option<AbstractContext>)> {
         self.current_frame().loop_info.get(&entry_bb)
     }
 
-    pub(super) fn loop_backedge(&self, entry_bb: BasicBlockId) -> Option<&BBContext> {
+    pub(super) fn loop_backedge(&self, entry_bb: BasicBlockId) -> Option<&AbstractContext> {
         self.current_frame()
             .loop_info
             .get(&entry_bb)
@@ -773,7 +773,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         entry_bb: BasicBlockId,
         liveness: Liveness,
-        backedge: Option<BBContext>,
+        backedge: Option<AbstractContext>,
     ) {
         self.current_frame_mut()
             .loop_info
@@ -792,7 +792,7 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().loop_count -= 1;
     }
 
-    pub(super) fn branch_continue(&mut self, bb_begin: BasicBlockId, bbctx: BBContext) {
+    pub(super) fn branch_continue(&mut self, bb_begin: BasicBlockId, bbctx: AbstractContext) {
         self.current_frame_mut().branch_map.insert(
             bb_begin,
             vec![BranchEntry {
@@ -819,7 +819,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         src_bb: BasicBlockId,
         dest_bb: BasicBlockId,
-        bbctx: BBContext,
+        bbctx: AbstractContext,
         mode: BranchMode,
     ) {
         self.current_frame_mut()
@@ -840,7 +840,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         src_idx: BcIndex,
         dest_bb: BasicBlockId,
-        mut bbctx: BBContext,
+        mut bbctx: AbstractContext,
         dest: JitLabel,
     ) {
         bbctx.clear_above_next_sp();
@@ -860,7 +860,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         bc_pos: BcIndex,
         dest_bb: BasicBlockId,
-        mut bbctx: BBContext,
+        mut bbctx: AbstractContext,
     ) {
         bbctx.clear_above_next_sp();
         let src_bb = self.iseq().bb_info.get_bb_id(bc_pos);
@@ -879,7 +879,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         src_idx: BcIndex,
         dest_bb: BasicBlockId,
-        mut bbctx: BBContext,
+        mut bbctx: AbstractContext,
     ) {
         bbctx.clear_above_next_sp();
         let src_bb = self.iseq().bb_info.get_bb_id(src_idx);

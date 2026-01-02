@@ -31,7 +31,7 @@ mod symbol;
 mod time;
 mod true_class;
 
-use crate::codegen::jitgen::BBContext;
+use crate::codegen::jitgen::AbstractContext;
 use codegen::jitgen::asmir::*;
 pub use enumerator::YIELDER;
 pub use monoasm::*;

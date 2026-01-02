@@ -630,7 +630,7 @@ impl SlotContext {
     }
 }
 
-impl BBContext {
+impl AbstractContext {
     ///
     /// Type guard.
     ///
@@ -1034,7 +1034,7 @@ impl LinkMode {
         store: &Store,
         fid: FuncId,
         callid: CallSiteId,
-        bbctx: &BBContext,
+        bbctx: &AbstractContext,
     ) -> Vec<Self> {
         let CallSiteInfo { recv, .. } = &store[callid];
         let recv = bbctx.mode(*recv);
@@ -1045,7 +1045,7 @@ impl LinkMode {
         store: &Store,
         fid: FuncId,
         callid: CallSiteId,
-        bbctx: &BBContext,
+        bbctx: &AbstractContext,
         self_class: ClassId,
     ) -> Vec<Self> {
         let recv = LinkMode::S(Guarded::Class(self_class));
@@ -1056,7 +1056,7 @@ impl LinkMode {
         store: &Store,
         fid: FuncId,
         callid: CallSiteId,
-        bbctx: &BBContext,
+        bbctx: &AbstractContext,
         recv: LinkMode,
     ) -> Vec<Self> {
         let CallSiteInfo {
@@ -1128,7 +1128,7 @@ impl Liveness {
         Self(vec![IsUsed::default(); total_reg_num])
     }
 
-    pub(in crate::codegen::jitgen) fn join(&mut self, bbctx: &BBContext) {
+    pub(in crate::codegen::jitgen) fn join(&mut self, bbctx: &AbstractContext) {
         for (i, is_used) in &mut self.0.iter_mut().enumerate() {
             is_used.join(bbctx.is_used(SlotId(i as u16)));
         }
@@ -1327,7 +1327,7 @@ impl UseTy {
     }
 }
 
-impl BBContext {
+impl AbstractContext {
     ///
     /// Write back the value of the *slot* to the corresponding stack slot.
     ///
@@ -1444,7 +1444,7 @@ impl BBContext {
 }
 
 // write back operations
-impl BBContext {
+impl AbstractContext {
     pub(crate) fn write_back_slots(&mut self, ir: &mut AsmIr, slot: &[SlotId]) {
         slot.iter().for_each(|r| self.write_back_slot(ir, *r));
     }

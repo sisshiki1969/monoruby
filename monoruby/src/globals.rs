@@ -21,7 +21,7 @@ pub use store::*;
 pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| AtomicU8::new(0u8));
 
 pub(crate) type InlineGen = dyn Fn(
-    &mut jitgen::BBContext,
+    &mut jitgen::AbstractContext,
     &mut jitgen::asmir::AsmIr,
     &crate::jitgen::JitContext,
     &Store,

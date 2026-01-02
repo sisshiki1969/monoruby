@@ -156,7 +156,7 @@ struct BranchEntry {
     /// source BasicBlockId of the branch.
     src_bb: Option<BasicBlockId>,
     /// context of the source basic block.
-    bbctx: BBContext,
+    bbctx: AbstractContext,
     /// true if the branch is a continuation branch.
     /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
     mode: BranchMode,
@@ -225,11 +225,29 @@ impl Assumptions {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct AbstractContext {
+    frames: Vec<AbstractFrame>,
+}
+
+impl std::ops::Deref for AbstractContext {
+    type Target = AbstractFrame;
+    fn deref(&self) -> &Self::Target {
+        &self.frames.last().unwrap()
+    }
+}
+
+impl std::ops::DerefMut for AbstractContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.frames.last_mut().unwrap()
+    }
+}
+
 ///
 /// Context of an each basic block.
 ///
 #[derive(Debug, Clone)]
-pub(crate) struct BBContext {
+pub(crate) struct AbstractFrame {
     /// state stack slots.
     slot_state: SlotContext,
     /// stack top register.
@@ -238,20 +256,20 @@ pub(crate) struct BBContext {
     assumptions: Assumptions,
 }
 
-impl std::ops::Deref for BBContext {
+impl std::ops::Deref for AbstractFrame {
     type Target = SlotContext;
     fn deref(&self) -> &Self::Target {
         &self.slot_state
     }
 }
 
-impl std::ops::DerefMut for BBContext {
+impl std::ops::DerefMut for AbstractFrame {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.slot_state
     }
 }
 
-impl BBContext {
+impl AbstractContext {
     fn equiv(&self, other: &Self) -> bool {
         self.slot_state.equiv(&other.slot_state) && self.assumptions == other.assumptions
     }
@@ -259,20 +277,26 @@ impl BBContext {
     fn new_entry(cc: &JitContext) -> Self {
         let next_sp = SlotId(cc.local_num() as u16 + 1);
         match cc.jit_type() {
-            JitType::Entry => Self {
-                slot_state: SlotContext::new_method(cc),
-                next_sp,
-                assumptions: Assumptions::new_entry(cc),
+            JitType::Entry => AbstractContext {
+                frames: vec![AbstractFrame {
+                    slot_state: SlotContext::new_method(cc),
+                    next_sp,
+                    assumptions: Assumptions::new_entry(cc),
+                }],
             },
-            JitType::Loop(_) => Self {
-                slot_state: SlotContext::new_loop(cc),
-                next_sp,
-                assumptions: Assumptions::new_loop(),
+            JitType::Loop(_) => AbstractContext {
+                frames: vec![AbstractFrame {
+                    slot_state: SlotContext::new_loop(cc),
+                    next_sp,
+                    assumptions: Assumptions::new_loop(),
+                }],
             },
-            JitType::Specialized { .. } => Self {
-                slot_state: SlotContext::new_method(cc),
-                next_sp,
-                assumptions: Assumptions::new_specialized(cc),
+            JitType::Specialized { .. } => AbstractContext {
+                frames: vec![AbstractFrame {
+                    slot_state: SlotContext::new_method(cc),
+                    next_sp,
+                    assumptions: Assumptions::new_specialized(cc),
+                }],
             },
         }
     }

@@ -175,7 +175,7 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 }
 
 fn array_allocate(
-    bb: &mut BBContext,
+    bb: &mut AbstractContext,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -268,7 +268,7 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn array_size(
-    bb: &mut BBContext,
+    bb: &mut AbstractContext,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -310,7 +310,7 @@ fn clone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 }
 
 fn array_clone(
-    bb: &mut BBContext,
+    bb: &mut AbstractContext,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -659,7 +659,7 @@ extern "C" fn ary_shl(mut ary: Array, arg: Value) -> Value {
 }
 
 fn array_shl(
-    bb: &mut BBContext,
+    bb: &mut AbstractContext,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,

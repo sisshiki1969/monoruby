@@ -3,7 +3,7 @@ use super::*;
 impl<'a> JitContext<'a> {
     pub(in crate::codegen::jitgen) fn analyse_backedge_fixpoint(
         &mut self,
-        bbctx: BBContext,
+        bbctx: AbstractContext,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
     ) {
@@ -40,8 +40,8 @@ impl<'a> JitContext<'a> {
         &self,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
-        mut bbctx: BBContext,
-    ) -> (Liveness, Option<BBContext>) {
+        mut bbctx: AbstractContext,
+    ) -> (Liveness, Option<AbstractContext>) {
         let pc = self.iseq().get_bb_pc(loop_start);
         let mut ctx = JitContext::loop_analysis(self, pc);
         let mut liveness = Liveness::new(ctx.total_reg_num());
@@ -55,7 +55,7 @@ impl<'a> JitContext<'a> {
             ctx.analyse_basic_block(&mut liveness, bbid, bbid == loop_start, bbid == loop_end);
         }
 
-        let mut backedge: Option<BBContext> = None;
+        let mut backedge: Option<AbstractContext> = None;
         if let Some(branches) = ctx.remove_branch(loop_start) {
             for BranchEntry { src_bb, bbctx, .. } in branches {
                 liveness.join(&bbctx);

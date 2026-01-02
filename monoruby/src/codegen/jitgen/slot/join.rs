@@ -1,6 +1,6 @@
 use super::*;
 
-impl BBContext {
+impl AbstractContext {
     ///
     /// Join contexts.
     ///
@@ -24,7 +24,7 @@ impl BBContext {
     ///  *2: if self == other, Const.
     ///
     /// ~~~
-    pub(in crate::codegen::jitgen) fn join(&mut self, other: &BBContext) {
+    pub(in crate::codegen::jitgen) fn join(&mut self, other: &AbstractContext) {
         self.assumptions.join(&other.assumptions);
         for i in self.all_regs() {
             self.is_used_mut(i).join(other.is_used(i));

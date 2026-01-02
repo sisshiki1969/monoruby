@@ -14,7 +14,7 @@ impl<'a> JitContext<'a> {
     ///
     pub(super) fn compile_method_call(
         &mut self,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         ir: &mut AsmIr,
         pc: BytecodePtr,
         recv_class: ClassId,
@@ -121,7 +121,7 @@ impl<'a> JitContext<'a> {
     ///
     fn guard_class_version(
         &self,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         ir: &mut AsmIr,
         with_recovery: bool,
         pc: BytecodePtr,
@@ -151,7 +151,7 @@ impl<'a> JitContext<'a> {
     ///
     pub(super) fn compile_yield_specialized(
         &mut self,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         ir: &mut AsmIr,
         callid: CallSiteId,
         block: &JitBlockInfo,
@@ -224,7 +224,7 @@ impl<'a> JitContext<'a> {
     ///
     fn call(
         &mut self,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         ir: &mut AsmIr,
         callid: CallSiteId,
         fid: FuncId,
@@ -289,7 +289,7 @@ impl<'a> JitContext<'a> {
 
     fn attr_reader(
         &mut self,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         ir: &mut AsmIr,
         callid: CallSiteId,
         recv_class: ClassId,
@@ -337,7 +337,7 @@ impl<'a> JitContext<'a> {
 
     fn attr_writer(
         &mut self,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         ir: &mut AsmIr,
         callid: CallSiteId,
         recv_class: ClassId,
@@ -381,7 +381,7 @@ impl<'a> JitContext<'a> {
 
     fn specialized_iseq(
         &mut self,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         ir: &mut AsmIr,
         callid: CallSiteId,
         recv_class: ClassId,
@@ -464,7 +464,7 @@ impl<'a> JitContext<'a> {
         args_info: JitArgumentInfo,
         outer: Option<usize>,
         callid: CallSiteId,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
     ) -> SpecializedCompileResult {
         let using_xmm = bbctx.get_using_xmm();
         self.xmm_save(using_xmm);
@@ -513,10 +513,10 @@ impl<'a> JitContext<'a> {
 
     fn inline_asm(
         &mut self,
-        bbctx: &mut BBContext,
+        bbctx: &mut AbstractContext,
         ir: &mut AsmIr,
         f: impl Fn(
-            &mut BBContext,
+            &mut AbstractContext,
             &mut AsmIr,
             &JitContext,
             &Store,
@@ -540,7 +540,7 @@ impl<'a> JitContext<'a> {
     }
 }
 
-impl BBContext {
+impl AbstractContext {
     ///
     /// ### in
     /// rdi: receiver: Value

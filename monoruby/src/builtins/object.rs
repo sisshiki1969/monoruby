@@ -98,7 +98,7 @@ fn object_id(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn object_object_id(
-    bb: &mut BBContext,
+    bb: &mut AbstractContext,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -156,7 +156,7 @@ pub(crate) fn send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
 }
 
 pub fn object_send(
-    bb: &mut BBContext,
+    bb: &mut AbstractContext,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -316,7 +316,7 @@ fn respond_to(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 }
 
 fn object_respond_to(
-    bb: &mut BBContext,
+    bb: &mut AbstractContext,
     _: &mut AsmIr,
     ctx: &JitContext,
     store: &Store,

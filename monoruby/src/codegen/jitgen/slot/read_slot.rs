@@ -1,6 +1,6 @@
 use super::*;
 
-impl BBContext {
+impl AbstractContext {
     ///
     /// load *slot* into *r*.
     ///
@@ -87,7 +87,7 @@ impl BBContext {
     }
 }
 
-impl BBContext {
+impl AbstractContext {
     ///
     /// load *slot* as f64 into xmm register.
     ///
@@ -176,7 +176,7 @@ impl BBContext {
     }
 }
 
-impl BBContext {
+impl AbstractContext {
     ///
     /// fetch *slot* and store in callee stack with `offset`.
     ///

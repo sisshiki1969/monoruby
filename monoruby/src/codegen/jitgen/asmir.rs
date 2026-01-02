@@ -126,16 +126,16 @@ impl AsmIr {
         AsmEvict(i)
     }
 
-    pub(crate) fn new_deopt(&mut self, bb: &BBContext, pc: BytecodePtr) -> AsmDeopt {
+    pub(crate) fn new_deopt(&mut self, bb: &AbstractContext, pc: BytecodePtr) -> AsmDeopt {
         self.new_deopt_with_pc(bb, pc)
     }
 
-    pub(crate) fn new_deopt_with_pc(&mut self, bb: &BBContext, pc: BytecodePtr) -> AsmDeopt {
+    pub(crate) fn new_deopt_with_pc(&mut self, bb: &AbstractContext, pc: BytecodePtr) -> AsmDeopt {
         let i = self.new_label(SideExit::Deoptimize(pc, bb.get_write_back()));
         AsmDeopt(i)
     }
 
-    pub(crate) fn new_error(&mut self, bb: &BBContext, pc: BytecodePtr) -> AsmError {
+    pub(crate) fn new_error(&mut self, bb: &AbstractContext, pc: BytecodePtr) -> AsmError {
         let i = self.new_label(SideExit::Error(pc, bb.get_write_back()));
         AsmError(i)
     }
@@ -322,17 +322,17 @@ impl AsmIr {
         self.push(AsmInst::GuardArrayTy(r, deopt));
     }
 
-    pub(super) fn deopt(&mut self, bb: &BBContext, pc: BytecodePtr) {
+    pub(super) fn deopt(&mut self, bb: &AbstractContext, pc: BytecodePtr) {
         let exit = self.new_deopt(bb, pc);
         self.push(AsmInst::Deopt(exit));
     }
 
-    pub(super) fn check_bop(&mut self, bb: &BBContext, pc: BytecodePtr) {
+    pub(super) fn check_bop(&mut self, bb: &AbstractContext, pc: BytecodePtr) {
         let deopt = self.new_deopt(bb, pc);
         self.push(AsmInst::CheckBOP { deopt });
     }
 
-    pub(super) fn block_arg(&mut self, bb: &BBContext, ret: SlotId, outer: usize, pc: BytecodePtr) {
+    pub(super) fn block_arg(&mut self, bb: &AbstractContext, ret: SlotId, outer: usize, pc: BytecodePtr) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
         self.push(AsmInst::BlockArg {
@@ -343,17 +343,17 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn load_svar(&mut self, bb: &BBContext, id: u32) {
+    pub(super) fn load_svar(&mut self, bb: &AbstractContext, id: u32) {
         let using_xmm = bb.get_using_xmm();
         self.push(AsmInst::LoadSVar { id, using_xmm });
     }
 
-    pub(super) fn to_a(&mut self, bb: &BBContext, src: SlotId) {
+    pub(super) fn to_a(&mut self, bb: &AbstractContext, src: SlotId) {
         let using_xmm = bb.get_using_xmm();
         self.push(AsmInst::ToA { src, using_xmm });
     }
 
-    pub(super) fn concat_str(&mut self, bb: &BBContext, arg: SlotId, len: u16) {
+    pub(super) fn concat_str(&mut self, bb: &AbstractContext, arg: SlotId, len: u16) {
         let using_xmm = bb.get_using_xmm();
         self.push(AsmInst::ConcatStr {
             arg,
@@ -362,7 +362,7 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn concat_regexp(&mut self, bb: &BBContext, arg: SlotId, len: u16) {
+    pub(super) fn concat_regexp(&mut self, bb: &AbstractContext, arg: SlotId, len: u16) {
         let using_xmm = bb.get_using_xmm();
         self.push(AsmInst::ConcatRegexp {
             arg,
@@ -373,7 +373,7 @@ impl AsmIr {
 
     pub(super) fn expand_array(
         &mut self,
-        bb: &BBContext,
+        bb: &AbstractContext,
         dst: SlotId,
         len: u16,
         rest_pos: Option<u16>,
@@ -394,7 +394,7 @@ impl AsmIr {
     ///
     /// If `lhs` is Array, compare `rhs` and each element of `lhs`.
     ///
-    pub(super) fn array_teq(&mut self, bb: &BBContext, lhs: SlotId, rhs: SlotId) {
+    pub(super) fn array_teq(&mut self, bb: &AbstractContext, lhs: SlotId, rhs: SlotId) {
         let using_xmm = bb.get_using_xmm();
         self.push(AsmInst::ArrayTEq {
             lhs,
@@ -403,7 +403,7 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn undef_method(&mut self, bb: &BBContext, undef: IdentId, pc: BytecodePtr) {
+    pub(super) fn undef_method(&mut self, bb: &AbstractContext, undef: IdentId, pc: BytecodePtr) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
         self.push(AsmInst::UndefMethod { undef, using_xmm });
@@ -412,7 +412,7 @@ impl AsmIr {
 
     pub(super) fn alias_method(
         &mut self,
-        bb: &BBContext,
+        bb: &AbstractContext,
         new: IdentId,
         old: IdentId,
         pc: BytecodePtr,
@@ -529,7 +529,7 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn integer_exp(&mut self, bb: &BBContext) {
+    pub(super) fn integer_exp(&mut self, bb: &AbstractContext) {
         let using_xmm = bb.get_using_xmm();
         self.push(AsmInst::IntegerExp { using_xmm });
     }
@@ -629,7 +629,7 @@ impl AsmIr {
     /// ### destroy
     /// - caller save registers
     ///
-    pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, idx: u16, pc: BytecodePtr) {
+    pub(super) fn array_u16_index_assign(&mut self, bb: &AbstractContext, idx: u16, pc: BytecodePtr) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
         self.push(AsmInst::ArrayU16IndexAssign {
@@ -650,7 +650,7 @@ impl AsmIr {
     /// ### destroy
     /// - caller save registers
     ///
-    pub(super) fn array_index_assign(&mut self, bb: &BBContext, pc: BytecodePtr) {
+    pub(super) fn array_index_assign(&mut self, bb: &AbstractContext, pc: BytecodePtr) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
         self.inst

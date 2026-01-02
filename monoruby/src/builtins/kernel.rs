@@ -124,7 +124,7 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn kernel_nil(
-    bb: &mut BBContext,
+    bb: &mut AbstractContext,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -160,7 +160,7 @@ fn kernel_nil(
 }
 
 fn kernel_block_given(
-    bb: &mut BBContext,
+    bb: &mut AbstractContext,
     ir: &mut AsmIr,
     jitctx: &JitContext,
     store: &Store,
