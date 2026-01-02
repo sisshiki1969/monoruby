@@ -51,6 +51,9 @@ impl SlotContext {
 
     pub(super) fn new_method(cc: &JitContext) -> Self {
         let mut ctx = SlotContext::new(cc, LinkMode::V);
+        for i in cc.locals() {
+            ctx.set_mode(i, LinkMode::C(Value::nil()));
+        }
         for i in cc.args() {
             ctx.set_mode(i, LinkMode::default());
         }

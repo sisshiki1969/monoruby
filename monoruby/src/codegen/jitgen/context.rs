@@ -707,6 +707,10 @@ impl<'a> JitContext<'a> {
         self.iseq().local_num()
     }
 
+    pub(super) fn locals(&self) -> std::ops::Range<SlotId> {
+        SlotId(1)..SlotId(self.local_num() as u16 + 1)
+    }
+
     pub(super) fn args(&self) -> std::ops::Range<SlotId> {
         SlotId(1)..SlotId(self.store[self.func_id()].params().total_args() as u16 + 1)
     }
