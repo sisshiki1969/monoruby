@@ -49,7 +49,7 @@ impl<'a> JitContext<'a> {
                     if self.inline_asm(bbctx, ir, f, callsite, recv_class, pc) {
                         bbctx.unset_side_effect_guard();
                         if self.store[func_id].possibly_capture_without_block() {
-                            bbctx.unset_frame_capture_guard(self);
+                            bbctx.unset_no_capture_guard(self);
                         }
                         return CompileResult::Continue;
                     }
@@ -126,7 +126,7 @@ impl<'a> JitContext<'a> {
         with_recovery: bool,
         pc: BytecodePtr,
     ) {
-        if bbctx.class_version_guarded {
+        if bbctx.class_version_guard() {
             return;
         }
         let deopt = ir.new_deopt(bbctx, pc);
@@ -277,22 +277,12 @@ impl<'a> JitContext<'a> {
                 (fid, None)
             }
         };
-        let evict = ir.new_evict();
-        bbctx.send(
-            ir,
-            &self.store,
-            callid,
-            fid,
-            recv_class,
-            evict,
-            outer_lfp,
-            pc,
-        );
+
+        bbctx.send(ir, &self.store, callid, fid, recv_class, outer_lfp, pc);
+
         if self.store[fid].possibly_capture_without_block() || block_fid.is_some() {
-            bbctx.unset_frame_capture_guard(self);
+            bbctx.unset_no_capture_guard(self);
         }
-        bbctx.def_rax2acc(ir, dst);
-        bbctx.immediate_evict(ir, evict, pc);
 
         CompileResult::Continue
     }
@@ -479,12 +469,12 @@ impl<'a> JitContext<'a> {
         let using_xmm = bbctx.get_using_xmm();
         self.xmm_save(using_xmm);
         self.set_callsite(callid);
-        self.set_not_captured(bbctx.frame_capture_guarded);
+        self.set_not_captured(bbctx.no_capture_guard());
         let frame = self.new_specialized_frame(iseq_id, outer, args_info, self_class);
         self.stack_frame.push(frame);
         self.traceir_to_asmir();
         let mut frame = self.stack_frame.pop().unwrap();
-        bbctx.frame_capture_guarded &= self.not_captured();
+        bbctx.join_no_capture_guard(self.not_captured());
         self.unset_callsite();
         self.xmm_restore(using_xmm);
         let pos = self.stack_frame.len() - 1;
@@ -566,17 +556,18 @@ impl BBContext {
         callid: CallSiteId,
         callee_fid: FuncId,
         recv_class: ClassId,
-        evict: AsmEvict,
         outer_lfp: Option<Lfp>,
         pc: BytecodePtr,
     ) {
+        let evict = ir.new_evict();
+        let dst = store[callid].dst;
         self.exec_gc(ir, true, pc);
         let using_xmm = self.get_using_xmm();
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save(using_xmm);
         self.set_arguments(store, ir, callid, callee_fid, pc);
-        self.discard(store[callid].dst);
+        self.discard(dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self, pc);
         self.writeback_acc(ir);
@@ -594,6 +585,8 @@ impl BBContext {
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
+        self.def_rax2acc(ir, dst);
+        self.immediate_evict(ir, evict, pc);
         self.unset_class_version_guard();
         self.unset_side_effect_guard();
     }

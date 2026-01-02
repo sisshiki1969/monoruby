@@ -166,6 +166,65 @@ pub(crate) fn conv(reg: SlotId) -> i32 {
     reg.0 as i32 * 8 + LFP_SELF
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Assumptions {
+    /// guard for class version. true if guaranteed the class version is not changed.
+    class_version_guard: bool,
+    /// guard for frame capture. true if guaranteed the frame is not captured.
+    no_capture_guard: bool,
+    /// guard for side effect. true if guaranteed no side effects are not occurred.
+    ///
+    /// all of the following conditions must be satisfied:
+    /// 1) no exceptions
+    /// 2) no modifications to global variables, class variables, instance variables, and constans.
+    /// 3) no method calls that may have side effects.
+    /// 4) no ensure clauses
+    side_effect_guard: bool,
+}
+
+impl Assumptions {
+    fn new_entry(cc: &JitContext) -> Self {
+        let no_capture_guard = !cc.is_block();
+        let side_effect_guard = cc.iseq().no_ensure();
+        Self {
+            class_version_guard: false,
+            // mehtods are always guarded frame capture but block are not.
+            no_capture_guard,
+            side_effect_guard,
+        }
+    }
+
+    fn new_loop() -> Self {
+        Self {
+            class_version_guard: false,
+            // not guarded frame capture in the compilation for loops
+            no_capture_guard: false,
+            side_effect_guard: false,
+        }
+    }
+
+    fn new_specialized(cc: &JitContext) -> Self {
+        let side_effect_guard = cc.iseq().no_ensure();
+        Self {
+            class_version_guard: false,
+            // specialized methods and blocks are always guarded frame capture
+            no_capture_guard: true,
+            side_effect_guard,
+        }
+    }
+
+    fn join(&mut self, other: &Self) {
+        self.class_version_guard &= other.class_version_guard;
+        self.no_capture_guard &= other.no_capture_guard;
+        self.side_effect_guard &= other.side_effect_guard;
+    }
+
+    fn join_result(&mut self, result: &ResultState) {
+        self.class_version_guard &= result.class_version_guard;
+        self.side_effect_guard &= result.side_effect_guard;
+    }
+}
+
 ///
 /// Context of an each basic block.
 ///
@@ -175,18 +234,8 @@ pub(crate) struct BBContext {
     slot_state: SlotContext,
     /// stack top register.
     next_sp: SlotId,
-    /// guard for class version. true if guaranteed the class version is not changed.
-    class_version_guarded: bool,
-    /// guard for frame capture. true if guaranteed the frame is not captured.
-    frame_capture_guarded: bool,
-    /// guard for side effect. true if guaranteed no side effects are not occurred.
-    ///
-    /// all of the following conditions must be satisfied:
-    /// 1) no exceptions
-    /// 2) no modifications to global variables, class variables, instance variables, and constans.
-    /// 3) no method calls that may have side effects.
-    /// 4) no ensure clauses
-    side_effect_guarded: bool,
+    /// assumptions
+    assumptions: Assumptions,
 }
 
 impl std::ops::Deref for BBContext {
@@ -204,64 +253,57 @@ impl std::ops::DerefMut for BBContext {
 
 impl BBContext {
     fn equiv(&self, other: &Self) -> bool {
-        self.slot_state.equiv(&other.slot_state)
-            && self.class_version_guarded == other.class_version_guarded
-            && self.frame_capture_guarded == other.frame_capture_guarded
-            && self.side_effect_guarded == other.side_effect_guarded
+        self.slot_state.equiv(&other.slot_state) && self.assumptions == other.assumptions
     }
 
     fn new_entry(cc: &JitContext) -> Self {
         let next_sp = SlotId(cc.local_num() as u16 + 1);
-        let side_effect_guarded = cc.iseq().no_ensure();
         match cc.jit_type() {
-            JitType::Generic => {
-                Self {
-                    slot_state: SlotContext::new_method(cc),
-                    next_sp,
-                    class_version_guarded: false,
-                    // mehtods are always guarded frame capture but block are not.
-                    frame_capture_guarded: !cc.is_block(),
-                    side_effect_guarded,
-                }
-            }
-            JitType::Loop(_) => {
-                Self {
-                    slot_state: SlotContext::new_loop(cc),
-                    next_sp,
-                    class_version_guarded: false,
-                    // not guarded frame capture in the compilation for loops
-                    frame_capture_guarded: false,
-                    side_effect_guarded: false,
-                }
-            }
-            JitType::Specialized { .. } => {
-                Self {
-                    slot_state: SlotContext::new_method(cc),
-                    next_sp,
-                    class_version_guarded: false,
-                    // specialized methods and blocks are always guarded frame capture
-                    frame_capture_guarded: true,
-                    side_effect_guarded,
-                }
-            }
+            JitType::Entry => Self {
+                slot_state: SlotContext::new_method(cc),
+                next_sp,
+                assumptions: Assumptions::new_entry(cc),
+            },
+            JitType::Loop(_) => Self {
+                slot_state: SlotContext::new_loop(cc),
+                next_sp,
+                assumptions: Assumptions::new_loop(),
+            },
+            JitType::Specialized { .. } => Self {
+                slot_state: SlotContext::new_method(cc),
+                next_sp,
+                assumptions: Assumptions::new_specialized(cc),
+            },
         }
     }
 
+    fn class_version_guard(&self) -> bool {
+        self.assumptions.class_version_guard
+    }
+
+    fn no_capture_guard(&self) -> bool {
+        self.assumptions.no_capture_guard
+    }
+
+    fn join_no_capture_guard(&mut self, other: bool) {
+        self.assumptions.no_capture_guard &= other;
+    }
+
     fn set_class_version_guard(&mut self) {
-        self.class_version_guarded = true;
+        self.assumptions.class_version_guard = true;
     }
 
     fn unset_class_version_guard(&mut self) {
-        self.class_version_guarded = false;
+        self.assumptions.class_version_guard = false;
     }
 
-    fn unset_frame_capture_guard(&mut self, jitctx: &mut JitContext) {
-        jitctx.unset_frame_capture_guard();
-        self.frame_capture_guarded = false;
+    fn unset_no_capture_guard(&mut self, jitctx: &mut JitContext) {
+        jitctx.unset_no_capture_guard();
+        self.assumptions.no_capture_guard = false;
     }
 
     fn unset_side_effect_guard(&mut self) {
-        self.side_effect_guarded = false;
+        self.assumptions.side_effect_guard = false;
     }
 
     fn join_entries(entries: &[BranchEntry]) -> Self {
@@ -276,8 +318,8 @@ impl BBContext {
         let ret = self.mode(slot).as_result();
         ResultState {
             ret,
-            class_version_guard: self.class_version_guarded,
-            side_effect_guard: self.side_effect_guarded,
+            class_version_guard: self.assumptions.class_version_guard,
+            side_effect_guard: self.assumptions.side_effect_guard,
         }
     }
 
@@ -338,8 +380,7 @@ impl BBContext {
         result: Option<ResultState>,
     ) -> CompileResult {
         if let Some(result) = result {
-            self.class_version_guarded &= result.class_version_guard;
-            self.side_effect_guarded &= result.side_effect_guard;
+            self.assumptions.join_result(&result);
             match result.ret {
                 ReturnValue::UD => {
                     ir.push(AsmInst::Unreachable);
@@ -561,7 +602,7 @@ impl Codegen {
         let jit_type = if let Some(pos) = position {
             JitType::Loop(pos)
         } else {
-            JitType::Generic
+            JitType::Entry
         };
 
         let mut ctx = JitContext::create(

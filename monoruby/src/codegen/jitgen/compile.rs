@@ -144,7 +144,7 @@ impl<'a> JitContext<'a> {
                 assert!(!self.is_loop());
                 ir.push(AsmInst::Init {
                     info: fn_info,
-                    not_captured: bbctx.frame_capture_guarded,
+                    not_captured: bbctx.no_capture_guard(),
                 });
                 ir.push(AsmInst::Preparation);
             }

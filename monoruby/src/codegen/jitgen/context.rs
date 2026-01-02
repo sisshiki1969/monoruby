@@ -7,7 +7,7 @@ use super::*;
 #[derive(Debug, Clone)]
 pub(super) enum JitType {
     /// JIT for method / block.
-    Generic,
+    Entry,
     /// specialized JIT for method / block.
     Specialized {
         idx: usize,
@@ -633,7 +633,7 @@ impl<'a> JitContext<'a> {
 
     ///
     /// Unset frame capture guard in the outer `JitFrame`s.
-    pub(super) fn unset_frame_capture_guard(&mut self) {
+    pub(super) fn unset_no_capture_guard(&mut self) {
         let mut i = self.stack_frame.len() - 1;
         loop {
             let frame = &mut self.stack_frame[i];

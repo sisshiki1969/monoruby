@@ -1486,7 +1486,7 @@ impl BBContext {
     }
 
     pub(super) fn write_back_locals_if_captured(&mut self, ir: &mut AsmIr) {
-        if !self.frame_capture_guarded {
+        if !self.no_capture_guard() {
             let wb = self.get_locals_write_back();
             ir.push(AsmInst::WriteBackIfCaptured(wb));
         }
