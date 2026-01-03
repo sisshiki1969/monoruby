@@ -61,7 +61,7 @@ fn fiber_yield(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Va
 }
 
 fn fiber_yield_inline(
-    bb: &mut AbstractContext,
+    state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -75,8 +75,8 @@ fn fiber_yield_inline(
     let CallSiteInfo {
         args, pos_num, dst, ..
     } = *callsite;
-    let using_xmm = bb.get_using_xmm();
-    let error = ir.new_error(bb, pc);
+    let using_xmm = state.get_using_xmm();
+    let error = ir.new_error(state, pc);
     ir.xmm_save(using_xmm);
     if pos_num == 0 {
         ir.inline(move |r#gen, _, _| {
@@ -86,9 +86,9 @@ fn fiber_yield_inline(
             }
         });
     } else if pos_num == 1 {
-        bb.load(ir, args, GP::Rsi);
+        state.load(ir, args, GP::Rsi);
     } else {
-        bb.write_back_recv_and_callargs(ir, callsite);
+        state.write_back_recv_and_callargs(ir, callsite);
         ir.inline(move |r#gen, _, _| {
             // TODO: we must check if the parent fiber exits.
             monoasm! { &mut r#gen.jit,
@@ -110,7 +110,7 @@ fn fiber_yield_inline(
     });
     ir.xmm_restore(using_xmm);
     ir.handle_error(error);
-    bb.def_rax2acc(ir, dst);
+    state.def_rax2acc(ir, dst);
     true
 }
 

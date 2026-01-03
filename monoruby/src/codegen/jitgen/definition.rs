@@ -1,6 +1,6 @@
 use super::*;
 
-impl AbstractContext {
+impl AbstractState {
     pub(super) fn class_def(
         &mut self,
         ir: &mut AsmIr,

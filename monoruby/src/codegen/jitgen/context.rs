@@ -127,7 +127,7 @@ pub(crate) struct JitStackFrame {
     /// ### value
     /// liveness and backedge info in the loop head.
     ///
-    loop_info: indexmap::IndexMap<BasicBlockId, (Liveness, Option<AbstractContext>)>,
+    loop_info: indexmap::IndexMap<BasicBlockId, (Liveness, Option<AbstractState>)>,
     ///
     /// Nested loop count.
     ///
@@ -140,7 +140,7 @@ pub(crate) struct JitStackFrame {
     ///
     /// Map for target contexts of backward branches.
     ///
-    backedge_map: HashMap<BasicBlockId, SlotContext>,
+    backedge_map: HashMap<BasicBlockId, SlotState>,
     ///
     /// Contexts for returning to this frame.
     ///
@@ -758,11 +758,11 @@ impl<'a> JitContext<'a> {
     pub(super) fn loop_info(
         &self,
         entry_bb: BasicBlockId,
-    ) -> Option<&(Liveness, Option<AbstractContext>)> {
+    ) -> Option<&(Liveness, Option<AbstractState>)> {
         self.current_frame().loop_info.get(&entry_bb)
     }
 
-    pub(super) fn loop_backedge(&self, entry_bb: BasicBlockId) -> Option<&AbstractContext> {
+    pub(super) fn loop_backedge(&self, entry_bb: BasicBlockId) -> Option<&AbstractState> {
         self.current_frame()
             .loop_info
             .get(&entry_bb)
@@ -773,7 +773,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         entry_bb: BasicBlockId,
         liveness: Liveness,
-        backedge: Option<AbstractContext>,
+        backedge: Option<AbstractState>,
     ) {
         self.current_frame_mut()
             .loop_info
@@ -792,7 +792,7 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().loop_count -= 1;
     }
 
-    pub(super) fn branch_continue(&mut self, bb_begin: BasicBlockId, state: AbstractContext) {
+    pub(super) fn branch_continue(&mut self, bb_begin: BasicBlockId, state: AbstractState) {
         self.current_frame_mut().branch_map.insert(
             bb_begin,
             vec![BranchEntry {
@@ -807,7 +807,7 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().branch_map.remove(&bb)
     }
 
-    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<SlotContext> {
+    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<SlotState> {
         self.current_frame_mut().backedge_map.remove(&bb)
     }
 
@@ -819,7 +819,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         src_bb: BasicBlockId,
         dest_bb: BasicBlockId,
-        state: AbstractContext,
+        state: AbstractState,
         mode: BranchMode,
     ) {
         self.current_frame_mut()
@@ -834,13 +834,13 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Add new branch from *src_idx* to *dest* with the context *bbctx*.
+    /// Add new branch from *src_idx* to *dest* with `state`.
     ///
     pub(super) fn new_side_branch(
         &mut self,
         src_idx: BcIndex,
         dest_bb: BasicBlockId,
-        mut state: AbstractContext,
+        mut state: AbstractState,
         dest: JitLabel,
     ) {
         state.clear_above_next_sp();
@@ -854,13 +854,13 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Add new branch from *src_idx* to *dest* with the context *bbctx*.
+    /// Add new branch from *src_idx* to *dest* with `state`.
     ///
     pub(super) fn new_branch(
         &mut self,
         bc_pos: BcIndex,
         dest_bb: BasicBlockId,
-        mut state: AbstractContext,
+        mut state: AbstractState,
     ) {
         state.clear_above_next_sp();
         let src_bb = self.iseq().bb_info.get_bb_id(bc_pos);
@@ -873,13 +873,13 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Add new continuation branch from *src_idx* to *dest* with the context *bbctx*.
+    /// Add new continuation branch from *src_idx* to *dest* with `state`.
     ///
     pub(super) fn new_continue(
         &mut self,
         src_idx: BcIndex,
         dest_bb: BasicBlockId,
-        mut state: AbstractContext,
+        mut state: AbstractState,
     ) {
         state.clear_above_next_sp();
         let src_bb = self.iseq().bb_info.get_bb_id(src_idx);
@@ -892,16 +892,16 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Add new backward branch from *src_idx* to *dest* with the context *bbctx*.
+    /// Add new backward branch from *src_idx* to *dest* with `state`.
     ///
-    pub(super) fn new_backedge(&mut self, target: SlotContext, bb_pos: BasicBlockId) {
+    pub(super) fn new_backedge(&mut self, target: SlotState, bb_pos: BasicBlockId) {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:{bb_pos:?} {target:?}");
         self.current_frame_mut().backedge_map.insert(bb_pos, target);
     }
 
     ///
-    /// Add new return branch with the context *bbctx*.
+    /// Add new return branch with `state`.
     ///
     pub(super) fn new_return(&mut self, ret: ResultState) {
         if let Some(pos) = self.caller_pos() {
@@ -912,7 +912,7 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Add new return branch with the context *bbctx*.
+    /// Add new return branch with `state`.
     ///
     pub(super) fn new_method_return(&mut self, ret: ResultState) {
         if let Some(pos) = self.method_caller_pos() {
@@ -923,7 +923,7 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Add new return branch with the context *bbctx*.
+    /// Add new return branch with `state`.
     ///
     pub(super) fn new_break(&mut self, ret: ResultState) {
         if let Some(pos) = self.iter_caller_pos() {

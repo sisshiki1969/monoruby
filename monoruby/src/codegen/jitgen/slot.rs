@@ -4,7 +4,7 @@ mod join;
 mod read_slot;
 
 #[derive(Clone, Default)]
-pub(crate) struct SlotContext {
+pub(crate) struct SlotState {
     /// Slot states.
     slots: Vec<LinkMode>,
     /// Liveness information.
@@ -15,7 +15,7 @@ pub(crate) struct SlotContext {
     local_num: usize,
 }
 
-impl std::fmt::Debug for SlotContext {
+impl std::fmt::Debug for SlotState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{{ ")?;
         for (i, state) in self.slots.iter().enumerate() {
@@ -26,12 +26,12 @@ impl std::fmt::Debug for SlotContext {
     }
 }
 
-impl SlotContext {
+impl SlotState {
     fn new(cc: &JitContext, default: LinkMode) -> Self {
         let total_reg_num = cc.total_reg_num();
         let local_num = cc.local_num();
         let self_class = Guarded::from_class(cc.self_class());
-        let mut ctx = SlotContext {
+        let mut ctx = SlotState {
             slots: vec![default; total_reg_num],
             liveness: vec![IsUsed::default(); total_reg_num],
             xmm: {
@@ -46,11 +46,11 @@ impl SlotContext {
     }
 
     pub(super) fn new_loop(cc: &JitContext) -> Self {
-        SlotContext::new(cc, LinkMode::default())
+        SlotState::new(cc, LinkMode::default())
     }
 
     pub(super) fn new_method(cc: &JitContext) -> Self {
-        let mut ctx = SlotContext::new(cc, LinkMode::V);
+        let mut ctx = SlotState::new(cc, LinkMode::V);
         for i in cc.locals() {
             ctx.set_mode(i, LinkMode::C(Value::nil()));
         }
@@ -164,7 +164,7 @@ impl SlotContext {
     }
 }
 
-impl SlotContext {
+impl SlotState {
     fn set_mode(&mut self, slot: SlotId, mode: LinkMode) {
         self.slots[slot.0 as usize] = mode;
     }
@@ -330,7 +330,7 @@ impl SlotContext {
     }
 }
 
-impl SlotContext {
+impl SlotState {
     // APIs for 'def'
 
     ///
@@ -423,7 +423,7 @@ impl SlotContext {
     }
 }
 
-impl SlotContext {
+impl SlotState {
     pub fn is_symbol_literal(&self, slot: SlotId) -> Option<IdentId> {
         if let LinkMode::C(v) = self.mode(slot) {
             v.try_symbol()
@@ -710,7 +710,7 @@ impl AbstractFrame {
     }
 }
 
-impl SlotContext {
+impl SlotState {
     pub(crate) fn get_using_xmm(&self) -> UsingXmm {
         let mut b = UsingXmm::new();
         self.xmm.iter().enumerate().for_each(|(i, v)| {
@@ -1034,29 +1034,29 @@ impl LinkMode {
         store: &Store,
         fid: FuncId,
         callid: CallSiteId,
-        bbctx: &AbstractContext,
+        state: &AbstractState,
     ) -> Vec<Self> {
         let CallSiteInfo { recv, .. } = &store[callid];
-        let recv = bbctx.mode(*recv);
-        Self::from_caller_inner(store, fid, callid, bbctx, recv)
+        let recv = state.mode(*recv);
+        Self::from_caller_inner(store, fid, callid, state, recv)
     }
 
     pub(super) fn from_caller_yield(
         store: &Store,
         fid: FuncId,
         callid: CallSiteId,
-        bbctx: &AbstractContext,
+        state: &AbstractState,
         self_class: ClassId,
     ) -> Vec<Self> {
         let recv = LinkMode::S(Guarded::Class(self_class));
-        Self::from_caller_inner(store, fid, callid, bbctx, recv)
+        Self::from_caller_inner(store, fid, callid, state, recv)
     }
 
     fn from_caller_inner(
         store: &Store,
         fid: FuncId,
         callid: CallSiteId,
-        bbctx: &AbstractContext,
+        state: &AbstractState,
         recv: LinkMode,
     ) -> Vec<Self> {
         let CallSiteInfo {
@@ -1071,19 +1071,19 @@ impl LinkMode {
         slots.push(recv);
         let (filled_req, filled_opt, filled_post) = info.apply_args(*pos_num);
         for i in 0..filled_req {
-            slots.push(bbctx.mode(*args + i));
+            slots.push(state.mode(*args + i));
         }
         for _ in filled_req..info.req_num() {
             slots.push(Self::nil());
         }
         for i in filled_req..filled_req + filled_opt {
-            slots.push(bbctx.mode(*args + i));
+            slots.push(state.mode(*args + i));
         }
         for _ in filled_opt..info.opt_num() {
             slots.push(Self::none());
         }
         for i in filled_req + filled_opt..filled_req + filled_opt + filled_post {
-            slots.push(bbctx.mode(*args + i));
+            slots.push(state.mode(*args + i));
         }
         for _ in filled_post..info.post_num() {
             slots.push(Self::nil());
@@ -1095,7 +1095,7 @@ impl LinkMode {
         assert_eq!(kw.0 as usize, slots.len());
         for k in info.kw_names() {
             if let Some(p) = kw_args.get(k) {
-                slots.push(bbctx.mode(*kw_pos + *p));
+                slots.push(state.mode(*kw_pos + *p));
             } else {
                 slots.push(Self::none());
             }
@@ -1128,9 +1128,9 @@ impl Liveness {
         Self(vec![IsUsed::default(); total_reg_num])
     }
 
-    pub(in crate::codegen::jitgen) fn join(&mut self, bbctx: &AbstractContext) {
+    pub(in crate::codegen::jitgen) fn join(&mut self, state: &AbstractState) {
         for (i, is_used) in &mut self.0.iter_mut().enumerate() {
-            is_used.join(bbctx.is_used(SlotId(i as u16)));
+            is_used.join(state.is_used(SlotId(i as u16)));
         }
     }
 
@@ -1362,11 +1362,6 @@ impl AbstractFrame {
                 unreachable!("write_back_slot() {slot:?} {:?}", self.mode(slot));
             }
         }
-    }
-
-    fn xmm_swap(&mut self, ir: &mut AsmIr, l: Xmm, r: Xmm) {
-        self.slot_state.xmm_swap(l, r);
-        ir.push(AsmInst::XmmSwap(l, r));
     }
 
     ///

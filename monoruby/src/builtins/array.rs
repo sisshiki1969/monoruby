@@ -175,7 +175,7 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 }
 
 fn array_allocate(
-    bb: &mut AbstractContext,
+    state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -187,7 +187,7 @@ fn array_allocate(
         return false;
     }
     let dst = callsite.dst;
-    bb.load(ir, callsite.recv, GP::Rdi);
+    state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _| {
         monoasm! { &mut r#gen.jit,
             movq rax, (allocate_array);
@@ -195,7 +195,7 @@ fn array_allocate(
         }
     });
 
-    bb.def_reg2acc(ir, GP::Rax, dst);
+    state.def_reg2acc(ir, GP::Rax, dst);
     true
 }
 
@@ -268,7 +268,7 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn array_size(
-    bb: &mut AbstractContext,
+    state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -280,7 +280,7 @@ fn array_size(
         return false;
     }
     let dst = callsite.dst;
-    bb.load(ir, callsite.recv, GP::Rdi);
+    state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _| {
         r#gen.get_array_length();
         monoasm! { &mut r#gen.jit,
@@ -289,7 +289,7 @@ fn array_size(
         }
     });
 
-    bb.def_reg2acc_fixnum(ir, GP::Rax, dst);
+    state.def_reg2acc_fixnum(ir, GP::Rax, dst);
     true
 }
 
@@ -310,7 +310,7 @@ fn clone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 }
 
 fn array_clone(
-    bb: &mut AbstractContext,
+    state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -322,8 +322,8 @@ fn array_clone(
         return false;
     }
     let dst = callsite.dst;
-    bb.load(ir, callsite.recv, GP::Rdi);
-    let using_xmm = bb.get_using_xmm();
+    state.load(ir, callsite.recv, GP::Rdi);
+    let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _| {
         monoasm! { &mut r#gen.jit,
@@ -332,7 +332,7 @@ fn array_clone(
         }
     });
     ir.xmm_restore(using_xmm);
-    bb.def_reg2acc_class(ir, GP::Rax, dst, class_id);
+    state.def_reg2acc_class(ir, GP::Rax, dst, class_id);
     true
 }
 
@@ -659,7 +659,7 @@ extern "C" fn ary_shl(mut ary: Array, arg: Value) -> Value {
 }
 
 fn array_shl(
-    bb: &mut AbstractContext,
+    state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -673,9 +673,9 @@ fn array_shl(
     let CallSiteInfo {
         dst, args, recv, ..
     } = *callsite;
-    bb.load(ir, recv, GP::Rdi);
-    bb.load(ir, args, GP::Rsi);
-    let using_xmm = bb.get_using_xmm();
+    state.load(ir, recv, GP::Rdi);
+    state.load(ir, args, GP::Rsi);
+    let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _| {
         monoasm!( &mut r#gen.jit,
@@ -684,7 +684,7 @@ fn array_shl(
         );
     });
     ir.xmm_restore(using_xmm);
-    bb.def_reg2acc_class(ir, GP::Rax, dst, recv_class);
+    state.def_reg2acc_class(ir, GP::Rax, dst, recv_class);
     true
 }
 

@@ -124,7 +124,7 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn kernel_nil(
-    bb: &mut AbstractContext,
+    state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -136,16 +136,16 @@ fn kernel_nil(
         return false;
     }
     let CallSiteInfo { recv, dst, .. } = *callsite;
-    if bb.is_nil(recv) {
+    if state.is_nil(recv) {
         if let Some(dst) = dst {
-            bb.def_C(dst, Value::bool(true));
+            state.def_C(dst, Value::bool(true));
         }
-    } else if bb.is_not_nil(recv) {
+    } else if state.is_not_nil(recv) {
         if let Some(dst) = dst {
-            bb.def_C(dst, Value::bool(false));
+            state.def_C(dst, Value::bool(false));
         }
     } else {
-        bb.load(ir, recv, GP::Rdi);
+        state.load(ir, recv, GP::Rdi);
         ir.inline(|r#gen, _, _| {
             monoasm! { &mut r#gen.jit,
                 movq rax, (FALSE_VALUE);
@@ -154,13 +154,13 @@ fn kernel_nil(
                 cmoveqq rax, rsi;
             }
         });
-        bb.def_rax2acc(ir, dst);
+        state.def_rax2acc(ir, dst);
     }
     true
 }
 
 fn kernel_block_given(
-    bb: &mut AbstractContext,
+    state: &mut AbstractState,
     ir: &mut AsmIr,
     jitctx: &JitContext,
     store: &Store,
@@ -176,7 +176,7 @@ fn kernel_block_given(
         && let Some(b) = store[callid].block_given()
     {
         if let Some(dst) = dst {
-            bb.def_C(dst, Value::bool(b));
+            state.def_C(dst, Value::bool(b));
         }
     } else {
         ir.inline(|r#gen, _, _| {
@@ -192,7 +192,7 @@ fn kernel_block_given(
             exit:
             }
         });
-        bb.def_rax2acc(ir, dst);
+        state.def_rax2acc(ir, dst);
     }
 
     true

@@ -98,7 +98,7 @@ fn object_id(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn object_object_id(
-    bb: &mut AbstractContext,
+    state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -110,8 +110,8 @@ fn object_object_id(
         return false;
     }
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
-    bb.load(ir, recv, GP::Rdi);
-    let using_xmm = bb.get_using_xmm();
+    state.load(ir, recv, GP::Rdi);
+    let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _| {
         monoasm! {&mut r#gen.jit,
@@ -120,7 +120,7 @@ fn object_object_id(
         }
     });
     ir.xmm_restore(using_xmm);
-    bb.def_rax2acc(ir, ret);
+    state.def_rax2acc(ir, ret);
     true
 }
 
@@ -156,7 +156,7 @@ pub(crate) fn send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
 }
 
 pub fn object_send(
-    bb: &mut AbstractContext,
+    state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -169,16 +169,16 @@ pub fn object_send(
         return false;
     }
 
-    bb.write_back_recv_and_callargs(ir, callsite);
-    bb.writeback_acc(ir);
-    let using_xmm = bb.get_using_xmm();
-    let error = ir.new_error(bb, pc);
+    state.write_back_recv_and_callargs(ir, callsite);
+    state.writeback_acc(ir);
+    let using_xmm = state.get_using_xmm();
+    let error = ir.new_error(state, pc);
     let callid = callsite.id;
     ir.inline(move |r#gen, store, labels| {
         let error = &labels[error];
         r#gen.object_send_inline(callid, store, using_xmm, &error, no_splat);
     });
-    bb.def_reg2acc(ir, GP::Rax, callsite.dst);
+    state.def_reg2acc(ir, GP::Rax, callsite.dst);
     true
 }
 
@@ -316,7 +316,7 @@ fn respond_to(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 }
 
 fn object_respond_to(
-    bb: &mut AbstractContext,
+    state: &mut AbstractState,
     _: &mut AsmIr,
     ctx: &JitContext,
     store: &Store,
@@ -336,9 +336,9 @@ fn object_respond_to(
         return false;
     };
     let include_all = if pos_num != 1 {
-        if bb.is_truthy(args + 1usize) {
+        if state.is_truthy(args + 1usize) {
             true
-        } else if bb.is_falsy(args + 1usize) {
+        } else if state.is_falsy(args + 1usize) {
             false
         } else {
             return false;
@@ -346,7 +346,7 @@ fn object_respond_to(
     } else {
         false
     };
-    let method_name = if let Some(name) = bb.is_symbol_literal(args) {
+    let method_name = if let Some(name) = state.is_symbol_literal(args) {
         name
     } else {
         return false;
@@ -358,7 +358,7 @@ fn object_respond_to(
     } else {
         false
     };
-    bb.def_C(dst, Value::bool(b));
+    state.def_C(dst, Value::bool(b));
     true
 }
 

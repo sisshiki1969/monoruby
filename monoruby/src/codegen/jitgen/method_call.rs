@@ -14,7 +14,7 @@ impl<'a> JitContext<'a> {
     ///
     pub(super) fn compile_method_call(
         &mut self,
-        bbctx: &mut AbstractContext,
+        state: &mut AbstractState,
         ir: &mut AsmIr,
         pc: BytecodePtr,
         recv_class: ClassId,
@@ -28,17 +28,17 @@ impl<'a> JitContext<'a> {
 
         // We must write back and unlink all local vars when they are possibly accessed or captured from inner blocks.
         if callsite.block_fid.is_some() || self.store[func_id].possibly_capture_without_block() {
-            bbctx.locals_to_S(ir);
+            state.locals_to_S(ir);
         }
 
         // class version guard
-        self.guard_class_version(bbctx, ir, true, pc);
+        self.guard_class_version(state, ir, true, pc);
 
         // receiver class guard
-        if bbctx.class(recv) != Some(recv_class) {
-            let deopt = ir.new_deopt(bbctx, pc);
-            bbctx.load(ir, recv, GP::Rdi);
-            bbctx.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
+        if state.class(recv) != Some(recv_class) {
+            let deopt = ir.new_deopt(state, pc);
+            state.load(ir, recv, GP::Rdi);
+            state.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
         }
 
         if callsite.block_fid.is_none()
@@ -46,28 +46,28 @@ impl<'a> JitContext<'a> {
         {
             match info {
                 InlineFuncInfo::InlineGen(f) => {
-                    if self.inline_asm(bbctx, ir, f, callsite, recv_class, pc) {
-                        bbctx.unset_side_effect_guard();
+                    if self.inline_asm(state, ir, f, callsite, recv_class, pc) {
+                        state.unset_side_effect_guard();
                         if self.store[func_id].possibly_capture_without_block() {
-                            bbctx.unset_no_capture_guard(self);
+                            state.unset_no_capture_guard(self);
                         }
                         return CompileResult::Continue;
                     }
                 }
                 InlineFuncInfo::CFunc_F_F(f) => {
                     let CallSiteInfo { args, dst, .. } = *callsite;
-                    if let Some(args) = bbctx.coerce_C_f64(args) {
+                    if let Some(args) = state.coerce_C_f64(args) {
                         let res = f(args);
                         if let Some(dst) = dst {
-                            bbctx.def_C_float(dst, res);
+                            state.def_C_float(dst, res);
                         }
                         return CompileResult::Continue;
                     }
                     if let Some(dst) = dst {
-                        let src = bbctx.load_xmm(ir, args, pc);
-                        bbctx.discard(dst);
-                        let using_xmm = bbctx.get_using_xmm();
-                        let dst = bbctx.def_F(dst);
+                        let src = state.load_xmm(ir, args, pc);
+                        state.discard(dst);
+                        let using_xmm = state.get_using_xmm();
+                        let dst = state.def_F(dst);
                         ir.push(AsmInst::CFunc_F_F {
                             f: *f,
                             src,
@@ -81,19 +81,19 @@ impl<'a> JitContext<'a> {
                     let CallSiteInfo {
                         recv, args, dst, ..
                     } = *callsite;
-                    if let Some((lhs, rhs)) = bbctx.check_binary_C_f64(recv, args) {
+                    if let Some((lhs, rhs)) = state.check_binary_C_f64(recv, args) {
                         let res = f(lhs, rhs);
                         if let Some(dst) = dst {
-                            bbctx.def_C_float(dst, res);
+                            state.def_C_float(dst, res);
                         }
                         return CompileResult::Continue;
                     }
                     if let Some(dst) = dst {
-                        let lhs = bbctx.load_xmm(ir, recv, pc);
-                        let rhs = bbctx.load_xmm(ir, args, pc);
-                        bbctx.discard(dst);
-                        let using_xmm = bbctx.get_using_xmm();
-                        let dst = bbctx.def_F(dst);
+                        let lhs = state.load_xmm(ir, recv, pc);
+                        let rhs = state.load_xmm(ir, args, pc);
+                        state.discard(dst);
+                        let using_xmm = state.get_using_xmm();
+                        let dst = state.def_F(dst);
                         ir.push(AsmInst::CFunc_FF_F {
                             f: *f,
                             lhs,
@@ -107,7 +107,7 @@ impl<'a> JitContext<'a> {
             }
         }
 
-        self.call(bbctx, ir, callid, func_id, recv_class, pc)
+        self.call(state, ir, callid, func_id, recv_class, pc)
     }
 
     ///
@@ -121,15 +121,15 @@ impl<'a> JitContext<'a> {
     ///
     fn guard_class_version(
         &self,
-        bbctx: &mut AbstractContext,
+        state: &mut AbstractState,
         ir: &mut AsmIr,
         with_recovery: bool,
         pc: BytecodePtr,
     ) {
-        if bbctx.class_version_guard() {
+        if state.class_version_guard() {
             return;
         }
-        let deopt = ir.new_deopt(bbctx, pc);
+        let deopt = ir.new_deopt(state, pc);
         match self.jit_type() {
             JitType::Specialized { idx, .. } => {
                 ir.push(AsmInst::GuardClassVersionSpecialized { idx: *idx, deopt });
@@ -142,7 +142,7 @@ impl<'a> JitContext<'a> {
                 });
             }
         }
-        bbctx.set_class_version_guard();
+        state.set_class_version_guard();
     }
 
     ///
@@ -151,7 +151,7 @@ impl<'a> JitContext<'a> {
     ///
     pub(super) fn compile_yield_specialized(
         &mut self,
-        bbctx: &mut AbstractContext,
+        state: &mut AbstractState,
         ir: &mut AsmIr,
         callid: CallSiteId,
         block: &JitBlockInfo,
@@ -170,7 +170,7 @@ impl<'a> JitContext<'a> {
                 &self.store,
                 callee_fid,
                 callid,
-                bbctx,
+                state,
                 self_class,
             ))
         } else {
@@ -183,24 +183,24 @@ impl<'a> JitContext<'a> {
             args_info,
             Some(outer),
             callid,
-            bbctx,
+            state,
         ) {
             SpecializedCompileResult::Const(v) => {
-                bbctx.def_C(dst, v);
+                state.def_C(dst, v);
                 return CompileResult::Continue;
             }
             SpecializedCompileResult::Compiled { entry, result } => (entry, result),
         };
-        bbctx.exec_gc(ir, true, pc);
-        let using_xmm = bbctx.get_using_xmm();
+        state.exec_gc(ir, true, pc);
+        let using_xmm = state.get_using_xmm();
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save(using_xmm);
-        bbctx.set_arguments(&self.store, ir, callid, callee_fid, pc);
-        bbctx.discard(dst);
-        bbctx.clear_above_next_sp();
-        let error = ir.new_error(bbctx, pc);
-        bbctx.writeback_acc(ir);
+        state.set_arguments(&self.store, ir, callid, callee_fid, pc);
+        state.discard(dst);
+        state.clear_above_next_sp();
+        let error = ir.new_error(state, pc);
+        state.writeback_acc(ir);
         let evict = ir.new_evict();
         let meta = self.store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
@@ -208,8 +208,8 @@ impl<'a> JitContext<'a> {
         ir.push(AsmInst::SpecializedYield { entry, evict });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
-        let res = bbctx.def_rax2acc_result(ir, dst, result);
-        bbctx.immediate_evict(ir, evict, pc);
+        let res = state.def_rax2acc_result(ir, dst, result);
+        state.immediate_evict(ir, evict, pc);
         res
     }
 
@@ -224,7 +224,7 @@ impl<'a> JitContext<'a> {
     ///
     fn call(
         &mut self,
-        bbctx: &mut AbstractContext,
+        state: &mut AbstractState,
         ir: &mut AsmIr,
         callid: CallSiteId,
         fid: FuncId,
@@ -242,29 +242,29 @@ impl<'a> JitContext<'a> {
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
         let (fid, outer_lfp) = match self.store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
-                return self.attr_reader(bbctx, ir, callid, recv_class, ivar_name);
+                return self.attr_reader(state, ir, callid, recv_class, ivar_name);
             }
             FuncKind::AttrWriter { ivar_name } => {
-                return self.attr_writer(bbctx, ir, callid, recv_class, ivar_name);
+                return self.attr_writer(state, ir, callid, recv_class, ivar_name);
             }
             FuncKind::Builtin { .. } => (fid, None),
             FuncKind::Proc(proc) => (proc.func_id(), Some(proc.outer_lfp())),
             FuncKind::ISeq(iseq) => {
                 if let Some(v) = self.store[iseq].is_const_fn() {
-                    bbctx.def_C(dst, v);
+                    state.def_C(dst, v);
                     return CompileResult::Continue;
                 }
 
                 let specializable = self.store.is_simple_call(fid, callid)
-                    && (bbctx.is_C(callsite.recv)
-                        || (pos_num != 0 && (args..args + pos_num).any(|i| bbctx.is_C(i))));
+                    && (state.is_C(callsite.recv)
+                        || (pos_num != 0 && (args..args + pos_num).any(|i| state.is_C(i))));
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
 
                 if iseq_block.is_some() || (specializable && self.specialize_level() < 5)
                 /*name == Some(IdentId::NEW)*/
                 {
                     return self.specialized_iseq(
-                        bbctx,
+                        state,
                         ir,
                         callid,
                         recv_class,
@@ -278,10 +278,10 @@ impl<'a> JitContext<'a> {
             }
         };
 
-        bbctx.send(ir, &self.store, callid, fid, recv_class, outer_lfp, pc);
+        state.send(ir, &self.store, callid, fid, recv_class, outer_lfp, pc);
 
         if self.store[fid].possibly_capture_without_block() || block_fid.is_some() {
-            bbctx.unset_no_capture_guard(self);
+            state.unset_no_capture_guard(self);
         }
 
         CompileResult::Continue
@@ -289,7 +289,7 @@ impl<'a> JitContext<'a> {
 
     fn attr_reader(
         &mut self,
-        bbctx: &mut AbstractContext,
+        state: &mut AbstractState,
         ir: &mut AsmIr,
         callid: CallSiteId,
         recv_class: ClassId,
@@ -307,9 +307,9 @@ impl<'a> JitContext<'a> {
         assert!(!callsite.kw_may_exists());
         assert!(block_fid.is_none());
         assert!(callsite.block_arg.is_none());
-        bbctx.load(ir, recv, GP::Rdi);
-        bbctx.discard(dst);
-        bbctx.writeback_acc(ir);
+        state.load(ir, recv, GP::Rdi);
+        state.discard(dst);
+        state.writeback_acc(ir);
         if recv_class.is_always_frozen() {
             if dst.is_some() {
                 ir.lit2reg(Value::nil(), GP::Rax);
@@ -331,13 +331,13 @@ impl<'a> JitContext<'a> {
                 });
             }
         }
-        bbctx.def_reg2acc(ir, GP::R15, dst);
+        state.def_reg2acc(ir, GP::R15, dst);
         CompileResult::Continue
     }
 
     fn attr_writer(
         &mut self,
-        bbctx: &mut AbstractContext,
+        state: &mut AbstractState,
         ir: &mut AsmIr,
         callid: CallSiteId,
         recv_class: ClassId,
@@ -360,10 +360,10 @@ impl<'a> JitContext<'a> {
         } else {
             return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
         };
-        bbctx.load(ir, recv, GP::Rdi);
-        let src = bbctx.load_or_reg(ir, args, GP::Rax);
+        state.load(ir, recv, GP::Rdi);
+        let src = state.load_or_reg(ir, args, GP::Rax);
         let is_object_ty = self.store[recv_class].is_object_ty_instance();
-        let using_xmm = bbctx.get_using_xmm();
+        let using_xmm = state.get_using_xmm();
         if is_object_ty && ivarid.is_inline() {
             ir.push(AsmInst::StoreIVarInline { src, ivarid })
         } else {
@@ -374,14 +374,14 @@ impl<'a> JitContext<'a> {
                 is_object_ty,
             });
         }
-        bbctx.def_rax2acc(ir, dst);
-        bbctx.unset_side_effect_guard();
+        state.def_rax2acc(ir, dst);
+        state.unset_side_effect_guard();
         CompileResult::Continue
     }
 
     fn specialized_iseq(
         &mut self,
-        ctx: &mut AbstractContext,
+        state: &mut AbstractState,
         ir: &mut AsmIr,
         callid: CallSiteId,
         recv_class: ClassId,
@@ -392,7 +392,7 @@ impl<'a> JitContext<'a> {
     ) -> CompileResult {
         let dst = self.store[callid].dst;
         let args_info = if specializable {
-            JitArgumentInfo::new(LinkMode::from_caller(&self.store, fid, callid, ctx))
+            JitArgumentInfo::new(LinkMode::from_caller(&self.store, fid, callid, state))
         } else {
             JitArgumentInfo::default()
         };
@@ -408,18 +408,18 @@ impl<'a> JitContext<'a> {
             args_info,
             None,
             callid,
-            ctx,
+            state,
         ) {
             SpecializedCompileResult::Const(v) => {
-                ctx.def_C(dst, v);
+                state.def_C(dst, v);
                 return CompileResult::Continue;
             }
             SpecializedCompileResult::Compiled { entry, result } => (entry, result),
         };
         let evict = ir.new_evict();
-        ctx.send_specialized(ir, &self.store, callid, fid, entry, patch_point, evict, pc);
-        let res = ctx.def_rax2acc_result(ir, dst, result);
-        ctx.immediate_evict(ir, evict, pc);
+        state.send_specialized(ir, &self.store, callid, fid, entry, patch_point, evict, pc);
+        let res = state.def_rax2acc_result(ir, dst, result);
+        state.immediate_evict(ir, evict, pc);
         return res;
     }
 }
@@ -507,10 +507,10 @@ impl<'a> JitContext<'a> {
 
     fn inline_asm(
         &mut self,
-        bbctx: &mut AbstractContext,
+        state: &mut AbstractState,
         ir: &mut AsmIr,
         f: impl Fn(
-            &mut AbstractContext,
+            &mut AbstractState,
             &mut AsmIr,
             &JitContext,
             &Store,
@@ -522,19 +522,19 @@ impl<'a> JitContext<'a> {
         recv_class: ClassId,
         pc: BytecodePtr,
     ) -> bool {
-        let bbctx_save = bbctx.clone();
+        let state_save = state.clone();
         let ir_save = ir.save();
-        if f(bbctx, ir, self, &self.store, callsite, recv_class, pc) {
+        if f(state, ir, self, &self.store, callsite, recv_class, pc) {
             true
         } else {
-            *bbctx = bbctx_save;
+            *state = state_save;
             ir.restore(ir_save);
             false
         }
     }
 }
 
-impl AbstractContext {
+impl AbstractState {
     ///
     /// ### in
     /// rdi: receiver: Value

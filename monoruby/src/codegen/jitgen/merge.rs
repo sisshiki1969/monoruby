@@ -60,7 +60,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         bbid: BasicBlockId,
         no_calc_backedge: bool,
-    ) -> Option<AbstractContext> {
+    ) -> Option<AbstractState> {
         let entries = self.remove_branch(bbid)?;
         let iseq = self.iseq();
         let pc = iseq.get_bb_pc(bbid);
@@ -69,7 +69,7 @@ impl<'a> JitContext<'a> {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge loop: {bbid:?}");
 
-            let incoming = AbstractContext::join_entries(&entries);
+            let incoming = AbstractState::join_entries(&entries);
             if !no_calc_backedge {
                 self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end);
             }
@@ -93,7 +93,7 @@ impl<'a> JitContext<'a> {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge {bbid:?}");
 
-            let target = AbstractContext::join_entries(&entries);
+            let target = AbstractState::join_entries(&entries);
             self.gen_bridges_for_branches(&target, entries, bbid, pc);
 
             Some(target)
@@ -109,7 +109,7 @@ impl<'a> JitContext<'a> {
     ///
     fn gen_bridges_for_branches(
         &mut self,
-        target: &SlotContext,
+        target: &SlotState,
         entries: Vec<BranchEntry>,
         bbid: BasicBlockId,
         pc: BytecodePtr,

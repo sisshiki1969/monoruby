@@ -3,14 +3,14 @@ use super::*;
 impl<'a> JitContext<'a> {
     pub(in crate::codegen::jitgen) fn analyse_backedge_fixpoint(
         &mut self,
-        bbctx: AbstractContext,
+        state: AbstractState,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
     ) {
         for x in 0..10 {
             #[cfg(feature = "jit-debug")]
             eprintln!("########## analyse iteration[{x}]");
-            let (liveness, backedge) = self.analyse_loop(loop_start, loop_end, bbctx.clone());
+            let (liveness, backedge) = self.analyse_loop(loop_start, loop_end, state.clone());
             if let Some(backedge) = backedge {
                 if let Some(be) = self.loop_backedge(loop_start)
                     && be.equiv(&backedge)
@@ -40,8 +40,8 @@ impl<'a> JitContext<'a> {
         &self,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
-        mut state: AbstractContext,
-    ) -> (Liveness, Option<AbstractContext>) {
+        mut state: AbstractState,
+    ) -> (Liveness, Option<AbstractState>) {
         let pc = self.iseq().get_bb_pc(loop_start);
         let mut ctx = JitContext::loop_analysis(self, pc);
         let mut liveness = Liveness::new(ctx.total_reg_num());
@@ -55,7 +55,7 @@ impl<'a> JitContext<'a> {
             ctx.analyse_basic_block(&mut liveness, bbid, bbid == loop_start, bbid == loop_end);
         }
 
-        let mut backedge: Option<AbstractContext> = None;
+        let mut backedge: Option<AbstractState> = None;
         if let Some(branches) = ctx.remove_branch(loop_start) {
             for BranchEntry { src_bb, state, .. } in branches {
                 liveness.join(&state);
@@ -95,19 +95,19 @@ impl<'a> JitContext<'a> {
         is_last: bool,
     ) {
         let mut ir = AsmIr::new(self);
-        let mut bbctx = match self.incoming_context(bbid, is_start) {
+        let mut state = match self.incoming_context(bbid, is_start) {
             Some(bb) => bb,
             None => return,
         };
 
         let BasciBlockInfoEntry { begin, end, .. } = self.iseq().bb_info[bbid];
         for bc_pos in begin..=end {
-            bbctx.next_sp = self.iseq().get_sp(bc_pos);
+            state.next_sp = self.iseq().get_sp(bc_pos);
 
-            match self.compile_instruction(&mut ir, &mut bbctx, bc_pos) {
+            match self.compile_instruction(&mut ir, &mut state, bc_pos) {
                 CompileResult::Continue => {}
                 CompileResult::Branch(dest_bb) => {
-                    self.new_branch(bc_pos, dest_bb, bbctx);
+                    self.new_branch(bc_pos, dest_bb, state);
                     return;
                 }
                 CompileResult::Cease => return,
@@ -117,7 +117,7 @@ impl<'a> JitContext<'a> {
                 | CompileResult::MethodReturn(_)
                 | CompileResult::Recompile(_)
                 | CompileResult::ExitLoop => {
-                    liveness.join(&bbctx);
+                    liveness.join(&state);
                     return;
                 }
                 CompileResult::Abort => {
@@ -126,11 +126,11 @@ impl<'a> JitContext<'a> {
                     unreachable!()
                 }
             }
-            bbctx.clear_above_next_sp();
+            state.clear_above_next_sp();
         }
 
         if !is_last {
-            self.prepare_next(bbctx, end);
+            self.prepare_next(state, end);
         }
     }
 }

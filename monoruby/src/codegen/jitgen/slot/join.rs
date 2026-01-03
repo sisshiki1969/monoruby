@@ -1,35 +1,23 @@
 use super::*;
 
-impl AbstractContext {
+impl AbstractState {
     ///
     /// Join abstract states.
     ///
-    pub(in crate::codegen::jitgen) fn join(&mut self, other: &AbstractContext) {
+    pub(in crate::codegen::jitgen) fn join(&mut self, other: &AbstractState) {
         for (lhs, rhs) in self.frames.iter_mut().zip(other.frames.iter()) {
             lhs.join(rhs);
         }
     }
 
     ///
-    /// Generate bridge AsmIr from F/Sf(l) to Sf(r).
-    ///
-    fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm, guarded: SfGuarded) {
-        if self.is_xmm_vacant(r) {
-            self.set_Sf(slot, r, guarded);
-            ir.xmm_move(l, r);
-        } else {
-            self.xmm_swap(ir, l, r);
-        }
-    }
-
-    ///
-    /// Generate bridge AsmIr to merge current state(*bbctx*) with target state(*target*)
+    /// Generate bridge AsmIr to merge current state with target state.
     ///
     pub(in crate::codegen::jitgen) fn gen_bridge(
         mut self,
         ir: &mut AsmIr,
         src_bb: Option<BasicBlockId>,
-        target: &SlotContext,
+        target: &SlotState,
         pc: BytecodePtr,
     ) {
         #[cfg(feature = "jit-debug")]
@@ -222,5 +210,25 @@ impl AbstractFrame {
                 }
             };
         }
+    }
+
+    ///
+    /// Generate bridge AsmIr from F/Sf(l) to Sf(r).
+    ///
+    fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm, guarded: SfGuarded) {
+        if self.is_xmm_vacant(r) {
+            self.set_Sf(slot, r, guarded);
+            ir.xmm_move(l, r);
+        } else {
+            self.xmm_swap(ir, l, r);
+        }
+    }
+
+    ///
+    /// Swap xmm registers `l` and `r`.
+    ///
+    fn xmm_swap(&mut self, ir: &mut AsmIr, l: Xmm, r: Xmm) {
+        self.slot_state.xmm_swap(l, r);
+        ir.push(AsmInst::XmmSwap(l, r));
     }
 }

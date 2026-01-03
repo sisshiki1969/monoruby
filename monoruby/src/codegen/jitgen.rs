@@ -16,7 +16,7 @@ use self::slot::Guarded;
 use super::*;
 use asmir::*;
 use context::{JitArgumentInfo, JitType};
-use slot::{Liveness, SlotContext};
+use slot::{Liveness, SlotState};
 use trace_ir::*;
 
 pub mod asmir;
@@ -156,7 +156,7 @@ struct BranchEntry {
     /// source BasicBlockId of the branch.
     src_bb: Option<BasicBlockId>,
     /// the abstract state of the source basic block.
-    state: AbstractContext,
+    state: AbstractState,
     /// true if the branch is a continuation branch.
     /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
     mode: BranchMode,
@@ -226,31 +226,31 @@ impl Assumptions {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AbstractContext {
+pub(crate) struct AbstractState {
     frames: Vec<AbstractFrame>,
 }
 
-impl std::ops::Deref for AbstractContext {
+impl std::ops::Deref for AbstractState {
     type Target = AbstractFrame;
     fn deref(&self) -> &Self::Target {
         &self.frames.last().unwrap()
     }
 }
 
-impl std::ops::DerefMut for AbstractContext {
+impl std::ops::DerefMut for AbstractState {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.frames.last_mut().unwrap()
     }
 }
 
-impl std::ops::Index<usize> for AbstractContext {
+impl std::ops::Index<usize> for AbstractState {
     type Output = AbstractFrame;
     fn index(&self, index: usize) -> &Self::Output {
         &self.frames[index]
     }
 }
 
-impl std::ops::IndexMut<usize> for AbstractContext {
+impl std::ops::IndexMut<usize> for AbstractState {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.frames[index]
     }
@@ -262,7 +262,7 @@ impl std::ops::IndexMut<usize> for AbstractContext {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AbstractFrame {
     /// state stack slots.
-    slot_state: SlotContext,
+    slot_state: SlotState,
     /// stack top register.
     next_sp: SlotId,
     /// assumptions
@@ -270,7 +270,7 @@ pub(crate) struct AbstractFrame {
 }
 
 impl std::ops::Deref for AbstractFrame {
-    type Target = SlotContext;
+    type Target = SlotState;
     fn deref(&self) -> &Self::Target {
         &self.slot_state
     }
@@ -287,17 +287,17 @@ impl AbstractFrame {
         let next_sp = SlotId(cc.local_num() as u16 + 1);
         match cc.jit_type() {
             JitType::Entry => AbstractFrame {
-                slot_state: SlotContext::new_method(cc),
+                slot_state: SlotState::new_method(cc),
                 next_sp,
                 assumptions: Assumptions::new_entry(cc),
             },
             JitType::Loop(_) => AbstractFrame {
-                slot_state: SlotContext::new_loop(cc),
+                slot_state: SlotState::new_loop(cc),
                 next_sp,
                 assumptions: Assumptions::new_loop(),
             },
             JitType::Specialized { .. } => AbstractFrame {
-                slot_state: SlotContext::new_method(cc),
+                slot_state: SlotState::new_method(cc),
                 next_sp,
                 assumptions: Assumptions::new_specialized(cc),
             },
@@ -317,11 +317,11 @@ impl AbstractFrame {
     }
 }
 
-impl AbstractContext {
+impl AbstractState {
     fn new(jitctx: &JitContext) -> Self {
-        let mut scopes = jitctx.outer_contexts();
-        scopes.push(AbstractFrame::new(jitctx));
-        AbstractContext { frames: scopes }
+        let mut frames = jitctx.outer_contexts();
+        frames.push(AbstractFrame::new(jitctx));
+        AbstractState { frames }
     }
 
     fn equiv(&self, other: &Self) -> bool {
@@ -333,8 +333,8 @@ impl AbstractContext {
 
     fn join_entries(entries: &[BranchEntry]) -> Self {
         let mut merge_ctx = entries.last().unwrap().state.clone();
-        for BranchEntry { state: bbctx, .. } in entries.iter() {
-            merge_ctx.join(bbctx);
+        for BranchEntry { state, .. } in entries.iter() {
+            merge_ctx.join(state);
         }
         merge_ctx
     }
