@@ -89,6 +89,10 @@ impl SlotState {
         self.slots.len()
     }
 
+    pub(super) fn no_r15(&self) -> bool {
+        self.r15.is_none()
+    }
+
     pub(super) fn equiv(&self, other: &Self) -> bool {
         assert_eq!(self.slots.len(), other.slots.len());
         self.slots
@@ -151,7 +155,7 @@ impl SlotState {
         self.slots[slot.0 as usize]
     }
 
-    pub(crate) fn guarded(&self, slot: SlotId) -> Guarded {
+    pub(in crate::codegen::jitgen) fn guarded(&self, slot: SlotId) -> Guarded {
         self.mode(slot).guarded()
     }
 
@@ -170,11 +174,11 @@ impl SlotState {
         self.slots[slot.0 as usize] = mode;
     }
 
-    fn is_used(&self, slot: SlotId) -> &IsUsed {
+    pub(super) fn is_used(&self, slot: SlotId) -> &IsUsed {
         &self.liveness[slot.0 as usize]
     }
 
-    fn is_used_mut(&mut self, slot: SlotId) -> &mut IsUsed {
+    pub(super) fn is_used_mut(&mut self, slot: SlotId) -> &mut IsUsed {
         &mut self.liveness[slot.0 as usize]
     }
 
@@ -251,7 +255,7 @@ impl SlotState {
     /// _ -> MaybeNone
     ///
     #[allow(non_snake_case)]
-    fn set_MaybeNone(&mut self, slot: SlotId) {
+    pub(super) fn set_MaybeNone(&mut self, slot: SlotId) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::MaybeNone);
     }
@@ -439,51 +443,6 @@ impl SlotState {
 
     pub(super) fn use_as_value(&mut self, slot: SlotId) {
         self.is_used_mut(slot).use_as_non_float();
-    }
-
-    ///
-    /// load *slot* into *r*.
-    ///
-    /// ### destroy
-    /// - rax, rcx
-    ///
-    /// ### panic
-    /// - if *slot* is V or None.
-    ///
-    pub(crate) fn load(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP) {
-        self.use_as_value(slot);
-        match self.mode(slot) {
-            LinkMode::F(xmm) => {
-                if dst == GP::R15 {
-                    assert!(self.r15.is_none());
-                }
-                // F -> Sf
-                ir.xmm2stack(xmm, slot);
-                ir.reg_move(GP::Rax, dst);
-                self.set_Sf_float(slot, xmm);
-            }
-            LinkMode::C(v) => {
-                if dst == GP::R15 {
-                    assert!(self.r15.is_none());
-                }
-                ir.lit2reg(v, dst);
-            }
-            LinkMode::Sf(_, _) | LinkMode::S(_) => {
-                if dst == GP::R15 {
-                    assert!(self.r15.is_none());
-                }
-                ir.stack2reg(slot, dst);
-            }
-            LinkMode::G(_) => {
-                ir.reg_move(GP::R15, dst);
-            }
-            LinkMode::MaybeNone => {
-                ir.stack2reg(slot, dst);
-            }
-            LinkMode::V | LinkMode::None => {
-                unreachable!("load() {:?} {:?}: {:?}", slot, self.mode(slot), self);
-            }
-        }
     }
 
     ///
@@ -693,14 +652,6 @@ impl SlotState {
         }
     }
 
-    fn is_xmm_vacant(&self, xmm: Xmm) -> bool {
-        self.xmm(xmm).is_empty()
-    }
-
-    fn is_r15(&self, slot: SlotId) -> bool {
-        self.r15 == Some(slot)
-    }
-
     pub(super) fn on_reg(&self, slot: SlotId) -> Option<GP> {
         if self.is_r15(slot) {
             Some(GP::R15)
@@ -727,6 +678,14 @@ impl SlotState {
         }
         assert!(!self.slots.iter().any(|link| matches!(link, LinkMode::G(_))));
         assert!(self.r15.is_none());
+    }
+
+    fn is_xmm_vacant(&self, xmm: Xmm) -> bool {
+        self.xmm(xmm).is_empty()
+    }
+
+    fn is_r15(&self, slot: SlotId) -> bool {
+        self.r15 == Some(slot)
     }
 }
 
@@ -1055,26 +1014,6 @@ impl Into<Guarded> for SfGuarded {
     }
 }
 
-impl SfGuarded {
-    fn join(&mut self, other: SfGuarded) {
-        *self = match (*self, other) {
-            (SfGuarded::Fixnum, SfGuarded::Fixnum) => SfGuarded::Fixnum,
-            (SfGuarded::Float, SfGuarded::Float) => SfGuarded::Float,
-            _ => SfGuarded::FixnumOrFloat,
-        }
-    }
-
-    fn from_concrete_value(v: Value) -> Self {
-        if v.is_fixnum() {
-            SfGuarded::Fixnum
-        } else if v.is_float() {
-            SfGuarded::Float
-        } else {
-            panic!("SfGuarded::from_concrete_value(): not fixnum/float {:?}", v);
-        }
-    }
-}
-
 ///
 /// Mode of linkage between stack slot and xmm registers.
 ///
@@ -1249,65 +1188,6 @@ impl LinkMode {
     }
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct Liveness(Vec<IsUsed>);
-
-impl std::fmt::Debug for Liveness {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Liveness {{ ")?;
-        for (i, is_used) in self.0.iter().enumerate() {
-            match is_used {
-                IsUsed::Used(UsedAs { ty, .. }) => {
-                    write!(f, "[{:?}: UsedAs {:?}] ", SlotId(i as u16), ty)?
-                }
-                IsUsed::Killed => write!(f, "[{:?}: Killed] ", SlotId(i as u16))?,
-                IsUsed::ND => {}
-            }
-        }
-        write!(f, "}}")
-    }
-}
-
-impl Liveness {
-    pub(in crate::codegen::jitgen) fn new(total_reg_num: usize) -> Self {
-        Self(vec![IsUsed::default(); total_reg_num])
-    }
-
-    pub(in crate::codegen::jitgen) fn join(&mut self, state: &AbstractState) {
-        for (i, is_used) in &mut self.0.iter_mut().enumerate() {
-            is_used.join(state.is_used(SlotId(i as u16)));
-        }
-    }
-
-    ///
-    /// Collect killed (and not used) slots.
-    ///
-    pub fn killed(&self) -> impl Iterator<Item = SlotId> {
-        self.0.iter().enumerate().filter_map(|(i, is_used)| {
-            if is_used == &IsUsed::Killed {
-                Some(SlotId(i as u16))
-            } else {
-                None
-            }
-        })
-    }
-
-    ///
-    /// Extract a set of registers which will be used as Float in this loop,
-    /// *and* xmm-linked on the back-edge.
-    ///
-    pub fn loop_used_as_float(&self) -> impl Iterator<Item = (SlotId, bool)> {
-        self.0.iter().enumerate().flat_map(|(i, b)| match b {
-            IsUsed::Used(used) => match used.ty {
-                UseTy::Float => Some((SlotId(i as u16), true)),
-                UseTy::Both => Some((SlotId(i as u16), false)),
-                _ => None,
-            },
-            _ => None,
-        })
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Guarded {
     #[default]
@@ -1336,9 +1216,6 @@ impl Guarded {
         }
     }
 
-    fn join(&self, other: &Self) -> Self {
-        if self == other { *self } else { Guarded::Value }
-    }
     pub fn class(&self) -> Option<ClassId> {
         Some(match self {
             Guarded::Value => return None,
@@ -1346,129 +1223,6 @@ impl Guarded {
             Guarded::Float => FLOAT_CLASS,
             Guarded::Class(c) => *c,
         })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-enum IsUsed {
-    ///
-    /// Not be used nor be killed.
-    ///
-    #[default]
-    ND,
-    ///
-    /// Used in any of paths.
-    ///
-    Used(UsedAs),
-    ///
-    /// Guaranteed not to be used (= killed) in all paths.
-    ///
-    Killed,
-}
-
-impl IsUsed {
-    fn join(&mut self, other: &Self) {
-        *self = match (&self, other) {
-            (IsUsed::Used(l), IsUsed::Used(r)) => IsUsed::Used(l.join(r)),
-            (IsUsed::Used(x), _) | (_, IsUsed::Used(x)) => IsUsed::Used(*x),
-            (IsUsed::Killed, IsUsed::Killed) => IsUsed::Killed,
-            _ => IsUsed::ND,
-        };
-    }
-
-    ///
-    /// used as f64 with no conversion
-    ///
-    fn use_as_float(&mut self) {
-        match self {
-            IsUsed::Killed => {}
-            IsUsed::Used(used) => used.use_as_float(),
-            IsUsed::ND => *self = IsUsed::Used(UsedAs::float()),
-        }
-    }
-
-    fn use_as_non_float(&mut self) {
-        match self {
-            IsUsed::Killed => {}
-            IsUsed::Used(used) => used.use_as_non_float(),
-            IsUsed::ND => *self = IsUsed::Used(UsedAs::non_float()),
-        }
-    }
-
-    fn kill(&mut self) {
-        match self {
-            IsUsed::Killed => {}
-            IsUsed::Used(used) => used.kill(),
-            IsUsed::ND => *self = IsUsed::Killed,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct UsedAs {
-    ty: UseTy,
-    killed: bool,
-}
-
-impl UsedAs {
-    fn float() -> Self {
-        UsedAs {
-            ty: UseTy::Float,
-            killed: false,
-        }
-    }
-
-    fn non_float() -> Self {
-        UsedAs {
-            ty: UseTy::NonFloat,
-            killed: false,
-        }
-    }
-
-    /// used as f64 with no conversion
-    fn use_as_float(&mut self) {
-        self.use_as(UseTy::Float);
-    }
-
-    fn use_as_non_float(&mut self) {
-        self.use_as(UseTy::NonFloat);
-    }
-
-    fn use_as(&mut self, other: UseTy) {
-        if self.killed {
-            return;
-        } else {
-            self.ty = self.ty.join(&other);
-        }
-    }
-
-    fn join(&self, other: &Self) -> Self {
-        Self {
-            ty: self.ty.join(&other.ty),
-            killed: self.killed && other.killed,
-        }
-    }
-
-    fn kill(&mut self) {
-        self.killed = true;
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum UseTy {
-    /// The slot is used as f64 with no conversion.
-    Float,
-    NonFloat,
-    Both,
-}
-
-impl UseTy {
-    fn join(&self, other: &Self) -> Self {
-        match (self, other) {
-            (UseTy::Float, UseTy::Float) => UseTy::Float,
-            (UseTy::NonFloat, UseTy::NonFloat) => UseTy::NonFloat,
-            (_, _) => UseTy::Both,
-        }
     }
 }
 
@@ -1579,86 +1333,6 @@ impl SlotState {
             (l, r) => {
                 unreachable!("{slot:?} {l:?}->{r:?} {target:?}");
             }
-        }
-    }
-}
-
-impl AbstractFrame {
-    ///
-    /// Join abstract states for the scope.
-    ///
-    /// ~~~text
-    ///                              other
-    ///       
-    ///                  F      Sf      f64     i63      C
-    ///              +-------+-------+-------+-------+-------+
-    ///         F    |   F   |  Sf   |   F   |   S   |   S   |
-    ///              +-------+-------+-------+-------+-------+
-    ///         Sf   |   Sf  |  Sf   |   Sf  |  Sf   |   S   |
-    ///  self        +-------+-------+-------+-------+-------|
-    ///         f64  |   F   |  Sf   |  F*1  |   S   |   S   |
-    ///              +-------+-------+-------+-------+-------|
-    ///         i63  |   S   |  Sf   |   S   |   S   |   S   |
-    ///              +-------+-------+-------+-------+-------|
-    ///         C    |   S   |   S   |   S   |   S   |  S*2  |
-    ///              +-------+-------+-------+-------+-------+
-    ///
-    ///  *1: if self == other, f64.
-    ///  *2: if self == other, Const.
-    ///
-    /// ~~~
-    pub(super) fn join(&mut self, other: &AbstractFrame) {
-        self.assumptions.join(&other.assumptions);
-        for i in self.all_regs() {
-            self.is_used_mut(i).join(other.is_used(i));
-            match (self.mode(i), other.mode(i)) {
-                (LinkMode::None, LinkMode::None) => {}
-                (LinkMode::MaybeNone, _) => {}
-                (_, LinkMode::MaybeNone) => {
-                    self.set_MaybeNone(i);
-                }
-                (LinkMode::V, _) => {}
-                (_, LinkMode::V) => {
-                    self.discard(i);
-                }
-                (LinkMode::F(_), LinkMode::F(_)) => {}
-                (LinkMode::F(_), LinkMode::C(r)) if r.is_float() => {}
-                (LinkMode::F(x), LinkMode::Sf(_, _))
-                | (LinkMode::Sf(x, _), LinkMode::Sf(_, _) | LinkMode::F(_)) => {
-                    let mut guarded = match self.mode(i) {
-                        LinkMode::F(_) => SfGuarded::Float,
-                        LinkMode::Sf(_, guarded) => guarded,
-                        _ => unreachable!(),
-                    };
-                    let other = match other.mode(i) {
-                        LinkMode::F(_) => SfGuarded::Float,
-                        LinkMode::Sf(_, guarded) => guarded,
-                        _ => unreachable!(),
-                    };
-                    guarded.join(other);
-                    self.set_Sf(i, x, guarded);
-                }
-                (LinkMode::Sf(x, mut guarded), LinkMode::C(r)) if r.is_float() || r.is_fixnum() => {
-                    guarded.join(SfGuarded::from_concrete_value(r));
-                    self.set_Sf(i, x, guarded)
-                }
-                (LinkMode::C(v), LinkMode::F(_)) if v.is_float() => {
-                    self.set_new_F(i);
-                }
-                (LinkMode::C(v), LinkMode::Sf(_, r)) if v.is_float() || v.is_fixnum() => {
-                    let mut guarded = SfGuarded::from_concrete_value(v);
-                    guarded.join(r);
-                    self.set_new_Sf(i, guarded);
-                }
-                (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
-                (LinkMode::C(l), LinkMode::C(r)) if l.is_float() && r.is_float() => {
-                    self.set_new_F(i);
-                }
-                _ => {
-                    let guarded = self.guarded(i).join(&other.guarded(i));
-                    self.set_S_with_guard(i, guarded);
-                }
-            };
         }
     }
 }

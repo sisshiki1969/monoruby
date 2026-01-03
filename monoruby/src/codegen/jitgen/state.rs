@@ -1,11 +1,14 @@
 use super::*;
 
 mod join;
+mod liveness;
 mod read_slot;
 mod slot;
 
+use liveness::IsUsed;
+pub(super) use liveness::Liveness;
 use slot::SfGuarded;
-pub(super) use slot::{Guarded, LinkMode, Liveness, SlotState};
+pub(super) use slot::{Guarded, LinkMode, SlotState};
 
 #[derive(Debug, Clone)]
 pub(crate) struct AbstractState {
@@ -61,27 +64,11 @@ impl AbstractState {
     }
 
     ///
-    /// Join abstract states.
-    ///
-    pub(super) fn join(&mut self, other: &AbstractState) {
-        for (lhs, rhs) in self.frames.iter_mut().zip(other.frames.iter()) {
-            lhs.join(rhs);
-        }
-    }
-
-    ///
     /// Generate bridge AsmIr to merge current state with target state.
     ///
-    pub(super) fn gen_bridge(
-        mut self,
-        ir: &mut AsmIr,
-        src_bb: Option<BasicBlockId>,
-        target: &SlotState,
-        pc: BytecodePtr,
-    ) {
+    pub(super) fn gen_bridge(mut self, ir: &mut AsmIr, target: &SlotState, pc: BytecodePtr) {
         #[cfg(feature = "jit-debug")]
-        eprintln!("    from: {src_bb:?} {:?}", self.slot_state);
-
+        eprintln!("      from:{:?}", &self);
         for slot in self.all_regs() {
             self.bridge(ir, target, slot, pc);
         }
@@ -323,13 +310,6 @@ impl AbstractFrame {
             self.def_reg2acc(ir, GP::Rax, dst);
         }
     }
-
-    //pub(super) fn generic_unop(&mut self, ir: &mut AsmIr, func: UnaryOpFn, pc: BytecodePtr) {
-    //    let using_xmm = self.get_using_xmm();
-    //    let error = ir.new_error(self, pc);
-    //    ir.push(AsmInst::GenericUnOp { func, using_xmm });
-    //    ir.handle_error(error);
-    //}
 }
 
 impl AbstractFrame {

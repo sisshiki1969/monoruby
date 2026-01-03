@@ -2,12 +2,62 @@ use super::*;
 
 impl SlotState {
     ///
+    /// load *slot* into *r*.
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    ///
+    /// ### panic
+    /// - if *slot* is V or None.
+    ///
+    pub(crate) fn load(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP) {
+        self.use_as_value(slot);
+        match self.mode(slot) {
+            LinkMode::F(xmm) => {
+                if dst == GP::R15 {
+                    assert!(self.no_r15());
+                }
+                // F -> Sf
+                ir.xmm2stack(xmm, slot);
+                ir.reg_move(GP::Rax, dst);
+                self.set_Sf_float(slot, xmm);
+            }
+            LinkMode::C(v) => {
+                if dst == GP::R15 {
+                    assert!(self.no_r15());
+                }
+                ir.lit2reg(v, dst);
+            }
+            LinkMode::Sf(_, _) | LinkMode::S(_) => {
+                if dst == GP::R15 {
+                    assert!(self.no_r15());
+                }
+                ir.stack2reg(slot, dst);
+            }
+            LinkMode::G(_) => {
+                ir.reg_move(GP::R15, dst);
+            }
+            LinkMode::MaybeNone => {
+                ir.stack2reg(slot, dst);
+            }
+            LinkMode::V | LinkMode::None => {
+                unreachable!("load() {:?} {:?}: {:?}", slot, self.mode(slot), self);
+            }
+        }
+    }
+
+    ///
     /// load *slot* into *opt* if not on register, and return the register.
     ///
     /// ### panic
     /// - if *slot* is V or None.
     ///
-    pub(crate) fn load_or_reg(&mut self, ir: &mut AsmIr, slot: SlotId, opt: GP) -> GP {
+    pub(in crate::codegen::jitgen) fn load_or_reg(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        opt: GP,
+    ) -> GP {
         if let Some(r) = self.on_reg(slot) {
             r
         } else {
@@ -16,7 +66,7 @@ impl SlotState {
         }
     }
 
-    pub(crate) fn load_array_ty(
+    pub(in crate::codegen::jitgen) fn load_array_ty(
         &mut self,
         ir: &mut AsmIr,
         store: &Store,
@@ -37,7 +87,7 @@ impl SlotState {
     }
 }
 
-impl AbstractFrame {
+impl SlotState {
     ///
     /// load *slot* as f64 into xmm register.
     ///
@@ -119,14 +169,14 @@ impl AbstractFrame {
         }
     }
 
-    pub(super) fn load_xmm_from_f64(&mut self, ir: &mut AsmIr, slot: SlotId, f: f64) -> Xmm {
+    fn load_xmm_from_f64(&mut self, ir: &mut AsmIr, slot: SlotId, f: f64) -> Xmm {
         let x = self.set_new_F(slot);
         ir.f64_to_xmm(f, x);
         x
     }
 }
 
-impl AbstractFrame {
+impl SlotState {
     ///
     /// fetch *slot* and store in callee stack with `offset`.
     ///

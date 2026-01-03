@@ -10,7 +10,7 @@ impl<'a> JitContext<'a> {
             let target = self.remove_backedge(bbid).unwrap();
             let pc = self.iseq().get_bb_pc(bbid);
             #[cfg(feature = "jit-debug")]
-            eprintln!("  backedge_bridge to: {bbid:?} {target:?}");
+            eprintln!("  backedge_bridge to:{bbid:?} target:{target:?}");
             for BranchEntry {
                 src_bb,
                 state,
@@ -19,9 +19,10 @@ impl<'a> JitContext<'a> {
             } in entries
             {
                 #[cfg(feature = "jit-debug")]
-                eprintln!("    {mode:?}");
+                eprintln!("    {mode:?} src:{src_bb:?}");
+
                 let mut ir = AsmIr::new(self);
-                state.gen_bridge(&mut ir, src_bb, &target, pc);
+                state.gen_bridge(&mut ir, &target, pc);
                 match mode {
                     BranchMode::Side { dest } => {
                         self.add_outline_bridge(ir, dest, bbid);
@@ -116,7 +117,7 @@ impl<'a> JitContext<'a> {
     ) {
         let target = target.clone();
         #[cfg(feature = "jit-debug")]
-        eprintln!("  bridge to: {bbid:?} {target:?}");
+        eprintln!("  bridge to:{bbid:?} target:{target:?}");
         for BranchEntry {
             src_bb,
             state,
@@ -125,9 +126,10 @@ impl<'a> JitContext<'a> {
         } in entries
         {
             #[cfg(feature = "jit-debug")]
-            eprintln!("    {mode:?}");
+            eprintln!("    {mode:?} src:{src_bb:?}");
+
             let mut ir = AsmIr::new(self);
-            state.gen_bridge(&mut ir, src_bb, &target, pc);
+            state.gen_bridge(&mut ir, &target, pc);
             match mode {
                 BranchMode::Side { dest } => {
                     self.add_outline_bridge(ir, dest, bbid);
