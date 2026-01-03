@@ -381,7 +381,7 @@ impl<'a> JitContext<'a> {
 
     fn specialized_iseq(
         &mut self,
-        bbctx: &mut AbstractContext,
+        ctx: &mut AbstractContext,
         ir: &mut AsmIr,
         callid: CallSiteId,
         recv_class: ClassId,
@@ -392,7 +392,7 @@ impl<'a> JitContext<'a> {
     ) -> CompileResult {
         let dst = self.store[callid].dst;
         let args_info = if specializable {
-            JitArgumentInfo::new(LinkMode::from_caller(&self.store, fid, callid, bbctx))
+            JitArgumentInfo::new(LinkMode::from_caller(&self.store, fid, callid, ctx))
         } else {
             JitArgumentInfo::default()
         };
@@ -408,18 +408,18 @@ impl<'a> JitContext<'a> {
             args_info,
             None,
             callid,
-            bbctx,
+            ctx,
         ) {
             SpecializedCompileResult::Const(v) => {
-                bbctx.def_C(dst, v);
+                ctx.def_C(dst, v);
                 return CompileResult::Continue;
             }
             SpecializedCompileResult::Compiled { entry, result } => (entry, result),
         };
         let evict = ir.new_evict();
-        bbctx.send_specialized(ir, &self.store, callid, fid, entry, patch_point, evict, pc);
-        let res = bbctx.def_rax2acc_result(ir, dst, result);
-        bbctx.immediate_evict(ir, evict, pc);
+        ctx.send_specialized(ir, &self.store, callid, fid, entry, patch_point, evict, pc);
+        let res = ctx.def_rax2acc_result(ir, dst, result);
+        ctx.immediate_evict(ir, evict, pc);
         return res;
     }
 }
@@ -453,6 +453,7 @@ impl<'a> JitContext<'a> {
             iseq_id,
             outer,
             self_class,
+            None,
         )
     }
 
@@ -464,20 +465,13 @@ impl<'a> JitContext<'a> {
         args_info: JitArgumentInfo,
         outer: Option<usize>,
         callid: CallSiteId,
-        bbctx: &mut AbstractContext,
+        scope: &mut AbstractFrame,
     ) -> SpecializedCompileResult {
-        let using_xmm = bbctx.get_using_xmm();
-        self.xmm_save(using_xmm);
-        self.set_callsite(callid);
-        self.set_not_captured(bbctx.no_capture_guard());
         let frame = self.new_specialized_frame(iseq_id, outer, args_info, self_class);
-        self.stack_frame.push(frame);
-        self.traceir_to_asmir();
-        let mut frame = self.stack_frame.pop().unwrap();
-        bbctx.join_no_capture_guard(self.not_captured());
-        self.unset_callsite();
-        self.xmm_restore(using_xmm);
-        let pos = self.stack_frame.len() - 1;
+
+        let mut frame = self.specialized_compile(scope, callid, frame);
+
+        let pos = self.current_frame_pos();
         let mut return_context = frame.detach_return_context();
         let result = return_context.remove(&pos);
         self.merge_return_context(return_context);

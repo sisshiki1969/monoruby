@@ -155,8 +155,8 @@ enum BranchMode {
 struct BranchEntry {
     /// source BasicBlockId of the branch.
     src_bb: Option<BasicBlockId>,
-    /// context of the source basic block.
-    bbctx: AbstractContext,
+    /// the abstract state of the source basic block.
+    state: AbstractContext,
     /// true if the branch is a continuation branch.
     /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
     mode: BranchMode,
@@ -166,7 +166,7 @@ pub(crate) fn conv(reg: SlotId) -> i32 {
     reg.0 as i32 * 8 + LFP_SELF
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct Assumptions {
     /// guard for class version. true if guaranteed the class version is not changed.
     class_version_guard: bool,
@@ -197,7 +197,7 @@ impl Assumptions {
     fn new_loop() -> Self {
         Self {
             class_version_guard: false,
-            // not guarded frame capture in the compilation for loops
+            // not guarded frame capture in the compilation for loops.
             no_capture_guard: false,
             side_effect_guard: false,
         }
@@ -207,7 +207,7 @@ impl Assumptions {
         let side_effect_guard = cc.iseq().no_ensure();
         Self {
             class_version_guard: false,
-            // specialized methods and blocks are always guarded frame capture
+            // specialized methods and blocks are always guarded frame capture.
             no_capture_guard: true,
             side_effect_guard,
         }
@@ -243,10 +243,23 @@ impl std::ops::DerefMut for AbstractContext {
     }
 }
 
+impl std::ops::Index<usize> for AbstractContext {
+    type Output = AbstractFrame;
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.frames[index]
+    }
+}
+
+impl std::ops::IndexMut<usize> for AbstractContext {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.frames[index]
+    }
+}
+
 ///
 /// Context of an each basic block.
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct AbstractFrame {
     /// state stack slots.
     slot_state: SlotContext,
@@ -269,40 +282,30 @@ impl std::ops::DerefMut for AbstractFrame {
     }
 }
 
-impl AbstractContext {
-    fn equiv(&self, other: &Self) -> bool {
-        self.slot_state.equiv(&other.slot_state) && self.assumptions == other.assumptions
-    }
-
-    fn new_entry(cc: &JitContext) -> Self {
+impl AbstractFrame {
+    fn new(cc: &JitContext) -> Self {
         let next_sp = SlotId(cc.local_num() as u16 + 1);
         match cc.jit_type() {
-            JitType::Entry => AbstractContext {
-                frames: vec![AbstractFrame {
-                    slot_state: SlotContext::new_method(cc),
-                    next_sp,
-                    assumptions: Assumptions::new_entry(cc),
-                }],
+            JitType::Entry => AbstractFrame {
+                slot_state: SlotContext::new_method(cc),
+                next_sp,
+                assumptions: Assumptions::new_entry(cc),
             },
-            JitType::Loop(_) => AbstractContext {
-                frames: vec![AbstractFrame {
-                    slot_state: SlotContext::new_loop(cc),
-                    next_sp,
-                    assumptions: Assumptions::new_loop(),
-                }],
+            JitType::Loop(_) => AbstractFrame {
+                slot_state: SlotContext::new_loop(cc),
+                next_sp,
+                assumptions: Assumptions::new_loop(),
             },
-            JitType::Specialized { .. } => AbstractContext {
-                frames: vec![AbstractFrame {
-                    slot_state: SlotContext::new_method(cc),
-                    next_sp,
-                    assumptions: Assumptions::new_specialized(cc),
-                }],
+            JitType::Specialized { .. } => AbstractFrame {
+                slot_state: SlotContext::new_method(cc),
+                next_sp,
+                assumptions: Assumptions::new_specialized(cc),
             },
         }
     }
 
-    fn class_version_guard(&self) -> bool {
-        self.assumptions.class_version_guard
+    fn equiv(&self, other: &Self) -> bool {
+        self.slot_state.equiv(&other.slot_state) && self.assumptions == other.assumptions
     }
 
     fn no_capture_guard(&self) -> bool {
@@ -311,6 +314,35 @@ impl AbstractContext {
 
     fn join_no_capture_guard(&mut self, other: bool) {
         self.assumptions.no_capture_guard &= other;
+    }
+}
+
+impl AbstractContext {
+    fn new(jitctx: &JitContext) -> Self {
+        let mut scopes = jitctx.outer_contexts();
+        scopes.push(AbstractFrame::new(jitctx));
+        AbstractContext { frames: scopes }
+    }
+
+    fn equiv(&self, other: &Self) -> bool {
+        self.frames
+            .iter()
+            .zip(other.frames.iter())
+            .all(|(lhs, rhs)| lhs.equiv(rhs))
+    }
+
+    fn join_entries(entries: &[BranchEntry]) -> Self {
+        let mut merge_ctx = entries.last().unwrap().state.clone();
+        for BranchEntry { state: bbctx, .. } in entries.iter() {
+            merge_ctx.join(bbctx);
+        }
+        merge_ctx
+    }
+}
+
+impl AbstractFrame {
+    fn class_version_guard(&self) -> bool {
+        self.assumptions.class_version_guard
     }
 
     fn set_class_version_guard(&mut self) {
@@ -328,14 +360,6 @@ impl AbstractContext {
 
     fn unset_side_effect_guard(&mut self) {
         self.assumptions.side_effect_guard = false;
-    }
-
-    fn join_entries(entries: &[BranchEntry]) -> Self {
-        let mut merge_ctx = entries.last().unwrap().bbctx.clone();
-        for BranchEntry { bbctx, .. } in entries.iter() {
-            merge_ctx.join(bbctx);
-        }
-        merge_ctx
     }
 
     fn as_result(&self, slot: SlotId) -> ResultState {
@@ -628,28 +652,20 @@ impl Codegen {
         } else {
             JitType::Entry
         };
-
-        let mut ctx = JitContext::create(
+        let frame = JitStackFrame::new(store, jit_type, 0, iseq_id, None, self_class, None);
+        let mut ctx = JitContext::new(
             store,
-            iseq_id,
-            jit_type,
+            true,
             class_version,
             class_version_label.clone(),
-            self_class,
-            0,
+            vec![],
         );
-        ctx.traceir_to_asmir();
+        let frame = ctx.traceir_to_asmir(frame);
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 
         self.jit.finalize();
-        self.gen_machine_code(
-            ctx.detach_current_frame(),
-            store,
-            entry_label,
-            0,
-            class_version_label,
-        );
+        self.gen_machine_code(frame, store, entry_label, 0, class_version_label);
 
         inline_cache
     }

@@ -3,7 +3,7 @@ use super::*;
 mod join;
 mod read_slot;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct SlotContext {
     /// Slot states.
     slots: Vec<LinkMode>,
@@ -630,7 +630,7 @@ impl SlotContext {
     }
 }
 
-impl AbstractContext {
+impl AbstractFrame {
     ///
     /// Type guard.
     ///
@@ -1327,7 +1327,7 @@ impl UseTy {
     }
 }
 
-impl AbstractContext {
+impl AbstractFrame {
     ///
     /// Write back the value of the *slot* to the corresponding stack slot.
     ///
@@ -1444,7 +1444,7 @@ impl AbstractContext {
 }
 
 // write back operations
-impl AbstractContext {
+impl AbstractFrame {
     pub(crate) fn write_back_slots(&mut self, ir: &mut AsmIr, slot: &[SlotId]) {
         slot.iter().for_each(|r| self.write_back_slot(ir, *r));
     }

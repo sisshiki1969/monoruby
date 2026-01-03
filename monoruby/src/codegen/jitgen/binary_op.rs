@@ -16,7 +16,7 @@ where
     }
 }
 
-impl AbstractContext {
+impl AbstractFrame {
     fn fold_constant_cmp<T>(&mut self, kind: CmpKind, lhs: T, rhs: T, dst: Option<SlotId>)
     where
         T: PartialEq + PartialOrd,
@@ -24,9 +24,7 @@ impl AbstractContext {
         let b = cmp(kind, lhs, rhs);
         self.def_C(dst, Value::bool(b));
     }
-}
 
-impl AbstractContext {
     fn check_concrete_i64(&self, mode: OpMode) -> Option<(i64, i64)> {
         match mode {
             OpMode::RR(lhs, rhs) => {

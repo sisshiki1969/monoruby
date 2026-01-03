@@ -5,8 +5,10 @@ use super::*;
 mod loop_analysis;
 
 impl<'a> JitContext<'a> {
-    pub(super) fn traceir_to_asmir(&mut self) {
-        let bbctx = AbstractContext::new_entry(&self);
+    pub(super) fn traceir_to_asmir(&mut self, frame: JitStackFrame) -> JitStackFrame {
+        self.push_frame(frame);
+
+        let bbctx = AbstractContext::new(&self);
         let iseq = self.iseq();
         let (bb_begin, bb_end) = if let Some(pc) = self.position() {
             let start_pos = iseq.get_pc_index(Some(pc));
@@ -43,6 +45,8 @@ impl<'a> JitContext<'a> {
 
         #[cfg(feature = "emit-cfg")]
         dump_cfg(self.iseq(), &self.store, bb_begin, bb_end);
+
+        self.pop_frame()
     }
 
     fn compile_basic_block(&mut self, bbid: BasicBlockId, last: bool) -> AsmIr {

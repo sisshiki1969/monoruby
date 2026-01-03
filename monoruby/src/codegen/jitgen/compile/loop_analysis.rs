@@ -40,16 +40,16 @@ impl<'a> JitContext<'a> {
         &self,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
-        mut bbctx: AbstractContext,
+        mut state: AbstractContext,
     ) -> (Liveness, Option<AbstractContext>) {
         let pc = self.iseq().get_bb_pc(loop_start);
         let mut ctx = JitContext::loop_analysis(self, pc);
         let mut liveness = Liveness::new(ctx.total_reg_num());
 
         if let Some(backedge) = self.loop_backedge(loop_start) {
-            bbctx.join(backedge);
+            state.join(backedge);
         };
-        ctx.branch_continue(loop_start, bbctx);
+        ctx.branch_continue(loop_start, state);
 
         for bbid in loop_start..=loop_end {
             ctx.analyse_basic_block(&mut liveness, bbid, bbid == loop_start, bbid == loop_end);
@@ -57,14 +57,14 @@ impl<'a> JitContext<'a> {
 
         let mut backedge: Option<AbstractContext> = None;
         if let Some(branches) = ctx.remove_branch(loop_start) {
-            for BranchEntry { src_bb, bbctx, .. } in branches {
-                liveness.join(&bbctx);
+            for BranchEntry { src_bb, state, .. } in branches {
+                liveness.join(&state);
                 assert!(src_bb.unwrap() >= loop_start);
                 // backegde
                 if let Some(backedge) = &mut backedge {
-                    backedge.join(&bbctx);
+                    backedge.join(&state);
                 } else {
-                    backedge = Some(bbctx);
+                    backedge = Some(state);
                 }
             }
         }

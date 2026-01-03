@@ -13,7 +13,7 @@ impl<'a> JitContext<'a> {
             eprintln!("  backedge_bridge to: {bbid:?} {target:?}");
             for BranchEntry {
                 src_bb,
-                bbctx,
+                state,
                 mode,
                 ..
             } in entries
@@ -21,7 +21,7 @@ impl<'a> JitContext<'a> {
                 #[cfg(feature = "jit-debug")]
                 eprintln!("    {mode:?}");
                 let mut ir = AsmIr::new(self);
-                bbctx.gen_bridge(&mut ir, src_bb, &target, pc);
+                state.gen_bridge(&mut ir, src_bb, &target, pc);
                 match mode {
                     BranchMode::Side { dest } => {
                         self.add_outline_bridge(ir, dest, bbid);
@@ -119,7 +119,7 @@ impl<'a> JitContext<'a> {
         eprintln!("  bridge to: {bbid:?} {target:?}");
         for BranchEntry {
             src_bb,
-            bbctx,
+            state,
             mode,
             ..
         } in entries
@@ -127,7 +127,7 @@ impl<'a> JitContext<'a> {
             #[cfg(feature = "jit-debug")]
             eprintln!("    {mode:?}");
             let mut ir = AsmIr::new(self);
-            bbctx.gen_bridge(&mut ir, src_bb, &target, pc);
+            state.gen_bridge(&mut ir, src_bb, &target, pc);
             match mode {
                 BranchMode::Side { dest } => {
                     self.add_outline_bridge(ir, dest, bbid);

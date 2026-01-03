@@ -94,6 +94,10 @@ pub(crate) struct JitStackFrame {
     ///
     callid: Option<CallSiteId>,
     ///
+    /// Snapshot of `AbstractScopeState`` when the child method is called.
+    ///
+    abstract_state: Option<AbstractFrame>,
+    ///
     /// `ClassId`` of *self*.
     ///
     self_class: ClassId,
@@ -161,7 +165,7 @@ pub(crate) struct JitStackFrame {
     pub(super) specialized_methods: Vec<SpecializeInfo>,
 
     ///
-    /// Stack offset for this frame.
+    /// Machine stack offset for this frame.
     ///
     stack_offset: usize,
     ///
@@ -209,6 +213,7 @@ impl JitStackFrame {
         iseq_id: ISeqId,
         outer: Option<usize>,
         self_class: ClassId,
+        abstract_state: Option<AbstractFrame>,
     ) -> Self {
         let self_ty = store[self_class].instance_ty();
         let is_not_block = store[store[iseq_id].func_id()].is_not_block();
@@ -226,6 +231,7 @@ impl JitStackFrame {
             iseq_id,
             outer,
             callid: None,
+            abstract_state,
             self_class,
             self_ty,
             is_not_block,
@@ -257,6 +263,7 @@ impl JitStackFrame {
             iseq_id: self.iseq_id,
             outer: self.outer,
             callid: self.callid,
+            abstract_state: self.abstract_state.clone(),
             self_class: self.self_class,
             self_ty: self.self_ty,
             is_not_block: self.is_not_block,
@@ -388,11 +395,11 @@ pub struct JitContext<'a> {
     ///
     /// Stack frame for specialized compilation. (iseq, outer_scope, block_iseq)
     ///
-    pub(crate) stack_frame: Vec<JitStackFrame>,
+    stack_frame: Vec<JitStackFrame>,
 }
 
 impl<'a> JitContext<'a> {
-    fn new(
+    pub(super) fn new(
         store: &'a Store,
         codegen_mode: bool,
         class_version: u32,
@@ -407,27 +414,6 @@ impl<'a> JitContext<'a> {
             inline_method_cache: vec![],
             stack_frame,
         }
-    }
-
-    pub(super) fn create(
-        store: &'a Store,
-        iseq_id: ISeqId,
-        jit_type: JitType,
-        class_version: u32,
-        class_version_label: DestLabel,
-        self_class: ClassId,
-        specialize_level: usize,
-    ) -> Self {
-        let stack_frame = vec![JitStackFrame::new(
-            store,
-            jit_type,
-            specialize_level,
-            iseq_id,
-            None,
-            self_class,
-        )];
-
-        Self::new(store, true, class_version, class_version_label, stack_frame)
     }
 
     pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
@@ -484,14 +470,6 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().specialized_methods.push(info);
     }
 
-    pub(super) fn xmm_save(&mut self, using_xmm: UsingXmm) {
-        self.current_frame_mut().stack_offset += using_xmm.offset();
-    }
-
-    pub(super) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
-        self.current_frame_mut().stack_offset -= using_xmm.offset();
-    }
-
     pub(super) fn push_return_context(&mut self, pos: usize, ret: ResultState) {
         if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
             frame.join(&ret);
@@ -530,6 +508,7 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    // handling frame
     fn current_frame(&self) -> &JitStackFrame {
         self.stack_frame.last().unwrap()
     }
@@ -538,30 +517,40 @@ impl<'a> JitContext<'a> {
         self.stack_frame.last_mut().unwrap()
     }
 
-    pub(super) fn detach_current_frame(&mut self) -> JitStackFrame {
+    pub(super) fn current_frame_pos(&self) -> usize {
+        self.stack_frame.len() - 1
+    }
+
+    pub(super) fn push_frame(&mut self, frame: JitStackFrame) {
+        self.stack_frame.push(frame);
+    }
+
+    pub(super) fn pop_frame(&mut self) -> JitStackFrame {
         self.stack_frame.pop().unwrap()
     }
 
-    pub(super) fn set_callsite(&mut self, callid: CallSiteId) {
-        self.current_frame_mut().callid = Some(callid);
-    }
+    pub(super) fn specialized_compile(
+        &mut self,
+        current_scope: &mut AbstractFrame,
+        callid: CallSiteId,
+        frame: JitStackFrame,
+    ) -> JitStackFrame {
+        let stack_offset = current_scope.get_using_xmm().offset();
+        let current = self.current_frame_mut();
+        current.stack_offset += stack_offset;
+        current.callid = Some(callid);
+        current.not_captured = current_scope.no_capture_guard();
+        let scope = std::mem::take(current_scope);
+        assert!(std::mem::replace(&mut current.abstract_state, Some(scope)).is_none());
 
-    pub(super) fn unset_callsite(&mut self) {
-        self.current_frame_mut().callid = None;
-    }
+        let frame = self.traceir_to_asmir(frame);
 
-    ///
-    /// Set the *not_captured* status of the current frame to `not_captured`.
-    ///
-    pub(super) fn set_not_captured(&mut self, not_captured: bool) {
-        self.current_frame_mut().not_captured = not_captured;
-    }
-
-    ///
-    /// Get the *not_captured* status of the current frame.
-    ///
-    pub(super) fn not_captured(&self) -> bool {
-        self.current_frame().not_captured
+        let current = self.current_frame_mut();
+        *current_scope = current.abstract_state.take().unwrap();
+        current_scope.join_no_capture_guard(current.not_captured);
+        current.callid = None;
+        current.stack_offset -= stack_offset;
+        frame
     }
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
@@ -613,6 +602,17 @@ impl<'a> JitContext<'a> {
             i -= self.stack_frame[i].outer?;
         }
         Some(i)
+    }
+
+    pub(super) fn outer_contexts(&self) -> Vec<AbstractFrame> {
+        let mut i = self.stack_frame.len() - 1;
+        let mut v = vec![];
+        while let Some(outer) = self.stack_frame[i].outer {
+            i -= outer;
+            let scope = self.stack_frame[i].abstract_state.clone().unwrap();
+            v.push(scope);
+        }
+        v
     }
 
     fn current_method_frame(&self) -> Option<(&JitStackFrame, usize)> {
@@ -792,12 +792,12 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().loop_count -= 1;
     }
 
-    pub(super) fn branch_continue(&mut self, bb_begin: BasicBlockId, bbctx: AbstractContext) {
+    pub(super) fn branch_continue(&mut self, bb_begin: BasicBlockId, state: AbstractContext) {
         self.current_frame_mut().branch_map.insert(
             bb_begin,
             vec![BranchEntry {
                 src_bb: None,
-                bbctx,
+                state,
                 mode: BranchMode::Continue,
             }],
         );
@@ -819,7 +819,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         src_bb: BasicBlockId,
         dest_bb: BasicBlockId,
-        bbctx: AbstractContext,
+        state: AbstractContext,
         mode: BranchMode,
     ) {
         self.current_frame_mut()
@@ -828,7 +828,7 @@ impl<'a> JitContext<'a> {
             .or_default()
             .push(BranchEntry {
                 src_bb: Some(src_bb),
-                bbctx,
+                state,
                 mode,
             });
     }
@@ -840,17 +840,17 @@ impl<'a> JitContext<'a> {
         &mut self,
         src_idx: BcIndex,
         dest_bb: BasicBlockId,
-        mut bbctx: AbstractContext,
+        mut state: AbstractContext,
         dest: JitLabel,
     ) {
-        bbctx.clear_above_next_sp();
+        state.clear_above_next_sp();
         let src_bb = self.iseq().bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
         eprintln!(
             "   new_side branch: {src_idx}->{dest_bb:?} {:?}",
-            bbctx.slot_state
+            state.slot_state
         );
-        self.branch(src_bb, dest_bb, bbctx, BranchMode::Side { dest });
+        self.branch(src_bb, dest_bb, state, BranchMode::Side { dest });
     }
 
     ///
@@ -860,16 +860,16 @@ impl<'a> JitContext<'a> {
         &mut self,
         bc_pos: BcIndex,
         dest_bb: BasicBlockId,
-        mut bbctx: AbstractContext,
+        mut state: AbstractContext,
     ) {
-        bbctx.clear_above_next_sp();
+        state.clear_above_next_sp();
         let src_bb = self.iseq().bb_info.get_bb_id(bc_pos);
         #[cfg(feature = "jit-debug")]
         eprintln!(
             "   new_branch: {bc_pos}->{dest_bb:?} {:?}",
-            bbctx.slot_state
+            state.slot_state
         );
-        self.branch(src_bb, dest_bb, bbctx, BranchMode::Branch);
+        self.branch(src_bb, dest_bb, state, BranchMode::Branch);
     }
 
     ///
@@ -879,16 +879,16 @@ impl<'a> JitContext<'a> {
         &mut self,
         src_idx: BcIndex,
         dest_bb: BasicBlockId,
-        mut bbctx: AbstractContext,
+        mut state: AbstractContext,
     ) {
-        bbctx.clear_above_next_sp();
+        state.clear_above_next_sp();
         let src_bb = self.iseq().bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
         eprintln!(
             "   new_continue: {src_idx}->{dest_bb:?} {:?}",
-            bbctx.slot_state
+            state.slot_state
         );
-        self.branch(src_bb, dest_bb, bbctx, BranchMode::Continue);
+        self.branch(src_bb, dest_bb, state, BranchMode::Continue);
     }
 
     ///

@@ -1,6 +1,6 @@
 use super::*;
 
-impl AbstractContext {
+impl AbstractFrame {
     ///
     /// load *slot* into *r*.
     ///
@@ -87,7 +87,7 @@ impl AbstractContext {
     }
 }
 
-impl AbstractContext {
+impl AbstractFrame {
     ///
     /// load *slot* as f64 into xmm register.
     ///
@@ -176,7 +176,7 @@ impl AbstractContext {
     }
 }
 
-impl AbstractContext {
+impl AbstractFrame {
     ///
     /// fetch *slot* and store in callee stack with `offset`.
     ///

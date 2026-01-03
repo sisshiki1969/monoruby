@@ -160,9 +160,5 @@ fn parse_f64(s: &str) -> (f64, bool) {
         f /= 10.0f64.powi(-e);
     }
     let err = iter.peek().is_some();
-    if positive {
-        (f, err)
-    } else {
-        (-f, err)
-    }
+    if positive { (f, err) } else { (-f, err) }
 }
