@@ -19,7 +19,7 @@ mod value;
 pub(crate) use crate::codegen::runtime::ProcData;
 pub(crate) use bytecode::*;
 pub use bytecodegen::bytecode_compile_script;
-pub use codegen::jitgen::JitContext;
+pub(crate) use codegen::jitgen::JitContext;
 pub use executor::Executor;
 pub use globals::OBJECT_CLASS;
 pub use globals::{Globals, MonorubyErr};

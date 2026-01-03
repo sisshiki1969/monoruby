@@ -1,56 +1,6 @@
 use super::*;
 
-impl AbstractFrame {
-    ///
-    /// load *slot* into *r*.
-    ///
-    /// ### destroy
-    /// - rax, rcx
-    ///
-    /// ### panic
-    /// - if *slot* is V or None.
-    ///
-    pub(crate) fn load(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP) {
-        self.use_as_value(slot);
-        match self.mode(slot) {
-            LinkMode::F(xmm) => {
-                if dst == GP::R15 {
-                    assert!(self.r15.is_none());
-                }
-                // F -> Sf
-                ir.xmm2stack(xmm, slot);
-                ir.reg_move(GP::Rax, dst);
-                self.set_Sf_float(slot, xmm);
-            }
-            LinkMode::C(v) => {
-                if dst == GP::R15 {
-                    assert!(self.r15.is_none());
-                }
-                ir.lit2reg(v, dst);
-            }
-            LinkMode::Sf(_, _) | LinkMode::S(_) => {
-                if dst == GP::R15 {
-                    assert!(self.r15.is_none());
-                }
-                ir.stack2reg(slot, dst);
-            }
-            LinkMode::G(_) => {
-                ir.reg_move(GP::R15, dst);
-            }
-            LinkMode::MaybeNone => {
-                ir.stack2reg(slot, dst);
-            }
-            LinkMode::V | LinkMode::None => {
-                unreachable!(
-                    "load() {:?} {:?}: {:?}",
-                    slot,
-                    self.mode(slot),
-                    &self.slot_state
-                );
-            }
-        }
-    }
-
+impl SlotState {
     ///
     /// load *slot* into *opt* if not on register, and return the register.
     ///

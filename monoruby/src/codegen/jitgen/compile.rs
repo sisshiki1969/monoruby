@@ -1,4 +1,4 @@
-use crate::{bytecodegen::BinOpK, codegen::jitgen::slot::LinkMode};
+use crate::{bytecodegen::BinOpK, codegen::jitgen::state::LinkMode};
 
 use super::*;
 
@@ -66,7 +66,7 @@ impl<'a> JitContext<'a> {
         for bc_pos in begin..=end {
             #[cfg(feature = "emit-asm")]
             ir.bc_index(bc_pos);
-            state.next_sp = self.iseq().get_sp(bc_pos);
+            state.set_next_sp(self.iseq().get_sp(bc_pos));
 
             match self.compile_instruction(&mut ir, &mut state, bc_pos) {
                 CompileResult::Continue => {}

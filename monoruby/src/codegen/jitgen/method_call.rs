@@ -1,5 +1,5 @@
 use crate::{
-    codegen::jitgen::{context::JitStackFrame, slot::LinkMode},
+    codegen::jitgen::{context::JitStackFrame, state::LinkMode},
     executor::inline::InlineFuncInfo,
 };
 
@@ -166,7 +166,7 @@ impl<'a> JitContext<'a> {
         } = block.add(1);
         let simple = self.store.is_simple_call(callee_fid, callid);
         let args_info = if simple {
-            JitArgumentInfo::new(slot::LinkMode::from_caller_yield(
+            JitArgumentInfo::new(LinkMode::from_caller_yield(
                 &self.store,
                 callee_fid,
                 callid,

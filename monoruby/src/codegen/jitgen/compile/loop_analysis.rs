@@ -16,13 +16,17 @@ impl<'a> JitContext<'a> {
                     && be.equiv(&backedge)
                 {
                     #[cfg(feature = "jit-debug")]
-                    eprintln!("fixed: {x} {:?}=={:?}", be.slot_state, backedge.slot_state);
+                    eprintln!(
+                        "fixed: {x} {:?}=={:?}",
+                        (be.slot_state()),
+                        backedge.slot_state()
+                    );
                     break;
                 } else {
                     #[cfg(feature = "jit-debug")]
                     eprintln!(
                         "analyse_loop[{x}] backedge: {loop_end:?}->{loop_start:?} {:?}",
-                        backedge.slot_state
+                        backedge.slot_state()
                     );
                     self.add_loop_info(loop_start, liveness, Some(backedge));
                 }
@@ -69,8 +73,8 @@ impl<'a> JitContext<'a> {
             }
         }
         if let Some(backedge) = &mut backedge {
-            for i in backedge.slot_state.all_regs() {
-                if let slot::LinkMode::G(_) = backedge.mode(i) {
+            for i in backedge.all_regs() {
+                if let LinkMode::G(_) = backedge.mode(i) {
                     let g = backedge.guarded(i);
                     backedge.set_S_with_guard(i, g);
                 }
@@ -81,7 +85,10 @@ impl<'a> JitContext<'a> {
             "analyse_end: {loop_start:?}->{loop_end:?} {}",
             backedge
                 .as_ref()
-                .map_or("no backedge".to_string(), |b| format!("{:?}", b.slot_state))
+                .map_or("no backedge".to_string(), |b| format!(
+                    "{:?}",
+                    b.slot_state()
+                ))
         );
 
         (liveness, backedge)
@@ -102,7 +109,7 @@ impl<'a> JitContext<'a> {
 
         let BasciBlockInfoEntry { begin, end, .. } = self.iseq().bb_info[bbid];
         for bc_pos in begin..=end {
-            state.next_sp = self.iseq().get_sp(bc_pos);
+            state.set_next_sp(self.iseq().get_sp(bc_pos));
 
             match self.compile_instruction(&mut ir, &mut state, bc_pos) {
                 CompileResult::Continue => {}

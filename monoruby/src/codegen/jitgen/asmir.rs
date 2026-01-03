@@ -126,16 +126,16 @@ impl AsmIr {
         AsmEvict(i)
     }
 
-    pub(crate) fn new_deopt(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmDeopt {
+    pub(crate) fn new_deopt(&mut self, state: &SlotState, pc: BytecodePtr) -> AsmDeopt {
         self.new_deopt_with_pc(state, pc)
     }
 
-    pub(crate) fn new_deopt_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmDeopt {
+    pub(crate) fn new_deopt_with_pc(&mut self, state: &SlotState, pc: BytecodePtr) -> AsmDeopt {
         let i = self.new_label(SideExit::Deoptimize(pc, state.get_write_back()));
         AsmDeopt(i)
     }
 
-    pub(crate) fn new_error(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmError {
+    pub(crate) fn new_error(&mut self, state: &SlotState, pc: BytecodePtr) -> AsmError {
         let i = self.new_label(SideExit::Error(pc, state.get_write_back()));
         AsmError(i)
     }

@@ -61,10 +61,10 @@ impl JitBlockInfo {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct JitArgumentInfo(pub Option<Vec<slot::LinkMode>>);
+pub(super) struct JitArgumentInfo(pub Option<Vec<LinkMode>>);
 
 impl JitArgumentInfo {
-    pub(super) fn new(slot: Vec<slot::LinkMode>) -> Self {
+    pub(super) fn new(slot: Vec<LinkMode>) -> Self {
         Self(Some(slot))
     }
 }
@@ -378,7 +378,7 @@ impl JitStackFrame {
 ///
 /// Context for JIT compilation.
 ///
-pub struct JitContext<'a> {
+pub(crate) struct JitContext<'a> {
     pub store: &'a Store,
     codegen_mode: bool,
 
@@ -848,7 +848,7 @@ impl<'a> JitContext<'a> {
         #[cfg(feature = "jit-debug")]
         eprintln!(
             "   new_side branch: {src_idx}->{dest_bb:?} {:?}",
-            state.slot_state
+            state.slot_state()
         );
         self.branch(src_bb, dest_bb, state, BranchMode::Side { dest });
     }
@@ -867,7 +867,7 @@ impl<'a> JitContext<'a> {
         #[cfg(feature = "jit-debug")]
         eprintln!(
             "   new_branch: {bc_pos}->{dest_bb:?} {:?}",
-            state.slot_state
+            state.slot_state()
         );
         self.branch(src_bb, dest_bb, state, BranchMode::Branch);
     }
@@ -886,7 +886,7 @@ impl<'a> JitContext<'a> {
         #[cfg(feature = "jit-debug")]
         eprintln!(
             "   new_continue: {src_idx}->{dest_bb:?} {:?}",
-            state.slot_state
+            state.slot_state()
         );
         self.branch(src_bb, dest_bb, state, BranchMode::Continue);
     }

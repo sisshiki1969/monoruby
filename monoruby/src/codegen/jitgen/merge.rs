@@ -83,10 +83,10 @@ impl<'a> JitContext<'a> {
                 target.liveness_analysis(liveness);
             }
             #[cfg(feature = "jit-debug")]
-            eprintln!("  target:  {:?}\n", target.slot_state);
+            eprintln!("  target:  {:?}\n", target.slot_state());
 
             self.gen_bridges_for_branches(&target, entries, bbid, pc + 1);
-            self.new_backedge(target.slot_state.clone(), bbid);
+            self.new_backedge(target.slot_state().clone(), bbid);
 
             Some(target)
         } else {
