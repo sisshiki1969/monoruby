@@ -485,25 +485,20 @@ impl<'a> JitContext<'a> {
             return;
         };
         if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
-            frame.side_effect_guard = false;
+            frame.unset_side_effect_guard();
         } else {
-            self.current_frame_mut().return_context.insert(
-                pos,
-                ResultState {
-                    ret: ReturnValue::UD,
-                    class_version_guard: false,
-                    side_effect_guard: false,
-                },
-            );
+            self.current_frame_mut()
+                .return_context
+                .insert(pos, ResultState::may_side_effect());
         }
     }
 
     pub(super) fn merge_return_context(&mut self, context: HashMap<usize, ResultState>) {
-        for (pos, ctx) in context {
+        for (pos, res) in context {
             if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
-                frame.join(&ctx);
+                frame.join(&res);
             } else {
-                self.current_frame_mut().return_context.insert(pos, ctx);
+                self.current_frame_mut().return_context.insert(pos, res);
             }
         }
     }

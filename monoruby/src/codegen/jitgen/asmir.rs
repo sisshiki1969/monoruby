@@ -1384,6 +1384,7 @@ pub(super) enum AsmInst {
     },
     /// rax = DynVar(src)
     LoadDynVarSpecialized {
+        /// machine stack offset in bytes
         offset: usize,
         reg: SlotId,
         not_captured: bool,
@@ -1395,6 +1396,7 @@ pub(super) enum AsmInst {
     },
     /// DynVar(dst) = src
     StoreDynVarSpecialized {
+        /// machine stack offset in bytes
         offset: usize,
         dst: SlotId,
         src: GP,

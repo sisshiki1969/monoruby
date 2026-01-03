@@ -96,11 +96,7 @@ impl<'a> JitContext<'a> {
                     return ir;
                 }
                 CompileResult::Recompile(reason) => {
-                    self.new_return(ResultState {
-                        ret: ReturnValue::Value,
-                        class_version_guard: false,
-                        side_effect_guard: false,
-                    });
+                    self.new_return(ResultState::default());
                     let pc = self.get_pc(bc_pos);
                     self.recompile_and_deopt(&mut state, &mut ir, reason, pc);
                     return ir;

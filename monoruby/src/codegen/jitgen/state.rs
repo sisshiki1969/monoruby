@@ -55,6 +55,18 @@ impl AbstractState {
             .all(|(lhs, rhs)| lhs.equiv(rhs))
     }
 
+    pub(super) fn unset_no_capture_guard(&mut self, jitctx: &mut JitContext) {
+        jitctx.unset_no_capture_guard();
+        self.frames
+            .iter_mut()
+            .for_each(|f| f.assumptions.no_capture_guard = false);
+        //self.assumptions.no_capture_guard = false;
+    }
+
+    pub(super) fn outer_no_capture_guard(&self, outer: usize) -> bool {
+        self.frames[self.frames.len() - 1 - outer].no_capture_guard()
+    }
+
     pub(super) fn join_entries(entries: &[BranchEntry]) -> Self {
         let mut merge_ctx = entries.last().unwrap().state.clone();
         for BranchEntry { state, .. } in entries.iter() {
@@ -155,11 +167,6 @@ impl AbstractFrame {
         self.assumptions.class_version_guard = false;
     }
 
-    pub(super) fn unset_no_capture_guard(&mut self, jitctx: &mut JitContext) {
-        jitctx.unset_no_capture_guard();
-        self.assumptions.no_capture_guard = false;
-    }
-
     pub(super) fn unset_side_effect_guard(&mut self) {
         self.assumptions.side_effect_guard = false;
     }
@@ -168,8 +175,7 @@ impl AbstractFrame {
         let ret = self.mode(slot).as_result();
         ResultState {
             ret,
-            class_version_guard: self.assumptions.class_version_guard,
-            side_effect_guard: self.assumptions.side_effect_guard,
+            assumptions: self.assumptions.clone(),
         }
     }
 
@@ -230,7 +236,7 @@ impl AbstractFrame {
         result: Option<ResultState>,
     ) -> CompileResult {
         if let Some(result) = result {
-            self.assumptions.join_result(&result);
+            self.assumptions.join(&result.assumptions);
             match result.ret {
                 ReturnValue::UD => {
                     ir.push(AsmInst::Unreachable);
@@ -374,6 +380,85 @@ impl AbstractFrame {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct ResultState {
+    ret: ReturnValue,
+    assumptions: Assumptions,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ReturnValue {
+    UD,
+    Const(Value),
+    Class(ClassId),
+    Value,
+}
+
+impl ResultState {
+    pub(super) fn default() -> Self {
+        ResultState {
+            ret: ReturnValue::Value,
+            assumptions: Assumptions::default(),
+        }
+    }
+
+    pub(super) fn may_side_effect() -> Self {
+        ResultState {
+            ret: ReturnValue::UD,
+            assumptions: Assumptions {
+                class_version_guard: true,
+                side_effect_guard: false,
+                no_capture_guard: true,
+            },
+        }
+    }
+
+    pub(super) fn unset_side_effect_guard(&mut self) {
+        self.assumptions.side_effect_guard = false;
+    }
+
+    fn return_class(&self) -> Option<ClassId> {
+        match self.ret {
+            ReturnValue::Const(v) => Some(v.class()),
+            ReturnValue::Class(class) => Some(class),
+            _ => None,
+        }
+    }
+
+    pub(in crate::codegen::jitgen) fn const_folded(&self) -> Option<Value> {
+        if !self.assumptions.side_effect_guard {
+            return None;
+        }
+        if let ReturnValue::Const(v) = self.ret {
+            return Some(v);
+        }
+        None
+    }
+
+    pub(in crate::codegen::jitgen) fn join(&mut self, other: &Self) {
+        self.assumptions.join(&other.assumptions);
+        match (&self.ret, &other.ret) {
+            (ReturnValue::UD, _) => {
+                self.ret = other.ret;
+                return;
+            }
+            (_, ReturnValue::UD) => return,
+            (ReturnValue::Const(l), ReturnValue::Const(r)) if l.id() == r.id() => {
+                return;
+            }
+            _ => {}
+        }
+
+        if let Some(class) = self.return_class()
+            && other.return_class() == Some(class)
+        {
+            self.ret = ReturnValue::Class(class);
+            return;
+        }
+        self.ret = ReturnValue::Value;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct Assumptions {
     /// guard for class version. true if guaranteed the class version is not changed.
@@ -425,10 +510,5 @@ impl Assumptions {
         self.class_version_guard &= other.class_version_guard;
         self.no_capture_guard &= other.no_capture_guard;
         self.side_effect_guard &= other.side_effect_guard;
-    }
-
-    fn join_result(&mut self, result: &ResultState) {
-        self.class_version_guard &= result.class_version_guard;
-        self.side_effect_guard &= result.side_effect_guard;
     }
 }
