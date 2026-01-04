@@ -142,7 +142,7 @@ pub(crate) struct JitStackFrame {
     ///
     backedge_map: HashMap<BasicBlockId, SlotState>,
     ///
-    /// Contexts for returning to this frame.
+    /// Contexts for returning from this frame.
     ///
     return_context: HashMap<usize, ResultState>,
 
@@ -172,10 +172,6 @@ pub(crate) struct JitStackFrame {
     /// Flag whether ivar on the heap is accessed in this context.
     ///
     ivar_heap_accessed: bool,
-    ///
-    ///
-    /// the frame is not captured
-    not_captured: bool,
 
     ///
     /// Source map for bytecode index and machine code position.
@@ -248,7 +244,6 @@ impl JitStackFrame {
             specialized_methods: vec![],
             stack_offset,
             ivar_heap_accessed: false,
-            not_captured: true,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -280,7 +275,6 @@ impl JitStackFrame {
             specialized_methods: vec![],
             stack_offset: self.stack_offset,
             ivar_heap_accessed: false,
-            not_captured: self.not_captured,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -526,23 +520,21 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn specialized_compile(
         &mut self,
-        current_scope: &mut AbstractFrame,
+        state: &mut AbstractFrame,
         callid: CallSiteId,
         frame: JitStackFrame,
     ) -> JitStackFrame {
-        let stack_offset = current_scope.get_using_xmm().offset();
+        let stack_offset = state.get_using_xmm().offset();
         let current = self.current_frame_mut();
         current.stack_offset += stack_offset;
         current.callid = Some(callid);
-        current.not_captured = current_scope.no_capture_guard();
-        let scope = std::mem::take(current_scope);
+        let scope = std::mem::take(state);
         assert!(std::mem::replace(&mut current.abstract_state, Some(scope)).is_none());
 
         let frame = self.traceir_to_asmir(frame);
 
         let current = self.current_frame_mut();
-        *current_scope = current.abstract_state.take().unwrap();
-        current_scope.join_no_capture_guard(current.not_captured);
+        *state = current.abstract_state.take().unwrap();
         current.callid = None;
         current.stack_offset -= stack_offset;
         frame
@@ -628,13 +620,18 @@ impl<'a> JitContext<'a> {
 
     ///
     /// Unset frame capture guard in the outer `JitFrame`s.
-    pub(super) fn unset_no_capture_guard(&mut self) {
+    ///
+    pub(super) fn unset_outer_no_capture_guard(&mut self) {
         let mut i = self.stack_frame.len() - 1;
         loop {
             let frame = &mut self.stack_frame[i];
             if let Some(outer) = frame.outer {
                 i -= outer;
-                self.stack_frame[i].not_captured = false;
+                self.stack_frame[i]
+                    .abstract_state
+                    .as_mut()
+                    .unwrap()
+                    .unset_no_capture_guard();
             } else {
                 return;
             }
@@ -656,9 +653,13 @@ impl<'a> JitContext<'a> {
         })
     }
 
-    pub(super) fn outer_stack_offset(&self, outer: usize) -> Option<(usize, bool)> {
+    pub(super) fn outer_stack_offset(
+        &self,
+        state: &AbstractState,
+        outer: usize,
+    ) -> Option<(usize, bool)> {
+        let not_captured = state.outer_no_capture_guard(outer)?;
         let outer = self.outer_pos(outer)?;
-        let not_captured = self.stack_frame[outer].not_captured;
         let offset = self.calc_stack_offset(outer, self.stack_frame.len() - 1);
         Some((offset, not_captured))
     }

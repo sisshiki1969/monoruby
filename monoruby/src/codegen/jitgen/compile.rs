@@ -292,7 +292,7 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::LoadDynVar(dst, src) => {
                 assert!(!dst.is_self());
-                if let Some((offset, not_captured)) = self.outer_stack_offset(src.outer) {
+                if let Some((offset, not_captured)) = self.outer_stack_offset(state, src.outer) {
                     ir.push(AsmInst::LoadDynVarSpecialized {
                         offset,
                         reg: src.reg,
@@ -305,7 +305,7 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::StoreDynVar(dst, src) => {
                 state.load(ir, src, GP::Rdi);
-                if let Some((offset, not_captured)) = self.outer_stack_offset(dst.outer) {
+                if let Some((offset, not_captured)) = self.outer_stack_offset(state, dst.outer) {
                     ir.push(AsmInst::StoreDynVarSpecialized {
                         offset,
                         dst: dst.reg,

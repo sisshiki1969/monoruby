@@ -56,15 +56,21 @@ impl AbstractState {
     }
 
     pub(super) fn unset_no_capture_guard(&mut self, jitctx: &mut JitContext) {
-        jitctx.unset_no_capture_guard();
-        self.frames
-            .iter_mut()
-            .for_each(|f| f.assumptions.no_capture_guard = false);
-        //self.assumptions.no_capture_guard = false;
+        jitctx.unset_outer_no_capture_guard();
+        self.unset_all_no_capture_guard();
     }
 
-    pub(super) fn outer_no_capture_guard(&self, outer: usize) -> bool {
-        self.frames[self.frames.len() - 1 - outer].no_capture_guard()
+    pub(super) fn unset_all_no_capture_guard(&mut self) {
+        for frame in &mut self.frames {
+            frame.unset_no_capture_guard();
+        }
+    }
+
+    pub(super) fn outer_no_capture_guard(&self, outer: usize) -> Option<bool> {
+        if outer >= self.frames.len() {
+            return None;
+        }
+        Some(self.frames[self.frames.len() - 1 - outer].no_capture_guard())
     }
 
     pub(super) fn join_entries(entries: &[BranchEntry]) -> Self {
@@ -151,8 +157,8 @@ impl AbstractFrame {
         self.assumptions.no_capture_guard
     }
 
-    pub(super) fn join_no_capture_guard(&mut self, other: bool) {
-        self.assumptions.no_capture_guard &= other;
+    pub(super) fn unset_no_capture_guard(&mut self) {
+        self.assumptions.no_capture_guard = false;
     }
 
     pub(super) fn class_version_guard(&self) -> bool {

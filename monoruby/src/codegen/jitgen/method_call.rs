@@ -465,11 +465,15 @@ impl<'a> JitContext<'a> {
         args_info: JitArgumentInfo,
         outer: Option<usize>,
         callid: CallSiteId,
-        scope: &mut AbstractFrame,
+        state: &mut AbstractState,
     ) -> SpecializedCompileResult {
         let frame = self.new_specialized_frame(iseq_id, outer, args_info, self_class);
 
-        let mut frame = self.specialized_compile(scope, callid, frame);
+        let mut frame = self.specialized_compile(state, callid, frame);
+        // we must unset no_capture_guard for all state frames if no_capture_guard of the current frame became false.
+        if !state.no_capture_guard() {
+            state.unset_all_no_capture_guard();
+        }
 
         let pos = self.current_frame_pos();
         let mut return_context = frame.detach_return_context();
