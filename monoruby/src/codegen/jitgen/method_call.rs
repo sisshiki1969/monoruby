@@ -481,7 +481,7 @@ impl<'a> JitContext<'a> {
         self.merge_return_context(return_context);
         if let Some(result) = &result {
             if let Some(v) = result.const_folded() {
-                #[cfg(feature = "jit-log")]
+                #[cfg(feature = "jit-debug")]
                 if self.codegen_mode() {
                     eprintln!(
                         "const folded: {} {:?}",
@@ -492,7 +492,7 @@ impl<'a> JitContext<'a> {
                 return SpecializedCompileResult::Const(v);
             }
         }
-        #[cfg(feature = "jit-log")]
+        #[cfg(feature = "jit-debug")]
         if self.codegen_mode() {
             eprintln!(
                 "return: {} {:?}",
@@ -503,7 +503,7 @@ impl<'a> JitContext<'a> {
         let entry = self.label();
         self.specialized_methods_push(context::SpecializeInfo {
             entry,
-            frame,
+            info: frame.asm_info,
             patch_point,
         });
         SpecializedCompileResult::Compiled { entry, result }

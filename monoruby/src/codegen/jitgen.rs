@@ -6,7 +6,7 @@ use ruruby_parse::CmpKind;
 
 use crate::{
     bytecodegen::{BcIndex, UnOpK},
-    codegen::jitgen::context::JitStackFrame,
+    codegen::jitgen::context::{AsmInfo, JitStackFrame},
 };
 
 pub(crate) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId, BasicBlockInfo};
@@ -255,14 +255,14 @@ impl Codegen {
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 
         self.jit.finalize();
-        self.gen_machine_code(frame, store, entry_label, 0, class_version_label);
+        self.gen_machine_code(frame.asm_info, store, entry_label, 0, class_version_label);
 
         inline_cache
     }
 
     fn gen_machine_code(
         &mut self,
-        mut frame: JitStackFrame,
+        mut frame: AsmInfo,
         store: &Store,
         entry_label: DestLabel,
         level: usize,
@@ -270,21 +270,21 @@ impl Codegen {
     ) {
         for context::SpecializeInfo {
             entry: specialized_entry,
-            frame: specialized_frame,
+            info: specialized_info,
             patch_point,
         } in std::mem::take(&mut frame.specialized_methods)
         {
             if !frame.is_specialized() {
                 let patch_point = frame.resolve_label(&mut self.jit, patch_point.unwrap());
                 self.specialized_info.push((
-                    specialized_frame.iseq_id(),
-                    specialized_frame.self_class(),
+                    specialized_info.iseq_id,
+                    specialized_info.self_class,
                     patch_point,
                 ));
             }
             let entry = frame.resolve_label(&mut self.jit, specialized_entry);
             self.gen_machine_code(
-                specialized_frame,
+                specialized_info,
                 store,
                 entry,
                 level + 1,
@@ -296,15 +296,15 @@ impl Codegen {
         #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
         {
             if self.startup_flag {
-                let iseq = &store[frame.iseq_id()];
+                let iseq = &store[frame.iseq_id];
                 let name = store.func_description(iseq.func_id());
                 eprintln!(
                     "  {}>>> [{}] {:?} <{}> self_class:{} {:?}",
                     " ".repeat(level * 3),
                     frame.specialize_level(),
-                    frame.iseq_id(),
+                    frame.iseq_id,
                     name,
-                    store.debug_class_name(frame.self_class()),
+                    store.debug_class_name(frame.self_class),
                     frame,
                 );
             }
@@ -369,14 +369,14 @@ impl Codegen {
 
         #[cfg(feature = "emit-asm")]
         if self.startup_flag {
-            let iseq_id = frame.iseq_id();
+            let iseq_id = frame.iseq_id;
             self.dump_disas(store, &frame.sourcemap, iseq_id);
             eprintln!("  <<<");
         }
 
         #[cfg(feature = "perf")]
         {
-            let iseq_id = frame.iseq_id();
+            let iseq_id = frame.iseq_id;
             let fid = store[iseq_id].func_id();
             let desc = format!("JIT:<{}>", store.func_description(fid));
             self.perf_info(pair, &desc);

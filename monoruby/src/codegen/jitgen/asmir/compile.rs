@@ -23,7 +23,7 @@ impl Codegen {
     pub(super) fn compile_asmir(
         &mut self,
         store: &Store,
-        frame: &mut JitStackFrame,
+        frame: &mut AsmInfo,
         labels: &SideExitLabels,
         inst: AsmInst,
         class_version: DestLabel,
@@ -45,9 +45,9 @@ impl Codegen {
                 );
             }
             AsmInst::Preparation => {
-                if !frame.self_class().is_always_frozen() && frame.ivar_heap_accessed() {
-                    let ivar_len = store[frame.self_class()].ivar_len();
-                    let heap_len = if frame.self_ty() == Some(ObjTy::OBJECT) {
+                if !frame.self_class.is_always_frozen() && frame.ivar_heap_accessed {
+                    let ivar_len = store[frame.self_class].ivar_len();
+                    let heap_len = if frame.self_ty == Some(ObjTy::OBJECT) {
                         ivar_len - OBJECT_INLINE_IVAR
                     } else {
                         ivar_len

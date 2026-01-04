@@ -1,4 +1,4 @@
-use crate::{bytecodegen::BinOpK, codegen::jitgen::context::JitStackFrame};
+use crate::bytecodegen::BinOpK;
 
 use super::*;
 
@@ -1609,7 +1609,7 @@ impl Codegen {
         &mut self,
         ir: AsmIr,
         store: &Store,
-        frame: &mut JitStackFrame,
+        frame: &mut AsmInfo,
         entry: Option<DestLabel>,
         exit: Option<BasicBlockId>,
         class_version: DestLabel,

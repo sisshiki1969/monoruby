@@ -20,7 +20,7 @@ pub(super) enum JitType {
 #[derive(Debug)]
 pub(super) struct SpecializeInfo {
     pub(super) entry: JitLabel,
-    pub(super) frame: JitStackFrame,
+    pub(super) info: AsmInfo,
     pub(super) patch_point: Option<JitLabel>,
 }
 
@@ -69,10 +69,8 @@ impl JitArgumentInfo {
     }
 }
 
-///
-/// Virtual Stack frame for specialized compilation.
-///
-pub(crate) struct JitStackFrame {
+#[derive(Debug)]
+pub(super) struct AsmInfo {
     ///
     /// Type of compilation for this frame.
     ///
@@ -84,7 +82,138 @@ pub(crate) struct JitStackFrame {
     ///
     /// `ISeqId` of the frame.
     ///
-    iseq_id: ISeqId,
+    pub iseq_id: ISeqId,
+    ///
+    /// `ClassId`` of *self*.
+    ///
+    pub self_class: ClassId,
+    ///
+    /// Object type of *self*.
+    ///
+    pub self_ty: Option<ObjTy>,
+
+    ///
+    /// Information for `JitLabel`s`.
+    ///
+    labels: Vec<Option<DestLabel>>,
+    ///
+    /// Destination labels for each BasicBlock.
+    ///
+    basic_block_labels: HashMap<BasicBlockId, JitLabel>,
+
+    ///
+    /// Generated AsmIr.
+    ///
+    ir: Vec<(Option<BasicBlockId>, AsmIr)>,
+    ///
+    /// Information for inlined bridges.
+    ///
+    inline_bridges: HashMap<Option<BasicBlockId>, (AsmIr, Option<BasicBlockId>)>,
+    ///
+    /// Information for outlined bridges.
+    ///
+    outline_bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
+
+    ///
+    /// Flag whether ivar on the heap is accessed in this context.
+    ///
+    pub ivar_heap_accessed: bool,
+
+    ///
+    /// Information for specialized method / block.
+    ///
+    pub(super) specialized_methods: Vec<SpecializeInfo>,
+
+    ///
+    /// Source map for bytecode index and machine code position.
+    ///
+    #[cfg(feature = "emit-asm")]
+    pub(super) sourcemap: Vec<(BcIndex, usize)>,
+    ///
+    /// Start offset of a machine code corresponding to the current basic block.
+    ///
+    #[cfg(feature = "emit-asm")]
+    pub(super) start_codepos: usize,
+}
+
+impl AsmInfo {
+    fn dup(&self) -> Self {
+        Self {
+            jit_type: self.jit_type.clone(),
+            specialize_level: self.specialize_level,
+            iseq_id: self.iseq_id,
+            self_class: self.self_class,
+            self_ty: self.self_ty,
+            labels: self.labels.clone(),
+            basic_block_labels: self.basic_block_labels.clone(),
+            ir: vec![],
+            outline_bridges: vec![],
+            inline_bridges: HashMap::default(),
+            specialized_methods: vec![],
+            ivar_heap_accessed: false,
+            #[cfg(feature = "emit-asm")]
+            sourcemap: vec![],
+            #[cfg(feature = "emit-asm")]
+            start_codepos: 0,
+        }
+    }
+
+    pub(super) fn is_specialized(&self) -> bool {
+        matches!(self.jit_type, JitType::Specialized { .. })
+    }
+
+    #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
+    pub(super) fn specialize_level(&self) -> usize {
+        self.specialize_level
+    }
+
+    ///
+    /// Resolve *JitLabel* and return *DestLabel*.
+    ///
+    pub(super) fn resolve_label(&mut self, jit: &mut JitMemory, label: JitLabel) -> DestLabel {
+        match &self.labels[label.0] {
+            Some(l) => l.clone(),
+            None => {
+                let l = jit.label();
+                self.labels[label.0] = Some(l.clone());
+                l
+            }
+        }
+    }
+
+    pub(super) fn resolve_bb_label(&mut self, jit: &mut JitMemory, bb: BasicBlockId) -> DestLabel {
+        let label = self.basic_block_labels.get(&bb).copied().unwrap();
+        self.resolve_label(jit, label)
+    }
+
+    pub(super) fn detach_ir(&mut self) -> Vec<(Option<BasicBlockId>, AsmIr)> {
+        std::mem::take(&mut self.ir)
+    }
+
+    // bridge operations
+
+    pub(super) fn detach_outline_bridges(&mut self) -> Vec<(AsmIr, JitLabel, BasicBlockId)> {
+        std::mem::take(&mut self.outline_bridges)
+    }
+
+    pub(super) fn inline_bridge_exists(&self, src_bb: BasicBlockId) -> bool {
+        self.inline_bridges.contains_key(&Some(src_bb))
+    }
+
+    pub(super) fn remove_inline_bridge(
+        &mut self,
+        src_bb: Option<BasicBlockId>,
+    ) -> Option<(AsmIr, Option<BasicBlockId>)> {
+        self.inline_bridges.remove(&src_bb)
+    }
+}
+
+///
+/// Virtual Stack frame for specialized compilation.
+///
+pub(super) struct JitStackFrame {
+    pub asm_info: AsmInfo,
+
     ///
     /// Outer frame. (None for methods)
     ///
@@ -97,27 +226,12 @@ pub(crate) struct JitStackFrame {
     /// Snapshot of `AbstractScopeState`` when the child method is called.
     ///
     abstract_state: Option<AbstractFrame>,
-    ///
-    /// `ClassId`` of *self*.
-    ///
-    self_class: ClassId,
-    ///
-    /// Object type of *self*.
-    ///
-    self_ty: Option<ObjTy>,
+
     ///
     /// Whether this function is a method, a class definition, or a top-level.
     ///
     is_not_block: bool,
 
-    ///
-    /// Information for `JitLabel`s`.
-    ///
-    labels: Vec<Option<DestLabel>>,
-    ///
-    /// Destination labels for each BasicBlock.
-    ///
-    basic_block_labels: HashMap<BasicBlockId, JitLabel>,
     ///
     /// Loop information.
     ///
@@ -147,42 +261,9 @@ pub(crate) struct JitStackFrame {
     return_context: HashMap<usize, ResultState>,
 
     ///
-    /// Generated AsmIr.
-    ///
-    ir: Vec<(Option<BasicBlockId>, AsmIr)>,
-    ///
-    /// Information for outlined bridges.
-    ///
-    outline_bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
-    ///
-    /// Information for inlined bridges.
-    ///
-    inline_bridges: HashMap<Option<BasicBlockId>, (AsmIr, Option<BasicBlockId>)>,
-
-    ///
-    /// Information for specialized method / block.
-    ///
-    pub(super) specialized_methods: Vec<SpecializeInfo>,
-
-    ///
     /// Machine stack offset for this frame.
     ///
     stack_offset: usize,
-    ///
-    /// Flag whether ivar on the heap is accessed in this context.
-    ///
-    ivar_heap_accessed: bool,
-
-    ///
-    /// Source map for bytecode index and machine code position.
-    ///
-    #[cfg(feature = "emit-asm")]
-    pub(super) sourcemap: Vec<(BcIndex, usize)>,
-    ///
-    /// Start offset of a machine code corresponding to the current basic block.
-    ///
-    #[cfg(feature = "emit-asm")]
-    pub(super) start_codepos: usize,
 }
 
 impl std::fmt::Debug for JitStackFrame {
@@ -192,6 +273,19 @@ impl std::fmt::Debug for JitStackFrame {
             .field("outer", &self.outer)
             .field("stack_offset", &self.stack_offset)
             .finish()
+    }
+}
+
+impl std::ops::Deref for JitStackFrame {
+    type Target = AsmInfo;
+    fn deref(&self) -> &AsmInfo {
+        &self.asm_info
+    }
+}
+
+impl std::ops::DerefMut for JitStackFrame {
+    fn deref_mut(&mut self) -> &mut AsmInfo {
+        &mut self.asm_info
     }
 }
 
@@ -222,113 +316,60 @@ impl JitStackFrame {
         }
         let stack_offset = store[iseq_id].stack_offset();
         Self {
-            jit_type,
-            specialize_level,
-            iseq_id,
+            asm_info: AsmInfo {
+                jit_type,
+                specialize_level,
+                iseq_id,
+                self_class,
+                self_ty,
+                labels,
+                basic_block_labels,
+                ir: vec![],
+                outline_bridges: vec![],
+                inline_bridges: HashMap::default(),
+                ivar_heap_accessed: false,
+                specialized_methods: vec![],
+                #[cfg(feature = "emit-asm")]
+                sourcemap: vec![],
+                #[cfg(feature = "emit-asm")]
+                start_codepos: 0,
+            },
             outer,
             callid: None,
             abstract_state,
-            self_class,
-            self_ty,
             is_not_block,
-            labels,
-            basic_block_labels,
             loop_info: indexmap::IndexMap::default(),
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
             return_context: HashMap::default(),
-            ir: vec![],
-            outline_bridges: vec![],
-            inline_bridges: HashMap::default(),
-            specialized_methods: vec![],
             stack_offset,
-            ivar_heap_accessed: false,
-            #[cfg(feature = "emit-asm")]
-            sourcemap: vec![],
-            #[cfg(feature = "emit-asm")]
-            start_codepos: 0,
         }
     }
 
     fn dup(&self) -> Self {
         Self {
-            jit_type: self.jit_type.clone(),
-            specialize_level: self.specialize_level,
-            iseq_id: self.iseq_id,
+            asm_info: self.asm_info.dup(),
             outer: self.outer,
             callid: self.callid,
             abstract_state: self.abstract_state.clone(),
-            self_class: self.self_class,
-            self_ty: self.self_ty,
             is_not_block: self.is_not_block,
-            labels: self.labels.clone(),
-            basic_block_labels: self.basic_block_labels.clone(),
             loop_info: indexmap::IndexMap::default(),
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
             return_context: HashMap::default(),
-            ir: vec![],
-            outline_bridges: vec![],
-            inline_bridges: HashMap::default(),
-            specialized_methods: vec![],
             stack_offset: self.stack_offset,
-            ivar_heap_accessed: false,
-            #[cfg(feature = "emit-asm")]
-            sourcemap: vec![],
-            #[cfg(feature = "emit-asm")]
-            start_codepos: 0,
         }
     }
 
     // accessors
 
-    pub(super) fn self_class(&self) -> ClassId {
-        self.self_class
-    }
-
-    pub(super) fn self_ty(&self) -> Option<ObjTy> {
-        self.self_ty
-    }
-
     pub(super) fn iseq_id(&self) -> ISeqId {
         self.iseq_id
     }
 
-    pub(super) fn is_specialized(&self) -> bool {
-        matches!(self.jit_type, JitType::Specialized { .. })
-    }
-
-    #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
-    pub(super) fn specialize_level(&self) -> usize {
-        self.specialize_level
-    }
-
-    pub(super) fn ivar_heap_accessed(&mut self) -> bool {
-        self.ivar_heap_accessed
-    }
-
     // bridge operations
-
-    pub(super) fn inline_bridge_exists(&self, src_bb: BasicBlockId) -> bool {
-        self.inline_bridges.contains_key(&Some(src_bb))
-    }
-
-    pub(super) fn remove_inline_bridge(
-        &mut self,
-        src_bb: Option<BasicBlockId>,
-    ) -> Option<(AsmIr, Option<BasicBlockId>)> {
-        self.inline_bridges.remove(&src_bb)
-    }
-
-    pub(super) fn detach_outline_bridges(&mut self) -> Vec<(AsmIr, JitLabel, BasicBlockId)> {
-        std::mem::take(&mut self.outline_bridges)
-    }
-
-    pub(super) fn detach_ir(&mut self) -> Vec<(Option<BasicBlockId>, AsmIr)> {
-        std::mem::take(&mut self.ir)
-    }
 
     pub(super) fn detach_return_context(&mut self) -> HashMap<usize, ResultState> {
         std::mem::take(&mut self.return_context)
@@ -345,27 +386,8 @@ impl JitStackFrame {
         JitLabel(id)
     }
 
-    ///
-    /// Resolve *JitLabel* and return *DestLabel*.
-    ///
-    pub(super) fn resolve_label(&mut self, jit: &mut JitMemory, label: JitLabel) -> DestLabel {
-        match &self.labels[label.0] {
-            Some(l) => l.clone(),
-            None => {
-                let l = jit.label();
-                self.labels[label.0] = Some(l.clone());
-                l
-            }
-        }
-    }
-
     pub(super) fn get_bb_label(&self, bb: BasicBlockId) -> JitLabel {
         self.basic_block_labels.get(&bb).copied().unwrap()
-    }
-
-    pub(super) fn resolve_bb_label(&mut self, jit: &mut JitMemory, bb: BasicBlockId) -> DestLabel {
-        let label = self.basic_block_labels.get(&bb).copied().unwrap();
-        self.resolve_label(jit, label)
     }
 }
 
