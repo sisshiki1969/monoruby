@@ -638,12 +638,7 @@ impl Executor {
         if module_function {
             globals.add_singleton_method(class_id, name, func, visibility);
         }
-        CODEGEN.with(|codegen| {
-            let mut codegen = codegen.borrow_mut();
-            if codegen.bop_redefine_flags() != 0 {
-                codegen.immediate_eviction(self.cfp());
-            }
-        });
+        Codegen::check_bop_redefine(self.cfp());
         self.invoke_method_if_exists(
             globals,
             IdentId::METHOD_ADDED,

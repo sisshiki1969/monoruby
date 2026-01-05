@@ -140,6 +140,9 @@ impl Codegen {
         );
     }
 
+    ///
+    /// Entry point of JIT compilation.
+    ///
     fn compile(
         &mut self,
         globals: &mut Globals,

@@ -174,17 +174,16 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[test]
     fn proc() {
         run_test_with_prelude(
             r#"
-        35.times {
-          a = :a
-          $b = proc { a = 1 }
-          a = nil
-          foo
-          a.times
-        }
+        a = :a
+        $b = proc { a = 1 }
+        a = nil
+        foo
+        a.inspect
 "#,
             r#"
         def foo

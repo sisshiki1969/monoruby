@@ -847,14 +847,6 @@ impl Codegen {
         unsafe { *self.const_version_addr += 1 }
     }
 
-    pub(crate) fn bop_redefine_flags(&self) -> u32 {
-        let addr = self
-            .jit
-            .get_label_address(&self.bop_redefined_flags)
-            .as_ptr() as *mut u32;
-        unsafe { *addr }
-    }
-
     pub(crate) fn set_bop_redefine(&mut self) {
         let addr = self
             .jit
@@ -866,13 +858,6 @@ impl Codegen {
         eprintln!("### basic op redefined.");
     }
 
-    pub(crate) fn get_deopt_with_return_addr(
-        &self,
-        return_addr: CodePtr,
-    ) -> Option<(Option<CodePtr>, DestLabel)> {
-        self.return_addr_table.get(&return_addr).cloned()
-    }
-
     ///
     /// Check whether *addr* is in VM code or invokers.
     ///
@@ -881,22 +866,6 @@ impl Codegen {
         let start1 = start1.unwrap();
         let start2 = start2.unwrap();
         (start1..start1 + size1).contains(&addr) || (start2..start2 + size2).contains(&addr)
-    }
-
-    pub(crate) fn immediate_eviction(&mut self, mut cfp: Cfp) {
-        let mut return_addr = unsafe { cfp.return_addr() };
-        while let Some(prev_cfp) = cfp.prev() {
-            let ret = return_addr.unwrap();
-            if !self.check_vm_address(ret) {
-                if let Some((patch_point, deopt)) = self.get_deopt_with_return_addr(ret) {
-                    let patch_point = patch_point.unwrap();
-                    self.jit.apply_jmp_patch_address(patch_point, &deopt);
-                    unsafe { patch_point.as_ptr().write(0xe9) };
-                }
-            }
-            cfp = prev_cfp;
-            return_addr = unsafe { cfp.return_addr() };
-        }
     }
 
     fn icmp_teq(&mut self) {
@@ -1159,6 +1128,50 @@ impl Codegen {
 
             eprintln!("      {:06x}: {}", i, text);
         }
+    }
+}
+
+// handling invariants
+
+impl Codegen {
+    pub fn check_bop_redefine(cfp: Cfp) {
+        CODEGEN.with(|codegen| {
+            let mut codegen = codegen.borrow_mut();
+            if codegen.bop_redefine_flags() != 0 {
+                codegen.immediate_eviction(cfp);
+            }
+        });
+    }
+
+    fn bop_redefine_flags(&self) -> u32 {
+        let addr = self
+            .jit
+            .get_label_address(&self.bop_redefined_flags)
+            .as_ptr() as *mut u32;
+        unsafe { *addr }
+    }
+
+    fn immediate_eviction(&mut self, mut cfp: Cfp) {
+        let mut return_addr = unsafe { cfp.return_addr() };
+        while let Some(prev_cfp) = cfp.prev() {
+            let ret = return_addr.unwrap();
+            if !self.check_vm_address(ret) {
+                if let Some((patch_point, deopt)) = self.get_deopt_with_return_addr(ret) {
+                    let patch_point = patch_point.unwrap();
+                    self.jit.apply_jmp_patch_address(patch_point, &deopt);
+                    unsafe { patch_point.as_ptr().write(0xe9) };
+                }
+            }
+            cfp = prev_cfp;
+            return_addr = unsafe { cfp.return_addr() };
+        }
+    }
+
+    fn get_deopt_with_return_addr(
+        &self,
+        return_addr: CodePtr,
+    ) -> Option<(Option<CodePtr>, DestLabel)> {
+        self.return_addr_table.get(&return_addr).cloned()
     }
 }
 
