@@ -84,4 +84,42 @@ mod tests {
         "#,
         );
     }
+
+    #[test]
+    fn binding_eval2() {
+        run_test_with_prelude(
+            r#"
+        35.times {
+          $b = binding
+          a = nil
+          foo
+          a.times
+        }
+"#,
+            r#"
+        def foo
+          eval("a = 1", $b)
+        end
+        "#,
+        )
+    }
+
+    #[test]
+    fn binding_eval3() {
+        run_test_with_prelude(
+            r#"
+        35.times {
+          eval("$b = binding")
+          a = nil
+          foo
+          a.times
+        }
+"#,
+            r#"
+        def foo
+          eval("a = 1", $b)
+        end
+        "#,
+        )
+    }
 }

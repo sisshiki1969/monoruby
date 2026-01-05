@@ -483,12 +483,11 @@ struct Assumptions {
 
 impl Assumptions {
     fn new_entry(cc: &JitContext) -> Self {
-        let no_capture_guard = !cc.is_block();
         let side_effect_guard = cc.iseq().no_ensure();
         Self {
             class_version_guard: false,
             // mehtods are always guarded frame capture but block are not.
-            no_capture_guard,
+            no_capture_guard: true,
             side_effect_guard,
         }
     }

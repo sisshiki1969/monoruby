@@ -1,8 +1,12 @@
+def foo
+  $b.call
+end
+
 35.times {
-  a = 100
-  1.times {
-    1.times {
-      puts a
-    }
-  }
+  a = :a
+  $b = proc { a = 1 }
+  a = nil
+  foo
+  puts a
 }
+
