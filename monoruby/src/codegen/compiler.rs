@@ -157,15 +157,17 @@ impl Codegen {
         #[cfg(feature = "profile")]
         {
             if let Some(reason) = &_is_recompile {
-                globals.countup_recompile(globals.store[iseq_id].func_id(), self_class, reason);
+                let func_id = globals.store[iseq_id].func_id();
+                globals.countup_recompile(func_id, self_class, reason);
             }
         }
 
-        #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
+        #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
         if self.startup_flag {
             let iseq = &globals.store[iseq_id];
+            let func_id = iseq.func_id();
             let start_pos = iseq.get_pc_index(position);
-            let name = globals.store.func_description(iseq.func_id());
+            let name = globals.store.func_description(func_id);
             eprintln!(
                 "==> start {} {}compile: {}{:?} <{}> {}self_class: {} {}:{}",
                 if position.is_some() {
@@ -179,7 +181,7 @@ impl Codegen {
                 } else {
                     String::new()
                 },
-                iseq.func_id(),
+                func_id,
                 name,
                 if position.is_some() {
                     format!("start:[{}] ", start_pos)
@@ -192,37 +194,55 @@ impl Codegen {
             );
         }
 
-        #[cfg(feature = "jit-log")]
         let now = std::time::Instant::now();
+        let (start0, start1) = self.get_address_pair();
 
-        let cache = self.jit_compile(
+        let (cache, specialized_info) = self.jit_compile(
             &globals.store,
             iseq_id,
             self_class,
             position,
-            entry_label,
+            entry_label.clone(),
             class_version,
             class_version_label,
         );
 
+        let codeptr = self.jit.get_label_address(&entry_label);
+        let (end0, end1) = self.get_address_pair();
+        let elapsed = now.elapsed();
+        let span = (
+            (start0, (end0 - start0) as usize),
+            (start1, (end1 - start1) as usize),
+        );
+        /*eprintln!(
+            "{} {} {position:?} ({} bytes, {} bytes) {elapsed:?}",
+            globals
+                .store
+                .func_description(globals.store[iseq_id].func_id()),
+            globals.store.debug_class_name(self_class),
+            span.0.1,
+            span.1.1
+        );*/
+        //eprintln!("{}", specialized_info.format(&globals.store));
+        self.add_compilation_unit(
+            iseq_id,
+            self_class,
+            position,
+            codeptr,
+            specialized_info,
+            span,
+            elapsed,
+        );
+        #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
         if self.startup_flag {
-            #[cfg(feature = "jit-log")]
-            {
-                let elapsed = now.elapsed();
-                eprintln!("<== finished compile. elapsed:{:?}", elapsed);
-                self.jit_compile_time += elapsed;
-            }
+            eprintln!("<== finished compile. elapsed:{:?}", elapsed);
+            self.jit_compile_time += elapsed;
 
-            #[cfg(any(feature = "jit-debug", feature = "jit-log"))]
-            {
-                self.jit.select_page(0);
-                eprintln!("    total bytes(0):{:?}", self.jit.get_current());
-                self.jit.select_page(1);
-                eprintln!("    total bytes(1):{:?}", self.jit.get_current());
-                self.jit.select_page(0);
-            }
-            #[cfg(feature = "emit-asm")]
-            eprintln!("<== finished compile.");
+            self.jit.select_page(0);
+            eprint!("    total bytes(0):{:?}    ", self.jit.get_current());
+            self.jit.select_page(1);
+            eprintln!("(1):{:?}", self.jit.get_current());
+            self.jit.select_page(0);
         }
 
         cache

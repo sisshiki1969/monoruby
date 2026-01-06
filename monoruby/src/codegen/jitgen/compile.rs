@@ -64,7 +64,6 @@ impl<'a> JitContext<'a> {
 
         let BasciBlockInfoEntry { begin, end, .. } = self.iseq().bb_info[bbid];
         for bc_pos in begin..=end {
-            #[cfg(feature = "emit-asm")]
             ir.bc_index(bc_pos);
             state.set_next_sp(self.iseq().get_sp(bc_pos));
 

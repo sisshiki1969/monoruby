@@ -711,7 +711,6 @@ impl AsmIr {
             .push(AsmInst::Inline(InlineProcedure { proc: Box::new(f) }));
     }
 
-    #[cfg(feature = "emit-asm")]
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
         self.push(AsmInst::BcIndex(index));
     }
@@ -719,7 +718,6 @@ impl AsmIr {
 
 #[derive(Debug)]
 pub(super) enum AsmInst {
-    #[cfg(feature = "emit-asm")]
     BcIndex(BcIndex),
     Label(JitLabel),
     Unreachable,

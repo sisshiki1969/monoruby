@@ -247,27 +247,34 @@ impl Store {
     ///
     pub(crate) fn func_description(&self, func_id: FuncId) -> String {
         let info = &self[func_id];
-        if let Some(iseq_id) = info.is_iseq() {
+        let name = if let Some(iseq_id) = info.is_iseq() {
             let iseq = &self[iseq_id];
             let mother = iseq.mother().0;
             if mother != iseq_id {
-                format!("block in {}", self.func_description(self[mother].func_id()))
+                return format!("block in {}", self.func_description(self[mother].func_id()));
             } else {
-                match info.owner_class() {
-                    Some(owner) => format!("{}#{}", owner.get_name(self), iseq.name()),
-                    None => iseq.name().to_string(),
-                }
+                iseq.name()
             }
         } else {
-            let name = if let Some(name) = info.name() {
+            if let Some(name) = info.name() {
                 format!("{:?}", name)
             } else {
                 String::new()
-            };
-            match info.owner_class() {
-                Some(owner) => format!("{}#{name}", owner.get_name(self)),
-                None => name.to_string(),
             }
+        };
+        match info.owner_class() {
+            Some(owner) => {
+                if let Some(obj) = self[owner].get_module().is_singleton() {
+                    if let Some(class) = obj.is_class() {
+                        format!("{}.{name}", class.id().get_name(self))
+                    } else {
+                        format!("{}.{name}", obj.debug_tos(self))
+                    }
+                } else {
+                    format!("{}#{name}", owner.get_name(self))
+                }
+            }
+            None => name,
         }
     }
 

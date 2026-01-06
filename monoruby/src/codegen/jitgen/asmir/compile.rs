@@ -29,7 +29,6 @@ impl Codegen {
         class_version: DestLabel,
     ) {
         match inst {
-            #[cfg(feature = "emit-asm")]
             AsmInst::BcIndex(i) => {
                 frame
                     .sourcemap

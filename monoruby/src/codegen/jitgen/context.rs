@@ -127,12 +127,10 @@ pub(super) struct AsmInfo {
     ///
     /// Source map for bytecode index and machine code position.
     ///
-    #[cfg(feature = "emit-asm")]
     pub(super) sourcemap: Vec<(BcIndex, usize)>,
     ///
-    /// Start offset of a machine code corresponding to the current basic block.
+    /// Start position of the machine code in `JitMemory`.
     ///
-    #[cfg(feature = "emit-asm")]
     pub(super) start_codepos: usize,
 }
 
@@ -151,9 +149,7 @@ impl AsmInfo {
             inline_bridges: HashMap::default(),
             specialized_methods: vec![],
             ivar_heap_accessed: false,
-            #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
-            #[cfg(feature = "emit-asm")]
             start_codepos: 0,
         }
     }
@@ -329,9 +325,7 @@ impl JitStackFrame {
                 inline_bridges: HashMap::default(),
                 ivar_heap_accessed: false,
                 specialized_methods: vec![],
-                #[cfg(feature = "emit-asm")]
                 sourcemap: vec![],
-                #[cfg(feature = "emit-asm")]
                 start_codepos: 0,
             },
             outer,
@@ -474,9 +468,9 @@ impl<'a> JitContext<'a> {
         self.current_frame().self_ty
     }
 
-    pub(super) fn is_block(&self) -> bool {
-        !self.store[self.func_id()].is_not_block()
-    }
+    //pub(super) fn is_block(&self) -> bool {
+    //    !self.store[self.func_id()].is_not_block()
+    //}
 
     pub(super) fn specialized_methods_len(&self) -> usize {
         self.current_frame().specialized_methods.len()

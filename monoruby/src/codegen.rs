@@ -2,6 +2,7 @@ use std::hash::Hash;
 
 use monoasm::*;
 use monoasm_macro::monoasm;
+use std::time::Duration;
 
 mod compiler;
 mod invoker;
@@ -16,6 +17,7 @@ use self::jitgen::asmir::AsmEvict;
 
 use super::*;
 use crate::bytecodegen::inst::*;
+use crate::codegen::jitgen::SpecializedCodeInfo;
 use crate::executor::*;
 
 const OPECODE: i64 = 6;
@@ -647,15 +649,36 @@ impl JitModule {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct CompilationUnitId(usize);
+
+#[allow(dead_code)]
+struct CompilationUnitInfo {
+    /// `ISeqId``.
+    iseq_id: ISeqId,
+    /// `ClassId`` of *self*.
+    self_class: ClassId,
+    /// Bytecode position. (`Some`` for loop compilation, `None`` for method compilation)
+    position: Option<BytecodePtr>,
+    /// Entry point of the machine code.
+    codeptr: CodePtr,
+    /// Specialized code info in the compilation unit.
+    specialized_info: SpecializedCodeInfo,
+    /// span of the generated code ((inline_code_start, inline_code_len), (outline_code_start, outline_code_len)).
+    span: ((CodePtr, usize), (CodePtr, usize)),
+    /// compilation time.
+    elapsed: Duration,
+}
+
 ///
-/// Bytecode compiler
-///
-/// This generates x86-64 machine code from a bytecode.
+/// Machine code generator
 ///
 pub struct Codegen {
     pub(crate) jit: JitModule,
     class_version_addr: *mut u32,
     const_version_addr: *mut u64,
+
+    compilation_unit: Vec<CompilationUnitInfo>,
 
     /// return_addr => (patch_point, deopt)
     return_addr_table: HashMap<CodePtr, (Option<CodePtr>, DestLabel)>,
@@ -746,6 +769,7 @@ impl Codegen {
             jit,
             class_version_addr,
             const_version_addr,
+            compilation_unit: Vec::new(),
             return_addr_table: HashMap::default(),
             asm_return_addr_table: HashMap::default(),
             specialized_info: Vec::new(),
@@ -806,6 +830,29 @@ impl Codegen {
     }
     pub(crate) fn const_version_label(&self) -> DestLabel {
         self.const_version.clone()
+    }
+
+    fn add_compilation_unit(
+        &mut self,
+        iseq_id: ISeqId,
+        self_class: ClassId,
+        position: Option<BytecodePtr>,
+        codeptr: CodePtr,
+        specialized_info: SpecializedCodeInfo,
+        span: ((CodePtr, usize), (CodePtr, usize)),
+        elapsed: Duration,
+    ) -> CompilationUnitId {
+        let id = self.compilation_unit.len();
+        self.compilation_unit.push(CompilationUnitInfo {
+            iseq_id,
+            self_class,
+            position,
+            codeptr,
+            specialized_info,
+            span,
+            elapsed,
+        });
+        CompilationUnitId(id)
     }
 
     pub(crate) fn sigint_flag(&self) -> bool {

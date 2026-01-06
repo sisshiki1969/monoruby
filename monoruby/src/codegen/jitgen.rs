@@ -226,6 +226,48 @@ impl UsingXmm {
     }
 }
 
+#[derive(Debug)]
+pub(super) struct SpecializedCodeInfo {
+    iseq_id: ISeqId,
+    self_class: ClassId,
+    childs: Vec<SpecializedCodeInfo>,
+}
+
+impl SpecializedCodeInfo {
+    fn from(info: &AsmInfo) -> Self {
+        let childs = info
+            .specialized_methods
+            .iter()
+            .map(|context::SpecializeInfo { info, .. }| Self::from(info))
+            .collect();
+        Self {
+            iseq_id: info.iseq_id,
+            self_class: info.self_class,
+            childs,
+        }
+    }
+
+    pub(super) fn format(&self, store: &Store) -> String {
+        let mut buf = String::new();
+        self.format_inner(store, &mut buf, 0);
+        buf
+    }
+
+    fn format_inner(&self, store: &Store, buf: &mut String, level: usize) {
+        let indent = " ".repeat(level * 2);
+        buf.push_str(&format!(
+            "{}- [{:?}] <{}> self_class:{}\n",
+            indent,
+            self.iseq_id,
+            store.func_description(store[self.iseq_id].func_id()),
+            store.debug_class_name(self.self_class)
+        ));
+        for child in &self.childs {
+            child.format_inner(store, buf, level + 1);
+        }
+    }
+}
+
 impl Codegen {
     pub(super) fn jit_compile(
         &mut self,
@@ -236,7 +278,7 @@ impl Codegen {
         entry_label: DestLabel,
         class_version: u32,
         class_version_label: DestLabel,
-    ) -> Vec<(ClassId, Option<IdentId>, FuncId)> {
+    ) -> (Vec<(ClassId, Option<IdentId>, FuncId)>, SpecializedCodeInfo) {
         let jit_type = if let Some(pos) = position {
             JitType::Loop(pos)
         } else {
@@ -251,13 +293,14 @@ impl Codegen {
             vec![],
         );
         let frame = ctx.traceir_to_asmir(frame);
+        let specialized_info = SpecializedCodeInfo::from(&frame);
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 
         self.jit.finalize();
         self.gen_machine_code(frame.asm_info, store, entry_label, 0, class_version_label);
 
-        inline_cache
+        (inline_cache, specialized_info)
     }
 
     fn gen_machine_code(
@@ -293,19 +336,18 @@ impl Codegen {
         }
 
         self.jit.bind_label(entry_label);
-        #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
+        #[cfg(any(feature = "jit-log"))]
         {
             if self.startup_flag {
                 let iseq = &store[frame.iseq_id];
                 let name = store.func_description(iseq.func_id());
                 eprintln!(
-                    "  {}>>> [{}] {:?} <{}> self_class:{} {:?}",
+                    "  {}>>> [{}] {:?} <{}> self_class:{}",
                     " ".repeat(level * 3),
                     frame.specialize_level(),
                     frame.iseq_id,
                     name,
                     store.debug_class_name(frame.self_class),
-                    frame,
                 );
             }
         }
