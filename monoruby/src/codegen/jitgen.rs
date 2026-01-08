@@ -280,30 +280,34 @@ impl Codegen {
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
         class_version: u32,
-        class_version_label: DestLabel,
-    ) -> Option<(Vec<(ClassId, Option<IdentId>, FuncId)>, SpecializedCodeInfo)> {
+    ) -> Option<(
+        Vec<(ClassId, Option<IdentId>, FuncId)>,
+        SpecializedCodeInfo,
+        DestLabel,
+    )> {
         let jit_type = if let Some(pos) = position {
             JitType::Loop(pos)
         } else {
             JitType::Entry
         };
         let frame = JitStackFrame::new(store, jit_type, 0, iseq_id, None, self_class, None);
-        let mut ctx = JitContext::new(
-            store,
-            true,
-            class_version,
-            class_version_label.clone(),
-            vec![],
-        );
+        let mut ctx = JitContext::new(store, true, class_version, vec![]);
         let frame = ctx.traceir_to_asmir(frame)?;
         let specialized_info = SpecializedCodeInfo::from(&frame);
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 
         self.jit.finalize();
-        self.gen_machine_code(frame.asm_info, store, entry_label, 0, class_version_label);
+        let class_version_label = self.jit.const_i32(class_version as _);
+        self.gen_machine_code(
+            frame.asm_info,
+            store,
+            entry_label,
+            0,
+            class_version_label.clone(),
+        );
 
-        Some((inline_cache, specialized_info))
+        Some((inline_cache, specialized_info, class_version_label))
     }
 
     fn gen_machine_code(

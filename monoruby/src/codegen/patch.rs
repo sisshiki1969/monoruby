@@ -28,17 +28,15 @@ impl Codegen {
     ) -> Option<()> {
         let jit_entry = self.jit.label();
         let class_version = self.class_version();
-        let class_version_label = self.jit.const_i32(class_version as _);
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
         let self_class = lfp.self_val().class();
-        if let Some(cache) = self.compile_method(
+        if let Some((cache, class_version_label)) = self.compile_method(
             globals,
             iseq_id,
             self_class,
             jit_entry.clone(),
             class_version,
-            class_version_label.clone(),
             None,
         ) {
             let patch_point = self.jit.label();

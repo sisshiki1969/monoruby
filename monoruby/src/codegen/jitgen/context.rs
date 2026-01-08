@@ -396,7 +396,6 @@ pub(crate) struct JitContext<'a> {
     /// Class version at compile time.
     ///
     class_version: u32,
-    class_version_label: DestLabel,
 
     ///
     /// Inline cache for method calls.
@@ -413,14 +412,12 @@ impl<'a> JitContext<'a> {
         store: &'a Store,
         codegen_mode: bool,
         class_version: u32,
-        class_version_label: DestLabel,
         stack_frame: Vec<JitStackFrame>,
     ) -> Self {
         Self {
             store,
             codegen_mode,
             class_version,
-            class_version_label,
             inline_method_cache: vec![],
             stack_frame,
         }
@@ -433,7 +430,6 @@ impl<'a> JitContext<'a> {
             store: self.store,
             codegen_mode: false,
             class_version: self.class_version,
-            class_version_label: self.class_version_label(),
             inline_method_cache: vec![],
             stack_frame,
         }
@@ -736,10 +732,6 @@ impl<'a> JitContext<'a> {
 
     pub(crate) fn class_version(&self) -> u32 {
         self.class_version
-    }
-
-    pub(crate) fn class_version_label(&self) -> DestLabel {
-        self.class_version_label.clone()
     }
 
     pub(super) fn specialize_level(&self) -> usize {

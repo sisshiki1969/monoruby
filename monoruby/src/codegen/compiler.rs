@@ -11,9 +11,8 @@ impl Codegen {
         self_class: ClassId,
         jit_entry: DestLabel,
         class_version: u32,
-        class_version_label: DestLabel,
         is_recompile: Option<RecompileReason>,
-    ) -> Option<Vec<(ClassId, Option<IdentId>, FuncId)>> {
+    ) -> Option<(Vec<(ClassId, Option<IdentId>, FuncId)>, DestLabel)> {
         self.compile(
             globals,
             iseq_id,
@@ -21,7 +20,6 @@ impl Codegen {
             None,
             jit_entry,
             class_version,
-            class_version_label,
             is_recompile,
         )
     }
@@ -151,9 +149,8 @@ impl Codegen {
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
         class_version: u32,
-        class_version_label: DestLabel,
         _is_recompile: Option<RecompileReason>,
-    ) -> Option<Vec<(ClassId, Option<IdentId>, FuncId)>> {
+    ) -> Option<(Vec<(ClassId, Option<IdentId>, FuncId)>, DestLabel)> {
         if position.is_none() && globals.store[iseq_id].jit_invalidated() {
             return None;
         }
@@ -200,14 +197,13 @@ impl Codegen {
         let now = std::time::Instant::now();
         let (start0, start1) = self.get_address_pair();
 
-        let (cache, specialized_info) = match self.jit_compile(
+        let (cache, specialized_info, class_version_label) = match self.jit_compile(
             &globals.store,
             iseq_id,
             self_class,
             position,
             entry_label.clone(),
             class_version,
-            class_version_label,
         ) {
             Some(res) => res,
             None => {
@@ -262,7 +258,7 @@ impl Codegen {
             self.jit.select_page(0);
         }
 
-        Some(cache)
+        Some((cache, class_version_label))
     }
 
     fn recompile_method(
@@ -276,14 +272,12 @@ impl Codegen {
         let iseq_id = globals.store[func_id].as_iseq();
         let jit_entry = self.jit.label();
         let class_version = self.class_version();
-        let class_version_label = self.jit.const_i32(class_version as _);
-        let cache = self.compile_method(
+        let (cache, _) = self.compile_method(
             globals,
             iseq_id,
             self_class,
             jit_entry.clone(),
             class_version,
-            class_version_label,
             Some(reason),
         )?;
         // get_jit_code() must not be None.
@@ -313,7 +307,7 @@ impl Codegen {
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
         let class_version = self.class_version();
-        let class_version_label = self.jit.const_i32(class_version as _);
+
         self.compile(
             globals,
             iseq_id,
@@ -321,7 +315,6 @@ impl Codegen {
             Some(pc),
             entry_label.clone(),
             class_version,
-            class_version_label,
             is_recompile,
         )?;
         let codeptr = self.jit.get_label_address(&entry_label);
@@ -339,7 +332,6 @@ impl Codegen {
 
         let entry = self.jit.label();
         let class_version = self.class_version();
-        let class_version_label = self.jit.const_i32(class_version as _);
         self.compile(
             globals,
             iseq_id,
@@ -347,7 +339,6 @@ impl Codegen {
             None,
             entry.clone(),
             class_version,
-            class_version_label,
             Some(reason),
         )?;
 
