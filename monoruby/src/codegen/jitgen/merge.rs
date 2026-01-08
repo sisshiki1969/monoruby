@@ -61,8 +61,12 @@ impl<'a> JitContext<'a> {
         &mut self,
         bbid: BasicBlockId,
         no_calc_backedge: bool,
-    ) -> Option<AbstractState> {
-        let entries = self.remove_branch(bbid)?;
+    ) -> Option<Option<AbstractState>> {
+        let entries = if let Some(entries) = self.remove_branch(bbid) {
+            entries
+        } else {
+            return Some(None);
+        };
         let iseq = self.iseq();
         let pc = iseq.get_bb_pc(bbid);
 
@@ -72,7 +76,7 @@ impl<'a> JitContext<'a> {
 
             let incoming = AbstractState::join_entries(&entries);
             if !no_calc_backedge {
-                self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end);
+                self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end)?;
             }
 
             let mut target = incoming;
@@ -102,7 +106,7 @@ impl<'a> JitContext<'a> {
 
         #[cfg(feature = "jit-debug")]
         eprintln!("===merge_end");
-        res
+        Some(res)
     }
 
     ///

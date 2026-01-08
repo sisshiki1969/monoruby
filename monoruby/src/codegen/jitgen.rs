@@ -59,6 +59,8 @@ enum CompileResult {
     Break(ResultState),
     /// deoptimize and recompile.
     Recompile(RecompileReason),
+    /// deoptimize and recompile.
+    Invalidate,
     /// internal error.
     #[allow(dead_code)]
     Abort,
@@ -226,6 +228,7 @@ impl UsingXmm {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(super) struct SpecializedCodeInfo {
     iseq_id: ISeqId,
@@ -278,7 +281,7 @@ impl Codegen {
         entry_label: DestLabel,
         class_version: u32,
         class_version_label: DestLabel,
-    ) -> (Vec<(ClassId, Option<IdentId>, FuncId)>, SpecializedCodeInfo) {
+    ) -> Option<(Vec<(ClassId, Option<IdentId>, FuncId)>, SpecializedCodeInfo)> {
         let jit_type = if let Some(pos) = position {
             JitType::Loop(pos)
         } else {
@@ -292,7 +295,7 @@ impl Codegen {
             class_version_label.clone(),
             vec![],
         );
-        let frame = ctx.traceir_to_asmir(frame);
+        let frame = ctx.traceir_to_asmir(frame)?;
         let specialized_info = SpecializedCodeInfo::from(&frame);
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
@@ -300,7 +303,7 @@ impl Codegen {
         self.jit.finalize();
         self.gen_machine_code(frame.asm_info, store, entry_label, 0, class_version_label);
 
-        (inline_cache, specialized_info)
+        Some((inline_cache, specialized_info))
     }
 
     fn gen_machine_code(

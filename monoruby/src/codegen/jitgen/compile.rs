@@ -5,7 +5,7 @@ use super::*;
 mod loop_analysis;
 
 impl<'a> JitContext<'a> {
-    pub(super) fn traceir_to_asmir(&mut self, frame: JitStackFrame) -> JitStackFrame {
+    pub(super) fn traceir_to_asmir(&mut self, frame: JitStackFrame) -> Option<JitStackFrame> {
         self.push_frame(frame);
 
         let state = AbstractState::new(&self);
@@ -37,7 +37,7 @@ impl<'a> JitContext<'a> {
         self.branch_continue(bb_begin, state);
 
         for bbid in bb_begin..=bb_end {
-            let ir = self.compile_basic_block(bbid, bbid == bb_end);
+            let ir = self.compile_basic_block(bbid, bbid == bb_end)?;
             self.push_ir(Some(bbid), ir);
         }
 
@@ -46,18 +46,18 @@ impl<'a> JitContext<'a> {
         #[cfg(feature = "emit-cfg")]
         dump_cfg(self.iseq(), &self.store, bb_begin, bb_end);
 
-        self.pop_frame()
+        Some(self.pop_frame())
     }
 
-    fn compile_basic_block(&mut self, bbid: BasicBlockId, last: bool) -> AsmIr {
+    fn compile_basic_block(&mut self, bbid: BasicBlockId, last: bool) -> Option<AsmIr> {
         let mut ir = AsmIr::new(self);
 
-        let mut state = match self.incoming_context(bbid, false) {
+        let mut state = match self.incoming_context(bbid, false)? {
             Some(bb) => bb,
             None => {
                 #[cfg(feature = "jit-debug")]
                 eprintln!("=== no entry {bbid:?}");
-                return ir;
+                return Some(ir);
             }
         };
         ir.push(AsmInst::Label(self.get_bb_label(bbid)));
@@ -71,38 +71,41 @@ impl<'a> JitContext<'a> {
                 CompileResult::Continue => {}
                 CompileResult::Raise => {
                     self.unset_return_context_side_effect_guard();
-                    return ir;
+                    return Some(ir);
                 }
                 CompileResult::Cease => {
-                    return ir;
+                    return Some(ir);
                 }
                 CompileResult::Branch(dest_bb) => {
                     self.new_branch(bc_pos, dest_bb, state);
-                    return ir;
+                    return Some(ir);
                 }
                 CompileResult::Return(ret) => {
                     self.new_return(ret);
-                    return ir;
+                    return Some(ir);
                 }
                 CompileResult::MethodReturn(ret) => {
                     self.unset_return_context_side_effect_guard();
                     self.new_method_return(ret);
-                    return ir;
+                    return Some(ir);
                 }
                 CompileResult::Break(ret) => {
                     self.unset_return_context_side_effect_guard();
                     self.new_break(ret);
-                    return ir;
+                    return Some(ir);
+                }
+                CompileResult::ExitLoop => {
+                    state.clear_above_next_sp();
+                    break;
                 }
                 CompileResult::Recompile(reason) => {
                     self.new_return(ResultState::default());
                     let pc = self.get_pc(bc_pos);
                     self.recompile_and_deopt(&mut state, &mut ir, reason, pc);
-                    return ir;
+                    return Some(ir);
                 }
-                CompileResult::ExitLoop => {
-                    state.clear_above_next_sp();
-                    break;
+                CompileResult::Invalidate => {
+                    return None;
                 }
                 CompileResult::Abort => {
                     #[cfg(feature = "emit-bc")]
@@ -117,7 +120,7 @@ impl<'a> JitContext<'a> {
             self.prepare_next(state, end)
         }
 
-        ir
+        Some(ir)
     }
 
     fn prepare_next(&mut self, state: AbstractState, end: BcIndex) {

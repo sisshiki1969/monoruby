@@ -25,35 +25,39 @@ impl Codegen {
         globals: &mut Globals,
         lfp: Lfp,
         entry: monoasm::CodePtr,
-    ) {
-        let patch_point = self.jit.label();
+    ) -> Option<()> {
         let jit_entry = self.jit.label();
         let class_version = self.class_version();
         let class_version_label = self.jit.const_i32(class_version as _);
-        let guard = self.jit.label();
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
         let self_class = lfp.self_val().class();
-        self.class_guard_stub(self_class, &patch_point, &jit_entry, &guard);
-        let old_entry = globals.store[iseq_id].add_jit_code(
-            self_class,
-            patch_point,
-            class_version_label.clone(),
-        );
-        assert!(old_entry.is_none());
-        let cache = self.compile_method(
+        if let Some(cache) = self.compile_method(
             globals,
             iseq_id,
             self_class,
-            jit_entry,
+            jit_entry.clone(),
             class_version,
-            class_version_label,
+            class_version_label.clone(),
             None,
-        );
+        ) {
+            let patch_point = self.jit.label();
+            let guard = self.jit.label();
+            self.class_guard_stub(self_class, &patch_point, &jit_entry, &guard);
+            let old_entry =
+                globals.store[iseq_id].add_jit_code(self_class, patch_point, class_version_label);
+            assert!(old_entry.is_none());
 
-        globals.store[iseq_id].set_cache_map(self_class, cache);
-        self.jit.apply_jmp_patch_address(entry, &guard);
-        self.jit.finalize();
+            globals.store[iseq_id].set_cache_map(self_class, cache);
+            self.jit.apply_jmp_patch_address(entry, &guard);
+            self.jit.finalize();
+            Some(())
+        } else {
+            let vm_entry = self.vm_entry();
+            self.jit.apply_jmp_patch_address(entry, &vm_entry);
+            self.jit.finalize();
+            None
+        }
     }
 
     ///

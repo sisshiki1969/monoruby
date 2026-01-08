@@ -27,7 +27,10 @@ impl<'a> JitContext<'a> {
         let recv = callsite.recv;
 
         // We must write back and unlink all local vars when they are possibly accessed or captured from inner blocks.
-        if callsite.block_fid.is_some() || self.store[func_id].possibly_capture_without_block() {
+        if self.store[func_id].possibly_capture_without_block() {
+            return CompileResult::Invalidate;
+        }
+        if callsite.block_fid.is_some() {
             state.locals_to_S(ir);
         }
 
@@ -48,9 +51,6 @@ impl<'a> JitContext<'a> {
                 InlineFuncInfo::InlineGen(f) => {
                     if self.inline_asm(state, ir, f, callsite, recv_class, pc) {
                         state.unset_side_effect_guard();
-                        if self.store[func_id].possibly_capture_without_block() {
-                            state.unset_no_capture_guard(self);
-                        }
                         return CompileResult::Continue;
                     }
                 }
@@ -190,6 +190,9 @@ impl<'a> JitContext<'a> {
                 return CompileResult::Continue;
             }
             SpecializedCompileResult::Compiled { entry, result } => (entry, result),
+            SpecializedCompileResult::Invalidate => {
+                return CompileResult::Invalidate;
+            }
         };
         state.exec_gc(ir, true, pc);
         let using_xmm = state.get_using_xmm();
@@ -280,7 +283,7 @@ impl<'a> JitContext<'a> {
 
         state.send(ir, &self.store, callid, fid, recv_class, outer_lfp, pc);
 
-        if self.store[fid].possibly_capture_without_block() || block_fid.is_some() {
+        if block_fid.is_some() {
             state.unset_no_capture_guard(self);
         }
 
@@ -415,6 +418,9 @@ impl<'a> JitContext<'a> {
                 return CompileResult::Continue;
             }
             SpecializedCompileResult::Compiled { entry, result } => (entry, result),
+            SpecializedCompileResult::Invalidate => {
+                return CompileResult::Invalidate;
+            }
         };
         let evict = ir.new_evict();
         state.send_specialized(ir, &self.store, callid, fid, entry, patch_point, evict, pc);
@@ -430,6 +436,7 @@ pub(super) enum SpecializedCompileResult {
         entry: JitLabel,
         result: Option<ResultState>,
     },
+    Invalidate,
 }
 
 impl<'a> JitContext<'a> {
@@ -469,7 +476,11 @@ impl<'a> JitContext<'a> {
     ) -> SpecializedCompileResult {
         let frame = self.new_specialized_frame(iseq_id, outer, args_info, self_class);
 
-        let mut frame = self.specialized_compile(state, callid, frame);
+        let mut frame = if let Some(frame) = self.specialized_compile(state, callid, frame) {
+            frame
+        } else {
+            return SpecializedCompileResult::Invalidate;
+        };
         // we must unset no_capture_guard for all state frames if no_capture_guard of the current frame became false.
         if !state.no_capture_guard() {
             state.unset_all_no_capture_guard();

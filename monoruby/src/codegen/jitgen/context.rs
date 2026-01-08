@@ -539,7 +539,7 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractFrame,
         callid: CallSiteId,
         frame: JitStackFrame,
-    ) -> JitStackFrame {
+    ) -> Option<JitStackFrame> {
         let stack_offset = state.get_using_xmm().offset();
         let current = self.current_frame_mut();
         current.stack_offset += stack_offset;
@@ -547,13 +547,13 @@ impl<'a> JitContext<'a> {
         let scope = std::mem::take(state);
         assert!(std::mem::replace(&mut current.abstract_state, Some(scope)).is_none());
 
-        let frame = self.traceir_to_asmir(frame);
+        let frame = self.traceir_to_asmir(frame)?;
 
         let current = self.current_frame_mut();
         *state = current.abstract_state.take().unwrap();
         current.callid = None;
         current.stack_offset -= stack_offset;
-        frame
+        Some(frame)
     }
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {

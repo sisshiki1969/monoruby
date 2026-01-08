@@ -13,7 +13,7 @@ impl Codegen {
         class_version: u32,
         class_version_label: DestLabel,
         is_recompile: Option<RecompileReason>,
-    ) -> Vec<(ClassId, Option<IdentId>, FuncId)> {
+    ) -> Option<Vec<(ClassId, Option<IdentId>, FuncId)>> {
         self.compile(
             globals,
             iseq_id,
@@ -153,7 +153,10 @@ impl Codegen {
         class_version: u32,
         class_version_label: DestLabel,
         _is_recompile: Option<RecompileReason>,
-    ) -> Vec<(ClassId, Option<IdentId>, FuncId)> {
+    ) -> Option<Vec<(ClassId, Option<IdentId>, FuncId)>> {
+        if position.is_none() && globals.store[iseq_id].jit_invalidated() {
+            return None;
+        }
         #[cfg(feature = "profile")]
         {
             if let Some(reason) = &_is_recompile {
@@ -197,7 +200,7 @@ impl Codegen {
         let now = std::time::Instant::now();
         let (start0, start1) = self.get_address_pair();
 
-        let (cache, specialized_info) = self.jit_compile(
+        let (cache, specialized_info) = match self.jit_compile(
             &globals.store,
             iseq_id,
             self_class,
@@ -205,7 +208,21 @@ impl Codegen {
             entry_label.clone(),
             class_version,
             class_version_label,
-        );
+        ) {
+            Some(res) => res,
+            None => {
+                if position.is_none() {
+                    globals.store[iseq_id].invalidate_jit_code();
+                }
+                #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
+                if self.startup_flag {
+                    let elapsed = now.elapsed();
+                    eprintln!("<== abort compile. elapsed:{:?}", elapsed);
+                    self.jit_compile_time += elapsed;
+                }
+                return None;
+            }
+        };
 
         let codeptr = self.jit.get_label_address(&entry_label);
         let (end0, end1) = self.get_address_pair();
@@ -245,10 +262,15 @@ impl Codegen {
             self.jit.select_page(0);
         }
 
-        cache
+        Some(cache)
     }
 
-    fn recompile_method(&mut self, globals: &mut Globals, lfp: Lfp, reason: RecompileReason) {
+    fn recompile_method(
+        &mut self,
+        globals: &mut Globals,
+        lfp: Lfp,
+        reason: RecompileReason,
+    ) -> Option<()> {
         let self_class = lfp.self_val().class();
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
@@ -263,7 +285,7 @@ impl Codegen {
             class_version,
             class_version_label,
             Some(reason),
-        );
+        )?;
         // get_jit_code() must not be None.
         // After BOP redefinition occurs, recompilation in invalidated methods cause None.
         if let Some(patch_point) = globals.store[iseq_id].get_jit_entry(self_class) {
@@ -276,6 +298,7 @@ impl Codegen {
                 globals.store[func_id].name()
             );
         }
+        Some(())
     }
 
     fn compile_partial(
@@ -284,7 +307,7 @@ impl Codegen {
         lfp: Lfp,
         pc: BytecodePtr,
         is_recompile: Option<RecompileReason>,
-    ) {
+    ) -> Option<()> {
         let entry_label = self.jit.label();
         let self_class = lfp.self_val().class();
         let func_id = lfp.func_id();
@@ -300,9 +323,10 @@ impl Codegen {
             class_version,
             class_version_label,
             is_recompile,
-        );
+        )?;
         let codeptr = self.jit.get_label_address(&entry_label);
         pc.write2(codeptr.as_ptr() as u64);
+        Some(())
     }
 
     fn recompile_specialized(
@@ -310,7 +334,7 @@ impl Codegen {
         globals: &mut Globals,
         idx: usize,
         reason: RecompileReason,
-    ) {
+    ) -> Option<()> {
         let (iseq_id, self_class, patch_point) = self.specialized_info[idx].clone();
 
         let entry = self.jit.label();
@@ -325,10 +349,11 @@ impl Codegen {
             class_version,
             class_version_label,
             Some(reason),
-        );
+        )?;
 
         let patch_point = self.jit.get_label_address(&patch_point);
         self.jit.apply_jmp_patch_address(patch_point, &entry);
+        Some(())
     }
 }
 

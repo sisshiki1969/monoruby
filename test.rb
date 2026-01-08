@@ -1,12 +1,8 @@
-def foo
-  $b.call
+res = []
+1000.times do
+  5.times do |a|
+      5.times do |b|
+          eval "res << a; res << b"
+      end
+  end
 end
-
-35.times {
-  a = :a
-  $b = proc { a = 1 }
-  a = nil
-  foo
-  puts a
-}
-

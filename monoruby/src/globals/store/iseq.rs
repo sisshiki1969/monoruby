@@ -130,12 +130,16 @@ pub struct ISeqInfo {
     /// Lexical module stack of this method.
     ///
     pub lexical_context: Vec<ClassId>,
+    ///
+    /// Source code information.
+    ///
     pub sourceinfo: SourceInfoRef,
     is_constant_fn: Option<Value>,
     ///
     /// JIT code info for each class of *self*.
     ///
     pub(super) jit_entry: HashMap<ClassId, JitInfo>,
+    pub(super) jit_invalidated: bool,
     ///
     /// Basic block information.
     ///
@@ -194,6 +198,7 @@ impl ISeqInfo {
             sourceinfo,
             is_constant_fn: None,
             jit_entry: HashMap::default(),
+            jit_invalidated: false,
             bb_info: BasicBlockInfo::default(),
             callsite_map: HashMap::default(),
         }
@@ -460,7 +465,14 @@ impl ISeqInfo {
             .map(|info| info.inline_cache_map = cache);
     }
 
+    pub(crate) fn jit_invalidated(&self) -> bool {
+        self.jit_invalidated
+    }
+
     pub(crate) fn get_jit_entry(&self, self_class: ClassId) -> Option<DestLabel> {
+        if self.jit_invalidated {
+            return None;
+        }
         self.jit_entry
             .get(&self_class)
             .map(|info| info.entry.clone())
@@ -473,6 +485,7 @@ impl ISeqInfo {
     }
 
     pub(crate) fn invalidate_jit_code(&mut self) {
+        self.jit_invalidated = true;
         self.jit_entry.clear();
     }
 }
