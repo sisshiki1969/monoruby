@@ -36,6 +36,10 @@ mod state;
 pub mod trace_ir;
 mod variables;
 
+type Result<T> = std::result::Result<T, CompileError>;
+
+pub(super) struct CompileError;
+
 ///
 /// Compile result of the current instruction.
 ///
@@ -59,8 +63,6 @@ enum CompileResult {
     Break(ResultState),
     /// deoptimize and recompile.
     Recompile(RecompileReason),
-    /// deoptimize and recompile.
-    Invalidate,
     /// internal error.
     #[allow(dead_code)]
     Abort,
@@ -280,7 +282,7 @@ impl Codegen {
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
         class_version: u32,
-    ) -> Option<(
+    ) -> Result<(
         Vec<(ClassId, Option<IdentId>, FuncId)>,
         SpecializedCodeInfo,
         DestLabel,
@@ -307,7 +309,7 @@ impl Codegen {
             class_version_label.clone(),
         );
 
-        Some((inline_cache, specialized_info, class_version_label))
+        Ok((inline_cache, specialized_info, class_version_label))
     }
 
     fn gen_machine_code(

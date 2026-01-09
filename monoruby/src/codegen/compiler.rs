@@ -197,7 +197,7 @@ impl Codegen {
         let now = std::time::Instant::now();
         let (start0, start1) = self.get_address_pair();
 
-        let (cache, specialized_info, class_version_label) = match self.jit_compile(
+        match self.jit_compile(
             &globals.store,
             iseq_id,
             self_class,
@@ -205,8 +205,51 @@ impl Codegen {
             entry_label.clone(),
             class_version,
         ) {
-            Some(res) => res,
-            None => {
+            Ok((cache, specialized_info, class_version_label)) => {
+                let codeptr = self.jit.get_label_address(&entry_label);
+                let (end0, end1) = self.get_address_pair();
+                let elapsed = now.elapsed();
+                let span = (
+                    (start0, (end0 - start0) as usize),
+                    (start1, (end1 - start1) as usize),
+                );
+                #[cfg(feature = "jit-log")]
+                {
+                    eprintln!(
+                        "{} {} {position:?} ({} bytes, {} bytes) {elapsed:?}",
+                        globals
+                            .store
+                            .func_description(globals.store[iseq_id].func_id()),
+                        globals.store.debug_class_name(self_class),
+                        span.0.1,
+                        span.1.1
+                    );
+                    eprintln!("{}", specialized_info.format(&globals.store));
+                }
+                self.add_compilation_unit(
+                    iseq_id,
+                    self_class,
+                    position,
+                    codeptr,
+                    specialized_info,
+                    span,
+                    elapsed,
+                );
+                #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
+                if self.startup_flag {
+                    eprintln!("<== finished compile. elapsed:{:?}", elapsed);
+                    self.jit_compile_time += elapsed;
+
+                    self.jit.select_page(0);
+                    eprint!("    total bytes(0):{:?}    ", self.jit.get_current());
+                    self.jit.select_page(1);
+                    eprintln!("(1):{:?}", self.jit.get_current());
+                    self.jit.select_page(0);
+                }
+
+                Some((cache, class_version_label))
+            }
+            Err(_) => {
                 if position.is_none() {
                     globals.store[iseq_id].invalidate_jit_code();
                 }
@@ -216,49 +259,9 @@ impl Codegen {
                     eprintln!("<== abort compile. elapsed:{:?}", elapsed);
                     self.jit_compile_time += elapsed;
                 }
-                return None;
+                None
             }
-        };
-
-        let codeptr = self.jit.get_label_address(&entry_label);
-        let (end0, end1) = self.get_address_pair();
-        let elapsed = now.elapsed();
-        let span = (
-            (start0, (end0 - start0) as usize),
-            (start1, (end1 - start1) as usize),
-        );
-        /*eprintln!(
-            "{} {} {position:?} ({} bytes, {} bytes) {elapsed:?}",
-            globals
-                .store
-                .func_description(globals.store[iseq_id].func_id()),
-            globals.store.debug_class_name(self_class),
-            span.0.1,
-            span.1.1
-        );*/
-        //eprintln!("{}", specialized_info.format(&globals.store));
-        self.add_compilation_unit(
-            iseq_id,
-            self_class,
-            position,
-            codeptr,
-            specialized_info,
-            span,
-            elapsed,
-        );
-        #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
-        if self.startup_flag {
-            eprintln!("<== finished compile. elapsed:{:?}", elapsed);
-            self.jit_compile_time += elapsed;
-
-            self.jit.select_page(0);
-            eprint!("    total bytes(0):{:?}    ", self.jit.get_current());
-            self.jit.select_page(1);
-            eprintln!("(1):{:?}", self.jit.get_current());
-            self.jit.select_page(0);
         }
-
-        Some((cache, class_version_label))
     }
 
     fn recompile_method(

@@ -61,11 +61,11 @@ impl<'a> JitContext<'a> {
         &mut self,
         bbid: BasicBlockId,
         no_calc_backedge: bool,
-    ) -> Option<Option<AbstractState>> {
+    ) -> Result<Option<AbstractState>> {
         let entries = if let Some(entries) = self.remove_branch(bbid) {
             entries
         } else {
-            return Some(None);
+            return Ok(None);
         };
         let iseq = self.iseq();
         let pc = iseq.get_bb_pc(bbid);
@@ -106,7 +106,7 @@ impl<'a> JitContext<'a> {
 
         #[cfg(feature = "jit-debug")]
         eprintln!("===merge_end");
-        Some(res)
+        Ok(res)
     }
 
     ///

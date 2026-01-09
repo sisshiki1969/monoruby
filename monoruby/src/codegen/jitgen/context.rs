@@ -535,7 +535,7 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractFrame,
         callid: CallSiteId,
         frame: JitStackFrame,
-    ) -> Option<JitStackFrame> {
+    ) -> Result<JitStackFrame> {
         let stack_offset = state.get_using_xmm().offset();
         let current = self.current_frame_mut();
         current.stack_offset += stack_offset;
@@ -549,7 +549,7 @@ impl<'a> JitContext<'a> {
         *state = current.abstract_state.take().unwrap();
         current.callid = None;
         current.stack_offset -= stack_offset;
-        Some(frame)
+        Ok(frame)
     }
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {

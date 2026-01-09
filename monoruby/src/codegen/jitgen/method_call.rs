@@ -20,16 +20,16 @@ impl<'a> JitContext<'a> {
         recv_class: ClassId,
         func_id: FuncId,
         callid: CallSiteId,
-    ) -> CompileResult {
+    ) -> Result<CompileResult> {
         let callsite = &self.store[callid];
         self.inline_method_cache
             .push((recv_class, callsite.name, func_id));
         let recv = callsite.recv;
 
-        // We must write back and unlink all local vars when they are possibly accessed or captured from inner blocks.
         if self.store[func_id].possibly_capture_without_block() {
-            return CompileResult::Invalidate;
+            return Err(CompileError);
         }
+        // We must write back and unlink all local vars when they are possibly accessed or captured from inner blocks.
         if callsite.block_fid.is_some() {
             state.locals_to_S(ir);
         }
@@ -51,7 +51,7 @@ impl<'a> JitContext<'a> {
                 InlineFuncInfo::InlineGen(f) => {
                     if self.inline_asm(state, ir, f, callsite, recv_class, pc) {
                         state.unset_side_effect_guard();
-                        return CompileResult::Continue;
+                        return Ok(CompileResult::Continue);
                     }
                 }
                 InlineFuncInfo::CFunc_F_F(f) => {
@@ -61,7 +61,7 @@ impl<'a> JitContext<'a> {
                         if let Some(dst) = dst {
                             state.def_C_float(dst, res);
                         }
-                        return CompileResult::Continue;
+                        return Ok(CompileResult::Continue);
                     }
                     if let Some(dst) = dst {
                         let src = state.load_xmm(ir, args, pc);
@@ -75,7 +75,7 @@ impl<'a> JitContext<'a> {
                             using_xmm,
                         });
                     }
-                    return CompileResult::Continue;
+                    return Ok(CompileResult::Continue);
                 }
                 InlineFuncInfo::CFunc_FF_F(f) => {
                     let CallSiteInfo {
@@ -86,7 +86,7 @@ impl<'a> JitContext<'a> {
                         if let Some(dst) = dst {
                             state.def_C_float(dst, res);
                         }
-                        return CompileResult::Continue;
+                        return Ok(CompileResult::Continue);
                     }
                     if let Some(dst) = dst {
                         let lhs = state.load_xmm(ir, recv, pc);
@@ -102,7 +102,7 @@ impl<'a> JitContext<'a> {
                             using_xmm,
                         });
                     }
-                    return CompileResult::Continue;
+                    return Ok(CompileResult::Continue);
                 }
             }
         }
@@ -157,7 +157,7 @@ impl<'a> JitContext<'a> {
         block: &JitBlockInfo,
         iseq: ISeqId,
         pc: BytecodePtr,
-    ) -> CompileResult {
+    ) -> Result<CompileResult> {
         let dst = self.store[callid].dst;
         let JitBlockInfo {
             block_fid: callee_fid,
@@ -184,15 +184,12 @@ impl<'a> JitContext<'a> {
             Some(outer),
             callid,
             state,
-        ) {
+        )? {
             SpecializedCompileResult::Const(v) => {
                 state.def_C(dst, v);
-                return CompileResult::Continue;
+                return Ok(CompileResult::Continue);
             }
             SpecializedCompileResult::Compiled { entry, result } => (entry, result),
-            SpecializedCompileResult::Invalidate => {
-                return CompileResult::Invalidate;
-            }
         };
         state.exec_gc(ir, true, pc);
         let using_xmm = state.get_using_xmm();
@@ -213,7 +210,7 @@ impl<'a> JitContext<'a> {
         ir.handle_error(error);
         let res = state.def_rax2acc_result(ir, dst, result);
         state.immediate_evict(ir, evict, pc);
-        res
+        Ok(res)
     }
 
     ///
@@ -233,7 +230,7 @@ impl<'a> JitContext<'a> {
         fid: FuncId,
         recv_class: ClassId,
         pc: BytecodePtr,
-    ) -> CompileResult {
+    ) -> Result<CompileResult> {
         let callsite = &self.store[callid];
         let CallSiteInfo {
             args,
@@ -245,17 +242,17 @@ impl<'a> JitContext<'a> {
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
         let (fid, outer_lfp) = match self.store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
-                return self.attr_reader(state, ir, callid, recv_class, ivar_name);
+                return Ok(self.attr_reader(state, ir, callid, recv_class, ivar_name));
             }
             FuncKind::AttrWriter { ivar_name } => {
-                return self.attr_writer(state, ir, callid, recv_class, ivar_name);
+                return Ok(self.attr_writer(state, ir, callid, recv_class, ivar_name));
             }
             FuncKind::Builtin { .. } => (fid, None),
             FuncKind::Proc(proc) => (proc.func_id(), Some(proc.outer_lfp())),
             FuncKind::ISeq(iseq) => {
                 if let Some(v) = self.store[iseq].is_const_fn() {
                     state.def_C(dst, v);
-                    return CompileResult::Continue;
+                    return Ok(CompileResult::Continue);
                 }
 
                 let specializable = self.store.is_simple_call(fid, callid)
@@ -287,7 +284,7 @@ impl<'a> JitContext<'a> {
             state.unset_no_capture_guard(self);
         }
 
-        CompileResult::Continue
+        Ok(CompileResult::Continue)
     }
 
     fn attr_reader(
@@ -392,7 +389,7 @@ impl<'a> JitContext<'a> {
         iseq: ISeqId,
         specializable: bool,
         pc: BytecodePtr,
-    ) -> CompileResult {
+    ) -> Result<CompileResult> {
         let dst = self.store[callid].dst;
         let args_info = if specializable {
             JitArgumentInfo::new(LinkMode::from_caller(&self.store, fid, callid, state))
@@ -412,21 +409,18 @@ impl<'a> JitContext<'a> {
             None,
             callid,
             state,
-        ) {
+        )? {
             SpecializedCompileResult::Const(v) => {
                 state.def_C(dst, v);
-                return CompileResult::Continue;
+                return Ok(CompileResult::Continue);
             }
             SpecializedCompileResult::Compiled { entry, result } => (entry, result),
-            SpecializedCompileResult::Invalidate => {
-                return CompileResult::Invalidate;
-            }
         };
         let evict = ir.new_evict();
         state.send_specialized(ir, &self.store, callid, fid, entry, patch_point, evict, pc);
         let res = state.def_rax2acc_result(ir, dst, result);
         state.immediate_evict(ir, evict, pc);
-        return res;
+        return Ok(res);
     }
 }
 
@@ -436,7 +430,6 @@ pub(super) enum SpecializedCompileResult {
         entry: JitLabel,
         result: Option<ResultState>,
     },
-    Invalidate,
 }
 
 impl<'a> JitContext<'a> {
@@ -473,14 +466,10 @@ impl<'a> JitContext<'a> {
         outer: Option<usize>,
         callid: CallSiteId,
         state: &mut AbstractState,
-    ) -> SpecializedCompileResult {
+    ) -> Result<SpecializedCompileResult> {
         let frame = self.new_specialized_frame(iseq_id, outer, args_info, self_class);
 
-        let mut frame = if let Some(frame) = self.specialized_compile(state, callid, frame) {
-            frame
-        } else {
-            return SpecializedCompileResult::Invalidate;
-        };
+        let mut frame = self.specialized_compile(state, callid, frame)?;
         // we must unset no_capture_guard for all state frames if no_capture_guard of the current frame became false.
         if !state.no_capture_guard() {
             state.unset_all_no_capture_guard();
@@ -500,7 +489,7 @@ impl<'a> JitContext<'a> {
                         result
                     );
                 }
-                return SpecializedCompileResult::Const(v);
+                return Ok(SpecializedCompileResult::Const(v));
             }
         }
         #[cfg(feature = "jit-debug")]
@@ -517,7 +506,7 @@ impl<'a> JitContext<'a> {
             info: frame.asm_info,
             patch_point,
         });
-        SpecializedCompileResult::Compiled { entry, result }
+        Ok(SpecializedCompileResult::Compiled { entry, result })
     }
 
     fn inline_asm(

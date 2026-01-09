@@ -5,7 +5,7 @@ use super::*;
 mod loop_analysis;
 
 impl<'a> JitContext<'a> {
-    pub(super) fn traceir_to_asmir(&mut self, frame: JitStackFrame) -> Option<JitStackFrame> {
+    pub(super) fn traceir_to_asmir(&mut self, frame: JitStackFrame) -> Result<JitStackFrame> {
         self.push_frame(frame);
 
         let state = AbstractState::new(&self);
@@ -46,10 +46,10 @@ impl<'a> JitContext<'a> {
         #[cfg(feature = "emit-cfg")]
         dump_cfg(self.iseq(), &self.store, bb_begin, bb_end);
 
-        Some(self.pop_frame())
+        Ok(self.pop_frame())
     }
 
-    fn compile_basic_block(&mut self, bbid: BasicBlockId, last: bool) -> Option<AsmIr> {
+    fn compile_basic_block(&mut self, bbid: BasicBlockId, last: bool) -> Result<AsmIr> {
         let mut ir = AsmIr::new(self);
 
         let mut state = match self.incoming_context(bbid, false)? {
@@ -57,7 +57,7 @@ impl<'a> JitContext<'a> {
             None => {
                 #[cfg(feature = "jit-debug")]
                 eprintln!("=== no entry {bbid:?}");
-                return Some(ir);
+                return Ok(ir);
             }
         };
         ir.push(AsmInst::Label(self.get_bb_label(bbid)));
@@ -67,32 +67,32 @@ impl<'a> JitContext<'a> {
             ir.bc_index(bc_pos);
             state.set_next_sp(self.iseq().get_sp(bc_pos));
 
-            match self.compile_instruction(&mut ir, &mut state, bc_pos) {
+            match self.compile_instruction(&mut ir, &mut state, bc_pos)? {
                 CompileResult::Continue => {}
                 CompileResult::Raise => {
                     self.unset_return_context_side_effect_guard();
-                    return Some(ir);
+                    return Ok(ir);
                 }
                 CompileResult::Cease => {
-                    return Some(ir);
+                    return Ok(ir);
                 }
                 CompileResult::Branch(dest_bb) => {
                     self.new_branch(bc_pos, dest_bb, state);
-                    return Some(ir);
+                    return Ok(ir);
                 }
                 CompileResult::Return(ret) => {
                     self.new_return(ret);
-                    return Some(ir);
+                    return Ok(ir);
                 }
                 CompileResult::MethodReturn(ret) => {
                     self.unset_return_context_side_effect_guard();
                     self.new_method_return(ret);
-                    return Some(ir);
+                    return Ok(ir);
                 }
                 CompileResult::Break(ret) => {
                     self.unset_return_context_side_effect_guard();
                     self.new_break(ret);
-                    return Some(ir);
+                    return Ok(ir);
                 }
                 CompileResult::ExitLoop => {
                     state.clear_above_next_sp();
@@ -102,10 +102,7 @@ impl<'a> JitContext<'a> {
                     self.new_return(ResultState::default());
                     let pc = self.get_pc(bc_pos);
                     self.recompile_and_deopt(&mut state, &mut ir, reason, pc);
-                    return Some(ir);
-                }
-                CompileResult::Invalidate => {
-                    return None;
+                    return Ok(ir);
                 }
                 CompileResult::Abort => {
                     #[cfg(feature = "emit-bc")]
@@ -120,7 +117,7 @@ impl<'a> JitContext<'a> {
             self.prepare_next(state, end)
         }
 
-        Some(ir)
+        Ok(ir)
     }
 
     fn prepare_next(&mut self, state: AbstractState, end: BcIndex) {
@@ -134,7 +131,7 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         state: &mut AbstractState,
         bc_pos: BcIndex,
-    ) -> CompileResult {
+    ) -> Result<CompileResult> {
         let pc = self.get_pc(bc_pos);
         let trace_ir = self.iseq().trace_ir(self.store, bc_pos);
         #[cfg(feature = "jit-debug")]
@@ -161,7 +158,7 @@ impl<'a> JitContext<'a> {
                 self.dec_loop_count();
                 if self.is_loop() && self.loop_count() == 0 {
                     ir.deopt(state, pc);
-                    return CompileResult::ExitLoop;
+                    return Ok(CompileResult::ExitLoop);
                 }
             }
             TraceIr::Integer(dst, i) => {
@@ -224,13 +221,13 @@ impl<'a> JitContext<'a> {
                         if let Some(base_class) = cache.base_class {
                             state.guard_const_base_class(ir, slot, base_class, pc);
                         } else {
-                            return CompileResult::Recompile(RecompileReason::NotCached);
+                            return Ok(CompileResult::Recompile(RecompileReason::NotCached));
                         }
                     }
                     state.load_constant(ir, dst, cache, pc);
                     state.unset_side_effect_guard();
                 } else {
-                    return CompileResult::Recompile(RecompileReason::NotCached);
+                    return Ok(CompileResult::Recompile(RecompileReason::NotCached));
                 }
             }
             TraceIr::StoreConst(src, id) => {
@@ -251,7 +248,7 @@ impl<'a> JitContext<'a> {
                         self.set_ivar_heap_accessed();
                     }
                 } else {
-                    return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
+                    return Ok(CompileResult::Recompile(RecompileReason::IvarIdNotFound));
                 }
             }
             TraceIr::StoreIvar(src, name, cache) => {
@@ -267,7 +264,7 @@ impl<'a> JitContext<'a> {
                     }
                     state.unset_side_effect_guard();
                 } else {
-                    return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
+                    return Ok(CompileResult::Recompile(RecompileReason::IvarIdNotFound));
                 }
             }
             TraceIr::LoadCvar { dst, name } => {
@@ -355,15 +352,15 @@ impl<'a> JitContext<'a> {
                                         && Value::is_i63(res)
                                     {
                                         state.def_C(dst, Value::fixnum(res));
-                                        return CompileResult::Continue;
+                                        return Ok(CompileResult::Continue);
                                     }
                                 }
                                 UnOpK::Pos => {
-                                    return CompileResult::Continue;
+                                    return Ok(CompileResult::Continue);
                                 }
                                 UnOpK::BitNot => {
                                     state.def_C(dst, Value::integer(!src));
-                                    return CompileResult::Continue;
+                                    return Ok(CompileResult::Continue);
                                 }
                             };
                         }
@@ -391,7 +388,7 @@ impl<'a> JitContext<'a> {
                                 UnOpK::BitNot => unreachable!(),
                             };
                             state.def_C(dst, Value::float(res));
-                            return CompileResult::Continue;
+                            return Ok(CompileResult::Continue);
                         }
                         let fsrc = state.load_xmm(ir, src, pc);
                         let dst = state.def_F(dst);
@@ -403,7 +400,7 @@ impl<'a> JitContext<'a> {
                             .call_unary_method(state, ir, src, recv_class, kind, bc_pos, pc);
                     }
                     _ => {
-                        return CompileResult::Recompile(RecompileReason::NotCached);
+                        return Ok(CompileResult::Recompile(RecompileReason::NotCached));
                     }
                 }
             }
@@ -418,7 +415,7 @@ impl<'a> JitContext<'a> {
                 return match state.binop_type(lhs, rhs, ic) {
                     BinaryOpType::Integer(mode) => {
                         state.gen_binop_integer(ir, kind, dst, mode, pc);
-                        CompileResult::Continue
+                        Ok(CompileResult::Continue)
                     }
                     BinaryOpType::Float(info) => {
                         match kind {
@@ -437,13 +434,13 @@ impl<'a> JitContext<'a> {
                             _ => {}
                         }
                         state.gen_binop_float(ir, kind, dst, info, pc);
-                        CompileResult::Continue
+                        Ok(CompileResult::Continue)
                     }
                     BinaryOpType::Other(Some(lhs_class)) => {
                         self.call_binary_method(state, ir, lhs, rhs, lhs_class, kind, bc_pos, pc)
                     }
                     BinaryOpType::Other(None) => {
-                        CompileResult::Recompile(RecompileReason::NotCached)
+                        Ok(CompileResult::Recompile(RecompileReason::NotCached))
                     }
                 };
             }
@@ -457,17 +454,17 @@ impl<'a> JitContext<'a> {
                 return match state.binop_type(lhs, rhs, ic) {
                     BinaryOpType::Integer(mode) => {
                         state.gen_cmp_integer(ir, kind, dst, mode, pc);
-                        CompileResult::Continue
+                        Ok(CompileResult::Continue)
                     }
                     BinaryOpType::Float(info) => {
                         state.gen_cmp_float(ir, dst, info, kind, pc);
-                        CompileResult::Continue
+                        Ok(CompileResult::Continue)
                     }
                     BinaryOpType::Other(Some(lhs_class)) => {
                         self.call_binary_method(state, ir, lhs, rhs, lhs_class, kind, bc_pos, pc)
                     }
                     BinaryOpType::Other(None) => {
-                        CompileResult::Recompile(RecompileReason::NotCached)
+                        Ok(CompileResult::Recompile(RecompileReason::NotCached))
                     }
                 };
             }
@@ -485,39 +482,39 @@ impl<'a> JitContext<'a> {
                         if let Some(result) =
                             state.check_concrete_i64_cmpbr(mode, kind, brkind, dest_bb)
                         {
-                            return result;
+                            return Ok(result);
                         }
                         let src_idx = bc_pos + 1;
                         let dest = self.label();
                         state.gen_cmpbr_integer(ir, kind, mode, brkind, dest, pc);
                         self.new_side_branch(src_idx, dest_bb, state.clone(), dest);
-                        CompileResult::Continue
+                        Ok(CompileResult::Continue)
                     }
                     BinaryOpType::Float(info) => {
                         if let Some(result) =
                             state.check_concrete_f64_cmpbr(lhs, rhs, kind, brkind, dest_bb)
                         {
-                            return result;
+                            return Ok(result);
                         }
                         let src_idx = bc_pos + 1;
                         let dest = self.label();
                         let mode = state.load_binary_xmm(ir, info, pc);
                         ir.float_cmp_br(mode, kind, brkind, dest);
                         self.new_side_branch(src_idx, dest_bb, state.clone(), dest);
-                        CompileResult::Continue
+                        Ok(CompileResult::Continue)
                     }
                     BinaryOpType::Other(Some(lhs_class)) => {
                         let res = self
-                            .call_binary_method(state, ir, lhs, rhs, lhs_class, kind, bc_pos, pc);
+                            .call_binary_method(state, ir, lhs, rhs, lhs_class, kind, bc_pos, pc)?;
                         if let CompileResult::Continue = res {
                             let src_idx = bc_pos + 1;
                             state.unset_class_version_guard();
                             self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
                         }
-                        res
+                        Ok(res)
                     }
                     BinaryOpType::Other(None) => {
-                        CompileResult::Recompile(RecompileReason::NotCached)
+                        Ok(CompileResult::Recompile(RecompileReason::NotCached))
                     }
                 };
             }
@@ -531,7 +528,7 @@ impl<'a> JitContext<'a> {
                 if let (Some(base_class), Some(INTEGER_CLASS)) = (base_class, idx_class) {
                     if self.store[base_class].is_array_ty_instance() {
                         state.array_integer_index(ir, &self.store, dst, base, idx, pc);
-                        return CompileResult::Continue;
+                        return Ok(CompileResult::Continue);
                     }
                 }
                 if let Some(base_class) = base_class {
@@ -546,7 +543,7 @@ impl<'a> JitContext<'a> {
                         pc,
                     );
                 }
-                return CompileResult::Recompile(RecompileReason::NotCached);
+                return Ok(CompileResult::Recompile(RecompileReason::NotCached));
             }
             TraceIr::IndexAssign {
                 base: recv,
@@ -558,7 +555,7 @@ impl<'a> JitContext<'a> {
                 if let Some((recv_class, idx_class)) = class {
                     if self.store[recv_class].is_array_ty_instance() && idx_class == INTEGER_CLASS {
                         state.array_integer_index_assign(ir, self.store, src, recv, idx, pc);
-                        return CompileResult::Continue;
+                        return Ok(CompileResult::Continue);
                     }
                     return self.call_ternary_method(
                         state,
@@ -571,7 +568,7 @@ impl<'a> JitContext<'a> {
                         pc,
                     );
                 }
-                return CompileResult::Recompile(RecompileReason::NotCached);
+                return Ok(CompileResult::Recompile(RecompileReason::NotCached));
             }
 
             TraceIr::ArrayTEq { lhs, rhs } => {
@@ -656,7 +653,9 @@ impl<'a> JitContext<'a> {
                             if let Some(fid) = self.jit_check_call(recv_class, callsite.name) {
                                 fid
                             } else {
-                                return CompileResult::Recompile(RecompileReason::MethodNotFound);
+                                return Ok(CompileResult::Recompile(
+                                    RecompileReason::MethodNotFound,
+                                ));
                             },
                         )
                     } else {
@@ -674,10 +673,10 @@ impl<'a> JitContext<'a> {
                         pc.write_method_cache(&cache);
                         (recv_class, func_id)
                     } else {
-                        return CompileResult::Recompile(RecompileReason::MethodNotFound);
+                        return Ok(CompileResult::Recompile(RecompileReason::MethodNotFound));
                     }
                 } else {
-                    return CompileResult::Recompile(RecompileReason::NotCached);
+                    return Ok(CompileResult::Recompile(RecompileReason::NotCached));
                 };
 
                 return self.compile_method_call(state, ir, pc, recv_class, func_id, callid);
@@ -804,7 +803,7 @@ impl<'a> JitContext<'a> {
                 ir.push(AsmInst::Ret);
                 let result = state.as_result(ret);
                 state.discard_temps();
-                return CompileResult::Return(result);
+                return Ok(CompileResult::Return(result));
             }
             TraceIr::MethodRet(ret) => {
                 state.write_back_locals_if_captured(ir);
@@ -816,7 +815,7 @@ impl<'a> JitContext<'a> {
                 }
                 let result = state.as_result(ret);
                 state.discard_temps();
-                return CompileResult::MethodReturn(result);
+                return Ok(CompileResult::MethodReturn(result));
             }
             TraceIr::BlockBreak(ret) => {
                 state.write_back_locals_if_captured(ir);
@@ -828,13 +827,13 @@ impl<'a> JitContext<'a> {
                 }
                 let result = state.as_result(ret);
                 state.discard_temps();
-                return CompileResult::Break(result);
+                return Ok(CompileResult::Break(result));
             }
             TraceIr::Raise(ret) => {
                 state.locals_to_S(ir);
                 state.load(ir, ret, GP::Rax);
                 ir.push(AsmInst::Raise);
-                return CompileResult::Raise;
+                return Ok(CompileResult::Raise);
             }
 
             TraceIr::EnsureEnd => {
@@ -842,16 +841,16 @@ impl<'a> JitContext<'a> {
                 ir.push(AsmInst::EnsureEnd);
             }
             TraceIr::Br(dest_bb) => {
-                return CompileResult::Branch(dest_bb);
+                return Ok(CompileResult::Branch(dest_bb));
             }
             TraceIr::CondBr(cond_, dest_bb, false, brkind) => {
                 if state.is_truthy(cond_) {
                     if brkind == BrKind::BrIf {
-                        return CompileResult::Branch(dest_bb);
+                        return Ok(CompileResult::Branch(dest_bb));
                     }
                 } else if state.is_falsy(cond_) {
                     if brkind == BrKind::BrIfNot {
-                        return CompileResult::Branch(dest_bb);
+                        return Ok(CompileResult::Branch(dest_bb));
                     }
                 } else {
                     state.load(ir, cond_, GP::Rax);
@@ -860,7 +859,7 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::NilBr(cond_, dest_bb) => {
                 if state.is_nil(cond_) {
-                    return CompileResult::Branch(dest_bb);
+                    return Ok(CompileResult::Branch(dest_bb));
                 } else if state.is_not_nil(cond_) {
                 } else {
                     let branch_dest = self.label();
@@ -872,7 +871,7 @@ impl<'a> JitContext<'a> {
             TraceIr::CondBr(_, _, true, _) => {}
             TraceIr::CheckLocal(local, dest_bb) => match state.mode(local) {
                 LinkMode::S(_) | LinkMode::C(_) => {
-                    return CompileResult::Branch(dest_bb);
+                    return Ok(CompileResult::Branch(dest_bb));
                 }
                 LinkMode::MaybeNone => {
                     let branch_dest = self.label();
@@ -906,10 +905,10 @@ impl<'a> JitContext<'a> {
                 let else_label = self.label();
                 self.new_side_branch(bc_pos, else_dest, state.clone(), else_label);
                 ir.opt_case(max, min, else_label, branch_labels.into());
-                return CompileResult::Cease;
+                return Ok(CompileResult::Cease);
             }
         }
-        CompileResult::Continue
+        Ok(CompileResult::Continue)
     }
 
     fn call_unary_method(
@@ -921,14 +920,14 @@ impl<'a> JitContext<'a> {
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
         pc: BytecodePtr,
-    ) -> CompileResult {
+    ) -> Result<CompileResult> {
         if let Some(func_id) = self.jit_check_method(recv_class, name.into()) {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, recv);
             assert_eq!(self.store[callid].pos_num, 0);
             self.compile_method_call(state, ir, pc, recv_class, func_id, callid)
         } else {
-            CompileResult::Recompile(RecompileReason::MethodNotFound)
+            Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }
     }
 
@@ -942,7 +941,7 @@ impl<'a> JitContext<'a> {
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
         pc: BytecodePtr,
-    ) -> CompileResult {
+    ) -> Result<CompileResult> {
         if let Some(fid) = self.jit_check_method(lhs_class, name.into()) {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, lhs);
@@ -950,7 +949,7 @@ impl<'a> JitContext<'a> {
             assert_eq!(self.store[callid].pos_num, 1);
             self.compile_method_call(state, ir, pc, lhs_class, fid, callid)
         } else {
-            CompileResult::Recompile(RecompileReason::MethodNotFound)
+            Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }
     }
 
@@ -964,7 +963,7 @@ impl<'a> JitContext<'a> {
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
         pc: BytecodePtr,
-    ) -> CompileResult {
+    ) -> Result<CompileResult> {
         if let Some(fid) = self.jit_check_method(recv_class, name.into()) {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, recv);
@@ -972,7 +971,7 @@ impl<'a> JitContext<'a> {
             assert_eq!(self.store[callid].pos_num, 2);
             self.compile_method_call(state, ir, pc, recv_class, fid, callid)
         } else {
-            CompileResult::Recompile(RecompileReason::MethodNotFound)
+            Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }
     }
 

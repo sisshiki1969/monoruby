@@ -6,7 +6,7 @@ impl<'a> JitContext<'a> {
         state: AbstractState,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
-    ) -> Option<()> {
+    ) -> Result<()> {
         for x in 0..10 {
             #[cfg(feature = "jit-debug")]
             eprintln!("########## analyse iteration[{x}]");
@@ -38,7 +38,7 @@ impl<'a> JitContext<'a> {
                 panic!("not fixed")
             }
         }
-        Some(())
+        Ok(())
     }
 
     fn analyse_loop(
@@ -46,7 +46,7 @@ impl<'a> JitContext<'a> {
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
         mut state: AbstractState,
-    ) -> Option<(Liveness, Option<AbstractState>)> {
+    ) -> Result<(Liveness, Option<AbstractState>)> {
         let pc = self.iseq().get_bb_pc(loop_start);
         let mut ctx = JitContext::loop_analysis(self, pc);
         let mut liveness = Liveness::new(ctx.total_reg_num());
@@ -92,7 +92,7 @@ impl<'a> JitContext<'a> {
                 ))
         );
 
-        Some((liveness, backedge))
+        Ok((liveness, backedge))
     }
 
     fn analyse_basic_block(
@@ -101,24 +101,24 @@ impl<'a> JitContext<'a> {
         bbid: BasicBlockId,
         is_start: bool,
         is_last: bool,
-    ) -> Option<()> {
+    ) -> Result<()> {
         let mut ir = AsmIr::new(self);
         let mut state = match self.incoming_context(bbid, is_start)? {
             Some(bb) => bb,
-            None => return Some(()),
+            None => return Ok(()),
         };
 
         let BasciBlockInfoEntry { begin, end, .. } = self.iseq().bb_info[bbid];
         for bc_pos in begin..=end {
             state.set_next_sp(self.iseq().get_sp(bc_pos));
 
-            match self.compile_instruction(&mut ir, &mut state, bc_pos) {
+            match self.compile_instruction(&mut ir, &mut state, bc_pos)? {
                 CompileResult::Continue => {}
                 CompileResult::Branch(dest_bb) => {
                     self.new_branch(bc_pos, dest_bb, state);
-                    return Some(());
+                    return Ok(());
                 }
-                CompileResult::Cease => return Some(()),
+                CompileResult::Cease => return Ok(()),
                 CompileResult::Raise
                 | CompileResult::Return(_)
                 | CompileResult::Break(_)
@@ -126,9 +126,8 @@ impl<'a> JitContext<'a> {
                 | CompileResult::Recompile(_)
                 | CompileResult::ExitLoop => {
                     liveness.join(&state);
-                    return Some(());
+                    return Ok(());
                 }
-                CompileResult::Invalidate => return None,
                 CompileResult::Abort => {
                     #[cfg(feature = "emit-bc")]
                     self.dump_iseq();
@@ -142,6 +141,6 @@ impl<'a> JitContext<'a> {
             self.prepare_next(state, end);
         }
 
-        Some(())
+        Ok(())
     }
 }
