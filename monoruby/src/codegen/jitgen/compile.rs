@@ -25,7 +25,7 @@ impl<'a> JitContext<'a> {
         if let Some(pc) = self.position() {
             // generate class guard of *self* for loop JIT
             // We must pass pc + 1 because pc (= LoopStart) cause an infinite loop.
-            let deopt = ir.new_deopt_with_pc(&state, pc + 1);
+            let deopt = ir.new_deopt(&state, pc + 1);
             ir.self2reg(GP::Rdi);
             ir.push(AsmInst::GuardClass(GP::Rdi, self.self_class(), deopt));
             ir.push(AsmInst::Preparation);
@@ -139,12 +139,9 @@ impl<'a> JitContext<'a> {
             eprintln!("{fmt}");
         }
         match trace_ir {
-            TraceIr::InitMethod(fn_info) => {
+            TraceIr::InitMethod(info) => {
                 assert!(!self.is_loop());
-                ir.push(AsmInst::Init {
-                    info: fn_info,
-                    not_captured: state.no_capture_guard(),
-                });
+                ir.push(AsmInst::Init { info });
                 ir.push(AsmInst::Preparation);
             }
             TraceIr::LoopStart { .. } => {

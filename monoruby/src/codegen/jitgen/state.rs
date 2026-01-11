@@ -494,8 +494,8 @@ impl Invariants {
     fn new_loop() -> Self {
         Self {
             class_version_guard: false,
-            // not guarded frame capture in the compilation for loops.
-            no_capture_guard: false,
+            // loop compilation is started only if the current local frame is not captured.
+            no_capture_guard: true,
             side_effect_guard: false,
         }
     }

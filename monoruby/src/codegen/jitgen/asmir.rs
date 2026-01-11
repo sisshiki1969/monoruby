@@ -127,10 +127,6 @@ impl AsmIr {
     }
 
     pub(crate) fn new_deopt(&mut self, state: &SlotState, pc: BytecodePtr) -> AsmDeopt {
-        self.new_deopt_with_pc(state, pc)
-    }
-
-    pub(crate) fn new_deopt_with_pc(&mut self, state: &SlotState, pc: BytecodePtr) -> AsmDeopt {
         let i = self.new_label(SideExit::Deoptimize(pc, state.get_write_back()));
         AsmDeopt(i)
     }
@@ -913,7 +909,7 @@ pub(super) enum AsmInst {
     ///
     Init {
         info: FnInitInfo,
-        not_captured: bool,
+        //not_captured: bool,
     },
     ///
     /// Deoptimize and fallback to interpreter.

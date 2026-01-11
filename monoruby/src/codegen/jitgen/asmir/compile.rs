@@ -34,8 +34,8 @@ impl Codegen {
                     .sourcemap
                     .push((i, self.jit.get_current() - frame.start_codepos));
             }
-            AsmInst::Init { info, not_captured } => {
-                self.init_func(&info, not_captured);
+            AsmInst::Init { info } => {
+                self.init_func(&info);
             }
             AsmInst::Unreachable => {
                 monoasm!( &mut self.jit,

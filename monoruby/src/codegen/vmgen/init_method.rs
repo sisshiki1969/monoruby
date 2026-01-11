@@ -23,7 +23,7 @@ impl Codegen {
     pub(super) fn vm_init(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.vm_init_func();
-        self.fill(NIL_VALUE);
+        self.fill_nil();
         self.fetch_and_dispatch();
         label
     }
@@ -53,13 +53,13 @@ impl Codegen {
     }
 
     ///
-    /// Fill *val* to the slots from *r15* .. *r15* + *rax*
+    /// Fill NIL_VALUE to the slots from *r15* .. *r15* + *rax*
     ///
     /// ### in
     /// - rax: reg_num - arg_num
     /// - r15: reg_num
     ///
-    fn fill(&mut self, val: u64) {
+    fn fill_nil(&mut self) {
         let l0 = self.jit.label();
         let l1 = self.jit.label();
         self.jit.branch_if_captured(&l1);
@@ -69,7 +69,7 @@ impl Codegen {
             negq r15;
             lea  r15, [r14 + r15 * 8 - (LFP_ARG0)];
         l0:
-            movq [r15 + rax * 8], (val);
+            movq [r15 + rax * 8], (NIL_VALUE);
             subq rax, 1;
             jne  l0;
         l1:
