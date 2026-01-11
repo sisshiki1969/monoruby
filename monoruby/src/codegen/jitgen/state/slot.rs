@@ -1268,7 +1268,7 @@ impl SlotState {
             (LinkMode::S(_), LinkMode::Sf(x, SfGuarded::Float)) => {
                 // S -> Sf
                 ir.stack2reg(slot, GP::Rax);
-                let deopt = ir.new_deopt_with_pc(&self, pc + 1);
+                let deopt = ir.new_deopt(&self, pc + 1);
                 if self.is_xmm_vacant(x) {
                     ir.float_to_xmm(GP::Rax, x, deopt);
                     self.set_Sf_float(slot, x);
@@ -1281,7 +1281,7 @@ impl SlotState {
             (LinkMode::G(_), LinkMode::Sf(x, SfGuarded::Float)) => {
                 // G -> Sf
                 //ir.stack2reg(slot, GP::Rax);
-                let deopt = ir.new_deopt_with_pc(&self, pc + 1);
+                let deopt = ir.new_deopt(&self, pc + 1);
                 if self.is_xmm_vacant(x) {
                     ir.float_to_xmm(GP::R15, x, deopt);
                     self.set_Sf_float(slot, x);
@@ -1295,7 +1295,7 @@ impl SlotState {
                 if let Some(class) = guarded.class()
                     && !self.is_class(slot, class)
                 {
-                    let deopt = ir.new_deopt_with_pc(&self, pc + 1);
+                    let deopt = ir.new_deopt(&self, pc + 1);
                     ir.stack2reg(slot, GP::Rax);
                     ir.push(AsmInst::GuardClass(GP::Rax, class, deopt));
                     self.set_S_with_guard(slot, guarded);
