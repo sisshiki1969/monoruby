@@ -85,7 +85,6 @@ mod tests {
         );
     }
 
-    #[ignore]
     #[test]
     fn binding_eval2() {
         run_test_with_prelude(
@@ -103,7 +102,6 @@ mod tests {
         )
     }
 
-    #[ignore]
     #[test]
     fn binding_eval3() {
         run_test_with_prelude(

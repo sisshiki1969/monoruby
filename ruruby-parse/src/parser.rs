@@ -165,10 +165,13 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
 
     /// Add the `id` as a new parameter in the current context.
     /// If a parameter with the same name already exists, return error.
-    fn new_param(&mut self, name: String, loc: Loc) -> Result<LvarId, LexerErr> {
-        match self.scope_mut().lvar.insert_new(name) {
+    fn new_param(&mut self, name: &str, loc: Loc) -> Result<LvarId, LexerErr> {
+        match self.scope_mut().lvar.insert_new(name.to_string()) {
             Some(lvar) => Ok(lvar),
-            None => Err(error_unexpected(loc, "Duplicated argument name.")),
+            None => Err(error_unexpected(
+                loc,
+                format!("Duplicated argument name `{}`.", name),
+            )),
         }
     }
 
@@ -584,8 +587,8 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 state = Kind::Rest;
                 match self.consume_ident()? {
                     Some(name) => {
-                        args.push(FormalParam::rest(name.clone(), loc));
-                        self.new_param(name, self.prev_loc())?;
+                        self.new_param(&name, self.prev_loc())?;
+                        args.push(FormalParam::rest(name, loc));
                     }
                     None => args.push(FormalParam::rest_discard(loc)),
                 }
@@ -627,8 +630,8 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                             ));
                         }
                     };
-                    args.push(FormalParam::optional(name.clone(), default, loc));
-                    self.new_param(name, loc)?;
+                    self.new_param(&name, loc)?;
+                    args.push(FormalParam::optional(name, default, loc));
                 } else if self.consume_punct_no_term(Punct::Colon)? {
                     // Keyword param
                     let next = self.peek_no_term()?.kind;
@@ -653,20 +656,20 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     } else {
                         state = Kind::KeyWord;
                     };
-                    args.push(FormalParam::keyword(name.clone(), default, loc));
-                    let lvar = self.new_param(name, loc)?;
+                    let lvar = self.new_param(&name, loc)?;
+                    args.push(FormalParam::keyword(name, default, loc));
                     self.add_kw_param(lvar);
                 } else {
                     // Required param
-                    loc = self.prev_loc();
+                    //loc = self.prev_loc();
                     match state {
                         Kind::Required => {
-                            args.push(FormalParam::req_param(name.clone(), loc));
-                            self.new_param(name, loc)?;
+                            self.new_param(&name, loc)?;
+                            args.push(FormalParam::req_param(name, loc));
                         }
                         Kind::PostReq | Kind::Optional | Kind::Rest => {
-                            args.push(FormalParam::post(name.clone(), loc));
-                            self.new_param(name, loc)?;
+                            self.new_param(&name, loc)?;
+                            args.push(FormalParam::post(name, loc));
                             state = Kind::PostReq;
                         }
                         _ => {
@@ -700,7 +703,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     fn parse_destruct_param(&mut self) -> Result<FormalParam, LexerErr> {
         let loc = self.loc();
         let name = self.expect_ident()?;
-        self.new_param(name.clone(), loc)?;
+        self.new_param(&name, loc)?;
         let mut idents = vec![(name, loc)];
         while self.consume_punct(Punct::Comma)? {
             if self.consume_punct(Punct::RParen)? {
@@ -708,7 +711,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             }
             let loc = self.loc();
             let name = self.expect_ident()?;
-            self.new_param(name.clone(), loc)?;
+            self.new_param(&name, loc)?;
             idents.push((name, loc));
         }
         self.expect_punct(Punct::RParen)?;

@@ -174,7 +174,6 @@ mod tests {
         );
     }
 
-    #[ignore]
     #[test]
     fn proc() {
         run_test_with_prelude(

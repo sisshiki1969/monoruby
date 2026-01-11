@@ -871,7 +871,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn kernel_system() {
         run_test(r#"system "ls""#);
         run_test(r#"system "jkjkjk""#);
