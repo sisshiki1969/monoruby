@@ -99,7 +99,7 @@ impl<'a> JitContext<'a> {
                     break;
                 }
                 CompileResult::Recompile(reason) => {
-                    self.new_return(ResultState::default());
+                    self.new_return(ReturnState::default());
                     let pc = self.get_pc(bc_pos);
                     self.recompile_and_deopt(&mut state, &mut ir, reason, pc);
                     return Ok(ir);
@@ -801,7 +801,7 @@ impl<'a> JitContext<'a> {
                 state.write_back_locals_if_captured(ir);
                 state.load(ir, ret, GP::Rax);
                 ir.push(AsmInst::Ret);
-                let result = state.as_result(ret);
+                let result = state.as_return(ret);
                 state.discard_temps();
                 return Ok(CompileResult::Return(result));
             }
@@ -813,7 +813,7 @@ impl<'a> JitContext<'a> {
                 } else {
                     ir.push(AsmInst::MethodRet(pc));
                 }
-                let result = state.as_result(ret);
+                let result = state.as_return(ret);
                 state.discard_temps();
                 return Ok(CompileResult::MethodReturn(result));
             }
@@ -825,7 +825,7 @@ impl<'a> JitContext<'a> {
                 } else {
                     ir.push(AsmInst::BlockBreak(pc));
                 }
-                let result = state.as_result(ret);
+                let result = state.as_return(ret);
                 state.discard_temps();
                 return Ok(CompileResult::Break(result));
             }

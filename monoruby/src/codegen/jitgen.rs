@@ -12,7 +12,7 @@ use crate::{
 pub(crate) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId, BasicBlockInfo};
 pub(crate) use self::context::JitContext;
 pub(crate) use self::state::{AbstractFrame, AbstractState};
-use state::{LinkMode, ResultState};
+use state::{LinkMode, ReturnState};
 
 use super::*;
 use asmir::*;
@@ -56,11 +56,11 @@ enum CompileResult {
     /// raise error.
     Raise,
     /// return from the current method/block.
-    Return(ResultState),
+    Return(ReturnState),
     /// method return from the current method/block.
-    MethodReturn(ResultState),
+    MethodReturn(ReturnState),
     /// break from the current method/block.
-    Break(ResultState),
+    Break(ReturnState),
     /// deoptimize and recompile.
     Recompile(RecompileReason),
     /// internal error.

@@ -103,7 +103,7 @@ pub(crate) struct AbstractFrame {
     /// stack top register.
     next_sp: SlotId,
     /// assumptions
-    assumptions: Assumptions,
+    invariants: Invariants,
 }
 
 impl std::ops::Deref for AbstractFrame {
@@ -126,23 +126,23 @@ impl AbstractFrame {
             JitType::Entry => AbstractFrame {
                 slot_state: SlotState::new_method(cc),
                 next_sp,
-                assumptions: Assumptions::new_entry(cc),
+                invariants: Invariants::new_entry(cc),
             },
             JitType::Loop(_) => AbstractFrame {
                 slot_state: SlotState::new_loop(cc),
                 next_sp,
-                assumptions: Assumptions::new_loop(),
+                invariants: Invariants::new_loop(),
             },
             JitType::Specialized { .. } => AbstractFrame {
                 slot_state: SlotState::new_method(cc),
                 next_sp,
-                assumptions: Assumptions::new_specialized(cc),
+                invariants: Invariants::new_specialized(cc),
             },
         }
     }
 
     fn equiv(&self, other: &Self) -> bool {
-        self.slot_state.equiv(&other.slot_state) && self.assumptions == other.assumptions
+        self.slot_state.equiv(&other.slot_state) && self.invariants == other.invariants
     }
 
     pub(in crate::codegen::jitgen) fn slot_state(&self) -> &SlotState {
@@ -154,34 +154,34 @@ impl AbstractFrame {
     }
 
     pub(super) fn no_capture_guard(&self) -> bool {
-        self.assumptions.no_capture_guard
+        self.invariants.no_capture_guard
     }
 
     pub(super) fn unset_no_capture_guard(&mut self) {
-        self.assumptions.no_capture_guard = false;
+        self.invariants.no_capture_guard = false;
     }
 
     pub(super) fn class_version_guard(&self) -> bool {
-        self.assumptions.class_version_guard
+        self.invariants.class_version_guard
     }
 
     pub(super) fn set_class_version_guard(&mut self) {
-        self.assumptions.class_version_guard = true;
+        self.invariants.class_version_guard = true;
     }
 
     pub(super) fn unset_class_version_guard(&mut self) {
-        self.assumptions.class_version_guard = false;
+        self.invariants.class_version_guard = false;
     }
 
     pub(super) fn unset_side_effect_guard(&mut self) {
-        self.assumptions.side_effect_guard = false;
+        self.invariants.side_effect_guard = false;
     }
 
-    pub(super) fn as_result(&self, slot: SlotId) -> ResultState {
-        let ret = self.mode(slot).as_result();
-        ResultState {
+    pub(super) fn as_return(&self, slot: SlotId) -> ReturnState {
+        let ret = self.mode(slot).as_return();
+        ReturnState {
             ret,
-            assumptions: self.assumptions.clone(),
+            invariants: self.invariants.clone(),
         }
     }
 
@@ -235,15 +235,15 @@ impl AbstractFrame {
         }
     }
 
-    pub(in crate::codegen::jitgen) fn def_rax2acc_result(
+    pub(in crate::codegen::jitgen) fn def_rax2acc_return(
         &mut self,
         ir: &mut AsmIr,
         dst: impl Into<Option<SlotId>>,
-        result: Option<ResultState>,
+        return_state: Option<ReturnState>,
     ) -> CompileResult {
-        if let Some(result) = result {
-            self.assumptions.join(&result.assumptions);
-            match result.ret {
+        if let Some(return_state) = return_state {
+            self.invariants.join(&return_state.invariants);
+            match return_state.ret {
                 ReturnValue::UD => {
                     ir.push(AsmInst::Unreachable);
                     return CompileResult::Cease;
@@ -387,9 +387,9 @@ impl AbstractFrame {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct ResultState {
+pub(super) struct ReturnState {
     ret: ReturnValue,
-    assumptions: Assumptions,
+    invariants: Invariants,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -400,18 +400,18 @@ enum ReturnValue {
     Value,
 }
 
-impl ResultState {
+impl ReturnState {
     pub(super) fn default() -> Self {
-        ResultState {
+        ReturnState {
             ret: ReturnValue::Value,
-            assumptions: Assumptions::default(),
+            invariants: Invariants::default(),
         }
     }
 
     pub(super) fn may_side_effect() -> Self {
-        ResultState {
+        ReturnState {
             ret: ReturnValue::UD,
-            assumptions: Assumptions {
+            invariants: Invariants {
                 class_version_guard: true,
                 side_effect_guard: false,
                 no_capture_guard: true,
@@ -420,7 +420,7 @@ impl ResultState {
     }
 
     pub(super) fn unset_side_effect_guard(&mut self) {
-        self.assumptions.side_effect_guard = false;
+        self.invariants.side_effect_guard = false;
     }
 
     fn return_class(&self) -> Option<ClassId> {
@@ -432,7 +432,7 @@ impl ResultState {
     }
 
     pub(in crate::codegen::jitgen) fn const_folded(&self) -> Option<Value> {
-        if !self.assumptions.side_effect_guard {
+        if !self.invariants.side_effect_guard {
             return None;
         }
         if let ReturnValue::Const(v) = self.ret {
@@ -442,7 +442,7 @@ impl ResultState {
     }
 
     pub(in crate::codegen::jitgen) fn join(&mut self, other: &Self) {
-        self.assumptions.join(&other.assumptions);
+        self.invariants.join(&other.invariants);
         match (&self.ret, &other.ret) {
             (ReturnValue::UD, _) => {
                 self.ret = other.ret;
@@ -466,7 +466,7 @@ impl ResultState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-struct Assumptions {
+struct Invariants {
     /// guard for class version. true if guaranteed the class version is not changed.
     class_version_guard: bool,
     /// guard for frame capture. true if guaranteed the frame is not captured.
@@ -481,12 +481,11 @@ struct Assumptions {
     side_effect_guard: bool,
 }
 
-impl Assumptions {
+impl Invariants {
     fn new_entry(cc: &JitContext) -> Self {
         let side_effect_guard = cc.iseq().no_ensure();
         Self {
             class_version_guard: false,
-            // mehtods are always guarded frame capture but block are not.
             no_capture_guard: true,
             side_effect_guard,
         }

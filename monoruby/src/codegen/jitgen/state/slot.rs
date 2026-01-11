@@ -1096,7 +1096,7 @@ impl LinkMode {
         }
     }
 
-    pub(super) fn as_result(&self) -> ReturnValue {
+    pub(super) fn as_return(&self) -> ReturnValue {
         match self {
             LinkMode::C(v) => ReturnValue::Const(*v),
             LinkMode::MaybeNone | LinkMode::None | LinkMode::V => unreachable!(),

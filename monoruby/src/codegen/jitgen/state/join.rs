@@ -44,7 +44,7 @@ impl AbstractFrame {
     ///
     /// ~~~
     fn join(&mut self, other: &AbstractFrame) {
-        self.assumptions.join(&other.assumptions);
+        self.invariants.join(&other.invariants);
         for i in self.all_regs() {
             self.is_used_mut(i).join(other.is_used(i));
             match (self.mode(i), other.mode(i)) {

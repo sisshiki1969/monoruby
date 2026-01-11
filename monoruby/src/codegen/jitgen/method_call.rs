@@ -176,7 +176,7 @@ impl<'a> JitContext<'a> {
         } else {
             JitArgumentInfo::default()
         };
-        let (entry, result) = match self.compile_specialized_func(
+        let (entry, return_state) = match self.compile_specialized_func(
             iseq,
             self_class,
             None,
@@ -189,7 +189,10 @@ impl<'a> JitContext<'a> {
                 state.def_C(dst, v);
                 return Ok(CompileResult::Continue);
             }
-            SpecializedCompileResult::Compiled { entry, result } => (entry, result),
+            SpecializedCompileResult::Compiled {
+                entry,
+                return_state,
+            } => (entry, return_state),
         };
         state.exec_gc(ir, true, pc);
         let using_xmm = state.get_using_xmm();
@@ -208,7 +211,7 @@ impl<'a> JitContext<'a> {
         ir.push(AsmInst::SpecializedYield { entry, evict });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
-        let res = state.def_rax2acc_result(ir, dst, result);
+        let res = state.def_rax2acc_return(ir, dst, return_state);
         state.immediate_evict(ir, evict, pc);
         Ok(res)
     }
@@ -414,11 +417,14 @@ impl<'a> JitContext<'a> {
                 state.def_C(dst, v);
                 return Ok(CompileResult::Continue);
             }
-            SpecializedCompileResult::Compiled { entry, result } => (entry, result),
+            SpecializedCompileResult::Compiled {
+                entry,
+                return_state: result,
+            } => (entry, result),
         };
         let evict = ir.new_evict();
         state.send_specialized(ir, &self.store, callid, fid, entry, patch_point, evict, pc);
-        let res = state.def_rax2acc_result(ir, dst, result);
+        let res = state.def_rax2acc_return(ir, dst, result);
         state.immediate_evict(ir, evict, pc);
         return Ok(res);
     }
@@ -428,7 +434,7 @@ pub(super) enum SpecializedCompileResult {
     Const(Value),
     Compiled {
         entry: JitLabel,
-        result: Option<ResultState>,
+        return_state: Option<ReturnState>,
     },
 }
 
@@ -477,9 +483,9 @@ impl<'a> JitContext<'a> {
 
         let pos = self.current_frame_pos();
         let mut return_context = frame.detach_return_context();
-        let result = return_context.remove(&pos);
+        let return_state = return_context.remove(&pos);
         self.merge_return_context(return_context);
-        if let Some(result) = &result {
+        if let Some(result) = &return_state {
             if let Some(v) = result.const_folded() {
                 #[cfg(feature = "jit-debug")]
                 if self.codegen_mode() {
@@ -497,7 +503,7 @@ impl<'a> JitContext<'a> {
             eprintln!(
                 "return: {} {:?}",
                 self.store.func_description(self.store[iseq_id].func_id()),
-                result
+                return_state
             );
         }
         let entry = self.label();
@@ -506,7 +512,10 @@ impl<'a> JitContext<'a> {
             info: frame.asm_info,
             patch_point,
         });
-        Ok(SpecializedCompileResult::Compiled { entry, result })
+        Ok(SpecializedCompileResult::Compiled {
+            entry,
+            return_state,
+        })
     }
 
     fn inline_asm(

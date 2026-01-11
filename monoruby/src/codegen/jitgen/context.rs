@@ -254,7 +254,7 @@ pub(super) struct JitStackFrame {
     ///
     /// Contexts for returning from this frame.
     ///
-    return_context: HashMap<usize, ResultState>,
+    return_context: HashMap<usize, ReturnState>,
 
     ///
     /// Machine stack offset for this frame.
@@ -365,7 +365,7 @@ impl JitStackFrame {
 
     // bridge operations
 
-    pub(super) fn detach_return_context(&mut self) -> HashMap<usize, ResultState> {
+    pub(super) fn detach_return_context(&mut self) -> HashMap<usize, ReturnState> {
         std::mem::take(&mut self.return_context)
     }
 
@@ -476,7 +476,7 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().specialized_methods.push(info);
     }
 
-    pub(super) fn push_return_context(&mut self, pos: usize, ret: ResultState) {
+    pub(super) fn push_return_context(&mut self, pos: usize, ret: ReturnState) {
         if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
             frame.join(&ret);
         } else {
@@ -495,11 +495,11 @@ impl<'a> JitContext<'a> {
         } else {
             self.current_frame_mut()
                 .return_context
-                .insert(pos, ResultState::may_side_effect());
+                .insert(pos, ReturnState::may_side_effect());
         }
     }
 
-    pub(super) fn merge_return_context(&mut self, context: HashMap<usize, ResultState>) {
+    pub(super) fn merge_return_context(&mut self, context: HashMap<usize, ReturnState>) {
         for (pos, res) in context {
             if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
                 frame.join(&res);
@@ -530,6 +530,9 @@ impl<'a> JitContext<'a> {
         self.stack_frame.pop().unwrap()
     }
 
+    ///
+    /// Compile specialized method / block.
+    ///
     pub(super) fn specialized_compile(
         &mut self,
         state: &mut AbstractFrame,
@@ -537,11 +540,11 @@ impl<'a> JitContext<'a> {
         frame: JitStackFrame,
     ) -> Result<JitStackFrame> {
         let stack_offset = state.get_using_xmm().offset();
-        let current = self.current_frame_mut();
-        current.stack_offset += stack_offset;
-        current.callid = Some(callid);
+        let caller = self.current_frame_mut();
+        caller.stack_offset += stack_offset;
+        caller.callid = Some(callid);
         let scope = std::mem::take(state);
-        assert!(std::mem::replace(&mut current.abstract_state, Some(scope)).is_none());
+        assert!(std::mem::replace(&mut caller.abstract_state, Some(scope)).is_none());
 
         let frame = self.traceir_to_asmir(frame)?;
 
@@ -907,7 +910,7 @@ impl<'a> JitContext<'a> {
     ///
     /// Add new return branch with `state`.
     ///
-    pub(super) fn new_return(&mut self, ret: ResultState) {
+    pub(super) fn new_return(&mut self, ret: ReturnState) {
         if let Some(pos) = self.caller_pos() {
             #[cfg(feature = "jit-debug")]
             eprintln!("   new_return:{:?}", ret);
@@ -918,7 +921,7 @@ impl<'a> JitContext<'a> {
     ///
     /// Add new return branch with `state`.
     ///
-    pub(super) fn new_method_return(&mut self, ret: ResultState) {
+    pub(super) fn new_method_return(&mut self, ret: ReturnState) {
         if let Some(pos) = self.method_caller_pos() {
             #[cfg(feature = "jit-debug")]
             eprintln!("   new_method_return:{:?}", ret);
@@ -929,7 +932,7 @@ impl<'a> JitContext<'a> {
     ///
     /// Add new return branch with `state`.
     ///
-    pub(super) fn new_break(&mut self, ret: ResultState) {
+    pub(super) fn new_break(&mut self, ret: ReturnState) {
         if let Some(pos) = self.iter_caller_pos() {
             #[cfg(feature = "jit-debug")]
             eprintln!("   new_break:{:?}", ret);
