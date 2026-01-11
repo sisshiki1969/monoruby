@@ -97,12 +97,11 @@ impl LvarCollector {
     /// Return None if `val` already exists.
     pub fn insert_new(&mut self, val: String) -> Option<LvarId> {
         match self.table.get_lvarid(&val) {
-            Some(_) => None,
-            None => {
-                self.table.push(val);
-                Some(LvarId::from(self.len() - 1))
-            }
+            Some(_) if val != "_" => return None,
+            _ => {}
         }
+        self.table.push(val);
+        Some(LvarId::from(self.len() - 1))
     }
 
     /// Add a new block parameter `val` to the `LvarCollector`.
