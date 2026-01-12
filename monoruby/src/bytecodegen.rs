@@ -811,7 +811,7 @@ impl<'a> BytecodeGen<'a> {
 
     /// get the outer block argument name.
     fn outer_block_param_name(&self, outer: usize) -> Option<IdentId> {
-        self.outer_locals()[outer - 1].1
+        self.store.outer_locals_in(self.iseq_id, outer).unwrap().1
     }
 
     fn assign_local(&mut self, name: IdentId) -> BcLocal {
@@ -833,7 +833,12 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn refer_dynamic_local(&self, outer: usize, name: IdentId) -> Option<BcLocal> {
-        self.outer_locals()[outer - 1].0.get(&name).cloned()
+        self.store
+            .outer_locals_in(self.iseq_id, outer)
+            .unwrap()
+            .0
+            .get(&name)
+            .cloned()
     }
 
     /// Add a variable identifier without checking duplicates.

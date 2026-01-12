@@ -2,6 +2,7 @@ use bytecodegen::{
     BinOpK, UnOpK,
     inst::{BrKind, DynVar, FnInitInfo},
 };
+use indexmap::IndexMap;
 use jitgen::trace_ir::TraceIr;
 use ruruby_parse::CmpKind;
 
@@ -853,23 +854,46 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
 impl Store {
     pub(crate) fn outer_locals(&self, iseq: ISeqId) -> ExternalContext {
         if let Some(iseq) = self[iseq].outer {
-            let mut context = ExternalContext::new();
-            let mut current_iseq = iseq;
-            loop {
-                let info = &self[current_iseq];
-                context
-                    .scope
-                    .push((info.locals.clone(), info.block_param()));
-                if let Some(outer) = info.outer {
-                    current_iseq = outer;
-                } else {
-                    break;
-                }
-            }
-            context
+            self.scoped_locals(iseq)
         } else {
             ExternalContext::new()
         }
+    }
+
+    pub(crate) fn outer_locals_in(
+        &self,
+        mut iseq: ISeqId,
+        mut outer: usize,
+    ) -> Option<(IndexMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)> {
+        loop {
+            let info = &self[iseq];
+            if outer == 0 {
+                return Some((info.locals.clone(), info.block_param()));
+            }
+            if let Some(outer_iseq) = info.outer {
+                iseq = outer_iseq;
+                outer -= 1;
+            } else {
+                return None;
+            }
+        }
+    }
+
+    pub(crate) fn scoped_locals(&self, iseq: ISeqId) -> ExternalContext {
+        let mut context = ExternalContext::new();
+        let mut current_iseq = iseq;
+        loop {
+            let info = &self[current_iseq];
+            context
+                .scope
+                .push((info.locals.clone(), info.block_param()));
+            if let Some(outer) = info.outer {
+                current_iseq = outer;
+            } else {
+                break;
+            }
+        }
+        context
     }
 
     ///

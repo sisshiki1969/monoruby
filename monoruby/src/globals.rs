@@ -67,19 +67,6 @@ impl ExternalContext {
     pub fn new() -> Self {
         Self { scope: vec![] }
     }
-
-    pub fn one(
-        locals: indexmap::IndexMap<IdentId, bytecodegen::BcLocal>,
-        block: Option<IdentId>,
-    ) -> Self {
-        Self {
-            scope: vec![(locals, block)],
-        }
-    }
-
-    pub fn extend_from_slice(&mut self, other: &Self) {
-        self.scope.extend_from_slice(&other.scope);
-    }
 }
 
 pub(crate) struct Invokers {
@@ -308,12 +295,7 @@ impl Globals {
         let outer = self.store[outer_fid].as_iseq();
         let (mother_fid, depth) = caller_cfp.method_func_id_depth();
         let mother = (self.store[mother_fid].as_iseq(), depth);
-        let mut ex_scope = indexmap::IndexMap::default();
-        for (name, idx) in &self.store.iseq(outer_fid).locals {
-            ex_scope.insert(*name, *idx);
-        }
-        let mut external_context = ExternalContext::one(ex_scope, None);
-        external_context.extend_from_slice(&self.store.outer_locals(outer));
+        let external_context = self.store.scoped_locals(outer);
 
         match Parser::parse_program_eval(code, path.into(), Some(&external_context)) {
             Ok(res) => {
@@ -343,12 +325,7 @@ impl Globals {
         let outer = self.store[outer_fid].as_iseq();
         let (lfp, mother_outer) = binding.outer_lfp().outermost();
         let mother = (self.store[lfp.func_id()].as_iseq(), mother_outer);
-        let mut ex_scope = indexmap::IndexMap::default();
-        for (name, idx) in &self.store.iseq(outer_fid).locals {
-            ex_scope.insert(*name, *idx);
-        }
-        let mut external_context = ExternalContext::one(ex_scope, None);
-        external_context.extend_from_slice(&self.store.outer_locals(outer));
+        let external_context = self.store.scoped_locals(outer);
 
         let context = if let Some(fid) = binding.func_id() {
             let mut lvar = LvarCollector::new();
