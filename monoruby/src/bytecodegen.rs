@@ -25,11 +25,11 @@ pub fn bytecode_compile_eval(
     globals: &mut Globals,
     result: ParseResult,
     mother: (ISeqId, usize),
-    outer: (FuncId, ExternalContext),
+    outer: ISeqId,
     loc: Loc,
     binding: Option<LvarCollector>,
 ) -> Result<FuncId> {
-    let main_fid = globals.store.new_eval(mother, result, outer, loc)?;
+    let main_fid = globals.store.new_eval(mother, outer, result, loc)?;
     bytecode_compile(globals, main_fid, binding)?;
     Ok(main_fid)
 }
@@ -331,7 +331,7 @@ enum Functions {
     },
     Block {
         mother: (ISeqId, usize),
-        outer: (FuncId, ExternalContext),
+        outer: ISeqId,
         compile_info: CompileInfo,
         is_block_style: bool,
     },
@@ -504,6 +504,8 @@ struct BytecodeGen<'a> {
     func_id: FuncId,
     /// ID of the mother method.
     mother: (ISeqId, ParamsInfo, usize),
+    /// ID of the outer iseq.
+    outer: Option<ISeqId>,
     /// bytecode IR.
     ir: Vec<(BytecodeInst, Loc)>,
     /// the temp stack pointer for each bytecode instruction.
@@ -516,8 +518,6 @@ struct BytecodeGen<'a> {
     ensure: Vec<Option<Node>>,
     /// local variables.
     locals: indexmap::IndexMap<IdentId, BcLocal>,
-    /// outer local variables. (dynamic_locals, block_param)
-    outer_locals: ExternalContext,
     /// literal values. (for GC)
     literals: Vec<Value>,
     /// The name of the block param.
@@ -554,24 +554,24 @@ impl<'a> BytecodeGen<'a> {
         binding: Option<LvarCollector>,
     ) -> Self {
         let info = &store[iseq_id];
-        let (mother, outer) = info.mother();
+        let (mother, mother_outer) = info.mother();
         let mother_params = store[store[mother].func_id()].params().clone();
-        let outer_locals = info.outer_locals.clone();
         let block_param = info.block_param();
         let func_id = info.func_id();
         let sourceinfo = info.sourceinfo.clone();
+        let outer = info.outer;
         let mut codegen = Self {
             store,
             iseq_id,
             func_id,
-            mother: (mother, mother_params, outer),
+            mother: (mother, mother_params, mother_outer),
+            outer,
             ir: vec![],
             sp: vec![],
             labels: BytecodeLabels::new(), // The first label is for redo.
             loops: vec![],
             ensure: vec![],
             locals: Default::default(),
-            outer_locals,
             literals: vec![],
             block_param,
             redo_label: Label(0),
@@ -670,7 +670,7 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn is_block(&self) -> bool {
-        !self.outer_locals.is_empty()
+        self.outer.is_some()
     }
 
     fn add_method(&mut self, name: Option<IdentId>, compile_info: CompileInfo) -> FunctionId {
@@ -688,7 +688,7 @@ impl<'a> BytecodeGen<'a> {
     fn add_block(
         &mut self,
         mother: (ISeqId, usize),
-        outer: (FuncId, ExternalContext),
+        outer: ISeqId,
         compile_info: CompileInfo,
     ) -> FunctionId {
         let info = Functions::Block {
@@ -704,7 +704,7 @@ impl<'a> BytecodeGen<'a> {
     fn add_lambda(
         &mut self,
         mother: (ISeqId, usize),
-        outer: (FuncId, ExternalContext),
+        outer: ISeqId,
         compile_info: CompileInfo,
     ) -> FunctionId {
         let info = Functions::Block {
@@ -805,15 +805,13 @@ impl<'a> BytecodeGen<'a> {
 // local variables handling.
 //
 impl<'a> BytecodeGen<'a> {
-    fn get_locals(&self) -> ExternalContext {
-        let mut locals = ExternalContext::one(self.locals.clone(), self.block_param);
-        locals.extend_from_slice(&self.outer_locals);
-        locals
+    fn outer_locals(&self) -> ExternalContext {
+        self.store.outer_locals(self.iseq_id)
     }
 
     /// get the outer block argument name.
     fn outer_block_param_name(&self, outer: usize) -> Option<IdentId> {
-        self.outer_locals[outer - 1].1
+        self.outer_locals()[outer - 1].1
     }
 
     fn assign_local(&mut self, name: IdentId) -> BcLocal {
@@ -835,7 +833,7 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn refer_dynamic_local(&self, outer: usize, name: IdentId) -> Option<BcLocal> {
-        self.outer_locals[outer - 1].0.get(&name).cloned()
+        self.outer_locals()[outer - 1].0.get(&name).cloned()
     }
 
     /// Add a variable identifier without checking duplicates.
@@ -884,25 +882,15 @@ impl<'a> BytecodeGen<'a> {
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         block: BlockInfo,
     ) -> Result<FunctionId> {
-        let outer_locals = self.get_locals();
         let (mother, _, outer) = self.mother;
         let compile_info = Store::handle_args(block, optional_params)?;
-        Ok(self.add_block(
-            (mother, outer + 1),
-            (self.func_id, outer_locals),
-            compile_info,
-        ))
+        Ok(self.add_block((mother, outer + 1), self.iseq_id, compile_info))
     }
 
     fn handle_lambda(&mut self, block: BlockInfo) -> Result<FunctionId> {
-        let outer_locals = self.get_locals();
         let (mother, _, outer) = self.mother;
         let compile_info = Store::handle_args(block, vec![])?;
-        Ok(self.add_lambda(
-            (mother, outer + 1),
-            (self.func_id, outer_locals),
-            compile_info,
-        ))
+        Ok(self.add_lambda((mother, outer + 1), self.iseq_id, compile_info))
     }
 }
 
@@ -1299,7 +1287,7 @@ impl<'a> BytecodeGen<'a> {
                         self.sourceinfo.show_loc(&lhs.loc);
                         return Err(MonorubyErr::runtimeerr(format!(
                             "[FATAL] Bytecodegen: dynamic var {name} not found. {lhs:?} {:?}",
-                            self.outer_locals
+                            self.outer_locals()
                         )));
                     }
                 }

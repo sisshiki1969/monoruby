@@ -375,7 +375,7 @@ impl Store {
     pub(crate) fn new_block(
         &mut self,
         mother: (ISeqId, usize),
-        outer: (FuncId, ExternalContext),
+        outer: ISeqId,
         compile_info: CompileInfo,
         is_block_style: bool,
         loc: Loc,
@@ -395,8 +395,8 @@ impl Store {
     pub(crate) fn new_eval(
         &mut self,
         mother: (ISeqId, usize),
+        outer: ISeqId,
         result: ParseResult,
-        outer: (FuncId, ExternalContext),
         loc: Loc,
     ) -> Result<FuncId> {
         let info = BlockInfo {

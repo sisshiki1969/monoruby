@@ -191,4 +191,30 @@ mod tests {
         "#,
         )
     }
+
+    #[test]
+    fn proc_2() {
+        run_test_once(
+            r#"
+        a = 5
+        p = proc {
+          a = 10
+        }
+        a = 1
+        p.call
+        a
+        "#,
+        );
+
+        run_test_once(
+            r#"
+        p = proc {
+          a = 10
+        }
+        a = 1
+        p.call
+        a
+        "#,
+        );
+    }
 }

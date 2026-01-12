@@ -79,6 +79,10 @@ pub struct ISeqInfo {
     ///
     mother: (ISeqId, usize),
     ///
+    /// outer ISeqId.
+    ///
+    pub outer: Option<ISeqId>,
+    ///
     /// Name of this function.
     ///
     name: Option<IdentId>,
@@ -110,10 +114,6 @@ pub struct ISeqInfo {
     /// Name of local variables
     ///
     pub(crate) locals: indexmap::IndexMap<IdentId, bytecodegen::BcLocal>,
-    ///
-    /// outer local variables. (dynamic_locals, block_param)
-    ///
-    pub(crate) outer_locals: ExternalContext,
     ///
     /// literal values. (for GC)
     ///
@@ -175,7 +175,7 @@ impl ISeqInfo {
     fn new(
         id: FuncId,
         mother: (ISeqId, usize),
-        outer_locals: ExternalContext,
+        outer: Option<ISeqId>,
         name: Option<IdentId>,
         args: ParamsInfo,
         loc: Loc,
@@ -184,6 +184,7 @@ impl ISeqInfo {
         ISeqInfo {
             func_id: id,
             mother,
+            outer,
             name,
             bytecode: None,
             loc,
@@ -192,7 +193,6 @@ impl ISeqInfo {
             exception_map: vec![],
             args,
             locals: Default::default(),
-            outer_locals,
             literals: vec![],
             non_temp_num: 0,
             temp_num: 0,
@@ -217,12 +217,12 @@ impl ISeqInfo {
     pub(super) fn new_block(
         id: FuncId,
         mother: (ISeqId, usize),
-        outer: (FuncId, ExternalContext),
+        outer: ISeqId,
         args: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(id, mother, outer.1, None, args, loc, sourceinfo)
+        Self::new(id, mother, Some(outer), None, args, loc, sourceinfo)
     }
 
     pub(super) fn new_method(
@@ -233,15 +233,7 @@ impl ISeqInfo {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(
-            id,
-            (iseq_id, 0),
-            ExternalContext::new(),
-            name,
-            args,
-            loc,
-            sourceinfo,
-        )
+        Self::new(id, (iseq_id, 0), None, name, args, loc, sourceinfo)
     }
 
     pub(crate) fn func_id(&self) -> FuncId {
@@ -283,26 +275,6 @@ impl ISeqInfo {
     ///
     pub(crate) fn block_param(&self) -> Option<IdentId> {
         self.args.block_param
-    }
-
-    ///
-    /// Get names of local variables.
-    ///
-    pub(crate) fn local_variables(&self) -> Vec<Value> {
-        let mut map = indexmap::IndexSet::<IdentId>::default();
-        self.locals.keys().for_each(|id| {
-            map.insert(*id);
-        });
-
-        self.outer_locals.scope.iter().for_each(|(locals, block)| {
-            locals.keys().for_each(|id| {
-                map.insert(*id);
-            });
-            if let Some(id) = block {
-                map.insert(*id);
-            }
-        });
-        map.into_iter().map(Value::symbol).collect()
     }
 
     ///
@@ -876,6 +848,53 @@ fn dec_wl(op: u64) -> (u16, u32) {
 
 fn dec_www(op: u64) -> (u16, u16, u16) {
     ((op >> 32) as u16, (op >> 16) as u16, op as u16)
+}
+
+impl Store {
+    pub(crate) fn outer_locals(&self, iseq: ISeqId) -> ExternalContext {
+        if let Some(iseq) = self[iseq].outer {
+            let mut context = ExternalContext::new();
+            let mut current_iseq = iseq;
+            loop {
+                let info = &self[current_iseq];
+                context
+                    .scope
+                    .push((info.locals.clone(), info.block_param()));
+                if let Some(outer) = info.outer {
+                    current_iseq = outer;
+                } else {
+                    break;
+                }
+            }
+            context
+        } else {
+            ExternalContext::new()
+        }
+    }
+
+    ///
+    /// Get names of local variables.
+    ///
+    pub(crate) fn local_variables(&self, mut iseq: ISeqId) -> Vec<Value> {
+        let mut map = indexmap::IndexSet::<IdentId>::default();
+        self[iseq].locals.keys().for_each(|id| {
+            map.insert(*id);
+        });
+        if let Some(id) = self[iseq].block_param() {
+            map.insert(id);
+        }
+
+        while let Some(outer) = self[iseq].outer {
+            self[outer].locals.keys().for_each(|id| {
+                map.insert(*id);
+            });
+            if let Some(id) = self[outer].block_param() {
+                map.insert(id);
+            }
+            iseq = outer;
+        }
+        map.into_iter().map(Value::symbol).collect()
+    }
 }
 
 ///
