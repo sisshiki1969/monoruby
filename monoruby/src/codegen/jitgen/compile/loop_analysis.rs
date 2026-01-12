@@ -108,7 +108,7 @@ impl<'a> JitContext<'a> {
             None => return Ok(()),
         };
 
-        let BasciBlockInfoEntry { begin, end, .. } = self.iseq().bb_info[bbid];
+        let BasicBlockInfoEntry { begin, end, .. } = self.iseq().bb_info[bbid];
         for bc_pos in begin..=end {
             state.set_next_sp(self.iseq().get_sp(bc_pos));
 

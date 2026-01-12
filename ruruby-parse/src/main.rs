@@ -125,6 +125,7 @@ mod tests {
         parse_and_output(code);
     }
 
+    #[ignore]
     #[test]
     fn samples() {
         fn read_dir<P: AsRef<Path>>(

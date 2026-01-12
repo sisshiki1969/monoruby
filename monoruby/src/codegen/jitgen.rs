@@ -9,7 +9,7 @@ use crate::{
     codegen::jitgen::context::{AsmInfo, JitStackFrame},
 };
 
-pub(crate) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId, BasicBlockInfo};
+pub(crate) use self::basic_block::{BasicBlockId, BasicBlockInfo, BasicBlockInfoEntry};
 pub(crate) use self::context::JitContext;
 pub(crate) use self::state::{AbstractFrame, AbstractState};
 use state::{LinkMode, ReturnState};
