@@ -35,7 +35,10 @@ pub(crate) const GLOBALS_FUNCINFO: usize =
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExternalContext {
-    scope: Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
+    scope: Vec<(
+        indexmap::IndexMap<IdentId, bytecodegen::BcLocal>,
+        Option<IdentId>,
+    )>,
 }
 
 impl ruruby_parse::LocalsContext for ExternalContext {
@@ -51,7 +54,10 @@ impl ruruby_parse::LocalsContext for ExternalContext {
 }
 
 impl std::ops::Index<usize> for ExternalContext {
-    type Output = (HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>);
+    type Output = (
+        indexmap::IndexMap<IdentId, bytecodegen::BcLocal>,
+        Option<IdentId>,
+    );
     fn index(&self, index: usize) -> &Self::Output {
         &self.scope[index]
     }
@@ -62,7 +68,10 @@ impl ExternalContext {
         Self { scope: vec![] }
     }
 
-    pub fn one(locals: HashMap<IdentId, bytecodegen::BcLocal>, block: Option<IdentId>) -> Self {
+    pub fn one(
+        locals: indexmap::IndexMap<IdentId, bytecodegen::BcLocal>,
+        block: Option<IdentId>,
+    ) -> Self {
         Self {
             scope: vec![(locals, block)],
         }
@@ -302,7 +311,7 @@ impl Globals {
         let outer_fid = caller_cfp.lfp().func_id();
         let (mother_fid, depth) = caller_cfp.method_func_id_depth();
         let mother = (self.store[mother_fid].as_iseq(), depth);
-        let mut ex_scope = HashMap::default();
+        let mut ex_scope = indexmap::IndexMap::default();
         for (name, idx) in &self.store.iseq(outer_fid).locals {
             ex_scope.insert(*name, *idx);
         }
@@ -336,7 +345,7 @@ impl Globals {
         let outer_fid = binding.outer_lfp().func_id();
         let (lfp, outer) = binding.outer_lfp().outermost();
         let mother = (self.store[lfp.func_id()].as_iseq(), outer);
-        let mut ex_scope = HashMap::default();
+        let mut ex_scope = indexmap::IndexMap::default();
         for (name, idx) in &self.store.iseq(outer_fid).locals {
             ex_scope.insert(*name, *idx);
         }

@@ -515,7 +515,7 @@ struct BytecodeGen<'a> {
     /// ensure clause information.
     ensure: Vec<Option<Node>>,
     /// local variables.
-    locals: HashMap<IdentId, BcLocal>,
+    locals: indexmap::IndexMap<IdentId, BcLocal>,
     /// outer local variables. (dynamic_locals, block_param)
     outer_locals: ExternalContext,
     /// literal values. (for GC)
@@ -570,7 +570,7 @@ impl<'a> BytecodeGen<'a> {
             labels: BytecodeLabels::new(), // The first label is for redo.
             loops: vec![],
             ensure: vec![],
-            locals: HashMap::default(),
+            locals: Default::default(),
             outer_locals,
             literals: vec![],
             block_param,
