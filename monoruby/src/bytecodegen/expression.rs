@@ -1,6 +1,6 @@
 use super::*;
 
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     ///
     /// Evaluate *expr*, push the result, and return the register.
     ///
@@ -785,7 +785,7 @@ impl BytecodeGen {
     }
 }
 
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     ///
     /// Generate multiple assignment.
     ///
@@ -915,7 +915,7 @@ impl BytecodeGen {
 //
 // Literals
 //
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     fn gen_symbol(&mut self, sym: IdentId, use_mode: UseMode2) -> Result<()> {
         match use_mode {
             UseMode2::NotUse => {}
@@ -1047,7 +1047,7 @@ impl BytecodeGen {
 //
 // Definitions
 //
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     fn gen_method_def(
         &mut self,
         name: IdentId,
@@ -1171,7 +1171,7 @@ impl BytecodeGen {
 //
 // Flow control
 //
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     fn gen_return(&mut self, val: Node, use_mode: UseMode2) -> Result<()> {
         self.gen_expr(val, UseMode2::Ret)?;
         if use_mode == UseMode2::Push {

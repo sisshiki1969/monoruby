@@ -144,7 +144,9 @@ pub struct ISeqInfo {
     /// Basic block information.
     ///
     pub(crate) bb_info: BasicBlockInfo,
+    ///
     /// Map for BcIndex to CallsiteId.
+    ///
     pub(super) callsite_map: HashMap<BcIndex, CallSiteId>,
 }
 

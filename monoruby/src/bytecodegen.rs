@@ -60,13 +60,11 @@ fn bytecode_compile_func(
     let loc = info.loc;
     let iseq = globals[func_id].as_iseq();
 
-    let mut r#gen = BytecodeGen::new(&globals.store, iseq, &info.params, binding);
+    let mut r#gen = BytecodeGen::new(&mut globals.store, iseq, &info.params, binding);
     r#gen.compile(info)?;
 
-    if let Some(value) = r#gen.is_const_function() {
-        globals.iseq_mut(func_id).unwrap().set_const_fn(value);
-    }
-    r#gen.into_bytecode(globals, loc)?;
+    r#gen.into_bytecode(loc)?;
+
     globals.gen_wrapper(func_id);
     Ok(())
 }
@@ -456,7 +454,50 @@ struct MergeSourceInfo {
 #[derive(Debug, Clone, Copy)]
 struct FunctionId(usize);
 
-struct BytecodeGen {
+#[derive(Clone, Default)]
+struct BytecodeLabels {
+    labels: Vec<Option<BcIndex>>,
+    /// The number of non-temporary registers.
+    non_temp_num: u16,
+}
+
+impl std::ops::Index<Label> for BytecodeLabels {
+    type Output = BcIndex;
+    fn index(&self, index: Label) -> &Self::Output {
+        self.labels[index.0].as_ref().unwrap()
+    }
+}
+
+impl BytecodeLabels {
+    fn new() -> Self {
+        Self {
+            labels: vec![None],
+            non_temp_num: 0,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.labels.len()
+    }
+
+    fn push(&mut self, bc: Option<BcIndex>) -> Label {
+        let label = Label(self.labels.len());
+        self.labels.push(bc);
+        label
+    }
+
+    fn slot_id(&self, reg: &BcReg) -> SlotId {
+        let id = match reg {
+            BcReg::Self_ => 0,
+            BcReg::Temp(i) => 1 + self.non_temp_num + i.0,
+            BcReg::Local(i) => 1 + i.0,
+        };
+        SlotId(id)
+    }
+}
+
+struct BytecodeGen<'a> {
+    store: &'a mut Store,
     /// ID of the iseq.
     iseq_id: ISeqId,
     /// ID of this function.
@@ -468,7 +509,7 @@ struct BytecodeGen {
     /// the temp stack pointer for each bytecode instruction.
     sp: Vec<BcTemp>,
     /// destination labels.
-    labels: Vec<Option<BcIndex>>,
+    labels: BytecodeLabels,
     /// loop information.
     loops: Vec<LoopInfo>, // (kind, label for exit, return register)
     /// ensure clause information.
@@ -487,8 +528,7 @@ struct BytecodeGen {
     temp: u16,
     /// The number of temporary registers.
     temp_num: u16,
-    /// The number of non-temporary registers.
-    non_temp_num: u16,
+
     /// Source info.
     sourceinfo: SourceInfoRef,
     /// Exception jump table.
@@ -499,16 +539,16 @@ struct BytecodeGen {
     functions: Vec<Option<Box<Functions>>>,
 }
 
-impl std::ops::Index<Label> for BytecodeGen {
+impl<'a> std::ops::Index<Label> for BytecodeGen<'a> {
     type Output = BcIndex;
     fn index(&self, index: Label) -> &Self::Output {
-        self.labels[index.0].as_ref().unwrap()
+        &self.labels[index]
     }
 }
 
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     fn new(
-        store: &Store,
+        store: &'a mut Store,
         iseq_id: ISeqId,
         params: &ParamsInfo,
         binding: Option<LvarCollector>,
@@ -516,24 +556,28 @@ impl BytecodeGen {
         let info = &store[iseq_id];
         let (mother, outer) = info.mother();
         let mother_params = store[store[mother].func_id()].params().clone();
+        let outer_locals = info.outer_locals.clone();
+        let block_param = info.block_param();
+        let func_id = info.func_id();
+        let sourceinfo = info.sourceinfo.clone();
         let mut codegen = Self {
+            store,
             iseq_id,
-            func_id: info.func_id(),
+            func_id,
             mother: (mother, mother_params, outer),
             ir: vec![],
             sp: vec![],
-            labels: vec![None], // The first label is for redo.
+            labels: BytecodeLabels::new(), // The first label is for redo.
             loops: vec![],
             ensure: vec![],
             locals: HashMap::default(),
-            outer_locals: info.outer_locals.clone(),
+            outer_locals,
             literals: vec![],
-            block_param: info.block_param(),
+            block_param,
             redo_label: Label(0),
             temp: 0,
             temp_num: 0,
-            non_temp_num: 0,
-            sourceinfo: info.sourceinfo.clone(),
+            sourceinfo,
             exception_table: vec![],
             merge_info: HashMap::default(),
             functions: vec![],
@@ -550,6 +594,14 @@ impl BytecodeGen {
         }
 
         codegen
+    }
+
+    fn iseq(&self) -> &ISeqInfo {
+        &self.store[self.iseq_id]
+    }
+
+    fn iseq_mut(&mut self) -> &mut ISeqInfo {
+        &mut self.store[self.iseq_id]
     }
 
     fn compile(&mut self, info: CompileInfo) -> Result<()> {
@@ -692,10 +744,10 @@ impl BytecodeGen {
 //
 // temporary registers handling.
 //
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     /// get a number of registers.
     fn total_reg_num(&self) -> usize {
-        1 + (self.non_temp_num + self.temp_num) as usize
+        1 + (self.labels.non_temp_num + self.temp_num) as usize
     }
 
     /// get the next register id.
@@ -745,19 +797,14 @@ impl BytecodeGen {
     }
 
     fn slot_id(&self, reg: &BcReg) -> SlotId {
-        let id = match reg {
-            BcReg::Self_ => 0,
-            BcReg::Temp(i) => 1 + self.non_temp_num + i.0,
-            BcReg::Local(i) => 1 + i.0,
-        };
-        SlotId(id)
+        self.labels.slot_id(reg)
     }
 }
 
 //
 // local variables handling.
 //
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     fn get_locals(&self) -> ExternalContext {
         let mut locals = ExternalContext::one(self.locals.clone(), self.block_param);
         locals.extend_from_slice(&self.outer_locals);
@@ -793,11 +840,11 @@ impl BytecodeGen {
 
     /// Add a variable identifier without checking duplicates.
     fn add_local(&mut self, ident: impl Into<Option<IdentId>>) -> BcLocal {
-        let local = BcLocal(self.non_temp_num);
+        let local = BcLocal(self.labels.non_temp_num);
         if let Some(ident) = ident.into() {
             assert!(self.locals.insert(ident, local).is_none());
         };
-        self.non_temp_num += 1;
+        self.labels.non_temp_num += 1;
         local
     }
 
@@ -862,7 +909,7 @@ impl BytecodeGen {
 //
 // emit bytecode ir.
 //
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     /// get new destination label.
     fn new_label(&mut self) -> Label {
         let label = self.labels.len();
@@ -880,7 +927,7 @@ impl BytecodeGen {
         } else {
             self.merge_info.insert(label, (Some(dest_sp), vec![]));
         }
-        self.labels[label.0] = Some(pos);
+        self.labels.labels[label.0] = Some(pos);
     }
 
     fn emit(&mut self, op: BytecodeInst, loc: Loc) {
@@ -1465,7 +1512,7 @@ impl BytecodeGen {
 //
 // Error handling.
 //
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     fn syntax_error(&self, msg: impl Into<String>, loc: Loc) -> MonorubyErr {
         MonorubyErr::syntax(msg.into(), loc, self.sourceinfo.clone(), self.func_id)
     }

@@ -1,6 +1,6 @@
 use super::*;
 
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     pub(super) fn gen_for(
         &mut self,
         param: Vec<(usize, String)>,

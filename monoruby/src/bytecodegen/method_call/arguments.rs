@@ -1,6 +1,6 @@
 use super::*;
 
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     pub(super) fn handle_arguments(
         &mut self,
         arglist: ArgList,

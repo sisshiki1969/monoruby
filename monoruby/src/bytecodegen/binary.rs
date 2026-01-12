@@ -1,7 +1,7 @@
 use super::*;
 use ::paste::paste;
 
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     /// Generate bytecode Ir for binary operations.
     pub(super) fn gen_binop(
         &mut self,
@@ -144,7 +144,7 @@ macro_rules! gen_ri_ops {
   };
 }
 
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     ///
     /// Generate operand mode.
     ///
