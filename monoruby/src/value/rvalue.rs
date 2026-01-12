@@ -358,8 +358,11 @@ pub struct RValue {
 
 impl std::fmt::Debug for RValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // SAFETY: Accessing header.meta is safe because the union's meta field is always
+        // valid to read when interpreting the header as metadata.
         let meta = unsafe { self.header.meta };
         if !self.header.is_live() {
+            // SAFETY: Reading header.meta for debug output of dead objects.
             write!(f, "{:016x} DEAD: {:?}", self.id(), unsafe {
                 self.header.meta
             })
@@ -370,6 +373,9 @@ impl std::fmt::Debug for RValue {
                 self.id(),
                 meta.class,
                 if let Some(ty) = meta.ty {
+                    // SAFETY: Union field access is safe here because we've checked the type via
+                    // `ty` match, ensuring we only access the union variant that corresponds to
+                    // the actual object type.
                     format!("{:?}({})", ty, unsafe {
                         match ty {
                             ObjTy::CLASS => format!("{:?}", self.kind.class),
@@ -417,6 +423,8 @@ impl RValue {
     }
 
     pub(crate) fn debug(&self, store: &Store) -> String {
+        // SAFETY: All as_* methods are called after ty() check, which verifies the object type.
+        // This ensures we only access the correct union variant for each type.
         unsafe {
             match self.ty() {
                 ObjTy::CLASS | ObjTy::MODULE => store.debug_class_name(self.as_class_id()),
@@ -443,6 +451,8 @@ impl RValue {
     }
 
     pub(crate) fn to_s(&self, store: &Store) -> String {
+        // SAFETY: Type is verified via ty() before accessing union variants through as_* methods.
+        // Each branch only accesses the union field matching its type.
         unsafe {
             match self.ty() {
                 ObjTy::CLASS | ObjTy::MODULE => store.get_class_name(self.as_class_id()),
@@ -463,6 +473,7 @@ impl RValue {
     }
 
     pub(crate) fn inspect(&self, store: &Store, set: &mut HashSet<u64>) -> String {
+        // SAFETY: Type checking via ty() ensures we access only the correct union variant.
         unsafe {
             match self.ty() {
                 ObjTy::OBJECT => self.object_inspect(store, set),
@@ -561,6 +572,8 @@ impl alloc::GC<RValue> for RValue {
                 });
             });
         }
+        // SAFETY: Type is checked via ty() match, ensuring we only access union variants that
+        // match the actual object type. Each as_* method accesses the correct union field.
         unsafe {
             match self.ty() {
                 ObjTy::CLASS | ObjTy::MODULE => self.as_module().mark(alloc),
@@ -606,6 +619,8 @@ impl alloc::GCBox for RValue {
         if !self.header.is_live() {
             return;
         }
+        // SAFETY: Type is verified via ty() before dropping. ManuallyDrop::drop is called only on
+        // the union variant matching the object's actual type, ensuring proper cleanup.
         unsafe {
             match self.ty() {
                 //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
@@ -1293,47 +1308,69 @@ impl RValue {
 impl RValue {
     fn as_object(&self) -> &[Option<value::Value>; OBJECT_INLINE_IVAR] {
         assert!(self.ty() == ObjTy::OBJECT);
+        // SAFETY: Union field access is safe because we've verified ty() == ObjTy::OBJECT,
+        // ensuring the object variant is the active union member.
         unsafe { &self.kind.object }
     }
 
     fn as_object_mut(&mut self) -> &mut [Option<value::Value>; OBJECT_INLINE_IVAR] {
         assert!(self.ty() == ObjTy::OBJECT);
+        // SAFETY: Union field access is safe because we've verified ty() == ObjTy::OBJECT,
+        // ensuring the object variant is the active union member.
         unsafe { &mut self.kind.object }
     }
 
     pub(super) unsafe fn as_module(&self) -> &ModuleInner {
+        // SAFETY: Caller must ensure this RValue contains a MODULE or CLASS type.
+        // Accessing the class union field is valid only when the type matches.
         unsafe { &self.kind.class }
     }
 
     pub(super) unsafe fn as_module_mut(&mut self) -> &mut ModuleInner {
+        // SAFETY: Caller must ensure this RValue contains a MODULE or CLASS type.
+        // Accessing the class union field is valid only when the type matches.
         unsafe { &mut self.kind.class }
     }
 
     unsafe fn as_class_id(&self) -> ClassId {
+        // SAFETY: Caller must ensure this is a MODULE or CLASS. We delegate to as_module()
+        // which accesses the class union field.
         unsafe { self.as_module().id() }
     }
 
     pub(super) unsafe fn as_float(&self) -> f64 {
+        // SAFETY: Caller must ensure this RValue contains a FLOAT type.
+        // Accessing the float union field is valid only when the type is FLOAT.
         unsafe { self.kind.float }
     }
 
     pub(super) unsafe fn as_bignum(&self) -> &BigInt {
+        // SAFETY: Caller must ensure this RValue contains a BIGNUM type.
+        // Accessing the bignum union field is valid only when the type is BIGNUM.
         unsafe { &self.kind.bignum }
     }
 
     pub(super) unsafe fn as_complex(&self) -> &ComplexInner {
+        // SAFETY: Caller must ensure this RValue contains a COMPLEX type.
+        // Accessing the complex union field is valid only when the type is COMPLEX.
         unsafe { &self.kind.complex }
     }
 
     pub(super) unsafe fn as_rstring(&self) -> &RStringInner {
+        // SAFETY: Caller must ensure this RValue contains a STRING type.
+        // Accessing the string union field is valid only when the type is STRING.
         unsafe { &self.kind.string }
     }
 
     pub(super) unsafe fn as_rstring_mut(&mut self) -> &mut RStringInner {
+        // SAFETY: Caller must ensure this RValue contains a STRING type.
+        // Accessing the string union field is valid only when the type is STRING.
         unsafe { &mut self.kind.string }
     }
 
     pub(super) unsafe fn as_str(&self) -> &str {
+        // SAFETY: Caller must ensure this RValue contains a STRING type with valid UTF-8.
+        // Accessing the string union field and calling check_utf8() is valid for STRING types.
         unsafe { self.kind.string.check_utf8().unwrap() }
     }
 
