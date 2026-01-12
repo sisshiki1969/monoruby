@@ -118,4 +118,28 @@ mod tests {
         "#,
         )
     }
+
+    #[test]
+    fn binding_eval4() {
+        run_test_with_prelude(
+            r#"
+        res = []
+        100.times do
+          x = 1
+          1.times do |b|
+            $b = binding
+          end
+          x = 100
+          bar
+          res << x
+        end
+        res
+        "#,
+            r#"
+        def bar
+          eval("x += 1", $b)
+        end
+            "#,
+        );
+    }
 }

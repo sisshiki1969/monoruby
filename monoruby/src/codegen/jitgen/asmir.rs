@@ -318,6 +318,10 @@ impl AsmIr {
         self.push(AsmInst::GuardArrayTy(r, deopt));
     }
 
+    pub(super) fn guard_capture(&mut self, deopt: AsmDeopt) {
+        self.push(AsmInst::GuardCapture(deopt));
+    }
+
     pub(super) fn deopt(&mut self, state: &AbstractFrame, pc: BytecodePtr) {
         let exit = self.new_deopt(state, pc);
         self.push(AsmInst::Deopt(exit));
@@ -869,6 +873,7 @@ pub(super) enum AsmInst {
     ///
     GuardClass(GP, ClassId, AsmDeopt),
     GuardArrayTy(GP, AsmDeopt),
+    GuardCapture(AsmDeopt),
 
     Ret,
     BlockBreak(BytecodePtr),
@@ -1545,8 +1550,6 @@ impl AsmInst {
             Self::LitToStack(val, slot) => format!("{:?} = {}", slot, val.debug(store)),
             Self::DeepCopyLit(val, _using_xmm) => format!("DeepCopyLiteral {}", val.debug(store)),
             Self::FloatToXmm(gpr, fpr, _deopt) => format!("{:?} = {:?} Float to f64", fpr, gpr),
-            Self::GuardArrayTy(gpr, _deopt) => format!("Guard ArrayTy {:?}", gpr),
-
             Self::GuardClassVersion {
                 position: _,
                 with_recovery: _,
@@ -1555,6 +1558,7 @@ impl AsmInst {
                 format!("GuardClassVersion")
             }
             Self::GuardClass(gpr, class, _deopt) => format!("GuardClass {:?} {:?}", class, gpr),
+            Self::GuardCapture(_deopt) => format!("Guard Capture"),
 
             Self::CondBr(kind, label) => format!("condbr {:?} {:?}", kind, label),
             Self::NilBr(label) => format!("nil_br {:?}", label),

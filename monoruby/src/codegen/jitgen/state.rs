@@ -157,6 +157,10 @@ impl AbstractFrame {
         self.invariants.no_capture_guard
     }
 
+    pub(super) fn set_no_capture_guard(&mut self) {
+        self.invariants.no_capture_guard = true;
+    }
+
     pub(super) fn unset_no_capture_guard(&mut self) {
         self.invariants.no_capture_guard = false;
     }

@@ -134,6 +134,7 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         bc_pos: BcIndex,
     ) -> Result<CompileResult> {
+        assert!(state.no_capture_guard());
         let pc = self.get_pc(bc_pos);
         let trace_ir = self.iseq().trace_ir(self.store, bc_pos);
         #[cfg(feature = "jit-debug")]
@@ -678,7 +679,15 @@ impl<'a> JitContext<'a> {
                     return Ok(CompileResult::Recompile(RecompileReason::NotCached));
                 };
 
-                return self.compile_method_call(state, ir, pc, recv_class, func_id, callid);
+                return self.compile_method_call(
+                    state,
+                    ir,
+                    pc,
+                    pc + 2,
+                    recv_class,
+                    func_id,
+                    callid,
+                );
             }
             TraceIr::Yield { callid } => {
                 if let Some(block_info) = self.current_method_given_block()
@@ -924,7 +933,7 @@ impl<'a> JitContext<'a> {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, recv);
             assert_eq!(self.store[callid].pos_num, 0);
-            self.compile_method_call(state, ir, pc, recv_class, func_id, callid)
+            self.compile_method_call(state, ir, pc, pc + 1, recv_class, func_id, callid)
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }
@@ -946,7 +955,7 @@ impl<'a> JitContext<'a> {
             assert_eq!(self.store[callid].recv, lhs);
             assert_eq!(self.store[callid].args, rhs);
             assert_eq!(self.store[callid].pos_num, 1);
-            self.compile_method_call(state, ir, pc, lhs_class, fid, callid)
+            self.compile_method_call(state, ir, pc, pc + 1, lhs_class, fid, callid)
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }
@@ -968,7 +977,7 @@ impl<'a> JitContext<'a> {
             assert_eq!(self.store[callid].recv, recv);
             assert_eq!(self.store[callid].args, idx);
             assert_eq!(self.store[callid].pos_num, 2);
-            self.compile_method_call(state, ir, pc, recv_class, fid, callid)
+            self.compile_method_call(state, ir, pc, pc + 1, recv_class, fid, callid)
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }

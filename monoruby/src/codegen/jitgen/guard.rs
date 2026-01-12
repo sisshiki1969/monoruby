@@ -179,6 +179,19 @@ impl Codegen {
         }
     }
 
+    pub(super) fn guard_capture(&mut self, deopt: &DestLabel) {
+        let captured = self.jit.label();
+        self.jit.branch_if_captured(&captured);
+        assert_eq!(0, self.jit.get_page());
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        captured:
+            movq rdi, (Value::symbol_from_str("__capture_guard").id());
+            jmp deopt;
+        }
+        self.jit.select_page(0);
+    }
+
     fn set_rdi_for_deopt(&mut self, r: GP, deopt: &DestLabel) -> DestLabel {
         if r != GP::Rdi {
             assert_eq!(0, self.jit.get_page());

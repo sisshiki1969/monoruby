@@ -207,6 +207,10 @@ impl Codegen {
                 let deopt = &labels[deopt];
                 self.guard_array_ty(r, deopt)
             }
+            AsmInst::GuardCapture(deopt) => {
+                let deopt = &labels[deopt];
+                self.guard_capture(deopt)
+            }
 
             AsmInst::HandleError(error) => {
                 let error = &labels[error];
