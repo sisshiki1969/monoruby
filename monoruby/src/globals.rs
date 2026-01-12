@@ -16,6 +16,7 @@ mod store;
 pub(crate) use dump::log_deoptimize;
 pub use error::*;
 use prng::*;
+pub use require::load_file;
 pub use store::*;
 
 pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| AtomicU8::new(0u8));

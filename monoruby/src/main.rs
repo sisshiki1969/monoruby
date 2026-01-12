@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::io::Read;
 
 use monoruby::*;
@@ -86,24 +85,25 @@ fn main() {
         return;
     }
 
-    let mut code = String::new();
     let mut iter = args.file.into_iter();
-    let path = if let Some(file_name) = iter.next() {
+    let (code, path) = if let Some(file_name) = iter.next() {
         let argv = Value::array_from_iter(iter.map(Value::string));
         globals.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
         globals.set_gvar(monoruby::IdentId::get_id("$*"), argv);
-        let path = std::path::PathBuf::from(&file_name).canonicalize().unwrap();
-        File::open(&file_name)
-            .unwrap()
-            .read_to_string(&mut code)
-            .unwrap();
-        path
+        match load_file(&std::path::PathBuf::from(&file_name)) {
+            Ok(res) => res,
+            Err(err) => {
+                eprintln!("{}", err.get_error_message(&globals.store));
+                std::process::exit(1);
+            }
+        }
     } else {
         if finish_flag {
             return;
         }
+        let mut code = String::new();
         std::io::stdin().read_to_string(&mut code).unwrap();
-        std::path::PathBuf::from("-")
+        (code, std::path::PathBuf::from("-"))
     };
     if args.ast {
         if let Err(err) = ruruby_parse::Parser::parse_program(code, path) {

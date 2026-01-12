@@ -23,10 +23,10 @@ impl Globals {
             }
 
             if let Some(file) = self.search_lib(file_name) {
-                return self.load_file(file);
+                return self.load_lib_file(file);
             }
         } else if file_name.exists() {
-            return self.load_file(file_name.into());
+            return self.load_lib_file(file_name.into());
         }
         Err(MonorubyErr::cant_load(None, file_name))
     }
@@ -65,7 +65,7 @@ impl Globals {
     ///
     /// When an error occured in loading, returns Err.
     ///
-    fn load_file(
+    fn load_lib_file(
         &mut self,
         path: std::path::PathBuf,
     ) -> Result<Option<(String, std::path::PathBuf, std::path::PathBuf)>> {
@@ -108,5 +108,22 @@ impl Globals {
         self.loaded_canonicalized_files
             .insert(canonicalized_path.to_path_buf());
         Ok(Some((file_body, load_path)))
+    }
+}
+
+pub fn load_file(path: &std::path::PathBuf) -> Result<(String, std::path::PathBuf)> {
+    fn inner(path: &std::path::PathBuf) -> std::io::Result<(String, std::path::PathBuf)> {
+        let canonicalized_path = path.canonicalize()?;
+        let mut file_body = String::new();
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .open(&canonicalized_path)?;
+        file.read_to_string(&mut file_body)?;
+        Ok((file_body, canonicalized_path))
+    }
+
+    match inner(path) {
+        Ok(res) => Ok(res),
+        Err(err) => Err(MonorubyErr::cant_load(Some(err), path)),
     }
 }
