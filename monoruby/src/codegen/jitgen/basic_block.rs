@@ -51,7 +51,7 @@ pub(crate) struct BasicBlockInfo {
     ///
     /// Basic block information.
     ///
-    info: Vec<BasciBlockInfoEntry>,
+    info: Vec<BasicBlockInfoEntry>,
     ///
     /// Whether an each instruction (*BcIndex*) is a beginning of a basic block.
     ///
@@ -67,7 +67,7 @@ pub(crate) struct BasicBlockInfo {
 }
 
 impl std::ops::Index<BasicBlockId> for BasicBlockInfo {
-    type Output = BasciBlockInfoEntry;
+    type Output = BasicBlockInfoEntry;
     fn index(&self, index: BasicBlockId) -> &Self::Output {
         &self.info[index.0]
     }
@@ -80,14 +80,14 @@ impl std::ops::IndexMut<BasicBlockId> for BasicBlockInfo {
 }
 
 impl std::ops::Index<std::ops::RangeInclusive<BasicBlockId>> for BasicBlockInfo {
-    type Output = [BasciBlockInfoEntry];
+    type Output = [BasicBlockInfoEntry];
     fn index(&self, index: std::ops::RangeInclusive<BasicBlockId>) -> &Self::Output {
         &self.info[index.start().0..=index.end().0]
     }
 }
 
 impl std::ops::Index<BcIndex> for BasicBlockInfo {
-    type Output = BasciBlockInfoEntry;
+    type Output = BasicBlockInfoEntry;
     fn index(&self, index: BcIndex) -> &Self::Output {
         let id = self.bb_map[index.to_usize()];
         &self[id]
@@ -123,7 +123,7 @@ impl BasicBlockInfo {
 
         // generate bb_info.
         let mut bb_info = BasicBlockInfo {
-            info: vec![BasciBlockInfoEntry::default(); bb_id as usize],
+            info: vec![BasicBlockInfoEntry::default(); bb_id as usize],
             bb_head,
             bb_map,
             loops: Default::default(),
@@ -184,14 +184,14 @@ impl BasicBlockInfo {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct BasciBlockInfoEntry {
+pub(crate) struct BasicBlockInfoEntry {
     pub begin: BcIndex,
     pub end: BcIndex,
     pub pred: Vec<BasicBlockId>,
     pub succ: Vec<BasicBlockId>,
 }
 
-impl std::fmt::Debug for BasciBlockInfoEntry {
+impl std::fmt::Debug for BasicBlockInfoEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,

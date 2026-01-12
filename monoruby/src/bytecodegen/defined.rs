@@ -1,6 +1,6 @@
 use super::*;
 
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     pub(super) fn gen_defined(&mut self, node: Node) -> Result<()> {
         let dst = self.push().into();
         match &node.kind {

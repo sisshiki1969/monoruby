@@ -7,7 +7,7 @@ use super::*;
 #[derive(Debug, Clone)]
 pub(super) enum JitType {
     /// JIT for method / block.
-    Generic,
+    Entry,
     /// specialized JIT for method / block.
     Specialized {
         idx: usize,
@@ -20,7 +20,7 @@ pub(super) enum JitType {
 #[derive(Debug)]
 pub(super) struct SpecializeInfo {
     pub(super) entry: JitLabel,
-    pub(super) frame: JitStackFrame,
+    pub(super) info: AsmInfo,
     pub(super) patch_point: Option<JitLabel>,
 }
 
@@ -61,18 +61,16 @@ impl JitBlockInfo {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct JitArgumentInfo(pub Option<Vec<slot::LinkMode>>);
+pub(super) struct JitArgumentInfo(pub Option<Vec<LinkMode>>);
 
 impl JitArgumentInfo {
-    pub(super) fn new(slot: Vec<slot::LinkMode>) -> Self {
+    pub(super) fn new(slot: Vec<LinkMode>) -> Self {
         Self(Some(slot))
     }
 }
 
-///
-/// Virtual Stack frame for specialized compilation.
-///
-pub(crate) struct JitStackFrame {
+#[derive(Debug)]
+pub(super) struct AsmInfo {
     ///
     /// Type of compilation for this frame.
     ///
@@ -84,27 +82,15 @@ pub(crate) struct JitStackFrame {
     ///
     /// `ISeqId` of the frame.
     ///
-    iseq_id: ISeqId,
-    ///
-    /// Outer frame. (None for methods)
-    ///
-    outer: Option<usize>,
-    ///
-    /// Callsite Id.
-    ///
-    callid: Option<CallSiteId>,
+    pub iseq_id: ISeqId,
     ///
     /// `ClassId`` of *self*.
     ///
-    self_class: ClassId,
+    pub self_class: ClassId,
     ///
     /// Object type of *self*.
     ///
-    self_ty: Option<ObjTy>,
-    ///
-    /// Whether this function is a method, a class definition, or a top-level.
-    ///
-    is_not_block: bool,
+    pub self_ty: Option<ObjTy>,
 
     ///
     /// Information for `JitLabel`s`.
@@ -114,6 +100,134 @@ pub(crate) struct JitStackFrame {
     /// Destination labels for each BasicBlock.
     ///
     basic_block_labels: HashMap<BasicBlockId, JitLabel>,
+
+    ///
+    /// Generated AsmIr.
+    ///
+    ir: Vec<(Option<BasicBlockId>, AsmIr)>,
+    ///
+    /// Information for inlined bridges.
+    ///
+    inline_bridges: HashMap<Option<BasicBlockId>, (AsmIr, Option<BasicBlockId>)>,
+    ///
+    /// Information for outlined bridges.
+    ///
+    outline_bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
+
+    ///
+    /// Flag whether ivar on the heap is accessed in this context.
+    ///
+    pub ivar_heap_accessed: bool,
+
+    ///
+    /// Information for specialized method / block.
+    ///
+    pub(super) specialized_methods: Vec<SpecializeInfo>,
+
+    ///
+    /// Source map for bytecode index and machine code position.
+    ///
+    pub(super) sourcemap: Vec<(BcIndex, usize)>,
+    ///
+    /// Start position of the machine code in `JitMemory`.
+    ///
+    pub(super) start_codepos: usize,
+}
+
+impl AsmInfo {
+    fn dup(&self) -> Self {
+        Self {
+            jit_type: self.jit_type.clone(),
+            specialize_level: self.specialize_level,
+            iseq_id: self.iseq_id,
+            self_class: self.self_class,
+            self_ty: self.self_ty,
+            labels: self.labels.clone(),
+            basic_block_labels: self.basic_block_labels.clone(),
+            ir: vec![],
+            outline_bridges: vec![],
+            inline_bridges: HashMap::default(),
+            specialized_methods: vec![],
+            ivar_heap_accessed: false,
+            sourcemap: vec![],
+            start_codepos: 0,
+        }
+    }
+
+    pub(super) fn is_specialized(&self) -> bool {
+        matches!(self.jit_type, JitType::Specialized { .. })
+    }
+
+    #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
+    pub(super) fn specialize_level(&self) -> usize {
+        self.specialize_level
+    }
+
+    ///
+    /// Resolve *JitLabel* and return *DestLabel*.
+    ///
+    pub(super) fn resolve_label(&mut self, jit: &mut JitMemory, label: JitLabel) -> DestLabel {
+        match &self.labels[label.0] {
+            Some(l) => l.clone(),
+            None => {
+                let l = jit.label();
+                self.labels[label.0] = Some(l.clone());
+                l
+            }
+        }
+    }
+
+    pub(super) fn resolve_bb_label(&mut self, jit: &mut JitMemory, bb: BasicBlockId) -> DestLabel {
+        let label = self.basic_block_labels.get(&bb).copied().unwrap();
+        self.resolve_label(jit, label)
+    }
+
+    pub(super) fn detach_ir(&mut self) -> Vec<(Option<BasicBlockId>, AsmIr)> {
+        std::mem::take(&mut self.ir)
+    }
+
+    // bridge operations
+
+    pub(super) fn detach_outline_bridges(&mut self) -> Vec<(AsmIr, JitLabel, BasicBlockId)> {
+        std::mem::take(&mut self.outline_bridges)
+    }
+
+    pub(super) fn inline_bridge_exists(&self, src_bb: BasicBlockId) -> bool {
+        self.inline_bridges.contains_key(&Some(src_bb))
+    }
+
+    pub(super) fn remove_inline_bridge(
+        &mut self,
+        src_bb: Option<BasicBlockId>,
+    ) -> Option<(AsmIr, Option<BasicBlockId>)> {
+        self.inline_bridges.remove(&src_bb)
+    }
+}
+
+///
+/// Virtual Stack frame for specialized compilation.
+///
+pub(super) struct JitStackFrame {
+    pub asm_info: AsmInfo,
+
+    ///
+    /// Outer frame. (None for methods)
+    ///
+    outer: Option<usize>,
+    ///
+    /// Callsite Id.
+    ///
+    callid: Option<CallSiteId>,
+    ///
+    /// Snapshot of `AbstractScopeState`` when the child method is called.
+    ///
+    abstract_state: Option<AbstractFrame>,
+
+    ///
+    /// Whether this function is a method, a class definition, or a top-level.
+    ///
+    is_not_block: bool,
+
     ///
     /// Loop information.
     ///
@@ -123,7 +237,7 @@ pub(crate) struct JitStackFrame {
     /// ### value
     /// liveness and backedge info in the loop head.
     ///
-    loop_info: indexmap::IndexMap<BasicBlockId, (Liveness, Option<BBContext>)>,
+    loop_info: indexmap::IndexMap<BasicBlockId, (Liveness, Option<AbstractState>)>,
     ///
     /// Nested loop count.
     ///
@@ -136,53 +250,16 @@ pub(crate) struct JitStackFrame {
     ///
     /// Map for target contexts of backward branches.
     ///
-    backedge_map: HashMap<BasicBlockId, SlotContext>,
+    backedge_map: HashMap<BasicBlockId, SlotState>,
     ///
-    /// Contexts for returning to this frame.
+    /// Contexts for returning from this frame.
     ///
-    return_context: HashMap<usize, ResultState>,
+    return_context: HashMap<usize, ReturnState>,
 
     ///
-    /// Generated AsmIr.
-    ///
-    ir: Vec<(Option<BasicBlockId>, AsmIr)>,
-    ///
-    /// Information for outlined bridges.
-    ///
-    outline_bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
-    ///
-    /// Information for inlined bridges.
-    ///
-    inline_bridges: HashMap<Option<BasicBlockId>, (AsmIr, Option<BasicBlockId>)>,
-
-    ///
-    /// Information for specialized method / block.
-    ///
-    pub(super) specialized_methods: Vec<SpecializeInfo>,
-
-    ///
-    /// Stack offset for this frame.
+    /// Machine stack offset for this frame.
     ///
     stack_offset: usize,
-    ///
-    /// Flag whether ivar on the heap is accessed in this context.
-    ///
-    ivar_heap_accessed: bool,
-    ///
-    ///
-    /// the frame is not captured
-    not_captured: bool,
-
-    ///
-    /// Source map for bytecode index and machine code position.
-    ///
-    #[cfg(feature = "emit-asm")]
-    pub(super) sourcemap: Vec<(BcIndex, usize)>,
-    ///
-    /// Start offset of a machine code corresponding to the current basic block.
-    ///
-    #[cfg(feature = "emit-asm")]
-    pub(super) start_codepos: usize,
 }
 
 impl std::fmt::Debug for JitStackFrame {
@@ -192,6 +269,19 @@ impl std::fmt::Debug for JitStackFrame {
             .field("outer", &self.outer)
             .field("stack_offset", &self.stack_offset)
             .finish()
+    }
+}
+
+impl std::ops::Deref for JitStackFrame {
+    type Target = AsmInfo;
+    fn deref(&self) -> &AsmInfo {
+        &self.asm_info
+    }
+}
+
+impl std::ops::DerefMut for JitStackFrame {
+    fn deref_mut(&mut self) -> &mut AsmInfo {
+        &mut self.asm_info
     }
 }
 
@@ -209,6 +299,7 @@ impl JitStackFrame {
         iseq_id: ISeqId,
         outer: Option<usize>,
         self_class: ClassId,
+        abstract_state: Option<AbstractFrame>,
     ) -> Self {
         let self_ty = store[self_class].instance_ty();
         let is_not_block = store[store[iseq_id].func_id()].is_not_block();
@@ -221,115 +312,60 @@ impl JitStackFrame {
         }
         let stack_offset = store[iseq_id].stack_offset();
         Self {
-            jit_type,
-            specialize_level,
-            iseq_id,
+            asm_info: AsmInfo {
+                jit_type,
+                specialize_level,
+                iseq_id,
+                self_class,
+                self_ty,
+                labels,
+                basic_block_labels,
+                ir: vec![],
+                outline_bridges: vec![],
+                inline_bridges: HashMap::default(),
+                ivar_heap_accessed: false,
+                specialized_methods: vec![],
+                sourcemap: vec![],
+                start_codepos: 0,
+            },
             outer,
             callid: None,
-            self_class,
-            self_ty,
+            abstract_state,
             is_not_block,
-            labels,
-            basic_block_labels,
             loop_info: indexmap::IndexMap::default(),
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
             return_context: HashMap::default(),
-            ir: vec![],
-            outline_bridges: vec![],
-            inline_bridges: HashMap::default(),
-            specialized_methods: vec![],
             stack_offset,
-            ivar_heap_accessed: false,
-            not_captured: true,
-            #[cfg(feature = "emit-asm")]
-            sourcemap: vec![],
-            #[cfg(feature = "emit-asm")]
-            start_codepos: 0,
         }
     }
 
     fn dup(&self) -> Self {
         Self {
-            jit_type: self.jit_type.clone(),
-            specialize_level: self.specialize_level,
-            iseq_id: self.iseq_id,
+            asm_info: self.asm_info.dup(),
             outer: self.outer,
             callid: self.callid,
-            self_class: self.self_class,
-            self_ty: self.self_ty,
+            abstract_state: self.abstract_state.clone(),
             is_not_block: self.is_not_block,
-            labels: self.labels.clone(),
-            basic_block_labels: self.basic_block_labels.clone(),
             loop_info: indexmap::IndexMap::default(),
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
             return_context: HashMap::default(),
-            ir: vec![],
-            outline_bridges: vec![],
-            inline_bridges: HashMap::default(),
-            specialized_methods: vec![],
             stack_offset: self.stack_offset,
-            ivar_heap_accessed: false,
-            not_captured: self.not_captured,
-            #[cfg(feature = "emit-asm")]
-            sourcemap: vec![],
-            #[cfg(feature = "emit-asm")]
-            start_codepos: 0,
         }
     }
 
     // accessors
 
-    pub(super) fn self_class(&self) -> ClassId {
-        self.self_class
-    }
-
-    pub(super) fn self_ty(&self) -> Option<ObjTy> {
-        self.self_ty
-    }
-
     pub(super) fn iseq_id(&self) -> ISeqId {
         self.iseq_id
     }
 
-    pub(super) fn is_specialized(&self) -> bool {
-        matches!(self.jit_type, JitType::Specialized { .. })
-    }
-
-    #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
-    pub(super) fn specialize_level(&self) -> usize {
-        self.specialize_level
-    }
-
-    pub(super) fn ivar_heap_accessed(&mut self) -> bool {
-        self.ivar_heap_accessed
-    }
-
     // bridge operations
 
-    pub(super) fn inline_bridge_exists(&self, src_bb: BasicBlockId) -> bool {
-        self.inline_bridges.contains_key(&Some(src_bb))
-    }
-
-    pub(super) fn remove_inline_bridge(
-        &mut self,
-        src_bb: Option<BasicBlockId>,
-    ) -> Option<(AsmIr, Option<BasicBlockId>)> {
-        self.inline_bridges.remove(&src_bb)
-    }
-
-    pub(super) fn detach_outline_bridges(&mut self) -> Vec<(AsmIr, JitLabel, BasicBlockId)> {
-        std::mem::take(&mut self.outline_bridges)
-    }
-
-    pub(super) fn detach_ir(&mut self) -> Vec<(Option<BasicBlockId>, AsmIr)> {
-        std::mem::take(&mut self.ir)
-    }
-
-    pub(super) fn detach_return_context(&mut self) -> HashMap<usize, ResultState> {
+    pub(super) fn detach_return_context(&mut self) -> HashMap<usize, ReturnState> {
         std::mem::take(&mut self.return_context)
     }
 
@@ -344,34 +380,15 @@ impl JitStackFrame {
         JitLabel(id)
     }
 
-    ///
-    /// Resolve *JitLabel* and return *DestLabel*.
-    ///
-    pub(super) fn resolve_label(&mut self, jit: &mut JitMemory, label: JitLabel) -> DestLabel {
-        match &self.labels[label.0] {
-            Some(l) => l.clone(),
-            None => {
-                let l = jit.label();
-                self.labels[label.0] = Some(l.clone());
-                l
-            }
-        }
-    }
-
     pub(super) fn get_bb_label(&self, bb: BasicBlockId) -> JitLabel {
         self.basic_block_labels.get(&bb).copied().unwrap()
-    }
-
-    pub(super) fn resolve_bb_label(&mut self, jit: &mut JitMemory, bb: BasicBlockId) -> DestLabel {
-        let label = self.basic_block_labels.get(&bb).copied().unwrap();
-        self.resolve_label(jit, label)
     }
 }
 
 ///
 /// Context for JIT compilation.
 ///
-pub struct JitContext<'a> {
+pub(crate) struct JitContext<'a> {
     pub store: &'a Store,
     codegen_mode: bool,
 
@@ -379,7 +396,6 @@ pub struct JitContext<'a> {
     /// Class version at compile time.
     ///
     class_version: u32,
-    class_version_label: DestLabel,
 
     ///
     /// Inline cache for method calls.
@@ -388,46 +404,23 @@ pub struct JitContext<'a> {
     ///
     /// Stack frame for specialized compilation. (iseq, outer_scope, block_iseq)
     ///
-    pub(crate) stack_frame: Vec<JitStackFrame>,
+    stack_frame: Vec<JitStackFrame>,
 }
 
 impl<'a> JitContext<'a> {
-    fn new(
+    pub(super) fn new(
         store: &'a Store,
         codegen_mode: bool,
         class_version: u32,
-        class_version_label: DestLabel,
         stack_frame: Vec<JitStackFrame>,
     ) -> Self {
         Self {
             store,
             codegen_mode,
             class_version,
-            class_version_label,
             inline_method_cache: vec![],
             stack_frame,
         }
-    }
-
-    pub(super) fn create(
-        store: &'a Store,
-        iseq_id: ISeqId,
-        jit_type: JitType,
-        class_version: u32,
-        class_version_label: DestLabel,
-        self_class: ClassId,
-        specialize_level: usize,
-    ) -> Self {
-        let stack_frame = vec![JitStackFrame::new(
-            store,
-            jit_type,
-            specialize_level,
-            iseq_id,
-            None,
-            self_class,
-        )];
-
-        Self::new(store, true, class_version, class_version_label, stack_frame)
     }
 
     pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
@@ -437,7 +430,6 @@ impl<'a> JitContext<'a> {
             store: self.store,
             codegen_mode: false,
             class_version: self.class_version,
-            class_version_label: self.class_version_label(),
             inline_method_cache: vec![],
             stack_frame,
         }
@@ -472,9 +464,9 @@ impl<'a> JitContext<'a> {
         self.current_frame().self_ty
     }
 
-    pub(super) fn is_block(&self) -> bool {
-        !self.store[self.func_id()].is_not_block()
-    }
+    //pub(super) fn is_block(&self) -> bool {
+    //    !self.store[self.func_id()].is_not_block()
+    //}
 
     pub(super) fn specialized_methods_len(&self) -> usize {
         self.current_frame().specialized_methods.len()
@@ -484,15 +476,7 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().specialized_methods.push(info);
     }
 
-    pub(super) fn xmm_save(&mut self, using_xmm: UsingXmm) {
-        self.current_frame_mut().stack_offset += using_xmm.offset();
-    }
-
-    pub(super) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
-        self.current_frame_mut().stack_offset -= using_xmm.offset();
-    }
-
-    pub(super) fn push_return_context(&mut self, pos: usize, ret: ResultState) {
+    pub(super) fn push_return_context(&mut self, pos: usize, ret: ReturnState) {
         if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
             frame.join(&ret);
         } else {
@@ -507,29 +491,25 @@ impl<'a> JitContext<'a> {
             return;
         };
         if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
-            frame.side_effect_guard = false;
+            frame.unset_side_effect_guard();
         } else {
-            self.current_frame_mut().return_context.insert(
-                pos,
-                ResultState {
-                    ret: ReturnValue::UD,
-                    class_version_guard: false,
-                    side_effect_guard: false,
-                },
-            );
+            self.current_frame_mut()
+                .return_context
+                .insert(pos, ReturnState::may_side_effect());
         }
     }
 
-    pub(super) fn merge_return_context(&mut self, context: HashMap<usize, ResultState>) {
-        for (pos, ctx) in context {
+    pub(super) fn merge_return_context(&mut self, context: HashMap<usize, ReturnState>) {
+        for (pos, res) in context {
             if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
-                frame.join(&ctx);
+                frame.join(&res);
             } else {
-                self.current_frame_mut().return_context.insert(pos, ctx);
+                self.current_frame_mut().return_context.insert(pos, res);
             }
         }
     }
 
+    // handling frame
     fn current_frame(&self) -> &JitStackFrame {
         self.stack_frame.last().unwrap()
     }
@@ -538,30 +518,41 @@ impl<'a> JitContext<'a> {
         self.stack_frame.last_mut().unwrap()
     }
 
-    pub(super) fn detach_current_frame(&mut self) -> JitStackFrame {
+    pub(super) fn current_frame_pos(&self) -> usize {
+        self.stack_frame.len() - 1
+    }
+
+    pub(super) fn push_frame(&mut self, frame: JitStackFrame) {
+        self.stack_frame.push(frame);
+    }
+
+    pub(super) fn pop_frame(&mut self) -> JitStackFrame {
         self.stack_frame.pop().unwrap()
     }
 
-    pub(super) fn set_callsite(&mut self, callid: CallSiteId) {
-        self.current_frame_mut().callid = Some(callid);
-    }
+    ///
+    /// Compile specialized method / block.
+    ///
+    pub(super) fn specialized_compile(
+        &mut self,
+        state: &mut AbstractFrame,
+        callid: CallSiteId,
+        frame: JitStackFrame,
+    ) -> Result<JitStackFrame> {
+        let stack_offset = state.get_using_xmm().offset();
+        let caller = self.current_frame_mut();
+        caller.stack_offset += stack_offset;
+        caller.callid = Some(callid);
+        let scope = std::mem::take(state);
+        assert!(std::mem::replace(&mut caller.abstract_state, Some(scope)).is_none());
 
-    pub(super) fn unset_callsite(&mut self) {
-        self.current_frame_mut().callid = None;
-    }
+        let frame = self.traceir_to_asmir(frame)?;
 
-    ///
-    /// Set the *not_captured* status of the current frame to `not_captured`.
-    ///
-    pub(super) fn set_not_captured(&mut self, not_captured: bool) {
-        self.current_frame_mut().not_captured = not_captured;
-    }
-
-    ///
-    /// Get the *not_captured* status of the current frame.
-    ///
-    pub(super) fn not_captured(&self) -> bool {
-        self.current_frame().not_captured
+        let current = self.current_frame_mut();
+        *state = current.abstract_state.take().unwrap();
+        current.callid = None;
+        current.stack_offset -= stack_offset;
+        Ok(frame)
     }
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
@@ -615,6 +606,17 @@ impl<'a> JitContext<'a> {
         Some(i)
     }
 
+    pub(super) fn outer_contexts(&self) -> Vec<AbstractFrame> {
+        let mut i = self.stack_frame.len() - 1;
+        let mut v = vec![];
+        while let Some(outer) = self.stack_frame[i].outer {
+            i -= outer;
+            let scope = self.stack_frame[i].abstract_state.clone().unwrap();
+            v.push(scope);
+        }
+        v
+    }
+
     fn current_method_frame(&self) -> Option<(&JitStackFrame, usize)> {
         let mut i = self.stack_frame.len() - 1;
         loop {
@@ -633,13 +635,18 @@ impl<'a> JitContext<'a> {
 
     ///
     /// Unset frame capture guard in the outer `JitFrame`s.
-    pub(super) fn unset_frame_capture_guard(&mut self) {
+    ///
+    pub(super) fn unset_outer_no_capture_guard(&mut self) {
         let mut i = self.stack_frame.len() - 1;
         loop {
             let frame = &mut self.stack_frame[i];
             if let Some(outer) = frame.outer {
                 i -= outer;
-                self.stack_frame[i].not_captured = false;
+                self.stack_frame[i]
+                    .abstract_state
+                    .as_mut()
+                    .unwrap()
+                    .unset_no_capture_guard();
             } else {
                 return;
             }
@@ -661,9 +668,13 @@ impl<'a> JitContext<'a> {
         })
     }
 
-    pub(super) fn outer_stack_offset(&self, outer: usize) -> Option<(usize, bool)> {
+    pub(super) fn outer_stack_offset(
+        &self,
+        state: &AbstractState,
+        outer: usize,
+    ) -> Option<(usize, bool)> {
+        let not_captured = state.outer_no_capture_guard(outer)?;
         let outer = self.outer_pos(outer)?;
-        let not_captured = self.stack_frame[outer].not_captured;
         let offset = self.calc_stack_offset(outer, self.stack_frame.len() - 1);
         Some((offset, not_captured))
     }
@@ -726,10 +737,6 @@ impl<'a> JitContext<'a> {
         self.class_version
     }
 
-    pub(crate) fn class_version_label(&self) -> DestLabel {
-        self.class_version_label.clone()
-    }
-
     pub(super) fn specialize_level(&self) -> usize {
         self.current_frame().specialize_level
     }
@@ -758,11 +765,11 @@ impl<'a> JitContext<'a> {
     pub(super) fn loop_info(
         &self,
         entry_bb: BasicBlockId,
-    ) -> Option<&(Liveness, Option<BBContext>)> {
+    ) -> Option<&(Liveness, Option<AbstractState>)> {
         self.current_frame().loop_info.get(&entry_bb)
     }
 
-    pub(super) fn loop_backedge(&self, entry_bb: BasicBlockId) -> Option<&BBContext> {
+    pub(super) fn loop_backedge(&self, entry_bb: BasicBlockId) -> Option<&AbstractState> {
         self.current_frame()
             .loop_info
             .get(&entry_bb)
@@ -773,7 +780,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         entry_bb: BasicBlockId,
         liveness: Liveness,
-        backedge: Option<BBContext>,
+        backedge: Option<AbstractState>,
     ) {
         self.current_frame_mut()
             .loop_info
@@ -792,12 +799,12 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().loop_count -= 1;
     }
 
-    pub(super) fn branch_continue(&mut self, bb_begin: BasicBlockId, bbctx: BBContext) {
+    pub(super) fn branch_continue(&mut self, bb_begin: BasicBlockId, state: AbstractState) {
         self.current_frame_mut().branch_map.insert(
             bb_begin,
             vec![BranchEntry {
                 src_bb: None,
-                bbctx,
+                state,
                 mode: BranchMode::Continue,
             }],
         );
@@ -807,7 +814,7 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().branch_map.remove(&bb)
     }
 
-    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<SlotContext> {
+    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<SlotState> {
         self.current_frame_mut().backedge_map.remove(&bb)
     }
 
@@ -819,7 +826,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         src_bb: BasicBlockId,
         dest_bb: BasicBlockId,
-        bbctx: BBContext,
+        state: AbstractState,
         mode: BranchMode,
     ) {
         self.current_frame_mut()
@@ -828,82 +835,82 @@ impl<'a> JitContext<'a> {
             .or_default()
             .push(BranchEntry {
                 src_bb: Some(src_bb),
-                bbctx,
+                state,
                 mode,
             });
     }
 
     ///
-    /// Add new branch from *src_idx* to *dest* with the context *bbctx*.
+    /// Add new branch from *src_idx* to *dest* with `state`.
     ///
     pub(super) fn new_side_branch(
         &mut self,
         src_idx: BcIndex,
         dest_bb: BasicBlockId,
-        mut bbctx: BBContext,
+        mut state: AbstractState,
         dest: JitLabel,
     ) {
-        bbctx.clear_above_next_sp();
+        state.clear_above_next_sp();
         let src_bb = self.iseq().bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
         eprintln!(
             "   new_side branch: {src_idx}->{dest_bb:?} {:?}",
-            bbctx.slot_state
+            state.slot_state()
         );
-        self.branch(src_bb, dest_bb, bbctx, BranchMode::Side { dest });
+        self.branch(src_bb, dest_bb, state, BranchMode::Side { dest });
     }
 
     ///
-    /// Add new branch from *src_idx* to *dest* with the context *bbctx*.
+    /// Add new branch from *src_idx* to *dest* with `state`.
     ///
     pub(super) fn new_branch(
         &mut self,
         bc_pos: BcIndex,
         dest_bb: BasicBlockId,
-        mut bbctx: BBContext,
+        mut state: AbstractState,
     ) {
-        bbctx.clear_above_next_sp();
+        state.clear_above_next_sp();
         let src_bb = self.iseq().bb_info.get_bb_id(bc_pos);
         #[cfg(feature = "jit-debug")]
         eprintln!(
             "   new_branch: {bc_pos}->{dest_bb:?} {:?}",
-            bbctx.slot_state
+            state.slot_state()
         );
-        self.branch(src_bb, dest_bb, bbctx, BranchMode::Branch);
+        self.branch(src_bb, dest_bb, state, BranchMode::Branch);
     }
 
     ///
-    /// Add new continuation branch from *src_idx* to *dest* with the context *bbctx*.
+    /// Add new continuation branch from *src_idx* to *dest* with `state`.
     ///
     pub(super) fn new_continue(
         &mut self,
         src_idx: BcIndex,
         dest_bb: BasicBlockId,
-        mut bbctx: BBContext,
+        mut state: AbstractState,
     ) {
-        bbctx.clear_above_next_sp();
+        state.clear_above_next_sp();
         let src_bb = self.iseq().bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
         eprintln!(
             "   new_continue: {src_idx}->{dest_bb:?} {:?}",
-            bbctx.slot_state
+            state.slot_state()
         );
-        self.branch(src_bb, dest_bb, bbctx, BranchMode::Continue);
+        self.branch(src_bb, dest_bb, state, BranchMode::Continue);
     }
 
     ///
-    /// Add new backward branch from *src_idx* to *dest* with the context *bbctx*.
+    /// Add new backward branch from *src_idx* to *dest* with `state`.
     ///
-    pub(super) fn new_backedge(&mut self, target: SlotContext, bb_pos: BasicBlockId) {
+    pub(super) fn new_backedge(&mut self, target: SlotState, bb_pos: BasicBlockId) {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:{bb_pos:?} {target:?}");
         self.current_frame_mut().backedge_map.insert(bb_pos, target);
     }
 
     ///
-    /// Add new return branch with the context *bbctx*.
+    /// Add new return branch with `state`.
     ///
-    pub(super) fn new_return(&mut self, ret: ResultState) {
+    pub(super) fn new_return(&mut self, ret: ReturnState) {
         if let Some(pos) = self.caller_pos() {
             #[cfg(feature = "jit-debug")]
             eprintln!("   new_return:{:?}", ret);
@@ -912,9 +919,9 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Add new return branch with the context *bbctx*.
+    /// Add new return branch with `state`.
     ///
-    pub(super) fn new_method_return(&mut self, ret: ResultState) {
+    pub(super) fn new_method_return(&mut self, ret: ReturnState) {
         if let Some(pos) = self.method_caller_pos() {
             #[cfg(feature = "jit-debug")]
             eprintln!("   new_method_return:{:?}", ret);
@@ -923,9 +930,9 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Add new return branch with the context *bbctx*.
+    /// Add new return branch with `state`.
     ///
-    pub(super) fn new_break(&mut self, ret: ResultState) {
+    pub(super) fn new_break(&mut self, ret: ReturnState) {
         if let Some(pos) = self.iter_caller_pos() {
             #[cfg(feature = "jit-debug")]
             eprintln!("   new_break:{:?}", ret);

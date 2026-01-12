@@ -11,9 +11,8 @@ impl Codegen {
         self_class: ClassId,
         jit_entry: DestLabel,
         class_version: u32,
-        class_version_label: DestLabel,
         is_recompile: Option<RecompileReason>,
-    ) -> Vec<(ClassId, Option<IdentId>, FuncId)> {
+    ) -> Option<(Vec<(ClassId, Option<IdentId>, FuncId)>, DestLabel)> {
         self.compile(
             globals,
             iseq_id,
@@ -21,7 +20,6 @@ impl Codegen {
             None,
             jit_entry,
             class_version,
-            class_version_label,
             is_recompile,
         )
     }
@@ -140,6 +138,9 @@ impl Codegen {
         );
     }
 
+    ///
+    /// Entry point of JIT compilation.
+    ///
     fn compile(
         &mut self,
         globals: &mut Globals,
@@ -148,21 +149,25 @@ impl Codegen {
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
         class_version: u32,
-        class_version_label: DestLabel,
         _is_recompile: Option<RecompileReason>,
-    ) -> Vec<(ClassId, Option<IdentId>, FuncId)> {
+    ) -> Option<(Vec<(ClassId, Option<IdentId>, FuncId)>, DestLabel)> {
+        if position.is_none() && globals.store[iseq_id].jit_invalidated() {
+            return None;
+        }
         #[cfg(feature = "profile")]
         {
             if let Some(reason) = &_is_recompile {
-                globals.countup_recompile(globals.store[iseq_id].func_id(), self_class, reason);
+                let func_id = globals.store[iseq_id].func_id();
+                globals.countup_recompile(func_id, self_class, reason);
             }
         }
 
-        #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
+        #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
         if self.startup_flag {
             let iseq = &globals.store[iseq_id];
+            let func_id = iseq.func_id();
             let start_pos = iseq.get_pc_index(position);
-            let name = globals.store.func_description(iseq.func_id());
+            let name = globals.store.func_description(func_id);
             eprintln!(
                 "==> start {} {}compile: {}{:?} <{}> {}self_class: {} {}:{}",
                 if position.is_some() {
@@ -176,7 +181,7 @@ impl Codegen {
                 } else {
                     String::new()
                 },
-                iseq.func_id(),
+                func_id,
                 name,
                 if position.is_some() {
                     format!("start:[{}] ", start_pos)
@@ -189,58 +194,95 @@ impl Codegen {
             );
         }
 
-        #[cfg(feature = "jit-log")]
         let now = std::time::Instant::now();
+        let (start0, start1) = self.get_address_pair();
 
-        let cache = self.jit_compile(
+        match self.jit_compile(
             &globals.store,
             iseq_id,
             self_class,
             position,
-            entry_label,
+            entry_label.clone(),
             class_version,
-            class_version_label,
-        );
-
-        if self.startup_flag {
-            #[cfg(feature = "jit-log")]
-            {
+        ) {
+            Ok((cache, specialized_info, class_version_label)) => {
+                let codeptr = self.jit.get_label_address(&entry_label);
+                let (end0, end1) = self.get_address_pair();
                 let elapsed = now.elapsed();
-                eprintln!("<== finished compile. elapsed:{:?}", elapsed);
-                self.jit_compile_time += elapsed;
-            }
+                let span = (
+                    (start0, (end0 - start0) as usize),
+                    (start1, (end1 - start1) as usize),
+                );
+                #[cfg(feature = "jit-log")]
+                {
+                    eprintln!(
+                        "{} {} {position:?} ({} bytes, {} bytes) {elapsed:?}",
+                        globals
+                            .store
+                            .func_description(globals.store[iseq_id].func_id()),
+                        globals.store.debug_class_name(self_class),
+                        span.0.1,
+                        span.1.1
+                    );
+                    eprintln!("{}", specialized_info.format(&globals.store));
+                }
+                self.add_compilation_unit(
+                    iseq_id,
+                    self_class,
+                    position,
+                    codeptr,
+                    specialized_info,
+                    span,
+                    elapsed,
+                );
+                #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
+                if self.startup_flag {
+                    eprintln!("<== finished compile. elapsed:{:?}", elapsed);
+                    self.jit_compile_time += elapsed;
 
-            #[cfg(any(feature = "jit-debug", feature = "jit-log"))]
-            {
-                self.jit.select_page(0);
-                eprintln!("    total bytes(0):{:?}", self.jit.get_current());
-                self.jit.select_page(1);
-                eprintln!("    total bytes(1):{:?}", self.jit.get_current());
-                self.jit.select_page(0);
+                    self.jit.select_page(0);
+                    eprint!("    total bytes(0):{:?}    ", self.jit.get_current());
+                    self.jit.select_page(1);
+                    eprintln!("(1):{:?}", self.jit.get_current());
+                    self.jit.select_page(0);
+                }
+
+                Some((cache, class_version_label))
             }
-            #[cfg(feature = "emit-asm")]
-            eprintln!("<== finished compile.");
+            Err(_) => {
+                if position.is_none() {
+                    globals.store[iseq_id].invalidate_jit_code();
+                }
+                #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
+                if self.startup_flag {
+                    let elapsed = now.elapsed();
+                    eprintln!("<== abort compile. elapsed:{:?}", elapsed);
+                    self.jit_compile_time += elapsed;
+                }
+                None
+            }
         }
-
-        cache
     }
 
-    fn recompile_method(&mut self, globals: &mut Globals, lfp: Lfp, reason: RecompileReason) {
+    fn recompile_method(
+        &mut self,
+        globals: &mut Globals,
+        lfp: Lfp,
+        reason: RecompileReason,
+    ) -> Option<()> {
         let self_class = lfp.self_val().class();
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
         let jit_entry = self.jit.label();
         let class_version = self.class_version();
-        let class_version_label = self.jit.const_i32(class_version as _);
-        let cache = self.compile_method(
+        let (cache, _) = self.compile_method(
             globals,
             iseq_id,
             self_class,
             jit_entry.clone(),
             class_version,
-            class_version_label,
             Some(reason),
-        );
+        )?;
         // get_jit_code() must not be None.
         // After BOP redefinition occurs, recompilation in invalidated methods cause None.
         if let Some(patch_point) = globals.store[iseq_id].get_jit_entry(self_class) {
@@ -253,6 +295,7 @@ impl Codegen {
                 globals.store[func_id].name()
             );
         }
+        Some(())
     }
 
     fn compile_partial(
@@ -261,13 +304,13 @@ impl Codegen {
         lfp: Lfp,
         pc: BytecodePtr,
         is_recompile: Option<RecompileReason>,
-    ) {
+    ) -> Option<()> {
         let entry_label = self.jit.label();
         let self_class = lfp.self_val().class();
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
         let class_version = self.class_version();
-        let class_version_label = self.jit.const_i32(class_version as _);
+
         self.compile(
             globals,
             iseq_id,
@@ -275,11 +318,11 @@ impl Codegen {
             Some(pc),
             entry_label.clone(),
             class_version,
-            class_version_label,
             is_recompile,
-        );
+        )?;
         let codeptr = self.jit.get_label_address(&entry_label);
         pc.write2(codeptr.as_ptr() as u64);
+        Some(())
     }
 
     fn recompile_specialized(
@@ -287,12 +330,11 @@ impl Codegen {
         globals: &mut Globals,
         idx: usize,
         reason: RecompileReason,
-    ) {
+    ) -> Option<()> {
         let (iseq_id, self_class, patch_point) = self.specialized_info[idx].clone();
 
         let entry = self.jit.label();
         let class_version = self.class_version();
-        let class_version_label = self.jit.const_i32(class_version as _);
         self.compile(
             globals,
             iseq_id,
@@ -300,12 +342,12 @@ impl Codegen {
             None,
             entry.clone(),
             class_version,
-            class_version_label,
             Some(reason),
-        );
+        )?;
 
         let patch_point = self.jit.get_label_address(&patch_point);
         self.jit.apply_jmp_patch_address(patch_point, &entry);
+        Some(())
     }
 }
 

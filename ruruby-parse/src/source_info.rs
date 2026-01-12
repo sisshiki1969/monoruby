@@ -161,10 +161,9 @@ impl SourceInfo {
                 };
                 res_string += &code[(start + offset)..end];
                 res_string += "\n";
-                res_string += &" ".repeat(console::measure_text_width(
-                    &code[(start + offset)..(start + offset + lead)],
-                ));
-                res_string += &"^".repeat(console::measure_text_width(
+                res_string +=
+                    &" ".repeat(text_width(&code[(start + offset)..(start + offset + lead)]));
+                res_string += &"^".repeat(text_width(
                     &code[(start + offset + lead)..(start + offset + lead + length)],
                 ));
                 res_string += "\n";
@@ -175,8 +174,8 @@ impl SourceInfo {
                 Some(line) => (line.line_no + 1, line.end + 1, loc.1),
                 None => (1, 0, loc.1),
             };
-            let lead = console::measure_text_width(&code[line.1..loc.0]);
-            let length = console::measure_text_width(&code[loc.0..loc.1]);
+            let lead = text_width(&code[line.1..loc.0]);
+            let length = text_width(&code[loc.0..loc.1]);
             let is_cr = loc.1 >= code.len() || self.get_next_char(loc.1) == Some('\n');
             res_string += &format!("{}:{}\n", self.file_name(), line.0);
             res_string += if !is_cr {
@@ -190,6 +189,10 @@ impl SourceInfo {
         }
         res_string
     }
+}
+
+fn text_width(s: &str) -> usize {
+    console::measure_text_width(s) + s.chars().filter(|c| c == &'\t').count() * 7
 }
 
 impl SourceInfo {

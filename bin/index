@@ -1,4 +1,4 @@
 #!/bin/bash
 
 cargo build --release
-benchmark-driver -o markdown benchmark/index.yaml --rbenv '3.4.1 --yjit; truffleruby-24.1.1' -e 'target/release/monoruby' --repeat-count 5
+benchmark-driver -o markdown benchmark/index.yaml --rbenv '4.0.0 --yjit; truffleruby-24.2.1' -e 'target/release/monoruby' --repeat-count 5

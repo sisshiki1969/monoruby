@@ -10,18 +10,19 @@ impl<'a> JitContext<'a> {
             let target = self.remove_backedge(bbid).unwrap();
             let pc = self.iseq().get_bb_pc(bbid);
             #[cfg(feature = "jit-debug")]
-            eprintln!("  backedge_bridge to: {bbid:?} {target:?}");
+            eprintln!("  backedge_bridge to:{bbid:?} target:{target:?}");
             for BranchEntry {
                 src_bb,
-                bbctx,
+                state,
                 mode,
                 ..
             } in entries
             {
                 #[cfg(feature = "jit-debug")]
-                eprintln!("    {mode:?}");
+                eprintln!("    {mode:?} src:{src_bb:?}");
+
                 let mut ir = AsmIr::new(self);
-                bbctx.gen_bridge(&mut ir, src_bb, &target, pc);
+                state.gen_bridge(&mut ir, &target, pc);
                 match mode {
                     BranchMode::Side { dest } => {
                         self.add_outline_bridge(ir, dest, bbid);
@@ -60,8 +61,12 @@ impl<'a> JitContext<'a> {
         &mut self,
         bbid: BasicBlockId,
         no_calc_backedge: bool,
-    ) -> Option<BBContext> {
-        let entries = self.remove_branch(bbid)?;
+    ) -> Result<Option<AbstractState>> {
+        let entries = if let Some(entries) = self.remove_branch(bbid) {
+            entries
+        } else {
+            return Ok(None);
+        };
         let iseq = self.iseq();
         let pc = iseq.get_bb_pc(bbid);
 
@@ -69,9 +74,9 @@ impl<'a> JitContext<'a> {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge loop: {bbid:?}");
 
-            let incoming = BBContext::join_entries(&entries);
+            let incoming = AbstractState::join_entries(&entries);
             if !no_calc_backedge {
-                self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end);
+                self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end)?;
             }
 
             let mut target = incoming;
@@ -83,17 +88,17 @@ impl<'a> JitContext<'a> {
                 target.liveness_analysis(liveness);
             }
             #[cfg(feature = "jit-debug")]
-            eprintln!("  target:  {:?}\n", target.slot_state);
+            eprintln!("  target:  {:?}\n", target.slot_state());
 
             self.gen_bridges_for_branches(&target, entries, bbid, pc + 1);
-            self.new_backedge(target.slot_state.clone(), bbid);
+            self.new_backedge(target.slot_state().clone(), bbid);
 
             Some(target)
         } else {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge {bbid:?}");
 
-            let target = BBContext::join_entries(&entries);
+            let target = AbstractState::join_entries(&entries);
             self.gen_bridges_for_branches(&target, entries, bbid, pc);
 
             Some(target)
@@ -101,7 +106,7 @@ impl<'a> JitContext<'a> {
 
         #[cfg(feature = "jit-debug")]
         eprintln!("===merge_end");
-        res
+        Ok(res)
     }
 
     ///
@@ -109,25 +114,26 @@ impl<'a> JitContext<'a> {
     ///
     fn gen_bridges_for_branches(
         &mut self,
-        target: &SlotContext,
+        target: &SlotState,
         entries: Vec<BranchEntry>,
         bbid: BasicBlockId,
         pc: BytecodePtr,
     ) {
         let target = target.clone();
         #[cfg(feature = "jit-debug")]
-        eprintln!("  bridge to: {bbid:?} {target:?}");
+        eprintln!("  bridge to:{bbid:?} target:{target:?}");
         for BranchEntry {
             src_bb,
-            bbctx,
+            state,
             mode,
             ..
         } in entries
         {
             #[cfg(feature = "jit-debug")]
-            eprintln!("    {mode:?}");
+            eprintln!("    {mode:?} src:{src_bb:?}");
+
             let mut ir = AsmIr::new(self);
-            bbctx.gen_bridge(&mut ir, src_bb, &target, pc);
+            state.gen_bridge(&mut ir, &target, pc);
             match mode {
                 BranchMode::Side { dest } => {
                     self.add_outline_bridge(ir, dest, bbid);

@@ -231,7 +231,7 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn integer_tof(
-    bb: &mut BBContext,
+    state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -244,8 +244,8 @@ fn integer_tof(
     }
     let CallSiteInfo { dst, recv, .. } = *callsite;
     if let Some(ret) = dst {
-        let fret = bb.def_F(ret).enc();
-        bb.load(ir, recv, GP::Rdi);
+        let fret = state.def_F(ret).enc();
+        state.load(ir, recv, GP::Rdi);
         ir.inline(move |r#gen, _, _| {
             monoasm! { &mut r#gen.jit,
                 sarq  rdi, 1;
@@ -395,7 +395,7 @@ fn shr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn integer_shr(
-    bb: &mut BBContext,
+    state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -409,15 +409,15 @@ fn integer_shr(
     let CallSiteInfo {
         dst, args, recv, ..
     } = *callsite;
-    bb.load(ir, recv, GP::Rdi);
-    if let Some(rhs) = bb.is_u8_literal(args) {
+    state.load(ir, recv, GP::Rdi);
+    if let Some(rhs) = state.is_u8_literal(args) {
         ir.inline(move |r#gen, _, _| r#gen.gen_shr_imm(rhs));
     } else {
-        bb.load_fixnum(ir, args, GP::Rcx, pc);
-        let deopt = ir.new_deopt(bb, pc);
+        state.load_fixnum(ir, args, GP::Rcx, pc);
+        let deopt = ir.new_deopt(state, pc);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shr(&labels[deopt]));
     }
-    bb.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+    state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
 }
 
@@ -433,7 +433,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn integer_shl(
-    bb: &mut BBContext,
+    state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -448,22 +448,22 @@ fn integer_shl(
         dst, args, recv, ..
     } = *callsite;
 
-    bb.load(ir, recv, GP::Rdi);
-    if let Some(rhs) = bb.is_u8_literal(args)
+    state.load(ir, recv, GP::Rdi);
+    if let Some(rhs) = state.is_u8_literal(args)
         && rhs < 64
     {
-        let deopt = ir.new_deopt(bb, pc);
+        let deopt = ir.new_deopt(state, pc);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shl_rhs_imm(rhs, &labels[deopt]));
-    } else if let Some(lhs) = bb.is_fixnum_literal(recv) {
-        bb.load_fixnum(ir, args, GP::Rcx, pc);
-        let deopt = ir.new_deopt(bb, pc);
+    } else if let Some(lhs) = state.is_fixnum_literal(recv) {
+        state.load_fixnum(ir, args, GP::Rcx, pc);
+        let deopt = ir.new_deopt(state, pc);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shl_lhs_imm(lhs, &labels[deopt]));
     } else {
-        bb.load_fixnum(ir, args, GP::Rcx, pc);
-        let deopt = ir.new_deopt(bb, pc);
+        state.load_fixnum(ir, args, GP::Rcx, pc);
+        let deopt = ir.new_deopt(state, pc);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shl(&labels[deopt]));
     }
-    bb.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+    state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
 }
 

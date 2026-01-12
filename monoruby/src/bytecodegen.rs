@@ -24,12 +24,11 @@ pub fn bytecode_compile_script(globals: &mut Globals, result: ParseResult) -> Re
 pub fn bytecode_compile_eval(
     globals: &mut Globals,
     result: ParseResult,
-    mother: (ISeqId, usize),
-    outer: (FuncId, ExternalContext),
+    outer: ISeqId,
     loc: Loc,
     binding: Option<LvarCollector>,
 ) -> Result<FuncId> {
-    let main_fid = globals.store.new_eval(mother, result, outer, loc)?;
+    let main_fid = globals.store.new_eval(outer, result, loc)?;
     bytecode_compile(globals, main_fid, binding)?;
     Ok(main_fid)
 }
@@ -60,13 +59,11 @@ fn bytecode_compile_func(
     let loc = info.loc;
     let iseq = globals[func_id].as_iseq();
 
-    let mut r#gen = BytecodeGen::new(&globals.store, iseq, &info.params, binding);
+    let mut r#gen = BytecodeGen::new(&mut globals.store, iseq, &info.params, binding);
     r#gen.compile(info)?;
 
-    if let Some(value) = r#gen.is_const_function() {
-        globals.iseq_mut(func_id).unwrap().set_const_fn(value);
-    }
-    r#gen.into_bytecode(globals, loc)?;
+    r#gen.into_bytecode(loc)?;
+
     globals.gen_wrapper(func_id);
     Ok(())
 }
@@ -225,7 +222,7 @@ struct CallSite {
     /// Positions of splat arguments.
     splat_pos: Vec<usize>,
     /// *FuncId* of passed block.
-    block_fid: Option<FunctionId>,
+    block_fid: Option<FuncId>,
     block_arg: Option<BcReg>,
     /// *BcReg* of the first arguments.
     args: BcReg,
@@ -242,7 +239,7 @@ impl CallSite {
         pos_num: usize,
         kw: Option<KeywordArgs>,
         splat_pos: Vec<usize>,
-        block_fid: Option<FunctionId>,
+        block_fid: Option<FuncId>,
         block_arg: Option<BcReg>,
         args: BcReg,
         recv: BcReg,
@@ -319,24 +316,6 @@ struct KeywordArgs {
     kw_args: indexmap::IndexMap<IdentId, usize>,
     /// Positions of splat keyword arguments.
     hash_splat_pos: Vec<BcReg>,
-}
-
-#[derive(Debug, Clone)]
-enum Functions {
-    Method {
-        name: Option<IdentId>,
-        compile_info: CompileInfo,
-    },
-    ClassDef {
-        name: Option<IdentId>,
-        compile_info: CompileInfo,
-    },
-    Block {
-        mother: (ISeqId, usize),
-        outer: (FuncId, ExternalContext),
-        compile_info: CompileInfo,
-        is_block_style: bool,
-    },
 }
 
 #[derive(Debug, Clone)]
@@ -453,30 +432,70 @@ struct MergeSourceInfo {
     sp: BcTemp,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct FunctionId(usize);
+#[derive(Clone, Default)]
+struct BytecodeLabels {
+    labels: Vec<Option<BcIndex>>,
+    /// The number of non-temporary registers.
+    non_temp_num: u16,
+}
 
-struct BytecodeGen {
+impl std::ops::Index<Label> for BytecodeLabels {
+    type Output = BcIndex;
+    fn index(&self, index: Label) -> &Self::Output {
+        self.labels[index.0].as_ref().unwrap()
+    }
+}
+
+impl BytecodeLabels {
+    fn new() -> Self {
+        Self {
+            labels: vec![None],
+            non_temp_num: 0,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.labels.len()
+    }
+
+    fn push(&mut self, bc: Option<BcIndex>) -> Label {
+        let label = Label(self.labels.len());
+        self.labels.push(bc);
+        label
+    }
+
+    fn slot_id(&self, reg: &BcReg) -> SlotId {
+        let id = match reg {
+            BcReg::Self_ => 0,
+            BcReg::Temp(i) => 1 + self.non_temp_num + i.0,
+            BcReg::Local(i) => 1 + i.0,
+        };
+        SlotId(id)
+    }
+}
+
+struct BytecodeGen<'a> {
+    store: &'a mut Store,
     /// ID of the iseq.
     iseq_id: ISeqId,
     /// ID of this function.
     func_id: FuncId,
     /// ID of the mother method.
     mother: (ISeqId, ParamsInfo, usize),
+    /// ID of the outer iseq.
+    outer: Option<ISeqId>,
     /// bytecode IR.
     ir: Vec<(BytecodeInst, Loc)>,
     /// the temp stack pointer for each bytecode instruction.
     sp: Vec<BcTemp>,
     /// destination labels.
-    labels: Vec<Option<BcIndex>>,
+    labels: BytecodeLabels,
     /// loop information.
     loops: Vec<LoopInfo>, // (kind, label for exit, return register)
     /// ensure clause information.
     ensure: Vec<Option<Node>>,
     /// local variables.
-    locals: HashMap<IdentId, BcLocal>,
-    /// outer local variables. (dynamic_locals, block_param)
-    outer_locals: ExternalContext,
+    locals: indexmap::IndexMap<IdentId, BcLocal>,
     /// literal values. (for GC)
     literals: Vec<Value>,
     /// The name of the block param.
@@ -487,56 +506,56 @@ struct BytecodeGen {
     temp: u16,
     /// The number of temporary registers.
     temp_num: u16,
-    /// The number of non-temporary registers.
-    non_temp_num: u16,
+
     /// Source info.
     sourceinfo: SourceInfoRef,
     /// Exception jump table.
     exception_table: Vec<ExceptionEntry>,
     /// Merge info.
     merge_info: HashMap<Label, (Option<BcTemp>, Vec<MergeSourceInfo>)>,
-    /// Function info.
-    functions: Vec<Option<Box<Functions>>>,
 }
 
-impl std::ops::Index<Label> for BytecodeGen {
+impl<'a> std::ops::Index<Label> for BytecodeGen<'a> {
     type Output = BcIndex;
     fn index(&self, index: Label) -> &Self::Output {
-        self.labels[index.0].as_ref().unwrap()
+        &self.labels[index]
     }
 }
 
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     fn new(
-        store: &Store,
+        store: &'a mut Store,
         iseq_id: ISeqId,
         params: &ParamsInfo,
         binding: Option<LvarCollector>,
     ) -> Self {
         let info = &store[iseq_id];
-        let (mother, outer) = info.mother();
+        let (mother, mother_outer) = info.mother();
         let mother_params = store[store[mother].func_id()].params().clone();
+        let block_param = info.block_param();
+        let func_id = info.func_id();
+        let sourceinfo = info.sourceinfo.clone();
+        let outer = info.outer;
         let mut codegen = Self {
+            store,
             iseq_id,
-            func_id: info.func_id(),
-            mother: (mother, mother_params, outer),
+            func_id,
+            mother: (mother, mother_params, mother_outer),
+            outer,
             ir: vec![],
             sp: vec![],
-            labels: vec![None], // The first label is for redo.
+            labels: BytecodeLabels::new(), // The first label is for redo.
             loops: vec![],
             ensure: vec![],
-            locals: HashMap::default(),
-            outer_locals: info.outer_locals.clone(),
+            locals: Default::default(),
             literals: vec![],
-            block_param: info.block_param(),
+            block_param,
             redo_label: Label(0),
             temp: 0,
             temp_num: 0,
-            non_temp_num: 0,
-            sourceinfo: info.sourceinfo.clone(),
+            sourceinfo,
             exception_table: vec![],
             merge_info: HashMap::default(),
-            functions: vec![],
         };
         if let Some(lvc) = binding {
             assert!(params.args_names.is_empty());
@@ -550,6 +569,14 @@ impl BytecodeGen {
         }
 
         codegen
+    }
+
+    fn iseq(&self) -> &ISeqInfo {
+        &self.store[self.iseq_id]
+    }
+
+    fn iseq_mut(&mut self) -> &mut ISeqInfo {
+        &mut self.store[self.iseq_id]
     }
 
     fn compile(&mut self, info: CompileInfo) -> Result<()> {
@@ -618,55 +645,40 @@ impl BytecodeGen {
     }
 
     fn is_block(&self) -> bool {
-        !self.outer_locals.is_empty()
+        self.outer.is_some()
     }
 
-    fn add_method(&mut self, name: Option<IdentId>, compile_info: CompileInfo) -> FunctionId {
-        let info = Functions::Method { name, compile_info };
-        self.functions.push(Some(Box::new(info)));
-        FunctionId(self.functions.len() - 1)
-    }
-
-    fn add_classdef(&mut self, name: Option<IdentId>, compile_info: CompileInfo) -> FunctionId {
-        let info = Functions::ClassDef { name, compile_info };
-        self.functions.push(Some(Box::new(info)));
-        FunctionId(self.functions.len() - 1)
-    }
-
-    fn add_block(
+    fn add_method(
         &mut self,
-        mother: (ISeqId, usize),
-        outer: (FuncId, ExternalContext),
+        name: Option<IdentId>,
         compile_info: CompileInfo,
-    ) -> FunctionId {
-        let info = Functions::Block {
-            mother,
-            outer,
-            compile_info,
-            is_block_style: true,
-        };
-        self.functions.push(Some(Box::new(info)));
-        FunctionId(self.functions.len() - 1)
+        loc: Loc,
+    ) -> Result<FuncId> {
+        let sourceinfo = self.sourceinfo.clone();
+        self.store
+            .new_iseq_method(name, compile_info, loc, sourceinfo, false)
     }
 
-    fn add_lambda(
+    fn add_classdef(
         &mut self,
-        mother: (ISeqId, usize),
-        outer: (FuncId, ExternalContext),
+        name: Option<IdentId>,
         compile_info: CompileInfo,
-    ) -> FunctionId {
-        let info = Functions::Block {
-            mother,
-            outer,
-            compile_info,
-            is_block_style: false,
-        };
-        self.functions.push(Some(Box::new(info)));
-        FunctionId(self.functions.len() - 1)
+        loc: Loc,
+    ) -> Result<FuncId> {
+        let sourceinfo = self.sourceinfo.clone();
+        self.store.new_classdef(name, compile_info, loc, sourceinfo)
     }
 
-    fn get_function(&mut self, id: FunctionId) -> Functions {
-        *std::mem::take(&mut self.functions[id.0]).unwrap()
+    fn add_block(&mut self, outer: ISeqId, compile_info: CompileInfo, loc: Loc) -> Result<FuncId> {
+        let sourceinfo = self.sourceinfo.clone();
+        self.store
+            .new_block(outer, compile_info, true, loc, sourceinfo)
+    }
+
+    fn add_lambda(&mut self, outer: ISeqId, compile_info: CompileInfo, loc: Loc) -> Result<FuncId> {
+        let sourceinfo = self.sourceinfo.clone();
+        self.store
+            .new_block(outer, compile_info, false, loc, sourceinfo)
     }
 
     fn loop_push(
@@ -692,10 +704,10 @@ impl BytecodeGen {
 //
 // temporary registers handling.
 //
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     /// get a number of registers.
     fn total_reg_num(&self) -> usize {
-        1 + (self.non_temp_num + self.temp_num) as usize
+        1 + (self.labels.non_temp_num + self.temp_num) as usize
     }
 
     /// get the next register id.
@@ -745,28 +757,21 @@ impl BytecodeGen {
     }
 
     fn slot_id(&self, reg: &BcReg) -> SlotId {
-        let id = match reg {
-            BcReg::Self_ => 0,
-            BcReg::Temp(i) => 1 + self.non_temp_num + i.0,
-            BcReg::Local(i) => 1 + i.0,
-        };
-        SlotId(id)
+        self.labels.slot_id(reg)
     }
 }
 
 //
 // local variables handling.
 //
-impl BytecodeGen {
-    fn get_locals(&self) -> ExternalContext {
-        let mut locals = ExternalContext::one(self.locals.clone(), self.block_param);
-        locals.extend_from_slice(&self.outer_locals);
-        locals
+impl<'a> BytecodeGen<'a> {
+    fn outer_locals(&self) -> ExternalContext {
+        self.store.outer_locals(self.iseq_id)
     }
 
     /// get the outer block argument name.
     fn outer_block_param_name(&self, outer: usize) -> Option<IdentId> {
-        self.outer_locals[outer - 1].1
+        self.store.outer_locals_in(self.iseq_id, outer).unwrap().1
     }
 
     fn assign_local(&mut self, name: IdentId) -> BcLocal {
@@ -788,16 +793,21 @@ impl BytecodeGen {
     }
 
     fn refer_dynamic_local(&self, outer: usize, name: IdentId) -> Option<BcLocal> {
-        self.outer_locals[outer - 1].0.get(&name).cloned()
+        self.store
+            .outer_locals_in(self.iseq_id, outer)
+            .unwrap()
+            .0
+            .get(&name)
+            .cloned()
     }
 
     /// Add a variable identifier without checking duplicates.
     fn add_local(&mut self, ident: impl Into<Option<IdentId>>) -> BcLocal {
-        let local = BcLocal(self.non_temp_num);
+        let local = BcLocal(self.labels.non_temp_num);
         if let Some(ident) = ident.into() {
             assert!(self.locals.insert(ident, local).is_none());
         };
-        self.non_temp_num += 1;
+        self.labels.non_temp_num += 1;
         local
     }
 
@@ -836,33 +846,23 @@ impl BytecodeGen {
         &mut self,
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         block: BlockInfo,
-    ) -> Result<FunctionId> {
-        let outer_locals = self.get_locals();
-        let (mother, _, outer) = self.mother;
+    ) -> Result<FuncId> {
+        let loc = block.loc;
         let compile_info = Store::handle_args(block, optional_params)?;
-        Ok(self.add_block(
-            (mother, outer + 1),
-            (self.func_id, outer_locals),
-            compile_info,
-        ))
+        self.add_block(self.iseq_id, compile_info, loc)
     }
 
-    fn handle_lambda(&mut self, block: BlockInfo) -> Result<FunctionId> {
-        let outer_locals = self.get_locals();
-        let (mother, _, outer) = self.mother;
+    fn handle_lambda(&mut self, block: BlockInfo) -> Result<FuncId> {
+        let loc = block.loc;
         let compile_info = Store::handle_args(block, vec![])?;
-        Ok(self.add_lambda(
-            (mother, outer + 1),
-            (self.func_id, outer_locals),
-            compile_info,
-        ))
+        self.add_lambda(self.iseq_id, compile_info, loc)
     }
 }
 
 //
 // emit bytecode ir.
 //
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     /// get new destination label.
     fn new_label(&mut self) -> Label {
         let label = self.labels.len();
@@ -880,7 +880,7 @@ impl BytecodeGen {
         } else {
             self.merge_info.insert(label, (Some(dest_sp), vec![]));
         }
-        self.labels[label.0] = Some(pos);
+        self.labels.labels[label.0] = Some(pos);
     }
 
     fn emit(&mut self, op: BytecodeInst, loc: Loc) {
@@ -1252,7 +1252,7 @@ impl BytecodeGen {
                         self.sourceinfo.show_loc(&lhs.loc);
                         return Err(MonorubyErr::runtimeerr(format!(
                             "[FATAL] Bytecodegen: dynamic var {name} not found. {lhs:?} {:?}",
-                            self.outer_locals
+                            self.outer_locals()
                         )));
                     }
                 }
@@ -1465,7 +1465,7 @@ impl BytecodeGen {
 //
 // Error handling.
 //
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     fn syntax_error(&self, msg: impl Into<String>, loc: Loc) -> MonorubyErr {
         MonorubyErr::syntax(msg.into(), loc, self.sourceinfo.clone(), self.func_id)
     }

@@ -1,6 +1,6 @@
 use super::*;
 
-impl BBContext {
+impl AbstractState {
     pub(super) fn array_integer_index(
         &mut self,
         ir: &mut AsmIr,

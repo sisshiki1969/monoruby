@@ -3,15 +3,15 @@ use super::*;
 impl<'a> JitContext<'a> {
     pub(in crate::codegen::jitgen) fn load_ivar(
         &mut self,
-        bbctx: &mut BBContext,
+        state: &mut AbstractState,
         ir: &mut AsmIr,
         dst: SlotId,
         self_class: ClassId,
         ivarid: IvarId,
     ) -> bool {
         assert!(!self_class.is_always_frozen());
-        bbctx.discard(dst);
-        bbctx.writeback_acc(ir);
+        state.discard(dst);
+        state.writeback_acc(ir);
         ir.self2reg(GP::Rdi);
         let is_object_ty = self.self_ty() == Some(ObjTy::OBJECT);
         let ivar_heap = if is_object_ty && ivarid.is_inline() {
@@ -25,20 +25,20 @@ impl<'a> JitContext<'a> {
             });
             true
         };
-        bbctx.def_reg2acc(ir, GP::R15, dst);
+        state.def_reg2acc(ir, GP::R15, dst);
         ivar_heap
     }
 
     pub(in crate::codegen::jitgen) fn store_ivar(
         &mut self,
-        bbctx: &mut BBContext,
+        state: &mut AbstractState,
         ir: &mut AsmIr,
         src: SlotId,
         self_class: ClassId,
         ivarid: IvarId,
     ) -> bool {
         assert!(!self_class.is_always_frozen());
-        let src = bbctx.load_or_reg(ir, src, GP::Rax);
+        let src = state.load_or_reg(ir, src, GP::Rax);
         ir.self2reg(GP::Rdi);
         let is_object_ty = self.self_ty() == Some(ObjTy::OBJECT);
         if is_object_ty && ivarid.is_inline() {
@@ -55,7 +55,7 @@ impl<'a> JitContext<'a> {
     }
 }
 
-impl BBContext {
+impl AbstractState {
     pub(super) fn jit_load_gvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
         self.discard(dst);
         let using_xmm = self.get_using_xmm();

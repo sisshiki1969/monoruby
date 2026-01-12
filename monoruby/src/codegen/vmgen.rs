@@ -694,6 +694,7 @@ impl Codegen {
         self.vm_execute_gc();
         if !cfg!(feature = "no-jit") {
             let count = self.jit.label();
+            self.jit.branch_if_captured(&cont);
             monoasm! { &mut self.jit,
                 movq rax, [r13 - 8];
                 testq rax, rax;

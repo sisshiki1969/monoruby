@@ -173,4 +173,48 @@ mod tests {
         "#,
         );
     }
+
+    #[test]
+    fn proc() {
+        run_test_with_prelude(
+            r#"
+        a = :a
+        $b = proc { a = 1 }
+        a = nil
+        foo
+        a.inspect
+"#,
+            r#"
+        def foo
+          $b.call
+        end
+        "#,
+        )
+    }
+
+    #[test]
+    fn proc_2() {
+        run_test_once(
+            r#"
+        a = 5
+        p = proc {
+          a = 10
+        }
+        a = 1
+        p.call
+        a
+        "#,
+        );
+
+        run_test_once(
+            r#"
+        p = proc {
+          a = 10
+        }
+        a = 1
+        p.call
+        a
+        "#,
+        );
+    }
 }

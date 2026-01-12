@@ -21,7 +21,7 @@ pub use store::*;
 pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| AtomicU8::new(0u8));
 
 pub(crate) type InlineGen = dyn Fn(
-    &mut jitgen::BBContext,
+    &mut jitgen::AbstractState,
     &mut jitgen::asmir::AsmIr,
     &crate::jitgen::JitContext,
     &Store,
@@ -35,7 +35,10 @@ pub(crate) const GLOBALS_FUNCINFO: usize =
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExternalContext {
-    scope: Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
+    scope: Vec<(
+        indexmap::IndexMap<IdentId, bytecodegen::BcLocal>,
+        Option<IdentId>,
+    )>,
 }
 
 impl ruruby_parse::LocalsContext for ExternalContext {
@@ -51,7 +54,10 @@ impl ruruby_parse::LocalsContext for ExternalContext {
 }
 
 impl std::ops::Index<usize> for ExternalContext {
-    type Output = (HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>);
+    type Output = (
+        indexmap::IndexMap<IdentId, bytecodegen::BcLocal>,
+        Option<IdentId>,
+    );
     fn index(&self, index: usize) -> &Self::Output {
         &self.scope[index]
     }
@@ -60,20 +66,6 @@ impl std::ops::Index<usize> for ExternalContext {
 impl ExternalContext {
     pub fn new() -> Self {
         Self { scope: vec![] }
-    }
-
-    pub fn one(locals: HashMap<IdentId, bytecodegen::BcLocal>, block: Option<IdentId>) -> Self {
-        Self {
-            scope: vec![(locals, block)],
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.scope.is_empty()
-    }
-
-    pub fn extend_from_slice(&mut self, other: &Self) {
-        self.scope.extend_from_slice(&other.scope);
     }
 }
 
@@ -300,25 +292,13 @@ impl Globals {
         caller_cfp: Cfp,
     ) -> Result<FuncId> {
         let outer_fid = caller_cfp.lfp().func_id();
-        let (mother_fid, depth) = caller_cfp.method_func_id_depth();
-        let mother = (self.store[mother_fid].as_iseq(), depth);
-        let mut ex_scope = HashMap::default();
-        for (name, idx) in &self.store.iseq(outer_fid).locals {
-            ex_scope.insert(*name, *idx);
-        }
-        let mut external_context = ExternalContext::one(ex_scope, None);
-        external_context.extend_from_slice(&self.store.iseq(outer_fid).outer_locals);
+        let outer = self.store[outer_fid].as_iseq();
+        let external_context = self.store.scoped_locals(outer);
 
         match Parser::parse_program_eval(code, path.into(), Some(&external_context)) {
-            Ok(res) => {
-                let res = bytecodegen::bytecode_compile_eval(
-                    self,
-                    res,
-                    mother,
-                    (outer_fid, external_context),
-                    Loc::default(),
-                    None,
-                );
+            Ok(result) => {
+                let res =
+                    bytecodegen::bytecode_compile_eval(self, result, outer, Loc::default(), None);
                 #[cfg(feature = "emit-bc")]
                 self.dump_bc();
                 res
@@ -334,14 +314,8 @@ impl Globals {
         binding: Binding,
     ) -> Result<()> {
         let outer_fid = binding.outer_lfp().func_id();
-        let (lfp, outer) = binding.outer_lfp().outermost();
-        let mother = (self.store[lfp.func_id()].as_iseq(), outer);
-        let mut ex_scope = HashMap::default();
-        for (name, idx) in &self.store.iseq(outer_fid).locals {
-            ex_scope.insert(*name, *idx);
-        }
-        let mut external_context = ExternalContext::one(ex_scope, None);
-        external_context.extend_from_slice(&self.store.iseq(outer_fid).outer_locals);
+        let outer = self.store[outer_fid].as_iseq();
+        let external_context = self.store.scoped_locals(outer);
 
         let context = if let Some(fid) = binding.func_id() {
             let mut lvar = LvarCollector::new();
@@ -360,14 +334,8 @@ impl Globals {
             Some(&external_context),
         ) {
             Ok(res) => {
-                let res = bytecodegen::bytecode_compile_eval(
-                    self,
-                    res,
-                    mother,
-                    (outer_fid, external_context),
-                    Loc::default(),
-                    context,
-                );
+                let res =
+                    bytecodegen::bytecode_compile_eval(self, res, outer, Loc::default(), context);
                 #[cfg(feature = "emit-bc")]
                 self.dump_bc();
                 res

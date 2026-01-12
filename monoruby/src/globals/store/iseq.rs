@@ -2,6 +2,7 @@ use bytecodegen::{
     BinOpK, UnOpK,
     inst::{BrKind, DynVar, FnInitInfo},
 };
+use indexmap::IndexMap;
 use jitgen::trace_ir::TraceIr;
 use ruruby_parse::CmpKind;
 
@@ -79,6 +80,10 @@ pub struct ISeqInfo {
     ///
     mother: (ISeqId, usize),
     ///
+    /// outer ISeqId.
+    ///
+    pub outer: Option<ISeqId>,
+    ///
     /// Name of this function.
     ///
     name: Option<IdentId>,
@@ -109,11 +114,7 @@ pub struct ISeqInfo {
     ///
     /// Name of local variables
     ///
-    pub(crate) locals: HashMap<IdentId, bytecodegen::BcLocal>,
-    ///
-    /// outer local variables. (dynamic_locals, block_param)
-    ///
-    pub(crate) outer_locals: ExternalContext,
+    pub(crate) locals: indexmap::IndexMap<IdentId, bytecodegen::BcLocal>,
     ///
     /// literal values. (for GC)
     ///
@@ -130,17 +131,23 @@ pub struct ISeqInfo {
     /// Lexical module stack of this method.
     ///
     pub lexical_context: Vec<ClassId>,
+    ///
+    /// Source code information.
+    ///
     pub sourceinfo: SourceInfoRef,
     is_constant_fn: Option<Value>,
     ///
     /// JIT code info for each class of *self*.
     ///
     pub(super) jit_entry: HashMap<ClassId, JitInfo>,
+    pub(super) jit_invalidated: bool,
     ///
     /// Basic block information.
     ///
     pub(crate) bb_info: BasicBlockInfo,
+    ///
     /// Map for BcIndex to CallsiteId.
+    ///
     pub(super) callsite_map: HashMap<BcIndex, CallSiteId>,
 }
 
@@ -169,7 +176,7 @@ impl ISeqInfo {
     fn new(
         id: FuncId,
         mother: (ISeqId, usize),
-        outer_locals: ExternalContext,
+        outer: Option<ISeqId>,
         name: Option<IdentId>,
         args: ParamsInfo,
         loc: Loc,
@@ -178,6 +185,7 @@ impl ISeqInfo {
         ISeqInfo {
             func_id: id,
             mother,
+            outer,
             name,
             bytecode: None,
             loc,
@@ -185,8 +193,7 @@ impl ISeqInfo {
             sp: vec![],
             exception_map: vec![],
             args,
-            locals: HashMap::default(),
-            outer_locals,
+            locals: Default::default(),
             literals: vec![],
             non_temp_num: 0,
             temp_num: 0,
@@ -194,6 +201,7 @@ impl ISeqInfo {
             sourceinfo,
             is_constant_fn: None,
             jit_entry: HashMap::default(),
+            jit_invalidated: false,
             bb_info: BasicBlockInfo::default(),
             callsite_map: HashMap::default(),
         }
@@ -210,12 +218,12 @@ impl ISeqInfo {
     pub(super) fn new_block(
         id: FuncId,
         mother: (ISeqId, usize),
-        outer: (FuncId, ExternalContext),
+        outer: ISeqId,
         args: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(id, mother, outer.1, None, args, loc, sourceinfo)
+        Self::new(id, mother, Some(outer), None, args, loc, sourceinfo)
     }
 
     pub(super) fn new_method(
@@ -226,15 +234,7 @@ impl ISeqInfo {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(
-            id,
-            (iseq_id, 0),
-            ExternalContext::new(),
-            name,
-            args,
-            loc,
-            sourceinfo,
-        )
+        Self::new(id, (iseq_id, 0), None, name, args, loc, sourceinfo)
     }
 
     pub(crate) fn func_id(&self) -> FuncId {
@@ -276,26 +276,6 @@ impl ISeqInfo {
     ///
     pub(crate) fn block_param(&self) -> Option<IdentId> {
         self.args.block_param
-    }
-
-    ///
-    /// Get names of local variables.
-    ///
-    pub(crate) fn local_variables(&self) -> Vec<Value> {
-        let mut map = indexmap::IndexSet::<IdentId>::default();
-        self.locals.keys().for_each(|id| {
-            map.insert(*id);
-        });
-
-        self.outer_locals.scope.iter().for_each(|(locals, block)| {
-            locals.keys().for_each(|id| {
-                map.insert(*id);
-            });
-            if let Some(id) = block {
-                map.insert(*id);
-            }
-        });
-        map.into_iter().map(Value::symbol).collect()
     }
 
     ///
@@ -460,7 +440,14 @@ impl ISeqInfo {
             .map(|info| info.inline_cache_map = cache);
     }
 
+    pub(crate) fn jit_invalidated(&self) -> bool {
+        self.jit_invalidated
+    }
+
     pub(crate) fn get_jit_entry(&self, self_class: ClassId) -> Option<DestLabel> {
+        if self.jit_invalidated {
+            return None;
+        }
         self.jit_entry
             .get(&self_class)
             .map(|info| info.entry.clone())
@@ -473,6 +460,7 @@ impl ISeqInfo {
     }
 
     pub(crate) fn invalidate_jit_code(&mut self) {
+        self.jit_invalidated = true;
         self.jit_entry.clear();
     }
 }
@@ -861,6 +849,76 @@ fn dec_wl(op: u64) -> (u16, u32) {
 
 fn dec_www(op: u64) -> (u16, u16, u16) {
     ((op >> 32) as u16, (op >> 16) as u16, op as u16)
+}
+
+impl Store {
+    pub(crate) fn outer_locals(&self, iseq: ISeqId) -> ExternalContext {
+        if let Some(iseq) = self[iseq].outer {
+            self.scoped_locals(iseq)
+        } else {
+            ExternalContext::new()
+        }
+    }
+
+    pub(crate) fn outer_locals_in(
+        &self,
+        mut iseq: ISeqId,
+        mut outer: usize,
+    ) -> Option<(IndexMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)> {
+        loop {
+            let info = &self[iseq];
+            if outer == 0 {
+                return Some((info.locals.clone(), info.block_param()));
+            }
+            if let Some(outer_iseq) = info.outer {
+                iseq = outer_iseq;
+                outer -= 1;
+            } else {
+                return None;
+            }
+        }
+    }
+
+    pub(crate) fn scoped_locals(&self, iseq: ISeqId) -> ExternalContext {
+        let mut context = ExternalContext::new();
+        let mut current_iseq = iseq;
+        loop {
+            let info = &self[current_iseq];
+            context
+                .scope
+                .push((info.locals.clone(), info.block_param()));
+            if let Some(outer) = info.outer {
+                current_iseq = outer;
+            } else {
+                break;
+            }
+        }
+        context
+    }
+
+    ///
+    /// Get names of local variables.
+    ///
+    pub(crate) fn local_variables(&self, mut iseq: ISeqId) -> Vec<Value> {
+        let mut map = indexmap::IndexSet::<IdentId>::default();
+        self[iseq].locals.keys().for_each(|id| {
+            map.insert(*id);
+        });
+        if let Some(id) = self[iseq].block_param() {
+            map.insert(id);
+        }
+
+        while let Some(outer) = self[iseq].outer {
+            self[outer].locals.keys().for_each(|id| {
+                map.insert(*id);
+            });
+            if let Some(id) = self[outer].block_param() {
+                map.insert(id);
+            }
+            iseq = outer;
+        }
+        map.into_iter().map(Value::symbol).collect()
+    }
 }
 
 ///

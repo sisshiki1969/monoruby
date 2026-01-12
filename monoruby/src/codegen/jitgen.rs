@@ -6,17 +6,18 @@ use ruruby_parse::CmpKind;
 
 use crate::{
     bytecodegen::{BcIndex, UnOpK},
-    codegen::jitgen::context::JitStackFrame,
+    codegen::jitgen::context::{AsmInfo, JitStackFrame},
 };
 
-pub(crate) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId, BasicBlockInfo};
-pub use self::context::JitContext;
-use self::slot::Guarded;
+pub(crate) use self::basic_block::{BasicBlockId, BasicBlockInfo, BasicBlockInfoEntry};
+pub(crate) use self::context::JitContext;
+pub(crate) use self::state::{AbstractFrame, AbstractState};
+use state::{LinkMode, ReturnState};
 
 use super::*;
 use asmir::*;
 use context::{JitArgumentInfo, JitType};
-use slot::{Liveness, SlotContext};
+use state::{Liveness, SlotState};
 use trace_ir::*;
 
 pub mod asmir;
@@ -31,9 +32,13 @@ mod index;
 mod init_method;
 mod merge;
 mod method_call;
-mod slot;
+mod state;
 pub mod trace_ir;
 mod variables;
+
+type Result<T> = std::result::Result<T, CompileError>;
+
+pub(super) struct CompileError;
 
 ///
 /// Compile result of the current instruction.
@@ -51,76 +56,16 @@ enum CompileResult {
     /// raise error.
     Raise,
     /// return from the current method/block.
-    Return(ResultState),
+    Return(ReturnState),
     /// method return from the current method/block.
-    MethodReturn(ResultState),
+    MethodReturn(ReturnState),
     /// break from the current method/block.
-    Break(ResultState),
+    Break(ReturnState),
     /// deoptimize and recompile.
     Recompile(RecompileReason),
     /// internal error.
     #[allow(dead_code)]
     Abort,
-}
-
-#[derive(Debug, Clone)]
-struct ResultState {
-    ret: ReturnValue,
-    class_version_guard: bool,
-    side_effect_guard: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ReturnValue {
-    UD,
-    Const(Value),
-    Class(ClassId),
-    Value,
-}
-
-impl ResultState {
-    fn return_class(&self) -> Option<ClassId> {
-        match self.ret {
-            ReturnValue::Const(v) => Some(v.class()),
-            ReturnValue::Class(class) => Some(class),
-            _ => None,
-        }
-    }
-
-    fn const_folded(&self) -> Option<Value> {
-        if !self.side_effect_guard {
-            return None;
-        }
-        if let ReturnValue::Const(v) = self.ret {
-            return Some(v);
-        }
-        None
-    }
-
-    fn join(&mut self, other: &Self) {
-        self.class_version_guard &= other.class_version_guard;
-        self.side_effect_guard &= other.side_effect_guard;
-
-        match (&self.ret, &other.ret) {
-            (ReturnValue::UD, _) => {
-                self.ret = other.ret;
-                return;
-            }
-            (_, ReturnValue::UD) => return,
-            (ReturnValue::Const(l), ReturnValue::Const(r)) if l.id() == r.id() => {
-                return;
-            }
-            _ => {}
-        }
-
-        if let Some(class) = self.return_class()
-            && other.return_class() == Some(class)
-        {
-            self.ret = ReturnValue::Class(class);
-            return;
-        }
-        self.ret = ReturnValue::Value;
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -155,8 +100,8 @@ enum BranchMode {
 struct BranchEntry {
     /// source BasicBlockId of the branch.
     src_bb: Option<BasicBlockId>,
-    /// context of the source basic block.
-    bbctx: BBContext,
+    /// the abstract state of the source basic block.
+    state: AbstractState,
     /// true if the branch is a continuation branch.
     /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
     mode: BranchMode,
@@ -164,268 +109,6 @@ struct BranchEntry {
 
 pub(crate) fn conv(reg: SlotId) -> i32 {
     reg.0 as i32 * 8 + LFP_SELF
-}
-
-///
-/// Context of an each basic block.
-///
-#[derive(Debug, Clone)]
-pub(crate) struct BBContext {
-    /// state stack slots.
-    slot_state: SlotContext,
-    /// stack top register.
-    next_sp: SlotId,
-    /// guard for class version. true if guaranteed the class version is not changed.
-    class_version_guarded: bool,
-    /// guard for frame capture. true if guaranteed the frame is not captured.
-    frame_capture_guarded: bool,
-    /// guard for side effect. true if guaranteed no side effects are not occurred.
-    ///
-    /// all of the following conditions must be satisfied:
-    /// 1) no exceptions
-    /// 2) no modifications to global variables, class variables, instance variables, and constans.
-    /// 3) no method calls that may have side effects.
-    /// 4) no ensure clauses
-    side_effect_guarded: bool,
-}
-
-impl std::ops::Deref for BBContext {
-    type Target = SlotContext;
-    fn deref(&self) -> &Self::Target {
-        &self.slot_state
-    }
-}
-
-impl std::ops::DerefMut for BBContext {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.slot_state
-    }
-}
-
-impl BBContext {
-    fn equiv(&self, other: &Self) -> bool {
-        self.slot_state.equiv(&other.slot_state)
-            && self.class_version_guarded == other.class_version_guarded
-            && self.frame_capture_guarded == other.frame_capture_guarded
-            && self.side_effect_guarded == other.side_effect_guarded
-    }
-
-    fn new_entry(cc: &JitContext) -> Self {
-        let next_sp = SlotId(cc.local_num() as u16 + 1);
-        let side_effect_guarded = cc.iseq().no_ensure();
-        match cc.jit_type() {
-            JitType::Generic => {
-                Self {
-                    slot_state: SlotContext::new_method(cc),
-                    next_sp,
-                    class_version_guarded: false,
-                    // mehtods are always guarded frame capture but block are not.
-                    frame_capture_guarded: !cc.is_block(),
-                    side_effect_guarded,
-                }
-            }
-            JitType::Loop(_) => {
-                Self {
-                    slot_state: SlotContext::new_loop(cc),
-                    next_sp,
-                    class_version_guarded: false,
-                    // not guarded frame capture in the compilation for loops
-                    frame_capture_guarded: false,
-                    side_effect_guarded: false,
-                }
-            }
-            JitType::Specialized { .. } => {
-                Self {
-                    slot_state: SlotContext::new_method(cc),
-                    next_sp,
-                    class_version_guarded: false,
-                    // specialized methods and blocks are always guarded frame capture
-                    frame_capture_guarded: true,
-                    side_effect_guarded,
-                }
-            }
-        }
-    }
-
-    fn set_class_version_guard(&mut self) {
-        self.class_version_guarded = true;
-    }
-
-    fn unset_class_version_guard(&mut self) {
-        self.class_version_guarded = false;
-    }
-
-    fn unset_frame_capture_guard(&mut self, jitctx: &mut JitContext) {
-        jitctx.unset_frame_capture_guard();
-        self.frame_capture_guarded = false;
-    }
-
-    fn unset_side_effect_guard(&mut self) {
-        self.side_effect_guarded = false;
-    }
-
-    fn join_entries(entries: &[BranchEntry]) -> Self {
-        let mut merge_ctx = entries.last().unwrap().bbctx.clone();
-        for BranchEntry { bbctx, .. } in entries.iter() {
-            merge_ctx.join(bbctx);
-        }
-        merge_ctx
-    }
-
-    fn as_result(&self, slot: SlotId) -> ResultState {
-        let ret = self.mode(slot).as_result();
-        ResultState {
-            ret,
-            class_version_guard: self.class_version_guarded,
-            side_effect_guard: self.side_effect_guarded,
-        }
-    }
-
-    pub(crate) fn def_rax2acc(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
-        self.def_reg2acc(ir, GP::Rax, dst);
-    }
-
-    pub(crate) fn def_reg2acc(&mut self, ir: &mut AsmIr, src: GP, dst: impl Into<Option<SlotId>>) {
-        self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::Value)
-    }
-
-    pub(crate) fn def_reg2acc_fixnum(
-        &mut self,
-        ir: &mut AsmIr,
-        src: GP,
-        dst: impl Into<Option<SlotId>>,
-    ) {
-        self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::Fixnum)
-    }
-
-    pub(crate) fn def_reg2acc_class(
-        &mut self,
-        ir: &mut AsmIr,
-        src: GP,
-        dst: impl Into<Option<SlotId>>,
-        class: ClassId,
-    ) {
-        self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::from_class(class))
-    }
-
-    pub(crate) fn def_reg2acc_concrete_value(
-        &mut self,
-        ir: &mut AsmIr,
-        src: GP,
-        dst: impl Into<Option<SlotId>>,
-        v: Value,
-    ) {
-        self.def_reg2acc_guarded(ir, src, dst, Guarded::from_concrete_value(v))
-    }
-
-    fn def_reg2acc_guarded(
-        &mut self,
-        ir: &mut AsmIr,
-        src: GP,
-        dst: impl Into<Option<SlotId>>,
-        guarded: slot::Guarded,
-    ) {
-        if let Some(dst) = dst.into() {
-            self.def_G(ir, dst, guarded);
-            ir.push(AsmInst::RegToAcc(src));
-        }
-    }
-
-    fn def_rax2acc_result(
-        &mut self,
-        ir: &mut AsmIr,
-        dst: impl Into<Option<SlotId>>,
-        result: Option<ResultState>,
-    ) -> CompileResult {
-        if let Some(result) = result {
-            self.class_version_guarded &= result.class_version_guard;
-            self.side_effect_guarded &= result.side_effect_guard;
-            match result.ret {
-                ReturnValue::UD => {
-                    ir.push(AsmInst::Unreachable);
-                    return CompileResult::Cease;
-                }
-                ReturnValue::Const(v) => {
-                    self.def_C(dst, v);
-                }
-                ReturnValue::Class(class) => {
-                    self.def_reg2acc_class(ir, GP::Rax, dst, class);
-                }
-                ReturnValue::Value => {
-                    self.def_rax2acc(ir, dst);
-                }
-            }
-            CompileResult::Continue
-        } else {
-            ir.push(AsmInst::Unreachable);
-            CompileResult::Cease
-        }
-    }
-
-    ///
-    /// Guard for the base class object of the constant in *slot*.
-    ///
-    /// ### destroy
-    /// - rax
-    ///
-    pub fn guard_const_base_class(
-        &mut self,
-        ir: &mut AsmIr,
-        slot: SlotId,
-        base_class: Value,
-        pc: BytecodePtr,
-    ) {
-        self.load(ir, slot, GP::Rax);
-        let deopt = ir.new_deopt(self, pc);
-        ir.push(AsmInst::GuardConstBaseClass { base_class, deopt });
-    }
-
-    ///
-    /// Execute GC.
-    ///
-    /// ### in
-    /// - rbx: &mut Executor
-    /// - r12: &mut Globals
-    ///
-    /// ### destroy
-    /// - rax, rcx
-    /// - stack
-    ///
-    pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool, pc: BytecodePtr) {
-        let wb = self.get_gc_write_back();
-        let error = ir.new_error(self, pc);
-        ir.exec_gc(wb, error, check_stack);
-    }
-
-    pub fn load_constant(
-        &mut self,
-        ir: &mut AsmIr,
-        dst: SlotId,
-        cache: &ConstCache,
-        pc: BytecodePtr,
-    ) {
-        let ConstCache { version, value, .. } = cache;
-        let deopt = ir.new_deopt(self, pc);
-        ir.push(AsmInst::GuardConstVersion {
-            const_version: *version,
-            deopt,
-        });
-        ir.lit2reg(*value, GP::Rax);
-        if let Some(f) = value.try_float() {
-            let fdst = self.def_Sf_float(dst);
-            ir.f64_to_xmm(f, fdst);
-            ir.reg2stack(GP::Rax, dst);
-        } else {
-            self.def_reg2acc(ir, GP::Rax, dst);
-        }
-    }
-
-    //pub(super) fn generic_unop(&mut self, ir: &mut AsmIr, func: UnaryOpFn, pc: BytecodePtr) {
-    //    let using_xmm = self.get_using_xmm();
-    //    let error = ir.new_error(self, pc);
-    //    ir.push(AsmInst::GenericUnOp { func, using_xmm });
-    //    ir.handle_error(error);
-    //}
 }
 
 ///
@@ -547,6 +230,49 @@ impl UsingXmm {
     }
 }
 
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(super) struct SpecializedCodeInfo {
+    iseq_id: ISeqId,
+    self_class: ClassId,
+    childs: Vec<SpecializedCodeInfo>,
+}
+
+impl SpecializedCodeInfo {
+    fn from(info: &AsmInfo) -> Self {
+        let childs = info
+            .specialized_methods
+            .iter()
+            .map(|context::SpecializeInfo { info, .. }| Self::from(info))
+            .collect();
+        Self {
+            iseq_id: info.iseq_id,
+            self_class: info.self_class,
+            childs,
+        }
+    }
+
+    pub(super) fn format(&self, store: &Store) -> String {
+        let mut buf = String::new();
+        self.format_inner(store, &mut buf, 0);
+        buf
+    }
+
+    fn format_inner(&self, store: &Store, buf: &mut String, level: usize) {
+        let indent = " ".repeat(level * 2);
+        buf.push_str(&format!(
+            "{}- [{:?}] <{}> self_class:{}\n",
+            indent,
+            self.iseq_id,
+            store.func_description(store[self.iseq_id].func_id()),
+            store.debug_class_name(self.self_class)
+        ));
+        for child in &self.childs {
+            child.format_inner(store, buf, level + 1);
+        }
+    }
+}
+
 impl Codegen {
     pub(super) fn jit_compile(
         &mut self,
@@ -556,42 +282,39 @@ impl Codegen {
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
         class_version: u32,
-        class_version_label: DestLabel,
-    ) -> Vec<(ClassId, Option<IdentId>, FuncId)> {
+    ) -> Result<(
+        Vec<(ClassId, Option<IdentId>, FuncId)>,
+        SpecializedCodeInfo,
+        DestLabel,
+    )> {
         let jit_type = if let Some(pos) = position {
             JitType::Loop(pos)
         } else {
-            JitType::Generic
+            JitType::Entry
         };
-
-        let mut ctx = JitContext::create(
-            store,
-            iseq_id,
-            jit_type,
-            class_version,
-            class_version_label.clone(),
-            self_class,
-            0,
-        );
-        ctx.traceir_to_asmir();
+        let frame = JitStackFrame::new(store, jit_type, 0, iseq_id, None, self_class, None);
+        let mut ctx = JitContext::new(store, true, class_version, vec![]);
+        let frame = ctx.traceir_to_asmir(frame)?;
+        let specialized_info = SpecializedCodeInfo::from(&frame);
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 
         self.jit.finalize();
+        let class_version_label = self.jit.const_i32(class_version as _);
         self.gen_machine_code(
-            ctx.detach_current_frame(),
+            frame.asm_info,
             store,
             entry_label,
             0,
-            class_version_label,
+            class_version_label.clone(),
         );
 
-        inline_cache
+        Ok((inline_cache, specialized_info, class_version_label))
     }
 
     fn gen_machine_code(
         &mut self,
-        mut frame: JitStackFrame,
+        mut frame: AsmInfo,
         store: &Store,
         entry_label: DestLabel,
         level: usize,
@@ -599,21 +322,21 @@ impl Codegen {
     ) {
         for context::SpecializeInfo {
             entry: specialized_entry,
-            frame: specialized_frame,
+            info: specialized_info,
             patch_point,
         } in std::mem::take(&mut frame.specialized_methods)
         {
             if !frame.is_specialized() {
                 let patch_point = frame.resolve_label(&mut self.jit, patch_point.unwrap());
                 self.specialized_info.push((
-                    specialized_frame.iseq_id(),
-                    specialized_frame.self_class(),
+                    specialized_info.iseq_id,
+                    specialized_info.self_class,
                     patch_point,
                 ));
             }
             let entry = frame.resolve_label(&mut self.jit, specialized_entry);
             self.gen_machine_code(
-                specialized_frame,
+                specialized_info,
                 store,
                 entry,
                 level + 1,
@@ -622,19 +345,18 @@ impl Codegen {
         }
 
         self.jit.bind_label(entry_label);
-        #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
+        #[cfg(any(feature = "jit-log"))]
         {
             if self.startup_flag {
-                let iseq = &store[frame.iseq_id()];
+                let iseq = &store[frame.iseq_id];
                 let name = store.func_description(iseq.func_id());
                 eprintln!(
-                    "  {}>>> [{}] {:?} <{}> self_class:{} {:?}",
+                    "  {}>>> [{}] {:?} <{}> self_class:{}",
                     " ".repeat(level * 3),
                     frame.specialize_level(),
-                    frame.iseq_id(),
+                    frame.iseq_id,
                     name,
-                    store.debug_class_name(frame.self_class()),
-                    frame,
+                    store.debug_class_name(frame.self_class),
                 );
             }
         }
@@ -698,14 +420,14 @@ impl Codegen {
 
         #[cfg(feature = "emit-asm")]
         if self.startup_flag {
-            let iseq_id = frame.iseq_id();
+            let iseq_id = frame.iseq_id;
             self.dump_disas(store, &frame.sourcemap, iseq_id);
             eprintln!("  <<<");
         }
 
         #[cfg(feature = "perf")]
         {
-            let iseq_id = frame.iseq_id();
+            let iseq_id = frame.iseq_id;
             let fid = store[iseq_id].func_id();
             let desc = format!("JIT:<{}>", store.func_description(fid));
             self.perf_info(pair, &desc);
@@ -881,18 +603,6 @@ impl JitModule {
           call rax;
         );
         self.xmm_restore(using_xmm);
-    }
-
-    ///
-    /// Test whether the current local frame is on the heap ("captured").
-    ///
-    /// if the frame is on the heap, jump to *label*.
-    ///
-    pub(super) fn branch_if_captured(&mut self, label: &DestLabel) {
-        monoasm! { &mut self.jit,
-            testb [r14 - (LFP_META - META_KIND)], (0b1000_0000_u8 as i8);
-            jnz label;
-        }
     }
 
     ///

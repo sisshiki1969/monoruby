@@ -1,6 +1,6 @@
 use super::*;
 
-impl BBContext {
+impl SlotState {
     ///
     /// load *slot* into *r*.
     ///
@@ -15,7 +15,7 @@ impl BBContext {
         match self.mode(slot) {
             LinkMode::F(xmm) => {
                 if dst == GP::R15 {
-                    assert!(self.r15.is_none());
+                    assert!(self.no_r15());
                 }
                 // F -> Sf
                 ir.xmm2stack(xmm, slot);
@@ -24,13 +24,13 @@ impl BBContext {
             }
             LinkMode::C(v) => {
                 if dst == GP::R15 {
-                    assert!(self.r15.is_none());
+                    assert!(self.no_r15());
                 }
                 ir.lit2reg(v, dst);
             }
             LinkMode::Sf(_, _) | LinkMode::S(_) => {
                 if dst == GP::R15 {
-                    assert!(self.r15.is_none());
+                    assert!(self.no_r15());
                 }
                 ir.stack2reg(slot, dst);
             }
@@ -41,12 +41,7 @@ impl BBContext {
                 ir.stack2reg(slot, dst);
             }
             LinkMode::V | LinkMode::None => {
-                unreachable!(
-                    "load() {:?} {:?}: {:?}",
-                    slot,
-                    self.mode(slot),
-                    &self.slot_state
-                );
+                unreachable!("load() {:?} {:?}: {:?}", slot, self.mode(slot), self);
             }
         }
     }
@@ -57,7 +52,12 @@ impl BBContext {
     /// ### panic
     /// - if *slot* is V or None.
     ///
-    pub(crate) fn load_or_reg(&mut self, ir: &mut AsmIr, slot: SlotId, opt: GP) -> GP {
+    pub(in crate::codegen::jitgen) fn load_or_reg(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        opt: GP,
+    ) -> GP {
         if let Some(r) = self.on_reg(slot) {
             r
         } else {
@@ -66,7 +66,7 @@ impl BBContext {
         }
     }
 
-    pub(crate) fn load_array_ty(
+    pub(in crate::codegen::jitgen) fn load_array_ty(
         &mut self,
         ir: &mut AsmIr,
         store: &Store,
@@ -87,7 +87,7 @@ impl BBContext {
     }
 }
 
-impl BBContext {
+impl SlotState {
     ///
     /// load *slot* as f64 into xmm register.
     ///
@@ -169,14 +169,14 @@ impl BBContext {
         }
     }
 
-    pub(super) fn load_xmm_from_f64(&mut self, ir: &mut AsmIr, slot: SlotId, f: f64) -> Xmm {
+    fn load_xmm_from_f64(&mut self, ir: &mut AsmIr, slot: SlotId, f: f64) -> Xmm {
         let x = self.set_new_F(slot);
         ir.f64_to_xmm(f, x);
         x
     }
 }
 
-impl BBContext {
+impl SlotState {
     ///
     /// fetch *slot* and store in callee stack with `offset`.
     ///

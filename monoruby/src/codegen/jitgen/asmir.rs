@@ -1,4 +1,4 @@
-use crate::{bytecodegen::BinOpK, codegen::jitgen::context::JitStackFrame};
+use crate::bytecodegen::BinOpK;
 
 use super::*;
 
@@ -126,17 +126,13 @@ impl AsmIr {
         AsmEvict(i)
     }
 
-    pub(crate) fn new_deopt(&mut self, bb: &BBContext, pc: BytecodePtr) -> AsmDeopt {
-        self.new_deopt_with_pc(bb, pc)
-    }
-
-    pub(crate) fn new_deopt_with_pc(&mut self, bb: &BBContext, pc: BytecodePtr) -> AsmDeopt {
-        let i = self.new_label(SideExit::Deoptimize(pc, bb.get_write_back()));
+    pub(crate) fn new_deopt(&mut self, state: &SlotState, pc: BytecodePtr) -> AsmDeopt {
+        let i = self.new_label(SideExit::Deoptimize(pc, state.get_write_back()));
         AsmDeopt(i)
     }
 
-    pub(crate) fn new_error(&mut self, bb: &BBContext, pc: BytecodePtr) -> AsmError {
-        let i = self.new_label(SideExit::Error(pc, bb.get_write_back()));
+    pub(crate) fn new_error(&mut self, state: &SlotState, pc: BytecodePtr) -> AsmError {
+        let i = self.new_label(SideExit::Error(pc, state.get_write_back()));
         AsmError(i)
     }
 }
@@ -322,19 +318,29 @@ impl AsmIr {
         self.push(AsmInst::GuardArrayTy(r, deopt));
     }
 
-    pub(super) fn deopt(&mut self, bb: &BBContext, pc: BytecodePtr) {
-        let exit = self.new_deopt(bb, pc);
+    pub(super) fn guard_capture(&mut self, deopt: AsmDeopt) {
+        self.push(AsmInst::GuardCapture(deopt));
+    }
+
+    pub(super) fn deopt(&mut self, state: &AbstractFrame, pc: BytecodePtr) {
+        let exit = self.new_deopt(state, pc);
         self.push(AsmInst::Deopt(exit));
     }
 
-    pub(super) fn check_bop(&mut self, bb: &BBContext, pc: BytecodePtr) {
-        let deopt = self.new_deopt(bb, pc);
+    pub(super) fn check_bop(&mut self, state: &AbstractFrame, pc: BytecodePtr) {
+        let deopt = self.new_deopt(state, pc);
         self.push(AsmInst::CheckBOP { deopt });
     }
 
-    pub(super) fn block_arg(&mut self, bb: &BBContext, ret: SlotId, outer: usize, pc: BytecodePtr) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
+    pub(super) fn block_arg(
+        &mut self,
+        state: &AbstractFrame,
+        ret: SlotId,
+        outer: usize,
+        pc: BytecodePtr,
+    ) {
+        let using_xmm = state.get_using_xmm();
+        let error = self.new_error(state, pc);
         self.push(AsmInst::BlockArg {
             ret,
             outer,
@@ -343,18 +349,18 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn load_svar(&mut self, bb: &BBContext, id: u32) {
-        let using_xmm = bb.get_using_xmm();
+    pub(super) fn load_svar(&mut self, state: &AbstractFrame, id: u32) {
+        let using_xmm = state.get_using_xmm();
         self.push(AsmInst::LoadSVar { id, using_xmm });
     }
 
-    pub(super) fn to_a(&mut self, bb: &BBContext, src: SlotId) {
-        let using_xmm = bb.get_using_xmm();
+    pub(super) fn to_a(&mut self, state: &AbstractFrame, src: SlotId) {
+        let using_xmm = state.get_using_xmm();
         self.push(AsmInst::ToA { src, using_xmm });
     }
 
-    pub(super) fn concat_str(&mut self, bb: &BBContext, arg: SlotId, len: u16) {
-        let using_xmm = bb.get_using_xmm();
+    pub(super) fn concat_str(&mut self, state: &AbstractFrame, arg: SlotId, len: u16) {
+        let using_xmm = state.get_using_xmm();
         self.push(AsmInst::ConcatStr {
             arg,
             len,
@@ -362,8 +368,8 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn concat_regexp(&mut self, bb: &BBContext, arg: SlotId, len: u16) {
-        let using_xmm = bb.get_using_xmm();
+    pub(super) fn concat_regexp(&mut self, state: &AbstractFrame, arg: SlotId, len: u16) {
+        let using_xmm = state.get_using_xmm();
         self.push(AsmInst::ConcatRegexp {
             arg,
             len,
@@ -373,12 +379,12 @@ impl AsmIr {
 
     pub(super) fn expand_array(
         &mut self,
-        bb: &BBContext,
+        state: &AbstractFrame,
         dst: SlotId,
         len: u16,
         rest_pos: Option<u16>,
     ) {
-        let using_xmm = bb.get_using_xmm();
+        let using_xmm = state.get_using_xmm();
         let len = len as _;
         let rest_pos = rest_pos.map(|v| v as _);
         self.push(AsmInst::ExpandArray {
@@ -394,8 +400,8 @@ impl AsmIr {
     ///
     /// If `lhs` is Array, compare `rhs` and each element of `lhs`.
     ///
-    pub(super) fn array_teq(&mut self, bb: &BBContext, lhs: SlotId, rhs: SlotId) {
-        let using_xmm = bb.get_using_xmm();
+    pub(super) fn array_teq(&mut self, state: &AbstractFrame, lhs: SlotId, rhs: SlotId) {
+        let using_xmm = state.get_using_xmm();
         self.push(AsmInst::ArrayTEq {
             lhs,
             rhs,
@@ -403,22 +409,22 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn undef_method(&mut self, bb: &BBContext, undef: IdentId, pc: BytecodePtr) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
+    pub(super) fn undef_method(&mut self, state: &AbstractFrame, undef: IdentId, pc: BytecodePtr) {
+        let using_xmm = state.get_using_xmm();
+        let error = self.new_error(state, pc);
         self.push(AsmInst::UndefMethod { undef, using_xmm });
         self.handle_error(error);
     }
 
     pub(super) fn alias_method(
         &mut self,
-        bb: &BBContext,
+        state: &AbstractFrame,
         new: IdentId,
         old: IdentId,
         pc: BytecodePtr,
     ) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
+        let using_xmm = state.get_using_xmm();
+        let error = self.new_error(state, pc);
         self.push(AsmInst::AliasMethod {
             new,
             old,
@@ -529,8 +535,8 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn integer_exp(&mut self, bb: &BBContext) {
-        let using_xmm = bb.get_using_xmm();
+    pub(super) fn integer_exp(&mut self, state: &AbstractFrame) {
+        let using_xmm = state.get_using_xmm();
         self.push(AsmInst::IntegerExp { using_xmm });
     }
 
@@ -629,9 +635,14 @@ impl AsmIr {
     /// ### destroy
     /// - caller save registers
     ///
-    pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, idx: u16, pc: BytecodePtr) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
+    pub(super) fn array_u16_index_assign(
+        &mut self,
+        state: &AbstractFrame,
+        idx: u16,
+        pc: BytecodePtr,
+    ) {
+        let using_xmm = state.get_using_xmm();
+        let error = self.new_error(state, pc);
         self.push(AsmInst::ArrayU16IndexAssign {
             idx,
             using_xmm,
@@ -650,9 +661,9 @@ impl AsmIr {
     /// ### destroy
     /// - caller save registers
     ///
-    pub(super) fn array_index_assign(&mut self, bb: &BBContext, pc: BytecodePtr) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
+    pub(super) fn array_index_assign(&mut self, state: &AbstractFrame, pc: BytecodePtr) {
+        let using_xmm = state.get_using_xmm();
+        let error = self.new_error(state, pc);
         self.inst
             .push(AsmInst::ArrayIndexAssign { using_xmm, error });
     }
@@ -700,7 +711,6 @@ impl AsmIr {
             .push(AsmInst::Inline(InlineProcedure { proc: Box::new(f) }));
     }
 
-    #[cfg(feature = "emit-asm")]
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
         self.push(AsmInst::BcIndex(index));
     }
@@ -708,7 +718,6 @@ impl AsmIr {
 
 #[derive(Debug)]
 pub(super) enum AsmInst {
-    #[cfg(feature = "emit-asm")]
     BcIndex(BcIndex),
     Label(JitLabel),
     Unreachable,
@@ -864,6 +873,7 @@ pub(super) enum AsmInst {
     ///
     GuardClass(GP, ClassId, AsmDeopt),
     GuardArrayTy(GP, AsmDeopt),
+    GuardCapture(AsmDeopt),
 
     Ret,
     BlockBreak(BytecodePtr),
@@ -904,7 +914,7 @@ pub(super) enum AsmInst {
     ///
     Init {
         info: FnInitInfo,
-        not_captured: bool,
+        //not_captured: bool,
     },
     ///
     /// Deoptimize and fallback to interpreter.
@@ -1373,6 +1383,7 @@ pub(super) enum AsmInst {
     },
     /// rax = DynVar(src)
     LoadDynVarSpecialized {
+        /// machine stack offset in bytes
         offset: usize,
         reg: SlotId,
         not_captured: bool,
@@ -1384,6 +1395,7 @@ pub(super) enum AsmInst {
     },
     /// DynVar(dst) = src
     StoreDynVarSpecialized {
+        /// machine stack offset in bytes
         offset: usize,
         dst: SlotId,
         src: GP,
@@ -1538,8 +1550,6 @@ impl AsmInst {
             Self::LitToStack(val, slot) => format!("{:?} = {}", slot, val.debug(store)),
             Self::DeepCopyLit(val, _using_xmm) => format!("DeepCopyLiteral {}", val.debug(store)),
             Self::FloatToXmm(gpr, fpr, _deopt) => format!("{:?} = {:?} Float to f64", fpr, gpr),
-            Self::GuardArrayTy(gpr, _deopt) => format!("Guard ArrayTy {:?}", gpr),
-
             Self::GuardClassVersion {
                 position: _,
                 with_recovery: _,
@@ -1548,6 +1558,7 @@ impl AsmInst {
                 format!("GuardClassVersion")
             }
             Self::GuardClass(gpr, class, _deopt) => format!("GuardClass {:?} {:?}", class, gpr),
+            Self::GuardCapture(_deopt) => format!("Guard Capture"),
 
             Self::CondBr(kind, label) => format!("condbr {:?} {:?}", kind, label),
             Self::NilBr(label) => format!("nil_br {:?}", label),
@@ -1596,7 +1607,7 @@ impl Codegen {
         &mut self,
         ir: AsmIr,
         store: &Store,
-        frame: &mut JitStackFrame,
+        frame: &mut AsmInfo,
         entry: Option<DestLabel>,
         exit: Option<BasicBlockId>,
         class_version: DestLabel,

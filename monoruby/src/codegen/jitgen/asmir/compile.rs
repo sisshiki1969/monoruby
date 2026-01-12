@@ -23,20 +23,19 @@ impl Codegen {
     pub(super) fn compile_asmir(
         &mut self,
         store: &Store,
-        frame: &mut JitStackFrame,
+        frame: &mut AsmInfo,
         labels: &SideExitLabels,
         inst: AsmInst,
         class_version: DestLabel,
     ) {
         match inst {
-            #[cfg(feature = "emit-asm")]
             AsmInst::BcIndex(i) => {
                 frame
                     .sourcemap
                     .push((i, self.jit.get_current() - frame.start_codepos));
             }
-            AsmInst::Init { info, not_captured } => {
-                self.init_func(&info, not_captured);
+            AsmInst::Init { info } => {
+                self.init_func(&info);
             }
             AsmInst::Unreachable => {
                 monoasm!( &mut self.jit,
@@ -45,9 +44,9 @@ impl Codegen {
                 );
             }
             AsmInst::Preparation => {
-                if !frame.self_class().is_always_frozen() && frame.ivar_heap_accessed() {
-                    let ivar_len = store[frame.self_class()].ivar_len();
-                    let heap_len = if frame.self_ty() == Some(ObjTy::OBJECT) {
+                if !frame.self_class.is_always_frozen() && frame.ivar_heap_accessed {
+                    let ivar_len = store[frame.self_class].ivar_len();
+                    let heap_len = if frame.self_ty == Some(ObjTy::OBJECT) {
                         ivar_len - OBJECT_INLINE_IVAR
                     } else {
                         ivar_len
@@ -207,6 +206,10 @@ impl Codegen {
             AsmInst::GuardArrayTy(r, deopt) => {
                 let deopt = &labels[deopt];
                 self.guard_array_ty(r, deopt)
+            }
+            AsmInst::GuardCapture(deopt) => {
+                let deopt = &labels[deopt];
+                self.guard_capture(deopt)
             }
 
             AsmInst::HandleError(error) => {

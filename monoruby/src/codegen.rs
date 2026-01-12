@@ -2,6 +2,7 @@ use std::hash::Hash;
 
 use monoasm::*;
 use monoasm_macro::monoasm;
+use std::time::Duration;
 
 mod compiler;
 mod invoker;
@@ -16,6 +17,7 @@ use self::jitgen::asmir::AsmEvict;
 
 use super::*;
 use crate::bytecodegen::inst::*;
+use crate::codegen::jitgen::SpecializedCodeInfo;
 use crate::executor::*;
 
 const OPECODE: i64 = 6;
@@ -326,6 +328,18 @@ impl JitModule {
             movq r11, [rsp + 168];
             //movq rax, [rsp + 176];
             addq rsp, 192;
+        }
+    }
+
+    ///
+    /// Test whether the current local frame is on the heap ("captured").
+    ///
+    /// if the frame is on the heap, jump to *label*.
+    ///
+    fn branch_if_captured(&mut self, label: &DestLabel) {
+        monoasm! { &mut self.jit,
+            testb [r14 - (LFP_META - META_KIND)], (0b1000_0000_u8 as i8);
+            jnz label;
         }
     }
 }
@@ -647,15 +661,36 @@ impl JitModule {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct CompilationUnitId(usize);
+
+#[allow(dead_code)]
+struct CompilationUnitInfo {
+    /// `ISeqId``.
+    iseq_id: ISeqId,
+    /// `ClassId`` of *self*.
+    self_class: ClassId,
+    /// Bytecode position. (`Some`` for loop compilation, `None`` for method compilation)
+    position: Option<BytecodePtr>,
+    /// Entry point of the machine code.
+    codeptr: CodePtr,
+    /// Specialized code info in the compilation unit.
+    specialized_info: SpecializedCodeInfo,
+    /// span of the generated code ((inline_code_start, inline_code_len), (outline_code_start, outline_code_len)).
+    span: ((CodePtr, usize), (CodePtr, usize)),
+    /// compilation time.
+    elapsed: Duration,
+}
+
 ///
-/// Bytecode compiler
-///
-/// This generates x86-64 machine code from a bytecode.
+/// Machine code generator
 ///
 pub struct Codegen {
     pub(crate) jit: JitModule,
     class_version_addr: *mut u32,
     const_version_addr: *mut u64,
+
+    compilation_unit: Vec<CompilationUnitInfo>,
 
     /// return_addr => (patch_point, deopt)
     return_addr_table: HashMap<CodePtr, (Option<CodePtr>, DestLabel)>,
@@ -746,6 +781,7 @@ impl Codegen {
             jit,
             class_version_addr,
             const_version_addr,
+            compilation_unit: Vec::new(),
             return_addr_table: HashMap::default(),
             asm_return_addr_table: HashMap::default(),
             specialized_info: Vec::new(),
@@ -808,6 +844,29 @@ impl Codegen {
         self.const_version.clone()
     }
 
+    fn add_compilation_unit(
+        &mut self,
+        iseq_id: ISeqId,
+        self_class: ClassId,
+        position: Option<BytecodePtr>,
+        codeptr: CodePtr,
+        specialized_info: SpecializedCodeInfo,
+        span: ((CodePtr, usize), (CodePtr, usize)),
+        elapsed: Duration,
+    ) -> CompilationUnitId {
+        let id = self.compilation_unit.len();
+        self.compilation_unit.push(CompilationUnitInfo {
+            iseq_id,
+            self_class,
+            position,
+            codeptr,
+            specialized_info,
+            span,
+            elapsed,
+        });
+        CompilationUnitId(id)
+    }
+
     pub(crate) fn sigint_flag(&self) -> bool {
         let ptr = self.jit.get_label_address(&self.sigint_flag).as_ptr() as *mut u32;
         unsafe { *ptr != 0 }
@@ -847,14 +906,6 @@ impl Codegen {
         unsafe { *self.const_version_addr += 1 }
     }
 
-    pub(crate) fn bop_redefine_flags(&self) -> u32 {
-        let addr = self
-            .jit
-            .get_label_address(&self.bop_redefined_flags)
-            .as_ptr() as *mut u32;
-        unsafe { *addr }
-    }
-
     pub(crate) fn set_bop_redefine(&mut self) {
         let addr = self
             .jit
@@ -866,13 +917,6 @@ impl Codegen {
         eprintln!("### basic op redefined.");
     }
 
-    pub(crate) fn get_deopt_with_return_addr(
-        &self,
-        return_addr: CodePtr,
-    ) -> Option<(Option<CodePtr>, DestLabel)> {
-        self.return_addr_table.get(&return_addr).cloned()
-    }
-
     ///
     /// Check whether *addr* is in VM code or invokers.
     ///
@@ -881,22 +925,6 @@ impl Codegen {
         let start1 = start1.unwrap();
         let start2 = start2.unwrap();
         (start1..start1 + size1).contains(&addr) || (start2..start2 + size2).contains(&addr)
-    }
-
-    pub(crate) fn immediate_eviction(&mut self, mut cfp: Cfp) {
-        let mut return_addr = unsafe { cfp.return_addr() };
-        while let Some(prev_cfp) = cfp.prev() {
-            let ret = return_addr.unwrap();
-            if !self.check_vm_address(ret) {
-                if let Some((patch_point, deopt)) = self.get_deopt_with_return_addr(ret) {
-                    let patch_point = patch_point.unwrap();
-                    self.jit.apply_jmp_patch_address(patch_point, &deopt);
-                    unsafe { patch_point.as_ptr().write(0xe9) };
-                }
-            }
-            cfp = prev_cfp;
-            return_addr = unsafe { cfp.return_addr() };
-        }
     }
 
     fn icmp_teq(&mut self) {
@@ -1159,6 +1187,50 @@ impl Codegen {
 
             eprintln!("      {:06x}: {}", i, text);
         }
+    }
+}
+
+// handling invariants
+
+impl Codegen {
+    pub fn check_bop_redefine(cfp: Cfp) {
+        CODEGEN.with(|codegen| {
+            let mut codegen = codegen.borrow_mut();
+            if codegen.bop_redefine_flags() != 0 {
+                codegen.immediate_eviction(cfp);
+            }
+        });
+    }
+
+    fn bop_redefine_flags(&self) -> u32 {
+        let addr = self
+            .jit
+            .get_label_address(&self.bop_redefined_flags)
+            .as_ptr() as *mut u32;
+        unsafe { *addr }
+    }
+
+    fn immediate_eviction(&mut self, mut cfp: Cfp) {
+        let mut return_addr = unsafe { cfp.return_addr() };
+        while let Some(prev_cfp) = cfp.prev() {
+            let ret = return_addr.unwrap();
+            if !self.check_vm_address(ret) {
+                if let Some((patch_point, deopt)) = self.get_deopt_with_return_addr(ret) {
+                    let patch_point = patch_point.unwrap();
+                    self.jit.apply_jmp_patch_address(patch_point, &deopt);
+                    unsafe { patch_point.as_ptr().write(0xe9) };
+                }
+            }
+            cfp = prev_cfp;
+            return_addr = unsafe { cfp.return_addr() };
+        }
+    }
+
+    fn get_deopt_with_return_addr(
+        &self,
+        return_addr: CodePtr,
+    ) -> Option<(Option<CodePtr>, DestLabel)> {
+        self.return_addr_table.get(&return_addr).cloned()
     }
 }
 

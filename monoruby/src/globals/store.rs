@@ -247,27 +247,34 @@ impl Store {
     ///
     pub(crate) fn func_description(&self, func_id: FuncId) -> String {
         let info = &self[func_id];
-        if let Some(iseq_id) = info.is_iseq() {
+        let name = if let Some(iseq_id) = info.is_iseq() {
             let iseq = &self[iseq_id];
             let mother = iseq.mother().0;
             if mother != iseq_id {
-                format!("block in {}", self.func_description(self[mother].func_id()))
+                return format!("block in {}", self.func_description(self[mother].func_id()));
             } else {
-                match info.owner_class() {
-                    Some(owner) => format!("{}#{}", owner.get_name(self), iseq.name()),
-                    None => iseq.name().to_string(),
-                }
+                iseq.name()
             }
         } else {
-            let name = if let Some(name) = info.name() {
+            if let Some(name) = info.name() {
                 format!("{:?}", name)
             } else {
                 String::new()
-            };
-            match info.owner_class() {
-                Some(owner) => format!("{}#{name}", owner.get_name(self)),
-                None => name.to_string(),
             }
+        };
+        match info.owner_class() {
+            Some(owner) => {
+                if let Some(obj) = self[owner].get_module().is_singleton() {
+                    if let Some(class) = obj.is_class() {
+                        format!("{}.{name}", class.id().get_name(self))
+                    } else {
+                        format!("{}.{name}", obj.debug_tos(self))
+                    }
+                } else {
+                    format!("{}#{name}", owner.get_name(self))
+                }
+            }
+            None => name,
         }
     }
 
@@ -367,13 +374,14 @@ impl Store {
 
     pub(crate) fn new_block(
         &mut self,
-        mother: (ISeqId, usize),
-        outer: (FuncId, ExternalContext),
+        outer: ISeqId,
         compile_info: CompileInfo,
         is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
+        let outer_mother = self[outer].mother();
+        let mother = (outer_mother.0, outer_mother.1 + 1);
         let func_id = self.functions.next_func_id();
         let params_info = compile_info.params.clone();
         self.functions.add_compile_info(compile_info);
@@ -387,9 +395,8 @@ impl Store {
 
     pub(crate) fn new_eval(
         &mut self,
-        mother: (ISeqId, usize),
+        outer: ISeqId,
         result: ParseResult,
-        outer: (FuncId, ExternalContext),
         loc: Loc,
     ) -> Result<FuncId> {
         let info = BlockInfo {
@@ -399,7 +406,7 @@ impl Store {
             loc,
         };
         let compile_info = Store::handle_args(info, vec![])?;
-        self.new_block(mother, outer, compile_info, false, loc, result.source_info)
+        self.new_block(outer, compile_info, false, loc, result.source_info)
     }
 
     pub(super) fn new_builtin_func(

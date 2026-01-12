@@ -2,7 +2,7 @@ use super::*;
 
 mod arguments;
 
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     pub(super) fn emit_call(&mut self, callsite: CallSite, loc: Loc) {
         if callsite.block_fid.is_some() {
             self.emit(
@@ -228,7 +228,7 @@ impl BytecodeGen {
     }
 }
 
-impl BytecodeGen {
+impl<'a> BytecodeGen<'a> {
     fn level_down(&mut self, node: &mut Node, level: usize) {
         match &mut node.kind {
             NodeKind::LocalVar(l, _) => {

@@ -98,7 +98,7 @@ fn log10(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn math_sqrt(
-    bb: &mut BBContext,
+    state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -110,9 +110,9 @@ fn math_sqrt(
         return false;
     }
     let CallSiteInfo { args, dst, .. } = *callsite;
-    let fsrc = bb.load_xmm(ir, args, pc).enc();
+    let fsrc = state.load_xmm(ir, args, pc).enc();
     if let Some(dst) = dst {
-        let fret = bb.def_F(dst).enc();
+        let fret = state.def_F(dst).enc();
         ir.inline(move |r#gen, _, _| {
             monoasm!( &mut r#gen.jit,
                 sqrtsd xmm(fret), xmm(fsrc);

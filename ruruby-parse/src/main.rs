@@ -99,11 +99,13 @@ mod tests {
 
     #[test]
     fn yamanote() {
-        let code =
-        fetch_file("https://raw.githubusercontent.com/mame/yamanote-quine/master/yamanote-quine-inner-circle.rb");
+        let code = fetch_file(
+            "https://raw.githubusercontent.com/mame/yamanote-quine/master/yamanote-quine-inner-circle.rb",
+        );
         parse_and_output(code);
-        let code =
-    fetch_file("https://raw.githubusercontent.com/mame/yamanote-quine/master/yamanote-quine-outer-circle.rb");
+        let code = fetch_file(
+            "https://raw.githubusercontent.com/mame/yamanote-quine/master/yamanote-quine-outer-circle.rb",
+        );
         parse_and_output(code);
     }
 
@@ -148,7 +150,7 @@ mod tests {
         for f in files {
             total += 1;
             let f = f.canonicalize().unwrap().to_string_lossy().to_string();
-            println!("testing {f}");
+            //println!("testing {f}");
             let code = match std::fs::read_to_string(f.clone()) {
                 Ok(code) => code,
                 Err(err) => {

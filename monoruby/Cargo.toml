@@ -20,7 +20,7 @@ name = "irm"
 [features]
 dump-bc = []
 dump-traceir = []
-emit-asm = ["dump-bc", "dump-traceir"]
+emit-asm = ["dump-bc", "dump-traceir", "jit-log"]
 emit-bc = ["dump-bc", "dump-traceir"]
 jit-log = []
 jit-debug = ["dump-traceir"]

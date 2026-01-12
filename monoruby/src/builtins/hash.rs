@@ -221,7 +221,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn hash_index(
-    bb: &mut BBContext,
+    state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -235,8 +235,8 @@ fn hash_index(
     if callsite.pos_num != 1 {
         return false;
     }
-    bb.load(ir, callsite.args, GP::Rcx);
-    bb.load(ir, callsite.recv, GP::Rdx);
+    state.load(ir, callsite.args, GP::Rcx);
+    state.load(ir, callsite.recv, GP::Rdx);
     ir.inline(|r#gen, _, _| {
         monoasm! {&mut r#gen.jit,
             movq rdi, rbx;
@@ -245,9 +245,9 @@ fn hash_index(
             call rax;
         }
     });
-    let error = ir.new_error(bb, pc);
+    let error = ir.new_error(state, pc);
     ir.handle_error(error);
-    bb.def_rax2acc(ir, callsite.dst);
+    state.def_rax2acc(ir, callsite.dst);
     true
 }
 

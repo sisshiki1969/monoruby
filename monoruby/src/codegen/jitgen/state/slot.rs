@@ -1,10 +1,7 @@
 use super::*;
 
-mod join;
-mod read_slot;
-
-#[derive(Clone)]
-pub(crate) struct SlotContext {
+#[derive(Clone, Default)]
+pub(crate) struct SlotState {
     /// Slot states.
     slots: Vec<LinkMode>,
     /// Liveness information.
@@ -15,7 +12,7 @@ pub(crate) struct SlotContext {
     local_num: usize,
 }
 
-impl std::fmt::Debug for SlotContext {
+impl std::fmt::Debug for SlotState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{{ ")?;
         for (i, state) in self.slots.iter().enumerate() {
@@ -26,12 +23,12 @@ impl std::fmt::Debug for SlotContext {
     }
 }
 
-impl SlotContext {
+impl SlotState {
     fn new(cc: &JitContext, default: LinkMode) -> Self {
         let total_reg_num = cc.total_reg_num();
         let local_num = cc.local_num();
         let self_class = Guarded::from_class(cc.self_class());
-        let mut ctx = SlotContext {
+        let mut ctx = SlotState {
             slots: vec![default; total_reg_num],
             liveness: vec![IsUsed::default(); total_reg_num],
             xmm: {
@@ -46,11 +43,11 @@ impl SlotContext {
     }
 
     pub(super) fn new_loop(cc: &JitContext) -> Self {
-        SlotContext::new(cc, LinkMode::default())
+        SlotState::new(cc, LinkMode::default())
     }
 
     pub(super) fn new_method(cc: &JitContext) -> Self {
-        let mut ctx = SlotContext::new(cc, LinkMode::V);
+        let mut ctx = SlotState::new(cc, LinkMode::V);
         for i in cc.locals() {
             ctx.set_mode(i, LinkMode::C(Value::nil()));
         }
@@ -88,6 +85,14 @@ impl SlotContext {
         ctx
     }
 
+    pub(super) fn slots_len(&self) -> usize {
+        self.slots.len()
+    }
+
+    pub(super) fn no_r15(&self) -> bool {
+        self.r15.is_none()
+    }
+
     pub(super) fn equiv(&self, other: &Self) -> bool {
         assert_eq!(self.slots.len(), other.slots.len());
         self.slots
@@ -96,7 +101,7 @@ impl SlotContext {
             .all(|(lhs, rhs)| lhs.equiv(rhs))
     }
 
-    pub(super) fn liveness_analysis(&mut self, liveness: &Liveness) {
+    pub(in crate::codegen::jitgen) fn liveness_analysis(&mut self, liveness: &Liveness) {
         let (used_as_float, killed) = (liveness.loop_used_as_float(), liveness.killed());
         self.use_float(used_as_float);
         self.kill_unused(killed);
@@ -130,11 +135,11 @@ impl SlotContext {
         }
     }
 
-    fn locals(&self) -> std::ops::Range<SlotId> {
+    pub(super) fn locals(&self) -> std::ops::Range<SlotId> {
         SlotId(1)..self.temp_start()
     }
 
-    pub(super) fn all_regs(&self) -> std::ops::Range<SlotId> {
+    pub(in crate::codegen::jitgen) fn all_regs(&self) -> std::ops::Range<SlotId> {
         SlotId(0)..SlotId(self.slots.len() as u16)
     }
 
@@ -146,34 +151,34 @@ impl SlotContext {
         SlotId((1 + self.local_num) as u16)
     }
 
-    pub(super) fn mode(&self, slot: SlotId) -> LinkMode {
+    pub(in crate::codegen::jitgen) fn mode(&self, slot: SlotId) -> LinkMode {
         self.slots[slot.0 as usize]
     }
 
-    pub(super) fn guarded(&self, slot: SlotId) -> Guarded {
+    pub(in crate::codegen::jitgen) fn guarded(&self, slot: SlotId) -> Guarded {
         self.mode(slot).guarded()
     }
 
-    pub(super) fn class(&self, slot: SlotId) -> Option<ClassId> {
+    pub(in crate::codegen::jitgen) fn class(&self, slot: SlotId) -> Option<ClassId> {
         self.guarded(slot).class()
     }
 
     #[allow(non_snake_case)]
-    pub(super) fn is_C(&self, slot: SlotId) -> bool {
+    pub(in crate::codegen::jitgen) fn is_C(&self, slot: SlotId) -> bool {
         self.mode(slot).is_C()
     }
 }
 
-impl SlotContext {
-    fn set_mode(&mut self, slot: SlotId, mode: LinkMode) {
+impl SlotState {
+    pub(super) fn set_mode(&mut self, slot: SlotId, mode: LinkMode) {
         self.slots[slot.0 as usize] = mode;
     }
 
-    fn is_used(&self, slot: SlotId) -> &IsUsed {
+    pub(super) fn is_used(&self, slot: SlotId) -> &IsUsed {
         &self.liveness[slot.0 as usize]
     }
 
-    fn is_used_mut(&mut self, slot: SlotId) -> &mut IsUsed {
+    pub(super) fn is_used_mut(&mut self, slot: SlotId) -> &mut IsUsed {
         &mut self.liveness[slot.0 as usize]
     }
 
@@ -230,7 +235,7 @@ impl SlotContext {
     ///
     /// *reg* is set to V.
     ///
-    pub(super) fn discard(&mut self, slot: impl Into<Option<SlotId>>) {
+    pub(in crate::codegen::jitgen) fn discard(&mut self, slot: impl Into<Option<SlotId>>) {
         if let Some(slot) = slot.into() {
             if slot.is_self() {
                 panic!("{self:?}")
@@ -240,7 +245,7 @@ impl SlotContext {
         }
     }
 
-    pub(super) fn discard_temps(&mut self) {
+    pub(in crate::codegen::jitgen) fn discard_temps(&mut self) {
         for slot in self.temps() {
             self.discard(slot);
         }
@@ -250,7 +255,7 @@ impl SlotContext {
     /// _ -> MaybeNone
     ///
     #[allow(non_snake_case)]
-    fn set_MaybeNone(&mut self, slot: SlotId) {
+    pub(super) fn set_MaybeNone(&mut self, slot: SlotId) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::MaybeNone);
     }
@@ -259,7 +264,7 @@ impl SlotContext {
     /// _ -> MaybeNone
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_None(&mut self, slot: SlotId) {
+    pub(in crate::codegen::jitgen) fn set_None(&mut self, slot: SlotId) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::None);
     }
@@ -268,7 +273,7 @@ impl SlotContext {
     /// _ -> S
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_S_with_guard(&mut self, slot: SlotId, guarded: Guarded) {
+    pub(in crate::codegen::jitgen) fn set_S_with_guard(&mut self, slot: SlotId, guarded: Guarded) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::S(guarded));
     }
@@ -277,7 +282,7 @@ impl SlotContext {
     /// _ -> S
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_S(&mut self, slot: SlotId) {
+    pub(in crate::codegen::jitgen) fn set_S(&mut self, slot: SlotId) {
         self.set_S_with_guard(slot, Guarded::Value);
     }
 
@@ -285,7 +290,7 @@ impl SlotContext {
     /// F/Sf -> F
     ///
     #[allow(non_snake_case)]
-    fn set_F(&mut self, slot: SlotId, xmm: Xmm) {
+    pub(super) fn set_F(&mut self, slot: SlotId, xmm: Xmm) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::F(xmm));
         self.xmm_add(slot, xmm);
@@ -295,7 +300,7 @@ impl SlotContext {
     /// F/Sf -> Sf
     ///
     #[allow(non_snake_case)]
-    fn set_Sf(&mut self, slot: SlotId, xmm: Xmm, guarded: SfGuarded) {
+    pub(super) fn set_Sf(&mut self, slot: SlotId, xmm: Xmm, guarded: SfGuarded) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::Sf(xmm, guarded));
         self.xmm_add(slot, xmm);
@@ -305,7 +310,7 @@ impl SlotContext {
     /// C -> F
     ///
     #[allow(non_snake_case)]
-    fn set_new_F(&mut self, slot: SlotId) -> Xmm {
+    pub(super) fn set_new_F(&mut self, slot: SlotId) -> Xmm {
         let x = self.alloc_xmm();
         self.set_F(slot, x);
         x
@@ -315,7 +320,7 @@ impl SlotContext {
     /// C -> Sf
     ///
     #[allow(non_snake_case)]
-    fn set_new_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> Xmm {
+    pub(super) fn set_new_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> Xmm {
         let x = self.alloc_xmm();
         self.set_Sf(slot, x, guarded);
         x
@@ -325,19 +330,19 @@ impl SlotContext {
     /// F -> Sf
     ///
     #[allow(non_snake_case)]
-    fn set_Sf_float(&mut self, slot: SlotId, xmm: Xmm) {
+    pub(super) fn set_Sf_float(&mut self, slot: SlotId, xmm: Xmm) {
         self.set_Sf(slot, xmm, SfGuarded::Float)
     }
 }
 
-impl SlotContext {
+impl SlotState {
     // APIs for 'def'
 
     ///
     /// Link *slot* to stack.
     ///
     #[allow(non_snake_case)]
-    pub(super) fn def_S(&mut self, slot: SlotId) {
+    pub(in crate::codegen::jitgen) fn def_S(&mut self, slot: SlotId) {
         self.def_S_guarded(slot, Guarded::Value);
     }
 
@@ -380,7 +385,7 @@ impl SlotContext {
     }
 
     #[allow(non_snake_case)]
-    pub(super) fn def_Sf_float(&mut self, slot: SlotId) -> Xmm {
+    pub(crate) fn def_Sf_float(&mut self, slot: SlotId) -> Xmm {
         self.def_Sf(slot, SfGuarded::Float)
     }
 
@@ -388,7 +393,7 @@ impl SlotContext {
     /// Link *slot* to a concrete fixnum value *i*.
     ///
     #[allow(non_snake_case)]
-    pub(super) fn def_C_fixnum(&mut self, slot: impl Into<Option<SlotId>>, i: i64) {
+    pub(crate) fn def_C_fixnum(&mut self, slot: impl Into<Option<SlotId>>, i: i64) {
         self.def_C(slot, Value::fixnum(i));
     }
 
@@ -396,7 +401,7 @@ impl SlotContext {
     /// Link *slot* to a concrete flonum value *i*.
     ///
     #[allow(non_snake_case)]
-    pub(super) fn def_C_float(&mut self, slot: impl Into<Option<SlotId>>, f: f64) {
+    pub(crate) fn def_C_float(&mut self, slot: impl Into<Option<SlotId>>, f: f64) {
         self.def_C(slot, Value::float(f));
     }
 
@@ -411,19 +416,73 @@ impl SlotContext {
         }
     }
 
+    ///
+    /// Link *slot* to the accumulator.
+    ///
+    #[allow(non_snake_case)]
+    pub(crate) fn def_G(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: impl Into<Option<SlotId>>,
+        guarded: Guarded,
+    ) {
+        if let Some(slot) = slot.into() {
+            self.discard(slot);
+            self.writeback_acc(ir);
+            self.set_mode(slot, LinkMode::G(guarded));
+            self.r15 = Some(slot);
+        }
+    }
+
     // APIs for 'use'
 
     /// used as f64 with no conversion
-    fn use_as_float(&mut self, slot: SlotId) {
+    pub(super) fn use_as_float(&mut self, slot: SlotId) {
         self.is_used_mut(slot).use_as_float();
     }
 
-    fn use_as_value(&mut self, slot: SlotId) {
+    pub(super) fn use_as_value(&mut self, slot: SlotId) {
         self.is_used_mut(slot).use_as_non_float();
+    }
+
+    ///
+    /// Write back the value of the *slot* to the corresponding stack slot.
+    ///
+    /// LinkMode of the *slot* is set to LinkMode::S or Sf.
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    ///
+    pub(in crate::codegen::jitgen) fn write_back_slot(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        match self.mode(slot) {
+            LinkMode::F(xmm) => {
+                // F -> Sf
+                self.set_Sf_float(slot, xmm);
+                ir.xmm2stack(xmm, slot);
+            }
+            LinkMode::C(v) => {
+                // C -> S
+                let guarded = Guarded::from_concrete_value(v);
+                self.set_mode(slot, LinkMode::S(guarded));
+                ir.push(AsmInst::LitToStack(v, slot));
+            }
+            LinkMode::G(guarded) => {
+                // G -> S
+                ir.acc2stack(slot);
+                assert_eq!(self.r15, Some(slot));
+                self.r15 = None;
+                self.set_mode(slot, LinkMode::S(guarded));
+            }
+            LinkMode::Sf(_, _) | LinkMode::S(_) | LinkMode::MaybeNone => {}
+            LinkMode::V | LinkMode::None => {
+                eprintln!("{:?}", self);
+                unreachable!("write_back_slot() {slot:?} {:?}", self.mode(slot));
+            }
+        }
     }
 }
 
-impl SlotContext {
+impl SlotState {
     pub fn is_symbol_literal(&self, slot: SlotId) -> Option<IdentId> {
         if let LinkMode::C(v) = self.mode(slot) {
             v.try_symbol()
@@ -593,14 +652,6 @@ impl SlotContext {
         }
     }
 
-    fn is_xmm_vacant(&self, xmm: Xmm) -> bool {
-        self.xmm(xmm).is_empty()
-    }
-
-    fn is_r15(&self, slot: SlotId) -> bool {
-        self.r15 == Some(slot)
-    }
-
     pub(super) fn on_reg(&self, slot: SlotId) -> Option<GP> {
         if self.is_r15(slot) {
             Some(GP::R15)
@@ -609,7 +660,7 @@ impl SlotContext {
         }
     }
 
-    pub(super) fn on_reg_or(&self, slot: SlotId, optb: GP) -> GP {
+    pub(in crate::codegen::jitgen) fn on_reg_or(&self, slot: SlotId, optb: GP) -> GP {
         if self.is_r15(slot) { GP::R15 } else { optb }
     }
 
@@ -628,9 +679,64 @@ impl SlotContext {
         assert!(!self.slots.iter().any(|link| matches!(link, LinkMode::G(_))));
         assert!(self.r15.is_none());
     }
+
+    fn is_xmm_vacant(&self, xmm: Xmm) -> bool {
+        self.xmm(xmm).is_empty()
+    }
+
+    fn is_r15(&self, slot: SlotId) -> bool {
+        self.r15 == Some(slot)
+    }
 }
 
-impl BBContext {
+impl SlotState {
+    ///
+    /// Copy *src* to *dst*.
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    pub(in crate::codegen::jitgen) fn copy_slot(
+        &mut self,
+        ir: &mut AsmIr,
+        src: SlotId,
+        dst: SlotId,
+    ) {
+        if src == dst {
+            return;
+        }
+        match self.mode(src) {
+            LinkMode::F(x) => {
+                self.discard(dst);
+                self.set_F(dst, x);
+            }
+            LinkMode::Sf(x, guarded) => {
+                ir.stack2reg(src, GP::Rax);
+                ir.reg2stack(GP::Rax, dst);
+                self.discard(dst);
+                self.set_Sf(dst, x, guarded);
+            }
+            LinkMode::S(guarded) => {
+                ir.stack2reg(src, GP::Rax);
+                ir.reg2stack(GP::Rax, dst);
+                self.def_S_guarded(dst, guarded);
+            }
+            LinkMode::C(v) => {
+                self.def_C(dst, v);
+            }
+            LinkMode::G(guarded) => {
+                ir.reg2stack(GP::R15, src);
+                self.set_S_with_guard(src, guarded);
+                self.def_G(ir, dst, guarded)
+            }
+            LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
+                unreachable!("copy_slot() {:?} {:?}: {:?}", src, self.mode(src), self);
+            }
+        }
+    }
+}
+
+impl SlotState {
     ///
     /// Type guard.
     ///
@@ -708,9 +814,7 @@ impl BBContext {
         let deopt = ir.new_deopt(self, pc);
         self.guard_class(ir, slot, r, INTEGER_CLASS, deopt);
     }
-}
 
-impl SlotContext {
     pub(crate) fn get_using_xmm(&self) -> UsingXmm {
         let mut b = UsingXmm::new();
         self.xmm.iter().enumerate().for_each(|(i, v)| {
@@ -846,7 +950,7 @@ impl SlotContext {
             .collect()
     }
 
-    fn get_locals_write_back(&self) -> WriteBack {
+    pub(super) fn get_locals_write_back(&self) -> WriteBack {
         let local_num = self.local_num;
         let f = |reg: SlotId| reg.0 as usize <= local_num;
         let xmm = self.wb_xmm(f);
@@ -868,7 +972,7 @@ impl SlotContext {
     /// - rax, rcx
     ///
     #[allow(non_snake_case)]
-    fn to_S(&mut self, ir: &mut AsmIr, slot: SlotId) {
+    pub(super) fn to_S(&mut self, ir: &mut AsmIr, slot: SlotId) {
         match self.mode(slot) {
             LinkMode::F(xmm) => {
                 ir.xmm2stack(xmm, slot);
@@ -894,7 +998,7 @@ impl SlotContext {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum SfGuarded {
+pub(in crate::codegen::jitgen) enum SfGuarded {
     Fixnum,
     Float,
     FixnumOrFloat,
@@ -910,31 +1014,11 @@ impl Into<Guarded> for SfGuarded {
     }
 }
 
-impl SfGuarded {
-    fn join(&mut self, other: SfGuarded) {
-        *self = match (*self, other) {
-            (SfGuarded::Fixnum, SfGuarded::Fixnum) => SfGuarded::Fixnum,
-            (SfGuarded::Float, SfGuarded::Float) => SfGuarded::Float,
-            _ => SfGuarded::FixnumOrFloat,
-        }
-    }
-
-    fn from_concrete_value(v: Value) -> Self {
-        if v.is_fixnum() {
-            SfGuarded::Fixnum
-        } else if v.is_float() {
-            SfGuarded::Float
-        } else {
-            panic!("SfGuarded::from_concrete_value(): not fixnum/float {:?}", v);
-        }
-    }
-}
-
 ///
 /// Mode of linkage between stack slot and xmm registers.
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum LinkMode {
+pub(in crate::codegen::jitgen) enum LinkMode {
     ///
     /// No Value.
     ///
@@ -1012,7 +1096,7 @@ impl LinkMode {
         }
     }
 
-    pub(super) fn as_result(&self) -> ReturnValue {
+    pub(super) fn as_return(&self) -> ReturnValue {
         match self {
             LinkMode::C(v) => ReturnValue::Const(*v),
             LinkMode::MaybeNone | LinkMode::None | LinkMode::V => unreachable!(),
@@ -1030,33 +1114,33 @@ impl LinkMode {
         matches!(self, LinkMode::C(_))
     }
 
-    pub(super) fn from_caller(
+    pub(in crate::codegen::jitgen) fn from_caller(
         store: &Store,
         fid: FuncId,
         callid: CallSiteId,
-        bbctx: &BBContext,
+        state: &AbstractState,
     ) -> Vec<Self> {
         let CallSiteInfo { recv, .. } = &store[callid];
-        let recv = bbctx.mode(*recv);
-        Self::from_caller_inner(store, fid, callid, bbctx, recv)
+        let recv = state.mode(*recv);
+        Self::from_caller_inner(store, fid, callid, state, recv)
     }
 
-    pub(super) fn from_caller_yield(
+    pub(in crate::codegen::jitgen) fn from_caller_yield(
         store: &Store,
         fid: FuncId,
         callid: CallSiteId,
-        bbctx: &BBContext,
+        state: &AbstractState,
         self_class: ClassId,
     ) -> Vec<Self> {
         let recv = LinkMode::S(Guarded::Class(self_class));
-        Self::from_caller_inner(store, fid, callid, bbctx, recv)
+        Self::from_caller_inner(store, fid, callid, state, recv)
     }
 
     fn from_caller_inner(
         store: &Store,
         fid: FuncId,
         callid: CallSiteId,
-        bbctx: &BBContext,
+        state: &AbstractState,
         recv: LinkMode,
     ) -> Vec<Self> {
         let CallSiteInfo {
@@ -1071,19 +1155,19 @@ impl LinkMode {
         slots.push(recv);
         let (filled_req, filled_opt, filled_post) = info.apply_args(*pos_num);
         for i in 0..filled_req {
-            slots.push(bbctx.mode(*args + i));
+            slots.push(state.mode(*args + i));
         }
         for _ in filled_req..info.req_num() {
             slots.push(Self::nil());
         }
         for i in filled_req..filled_req + filled_opt {
-            slots.push(bbctx.mode(*args + i));
+            slots.push(state.mode(*args + i));
         }
         for _ in filled_opt..info.opt_num() {
             slots.push(Self::none());
         }
         for i in filled_req + filled_opt..filled_req + filled_opt + filled_post {
-            slots.push(bbctx.mode(*args + i));
+            slots.push(state.mode(*args + i));
         }
         for _ in filled_post..info.post_num() {
             slots.push(Self::nil());
@@ -1095,71 +1179,12 @@ impl LinkMode {
         assert_eq!(kw.0 as usize, slots.len());
         for k in info.kw_names() {
             if let Some(p) = kw_args.get(k) {
-                slots.push(bbctx.mode(*kw_pos + *p));
+                slots.push(state.mode(*kw_pos + *p));
             } else {
                 slots.push(Self::none());
             }
         }
         slots
-    }
-}
-
-#[derive(Clone, Default)]
-pub(crate) struct Liveness(Vec<IsUsed>);
-
-impl std::fmt::Debug for Liveness {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Liveness {{ ")?;
-        for (i, is_used) in self.0.iter().enumerate() {
-            match is_used {
-                IsUsed::Used(UsedAs { ty, .. }) => {
-                    write!(f, "[{:?}: UsedAs {:?}] ", SlotId(i as u16), ty)?
-                }
-                IsUsed::Killed => write!(f, "[{:?}: Killed] ", SlotId(i as u16))?,
-                IsUsed::ND => {}
-            }
-        }
-        write!(f, "}}")
-    }
-}
-
-impl Liveness {
-    pub(in crate::codegen::jitgen) fn new(total_reg_num: usize) -> Self {
-        Self(vec![IsUsed::default(); total_reg_num])
-    }
-
-    pub(in crate::codegen::jitgen) fn join(&mut self, bbctx: &BBContext) {
-        for (i, is_used) in &mut self.0.iter_mut().enumerate() {
-            is_used.join(bbctx.is_used(SlotId(i as u16)));
-        }
-    }
-
-    ///
-    /// Collect killed (and not used) slots.
-    ///
-    pub fn killed(&self) -> impl Iterator<Item = SlotId> {
-        self.0.iter().enumerate().filter_map(|(i, is_used)| {
-            if is_used == &IsUsed::Killed {
-                Some(SlotId(i as u16))
-            } else {
-                None
-            }
-        })
-    }
-
-    ///
-    /// Extract a set of registers which will be used as Float in this loop,
-    /// *and* xmm-linked on the back-edge.
-    ///
-    pub fn loop_used_as_float(&self) -> impl Iterator<Item = (SlotId, bool)> {
-        self.0.iter().enumerate().flat_map(|(i, b)| match b {
-            IsUsed::Used(used) => match used.ty {
-                UseTy::Float => Some((SlotId(i as u16), true)),
-                UseTy::Both => Some((SlotId(i as u16), false)),
-                _ => None,
-            },
-            _ => None,
-        })
     }
 }
 
@@ -1191,9 +1216,6 @@ impl Guarded {
         }
     }
 
-    fn join(&self, other: &Self) -> Self {
-        if self == other { *self } else { Guarded::Value }
-    }
     pub fn class(&self) -> Option<ClassId> {
         Some(match self {
             Guarded::Value => return None,
@@ -1204,291 +1226,135 @@ impl Guarded {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-enum IsUsed {
+impl SlotState {
     ///
-    /// Not be used nor be killed.
+    /// Generate bridge AsmIr to merge current state with target state.
     ///
-    #[default]
-    ND,
-    ///
-    /// Used in any of paths.
-    ///
-    Used(UsedAs),
-    ///
-    /// Guaranteed not to be used (= killed) in all paths.
-    ///
-    Killed,
+    pub(super) fn bridge(&mut self, ir: &mut AsmIr, target: &Self, slot: SlotId, pc: BytecodePtr) {
+        match (self.mode(slot), target.mode(slot)) {
+            (LinkMode::V, LinkMode::V) => {}
+            (_, LinkMode::V) => {
+                self.discard(slot);
+            }
+            (LinkMode::F(l), LinkMode::F(r)) => {
+                if l != r {
+                    if self.is_xmm_vacant(r) {
+                        self.set_F(slot, r);
+                        ir.xmm_move(l, r);
+                    } else {
+                        self.gen_xmm_swap(ir, l, r);
+                    }
+                }
+            }
+            (LinkMode::F(l), LinkMode::Sf(r, SfGuarded::Float)) => {
+                ir.xmm2stack(l, slot);
+                if l == r {
+                    // F(l) -> Sf(l)
+                    self.set_Sf_float(slot, l);
+                } else {
+                    // F(l) -> Sf(r)
+                    self.to_sf(ir, slot, l, r, SfGuarded::Float);
+                }
+            }
+            (LinkMode::Sf(l, _), LinkMode::Sf(r, guarded)) => {
+                if l != r {
+                    // Sf(l) -> Sf(r)
+                    self.to_sf(ir, slot, l, r, guarded);
+                }
+            }
+            (LinkMode::Sf(_, guarded), LinkMode::S(_)) => {
+                self.set_S_with_guard(slot, guarded.into());
+            }
+            (LinkMode::S(_), LinkMode::Sf(x, SfGuarded::Float)) => {
+                // S -> Sf
+                ir.stack2reg(slot, GP::Rax);
+                let deopt = ir.new_deopt(&self, pc + 1);
+                if self.is_xmm_vacant(x) {
+                    ir.float_to_xmm(GP::Rax, x, deopt);
+                    self.set_Sf_float(slot, x);
+                } else {
+                    let tmp = self.set_new_Sf(slot, SfGuarded::Float);
+                    ir.float_to_xmm(GP::Rax, tmp, deopt);
+                    self.gen_xmm_swap(ir, x, tmp);
+                }
+            }
+            (LinkMode::G(_), LinkMode::Sf(x, SfGuarded::Float)) => {
+                // G -> Sf
+                //ir.stack2reg(slot, GP::Rax);
+                let deopt = ir.new_deopt(&self, pc + 1);
+                if self.is_xmm_vacant(x) {
+                    ir.float_to_xmm(GP::R15, x, deopt);
+                    self.set_Sf_float(slot, x);
+                } else {
+                    let tmp = self.set_new_Sf(slot, SfGuarded::Float);
+                    ir.float_to_xmm(GP::R15, tmp, deopt);
+                    self.gen_xmm_swap(ir, x, tmp);
+                }
+            }
+            (LinkMode::S(_), LinkMode::S(guarded)) => {
+                if let Some(class) = guarded.class()
+                    && !self.is_class(slot, class)
+                {
+                    let deopt = ir.new_deopt(&self, pc + 1);
+                    ir.stack2reg(slot, GP::Rax);
+                    ir.push(AsmInst::GuardClass(GP::Rax, class, deopt));
+                    self.set_S_with_guard(slot, guarded);
+                }
+            }
+            (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
+            (LinkMode::C(l), LinkMode::F(r)) => {
+                if let Some(f) = l.try_float() {
+                    self.set_F(slot, r);
+                    ir.f64_to_xmm(f, r);
+                } else {
+                    unreachable!()
+                }
+            }
+            (LinkMode::C(l), LinkMode::Sf(r, _)) => {
+                if let Some(f) = l.try_float() {
+                    self.set_Sf_float(slot, r);
+                    ir.f64_to_xmm(f, r);
+                    ir.lit2reg(Value::float(f), GP::Rax);
+                    ir.reg2stack(GP::Rax, slot);
+                } else if let Some(i) = l.try_fixnum() {
+                    self.set_Sf_float(slot, r);
+                    ir.f64_to_xmm(i as f64, r);
+                    ir.lit2reg(Value::fixnum(i), GP::Rax);
+                    ir.reg2stack(GP::Rax, slot);
+                } else {
+                    unreachable!()
+                }
+            }
+            (LinkMode::C(_) | LinkMode::F(_) | LinkMode::G(_), LinkMode::S(_)) => {
+                self.write_back_slot(ir, slot);
+            }
+            (LinkMode::None, LinkMode::None) => {}
+            (LinkMode::MaybeNone, LinkMode::MaybeNone) => {}
+            (l, r) => {
+                unreachable!("{slot:?} {l:?}->{r:?} {target:?}");
+            }
+        }
+    }
 }
 
-impl IsUsed {
-    fn join(&mut self, other: &Self) {
-        *self = match (&self, other) {
-            (IsUsed::Used(l), IsUsed::Used(r)) => IsUsed::Used(l.join(r)),
-            (IsUsed::Used(x), _) | (_, IsUsed::Used(x)) => IsUsed::Used(*x),
-            (IsUsed::Killed, IsUsed::Killed) => IsUsed::Killed,
-            _ => IsUsed::ND,
-        };
-    }
-
+impl SlotState {
     ///
-    /// used as f64 with no conversion
+    /// Generate bridge AsmIr from F/Sf(l) to Sf(r).
     ///
-    fn use_as_float(&mut self) {
-        match self {
-            IsUsed::Killed => {}
-            IsUsed::Used(used) => used.use_as_float(),
-            IsUsed::ND => *self = IsUsed::Used(UsedAs::float()),
-        }
-    }
-
-    fn use_as_non_float(&mut self) {
-        match self {
-            IsUsed::Killed => {}
-            IsUsed::Used(used) => used.use_as_non_float(),
-            IsUsed::ND => *self = IsUsed::Used(UsedAs::non_float()),
-        }
-    }
-
-    fn kill(&mut self) {
-        match self {
-            IsUsed::Killed => {}
-            IsUsed::Used(used) => used.kill(),
-            IsUsed::ND => *self = IsUsed::Killed,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct UsedAs {
-    ty: UseTy,
-    killed: bool,
-}
-
-impl UsedAs {
-    fn float() -> Self {
-        UsedAs {
-            ty: UseTy::Float,
-            killed: false,
-        }
-    }
-
-    fn non_float() -> Self {
-        UsedAs {
-            ty: UseTy::NonFloat,
-            killed: false,
-        }
-    }
-
-    /// used as f64 with no conversion
-    fn use_as_float(&mut self) {
-        self.use_as(UseTy::Float);
-    }
-
-    fn use_as_non_float(&mut self) {
-        self.use_as(UseTy::NonFloat);
-    }
-
-    fn use_as(&mut self, other: UseTy) {
-        if self.killed {
-            return;
+    fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm, guarded: SfGuarded) {
+        if self.is_xmm_vacant(r) {
+            self.set_Sf(slot, r, guarded);
+            ir.xmm_move(l, r);
         } else {
-            self.ty = self.ty.join(&other);
+            self.gen_xmm_swap(ir, l, r);
         }
     }
 
-    fn join(&self, other: &Self) -> Self {
-        Self {
-            ty: self.ty.join(&other.ty),
-            killed: self.killed && other.killed,
-        }
-    }
-
-    fn kill(&mut self) {
-        self.killed = true;
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum UseTy {
-    /// The slot is used as f64 with no conversion.
-    Float,
-    NonFloat,
-    Both,
-}
-
-impl UseTy {
-    fn join(&self, other: &Self) -> Self {
-        match (self, other) {
-            (UseTy::Float, UseTy::Float) => UseTy::Float,
-            (UseTy::NonFloat, UseTy::NonFloat) => UseTy::NonFloat,
-            (_, _) => UseTy::Both,
-        }
-    }
-}
-
-impl BBContext {
     ///
-    /// Write back the value of the *slot* to the corresponding stack slot.
+    /// Swap xmm registers `l` and `r`.
     ///
-    /// LinkMode of the *slot* is set to LinkMode::S or Sf.
-    ///
-    /// ### destroy
-    /// - rax, rcx
-    ///
-    pub(super) fn write_back_slot(&mut self, ir: &mut AsmIr, slot: SlotId) {
-        match self.mode(slot) {
-            LinkMode::F(xmm) => {
-                // F -> Sf
-                self.set_Sf_float(slot, xmm);
-                ir.xmm2stack(xmm, slot);
-            }
-            LinkMode::C(v) => {
-                // C -> S
-                let guarded = Guarded::from_concrete_value(v);
-                self.set_mode(slot, LinkMode::S(guarded));
-                ir.push(AsmInst::LitToStack(v, slot));
-            }
-            LinkMode::G(guarded) => {
-                // G -> S
-                ir.acc2stack(slot);
-                assert_eq!(self.r15, Some(slot));
-                self.r15 = None;
-                self.set_mode(slot, LinkMode::S(guarded));
-            }
-            LinkMode::Sf(_, _) | LinkMode::S(_) | LinkMode::MaybeNone => {}
-            LinkMode::V | LinkMode::None => {
-                eprintln!("{:?}", self.slot_state);
-                unreachable!("write_back_slot() {slot:?} {:?}", self.mode(slot));
-            }
-        }
-    }
-
-    fn xmm_swap(&mut self, ir: &mut AsmIr, l: Xmm, r: Xmm) {
-        self.slot_state.xmm_swap(l, r);
+    fn gen_xmm_swap(&mut self, ir: &mut AsmIr, l: Xmm, r: Xmm) {
+        self.xmm_swap(l, r);
         ir.push(AsmInst::XmmSwap(l, r));
-    }
-
-    ///
-    /// Discard slots above *next_sp*.
-    ///
-    pub(in crate::codegen::jitgen) fn clear_above_next_sp(&mut self) {
-        let sp = self.next_sp;
-        for i in sp..SlotId(self.slots.len() as u16) {
-            self.discard(i);
-        }
-    }
-
-    ///
-    /// Copy *src* to *dst*.
-    ///
-    /// ### destroy
-    /// - rax
-    ///
-    pub(super) fn copy_slot(&mut self, ir: &mut AsmIr, src: SlotId, dst: SlotId) {
-        if src == dst {
-            return;
-        }
-        match self.mode(src) {
-            LinkMode::F(x) => {
-                self.discard(dst);
-                self.set_F(dst, x);
-            }
-            LinkMode::Sf(x, guarded) => {
-                ir.stack2reg(src, GP::Rax);
-                ir.reg2stack(GP::Rax, dst);
-                self.discard(dst);
-                self.set_Sf(dst, x, guarded);
-            }
-            LinkMode::S(guarded) => {
-                ir.stack2reg(src, GP::Rax);
-                ir.reg2stack(GP::Rax, dst);
-                self.def_S_guarded(dst, guarded);
-            }
-            LinkMode::C(v) => {
-                self.def_C(dst, v);
-            }
-            LinkMode::G(guarded) => {
-                ir.reg2stack(GP::R15, src);
-                self.set_S_with_guard(src, guarded);
-                self.def_G(ir, dst, guarded)
-            }
-            LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
-                unreachable!(
-                    "copy_slot() {:?} {:?}: {:?}",
-                    src,
-                    self.mode(src),
-                    &self.slot_state
-                );
-            }
-        }
-    }
-
-    ///
-    /// Link *slot* to the accumulator.
-    ///
-    #[allow(non_snake_case)]
-    pub(super) fn def_G(
-        &mut self,
-        ir: &mut AsmIr,
-        slot: impl Into<Option<SlotId>>,
-        guarded: Guarded,
-    ) {
-        if let Some(slot) = slot.into() {
-            self.discard(slot);
-            self.writeback_acc(ir);
-            self.set_mode(slot, LinkMode::G(guarded));
-            self.r15 = Some(slot);
-        }
-    }
-}
-
-// write back operations
-impl BBContext {
-    pub(crate) fn write_back_slots(&mut self, ir: &mut AsmIr, slot: &[SlotId]) {
-        slot.iter().for_each(|r| self.write_back_slot(ir, *r));
-    }
-
-    ///
-    /// Fetch from *args* to *args* + *len* - 1 and store in corresponding stack slots.
-    ///
-    pub(super) fn write_back_range(&mut self, ir: &mut AsmIr, args: SlotId, len: u16) {
-        for reg in args.0..args.0 + len {
-            self.write_back_slot(ir, SlotId::new(reg))
-        }
-    }
-
-    pub(crate) fn write_back_recv_and_callargs(&mut self, ir: &mut AsmIr, callsite: &CallSiteInfo) {
-        self.write_back_slot(ir, callsite.recv);
-        self.write_back_args(ir, callsite);
-    }
-
-    pub(super) fn write_back_args(&mut self, ir: &mut AsmIr, callsite: &CallSiteInfo) {
-        let CallSiteInfo {
-            args,
-            pos_num,
-            kw_pos,
-            block_arg,
-            ..
-        } = callsite;
-        self.write_back_range(ir, *args, *pos_num as u16);
-        self.write_back_range(ir, *kw_pos, callsite.kw_len() as u16);
-        if let Some(block_arg) = block_arg {
-            self.write_back_slot(ir, *block_arg);
-        }
-    }
-
-    #[allow(non_snake_case)]
-    pub(super) fn locals_to_S(&mut self, ir: &mut AsmIr) {
-        for i in self.locals() {
-            self.to_S(ir, i);
-        }
-    }
-
-    pub(super) fn write_back_locals_if_captured(&mut self, ir: &mut AsmIr) {
-        if !self.frame_capture_guarded {
-            let wb = self.get_locals_write_back();
-            ir.push(AsmInst::WriteBackIfCaptured(wb));
-        }
     }
 }

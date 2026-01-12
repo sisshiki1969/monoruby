@@ -105,9 +105,16 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 
 pub(super) fn gen_class_new(
     f: extern "C" fn(Value) -> Value,
-) -> impl Fn(&mut BBContext, &mut AsmIr, &JitContext, &Store, &CallSiteInfo, ClassId, BytecodePtr) -> bool
-{
-    move |bb: &mut BBContext,
+) -> impl Fn(
+    &mut AbstractState,
+    &mut AsmIr,
+    &JitContext,
+    &Store,
+    &CallSiteInfo,
+    ClassId,
+    BytecodePtr,
+) -> bool {
+    move |state: &mut AbstractState,
           ir: &mut AsmIr,
           _: &JitContext,
           _: &Store,
@@ -124,11 +131,11 @@ pub(super) fn gen_class_new(
             dst,
             ..
         } = *callsite;
-        bb.writeback_acc(ir);
-        bb.load(ir, recv, GP::Rdi);
-        bb.write_back_recv_and_callargs(ir, callsite);
-        let using_xmm = bb.get_using_xmm();
-        let error = ir.new_error(bb, pc);
+        state.writeback_acc(ir);
+        state.load(ir, recv, GP::Rdi);
+        state.write_back_recv_and_callargs(ir, callsite);
+        let using_xmm = state.get_using_xmm();
+        let error = ir.new_error(state, pc);
         ir.xmm_save(using_xmm);
         ir.inline(move |r#gen, _, _| {
             let cached_version = r#gen.jit.data_i32(-1);
@@ -183,13 +190,13 @@ pub(super) fn gen_class_new(
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
-        bb.def_rax2acc(ir, dst);
+        state.def_rax2acc(ir, dst);
         true
     }
 }
 
 fn class_allocate(
-    bb: &mut BBContext,
+    state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     _: &Store,
@@ -201,9 +208,9 @@ fn class_allocate(
         return false;
     }
     let CallSiteInfo { recv, dst, .. } = *callsite;
-    bb.load(ir, recv, GP::Rdi);
-    bb.write_back_recv_and_callargs(ir, callsite);
-    let using_xmm = bb.get_using_xmm();
+    state.load(ir, recv, GP::Rdi);
+    state.write_back_recv_and_callargs(ir, callsite);
+    let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _| {
         monoasm!( &mut r#gen.jit,
@@ -212,7 +219,7 @@ fn class_allocate(
         );
     });
     ir.xmm_restore(using_xmm);
-    bb.def_rax2acc(ir, dst);
+    state.def_rax2acc(ir, dst);
     true
 }
 
