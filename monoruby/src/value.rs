@@ -66,6 +66,8 @@ impl RubyHash<Executor, Globals, MonorubyErr> for Value {
     ) -> Result<()> {
         match self.try_rvalue() {
             None => self.0.hash(state),
+            // SAFETY: The RValue pointer is valid and the type checking via ty()
+            // ensures we're accessing the correct variant of the union.
             Some(lhs) => unsafe {
                 match lhs.ty() {
                     //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", lhs),
@@ -96,6 +98,8 @@ impl RubyEql<Executor, Globals, MonorubyErr> for Value {
         match (self.try_rvalue(), other.try_rvalue()) {
             (None, None) => Ok(self.id() == other.id()),
             (Some(lhs), Some(rhs)) => {
+                // SAFETY: Both lhs and rhs are valid RValue pointers. Type checking via ty()
+                // ensures we're accessing the correct variants of their unions.
                 unsafe {
                     Ok(match (lhs.ty(), rhs.ty()) {
                         (ObjTy::BIGNUM, ObjTy::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
@@ -315,6 +319,7 @@ impl Value {
 //
 impl Value {
     pub const fn nil() -> Self {
+        // SAFETY: NIL_VALUE is a non-zero constant, so it's safe to create a NonZeroU64.
         Value(unsafe { std::num::NonZeroU64::new_unchecked(NIL_VALUE) })
     }
 
@@ -434,6 +439,8 @@ impl Value {
     }
 
     pub fn yielder_object() -> Self {
+        // SAFETY: YIELDER is a static variable that is properly initialized before use.
+        // Access is synchronized through single-threaded Ruby VM execution.
         Value::object(unsafe { crate::builtins::YIELDER.unwrap().id() })
     }
 
@@ -738,6 +745,9 @@ impl Value {
         if self.is_packed_value() {
             None
         } else {
+            // SAFETY: Non-packed values contain a valid pointer to an RValue
+            // allocated by the GC allocator. The pointer remains valid as long
+            // as the Value is live and not collected.
             Some(unsafe { &*(self.id() as *const RValue) })
         }
     }
@@ -751,6 +761,9 @@ impl Value {
         if self.is_packed_value() {
             None
         } else {
+            // SAFETY: Non-packed values contain a valid pointer to an RValue
+            // allocated by the GC allocator. The pointer remains valid and we have
+            // exclusive mutable access through &mut self.
             Some(unsafe { &mut *(self.id() as *mut RValue) })
         }
     }
@@ -848,6 +861,8 @@ impl Value {
             return Some(f);
         } else if let Some(rv) = self.try_rvalue() {
             if rv.ty() == ObjTy::FLOAT {
+                // SAFETY: The type check ensures this RValue contains a float,
+                // so accessing it via as_float() is safe.
                 return Some(unsafe { rv.as_float() });
             }
         }
@@ -856,6 +871,8 @@ impl Value {
 
     pub fn try_complex(&self) -> Option<&ComplexInner> {
         if self.ty()? == ObjTy::COMPLEX {
+            // SAFETY: The type check ensures this RValue contains a complex number,
+            // so accessing it via as_complex() is safe.
             Some(unsafe { self.rvalue().as_complex() })
         } else {
             None
@@ -864,6 +881,7 @@ impl Value {
 
     pub fn as_complex(&self) -> &ComplexInner {
         assert_eq!(Some(ObjTy::COMPLEX), self.ty());
+        // SAFETY: The assert ensures this RValue contains a complex number.
         unsafe { self.rvalue().as_complex() }
     }
 
@@ -885,11 +903,13 @@ impl Value {
 
     fn as_module_inner(&self) -> &ModuleInner {
         assert!(self.rvalue().ty() == ObjTy::MODULE || self.rvalue().ty() == ObjTy::CLASS);
+        // SAFETY: The assert ensures this RValue contains a module or class.
         unsafe { self.rvalue().as_module() }
     }
 
     fn as_module_inner_mut(&mut self) -> &mut ModuleInner {
         assert!(self.rvalue().ty() == ObjTy::MODULE || self.rvalue().ty() == ObjTy::CLASS);
+        // SAFETY: The assert ensures this RValue contains a module or class.
         unsafe { self.rvalue_mut().as_module_mut() }
     }
 
@@ -903,11 +923,13 @@ impl Value {
     ///
     pub(crate) fn as_array_inner(&self) -> &ArrayInner {
         assert_eq!(ObjTy::ARRAY, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains an array.
         unsafe { self.rvalue().as_array() }
     }
 
     fn as_array_inner_mut(&mut self) -> &mut ArrayInner {
         assert_eq!(ObjTy::ARRAY, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains an array.
         unsafe { self.rvalue_mut().as_array_mut() }
     }
 
@@ -945,11 +967,13 @@ impl Value {
 
     pub(crate) fn as_rstring_inner(&self) -> &RStringInner {
         assert_eq!(ObjTy::STRING, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a string.
         unsafe { self.rvalue().as_rstring() }
     }
 
     pub(crate) fn as_rstring_inner_mut(&mut self) -> &mut RStringInner {
         assert_eq!(ObjTy::STRING, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a string.
         unsafe { self.rvalue_mut().as_rstring_mut() }
     }
 
@@ -1023,6 +1047,7 @@ impl Value {
 
     pub(crate) fn is_exception(&self) -> Option<&ExceptionInner> {
         let rv = self.try_rvalue()?;
+        // SAFETY: The type check ensures this RValue contains an exception.
         unsafe {
             match rv.ty() {
                 ObjTy::EXCEPTION => Some(rv.as_exception()),
@@ -1033,6 +1058,7 @@ impl Value {
 
     pub(crate) fn is_exception_mut(&mut self) -> Option<&mut ExceptionInner> {
         let rv = self.try_rvalue_mut()?;
+        // SAFETY: The type check ensures this RValue contains an exception.
         unsafe {
             match rv.ty() {
                 ObjTy::EXCEPTION => Some(rv.as_exception_mut()),
@@ -1054,21 +1080,25 @@ impl Value {
 
     pub(crate) fn as_hashmap_inner(&self) -> &HashmapInner {
         assert_eq!(ObjTy::HASH, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a hash.
         unsafe { self.rvalue().as_hashmap() }
     }
 
     pub(crate) fn as_hashmap_inner_mut(&mut self) -> &mut HashmapInner {
         assert_eq!(ObjTy::HASH, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a hash.
         unsafe { self.rvalue_mut().as_hashmap_mut() }
     }
 
     pub(crate) fn as_regexp_inner(&self) -> &RegexpInner {
         assert_eq!(ObjTy::REGEXP, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a regexp.
         unsafe { self.rvalue().as_regex() }
     }
 
     pub(crate) fn as_regexp_inner_mut(&mut self) -> &mut RegexpInner {
         assert_eq!(ObjTy::REGEXP, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a regexp.
         unsafe { self.rvalue_mut().as_regex_mut() }
     }
 
@@ -1135,6 +1165,7 @@ impl Value {
 
     pub(crate) fn is_range(&self) -> Option<&RangeInner> {
         if let Some(rvalue) = self.try_rvalue() {
+            // SAFETY: The type check ensures this RValue contains a range.
             unsafe {
                 match rvalue.ty() {
                     ObjTy::RANGE => Some(self.rvalue().as_range()),
@@ -1311,6 +1342,7 @@ impl Value {
 
     pub(crate) fn try_bytes(&self) -> Option<&RStringInner> {
         if let Some(rv) = self.try_rvalue() {
+            // SAFETY: The type check ensures this RValue contains a string.
             unsafe {
                 match rv.ty() {
                     ObjTy::STRING => Some(rv.as_rstring()),
@@ -1324,6 +1356,7 @@ impl Value {
 
     pub(crate) fn is_rstring_inner(&self) -> Option<&RStringInner> {
         let rv = self.try_rvalue()?;
+        // SAFETY: The type check ensures this RValue contains a string.
         unsafe {
             match rv.ty() {
                 ObjTy::STRING => Some(rv.as_rstring()),
@@ -1342,11 +1375,13 @@ impl Value {
 
     pub(crate) fn as_str(&self) -> &str {
         assert_eq!(ObjTy::STRING, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a string.
         unsafe { self.rvalue().as_str() }
     }
 
     pub(crate) fn is_str(&self) -> Option<&str> {
         let rv = self.try_rvalue()?;
+        // SAFETY: The type check ensures this RValue contains a string.
         unsafe {
             match rv.ty() {
                 ObjTy::STRING => Some(rv.as_str()),
@@ -1357,37 +1392,44 @@ impl Value {
 
     pub(crate) fn replace_string(&mut self, replace: String) {
         assert_eq!(ObjTy::STRING, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a string.
         unsafe { *self.rvalue_mut().as_rstring_mut() = RStringInner::from_string(replace) };
     }
 
     pub(crate) fn replace_str(&mut self, replace: &str) {
         assert_eq!(ObjTy::STRING, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a string.
         unsafe { *self.rvalue_mut().as_rstring_mut() = RStringInner::from_str(replace) };
     }
 
     pub(crate) fn as_range(&self) -> &RangeInner {
         assert_eq!(ObjTy::RANGE, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a range.
         unsafe { self.rvalue().as_range() }
     }
 
     #[allow(dead_code)]
     pub(crate) fn as_io_inner(&self) -> &IoInner {
         assert_eq!(ObjTy::IO, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains an IO object.
         unsafe { self.rvalue().as_io() }
     }
 
     pub(crate) fn as_io_inner_mut(&mut self) -> &mut IoInner {
         assert_eq!(ObjTy::IO, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains an IO object.
         unsafe { self.rvalue_mut().as_io_mut() }
     }
 
     pub(crate) fn as_proc_inner(&self) -> &ProcInner {
         assert_eq!(ObjTy::PROC, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a proc.
         unsafe { self.rvalue().as_proc() }
     }
 
     pub(crate) fn as_proc_inner_mut(&mut self) -> &mut ProcInner {
         assert_eq!(ObjTy::PROC, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a proc.
         unsafe { self.rvalue_mut().as_proc_mut() }
     }
 
@@ -1403,46 +1445,55 @@ impl Value {
 
     pub fn as_fiber_inner(&self) -> &FiberInner {
         assert_eq!(ObjTy::FIBER, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a fiber.
         unsafe { self.rvalue().as_fiber() }
     }
 
     pub fn as_fiber_inner_mut(&mut self) -> &mut FiberInner {
         assert_eq!(ObjTy::FIBER, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a fiber.
         unsafe { self.rvalue_mut().as_fiber_mut() }
     }
 
     pub fn as_enumerator_inner(&self) -> &EnumeratorInner {
         assert_eq!(ObjTy::ENUMERATOR, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains an enumerator.
         unsafe { self.rvalue().as_enumerator() }
     }
 
     pub fn as_enumerator_inner_mut(&mut self) -> &mut EnumeratorInner {
         assert_eq!(ObjTy::ENUMERATOR, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains an enumerator.
         unsafe { self.rvalue_mut().as_enumerator_mut() }
     }
 
     pub fn as_generator_inner(&self) -> &GeneratorInner {
         assert_eq!(ObjTy::GENERATOR, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a generator.
         unsafe { self.rvalue().as_generator() }
     }
 
     pub fn as_generator_inner_mut(&mut self) -> &mut GeneratorInner {
         assert_eq!(ObjTy::GENERATOR, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a generator.
         unsafe { self.rvalue_mut().as_generator_mut() }
     }
 
     pub fn as_binding_inner(&self) -> &BindingInner {
         assert_eq!(ObjTy::BINDING, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a binding.
         unsafe { self.rvalue().as_binding() }
     }
 
     pub fn as_binding_inner_mut(&mut self) -> &mut BindingInner {
         assert_eq!(ObjTy::BINDING, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a binding.
         unsafe { self.rvalue_mut().as_binding_mut() }
     }
 
     pub fn as_match_data(&self) -> &MatchDataInner {
         assert_eq!(ObjTy::MATCHDATA, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains match data.
         unsafe { self.rvalue().as_match_data() }
     }
 }

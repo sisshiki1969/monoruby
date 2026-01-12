@@ -408,6 +408,8 @@ impl Globals {
             let locals_len = self.locals_len(binding_lfp.func_id());
             for i in SlotId(1)..SlotId(1) + locals_len {
                 let v = binding_lfp.register(i);
+                // SAFETY: Setting register values during frame initialization.
+                // The slot index is within bounds (1..locals_len).
                 unsafe { lfp.set_register(i, v) }
             }
         }
@@ -432,6 +434,8 @@ impl Globals {
             let locals_len = self.locals_len(binding_lfp.func_id());
             for i in SlotId(1)..SlotId(1) + locals_len {
                 let v = binding_lfp.register(i);
+                // SAFETY: Setting register values during frame initialization.
+                // The slot index is within bounds (1..locals_len).
                 unsafe { lfp.set_register(i, v) }
             }
         }
