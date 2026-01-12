@@ -113,7 +113,7 @@ impl<'a> BytecodeGen<'a> {
         let mut incoming = IncomingBranches::new(ir.len());
         for (idx, (inst, loc)) in ir.iter().enumerate() {
             let idx = BcIndex::from(idx);
-            let op = self.inst_to_bc(&mut incoming, inst.clone(), idx, *loc)?;
+            let op = self.inst_to_bc(&mut incoming, inst.clone(), idx)?;
             ops.push(op);
             sourcemap.push(*loc);
         }
@@ -135,7 +135,6 @@ impl<'a> BytecodeGen<'a> {
         incoming: &mut IncomingBranches,
         inst: BytecodeInst,
         bc_pos: BcIndex,
-        loc: Loc,
     ) -> Result<Bytecode> {
         let bc = match inst {
             BytecodeInst::Br(dst) => {
@@ -244,21 +243,18 @@ impl<'a> BytecodeGen<'a> {
                 incoming.push(bc_pos, bc_pos + 1);
                 Bytecode::from(enc_l(15, 0))
             }
-            BytecodeInst::SingletonMethodDef { obj, name, func } => {
+            BytecodeInst::SingletonMethodDef { obj, name, func_id } => {
                 // 1
                 let op1 = self.slot_id(&obj);
-                let func_id = self.new_function(func, loc)?;
                 Bytecode::from_with_func_name_id(enc_wl(1, op1.0, 0), Some(name), func_id)
             }
-            BytecodeInst::MethodDef { name, func } => {
+            BytecodeInst::MethodDef { name, func_id } => {
                 // 2
-                let func_id = self.new_function(func, loc)?;
                 Bytecode::from_with_func_name_id(enc_l(2, 0), Some(name), func_id)
             }
-            BytecodeInst::Lambda { dst, func } => {
+            BytecodeInst::Lambda { dst, func_id } => {
                 // 38
                 let op1 = self.slot_id(&dst);
-                let func_id = self.new_function(func, loc)?;
                 Bytecode::from(enc_wl(38, op1.0, func_id.get()))
             }
             BytecodeInst::Integer(dst, num) => {
@@ -335,7 +331,7 @@ impl<'a> BytecodeGen<'a> {
                 base,
                 superclass,
                 name,
-                func,
+                func_id,
             } => {
                 // 70
                 let op1 = match ret {
@@ -350,7 +346,6 @@ impl<'a> BytecodeGen<'a> {
                     None => SlotId::new(0),
                     Some(r) => self.slot_id(&r),
                 };
-                let func_id = self.new_function(func, loc)?;
                 Bytecode::from_with_func_name_id(
                     enc_www(70, op1.0, op2.0, op3.0),
                     Some(name),
@@ -361,7 +356,7 @@ impl<'a> BytecodeGen<'a> {
                 ret,
                 base,
                 name,
-                func,
+                func_id,
             } => {
                 // 71
                 let op1 = match ret {
@@ -372,7 +367,6 @@ impl<'a> BytecodeGen<'a> {
                     None => SlotId::new(0),
                     Some(r) => self.slot_id(&r),
                 };
-                let func_id = self.new_function(func, loc)?;
                 Bytecode::from_with_func_name_id(enc_www(71, op1.0, op2.0, 0), Some(name), func_id)
             }
             BytecodeInst::BlockArgProxy(dst, outer) => {
@@ -380,14 +374,13 @@ impl<'a> BytecodeGen<'a> {
                 let op1 = self.slot_id(&dst);
                 Bytecode::from(enc_wl(21, op1.0, outer as u32))
             }
-            BytecodeInst::SingletonClassDef { ret, base, func } => {
+            BytecodeInst::SingletonClassDef { ret, base, func_id } => {
                 // 22
                 let op1 = match ret {
                     None => SlotId::new(0),
                     Some(ret) => self.slot_id(&ret),
                 };
                 let op2 = self.slot_id(&base);
-                let func_id = self.new_function(func, loc)?;
                 Bytecode::from_with_func_name_id(enc_wl(22, op1.0, op2.0 as u32), None, func_id)
             }
             BytecodeInst::BlockArg(dst, outer) => {
@@ -428,17 +421,17 @@ impl<'a> BytecodeGen<'a> {
             BytecodeInst::MethodCall(box callsite) => {
                 // 30, 31
                 let opcode = if callsite.is_simple() { 30 } else { 31 };
-                self.encode_call(opcode, callsite, bc_pos, loc)?
+                self.encode_call(opcode, callsite, bc_pos)?
             }
             BytecodeInst::MethodCallBlock(box callsite) => {
                 // 32, 33
                 let opcode = if callsite.is_simple() { 32 } else { 33 };
-                self.encode_call(opcode, callsite, bc_pos, loc)?
+                self.encode_call(opcode, callsite, bc_pos)?
             }
             BytecodeInst::Yield(box callsite) => {
                 // 34, 35
                 let opcode = if callsite.is_simple() { 34 } else { 35 };
-                self.encode_call(opcode, callsite, bc_pos, loc)?
+                self.encode_call(opcode, callsite, bc_pos)?
             }
             BytecodeInst::InlineCache(box callsite) => self.encode_cache(130, callsite)?,
             BytecodeInst::Not { ret, src } => {
@@ -453,11 +446,8 @@ impl<'a> BytecodeGen<'a> {
             } => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&src);
-                let callid = self.new_callsite(
-                    CallSite::unary(Some(kind.into()), src, Some(ret)),
-                    bc_pos,
-                    loc,
-                )?;
+                let callid =
+                    self.new_callsite(CallSite::unary(Some(kind.into()), src, Some(ret)), bc_pos)?;
                 self.store
                     .new_callsite_map_entry(self.iseq_id, bc_pos, callid);
                 Bytecode::from_with_class_and_version(
@@ -472,7 +462,7 @@ impl<'a> BytecodeGen<'a> {
                 let op3 = self.slot_id(&rhs);
                 let name = kind.into();
                 let callid =
-                    self.new_callsite(CallSite::binary(Some(name), lhs, rhs, ret), bc_pos, loc)?;
+                    self.new_callsite(CallSite::binary(Some(name), lhs, rhs, ret), bc_pos)?;
                 self.store
                     .new_callsite_map_entry(self.iseq_id, bc_pos, callid);
                 Bytecode::from_with_class2(enc_www(160 + kind as u16, op1.0, op2.0, op3.0))
@@ -488,7 +478,7 @@ impl<'a> BytecodeGen<'a> {
                 };
                 let name = kind.into();
                 let callid =
-                    self.new_callsite(CallSite::binary(Some(name), lhs, rhs, ret), bc_pos, loc)?;
+                    self.new_callsite(CallSite::binary(Some(name), lhs, rhs, ret), bc_pos)?;
                 self.store
                     .new_callsite_map_entry(self.iseq_id, bc_pos, callid);
                 Bytecode::from_with_class2(op)
@@ -500,7 +490,6 @@ impl<'a> BytecodeGen<'a> {
                 let callid = self.new_callsite(
                     CallSite::binary(Some(IdentId::_INDEX), base, idx, Some(ret)),
                     bc_pos,
-                    loc,
                 )?;
                 self.store
                     .new_callsite_map_entry(self.iseq_id, bc_pos, callid);
@@ -513,7 +502,6 @@ impl<'a> BytecodeGen<'a> {
                 let callid = self.new_callsite(
                     CallSite::ternary(Some(IdentId::_INDEX_ASSIGN), base, index, None),
                     bc_pos,
-                    loc,
                 )?;
                 self.store
                     .new_callsite_map_entry(self.iseq_id, bc_pos, callid);
@@ -522,7 +510,7 @@ impl<'a> BytecodeGen<'a> {
             BytecodeInst::Array(ret, box callsite) => {
                 // 39
                 let op1 = self.slot_id(&ret);
-                let callid = self.new_callsite(callsite, bc_pos, loc)?;
+                let callid = self.new_callsite(callsite, bc_pos)?;
                 Bytecode::from(enc_wl(39, op1.0, callid.get()))
             }
             BytecodeInst::DefinedYield { dst } => {
@@ -654,14 +642,13 @@ impl<'a> BytecodeGen<'a> {
         opcode: u16,
         callsite: CallSite,
         bc_pos: BcIndex,
-        loc: Loc,
     ) -> Result<Bytecode> {
         let CallSite { dst, .. } = callsite;
         let ret = match dst {
             None => 0,
             Some(ret) => self.slot_id(&ret).0,
         };
-        let callid = self.new_callsite(callsite, bc_pos, loc)?;
+        let callid = self.new_callsite(callsite, bc_pos)?;
         Ok(Bytecode::from(enc_wl(opcode, ret, callid.get())))
     }
 
@@ -684,12 +671,7 @@ impl<'a> BytecodeGen<'a> {
         ))
     }
 
-    fn new_callsite(
-        &mut self,
-        callsite: CallSite,
-        bc_pos: BcIndex,
-        loc: Loc,
-    ) -> Result<CallSiteId> {
+    fn new_callsite(&mut self, callsite: CallSite, bc_pos: BcIndex) -> Result<CallSiteId> {
         let CallSite {
             name,
             pos_num,
@@ -702,12 +684,6 @@ impl<'a> BytecodeGen<'a> {
             dst,
             forwarding,
         } = callsite;
-
-        let block_fid = if let Some(block_fid) = block_fid {
-            Some(self.new_function(block_fid, loc)?)
-        } else {
-            None
-        };
 
         let args = self.slot_id(&args);
         let recv = self.slot_id(&recv);
@@ -743,27 +719,6 @@ impl<'a> BytecodeGen<'a> {
             dst,
             forwarding,
         ))
-    }
-
-    fn new_function(&mut self, func: FunctionId, loc: Loc) -> Result<FuncId> {
-        let sourceinfo = self.sourceinfo.clone();
-        match self.get_function(func) {
-            Functions::Method { name, compile_info } => {
-                self.store
-                    .new_iseq_method(name, compile_info, loc, sourceinfo, false)
-            }
-            Functions::ClassDef { name, compile_info } => {
-                self.store.new_classdef(name, compile_info, loc, sourceinfo)
-            }
-            Functions::Block {
-                mother,
-                outer,
-                compile_info,
-                is_block_style,
-            } => self
-                .store
-                .new_block(mother, outer, compile_info, is_block_style, loc, sourceinfo),
-        }
     }
 }
 

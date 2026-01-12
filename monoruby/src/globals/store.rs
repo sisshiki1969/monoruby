@@ -374,13 +374,14 @@ impl Store {
 
     pub(crate) fn new_block(
         &mut self,
-        mother: (ISeqId, usize),
         outer: ISeqId,
         compile_info: CompileInfo,
         is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
+        let outer_mother = self[outer].mother();
+        let mother = (outer_mother.0, outer_mother.1 + 1);
         let func_id = self.functions.next_func_id();
         let params_info = compile_info.params.clone();
         self.functions.add_compile_info(compile_info);
@@ -394,7 +395,6 @@ impl Store {
 
     pub(crate) fn new_eval(
         &mut self,
-        mother: (ISeqId, usize),
         outer: ISeqId,
         result: ParseResult,
         loc: Loc,
@@ -406,7 +406,7 @@ impl Store {
             loc,
         };
         let compile_info = Store::handle_args(info, vec![])?;
-        self.new_block(mother, outer, compile_info, false, loc, result.source_info)
+        self.new_block(outer, compile_info, false, loc, result.source_info)
     }
 
     pub(super) fn new_builtin_func(

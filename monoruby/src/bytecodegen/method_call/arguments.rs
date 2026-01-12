@@ -263,7 +263,7 @@ impl<'a> BytecodeGen<'a> {
         }
     }
 
-    fn block_arg(&mut self, block: Node, loc: Loc) -> Result<Option<FunctionId>> {
+    fn block_arg(&mut self, block: Node, loc: Loc) -> Result<Option<FuncId>> {
         match block.kind {
             NodeKind::Lambda(box block) => return Ok(Some(self.handle_block(vec![], block)?)),
             NodeKind::LocalVar(0, proc_local) => {

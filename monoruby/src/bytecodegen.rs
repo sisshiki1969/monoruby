@@ -24,12 +24,11 @@ pub fn bytecode_compile_script(globals: &mut Globals, result: ParseResult) -> Re
 pub fn bytecode_compile_eval(
     globals: &mut Globals,
     result: ParseResult,
-    mother: (ISeqId, usize),
     outer: ISeqId,
     loc: Loc,
     binding: Option<LvarCollector>,
 ) -> Result<FuncId> {
-    let main_fid = globals.store.new_eval(mother, outer, result, loc)?;
+    let main_fid = globals.store.new_eval(outer, result, loc)?;
     bytecode_compile(globals, main_fid, binding)?;
     Ok(main_fid)
 }
@@ -223,7 +222,7 @@ struct CallSite {
     /// Positions of splat arguments.
     splat_pos: Vec<usize>,
     /// *FuncId* of passed block.
-    block_fid: Option<FunctionId>,
+    block_fid: Option<FuncId>,
     block_arg: Option<BcReg>,
     /// *BcReg* of the first arguments.
     args: BcReg,
@@ -240,7 +239,7 @@ impl CallSite {
         pos_num: usize,
         kw: Option<KeywordArgs>,
         splat_pos: Vec<usize>,
-        block_fid: Option<FunctionId>,
+        block_fid: Option<FuncId>,
         block_arg: Option<BcReg>,
         args: BcReg,
         recv: BcReg,
@@ -317,24 +316,6 @@ struct KeywordArgs {
     kw_args: indexmap::IndexMap<IdentId, usize>,
     /// Positions of splat keyword arguments.
     hash_splat_pos: Vec<BcReg>,
-}
-
-#[derive(Debug, Clone)]
-enum Functions {
-    Method {
-        name: Option<IdentId>,
-        compile_info: CompileInfo,
-    },
-    ClassDef {
-        name: Option<IdentId>,
-        compile_info: CompileInfo,
-    },
-    Block {
-        mother: (ISeqId, usize),
-        outer: ISeqId,
-        compile_info: CompileInfo,
-        is_block_style: bool,
-    },
 }
 
 #[derive(Debug, Clone)]
@@ -451,9 +432,6 @@ struct MergeSourceInfo {
     sp: BcTemp,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct FunctionId(usize);
-
 #[derive(Clone, Default)]
 struct BytecodeLabels {
     labels: Vec<Option<BcIndex>>,
@@ -535,8 +513,6 @@ struct BytecodeGen<'a> {
     exception_table: Vec<ExceptionEntry>,
     /// Merge info.
     merge_info: HashMap<Label, (Option<BcTemp>, Vec<MergeSourceInfo>)>,
-    /// Function info.
-    functions: Vec<Option<Box<Functions>>>,
 }
 
 impl<'a> std::ops::Index<Label> for BytecodeGen<'a> {
@@ -580,7 +556,6 @@ impl<'a> BytecodeGen<'a> {
             sourceinfo,
             exception_table: vec![],
             merge_info: HashMap::default(),
-            functions: vec![],
         };
         if let Some(lvc) = binding {
             assert!(params.args_names.is_empty());
@@ -673,52 +648,37 @@ impl<'a> BytecodeGen<'a> {
         self.outer.is_some()
     }
 
-    fn add_method(&mut self, name: Option<IdentId>, compile_info: CompileInfo) -> FunctionId {
-        let info = Functions::Method { name, compile_info };
-        self.functions.push(Some(Box::new(info)));
-        FunctionId(self.functions.len() - 1)
-    }
-
-    fn add_classdef(&mut self, name: Option<IdentId>, compile_info: CompileInfo) -> FunctionId {
-        let info = Functions::ClassDef { name, compile_info };
-        self.functions.push(Some(Box::new(info)));
-        FunctionId(self.functions.len() - 1)
-    }
-
-    fn add_block(
+    fn add_method(
         &mut self,
-        mother: (ISeqId, usize),
-        outer: ISeqId,
+        name: Option<IdentId>,
         compile_info: CompileInfo,
-    ) -> FunctionId {
-        let info = Functions::Block {
-            mother,
-            outer,
-            compile_info,
-            is_block_style: true,
-        };
-        self.functions.push(Some(Box::new(info)));
-        FunctionId(self.functions.len() - 1)
+        loc: Loc,
+    ) -> Result<FuncId> {
+        let sourceinfo = self.sourceinfo.clone();
+        self.store
+            .new_iseq_method(name, compile_info, loc, sourceinfo, false)
     }
 
-    fn add_lambda(
+    fn add_classdef(
         &mut self,
-        mother: (ISeqId, usize),
-        outer: ISeqId,
+        name: Option<IdentId>,
         compile_info: CompileInfo,
-    ) -> FunctionId {
-        let info = Functions::Block {
-            mother,
-            outer,
-            compile_info,
-            is_block_style: false,
-        };
-        self.functions.push(Some(Box::new(info)));
-        FunctionId(self.functions.len() - 1)
+        loc: Loc,
+    ) -> Result<FuncId> {
+        let sourceinfo = self.sourceinfo.clone();
+        self.store.new_classdef(name, compile_info, loc, sourceinfo)
     }
 
-    fn get_function(&mut self, id: FunctionId) -> Functions {
-        *std::mem::take(&mut self.functions[id.0]).unwrap()
+    fn add_block(&mut self, outer: ISeqId, compile_info: CompileInfo, loc: Loc) -> Result<FuncId> {
+        let sourceinfo = self.sourceinfo.clone();
+        self.store
+            .new_block(outer, compile_info, true, loc, sourceinfo)
+    }
+
+    fn add_lambda(&mut self, outer: ISeqId, compile_info: CompileInfo, loc: Loc) -> Result<FuncId> {
+        let sourceinfo = self.sourceinfo.clone();
+        self.store
+            .new_block(outer, compile_info, false, loc, sourceinfo)
     }
 
     fn loop_push(
@@ -886,16 +846,16 @@ impl<'a> BytecodeGen<'a> {
         &mut self,
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         block: BlockInfo,
-    ) -> Result<FunctionId> {
-        let (mother, _, outer) = self.mother;
+    ) -> Result<FuncId> {
+        let loc = block.loc;
         let compile_info = Store::handle_args(block, optional_params)?;
-        Ok(self.add_block((mother, outer + 1), self.iseq_id, compile_info))
+        self.add_block(self.iseq_id, compile_info, loc)
     }
 
-    fn handle_lambda(&mut self, block: BlockInfo) -> Result<FunctionId> {
-        let (mother, _, outer) = self.mother;
+    fn handle_lambda(&mut self, block: BlockInfo) -> Result<FuncId> {
+        let loc = block.loc;
         let compile_info = Store::handle_args(block, vec![])?;
-        Ok(self.add_lambda((mother, outer + 1), self.iseq_id, compile_info))
+        self.add_lambda(self.iseq_id, compile_info, loc)
     }
 }
 

@@ -68,7 +68,7 @@ pub(super) enum BytecodeInst {
     },
     Lambda {
         dst: BcReg,
-        func: FunctionId,
+        func_id: FuncId,
     },
     Index(BcReg, BcReg, BcReg), // ret, base, index
     StoreIndex {
@@ -195,30 +195,30 @@ pub(super) enum BytecodeInst {
     InitMethod(FnInitInfo),
     MethodDef {
         name: IdentId,
-        func: FunctionId,
+        func_id: FuncId,
     },
     ClassDef {
         ret: Option<BcReg>,
         base: Option<BcReg>,
         superclass: Option<BcReg>,
         name: IdentId,
-        func: FunctionId,
+        func_id: FuncId,
     },
     ModuleDef {
         ret: Option<BcReg>,
         base: Option<BcReg>,
         name: IdentId,
-        func: FunctionId,
+        func_id: FuncId,
     },
     SingletonClassDef {
         ret: Option<BcReg>,
         base: BcReg,
-        func: FunctionId,
+        func_id: FuncId,
     },
     SingletonMethodDef {
         obj: BcReg,
         name: IdentId,
-        func: FunctionId,
+        func_id: FuncId,
     },
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
     ConcatRegexp(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)

@@ -293,20 +293,12 @@ impl Globals {
     ) -> Result<FuncId> {
         let outer_fid = caller_cfp.lfp().func_id();
         let outer = self.store[outer_fid].as_iseq();
-        let (mother_fid, depth) = caller_cfp.method_func_id_depth();
-        let mother = (self.store[mother_fid].as_iseq(), depth);
         let external_context = self.store.scoped_locals(outer);
 
         match Parser::parse_program_eval(code, path.into(), Some(&external_context)) {
-            Ok(res) => {
-                let res = bytecodegen::bytecode_compile_eval(
-                    self,
-                    res,
-                    mother,
-                    outer,
-                    Loc::default(),
-                    None,
-                );
+            Ok(result) => {
+                let res =
+                    bytecodegen::bytecode_compile_eval(self, result, outer, Loc::default(), None);
                 #[cfg(feature = "emit-bc")]
                 self.dump_bc();
                 res
@@ -323,8 +315,6 @@ impl Globals {
     ) -> Result<()> {
         let outer_fid = binding.outer_lfp().func_id();
         let outer = self.store[outer_fid].as_iseq();
-        let (lfp, mother_outer) = binding.outer_lfp().outermost();
-        let mother = (self.store[lfp.func_id()].as_iseq(), mother_outer);
         let external_context = self.store.scoped_locals(outer);
 
         let context = if let Some(fid) = binding.func_id() {
@@ -344,14 +334,8 @@ impl Globals {
             Some(&external_context),
         ) {
             Ok(res) => {
-                let res = bytecodegen::bytecode_compile_eval(
-                    self,
-                    res,
-                    mother,
-                    outer,
-                    Loc::default(),
-                    context,
-                );
+                let res =
+                    bytecodegen::bytecode_compile_eval(self, res, outer, Loc::default(), context);
                 #[cfg(feature = "emit-bc")]
                 self.dump_bc();
                 res

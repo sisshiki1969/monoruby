@@ -1003,7 +1003,7 @@ impl<'a> BytecodeGen<'a> {
 
     fn gen_lambda(&mut self, dst: BcReg, info: Box<BlockInfo>, loc: Loc) -> Result<()> {
         let func = self.handle_lambda(*info)?;
-        self.emit(BytecodeInst::Lambda { dst, func }, loc);
+        self.emit(BytecodeInst::Lambda { dst, func_id: func }, loc);
         Ok(())
     }
 
@@ -1056,8 +1056,8 @@ impl<'a> BytecodeGen<'a> {
         loc: Loc,
     ) -> Result<()> {
         let compile_info = Store::handle_args(block, vec![])?;
-        let func = self.add_method(Some(name), compile_info);
-        self.emit(BytecodeInst::MethodDef { name, func }, loc);
+        let func_id = self.add_method(Some(name), compile_info, loc)?;
+        self.emit(BytecodeInst::MethodDef { name, func_id }, loc);
         self.gen_symbol(name, use_mode)?;
         Ok(())
     }
@@ -1070,9 +1070,9 @@ impl<'a> BytecodeGen<'a> {
         loc: Loc,
     ) -> Result<()> {
         let compile_info = Store::handle_args(block, vec![])?;
-        let func = self.add_method(Some(name), compile_info);
+        let func_id = self.add_method(Some(name), compile_info, loc)?;
         let obj = self.pop().into();
-        self.emit(BytecodeInst::SingletonMethodDef { obj, name, func }, loc);
+        self.emit(BytecodeInst::SingletonMethodDef { obj, name, func_id }, loc);
         self.gen_symbol(name, use_mode)?;
         Ok(())
     }
@@ -1106,7 +1106,7 @@ impl<'a> BytecodeGen<'a> {
             None
         };
         let compile_info = Store::handle_args(info, vec![])?;
-        let func = self.add_classdef(Some(name), compile_info);
+        let func_id = self.add_classdef(Some(name), compile_info, loc)?;
         let superclass = match superclass {
             Some(box superclass) => Some(self.push_expr(superclass)?.into()),
             None => None,
@@ -1124,7 +1124,7 @@ impl<'a> BytecodeGen<'a> {
                     ret,
                     base,
                     name,
-                    func,
+                    func_id,
                 }
             } else {
                 BytecodeInst::ClassDef {
@@ -1132,7 +1132,7 @@ impl<'a> BytecodeGen<'a> {
                     base,
                     superclass,
                     name,
-                    func,
+                    func_id,
                 }
             },
             loc,
@@ -1151,7 +1151,7 @@ impl<'a> BytecodeGen<'a> {
         loc: Loc,
     ) -> Result<()> {
         let compile_info = Store::handle_args(info, vec![])?;
-        let func = self.add_classdef(None, compile_info);
+        let func_id = self.add_classdef(None, compile_info, loc)?;
         let old = self.temp;
         let base = self.gen_expr_reg(base)?;
         self.temp = old;
@@ -1160,7 +1160,7 @@ impl<'a> BytecodeGen<'a> {
             UseMode2::Push | UseMode2::Ret => Some(self.push().into()),
             UseMode2::Store(r) => Some(r),
         };
-        self.emit(BytecodeInst::SingletonClassDef { ret, base, func }, loc);
+        self.emit(BytecodeInst::SingletonClassDef { ret, base, func_id }, loc);
         if use_mode == UseMode2::Ret {
             self.emit_ret(None)?;
         }
