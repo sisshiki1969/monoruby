@@ -133,6 +133,8 @@ impl Executor {
     /// Set stack limit to (*rsp* - MAX_STACK_SIZE).
     ///
     pub fn set_stack_limit(&mut self, rsp: *mut u8) {
+        // SAFETY: rsp is a valid stack pointer, and subtracting MAX_STACK_SIZE
+        // stays within the allocated stack region.
         let stack_limit = unsafe { rsp.sub(MAX_STACK_SIZE) };
         self.stack_limit = stack_limit as usize;
     }
@@ -476,6 +478,8 @@ impl Executor {
         let invoker = CODEGEN.with(|codegen| codegen.borrow().yield_fiber);
         match invoker(self as _, val) {
             Some(res) => Ok(res),
+            // SAFETY: parent_fiber is guaranteed to be a valid pointer to an Executor
+            // when it is set. This pointer remains valid for the lifetime of this fiber.
             None => Err(unsafe { self.parent_fiber.unwrap().as_mut().take_error() }),
         }
     }
@@ -502,6 +506,8 @@ impl Executor {
             base,
             ..
         } = globals.store[site_id].clone();
+        // SAFETY: get_slot is safe to call here because we're accessing a valid slot
+        // that was previously set by the bytecode compiler.
         let base = base.map(|base| unsafe { self.get_slot(base) }.unwrap());
         let current_func = self.method_func_id();
         let mut parent = if let Some(base) = base {
@@ -542,6 +548,8 @@ impl Executor {
             ..
         } = globals.store[site_id].clone();
         let mut parent = if let Some(base) = base {
+            // SAFETY: get_slot is safe to call here because we're accessing a valid slot
+            // that was previously set by the bytecode compiler.
             let base = unsafe { self.get_slot(base) }.unwrap();
             base.expect_class_or_module(&globals.store)?.id()
         } else if toplevel {
@@ -775,6 +783,8 @@ impl Executor {
             globals.store[func_id].name().unwrap()
         };
         let bh = callsite.block_handler(lfp);
+        // SAFETY: args_to_vec safely accesses the arguments stored in the local frame pointer.
+        // The callsite.args and callsite.pos_num are valid and within bounds.
         let mut args = unsafe { lfp.args_to_vec(callsite.args, callsite.pos_num) };
         args.insert(0, Value::symbol(method_name));
         let kw_pos = callsite.kw_pos;
@@ -1423,6 +1433,9 @@ struct Root<'a, 'b> {
 
 impl<'a, 'b> alloc::GC<RValue> for Root<'a, 'b> {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        // SAFETY: YIELDER is a static mutable variable that is properly initialized
+        // before GC runs. Access is synchronized through the single-threaded nature
+        // of the Ruby VM.
         unsafe { crate::builtins::YIELDER.unwrap().mark(alloc) };
         self.globals.mark(alloc);
         self.executor.mark(alloc);
@@ -1455,6 +1468,8 @@ pub(crate) extern "C" fn execute_gc(
     })?;
     // Get root Executor.
     while let Some(mut parent) = executor.parent_fiber {
+        // SAFETY: parent_fiber is guaranteed to be a valid pointer to an Executor
+        // that outlives this borrow. The parent fiber structure is maintained correctly.
         executor = unsafe { parent.as_mut() };
     }
     alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc(&Root { globals, executor }));

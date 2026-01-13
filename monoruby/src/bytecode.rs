@@ -242,6 +242,8 @@ pub(crate) struct BytecodePtrBase(std::ptr::NonNull<Bytecode>);
 impl std::ops::Add<usize> for BytecodePtrBase {
     type Output = BytecodePtr;
     fn add(self, rhs: usize) -> BytecodePtr {
+        // SAFETY: Pointer arithmetic within the bytecode buffer is safe as long as
+        // the offset stays within the allocated bytecode array bounds.
         BytecodePtr::new(unsafe { self.as_ptr().add(rhs) })
     }
 }
@@ -249,6 +251,8 @@ impl std::ops::Add<usize> for BytecodePtrBase {
 impl std::ops::Add<BcIndex> for BytecodePtrBase {
     type Output = BytecodePtr;
     fn add(self, rhs: BcIndex) -> BytecodePtr {
+        // SAFETY: Pointer arithmetic within the bytecode buffer is safe as long as
+        // the offset stays within the allocated bytecode array bounds.
         BytecodePtr(unsafe {
             std::ptr::NonNull::new(self.as_ptr().offset(rhs.0 as isize)).unwrap()
         })
@@ -275,6 +279,8 @@ pub(crate) struct BytecodePtr(std::ptr::NonNull<Bytecode>);
 impl std::ops::Sub<BytecodePtrBase> for BytecodePtr {
     type Output = BcIndex;
     fn sub(self, rhs: BytecodePtrBase) -> BcIndex {
+        // SAFETY: Both pointers point into the same bytecode buffer, so offset_from
+        // is valid. The assert ensures the result is non-negative.
         let offset = unsafe { self.as_ptr().offset_from(rhs.as_ptr()) };
         assert!(offset >= 0, "self:{:?} rhs:{:?}", self, rhs);
         BcIndex(offset as u32)
@@ -284,6 +290,8 @@ impl std::ops::Sub<BytecodePtrBase> for BytecodePtr {
 impl std::ops::Add<isize> for BytecodePtr {
     type Output = BytecodePtr;
     fn add(self, rhs: isize) -> BytecodePtr {
+        // SAFETY: Pointer arithmetic within the bytecode buffer is safe as long as
+        // the offset stays within bounds.
         BytecodePtr::new(unsafe { self.as_ptr().offset(rhs) })
     }
 }
@@ -291,12 +299,16 @@ impl std::ops::Add<isize> for BytecodePtr {
 impl std::ops::Sub<isize> for BytecodePtr {
     type Output = BytecodePtr;
     fn sub(self, rhs: isize) -> BytecodePtr {
+        // SAFETY: Pointer arithmetic within the bytecode buffer is safe as long as
+        // the offset stays within bounds.
         BytecodePtr::new(unsafe { self.as_ptr().offset(-rhs) })
     }
 }
 
 impl std::ops::AddAssign<i32> for BytecodePtr {
     fn add_assign(&mut self, offset: i32) {
+        // SAFETY: Pointer arithmetic within the bytecode buffer is safe as long as
+        // the offset stays within bounds.
         unsafe {
             *self = BytecodePtr::new(self.as_ptr().offset(offset as isize));
         }
@@ -306,6 +318,8 @@ impl std::ops::AddAssign<i32> for BytecodePtr {
 impl std::ops::Deref for BytecodePtr {
     type Target = Bytecode;
     fn deref(&self) -> &Self::Target {
+        // SAFETY: NonNull guarantees the pointer is non-null and properly aligned.
+        // The bytecode buffer is valid for the lifetime of this reference.
         unsafe { self.0.as_ref() }
     }
 }
@@ -332,6 +346,8 @@ impl BytecodePtr {
     }
 
     pub fn write2(self, data: u64) {
+        // SAFETY: Writing to the second u64 slot of the bytecode instruction.
+        // The bytecode buffer has sufficient space for this write.
         unsafe { *((self.as_ptr() as *mut u64).add(1)) = data }
     }
 
@@ -361,6 +377,8 @@ impl BytecodePtr {
 
     pub fn write_method_cache(self, cache: &MethodCacheEntry) {
         let p = self.as_ptr() as *mut u8;
+        // SAFETY: Writing method cache data at specific offsets within the bytecode
+        // instruction. The bytecode structure has sufficient space for these writes.
         unsafe {
             (p.add(8) as *mut Option<FuncId>).write(Some(cache.func_id));
             (p.add(24) as *mut Option<ClassId>).write(Some(cache.recv_class));
