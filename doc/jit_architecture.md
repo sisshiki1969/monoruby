@@ -2,14 +2,14 @@
 
 ## Overview
 
-The monoruby JIT compiler is a multi-stage compiler that transforms Ruby code into efficient x86-64 native code. It uses [monoasm](https://github.com/sisshiki1969/monoasm), a custom dynamic assembler developed for this project.
+The monoruby JIT compiler is a method-JIT that transforms Ruby code into efficient x86-64 native code. It uses [monoasm](https://github.com/sisshiki1969/monoasm), a custom dynamic assembler developed for this project.
 
 ## Compilation Pipeline
 
 ```
 ┌─────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌─────────────┐
 │ Ruby Source │───>│   Parser     │───>│  Bytecode    │───>│   TraceIR    │───>│   AsmIR     │
-│   (.rb)     │    │(ruruby-parse)│    │  (BcOp)      │    │              │    │             │
+│   (.rb)     │    │(ruruby-parse)│    │              │    │              │    │             │
 └─────────────┘    └──────────────┘    └──────────────┘    └──────────────┘    └─────────────┘
                                                                                       │
                                                                                       v
@@ -142,10 +142,10 @@ struct SlotState {
 enum LinkMode {
     None,           // Undefined
     MaybeNone,      // Possibly undefined
-    S(SlotMode),    // On stack
+    S,              // On stack
     C(Value),       // Compile-time constant
     G(GP),          // General-purpose register
-    Sf(Xmm, ...),   // XMM register (floating point)
+    f(Xmm),         // XMM register (floating point)
 }
 ```
 
@@ -205,7 +205,7 @@ struct WriteBack {
 | `r12` | `&mut Globals` |
 | `r13` | PC (Program Counter) |
 | `r14` | LFP (Local Frame Pointer) |
-| `r15` | Accumulator / Temporary register |
+| `r15` | Accumulator |
 
 ### XMM Registers
 Used for floating-point operations. `xmm2` through `xmm15` are available.

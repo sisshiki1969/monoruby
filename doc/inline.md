@@ -1,76 +1,108 @@
-# Inline function
+# Inline asm function
 
-## precondition
-
-- rdi: receiver: Value
+- To avoid the overhead of method calls in performance-critical code paths, we can inline certain method calls directly into the generated machine code using inline assembly functions.
+- This is particularly useful for small, frequently called methods where the overhead of a function call would be significant compared to the method's execution time.
+- In inline asm functions, we have direct access to the JIT context, allowing us to manipulate the abstract state and generate machine code as needed.
+- We can do 'trial inlining' by attempting to inline a method call and reverting to the original state if inlining is not possible.
 
 ## output
 
 - accumulator(r15): result: Value
 
 ```rust
-  TraceIr::InlineCall {
-      inline_id, callid, ..
-  } => {
-      let inline_gen = store.get_inline_info(inline_id).0;
-      let recv = store[callid].recv;
-      self.ir.fetch_to_reg(bb, recv, GP::Rdi);
-      let (deopt, error) = self.ir.new_deopt_error(bb, pc);
-      let using_xmm = bb.get_using_xmm();
-      self.ir.guard_class_version(pc, using_xmm, deopt, error);
-      inline_gen(&mut self.ir, store, bb, &store[callid], pc);
-  }
-```
-
-## callee function example
-
-- You must take arguments directly from the caller's stack using callsite information (`CallSiteInfo`).
-- An 'inlinable' method call must have 'simple' call site, which means no keyword arguments, no splat arguments, and no block argument.
-- use `AsmIr.inline(&mut self, f: impl FnOnce(&mut Codegen, &SideExitLabels))` to embed a unique code.
-- use `AsmIr.reg2acc(&mut self, bb: &mut BBContext, src: GP, dst: impl Into<Option<SlotId>>)` for moving the result (in `src: GP`) to the accumulator.
-
-```rust
-fn object_send(
-    ir: &mut AsmIr,
-    _store: &Store,
-    bb: &mut BBContext,
-    callsite: &CallSiteInfo,
-    _pc: BcPc,
-) {
-    let CallSiteInfo {
-        recv,
-        dst,
-        args,
-        pos_num,
-        block_fid,
-        ..
-    } = *callsite;
-    ir.write_back_callargs(bb, callsite);
-    ir.unlink(bb, dst);
-    let using = bb.get_using_xmm();
-    let bh = match block_fid {
-        None => 0,
-        Some(func_id) => BlockHandler::from(func_id).0.id(),
-    };
-    ir.inline(move |gen, _| {
-        let cache = gen.jit.bytes(std::mem::size_of::<Cache>() * CACHE_SIZE);
-        gen.xmm_save(using);
-        monoasm! {&mut gen.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rdx, [r14 - (conv(recv))];
-            lea  rcx, [r14 - (conv(args))];
-            movq r8, (pos_num);
-            movq r9, (bh);
-            subq rsp, 8;
-            lea  rax, [rip + cache];
-            pushq rax;
-            movq rax, (call_send_wrapper);
-            call rax;
-            addq rsp, 16;
+impl<'a> JitContext<'a> {
+    fn inline_asm(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        f: impl Fn(
+            &mut AbstractState,
+            &mut AsmIr,
+            &JitContext,
+            &Store,
+            CallSiteId,
+            ClassId,
+            BytecodePtr,
+        ) -> bool,
+        callid: CallSiteId,
+        recv_class: ClassId,
+        pc: BytecodePtr,
+    ) -> bool {
+        let state_save = state.clone();
+        let ir_save = ir.save();
+        if f(state, ir, self, &self.store, callid, recv_class, pc) {
+            true
+        } else {
+            *state = state_save;
+            ir.restore(ir_save);
+            false
         }
-        gen.xmm_restore(using);
-    });
-    ir.reg2acc(bb, GP::Rax, dst);
+    }
 }
 ```
+
+the signature of inline asm function is as follows:
+
+```rust
+fn(
+    &mut AbstractState,
+    &mut AsmIr,
+    &JitContext,
+    &Store,
+    &CallSiteInfo,
+    ClassId,
+    BytecodePtr,
+) -> bool
+```
+
+## inline asm function example
+
+- We must return `true` if inlining succeeded, otherwise `false`.
+- We must take arguments directly from the caller's stack using callsite information (`CallSiteId`).
+- An 'inlinable' method call should have 'simple' call site, which means no keyword arguments, no splat arguments, and no block argument.
+- use `AsmIr::inline()` to embed a machine code directly.
+- use `AbstractState::def_rax2acc()` for moving the result (in `rax`) to the accumulator.
+
+```rust
+fn kernel_nil(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: BytecodePtr,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let CallSiteInfo { recv, dst, .. } = *callsite;
+    if state.is_nil(recv) {
+        if let Some(dst) = dst {
+            state.def_C(dst, Value::bool(true));
+        }
+    } else if state.is_not_nil(recv) {
+        if let Some(dst) = dst {
+            state.def_C(dst, Value::bool(false));
+        }
+    } else {
+        state.load(ir, recv, GP::Rdi);
+        ir.inline(|r#gen, _, _| {
+            monoasm! { &mut r#gen.jit,
+                movq rax, (FALSE_VALUE);
+                movq rsi, (TRUE_VALUE);
+                cmpq rdi, (NIL_VALUE);
+                cmoveqq rax, rsi;
+            }
+        });
+        state.def_rax2acc(ir, dst);
+    }
+    true
+}
+```
+
+- Here, we check if the call site is simple. If not, we return `false` to indicate inlining failed.
+- We then check the abstract state of the receiver. If we can determine it's definitely `nil` or definitely not `nil`, we set the destination accordingly.
+- If we cannot determine the state of the receiver, we generate machine code to perform the check at runtime.
+- Finally, we move the result from `rax` to the accumulator and return `true` to indicate successful inlining.

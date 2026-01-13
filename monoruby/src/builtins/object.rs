@@ -101,11 +101,12 @@ fn object_object_id(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
+    store: &Store,
+    callid: CallSiteId,
     _: ClassId,
     _: BytecodePtr,
 ) -> bool {
+    let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }
@@ -159,11 +160,12 @@ pub fn object_send(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
+    store: &Store,
+    callid: CallSiteId,
     _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
+    let callsite = &store[callid];
     let no_splat = !callsite.object_send_single_splat();
     if !callsite.is_simple() && no_splat {
         return false;
@@ -320,10 +322,11 @@ fn object_respond_to(
     _: &mut AsmIr,
     ctx: &JitContext,
     store: &Store,
-    callsite: &CallSiteInfo,
+    callid: CallSiteId,
     recv_class: ClassId,
     _: BytecodePtr,
 ) -> bool {
+    let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }

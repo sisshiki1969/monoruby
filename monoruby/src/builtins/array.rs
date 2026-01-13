@@ -178,11 +178,12 @@ fn array_allocate(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
+    store: &Store,
+    callid: CallSiteId,
     _: ClassId,
     _: BytecodePtr,
 ) -> bool {
+    let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }
@@ -271,11 +272,12 @@ fn array_size(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
+    store: &Store,
+    callid: CallSiteId,
     _: ClassId,
     _: BytecodePtr,
 ) -> bool {
+    let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }
@@ -313,11 +315,12 @@ fn array_clone(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
+    store: &Store,
+    callid: CallSiteId,
     class_id: ClassId,
     _: BytecodePtr,
 ) -> bool {
+    let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }
@@ -662,11 +665,12 @@ fn array_shl(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
+    store: &Store,
+    callid: CallSiteId,
     recv_class: ClassId,
     _: BytecodePtr,
 ) -> bool {
+    let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }

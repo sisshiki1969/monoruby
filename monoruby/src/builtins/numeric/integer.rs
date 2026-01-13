@@ -234,11 +234,12 @@ fn integer_tof(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
+    store: &Store,
+    callid: CallSiteId,
     _: ClassId,
     _: BytecodePtr,
 ) -> bool {
+    let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }
@@ -398,11 +399,12 @@ fn integer_shr(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
+    store: &Store,
+    callid: CallSiteId,
     _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
+    let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }
@@ -436,11 +438,12 @@ fn integer_shl(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
+    store: &Store,
+    callid: CallSiteId,
     _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
+    let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }

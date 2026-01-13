@@ -26,7 +26,7 @@ pub(crate) type InlineGen = dyn Fn(
     &mut jitgen::asmir::AsmIr,
     &crate::jitgen::JitContext,
     &Store,
-    &CallSiteInfo,
+    CallSiteId,
     ClassId,
     BytecodePtr,
 ) -> bool;

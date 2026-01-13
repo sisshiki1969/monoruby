@@ -224,11 +224,12 @@ fn hash_index(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
+    store: &Store,
+    callid: CallSiteId,
     _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
+    let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }

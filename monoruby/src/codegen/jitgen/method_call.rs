@@ -50,7 +50,7 @@ impl<'a> JitContext<'a> {
         {
             match info {
                 InlineFuncInfo::InlineGen(f) => {
-                    if self.inline_asm(state, ir, f, callsite, recv_class, pc) {
+                    if self.inline_asm(state, ir, f, callid, recv_class, pc) {
                         state.unset_side_effect_guard();
                         return Ok(CompileResult::Continue);
                     }
@@ -540,17 +540,17 @@ impl<'a> JitContext<'a> {
             &mut AsmIr,
             &JitContext,
             &Store,
-            &CallSiteInfo,
+            CallSiteId,
             ClassId,
             BytecodePtr,
         ) -> bool,
-        callsite: &CallSiteInfo,
+        callid: CallSiteId,
         recv_class: ClassId,
         pc: BytecodePtr,
     ) -> bool {
         let state_save = state.clone();
         let ir_save = ir.save();
-        if f(state, ir, self, &self.store, callsite, recv_class, pc) {
+        if f(state, ir, self, &self.store, callid, recv_class, pc) {
             true
         } else {
             *state = state_save;

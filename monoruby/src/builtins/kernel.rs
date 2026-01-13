@@ -127,11 +127,12 @@ fn kernel_nil(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
+    store: &Store,
+    callid: CallSiteId,
     _: ClassId,
     _: BytecodePtr,
 ) -> bool {
+    let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }
@@ -164,10 +165,11 @@ fn kernel_block_given(
     ir: &mut AsmIr,
     jitctx: &JitContext,
     store: &Store,
-    callsite: &CallSiteInfo,
+    callid: CallSiteId,
     _: ClassId,
     _: BytecodePtr,
 ) -> bool {
+    let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }

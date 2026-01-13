@@ -105,22 +105,16 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 
 pub(super) fn gen_class_new(
     f: extern "C" fn(Value) -> Value,
-) -> impl Fn(
-    &mut AbstractState,
-    &mut AsmIr,
-    &JitContext,
-    &Store,
-    &CallSiteInfo,
-    ClassId,
-    BytecodePtr,
-) -> bool {
+) -> impl Fn(&mut AbstractState, &mut AsmIr, &JitContext, &Store, CallSiteId, ClassId, BytecodePtr) -> bool
+{
     move |state: &mut AbstractState,
           ir: &mut AsmIr,
           _: &JitContext,
-          _: &Store,
-          callsite: &CallSiteInfo,
+          store: &Store,
+          callid: CallSiteId,
           _: ClassId,
           pc: BytecodePtr| {
+        let callsite = &store[callid];
         if !callsite.is_simple() {
             return false;
         }
@@ -199,11 +193,12 @@ fn class_allocate(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
+    store: &Store,
+    callid: CallSiteId,
     _: ClassId,
     _: BytecodePtr,
 ) -> bool {
+    let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }
