@@ -181,7 +181,6 @@ fn array_allocate(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    _: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -275,7 +274,6 @@ fn array_size(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    _: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -318,7 +316,6 @@ fn array_clone(
     store: &Store,
     callid: CallSiteId,
     class_id: ClassId,
-    _: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -668,7 +665,6 @@ fn array_shl(
     store: &Store,
     callid: CallSiteId,
     recv_class: ClassId,
-    _: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {

@@ -8,13 +8,12 @@ impl AbstractState {
         dst: SlotId,
         base: SlotId,
         idx: SlotId,
-        pc: BytecodePtr,
     ) {
-        self.load_array_ty(ir, store, base, GP::Rdi, pc);
+        self.load_array_ty(ir, store, base, GP::Rdi);
         if let Some(idx) = self.is_u16(idx) {
             ir.array_u16_index(idx);
         } else {
-            self.load_fixnum(ir, idx, GP::Rsi, pc);
+            self.load_fixnum(ir, idx, GP::Rsi);
             ir.array_index();
         }
         self.def_rax2acc(ir, dst);
@@ -27,16 +26,15 @@ impl AbstractState {
         src: SlotId,
         base: SlotId,
         idx: SlotId,
-        pc: BytecodePtr,
     ) {
-        self.load_array_ty(ir, store, base, GP::Rdi, pc);
+        self.load_array_ty(ir, store, base, GP::Rdi);
         if let Some(idx) = self.is_u16(idx) {
             self.load(ir, src, GP::Rdx);
-            ir.array_u16_index_assign(self, idx, pc);
+            ir.array_u16_index_assign(self, idx);
         } else {
-            self.load_fixnum(ir, idx, GP::Rsi, pc);
+            self.load_fixnum(ir, idx, GP::Rsi);
             self.load(ir, src, GP::Rdx);
-            ir.array_index_assign(self, pc);
+            ir.array_index_assign(self);
         }
     }
 }

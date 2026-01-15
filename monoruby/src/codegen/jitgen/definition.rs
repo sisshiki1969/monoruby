@@ -10,7 +10,6 @@ impl AbstractState {
         name: IdentId,
         func_id: FuncId,
         is_module: bool,
-        pc: BytecodePtr,
     ) {
         if let Some(base) = base {
             self.write_back_slots(ir, &[base]);
@@ -22,7 +21,7 @@ impl AbstractState {
             self.def_S(dst);
         }
         let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self, pc);
+        let error = ir.new_error(self);
         ir.push(AsmInst::ClassDef {
             base,
             superclass,
@@ -41,14 +40,13 @@ impl AbstractState {
         dst: Option<SlotId>,
         base: SlotId,
         func_id: FuncId,
-        pc: BytecodePtr,
     ) {
         self.write_back_slots(ir, &[base]);
         if let Some(dst) = dst {
             self.def_S(dst);
         }
         let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self, pc);
+        let error = ir.new_error(self);
         ir.push(AsmInst::SingletonClassDef {
             base,
             dst,

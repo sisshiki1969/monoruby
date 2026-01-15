@@ -126,14 +126,24 @@ impl AsmIr {
         AsmEvict(i)
     }
 
-    pub(crate) fn new_deopt(&mut self, state: &SlotState, pc: BytecodePtr) -> AsmDeopt {
+    pub(crate) fn new_deopt_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmDeopt {
         let i = self.new_label(SideExit::Deoptimize(pc, state.get_write_back()));
         AsmDeopt(i)
     }
 
-    pub(crate) fn new_error(&mut self, state: &SlotState, pc: BytecodePtr) -> AsmError {
+    pub(crate) fn new_deopt(&mut self, state: &AbstractFrame) -> AsmDeopt {
+        let pc = state.pc();
+        self.new_deopt_with_pc(state, pc)
+    }
+
+    pub(crate) fn new_error_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmError {
         let i = self.new_label(SideExit::Error(pc, state.get_write_back()));
         AsmError(i)
+    }
+
+    pub(crate) fn new_error(&mut self, state: &AbstractFrame) -> AsmError {
+        let pc = state.pc();
+        self.new_error_with_pc(state, pc)
     }
 }
 
@@ -322,25 +332,19 @@ impl AsmIr {
         self.push(AsmInst::GuardCapture(deopt));
     }
 
-    pub(super) fn deopt(&mut self, state: &AbstractFrame, pc: BytecodePtr) {
-        let exit = self.new_deopt(state, pc);
+    pub(super) fn deopt(&mut self, state: &AbstractFrame) {
+        let exit = self.new_deopt(state);
         self.push(AsmInst::Deopt(exit));
     }
 
-    pub(super) fn check_bop(&mut self, state: &AbstractFrame, pc: BytecodePtr) {
-        let deopt = self.new_deopt(state, pc);
+    pub(super) fn check_bop(&mut self, state: &AbstractFrame) {
+        let deopt = self.new_deopt(state);
         self.push(AsmInst::CheckBOP { deopt });
     }
 
-    pub(super) fn block_arg(
-        &mut self,
-        state: &AbstractFrame,
-        ret: SlotId,
-        outer: usize,
-        pc: BytecodePtr,
-    ) {
+    pub(super) fn block_arg(&mut self, state: &AbstractFrame, ret: SlotId, outer: usize) {
         let using_xmm = state.get_using_xmm();
-        let error = self.new_error(state, pc);
+        let error = self.new_error(state);
         self.push(AsmInst::BlockArg {
             ret,
             outer,
@@ -409,22 +413,16 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn undef_method(&mut self, state: &AbstractFrame, undef: IdentId, pc: BytecodePtr) {
+    pub(super) fn undef_method(&mut self, state: &AbstractFrame, undef: IdentId) {
         let using_xmm = state.get_using_xmm();
-        let error = self.new_error(state, pc);
+        let error = self.new_error(state);
         self.push(AsmInst::UndefMethod { undef, using_xmm });
         self.handle_error(error);
     }
 
-    pub(super) fn alias_method(
-        &mut self,
-        state: &AbstractFrame,
-        new: IdentId,
-        old: IdentId,
-        pc: BytecodePtr,
-    ) {
+    pub(super) fn alias_method(&mut self, state: &AbstractFrame, new: IdentId, old: IdentId) {
         let using_xmm = state.get_using_xmm();
-        let error = self.new_error(state, pc);
+        let error = self.new_error(state);
         self.push(AsmInst::AliasMethod {
             new,
             old,
@@ -635,14 +633,9 @@ impl AsmIr {
     /// ### destroy
     /// - caller save registers
     ///
-    pub(super) fn array_u16_index_assign(
-        &mut self,
-        state: &AbstractFrame,
-        idx: u16,
-        pc: BytecodePtr,
-    ) {
+    pub(super) fn array_u16_index_assign(&mut self, state: &AbstractFrame, idx: u16) {
         let using_xmm = state.get_using_xmm();
-        let error = self.new_error(state, pc);
+        let error = self.new_error(state);
         self.push(AsmInst::ArrayU16IndexAssign {
             idx,
             using_xmm,
@@ -661,9 +654,9 @@ impl AsmIr {
     /// ### destroy
     /// - caller save registers
     ///
-    pub(super) fn array_index_assign(&mut self, state: &AbstractFrame, pc: BytecodePtr) {
+    pub(super) fn array_index_assign(&mut self, state: &AbstractFrame) {
         let using_xmm = state.get_using_xmm();
-        let error = self.new_error(state, pc);
+        let error = self.new_error(state);
         self.inst
             .push(AsmInst::ArrayIndexAssign { using_xmm, error });
     }

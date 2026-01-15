@@ -130,7 +130,6 @@ fn kernel_nil(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    _: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -167,7 +166,6 @@ fn kernel_block_given(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    _: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {

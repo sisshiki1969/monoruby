@@ -237,7 +237,6 @@ fn integer_tof(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    _: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -402,7 +401,6 @@ fn integer_shr(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -415,8 +413,8 @@ fn integer_shr(
     if let Some(rhs) = state.is_u8_literal(args) {
         ir.inline(move |r#gen, _, _| r#gen.gen_shr_imm(rhs));
     } else {
-        state.load_fixnum(ir, args, GP::Rcx, pc);
-        let deopt = ir.new_deopt(state, pc);
+        state.load_fixnum(ir, args, GP::Rcx);
+        let deopt = ir.new_deopt(state);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shr(&labels[deopt]));
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
@@ -441,7 +439,6 @@ fn integer_shl(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -455,15 +452,15 @@ fn integer_shl(
     if let Some(rhs) = state.is_u8_literal(args)
         && rhs < 64
     {
-        let deopt = ir.new_deopt(state, pc);
+        let deopt = ir.new_deopt(state);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shl_rhs_imm(rhs, &labels[deopt]));
     } else if let Some(lhs) = state.is_fixnum_literal(recv) {
-        state.load_fixnum(ir, args, GP::Rcx, pc);
-        let deopt = ir.new_deopt(state, pc);
+        state.load_fixnum(ir, args, GP::Rcx);
+        let deopt = ir.new_deopt(state);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shl_lhs_imm(lhs, &labels[deopt]));
     } else {
-        state.load_fixnum(ir, args, GP::Rcx, pc);
-        let deopt = ir.new_deopt(state, pc);
+        state.load_fixnum(ir, args, GP::Rcx);
+        let deopt = ir.new_deopt(state);
         ir.inline(move |r#gen, _, labels| r#gen.gen_shl(&labels[deopt]));
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);

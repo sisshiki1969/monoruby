@@ -16,8 +16,6 @@ impl<'a> JitContext<'a> {
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
-        pc: BytecodePtr,
-        next_pc: BytecodePtr,
         recv_class: ClassId,
         func_id: FuncId,
         callid: CallSiteId,
@@ -36,11 +34,11 @@ impl<'a> JitContext<'a> {
         }
 
         // class version guard
-        self.guard_class_version(state, ir, true, pc);
+        self.guard_class_version(state, ir, true);
 
         // receiver class guard
         if state.class(recv) != Some(recv_class) {
-            let deopt = ir.new_deopt(state, pc);
+            let deopt = ir.new_deopt(state);
             state.load(ir, recv, GP::Rdi);
             state.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
         }
@@ -50,7 +48,7 @@ impl<'a> JitContext<'a> {
         {
             match info {
                 InlineFuncInfo::InlineGen(f) => {
-                    if self.inline_asm(state, ir, f, callid, recv_class, pc) {
+                    if self.inline_asm(state, ir, f, callid, recv_class) {
                         state.unset_side_effect_guard();
                         return Ok(CompileResult::Continue);
                     }
@@ -65,7 +63,7 @@ impl<'a> JitContext<'a> {
                         return Ok(CompileResult::Continue);
                     }
                     if let Some(dst) = dst {
-                        let src = state.load_xmm(ir, args, pc);
+                        let src = state.load_xmm(ir, args);
                         state.discard(dst);
                         let using_xmm = state.get_using_xmm();
                         let dst = state.def_F(dst);
@@ -90,8 +88,8 @@ impl<'a> JitContext<'a> {
                         return Ok(CompileResult::Continue);
                     }
                     if let Some(dst) = dst {
-                        let lhs = state.load_xmm(ir, recv, pc);
-                        let rhs = state.load_xmm(ir, args, pc);
+                        let lhs = state.load_xmm(ir, recv);
+                        let rhs = state.load_xmm(ir, args);
                         state.discard(dst);
                         let using_xmm = state.get_using_xmm();
                         let dst = state.def_F(dst);
@@ -108,7 +106,7 @@ impl<'a> JitContext<'a> {
             }
         }
 
-        self.call(state, ir, callid, func_id, recv_class, pc, next_pc)
+        self.call(state, ir, callid, func_id, recv_class)
     }
 
     ///
@@ -120,17 +118,11 @@ impl<'a> JitContext<'a> {
     /// ### destroy
     /// - rax
     ///
-    fn guard_class_version(
-        &self,
-        state: &mut AbstractState,
-        ir: &mut AsmIr,
-        with_recovery: bool,
-        pc: BytecodePtr,
-    ) {
+    fn guard_class_version(&self, state: &mut AbstractState, ir: &mut AsmIr, with_recovery: bool) {
         if state.class_version_guard() {
             return;
         }
-        let deopt = ir.new_deopt(state, pc);
+        let deopt = ir.new_deopt(state);
         match self.jit_type() {
             JitType::Specialized { idx, .. } => {
                 ir.push(AsmInst::GuardClassVersionSpecialized { idx: *idx, deopt });
@@ -157,7 +149,6 @@ impl<'a> JitContext<'a> {
         callid: CallSiteId,
         block: &JitBlockInfo,
         iseq: ISeqId,
-        pc: BytecodePtr,
     ) -> Result<CompileResult> {
         let dst = self.store[callid].dst;
         let JitBlockInfo {
@@ -195,15 +186,15 @@ impl<'a> JitContext<'a> {
                 return_state,
             } => (entry, return_state),
         };
-        state.exec_gc(ir, true, pc);
+        state.exec_gc(ir, true);
         let using_xmm = state.get_using_xmm();
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save(using_xmm);
-        state.set_arguments(&self.store, ir, callid, callee_fid, pc);
+        state.set_arguments(&self.store, ir, callid, callee_fid);
         state.discard(dst);
         state.clear_above_next_sp();
-        let error = ir.new_error(state, pc);
+        let error = ir.new_error(state);
         state.writeback_acc(ir);
         let evict = ir.new_evict();
         let meta = self.store[callee_fid].meta();
@@ -213,7 +204,7 @@ impl<'a> JitContext<'a> {
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
         let res = state.def_rax2acc_return(ir, dst, return_state);
-        state.immediate_evict(ir, evict, pc + 2);
+        state.immediate_evict(ir, evict);
         Ok(res)
     }
 
@@ -233,8 +224,6 @@ impl<'a> JitContext<'a> {
         callid: CallSiteId,
         fid: FuncId,
         recv_class: ClassId,
-        pc: BytecodePtr,
-        next_pc: BytecodePtr,
     ) -> Result<CompileResult> {
         let callsite = &self.store[callid];
         let CallSiteInfo {
@@ -276,8 +265,6 @@ impl<'a> JitContext<'a> {
                         fid,
                         iseq,
                         specializable,
-                        pc,
-                        next_pc,
                     );
                 }
                 (fid, None)
@@ -288,16 +275,7 @@ impl<'a> JitContext<'a> {
             state.unset_no_capture_guard(self);
         }
 
-        state.send(
-            ir,
-            &self.store,
-            callid,
-            fid,
-            recv_class,
-            outer_lfp,
-            pc,
-            next_pc,
-        );
+        state.send(ir, &self.store, callid, fid, recv_class, outer_lfp);
 
         Ok(CompileResult::Continue)
     }
@@ -403,8 +381,6 @@ impl<'a> JitContext<'a> {
         fid: FuncId,
         iseq: ISeqId,
         specializable: bool,
-        pc: BytecodePtr,
-        next_pc: BytecodePtr,
     ) -> Result<CompileResult> {
         let dst = self.store[callid].dst;
         let args_info = if specializable {
@@ -436,9 +412,9 @@ impl<'a> JitContext<'a> {
             } => (entry, result),
         };
         let evict = ir.new_evict();
-        state.send_specialized(ir, &self.store, callid, fid, entry, patch_point, evict, pc);
+        state.send_specialized(ir, &self.store, callid, fid, entry, patch_point, evict);
         let res = state.def_rax2acc_return(ir, dst, result);
-        state.immediate_evict(ir, evict, next_pc);
+        state.immediate_evict(ir, evict);
         return Ok(res);
     }
 }
@@ -535,22 +511,13 @@ impl<'a> JitContext<'a> {
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
-        f: impl Fn(
-            &mut AbstractState,
-            &mut AsmIr,
-            &JitContext,
-            &Store,
-            CallSiteId,
-            ClassId,
-            BytecodePtr,
-        ) -> bool,
+        f: impl Fn(&mut AbstractState, &mut AsmIr, &JitContext, &Store, CallSiteId, ClassId) -> bool,
         callid: CallSiteId,
         recv_class: ClassId,
-        pc: BytecodePtr,
     ) -> bool {
         let state_save = state.clone();
         let ir_save = ir.save();
-        if f(state, ir, self, &self.store, callid, recv_class, pc) {
+        if f(state, ir, self, &self.store, callid, recv_class) {
             true
         } else {
             *state = state_save;
@@ -577,20 +544,18 @@ impl AbstractState {
         callee_fid: FuncId,
         recv_class: ClassId,
         outer_lfp: Option<Lfp>,
-        pc: BytecodePtr,
-        next_pc: BytecodePtr,
     ) {
         let evict = ir.new_evict();
         let dst = store[callid].dst;
-        self.exec_gc(ir, true, pc);
+        self.exec_gc(ir, true);
         let using_xmm = self.get_using_xmm();
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save(using_xmm);
-        self.set_arguments(store, ir, callid, callee_fid, pc);
+        self.set_arguments(store, ir, callid, callee_fid);
         self.discard(dst);
         self.clear_above_next_sp();
-        let error = ir.new_error(self, pc);
+        let error = ir.new_error(self);
         self.writeback_acc(ir);
         let meta = store[callee_fid].meta();
         ir.push(AsmInst::SetupMethodFrame {
@@ -607,7 +572,7 @@ impl AbstractState {
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
         self.def_rax2acc(ir, dst);
-        self.immediate_evict(ir, evict, next_pc);
+        self.immediate_evict(ir, evict);
         self.unset_class_version_guard();
         self.unset_side_effect_guard();
     }
@@ -625,17 +590,16 @@ impl AbstractState {
         inlined_entry: JitLabel,
         patch_point: Option<JitLabel>,
         evict: AsmEvict,
-        pc: BytecodePtr,
     ) {
-        self.exec_gc(ir, true, pc);
+        self.exec_gc(ir, true);
         let using_xmm = self.get_using_xmm();
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save(using_xmm);
-        self.set_arguments(store, ir, callid, callee_fid, pc);
+        self.set_arguments(store, ir, callid, callee_fid);
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
-        let error = ir.new_error(self, pc);
+        let error = ir.new_error(self);
         self.writeback_acc(ir);
         let meta = store[callee_fid].meta();
         ir.push(AsmInst::SetupMethodFrame {
@@ -654,21 +618,15 @@ impl AbstractState {
         self.unset_side_effect_guard();
     }
 
-    pub(super) fn compile_yield(
-        &mut self,
-        ir: &mut AsmIr,
-        store: &Store,
-        callid: CallSiteId,
-        pc: BytecodePtr,
-    ) {
+    pub(super) fn compile_yield(&mut self, ir: &mut AsmIr, store: &Store, callid: CallSiteId) {
         let callinfo = &store[callid];
         let dst = callinfo.dst;
         self.write_back_recv_and_callargs(ir, &callinfo);
         self.writeback_acc(ir);
         let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self, pc);
+        let error = ir.new_error(self);
         let evict = ir.new_evict();
-        self.exec_gc(ir, true, pc);
+        self.exec_gc(ir, true);
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save(using_xmm);
@@ -680,16 +638,17 @@ impl AbstractState {
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
         self.def_rax2acc(ir, dst);
-        self.immediate_evict(ir, evict, pc + 2);
+        self.immediate_evict(ir, evict);
         self.unset_class_version_guard();
         self.unset_side_effect_guard();
     }
 
-    fn immediate_evict(&mut self, ir: &mut AsmIr, evict: AsmEvict, next_pc: BytecodePtr) {
+    fn immediate_evict(&mut self, ir: &mut AsmIr, evict: AsmEvict) {
+        let next_pc = self.pc().next();
         ir.push(AsmInst::ImmediateEvict { evict });
         ir[evict] = SideExit::Evict(Some((next_pc, self.get_write_back())));
         if !self.no_capture_guard() {
-            let deopt = ir.new_deopt(self, next_pc);
+            let deopt = ir.new_deopt_with_pc(self, next_pc);
             ir.guard_capture(deopt);
             self.set_no_capture_guard();
         }
@@ -715,7 +674,6 @@ impl AbstractState {
         ir: &mut AsmIr,
         callid: CallSiteId,
         callee_fid: FuncId,
-        pc: BytecodePtr,
     ) {
         let callee = &store[callee_fid];
         let callsite = &store[callid];
@@ -810,7 +768,7 @@ impl AbstractState {
             ir.reg_add(GP::Rsp, stack_offset);
         } else {
             self.write_back_recv_and_callargs(ir, callsite);
-            let error = ir.new_error(self, pc);
+            let error = ir.new_error(self);
             ir.push(AsmInst::SetArguments { callid, callee_fid });
             ir.handle_error(error);
         }

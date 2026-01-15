@@ -1,6 +1,6 @@
 use super::*;
 
-impl SlotState {
+impl AbstractFrame {
     ///
     /// load *slot* into *r*.
     ///
@@ -72,36 +72,35 @@ impl SlotState {
         store: &Store,
         slot: SlotId,
         dst: GP,
-        pc: BytecodePtr,
     ) {
         self.load(ir, slot, dst);
         if !self.is_array_ty(store, slot) {
-            let deopt = ir.new_deopt(self, pc);
+            let deopt = ir.new_deopt(self);
             ir.guard_array_ty(dst, deopt);
         }
     }
 
-    pub(crate) fn load_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP, pc: BytecodePtr) {
+    pub(crate) fn load_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) {
         self.load(ir, slot, r);
-        self.guard_fixnum(ir, slot, r, pc);
+        self.guard_fixnum(ir, slot, r);
     }
 }
 
-impl SlotState {
+impl AbstractFrame {
     ///
     /// load *slot* as f64 into xmm register.
     ///
     /// ### destroy
     /// - rdi
     ///
-    pub(crate) fn load_xmm_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, pc: BytecodePtr) -> Xmm {
+    pub(crate) fn load_xmm_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
         self.use_as_value(slot);
         match self.mode(slot) {
             LinkMode::Sf(x, _) | LinkMode::F(x) => x,
             LinkMode::S(_) => {
                 // S -> Sf
                 ir.stack2reg(slot, GP::Rdi);
-                self.guard_fixnum(ir, slot, GP::Rdi, pc);
+                self.guard_fixnum(ir, slot, GP::Rdi);
                 let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
                 ir.fixnum2xmm(GP::Rdi, x);
                 x
@@ -109,7 +108,7 @@ impl SlotState {
             LinkMode::G(_) => {
                 // G -> Sf
                 ir.reg2stack(GP::R15, slot);
-                self.guard_fixnum(ir, slot, GP::R15, pc);
+                self.guard_fixnum(ir, slot, GP::R15);
                 let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
                 ir.fixnum2xmm(GP::R15, x);
                 x
@@ -128,8 +127,8 @@ impl SlotState {
     /// - rdi, rax
     ///
     ///
-    pub(crate) fn load_xmm(&mut self, ir: &mut AsmIr, slot: SlotId, pc: BytecodePtr) -> Xmm {
-        let deopt = ir.new_deopt(self, pc);
+    pub(crate) fn load_xmm(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
+        let deopt = ir.new_deopt(self);
         self.use_as_float(slot);
         match self.mode(slot) {
             LinkMode::Sf(x, _) | LinkMode::F(x) => x,
@@ -176,7 +175,7 @@ impl SlotState {
     }
 }
 
-impl SlotState {
+impl AbstractFrame {
     ///
     /// fetch *slot* and store in callee stack with `offset`.
     ///

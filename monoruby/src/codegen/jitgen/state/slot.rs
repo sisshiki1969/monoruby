@@ -736,7 +736,7 @@ impl SlotState {
     }
 }
 
-impl SlotState {
+impl AbstractFrame {
     ///
     /// Type guard.
     ///
@@ -810,8 +810,8 @@ impl SlotState {
         ir.push(AsmInst::GuardClass(r, class, deopt));
     }
 
-    pub(crate) fn guard_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP, pc: BytecodePtr) {
-        let deopt = ir.new_deopt(self, pc);
+    pub(crate) fn guard_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) {
+        let deopt = ir.new_deopt(self);
         self.guard_class(ir, slot, r, INTEGER_CLASS, deopt);
     }
 
@@ -1226,11 +1226,17 @@ impl Guarded {
     }
 }
 
-impl SlotState {
+impl AbstractFrame {
     ///
     /// Generate bridge AsmIr to merge current state with target state.
     ///
-    pub(super) fn bridge(&mut self, ir: &mut AsmIr, target: &Self, slot: SlotId, pc: BytecodePtr) {
+    pub(super) fn bridge(
+        &mut self,
+        ir: &mut AsmIr,
+        target: &SlotState,
+        slot: SlotId,
+        pc: BytecodePtr,
+    ) {
         match (self.mode(slot), target.mode(slot)) {
             (LinkMode::V, LinkMode::V) => {}
             (_, LinkMode::V) => {
@@ -1268,7 +1274,7 @@ impl SlotState {
             (LinkMode::S(_), LinkMode::Sf(x, SfGuarded::Float)) => {
                 // S -> Sf
                 ir.stack2reg(slot, GP::Rax);
-                let deopt = ir.new_deopt(&self, pc + 1);
+                let deopt = ir.new_deopt_with_pc(&self, pc + 1);
                 if self.is_xmm_vacant(x) {
                     ir.float_to_xmm(GP::Rax, x, deopt);
                     self.set_Sf_float(slot, x);
@@ -1281,7 +1287,7 @@ impl SlotState {
             (LinkMode::G(_), LinkMode::Sf(x, SfGuarded::Float)) => {
                 // G -> Sf
                 //ir.stack2reg(slot, GP::Rax);
-                let deopt = ir.new_deopt(&self, pc + 1);
+                let deopt = ir.new_deopt_with_pc(&self, pc + 1);
                 if self.is_xmm_vacant(x) {
                     ir.float_to_xmm(GP::R15, x, deopt);
                     self.set_Sf_float(slot, x);
@@ -1295,7 +1301,7 @@ impl SlotState {
                 if let Some(class) = guarded.class()
                     && !self.is_class(slot, class)
                 {
-                    let deopt = ir.new_deopt(&self, pc + 1);
+                    let deopt = ir.new_deopt_with_pc(&self, pc + 1);
                     ir.stack2reg(slot, GP::Rax);
                     ir.push(AsmInst::GuardClass(GP::Rax, class, deopt));
                     self.set_S_with_guard(slot, guarded);
@@ -1337,7 +1343,7 @@ impl SlotState {
     }
 }
 
-impl SlotState {
+impl AbstractFrame {
     ///
     /// Generate bridge AsmIr from F/Sf(l) to Sf(r).
     ///

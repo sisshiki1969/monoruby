@@ -161,7 +161,6 @@ impl AbstractFrame {
         kind: BinOpK,
         dst: Option<SlotId>,
         mode: OpMode,
-        pc: BytecodePtr,
     ) {
         if let Some((lhs, rhs)) = self.check_concrete_i64(mode)
             && let Some(result) = self.binop_integer_folded(kind, lhs, rhs)
@@ -174,43 +173,43 @@ impl AbstractFrame {
             BinOpK::Add | BinOpK::Mul | BinOpK::BitOr | BinOpK::BitAnd | BinOpK::BitXor => {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
-                self.fetch_fixnum_comm(ir, lhs, rhs, mode, pc);
-                let deopt = ir.new_deopt(self, pc);
+                self.fetch_fixnum_comm(ir, lhs, rhs, mode);
+                let deopt = ir.new_deopt(self);
                 ir.integer_binop(kind, lhs, rhs, mode, deopt);
                 self.def_reg2acc_fixnum(ir, lhs, dst);
             }
             BinOpK::Sub => {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
-                self.fetch_fixnum_mode(ir, lhs, rhs, mode, pc);
-                let deopt = ir.new_deopt(self, pc);
+                self.fetch_fixnum_mode(ir, lhs, rhs, mode);
+                let deopt = ir.new_deopt(self);
                 ir.integer_binop(kind, lhs, rhs, mode, deopt);
                 self.def_reg2acc_fixnum(ir, lhs, dst);
             }
             BinOpK::Exp => {
-                self.fetch_fixnum_binary(ir, GP::Rdi, GP::Rsi, mode, pc);
+                self.fetch_fixnum_binary(ir, GP::Rdi, GP::Rsi, mode);
                 ir.integer_exp(self);
                 self.def_reg2acc(ir, GP::Rax, dst);
             }
             BinOpK::Div => {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
-                self.fetch_fixnum_binary(ir, lhs, rhs, mode, pc);
-                let deopt = ir.new_deopt(self, pc);
+                self.fetch_fixnum_binary(ir, lhs, rhs, mode);
+                let deopt = ir.new_deopt(self);
                 ir.integer_binop(kind, lhs, rhs, mode, deopt);
                 self.def_reg2acc_fixnum(ir, GP::Rax, dst);
             }
             BinOpK::Rem => match mode {
                 OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
-                    self.fetch_fixnum_r_nodeopt(ir, lhs, GP::Rax, pc);
+                    self.fetch_fixnum_r_nodeopt(ir, lhs, GP::Rax);
                     ir.reg_and(GP::Rax, (rhs * 2 - 1) as i64 as u64);
                     self.def_reg2acc_fixnum(ir, GP::Rax, dst);
                 }
                 _ => {
                     let lhs = GP::Rdi;
                     let rhs = GP::Rsi;
-                    self.fetch_fixnum_binary(ir, lhs, rhs, mode, pc);
-                    let deopt = ir.new_deopt(self, pc);
+                    self.fetch_fixnum_binary(ir, lhs, rhs, mode);
+                    let deopt = ir.new_deopt(self);
                     ir.integer_binop(kind, lhs, rhs, mode, deopt);
                     self.def_reg2acc_fixnum(ir, GP::Rax, dst);
                 }
@@ -236,7 +235,6 @@ impl AbstractFrame {
         kind: BinOpK,
         dst: Option<SlotId>,
         info: FBinOpInfo,
-        pc: BytecodePtr,
     ) {
         if let Some((lhs, rhs)) = self.check_binary_C_f64(info.lhs, info.rhs)
             && let Some(result) = self.binop_float_folded(kind, lhs, rhs)
@@ -245,7 +243,7 @@ impl AbstractFrame {
             return;
         };
 
-        let (lhs, rhs, dst) = self.load_binary_ret_xmm(ir, dst, info, pc);
+        let (lhs, rhs, dst) = self.load_binary_ret_xmm(ir, dst, info);
         if let Some(dst) = dst {
             ir.xmm_binop(kind, lhs, rhs, dst);
         }
@@ -265,13 +263,12 @@ impl AbstractFrame {
         kind: CmpKind,
         dst: Option<SlotId>,
         mode: OpMode,
-        pc: BytecodePtr,
     ) {
         if let Some((lhs, rhs)) = self.check_concrete_i64(mode) {
             self.fold_constant_cmp(kind, lhs, rhs, dst);
             return;
         };
-        let (lhs, rhs) = self.fetch_fixnum_mode_nodeopt(ir, mode, pc);
+        let (lhs, rhs) = self.fetch_fixnum_mode_nodeopt(ir, mode);
         ir.integer_cmp(mode, kind, lhs, rhs);
         self.def_rax2acc(ir, dst);
     }
@@ -282,13 +279,12 @@ impl AbstractFrame {
         dst: Option<SlotId>,
         info: FBinOpInfo,
         kind: CmpKind,
-        pc: BytecodePtr,
     ) {
         if let Some((lhs, rhs)) = self.check_binary_C_f64(info.lhs, info.rhs) {
             self.fold_constant_cmp(kind, lhs, rhs, dst);
             return;
         };
-        let binary_xmm = self.load_binary_xmm(ir, info, pc);
+        let binary_xmm = self.load_binary_xmm(ir, info);
         ir.push(AsmInst::FloatCmp {
             kind,
             lhs: binary_xmm.0,
@@ -304,132 +300,84 @@ impl AbstractFrame {
         mode: OpMode,
         brkind: BrKind,
         branch_dest: JitLabel,
-        pc: BytecodePtr,
     ) {
-        let (lhs, rhs) = self.fetch_fixnum_mode_nodeopt(ir, mode, pc);
+        let (lhs, rhs) = self.fetch_fixnum_mode_nodeopt(ir, mode);
         ir.integer_cmp_br(mode, kind, lhs, rhs, brkind, branch_dest);
     }
 
-    fn fetch_fixnum_comm(
-        &mut self,
-        ir: &mut AsmIr,
-        lhs: GP,
-        rhs: GP,
-        mode: OpMode,
-        pc: BytecodePtr,
-    ) {
+    fn fetch_fixnum_comm(&mut self, ir: &mut AsmIr, lhs: GP, rhs: GP, mode: OpMode) {
         match mode {
-            OpMode::RR(l, r) => self.fetch_fixnum_rr(ir, l, r, lhs, rhs, pc),
-            OpMode::RI(slot, _) | OpMode::IR(_, slot) => self.fetch_fixnum_r(ir, slot, lhs, pc),
+            OpMode::RR(l, r) => self.fetch_fixnum_rr(ir, l, r, lhs, rhs),
+            OpMode::RI(slot, _) | OpMode::IR(_, slot) => self.fetch_fixnum_r(ir, slot, lhs),
         }
     }
 
-    fn fetch_fixnum_mode(
-        &mut self,
-        ir: &mut AsmIr,
-        lhs: GP,
-        rhs: GP,
-        mode: OpMode,
-        pc: BytecodePtr,
-    ) {
+    fn fetch_fixnum_mode(&mut self, ir: &mut AsmIr, lhs: GP, rhs: GP, mode: OpMode) {
         match mode {
-            OpMode::RR(l, r) => self.fetch_fixnum_rr(ir, l, r, lhs, rhs, pc),
-            OpMode::RI(l, _) => self.fetch_fixnum_r(ir, l, lhs, pc),
-            OpMode::IR(_, r) => self.fetch_fixnum_r(ir, r, rhs, pc),
+            OpMode::RR(l, r) => self.fetch_fixnum_rr(ir, l, r, lhs, rhs),
+            OpMode::RI(l, _) => self.fetch_fixnum_r(ir, l, lhs),
+            OpMode::IR(_, r) => self.fetch_fixnum_r(ir, r, rhs),
         }
     }
 
-    fn fetch_fixnum_mode_nodeopt(
-        &mut self,
-        ir: &mut AsmIr,
-        mode: OpMode,
-        pc: BytecodePtr,
-    ) -> (GP, GP) {
+    fn fetch_fixnum_mode_nodeopt(&mut self, ir: &mut AsmIr, mode: OpMode) -> (GP, GP) {
         let (lhs, rhs) = self.cmp_regs(mode);
         match mode {
-            OpMode::RR(l, r) => self.fetch_fixnum_rr_nodeopt(ir, l, r, lhs, rhs, pc),
-            OpMode::RI(l, _) => self.fetch_fixnum_r_nodeopt(ir, l, lhs, pc),
-            OpMode::IR(_, r) => self.fetch_fixnum_r_nodeopt(ir, r, rhs, pc),
+            OpMode::RR(l, r) => self.fetch_fixnum_rr_nodeopt(ir, l, r, lhs, rhs),
+            OpMode::RI(l, _) => self.fetch_fixnum_r_nodeopt(ir, l, lhs),
+            OpMode::IR(_, r) => self.fetch_fixnum_r_nodeopt(ir, r, rhs),
         }
         (lhs, rhs)
     }
 
-    fn fetch_fixnum_binary(
-        &mut self,
-        ir: &mut AsmIr,
-        lhs: GP,
-        rhs: GP,
-        mode: OpMode,
-        pc: BytecodePtr,
-    ) {
+    fn fetch_fixnum_binary(&mut self, ir: &mut AsmIr, lhs: GP, rhs: GP, mode: OpMode) {
         match mode {
-            OpMode::RR(l, r) => self.fetch_fixnum_rr(ir, l, r, lhs, rhs, pc),
+            OpMode::RR(l, r) => self.fetch_fixnum_rr(ir, l, r, lhs, rhs),
             OpMode::RI(l, r) => {
                 ir.lit2reg(Value::i32(r as i32), rhs);
-                self.fetch_fixnum_r(ir, l, lhs, pc);
+                self.fetch_fixnum_r(ir, l, lhs);
             }
             OpMode::IR(l, r) => {
                 ir.lit2reg(Value::i32(l as i32), lhs);
-                self.fetch_fixnum_r(ir, r, rhs, pc);
+                self.fetch_fixnum_r(ir, r, rhs);
             }
         }
     }
 
-    fn fetch_fixnum_rr(
-        &mut self,
-        ir: &mut AsmIr,
-        l: SlotId,
-        r: SlotId,
-        lhs: GP,
-        rhs: GP,
-        pc: BytecodePtr,
-    ) {
+    fn fetch_fixnum_rr(&mut self, ir: &mut AsmIr, l: SlotId, r: SlotId, lhs: GP, rhs: GP) {
         self.load(ir, l, lhs);
         self.load(ir, r, rhs);
-        self.guard_fixnum(ir, l, lhs, pc);
-        self.guard_fixnum(ir, r, rhs, pc);
+        self.guard_fixnum(ir, l, lhs);
+        self.guard_fixnum(ir, r, rhs);
     }
 
-    fn fetch_fixnum_rr_nodeopt(
-        &mut self,
-        ir: &mut AsmIr,
-        l: SlotId,
-        r: SlotId,
-        lhs: GP,
-        rhs: GP,
-        pc: BytecodePtr,
-    ) {
+    fn fetch_fixnum_rr_nodeopt(&mut self, ir: &mut AsmIr, l: SlotId, r: SlotId, lhs: GP, rhs: GP) {
         self.load(ir, l, lhs);
         self.load(ir, r, rhs);
         if self.is_fixnum_literal(l).is_some() && self.is_fixnum_literal(r).is_some() {
             return;
         }
-        self.guard_fixnum(ir, l, lhs, pc);
-        self.guard_fixnum(ir, r, rhs, pc);
+        self.guard_fixnum(ir, l, lhs);
+        self.guard_fixnum(ir, r, rhs);
     }
 
-    fn fetch_fixnum_r(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP, pc: BytecodePtr) {
+    fn fetch_fixnum_r(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) {
         self.load(ir, slot, r);
         if self.is_fixnum_literal(slot).is_some() {
         } else {
-            self.guard_fixnum(ir, slot, r, pc);
+            self.guard_fixnum(ir, slot, r);
         }
     }
 
-    fn fetch_fixnum_r_nodeopt(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP, pc: BytecodePtr) {
+    fn fetch_fixnum_r_nodeopt(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) {
         self.load(ir, slot, r);
         if self.is_fixnum_literal(slot).is_some() {
         } else {
-            self.guard_fixnum(ir, slot, r, pc);
+            self.guard_fixnum(ir, slot, r);
         }
     }
 
-    pub(super) fn load_binary_xmm(
-        &mut self,
-        ir: &mut AsmIr,
-        info: FBinOpInfo,
-        pc: BytecodePtr,
-    ) -> (Xmm, Xmm) {
+    pub(super) fn load_binary_xmm(&mut self, ir: &mut AsmIr, info: FBinOpInfo) -> (Xmm, Xmm) {
         let FBinOpInfo {
             lhs,
             rhs,
@@ -439,11 +387,11 @@ impl AbstractFrame {
         } = info;
         if lhs != rhs {
             (
-                self.fetch_float_assume(ir, lhs, lhs_class, pc),
-                self.fetch_float_assume(ir, rhs, rhs_class, pc),
+                self.fetch_float_assume(ir, lhs, lhs_class),
+                self.fetch_float_assume(ir, rhs, rhs_class),
             )
         } else {
-            let lhs = self.fetch_float_assume(ir, lhs, lhs_class, pc);
+            let lhs = self.fetch_float_assume(ir, lhs, lhs_class);
             (lhs, lhs)
         }
     }
@@ -453,9 +401,8 @@ impl AbstractFrame {
         ir: &mut AsmIr,
         dst: Option<SlotId>,
         info: FBinOpInfo,
-        pc: BytecodePtr,
     ) -> (Xmm, Xmm, Option<Xmm>) {
-        let (lhs, rhs) = self.load_binary_xmm(ir, info, pc);
+        let (lhs, rhs) = self.load_binary_xmm(ir, info);
         let dst = dst.map(|dst| {
             if dst == info.lhs {
                 self.def_F_with_xmm(dst, lhs);
@@ -467,16 +414,10 @@ impl AbstractFrame {
         (lhs, rhs, dst)
     }
 
-    fn fetch_float_assume(
-        &mut self,
-        ir: &mut AsmIr,
-        rhs: SlotId,
-        class: FOpClass,
-        pc: BytecodePtr,
-    ) -> Xmm {
+    fn fetch_float_assume(&mut self, ir: &mut AsmIr, rhs: SlotId, class: FOpClass) -> Xmm {
         match class {
-            FOpClass::Integer => self.load_xmm_fixnum(ir, rhs, pc),
-            FOpClass::Float => self.load_xmm(ir, rhs, pc),
+            FOpClass::Integer => self.load_xmm_fixnum(ir, rhs),
+            FOpClass::Float => self.load_xmm(ir, rhs),
         }
     }
 }

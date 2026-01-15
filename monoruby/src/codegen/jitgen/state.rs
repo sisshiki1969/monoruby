@@ -160,6 +160,14 @@ impl AbstractFrame {
         &self.slot_state
     }
 
+    pub(super) fn pc(&self) -> BytecodePtr {
+        self.pc.unwrap()
+    }
+
+    pub(super) fn set_pc(&mut self, pc: BytecodePtr) {
+        self.pc = Some(pc);
+    }
+
     pub(in crate::codegen::jitgen) fn set_next_sp(&mut self, slot: SlotId) {
         self.next_sp = slot;
     }
@@ -291,10 +299,9 @@ impl AbstractFrame {
         ir: &mut AsmIr,
         slot: SlotId,
         base_class: Value,
-        pc: BytecodePtr,
     ) {
         self.load(ir, slot, GP::Rax);
-        let deopt = ir.new_deopt(self, pc);
+        let deopt = ir.new_deopt(self);
         ir.push(AsmInst::GuardConstBaseClass { base_class, deopt });
     }
 
@@ -309,21 +316,15 @@ impl AbstractFrame {
     /// - rax, rcx
     /// - stack
     ///
-    pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool, pc: BytecodePtr) {
+    pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool) {
         let wb = self.get_gc_write_back();
-        let error = ir.new_error(self, pc);
+        let error = ir.new_error(self);
         ir.exec_gc(wb, error, check_stack);
     }
 
-    pub fn load_constant(
-        &mut self,
-        ir: &mut AsmIr,
-        dst: SlotId,
-        cache: &ConstCache,
-        pc: BytecodePtr,
-    ) {
+    pub fn load_constant(&mut self, ir: &mut AsmIr, dst: SlotId, cache: &ConstCache) {
         let ConstCache { version, value, .. } = cache;
-        let deopt = ir.new_deopt(self, pc);
+        let deopt = ir.new_deopt(self);
         ir.push(AsmInst::GuardConstVersion {
             const_version: *version,
             deopt,

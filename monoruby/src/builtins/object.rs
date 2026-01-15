@@ -104,7 +104,6 @@ fn object_object_id(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    _: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -163,7 +162,6 @@ pub fn object_send(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
     let no_splat = !callsite.object_send_single_splat();
@@ -174,7 +172,7 @@ pub fn object_send(
     state.write_back_recv_and_callargs(ir, callsite);
     state.writeback_acc(ir);
     let using_xmm = state.get_using_xmm();
-    let error = ir.new_error(state, pc);
+    let error = ir.new_error(state);
     let callid = callsite.id;
     ir.inline(move |r#gen, store, labels| {
         let error = &labels[error];
@@ -324,7 +322,6 @@ fn object_respond_to(
     store: &Store,
     callid: CallSiteId,
     recv_class: ClassId,
-    _: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {

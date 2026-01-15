@@ -227,7 +227,6 @@ fn hash_index(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -246,7 +245,7 @@ fn hash_index(
             call rax;
         }
     });
-    let error = ir.new_error(state, pc);
+    let error = ir.new_error(state);
     ir.handle_error(error);
     state.def_rax2acc(ir, callsite.dst);
     true
