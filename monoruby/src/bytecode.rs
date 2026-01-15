@@ -412,33 +412,21 @@ impl BytecodePtr {
                     name: IdentId::from((op2.0) as u32),
                     func_id: FuncId::new((op2.0 >> 32) as u32),
                 },
-                3 => {
-                    //let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
-                    TraceIr::Br(op1_l as i32)
-                }
-                4 => {
-                    //let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
-                    TraceIr::CondBr(SlotId::new(op1_w), op1_l as i32, false, BrKind::BrIf)
-                }
-                5 => {
-                    //let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
-                    TraceIr::CondBr(SlotId::new(op1_w), op1_l as i32, false, BrKind::BrIfNot)
-                }
+                3 => TraceIr::Br(op1_l as i32),
+                4 => TraceIr::CondBr(SlotId::new(op1_w), op1_l as i32, false, BrKind::BrIf),
+                5 => TraceIr::CondBr(SlotId::new(op1_w), op1_l as i32, false, BrKind::BrIfNot),
                 6 => TraceIr::Integer(SlotId::new(op1_w), op1_l as i32),
                 7 => TraceIr::Literal(SlotId::new(op1_w), op2.get_value()),
                 8 => TraceIr::Nil(SlotId::new(op1_w)),
                 9 => TraceIr::Symbol(SlotId::new(op1_w), IdentId::from(op1_l)),
                 10 | 18 => TraceIr::LoadConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
                 11 => TraceIr::StoreConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
-                12..=13 => {
-                    //let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
-                    TraceIr::CondBr(
-                        SlotId::new(op1_w),
-                        op1_l as i32,
-                        true,
-                        BrKind::from(opcode - 12),
-                    )
-                }
+                12..=13 => TraceIr::CondBr(
+                    SlotId::new(op1_w),
+                    op1_l as i32,
+                    true,
+                    BrKind::from(opcode - 12),
+                ),
                 14 => TraceIr::LoopStart {
                     counter: op1_l,
                     jit_addr: self.into_jit_addr(),
@@ -465,10 +453,7 @@ impl BytecodePtr {
                     },
                 ),
                 19 => TraceIr::CheckKwRest(SlotId::new(op1_w)),
-                20 => {
-                    //let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
-                    TraceIr::CheckLocal(SlotId::new(op1_w), op1_l as i32)
-                }
+                20 => TraceIr::CheckLocal(SlotId::new(op1_w), op1_l as i32),
                 21 => TraceIr::BlockArgProxy(SlotId::new(op1_w), op1_l as usize),
                 22 => TraceIr::SingletonClassDef {
                     dst: SlotId::from(op1_w),
@@ -540,10 +525,7 @@ impl BytecodePtr {
                         branch_table,
                     }
                 }
-                37 => {
-                    //let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
-                    TraceIr::NilBr(SlotId::new(op1_w), op1_l as i32)
-                }
+                37 => TraceIr::NilBr(SlotId::new(op1_w), op1_l as i32),
                 38 => TraceIr::Lambda {
                     dst: SlotId::new(op1_w),
                     func_id: FuncId::new(op1_l),
@@ -771,6 +753,14 @@ impl BytecodePtr {
                 179 => TraceIr::ConcatStr(SlotId::from(op1_w1), SlotId::new(op2_w2), op3_w3),
                 _ => unreachable!("{:016x}", op1),
             }
+        }
+    }
+
+    pub(crate) fn next(&self) -> BytecodePtr {
+        match self.opcode() {
+            // MethodCall and Yield have an extra instruction (InlineCache)
+            30..=35 => *self + 2,
+            _ => *self + 1,
         }
     }
 }
