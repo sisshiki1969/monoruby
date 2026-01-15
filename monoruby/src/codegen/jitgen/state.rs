@@ -98,6 +98,8 @@ impl AbstractState {
 ///
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AbstractFrame {
+    /// current program counter on the bytecode.
+    pc: Option<BytecodePtr>,
     /// state stack slots.
     slot_state: SlotState,
     /// stack top register.
@@ -123,21 +125,30 @@ impl AbstractFrame {
     fn new(cc: &JitContext) -> Self {
         let next_sp = SlotId(cc.local_num() as u16 + 1);
         match cc.jit_type() {
-            JitType::Entry => AbstractFrame {
-                slot_state: SlotState::new_method(cc),
-                next_sp,
-                invariants: Invariants::new_entry(cc),
-            },
+            JitType::Entry => {
+                let pc = cc.get_pc(BcIndex::default());
+                AbstractFrame {
+                    pc: Some(pc),
+                    slot_state: SlotState::new_method(cc),
+                    next_sp,
+                    invariants: Invariants::new_entry(cc),
+                }
+            }
             JitType::Loop(_) => AbstractFrame {
+                pc: cc.position(),
                 slot_state: SlotState::new_loop(cc),
                 next_sp,
                 invariants: Invariants::new_loop(),
             },
-            JitType::Specialized { .. } => AbstractFrame {
-                slot_state: SlotState::new_method(cc),
-                next_sp,
-                invariants: Invariants::new_specialized(cc),
-            },
+            JitType::Specialized { .. } => {
+                let pc = cc.get_pc(BcIndex::default());
+                AbstractFrame {
+                    pc: Some(pc),
+                    slot_state: SlotState::new_method(cc),
+                    next_sp,
+                    invariants: Invariants::new_specialized(cc),
+                }
+            }
         }
     }
 

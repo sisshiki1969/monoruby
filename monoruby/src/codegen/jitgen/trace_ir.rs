@@ -64,22 +64,24 @@ impl std::cmp::PartialEq for MethodCacheEntry {
 ///
 #[derive(Debug, Clone)]
 pub(crate) enum TraceIr {
-    /// branch(dest)
-    Br(BasicBlockId),
-    /// conditional branch(%reg, dest, optimizable)  : branch when reg was true.
-    CondBr(SlotId, BasicBlockId, bool, BrKind),
-    /// conditional branch(%reg, dest)  : branch when reg is nil.
-    NilBr(SlotId, BasicBlockId),
+    /// branch(disp)
+    Br(i32),
+    /// conditional branch(%reg, disp, optimizable)  : branch when reg was true.
+    CondBr(SlotId, i32, bool, BrKind),
+    /// conditional branch(%reg, disp)  : branch when reg is nil.
+    NilBr(SlotId, i32),
     /// check local var(%reg, dest)  : branch when reg was None.
+    CheckLocal(SlotId, i32),
     OptCase {
         cond: SlotId,
         min: u16,
         max: u16,
-        else_dest: BasicBlockId,
-        branch_table: Box<[BasicBlockId]>,
+        else_disp: i32,
+        branch_table: Box<[i32]>,
     },
-    CheckLocal(SlotId, BasicBlockId),
     CheckKwRest(SlotId),
+
+    Nil(SlotId),
     /// integer(%reg, i32)
     Integer(SlotId, i32),
     /// Symbol(%reg, IdentId)
@@ -139,7 +141,6 @@ pub(crate) enum TraceIr {
         dst: SlotId,
         id: u32,
     },
-    Nil(SlotId),
     Not {
         dst: SlotId,
         src: SlotId,
@@ -170,7 +171,7 @@ pub(crate) enum TraceIr {
         _dst: Option<SlotId>,
         lhs: SlotId,
         rhs: SlotId,
-        dest_bb: BasicBlockId,
+        disp: i32,
         brkind: BrKind,
         ic: Option<(ClassId, ClassId)>,
     },
@@ -308,7 +309,6 @@ pub(crate) enum TraceIr {
         name: IdentId,
     },
     /// loop start marker
-    #[allow(dead_code)]
     LoopStart {
         counter: u32,
         jit_addr: *const u8,
@@ -318,7 +318,7 @@ pub(crate) enum TraceIr {
 
 impl TraceIr {
     #[cfg(feature = "dump-traceir")]
-    pub(crate) fn format(&self, store: &Store) -> Option<String> {
+    pub(crate) fn format(&self, store: &Store, iseq_id: ISeqId, pc: BytecodePtr) -> Option<String> {
         fn optstr(opt: bool) -> &'static str {
             if opt { "_" } else { "" }
         }
@@ -381,38 +381,46 @@ impl TraceIr {
             fmt(store, op1, class)
         }
 
+        let iseq = &store[iseq_id];
+        let bc_pos = iseq.get_pc_index(Some(pc));
         let s = match self {
             TraceIr::InitMethod(info) => {
                 format!("init_method {info:?}")
             }
-            TraceIr::CheckLocal(local, dest) => {
-                format!("check_local({:?}) =>{:?}", local, dest)
+            TraceIr::CheckLocal(local, disp) => {
+                let dest = iseq.get_bb(bc_pos + 1 + *disp);
+                format!("check_local({local:?}) =>{dest:?}")
             }
             TraceIr::CheckKwRest(local) => {
                 format!("check_kw_rest({:?})", local)
             }
-            TraceIr::Br(dest) => {
-                format!("br => {:?}", dest)
+            TraceIr::Br(disp) => {
+                let dest = iseq.get_bb(bc_pos + 1 + *disp);
+                format!("br => {dest:?}")
             }
-            TraceIr::CondBr(reg, dest, opt, kind) => {
-                format!(
-                    "cond{}br {}{:?} => {:?}",
-                    kind.to_s(),
-                    optstr(*opt),
-                    reg,
-                    dest
-                )
+            TraceIr::CondBr(reg, disp, opt, kind) => {
+                let dest = iseq.get_bb(bc_pos + 1 + *disp);
+                format!("cond{}br {}{reg:?} => {dest:?}", kind.to_s(), optstr(*opt),)
             }
-            TraceIr::NilBr(reg, dest) => {
-                format!("nilbr {:?} => {:?}", reg, dest)
+            TraceIr::NilBr(reg, disp) => {
+                let dest = iseq.get_bb(bc_pos + 1 + *disp);
+                format!("nilbr {reg:?} => {dest:?}")
             }
             TraceIr::OptCase {
                 cond,
                 min,
                 max,
-                else_dest,
+                else_disp,
                 branch_table,
             } => {
+                let else_dest = iseq.get_bb(bc_pos + 1 + *else_disp);
+                let branch_table: Vec<String> = branch_table
+                    .iter()
+                    .map(|disp| {
+                        let dest = iseq.get_bb(bc_pos + 1 + *disp);
+                        format!("{dest:?}")
+                    })
+                    .collect();
                 format!(
                     "opt_case {cond:?}: else -> {else_dest:?}  {min}..{max} -> branch_table:{branch_table:?}",
                 )

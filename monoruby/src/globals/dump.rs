@@ -103,17 +103,20 @@ impl Globals {
                 " FuncId  {:60} [{:05}]     {:7}",
                 "func name", "index", "count"
             );
-            eprintln!("------------------------------------------------------------------------------------------------------------------------------------------------------");
+            eprintln!(
+                "------------------------------------------------------------------------------------------------------------------------------------------------------"
+            );
             let mut v: Vec<_> = self.deopt_stats.iter().collect();
             v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
             for ((func_id, bc_pos), count) in v.into_iter().take(20) {
-                let func = self.store.iseq(*func_id);
-                let fmt = if let Some(fmt) = func.trace_ir(&self.store, *bc_pos).format(&self.store)
-                {
-                    fmt
-                } else {
-                    "<INVALID>".to_string()
-                };
+                let iseq_id = self.store[*func_id].as_iseq();
+                let pc = self.store[iseq_id].get_pc(*bc_pos);
+                let fmt =
+                    if let Some(fmt) = pc.trace_ir(&self.store).format(&self.store, iseq_id, pc) {
+                        fmt
+                    } else {
+                        "<INVALID>".to_string()
+                    };
                 let name = self.store.func_description(*func_id);
                 eprintln!(
                     "({:6}) {:60} [{:05}]  {:10}   {fmt}",
@@ -184,16 +187,18 @@ pub(crate) extern "C" fn log_deoptimize(
 ) {
     use crate::jitgen::trace_ir::*;
     let func_id = vm.cfp().lfp().func_id();
-    let func = globals.store.iseq(func_id);
-    let bc_pos = func.get_pc_index(Some(pc));
-    let trace_ir = func.trace_ir(&globals.store, bc_pos);
+    let iseq_id = globals.store[func_id].as_iseq();
+    let bc_pos = globals.store[iseq_id].get_pc_index(Some(pc));
+    let trace_ir = pc.trace_ir(&globals.store);
 
     if let TraceIr::LoopEnd = trace_ir {
         // normal exit from jit'ed loop
         #[cfg(feature = "deopt")]
         {
             let name = globals.store.func_description(func_id);
-            let fmt = trace_ir.format(&globals.store).unwrap_or_default();
+            let fmt = trace_ir
+                .format(&globals.store, iseq_id, pc)
+                .unwrap_or_default();
             eprint!("<-- exited from JIT code in <{}> {:?}.", name, func_id);
             eprintln!("    [{:05}] {fmt}", bc_pos);
         }
@@ -210,7 +215,9 @@ pub(crate) extern "C" fn log_deoptimize(
         #[cfg(feature = "deopt")]
         {
             let name = globals.store.func_description(func_id);
-            let fmt = trace_ir.format(&globals.store).unwrap_or_default();
+            let fmt = trace_ir
+                .format(&globals.store, iseq_id, pc)
+                .unwrap_or_default();
             match trace_ir {
                 TraceIr::LoadConst(..)          // inline constant cache miss
                 | TraceIr::ClassDef { .. }      // error in class def (illegal superclass etc.)

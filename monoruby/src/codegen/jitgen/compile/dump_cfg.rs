@@ -1,11 +1,12 @@
 use super::*;
 
 pub(super) fn dump_cfg(
-    func: &ISeqInfo,
     store: &Store,
+    iseq_id: ISeqId,
     bb_begin: BasicBlockId,
     bb_end: BasicBlockId,
 ) {
+    let iseq = &store[iseq_id];
     let mut s = format!(
         r###"digraph graph_name {{
   graph [
@@ -44,14 +45,15 @@ pub(super) fn dump_cfg(
     labeldistance = 2.5,
     labelangle = 70
   ];"###,
-        store.func_description(func.func_id())
+        store.func_description(iseq.func_id())
     );
     s += "\n";
     for bbid in bb_begin..=bb_end {
         s += &format!("  {:?} [\n    shape=record\n    label=\"{{{:?}", bbid, bbid);
-        let BasicBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
+        let BasicBlockInfoEntry { begin, end, .. } = iseq.bb_info[bbid];
         for bc in begin..=end {
-            if let Some(inst) = func.trace_ir(store, bc).format(store) {
+            let pc = iseq.get_pc(bc);
+            if let Some(inst) = pc.trace_ir(store).format(store, iseq_id, pc) {
                 s += "|";
                 let html = html_escape::encode_text(&inst)
                     .replace('|', "\\|")
@@ -63,7 +65,7 @@ pub(super) fn dump_cfg(
     }
 
     for bbid in bb_begin..=bb_end {
-        let entry = &func.bb_info[bbid];
+        let entry = &iseq.bb_info[bbid];
         for succ in &entry.succ {
             s += &format!("  {:?} -> {:?} [headport = n, tailport = s];\n", bbid, succ);
         }
@@ -75,5 +77,5 @@ pub(super) fn dump_cfg(
         Ok(true) => {}
         _ => std::fs::create_dir(&path).unwrap(),
     }
-    std::fs::write(path.join(format!("fid-{}.dot", func.func_id().get())), s).unwrap();
+    std::fs::write(path.join(format!("fid-{}.dot", iseq.func_id().get())), s).unwrap();
 }

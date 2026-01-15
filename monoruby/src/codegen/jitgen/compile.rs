@@ -17,7 +17,7 @@ impl<'a> JitContext<'a> {
             let bb_begin = iseq.bb_info.get_bb_id(start_pos);
             iseq.bb_info.is_loop_begin(bb_begin).unwrap()
         } else {
-            let start_pos = BcIndex::from(0);
+            let start_pos = BcIndex::default();
             let bb_begin = iseq.bb_info.get_bb_id(start_pos);
             let bb_end = BasicBlockId(iseq.bb_info.len() - 1);
             (bb_begin, bb_end)
@@ -46,7 +46,7 @@ impl<'a> JitContext<'a> {
         self.backedge_branches();
 
         #[cfg(feature = "emit-cfg")]
-        dump_cfg::dump_cfg(self.iseq(), &self.store, bb_begin, bb_end);
+        dump_cfg::dump_cfg(&self.store, self.iseq_id(), bb_begin, bb_end);
 
         Ok(self.pop_frame())
     }
@@ -136,9 +136,9 @@ impl<'a> JitContext<'a> {
     ) -> Result<CompileResult> {
         assert!(state.no_capture_guard());
         let pc = self.get_pc(bc_pos);
-        let trace_ir = self.iseq().trace_ir(self.store, bc_pos);
+        let trace_ir = pc.trace_ir(self.store);
         #[cfg(feature = "jit-debug")]
-        if let Some(fmt) = trace_ir.format(self.store) {
+        if let Some(fmt) = trace_ir.format(self.store, self.iseq_id(), pc) {
             eprintln!("{fmt}");
         }
         match trace_ir {
@@ -473,10 +473,11 @@ impl<'a> JitContext<'a> {
                 _dst: _,
                 lhs,
                 rhs,
-                dest_bb,
+                disp,
                 brkind,
                 ic,
             } => {
+                let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
                 return match state.binop_type(lhs, rhs, ic) {
                     BinaryOpType::Integer(mode) => {
                         if let Some(result) =
@@ -848,10 +849,12 @@ impl<'a> JitContext<'a> {
                 state.locals_to_S(ir);
                 ir.push(AsmInst::EnsureEnd);
             }
-            TraceIr::Br(dest_bb) => {
+            TraceIr::Br(disp) => {
+                let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
                 return Ok(CompileResult::Branch(dest_bb));
             }
-            TraceIr::CondBr(cond_, dest_bb, false, brkind) => {
+            TraceIr::CondBr(cond_, disp, false, brkind) => {
+                let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
                 if state.is_truthy(cond_) {
                     if brkind == BrKind::BrIf {
                         return Ok(CompileResult::Branch(dest_bb));
@@ -865,7 +868,8 @@ impl<'a> JitContext<'a> {
                     self.gen_cond_br(state, ir, bc_pos, dest_bb, brkind);
                 }
             }
-            TraceIr::NilBr(cond_, dest_bb) => {
+            TraceIr::NilBr(cond_, disp) => {
+                let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
                 if state.is_nil(cond_) {
                     return Ok(CompileResult::Branch(dest_bb));
                 } else if state.is_not_nil(cond_) {
@@ -877,22 +881,25 @@ impl<'a> JitContext<'a> {
                 }
             }
             TraceIr::CondBr(_, _, true, _) => {}
-            TraceIr::CheckLocal(local, dest_bb) => match state.mode(local) {
-                LinkMode::S(_) | LinkMode::C(_) => {
-                    return Ok(CompileResult::Branch(dest_bb));
+            TraceIr::CheckLocal(local, disp) => {
+                let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
+                match state.mode(local) {
+                    LinkMode::S(_) | LinkMode::C(_) => {
+                        return Ok(CompileResult::Branch(dest_bb));
+                    }
+                    LinkMode::MaybeNone => {
+                        let branch_dest = self.label();
+                        state.load(ir, local, GP::Rax);
+                        ir.push(AsmInst::CheckLocal(branch_dest));
+                        let mut side_bb = state.clone();
+                        side_bb.set_S(local);
+                        self.new_side_branch(bc_pos, dest_bb, side_bb, branch_dest);
+                        state.set_None(local);
+                    }
+                    LinkMode::None => {}
+                    _ => unreachable!(),
                 }
-                LinkMode::MaybeNone => {
-                    let branch_dest = self.label();
-                    state.load(ir, local, GP::Rax);
-                    ir.push(AsmInst::CheckLocal(branch_dest));
-                    let mut side_bb = state.clone();
-                    side_bb.set_S(local);
-                    self.new_side_branch(bc_pos, dest_bb, side_bb, branch_dest);
-                    state.set_None(local);
-                }
-                LinkMode::None => {}
-                _ => unreachable!(),
-            },
+            }
             TraceIr::CheckKwRest(local) => {
                 ir.push(AsmInst::CheckKwRest(local));
             }
@@ -900,15 +907,17 @@ impl<'a> JitContext<'a> {
                 cond,
                 min,
                 max,
-                else_dest,
+                else_disp,
                 branch_table,
             } => {
                 state.load_fixnum(ir, cond, GP::Rdi, pc);
                 let mut branch_labels = vec![];
-                for bbid in branch_table {
+                let else_dest = self.iseq().get_bb(bc_pos + 1 + else_disp);
+                for disp in branch_table {
                     let branch_dest = self.label();
                     branch_labels.push(branch_dest);
-                    self.new_side_branch(bc_pos, bbid, state.clone(), branch_dest);
+                    let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
+                    self.new_side_branch(bc_pos, dest_bb, state.clone(), branch_dest);
                 }
                 let else_label = self.label();
                 self.new_side_branch(bc_pos, else_dest, state.clone(), else_label);

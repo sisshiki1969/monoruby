@@ -1176,9 +1176,10 @@ impl Codegen {
                     if iseq.bb_info.is_bb_head(bc_pos).is_some() {
                         eprintln!("  {:?}", iseq.bb_info.get_bb_id(bc_pos));
                     }
+                    let pc = iseq.get_pc(bc_pos);
                     eprintln!(
                         "    {bc_pos} {}",
-                        match iseq.trace_ir(store, bc_pos).format(store) {
+                        match pc.trace_ir(store).format(store, iseq_id, pc) {
                             Some(s) => s,
                             None => "".to_string(),
                         }

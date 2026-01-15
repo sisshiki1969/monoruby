@@ -642,8 +642,9 @@ impl Store {
             if let Some(bbid) = iseq.bb_info.is_bb_head(bc_pos) {
                 eprintln!("  {:?}", bbid);
             };
-            let trace_ir = iseq.trace_ir(self, bc_pos);
-            if let Some(fmt) = trace_ir.format(self) {
+            let pc = iseq.get_pc(bc_pos);
+            let trace_ir = pc.trace_ir(self);
+            if let Some(fmt) = trace_ir.format(self, iseq_id, pc) {
                 eprintln!("    {bc_pos} [{:02}] {fmt}", iseq.sp[i].0);
             };
         }
