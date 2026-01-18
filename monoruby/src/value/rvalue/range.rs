@@ -1,5 +1,10 @@
 use super::*;
 
+pub const RANGE_START_OFFSET: usize = RVALUE_OFFSET_KIND + std::mem::offset_of!(RangeInner, start);
+pub const RANGE_END_OFFSET: usize = RVALUE_OFFSET_KIND + std::mem::offset_of!(RangeInner, end);
+pub const RANGE_EXCLUDE_END_OFFSET: usize =
+    RVALUE_OFFSET_KIND + std::mem::offset_of!(RangeInner, exclude_end);
+
 #[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct RangeInner {
