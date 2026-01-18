@@ -335,11 +335,19 @@ impl Value {
         Value::i32(ord as i32)
     }
 
-    pub fn fixnum(num: i64) -> Self {
+    pub fn check_fixnum(i: i64) -> Option<Value> {
+        if Self::is_i63(i) {
+            Some(Value::fixnum(i))
+        } else {
+            None
+        }
+    }
+
+    fn fixnum(num: i64) -> Self {
         Value::from((num << 1) as u64 | 0b1)
     }
 
-    pub fn is_i63(num: i64) -> bool {
+    fn is_i63(num: i64) -> bool {
         let top = ((num as u64) >> 62) ^ ((num as u64) >> 63);
         top & 0b1 == 0
     }

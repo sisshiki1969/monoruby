@@ -343,9 +343,9 @@ impl<'a> JitContext<'a> {
                             match kind {
                                 UnOpK::Neg => {
                                     if let Some(res) = src.checked_neg()
-                                        && Value::is_i63(res)
+                                        && let Some(res) = Value::check_fixnum(res)
                                     {
-                                        state.def_C(dst, Value::fixnum(res));
+                                        state.def_C(dst, res);
                                         return Ok(CompileResult::Continue);
                                     }
                                 }

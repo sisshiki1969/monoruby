@@ -247,7 +247,7 @@ fn year(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         TimeInner::Local(t) => t.year(),
         TimeInner::Utc(t) => t.year(),
     };
-    Ok(Value::fixnum(year as _))
+    Ok(Value::integer(year as _))
 }
 
 ///
@@ -262,7 +262,7 @@ fn month(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
         TimeInner::Local(t) => t.month(),
         TimeInner::Utc(t) => t.month(),
     };
-    Ok(Value::fixnum(month as _))
+    Ok(Value::integer(month as _))
 }
 
 ///
@@ -277,7 +277,7 @@ fn day(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         TimeInner::Local(t) => t.day(),
         TimeInner::Utc(t) => t.day(),
     };
-    Ok(Value::fixnum(day as _))
+    Ok(Value::integer(day as _))
 }
 
 /// ### Time#-

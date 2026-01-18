@@ -74,14 +74,8 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
-    if range.start().is_fixnum() && range.end().is_fixnum() {
-        let start = range.start().expect_integer(globals)?;
-        let mut end = range.end().expect_integer(globals)?;
-        if !range.exclude_end() {
-            end += 1
-        }
-
-        let iter = (start..end).map(Value::fixnum);
+    if let Some((start, end)) = range.try_fixnum() {
+        let iter = (start..end).map(Value::integer);
         vm.invoke_block_iter1(globals, bh, iter)?;
         Ok(self_)
     } else {
@@ -223,14 +217,8 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let self_ = lfp.self_val();
         let range = self_.as_range();
-        if range.start().is_fixnum() && range.end().is_fixnum() {
-            let start = range.start().expect_integer(globals)?;
-            let mut end = range.end().expect_integer(globals)?;
-            if !range.exclude_end() {
-                end += 1
-            }
-
-            let iter = (start..end).map(Value::fixnum);
+        if let Some((start, end)) = range.try_fixnum() {
+            let iter = (start..end).map(Value::integer);
             let data = vm.get_block_data(globals, bh)?;
             for val in iter {
                 if !vm.invoke_block(globals, &data, &[val])?.as_bool() {
@@ -260,18 +248,12 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
-    if range.start().is_fixnum() && range.end().is_fixnum() {
-        let start = range.start().expect_integer(globals)?;
-        let mut end = range.end().expect_integer(globals)?;
-        if !range.exclude_end() {
-            end += 1
-        }
-
+    if let Some((start, end)) = range.try_fixnum() {
         if end <= start {
             return Ok(Value::array_from_vec(vec![]));
         }
 
-        let iter = (start..end).map(Value::fixnum);
+        let iter = (start..end).map(Value::integer);
         vm.invoke_block_map1(globals, bh, iter, (end - start).unsigned_abs() as usize)
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
@@ -291,18 +273,12 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
-    if range.start().is_fixnum() && range.end().is_fixnum() {
-        let start = range.start().expect_integer(globals)?;
-        let mut end = range.end().expect_integer(globals)?;
-        if !range.exclude_end() {
-            end += 1
-        }
-
+    if let Some((start, end)) = range.try_fixnum() {
         if end <= start {
             return Ok(Value::array_from_vec(vec![]));
         }
 
-        let iter = (start..end).map(Value::fixnum);
+        let iter = (start..end).map(Value::integer);
         vm.invoke_block_flat_map1(globals, bh, iter, (end - start).unsigned_abs() as usize)
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
@@ -320,14 +296,8 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let range = self_.as_range();
-    if let Some(start) = range.start().try_fixnum()
-        && let Some(mut end) = range.end().try_fixnum()
-    {
-        if !range.exclude_end() {
-            end += 1
-        }
-
-        let vec = (start..end).map(Value::fixnum).collect();
+    if let Some((start, end)) = range.try_fixnum() {
+        let vec = (start..end).map(Value::integer).collect();
         Ok(Value::array_from_vec(vec))
     } else if let Some(start) = range.start().is_str()
         && let Some(end) = range.end().is_str()

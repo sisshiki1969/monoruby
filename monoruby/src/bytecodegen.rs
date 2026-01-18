@@ -627,7 +627,7 @@ impl<'a> BytecodeGen<'a> {
             match &ret.kind {
                 NodeKind::Nil => Some(Value::nil()),
                 NodeKind::Bool(b) => Some(Value::bool(*b)),
-                NodeKind::Integer(i) if Value::is_i63(*i) => Some(Value::fixnum(*i)),
+                NodeKind::Integer(i) => Value::check_fixnum(*i),
                 _ => None,
             }
         } else {
@@ -974,8 +974,8 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn emit_integer(&mut self, dst: BcReg, i: i64) {
-        if Value::is_i63(i) {
-            self.emit_imm(dst, Value::fixnum(i));
+        if let Some(v) = Value::check_fixnum(i) {
+            self.emit_imm(dst, v);
         } else {
             self.emit_literal(dst, Value::integer(i));
         }

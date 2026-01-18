@@ -54,6 +54,15 @@ impl RangeInner {
         self.end
     }
 
+    pub fn try_fixnum(&self) -> Option<(i64, i64)> {
+        let start = self.start.try_fixnum()?;
+        let mut end = self.end.try_fixnum()?;
+        if !self.exclude_end() {
+            end += 1
+        }
+        Some((start, end))
+    }
+
     pub fn exclude_end(&self) -> bool {
         self.exclude_end != 0
     }

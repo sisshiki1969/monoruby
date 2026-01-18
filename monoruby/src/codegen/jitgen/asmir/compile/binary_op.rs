@@ -625,7 +625,7 @@ impl Codegen {
         let shr = self.jit.label();
         let after = self.jit.label();
         let under = self.jit.label();
-        let lhs = Value::fixnum(lhs);
+        let lhs = Value::check_fixnum(lhs).unwrap();
         let lzcnt = lhs.id().leading_zeros();
         monoasm!( &mut self.jit,
             sarq rcx, 1;

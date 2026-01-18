@@ -87,59 +87,48 @@ impl AbstractFrame {
         None
     }
 
-    fn binop_integer_folded(&mut self, kind: BinOpK, lhs: i64, rhs: i64) -> Option<i64> {
+    fn binop_integer_folded(&mut self, kind: BinOpK, lhs: i64, rhs: i64) -> Option<Value> {
         match kind {
             BinOpK::Add => {
-                if let Some(result) = lhs.checked_add(rhs)
-                    && Value::is_i63(result)
-                {
-                    return Some(result);
+                if let Some(result) = lhs.checked_add(rhs) {
+                    return Value::check_fixnum(result);
                 }
             }
             BinOpK::Sub => {
-                if let Some(result) = lhs.checked_sub(rhs)
-                    && Value::is_i63(result)
-                {
-                    return Some(result);
+                if let Some(result) = lhs.checked_sub(rhs) {
+                    return Value::check_fixnum(result);
                 }
             }
             BinOpK::Mul => {
-                if let Some(result) = lhs.checked_mul(rhs)
-                    && Value::is_i63(result)
-                {
-                    return Some(result);
+                if let Some(result) = lhs.checked_mul(rhs) {
+                    return Value::check_fixnum(result);
                 }
             }
             BinOpK::Div => {
-                if let Some(result) = lhs.checked_div(rhs)
-                    && Value::is_i63(result)
-                {
-                    return Some(result);
+                if let Some(result) = lhs.checked_div(rhs) {
+                    return Value::check_fixnum(result);
                 }
             }
             BinOpK::Rem => {
-                if let Some(result) = lhs.checked_rem(rhs)
-                    && Value::is_i63(result)
-                {
-                    return Some(result);
+                if let Some(result) = lhs.checked_rem(rhs) {
+                    return Value::check_fixnum(result);
                 }
             }
             BinOpK::Exp => {
                 if let Ok(rhs) = u32::try_from(rhs)
                     && let Some(result) = lhs.checked_pow(rhs)
-                    && Value::is_i63(result)
                 {
-                    return Some(result);
+                    return Value::check_fixnum(result);
                 }
             }
             BinOpK::BitOr => {
-                return Some(lhs | rhs);
+                return Some(Value::integer(lhs | rhs));
             }
             BinOpK::BitAnd => {
-                return Some(lhs & rhs);
+                return Some(Value::integer(lhs & rhs));
             }
             BinOpK::BitXor => {
-                return Some(lhs ^ rhs);
+                return Some(Value::integer(lhs ^ rhs));
             }
         }
         None
@@ -165,7 +154,7 @@ impl AbstractFrame {
         if let Some((lhs, rhs)) = self.check_concrete_i64(mode)
             && let Some(result) = self.binop_integer_folded(kind, lhs, rhs)
         {
-            self.def_C_fixnum(dst, result);
+            self.def_C(dst, result);
             return;
         };
 

@@ -390,14 +390,6 @@ impl SlotState {
     }
 
     ///
-    /// Link *slot* to a concrete fixnum value *i*.
-    ///
-    #[allow(non_snake_case)]
-    pub(crate) fn def_C_fixnum(&mut self, slot: impl Into<Option<SlotId>>, i: i64) {
-        self.def_C(slot, Value::fixnum(i));
-    }
-
-    ///
     /// Link *slot* to a concrete flonum value *i*.
     ///
     #[allow(non_snake_case)]
@@ -1317,19 +1309,17 @@ impl AbstractFrame {
                 }
             }
             (LinkMode::C(l), LinkMode::Sf(r, _)) => {
+                self.set_Sf_float(slot, r);
                 if let Some(f) = l.try_float() {
-                    self.set_Sf_float(slot, r);
                     ir.f64_to_xmm(f, r);
                     ir.lit2reg(Value::float(f), GP::Rax);
-                    ir.reg2stack(GP::Rax, slot);
                 } else if let Some(i) = l.try_fixnum() {
-                    self.set_Sf_float(slot, r);
                     ir.f64_to_xmm(i as f64, r);
-                    ir.lit2reg(Value::fixnum(i), GP::Rax);
-                    ir.reg2stack(GP::Rax, slot);
+                    ir.lit2reg(Value::integer(i), GP::Rax);
                 } else {
                     unreachable!()
                 }
+                ir.reg2stack(GP::Rax, slot);
             }
             (LinkMode::C(_) | LinkMode::F(_) | LinkMode::G(_), LinkMode::S(_)) => {
                 self.write_back_slot(ir, slot);
