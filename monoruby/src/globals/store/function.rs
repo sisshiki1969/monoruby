@@ -449,6 +449,7 @@ pub(crate) enum FuncKind {
     ISeq(ISeqId),
     Proc(Proc),
     Builtin { abs_address: u64 },
+    Const(Value),
     AttrReader { ivar_name: IdentId },
     AttrWriter { ivar_name: IdentId },
 }

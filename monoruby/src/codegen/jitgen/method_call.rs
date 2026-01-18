@@ -242,13 +242,12 @@ impl<'a> JitContext<'a> {
                 return Ok(self.attr_writer(state, ir, callid, recv_class, ivar_name));
             }
             FuncKind::Builtin { .. } => (fid, None),
+            FuncKind::Const(v) => {
+                state.def_C(dst, v);
+                return Ok(CompileResult::Continue);
+            }
             FuncKind::Proc(proc) => (proc.func_id(), Some(proc.outer_lfp())),
             FuncKind::ISeq(iseq) => {
-                if let Some(v) = self.store[iseq].is_const_fn() {
-                    state.def_C(dst, v);
-                    return Ok(CompileResult::Continue);
-                }
-
                 let specializable = self.store.is_simple_call(fid, callid)
                     && (state.is_C(callsite.recv)
                         || (pos_num != 0 && (args..args + pos_num).any(|i| state.is_C(i))));

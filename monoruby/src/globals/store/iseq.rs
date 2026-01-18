@@ -129,7 +129,6 @@ pub struct ISeqInfo {
     /// Source code information.
     ///
     pub sourceinfo: SourceInfoRef,
-    is_constant_fn: Option<Value>,
     ///
     /// JIT code info for each class of *self*.
     ///
@@ -193,20 +192,11 @@ impl ISeqInfo {
             temp_num: 0,
             lexical_context: vec![],
             sourceinfo,
-            is_constant_fn: None,
             jit_entry: HashMap::default(),
             jit_invalidated: false,
             bb_info: BasicBlockInfo::default(),
             callsite_map: HashMap::default(),
         }
-    }
-
-    pub fn is_const_fn(&self) -> Option<Value> {
-        self.is_constant_fn
-    }
-
-    pub fn set_const_fn(&mut self, v: Value) {
-        self.is_constant_fn = Some(v);
     }
 
     pub(super) fn new_block(

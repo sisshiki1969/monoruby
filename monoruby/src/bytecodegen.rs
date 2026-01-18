@@ -58,10 +58,8 @@ fn bytecode_compile_func(
     let info = globals.functions.get_compile_info();
     let iseq = globals[func_id].as_iseq();
 
-    let mut r#gen = BytecodeGen::new(&mut globals.store, iseq, &info.params, binding);
+    let r#gen = BytecodeGen::new(&mut globals.store, iseq, &info.params, binding);
     r#gen.compile(info)?;
-
-    r#gen.into_bytecode()?;
 
     globals.gen_wrapper(func_id);
     Ok(())
@@ -572,7 +570,7 @@ impl<'a> BytecodeGen<'a> {
         &mut self.store[self.iseq_id]
     }
 
-    fn compile(&mut self, info: CompileInfo) -> Result<()> {
+    fn compile(mut self, info: CompileInfo) -> Result<()> {
         self.gen_dummy_init();
         // arguments preparation
         for ForParamInfo {
@@ -633,6 +631,10 @@ impl<'a> BytecodeGen<'a> {
         } else {
             None
         };
+        if let Some(is_const) = is_const {
+            self.store[self.func_id].kind = FuncKind::Const(is_const);
+            return Ok(());
+        }
         let loc = info.loc;
         self.apply_label(self.redo_label);
         // we must check whether redo exist in the function.
@@ -647,10 +649,7 @@ impl<'a> BytecodeGen<'a> {
         }
         self.replace_init(&info.params);
         self.iseq_mut().loc = info.loc;
-        if let Some(is_const) = is_const {
-            self.iseq_mut().set_const_fn(is_const);
-        }
-        Ok(())
+        self.into_bytecode()
     }
 
     fn is_block(&self) -> bool {
