@@ -257,10 +257,10 @@ impl<'a> BytecodeGen<'a> {
                 let op1 = self.slot_id(&dst);
                 Bytecode::from(enc_wl(38, op1.0, func_id.get()))
             }
-            BytecodeInst::Integer(dst, num) => {
+            BytecodeInst::Immediate(dst, val) => {
                 // 6
                 let op1 = self.slot_id(&dst);
-                Bytecode::from(enc_wl(6, op1.0, num as u32))
+                Bytecode::from_with_value(enc_wl(6, op1.0, 0), val)
             }
             BytecodeInst::Literal(reg, val) => {
                 // 7
@@ -271,11 +271,6 @@ impl<'a> BytecodeGen<'a> {
                 // 8
                 let op1 = self.slot_id(&reg);
                 Bytecode::from(enc_w(8, op1.0))
-            }
-            BytecodeInst::Symbol(reg, name) => {
-                // 9
-                let op1 = self.slot_id(&reg);
-                Bytecode::from(enc_wl(9, op1.0, name.get()))
             }
             BytecodeInst::LoadConst {
                 dst,

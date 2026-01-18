@@ -161,11 +161,8 @@ impl<'a> JitContext<'a> {
                     return Ok(CompileResult::ExitLoop);
                 }
             }
-            TraceIr::Integer(dst, i) => {
-                state.def_C(dst, Value::i32(i));
-            }
-            TraceIr::Symbol(dst, id) => {
-                state.def_C(dst, Value::symbol(id));
+            TraceIr::Immediate(dst, i) => {
+                state.def_C(dst, i);
             }
             TraceIr::Nil(dst) => {
                 state.def_C(dst, Value::nil());

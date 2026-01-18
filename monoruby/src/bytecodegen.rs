@@ -947,21 +947,29 @@ impl<'a> BytecodeGen<'a> {
         self.emit(BytecodeInst::CheckKwRest(local), Loc::default());
     }
 
+    fn emit_imm(&mut self, dst: BcReg, v: Value) {
+        self.emit(BytecodeInst::Immediate(dst, v), Loc::default());
+    }
+
+    fn emit_integer(&mut self, dst: BcReg, i: i64) {
+        if Value::is_i63(i) {
+            self.emit_imm(dst, Value::fixnum(i));
+        } else {
+            self.emit_literal(dst, Value::integer(i));
+        }
+    }
+
     fn emit_nil(&mut self, dst: BcReg) {
         self.emit(BytecodeInst::Nil(dst), Loc::default());
+    }
+
+    fn emit_symbol(&mut self, dst: BcReg, sym: IdentId) {
+        self.emit_imm(dst, Value::symbol(sym));
     }
 
     fn emit_literal(&mut self, dst: BcReg, v: Value) {
         self.literals.push(v);
         self.emit(BytecodeInst::Literal(dst, v), Loc::default());
-    }
-
-    fn emit_integer(&mut self, dst: BcReg, i: i64) {
-        if let Ok(i) = i32::try_from(i) {
-            self.emit(BytecodeInst::Integer(dst, i), Loc::default());
-        } else {
-            self.emit_literal(dst, Value::integer(i));
-        }
     }
 
     fn emit_bigint(&mut self, dst: BcReg, bigint: BigInt) {
@@ -974,10 +982,6 @@ impl<'a> BytecodeGen<'a> {
 
     fn emit_imaginary(&mut self, dst: BcReg, r: Real) {
         self.emit_literal(dst, Value::complex(0, r));
-    }
-
-    fn emit_symbol(&mut self, dst: BcReg, sym: IdentId) {
-        self.emit(BytecodeInst::Symbol(dst, sym), Loc::default());
     }
 
     fn emit_string(&mut self, dst: BcReg, s: String) {

@@ -83,9 +83,8 @@ pub(crate) enum TraceIr {
 
     Nil(SlotId),
     /// integer(%reg, i32)
-    Integer(SlotId, i32),
-    /// Symbol(%reg, IdentId)
-    Symbol(SlotId, IdentId),
+    Immediate(SlotId, Value),
+
     /// literal(%ret, value)
     Literal(SlotId, Value),
     Array {
@@ -425,8 +424,7 @@ impl TraceIr {
                     "opt_case {cond:?}: else -> {else_dest:?}  {min}..{max} -> branch_table:{branch_table:?}",
                 )
             }
-            TraceIr::Integer(reg, num) => format!("{:?} = {}: i32", reg, num),
-            TraceIr::Symbol(reg, id) => format!("{:?} = :{id}", reg),
+            TraceIr::Immediate(reg, val) => format!("{:?} = {}", reg, val.debug(store)),
             TraceIr::Range {
                 dst,
                 start,
