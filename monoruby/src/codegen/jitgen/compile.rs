@@ -164,9 +164,6 @@ impl<'a> JitContext<'a> {
             TraceIr::Immediate(dst, i) => {
                 state.def_C(dst, i);
             }
-            TraceIr::Nil(dst) => {
-                state.def_C(dst, Value::nil());
-            }
             TraceIr::Literal(dst, val) => {
                 if val.is_packed_value() || val.is_float() {
                     state.def_C(dst, val);

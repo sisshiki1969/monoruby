@@ -56,13 +56,12 @@ fn bytecode_compile_func(
     binding: Option<LvarCollector>,
 ) -> Result<()> {
     let info = globals.functions.get_compile_info();
-    let loc = info.loc;
     let iseq = globals[func_id].as_iseq();
 
     let mut r#gen = BytecodeGen::new(&mut globals.store, iseq, &info.params, binding);
     r#gen.compile(info)?;
 
-    r#gen.into_bytecode(loc)?;
+    r#gen.into_bytecode()?;
 
     globals.gen_wrapper(func_id);
     Ok(())
@@ -494,10 +493,6 @@ struct BytecodeGen<'a> {
     loops: Vec<LoopInfo>, // (kind, label for exit, return register)
     /// ensure clause information.
     ensure: Vec<Option<Node>>,
-    /// local variables.
-    locals: indexmap::IndexMap<IdentId, BcLocal>,
-    /// literal values. (for GC)
-    literals: Vec<Value>,
     /// The name of the block param.
     block_param: Option<IdentId>,
     /// The label for redo.
@@ -547,8 +542,6 @@ impl<'a> BytecodeGen<'a> {
             labels: BytecodeLabels::new(), // The first label is for redo.
             loops: vec![],
             ensure: vec![],
-            locals: Default::default(),
-            literals: vec![],
             block_param,
             redo_label: Label(0),
             temp: 0,
@@ -628,6 +621,18 @@ impl<'a> BytecodeGen<'a> {
         }
 
         let ast = info.ast;
+        let is_const = if self.ir.len() == 1
+            && let NodeKind::Return(box ret) = &ast.kind
+        {
+            match &ret.kind {
+                NodeKind::Nil => Some(Value::nil()),
+                NodeKind::Bool(b) => Some(Value::bool(*b)),
+                NodeKind::Integer(i) if Value::is_i63(*i) => Some(Value::fixnum(*i)),
+                _ => None,
+            }
+        } else {
+            None
+        };
         let loc = info.loc;
         self.apply_label(self.redo_label);
         // we must check whether redo exist in the function.
@@ -641,6 +646,10 @@ impl<'a> BytecodeGen<'a> {
             self.emit(BytecodeInst::LoopEnd, loc);
         }
         self.replace_init(&info.params);
+        self.iseq_mut().loc = info.loc;
+        if let Some(is_const) = is_const {
+            self.iseq_mut().set_const_fn(is_const);
+        }
         Ok(())
     }
 
@@ -775,7 +784,7 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn assign_local(&mut self, name: IdentId) -> BcLocal {
-        match self.locals.get(&name) {
+        match self.iseq().locals.get(&name) {
             Some(local) => *local,
             None => self.add_local(name),
         }
@@ -783,7 +792,7 @@ impl<'a> BytecodeGen<'a> {
 
     fn refer_local(&mut self, ident: &str) -> Option<BcReg> {
         let name = IdentId::get_id(ident);
-        match self.locals.get(&name) {
+        match self.iseq().locals.get(&name) {
             Some(r) => Some((*r).into()),
             None => {
                 assert_eq!(Some(name), self.block_param);
@@ -805,7 +814,7 @@ impl<'a> BytecodeGen<'a> {
     fn add_local(&mut self, ident: impl Into<Option<IdentId>>) -> BcLocal {
         let local = BcLocal(self.labels.non_temp_num);
         if let Some(ident) = ident.into() {
-            assert!(self.locals.insert(ident, local).is_none());
+            assert!(self.iseq_mut().locals.insert(ident, local).is_none());
         };
         self.labels.non_temp_num += 1;
         local
@@ -951,6 +960,19 @@ impl<'a> BytecodeGen<'a> {
         self.emit(BytecodeInst::Immediate(dst, v), Loc::default());
     }
 
+    fn emit_literal(&mut self, dst: BcReg, v: Value) {
+        self.iseq_mut().literals.push(v);
+        self.emit(BytecodeInst::Literal(dst, v), Loc::default());
+    }
+
+    fn emit_nil(&mut self, dst: BcReg) {
+        self.emit_imm(dst, Value::nil());
+    }
+
+    fn emit_symbol(&mut self, dst: BcReg, sym: IdentId) {
+        self.emit_imm(dst, Value::symbol(sym));
+    }
+
     fn emit_integer(&mut self, dst: BcReg, i: i64) {
         if Value::is_i63(i) {
             self.emit_imm(dst, Value::fixnum(i));
@@ -959,25 +981,16 @@ impl<'a> BytecodeGen<'a> {
         }
     }
 
-    fn emit_nil(&mut self, dst: BcReg) {
-        self.emit(BytecodeInst::Nil(dst), Loc::default());
-    }
-
-    fn emit_symbol(&mut self, dst: BcReg, sym: IdentId) {
-        self.emit_imm(dst, Value::symbol(sym));
-    }
-
-    fn emit_literal(&mut self, dst: BcReg, v: Value) {
-        self.literals.push(v);
-        self.emit(BytecodeInst::Literal(dst, v), Loc::default());
-    }
-
     fn emit_bigint(&mut self, dst: BcReg, bigint: BigInt) {
         self.emit_literal(dst, Value::bigint(bigint));
     }
 
     fn emit_float(&mut self, dst: BcReg, f: f64) {
-        self.emit_literal(dst, Value::float(f));
+        if let Some(v) = Value::flonum(f) {
+            self.emit_imm(dst, v);
+        } else {
+            self.emit_literal(dst, Value::float(f));
+        }
     }
 
     fn emit_imaginary(&mut self, dst: BcReg, r: Real) {

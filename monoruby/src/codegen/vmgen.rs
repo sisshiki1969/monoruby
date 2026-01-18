@@ -215,7 +215,6 @@ impl Codegen {
         self.dispatch[5] = self.vm_condnotbr(&branch);
         self.dispatch[6] = self.vm_immediate();
         self.dispatch[7] = self.vm_literal();
-        self.dispatch[8] = self.vm_nil();
         self.dispatch[10] = self.vm_load_const();
         self.dispatch[11] = self.vm_store_const();
         self.dispatch[12] = self.vm_condbr(&branch);
@@ -725,20 +724,9 @@ impl Codegen {
         label
     }
 
-    fn vm_nil(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        self.fetch_r15();
-        monoasm! { &mut self.jit,
-            movq rax, (NIL_VALUE);
-        };
-        self.vm_store_r15(GP::Rax);
-        self.fetch_and_dispatch();
-        label
-    }
-
     fn vm_immediate(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.fetch2();
+        self.fetch_r15();
         monoasm! { &mut self.jit,
             movq rax, [r13 - 8];
         };
@@ -749,7 +737,7 @@ impl Codegen {
 
     fn vm_literal(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.fetch2();
+        self.fetch_r15();
         monoasm! { &mut self.jit,
             movq rdi, [r13 - 8];
             movq rax, (Value::value_deep_copy);

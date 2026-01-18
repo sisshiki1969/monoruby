@@ -417,7 +417,6 @@ impl BytecodePtr {
                 5 => TraceIr::CondBr(SlotId::new(op1_w), op1_l as i32, false, BrKind::BrIfNot),
                 6 => TraceIr::Immediate(SlotId::new(op1_w), op2.get_value()),
                 7 => TraceIr::Literal(SlotId::new(op1_w), op2.get_value()),
-                8 => TraceIr::Nil(SlotId::new(op1_w)),
                 10 | 18 => TraceIr::LoadConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
                 11 => TraceIr::StoreConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
                 12..=13 => TraceIr::CondBr(

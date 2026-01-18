@@ -81,7 +81,6 @@ pub(crate) enum TraceIr {
     },
     CheckKwRest(SlotId),
 
-    Nil(SlotId),
     /// integer(%reg, i32)
     Immediate(SlotId, Value),
 
@@ -425,6 +424,9 @@ impl TraceIr {
                 )
             }
             TraceIr::Immediate(reg, val) => format!("{:?} = {}", reg, val.debug(store)),
+            TraceIr::Literal(reg, val) => {
+                format!("{:?} = literal[{}]", reg, val.debug(store))
+            }
             TraceIr::Range {
                 dst,
                 start,
@@ -437,9 +439,6 @@ impl TraceIr {
                 if *exclude_end { "..." } else { ".." },
                 end
             ),
-            TraceIr::Literal(reg, val) => {
-                format!("{:?} = literal[{}]", reg, val.debug(store))
-            }
             TraceIr::Array { dst, callid } => {
                 let CallSiteInfo {
                     args,
@@ -561,7 +560,6 @@ impl TraceIr {
                     }
                 )
             }
-            TraceIr::Nil(reg) => format!("{:?} = nil", reg),
             TraceIr::UnOp {
                 kind,
                 dst,

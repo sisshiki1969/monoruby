@@ -379,14 +379,22 @@ impl Value {
         Some(Value::integer(f as i64))
     }
 
-    pub fn float(num: f64) -> Self {
+    pub fn flonum(num: f64) -> Option<Self> {
         if num == 0.0 {
-            return Value::from(FLOAT_ZERO);
+            return Some(Value::from(FLOAT_ZERO));
         }
         let unum = f64::to_bits(num);
         let exp = ((unum >> 60) & 0b111) + 1;
         if (exp & 0b0110) == 0b0100 {
-            Value::from(((unum.rotate_left(3)) & !1) | 2)
+            Some(Value::from(((unum.rotate_left(3)) & !1) | 2))
+        } else {
+            None
+        }
+    }
+
+    pub fn float(num: f64) -> Self {
+        if let Some(v) = Self::flonum(num) {
+            v
         } else {
             RValue::new_float(num).pack()
         }

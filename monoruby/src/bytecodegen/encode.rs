@@ -37,7 +37,7 @@ impl IncomingBranches {
 }
 
 impl<'a> BytecodeGen<'a> {
-    pub(super) fn into_bytecode(mut self, loc: Loc) -> Result<()> {
+    pub(super) fn into_bytecode(mut self) -> Result<()> {
         let func_id = self.func_id;
         for (dst, (dst_sp, src)) in std::mem::take(&mut self.merge_info) {
             let dst_idx = self[dst];
@@ -59,11 +59,8 @@ impl<'a> BytecodeGen<'a> {
         }
         let temp_num = self.temp_num;
         let non_temp_num = self.labels.non_temp_num;
-        let literals = std::mem::take(&mut self.literals);
-        let locals = std::mem::take(&mut self.locals);
-        let is_const = self.is_const_function();
 
-        let (ops, sourcemap, bbinfo) = self.ir_to_bc()?;
+        self.ir_to_bc()?;
 
         for ExceptionEntry {
             range,
@@ -90,32 +87,22 @@ impl<'a> BytecodeGen<'a> {
             .collect();
 
         let info = self.iseq_mut();
-        if let Some(value) = is_const {
-            info.set_const_fn(value);
-        }
         info.temp_num = temp_num;
         info.non_temp_num = non_temp_num;
-        info.literals = literals;
-        info.locals = locals;
-        info.loc = loc;
-        info.set_bytecode(ops);
-        info.sourcemap = sourcemap;
         info.sp = sp;
-        info.bb_info = bbinfo;
         self.store.set_func_data(func_id);
         Ok(())
     }
 
-    fn ir_to_bc(&mut self) -> Result<(Vec<Bytecode>, Vec<Loc>, BasicBlockInfo)> {
+    fn ir_to_bc(&mut self) -> Result<()> {
         let mut ops = vec![];
-        let mut sourcemap = vec![];
         let ir = std::mem::take(&mut self.ir);
         let mut incoming = IncomingBranches::new(ir.len());
         for (idx, (inst, loc)) in ir.iter().enumerate() {
             let idx = BcIndex::from(idx);
             let op = self.inst_to_bc(&mut incoming, inst.clone(), idx)?;
             ops.push(op);
-            sourcemap.push(*loc);
+            self.iseq_mut().sourcemap.push(*loc);
         }
         for (idx, (inst, _)) in ir.iter().enumerate() {
             let idx = BcIndex::from(idx);
@@ -125,9 +112,10 @@ impl<'a> BytecodeGen<'a> {
         }
         incoming.pop();
 
-        let bbinfo = BasicBlockInfo::new(incoming.branches, &BytecodeIr::new(ir));
+        self.iseq_mut().bb_info = BasicBlockInfo::new(incoming.branches, &BytecodeIr::new(ir));
+        self.iseq_mut().set_bytecode(ops);
 
-        Ok((ops, sourcemap, bbinfo))
+        Ok(())
     }
 
     fn inst_to_bc(
@@ -266,11 +254,6 @@ impl<'a> BytecodeGen<'a> {
                 // 7
                 let op1 = self.slot_id(&reg);
                 Bytecode::from_with_value(enc_wl(7, op1.0, 0), val)
-            }
-            BytecodeInst::Nil(reg) => {
-                // 8
-                let op1 = self.slot_id(&reg);
-                Bytecode::from(enc_w(8, op1.0))
             }
             BytecodeInst::LoadConst {
                 dst,
@@ -617,19 +600,6 @@ impl<'a> BytecodeGen<'a> {
             }
         };
         Ok(bc)
-    }
-
-    pub(super) fn is_const_function(&self) -> Option<Value> {
-        if self.ir.len() == 3
-            && let BytecodeInst::Nil(r1) = &self.ir[1].0
-            && let BytecodeInst::Ret(r2) = &self.ir[2].0
-            && r1 == r2
-        {
-            // Handle the specific case for const-function
-            Some(Value::nil())
-        } else {
-            None
-        }
     }
 
     fn encode_call(
