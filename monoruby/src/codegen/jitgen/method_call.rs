@@ -243,7 +243,7 @@ impl<'a> JitContext<'a> {
             }
             FuncKind::Builtin { .. } => (fid, None),
             FuncKind::Const(v) => {
-                state.def_C(dst, v);
+                state.def_C(dst, v.into());
                 return Ok(CompileResult::Continue);
             }
             FuncKind::Proc(proc) => (proc.func_id(), Some(proc.outer_lfp())),

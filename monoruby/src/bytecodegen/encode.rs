@@ -245,10 +245,10 @@ impl<'a> BytecodeGen<'a> {
                 let op1 = self.slot_id(&dst);
                 Bytecode::from(enc_wl(38, op1.0, func_id.get()))
             }
-            BytecodeInst::Immediate(dst, val) => {
+            BytecodeInst::Immediate(dst, imm) => {
                 // 6
                 let op1 = self.slot_id(&dst);
-                Bytecode::from_with_value(enc_wl(6, op1.0, 0), val)
+                Bytecode::from_with_value(enc_wl(6, op1.0, 0), imm.into())
             }
             BytecodeInst::Literal(reg, val) => {
                 // 7

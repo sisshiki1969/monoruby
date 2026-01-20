@@ -226,7 +226,7 @@ impl Bc2 {
     }
 
     pub fn get_value(&self) -> Value {
-        Value::from(self.0)
+        Value::from_u64(self.0)
     }
 
     pub fn get_ident2(&self) -> (IdentId, IdentId) {

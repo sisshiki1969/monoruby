@@ -13,8 +13,8 @@ impl Codegen {
                     self.gen_vm_stub()
                 }
             }
-            FuncKind::Const(v) => {
-                self.gen_const_fn(v);
+            FuncKind::Const(imm) => {
+                self.gen_const_fn(*imm);
             }
             FuncKind::Proc(proc) => {
                 //self.vm_execute_gc();
@@ -123,9 +123,9 @@ impl Codegen {
     ///
     /// Generate a function that always returns the constant value.
     ///
-    fn gen_const_fn(&mut self, value: &Value) {
+    fn gen_const_fn(&mut self, imm: Immediate) {
         monoasm!( &mut self.jit,
-            movq rax, (value.id());
+            movq rax, (imm.id());
             ret;
         );
     }

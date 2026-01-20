@@ -623,16 +623,16 @@ impl<'a> BytecodeGen<'a> {
             && let NodeKind::Return(box ret) = &ast.kind
         {
             match &ret.kind {
-                NodeKind::Nil => Some(Value::nil()),
-                NodeKind::Bool(b) => Some(Value::bool(*b)),
-                NodeKind::Integer(i) => Value::check_fixnum(*i),
+                NodeKind::Nil => Some(Immediate::nil()),
+                NodeKind::Bool(b) => Some(Immediate::bool(*b)),
+                NodeKind::Integer(i) => Immediate::check_fixnum(*i),
                 _ => None,
             }
         } else {
             None
         };
-        if let Some(is_const) = is_const {
-            self.store[self.func_id].kind = FuncKind::Const(is_const);
+        if let Some(imm) = is_const {
+            self.store[self.func_id].kind = FuncKind::Const(imm);
             return Ok(());
         }
         let loc = info.loc;
@@ -955,8 +955,8 @@ impl<'a> BytecodeGen<'a> {
         self.emit(BytecodeInst::CheckKwRest(local), Loc::default());
     }
 
-    fn emit_imm(&mut self, dst: BcReg, v: Value) {
-        self.emit(BytecodeInst::Immediate(dst, v), Loc::default());
+    fn emit_imm(&mut self, dst: BcReg, imm: Immediate) {
+        self.emit(BytecodeInst::Immediate(dst, imm), Loc::default());
     }
 
     fn emit_literal(&mut self, dst: BcReg, v: Value) {
@@ -965,16 +965,16 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn emit_nil(&mut self, dst: BcReg) {
-        self.emit_imm(dst, Value::nil());
+        self.emit_imm(dst, Immediate::nil());
     }
 
     fn emit_symbol(&mut self, dst: BcReg, sym: IdentId) {
-        self.emit_imm(dst, Value::symbol(sym));
+        self.emit_imm(dst, Immediate::symbol(sym));
     }
 
     fn emit_integer(&mut self, dst: BcReg, i: i64) {
-        if let Some(v) = Value::check_fixnum(i) {
-            self.emit_imm(dst, v);
+        if let Some(imm) = Immediate::check_fixnum(i) {
+            self.emit_imm(dst, imm);
         } else {
             self.emit_literal(dst, Value::integer(i));
         }
@@ -985,7 +985,7 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn emit_float(&mut self, dst: BcReg, f: f64) {
-        if let Some(v) = Value::flonum(f) {
+        if let Some(v) = Immediate::flonum(f) {
             self.emit_imm(dst, v);
         } else {
             self.emit_literal(dst, Value::float(f));
