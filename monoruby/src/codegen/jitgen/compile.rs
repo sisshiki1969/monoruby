@@ -136,7 +136,7 @@ impl<'a> JitContext<'a> {
         assert!(state.no_capture_guard());
         let pc = self.get_pc(bc_pos);
         state.set_pc(pc);
-        let trace_ir = pc.trace_ir(self.store);
+        let trace_ir = TraceIr::from_pc(pc, self.store);
         #[cfg(feature = "jit-debug")]
         if let Some(fmt) = trace_ir.format(self.store, self.iseq_id(), pc) {
             eprintln!("{fmt}");

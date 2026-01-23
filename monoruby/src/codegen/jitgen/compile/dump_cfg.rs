@@ -53,7 +53,7 @@ pub(super) fn dump_cfg(
         let BasicBlockInfoEntry { begin, end, .. } = iseq.bb_info[bbid];
         for bc in begin..=end {
             let pc = iseq.get_pc(bc);
-            if let Some(inst) = pc.trace_ir(store).format(store, iseq_id, pc) {
+            if let Some(inst) = TraceIr::from_pc(pc, store).format(store, iseq_id, pc) {
                 s += "|";
                 let html = html_escape::encode_text(&inst)
                     .replace('|', "\\|")
