@@ -242,9 +242,7 @@ impl<'a> JitContext<'a> {
                     {
                         assert_eq!(ivarid, cached_ivarid);
                     }
-                    if self.load_ivar(state, ir, dst, self_class, ivarid) {
-                        self.set_ivar_heap_accessed();
-                    }
+                    self.load_ivar(state, ir, dst, self_class, ivarid);
                 } else {
                     return Ok(CompileResult::Recompile(RecompileReason::IvarIdNotFound));
                 }
@@ -257,9 +255,7 @@ impl<'a> JitContext<'a> {
                     {
                         assert_eq!(ivarid, cached_ivarid);
                     }
-                    if self.store_ivar(state, ir, src, self_class, ivarid) {
-                        self.set_ivar_heap_accessed();
-                    }
+                    self.store_ivar(state, ir, src, self_class, ivarid);
                     state.unset_side_effect_guard();
                 } else {
                     return Ok(CompileResult::Recompile(RecompileReason::IvarIdNotFound));
@@ -290,10 +286,10 @@ impl<'a> JitContext<'a> {
             TraceIr::LoadDynVar(dst, src) => {
                 assert!(!dst.is_self());
                 if let Some((offset, not_captured)) = self.outer_stack_offset(state, src.outer) {
+                    assert!(not_captured);
                     ir.push(AsmInst::LoadDynVarSpecialized {
                         offset,
                         reg: src.reg,
-                        not_captured,
                     });
                 } else {
                     ir.push(AsmInst::LoadDynVar { src });
@@ -303,11 +299,11 @@ impl<'a> JitContext<'a> {
             TraceIr::StoreDynVar(dst, src) => {
                 state.load(ir, src, GP::Rdi);
                 if let Some((offset, not_captured)) = self.outer_stack_offset(state, dst.outer) {
+                    assert!(not_captured);
                     ir.push(AsmInst::StoreDynVarSpecialized {
                         offset,
                         dst: dst.reg,
                         src: GP::Rdi,
-                        not_captured,
                     });
                 } else {
                     ir.push(AsmInst::StoreDynVar { dst, src: GP::Rdi });
@@ -528,13 +524,13 @@ impl<'a> JitContext<'a> {
                         return Ok(CompileResult::Continue);
                     }
                 }
-                if let Some(base_class) = base_class {
+                if let Some(lhs_class) = base_class {
                     return self.call_binary_method(
                         state,
                         ir,
                         base,
                         idx,
-                        base_class,
+                        lhs_class,
                         IdentId::_INDEX,
                         bc_pos,
                     );
@@ -542,21 +538,24 @@ impl<'a> JitContext<'a> {
                 return Ok(CompileResult::Recompile(RecompileReason::NotCached));
             }
             TraceIr::IndexAssign {
-                base: recv,
+                base,
                 idx,
                 src,
-                class,
+                class: ic,
             } => {
                 assert_eq!(idx.0 + 1, src.0);
-                if let Some((recv_class, idx_class)) = class {
-                    if self.store[recv_class].is_array_ty_instance() && idx_class == INTEGER_CLASS {
-                        state.array_integer_index_assign(ir, self.store, src, recv, idx);
+                let (base_class, idx_class) = state.binary_class(base, idx, ic);
+                if let (Some(base_class), Some(INTEGER_CLASS)) = (base_class, idx_class) {
+                    if self.store[base_class].is_array_ty_instance() {
+                        state.array_integer_index_assign(ir, self.store, src, base, idx);
                         return Ok(CompileResult::Continue);
                     }
+                }
+                if let Some(recv_class) = base_class {
                     return self.call_ternary_method(
                         state,
                         ir,
-                        recv,
+                        base,
                         idx,
                         recv_class,
                         IdentId::_INDEX_ASSIGN,
@@ -565,6 +564,65 @@ impl<'a> JitContext<'a> {
                 }
                 return Ok(CompileResult::Recompile(RecompileReason::NotCached));
             }
+            TraceIr::MethodCall {
+                _polymorphic: _,
+                callid,
+                cache,
+            } => {
+                let callsite = &self.store[callid];
+                let recv_class = state.class(callsite.recv);
+                let (recv_class, func_id) = if let Some(cache) = cache {
+                    if cache.version != self.class_version()
+                        || (recv_class.is_some() && Some(cache.recv_class) != recv_class)
+                    {
+                        // the inline method cache is invalid.
+                        let recv_class = if let Some(recv_class) = recv_class {
+                            recv_class
+                        } else {
+                            cache.recv_class
+                        };
+                        (
+                            recv_class,
+                            if let Some(fid) = self.jit_check_call(recv_class, callsite.name) {
+                                fid
+                            } else {
+                                return Ok(CompileResult::Recompile(
+                                    RecompileReason::MethodNotFound,
+                                ));
+                            },
+                        )
+                    } else {
+                        // the inline method cache is valid.
+                        (cache.recv_class, cache.func_id)
+                    }
+                } else if let Some(recv_class) = recv_class {
+                    // no inline cache, but receiver class is known.
+                    if let Some(func_id) = self.jit_check_call(recv_class, callsite.name) {
+                        let cache = MethodCacheEntry {
+                            recv_class,
+                            func_id,
+                            version: self.class_version(),
+                        };
+                        pc.write_method_cache(&cache);
+                        (recv_class, func_id)
+                    } else {
+                        return Ok(CompileResult::Recompile(RecompileReason::MethodNotFound));
+                    }
+                } else {
+                    return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+                };
+
+                return self.compile_method_call(state, ir, recv_class, func_id, callid);
+            }
+            TraceIr::Yield { callid } => {
+                if let Some(block_info) = self.current_method_given_block()
+                    && let Some(iseq) = self.store[block_info.block_fid].is_iseq()
+                {
+                    return self.compile_yield_specialized(state, ir, callid, &block_info, iseq);
+                }
+                state.compile_yield(ir, &self.store, callid);
+            }
+            TraceIr::InlineCache => {}
 
             TraceIr::ArrayTEq { lhs, rhs } => {
                 state.write_back_slot(ir, lhs);
@@ -626,65 +684,7 @@ impl<'a> JitContext<'a> {
                 state.unset_class_version_guard();
                 state.unset_side_effect_guard();
             }
-            TraceIr::MethodCall {
-                _polymorphic: _,
-                callid,
-                cache,
-            } => {
-                let callsite = &self.store[callid];
-                let recv_class = state.class(callsite.recv);
-                let (recv_class, func_id) = if let Some(cache) = cache {
-                    if cache.version != self.class_version()
-                        || (recv_class.is_some() && Some(cache.recv_class) != recv_class)
-                    {
-                        // the inline method cache is invalid.
-                        let recv_class = if let Some(recv_class) = recv_class {
-                            recv_class
-                        } else {
-                            cache.recv_class
-                        };
-                        (
-                            recv_class,
-                            if let Some(fid) = self.jit_check_call(recv_class, callsite.name) {
-                                fid
-                            } else {
-                                return Ok(CompileResult::Recompile(
-                                    RecompileReason::MethodNotFound,
-                                ));
-                            },
-                        )
-                    } else {
-                        // the inline method cache is valid.
-                        (cache.recv_class, cache.func_id)
-                    }
-                } else if let Some(recv_class) = recv_class {
-                    // no inline cache, but receiver class is known.
-                    if let Some(func_id) = self.jit_check_call(recv_class, callsite.name) {
-                        let cache = MethodCacheEntry {
-                            recv_class,
-                            func_id,
-                            version: self.class_version(),
-                        };
-                        pc.write_method_cache(&cache);
-                        (recv_class, func_id)
-                    } else {
-                        return Ok(CompileResult::Recompile(RecompileReason::MethodNotFound));
-                    }
-                } else {
-                    return Ok(CompileResult::Recompile(RecompileReason::NotCached));
-                };
 
-                return self.compile_method_call(state, ir, recv_class, func_id, callid);
-            }
-            TraceIr::Yield { callid } => {
-                if let Some(block_info) = self.current_method_given_block()
-                    && let Some(iseq) = self.store[block_info.block_fid].is_iseq()
-                {
-                    return self.compile_yield_specialized(state, ir, callid, &block_info, iseq);
-                }
-                state.compile_yield(ir, &self.store, callid);
-            }
-            TraceIr::InlineCache => {}
             TraceIr::MethodDef { name, func_id } => {
                 let using_xmm = state.get_using_xmm();
                 ir.push(AsmInst::MethodDef {

@@ -597,18 +597,13 @@ impl Codegen {
             }
 
             AsmInst::LoadDynVar { src } => self.load_dyn_var(src),
-            AsmInst::LoadDynVarSpecialized {
-                offset,
-                reg,
-                not_captured: on_stack,
-            } => self.load_dyn_var_specialized(offset, reg, on_stack),
+            AsmInst::LoadDynVarSpecialized { offset, reg } => {
+                self.load_dyn_var_specialized(offset, reg);
+            }
             AsmInst::StoreDynVar { dst, src } => self.store_dyn_var(dst, src),
-            AsmInst::StoreDynVarSpecialized {
-                offset,
-                dst,
-                src,
-                not_captured: on_stack,
-            } => self.store_dyn_var_specialized(offset, dst, src, on_stack),
+            AsmInst::StoreDynVarSpecialized { offset, dst, src } => {
+                self.store_dyn_var_specialized(offset, dst, src);
+            }
 
             AsmInst::LoadIVarHeap {
                 ivarid,
