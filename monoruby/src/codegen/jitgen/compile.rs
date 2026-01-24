@@ -2,9 +2,13 @@ use crate::{bytecodegen::BinOpK, codegen::jitgen::state::LinkMode};
 
 use super::*;
 
+mod binary_op;
 #[cfg(feature = "emit-cfg")]
 mod dump_cfg;
+mod index;
 mod loop_analysis;
+mod method_call;
+mod variables;
 
 impl<'a> JitContext<'a> {
     pub(super) fn traceir_to_asmir(&mut self, frame: JitStackFrame) -> Result<JitStackFrame> {

@@ -22,19 +22,14 @@ use trace_ir::*;
 
 pub mod asmir;
 mod basic_block;
-mod binary_op;
 mod compile;
 mod context;
 mod definition;
 mod deoptimize;
 mod guard;
-mod index;
-mod init_method;
 mod merge;
-mod method_call;
 mod state;
 pub mod trace_ir;
-mod variables;
 
 type Result<T> = std::result::Result<T, CompileError>;
 

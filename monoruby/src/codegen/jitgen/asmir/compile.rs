@@ -5,6 +5,7 @@ mod constants;
 mod defined;
 mod definition;
 mod index;
+mod init_method;
 mod method_call;
 mod variables;
 
