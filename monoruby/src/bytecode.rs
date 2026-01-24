@@ -375,16 +375,16 @@ impl BytecodePtr {
         }
     }
 
-    pub fn write_method_cache(self, cache: &MethodCacheEntry) {
-        let p = self.as_ptr() as *mut u8;
-        // SAFETY: Writing method cache data at specific offsets within the bytecode
-        // instruction. The bytecode structure has sufficient space for these writes.
-        unsafe {
-            (p.add(8) as *mut Option<FuncId>).write(Some(cache.func_id));
-            (p.add(24) as *mut Option<ClassId>).write(Some(cache.recv_class));
-            (p.add(28) as *mut u32).write(cache.version);
-        }
-    }
+    //pub fn write_method_cache(self, cache: &MethodCacheEntry) {
+    //    let p = self.as_ptr() as *mut u8;
+    //    // SAFETY: Writing method cache data at specific offsets within the bytecode
+    //    // instruction. The bytecode structure has sufficient space for these writes.
+    //    unsafe {
+    //        (p.add(8) as *mut Option<FuncId>).write(Some(cache.func_id));
+    //        (p.add(24) as *mut Option<ClassId>).write(Some(cache.recv_class));
+    //        (p.add(28) as *mut u32).write(cache.version);
+    //    }
+    //}
 }
 
 impl BytecodePtr {

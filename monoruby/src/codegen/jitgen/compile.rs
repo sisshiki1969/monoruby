@@ -1,4 +1,4 @@
-use crate::{bytecodegen::BinOpK, codegen::jitgen::state::LinkMode};
+use crate::codegen::jitgen::state::LinkMode;
 
 use super::*;
 
@@ -211,28 +211,10 @@ impl<'a> JitContext<'a> {
             }
 
             TraceIr::LoadConst(dst, id) => {
-                state.discard(dst);
-
-                if let Some(cache) = &self.store[id].cache {
-                    let base_slot = self.store[id].base;
-                    if let Some(slot) = base_slot {
-                        if let Some(base_class) = cache.base_class {
-                            state.guard_const_base_class(ir, slot, base_class);
-                        } else {
-                            return Ok(CompileResult::Recompile(RecompileReason::NotCached));
-                        }
-                    }
-                    state.load_constant(ir, dst, cache);
-                    state.unset_side_effect_guard();
-                } else {
-                    return Ok(CompileResult::Recompile(RecompileReason::NotCached));
-                }
+                return self.load_constant(state, ir, dst, id);
             }
             TraceIr::StoreConst(src, id) => {
-                state.load(ir, src, GP::Rax);
-                let using_xmm = state.get_using_xmm();
-                ir.push(AsmInst::StoreConstant { id, using_xmm });
-                state.unset_side_effect_guard();
+                state.store_constant(ir, src, id);
             }
             TraceIr::LoadIvar(dst, name, cache) => {
                 let self_class = self.self_class();
@@ -285,29 +267,11 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::LoadDynVar(dst, src) => {
                 assert!(!dst.is_self());
-                if let Some((offset, not_captured)) = self.outer_stack_offset(state, src.outer) {
-                    assert!(not_captured);
-                    ir.push(AsmInst::LoadDynVarSpecialized {
-                        offset,
-                        reg: src.reg,
-                    });
-                } else {
-                    ir.push(AsmInst::LoadDynVar { src });
-                }
+                self.load_dynvar(state, ir, src);
                 state.def_rax2acc(ir, dst);
             }
             TraceIr::StoreDynVar(dst, src) => {
-                state.load(ir, src, GP::Rdi);
-                if let Some((offset, not_captured)) = self.outer_stack_offset(state, dst.outer) {
-                    assert!(not_captured);
-                    ir.push(AsmInst::StoreDynVarSpecialized {
-                        offset,
-                        dst: dst.reg,
-                        src: GP::Rdi,
-                    });
-                } else {
-                    ir.push(AsmInst::StoreDynVar { dst, src: GP::Rdi });
-                }
+                self.store_dynvar(state, ir, dst, src);
                 state.unset_side_effect_guard();
             }
             TraceIr::BlockArgProxy(ret, outer) => {
@@ -404,62 +368,14 @@ impl<'a> JitContext<'a> {
                 lhs,
                 rhs,
                 ic,
-            } => {
-                return match state.binop_type(lhs, rhs, ic) {
-                    BinaryOpType::Integer(mode) => {
-                        state.gen_binop_integer(ir, kind, dst, mode);
-                        Ok(CompileResult::Continue)
-                    }
-                    BinaryOpType::Float(info) => {
-                        match kind {
-                            BinOpK::Exp | BinOpK::Rem => {
-                                return self.call_binary_method(
-                                    state,
-                                    ir,
-                                    lhs,
-                                    rhs,
-                                    info.lhs_class.into(),
-                                    kind,
-                                    bc_pos,
-                                );
-                            }
-                            _ => {}
-                        }
-                        state.gen_binop_float(ir, kind, dst, info);
-                        Ok(CompileResult::Continue)
-                    }
-                    BinaryOpType::Other(Some(lhs_class)) => {
-                        self.call_binary_method(state, ir, lhs, rhs, lhs_class, kind, bc_pos)
-                    }
-                    BinaryOpType::Other(None) => {
-                        Ok(CompileResult::Recompile(RecompileReason::NotCached))
-                    }
-                };
-            }
+            } => return self.binary_op(state, ir, kind, dst, lhs, rhs, ic, bc_pos),
             TraceIr::BinCmp {
                 kind,
                 dst,
                 lhs,
                 rhs,
                 ic,
-            } => {
-                return match state.binop_type(lhs, rhs, ic) {
-                    BinaryOpType::Integer(mode) => {
-                        state.gen_cmp_integer(ir, kind, dst, mode);
-                        Ok(CompileResult::Continue)
-                    }
-                    BinaryOpType::Float(info) => {
-                        state.gen_cmp_float(ir, dst, info, kind);
-                        Ok(CompileResult::Continue)
-                    }
-                    BinaryOpType::Other(Some(lhs_class)) => {
-                        self.call_binary_method(state, ir, lhs, rhs, lhs_class, kind, bc_pos)
-                    }
-                    BinaryOpType::Other(None) => {
-                        Ok(CompileResult::Recompile(RecompileReason::NotCached))
-                    }
-                };
-            }
+            } => return self.binary_cmp(state, ir, kind, dst, lhs, rhs, ic, bc_pos),
             TraceIr::BinCmpBr {
                 kind,
                 _dst: _,
@@ -470,73 +386,14 @@ impl<'a> JitContext<'a> {
                 ic,
             } => {
                 let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
-                return match state.binop_type(lhs, rhs, ic) {
-                    BinaryOpType::Integer(mode) => {
-                        if let Some(result) =
-                            state.check_concrete_i64_cmpbr(mode, kind, brkind, dest_bb)
-                        {
-                            return Ok(result);
-                        }
-                        let src_idx = bc_pos + 1;
-                        let dest = self.label();
-                        state.gen_cmpbr_integer(ir, kind, mode, brkind, dest);
-                        self.new_side_branch(src_idx, dest_bb, state.clone(), dest);
-                        Ok(CompileResult::Continue)
-                    }
-                    BinaryOpType::Float(info) => {
-                        if let Some(result) =
-                            state.check_concrete_f64_cmpbr(lhs, rhs, kind, brkind, dest_bb)
-                        {
-                            return Ok(result);
-                        }
-                        let src_idx = bc_pos + 1;
-                        let dest = self.label();
-                        let mode = state.load_binary_xmm(ir, info);
-                        ir.float_cmp_br(mode, kind, brkind, dest);
-                        self.new_side_branch(src_idx, dest_bb, state.clone(), dest);
-                        Ok(CompileResult::Continue)
-                    }
-                    BinaryOpType::Other(Some(lhs_class)) => {
-                        let res =
-                            self.call_binary_method(state, ir, lhs, rhs, lhs_class, kind, bc_pos)?;
-                        if let CompileResult::Continue = res {
-                            let src_idx = bc_pos + 1;
-                            state.unset_class_version_guard();
-                            self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
-                        }
-                        Ok(res)
-                    }
-                    BinaryOpType::Other(None) => {
-                        Ok(CompileResult::Recompile(RecompileReason::NotCached))
-                    }
-                };
+                return self.binart_cmp_br(state, ir, kind, lhs, rhs, dest_bb, brkind, ic, bc_pos);
             }
             TraceIr::Index {
                 dst,
                 base,
                 idx,
                 class: ic,
-            } => {
-                let (base_class, idx_class) = state.binary_class(base, idx, ic);
-                if let (Some(base_class), Some(INTEGER_CLASS)) = (base_class, idx_class) {
-                    if self.store[base_class].is_array_ty_instance() {
-                        state.array_integer_index(ir, &self.store, dst, base, idx);
-                        return Ok(CompileResult::Continue);
-                    }
-                }
-                if let Some(lhs_class) = base_class {
-                    return self.call_binary_method(
-                        state,
-                        ir,
-                        base,
-                        idx,
-                        lhs_class,
-                        IdentId::_INDEX,
-                        bc_pos,
-                    );
-                }
-                return Ok(CompileResult::Recompile(RecompileReason::NotCached));
-            }
+            } => return self.index(state, ir, dst, base, idx, ic, bc_pos),
             TraceIr::IndexAssign {
                 base,
                 idx,
@@ -544,76 +401,13 @@ impl<'a> JitContext<'a> {
                 class: ic,
             } => {
                 assert_eq!(idx.0 + 1, src.0);
-                let (base_class, idx_class) = state.binary_class(base, idx, ic);
-                if let (Some(base_class), Some(INTEGER_CLASS)) = (base_class, idx_class) {
-                    if self.store[base_class].is_array_ty_instance() {
-                        state.array_integer_index_assign(ir, self.store, src, base, idx);
-                        return Ok(CompileResult::Continue);
-                    }
-                }
-                if let Some(recv_class) = base_class {
-                    return self.call_ternary_method(
-                        state,
-                        ir,
-                        base,
-                        idx,
-                        recv_class,
-                        IdentId::_INDEX_ASSIGN,
-                        bc_pos,
-                    );
-                }
-                return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+                return self.index_assign(state, ir, base, idx, src, ic, bc_pos);
             }
             TraceIr::MethodCall {
                 _polymorphic: _,
                 callid,
                 cache,
-            } => {
-                let callsite = &self.store[callid];
-                let recv_class = state.class(callsite.recv);
-                let (recv_class, func_id) = if let Some(cache) = cache {
-                    if cache.version != self.class_version()
-                        || (recv_class.is_some() && Some(cache.recv_class) != recv_class)
-                    {
-                        // the inline method cache is invalid.
-                        let recv_class = if let Some(recv_class) = recv_class {
-                            recv_class
-                        } else {
-                            cache.recv_class
-                        };
-                        (
-                            recv_class,
-                            if let Some(fid) = self.jit_check_call(recv_class, callsite.name) {
-                                fid
-                            } else {
-                                return Ok(CompileResult::Recompile(
-                                    RecompileReason::MethodNotFound,
-                                ));
-                            },
-                        )
-                    } else {
-                        // the inline method cache is valid.
-                        (cache.recv_class, cache.func_id)
-                    }
-                } else if let Some(recv_class) = recv_class {
-                    // no inline cache, but receiver class is known.
-                    if let Some(func_id) = self.jit_check_call(recv_class, callsite.name) {
-                        let cache = MethodCacheEntry {
-                            recv_class,
-                            func_id,
-                            version: self.class_version(),
-                        };
-                        pc.write_method_cache(&cache);
-                        (recv_class, func_id)
-                    } else {
-                        return Ok(CompileResult::Recompile(RecompileReason::MethodNotFound));
-                    }
-                } else {
-                    return Ok(CompileResult::Recompile(RecompileReason::NotCached));
-                };
-
-                return self.compile_method_call(state, ir, recv_class, func_id, callid);
-            }
+            } => return self.method_call(state, ir, callid, cache),
             TraceIr::Yield { callid } => {
                 if let Some(block_info) = self.current_method_given_block()
                     && let Some(iseq) = self.store[block_info.block_fid].is_iseq()
