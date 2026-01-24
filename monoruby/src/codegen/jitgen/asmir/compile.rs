@@ -269,7 +269,6 @@ impl Codegen {
                 );
                 self.jit.select_page(0);
             }
-            AsmInst::WriteBackIfCaptured(wb) => self.gen_write_back_if_captured(&wb),
             AsmInst::XmmSave(using_xmm) => self.xmm_save(using_xmm),
             AsmInst::XmmRestore(using_xmm) => self.xmm_restore(using_xmm),
             AsmInst::ExecGc { write_back, error } => {

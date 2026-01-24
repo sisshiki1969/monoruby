@@ -359,13 +359,6 @@ impl AbstractFrame {
             self.to_S(ir, i);
         }
     }
-
-    pub(super) fn write_back_locals_if_captured(&mut self, ir: &mut AsmIr) {
-        if !self.no_capture_guard() {
-            let wb = self.get_locals_write_back();
-            ir.push(AsmInst::WriteBackIfCaptured(wb));
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

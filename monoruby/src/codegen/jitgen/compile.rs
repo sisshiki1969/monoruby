@@ -580,7 +580,7 @@ impl<'a> JitContext<'a> {
             }
 
             TraceIr::Ret(ret) => {
-                state.write_back_locals_if_captured(ir);
+                assert!(state.no_capture_guard());
                 state.load(ir, ret, GP::Rax);
                 ir.push(AsmInst::Ret);
                 let result = state.as_return(ret);
@@ -588,7 +588,7 @@ impl<'a> JitContext<'a> {
                 return Ok(CompileResult::Return(result));
             }
             TraceIr::MethodRet(ret) => {
-                state.write_back_locals_if_captured(ir);
+                assert!(state.no_capture_guard());
                 state.load(ir, ret, GP::Rax);
                 if let Some(rbp_offset) = self.method_caller_stack_offset() {
                     ir.push(AsmInst::MethodRetSpecialized { rbp_offset });
@@ -600,7 +600,7 @@ impl<'a> JitContext<'a> {
                 return Ok(CompileResult::MethodReturn(result));
             }
             TraceIr::BlockBreak(ret) => {
-                state.write_back_locals_if_captured(ir);
+                assert!(state.no_capture_guard());
                 state.load(ir, ret, GP::Rax);
                 if let Some(rbp_offset) = self.iter_caller_stack_offset() {
                     ir.push(AsmInst::BlockBreakSpecialized { rbp_offset });

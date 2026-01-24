@@ -942,19 +942,6 @@ impl AbstractFrame {
             .collect()
     }
 
-    pub(super) fn get_locals_write_back(&self) -> WriteBack {
-        let local_num = self.local_num;
-        let f = |reg: SlotId| reg.0 as usize <= local_num;
-        let xmm = self.wb_xmm(f);
-        let literal = self.wb_literal(f);
-        let void = self.wb_void();
-        let r15 = match self.r15 {
-            Some(slot) if f(slot) => Some(slot),
-            _ => None,
-        };
-        WriteBack::new(xmm, literal, r15, void)
-    }
-
     ///
     /// Write back the value of the *slot* to the corresponding stack slot.
     ///
