@@ -684,7 +684,7 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
 
 impl TraceIr {
     #[cfg(feature = "dump-traceir")]
-    pub(crate) fn format(&self, store: &Store, iseq_id: ISeqId, pc: BytecodePtr) -> Option<String> {
+    pub(crate) fn format(store: &Store, iseq_id: ISeqId, pc: BytecodePtr) -> Option<String> {
         fn optstr(opt: bool) -> &'static str {
             if opt { "_" } else { "" }
         }
@@ -749,27 +749,27 @@ impl TraceIr {
 
         let iseq = &store[iseq_id];
         let bc_pos = iseq.get_pc_index(Some(pc));
-        let s = match self {
+        let s = match Self::from_pc(pc, store) {
             TraceIr::InitMethod(info) => {
                 format!("init_method {info:?}")
             }
             TraceIr::CheckLocal(local, disp) => {
-                let dest = iseq.get_bb(bc_pos + 1 + *disp);
+                let dest = iseq.get_bb(bc_pos + 1 + disp);
                 format!("check_local({local:?}) =>{dest:?}")
             }
             TraceIr::CheckKwRest(local) => {
                 format!("check_kw_rest({:?})", local)
             }
             TraceIr::Br(disp) => {
-                let dest = iseq.get_bb(bc_pos + 1 + *disp);
+                let dest = iseq.get_bb(bc_pos + 1 + disp);
                 format!("br => {dest:?}")
             }
             TraceIr::CondBr(reg, disp, opt, kind) => {
-                let dest = iseq.get_bb(bc_pos + 1 + *disp);
-                format!("cond{}br {}{reg:?} => {dest:?}", kind.to_s(), optstr(*opt),)
+                let dest = iseq.get_bb(bc_pos + 1 + disp);
+                format!("cond{}br {}{reg:?} => {dest:?}", kind.to_s(), optstr(opt),)
             }
             TraceIr::NilBr(reg, disp) => {
-                let dest = iseq.get_bb(bc_pos + 1 + *disp);
+                let dest = iseq.get_bb(bc_pos + 1 + disp);
                 format!("nilbr {reg:?} => {dest:?}")
             }
             TraceIr::OptCase {
@@ -779,7 +779,7 @@ impl TraceIr {
                 else_disp,
                 branch_table,
             } => {
-                let else_dest = iseq.get_bb(bc_pos + 1 + *else_disp);
+                let else_dest = iseq.get_bb(bc_pos + 1 + else_disp);
                 let branch_table: Vec<String> = branch_table
                     .iter()
                     .map(|disp| {
@@ -804,7 +804,7 @@ impl TraceIr {
                 "{:?} = {:?} {} {:?}",
                 dst,
                 start,
-                if *exclude_end { "..." } else { ".." },
+                if exclude_end { "..." } else { ".." },
                 end
             ),
             TraceIr::Array { dst, callid } => {
@@ -813,7 +813,7 @@ impl TraceIr {
                     pos_num,
                     splat_pos,
                     ..
-                } = &store[*callid];
+                } = &store[callid];
                 let mut s = format!("{:?} = array[", dst);
                 for i in 0..*pos_num {
                     let prefix = if splat_pos.contains(&i) { "*" } else { "" };
@@ -837,7 +837,7 @@ impl TraceIr {
                 class,
             } => {
                 let op1 = format!("{:?} = {:?}.[{:?}]", dst, base, idx);
-                fmt(store, op1, *class)
+                fmt(store, op1, class)
             }
             TraceIr::IndexAssign {
                 base,
@@ -846,22 +846,22 @@ impl TraceIr {
                 class,
             } => {
                 let op1 = format!("{:?}:.[{:?}:] = {:?}", base, idx, src,);
-                fmt(store, op1, *class)
+                fmt(store, op1, class)
             }
             TraceIr::LoadConst(reg, id) => {
-                let op = store[*id].format();
+                let op = store[id].format();
                 let op1 = format!("{:?} = {op}", reg);
                 format!(
                     "{:36} [{}]",
                     op1,
-                    match &store[*id].cache {
+                    match &store[id].cache {
                         None => "<INVALID>".to_string(),
                         Some(cache) => cache.value.debug(store),
                     }
                 )
             }
             TraceIr::StoreConst(src, id) => {
-                let op = store[*id].format();
+                let op = store[id].format();
                 format!("{op} = {:?}", src)
             }
             TraceIr::BlockArgProxy(dst, outer) => {
@@ -880,7 +880,7 @@ impl TraceIr {
                 format!(
                     "{:?} = {id}: {}",
                     reg,
-                    format!("{}[{:?}]", store.debug_class_name(*class_id), ivar_id)
+                    format!("{}[{:?}]", store.debug_class_name(class_id), ivar_id)
                 )
             }
             TraceIr::LoadIvar(reg, id, None) => {
@@ -889,7 +889,7 @@ impl TraceIr {
             TraceIr::StoreIvar(reg, id, Some((class_id, ivar_id))) => {
                 format!(
                     "{id}: {} = {:?}",
-                    format!("{}[{:?}]", store.debug_class_name(*class_id), ivar_id),
+                    format!("{}[{:?}]", store.debug_class_name(class_id), ivar_id),
                     reg
                 )
             }
@@ -918,7 +918,7 @@ impl TraceIr {
                 format!(
                     "{:?} = ${}",
                     ret,
-                    match *id {
+                    match id {
                         ruruby_parse::SPECIAL_LASTMATCH => "&".to_string(),
                         ruruby_parse::SPECIAL_POSTMATCH => "'".to_string(),
                         ruruby_parse::SPECIAL_LOADPATH => "$LOAD_PATH".to_string(),
@@ -935,7 +935,7 @@ impl TraceIr {
                 ic: src_class,
             } => {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
-                format!("{:36} [{}]", op1, store.debug_class_name(*src_class),)
+                format!("{:36} [{}]", op1, store.debug_class_name(src_class),)
             }
             TraceIr::Not { dst, src } => {
                 let op1 = format!("{:?} = !{:?}", dst, src);
@@ -948,7 +948,7 @@ impl TraceIr {
                 lhs,
                 rhs,
                 ic,
-            } => binop_fmt(store, *kind, *dst, *lhs, *rhs, ic.clone()),
+            } => binop_fmt(store, kind, dst, lhs, rhs, ic.clone()),
 
             TraceIr::BinCmp {
                 kind,
@@ -956,7 +956,7 @@ impl TraceIr {
                 lhs,
                 rhs,
                 ic,
-            } => cmp_fmt(store, *kind, *dst, *lhs, *rhs, ic.clone(), false),
+            } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), false),
             TraceIr::BinCmpBr {
                 kind,
                 _dst: dst,
@@ -964,7 +964,7 @@ impl TraceIr {
                 rhs,
                 ic,
                 ..
-            } => cmp_fmt(store, *kind, *dst, *lhs, *rhs, ic.clone(), true),
+            } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), true),
 
             TraceIr::ArrayTEq { lhs, rhs } => {
                 format!("{lhs:?} = *{lhs:?} === {rhs:?}")
@@ -982,7 +982,7 @@ impl TraceIr {
                 callid,
                 cache,
             } => {
-                let callsite = &store[*callid];
+                let callsite = &store[callid];
                 let name = if let Some(name) = callsite.name {
                     name.to_string()
                 } else {
@@ -990,12 +990,12 @@ impl TraceIr {
                 };
                 let CallSiteInfo { recv, dst, .. } = callsite;
                 let s = callsite.format_args();
-                let op1 = format!("{} = {:?}.{name}{s}", ret_str(*dst), recv,);
+                let op1 = format!("{} = {:?}.{name}{s}", ret_str(*dst), recv);
                 format!(
                     "{:36} {}[{}] {}",
                     op1,
-                    if *polymorphic { "POLYMORPHIC " } else { "" },
-                    store.debug_class_name(if let Some(entry) = cache {
+                    if polymorphic { "POLYMORPHIC " } else { "" },
+                    store.debug_class_name(if let Some(entry) = &cache {
                         Some(entry.recv_class)
                     } else {
                         None
@@ -1008,8 +1008,8 @@ impl TraceIr {
                 )
             }
             TraceIr::Yield { callid } => {
-                let dst = store[*callid].dst;
-                let s = store[*callid].format_args();
+                let dst = store[callid].dst;
+                let s = store[callid].format_args();
                 format!("{} = yield{s}", ret_str(dst))
             }
             TraceIr::InlineCache => return None,
@@ -1028,7 +1028,7 @@ impl TraceIr {
             } => {
                 format!(
                     "{} = class_def {}{name}{}: {:?}",
-                    ret_str(*dst),
+                    ret_str(dst),
                     if let Some(base) = base {
                         format!("{:?}::", base)
                     } else {
@@ -1050,7 +1050,7 @@ impl TraceIr {
             } => {
                 format!(
                     "{} = module_def {}{name}: {:?}",
-                    ret_str(*dst),
+                    ret_str(dst),
                     if let Some(base) = base {
                         format!("{:?}::", base)
                     } else {
@@ -1066,28 +1066,28 @@ impl TraceIr {
             } => {
                 format!(
                     "{} = singleton_class_def << {:?}: {:?}",
-                    ret_str(*ret),
+                    ret_str(ret),
                     base,
                     func_id
                 )
             }
             TraceIr::ConcatStr(ret, args, len) => {
-                format!("{} = concat({:?}; {})", ret_str(*ret), args, len)
+                format!("{} = concat({:?}; {})", ret_str(ret), args, len)
             }
             TraceIr::ConcatRegexp(ret, args, len) => {
-                format!("{} = concat_regexp({:?}; {})", ret_str(*ret), args, len)
+                format!("{} = concat_regexp({:?}; {})", ret_str(ret), args, len)
             }
             TraceIr::ExpandArray {
                 src,
                 dst: (dst, len, rest_pos),
             } => {
                 let mut s = String::new();
-                for i in 0..*len {
-                    let prefix = if rest_pos == &Some(i) { "*" } else { "" };
+                for i in 0..len {
+                    let prefix = if rest_pos == Some(i) { "*" } else { "" };
                     if i != 0 {
                         s += ",";
                     }
-                    s += &format!("{prefix}{:?}", *dst + i);
+                    s += &format!("{prefix}{:?}", dst + i);
                 }
                 format!("{s} = expand({src:?})")
             }
@@ -1099,7 +1099,7 @@ impl TraceIr {
             }
             TraceIr::DefinedYield { dst } => format!("{:?} = defined?(yield)", dst),
             TraceIr::DefinedConst { dst, siteid } => {
-                let s = store[*siteid].format();
+                let s = store[siteid].format();
                 format!("{:?} = defined?(constant) {s}", dst)
             }
             TraceIr::DefinedMethod { dst, recv, name } => {

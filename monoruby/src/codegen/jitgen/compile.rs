@@ -142,7 +142,7 @@ impl<'a> JitContext<'a> {
         state.set_pc(pc);
         let trace_ir = TraceIr::from_pc(pc, self.store);
         #[cfg(feature = "jit-debug")]
-        if let Some(fmt) = trace_ir.format(self.store, self.iseq_id(), pc) {
+        if let Some(fmt) = TraceIr::format(self.store, self.iseq_id(), pc) {
             eprintln!("{fmt}");
         }
         match trace_ir {

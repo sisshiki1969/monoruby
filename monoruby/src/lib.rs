@@ -16,6 +16,7 @@ mod id_table;
 pub mod tests;
 mod value;
 
+pub(crate) use crate::codegen::jitgen::trace_ir::TraceIr;
 pub(crate) use crate::codegen::runtime::ProcData;
 pub(crate) use bytecode::*;
 pub use bytecodegen::bytecode_compile_script;
