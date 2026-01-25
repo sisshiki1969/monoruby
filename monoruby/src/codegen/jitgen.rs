@@ -243,12 +243,14 @@ impl SpecializedCodeInfo {
         }
     }
 
+    #[cfg(feature = "jit-log")]
     pub(super) fn format(&self, store: &Store) -> String {
         let mut buf = String::new();
         self.format_inner(store, &mut buf, 0);
         buf
     }
 
+    #[cfg(feature = "jit-log")]
     fn format_inner(&self, store: &Store, buf: &mut String, level: usize) {
         let indent = " ".repeat(level * 2);
         buf.push_str(&format!(
@@ -485,17 +487,21 @@ impl JitModule {
         );
     }
 
+    pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
+        self.xmm_save_with_cont(using_xmm, false);
+    }
+
     ///
     /// Save floating point registers in use.
     ///
     /// ### stack pointer adjustment
     /// - -`using_xmm`.offset()
     ///
-    pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
-        if using_xmm.not_any() {
+    fn xmm_save_with_cont(&mut self, using_xmm: UsingXmm, cont: bool) {
+        if using_xmm.not_any() && !cont {
             return;
         }
-        let sp_offset = using_xmm.offset();
+        let sp_offset = using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 };
         monoasm!( &mut self.jit,
             subq rsp, (sp_offset);
         );
@@ -510,14 +516,18 @@ impl JitModule {
         }
     }
 
+    pub(crate) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
+        self.xmm_restore_with_cont(using_xmm, false);
+    }
+
     ///
     /// Restore floating point registers in use.
     ///
-    pub(crate) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
-        if using_xmm.not_any() {
+    fn xmm_restore_with_cont(&mut self, using_xmm: UsingXmm, cont: bool) {
+        if using_xmm.not_any() && !cont {
             return;
         }
-        let sp_offset = using_xmm.offset();
+        let sp_offset = using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 };
         let mut i = 0;
         for (x, b) in using_xmm.iter().enumerate() {
             if *b {

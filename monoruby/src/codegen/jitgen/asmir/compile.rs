@@ -269,8 +269,8 @@ impl Codegen {
                 );
                 self.jit.select_page(0);
             }
-            AsmInst::XmmSave(using_xmm) => self.xmm_save(using_xmm),
-            AsmInst::XmmRestore(using_xmm) => self.xmm_restore(using_xmm),
+            AsmInst::XmmSave(using_xmm, cont) => self.xmm_save_with_cont(using_xmm, cont),
+            AsmInst::XmmRestore(using_xmm, cont) => self.xmm_restore_with_cont(using_xmm, cont),
             AsmInst::ExecGc { write_back, error } => {
                 let error = &labels[error];
                 self.jit_execute_gc(&write_back, error)

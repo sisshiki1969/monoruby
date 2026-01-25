@@ -155,14 +155,22 @@ impl AsmIr {
     /// - -`using_xmm`.offset()
     ///
     pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
-        self.push(AsmInst::XmmSave(using_xmm));
+        self.push(AsmInst::XmmSave(using_xmm, false));
+    }
+
+    pub(crate) fn xmm_save_cont(&mut self, using_xmm: UsingXmm) {
+        self.push(AsmInst::XmmSave(using_xmm, true));
     }
 
     ///
     /// Restore floating point registers in use.
     ///
     pub(crate) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
-        self.push(AsmInst::XmmRestore(using_xmm));
+        self.push(AsmInst::XmmRestore(using_xmm, false));
+    }
+
+    pub(crate) fn xmm_restore_cont(&mut self, using_xmm: UsingXmm) {
+        self.push(AsmInst::XmmRestore(using_xmm, true));
     }
 
     ///
@@ -938,11 +946,11 @@ pub(super) enum AsmInst {
     /// ### stack pointer adjustment
     /// - -`using_xmm`.offset()
     ///
-    XmmSave(UsingXmm),
+    XmmSave(UsingXmm, bool),
     ///
     /// Restore floating point registers in use.
     ///
-    XmmRestore(UsingXmm),
+    XmmRestore(UsingXmm, bool),
     ///
     /// Execute GC.
     ///
@@ -1510,6 +1518,7 @@ pub(super) enum AsmInst {
 }
 
 impl AsmInst {
+    #[allow(dead_code)]
     #[cfg(feature = "emit-asm")]
     pub fn dump(&self, store: &Store) -> String {
         match self {
@@ -1571,8 +1580,8 @@ impl AsmInst {
                 format!("recompile_deopt {:?} {:?}", position, reason)
             }
             Self::HandleError(error) => format!("handle_error {:?}", error),
-            Self::XmmSave(using_xmm) => format!("xmm_save {:?}", using_xmm),
-            Self::XmmRestore(using_xmm) => format!("xmm_restore {:?}", using_xmm),
+            Self::XmmSave(using_xmm, cont) => format!("xmm_save {:?} {cont}", using_xmm),
+            Self::XmmRestore(using_xmm, cont) => format!("xmm_restore {:?} {cont}", using_xmm),
             Self::ExecGc {
                 write_back,
                 error: _,

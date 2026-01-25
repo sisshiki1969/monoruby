@@ -643,7 +643,7 @@ impl Store {
                 eprintln!("  {:?}", bbid);
             };
             let pc = iseq.get_pc(bc_pos);
-            if let Some(fmt) = TraceIr::format(self, iseq_id, pc) {
+            if let Some(fmt) = jitgen::trace_ir::TraceIr::format(self, iseq_id, pc) {
                 eprintln!("    {bc_pos} [{:02}] {fmt}", iseq.sp[i].0);
             };
         }

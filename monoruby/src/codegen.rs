@@ -1179,7 +1179,7 @@ impl Codegen {
                     let pc = iseq.get_pc(bc_pos);
                     eprintln!(
                         "    {bc_pos} {}",
-                        match TraceIr::format(store, iseq_id, pc) {
+                        match jitgen::trace_ir::TraceIr::format(store, iseq_id, pc) {
                             Some(s) => s,
                             None => "".to_string(),
                         }
