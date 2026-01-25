@@ -493,7 +493,11 @@ impl Lfp {
 
     pub fn try_arg(&self, i: usize) -> Option<Value> {
         let v = unsafe { *((self.0.as_ptr().sub(LFP_ARG0 as usize + i * 8)) as *const u64) };
-        if v == 0 { None } else { Some(Value::from(v)) }
+        if v == 0 {
+            None
+        } else {
+            Some(Value::from_u64(v))
+        }
     }
 
     pub fn args_count(&self, max: usize) -> usize {

@@ -6,15 +6,15 @@ impl Codegen {
         let entry = self.jit.label();
         self.jit.bind_label(entry.clone());
         match &globals.store[fid].kind {
-            FuncKind::ISeq(iseq) => {
-                if let Some(v) = globals[*iseq].is_const_fn() {
-                    // constant function
-                    self.gen_const_fn(&v);
-                } else if !no_jit && !cfg!(feature = "no-jit") {
+            FuncKind::ISeq(_) => {
+                if !no_jit && !cfg!(feature = "no-jit") {
                     self.gen_jit_stub();
                 } else {
                     self.gen_vm_stub()
                 }
+            }
+            FuncKind::Const(imm) => {
+                self.gen_const_fn(*imm);
             }
             FuncKind::Proc(proc) => {
                 //self.vm_execute_gc();
@@ -123,9 +123,9 @@ impl Codegen {
     ///
     /// Generate a function that always returns the constant value.
     ///
-    fn gen_const_fn(&mut self, value: &Value) {
+    fn gen_const_fn(&mut self, imm: Immediate) {
         monoasm!( &mut self.jit,
-            movq rax, (value.id());
+            movq rax, (imm.id());
             ret;
         );
     }

@@ -50,9 +50,7 @@ impl BytecodeIr {
 ///
 #[derive(Debug, Clone)]
 pub(super) enum BytecodeInst {
-    Nil(BcReg),
-    Integer(BcReg, i32),
-    Symbol(BcReg, IdentId),
+    Immediate(BcReg, Immediate),
     Literal(BcReg, Value),
     Array(BcReg, Box<CallSite>),
     Hash {

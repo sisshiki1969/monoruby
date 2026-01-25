@@ -78,12 +78,14 @@ fn test_ivar() {
     let mut globals = Globals::new(0, false, true);
     let obj = Value::object(OBJECT_CLASS);
     assert_eq!(None, globals.store.get_ivar(obj, IdentId::INITIALIZE));
-    assert!(globals
-        .store
-        .set_ivar(obj, IdentId::INITIALIZE, Value::fixnum(42))
-        .is_ok());
+    assert!(
+        globals
+            .store
+            .set_ivar(obj, IdentId::INITIALIZE, Value::i32(42))
+            .is_ok()
+    );
     assert_eq!(
-        Some(Value::fixnum(42)),
+        Some(Value::i32(42)),
         globals.store.get_ivar(obj, IdentId::INITIALIZE)
     );
 }

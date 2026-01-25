@@ -19,7 +19,7 @@ pub use match_data::MatchDataInner;
 pub use method::*;
 pub use module::{Module, ModuleInner, ModuleType};
 pub use proc::*;
-pub use range::RangeInner;
+pub use range::{RANGE_END_OFFSET, RANGE_EXCLUDE_END_OFFSET, RANGE_START_OFFSET, RangeInner};
 pub use regexp::{Regexp, RegexpInner};
 pub(crate) use string::pack::*;
 pub use string::{Encoding, RString, RStringInner};

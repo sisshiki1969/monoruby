@@ -7,8 +7,15 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Range", RANGE_CLASS, ObjTy::RANGE);
     globals.define_builtin_class_func_with(RANGE_CLASS, "new", range_new, 2, 2, false);
-    globals.define_builtin_func(RANGE_CLASS, "begin", begin, 0);
-    globals.define_builtin_func(RANGE_CLASS, "end", end, 0);
+    globals.define_builtin_inline_funcs(
+        RANGE_CLASS,
+        "begin",
+        &["first"],
+        begin,
+        Box::new(range_begin),
+        0,
+    );
+    globals.define_builtin_inline_funcs(RANGE_CLASS, "end", &["last"], end, Box::new(range_end), 0);
     globals.define_builtin_func(RANGE_CLASS, "exclude_end?", exclude_end, 0);
     globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
     //globals.define_builtin_func(RANGE_CLASS, "reject", reject, 0);
@@ -42,6 +49,30 @@ fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     Ok(lfp.self_val().as_range().start())
 }
 
+fn range_begin(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let dst = callsite.dst;
+    state.load(ir, callsite.recv, GP::Rdi);
+    ir.inline(move |r#gen, _, _| {
+        monoasm! { &mut r#gen.jit,
+            movq rax, [rdi + (crate::rvalue::RANGE_START_OFFSET as i32)];
+        }
+    });
+
+    state.def_reg2acc(ir, GP::Rax, dst);
+    true
+}
+
 ///
 /// Range#end
 ///
@@ -51,6 +82,30 @@ fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 #[monoruby_builtin]
 fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val().as_range().end())
+}
+
+fn range_end(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let dst = callsite.dst;
+    state.load(ir, callsite.recv, GP::Rdi);
+    ir.inline(move |r#gen, _, _| {
+        monoasm! { &mut r#gen.jit,
+            movq rax, [rdi + (crate::rvalue::RANGE_END_OFFSET as i32)];
+        }
+    });
+
+    state.def_reg2acc(ir, GP::Rax, dst);
+    true
 }
 
 /// Range#exclude_end?
@@ -74,14 +129,8 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
-    if range.start().is_fixnum() && range.end().is_fixnum() {
-        let start = range.start().expect_integer(globals)?;
-        let mut end = range.end().expect_integer(globals)?;
-        if !range.exclude_end() {
-            end += 1
-        }
-
-        let iter = (start..end).map(Value::fixnum);
+    if let Some((start, end)) = range.try_fixnum() {
+        let iter = (start..end).map(Value::integer);
         vm.invoke_block_iter1(globals, bh, iter)?;
         Ok(self_)
     } else {
@@ -223,14 +272,8 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let self_ = lfp.self_val();
         let range = self_.as_range();
-        if range.start().is_fixnum() && range.end().is_fixnum() {
-            let start = range.start().expect_integer(globals)?;
-            let mut end = range.end().expect_integer(globals)?;
-            if !range.exclude_end() {
-                end += 1
-            }
-
-            let iter = (start..end).map(Value::fixnum);
+        if let Some((start, end)) = range.try_fixnum() {
+            let iter = (start..end).map(Value::integer);
             let data = vm.get_block_data(globals, bh)?;
             for val in iter {
                 if !vm.invoke_block(globals, &data, &[val])?.as_bool() {
@@ -260,18 +303,12 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
-    if range.start().is_fixnum() && range.end().is_fixnum() {
-        let start = range.start().expect_integer(globals)?;
-        let mut end = range.end().expect_integer(globals)?;
-        if !range.exclude_end() {
-            end += 1
-        }
-
+    if let Some((start, end)) = range.try_fixnum() {
         if end <= start {
             return Ok(Value::array_from_vec(vec![]));
         }
 
-        let iter = (start..end).map(Value::fixnum);
+        let iter = (start..end).map(Value::integer);
         vm.invoke_block_map1(globals, bh, iter, (end - start).unsigned_abs() as usize)
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
@@ -291,18 +328,12 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
-    if range.start().is_fixnum() && range.end().is_fixnum() {
-        let start = range.start().expect_integer(globals)?;
-        let mut end = range.end().expect_integer(globals)?;
-        if !range.exclude_end() {
-            end += 1
-        }
-
+    if let Some((start, end)) = range.try_fixnum() {
         if end <= start {
             return Ok(Value::array_from_vec(vec![]));
         }
 
-        let iter = (start..end).map(Value::fixnum);
+        let iter = (start..end).map(Value::integer);
         vm.invoke_block_flat_map1(globals, bh, iter, (end - start).unsigned_abs() as usize)
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
@@ -320,14 +351,8 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let range = self_.as_range();
-    if let Some(start) = range.start().try_fixnum()
-        && let Some(mut end) = range.end().try_fixnum()
-    {
-        if !range.exclude_end() {
-            end += 1
-        }
-
-        let vec = (start..end).map(Value::fixnum).collect();
+    if let Some((start, end)) = range.try_fixnum() {
+        let vec = (start..end).map(Value::integer).collect();
         Ok(Value::array_from_vec(vec))
     } else if let Some(start) = range.start().is_str()
         && let Some(end) = range.end().is_str()

@@ -9,6 +9,51 @@ use super::{
 };
 
 impl<'a> JitContext<'a> {
+    pub(super) fn method_call(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        callid: CallSiteId,
+        cache: Option<MethodCacheEntry>,
+    ) -> Result<CompileResult> {
+        let callsite = &self.store[callid];
+        let recv_class = state.class(callsite.recv);
+        let (recv_class, func_id) = if let Some(cache) = cache {
+            if cache.version != self.class_version()
+                || (recv_class.is_some() && Some(cache.recv_class) != recv_class)
+            {
+                // the inline method cache is invalid.
+                let recv_class = if let Some(recv_class) = recv_class {
+                    recv_class
+                } else {
+                    cache.recv_class
+                };
+                (
+                    recv_class,
+                    if let Some(fid) = self.jit_check_call(recv_class, callsite.name) {
+                        fid
+                    } else {
+                        return Ok(CompileResult::Recompile(RecompileReason::MethodNotFound));
+                    },
+                )
+            } else {
+                // the inline method cache is valid.
+                (cache.recv_class, cache.func_id)
+            }
+        } else if let Some(recv_class) = recv_class {
+            // no inline cache, but receiver class is known.
+            if let Some(func_id) = self.jit_check_call(recv_class, callsite.name) {
+                (recv_class, func_id)
+            } else {
+                return Ok(CompileResult::Recompile(RecompileReason::MethodNotFound));
+            }
+        } else {
+            return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+        };
+
+        self.compile_method_call(state, ir, recv_class, func_id, callid)
+    }
+
     ///
     /// Compile TraceIr::MethodCall with inline method cache info.
     ///
@@ -110,6 +155,77 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// generate JIT code for a method call which was cached.
+    ///
+    /// ### in
+    /// - rdi: receiver: Value
+    ///
+    /// ### out
+    /// - rax: return value: Value
+    ///
+    fn call(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        callid: CallSiteId,
+        fid: FuncId,
+        recv_class: ClassId,
+    ) -> Result<CompileResult> {
+        let callsite = &self.store[callid];
+        let CallSiteInfo {
+            args,
+            pos_num,
+            dst,
+            block_fid,
+            ..
+        } = *callsite;
+        // in this point, the receiver's class is guaranteed to be identical to cached_class.
+        let (fid, outer_lfp) = match self.store[fid].kind {
+            FuncKind::AttrReader { ivar_name } => {
+                return Ok(self.attr_reader(state, ir, callid, recv_class, ivar_name));
+            }
+            FuncKind::AttrWriter { ivar_name } => {
+                return Ok(self.attr_writer(state, ir, callid, recv_class, ivar_name));
+            }
+            FuncKind::Builtin { .. } => (fid, None),
+            FuncKind::Const(v) => {
+                state.def_C(dst, v.into());
+                return Ok(CompileResult::Continue);
+            }
+            FuncKind::Proc(proc) => (proc.func_id(), Some(proc.outer_lfp())),
+            FuncKind::ISeq(iseq) => {
+                let specializable = self.store.is_simple_call(fid, callid)
+                    && (state.is_C(callsite.recv)
+                        || (pos_num != 0 && (args..args + pos_num).any(|i| state.is_C(i))));
+                let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
+
+                if iseq_block.is_some() || (specializable && self.specialize_level() < 5)
+                /*name == Some(IdentId::NEW)*/
+                {
+                    return self.specialized_iseq(
+                        state,
+                        ir,
+                        callid,
+                        recv_class,
+                        fid,
+                        iseq,
+                        specializable,
+                    );
+                }
+                (fid, None)
+            }
+        };
+
+        if block_fid.is_some() {
+            state.unset_no_capture_guard(self);
+        }
+
+        state.send(ir, &self.store, callid, fid, recv_class, outer_lfp);
+
+        Ok(CompileResult::Continue)
+    }
+
+    ///
     /// Class version guard for JIT.
     ///
     /// Check the cached class version.
@@ -206,78 +322,6 @@ impl<'a> JitContext<'a> {
         let res = state.def_rax2acc_return(ir, dst, return_state);
         state.immediate_evict(ir, evict);
         Ok(res)
-    }
-
-    ///
-    /// generate JIT code for a method call which was cached.
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    /// ### out
-    /// - rax: return value: Value
-    ///
-    fn call(
-        &mut self,
-        state: &mut AbstractState,
-        ir: &mut AsmIr,
-        callid: CallSiteId,
-        fid: FuncId,
-        recv_class: ClassId,
-    ) -> Result<CompileResult> {
-        let callsite = &self.store[callid];
-        let CallSiteInfo {
-            args,
-            pos_num,
-            dst,
-            block_fid,
-            ..
-        } = *callsite;
-        // in this point, the receiver's class is guaranteed to be identical to cached_class.
-        let (fid, outer_lfp) = match self.store[fid].kind {
-            FuncKind::AttrReader { ivar_name } => {
-                return Ok(self.attr_reader(state, ir, callid, recv_class, ivar_name));
-            }
-            FuncKind::AttrWriter { ivar_name } => {
-                return Ok(self.attr_writer(state, ir, callid, recv_class, ivar_name));
-            }
-            FuncKind::Builtin { .. } => (fid, None),
-            FuncKind::Proc(proc) => (proc.func_id(), Some(proc.outer_lfp())),
-            FuncKind::ISeq(iseq) => {
-                if let Some(v) = self.store[iseq].is_const_fn() {
-                    state.def_C(dst, v);
-                    return Ok(CompileResult::Continue);
-                }
-
-                let specializable = self.store.is_simple_call(fid, callid)
-                    && (state.is_C(callsite.recv)
-                        || (pos_num != 0 && (args..args + pos_num).any(|i| state.is_C(i))));
-                let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
-
-                if iseq_block.is_some() || (specializable && self.specialize_level() < 5)
-                /*name == Some(IdentId::NEW)*/
-                {
-                    return self.specialized_iseq(
-                        state,
-                        ir,
-                        callid,
-                        recv_class,
-                        fid,
-                        iseq,
-                        specializable,
-                    );
-                }
-                (fid, None)
-            }
-        };
-
-        if block_fid.is_some() {
-            state.unset_no_capture_guard(self);
-        }
-
-        state.send(ir, &self.store, callid, fid, recv_class, outer_lfp);
-
-        Ok(CompileResult::Continue)
     }
 
     fn attr_reader(

@@ -3,7 +3,9 @@ use onigmo_regex::Captures;
 use rubymap::RubyEql;
 use std::{
     collections::HashSet,
+    fmt::Debug,
     hash::{Hash, Hasher},
+    ops::Deref,
 };
 
 use super::*;
@@ -182,12 +184,12 @@ impl Value {
 }
 
 impl Value {
-    pub(crate) fn from(id: u64) -> Self {
+    pub(crate) fn from_u64(id: u64) -> Self {
         Value(std::num::NonZeroU64::new(id).unwrap())
     }
 
     fn from_ptr(ptr: *mut RValue) -> Self {
-        Value::from(ptr as u64)
+        Value::from_u64(ptr as u64)
     }
 
     pub(crate) fn class(&self) -> ClassId {
@@ -318,30 +320,46 @@ impl Value {
 // constructors
 //
 impl Value {
-    pub const fn nil() -> Self {
-        // SAFETY: NIL_VALUE is a non-zero constant, so it's safe to create a NonZeroU64.
-        Value(unsafe { std::num::NonZeroU64::new_unchecked(NIL_VALUE) })
+    pub fn nil() -> Self {
+        Immediate::nil().into()
     }
 
     pub fn bool(b: bool) -> Self {
-        if b {
-            Value::from(TRUE_VALUE)
-        } else {
-            Value::from(FALSE_VALUE)
-        }
+        Immediate::bool(b).into()
+    }
+
+    pub fn symbol(id: IdentId) -> Self {
+        Immediate::from_u64((id.get() as u64) << 32 | TAG_SYMBOL).into()
+    }
+
+    pub fn symbol_from_str(s: &str) -> Self {
+        let id = IdentId::get_id(s);
+        Value::symbol(id)
+    }
+
+    fn fixnum(num: i64) -> Self {
+        Immediate::fixnum(num).into()
+    }
+
+    pub fn flonum(num: f64) -> Option<Self> {
+        Immediate::flonum(num).map(|imm| imm.into())
+    }
+
+    fn is_i63(num: i64) -> bool {
+        let top = ((num as u64) >> 62) ^ ((num as u64) >> 63);
+        top & 0b1 == 0
     }
 
     pub(crate) fn from_ord(ord: std::cmp::Ordering) -> Self {
         Value::i32(ord as i32)
     }
 
-    pub fn fixnum(num: i64) -> Self {
-        Value::from((num << 1) as u64 | 0b1)
-    }
-
-    pub fn is_i63(num: i64) -> bool {
-        let top = ((num as u64) >> 62) ^ ((num as u64) >> 63);
-        top & 0b1 == 0
+    pub fn check_fixnum(i: i64) -> Option<Value> {
+        if Self::is_i63(i) {
+            Some(Value::fixnum(i))
+        } else {
+            None
+        }
     }
 
     pub fn i32(num: i32) -> Self {
@@ -380,13 +398,8 @@ impl Value {
     }
 
     pub fn float(num: f64) -> Self {
-        if num == 0.0 {
-            return Value::from(FLOAT_ZERO);
-        }
-        let unum = f64::to_bits(num);
-        let exp = ((unum >> 60) & 0b111) + 1;
-        if (exp & 0b0110) == 0b0100 {
-            Value::from(((unum.rotate_left(3)) & !1) | 2)
+        if let Some(v) = Self::flonum(num) {
+            v
         } else {
             RValue::new_float(num).pack()
         }
@@ -542,15 +555,6 @@ impl Value {
 
     pub(crate) fn new_file(file: std::fs::File, name: String) -> Self {
         RValue::new_file(file, name).pack()
-    }
-
-    pub fn symbol(id: IdentId) -> Self {
-        Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
-    }
-
-    pub fn symbol_from_str(s: &str) -> Self {
-        let id = IdentId::get_id(s);
-        Value::symbol(id)
     }
 
     pub fn range(start: Value, end: Value, exclude_end: bool) -> Self {
@@ -1651,6 +1655,81 @@ impl Value {
                 Value::range(start, end, *exclude_end)
             }
             _ => unreachable!("{:?}", node.kind),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct Immediate(std::num::NonZeroU64);
+
+impl Into<Value> for Immediate {
+    fn into(self) -> Value {
+        Value(self.0)
+    }
+}
+
+impl Deref for Immediate {
+    type Target = Value;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*(self as *const Immediate as *const Value) }
+    }
+}
+
+impl From<Value> for Immediate {
+    fn from(value: Value) -> Self {
+        assert!(value.is_packed_value());
+        Self(value.0)
+    }
+}
+
+impl Debug for Immediate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let v: Value = (*self).into();
+        write!(f, "{:?}", v)
+    }
+}
+
+impl Immediate {
+    fn from_u64(u: u64) -> Immediate {
+        Immediate(std::num::NonZeroU64::new(u).unwrap())
+    }
+
+    pub fn nil() -> Self {
+        Immediate::from_u64(NIL_VALUE)
+    }
+
+    pub fn bool(b: bool) -> Self {
+        Immediate::from_u64(if b { TRUE_VALUE } else { FALSE_VALUE })
+    }
+
+    fn fixnum(num: i64) -> Self {
+        Immediate::from_u64((num << 1) as u64 | 0b1)
+    }
+
+    pub fn symbol(id: IdentId) -> Self {
+        Immediate::from_u64((id.get() as u64) << 32 | TAG_SYMBOL)
+    }
+
+    pub fn flonum(num: f64) -> Option<Self> {
+        if num == 0.0 {
+            return Some(Self::from_u64(FLOAT_ZERO));
+        }
+        let unum = f64::to_bits(num);
+        let exp = ((unum >> 60) & 0b111) + 1;
+        if (exp & 0b0110) == 0b0100 {
+            Some(Self::from_u64(((unum.rotate_left(3)) & !1) | 2))
+        } else {
+            None
+        }
+    }
+
+    pub fn check_fixnum(i: i64) -> Option<Self> {
+        if Value::is_i63(i) {
+            Some(Immediate::fixnum(i))
+        } else {
+            None
         }
     }
 }

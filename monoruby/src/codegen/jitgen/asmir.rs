@@ -926,7 +926,6 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
         reason: RecompileReason,
     },
-    WriteBackIfCaptured(WriteBack),
     ///
     /// Handle error.
     ///
@@ -1379,7 +1378,6 @@ pub(super) enum AsmInst {
         /// machine stack offset in bytes
         offset: usize,
         reg: SlotId,
-        not_captured: bool,
     },
     /// DynVar(dst) = src
     StoreDynVar {
@@ -1392,7 +1390,6 @@ pub(super) enum AsmInst {
         offset: usize,
         dst: SlotId,
         src: GP,
-        not_captured: bool,
     },
     LoadCVar {
         name: IdentId,

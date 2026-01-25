@@ -2,6 +2,125 @@ use crate::bytecodegen::BinOpK;
 
 use super::*;
 
+impl<'a> JitContext<'a> {
+    pub(super) fn binary_op(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        kind: BinOpK,
+        dst: Option<SlotId>,
+        lhs: SlotId,
+        rhs: SlotId,
+        ic: Option<(ClassId, ClassId)>,
+        bc_pos: BcIndex,
+    ) -> Result<CompileResult> {
+        match state.binop_type(lhs, rhs, ic) {
+            BinaryOpType::Integer(mode) => {
+                state.binop_integer(ir, kind, dst, mode);
+                Ok(CompileResult::Continue)
+            }
+            BinaryOpType::Float(info) => {
+                match kind {
+                    BinOpK::Exp | BinOpK::Rem => {
+                        return self.call_binary_method(
+                            state,
+                            ir,
+                            lhs,
+                            rhs,
+                            info.lhs_class.into(),
+                            kind,
+                            bc_pos,
+                        );
+                    }
+                    _ => {}
+                }
+                state.binop_float(ir, kind, dst, info);
+                Ok(CompileResult::Continue)
+            }
+            BinaryOpType::Other(Some(lhs_class)) => {
+                self.call_binary_method(state, ir, lhs, rhs, lhs_class, kind, bc_pos)
+            }
+            BinaryOpType::Other(None) => Ok(CompileResult::Recompile(RecompileReason::NotCached)),
+        }
+    }
+
+    pub(super) fn binary_cmp(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        kind: CmpKind,
+        dst: Option<SlotId>,
+        lhs: SlotId,
+        rhs: SlotId,
+        ic: Option<(ClassId, ClassId)>,
+        bc_pos: BcIndex,
+    ) -> Result<CompileResult> {
+        match state.binop_type(lhs, rhs, ic) {
+            BinaryOpType::Integer(mode) => {
+                state.gen_cmp_integer(ir, kind, dst, mode);
+                Ok(CompileResult::Continue)
+            }
+            BinaryOpType::Float(info) => {
+                state.gen_cmp_float(ir, dst, info, kind);
+                Ok(CompileResult::Continue)
+            }
+            BinaryOpType::Other(Some(lhs_class)) => {
+                self.call_binary_method(state, ir, lhs, rhs, lhs_class, kind, bc_pos)
+            }
+            BinaryOpType::Other(None) => Ok(CompileResult::Recompile(RecompileReason::NotCached)),
+        }
+    }
+
+    pub(super) fn binart_cmp_br(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        kind: CmpKind,
+        lhs: SlotId,
+        rhs: SlotId,
+        dest_bb: BasicBlockId,
+        brkind: BrKind,
+        ic: Option<(ClassId, ClassId)>,
+        bc_pos: BcIndex,
+    ) -> Result<CompileResult> {
+        match state.binop_type(lhs, rhs, ic) {
+            BinaryOpType::Integer(mode) => {
+                if let Some(result) = state.check_concrete_i64_cmpbr(mode, kind, brkind, dest_bb) {
+                    return Ok(result);
+                }
+                let src_idx = bc_pos + 1;
+                let dest = self.label();
+                state.gen_cmpbr_integer(ir, kind, mode, brkind, dest);
+                self.new_side_branch(src_idx, dest_bb, state.clone(), dest);
+                Ok(CompileResult::Continue)
+            }
+            BinaryOpType::Float(info) => {
+                if let Some(result) =
+                    state.check_concrete_f64_cmpbr(lhs, rhs, kind, brkind, dest_bb)
+                {
+                    return Ok(result);
+                }
+                let src_idx = bc_pos + 1;
+                let dest = self.label();
+                let mode = state.load_binary_xmm(ir, info);
+                ir.float_cmp_br(mode, kind, brkind, dest);
+                self.new_side_branch(src_idx, dest_bb, state.clone(), dest);
+                Ok(CompileResult::Continue)
+            }
+            BinaryOpType::Other(Some(lhs_class)) => {
+                let res = self.call_binary_method(state, ir, lhs, rhs, lhs_class, kind, bc_pos)?;
+                if let CompileResult::Continue = res {
+                    let src_idx = bc_pos + 1;
+                    state.unset_class_version_guard();
+                    self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
+                }
+                Ok(res)
+            }
+            BinaryOpType::Other(None) => Ok(CompileResult::Recompile(RecompileReason::NotCached)),
+        }
+    }
+}
+
 fn cmp<T>(kind: CmpKind, lhs: T, rhs: T) -> bool
 where
     T: PartialEq + PartialOrd,
@@ -87,59 +206,48 @@ impl AbstractFrame {
         None
     }
 
-    fn binop_integer_folded(&mut self, kind: BinOpK, lhs: i64, rhs: i64) -> Option<i64> {
+    fn binop_integer_folded(&mut self, kind: BinOpK, lhs: i64, rhs: i64) -> Option<Value> {
         match kind {
             BinOpK::Add => {
-                if let Some(result) = lhs.checked_add(rhs)
-                    && Value::is_i63(result)
-                {
-                    return Some(result);
+                if let Some(result) = lhs.checked_add(rhs) {
+                    return Value::check_fixnum(result);
                 }
             }
             BinOpK::Sub => {
-                if let Some(result) = lhs.checked_sub(rhs)
-                    && Value::is_i63(result)
-                {
-                    return Some(result);
+                if let Some(result) = lhs.checked_sub(rhs) {
+                    return Value::check_fixnum(result);
                 }
             }
             BinOpK::Mul => {
-                if let Some(result) = lhs.checked_mul(rhs)
-                    && Value::is_i63(result)
-                {
-                    return Some(result);
+                if let Some(result) = lhs.checked_mul(rhs) {
+                    return Value::check_fixnum(result);
                 }
             }
             BinOpK::Div => {
-                if let Some(result) = lhs.checked_div(rhs)
-                    && Value::is_i63(result)
-                {
-                    return Some(result);
+                if let Some(result) = lhs.checked_div(rhs) {
+                    return Value::check_fixnum(result);
                 }
             }
             BinOpK::Rem => {
-                if let Some(result) = lhs.checked_rem(rhs)
-                    && Value::is_i63(result)
-                {
-                    return Some(result);
+                if let Some(result) = lhs.checked_rem(rhs) {
+                    return Value::check_fixnum(result);
                 }
             }
             BinOpK::Exp => {
                 if let Ok(rhs) = u32::try_from(rhs)
                     && let Some(result) = lhs.checked_pow(rhs)
-                    && Value::is_i63(result)
                 {
-                    return Some(result);
+                    return Value::check_fixnum(result);
                 }
             }
             BinOpK::BitOr => {
-                return Some(lhs | rhs);
+                return Some(Value::integer(lhs | rhs));
             }
             BinOpK::BitAnd => {
-                return Some(lhs & rhs);
+                return Some(Value::integer(lhs & rhs));
             }
             BinOpK::BitXor => {
-                return Some(lhs ^ rhs);
+                return Some(Value::integer(lhs ^ rhs));
             }
         }
         None
@@ -155,17 +263,11 @@ impl AbstractFrame {
     /// ### out
     /// - r15: dst
     ///
-    pub(super) fn gen_binop_integer(
-        &mut self,
-        ir: &mut AsmIr,
-        kind: BinOpK,
-        dst: Option<SlotId>,
-        mode: OpMode,
-    ) {
+    fn binop_integer(&mut self, ir: &mut AsmIr, kind: BinOpK, dst: Option<SlotId>, mode: OpMode) {
         if let Some((lhs, rhs)) = self.check_concrete_i64(mode)
             && let Some(result) = self.binop_integer_folded(kind, lhs, rhs)
         {
-            self.def_C_fixnum(dst, result);
+            self.def_C(dst, result);
             return;
         };
 
@@ -229,13 +331,7 @@ impl AbstractFrame {
         })
     }
 
-    pub(super) fn gen_binop_float(
-        &mut self,
-        ir: &mut AsmIr,
-        kind: BinOpK,
-        dst: Option<SlotId>,
-        info: FBinOpInfo,
-    ) {
+    fn binop_float(&mut self, ir: &mut AsmIr, kind: BinOpK, dst: Option<SlotId>, info: FBinOpInfo) {
         if let Some((lhs, rhs)) = self.check_binary_C_f64(info.lhs, info.rhs)
             && let Some(result) = self.binop_float_folded(kind, lhs, rhs)
         {

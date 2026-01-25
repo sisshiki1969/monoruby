@@ -289,23 +289,6 @@ impl AbstractFrame {
     }
 
     ///
-    /// Guard for the base class object of the constant in *slot*.
-    ///
-    /// ### destroy
-    /// - rax
-    ///
-    pub(in crate::codegen::jitgen) fn guard_const_base_class(
-        &mut self,
-        ir: &mut AsmIr,
-        slot: SlotId,
-        base_class: Value,
-    ) {
-        self.load(ir, slot, GP::Rax);
-        let deopt = ir.new_deopt(self);
-        ir.push(AsmInst::GuardConstBaseClass { base_class, deopt });
-    }
-
-    ///
     /// Execute GC.
     ///
     /// ### in
@@ -320,23 +303,6 @@ impl AbstractFrame {
         let wb = self.get_gc_write_back();
         let error = ir.new_error(self);
         ir.exec_gc(wb, error, check_stack);
-    }
-
-    pub fn load_constant(&mut self, ir: &mut AsmIr, dst: SlotId, cache: &ConstCache) {
-        let ConstCache { version, value, .. } = cache;
-        let deopt = ir.new_deopt(self);
-        ir.push(AsmInst::GuardConstVersion {
-            const_version: *version,
-            deopt,
-        });
-        ir.lit2reg(*value, GP::Rax);
-        if let Some(f) = value.try_float() {
-            let fdst = self.def_Sf_float(dst);
-            ir.f64_to_xmm(f, fdst);
-            ir.reg2stack(GP::Rax, dst);
-        } else {
-            self.def_reg2acc(ir, GP::Rax, dst);
-        }
     }
 }
 
@@ -391,13 +357,6 @@ impl AbstractFrame {
     pub(super) fn locals_to_S(&mut self, ir: &mut AsmIr) {
         for i in self.locals() {
             self.to_S(ir, i);
-        }
-    }
-
-    pub(super) fn write_back_locals_if_captured(&mut self, ir: &mut AsmIr) {
-        if !self.no_capture_guard() {
-            let wb = self.get_locals_write_back();
-            ir.push(AsmInst::WriteBackIfCaptured(wb));
         }
     }
 }

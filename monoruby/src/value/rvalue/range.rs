@@ -1,5 +1,10 @@
 use super::*;
 
+pub const RANGE_START_OFFSET: usize = RVALUE_OFFSET_KIND + std::mem::offset_of!(RangeInner, start);
+pub const RANGE_END_OFFSET: usize = RVALUE_OFFSET_KIND + std::mem::offset_of!(RangeInner, end);
+pub const RANGE_EXCLUDE_END_OFFSET: usize =
+    RVALUE_OFFSET_KIND + std::mem::offset_of!(RangeInner, exclude_end);
+
 #[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct RangeInner {
@@ -52,6 +57,15 @@ impl RangeInner {
 
     pub fn end(&self) -> Value {
         self.end
+    }
+
+    pub fn try_fixnum(&self) -> Option<(i64, i64)> {
+        let start = self.start.try_fixnum()?;
+        let mut end = self.end.try_fixnum()?;
+        if !self.exclude_end() {
+            end += 1
+        }
+        Some((start, end))
     }
 
     pub fn exclude_end(&self) -> bool {

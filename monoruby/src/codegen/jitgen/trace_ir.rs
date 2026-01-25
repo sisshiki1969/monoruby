@@ -81,11 +81,9 @@ pub(crate) enum TraceIr {
     },
     CheckKwRest(SlotId),
 
-    Nil(SlotId),
     /// integer(%reg, i32)
-    Integer(SlotId, i32),
-    /// Symbol(%reg, IdentId)
-    Symbol(SlotId, IdentId),
+    Immediate(SlotId, Value),
+
     /// literal(%ret, value)
     Literal(SlotId, Value),
     Array {
@@ -317,8 +315,376 @@ pub(crate) enum TraceIr {
 }
 
 impl TraceIr {
+    pub(crate) fn from_pc(pc: BytecodePtr, store: &Store) -> Self {
+        let op1 = pc.op1;
+        let op2 = pc.op2;
+        let opcode = pc.opcode();
+        if opcode & 0xc0 == 0 {
+            let (op1_w, op1_l) = dec_wl(op1);
+            match opcode {
+                1 => TraceIr::SingletonMethodDef {
+                    obj: SlotId::new(op1_w),
+                    name: IdentId::from(op2.0 as u32),
+                    func_id: FuncId::new((op2.0 >> 32) as u32),
+                },
+                2 => TraceIr::MethodDef {
+                    name: IdentId::from((op2.0) as u32),
+                    func_id: FuncId::new((op2.0 >> 32) as u32),
+                },
+                3 => TraceIr::Br(op1_l as i32),
+                4 => TraceIr::CondBr(SlotId::new(op1_w), op1_l as i32, false, BrKind::BrIf),
+                5 => TraceIr::CondBr(SlotId::new(op1_w), op1_l as i32, false, BrKind::BrIfNot),
+                6 => TraceIr::Immediate(SlotId::new(op1_w), op2.get_value()),
+                7 => TraceIr::Literal(SlotId::new(op1_w), op2.get_value()),
+                10 | 18 => TraceIr::LoadConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
+                11 => TraceIr::StoreConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
+                12..=13 => TraceIr::CondBr(
+                    SlotId::new(op1_w),
+                    op1_l as i32,
+                    true,
+                    BrKind::from(opcode - 12),
+                ),
+                14 => TraceIr::LoopStart {
+                    counter: op1_l,
+                    jit_addr: pc.into_jit_addr(),
+                },
+                15 => TraceIr::LoopEnd,
+                16 => TraceIr::LoadIvar(
+                    SlotId::new(op1_w),
+                    IdentId::from(op1_l),
+                    if let Some(class) = pc.cached_class0() {
+                        let ivar = pc.cached_ivarid();
+                        Some((class, ivar))
+                    } else {
+                        None
+                    },
+                ),
+                17 => TraceIr::StoreIvar(
+                    SlotId::new(op1_w),
+                    IdentId::from(op1_l),
+                    if let Some(class) = pc.cached_class0() {
+                        let ivar = pc.cached_ivarid();
+                        Some((class, ivar))
+                    } else {
+                        None
+                    },
+                ),
+                19 => TraceIr::CheckKwRest(SlotId::new(op1_w)),
+                20 => TraceIr::CheckLocal(SlotId::new(op1_w), op1_l as i32),
+                21 => TraceIr::BlockArgProxy(SlotId::new(op1_w), op1_l as usize),
+                22 => TraceIr::SingletonClassDef {
+                    dst: SlotId::from(op1_w),
+                    base: SlotId::new(op1_l as u16),
+                    func_id: FuncId::new((op2.0 >> 32) as u32),
+                },
+                23 => TraceIr::BlockArg(SlotId::new(op1_w), op1_l as usize),
+                24 => TraceIr::CheckCvar {
+                    dst: SlotId::new(op1_w),
+                    name: IdentId::from(op1_l),
+                },
+                25 => TraceIr::LoadGvar {
+                    dst: SlotId::new(op1_w),
+                    name: IdentId::from(op1_l),
+                },
+                26 => TraceIr::StoreGvar {
+                    src: SlotId::new(op1_w),
+                    name: IdentId::from(op1_l),
+                },
+                27 => TraceIr::LoadCvar {
+                    dst: SlotId::new(op1_w),
+                    name: IdentId::from(op1_l),
+                },
+                28 => TraceIr::LoadSvar {
+                    dst: SlotId::new(op1_w),
+                    id: op1_l,
+                },
+                29 => TraceIr::StoreCvar {
+                    src: SlotId::new(op1_w),
+                    name: IdentId::from(op1_l),
+                },
+                30..=33 => {
+                    let callid = op1_l.into();
+                    let polymorphic = match pc.opcode_sub() {
+                        0 => false,
+                        1 => true,
+                        _ => unreachable!(),
+                    };
+                    let cache = if let Some(cache) = pc.method_cache() {
+                        Some(cache)
+                    } else {
+                        None
+                    };
+                    TraceIr::MethodCall {
+                        _polymorphic: polymorphic,
+                        callid,
+                        cache,
+                    }
+                }
+                34..=35 => TraceIr::Yield {
+                    callid: op1_l.into(),
+                },
+                36 => {
+                    let optid = OptCaseId::from(op1_l);
+                    let OptCaseInfo {
+                        min,
+                        max,
+                        offsets,
+                        branch_table,
+                    } = &store[optid];
+                    let else_disp = offsets[0] as i32;
+                    let branch_table: Box<[_]> =
+                        branch_table.iter().map(|ofs| *ofs as i32).collect();
+                    TraceIr::OptCase {
+                        cond: SlotId::new(op1_w),
+                        min: *min,
+                        max: *max,
+                        else_disp,
+                        branch_table,
+                    }
+                }
+                37 => TraceIr::NilBr(SlotId::new(op1_w), op1_l as i32),
+                38 => TraceIr::Lambda {
+                    dst: SlotId::new(op1_w),
+                    func_id: FuncId::new(op1_l),
+                },
+                39 => TraceIr::Array {
+                    dst: SlotId::new(op1_w),
+                    callid: CallSiteId::from(op1_l),
+                },
+                40 => {
+                    let (_, op1_w2, op1_w3) = dec_www(op1);
+                    TraceIr::ArrayTEq {
+                        lhs: SlotId::new(op1_w2),
+                        rhs: SlotId::new(op1_w3),
+                    }
+                }
+                _ => unreachable!("{:016x}", op1),
+            }
+        } else {
+            let (op1_w1, op2_w2, op3_w3) = dec_www(op1);
+            match opcode {
+                64 => TraceIr::DefinedYield {
+                    dst: SlotId::new(op1_w1),
+                },
+                65 => TraceIr::DefinedConst {
+                    dst: SlotId::new(op1_w1),
+                    siteid: ConstSiteId(op2.0 as u32),
+                },
+                66 => TraceIr::DefinedMethod {
+                    dst: SlotId::new(op1_w1),
+                    recv: SlotId::new(op2_w2),
+                    name: IdentId::from(op2.0 as u32),
+                },
+                67 => TraceIr::DefinedGvar {
+                    dst: SlotId::new(op1_w1),
+                    name: IdentId::from(op2.0 as u32),
+                },
+                68 => TraceIr::DefinedIvar {
+                    dst: SlotId::new(op1_w1),
+                    name: IdentId::from(op2.0 as u32),
+                },
+                69 => TraceIr::DefinedSuper {
+                    dst: SlotId::new(op1_w1),
+                },
+                70 => TraceIr::ClassDef {
+                    dst: SlotId::from(op1_w1),
+                    base: SlotId::from(op2_w2),
+                    superclass: SlotId::from(op3_w3),
+                    name: IdentId::from((op2.0) as u32),
+                    func_id: FuncId::new((op2.0 >> 32) as u32),
+                },
+                71 => TraceIr::ModuleDef {
+                    dst: SlotId::from(op1_w1),
+                    base: SlotId::from(op2_w2),
+                    name: IdentId::from((op2.0) as u32),
+                    func_id: FuncId::new((op2.0 >> 32) as u32),
+                },
+                80 => TraceIr::Ret(SlotId::new(op1_w1)),
+                81 => TraceIr::MethodRet(SlotId::new(op1_w1)),
+                82 => TraceIr::BlockBreak(SlotId::new(op1_w1)),
+                83 => TraceIr::Raise(SlotId::new(op1_w1)),
+                85 => TraceIr::EnsureEnd,
+                86 => TraceIr::ConcatRegexp(SlotId::from(op1_w1), SlotId::new(op2_w2), op3_w3),
+                120 => TraceIr::Not {
+                    dst: SlotId::new(op1_w1),
+                    src: SlotId::new(op2_w2),
+                },
+                121..=123 => {
+                    let kind = UnOpK::from(opcode - 121);
+                    let dst = SlotId::new(op1_w1);
+                    let src = SlotId::new(op2_w2);
+                    TraceIr::UnOp {
+                        kind,
+                        dst,
+                        src,
+                        ic: pc.classid1(),
+                    }
+                }
+                130 => TraceIr::InlineCache,
+                132 => TraceIr::Index {
+                    dst: SlotId::new(op1_w1),
+                    base: SlotId::new(op2_w2),
+                    idx: SlotId::new(op3_w3),
+                    class: if let Some(base_class) = pc.classid1()
+                        && let Some(idx_class) = pc.classid2()
+                    {
+                        Some((base_class, idx_class))
+                    } else {
+                        None
+                    },
+                },
+                133 => TraceIr::IndexAssign {
+                    base: SlotId::new(op2_w2),
+                    idx: SlotId::new(op3_w3),
+                    src: SlotId::new(op1_w1),
+                    class: if let Some(base_class) = pc.classid1()
+                        && let Some(idx_class) = pc.classid2()
+                    {
+                        Some((base_class, idx_class))
+                    } else {
+                        None
+                    },
+                },
+                140..=146 => {
+                    let kind = CmpKind::from(opcode - 140);
+                    let dst = SlotId::from(op1_w1);
+                    let lhs = SlotId::new(op2_w2);
+                    let rhs = SlotId::new(op3_w3);
+                    let ic = if let Some(lhs_class) = pc.classid1()
+                        && let Some(rhs_class) = pc.classid2()
+                    {
+                        Some((lhs_class, rhs_class))
+                    } else {
+                        None
+                    };
+                    TraceIr::BinCmp {
+                        kind,
+                        dst,
+                        lhs,
+                        rhs,
+                        ic,
+                    }
+                }
+
+                148 => TraceIr::LoadDynVar(
+                    SlotId::new(op1_w1),
+                    DynVar {
+                        reg: SlotId::new(op2_w2),
+                        outer: op3_w3 as usize,
+                    },
+                ),
+                149 => TraceIr::StoreDynVar(
+                    DynVar {
+                        reg: SlotId::new(op1_w1),
+                        outer: op2_w2 as usize,
+                    },
+                    SlotId::new(op3_w3),
+                ),
+                150..=156 => {
+                    let kind = CmpKind::from(opcode - 150);
+                    let dst = SlotId::from(op1_w1);
+                    let lhs = SlotId::new(op2_w2);
+                    let rhs = SlotId::new(op3_w3);
+                    let ic = if let Some(lhs_class) = pc.classid1()
+                        && let Some(rhs_class) = pc.classid2()
+                    {
+                        Some((lhs_class, rhs_class))
+                    } else {
+                        None
+                    };
+                    let (disp, brkind) = match TraceIr::from_pc(pc + 1, store) {
+                        TraceIr::CondBr(_, dest, true, brkind) => (dest + 1, brkind),
+                        _ => unreachable!(),
+                    };
+                    TraceIr::BinCmpBr {
+                        kind,
+                        _dst: dst,
+                        lhs,
+                        rhs,
+                        disp,
+                        brkind,
+                        ic,
+                    }
+                }
+                160..=168 => {
+                    let kind = BinOpK::from(opcode - 160);
+                    let dst = SlotId::from(op1_w1);
+                    let lhs = SlotId::new(op2_w2);
+                    let rhs = SlotId::new(op3_w3);
+                    let ic = if let Some(lhs_class) = pc.classid1()
+                        && let Some(rhs_class) = pc.classid2()
+                    {
+                        Some((lhs_class, rhs_class))
+                    } else {
+                        None
+                    };
+                    TraceIr::BinOp {
+                        kind,
+                        dst,
+                        lhs,
+                        rhs,
+                        ic,
+                    }
+                }
+
+                170 => TraceIr::InitMethod(FnInitInfo {
+                    reg_num: op1_w1 as usize,
+                    arg_num: op2_w2 as usize,
+                    stack_offset: op3_w3 as usize,
+                }),
+                171 => TraceIr::ExpandArray {
+                    src: SlotId::new(op1_w1),
+                    dst: (SlotId::new(op2_w2), op3_w3, {
+                        let rest = op2.get_u16();
+                        if rest == 0 { None } else { Some(rest - 1) }
+                    }),
+                },
+                172 => {
+                    let undef = IdentId::from(dec_wl(op1).1);
+                    TraceIr::UndefMethod { undef }
+                }
+                173 => {
+                    let (new, old) = op2.get_ident2();
+                    TraceIr::AliasMethod { new, old }
+                }
+                174 => TraceIr::Hash {
+                    dst: SlotId::new(op1_w1),
+                    args: SlotId::new(op2_w2),
+                    len: op3_w3,
+                },
+                175 => TraceIr::ToA {
+                    dst: SlotId::new(op1_w1),
+                    src: SlotId::new(op2_w2),
+                },
+                176 => TraceIr::Mov(SlotId::new(op1_w1), SlotId::new(op2_w2)),
+                177..=178 => TraceIr::Range {
+                    dst: SlotId::new(op1_w1),
+                    start: SlotId::new(op2_w2),
+                    end: SlotId::new(op3_w3),
+                    exclude_end: match opcode - 177 {
+                        0 => false,
+                        1 => true,
+                        _ => unreachable!(),
+                    },
+                },
+                179 => TraceIr::ConcatStr(SlotId::from(op1_w1), SlotId::new(op2_w2), op3_w3),
+                _ => unreachable!("{:016x}", op1),
+            }
+        }
+    }
+}
+
+fn dec_wl(op: u64) -> (u16, u32) {
+    ((op >> 32) as u16, op as u32)
+}
+
+fn dec_www(op: u64) -> (u16, u16, u16) {
+    ((op >> 32) as u16, (op >> 16) as u16, op as u16)
+}
+
+impl TraceIr {
     #[cfg(feature = "dump-traceir")]
-    pub(crate) fn format(&self, store: &Store, iseq_id: ISeqId, pc: BytecodePtr) -> Option<String> {
+    pub(crate) fn format(store: &Store, iseq_id: ISeqId, pc: BytecodePtr) -> Option<String> {
         fn optstr(opt: bool) -> &'static str {
             if opt { "_" } else { "" }
         }
@@ -383,27 +749,27 @@ impl TraceIr {
 
         let iseq = &store[iseq_id];
         let bc_pos = iseq.get_pc_index(Some(pc));
-        let s = match self {
+        let s = match Self::from_pc(pc, store) {
             TraceIr::InitMethod(info) => {
                 format!("init_method {info:?}")
             }
             TraceIr::CheckLocal(local, disp) => {
-                let dest = iseq.get_bb(bc_pos + 1 + *disp);
+                let dest = iseq.get_bb(bc_pos + 1 + disp);
                 format!("check_local({local:?}) =>{dest:?}")
             }
             TraceIr::CheckKwRest(local) => {
                 format!("check_kw_rest({:?})", local)
             }
             TraceIr::Br(disp) => {
-                let dest = iseq.get_bb(bc_pos + 1 + *disp);
+                let dest = iseq.get_bb(bc_pos + 1 + disp);
                 format!("br => {dest:?}")
             }
             TraceIr::CondBr(reg, disp, opt, kind) => {
-                let dest = iseq.get_bb(bc_pos + 1 + *disp);
-                format!("cond{}br {}{reg:?} => {dest:?}", kind.to_s(), optstr(*opt),)
+                let dest = iseq.get_bb(bc_pos + 1 + disp);
+                format!("cond{}br {}{reg:?} => {dest:?}", kind.to_s(), optstr(opt),)
             }
             TraceIr::NilBr(reg, disp) => {
-                let dest = iseq.get_bb(bc_pos + 1 + *disp);
+                let dest = iseq.get_bb(bc_pos + 1 + disp);
                 format!("nilbr {reg:?} => {dest:?}")
             }
             TraceIr::OptCase {
@@ -413,7 +779,7 @@ impl TraceIr {
                 else_disp,
                 branch_table,
             } => {
-                let else_dest = iseq.get_bb(bc_pos + 1 + *else_disp);
+                let else_dest = iseq.get_bb(bc_pos + 1 + else_disp);
                 let branch_table: Vec<String> = branch_table
                     .iter()
                     .map(|disp| {
@@ -425,8 +791,10 @@ impl TraceIr {
                     "opt_case {cond:?}: else -> {else_dest:?}  {min}..{max} -> branch_table:{branch_table:?}",
                 )
             }
-            TraceIr::Integer(reg, num) => format!("{:?} = {}: i32", reg, num),
-            TraceIr::Symbol(reg, id) => format!("{:?} = :{id}", reg),
+            TraceIr::Immediate(reg, val) => format!("{:?} = {}", reg, val.debug(store)),
+            TraceIr::Literal(reg, val) => {
+                format!("{:?} = literal[{}]", reg, val.debug(store))
+            }
             TraceIr::Range {
                 dst,
                 start,
@@ -436,19 +804,16 @@ impl TraceIr {
                 "{:?} = {:?} {} {:?}",
                 dst,
                 start,
-                if *exclude_end { "..." } else { ".." },
+                if exclude_end { "..." } else { ".." },
                 end
             ),
-            TraceIr::Literal(reg, val) => {
-                format!("{:?} = literal[{}]", reg, val.debug(store))
-            }
             TraceIr::Array { dst, callid } => {
                 let CallSiteInfo {
                     args,
                     pos_num,
                     splat_pos,
                     ..
-                } = &store[*callid];
+                } = &store[callid];
                 let mut s = format!("{:?} = array[", dst);
                 for i in 0..*pos_num {
                     let prefix = if splat_pos.contains(&i) { "*" } else { "" };
@@ -472,7 +837,7 @@ impl TraceIr {
                 class,
             } => {
                 let op1 = format!("{:?} = {:?}.[{:?}]", dst, base, idx);
-                fmt(store, op1, *class)
+                fmt(store, op1, class)
             }
             TraceIr::IndexAssign {
                 base,
@@ -481,22 +846,22 @@ impl TraceIr {
                 class,
             } => {
                 let op1 = format!("{:?}:.[{:?}:] = {:?}", base, idx, src,);
-                fmt(store, op1, *class)
+                fmt(store, op1, class)
             }
             TraceIr::LoadConst(reg, id) => {
-                let op = store[*id].format();
+                let op = store[id].format();
                 let op1 = format!("{:?} = {op}", reg);
                 format!(
                     "{:36} [{}]",
                     op1,
-                    match &store[*id].cache {
+                    match &store[id].cache {
                         None => "<INVALID>".to_string(),
                         Some(cache) => cache.value.debug(store),
                     }
                 )
             }
             TraceIr::StoreConst(src, id) => {
-                let op = store[*id].format();
+                let op = store[id].format();
                 format!("{op} = {:?}", src)
             }
             TraceIr::BlockArgProxy(dst, outer) => {
@@ -515,7 +880,7 @@ impl TraceIr {
                 format!(
                     "{:?} = {id}: {}",
                     reg,
-                    format!("{}[{:?}]", store.debug_class_name(*class_id), ivar_id)
+                    format!("{}[{:?}]", store.debug_class_name(class_id), ivar_id)
                 )
             }
             TraceIr::LoadIvar(reg, id, None) => {
@@ -524,7 +889,7 @@ impl TraceIr {
             TraceIr::StoreIvar(reg, id, Some((class_id, ivar_id))) => {
                 format!(
                     "{id}: {} = {:?}",
-                    format!("{}[{:?}]", store.debug_class_name(*class_id), ivar_id),
+                    format!("{}[{:?}]", store.debug_class_name(class_id), ivar_id),
                     reg
                 )
             }
@@ -553,7 +918,7 @@ impl TraceIr {
                 format!(
                     "{:?} = ${}",
                     ret,
-                    match *id {
+                    match id {
                         ruruby_parse::SPECIAL_LASTMATCH => "&".to_string(),
                         ruruby_parse::SPECIAL_POSTMATCH => "'".to_string(),
                         ruruby_parse::SPECIAL_LOADPATH => "$LOAD_PATH".to_string(),
@@ -563,7 +928,6 @@ impl TraceIr {
                     }
                 )
             }
-            TraceIr::Nil(reg) => format!("{:?} = nil", reg),
             TraceIr::UnOp {
                 kind,
                 dst,
@@ -571,7 +935,7 @@ impl TraceIr {
                 ic: src_class,
             } => {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
-                format!("{:36} [{}]", op1, store.debug_class_name(*src_class),)
+                format!("{:36} [{}]", op1, store.debug_class_name(src_class),)
             }
             TraceIr::Not { dst, src } => {
                 let op1 = format!("{:?} = !{:?}", dst, src);
@@ -584,7 +948,7 @@ impl TraceIr {
                 lhs,
                 rhs,
                 ic,
-            } => binop_fmt(store, *kind, *dst, *lhs, *rhs, ic.clone()),
+            } => binop_fmt(store, kind, dst, lhs, rhs, ic.clone()),
 
             TraceIr::BinCmp {
                 kind,
@@ -592,7 +956,7 @@ impl TraceIr {
                 lhs,
                 rhs,
                 ic,
-            } => cmp_fmt(store, *kind, *dst, *lhs, *rhs, ic.clone(), false),
+            } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), false),
             TraceIr::BinCmpBr {
                 kind,
                 _dst: dst,
@@ -600,7 +964,7 @@ impl TraceIr {
                 rhs,
                 ic,
                 ..
-            } => cmp_fmt(store, *kind, *dst, *lhs, *rhs, ic.clone(), true),
+            } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), true),
 
             TraceIr::ArrayTEq { lhs, rhs } => {
                 format!("{lhs:?} = *{lhs:?} === {rhs:?}")
@@ -618,7 +982,7 @@ impl TraceIr {
                 callid,
                 cache,
             } => {
-                let callsite = &store[*callid];
+                let callsite = &store[callid];
                 let name = if let Some(name) = callsite.name {
                     name.to_string()
                 } else {
@@ -626,12 +990,12 @@ impl TraceIr {
                 };
                 let CallSiteInfo { recv, dst, .. } = callsite;
                 let s = callsite.format_args();
-                let op1 = format!("{} = {:?}.{name}{s}", ret_str(*dst), recv,);
+                let op1 = format!("{} = {:?}.{name}{s}", ret_str(*dst), recv);
                 format!(
                     "{:36} {}[{}] {}",
                     op1,
-                    if *polymorphic { "POLYMORPHIC " } else { "" },
-                    store.debug_class_name(if let Some(entry) = cache {
+                    if polymorphic { "POLYMORPHIC " } else { "" },
+                    store.debug_class_name(if let Some(entry) = &cache {
                         Some(entry.recv_class)
                     } else {
                         None
@@ -644,8 +1008,8 @@ impl TraceIr {
                 )
             }
             TraceIr::Yield { callid } => {
-                let dst = store[*callid].dst;
-                let s = store[*callid].format_args();
+                let dst = store[callid].dst;
+                let s = store[callid].format_args();
                 format!("{} = yield{s}", ret_str(dst))
             }
             TraceIr::InlineCache => return None,
@@ -664,7 +1028,7 @@ impl TraceIr {
             } => {
                 format!(
                     "{} = class_def {}{name}{}: {:?}",
-                    ret_str(*dst),
+                    ret_str(dst),
                     if let Some(base) = base {
                         format!("{:?}::", base)
                     } else {
@@ -686,7 +1050,7 @@ impl TraceIr {
             } => {
                 format!(
                     "{} = module_def {}{name}: {:?}",
-                    ret_str(*dst),
+                    ret_str(dst),
                     if let Some(base) = base {
                         format!("{:?}::", base)
                     } else {
@@ -702,28 +1066,28 @@ impl TraceIr {
             } => {
                 format!(
                     "{} = singleton_class_def << {:?}: {:?}",
-                    ret_str(*ret),
+                    ret_str(ret),
                     base,
                     func_id
                 )
             }
             TraceIr::ConcatStr(ret, args, len) => {
-                format!("{} = concat({:?}; {})", ret_str(*ret), args, len)
+                format!("{} = concat({:?}; {})", ret_str(ret), args, len)
             }
             TraceIr::ConcatRegexp(ret, args, len) => {
-                format!("{} = concat_regexp({:?}; {})", ret_str(*ret), args, len)
+                format!("{} = concat_regexp({:?}; {})", ret_str(ret), args, len)
             }
             TraceIr::ExpandArray {
                 src,
                 dst: (dst, len, rest_pos),
             } => {
                 let mut s = String::new();
-                for i in 0..*len {
-                    let prefix = if rest_pos == &Some(i) { "*" } else { "" };
+                for i in 0..len {
+                    let prefix = if rest_pos == Some(i) { "*" } else { "" };
                     if i != 0 {
                         s += ",";
                     }
-                    s += &format!("{prefix}{:?}", *dst + i);
+                    s += &format!("{prefix}{:?}", dst + i);
                 }
                 format!("{s} = expand({src:?})")
             }
@@ -735,7 +1099,7 @@ impl TraceIr {
             }
             TraceIr::DefinedYield { dst } => format!("{:?} = defined?(yield)", dst),
             TraceIr::DefinedConst { dst, siteid } => {
-                let s = store[*siteid].format();
+                let s = store[siteid].format();
                 format!("{:?} = defined?(constant) {s}", dst)
             }
             TraceIr::DefinedMethod { dst, recv, name } => {

@@ -263,7 +263,7 @@ fn finite(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 fn infinite(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let f = lfp.self_val().try_float().unwrap();
     if f.is_infinite() {
-        Ok(Value::fixnum(num::signum(f) as i64))
+        Ok(Value::integer(num::signum(f) as i64))
     } else {
         Ok(Value::nil())
     }

@@ -390,14 +390,6 @@ impl SlotState {
     }
 
     ///
-    /// Link *slot* to a concrete fixnum value *i*.
-    ///
-    #[allow(non_snake_case)]
-    pub(crate) fn def_C_fixnum(&mut self, slot: impl Into<Option<SlotId>>, i: i64) {
-        self.def_C(slot, Value::fixnum(i));
-    }
-
-    ///
     /// Link *slot* to a concrete flonum value *i*.
     ///
     #[allow(non_snake_case)]
@@ -950,19 +942,6 @@ impl AbstractFrame {
             .collect()
     }
 
-    pub(super) fn get_locals_write_back(&self) -> WriteBack {
-        let local_num = self.local_num;
-        let f = |reg: SlotId| reg.0 as usize <= local_num;
-        let xmm = self.wb_xmm(f);
-        let literal = self.wb_literal(f);
-        let void = self.wb_void();
-        let r15 = match self.r15 {
-            Some(slot) if f(slot) => Some(slot),
-            _ => None,
-        };
-        WriteBack::new(xmm, literal, r15, void)
-    }
-
     ///
     /// Write back the value of the *slot* to the corresponding stack slot.
     ///
@@ -1317,19 +1296,17 @@ impl AbstractFrame {
                 }
             }
             (LinkMode::C(l), LinkMode::Sf(r, _)) => {
+                self.set_Sf_float(slot, r);
                 if let Some(f) = l.try_float() {
-                    self.set_Sf_float(slot, r);
                     ir.f64_to_xmm(f, r);
                     ir.lit2reg(Value::float(f), GP::Rax);
-                    ir.reg2stack(GP::Rax, slot);
                 } else if let Some(i) = l.try_fixnum() {
-                    self.set_Sf_float(slot, r);
                     ir.f64_to_xmm(i as f64, r);
-                    ir.lit2reg(Value::fixnum(i), GP::Rax);
-                    ir.reg2stack(GP::Rax, slot);
+                    ir.lit2reg(Value::integer(i), GP::Rax);
                 } else {
                     unreachable!()
                 }
+                ir.reg2stack(GP::Rax, slot);
             }
             (LinkMode::C(_) | LinkMode::F(_) | LinkMode::G(_), LinkMode::S(_)) => {
                 self.write_back_slot(ir, slot);
