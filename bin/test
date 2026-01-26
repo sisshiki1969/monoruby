@@ -1,6 +1,6 @@
 #!/bin/bash
 cargo llvm-cov clean --workspace
-cargo llvm-cov nextest --all-features --no-report
+cargo llvm-cov nextest --features emit-asm --features deopt --features gc-stress --features perf --features gc-debug --features jit-debug --features emit-cfg --no-report
 
 cargo build --features gc-stress
 
