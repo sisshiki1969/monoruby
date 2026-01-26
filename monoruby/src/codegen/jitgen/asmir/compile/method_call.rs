@@ -79,7 +79,7 @@ impl Codegen {
         self.push_block(callsite.block_fid, callsite.block_arg);
         // set self
         monoasm!( &mut self.jit,
-            pushq [r14 - (conv(callsite.recv))];
+            pushq [rbp - (rbp_local(callsite.recv))];
             addq  rsp, 64;
         );
 
@@ -196,7 +196,7 @@ impl Codegen {
             );
         } else if let Some(block) = callsite.block_arg {
             monoasm!( &mut self.jit,
-                movq rax, [r14 - (conv(block))];
+                movq rax, [rbp - (rbp_local(block))];
                 pushq rax;
             );
         } else {
@@ -319,7 +319,7 @@ impl Codegen {
             );
         } else if let Some(block) = block_arg {
             monoasm!( &mut self.jit,
-                pushq [r14 - (conv(block))];
+                pushq [rbp - (rbp_local(block))];
             );
         } else {
             monoasm!( &mut self.jit,
@@ -496,7 +496,7 @@ impl Codegen {
                 }
             } else {
                 monoasm! { &mut self.jit,
-                    movq rcx, [r14 - (conv(args))];
+                    movq rcx, [rbp - (rbp_local(args))];
                 }
                 self.object_send_inner(recv, cache, &error);
             }
@@ -524,7 +524,7 @@ impl Codegen {
         self.push_block(block_fid, block_arg);
         // set self
         monoasm!( &mut self.jit,
-            pushq [r14 - (conv(recv))];
+            pushq [rbp - (rbp_local(recv))];
             addq  rsp, 64;
         );
 
@@ -577,7 +577,7 @@ impl Codegen {
         let exit = self.jit.label();
         let heap = self.jit.label();
         monoasm! { &mut self.jit,
-            movq rcx, [r14 - (conv(args))];
+            movq rcx, [rbp - (rbp_local(args))];
             testq rcx, 0b111;
             jnz  exit;
             cmpw [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
@@ -617,7 +617,7 @@ impl Codegen {
             movzxw rax, [r15 + (FUNCDATA_MIN)];
             cmpw  rax, (pos_num - 1);
             jne  arg_error;
-            lea  rdi, [r14 - (conv(args + 1usize))];
+            lea  rdi, [rbp - (rbp_local(args + 1usize))];
             lea  rdx, [rsp - (RSP_LOCAL_FRAME + LFP_ARG0)];
             movq r8, (pos_num);
             // src: rdi, dst: rdx
@@ -722,7 +722,7 @@ impl Codegen {
             pushq rcx;
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [r14 - (conv(recv))];
+            movq rdx, [rbp - (rbp_local(recv))];
             lea  r8, [rip + cache];
             movq rax, (find);
             call rax;

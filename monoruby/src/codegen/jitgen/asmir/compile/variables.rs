@@ -268,7 +268,7 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (name.get());
-            movq rcx, [r14 - (conv(src))];
+            movq rcx, [rbp - (rbp_local(src))];
             movq rax, (runtime::set_class_var);
             call rax;
         };
@@ -291,7 +291,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rdi, r12;
             movl rsi, (name.get());
-            movq rdx, [r14 - (conv(src))];
+            movq rdx, [rbp - (rbp_local(src))];
             movq rax, (runtime::set_global_var);
             call rax;
         };

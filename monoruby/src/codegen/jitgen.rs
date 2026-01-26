@@ -106,6 +106,10 @@ pub(crate) fn conv(reg: SlotId) -> i32 {
     reg.0 as i32 * 8 + LFP_SELF
 }
 
+pub(crate) fn rbp_local(reg: SlotId) -> i32 {
+    24 + reg.0 as i32 * 8 + LFP_SELF
+}
+
 ///
 /// The struct holds information for writing back Value's in xmm registers or accumulator to the corresponding stack slots.
 ///
@@ -439,7 +443,7 @@ macro_rules! load_store {
                 let reg = reg.into();
                 if let Some(reg) = reg {
                     monoasm!{ &mut self.jit,
-                        movq [r14 - (conv(reg))], $reg;
+                        movq [rbp - (rbp_local(reg))], $reg;
                     }
                 }
             }
@@ -450,7 +454,7 @@ macro_rules! load_store {
             #[allow(dead_code)]
             pub(crate) fn [<load_ $reg>](&mut self, reg: SlotId) {
                 monoasm!( &mut self.jit,
-                    movq $reg, [r14 - (conv(reg))];
+                    movq $reg, [rbp - (rbp_local(reg))];
                 );
             }
         }
@@ -567,6 +571,24 @@ impl JitModule {
         }
     }
 
+    fn xmm_to_stack2(&mut self, xmm: Xmm, v: &[SlotId]) {
+        if v.is_empty() {
+            return;
+        }
+        #[cfg(feature = "jit-debug")]
+        eprintln!("      wb: {:?}->{:?}", xmm, v);
+        let f64_to_val = self.f64_to_val.clone();
+        monoasm!( &mut self.jit,
+            movq xmm0, xmm(xmm.enc());
+            call f64_to_val;
+        );
+        for reg in v {
+            monoasm! { &mut self.jit,
+                movq [r14 - (conv(*reg))], rax;
+            }
+        }
+    }
+
     ///
     /// Move Value *v* to stack slot *reg*.
     ///
@@ -629,7 +651,7 @@ impl JitModule {
     ///
     pub(super) fn gen_write_back(&mut self, wb: &WriteBack) {
         for (xmm, v) in &wb.xmm {
-            self.xmm_to_stack(*xmm, v);
+            self.xmm_to_stack2(*xmm, v);
         }
         for (v, slot) in &wb.literal {
             self.literal_to_stack(*slot, *v);
@@ -638,7 +660,9 @@ impl JitModule {
             self.literal_to_stack(*slot, Value::nil());
         }
         if let Some(slot) = wb.r15 {
-            self.store_r15(slot);
+            monoasm! { self,
+                movq [r14 - (conv(slot))], r15;
+            }
         }
     }
 }

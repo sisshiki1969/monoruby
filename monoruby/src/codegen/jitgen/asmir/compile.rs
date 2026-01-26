@@ -104,7 +104,7 @@ impl Codegen {
             AsmInst::StackToReg(slot, r) => {
                 let r = r as u64;
                 monoasm!( &mut self.jit,
-                    movq R(r), [r14 - (conv(slot))];
+                    movq R(r), [rbp - (rbp_local(slot))];
                 );
             }
             AsmInst::LitToReg(v, r) => {
@@ -192,7 +192,7 @@ impl Codegen {
             AsmInst::I64ToBoth(i, r, x) => {
                 let f = self.jit.const_f64(i as f64);
                 monoasm! {&mut self.jit,
-                    movq [r14 - (conv(r))], (Value::integer(i).id());
+                    movq [rbp - (rbp_local(r))], (Value::integer(i).id());
                     movq xmm(x.enc()), [rip + f];
                 }
             }
@@ -346,11 +346,11 @@ impl Codegen {
             AsmInst::CheckKwRest(slot) => {
                 let exit = self.jit.label();
                 monoasm! { &mut self.jit,
-                    cmpq [r14 - (conv(slot))], (NIL_VALUE);
+                    cmpq [rbp - (rbp_local(slot))], (NIL_VALUE);
                     jne  exit;
                     movq rax, (runtime::empty_hash);
                     call rax;
-                    movq [r14 - (conv(slot))], rax;
+                    movq [rbp - (rbp_local(slot))], rax;
                 exit:
                 };
             }
@@ -704,7 +704,7 @@ impl Codegen {
                 };
                 self.xmm_save(using_xmm);
                 monoasm!( &mut self.jit,
-                    lea rsi, [r14 - (conv(dst))];
+                    lea rsi, [rbp - (rbp_local(dst))];
                     movq rdx, (len);
                     movq rcx, (rest);
                     movq rax, (runtime::expand_array);
@@ -923,7 +923,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            lea  rdx, [r14 - (conv(args))];
+            lea  rdx, [rbp - (rbp_local(args))];
             movq rcx, (len);
             movq rax, (runtime::gen_hash);
             call rax;
@@ -948,7 +948,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            lea rdx, [r14 - (conv(arg))];
+            lea rdx, [rbp - (rbp_local(arg))];
             movq rcx, (len);
             movq rax, (runtime::concatenate_string);
             call rax;
@@ -960,7 +960,7 @@ impl Codegen {
         let toa = self.jit.label();
         let exit = self.jit.label();
         monoasm!( &mut self.jit,
-            movq rax, [r14 - (conv(src))];
+            movq rax, [rbp - (rbp_local(src))];
         );
         self.guard_rvalue(GP::Rax, ARRAY_CLASS, &toa);
         self.bind_label(exit.clone());
@@ -987,7 +987,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            lea rdx, [r14 - (conv(arg))];
+            lea rdx, [rbp - (rbp_local(arg))];
             movq rcx, (len);
             movq rax, (runtime::concatenate_regexp);
             call rax;
