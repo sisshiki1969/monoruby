@@ -35,6 +35,8 @@ type Result<T> = std::result::Result<T, CompileError>;
 
 pub(super) struct CompileError;
 
+const RBP_LOCAL_FRAME: i32 = 24;
+
 ///
 /// Compile result of the current instruction.
 ///
@@ -107,7 +109,7 @@ pub(crate) fn conv(reg: SlotId) -> i32 {
 }
 
 pub(crate) fn rbp_local(reg: SlotId) -> i32 {
-    24 + reg.0 as i32 * 8 + LFP_SELF
+    RBP_LOCAL_FRAME + reg.0 as i32 * 8 + LFP_SELF
 }
 
 ///
@@ -599,6 +601,26 @@ impl JitModule {
         let i = v.id() as i64;
         if i32::try_from(i).is_ok() {
             monoasm! { &mut self.jit,
+                movq [rbp - (rbp_local(reg))], (v.id());
+            }
+        } else {
+            monoasm! { &mut self.jit,
+                movq rax, (v.id());
+                movq [rbp - (rbp_local(reg))], rax;
+            }
+        }
+    }
+
+    ///
+    /// Move Value *v* to stack slot *reg*.
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    fn literal_to_stack2(&mut self, reg: SlotId, v: Value) {
+        let i = v.id() as i64;
+        if i32::try_from(i).is_ok() {
+            monoasm! { &mut self.jit,
                 movq [r14 - (conv(reg))], (v.id());
             }
         } else {
@@ -651,13 +673,41 @@ impl JitModule {
     ///
     pub(super) fn gen_write_back(&mut self, wb: &WriteBack) {
         for (xmm, v) in &wb.xmm {
-            self.xmm_to_stack2(*xmm, v);
+            self.xmm_to_stack(*xmm, v);
         }
         for (v, slot) in &wb.literal {
             self.literal_to_stack(*slot, *v);
         }
         for slot in &wb.void {
             self.literal_to_stack(*slot, Value::nil());
+        }
+        if let Some(slot) = wb.r15 {
+            monoasm! { self,
+                movq [rbp - (rbp_local(slot))], r15;
+            }
+        }
+    }
+
+    ///
+    /// Generate a code which write back all xmm registers to corresponding stack slots for deopt.
+    ///
+    /// We must use r14-based addressing here, because the local frame can be on the heap just after returning from a method.
+    ///
+    /// xmms are not deallocated.
+    ///
+    /// ### destroy
+    ///
+    /// - rax, rcx
+    ///
+    pub(super) fn gen_write_back_for_deopt(&mut self, wb: &WriteBack) {
+        for (xmm, v) in &wb.xmm {
+            self.xmm_to_stack2(*xmm, v);
+        }
+        for (v, slot) in &wb.literal {
+            self.literal_to_stack2(*slot, *v);
+        }
+        for slot in &wb.void {
+            self.literal_to_stack2(*slot, Value::nil());
         }
         if let Some(slot) = wb.r15 {
             monoasm! { self,
@@ -675,7 +725,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
         entry:
         );
-        self.gen_write_back(&wb);
+        self.gen_write_back_for_deopt(&wb);
         monoasm!( &mut self.jit,
             movq r13, ((pc + 1).as_ptr());
             jmp  raise;
@@ -716,7 +766,7 @@ impl Codegen {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(entry);
-        self.gen_write_back(wb);
+        self.gen_write_back_for_deopt(wb);
         monoasm!( &mut self.jit,
             movq r13, (pc.as_ptr());
         );

@@ -98,7 +98,7 @@ impl Codegen {
             AsmInst::RegToStack(r, slot) => {
                 let r = r as u64;
                 monoasm!( &mut self.jit,
-                    movq [r14 - (conv(slot))], R(r);
+                    movq [rbp - (rbp_local(slot))], R(r);
                 );
             }
             AsmInst::StackToReg(slot, r) => {
