@@ -17,8 +17,8 @@ impl Binding {
         }
     }
 
-    pub fn from_outer(outer_lfp: Lfp) -> Self {
-        Binding(Value::new_binding(outer_lfp))
+    pub fn from_outer(outer_lfp: Lfp, current_cfp: Cfp) -> Self {
+        Binding(Value::new_binding(outer_lfp, current_cfp))
     }
 }
 

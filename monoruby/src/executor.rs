@@ -1139,7 +1139,7 @@ impl Executor {
     pub fn generate_proc(&mut self, bh: BlockHandler) -> Result<Proc> {
         if let Some(proxy) = bh.try_proxy() {
             let outer_lfp = self.cfp().prev().unwrap().lfp();
-            outer_lfp.move_frame_to_heap();
+            outer_lfp.move_frame_to_heap(self.cfp());
             let proc = Proc::from(ProcData::from_proxy(self, proxy).to_proc().unwrap());
             Ok(proc)
         } else if let Some(proc) = bh.try_proc() {
@@ -1151,13 +1151,13 @@ impl Executor {
 
     pub fn generate_lambda(&mut self, func_id: FuncId) -> Proc {
         let outer_lfp = self.cfp().lfp();
-        outer_lfp.move_frame_to_heap();
+        outer_lfp.move_frame_to_heap(self.cfp());
         Proc::from_parts(outer_lfp, func_id)
     }
 
     pub fn generate_binding(&mut self) -> Binding {
         let lfp = self.cfp().prev().unwrap().lfp();
-        Binding::from_outer(lfp)
+        Binding::from_outer(lfp, self.cfp())
     }
 
     ///

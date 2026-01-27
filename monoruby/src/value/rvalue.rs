@@ -1226,8 +1226,8 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_binding(outer_lfp: Lfp) -> Self {
-        let outer_lfp = outer_lfp.move_frame_to_heap();
+    pub(super) fn new_binding(outer_lfp: Lfp, current_cfp: Cfp) -> Self {
+        let outer_lfp = outer_lfp.move_frame_to_heap(current_cfp);
         assert!(!outer_lfp.on_stack());
         RValue {
             header: Header::new(BINDING_CLASS, ObjTy::BINDING),

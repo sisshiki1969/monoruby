@@ -43,6 +43,20 @@ impl Cfp {
     }
 
     ///
+    /// Get previous LFP address of *self*.
+    ///
+    pub unsafe fn prev_lfp(&self) -> Lfp {
+        unsafe { *(self.as_ptr() as *const Lfp).add(3 + BP_CFP as usize / 8) }
+    }
+
+    ///
+    /// Set previous LFP address of *self*.
+    ///
+    pub unsafe fn set_prev_lfp(&mut self, lfp: Lfp) {
+        unsafe { *(self.as_ptr() as *mut Lfp).add(3 + BP_CFP as usize / 8) = lfp };
+    }
+
+    ///
     /// Get LFP.
     ///
     pub(crate) fn lfp(&self) -> Lfp {
@@ -287,22 +301,41 @@ impl Lfp {
     /// If the frame is already on the heap, do nothing.
     ///
     /// ### args
-    /// - *lfp*: the address of the frame to move.
+    /// - *self*: the LFP of the frame to move.
+    /// - *current_cfp*: the current control frame pointer.
     ///
     /// ### return
     /// - the frame moved to the heap.
     ///
-    pub fn move_frame_to_heap(self) -> Self {
+    pub fn move_frame_to_heap(self, current_cfp: Cfp) -> Self {
         if self.on_stack() {
             unsafe {
-                let mut cfp = self.cfp();
                 let len = self.frame_bytes();
                 let v = self.frame_ref().to_vec().into_boxed_slice();
                 let mut heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
                 heap_lfp.meta_mut().set_on_heap();
-                cfp.set_lfp(heap_lfp);
+                self.cfp().set_lfp(heap_lfp);
+
+                // Find the next CFP that called this frame by traversing backward from current_cfp
+                let mut cfp = current_cfp;
+                loop {
+                    if cfp.prev_lfp() == self {
+                        // Found the CFP that uses this LFP
+                        // Store the heap_lfp in the continuation frame's prev_lfp position
+                        // which is located at CFP + 32 bytes (4 * 8 bytes)
+                        cfp.set_prev_lfp(heap_lfp);
+                        break;
+                    }
+                    if let Some(prev_cfp) = cfp.prev() {
+                        cfp = prev_cfp;
+                    } else {
+                        // This should not happen in normal cases
+                        break;
+                    }
+                }
+
                 if let Some(outer_lfp) = heap_lfp.outer() {
-                    let outer = outer_lfp.move_frame_to_heap();
+                    let outer = outer_lfp.move_frame_to_heap(current_cfp);
                     heap_lfp.set_outer(Some(outer));
                 }
                 assert!(!heap_lfp.on_stack());
