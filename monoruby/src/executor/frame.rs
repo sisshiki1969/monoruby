@@ -112,6 +112,37 @@ impl Cfp {
         (lfp.func_id(), depth)
     }
 
+    pub fn generate_proc(self, bh: BlockHandler) -> Result<Proc> {
+        if let Some(proxy) = bh.try_proxy() {
+            let outer_lfp = self.prev().unwrap().lfp();
+            outer_lfp.move_frame_to_heap(self);
+            let proc = Proc::from(self.proc_data_from_proxy(proxy).to_proc().unwrap());
+            Ok(proc)
+        } else if let Some(proc) = bh.try_proc() {
+            Ok(proc)
+        } else {
+            unimplemented!("bh: {bh:?}")
+        }
+    }
+
+    pub fn generate_lambda(self, func_id: FuncId) -> Proc {
+        let outer_lfp = self.lfp();
+        outer_lfp.move_frame_to_heap(self);
+        Proc::from_parts(outer_lfp, func_id)
+    }
+
+    pub fn generate_binding(self) -> Binding {
+        let lfp = self.prev().unwrap().lfp();
+        Binding::from_outer(lfp, self)
+    }
+
+    pub(crate) fn proc_data_from_proxy(mut self, proxy: (FuncId, u16)) -> ProcData {
+        for _ in 0..proxy.1 {
+            self = self.prev().unwrap();
+        }
+        ProcData::new(self.lfp(), proxy.0)
+    }
+
     ///
     /// Get *BlockHandler* of a current method / classdef.
     ///
@@ -326,12 +357,7 @@ impl Lfp {
                         cfp.set_prev_lfp(heap_lfp);
                         break;
                     }
-                    if let Some(prev_cfp) = cfp.prev() {
-                        cfp = prev_cfp;
-                    } else {
-                        // This should not happen in normal cases
-                        break;
-                    }
+                    cfp = cfp.prev().unwrap();
                 }
 
                 if let Some(outer_lfp) = heap_lfp.outer() {

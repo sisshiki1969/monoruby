@@ -267,7 +267,7 @@ fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn proc(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(bh) = lfp.block() {
-        let p = vm.generate_proc(bh)?;
+        let p = vm.cfp().generate_proc(bh)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())
@@ -279,7 +279,7 @@ fn lambda(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let func_id = bh.func_id();
         globals.store[func_id].set_method_style();
-        let p = vm.generate_proc(bh)?;
+        let p = vm.cfp().generate_proc(bh)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())
@@ -294,7 +294,7 @@ fn lambda(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/binding.html]
 #[monoruby_builtin]
 fn binding(vm: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
-    Ok(vm.generate_binding().as_val())
+    Ok(vm.cfp().generate_binding().as_val())
 }
 
 ///

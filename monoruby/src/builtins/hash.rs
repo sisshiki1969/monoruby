@@ -88,7 +88,7 @@ pub(super) fn init(globals: &mut Globals) {
 fn new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = if let Some(bh) = lfp.block() {
-        let default_proc = vm.generate_proc(bh)?;
+        let default_proc = vm.cfp().generate_proc(bh)?;
         Value::hash_with_class_and_default_proc(class, default_proc)
     } else {
         let default = lfp.try_arg(0).unwrap_or_default();

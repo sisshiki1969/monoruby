@@ -416,7 +416,7 @@ fn define_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
             ));
         }
     } else if let Some(bh) = lfp.block() {
-        vm.generate_proc(bh)?
+        vm.cfp().generate_proc(bh)?
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };

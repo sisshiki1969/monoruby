@@ -60,7 +60,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn enumerator_new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let proc = vm.generate_proc(bh)?;
+    let proc = vm.cfp().generate_proc(bh)?;
     let obj = Value::new_generator(proc);
     vm.generate_enumerator(IdentId::EACH, obj, vec![])
 }
@@ -246,7 +246,7 @@ fn yielder_yield(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<
 #[monoruby_builtin]
 fn generator_new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let proc = vm.generate_proc(bh)?;
+    let proc = vm.cfp().generate_proc(bh)?;
     Ok(Value::new_generator(proc))
 }
 

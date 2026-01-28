@@ -79,17 +79,6 @@ impl ProcData {
         }
     }
 
-    pub(crate) fn from_proxy(executor: &Executor, proxy: (FuncId, u16)) -> Self {
-        let mut cfp = executor.cfp();
-        for _ in 0..proxy.1 {
-            cfp = cfp.prev().unwrap();
-        }
-        ProcData {
-            outer: Some(cfp.lfp()),
-            func_id: Some(proxy.0),
-        }
-    }
-
     pub(crate) fn to_proc(self) -> Option<ProcInner> {
         if let Some(func_id) = self.func_id {
             Some(ProcInner::new(self.outer.unwrap(), func_id))
@@ -141,7 +130,7 @@ pub(super) extern "C" fn block_arg(
     if bh.get().is_nil() {
         return Some(Value::nil());
     }
-    match vm.generate_proc(bh) {
+    match vm.cfp().generate_proc(bh) {
         Ok(val) => Some(val.into()),
         Err(err) => {
             vm.set_error(err);
@@ -204,7 +193,7 @@ pub(super) extern "C" fn array_teq(
 }
 
 pub(super) extern "C" fn gen_lambda(vm: &mut Executor, _: &mut Globals, func_id: FuncId) -> Value {
-    vm.generate_lambda(func_id).into()
+    vm.cfp().generate_lambda(func_id).into()
 }
 
 pub(super) extern "C" fn gen_hash(

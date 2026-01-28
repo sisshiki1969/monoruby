@@ -29,7 +29,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(bh) = lfp.block() {
-        let p = vm.generate_proc(bh)?;
+        let p = vm.cfp().generate_proc(bh)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())

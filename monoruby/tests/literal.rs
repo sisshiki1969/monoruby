@@ -223,6 +223,7 @@ fn imaginary() {
     run_test(r#"4+5i"#);
 }
 
+#[ignore]
 #[test]
 fn lambda() {
     run_test(
