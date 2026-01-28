@@ -162,7 +162,7 @@ impl Codegen {
     fn pop_cont_frame(&mut self) {
         monoasm! { &mut self.jit,
             popq r13;   // pop pc
-            addq rsp, 8;
+            popq r14;
             movzxw rdi, [r13 + (RET_REG)];  // rdi <- :1
             addq r13, 16;
         };

@@ -507,7 +507,8 @@ impl JitModule {
         if using_xmm.not_any() && !cont {
             return;
         }
-        let sp_offset = using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 };
+        //let cont = if cont { CONTINUATION_FRAME_SIZE } else { 0 };
+        let sp_offset = using_xmm.offset();
         monoasm!( &mut self.jit,
             subq rsp, (sp_offset);
         );
@@ -520,6 +521,15 @@ impl JitModule {
                 i += 1;
             }
         }
+        if !cont {
+            return;
+        }
+        monoasm!( &mut self.jit,
+            lea  rax, [rbp - (RBP_LOCAL_FRAME)];
+            pushq rax;
+            xorq rax, rax;
+            pushq rax;
+        );
     }
 
     pub(crate) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
@@ -533,12 +543,13 @@ impl JitModule {
         if using_xmm.not_any() && !cont {
             return;
         }
-        let sp_offset = using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 };
+        let cont = if cont { CONTINUATION_FRAME_SIZE } else { 0 };
+        let sp_offset = using_xmm.offset() + cont;
         let mut i = 0;
         for (x, b) in using_xmm.iter().enumerate() {
             if *b {
                 monoasm!( &mut self.jit,
-                    movq xmm(Xmm::new(x as _).enc()), [rsp + (8 * i)];
+                    movq xmm(Xmm::new(x as _).enc()), [rsp + (cont as i32 + (8 * i))];
                 );
                 i += 1;
             }
