@@ -125,10 +125,11 @@ impl Cfp {
         }
     }
 
-    pub fn generate_lambda(self, func_id: FuncId) -> Proc {
+    pub fn generate_lambda(self, func_id: FuncId) -> (Proc, Lfp) {
         let outer_lfp = self.lfp();
-        outer_lfp.move_frame_to_heap(self);
-        Proc::from_parts(outer_lfp, func_id)
+        let outer_lfp = outer_lfp.move_frame_to_heap(self);
+        let proc = Proc::from_parts(outer_lfp, func_id);
+        (proc, outer_lfp)
     }
 
     pub fn generate_binding(self) -> Binding {
@@ -357,7 +358,12 @@ impl Lfp {
                         cfp.set_prev_lfp(heap_lfp);
                         break;
                     }
-                    cfp = cfp.prev().unwrap();
+                    if let Some(prev_cfp) = cfp.prev() {
+                        cfp = prev_cfp;
+                    } else {
+                        // this only happens in runtime::gen_lambda().
+                        break;
+                    }
                 }
 
                 if let Some(outer_lfp) = heap_lfp.outer() {

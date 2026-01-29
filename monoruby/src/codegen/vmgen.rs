@@ -797,8 +797,9 @@ impl Codegen {
             movq rsi, r12;
             movq rax, (runtime::gen_lambda);
             call rax;
+            movq r14, rdx;
         }
-        self.restore_lfp();
+        //self.restore_lfp();
         monoasm! { &mut self.jit,
             movzxw rdi, [r13 - 12];  // r15 <- :1
             negq rdi;

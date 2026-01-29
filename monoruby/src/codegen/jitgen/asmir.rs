@@ -675,10 +675,6 @@ impl AsmIr {
         self.push(AsmInst::NewArray { callid, using_xmm });
     }
 
-    pub(super) fn new_lambda(&mut self, using_xmm: UsingXmm, func_id: FuncId) {
-        self.push(AsmInst::NewLambda(func_id, using_xmm));
-    }
-
     pub(super) fn new_hash(&mut self, using_xmm: UsingXmm, args: SlotId, len: usize) {
         self.push(AsmInst::NewHash(args, len, using_xmm));
     }
@@ -1263,10 +1259,6 @@ pub(super) enum AsmInst {
         callid: CallSiteId,
         using_xmm: UsingXmm,
     },
-    ///
-    /// Create a new Array object and store it to *rax*
-    ///
-    NewLambda(FuncId, UsingXmm),
     ///
     /// Create a new Hash object and store it to *rax*
     ///

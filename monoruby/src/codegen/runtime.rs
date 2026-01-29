@@ -192,8 +192,19 @@ pub(super) extern "C" fn array_teq(
     }
 }
 
-pub(super) extern "C" fn gen_lambda(vm: &mut Executor, _: &mut Globals, func_id: FuncId) -> Value {
-    vm.cfp().generate_lambda(func_id).into()
+#[repr(C)]
+pub struct LambdaReturn {
+    proc: Proc,
+    lfp: Lfp,
+}
+
+pub(super) extern "C" fn gen_lambda(
+    vm: &mut Executor,
+    _: &mut Globals,
+    func_id: FuncId,
+) -> LambdaReturn {
+    let (proc, lfp) = vm.cfp().generate_lambda(func_id);
+    LambdaReturn { proc, lfp }
 }
 
 pub(super) extern "C" fn gen_hash(
