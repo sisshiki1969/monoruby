@@ -40,7 +40,7 @@ impl Codegen {
     ) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
-            movq rdi, rbx;  // &mut Executor
+            lea  rdi, [rbp - (RBP_LOCAL_FRAME)];
             movq rsi, r12;  // &mut Globals
             lea  rdx, [rbp - (rbp_local(dst))];
             movq rcx, [rbp - (rbp_local(recv))];
@@ -59,7 +59,7 @@ impl Codegen {
     pub(super) fn defined_super(&mut self, dst: SlotId, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
-            movq rdi, rbx;  // &mut Executor
+            lea  rdi, [rbp - (RBP_LOCAL_FRAME)];
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::defined_super);
             call rax;
@@ -91,7 +91,7 @@ impl Codegen {
     pub(super) fn defined_ivar(&mut self, dst: SlotId, name: IdentId, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
-            movq rdi, rbx;  // &mut Executor
+            lea  rdi, [rbp - (RBP_LOCAL_FRAME)];
             movq rsi, r12;  // &mut Globals
             lea  rdx, [rbp - (rbp_local(dst))];
             movl rcx, (name.get());

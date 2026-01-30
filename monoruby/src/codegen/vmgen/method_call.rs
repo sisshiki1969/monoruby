@@ -271,6 +271,7 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId
+            movq r8, r14;
             movq rax, (runtime::find_method);
             call rax;   // rax <- Option<FuncId>
             movl rax, rax;

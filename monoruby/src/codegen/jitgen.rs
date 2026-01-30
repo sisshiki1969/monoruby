@@ -35,7 +35,7 @@ type Result<T> = std::result::Result<T, CompileError>;
 
 pub(super) struct CompileError;
 
-const RBP_LOCAL_FRAME: i32 = 24;
+pub const RBP_LOCAL_FRAME: i32 = 24;
 
 ///
 /// Compile result of the current instruction.

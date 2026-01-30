@@ -84,7 +84,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
         jit_class_guard_fail:
             movq rdx, rdi;
-            movq rdi, rbx;
+            lea  rdi, [rbp - (jitgen::RBP_LOCAL_FRAME)];
             movq rsi, r12;
             movq rax, (guard_fail);
             subq rsp, 4088;
@@ -998,7 +998,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rdx, r15;
             movl rcx, [r13 - 8];
-            movq rdi, rbx;  // &mut Interp
+            movq rdi, r14;
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::defined_ivar);
             call rax;
@@ -1016,7 +1016,7 @@ impl Codegen {
             movq rdx, r15;
             movq rcx, rdi;
             movl r8, [r13 - 8];
-            movq rdi, rbx;  // &mut Interp
+            movq rdi, r14;
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::defined_method);
             call rax;
@@ -1042,7 +1042,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch_addr_r15();
         monoasm! { &mut self.jit,
-            movq rdi, rbx;  // &mut Interp
+            movq rdi, r14;
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::defined_super);
             call rax;

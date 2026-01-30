@@ -1307,8 +1307,8 @@ extern "C" fn stack_overflow(executor: &mut Executor) -> Option<Value> {
 }
 
 #[cfg(feature = "profile")]
-extern "C" fn guard_fail(vm: &mut Executor, globals: &mut Globals, self_val: Value) {
-    let func_id = vm.cfp().lfp().func_id();
+extern "C" fn guard_fail(lfp: Lfp, globals: &mut Globals, self_val: Value) {
+    let func_id = lfp.func_id();
     globals.jit_class_guard_failed(func_id, self_val.class());
 }
 

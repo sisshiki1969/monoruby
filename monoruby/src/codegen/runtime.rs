@@ -15,20 +15,21 @@ pub(super) extern "C" fn find_method(
     globals: &mut Globals,
     callid: CallSiteId,
     recv: Value,
+    lfp: Lfp,
 ) -> Option<FuncId> {
     if let Some(func_name) = globals[callid].name {
         let is_func_call = globals[callid].is_func_call();
-        vm.find_method(globals, recv, func_name, is_func_call)
+        globals.find_method(recv, func_name, is_func_call)
     } else {
-        find_super(vm, globals)
+        find_super(lfp, globals)
     }
     .map_err(|err| vm.set_error(err))
     .ok()
 }
 
-fn find_super(vm: &mut Executor, globals: &mut Globals) -> Result<FuncId> {
-    let func_id = vm.method_func_id();
-    let self_val = vm.cfp().lfp().self_val();
+fn find_super(lfp: Lfp, globals: &mut Globals) -> Result<FuncId> {
+    let func_id = lfp.method_func_id();
+    let self_val = lfp.self_val();
     let owner = globals.store[func_id].owner_class().unwrap();
     let func_name = globals.store[func_id].name().unwrap();
     let self_class = self_val.class();
@@ -804,26 +805,26 @@ pub(super) extern "C" fn defined_gvar(
 }
 
 pub(super) extern "C" fn defined_ivar(
-    vm: &mut Executor,
+    lfp: Lfp,
     globals: &mut Globals,
     reg: *mut Value,
     name: IdentId,
 ) {
-    let self_val = vm.cfp().lfp().self_val();
+    let self_val = lfp.self_val();
     if globals.store.get_ivar(self_val, name).is_none() {
         unsafe { *reg = Value::nil() }
     }
 }
 
 pub(super) extern "C" fn defined_method(
-    vm: &mut Executor,
+    lfp: Lfp,
     globals: &mut Globals,
     reg: *mut Value,
     recv: Value,
     name: IdentId,
 ) {
-    let is_func_call = vm.cfp().lfp().self_val() == recv;
-    if vm.find_method(globals, recv, name, is_func_call).is_err() {
+    let is_func_call = lfp.self_val() == recv;
+    if globals.find_method(recv, name, is_func_call).is_err() {
         unsafe { *reg = Value::nil() }
     }
 }
@@ -833,13 +834,8 @@ pub(super) extern "C" fn defined_method(
 ///
 /// return "super" if callable, `nil` if not.
 ///
-pub(super) extern "C" fn defined_super(vm: &mut Executor, globals: &mut Globals) -> Value {
-    let func_id = vm.method_func_id();
-    let self_val = vm.cfp().lfp().self_val();
-    let owner = globals.store[func_id].owner_class().unwrap();
-    let name = globals.store[func_id].name().unwrap();
-    let self_class = self_val.class();
-    if globals.check_super(self_class, owner, name).is_some() {
+pub(super) extern "C" fn defined_super(lfp: Lfp, globals: &mut Globals) -> Value {
+    if find_super(lfp, globals).is_ok() {
         Value::string_from_str("super")
     } else {
         Value::nil()

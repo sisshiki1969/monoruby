@@ -459,7 +459,8 @@ extern "C" fn find(
     recv: Value,
     func_name: IdentId,
 ) -> Option<FuncId> {
-    vm.find_method(globals, recv, func_name, true)
+    globals
+        .find_method(recv, func_name, true)
         .map_err(|err| vm.set_error(err))
         .ok()
 }

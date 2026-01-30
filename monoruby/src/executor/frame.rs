@@ -35,6 +35,10 @@ impl Cfp {
         unsafe { *self.as_ptr() }
     }
 
+    pub fn caller(self) -> Option<(Cfp, Lfp)> {
+        Some((self.prev()?, self.prev_lfp()))
+    }
+
     ///
     /// Get base pointer address of *self*.
     ///
@@ -45,7 +49,8 @@ impl Cfp {
     ///
     /// Get previous LFP address of *self*.
     ///
-    pub unsafe fn prev_lfp(&self) -> Lfp {
+    pub fn prev_lfp(&self) -> Lfp {
+        //assert!(self.prev().is_some());
         unsafe { *(self.as_ptr() as *const Lfp).add(3 + BP_CFP as usize / 8) }
     }
 
@@ -73,13 +78,11 @@ impl Cfp {
     pub(crate) fn caller_lfp(&self, lfp: Lfp) -> Lfp {
         let target_lfp = lfp.outer().unwrap();
         let mut cfp = *self;
-        unsafe {
-            loop {
-                if cfp.prev_lfp() == target_lfp {
-                    return cfp.lfp();
-                }
-                cfp = cfp.prev().unwrap();
+        loop {
+            if cfp.prev_lfp() == target_lfp {
+                return cfp.lfp();
             }
+            cfp = cfp.prev().unwrap();
         }
     }
 

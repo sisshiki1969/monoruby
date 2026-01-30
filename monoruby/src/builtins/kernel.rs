@@ -367,7 +367,7 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/block_given=3f.html]
 #[monoruby_builtin]
 fn block_given(vm: &mut Executor, _globals: &mut Globals, _: Lfp) -> Result<Value> {
-    Ok(Value::bool(unsafe { vm.cfp().prev_lfp().block_given() }))
+    Ok(Value::bool(vm.cfp().prev_lfp().block_given()))
 }
 
 ///
@@ -679,9 +679,9 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         globals.compile_script_binding(expr, "(eval)", binding)?;
         vm.invoke_binding(globals, binding.binding().unwrap())
     } else {
-        let caller_cfp = cfp.prev().unwrap();
+        let (caller_cfp, caller_lfp) = cfp.caller().unwrap();
         let fid = globals.compile_script_eval(expr, "(eval)", caller_cfp)?;
-        let proc = ProcData::new(caller_cfp.lfp(), fid);
+        let proc = ProcData::new(caller_lfp, fid);
         vm.invoke_block(globals, &proc, &[])
     }
 }
