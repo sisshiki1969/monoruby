@@ -882,6 +882,16 @@ impl Codegen {
             .signal_handler(self.alloc_flag.clone(), self.sigint_flag.clone())
     }
 
+    ///
+    /// Raise error.
+    ///
+    /// ### in
+    /// - r13: PC + 1
+    /// - r14: LFP
+    ///
+    /// ### destroy
+    /// - caller saved registers
+    ///
     pub(crate) fn entry_raise(&self) -> DestLabel {
         self.entry_raise.clone()
     }
@@ -1023,13 +1033,16 @@ impl Codegen {
     ///
     /// Gen code for break in block.
     ///
-    /// rbp <- bp for a context of the outer of the block.
+    /// #### in
+    /// - rax: return value
+    /// - r13: PC + 1
+    /// - r14: LFP
     ///
     fn block_break(&mut self) {
         let raise = self.entry_raise();
         monoasm! { &mut self.jit,
             movq rdi, rbx;
-            movq rsi, r12;
+            movq rsi, r14;
             movq rdx, rax;
             movq rax, (runtime::err_block_break);
             call rax;
@@ -1042,13 +1055,14 @@ impl Codegen {
     ///
     /// #### in
     /// - rax: return value
-    /// - r13: pc + 1
+    /// - r13: PC + 1
+    /// - r14: LFP
     ///
     fn method_return(&mut self) {
         let raise = self.entry_raise();
         monoasm! { &mut self.jit,
             movq rdi, rbx;
-            movq rsi, r12;
+            movq rsi, r14;
             movq rdx, rax;
             movq rax, (runtime::err_method_return);
             call rax;

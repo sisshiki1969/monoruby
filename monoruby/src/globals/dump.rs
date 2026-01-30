@@ -181,13 +181,13 @@ impl Globals {
 
 #[cfg(any(feature = "deopt", feature = "profile"))]
 pub(crate) extern "C" fn log_deoptimize(
-    vm: &mut Executor,
+    lfp: Lfp,
     globals: &mut Globals,
     pc: BytecodePtr,
     #[cfg(feature = "deopt")] reason: Option<Value>,
 ) {
     use crate::jitgen::trace_ir::*;
-    let func_id = vm.cfp().lfp().func_id();
+    let func_id = lfp.func_id();
     let iseq_id = globals.store[func_id].as_iseq();
     let bc_pos = globals.store[iseq_id].get_pc_index(Some(pc));
     let trace_ir = TraceIr::from_pc(pc, &globals.store);

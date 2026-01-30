@@ -66,30 +66,20 @@ impl Cfp {
     ///
     /// Get outermost LFP.
     ///
-    pub(crate) fn outermost_lfp(&self) -> Lfp {
+    fn outermost_lfp(&self) -> Lfp {
         self.lfp().outermost().0
     }
 
-    ///
-    /// Get outermost LFP and the depth.
-    ///
-    pub(crate) fn outermost_lfp_depth(&self) -> (Lfp, usize) {
-        self.lfp().outermost()
-    }
-
-    pub(crate) fn block_given(&self) -> bool {
-        self.outermost_lfp().block().is_some()
-    }
-
-    pub(crate) fn caller(&self) -> Cfp {
-        let target_lfp = self.lfp().outer().unwrap();
+    pub(crate) fn caller_lfp(&self, lfp: Lfp) -> Lfp {
+        let target_lfp = lfp.outer().unwrap();
         let mut cfp = *self;
-        loop {
-            let cfp_prev = cfp.prev().unwrap();
-            if cfp_prev.lfp() == target_lfp {
-                return cfp;
+        unsafe {
+            loop {
+                if cfp.prev_lfp() == target_lfp {
+                    return cfp.lfp();
+                }
+                cfp = cfp.prev().unwrap();
             }
-            cfp = cfp_prev;
         }
     }
 
@@ -105,11 +95,6 @@ impl Cfp {
     ///
     pub fn method_func_id(&self) -> FuncId {
         self.outermost_lfp().func_id()
-    }
-
-    pub fn method_func_id_depth(&self) -> (FuncId, usize) {
-        let (lfp, depth) = self.outermost_lfp_depth();
-        (lfp.func_id(), depth)
     }
 
     pub fn generate_proc(self, bh: BlockHandler) -> Result<Proc> {
@@ -274,6 +259,10 @@ impl Lfp {
             depth += 1;
         }
         (lfp, depth)
+    }
+
+    pub(crate) fn block_given(&self) -> bool {
+        self.outermost().0.block().is_some()
     }
 
     pub(crate) fn method_func_id(&self) -> FuncId {

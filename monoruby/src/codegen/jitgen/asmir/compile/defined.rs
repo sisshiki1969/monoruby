@@ -9,8 +9,7 @@ impl Codegen {
     pub(super) fn defined_yield(&mut self, dst: SlotId, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
-            movq rdi, rbx;  // &mut Executor
-            movq rsi, r12;  // &mut Globals
+            lea  rdi, [rbp - (RBP_LOCAL_FRAME)];
             movq rax, (runtime::defined_yield);
             call rax;
             lea  rdi, [rbp - (rbp_local(dst))];

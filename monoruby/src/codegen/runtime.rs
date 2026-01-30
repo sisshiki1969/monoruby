@@ -851,8 +851,8 @@ pub(super) extern "C" fn defined_super(vm: &mut Executor, globals: &mut Globals)
 ///
 /// return "super" if callable, `nil` if not.
 ///
-pub(super) extern "C" fn defined_yield(vm: &mut Executor, _globals: &mut Globals) -> Value {
-    if vm.cfp().block_given() {
+pub(super) extern "C" fn defined_yield(lfp: Lfp) -> Value {
+    if lfp.block_given() {
         Value::string_from_str("yield")
     } else {
         Value::nil()
@@ -869,13 +869,13 @@ pub(super) extern "C" fn err_divide_by_zero(vm: &mut Executor) {
     vm.err_divide_by_zero();
 }
 
-pub(super) extern "C" fn err_method_return(vm: &mut Executor, _globals: &mut Globals, val: Value) {
-    let target_lfp = vm.cfp().outermost_lfp();
+pub(super) extern "C" fn err_method_return(vm: &mut Executor, lfp: Lfp, val: Value) {
+    let target_lfp = lfp.outermost().0;
     vm.set_error(MonorubyErr::method_return(val, target_lfp));
 }
 
-pub(super) extern "C" fn err_block_break(vm: &mut Executor, _globals: &mut Globals, val: Value) {
-    let target_lfp = vm.cfp().caller().lfp();
+pub(super) extern "C" fn err_block_break(vm: &mut Executor, lfp: Lfp, val: Value) {
+    let target_lfp = vm.cfp().caller_lfp(lfp);
     vm.set_error(MonorubyErr::method_return(val, target_lfp));
 }
 

@@ -290,12 +290,14 @@ impl Codegen {
             AsmInst::MethodRet(pc) => {
                 monoasm! { &mut self.jit,
                     movq r13, ((pc + 1).as_ptr());
+                    lea  r14, [rbp - (RBP_LOCAL_FRAME)];
                 };
                 self.method_return();
             }
             AsmInst::BlockBreak(pc) => {
                 monoasm! { &mut self.jit,
                     movq r13, ((pc + 1).as_ptr());
+                    lea  r14, [rbp - (RBP_LOCAL_FRAME)];
                 };
                 self.block_break();
             }

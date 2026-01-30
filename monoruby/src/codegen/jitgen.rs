@@ -794,7 +794,7 @@ impl Codegen {
                 );
             }
             monoasm!( &mut self.jit,
-                movq rdi, rbx;
+                lea  rdi, [rbp - (RBP_LOCAL_FRAME)];
                 movq rsi, r12;
                 movq rdx, r13;
                 movq rax, (crate::globals::log_deoptimize);

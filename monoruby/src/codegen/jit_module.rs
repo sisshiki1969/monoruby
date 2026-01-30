@@ -66,7 +66,7 @@ impl JitModule {
         raise:
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [r14 - (LFP_META)];
+            movq rdx, r14;
             movq rcx, r13;
             subq rcx, 16;
             movq rax, (handle_error);
@@ -320,9 +320,10 @@ impl ErrorReturn {
 pub(super) extern "C" fn handle_error(
     vm: &mut Executor,
     globals: &mut Globals,
-    meta: Meta,
+    mut lfp: Lfp,
     pc: BytecodePtr,
 ) -> ErrorReturn {
+    let meta = lfp.meta();
     let func_info = &globals.store[meta.func_id()];
     if vm.exception().is_none() {
         vm.set_error(MonorubyErr::runtimeerr(
@@ -333,7 +334,6 @@ pub(super) extern "C" fn handle_error(
         FuncKind::ISeq(info) => {
             let bc_base = globals.store[*info].get_top_pc();
             let pc = pc - bc_base;
-            let mut lfp = vm.cfp().lfp();
             let info = &globals.store[*info];
             // check exception table.
             // First, we check method_return.
@@ -362,7 +362,6 @@ pub(super) extern "C" fn handle_error(
             }
         }
         FuncKind::Builtin { .. } => {
-            let lfp = vm.cfp().lfp();
             // First, we check method_return.
             if let MonorubyErrKind::MethodReturn(val, target_lfp) = vm.exception().unwrap().kind() {
                 return if lfp == *target_lfp {

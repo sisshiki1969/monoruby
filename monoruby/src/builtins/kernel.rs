@@ -367,7 +367,7 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/block_given=3f.html]
 #[monoruby_builtin]
 fn block_given(vm: &mut Executor, _globals: &mut Globals, _: Lfp) -> Result<Value> {
-    Ok(Value::bool(vm.cfp().prev().unwrap().block_given()))
+    Ok(Value::bool(unsafe { vm.cfp().prev_lfp().block_given() }))
 }
 
 ///

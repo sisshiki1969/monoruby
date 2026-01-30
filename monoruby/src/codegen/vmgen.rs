@@ -1029,9 +1029,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch_addr_r15();
         monoasm! { &mut self.jit,
-            movq rdx, r15;
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
+            movq rdi, r14;
             movq rax, (runtime::defined_yield);
             call rax;
             movq [r15], rax;
