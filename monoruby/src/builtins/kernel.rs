@@ -632,7 +632,7 @@ fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require_relative.html]
 #[monoruby_builtin]
 fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let mut file_name: std::path::PathBuf = globals.current_source_path(vm).into();
+    let mut file_name: std::path::PathBuf = globals.current_source_path(vm, lfp).into();
     file_name.pop();
     let feature = std::path::PathBuf::from(lfp.arg(0).expect_string(globals)?);
     file_name.extend(&feature);
@@ -679,8 +679,8 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         globals.compile_script_binding(expr, "(eval)", binding)?;
         vm.invoke_binding(globals, binding.binding().unwrap())
     } else {
-        let (caller_cfp, caller_lfp) = cfp.caller().unwrap();
-        let fid = globals.compile_script_eval(expr, "(eval)", caller_cfp)?;
+        let caller_lfp = cfp.prev_lfp();
+        let fid = globals.compile_script_eval(expr, "(eval)", caller_lfp)?;
         let proc = ProcData::new(caller_lfp, fid);
         vm.invoke_block(globals, &proc, &[])
     }
@@ -855,8 +855,8 @@ fn warn(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/__dir__.html]
 #[monoruby_builtin]
-fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
-    let path = globals.current_source_path(vm).parent().unwrap();
+fn dir_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let path = globals.current_source_path(vm, lfp).parent().unwrap();
     Ok(Value::string(path.to_string_lossy().to_string()))
 }
 
@@ -868,7 +868,7 @@ fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/__method__.html]
 #[monoruby_builtin]
 fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
-    let fid = vm.cfp().prev().unwrap().method_func_id();
+    let fid = vm.cfp().prev_lfp().method_func_id();
     if !globals.store[fid].is_method() {
         return Ok(Value::nil());
     }

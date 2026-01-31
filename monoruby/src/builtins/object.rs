@@ -465,15 +465,15 @@ fn instance_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
     } else if let Some(arg0) = lfp.try_arg(0) {
         let expr = arg0.expect_string(globals)?;
         let cfp = vm.cfp();
-        let caller_cfp = cfp.prev().unwrap();
+        let caller_lfp = cfp.prev_lfp();
         let path = if let Some(arg1) = lfp.try_arg(1) {
             arg1.expect_string(globals)?
         } else {
             "(eval)".into()
         };
 
-        let fid = globals.compile_script_eval(expr, path, caller_cfp)?;
-        let proc = ProcData::new(caller_cfp.lfp(), fid);
+        let fid = globals.compile_script_eval(expr, path, caller_lfp)?;
+        let proc = ProcData::new(caller_lfp, fid);
         vm.invoke_block_with_self(globals, &proc, self_val, &[])
     } else {
         Err(MonorubyErr::wrong_number_of_arg_range(0, 1..=3))

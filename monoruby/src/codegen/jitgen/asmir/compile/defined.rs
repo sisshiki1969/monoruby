@@ -25,6 +25,7 @@ impl Codegen {
             movq rsi, r12;  // &mut Globals
             lea  rdx, [rbp - (rbp_local(dst))];
             movl rcx, (siteid.0);
+            lea  r8, [rbp - (RBP_LOCAL_FRAME)];
             movq rax, (runtime::defined_const);
             call rax;
         };

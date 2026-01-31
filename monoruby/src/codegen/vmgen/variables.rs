@@ -5,16 +5,17 @@ extern "C" fn vm_get_constant(
     globals: &mut Globals,
     site_id: ConstSiteId,
     const_version: usize,
+    lfp: Lfp,
 ) -> Option<Value> {
     if let Some(cache) = &globals.store[site_id].cache {
         let base_class = globals.store[site_id]
             .base
-            .map(|base| unsafe { vm.get_slot(base) }.unwrap());
+            .map(|base| lfp.register(base).unwrap());
         if cache.version == const_version && cache.base_class == base_class {
             return Some(cache.value);
         };
     }
-    match vm.find_constant(globals, site_id) {
+    match vm.find_constant(globals, lfp, site_id) {
         Ok((value, base_class)) => {
             globals.store[site_id].cache = Some(ConstCache {
                 version: const_version,
@@ -35,16 +36,17 @@ extern "C" fn vm_check_constant(
     globals: &mut Globals,
     site_id: ConstSiteId,
     const_version: usize,
+    lfp: Lfp,
 ) -> Value {
     if let Some(cache) = &globals.store[site_id].cache {
         let base_class = globals.store[site_id]
             .base
-            .map(|base| unsafe { vm.get_slot(base) }.unwrap());
+            .map(|base| lfp.register(base).unwrap());
         if cache.version == const_version && cache.base_class == base_class {
             return cache.value;
         };
     }
-    match vm.find_constant(globals, site_id) {
+    match vm.find_constant(globals, lfp, site_id) {
         Ok((value, base_class)) => {
             globals.store[site_id].cache = Some(ConstCache {
                 version: const_version,
@@ -72,6 +74,7 @@ impl Codegen {
             movq rcx, [rip + const_version]; // usize
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
+            movq r8, r14;   // Lfp
             movq rax, (vm_get_constant);
             call rax;
         };
@@ -98,6 +101,7 @@ impl Codegen {
             movq rcx, [rip + const_version]; // usize
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
+            movq r8, r14;   // Lfp
             movq rax, (vm_check_constant);
             call rax;
         };
@@ -124,6 +128,7 @@ impl Codegen {
             movq rcx, r15;  // val: Value
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
+            movq r8, r14;   // Lfp
             addq [rip + const_version], 1;
             movq rax, (runtime::set_constant);
             call rax;

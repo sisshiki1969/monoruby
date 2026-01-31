@@ -9,6 +9,7 @@ impl Codegen {
           movq rcx, rax;  // val: Value
           movq rdi, rbx;  // &mut Interp
           movq rsi, r12;  // &mut Globals
+          lea  r8, [rbp - (RBP_LOCAL_FRAME)];  // lfp: Lfp
           addq [rip + const_version], 1;
           movq rax, (runtime::set_constant);
           call rax;

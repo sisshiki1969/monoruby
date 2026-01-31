@@ -289,9 +289,9 @@ impl Globals {
         &mut self,
         code: String,
         path: impl Into<PathBuf>,
-        caller_cfp: Cfp,
+        caller_lfp: Lfp,
     ) -> Result<FuncId> {
-        let outer_fid = caller_cfp.lfp().func_id();
+        let outer_fid = caller_lfp.func_id();
         let outer = self.store[outer_fid].as_iseq();
         let external_context = self.store.scoped_locals(outer);
 
@@ -459,8 +459,8 @@ impl Globals {
         Value::array_from_iter(iter)
     }
 
-    pub(crate) fn current_source_path(&self, executor: &Executor) -> &std::path::Path {
-        let source_func_id = executor.cfp().get_source_pos();
+    pub(crate) fn current_source_path(&self, executor: &Executor, lfp: Lfp) -> &std::path::Path {
+        let source_func_id = executor.cfp().get_source_pos(lfp);
         &self.store.iseq(source_func_id).sourceinfo.path
     }
 

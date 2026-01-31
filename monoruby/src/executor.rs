@@ -154,14 +154,6 @@ impl Executor {
         self.cfp.unwrap()
     }
 
-    pub(crate) unsafe fn get_slot(&self, index: SlotId) -> Option<Value> {
-        self.cfp().lfp().register(index)
-    }
-
-    pub(crate) fn method_func_id(&self) -> FuncId {
-        self.cfp().method_func_id()
-    }
-
     pub fn temp_len(&self) -> usize {
         self.temp_stack.len()
     }
@@ -497,6 +489,7 @@ impl Executor {
     pub(crate) fn find_constant(
         &mut self,
         globals: &mut Globals,
+        lfp: Lfp,
         site_id: ConstSiteId,
     ) -> Result<(Value, Option<Value>)> {
         let ConstSiteInfo {
@@ -508,8 +501,8 @@ impl Executor {
         } = globals.store[site_id].clone();
         // SAFETY: get_slot is safe to call here because we're accessing a valid slot
         // that was previously set by the bytecode compiler.
-        let base = base.map(|base| unsafe { self.get_slot(base) }.unwrap());
-        let current_func = self.method_func_id();
+        let base = base.map(|base| lfp.register(base).unwrap());
+        let current_func = lfp.method_func_id();
         let mut parent = if let Some(base) = base {
             base.expect_class_or_module(&globals.store)?.id()
         } else if toplevel {
@@ -537,6 +530,7 @@ impl Executor {
     pub(crate) fn set_constant(
         &mut self,
         globals: &mut Globals,
+        lfp: Lfp,
         site_id: ConstSiteId,
         val: Value,
     ) -> Result<()> {
@@ -550,7 +544,7 @@ impl Executor {
         let mut parent = if let Some(base) = base {
             // SAFETY: get_slot is safe to call here because we're accessing a valid slot
             // that was previously set by the bytecode compiler.
-            let base = unsafe { self.get_slot(base) }.unwrap();
+            let base = lfp.register(base).unwrap();
             base.expect_class_or_module(&globals.store)?.id()
         } else if toplevel {
             OBJECT_CLASS
@@ -558,7 +552,7 @@ impl Executor {
             self.context_class_id()
         } else {
             let parent = prefix.remove(0);
-            let current_func = self.method_func_id();
+            let current_func = lfp.method_func_id();
             self.search_constant_checked(globals, parent, current_func)?
                 .expect_class_or_module(&globals.store)?
                 .id()
@@ -622,6 +616,7 @@ impl Executor {
     pub(crate) fn define_method(
         &mut self,
         globals: &mut Globals,
+        lfp: Lfp,
         name: IdentId,
         func: FuncId,
     ) -> Result<Value> {
@@ -630,7 +625,7 @@ impl Executor {
             module_function,
             visibility,
         } = self.get_class_context();
-        let current_func = self.method_func_id();
+        let current_func = lfp.method_func_id();
         if let Some(iseq) = globals.store[func].is_iseq() {
             globals.store[iseq].lexical_context =
                 globals.store.iseq(current_func).lexical_context.clone();
@@ -739,7 +734,7 @@ impl Executor {
         let method_name = if let Some(name) = callsite.name {
             name
         } else {
-            let func_id = self.method_func_id();
+            let func_id = lfp.method_func_id();
             globals.store[func_id].name().unwrap()
         };
         let bh = callsite.block_handler(lfp);

@@ -40,12 +40,12 @@ fn find_super(lfp: Lfp, globals: &mut Globals) -> Result<FuncId> {
 }
 
 pub(super) extern "C" fn enter_classdef<'a>(
-    vm: &mut Executor,
+    lfp: Lfp,
     globals: &'a mut Globals,
     func_id: FuncId,
     self_value: Module,
 ) -> &'a FuncData {
-    let current_func = vm.method_func_id();
+    let current_func = lfp.method_func_id();
     let mut lexical_context = globals.store.iseq(current_func).lexical_context.clone();
     lexical_context.push(self_value.id());
     if let Some(info) = globals.store.iseq_mut(func_id) {
@@ -592,8 +592,9 @@ pub(super) extern "C" fn set_constant(
     globals: &mut Globals,
     id: ConstSiteId,
     val: Value,
+    lfp: Lfp,
 ) {
-    vm.set_constant(globals, id, val).unwrap();
+    vm.set_constant(globals, lfp, id, val).unwrap();
 }
 
 ///
@@ -713,8 +714,9 @@ pub(super) extern "C" fn define_method(
     globals: &mut Globals,
     name: IdentId,
     func: FuncId,
+    lfp: Lfp,
 ) -> Option<Value> {
-    match vm.define_method(globals, name, func) {
+    match vm.define_method(globals, lfp, name, func) {
         Ok(v) => Some(v),
         Err(err) => {
             vm.set_error(err);
@@ -724,13 +726,13 @@ pub(super) extern "C" fn define_method(
 }
 
 pub(super) extern "C" fn singleton_define_method(
-    vm: &mut Executor,
+    lfp: Lfp,
     globals: &mut Globals,
     name: IdentId,
     func: FuncId,
     obj: Value,
 ) {
-    let current_func = vm.method_func_id();
+    let current_func = lfp.method_func_id();
     if let Some(iseq) = globals.store[func].is_iseq() {
         globals.store[iseq].lexical_context =
             globals.store.iseq(current_func).lexical_context.clone();
@@ -781,8 +783,9 @@ pub(super) extern "C" fn defined_const(
     globals: &mut Globals,
     reg: *mut Value,
     site_id: ConstSiteId,
+    lfp: Lfp,
 ) {
-    if vm.find_constant(globals, site_id).is_err() {
+    if vm.find_constant(globals, lfp, site_id).is_err() {
         unsafe { *reg = Value::nil() }
     }
 }

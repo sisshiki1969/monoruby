@@ -970,6 +970,7 @@ impl Codegen {
             movl rcx, [r13 - 8];
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
+            movq r8, r14;
             movq rax, (runtime::defined_const);
             call rax;
         };

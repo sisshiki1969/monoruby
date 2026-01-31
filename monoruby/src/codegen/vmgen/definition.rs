@@ -69,7 +69,7 @@ impl Codegen {
             movq r15, rax; // r15 <- self
             movq rcx, rax; // rcx <- self
             movl rdx, [r13 - 4];  // rdx <- func_id
-            movq rdi, rbx;  // &mut Executor
+            movq rdi, r14;
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::enter_classdef);
             call rax; // rax <- &FuncData
@@ -125,6 +125,7 @@ impl Codegen {
             movl rcx, [r13 - 4];  // func_id
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
+            movq r8, r14;
             movq rax, (runtime::define_method);
             call rax;
             testq rax, rax;
@@ -153,7 +154,7 @@ impl Codegen {
             movq r8, r15;
             movl rdx, [r13 - 8];  // name
             movl rcx, [r13 - 4];  // func_id
-            movq rdi, rbx;  // &mut Interp
+            movq rdi, r14;  // Lfp
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::singleton_define_method);
             call rax;

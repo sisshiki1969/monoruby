@@ -84,6 +84,7 @@ impl Codegen {
             movq rsi, r12; // &Globals
             movq rdx, (u32::from(name)); // IdentId
             movq rcx, (u32::from(func_id)); // FuncId
+            lea  r8, [rbp - (RBP_LOCAL_FRAME)]; // Lfp
             movq rax, (runtime::define_method);
             call rax;
         );
@@ -99,7 +100,7 @@ impl Codegen {
     ) {
         self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
-            movq rdi, rbx; // &mut Interp
+            lea  rdi, [rbp - (RBP_LOCAL_FRAME)]; // Lfp
             movq rsi, r12; // &Globals
             movq rdx, (u32::from(name)); // IdentId
             movq rcx, (u32::from(func_id)); // FuncId
@@ -115,7 +116,7 @@ impl Codegen {
             movq r15, rax; // r15 <- self
             movq rcx, rax; // rcx <- self
             movl rdx, (func_id.get());  // rdx <- func_id
-            movq rdi, rbx;  // &mut Executor
+            lea  rdi, [rbp - (RBP_LOCAL_FRAME)];
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::enter_classdef);
             call rax; // rax <- &FuncData

@@ -35,10 +35,6 @@ impl Cfp {
         unsafe { *self.as_ptr() }
     }
 
-    pub fn caller(self) -> Option<(Cfp, Lfp)> {
-        Some((self.prev()?, self.prev_lfp()))
-    }
-
     ///
     /// Get base pointer address of *self*.
     ///
@@ -102,7 +98,7 @@ impl Cfp {
 
     pub fn generate_proc(self, bh: BlockHandler) -> Result<Proc> {
         if let Some(proxy) = bh.try_proxy() {
-            let outer_lfp = self.prev().unwrap().lfp();
+            let outer_lfp = self.prev_lfp();
             outer_lfp.move_frame_to_heap(self);
             let proc = Proc::from(self.proc_data_from_proxy(proxy).to_proc().unwrap());
             Ok(proc)
@@ -121,7 +117,7 @@ impl Cfp {
     }
 
     pub fn generate_binding(self) -> Binding {
-        let lfp = self.prev().unwrap().lfp();
+        let lfp = self.prev_lfp();
         Binding::from_outer(lfp, self)
     }
 
@@ -157,13 +153,17 @@ impl Cfp {
     ///
     /// Get *FuncId* of a current position in the source code.
     ///
-    pub fn get_source_pos(&self) -> FuncId {
-        let mut cfp = Some(*self);
-        while let Some(inner_cfp) = cfp {
-            if !inner_cfp.lfp().meta().is_native() {
-                return inner_cfp.lfp().func_id();
+    pub fn get_source_pos(self, lfp: Lfp) -> FuncId {
+        if !lfp.meta().is_native() {
+            return lfp.func_id();
+        }
+        let mut cfp = self;
+        while let Some(prev_cfp) = cfp.prev() {
+            let lfp = cfp.prev_lfp();
+            if !lfp.meta().is_native() {
+                return lfp.func_id();
             }
-            cfp = inner_cfp.prev();
+            cfp = prev_cfp;
         }
         unreachable!("get_source_pos: non-native method not found.")
     }
