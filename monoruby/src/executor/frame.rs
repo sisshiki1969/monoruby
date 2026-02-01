@@ -65,28 +65,23 @@ impl Cfp {
     }
 
     ///
-    /// Get outermost LFP.
-    ///
-    fn outermost_lfp(&self) -> Lfp {
-        self.lfp().outermost().0
-    }
-
-    pub(crate) fn caller_lfp(&self, lfp: Lfp) -> Lfp {
-        let target_lfp = lfp.outer().unwrap();
-        let mut cfp = *self;
-        loop {
-            if cfp.prev_lfp() == target_lfp {
-                return cfp.lfp();
-            }
-            cfp = cfp.prev().unwrap();
-        }
-    }
-
-    ///
     /// Set LFP.
     ///
     pub unsafe fn set_lfp(&mut self, lfp: Lfp) {
         unsafe { *(self.as_ptr().sub(CFP_LFP as usize / 8) as *mut Lfp) = lfp };
+    }
+
+    pub(crate) fn caller_lfp(self, lfp: Lfp) -> Lfp {
+        let target_lfp = lfp.outer().unwrap();
+        let (mut cfp, mut lfp) = (self, lfp);
+        loop {
+            if cfp.prev_lfp() == target_lfp {
+                //assert_eq!(lfp, cfp.lfp());
+                return cfp.lfp();
+            }
+            lfp = cfp.prev_lfp();
+            cfp = cfp.prev().unwrap();
+        }
     }
 
     pub fn generate_proc(self, bh: BlockHandler) -> Result<Proc> {
@@ -123,17 +118,18 @@ impl Cfp {
     ///
     /// Get *BlockHandler* of a current method / classdef.
     ///
-    pub fn get_block(&self) -> Option<BlockHandler> {
-        let lfp = self.outermost_lfp();
-        let bh = lfp.block()?;
+    pub fn get_block(self, lfp: Lfp) -> Option<BlockHandler> {
+        let target_lfp = lfp.outermost().0;
+        let bh = target_lfp.block()?;
         Some(match bh.0.try_fixnum() {
             Some(mut i) => {
-                let mut cfp = *self;
+                let (mut cfp, mut lfp) = (self, lfp);
                 loop {
-                    if cfp.lfp() == lfp {
+                    if lfp == target_lfp {
                         break;
                     }
                     i += 1;
+                    lfp = cfp.prev_lfp();
                     cfp = cfp.prev().unwrap();
                 }
                 BlockHandler::new(Value::integer(i))

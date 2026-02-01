@@ -95,13 +95,18 @@ impl ProcData {
 /// ### in
 /// - rdi: &mut Executor
 /// - rsi: &mut Globals
+/// - rdx: Lfp
 ///
 /// ### out
 /// - rax: outer Lfp
 /// - rdx: FuncId
 ///
-pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals) -> ProcData {
-    let bh = match vm.cfp().get_block() {
+pub(super) extern "C" fn get_yield_data(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+) -> ProcData {
+    let bh = match vm.cfp().get_block(lfp) {
         Some(data) => data,
         None => {
             vm.set_error(MonorubyErr::no_block_given());

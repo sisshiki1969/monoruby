@@ -452,9 +452,11 @@ impl JitModule {
     /// ### out
     /// - r15: &FuncData
     ///
+    /// ### destroy
+    /// - rdx
+    ///
     fn get_func_data(&mut self) {
         monoasm! { &mut self.jit,
-            movl rdx, rdx;
             // assumes size_of::<FuncInfo>() is 64,
             shlq rdx, 6;
             addq rdx, [r12 + (GLOBALS_FUNCINFO)];
@@ -468,6 +470,7 @@ impl JitModule {
     /// ### in
     /// - rbx: &mut Executor
     /// - r12: &Globals
+    /// - rdx: Lfp
     ///
     /// ### out
     /// - rax: outer_lfp: Option<LFP>
@@ -482,6 +485,7 @@ impl JitModule {
             movq rsi, r12;
             movq rax, (runtime::get_yield_data);
             call rax;
+            movl rdx, rdx;
         }
     }
 

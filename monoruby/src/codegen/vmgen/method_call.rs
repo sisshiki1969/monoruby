@@ -120,6 +120,9 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.vm_check_stack();
         self.vm_execute_gc();
+        monoasm! { &mut self.jit,
+            movq rdx, r14;
+        }
         self.get_proc_data();
         // rax: outer, rdx: FuncId
         self.vm_handle_error();

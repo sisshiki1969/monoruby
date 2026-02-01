@@ -31,6 +31,7 @@ impl JitModule {
         monoasm! { &mut self.jit,
             movq r10, [rsp + 16];
             movq r11, [rsp + 8];
+            movl rdx, rdx;
         }
         self.invoker_prologue(&error_exit);
         self.invoker_frame_setup(false, true);
@@ -62,6 +63,7 @@ impl JitModule {
         monoasm! { &mut self.jit,
             xorq r10, r10;
             xorq r11, r11;
+            movl rdx, rdx;
         }
         self.invoker_prologue(&error_exit);
         self.invoker_frame_setup(false, true);

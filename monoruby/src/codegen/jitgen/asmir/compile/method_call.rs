@@ -122,6 +122,9 @@ impl Codegen {
     /// - r15
     ///
     pub(super) fn gen_yield(&mut self, callid: CallSiteId, error: &DestLabel) -> CodePtr {
+        monoasm! { &mut self.jit,
+            lea rdx, [rbp - (RBP_LOCAL_FRAME)];
+        }
         self.get_proc_data();
         self.handle_error(&error);
         // rax <- outer, rdx <- FuncId
