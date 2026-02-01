@@ -951,7 +951,7 @@ impl Codegen {
         loop_exit:
             movq rdx, [rax - (LFP_BLOCK)];
             movq rdi, rbx;
-            movq rsi, r12;
+            movq rsi, r14;
             movq rax, (runtime::block_arg);
             call rax;
             testq rax, rax;

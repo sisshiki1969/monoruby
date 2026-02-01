@@ -84,11 +84,11 @@ impl Cfp {
         }
     }
 
-    pub fn generate_proc(self, bh: BlockHandler) -> Result<Proc> {
+    pub fn generate_proc(self, lfp: Lfp, bh: BlockHandler) -> Result<Proc> {
         if let Some(proxy) = bh.try_proxy() {
             let outer_lfp = self.prev_lfp();
             outer_lfp.move_frame_to_heap(self);
-            let proc = Proc::from(self.proc_data_from_proxy(proxy).to_proc().unwrap());
+            let proc = Proc::from(self.proc_data_from_proxy(lfp, proxy).to_proc().unwrap());
             Ok(proc)
         } else if let Some(proc) = bh.try_proc() {
             Ok(proc)
@@ -108,11 +108,13 @@ impl Cfp {
         Binding::from_outer(lfp, self)
     }
 
-    pub(crate) fn proc_data_from_proxy(mut self, proxy: (FuncId, u16)) -> ProcData {
+    pub(crate) fn proc_data_from_proxy(self, lfp: Lfp, proxy: (FuncId, u16)) -> ProcData {
+        let (mut cfp, mut lfp) = (self, lfp);
         for _ in 0..proxy.1 {
-            self = self.prev().unwrap();
+            lfp = cfp.prev_lfp();
+            cfp = cfp.prev().unwrap();
         }
-        ProcData::new(self.lfp(), proxy.0)
+        ProcData::new(cfp.lfp(), proxy.0)
     }
 
     ///

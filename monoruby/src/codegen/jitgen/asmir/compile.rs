@@ -1009,7 +1009,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rdx, [rax - (LFP_BLOCK)];
             movq rdi, rbx;
-            movq rsi, r12;
+            lea  rsi, [rbp - (RBP_LOCAL_FRAME)];
             movq rax, (runtime::block_arg);
             call rax;
         };

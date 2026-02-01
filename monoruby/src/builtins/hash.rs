@@ -88,7 +88,7 @@ pub(super) fn init(globals: &mut Globals) {
 fn new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = if let Some(bh) = lfp.block() {
-        let default_proc = vm.cfp().generate_proc(bh)?;
+        let default_proc = vm.cfp().generate_proc(lfp, bh)?;
         Value::hash_with_class_and_default_proc(class, default_proc)
     } else {
         let default = lfp.try_arg(0).unwrap_or_default();
@@ -346,7 +346,7 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if removed_value.is_none()
         && let Some(bh) = lfp.block()
     {
-        return vm.invoke_block_once(globals, bh, &[key]);
+        return vm.invoke_block_once(globals, lfp, bh, &[key]);
     }
 
     Ok(removed_value.unwrap_or_default())
@@ -373,6 +373,7 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let hash = lfp.self_val().as_hash();
     vm.invoke_block_map1(
         globals,
+        lfp,
         bh,
         hash.iter().map(|(k, v)| Value::array2(k, v)),
         hash.len(),
@@ -398,7 +399,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         Some(block) => block,
     };
     let hash = lfp.self_val().as_hash();
-    let data = vm.get_block_data(globals, bh)?;
+    let data = vm.get_block_data(globals, lfp, bh)?;
     for (k, v) in hash.iter() {
         vm.invoke_block(globals, &data, &[Value::array2(k, v)])?;
     }
@@ -423,7 +424,7 @@ fn each_value(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     };
     let hash = lfp.self_val().as_hash();
     let iter = hash.iter().map(|(_, v)| v);
-    vm.invoke_block_iter1(globals, bh, iter)?;
+    vm.invoke_block_iter1(globals, lfp, bh, iter)?;
     Ok(lfp.self_val())
 }
 
@@ -445,7 +446,7 @@ fn each_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     };
     let hash = lfp.self_val().as_hash();
     let iter = hash.iter().map(|(k, _)| k);
-    vm.invoke_block_iter1(globals, bh, iter)?;
+    vm.invoke_block_iter1(globals, lfp, bh, iter)?;
     Ok(lfp.self_val())
 }
 
@@ -467,7 +468,7 @@ fn select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
         Some(block) => block,
     };
-    let data = vm.get_block_data(globals, bh)?;
+    let data = vm.get_block_data(globals, lfp, bh)?;
     let mut inner = HashmapInner::default();
     for (k, v) in lfp.self_val().as_hash().iter() {
         if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
@@ -495,7 +496,7 @@ fn select_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
         }
         Some(block) => block,
     };
-    let data = vm.get_block_data(globals, bh)?;
+    let data = vm.get_block_data(globals, lfp, bh)?;
     let mut remove = vec![];
     for (k, v) in lfp.self_val().as_hash().iter() {
         if !vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
@@ -570,7 +571,7 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let h = lfp.self_val().dup();
-    let p = vm.get_block_data(globals, bh)?;
+    let p = vm.get_block_data(globals, lfp, bh)?;
     vm.temp_push(h);
     let mut res = Hashmap::new(h);
     for (k, v) in lfp.self_val().expect_hash_ty(globals)?.iter() {
@@ -653,7 +654,7 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut h = lfp.self_val().as_hash();
     if let Some(block) = lfp.block() {
-        let data = vm.get_block_data(globals, block)?;
+        let data = vm.get_block_data(globals, lfp, block)?;
         for arg in lfp.arg(0).as_array().iter() {
             let other = arg.expect_hash_ty(globals)?;
             for (k, other_v) in other.iter() {
@@ -735,7 +736,7 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
         match hash.get(lfp.arg(0), vm, globals)? {
             Some(v) => v,
-            None => vm.invoke_block_once(globals, bh, &[lfp.arg(0)])?,
+            None => vm.invoke_block_once(globals, lfp, bh, &[lfp.arg(0)])?,
         }
     } else if lfp.try_arg(1).is_none() {
         match hash.get(lfp.arg(0), vm, globals)? {

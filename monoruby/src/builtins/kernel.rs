@@ -267,7 +267,7 @@ fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn proc(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(bh) = lfp.block() {
-        let p = vm.cfp().generate_proc(bh)?;
+        let p = vm.cfp().generate_proc(lfp, bh)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())
@@ -279,7 +279,7 @@ fn lambda(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let func_id = bh.func_id();
         globals.store[func_id].set_method_style();
-        let p = vm.cfp().generate_proc(bh)?;
+        let p = vm.cfp().generate_proc(lfp, bh)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())
@@ -306,7 +306,7 @@ fn binding(vm: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let data = vm.get_block_data(globals, bh)?;
+    let data = vm.get_block_data(globals, lfp, bh)?;
     loop {
         if let Err(err) = vm.invoke_block(globals, &data, &[]) {
             return if err.kind() == &MonorubyErrKind::StopIteration {

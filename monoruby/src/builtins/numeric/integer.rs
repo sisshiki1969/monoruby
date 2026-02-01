@@ -167,7 +167,7 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         limit,
         step: 1,
     };
-    vm.invoke_block_iter1(globals, bh, iter)?;
+    vm.invoke_block_iter1(globals, lfp, bh, iter)?;
     Ok(lfp.self_val())
 }
 
@@ -198,7 +198,7 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         limit,
         step: -1,
     };
-    vm.invoke_block_iter1(globals, bh, iter)?;
+    vm.invoke_block_iter1(globals, lfp, bh, iter)?;
     Ok(lfp.self_val())
 }
 

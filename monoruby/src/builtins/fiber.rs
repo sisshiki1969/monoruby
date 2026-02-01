@@ -32,7 +32,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn fiber_new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let proc = vm.cfp().generate_proc(bh)?;
+    let proc = vm.cfp().generate_proc(lfp, bh)?;
     Ok(Value::new_fiber(proc))
 }
 

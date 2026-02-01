@@ -786,20 +786,22 @@ impl Executor {
     pub(crate) fn invoke_block_once(
         &mut self,
         globals: &mut Globals,
+        lfp: Lfp,
         bh: BlockHandler,
         args: &[Value],
     ) -> Result<Value> {
-        let data = self.get_block_data(globals, bh)?;
+        let data = self.get_block_data(globals, lfp, bh)?;
         self.invoke_block(globals, &data, args)
     }
 
     pub(crate) fn invoke_block_iter1(
         &mut self,
         globals: &mut Globals,
+        lfp: Lfp,
         bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
     ) -> Result<()> {
-        let data = self.get_block_data(globals, bh)?;
+        let data = self.get_block_data(globals, lfp, bh)?;
         for val in iter {
             self.invoke_block(globals, &data, &[val])?;
         }
@@ -826,6 +828,7 @@ impl Executor {
     pub(crate) fn invoke_block_map1(
         &mut self,
         globals: &mut Globals,
+        lfp: Lfp,
         bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
         size_hint: impl Into<Option<usize>>,
@@ -842,7 +845,7 @@ impl Executor {
             }
             Ok(())
         }
-        let data = self.get_block_data(globals, bh)?;
+        let data = self.get_block_data(globals, lfp, bh)?;
         self.temp_array_new(size_hint);
         let res = inner(self, globals, &data, iter);
         let v = self.temp_pop();
@@ -853,6 +856,7 @@ impl Executor {
     pub(crate) fn invoke_block_flat_map1(
         &mut self,
         globals: &mut Globals,
+        lfp: Lfp,
         bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
         size_hint: impl Into<Option<usize>>,
@@ -873,7 +877,7 @@ impl Executor {
             }
             Ok(())
         }
-        let data = self.get_block_data(globals, bh)?;
+        let data = self.get_block_data(globals, lfp, bh)?;
         self.temp_array_new(size_hint);
         let res = inner(self, globals, &data, iter);
         let v = self.temp_pop();
@@ -884,11 +888,12 @@ impl Executor {
     pub(crate) fn invoke_block_fold1(
         &mut self,
         globals: &mut Globals,
+        lfp: Lfp,
         bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
         mut res: Value,
     ) -> Result<Value> {
-        let data = self.get_block_data(globals, bh)?;
+        let data = self.get_block_data(globals, lfp, bh)?;
         for elem in iter {
             res = self.invoke_block(globals, &data, &[res, elem])?;
         }
@@ -981,10 +986,11 @@ impl Executor {
     pub(crate) fn get_block_data(
         &mut self,
         globals: &mut Globals,
+        lfp: Lfp,
         bh: BlockHandler,
     ) -> Result<ProcData> {
         if let Some(proxy) = bh.try_proxy() {
-            Ok(self.cfp().proc_data_from_proxy(proxy))
+            Ok(self.cfp().proc_data_from_proxy(lfp, proxy))
         } else if let Some(proc) = bh.0.is_proc() {
             Ok(ProcData::from_proc(&proc))
         } else if let Some(proc) =
@@ -1180,12 +1186,10 @@ impl BlockHandler {
     }
 
     pub fn try_proxy(&self) -> Option<(FuncId, u16)> {
-        self.0.try_fixnum().map(|i| {
-            let i = i as u64;
-            let func_id = FuncId::new(u32::try_from(i >> 16).unwrap());
-            let idx = i as u16;
-            (func_id, idx)
-        })
+        let i = self.0.try_fixnum()? as u64;
+        let func_id = FuncId::new(u32::try_from(i >> 16).unwrap());
+        let idx = i as u16;
+        Some((func_id, idx))
     }
 
     pub fn delegate(self) -> Self {

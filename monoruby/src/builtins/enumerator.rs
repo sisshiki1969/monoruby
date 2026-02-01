@@ -60,7 +60,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn enumerator_new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let proc = vm.cfp().generate_proc(bh)?;
+    let proc = vm.cfp().generate_proc(lfp, bh)?;
     let obj = Value::new_generator(proc);
     vm.generate_enumerator(IdentId::EACH, obj, vec![])
 }
@@ -116,7 +116,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
     let self_val: Enumerator = Enumerator::new(lfp.self_val());
     let data = if let Some(bh) = lfp.block() {
-        vm.get_block_data(globals, bh)?
+        vm.get_block_data(globals, lfp, bh)?
     } else {
         return Ok(self_val.into());
     };
@@ -179,7 +179,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 
     let id = IdentId::get_id("with_index");
     let data = if let Some(bh) = lfp.block() {
-        vm.get_block_data(globals, bh)?
+        vm.get_block_data(globals, lfp, bh)?
     } else {
         return vm.generate_enumerator(id, lfp.self_val(), vec![]);
     };
@@ -246,7 +246,7 @@ fn yielder_yield(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<
 #[monoruby_builtin]
 fn generator_new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let proc = vm.cfp().generate_proc(bh)?;
+    let proc = vm.cfp().generate_proc(lfp, bh)?;
     Ok(Value::new_generator(proc))
 }
 
@@ -274,7 +274,7 @@ fn generator_each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
         }
     }
     let self_val = Generator::new(lfp.self_val());
-    let data = vm.get_block_data(globals, lfp.expect_block()?)?;
+    let data = vm.get_block_data(globals, lfp, lfp.expect_block()?)?;
     let internal = self_val.create_internal();
     vm.temp_push(internal.into());
     let res = each_inner(vm, globals, internal, &data);

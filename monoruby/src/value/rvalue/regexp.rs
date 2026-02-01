@@ -195,6 +195,7 @@ impl RegexpInner {
     pub(crate) fn replace_one_block(
         vm: &mut Executor,
         globals: &mut Globals,
+        lfp: Lfp,
         re_val: Value,
         given: &str,
         bh: BlockHandler,
@@ -202,6 +203,7 @@ impl RegexpInner {
         fn replace_(
             vm: &mut Executor,
             globals: &mut Globals,
+            lfp: Lfp,
             re: &RegexpInner,
             given: &str,
             bh: BlockHandler,
@@ -213,7 +215,7 @@ impl RegexpInner {
                     let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
                     let mut res = given.to_string();
                     let matched = Value::string_from_str(matched_str);
-                    let result = vm.invoke_block_once(globals, bh, &[matched])?;
+                    let result = vm.invoke_block_once(globals, lfp, bh, &[matched])?;
                     let s = result.to_s(&globals.store);
                     res.replace_range(start..end, &s);
                     Ok((res, true))
@@ -223,9 +225,9 @@ impl RegexpInner {
 
         if let Some(s) = re_val.is_str() {
             let re = Self::from_escaped(s)?;
-            replace_(vm, globals, &re, given, bh)
+            replace_(vm, globals, lfp, &re, given, bh)
         } else if let Some(re) = re_val.is_regex() {
-            replace_(vm, globals, &re, given, bh)
+            replace_(vm, globals, lfp, &re, given, bh)
         } else {
             Err(MonorubyErr::argumenterr(
                 "1st arg must be RegExp or String.",
@@ -256,6 +258,7 @@ impl RegexpInner {
     pub(crate) fn replace_all_block(
         vm: &mut Executor,
         globals: &mut Globals,
+        lfp: Lfp,
         re_val: Value,
         given: &str,
         bh: BlockHandler,
@@ -263,12 +266,13 @@ impl RegexpInner {
         fn replace_(
             vm: &mut Executor,
             globals: &mut Globals,
+            lfp: Lfp,
             re: &RegexpInner,
             given: &str,
             bh: BlockHandler,
         ) -> Result<(String, bool)> {
             let mut range = vec![];
-            let data = vm.get_block_data(globals, bh)?;
+            let data = vm.get_block_data(globals, lfp, bh)?;
 
             vm.clear_capture_special_variables();
             for cap in re.captures_iter(given) {
@@ -296,9 +300,9 @@ impl RegexpInner {
 
         if let Some(s) = re_val.is_str() {
             let re = Self::from_escaped(s)?;
-            replace_(vm, globals, &re, given, bh)
+            replace_(vm, globals, lfp, &re, given, bh)
         } else if let Some(re) = re_val.is_regex() {
-            replace_(vm, globals, &re, given, bh)
+            replace_(vm, globals, lfp, &re, given, bh)
         } else {
             Err(MonorubyErr::argumenterr(
                 "1st arg must be RegExp or String.",
@@ -309,6 +313,7 @@ impl RegexpInner {
     pub(crate) fn match_one(
         vm: &mut Executor,
         globals: &mut Globals,
+        lfp: Lfp,
         re: &RegexpInner,
         given: &str,
         block: Option<BlockHandler>,
@@ -323,7 +328,7 @@ impl RegexpInner {
             Some(captures) => {
                 if let Some(bh) = block {
                     let matched = Value::string_from_str(captures.get(0).unwrap().as_str());
-                    vm.invoke_block_once(globals, bh, &[matched])
+                    vm.invoke_block_once(globals, lfp, bh, &[matched])
                 } else {
                     let mut ary = Array::new_empty();
                     for i in 0..captures.len() {

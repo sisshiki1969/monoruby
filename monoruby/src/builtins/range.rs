@@ -131,7 +131,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let range = self_.as_range();
     if let Some((start, end)) = range.try_fixnum() {
         let iter = (start..end).map(Value::integer);
-        vm.invoke_block_iter1(globals, bh, iter)?;
+        vm.invoke_block_iter1(globals, lfp, bh, iter)?;
         Ok(self_)
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
@@ -274,7 +274,7 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         let range = self_.as_range();
         if let Some((start, end)) = range.try_fixnum() {
             let iter = (start..end).map(Value::integer);
-            let data = vm.get_block_data(globals, bh)?;
+            let data = vm.get_block_data(globals, lfp, bh)?;
             for val in iter {
                 if !vm.invoke_block(globals, &data, &[val])?.as_bool() {
                     return Ok(Value::bool(false));
@@ -309,7 +309,13 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
 
         let iter = (start..end).map(Value::integer);
-        vm.invoke_block_map1(globals, bh, iter, (end - start).unsigned_abs() as usize)
+        vm.invoke_block_map1(
+            globals,
+            lfp,
+            bh,
+            iter,
+            (end - start).unsigned_abs() as usize,
+        )
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
     }
@@ -334,7 +340,13 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
         }
 
         let iter = (start..end).map(Value::integer);
-        vm.invoke_block_flat_map1(globals, bh, iter, (end - start).unsigned_abs() as usize)
+        vm.invoke_block_flat_map1(
+            globals,
+            lfp,
+            bh,
+            iter,
+            (end - start).unsigned_abs() as usize,
+        )
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
     }

@@ -444,7 +444,7 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     };
     let res = Value::new_file(file, path);
     if let Some(bh) = lfp.block() {
-        return vm.invoke_block_once(globals, bh, &[res]);
+        return vm.invoke_block_once(globals, lfp, bh, &[res]);
     }
     Ok(res)
 }

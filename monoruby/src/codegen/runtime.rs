@@ -113,7 +113,7 @@ pub(super) extern "C" fn get_yield_data(
             return ProcData::default();
         }
     };
-    match vm.get_block_data(globals, bh) {
+    match vm.get_block_data(globals, lfp, bh) {
         Ok(data) => data,
         Err(err) => {
             vm.set_error(err);
@@ -124,7 +124,7 @@ pub(super) extern "C" fn get_yield_data(
 
 pub(super) extern "C" fn block_arg(
     vm: &mut Executor,
-    _: &mut Globals,
+    lfp: Lfp,
     block_handler: Option<BlockHandler>,
 ) -> Option<Value> {
     let bh = match block_handler {
@@ -136,7 +136,7 @@ pub(super) extern "C" fn block_arg(
     if bh.get().is_nil() {
         return Some(Value::nil());
     }
-    match vm.cfp().generate_proc(bh) {
+    match vm.cfp().generate_proc(lfp, bh) {
         Ok(val) => Some(val.into()),
         Err(err) => {
             vm.set_error(err);

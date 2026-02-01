@@ -271,7 +271,7 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         if lfp.try_arg(0).is_some() {
             return Err(MonorubyErr::wrong_number_of_arg(0, lfp.args_count(3)));
         }
-        let data = vm.get_block_data(globals, bh)?;
+        let data = vm.get_block_data(globals, lfp, bh)?;
         vm.push_class_context(module.id());
         let res = vm.invoke_block_with_self(globals, &data, module.get(), &[module.get()]);
         vm.pop_class_context();
@@ -416,7 +416,7 @@ fn define_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
             ));
         }
     } else if let Some(bh) = lfp.block() {
-        vm.cfp().generate_proc(bh)?
+        vm.cfp().generate_proc(lfp, bh)?
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
