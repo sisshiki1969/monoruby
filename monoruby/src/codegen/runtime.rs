@@ -199,12 +199,8 @@ pub struct LambdaReturn {
     lfp: Lfp,
 }
 
-pub(super) extern "C" fn gen_lambda(
-    vm: &mut Executor,
-    _: &mut Globals,
-    func_id: FuncId,
-) -> LambdaReturn {
-    let (proc, lfp) = vm.cfp().generate_lambda(func_id);
+pub(super) extern "C" fn gen_lambda(vm: &mut Executor, lfp: Lfp, func_id: FuncId) -> LambdaReturn {
+    let (proc, lfp) = vm.cfp().generate_lambda(lfp, func_id);
     LambdaReturn { proc, lfp }
 }
 
@@ -604,8 +600,9 @@ pub(super) extern "C" fn get_class_var(
     vm: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
+    lfp: Lfp,
 ) -> Option<Value> {
-    match vm.find_class_variable(globals, name) {
+    match globals.find_class_variable(lfp, name) {
         Ok(val) => Some(val),
         Err(err) => {
             vm.set_error(err);
@@ -617,12 +614,8 @@ pub(super) extern "C" fn get_class_var(
 ///
 /// Check class variable.
 ///
-pub(super) extern "C" fn check_class_var(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    name: IdentId,
-) -> Value {
-    match vm.find_class_variable(globals, name) {
+pub(super) extern "C" fn check_class_var(lfp: Lfp, globals: &mut Globals, name: IdentId) -> Value {
+    match globals.find_class_variable(lfp, name) {
         Ok(val) => val,
         Err(_) => Value::nil(),
     }
@@ -636,8 +629,9 @@ pub(super) extern "C" fn set_class_var(
     globals: &mut Globals,
     name: IdentId,
     src: Value,
+    lfp: Lfp,
 ) -> Option<Value> {
-    match vm.set_class_variable(globals, name, src) {
+    match globals.set_class_variable(lfp, name, src) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);

@@ -794,7 +794,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movl rdx, rdi;
             movq rdi, rbx;
-            movq rsi, r12;
+            movq rsi, r14;
             movq rax, (runtime::gen_lambda);
             call rax;
             movq r14, rdx;

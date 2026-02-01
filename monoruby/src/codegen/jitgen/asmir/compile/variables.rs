@@ -244,6 +244,7 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (name.get());
+            lea  rcx, [rbp - (RBP_LOCAL_FRAME)];
             movq rax, (runtime::get_class_var);
             call rax;
         };
@@ -253,7 +254,7 @@ impl Codegen {
     pub(super) fn check_cvar(&mut self, name: IdentId, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
-            movq rdi, rbx;
+            lea  rdi, [rbp - (RBP_LOCAL_FRAME)];
             movq rsi, r12;
             movl rdx, (name.get());
             movq rax, (runtime::check_class_var);
@@ -269,6 +270,7 @@ impl Codegen {
             movq rsi, r12;
             movl rdx, (name.get());
             movq rcx, [rbp - (rbp_local(src))];
+            lea  r8, [rbp - (RBP_LOCAL_FRAME)];
             movq rax, (runtime::set_class_var);
             call rax;
         };

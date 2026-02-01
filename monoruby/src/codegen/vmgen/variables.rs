@@ -201,6 +201,7 @@ impl Codegen {
             movl rdx, rdi; // name: IdentId
             movq rdi, rbx; // &mut Executor
             movq rsi, r12; // &mut Globals
+            movq rcx, r14; // Lfp
             movq rax, (runtime::get_class_var);
             call rax;
         };
@@ -227,7 +228,7 @@ impl Codegen {
         self.fetch2();
         monoasm! { &mut self.jit,
             movl rdx, rdi; // name: IdentId
-            movq rdi, rbx; // &mut Executor
+            movq rdi, r14; // Lfp
             movq rsi, r12; // &mut Globals
             movq rax, (runtime::check_class_var);
             call rax;
@@ -254,10 +255,11 @@ impl Codegen {
         self.fetch2();
         self.vm_get_slot_value(GP::R15);
         monoasm! { &mut self.jit,
-            movl rdx, rdi; // name: IdentId
-            movq rdi, rbx; // &mut Executor
-            movq rsi, r12; // &mut Globals
+            movl rdx, rdi;  // name: IdentId
+            movq rdi, rbx;  // &mut Executor
+            movq rsi, r12;  // &mut Globals
             movq rcx, r15;  // dst: Value
+            movq r8, r14;   // Lfp
             movq rax, (runtime::set_class_var);
             call rax;
         };

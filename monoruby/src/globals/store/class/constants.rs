@@ -109,10 +109,6 @@ impl Globals {
         self.set_constant(class_id, name, val);
     }
 
-    pub(crate) fn set_class_variable(&mut self, class_id: ClassId, name: IdentId, val: Value) {
-        self.store.classes[class_id].set_cvar(name, val);
-    }
-
     pub(crate) fn get_class_variable(
         &self,
         parent: Module,
@@ -172,6 +168,41 @@ impl Globals {
             };
         }
         None
+    }
+
+    ///
+    /// Find and return a class variable with `name`.
+    ///
+    pub(crate) fn find_class_variable(&self, lfp: Lfp, name: IdentId) -> Result<Value> {
+        let parent = self.get_parent(lfp)?;
+        Ok(self.get_class_variable(parent, name)?.1)
+    }
+
+    ///
+    /// Set a class variable with `name` to `value`.
+    ///
+    pub(crate) fn set_class_variable(&mut self, lfp: Lfp, name: IdentId, val: Value) -> Result<()> {
+        let parent = self.get_parent(lfp)?;
+        let parent = match self.search_class_variables_superclass(parent, name) {
+            Some((module, _)) => module,
+            None => parent,
+        };
+        self.store.classes[parent.id()].set_cvar(name, val);
+        Ok(())
+    }
+
+    ///
+    /// Get the parent module of the current context.
+    ///
+    fn get_parent(&self, lfp: Lfp) -> Result<Module> {
+        let fid = lfp.method_func_id();
+        let parent = self.store.iseq(fid).lexical_context.last().cloned();
+        match parent {
+            Some(parent) => Ok(self[parent].get_module()),
+            None => Err(MonorubyErr::runtimeerr(
+                "class variable access from toplevel",
+            )),
+        }
     }
 }
 

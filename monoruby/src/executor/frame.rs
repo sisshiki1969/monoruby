@@ -89,13 +89,6 @@ impl Cfp {
         unsafe { *(self.as_ptr().sub(CFP_LFP as usize / 8) as *mut Lfp) = lfp };
     }
 
-    ///
-    /// Get *FuncId* of a current method / classdef.
-    ///
-    pub fn method_func_id(&self) -> FuncId {
-        self.outermost_lfp().func_id()
-    }
-
     pub fn generate_proc(self, bh: BlockHandler) -> Result<Proc> {
         if let Some(proxy) = bh.try_proxy() {
             let outer_lfp = self.prev_lfp();
@@ -109,9 +102,8 @@ impl Cfp {
         }
     }
 
-    pub fn generate_lambda(self, func_id: FuncId) -> (Proc, Lfp) {
-        let outer_lfp = self.lfp();
-        let outer_lfp = outer_lfp.move_frame_to_heap(self);
+    pub fn generate_lambda(self, lfp: Lfp, func_id: FuncId) -> (Proc, Lfp) {
+        let outer_lfp = lfp.move_frame_to_heap(self);
         let proc = Proc::from_parts(outer_lfp, func_id);
         (proc, outer_lfp)
     }
@@ -133,8 +125,8 @@ impl Cfp {
     ///
     pub fn get_block(&self) -> Option<BlockHandler> {
         let lfp = self.outermost_lfp();
-
-        lfp.block().map(|bh| match bh.0.try_fixnum() {
+        let bh = lfp.block()?;
+        Some(match bh.0.try_fixnum() {
             Some(mut i) => {
                 let mut cfp = *self;
                 loop {
