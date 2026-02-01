@@ -223,8 +223,8 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     } else {
         dirs::home_dir().unwrap().to_string_lossy().to_string()
     };
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, lfp, bh)?;
+    if lfp.block().is_some() {
+        let data = vm.get_block_data(globals, lfp)?;
         let old_pwd = std::env::current_dir().unwrap();
         match std::env::set_current_dir(&path) {
             Ok(_) => {}

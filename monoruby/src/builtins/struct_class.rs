@@ -80,9 +80,9 @@ fn struct_initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resu
 
     new_struct.set_instance_var(&mut globals.store, "/members", Value::array(members))?;
 
-    if let Some(bh) = lfp.block() {
+    if lfp.block().is_some() {
         vm.push_class_context(class_id);
-        let data = vm.get_block_data(globals, lfp, bh)?;
+        let data = vm.get_block_data(globals, lfp)?;
         let res = vm.invoke_block_with_self(globals, &data, new_struct, &[new_struct]);
         vm.pop_class_context();
         res?;

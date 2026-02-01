@@ -113,7 +113,7 @@ pub(super) extern "C" fn get_yield_data(
             return ProcData::default();
         }
     };
-    match vm.get_block_data(globals, lfp, bh) {
+    match vm.get_block_data_inner(globals, lfp, bh) {
         Ok(data) => data,
         Err(err) => {
             vm.set_error(err);

@@ -456,11 +456,11 @@ fn singleton_class(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
 fn instance_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
 
-    if let Some(bh) = lfp.block() {
+    if lfp.block().is_some() {
         if lfp.try_arg(0).is_some() {
             return Err(MonorubyErr::wrong_number_of_arg(0, lfp.args_count(3)));
         }
-        let data = vm.get_block_data(globals, lfp, bh)?;
+        let data = vm.get_block_data(globals, lfp)?;
         vm.invoke_block_with_self(globals, &data, self_val, &[self_val])
     } else if let Some(arg0) = lfp.try_arg(0) {
         let expr = arg0.expect_string(globals)?;

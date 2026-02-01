@@ -267,11 +267,11 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let module = lfp.self_val().as_class();
 
-    if let Some(bh) = lfp.block() {
+    if lfp.block().is_some() {
         if lfp.try_arg(0).is_some() {
             return Err(MonorubyErr::wrong_number_of_arg(0, lfp.args_count(3)));
         }
-        let data = vm.get_block_data(globals, lfp, bh)?;
+        let data = vm.get_block_data(globals, lfp)?;
         vm.push_class_context(module.id());
         let res = vm.invoke_block_with_self(globals, &data, module.get(), &[module.get()]);
         vm.pop_class_context();

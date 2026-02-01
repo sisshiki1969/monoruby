@@ -277,8 +277,8 @@ fn readline(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
-    if let Some(bh) = lfp.block() {
-        let p = vm.get_block_data(globals, lfp, bh)?;
+    if lfp.block().is_some() {
+        let p = vm.get_block_data(globals, lfp)?;
         while let Some(s) = io.read_line()? {
             vm.invoke_block(globals, &p, &[Value::string(s)])?;
         }

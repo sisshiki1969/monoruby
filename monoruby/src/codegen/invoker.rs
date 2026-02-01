@@ -409,6 +409,7 @@ impl JitModule {
             pushq r15;
             cmpq rsp, [rdi + (EXECUTOR_STACK_LIMIT)];
             jle  overflow;
+            subq rsp, 16;
             movq rbx, rdi;
             movq r12, rsi;
         }
@@ -563,6 +564,7 @@ impl JitModule {
     fn invoker_epilogue(&mut self, error_exit: &DestLabel) {
         monoasm! { &mut self.jit,
         error_exit:
+            addq rsp, 16;
             popq r15;
             popq r14;
             popq r13;

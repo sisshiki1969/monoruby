@@ -126,12 +126,11 @@ fn exclude_end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<V
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/each.html]
 #[monoruby_builtin]
 fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if let Some((start, end)) = range.try_fixnum() {
         let iter = (start..end).map(Value::integer);
-        vm.invoke_block_iter1(globals, lfp, bh, iter)?;
+        vm.invoke_block_iter1(globals, lfp, iter)?;
         Ok(self_)
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
@@ -269,12 +268,12 @@ fn teq(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/all=3f.html]
 #[monoruby_builtin]
 fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    if let Some(bh) = lfp.block() {
+    if lfp.block().is_some() {
         let self_ = lfp.self_val();
         let range = self_.as_range();
         if let Some((start, end)) = range.try_fixnum() {
             let iter = (start..end).map(Value::integer);
-            let data = vm.get_block_data(globals, lfp, bh)?;
+            let data = vm.get_block_data(globals, lfp)?;
             for val in iter {
                 if !vm.invoke_block(globals, &data, &[val])?.as_bool() {
                     return Ok(Value::bool(false));
@@ -300,7 +299,6 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect.html]
 #[monoruby_builtin]
 fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if let Some((start, end)) = range.try_fixnum() {
@@ -309,13 +307,7 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
 
         let iter = (start..end).map(Value::integer);
-        vm.invoke_block_map1(
-            globals,
-            lfp,
-            bh,
-            iter,
-            (end - start).unsigned_abs() as usize,
-        )
+        vm.invoke_block_map1(globals, lfp, iter, (end - start).unsigned_abs() as usize)
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
     }
@@ -331,7 +323,6 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect_concat.html]
 #[monoruby_builtin]
 fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if let Some((start, end)) = range.try_fixnum() {
@@ -340,13 +331,7 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
         }
 
         let iter = (start..end).map(Value::integer);
-        vm.invoke_block_flat_map1(
-            globals,
-            lfp,
-            bh,
-            iter,
-            (end - start).unsigned_abs() as usize,
-        )
+        vm.invoke_block_flat_map1(globals, lfp, iter, (end - start).unsigned_abs() as usize)
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
     }

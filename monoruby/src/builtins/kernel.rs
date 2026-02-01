@@ -305,8 +305,7 @@ fn binding(vm: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/loop.html]
 #[monoruby_builtin]
 fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let bh = lfp.expect_block()?;
-    let data = vm.get_block_data(globals, lfp, bh)?;
+    let data = vm.get_block_data(globals, lfp)?;
     loop {
         if let Err(err) = vm.invoke_block(globals, &data, &[]) {
             return if err.kind() == &MonorubyErrKind::StopIteration {

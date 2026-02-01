@@ -149,12 +149,9 @@ fn step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/upto.html]
 #[monoruby_builtin]
 fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let bh = match lfp.block() {
-        None => {
-            let id = IdentId::get_id("upto");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect());
-        }
-        Some(block) => block,
+    if lfp.block().is_none() {
+        let id = IdentId::get_id("upto");
+        return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect());
     };
     let cur = lfp.self_val().expect_integer(globals)?;
     let limit = lfp.arg(0).coerce_to_i64(globals)?;
@@ -167,7 +164,7 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         limit,
         step: 1,
     };
-    vm.invoke_block_iter1(globals, lfp, bh, iter)?;
+    vm.invoke_block_iter1(globals, lfp, iter)?;
     Ok(lfp.self_val())
 }
 
@@ -180,12 +177,9 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/downto.html]
 #[monoruby_builtin]
 fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let bh = match lfp.block() {
-        None => {
-            let id = IdentId::get_id("downto");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect());
-        }
-        Some(block) => block,
+    if lfp.block().is_none() {
+        let id = IdentId::get_id("downto");
+        return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect());
     };
     let cur = lfp.self_val().expect_integer(globals)?;
     let limit = lfp.arg(0).coerce_to_i64(globals)?;
@@ -198,7 +192,7 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         limit,
         step: -1,
     };
-    vm.invoke_block_iter1(globals, lfp, bh, iter)?;
+    vm.invoke_block_iter1(globals, lfp, iter)?;
     Ok(lfp.self_val())
 }
 

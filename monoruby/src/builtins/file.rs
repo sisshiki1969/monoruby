@@ -443,8 +443,8 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
     };
     let res = Value::new_file(file, path);
-    if let Some(bh) = lfp.block() {
-        return vm.invoke_block_once(globals, lfp, bh, &[res]);
+    if lfp.block().is_some() {
+        return vm.invoke_block_once(globals, lfp, &[res]);
     }
     Ok(res)
 }

@@ -770,8 +770,7 @@ impl Executor {
         self_val: Value,
         args: &[Value],
     ) -> Result<Value> {
-        let invoker = CODEGEN.with(|codegen| codegen.borrow().block_invoker_with_self);
-        invoker(
+        (globals.invokers.block_with_self)(
             self,
             globals,
             data as _,
@@ -787,10 +786,9 @@ impl Executor {
         &mut self,
         globals: &mut Globals,
         lfp: Lfp,
-        bh: BlockHandler,
         args: &[Value],
     ) -> Result<Value> {
-        let data = self.get_block_data(globals, lfp, bh)?;
+        let data = self.get_block_data(globals, lfp)?;
         self.invoke_block(globals, &data, args)
     }
 
@@ -798,10 +796,9 @@ impl Executor {
         &mut self,
         globals: &mut Globals,
         lfp: Lfp,
-        bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
     ) -> Result<()> {
-        let data = self.get_block_data(globals, lfp, bh)?;
+        let data = self.get_block_data(globals, lfp)?;
         for val in iter {
             self.invoke_block(globals, &data, &[val])?;
         }
@@ -829,7 +826,6 @@ impl Executor {
         &mut self,
         globals: &mut Globals,
         lfp: Lfp,
-        bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
         size_hint: impl Into<Option<usize>>,
     ) -> Result<Value> {
@@ -845,7 +841,7 @@ impl Executor {
             }
             Ok(())
         }
-        let data = self.get_block_data(globals, lfp, bh)?;
+        let data = self.get_block_data(globals, lfp)?;
         self.temp_array_new(size_hint);
         let res = inner(self, globals, &data, iter);
         let v = self.temp_pop();
@@ -857,7 +853,6 @@ impl Executor {
         &mut self,
         globals: &mut Globals,
         lfp: Lfp,
-        bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
         size_hint: impl Into<Option<usize>>,
     ) -> Result<Value> {
@@ -877,7 +872,7 @@ impl Executor {
             }
             Ok(())
         }
-        let data = self.get_block_data(globals, lfp, bh)?;
+        let data = self.get_block_data(globals, lfp)?;
         self.temp_array_new(size_hint);
         let res = inner(self, globals, &data, iter);
         let v = self.temp_pop();
@@ -889,11 +884,10 @@ impl Executor {
         &mut self,
         globals: &mut Globals,
         lfp: Lfp,
-        bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
         mut res: Value,
     ) -> Result<Value> {
-        let data = self.get_block_data(globals, lfp, bh)?;
+        let data = self.get_block_data(globals, lfp)?;
         for elem in iter {
             res = self.invoke_block(globals, &data, &[res, elem])?;
         }
@@ -980,10 +974,15 @@ impl Executor {
 }
 
 impl Executor {
+    pub(crate) fn get_block_data(&mut self, globals: &mut Globals, lfp: Lfp) -> Result<ProcData> {
+        let bh = lfp.expect_block()?;
+        self.get_block_data_inner(globals, lfp, bh)
+    }
+
     ///
     /// Generate *ProcInner* from 'bh'.
     ///
-    pub(crate) fn get_block_data(
+    pub(crate) fn get_block_data_inner(
         &mut self,
         globals: &mut Globals,
         lfp: Lfp,

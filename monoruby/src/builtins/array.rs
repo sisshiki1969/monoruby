@@ -229,12 +229,12 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
             return Err(MonorubyErr::negative_array_size());
         }
         let size = size as usize;
-        if let Some(bh) = lfp.block() {
+        if lfp.block().is_some() {
             if lfp.try_arg(1).is_some() {
                 eprintln!("warning: block supersedes default value argument");
             }
             let iter = (0..size).map(|i| Value::integer(i as i64));
-            let mut res = vm.invoke_block_map1(globals, lfp, bh, iter, size)?;
+            let mut res = vm.invoke_block_map1(globals, lfp, iter, size)?;
             RValue::swap_kind(lfp.self_val().rvalue_mut(), res.rvalue_mut());
         } else {
             let val = if lfp.try_arg(1).is_none() {
@@ -362,9 +362,9 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             }
         }
         Ok(Value::integer(count))
-    } else if let Some(bh) = lfp.block() {
+    } else if lfp.block().is_some() {
         let mut count = 0;
-        let bh = vm.get_block_data(globals, lfp, bh)?;
+        let bh = vm.get_block_data(globals, lfp)?;
         for elem in lfp.self_val().as_array().iter() {
             if vm.invoke_block(globals, &bh, &[*elem])?.as_bool() {
                 count += 1;
@@ -411,9 +411,10 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     fn inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<()> {
         let self_ = lfp.self_val().as_array();
-        let block = match lfp.block() {
-            Some(bh) => Some(vm.get_block_data(globals, lfp, bh)?),
-            None => None,
+        let block = if lfp.block().is_some() {
+            Some(vm.get_block_data(globals, lfp)?)
+        } else {
+            None
         };
         for (i, elem) in self_.iter().enumerate() {
             let elem = if let Some(p) = &block {
@@ -952,10 +953,10 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
     match lfp.block() {
         None => Ok(ary.as_val()),
-        Some(block) => {
+        Some(_) => {
             let size_hint = ary.len();
             vm.temp_push(ary.as_val());
-            let res = vm.invoke_block_map1(globals, lfp, block, ary.iter().cloned(), size_hint);
+            let res = vm.invoke_block_map1(globals, lfp, ary.iter().cloned(), size_hint);
             vm.temp_pop();
             res?;
             Ok(Value::nil())
@@ -978,13 +979,13 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val().as_array();
     let mut iter = self_.iter().cloned();
-    if let Some(bh) = lfp.block() {
+    if lfp.block().is_some() {
         let res = if lfp.try_arg(0).is_none() {
             iter.next().unwrap_or_default()
         } else {
             lfp.arg(0)
         };
-        vm.invoke_block_fold1(globals, lfp, bh, iter, res)
+        vm.invoke_block_fold1(globals, lfp, iter, res)
     } else {
         let (sym, mut res) = if let Some(arg0) = lfp.try_arg(0) {
             if let Some(arg1) = lfp.try_arg(1) {
@@ -1127,8 +1128,8 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                     executor::op::add_values(vm, globals, sum, v).ok_or_else(|| vm.take_error())?;
             }
         }
-        Some(bh) => {
-            let data = vm.get_block_data(globals, lfp, bh)?;
+        Some(_) => {
+            let data = vm.get_block_data(globals, lfp)?;
             for v in iter {
                 let rhs = vm.invoke_block(globals, &data, &[v])?;
                 sum = executor::op::add_values(vm, globals, sum, rhs)
@@ -1198,11 +1199,10 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/max.html]
 #[monoruby_builtin]
 fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let bh = lfp.expect_block()?;
     let aref = lfp.self_val().expect_array_ty(globals)?;
     let mut res_true = vec![];
     let mut res_false = vec![];
-    let p = vm.get_block_data(globals, lfp, bh)?;
+    let p = vm.get_block_data(globals, lfp)?;
     for elem in aref.iter().cloned() {
         if vm.invoke_block(globals, &p, &[elem])?.as_bool() {
             res_true.push(elem);
@@ -1217,8 +1217,8 @@ fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
 }
 
 fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array) -> Result<Value> {
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, lfp, bh)?;
+    if lfp.block().is_some() {
+        let data = vm.get_block_data(globals, lfp)?;
         let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
             let res = vm
                 .invoke_block(globals, &data, &[lhs, rhs])?
@@ -1277,8 +1277,7 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort_by=21.html]
 #[monoruby_builtin]
 fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let bh = lfp.expect_block()?;
-    let data = vm.get_block_data(globals, lfp, bh)?;
+    let data = vm.get_block_data(globals, lfp)?;
     let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
         let lhs = vm.invoke_block(globals, &data, &[lhs])?;
         let rhs = vm.invoke_block(globals, &data, &[rhs])?;
@@ -1301,22 +1300,21 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/sort_by.html]
 #[monoruby_builtin]
 fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, lfp, bh)?;
-        let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
-            let lhs = vm.invoke_block(globals, &data, &[lhs])?;
-            let rhs = vm.invoke_block(globals, &data, &[rhs])?;
-            Executor::compare_values(vm, globals, lhs, rhs)
-        };
-        let mut ary = lfp.self_val().dup().as_array();
-        let gc_enabled = Globals::gc_enable(false);
-        let res = executor::op::sort_by(&mut ary, f);
-        Globals::gc_enable(gc_enabled);
-        res?;
-        Ok(ary.into())
-    } else {
-        vm.generate_enumerator(IdentId::get_id("sort_by"), lfp.self_val(), vec![])
+    if lfp.block().is_none() {
+        return vm.generate_enumerator(IdentId::get_id("sort_by"), lfp.self_val(), vec![]);
     }
+    let data = vm.get_block_data(globals, lfp)?;
+    let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
+        let lhs = vm.invoke_block(globals, &data, &[lhs])?;
+        let rhs = vm.invoke_block(globals, &data, &[rhs])?;
+        Executor::compare_values(vm, globals, lhs, rhs)
+    };
+    let mut ary = lfp.self_val().dup().as_array();
+    let gc_enabled = Globals::gc_enable(false);
+    let res = executor::op::sort_by(&mut ary, f);
+    Globals::gc_enable(gc_enabled);
+    res?;
+    Ok(ary.into())
 }
 
 ///
@@ -1330,19 +1328,18 @@ fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/filter.html]
 #[monoruby_builtin]
 fn filter(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, lfp, bh)?;
-        let mut res = vec![];
-        for elem in ary.iter() {
-            if vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
-                res.push(*elem);
-            };
-        }
-        Ok(Value::array_from_vec(res))
-    } else {
-        vm.generate_enumerator(IdentId::get_id("filter"), lfp.self_val(), vec![])
+    if lfp.block().is_none() {
+        return vm.generate_enumerator(IdentId::get_id("filter"), lfp.self_val(), vec![]);
     }
+    let ary = lfp.self_val().as_array();
+    let data = vm.get_block_data(globals, lfp)?;
+    let mut res = vec![];
+    for elem in ary.iter() {
+        if vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
+            res.push(*elem);
+        };
+    }
+    Ok(Value::array_from_vec(res))
 }
 
 ///
@@ -1356,23 +1353,22 @@ fn filter(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/filter=21.html]
 #[monoruby_builtin]
 fn filter_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let mut ary = lfp.self_val().as_array();
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, lfp, bh)?;
-        let changed = ary
-            .retain(|v| {
-                vm.invoke_block(globals, &data, &[*v])
-                    .map(|res| res.as_bool())
-            })?
-            .is_some();
-        Ok(if changed {
-            lfp.self_val()
-        } else {
-            Value::nil()
-        })
-    } else {
-        vm.generate_enumerator(IdentId::get_id("filter!"), lfp.self_val(), vec![])
+    if lfp.block().is_none() {
+        return vm.generate_enumerator(IdentId::get_id("filter!"), lfp.self_val(), vec![]);
     }
+    let mut ary = lfp.self_val().as_array();
+    let data = vm.get_block_data(globals, lfp)?;
+    let changed = ary
+        .retain(|v| {
+            vm.invoke_block(globals, &data, &[*v])
+                .map(|res| res.as_bool())
+        })?
+        .is_some();
+    Ok(if changed {
+        lfp.self_val()
+    } else {
+        Value::nil()
+    })
 }
 
 ///
@@ -1385,8 +1381,8 @@ fn filter_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 #[monoruby_builtin]
 fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, lfp, bh)?;
+    if lfp.block().is_some() {
+        let data = vm.get_block_data(globals, lfp)?;
         let mut res = vec![];
         for elem in ary.iter() {
             if !vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
@@ -1409,8 +1405,8 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, lfp, bh)?;
+    if lfp.block().is_some() {
+        let data = vm.get_block_data(globals, lfp)?;
         let changed = ary
             .retain(|v| {
                 vm.invoke_block(globals, &data, &[*v])
@@ -1437,8 +1433,8 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 #[monoruby_builtin]
 fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, lfp, bh)?;
+    if lfp.block().is_some() {
+        let data = vm.get_block_data(globals, lfp)?;
         ary.retain(|v| {
             vm.invoke_block(globals, &data, &[*v])
                 .map(|res| !res.as_bool())
@@ -1474,8 +1470,8 @@ fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
         Ok(())
     }
     let ary = lfp.self_val().as_array();
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, lfp, bh)?;
+    if lfp.block().is_some() {
+        let data = vm.get_block_data(globals, lfp)?;
         let mut map = RubyMap::default();
         let gc_enabled = Globals::gc_enable(false);
         let res = inner(vm, globals, &data, ary, &mut map);
@@ -1581,10 +1577,9 @@ fn map_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect_concat.html]
 #[monoruby_builtin]
 fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let bh = lfp.expect_block()?;
     let ary = lfp.self_val().as_array();
     let size_hint = ary.len();
-    vm.invoke_block_flat_map1(globals, lfp, bh, ary.iter().cloned(), size_hint)
+    vm.invoke_block_flat_map1(globals, lfp, ary.iter().cloned(), size_hint)
 }
 
 fn all_any_inner(
@@ -1594,8 +1589,8 @@ fn all_any_inner(
     is_all: bool,
 ) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, lfp, bh)?;
+    if lfp.block().is_some() {
+        let data = vm.get_block_data(globals, lfp)?;
         for elem in ary.iter() {
             if vm.invoke_block(globals, &data, &[*elem])?.as_bool() != is_all {
                 return Ok(Value::bool(!is_all));
@@ -1647,8 +1642,7 @@ fn any_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    let bh = lfp.expect_block()?;
-    let data = vm.get_block_data(globals, lfp, bh)?;
+    let data = vm.get_block_data(globals, lfp)?;
     for elem in ary.iter() {
         if vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
             return Ok(*elem);
@@ -1829,11 +1823,11 @@ fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
         .into_iter()
         .map(|a| Value::array_from_iter(a.into_iter().cloned()))
         .collect();
-    if let Some(bh) = lfp.block() {
+    if lfp.block().is_some() {
         let len = v.len();
         let ary = Array::new_from_vec(v);
         vm.temp_push(ary.into());
-        let res = vm.invoke_block_map1(globals, lfp, bh, ary.into_iter().cloned(), len);
+        let res = vm.invoke_block_map1(globals, lfp, ary.into_iter().cloned(), len);
         vm.temp_pop();
         res
     } else {
@@ -1909,7 +1903,7 @@ fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().dup().as_array();
     match lfp.block() {
         None => ary.uniq(vm, globals)?,
-        Some(bh) => uniq_block(vm, globals, lfp, ary, bh)?,
+        Some(_) => uniq_block(vm, globals, lfp, ary)?,
     };
     Ok(ary.into())
 }
@@ -1919,7 +1913,7 @@ fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     let deleted = match lfp.block() {
         None => ary.uniq(vm, globals)?,
-        Some(bh) => uniq_block(vm, globals, lfp, ary, bh)?,
+        Some(_) => uniq_block(vm, globals, lfp, ary)?,
     };
     if deleted {
         Ok(lfp.self_val())
@@ -1928,28 +1922,16 @@ fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
 }
 
-fn uniq_block(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    ary: Array,
-    bh: BlockHandler,
-) -> Result<bool> {
+fn uniq_block(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, ary: Array) -> Result<bool> {
     vm.temp_push(ary.into());
-    let res = uniq_inner(vm, globals, lfp, ary, bh);
+    let res = uniq_inner(vm, globals, lfp, ary);
     vm.temp_pop();
     res
 }
 
-fn uniq_inner(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    mut ary: Array,
-    bh: BlockHandler,
-) -> Result<bool> {
+fn uniq_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array) -> Result<bool> {
     let mut h = RubySet::default();
-    let data = vm.get_block_data(globals, lfp, bh)?;
+    let data = vm.get_block_data(globals, lfp)?;
     vm.temp_array_new(Some(ary.len()));
     let res = ary.retain(|x| {
         let res = vm.invoke_block(globals, &data, &[*x])?;
@@ -2158,8 +2140,8 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let f = |v: &Value| Ok(!vm.eq_values_bool(globals, *v, arg0)?);
     if let Some(last) = ary.retain(f)? {
         Ok(last)
-    } else if let Some(bh) = lfp.block() {
-        vm.invoke_block_once(globals, lfp, bh, &[])
+    } else if lfp.block().is_some() {
+        vm.invoke_block_once(globals, lfp, &[])
     } else {
         Ok(Value::nil())
     }
@@ -2203,8 +2185,8 @@ fn delete_at(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 #[monoruby_builtin]
 fn find_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, lfp, bh)?;
+    if lfp.block().is_some() {
+        let data = vm.get_block_data(globals, lfp)?;
         for (i, v) in ary.iter().enumerate() {
             if vm.invoke_block(globals, &data, &[*v])?.as_bool() {
                 return Ok(Value::integer(i as i64));

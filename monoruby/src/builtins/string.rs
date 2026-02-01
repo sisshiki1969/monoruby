@@ -867,10 +867,10 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                 .collect()
         };
         match lfp.block() {
-            Some(bh) => {
+            Some(_) => {
                 let ary = Value::array_from_vec(v);
                 vm.temp_push(ary);
-                vm.invoke_block_iter1(globals, lfp, bh, ary.as_array().iter().cloned())?;
+                vm.invoke_block_iter1(globals, lfp, ary.as_array().iter().cloned())?;
                 vm.temp_pop();
                 Ok(lfp.self_val())
             }
@@ -926,8 +926,8 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
         let iter = res.into_iter().map(|r| Value::string_from_str(&string[r]));
         match lfp.block() {
-            Some(bh) => {
-                vm.invoke_block_iter1(globals, lfp, bh, iter)?;
+            Some(_) => {
+                vm.invoke_block_iter1(globals, lfp, iter)?;
                 Ok(lfp.self_val())
             }
             None => Ok(Value::array_from_iter(iter)),
@@ -1255,9 +1255,9 @@ fn sub_main(
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
-            Some(bh) => {
+            Some(_) => {
                 let given = self_val.expect_str(globals)?;
-                RegexpInner::replace_one_block(vm, globals, lfp, lfp.arg(0), given, bh)
+                RegexpInner::replace_one_block(vm, globals, lfp, lfp.arg(0), given)
             }
         }
     }
@@ -1310,9 +1310,9 @@ fn gsub_main(
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
-            Some(bh) => {
+            Some(_) => {
                 let given = self_val.expect_str(globals)?;
-                RegexpInner::replace_all_block(vm, globals, lfp, lfp.arg(0), given, bh)
+                RegexpInner::replace_all_block(vm, globals, lfp, lfp.arg(0), given)
             }
         }
     }
@@ -1341,10 +1341,10 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     };
     match lfp.block() {
         None => Ok(Value::array_from_vec(vec)),
-        Some(block) => {
+        Some(_) => {
             let ary = Value::array_from_vec(vec);
             vm.temp_push(ary);
-            let res = scan_inner(vm, globals, lfp, block, &ary.as_array());
+            let res = scan_inner(vm, globals, lfp, &ary.as_array());
             vm.temp_pop();
             res?;
             Ok(lfp.self_val())
@@ -1352,14 +1352,8 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
 }
 
-fn scan_inner(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    block: BlockHandler,
-    vec: &[Value],
-) -> Result<()> {
-    let data = vm.get_block_data(globals, lfp, block)?;
+fn scan_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, vec: &[Value]) -> Result<()> {
+    let data = vm.get_block_data(globals, lfp)?;
     for arg in vec {
         match arg.try_array_ty() {
             Some(ary) => {
@@ -1664,8 +1658,8 @@ fn bytes(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         .as_rstring_inner()
         .iter()
         .map(|b| Value::integer(*b as i64));
-    if let Some(bh) = lfp.block() {
-        vm.invoke_block_iter1(globals, lfp, bh, iter)?;
+    if lfp.block().is_some() {
+        vm.invoke_block_iter1(globals, lfp, iter)?;
         Ok(lfp.self_val())
     } else {
         Ok(Value::array_from_iter(iter))
@@ -1687,11 +1681,10 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
     } else {
         "\n"
     };
-    let bh = lfp.expect_block()?;
     let receiver = lfp.self_val();
     let string = receiver.expect_str(globals)?;
     let iter = string.split_inclusive(rs).map(Value::string_from_str);
-    vm.invoke_block_iter1(globals, lfp, bh, iter)?;
+    vm.invoke_block_iter1(globals, lfp, iter)?;
 
     Ok(receiver)
 }
@@ -2182,8 +2175,8 @@ fn chars(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let recv = self_.expect_str(globals)?;
     let iter = recv.chars().map(|c| Value::string(c.to_string()));
-    if let Some(bh) = lfp.block() {
-        vm.invoke_block_map1(globals, lfp, bh, iter, None)?;
+    if lfp.block().is_some() {
+        vm.invoke_block_map1(globals, lfp, iter, None)?;
         Ok(lfp.self_val())
     } else {
         Ok(Value::array_from_iter(iter))
@@ -2201,9 +2194,9 @@ fn chars(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let recv = self_.expect_str(globals)?;
-    if let Some(bh) = lfp.block() {
+    if lfp.block().is_some() {
         let iter = recv.chars().map(|c| Value::string(c.to_string()));
-        vm.invoke_block_iter1(globals, lfp, bh, iter)?;
+        vm.invoke_block_iter1(globals, lfp, iter)?;
         Ok(lfp.self_val())
     } else {
         vm.generate_enumerator(IdentId::get_id("each_char"), lfp.self_val(), vec![])
