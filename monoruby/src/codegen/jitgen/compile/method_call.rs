@@ -285,13 +285,13 @@ impl<'a> JitContext<'a> {
             JitArgumentInfo::default()
         };
         let (entry, return_state) = match self.compile_specialized_func(
+            state,
             iseq,
             self_class,
             None,
             args_info,
             Some(outer),
             callid,
-            state,
         )? {
             SpecializedCompileResult::Const(v) => {
                 state.def_C(dst, v);
@@ -438,13 +438,13 @@ impl<'a> JitContext<'a> {
             Some(self.label())
         };
         let (entry, result) = match self.compile_specialized_func(
+            state,
             iseq,
             recv_class,
             patch_point,
             args_info,
             None,
             callid,
-            state,
         )? {
             SpecializedCompileResult::Const(v) => {
                 state.def_C(dst, v);
@@ -498,13 +498,13 @@ impl<'a> JitContext<'a> {
 
     fn compile_specialized_func(
         &mut self,
+        state: &mut AbstractState,
         iseq_id: ISeqId,
         self_class: ClassId,
         patch_point: Option<JitLabel>,
         args_info: JitArgumentInfo,
         outer: Option<usize>,
         callid: CallSiteId,
-        state: &mut AbstractState,
     ) -> Result<SpecializedCompileResult> {
         let frame = self.new_specialized_frame(iseq_id, outer, args_info, self_class);
 

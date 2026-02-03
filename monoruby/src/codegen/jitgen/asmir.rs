@@ -62,7 +62,6 @@ impl std::ops::Index<AsmEvict> for SideExitLabels {
 #[derive(Debug)]
 pub(crate) struct AsmIr {
     codegen_mode: bool,
-    empty: bool,
     inst: Vec<AsmInst>,
     side_exit: Vec<SideExit>,
 }
@@ -95,7 +94,6 @@ impl AsmIr {
     pub(super) fn new(ctx: &JitContext) -> Self {
         Self {
             codegen_mode: ctx.codegen_mode(),
-            empty: true,
             inst: vec![],
             side_exit: vec![],
         }
@@ -104,21 +102,21 @@ impl AsmIr {
     pub(super) fn push(&mut self, inst: AsmInst) {
         if self.codegen_mode {
             self.inst.push(inst);
-            self.empty = false;
         }
     }
 
     pub(super) fn is_empty(&self) -> bool {
-        self.empty
+        self.inst.is_empty()
     }
 
-    pub(super) fn save(&mut self) -> (usize, usize) {
-        (self.inst.len(), self.side_exit.len())
+    pub(super) fn save(&mut self) -> (usize, usize, bool) {
+        (self.inst.len(), self.side_exit.len(), self.codegen_mode)
     }
 
-    pub(super) fn restore(&mut self, (inst, side_exit): (usize, usize)) {
+    pub(super) fn restore(&mut self, (inst, side_exit, codegen_mode): (usize, usize, bool)) {
         self.inst.truncate(inst);
         self.side_exit.truncate(side_exit);
+        self.codegen_mode = codegen_mode;
     }
 
     pub(crate) fn new_evict(&mut self) -> AsmEvict {

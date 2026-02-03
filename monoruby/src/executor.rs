@@ -859,8 +859,7 @@ impl Executor {
         self_val: Value,
         args: &[Value],
     ) -> Result<Value> {
-        let invoker = CODEGEN.with(|codegen| codegen.borrow().block_invoker_with_self);
-        invoker(
+        (globals.invokers.block_with_self)(
             self,
             globals,
             data as _,
