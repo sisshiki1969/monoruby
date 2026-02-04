@@ -1133,22 +1133,25 @@ impl LinkMode {
         let mut slots = vec![];
         slots.push(recv);
         let (filled_req, filled_opt, filled_post) = info.apply_args(*pos_num);
-        for i in 0..filled_req {
+        let req_len = filled_req.len();
+        let opt_len = filled_opt.len();
+        let post_len = filled_post.len();
+        for i in filled_req.clone() {
             slots.push(state.mode(*args + i));
         }
-        for _ in filled_req..info.req_num() {
+        for _ in req_len..info.req_num() {
             slots.push(Self::nil());
         }
-        for i in filled_req..filled_req + filled_opt {
+        for i in req_len..req_len + opt_len {
             slots.push(state.mode(*args + i));
         }
-        for _ in filled_opt..info.opt_num() {
+        for _ in opt_len..info.opt_num() {
             slots.push(Self::none());
         }
-        for i in filled_req + filled_opt..filled_req + filled_opt + filled_post {
+        for i in req_len + opt_len..req_len + opt_len + post_len {
             slots.push(state.mode(*args + i));
         }
-        for _ in filled_post..info.post_num() {
+        for _ in post_len..info.post_num() {
             slots.push(Self::nil());
         }
         if info.is_rest() {

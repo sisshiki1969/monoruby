@@ -877,18 +877,38 @@ impl FuncInfo {
         self.is_block_style() && (self.total_positional_args() > 1)
     }
 
-    pub(crate) fn apply_args(&self, pos_num: usize) -> (usize, usize, usize) {
+    ///
+    /// Given the number of positional arguments, return (required, optional, post) arguments to apply.
+    ///
+    pub(crate) fn apply_args(
+        &self,
+        pos_num: usize,
+    ) -> (
+        std::ops::Range<usize>,
+        std::ops::Range<usize>,
+        std::ops::Range<usize>,
+    ) {
+        let opt = self.req_num();
+        let post = self.reqopt_num() + self.is_rest() as usize;
         if pos_num <= self.req_num() {
-            (pos_num, 0, 0)
+            (0..pos_num, opt..opt, post..post)
         } else if pos_num <= self.min_positional_args() {
-            (self.req_num(), 0, pos_num - self.req_num())
+            (
+                0..self.req_num(),
+                opt..opt,
+                post..post + pos_num - self.req_num(),
+            )
         } else if pos_num > self.max_positional_args() {
-            (self.req_num(), self.opt_num(), self.post_num())
+            (
+                0..self.req_num(),
+                opt..opt + self.opt_num(),
+                post..post + self.post_num(),
+            )
         } else {
             (
-                self.req_num(),
-                pos_num - self.min_positional_args(),
-                self.post_num(),
+                0..self.req_num(),
+                opt..opt + pos_num - self.min_positional_args(),
+                post..post + self.post_num(),
             )
         }
     }
