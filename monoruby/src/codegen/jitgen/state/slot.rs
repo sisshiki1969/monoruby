@@ -1132,11 +1132,11 @@ impl LinkMode {
         let info = &store[fid];
         let mut slots = vec![];
         slots.push(recv);
-        let (filled_req, filled_opt, filled_post) = info.apply_args(*pos_num);
+        let (filled_req, filled_opt, filled_post, rest_len) = info.apply_args(*pos_num);
         let req_len = filled_req.len();
         let opt_len = filled_opt.len();
         let post_len = filled_post.len();
-        for i in filled_req.clone() {
+        for i in filled_req {
             slots.push(state.mode(*args + i));
         }
         for _ in req_len..info.req_num() {
@@ -1148,14 +1148,15 @@ impl LinkMode {
         for _ in opt_len..info.opt_num() {
             slots.push(Self::none());
         }
-        for i in req_len + opt_len..req_len + opt_len + post_len {
+        if info.is_rest() {
+            slots.push(Self::S(Guarded::Class(ARRAY_CLASS)));
+        }
+        let start = req_len + opt_len + rest_len;
+        for i in start..start + post_len {
             slots.push(state.mode(*args + i));
         }
         for _ in post_len..info.post_num() {
             slots.push(Self::nil());
-        }
-        if info.is_rest() {
-            slots.push(Self::default());
         }
         let kw = info.kw_reg_pos();
         assert_eq!(kw.0 as usize, slots.len());

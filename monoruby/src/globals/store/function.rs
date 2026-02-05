@@ -887,28 +887,36 @@ impl FuncInfo {
         std::ops::Range<usize>,
         std::ops::Range<usize>,
         std::ops::Range<usize>,
+        usize,
     ) {
         let opt = self.req_num();
         let post = self.reqopt_num() + self.is_rest() as usize;
         if pos_num <= self.req_num() {
-            (0..pos_num, opt..opt, post..post)
+            (0..pos_num, opt..opt, post..post, 0)
         } else if pos_num <= self.min_positional_args() {
             (
                 0..self.req_num(),
                 opt..opt,
                 post..post + pos_num - self.req_num(),
+                0,
             )
         } else if pos_num > self.max_positional_args() {
             (
                 0..self.req_num(),
                 opt..opt + self.opt_num(),
                 post..post + self.post_num(),
+                if self.is_block_style() && !self.is_rest() {
+                    0
+                } else {
+                    pos_num - self.max_positional_args()
+                },
             )
         } else {
             (
                 0..self.req_num(),
                 opt..opt + pos_num - self.min_positional_args(),
                 post..post + self.post_num(),
+                0,
             )
         }
     }
@@ -982,8 +990,7 @@ impl Store {
     /// - no hash splat arguments
     /// - no single argument expansion in block call
     /// - no extra positional argument
-    /// - no rest param
-    /// - if method_call, required + post <= (the number of positional arguments) <= required + optional + post
+    /// - if method_call with ni rest param, required + post <= (the number of positional arguments) <= required + optional + post
     ///
     pub(crate) fn is_simple_call(&self, fid: FuncId, callid: CallSiteId) -> bool {
         let callsite = &self[callid];
@@ -997,7 +1004,6 @@ impl Store {
         };
         !callsite.has_splat()
             && !callsite.has_hash_splat()
-            && !info.is_rest()
-            && (info.is_block_style() || info.positional_within_range(pos_num))
+            && (info.is_block_style() || info.is_rest() || info.positional_within_range(pos_num))
     }
 }

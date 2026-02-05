@@ -397,6 +397,15 @@ impl AsmIr {
         });
     }
 
+    pub(super) fn create_array(&mut self, state: &AbstractFrame, src: SlotId, len: usize) {
+        let using_xmm = state.get_using_xmm();
+        self.push(AsmInst::CreateArray {
+            src,
+            len,
+            using_xmm,
+        });
+    }
+
     ///
     /// Compare `lhs and `rhs` with "===" and return the result in rax.
     ///
@@ -1449,6 +1458,11 @@ pub(super) enum AsmInst {
         dst: SlotId,
         len: usize,
         rest_pos: Option<usize>,
+        using_xmm: UsingXmm,
+    },
+    CreateArray {
+        src: SlotId,
+        len: usize,
         using_xmm: UsingXmm,
     },
 

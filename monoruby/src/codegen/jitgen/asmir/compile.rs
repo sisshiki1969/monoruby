@@ -712,6 +712,20 @@ impl Codegen {
                 );
                 self.xmm_restore(using_xmm);
             }
+            AsmInst::CreateArray {
+                src,
+                len,
+                using_xmm,
+            } => {
+                self.xmm_save(using_xmm);
+                monoasm!( &mut self.jit,
+                    lea  rdi, [r14 - (conv(src))];
+                    movq rsi, (len);
+                    movq rax, (runtime::create_array);
+                    call rax;
+                );
+                self.xmm_restore(using_xmm);
+            }
             AsmInst::ConcatStr {
                 arg,
                 len,

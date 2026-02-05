@@ -710,17 +710,19 @@ impl AbstractState {
         let callee = &store[callee_fid];
         let callsite = &store[callid];
         if store.is_simple_call(callee_fid, callid) {
-            let stack_offset = if self.callsite_exists_F(store, callid) {
+            let args = callsite.args;
+            let pos_num = callsite.pos_num;
+            let kw_pos = callsite.kw_pos;
+            let kw_num = callsite.kw_len();
+
+            let (filled_req, filled_opt, filled_post, rest_len) = callee.apply_args(pos_num);
+            let stack_offset = if self.callsite_exists_F(store, callid) || callee.is_rest() {
                 callee.get_offset() as i32
             } else {
                 0
             };
             ir.reg_sub(GP::Rsp, stack_offset);
 
-            let args = callsite.args;
-            let pos_num = callsite.pos_num;
-            let kw_pos = callsite.kw_pos;
-            let kw_num = callsite.kw_len();
             // write back block argument.
             if let Some(block_arg) = callsite.block_arg {
                 self.write_back_slot(ir, block_arg);
@@ -731,7 +733,6 @@ impl AbstractState {
             self.fetch_for_callee(ir, callsite.recv, ofs);
 
             // fetch positional arguments.
-            let (filled_req, filled_opt, filled_post) = callee.apply_args(pos_num);
             let req = filled_req.len();
             let opt = filled_opt.len();
             let post = filled_post.len();
@@ -761,10 +762,16 @@ impl AbstractState {
                 }
             }
 
+            // fill a rest param.
+            if callee.is_rest() {
+                let ofs = stack_offset - (LFP_ARG0 + (8 * (callee.reqopt_num())) as i32);
+                self.fetch_rest_for_callee(ir, args + req + opt, rest_len, ofs);
+            }
+
             // fill post params.
             let start = filled_post.start;
             for i in filled_post {
-                let reg = args + req + opt + (i - start);
+                let reg = args + (pos_num - post) + (i - start);
                 let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
                 self.fetch_for_callee(ir, reg, ofs);
             }
