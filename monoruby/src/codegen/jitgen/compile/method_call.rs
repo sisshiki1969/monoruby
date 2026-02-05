@@ -732,7 +732,6 @@ impl AbstractState {
             let ofs = stack_offset - LFP_SELF;
             self.fetch_for_callee(ir, callsite.recv, ofs);
 
-            // fetch positional arguments.
             let req = filled_req.len();
             let opt = filled_opt.len();
             let post = filled_post.len();

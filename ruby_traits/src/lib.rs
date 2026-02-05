@@ -57,6 +57,16 @@ where
     }
 }
 
+/// Ruby-level Key equivalence trait.
+///
+/// This trait allows `Hash` lookup to be customized.
+///
+/// This operations is failible, and return Err if failed.
+pub trait RubySymEql {
+    /// Compare self to `other` and return `true` if they are equal.
+    fn eql(&self, other: &Self) -> bool;
+}
+
 ///
 /// A Hashable type.
 ///
@@ -145,6 +155,13 @@ impl_ruby!(
     String
 );
 
+///
+/// A Hashable type.
+///
+pub trait RubySymHash {
+    fn ruby_hash<H: std::hash::Hasher>(&self, state: &mut H);
+}
+
 /// Key equivalence trait.
 ///
 /// This trait allows hash table lookup to be customized. It has one blanket
@@ -196,5 +213,21 @@ where
     #[inline]
     fn equivalent(&self, key: &K, e: &mut E, g: &mut G) -> Result<bool, R> {
         self.eql(key.borrow(), e, g)
+    }
+}
+
+pub trait SymEquivalent<K: ?Sized> {
+    /// Compare self to `key` and return `true` if they are equal.
+    fn equivalent(&self, key: &K) -> bool;
+}
+
+impl<Q: ?Sized, K: ?Sized> SymEquivalent<K> for Q
+where
+    Q: RubySymEql,
+    K: Borrow<Q>,
+{
+    #[inline]
+    fn equivalent(&self, key: &K) -> bool {
+        self.eql(key.borrow())
     }
 }

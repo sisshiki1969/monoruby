@@ -542,8 +542,9 @@ fn hash_splat_and_kw_rest(
                     continue;
                 }
                 let v = caller_lfp.register(kw_pos + i).unwrap();
-                kw_rest.insert(Value::symbol(name), v, vm, globals)?;
+                kw_rest.insert_sym(RubySymbol::new(name), v);
             }
+
             for h in hash_splat_pos
                 .iter()
                 .map(|pos| caller_lfp.register(*pos).unwrap())
