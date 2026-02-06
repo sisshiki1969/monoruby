@@ -1,21 +1,6 @@
 use super::*;
 
 ///
-/// Handle hash splat arguments and a keyword rest parameter.
-///
-pub(crate) fn jit_hash_splat_kw_rest(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    callid: CallSiteId,
-    callee_lfp: Lfp,
-    caller_lfp: Lfp,
-    meta: Meta,
-) -> Result<()> {
-    let callee_func_id = meta.func_id();
-    hash_splat_and_kw_rest(vm, globals, callee_func_id, callid, callee_lfp, caller_lfp)
-}
-
-///
 /// Set positional arguments (req, opt, rest) and keyword arguments (kw, kw_rest) to the callee frame.
 ///
 /// This function solves the match of arguments-parameters dynamically.

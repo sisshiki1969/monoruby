@@ -452,27 +452,6 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn handle_hash_splat_kwrest(
-        &mut self,
-        store: &Store,
-        callid: CallSiteId,
-        callee_fid: FuncId,
-        error: AsmError,
-    ) {
-        let caller = &store[callid];
-        let callee = &store[callee_fid];
-        if callee.kw_rest().is_some() || !caller.hash_splat_pos.is_empty() {
-            let meta = callee.meta();
-            let offset = callee.get_offset();
-            self.push(AsmInst::SetupHashSplatKwRest {
-                callid,
-                meta,
-                offset,
-                error,
-            });
-        }
-    }
-
     ///
     /// Handle error.
     ///
@@ -1009,12 +988,7 @@ pub(super) enum AsmInst {
         meta: Meta,
         outer: usize,
     },
-    SetupHashSplatKwRest {
-        callid: CallSiteId,
-        meta: Meta,
-        offset: usize,
-        error: AsmError,
-    },
+
     ///
     /// Call method
     ///

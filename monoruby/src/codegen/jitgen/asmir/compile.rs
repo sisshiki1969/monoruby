@@ -397,15 +397,6 @@ impl Codegen {
             AsmInst::SetupYieldFrame { meta, outer } => {
                 self.setup_yield_frame(meta, outer);
             }
-            AsmInst::SetupHashSplatKwRest {
-                callid,
-                meta,
-                offset,
-                error,
-            } => {
-                let error = &labels[error];
-                self.handle_hash_splat_kw_rest(callid, meta, offset, error);
-            }
             AsmInst::Call {
                 callee_fid,
                 recv_class,

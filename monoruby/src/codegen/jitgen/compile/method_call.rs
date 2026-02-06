@@ -295,7 +295,7 @@ impl<'a> JitContext<'a> {
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save(using_xmm);
-        let simple = state.set_arguments(&self.store, ir, callid, callee_fid);
+        state.set_arguments(&self.store, ir, callid, callee_fid);
         state.discard(dst);
         state.clear_above_next_sp();
         let error = ir.new_error(state);
@@ -303,9 +303,6 @@ impl<'a> JitContext<'a> {
         let evict = ir.new_evict();
         let meta = self.store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
-        if !simple {
-            //ir.handle_hash_splat_kwrest(&self.store, callid, callee_fid, error);
-        }
         ir.push(AsmInst::SpecializedYield { entry, evict });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
@@ -586,7 +583,7 @@ impl AbstractState {
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save(using_xmm);
-        let simple = self.set_arguments(store, ir, callid, callee_fid);
+        self.set_arguments(store, ir, callid, callee_fid);
         self.discard(dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -597,9 +594,6 @@ impl AbstractState {
             callid,
             outer_lfp,
         });
-        if !simple {
-            //ir.handle_hash_splat_kwrest(store, callid, callee_fid, error);
-        }
         ir.push(AsmInst::Call {
             callee_fid,
             recv_class,
@@ -632,7 +626,7 @@ impl AbstractState {
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save(using_xmm);
-        let simple = self.set_arguments(store, ir, callid, callee_fid);
+        self.set_arguments(store, ir, callid, callee_fid);
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -643,9 +637,6 @@ impl AbstractState {
             callid,
             outer_lfp: None,
         });
-        if !simple {
-            //ir.handle_hash_splat_kwrest(store, callid, callee_fid, error);
-        }
         ir.push(AsmInst::SpecializedCall {
             entry: inlined_entry,
             patch_point,
@@ -712,7 +703,7 @@ impl AbstractState {
         ir: &mut AsmIr,
         callid: CallSiteId,
         callee_fid: FuncId,
-    ) -> bool {
+    ) {
         let callee = &store[callee_fid];
         let callsite = &store[callid];
         if store.is_simple_call(callee_fid, callid) {
@@ -824,13 +815,11 @@ impl AbstractState {
             }
 
             ir.reg_add(GP::Rsp, stack_offset);
-            true
         } else {
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArguments { callid, callee_fid });
             ir.handle_error(error);
-            false
         }
     }
 }
