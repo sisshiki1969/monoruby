@@ -397,13 +397,12 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn create_array(&mut self, state: &AbstractFrame, src: SlotId, len: usize) {
-        let using_xmm = state.get_using_xmm();
-        self.push(AsmInst::CreateArray {
-            src,
-            len,
-            using_xmm,
-        });
+    pub(super) fn create_array(&mut self, src: SlotId, len: usize) {
+        self.push(AsmInst::CreateArray { src, len });
+    }
+
+    pub(super) fn kw_rest(&mut self, rest_kw: Vec<(SlotId, IdentId)>) {
+        self.push(AsmInst::RestKw { rest_kw });
     }
 
     ///
@@ -1463,7 +1462,9 @@ pub(super) enum AsmInst {
     CreateArray {
         src: SlotId,
         len: usize,
-        using_xmm: UsingXmm,
+    },
+    RestKw {
+        rest_kw: Vec<(SlotId, IdentId)>,
     },
 
     UndefMethod {

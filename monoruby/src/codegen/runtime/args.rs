@@ -163,7 +163,7 @@ fn set_callee_frame_arguments(
         let mut h = RubyMap::default();
         for (k, id) in globals[callid].kw_args.clone().iter() {
             let v = caller_lfp.register(globals[callid].kw_pos + *id).unwrap();
-            h.insert(Value::symbol(*k), v, vm, globals)?;
+            h.insert_sym(RubySymbol::new(*k), v);
         }
         for v in globals[callid]
             .hash_splat_pos

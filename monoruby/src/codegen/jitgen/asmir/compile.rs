@@ -712,19 +712,29 @@ impl Codegen {
                 );
                 self.xmm_restore(using_xmm);
             }
-            AsmInst::CreateArray {
-                src,
-                len,
-                using_xmm,
-            } => {
-                self.xmm_save(using_xmm);
+            AsmInst::CreateArray { src, len } => {
                 monoasm!( &mut self.jit,
                     lea  rdi, [r14 - (conv(src))];
                     movq rsi, (len);
                     movq rax, (runtime::create_array);
                     call rax;
                 );
-                self.xmm_restore(using_xmm);
+            }
+            AsmInst::RestKw { rest_kw } => {
+                let data = self.jit.const_align8();
+                for (i, name) in rest_kw.into_iter() {
+                    self.jit.const_i32(name.get() as i32);
+                    self.jit.const_i32(i.0 as i32);
+                }
+                self.jit.const_i32(0);
+                self.jit.const_i32(0);
+
+                monoasm!( &mut self.jit,
+                    lea  rdi, [rip + data];
+                    movq rsi, r14;
+                    movq rax, (runtime::correct_rest_kw);
+                    call rax;
+                );
             }
             AsmInst::ConcatStr {
                 arg,

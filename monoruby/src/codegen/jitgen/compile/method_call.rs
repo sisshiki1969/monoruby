@@ -295,7 +295,7 @@ impl<'a> JitContext<'a> {
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save(using_xmm);
-        state.set_arguments(&self.store, ir, callid, callee_fid);
+        let simple = state.set_arguments(&self.store, ir, callid, callee_fid);
         state.discard(dst);
         state.clear_above_next_sp();
         let error = ir.new_error(state);
@@ -303,7 +303,9 @@ impl<'a> JitContext<'a> {
         let evict = ir.new_evict();
         let meta = self.store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
-        ir.handle_hash_splat_kwrest(&self.store, callid, callee_fid, error);
+        if !simple {
+            //ir.handle_hash_splat_kwrest(&self.store, callid, callee_fid, error);
+        }
         ir.push(AsmInst::SpecializedYield { entry, evict });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
@@ -584,7 +586,7 @@ impl AbstractState {
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save(using_xmm);
-        self.set_arguments(store, ir, callid, callee_fid);
+        let simple = self.set_arguments(store, ir, callid, callee_fid);
         self.discard(dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -595,7 +597,9 @@ impl AbstractState {
             callid,
             outer_lfp,
         });
-        ir.handle_hash_splat_kwrest(store, callid, callee_fid, error);
+        if !simple {
+            //ir.handle_hash_splat_kwrest(store, callid, callee_fid, error);
+        }
         ir.push(AsmInst::Call {
             callee_fid,
             recv_class,
@@ -628,7 +632,7 @@ impl AbstractState {
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save(using_xmm);
-        self.set_arguments(store, ir, callid, callee_fid);
+        let simple = self.set_arguments(store, ir, callid, callee_fid);
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -639,7 +643,9 @@ impl AbstractState {
             callid,
             outer_lfp: None,
         });
-        ir.handle_hash_splat_kwrest(store, callid, callee_fid, error);
+        if !simple {
+            //ir.handle_hash_splat_kwrest(store, callid, callee_fid, error);
+        }
         ir.push(AsmInst::SpecializedCall {
             entry: inlined_entry,
             patch_point,
@@ -706,7 +712,7 @@ impl AbstractState {
         ir: &mut AsmIr,
         callid: CallSiteId,
         callee_fid: FuncId,
-    ) {
+    ) -> bool {
         let callee = &store[callee_fid];
         let callsite = &store[callid];
         if store.is_simple_call(callee_fid, callid) {
@@ -716,7 +722,10 @@ impl AbstractState {
             let kw_num = callsite.kw_len();
 
             let (filled_req, filled_opt, filled_post, rest_len) = callee.apply_args(pos_num);
-            let stack_offset = if self.callsite_exists_F(store, callid) || callee.is_rest() {
+            let stack_offset = if self.callsite_exists_F(store, callid)
+                || callee.is_rest()
+                || callee.kw_rest().is_some()
+            {
                 callee.get_offset() as i32
             } else {
                 0
@@ -782,7 +791,7 @@ impl AbstractState {
             }
 
             // fill keyword arguments
-            let CallSiteInfo { kw_args, .. } = callsite;
+            let kw_args = &callsite.kw_args;
             let mut used_kw = vec![];
             for (i, param_name) in callee.kw_names().iter().enumerate() {
                 let ofs = stack_offset - (LFP_SELF + (callee.kw_reg_pos() + i).0 as i32 * 8);
@@ -798,19 +807,30 @@ impl AbstractState {
                 }
             }
 
-            // write back unused keyword arguments.
+            // check unused keyword arguments.
+            let mut rest_kw = vec![];
             for i in 0..kw_num {
                 if !used_kw.contains(&i) {
-                    self.write_back_slot(ir, kw_pos + i);
+                    let (k, v) = callsite.kw_args.get_index(i).unwrap();
+                    assert_eq!(i, *v);
+                    rest_kw.push((kw_pos + i, *k));
                 }
             }
 
+            // fill kw rest param.
+            if let Some(kw_rest) = callee.kw_rest() {
+                let ofs = stack_offset - (LFP_SELF + kw_rest.0 as i32 * 8);
+                self.fetch_kwrest_for_callee(ir, rest_kw, ofs);
+            }
+
             ir.reg_add(GP::Rsp, stack_offset);
+            true
         } else {
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArguments { callid, callee_fid });
             ir.handle_error(error);
+            false
         }
     }
 }

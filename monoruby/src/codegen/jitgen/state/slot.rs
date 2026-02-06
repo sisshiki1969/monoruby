@@ -1167,6 +1167,9 @@ impl LinkMode {
                 slots.push(Self::none());
             }
         }
+        if info.kw_rest().is_some() {
+            slots.push(Self::S(Guarded::Class(HASH_CLASS)));
+        }
         slots
     }
 }

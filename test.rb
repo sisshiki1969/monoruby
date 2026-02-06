@@ -1,7 +1,7 @@
-def f(r1, r2, o1=100, o2=200, *rest, p1, p2)
-  puts "r1:#{r1}, r2:#{r2}, o1:#{o1}, o2:#{o2}, rest:#{rest.inspect}, p1:#{p1}, p2:#{p2}"
+def f(x, a:0, b:0, **rest)
+  puts "a:#{a}, b:#{b}, rest:#{rest.inspect}"
 end
 
 50.times {
-  f("1","2","3","4","5","6","7","8")
+  f(1, a:"a", b:"b", c:"c", d:42)
 }
