@@ -1132,27 +1132,31 @@ impl LinkMode {
         let info = &store[fid];
         let mut slots = vec![];
         slots.push(recv);
-        let (filled_req, filled_opt, filled_post) = info.apply_args(*pos_num);
-        for i in 0..filled_req {
+        let (filled_req, filled_opt, filled_post, rest_len) = info.apply_args(*pos_num);
+        let req_len = filled_req.len();
+        let opt_len = filled_opt.len();
+        let post_len = filled_post.len();
+        for i in filled_req {
             slots.push(state.mode(*args + i));
         }
-        for _ in filled_req..info.req_num() {
+        for _ in req_len..info.req_num() {
             slots.push(Self::nil());
         }
-        for i in filled_req..filled_req + filled_opt {
+        for i in req_len..req_len + opt_len {
             slots.push(state.mode(*args + i));
         }
-        for _ in filled_opt..info.opt_num() {
+        for _ in opt_len..info.opt_num() {
             slots.push(Self::none());
         }
-        for i in filled_req + filled_opt..filled_req + filled_opt + filled_post {
+        if info.is_rest() {
+            slots.push(Self::S(Guarded::Class(ARRAY_CLASS)));
+        }
+        let start = req_len + opt_len + rest_len;
+        for i in start..start + post_len {
             slots.push(state.mode(*args + i));
         }
-        for _ in filled_post..info.post_num() {
+        for _ in post_len..info.post_num() {
             slots.push(Self::nil());
-        }
-        if info.is_rest() {
-            slots.push(Self::default());
         }
         let kw = info.kw_reg_pos();
         assert_eq!(kw.0 as usize, slots.len());
@@ -1162,6 +1166,9 @@ impl LinkMode {
             } else {
                 slots.push(Self::none());
             }
+        }
+        if info.kw_rest().is_some() {
+            slots.push(Self::S(Guarded::Class(HASH_CLASS)));
         }
         slots
     }

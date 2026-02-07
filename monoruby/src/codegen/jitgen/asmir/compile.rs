@@ -397,15 +397,6 @@ impl Codegen {
             AsmInst::SetupYieldFrame { meta, outer } => {
                 self.setup_yield_frame(meta, outer);
             }
-            AsmInst::SetupHashSplatKwRest {
-                callid,
-                meta,
-                offset,
-                error,
-            } => {
-                let error = &labels[error];
-                self.handle_hash_splat_kw_rest(callid, meta, offset, error);
-            }
             AsmInst::Call {
                 callee_fid,
                 recv_class,
@@ -711,6 +702,30 @@ impl Codegen {
                     call rax;
                 );
                 self.xmm_restore(using_xmm);
+            }
+            AsmInst::CreateArray { src, len } => {
+                monoasm!( &mut self.jit,
+                    lea  rdi, [r14 - (conv(src))];
+                    movq rsi, (len);
+                    movq rax, (runtime::create_array);
+                    call rax;
+                );
+            }
+            AsmInst::RestKw { rest_kw } => {
+                let data = self.jit.const_align8();
+                for (i, name) in rest_kw.into_iter() {
+                    self.jit.const_i32(name.get() as i32);
+                    self.jit.const_i32(i.0 as i32);
+                }
+                self.jit.const_i32(0);
+                self.jit.const_i32(0);
+
+                monoasm!( &mut self.jit,
+                    lea  rdi, [rip + data];
+                    movq rsi, r14;
+                    movq rax, (runtime::correct_rest_kw);
+                    call rax;
+                );
             }
             AsmInst::ConcatStr {
                 arg,

@@ -877,18 +877,46 @@ impl FuncInfo {
         self.is_block_style() && (self.total_positional_args() > 1)
     }
 
-    pub(crate) fn apply_args(&self, pos_num: usize) -> (usize, usize, usize) {
+    ///
+    /// Given the number of positional arguments, return (required, optional, post) arguments to apply.
+    ///
+    pub(crate) fn apply_args(
+        &self,
+        pos_num: usize,
+    ) -> (
+        std::ops::Range<usize>,
+        std::ops::Range<usize>,
+        std::ops::Range<usize>,
+        usize,
+    ) {
+        let opt = self.req_num();
+        let post = self.reqopt_num() + self.is_rest() as usize;
         if pos_num <= self.req_num() {
-            (pos_num, 0, 0)
+            (0..pos_num, opt..opt, post..post, 0)
         } else if pos_num <= self.min_positional_args() {
-            (self.req_num(), 0, pos_num - self.req_num())
+            (
+                0..self.req_num(),
+                opt..opt,
+                post..post + pos_num - self.req_num(),
+                0,
+            )
         } else if pos_num > self.max_positional_args() {
-            (self.req_num(), self.opt_num(), self.post_num())
+            (
+                0..self.req_num(),
+                opt..opt + self.opt_num(),
+                post..post + self.post_num(),
+                if self.is_block_style() && !self.is_rest() {
+                    0
+                } else {
+                    pos_num - self.max_positional_args()
+                },
+            )
         } else {
             (
-                self.req_num(),
-                pos_num - self.min_positional_args(),
-                self.post_num(),
+                0..self.req_num(),
+                opt..opt + pos_num - self.min_positional_args(),
+                post..post + self.post_num(),
+                0,
             )
         }
     }
@@ -962,8 +990,7 @@ impl Store {
     /// - no hash splat arguments
     /// - no single argument expansion in block call
     /// - no extra positional argument
-    /// - no rest param
-    /// - if method_call, required + post <= (the number of positional arguments) <= required + optional + post
+    /// - if method_call with ni rest param, required + post <= (the number of positional arguments) <= required + optional + post
     ///
     pub(crate) fn is_simple_call(&self, fid: FuncId, callid: CallSiteId) -> bool {
         let callsite = &self[callid];
@@ -977,7 +1004,6 @@ impl Store {
         };
         !callsite.has_splat()
             && !callsite.has_hash_splat()
-            && !info.is_rest()
-            && (info.is_block_style() || info.positional_within_range(pos_num))
+            && (info.is_block_style() || info.is_rest() || info.positional_within_range(pos_num))
     }
 }

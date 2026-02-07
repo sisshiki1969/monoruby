@@ -202,4 +202,33 @@ impl AbstractFrame {
             }
         }
     }
+
+    pub(in crate::codegen::jitgen) fn fetch_rest_for_callee(
+        &mut self,
+        ir: &mut AsmIr,
+        src: SlotId,
+        len: usize,
+        ofs: i32,
+    ) {
+        for i in src..src + len {
+            self.use_as_value(i);
+        }
+        self.write_back_range(ir, src, len as u16);
+        ir.create_array(src, len);
+        ir.reg2rsp_offset(GP::Rax, ofs);
+    }
+
+    pub(in crate::codegen::jitgen) fn fetch_kwrest_for_callee(
+        &mut self,
+        ir: &mut AsmIr,
+        rest_kw: Vec<(SlotId, IdentId)>,
+        ofs: i32,
+    ) {
+        for (slot, _) in &rest_kw {
+            self.use_as_value(*slot);
+            self.write_back_slot(ir, *slot);
+        }
+        ir.kw_rest(rest_kw);
+        ir.reg2rsp_offset(GP::Rax, ofs);
+    }
 }

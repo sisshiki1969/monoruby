@@ -1341,6 +1341,7 @@ pub enum FiberState {
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Hash, Default)]
+#[repr(transparent)]
 pub struct SlotId(pub u16);
 
 impl std::iter::Step for SlotId {

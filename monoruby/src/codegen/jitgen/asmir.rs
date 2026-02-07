@@ -397,6 +397,14 @@ impl AsmIr {
         });
     }
 
+    pub(super) fn create_array(&mut self, src: SlotId, len: usize) {
+        self.push(AsmInst::CreateArray { src, len });
+    }
+
+    pub(super) fn kw_rest(&mut self, rest_kw: Vec<(SlotId, IdentId)>) {
+        self.push(AsmInst::RestKw { rest_kw });
+    }
+
     ///
     /// Compare `lhs and `rhs` with "===" and return the result in rax.
     ///
@@ -442,27 +450,6 @@ impl AsmIr {
             else_label,
             branch_labels,
         });
-    }
-
-    pub(super) fn handle_hash_splat_kwrest(
-        &mut self,
-        store: &Store,
-        callid: CallSiteId,
-        callee_fid: FuncId,
-        error: AsmError,
-    ) {
-        let caller = &store[callid];
-        let callee = &store[callee_fid];
-        if callee.kw_rest().is_some() || !caller.hash_splat_pos.is_empty() {
-            let meta = callee.meta();
-            let offset = callee.get_offset();
-            self.push(AsmInst::SetupHashSplatKwRest {
-                callid,
-                meta,
-                offset,
-                error,
-            });
-        }
     }
 
     ///
@@ -1001,12 +988,7 @@ pub(super) enum AsmInst {
         meta: Meta,
         outer: usize,
     },
-    SetupHashSplatKwRest {
-        callid: CallSiteId,
-        meta: Meta,
-        offset: usize,
-        error: AsmError,
-    },
+
     ///
     /// Call method
     ///
@@ -1451,6 +1433,13 @@ pub(super) enum AsmInst {
         rest_pos: Option<usize>,
         using_xmm: UsingXmm,
     },
+    CreateArray {
+        src: SlotId,
+        len: usize,
+    },
+    RestKw {
+        rest_kw: Vec<(SlotId, IdentId)>,
+    },
 
     UndefMethod {
         undef: IdentId,
@@ -1509,6 +1498,7 @@ pub(super) enum AsmInst {
 
 impl AsmInst {
     #[cfg(feature = "emit-asm")]
+    #[allow(dead_code)]
     pub fn dump(&self, store: &Store) -> String {
         match self {
             Self::AccToStack(slot) => format!("{:?} = R15", slot),

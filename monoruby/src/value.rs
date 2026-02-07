@@ -51,6 +51,27 @@ impl std::default::Default for Value {
     }
 }
 
+impl From<Immediate> for Value {
+    fn from(imm: Immediate) -> Self {
+        Value(imm.0)
+    }
+}
+
+impl From<RubySymbol> for Value {
+    fn from(sym: RubySymbol) -> Self {
+        Value(sym.0)
+    }
+}
+
+impl std::borrow::Borrow<RubySymbol> for Value {
+    fn borrow(&self) -> &RubySymbol {
+        // SAFETY: If self is a packed value, it is safe to interpret its bits as RubySymbol.
+        // If self is not a packed value, this function should not be called.
+        assert!(self.is_packed_value());
+        unsafe { &*(self as *const Value as *const RubySymbol) }
+    }
+}
+
 impl GC<RValue> for Value {
     fn mark(&self, alloc: &mut Allocator<RValue>) {
         if let Some(rvalue) = self.try_rvalue() {
@@ -1663,17 +1684,17 @@ impl Value {
 #[repr(transparent)]
 pub struct Immediate(std::num::NonZeroU64);
 
-impl Into<Value> for Immediate {
-    fn into(self) -> Value {
-        Value(self.0)
-    }
-}
-
 impl Deref for Immediate {
     type Target = Value;
 
     fn deref(&self) -> &Self::Target {
         unsafe { &*(self as *const Immediate as *const Value) }
+    }
+}
+
+impl AsRef<Value> for Immediate {
+    fn as_ref(&self) -> &Value {
+        self.deref()
     }
 }
 
@@ -1731,6 +1752,42 @@ impl Immediate {
         } else {
             None
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct RubySymbol(std::num::NonZeroU64);
+
+impl Deref for RubySymbol {
+    type Target = Value;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*(self as *const RubySymbol as *const Value) }
+    }
+}
+
+impl AsRef<Value> for RubySymbol {
+    fn as_ref(&self) -> &Value {
+        self.deref()
+    }
+}
+
+impl RubySymHash for RubySymbol {
+    fn ruby_hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl RubySymEql for RubySymbol {
+    fn eql(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl RubySymbol {
+    pub fn new(id: IdentId) -> Self {
+        RubySymbol(Value::symbol(id).0)
     }
 }
 
