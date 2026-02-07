@@ -67,7 +67,7 @@ impl std::borrow::Borrow<RubySymbol> for Value {
     fn borrow(&self) -> &RubySymbol {
         // SAFETY: If self is a packed value, it is safe to interpret its bits as RubySymbol.
         // If self is not a packed value, this function should not be called.
-        assert!(self.is_packed_value());
+        assert!(self.is_symbol());
         unsafe { &*(self as *const Value as *const RubySymbol) }
     }
 }

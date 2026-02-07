@@ -878,7 +878,7 @@ impl FuncInfo {
     }
 
     ///
-    /// Given the number of positional arguments, return (required, optional, post) arguments to apply.
+    /// Given the number of positional arguments, return (required, optional, post, rest) arguments to apply.
     ///
     pub(crate) fn apply_args(
         &self,
@@ -990,7 +990,7 @@ impl Store {
     /// - no hash splat arguments
     /// - no single argument expansion in block call
     /// - no extra positional argument
-    /// - if method_call with ni rest param, required + post <= (the number of positional arguments) <= required + optional + post
+    /// - if method_call without a rest param, required + post <= (the number of positional arguments) <= required + optional + post
     ///
     pub(crate) fn is_simple_call(&self, fid: FuncId, callid: CallSiteId) -> bool {
         let callsite = &self[callid];
@@ -1004,6 +1004,11 @@ impl Store {
         };
         !callsite.has_splat()
             && !callsite.has_hash_splat()
-            && (info.is_block_style() || info.is_rest() || info.positional_within_range(pos_num))
+            && (info.is_block_style()
+                || if info.is_rest() {
+                    pos_num >= info.min_positional_args()
+                } else {
+                    info.positional_within_range(pos_num)
+                })
     }
 }

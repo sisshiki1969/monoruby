@@ -57,11 +57,13 @@ where
     }
 }
 
-/// Ruby-level Key equivalence trait.
+///
+/// Ruby-level Key equivalence trait for only `Symbol` keys.
 ///
 /// This trait allows `Hash` lookup to be customized.
 ///
-/// This operations is failible, and return Err if failed.
+/// This operations is *not* failible.
+///
 pub trait RubySymEql {
     /// Compare self to `other` and return `true` if they are equal.
     fn eql(&self, other: &Self) -> bool;

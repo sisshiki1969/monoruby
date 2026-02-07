@@ -228,7 +228,11 @@ impl AbstractFrame {
             self.use_as_value(*slot);
             self.write_back_slot(ir, *slot);
         }
-        ir.kw_rest(rest_kw);
+        if rest_kw.is_empty() {
+            ir.lit2reg(Value::nil(), GP::Rax);
+        } else {
+            ir.kw_rest(rest_kw);
+        }
         ir.reg2rsp_offset(GP::Rax, ofs);
     }
 }

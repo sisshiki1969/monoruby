@@ -1,5 +1,5 @@
 use super::*;
-use std::string::String;
+use std::{hash::Hash, string::String};
 struct E;
 struct G;
 
@@ -25,11 +25,71 @@ fn new() {
     assert_eq!(map.is_empty(), true);
 }
 
+#[derive(Debug, PartialEq)]
+struct Symbol(i32);
+
+impl RubySymEql for Symbol {
+    fn eql(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl RubySymHash for Symbol {
+    fn ruby_hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+struct Value(i32);
+
+impl From<Symbol> for Value {
+    fn from(s: Symbol) -> Self {
+        Value(s.0)
+    }
+}
+
+#[allow(unsafe_code)]
+impl std::borrow::Borrow<Symbol> for Value {
+    fn borrow(&self) -> &Symbol {
+        // SAFETY: If self is a packed value, it is safe to interpret its bits as Symbol.
+        // If self is not a packed value, this function should not be called.
+        unsafe { &*(self as *const Value as *const Symbol) }
+    }
+}
+
+impl RubyEql<E, G, ()> for Value {
+    fn eql(&self, other: &Self, _: &mut E, _: &mut G) -> Result<bool, ()> {
+        Ok(self.0 == other.0)
+    }
+}
+
+impl RubyHash<E, G, ()> for Value {
+    fn ruby_hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+        _: &mut E,
+        _: &mut G,
+    ) -> Result<(), ()> {
+        self.0.hash(state);
+        Ok(())
+    }
+}
+
 #[test]
 fn insert() {
-    let insert = [0, 4, 2, 12, 8, 7, 11, 5];
-    let not_present = [1, 3, 6, 9, 10];
-    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::with_capacity(insert.len());
+    let insert = [
+        //Value(0),
+        //Value(4),
+        Value(2),
+        Value(12),
+        Value(8),
+        Value(7),
+        Value(11),
+        Value(5),
+    ];
+    let not_present = [Value(1), Value(3), Value(6), Value(9), Value(10)];
+    let mut map: RubyMap<Value, Value, E, G, ()> = RubyMap::with_capacity(insert.len());
     let mut e = E;
     let mut g = G;
 
@@ -40,6 +100,8 @@ fn insert() {
         assert_eq!(map.get(&elt, &mut e, &mut g).unwrap(), Some(&elt));
         assert_eq!(map.get(&elt, &mut e, &mut g).unwrap().unwrap(), &elt);
     }
+    map.insert_sym(Symbol(0), Value(0));
+    map.insert_sym(Symbol(4), Value(4));
     println!("{:?}", map);
 
     for &elt in &not_present {
