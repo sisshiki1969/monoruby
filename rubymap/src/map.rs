@@ -22,7 +22,7 @@ use ::core::mem;
 use ::core::ops::{Index, IndexMut, RangeBounds};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use ruby_traits::{RubyEql, RubyHash};
+use ruby_traits::{RubyEql, RubyHash, RubySymEql, RubySymHash};
 
 use std::collections::hash_map::RandomState;
 
@@ -384,6 +384,14 @@ where
         Ok(self.insert_full(key, value, e, g)?.1)
     }
 
+    pub fn insert_sym<I>(&mut self, key: I, value: V) -> Option<V>
+    where
+        I: RubySymHash + RubySymEql,
+        K: std::borrow::Borrow<I> + From<I>,
+    {
+        self.insert_sym_full(key, value).1
+    }
+
     /// Insert a key-value pair in the map, and get their index.
     ///
     /// If an equivalent key already exists in the map: the key remains and
@@ -405,6 +413,15 @@ where
     ) -> Result<(usize, Option<V>), R> {
         let hash = self.hash(&key, e, g)?;
         self.core.insert_full(hash, key, value, e, g)
+    }
+
+    pub fn insert_sym_full<I>(&mut self, key: I, value: V) -> (usize, Option<V>)
+    where
+        I: RubySymHash + RubySymEql,
+        K: std::borrow::Borrow<I> + From<I>,
+    {
+        let hash = self.hash_sym(&key);
+        self.core.insert_full_sym(hash, key, value)
     }
 
     /// Insert a key-value pair in the map at its ordered position among sorted keys.
@@ -672,6 +689,12 @@ where
         let mut h = self.hash_builder.build_hasher();
         key.ruby_hash(&mut h, e, g)?;
         Ok(HashValue(h.finish() as usize))
+    }
+
+    pub(crate) fn hash_sym<Q: ?Sized + RubySymHash>(&self, key: &Q) -> HashValue {
+        let mut h = self.hash_builder.build_hasher();
+        key.ruby_hash(&mut h);
+        HashValue(h.finish() as usize)
     }
 
     /// Return `true` if an equivalent to `key` exists in the map.

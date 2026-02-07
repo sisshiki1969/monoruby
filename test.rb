@@ -1,4 +1,7 @@
+def f(x, a:0, b:0, **rest)
+  puts "a:#{a}, b:#{b}, rest:#{rest.inspect}"
+end
+
 50.times {
-  a = 0..100
-  puts a.begin + a.end
+  f(1, a:"a", b:"b", c:"c", d:42)
 }

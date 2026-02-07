@@ -1,10 +1,8 @@
 #!/bin/bash
-cargo clean
-source <(cargo llvm-cov show-env --export-prefix)
 cargo llvm-cov clean --workspace
-cargo build --features gc-stress
+cargo llvm-cov nextest --features emit-asm --features deopt --features gc-stress --features perf --features gc-debug --features jit-debug --features emit-cfg --no-report
 
-cargo llvm-cov nextest --no-report
+cargo build --features gc-stress
 
 target/debug/monoruby benchmark/app_fib.rb > monoruby.log
 ruby benchmark/app_fib.rb > ruby.log

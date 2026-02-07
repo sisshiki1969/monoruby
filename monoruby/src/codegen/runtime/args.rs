@@ -1,21 +1,6 @@
 use super::*;
 
 ///
-/// Handle hash splat arguments and a keyword rest parameter.
-///
-pub(crate) fn jit_hash_splat_kw_rest(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    callid: CallSiteId,
-    callee_lfp: Lfp,
-    caller_lfp: Lfp,
-    meta: Meta,
-) -> Result<()> {
-    let callee_func_id = meta.func_id();
-    hash_splat_and_kw_rest(vm, globals, callee_func_id, callid, callee_lfp, caller_lfp)
-}
-
-///
 /// Set positional arguments (req, opt, rest) and keyword arguments (kw, kw_rest) to the callee frame.
 ///
 /// This function solves the match of arguments-parameters dynamically.
@@ -163,7 +148,7 @@ fn set_callee_frame_arguments(
         let mut h = RubyMap::default();
         for (k, id) in globals[callid].kw_args.clone().iter() {
             let v = caller_lfp.register(globals[callid].kw_pos + *id).unwrap();
-            h.insert(Value::symbol(*k), v, vm, globals)?;
+            h.insert_sym(RubySymbol::new(*k), v);
         }
         for v in globals[callid]
             .hash_splat_pos
@@ -542,8 +527,9 @@ fn hash_splat_and_kw_rest(
                     continue;
                 }
                 let v = caller_lfp.register(kw_pos + i).unwrap();
-                kw_rest.insert(Value::symbol(name), v, vm, globals)?;
+                kw_rest.insert_sym(RubySymbol::new(name), v);
             }
+
             for h in hash_splat_pos
                 .iter()
                 .map(|pos| caller_lfp.register(*pos).unwrap())

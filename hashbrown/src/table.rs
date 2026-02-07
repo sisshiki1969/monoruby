@@ -292,6 +292,42 @@ impl<T, E, G, R> HashTable<T, E, G, R> {
         )
     }
 
+    /// Returns an `Entry` for an entry in the table with the given hash
+    /// and which satisfies the equality function passed.
+    ///
+    /// This can be used to remove the entry from the table, or insert a new
+    /// entry with the given hash if one doesn't already exist.
+    ///
+    /// This method will call `eq` for all entries with the given hash, but may
+    /// also call it for entries with a different hash. `eq` should only return
+    /// true for the desired entry, at which point the search is stopped.
+    ///
+    /// This method may grow the table in preparation for an insertion. Call
+    /// [`HashTable::find_entry`] if this is undesirable.
+    ///
+    /// `hasher` is called if entries need to be moved or copied to a new table.
+    /// This must return the same hash value that each entry was inserted with.
+    ///
+    pub fn entry_sym(
+        &mut self,
+        hash: u64,
+        eq: impl FnMut(&T) -> bool,
+        hasher: impl Fn(&T) -> u64,
+    ) -> Entry<'_, T, E, G, R> {
+        match self.raw.find_or_find_insert_slot_sym(hash, eq, hasher) {
+            Ok(bucket) => Entry::Occupied(OccupiedEntry {
+                hash,
+                bucket,
+                table: self,
+            }),
+            Err(insert_slot) => Entry::Vacant(VacantEntry {
+                hash,
+                insert_slot,
+                table: self,
+            }),
+        }
+    }
+
     /// Inserts an element into the `HashTable` with the given hash value, but
     /// without checking whether an equivalent element already exists within the
     /// table.
