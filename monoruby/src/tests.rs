@@ -57,10 +57,16 @@ pub fn run_tests(codes: &[String]) {
     );
     eprintln!("{}", wrapped);
     let mut globals = Globals::new_test();
-    let interp_val = run_test_main(&mut globals, &wrapped);
-    let ruby_res = run_ruby(&mut globals, &code);
+    let interp_val = run_test_main(&mut globals, &wrapped).as_array();
+    let ruby_res = run_ruby(&mut globals, &code).as_array();
 
-    Value::assert_eq(&globals, interp_val, ruby_res);
+    for i in 0..codes.len() {
+        let interp_elem = interp_val.get(i).unwrap();
+        let ruby_elem = ruby_res.get(i).unwrap();
+        eprintln!("{}", codes[i]);
+        Value::assert_eq(&globals, *interp_elem, *ruby_elem);
+    }
+    //Value::assert_eq(&globals, interp_val, ruby_res);
 }
 
 pub fn run_binop_tests(lhs: &[&str], op: &[&str], rhs: &[&str]) {

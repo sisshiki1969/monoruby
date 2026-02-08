@@ -70,9 +70,9 @@ fn ne(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Complex/s/polar.html]
 #[monoruby_builtin]
 fn complex_polar(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let r = RealKind::try_from(globals, lfp.arg(0))?.to_f64();
+    let r = RealKind::expect(globals, lfp.arg(0))?.to_f64();
     let theta = if let Some(theta) = lfp.try_arg(1) {
-        RealKind::try_from(globals, theta)?.to_f64()
+        RealKind::expect(globals, theta)?.to_f64()
     } else {
         RealKind::Float(0.0).to_f64()
     };

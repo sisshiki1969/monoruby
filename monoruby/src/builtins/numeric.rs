@@ -56,44 +56,16 @@ binop!(add, sub, mul, div, rem, pow);
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/divmod.html]
 #[monoruby_builtin]
 fn divmod(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let (div, modulo) = match (lfp.self_val().unpack(), lfp.arg(0).unpack()) {
-        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
-            let div = if rhs.is_negative() {
-                (-lhs).div_euclid(-rhs)
-            } else {
-                lhs.div_euclid(rhs)
-            };
-            let modulo = lhs - rhs * div;
-            (Value::integer(div), Value::integer(modulo))
-        }
-        (RV::Fixnum(lhs), RV::Float(rhs)) => {
-            let lhs = lhs as f64;
-            let div = if rhs.is_sign_negative() {
-                (-lhs).div_euclid(-rhs)
-            } else {
-                lhs.div_euclid(rhs)
-            };
-            let modulo = lhs - rhs * div;
-            (Value::integer(div as i64), Value::float(modulo))
-        }
-        (RV::Float(lhs), RV::Fixnum(rhs)) => {
-            let rhs = rhs as f64;
-            let div = if rhs.is_sign_negative() {
-                (-lhs).div_euclid(-rhs)
-            } else {
-                lhs.div_euclid(rhs)
-            };
-            let modulo = lhs - rhs * div;
-            (Value::integer(div as i64), Value::float(modulo))
-        }
-        (RV::Float(lhs), RV::Float(rhs)) => {
-            let div = if rhs.is_sign_negative() {
-                (-lhs).div_euclid(-rhs)
-            } else {
-                lhs.div_euclid(rhs)
-            };
-            let modulo = lhs - rhs * div;
-            (Value::integer(div as i64), Value::float(modulo))
+    let lhs = lfp.self_val();
+    let rhs = lfp.arg(0);
+
+    let (div, modulo) = match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
+        (Some(lhs), Some(rhs)) => {
+            if rhs.check_zero_div() {
+                return Err(MonorubyErr::divide_by_zero());
+            }
+            let (div, modulo) = lhs.div_mod(&rhs);
+            (div.into(), modulo.into())
         }
         _ => return Err(MonorubyErr::cant_convert_into_float(globals, lfp.arg(0))),
     };

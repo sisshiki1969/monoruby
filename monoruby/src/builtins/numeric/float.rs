@@ -86,7 +86,7 @@ fn toi(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn div_floor(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let lhs = lfp.self_val().try_float().unwrap();
-    let rhs = RealKind::try_from(globals, lfp.arg(0))?.to_f64();
+    let rhs = RealKind::expect(globals, lfp.arg(0))?.to_f64();
     let div_floor = (lhs / rhs).floor();
     Value::coerce_f64_to_int(div_floor)
 }

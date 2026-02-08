@@ -134,21 +134,9 @@ fn binop_integer() {
         "234234645",
         "2352354645657876868978696835652452546462456245646",
     ];
-    let mut test = vec![];
-    for lhs in lhs_integer {
-        for rhs in rhs_integer {
-            for op in ["%"] {
-                test.extend_from_slice(&[
-                    format!("{lhs} {op} {rhs}"),
-                    format!("-{lhs} {op} (-{rhs})"),
-                ]);
-            }
-        }
-    }
-    run_tests(&test);
     run_binop_tests(
         &lhs_integer,
-        &["+", "-", "*", "/", "&", "|", "^"],
+        &["+", "-", "*", "/", "&", "|", "^", "%"],
         &rhs_integer,
     );
     run_test_error("3 + :aaa");
@@ -165,12 +153,12 @@ fn binop_integer() {
 fn binop_numeric() {
     let lhs = [
         "0",
+        "690426",
+        "24829482958347598570210950349530597028472983429873",
         "0.0",
         "1.2e-13",
         "1.5e21",
-        "690426",
         "690426.0",
-        "24829482958347598570210950349530597028472983429873",
         "12.3+45.6i",
         "123+45.6i",
         "12.3+456i",
@@ -198,10 +186,7 @@ fn binop_numeric() {
         "84623499894518399348254679127328445692349+12988593475873426874687983435698234234882342i",
     ];
     run_binop_tests(&lhs, &["+", "-", "*"], &rhs);
-    run_binop_tests(&lhs[0..7], &["/"], &rhs[0..5]);
-    //for i in 0..6 {
-    //    run_binop_tests(&[lhs[7]], &["/"], &[rhs[i]]);
-    //}
+    run_binop_tests(&lhs[0..7], &["/", "%"], &rhs[0..5]);
     run_test_error("3.1 + :aaa");
     run_test_error("3.1 - :aaa");
     run_test_error("3.1 * :aaa");

@@ -1,7 +1,9 @@
-def f(x, a:0, b:0, **rest)
-  puts "a:#{a}, b:#{b}, rest:#{rest.inspect}"
-end
-
-50.times {
-  f(1, a:"a", b:"b", c:"c", d:42)
-}
+ def f
+ 	eval("a = 42", $b)
+ end
+ 
+ $b = binding
+ 
+ a = 100
+ f
+ puts a

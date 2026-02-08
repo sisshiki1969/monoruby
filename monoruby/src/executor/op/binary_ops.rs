@@ -4,7 +4,7 @@
 
 use super::*;
 
-use num::{BigInt, Integer, ToPrimitive, Zero};
+use num::{BigInt, ToPrimitive, Zero};
 use paste::paste;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Rem, Shl, Shr, Sub};
 
@@ -17,20 +17,15 @@ macro_rules! binop_values {
                 lhs: Value,
                 rhs: Value
             ) -> Option<Value> {
+                match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
+                    (Some(lhs), Some(rhs)) => return Some((lhs.$op(rhs)).into()),
+                    _ => {}
+                }
                 let v = match (lhs.unpack(), rhs.unpack()) {
-                    (RV::Fixnum(lhs), RV::Fixnum(rhs)) => match lhs.[<checked_ $op>](rhs){
-                        Some(res) => Value::integer(res),
-                        None => Value::bigint(BigInt::from(lhs).$op(BigInt::from(rhs))),
-                    }
-                    (RV::Fixnum(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).$op(rhs)),
-                    (RV::Fixnum(lhs), RV::Float(rhs)) => Value::float((lhs as f64).$op(&rhs)),
                     (RV::Fixnum(lhs), RV::Complex(rhs)) => {
                         let lhs = num::complex::Complex::from(Real::from(lhs));
                         Value::complex_from(lhs.$op(rhs))
                     }
-                    (RV::BigInt(lhs), RV::Fixnum(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
-                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
-                    (RV::BigInt(lhs), RV::Float(rhs)) => Value::float(lhs.to_f64().unwrap().$op(&rhs)),
                     (RV::BigInt(lhs), RV::Complex(rhs)) => {
                         let lhs = num::complex::Complex::from(Real::from(lhs.clone()));
                         Value::complex_from(lhs.$op(rhs))
@@ -41,9 +36,6 @@ macro_rules! binop_values {
                         return None;
                     }
 
-                    (RV::Float(lhs), RV::Fixnum(rhs)) => Value::float(lhs.$op(&(rhs as f64))),
-                    (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.$op(rhs.to_f64().unwrap())),
-                    (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.$op(&rhs)),
                     (RV::Float(lhs), RV::Complex(rhs)) => {
                         let lhs = num::complex::Complex::from(Real::from(lhs));
                         Value::complex_from(lhs.$op(rhs))
@@ -109,9 +101,156 @@ macro_rules! binop_values_no_opt {
 binop_values!(
     (add, IdentId::_ADD),
     (sub, IdentId::_SUB),
-    (mul, IdentId::_MUL),
-    (rem, IdentId::_REM)
+    (mul, IdentId::_MUL)
 );
+
+pub(crate) extern "C" fn div_values(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
+        (Some(lhs), Some(rhs)) => {
+            if rhs.check_zero_div() {
+                vm.err_divide_by_zero();
+                return None;
+            } else {
+                return Some((lhs / rhs).into());
+            }
+        }
+        _ => {}
+    }
+    let v = match (lhs.unpack(), rhs.unpack()) {
+        (RV::Fixnum(lhs), RV::Complex(rhs)) => {
+            if rhs.is_zero() {
+                vm.err_divide_by_zero();
+                return None;
+            }
+            let lhs = num::complex::Complex::from(Real::from(lhs));
+            Value::complex_from(lhs.div(rhs))
+        }
+        (RV::BigInt(lhs), RV::Complex(rhs)) => {
+            if rhs.is_zero() {
+                vm.err_divide_by_zero();
+                return None;
+            }
+            let lhs = num::complex::Complex::from(Real::from(lhs.clone()));
+            Value::complex_from(lhs.div(rhs))
+        }
+        (RV::Float(lhs), RV::Complex(rhs)) => {
+            if rhs.is_zero() {
+                vm.err_divide_by_zero();
+                return None;
+            }
+            let lhs = num::complex::Complex::from(Real::from(lhs));
+            Value::complex_from(lhs.div(rhs))
+        }
+        (RV::Float(_), _) => {
+            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_DIV, rhs, "Float");
+            vm.set_error(err);
+            return None;
+        }
+        (RV::Complex(lhs), RV::Fixnum(rhs)) => {
+            if rhs.is_zero() {
+                vm.err_divide_by_zero();
+                return None;
+            }
+            let rhs = num::complex::Complex::from(Real::from(rhs));
+            Value::complex_from((*lhs).div(rhs))
+        }
+        (RV::Complex(lhs), RV::BigInt(rhs)) => {
+            if rhs.is_zero() {
+                vm.err_divide_by_zero();
+                return None;
+            }
+            let rhs = num::complex::Complex::from(Real::from(rhs.clone()));
+            Value::complex_from(lhs.div(rhs))
+        }
+        (RV::Complex(lhs), RV::Float(rhs)) => {
+            let rhs = num::complex::Complex::from(Real::from(rhs));
+            Value::complex_from(lhs.div(rhs))
+        }
+        (RV::Complex(lhs), RV::Complex(rhs)) => {
+            if rhs.is_zero() {
+                vm.err_divide_by_zero();
+                return None;
+            }
+            Value::complex_from(lhs.div(rhs))
+        }
+        (RV::Complex(_), _) => {
+            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_DIV, rhs, "Complex");
+            vm.set_error(err);
+            return None;
+        }
+        _ => {
+            return vm.invoke_method_simple(globals, IdentId::_DIV, lhs, &[rhs]);
+        }
+    };
+    Some(v)
+}
+
+pub(crate) extern "C" fn rem_values(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
+        (Some(lhs), Some(rhs)) => {
+            if rhs.check_zero_div() {
+                vm.err_divide_by_zero();
+                return None;
+            } else {
+                return Some((lhs % rhs).into());
+            }
+        }
+        _ => {}
+    }
+    let v = match (lhs.unpack(), rhs.unpack()) {
+        (RV::BigInt(lhs), RV::Complex(rhs)) => {
+            let lhs = num::complex::Complex::from(Real::from(lhs.clone()));
+            Value::complex_from(lhs.rem(rhs))
+        }
+        (RV::Fixnum(_) | RV::BigInt(_), _) => {
+            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_REM, rhs, "Integer");
+            vm.set_error(err);
+            return None;
+        }
+
+        (RV::Float(lhs), RV::Complex(rhs)) => {
+            let lhs = num::complex::Complex::from(Real::from(lhs));
+            Value::complex_from(lhs.rem(rhs))
+        }
+        (RV::Float(_), _) => {
+            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_REM, rhs, "Float");
+            vm.set_error(err);
+            return None;
+        }
+        (RV::Complex(lhs), RV::Fixnum(rhs)) => {
+            let rhs = num::complex::Complex::from(Real::from(rhs));
+            Value::complex_from(lhs.rem(rhs))
+        }
+        (RV::Complex(lhs), RV::BigInt(rhs)) => {
+            let rhs = num::complex::Complex::from(Real::from(rhs.clone()));
+            Value::complex_from(lhs.rem(rhs))
+        }
+        (RV::Complex(lhs), RV::Float(rhs)) => {
+            let rhs = num::complex::Complex::from(Real::from(rhs));
+            Value::complex_from(lhs.rem(rhs))
+        }
+        (RV::Complex(lhs), RV::Complex(rhs)) => Value::complex_from(lhs.rem(rhs)),
+        (RV::Complex(_), _) => {
+            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_REM, rhs, "Complex");
+            vm.set_error(err);
+            return None;
+        }
+        _ => {
+            return vm.invoke_method_simple(globals, IdentId::_REM, lhs, &[rhs]);
+        }
+    };
+    Some(v)
+}
 
 binop_values_no_opt!(
     (add, IdentId::_ADD),
@@ -199,120 +338,6 @@ pub(crate) extern "C" fn pow_values(
         }
         _ => {
             return vm.invoke_method_simple(globals, IdentId::_POW, lhs, &[rhs]);
-        }
-    };
-    Some(v)
-}
-
-pub(crate) extern "C" fn div_values(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lhs: Value,
-    rhs: Value,
-) -> Option<Value> {
-    let v = match (lhs.unpack(), rhs.unpack()) {
-        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            Value::integer(lhs.div_floor(rhs))
-        }
-        (RV::Fixnum(lhs), RV::BigInt(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            Value::bigint(BigInt::from(lhs).div_floor(rhs))
-        }
-        (RV::Fixnum(lhs), RV::Float(rhs)) => Value::float((lhs as f64).div(&rhs)),
-        (RV::Fixnum(lhs), RV::Complex(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            let lhs = num::complex::Complex::from(Real::from(lhs));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::BigInt(lhs), RV::Fixnum(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            Value::bigint(lhs.div_floor(&BigInt::from(rhs)))
-        }
-        (RV::BigInt(lhs), RV::BigInt(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            Value::bigint(lhs.div_floor(rhs))
-        }
-        (RV::BigInt(lhs), RV::Float(rhs)) => Value::float((lhs.to_f64().unwrap()).div(&rhs)),
-        (RV::BigInt(lhs), RV::Complex(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            let lhs = num::complex::Complex::from(Real::from(lhs.clone()));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_DIV, rhs, "Integer");
-            vm.set_error(err);
-            return None;
-        }
-
-        (RV::Float(lhs), RV::Fixnum(rhs)) => Value::float(lhs.div(&(rhs as f64))),
-        (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.div(&rhs.to_f64().unwrap())),
-        (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.div(&rhs)),
-        (RV::Float(lhs), RV::Complex(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            let lhs = num::complex::Complex::from(Real::from(lhs));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Float(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_DIV, rhs, "Float");
-            vm.set_error(err);
-            return None;
-        }
-        (RV::Complex(lhs), RV::Fixnum(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            let rhs = num::complex::Complex::from(Real::from(rhs));
-            Value::complex_from((*lhs).div(rhs))
-        }
-        (RV::Complex(lhs), RV::BigInt(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            let rhs = num::complex::Complex::from(Real::from(rhs.clone()));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Complex(lhs), RV::Float(rhs)) => {
-            let rhs = num::complex::Complex::from(Real::from(rhs));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Complex(lhs), RV::Complex(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Complex(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_DIV, rhs, "Complex");
-            vm.set_error(err);
-            return None;
-        }
-        _ => {
-            return vm.invoke_method_simple(globals, IdentId::_DIV, lhs, &[rhs]);
         }
     };
     Some(v)
