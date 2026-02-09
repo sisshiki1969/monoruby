@@ -64,7 +64,7 @@ fn divmod(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             if rhs.check_zero_div() {
                 return Err(MonorubyErr::divide_by_zero());
             }
-            let (div, modulo) = lhs.div_mod(&rhs);
+            let (div, modulo) = lhs.ruby_div_mod(&rhs);
             (div.into(), modulo.into())
         }
         _ => return Err(MonorubyErr::cant_convert_into_float(globals, lfp.arg(0))),

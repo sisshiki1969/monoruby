@@ -135,14 +135,14 @@ impl std::ops::Mul<Real> for Real {
 impl std::ops::Div<Real> for Real {
     type Output = Real;
     fn div(self, other: Real) -> Self::Output {
-        (RealKind::from(self) / (RealKind::from(other))).into()
+        (RealKind::from(self).ruby_div(&RealKind::from(other))).into()
     }
 }
 
 impl std::ops::Rem<Real> for Real {
     type Output = Real;
     fn rem(self, other: Real) -> Self::Output {
-        (RealKind::from(self) % (RealKind::from(other))).into()
+        (RealKind::from(self).ruby_mod(&RealKind::from(other))).into()
     }
 }
 
@@ -270,6 +270,56 @@ impl std::convert::From<Real> for RealKind {
     }
 }
 
+impl RubyDivMod for RealKind {
+    type Output = (RealKind, RealKind);
+    fn ruby_div_mod(&self, other: &RealKind) -> Self::Output {
+        match (self, other) {
+            (RealKind::Integer(a), RealKind::Integer(b)) => {
+                let (d, m) = a.ruby_div_mod(b);
+                (RealKind::Integer(d), RealKind::Integer(m))
+            }
+            (RealKind::Integer(a), RealKind::BigInt(b)) => {
+                let (d, m) = BigInt::from(*a).ruby_div_mod(&b);
+                (RealKind::BigInt(d), RealKind::BigInt(m))
+            }
+            (RealKind::Integer(a), RealKind::Float(b)) => {
+                let (d, m) = (((*a as f64) / b).floor() as i64, (*a as f64).ruby_mod(b));
+                (RealKind::Integer(d), RealKind::Float(m))
+            }
+            (RealKind::BigInt(a), RealKind::Integer(b)) => {
+                let (d, m) = a.ruby_div_mod(&BigInt::from(*b));
+                (RealKind::BigInt(d), RealKind::BigInt(m))
+            }
+            (RealKind::BigInt(a), RealKind::BigInt(b)) => {
+                let (d, m) = a.ruby_div_mod(&b);
+                (RealKind::BigInt(d), RealKind::BigInt(m))
+            }
+            (RealKind::BigInt(a), RealKind::Float(b)) => {
+                let (d, m) = (
+                    (a.to_f64().unwrap() / b).floor(),
+                    a.to_f64().unwrap().ruby_mod(b),
+                );
+                (RealKind::Float(d), RealKind::Float(m))
+            }
+            (RealKind::Float(a), RealKind::Integer(b)) => {
+                let (d, m) = ((a / (*b as f64)).floor() as i64, a.ruby_mod(&(*b as f64)));
+                (RealKind::Integer(d), RealKind::Float(m))
+            }
+            (RealKind::Float(a), RealKind::BigInt(b)) => {
+                let (d, m) = (
+                    (a / b.to_f64().unwrap()).floor(),
+                    a.ruby_mod(&b.to_f64().unwrap()),
+                );
+                (RealKind::Float(d), RealKind::Float(m))
+            }
+            (RealKind::Float(a), RealKind::Float(b)) => {
+                let (d, m) = ((a / b).floor() as i64, a.ruby_mod(b));
+                (RealKind::Integer(d), RealKind::Float(m))
+            }
+        }
+    }
+}
+
 impl RealKind {
     pub fn expect(store: &Store, value: Value) -> Result<Self> {
         match Self::try_from(value) {
@@ -292,53 +342,6 @@ impl RealKind {
             RealKind::Integer(i) => i.is_zero(),
             RealKind::BigInt(b) => b.is_zero(),
             RealKind::Float(_) => false,
-        }
-    }
-
-    pub fn div_mod(&self, other: &RealKind) -> (RealKind, RealKind) {
-        match (self, other) {
-            (RealKind::Integer(a), RealKind::Integer(b)) => {
-                let (d, m) = idivmod(*a, *b);
-                (RealKind::Integer(d), RealKind::Integer(m))
-            }
-            (RealKind::Integer(a), RealKind::BigInt(b)) => {
-                let (d, m) = bdivmod(&BigInt::from(*a), &b);
-                (RealKind::BigInt(d), RealKind::BigInt(m))
-            }
-            (RealKind::Integer(a), RealKind::Float(b)) => {
-                let (d, m) = (((*a as f64) / b).floor() as i64, fmod(*a as f64, *b));
-                (RealKind::Integer(d), RealKind::Float(m))
-            }
-            (RealKind::BigInt(a), RealKind::Integer(b)) => {
-                let (d, m) = bdivmod(&a, &BigInt::from(*b));
-                (RealKind::BigInt(d), RealKind::BigInt(m))
-            }
-            (RealKind::BigInt(a), RealKind::BigInt(b)) => {
-                let (d, m) = bdivmod(&a, &b);
-                (RealKind::BigInt(d), RealKind::BigInt(m))
-            }
-            (RealKind::BigInt(a), RealKind::Float(b)) => {
-                let (d, m) = (
-                    (a.to_f64().unwrap() / b).floor(),
-                    fmod(a.to_f64().unwrap(), *b),
-                );
-                (RealKind::Float(d), RealKind::Float(m))
-            }
-            (RealKind::Float(a), RealKind::Integer(b)) => {
-                let (d, m) = ((a / (*b as f64)).floor() as i64, fmod(*a, *b as f64));
-                (RealKind::Integer(d), RealKind::Float(m))
-            }
-            (RealKind::Float(a), RealKind::BigInt(b)) => {
-                let (d, m) = (
-                    (a / b.to_f64().unwrap()).floor(),
-                    fmod(*a, b.to_f64().unwrap()),
-                );
-                (RealKind::Float(d), RealKind::Float(m))
-            }
-            (RealKind::Float(a), RealKind::Float(b)) => {
-                let (d, m) = ((a / b).floor() as i64, fmod(*a, *b));
-                (RealKind::Integer(d), RealKind::Float(m))
-            }
         }
     }
 }
@@ -382,52 +385,52 @@ macro_rules! binops {
 
 binops!((Add, add), (Sub, sub), (Mul, mul));
 
-impl std::ops::Div<RealKind> for RealKind {
+impl RubyDiv for RealKind {
     type Output = RealKind;
-    fn div(self, other: RealKind) -> Self::Output {
+    fn ruby_div(&self, other: &RealKind) -> Self::Output {
         match (self, other) {
-            (RealKind::Integer(a), RealKind::Integer(b)) => RealKind::Integer(idiv(a, b)),
+            (RealKind::Integer(a), RealKind::Integer(b)) => RealKind::Integer(a.ruby_div(&b)),
             (RealKind::Integer(a), RealKind::BigInt(b)) => {
-                RealKind::BigInt(bdiv(&BigInt::from(a), &b))
+                RealKind::BigInt(BigInt::from(*a).ruby_div(&b))
             }
-            (RealKind::Integer(a), RealKind::Float(b)) => RealKind::Float((a as f64).div(b)),
+            (RealKind::Integer(a), RealKind::Float(b)) => RealKind::Float((*a as f64).ruby_div(&b)),
             (RealKind::BigInt(a), RealKind::Integer(b)) => {
-                RealKind::BigInt(bdiv(&a, &BigInt::from(b)))
+                RealKind::BigInt(a.ruby_div(&BigInt::from(*b)))
             }
-            (RealKind::BigInt(a), RealKind::BigInt(b)) => RealKind::BigInt(bdiv(&a, &b)),
+            (RealKind::BigInt(a), RealKind::BigInt(b)) => RealKind::BigInt(a.ruby_div(&b)),
             (RealKind::BigInt(a), RealKind::Float(b)) => {
-                RealKind::Float(a.to_f64().unwrap().div(b))
+                RealKind::Float(a.to_f64().unwrap().ruby_div(&b))
             }
-            (RealKind::Float(a), RealKind::Integer(b)) => RealKind::Float(a.div(b as f64)),
+            (RealKind::Float(a), RealKind::Integer(b)) => RealKind::Float(a.ruby_div(&(*b as f64))),
             (RealKind::Float(a), RealKind::BigInt(b)) => {
-                RealKind::Float(a.div(b.to_f64().unwrap()))
+                RealKind::Float(a.ruby_div(&b.to_f64().unwrap()))
             }
-            (RealKind::Float(a), RealKind::Float(b)) => RealKind::Float(a.div(b)),
+            (RealKind::Float(a), RealKind::Float(b)) => RealKind::Float(a.ruby_div(&b)),
         }
     }
 }
 
-impl std::ops::Rem<RealKind> for RealKind {
+impl RubyMod for RealKind {
     type Output = RealKind;
-    fn rem(self, other: RealKind) -> Self::Output {
+    fn ruby_mod(&self, other: &RealKind) -> Self::Output {
         match (self, other) {
-            (RealKind::Integer(a), RealKind::Integer(b)) => RealKind::Integer(imod(a, b)),
+            (RealKind::Integer(a), RealKind::Integer(b)) => RealKind::Integer(a.ruby_mod(&b)),
             (RealKind::Integer(a), RealKind::BigInt(b)) => {
-                RealKind::BigInt(bmod(&BigInt::from(a), &b))
+                RealKind::BigInt(BigInt::from(*a).ruby_mod(&b))
             }
-            (RealKind::Integer(a), RealKind::Float(b)) => RealKind::Float(fmod(a as f64, b)),
+            (RealKind::Integer(a), RealKind::Float(b)) => RealKind::Float((*a as f64).ruby_mod(&b)),
             (RealKind::BigInt(a), RealKind::Integer(b)) => {
-                RealKind::BigInt(bmod(&a, &BigInt::from(b)))
+                RealKind::BigInt(a.ruby_mod(&BigInt::from(*b)))
             }
-            (RealKind::BigInt(a), RealKind::BigInt(b)) => RealKind::BigInt(bmod(&a, &b)),
+            (RealKind::BigInt(a), RealKind::BigInt(b)) => RealKind::BigInt(a.ruby_mod(&b)),
             (RealKind::BigInt(a), RealKind::Float(b)) => {
-                RealKind::Float(fmod(a.to_f64().unwrap(), b))
+                RealKind::Float(a.to_f64().unwrap().ruby_mod(&b))
             }
-            (RealKind::Float(a), RealKind::Integer(b)) => RealKind::Float(fmod(a, b as f64)),
+            (RealKind::Float(a), RealKind::Integer(b)) => RealKind::Float(a.ruby_mod(&(*b as f64))),
             (RealKind::Float(a), RealKind::BigInt(b)) => {
-                RealKind::Float(fmod(a, b.to_f64().unwrap()))
+                RealKind::Float(a.ruby_mod(&b.to_f64().unwrap()))
             }
-            (RealKind::Float(a), RealKind::Float(b)) => RealKind::Float(fmod(a, b)),
+            (RealKind::Float(a), RealKind::Float(b)) => RealKind::Float(a.ruby_mod(&b)),
         }
     }
 }
@@ -481,99 +484,168 @@ impl RealKind {
 }
 
 ///
-/// division of integers.
+/// the division-modulo trait.
 ///
-/// we must overflow when lhs == i64::MIN && rhs == -1, but it is not neccesary to handle it because lhs/rhs is i63.
+/// the logic in CRuby is as follows;
 ///
-#[inline]
-fn idiv(lhs: i64, rhs: i64) -> i64 {
-    if lhs > 0 && rhs < 0 {
-        ((lhs - 1) / rhs) - 1
-    } else if lhs < 0 && rhs > 0 {
-        ((lhs + 1) / rhs) - 1
-    } else {
-        lhs / rhs
+/// ~~~Ruby
+/// rb_fix_divmod_fix(VALUE a, VALUE b, VALUE *divp, VALUE *modp)
+/// {
+///     /* assume / and % comply C99.
+///      * ldiv(3) won't be inlined by GCC and clang.
+///      * I expect / and % are compiled as single idiv.
+///      */
+///     long x = FIX2LONG(a);
+///     long y = FIX2LONG(b);
+///     long div, mod;
+///     if (x == FIXNUM_MIN && y == -1) {
+///         if (divp) *divp = LONG2NUM(-FIXNUM_MIN);
+///         if (modp) *modp = LONG2FIX(0);
+///         return;
+///     }
+///     div = x / y;
+///     mod = x % y;
+///     if (y > 0 ? mod < 0 : mod > 0) {
+///         mod += y;
+///         div -= 1;
+///     }
+///     if (divp) *divp = LONG2FIX(div);
+///     if (modp) *modp = LONG2FIX(mod);
+/// }
+/// ~~~
+pub trait RubyDivMod<Rhs = Self> {
+    type Output;
+    fn ruby_div_mod(&self, rhs: &Rhs) -> Self::Output;
+}
+
+impl RubyDivMod for i64 {
+    type Output = (i64, i64);
+    #[inline]
+    fn ruby_div_mod(&self, rhs: &i64) -> Self::Output {
+        if *self > 0 && *rhs < 0 {
+            let (div, modulo) = (*self - 1).div_rem(rhs);
+            (div - 1, modulo + rhs + 1)
+        } else if *self < 0 && *rhs > 0 {
+            let (div, modulo) = (*self + 1).div_rem(rhs);
+            (div - 1, modulo + rhs - 1)
+        } else {
+            self.div_rem(rhs)
+        }
     }
 }
 
-///
-/// modulo of integers.
-///
-/// we must overflow when lhs == i64::MIN && rhs == -1, but it is not neccesary to handle it because lhs/rhs is i63.
-///
-#[inline]
-fn imod(lhs: i64, rhs: i64) -> i64 {
-    if lhs > 0 && rhs < 0 {
-        ((lhs - 1) % rhs) + rhs + 1
-    } else if lhs < 0 && rhs > 0 {
-        ((lhs + 1) % rhs) + rhs - 1
-    } else {
-        lhs % rhs
+impl RubyDivMod for f64 {
+    type Output = (f64, f64);
+    #[inline]
+    fn ruby_div_mod(&self, rhs: &f64) -> Self::Output {
+        let div = (self / rhs).floor();
+        let modulo = if *self > 0.0 && *rhs < 0.0 || *self < 0.0 && *rhs > 0.0 {
+            *self % *rhs + *rhs
+        } else {
+            *self % *rhs
+        };
+        (div, modulo)
     }
 }
 
-#[inline]
-fn idivmod(lhs: i64, rhs: i64) -> (i64, i64) {
-    if lhs > 0 && rhs < 0 {
-        let (div, modulo) = (lhs - 1).div_rem(&rhs);
-        (div - 1, modulo + rhs + 1)
-    } else if lhs < 0 && rhs > 0 {
-        let (div, modulo) = (lhs + 1).div_rem(&rhs);
-        (div - 1, modulo + rhs - 1)
-    } else {
-        lhs.div_rem(&rhs)
+impl RubyDivMod for BigInt {
+    type Output = (BigInt, BigInt);
+    #[inline]
+    fn ruby_div_mod(&self, rhs: &BigInt) -> Self::Output {
+        if self > &BigInt::zero() && rhs < &BigInt::zero() {
+            let (div, modulo) = (self - 1i32).div_rem(rhs);
+            (div - 1, modulo + rhs + 1)
+        } else if self < &BigInt::zero() && rhs > &BigInt::zero() {
+            let (div, modulo) = (self + 1i32).div_rem(rhs);
+            (div - 1, modulo + rhs - 1)
+        } else {
+            self.div_rem(rhs)
+        }
     }
 }
 
-///
-/// division of bignums.
-///
-#[inline]
-fn bdiv(lhs: &BigInt, rhs: &BigInt) -> BigInt {
-    if lhs > &BigInt::zero() && rhs < &BigInt::zero() {
-        ((lhs - 1) / rhs) - 1
-    } else if lhs < &BigInt::zero() && rhs > &BigInt::zero() {
-        ((lhs + 1) / rhs) - 1
-    } else {
-        lhs / rhs
+pub trait RubyDiv<Rhs = Self> {
+    type Output;
+    fn ruby_div(&self, rhs: &Rhs) -> Self::Output;
+}
+
+impl RubyDiv for i64 {
+    type Output = i64;
+    #[inline]
+    fn ruby_div(&self, rhs: &i64) -> Self::Output {
+        if *self > 0 && *rhs < 0 {
+            ((*self - 1) / *rhs) - 1
+        } else if *self < 0 && *rhs > 0 {
+            ((*self + 1) / *rhs) - 1
+        } else {
+            *self / *rhs
+        }
     }
 }
 
-///
-/// modulo of bignums.
-///
-#[inline]
-fn bmod(lhs: &BigInt, rhs: &BigInt) -> BigInt {
-    if lhs > &BigInt::zero() && rhs < &BigInt::zero() {
-        ((lhs - 1) % rhs) + rhs + 1
-    } else if lhs < &BigInt::zero() && rhs > &BigInt::zero() {
-        ((lhs + 1) % rhs) + rhs - 1
-    } else {
-        lhs % rhs
+impl RubyDiv for f64 {
+    type Output = f64;
+    #[inline]
+    fn ruby_div(&self, rhs: &f64) -> Self::Output {
+        self / rhs
     }
 }
 
-#[inline]
-fn bdivmod(lhs: &BigInt, rhs: &BigInt) -> (BigInt, BigInt) {
-    if lhs > &BigInt::zero() && rhs < &BigInt::zero() {
-        let (div, modulo) = (lhs - 1i32).div_rem(rhs);
-        (div - 1, modulo + rhs + 1)
-    } else if lhs < &BigInt::zero() && rhs > &BigInt::zero() {
-        let (div, modulo) = (lhs + 1i32).div_rem(rhs);
-        (div + 1, modulo + rhs - 1)
-    } else {
-        lhs.div_rem(&rhs)
+impl RubyDiv for BigInt {
+    type Output = BigInt;
+    #[inline]
+    fn ruby_div(&self, rhs: &BigInt) -> Self::Output {
+        if self > &BigInt::zero() && rhs < &BigInt::zero() {
+            ((self - 1) / rhs) - 1
+        } else if self < &BigInt::zero() && rhs > &BigInt::zero() {
+            ((self + 1) / rhs) - 1
+        } else {
+            self / rhs
+        }
     }
 }
 
-///
-/// modulo of floats.
-///
-#[inline]
-fn fmod(lhs: f64, rhs: f64) -> f64 {
-    if lhs > 0.0 && rhs < 0.0 || lhs < 0.0 && rhs > 0.0 {
-        lhs % rhs + rhs
-    } else {
-        lhs % rhs
+pub trait RubyMod<Rhs = Self> {
+    type Output;
+    fn ruby_mod(&self, rhs: &Rhs) -> Self::Output;
+}
+
+impl RubyMod for i64 {
+    type Output = i64;
+    #[inline]
+    fn ruby_mod(&self, rhs: &i64) -> Self::Output {
+        if *self > 0 && *rhs < 0 {
+            ((*self - 1) % *rhs) + *rhs + 1
+        } else if *self < 0 && *rhs > 0 {
+            ((*self + 1) % *rhs) + *rhs - 1
+        } else {
+            *self % *rhs
+        }
+    }
+}
+
+impl RubyMod for f64 {
+    type Output = f64;
+    #[inline]
+    fn ruby_mod(&self, rhs: &f64) -> Self::Output {
+        if *self > 0.0 && *rhs < 0.0 || *self < 0.0 && *rhs > 0.0 {
+            *self % *rhs + *rhs
+        } else {
+            *self % *rhs
+        }
+    }
+}
+
+impl RubyMod for BigInt {
+    type Output = BigInt;
+    #[inline]
+    fn ruby_mod(&self, rhs: &BigInt) -> Self::Output {
+        if self > &BigInt::zero() && rhs < &BigInt::zero() {
+            ((self - 1) % rhs) + rhs + 1
+        } else if self < &BigInt::zero() && rhs > &BigInt::zero() {
+            ((self + 1) % rhs) + rhs - 1
+        } else {
+            self % rhs
+        }
     }
 }

@@ -116,7 +116,7 @@ pub(crate) extern "C" fn div_values(
                 vm.err_divide_by_zero();
                 return None;
             } else {
-                return Some((lhs / rhs).into());
+                return Some((lhs.ruby_div(&rhs)).into());
             }
         }
         _ => {}
@@ -202,7 +202,7 @@ pub(crate) extern "C" fn rem_values(
                 vm.err_divide_by_zero();
                 return None;
             } else {
-                return Some((lhs % rhs).into());
+                return Some((lhs.ruby_mod(&rhs)).into());
             }
         }
         _ => {}
