@@ -223,16 +223,8 @@ impl AbstractFrame {
                     return Value::check_fixnum(result);
                 }
             }
-            BinOpK::Div => {
-                if let Some(result) = lhs.checked_div(rhs) {
-                    return Value::check_fixnum(result);
-                }
-            }
-            BinOpK::Rem => {
-                if let Some(result) = lhs.checked_rem(rhs) {
-                    return Value::check_fixnum(result);
-                }
-            }
+            BinOpK::Div => return Value::check_fixnum(lhs.ruby_div(&rhs)),
+            BinOpK::Rem => return Value::check_fixnum(lhs.ruby_mod(&rhs)),
             BinOpK::Exp => {
                 if let Ok(rhs) = u32::try_from(rhs)
                     && let Some(result) = lhs.checked_pow(rhs)
@@ -324,9 +316,9 @@ impl AbstractFrame {
             BinOpK::Add => lhs + rhs,
             BinOpK::Sub => lhs - rhs,
             BinOpK::Mul => lhs * rhs,
-            BinOpK::Div => lhs / rhs,
+            BinOpK::Div => lhs.ruby_div(&rhs),
+            BinOpK::Rem => lhs.ruby_mod(&rhs),
             BinOpK::Exp => lhs.powf(rhs),
-            BinOpK::Rem => lhs.rem_euclid(rhs),
             _ => return None,
         })
     }
