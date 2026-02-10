@@ -1,3 +1,5 @@
+use num::Zero;
+
 use crate::bytecodegen::BinOpK;
 
 use super::*;
@@ -223,8 +225,18 @@ impl AbstractFrame {
                     return Value::check_fixnum(result);
                 }
             }
-            BinOpK::Div => return Value::check_fixnum(lhs.ruby_div(&rhs)),
-            BinOpK::Rem => return Value::check_fixnum(lhs.ruby_mod(&rhs)),
+            BinOpK::Div => {
+                if rhs.is_zero() {
+                    return None;
+                }
+                return Value::check_fixnum(lhs.ruby_div(&rhs));
+            }
+            BinOpK::Rem => {
+                if rhs.is_zero() {
+                    return None;
+                }
+                return Value::check_fixnum(lhs.ruby_mod(&rhs));
+            }
             BinOpK::Exp => {
                 if let Ok(rhs) = u32::try_from(rhs)
                     && let Some(result) = lhs.checked_pow(rhs)

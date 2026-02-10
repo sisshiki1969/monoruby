@@ -1189,6 +1189,9 @@ impl Guarded {
             Guarded::Fixnum
         } else if v.is_float() {
             Guarded::Float
+        } else if v.class() == INTEGER_CLASS {
+            // Bignum is not Guarded::Fixnum.
+            Guarded::Value
         } else {
             Guarded::Class(v.class())
         }

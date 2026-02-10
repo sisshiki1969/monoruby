@@ -261,7 +261,8 @@ impl Value {
         if let Some(rv) = self.try_rvalue_mut() {
             rv.change_class(new_class_id);
         } else {
-            unreachable!("the class of primitive class can not be changed.");
+            let class = self.class();
+            unreachable!("the class of primitive class {class:?} can not be changed.");
         }
     }
 
