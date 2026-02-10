@@ -1,4 +1,4 @@
-a = 47
-40.times {
-	puts a % -5
+a = -47
+25.times {
+	puts a % 5
 }
