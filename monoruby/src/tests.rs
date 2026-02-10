@@ -47,7 +47,7 @@ pub fn run_tests(codes: &[String]) {
     let wrapped = format!(
         r##"
       __res = ({0})
-      for __i in 0..25 do
+      25.times do
           __res2 = ({0})
           __assert(__res, __res2)
       end
