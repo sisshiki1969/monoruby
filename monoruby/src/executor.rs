@@ -102,7 +102,9 @@ impl Executor {
         let mut executor = Self::default();
         let path = dirs::home_dir()
             .unwrap()
-            .join(".monoruby/builtins/startup.rb");
+            .join(".monoruby")
+            .join("builtins")
+            .join("startup.rb");
         executor.require(globals, &path, false)?;
         if !globals.no_gems {
             executor.load_gems(globals);
