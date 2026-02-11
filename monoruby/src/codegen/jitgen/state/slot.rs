@@ -402,6 +402,7 @@ impl SlotState {
     ///
     #[allow(non_snake_case)]
     pub(crate) fn def_C(&mut self, slot: impl Into<Option<SlotId>>, v: Value) {
+        assert!(v.is_frozen_literal(), "{:?}", v);
         if let Some(slot) = slot.into() {
             self.discard(slot);
             self.set_mode(slot, LinkMode::C(v));
@@ -494,6 +495,14 @@ impl SlotState {
     pub fn is_float_literal(&self, slot: SlotId) -> Option<f64> {
         if let LinkMode::C(v) = self.mode(slot) {
             v.try_float()
+        } else {
+            None
+        }
+    }
+
+    pub fn is_range_literal(&self, slot: SlotId) -> Option<RangeInner> {
+        if let LinkMode::C(v) = self.mode(slot) {
+            v.is_range().cloned()
         } else {
             None
         }
@@ -1036,6 +1045,8 @@ pub(in crate::codegen::jitgen) enum LinkMode {
     Sf(Xmm, SfGuarded),
     ///
     /// Concrete value.
+    ///
+    /// The `Value` must be a packed value or Float or Range object.
     ///
     C(Value),
 }

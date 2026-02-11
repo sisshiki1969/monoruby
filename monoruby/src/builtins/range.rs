@@ -68,6 +68,13 @@ fn range_begin(
         return false;
     }
     let dst = callsite.dst;
+    if let Some(range) = state.is_range_literal(callsite.recv) {
+        let start = range.start();
+        if start.is_frozen_literal() {
+            state.def_C(dst, start);
+            return true;
+        }
+    }
     state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _| {
         monoasm! { &mut r#gen.jit,
@@ -103,6 +110,13 @@ fn range_end(
         return false;
     }
     let dst = callsite.dst;
+    if let Some(range) = state.is_range_literal(callsite.recv) {
+        let end = range.end();
+        if end.is_frozen_literal() {
+            state.def_C(dst, end);
+            return true;
+        }
+    }
     state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _| {
         monoasm! { &mut r#gen.jit,
@@ -136,6 +150,11 @@ fn range_exclude_end(
         return false;
     }
     let dst = callsite.dst;
+    if let Some(range) = state.is_range_literal(callsite.recv) {
+        let exclude_end = range.exclude_end();
+        state.def_C(dst, Value::bool(exclude_end));
+        return true;
+    }
     state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _| {
         monoasm! { &mut r#gen.jit,
@@ -441,6 +460,24 @@ mod tests {
         a
         "#,
         );
+        run_test(
+            r#"
+        a = 0
+        (10..5).each do |x|
+            a += x
+        end
+        a
+        "#,
+        );
+        run_test(
+            r#"
+        a = ''
+        ('a'...'z').each do |x|
+            a += x
+        end
+        a
+        "#,
+        );
     }
 
     #[test]
@@ -573,8 +610,31 @@ mod tests {
         res << (0..4).bsearch {|i| 100 - ary[i] } # => 1, 2 or 3
         res << (0..4).bsearch {|i| 300 - ary[i] } # => nil
         res << (0..4).bsearch {|i|  50 - ary[i] } # => nil
+
+        res << (10..4).bsearch {|i| 100 - ary[i] }
+        res << (10..4).bsearch {|i| 300 - ary[i] }
+        res << (10..4).bsearch {|i|  50 - ary[i] }
         
         res
+        "##,
+        );
+    }
+
+    #[test]
+    fn reject() {
+        run_test(
+            r##"
+        (1..6).reject {|i| i % 2 == 0 }
+        "##,
+        );
+        run_test(
+            r##"
+        (1...6).reject {|i| i % 2 == 0 }
+        "##,
+        );
+        run_test(
+            r##"
+        (10..6).reject {|i| i % 2 == 0 }
         "##,
         );
     }

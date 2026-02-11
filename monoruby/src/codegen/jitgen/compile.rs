@@ -169,7 +169,7 @@ impl<'a> JitContext<'a> {
                 state.def_C(dst, i);
             }
             TraceIr::Literal(dst, val) => {
-                if val.is_packed_value() || val.is_float() {
+                if val.is_frozen_literal() {
                     state.def_C(dst, val);
                 } else {
                     state.discard(dst);

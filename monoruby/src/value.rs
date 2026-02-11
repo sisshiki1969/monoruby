@@ -367,7 +367,7 @@ impl Value {
         Immediate::flonum(num).map(|imm| imm.into())
     }
 
-    fn is_i63(num: i64) -> bool {
+    pub fn is_i63(num: i64) -> bool {
         let top = ((num as u64) >> 62) ^ ((num as u64) >> 63);
         top & 0b1 == 0
     }
@@ -760,6 +760,13 @@ impl Value {
     ///
     pub fn is_packed_value(&self) -> bool {
         self.0.get() & 0b0111 != 0
+    }
+
+    ///
+    /// Check if `self` is an immediate, Float or Range object.
+    ///
+    pub fn is_frozen_literal(&self) -> bool {
+        self.is_packed_value() || self.is_float() || self.is_range().is_some()
     }
 
     ///
