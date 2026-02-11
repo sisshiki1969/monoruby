@@ -367,7 +367,7 @@ impl Value {
         Immediate::flonum(num).map(|imm| imm.into())
     }
 
-    fn is_i63(num: i64) -> bool {
+    pub fn is_i63(num: i64) -> bool {
         let top = ((num as u64) >> 62) ^ ((num as u64) >> 63);
         top & 0b1 == 0
     }

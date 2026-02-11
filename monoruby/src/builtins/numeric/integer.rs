@@ -246,16 +246,23 @@ fn integer_succ(
         return false;
     }
     let CallSiteInfo { dst, recv, .. } = *callsite;
+    if let Some(i) = state.is_fixnum_literal(recv)
+        && Value::is_i63(i + 1)
+    {
+        state.def_C(dst, Value::integer(i + 1));
+        return true;
+    }
+
+    let deopt = ir.new_deopt(state);
+    state.load(ir, recv, GP::Rdi);
+    ir.inline(move |r#gen, _, labels| {
+        let deopt = &labels[deopt];
+        monoasm! { &mut r#gen.jit,
+            addq  rdi, 2;
+            jo    deopt;
+        }
+    });
     if let Some(dst) = dst {
-        let deopt = ir.new_deopt(state);
-        state.load(ir, recv, GP::Rdi);
-        ir.inline(move |r#gen, _, labels| {
-            let deopt = &labels[deopt];
-            monoasm! { &mut r#gen.jit,
-                addq  rdi, 2;
-                jo    deopt;
-            }
-        });
         state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     }
     true
@@ -697,6 +704,12 @@ mod tests {
         res
         "##,
         );
+    }
+
+    #[test]
+    fn succ() {
+        run_test("253.succ.succ.succ");
+        run_test_with_prelude("$a.succ.succ.succ", "$a = 100");
     }
 
     #[test]

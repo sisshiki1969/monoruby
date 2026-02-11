@@ -100,16 +100,10 @@ impl Executor {
         globals.set_gvar(IdentId::get_id("$0"), program_name);
         globals.set_gvar(IdentId::get_id("$PROGRAM_NAME"), program_name);
         let mut executor = Self::default();
-        let path = dirs::home_dir().unwrap().join(".monoruby").join("builtins");
-        for file in [
-            "startup.rb",
-            "comparable.rb",
-            "enumerable.rb",
-            "builtins.rb",
-            "pathname_builtins.rb",
-        ] {
-            executor.require(globals, &path.clone().join(file), false)?;
-        }
+        let path = dirs::home_dir()
+            .unwrap()
+            .join(".monoruby/builtins/startup.rb");
+        executor.require(globals, &path, false)?;
         if !globals.no_gems {
             executor.load_gems(globals);
         }
