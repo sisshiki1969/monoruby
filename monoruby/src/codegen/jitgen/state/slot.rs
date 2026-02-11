@@ -499,9 +499,9 @@ impl SlotState {
         }
     }
 
-    pub fn is_range_literal(&self, slot: SlotId) -> Option<&RangeInner> {
+    pub fn is_range_literal(&self, slot: SlotId) -> Option<RangeInner> {
         if let LinkMode::C(v) = self.mode(slot) {
-            v.is_range()
+            v.is_range().cloned()
         } else {
             None
         }
@@ -1044,6 +1044,8 @@ pub(in crate::codegen::jitgen) enum LinkMode {
     Sf(Xmm, SfGuarded),
     ///
     /// Concrete value.
+    ///
+    /// The `Value` must be a packed value or Float or Range object.
     ///
     C(Value),
 }

@@ -155,16 +155,20 @@ impl AbstractFrame {
 
     #[allow(non_snake_case)]
     fn load_xmm_from_C(&mut self, ir: &mut AsmIr, slot: SlotId, v: Value) -> Xmm {
-        if let Some(f) = v.try_float() {
-            // -> F
-            self.load_xmm_from_f64(ir, slot, f)
-        } else if let Some(i) = v.try_fixnum() {
-            // -> Sf
-            let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
-            ir.i64_to_stack_and_xmm(i, slot, x);
-            x
-        } else {
-            unreachable!()
+        match v.unpack() {
+            RV::Float(f) => {
+                // -> F
+                self.load_xmm_from_f64(ir, slot, f)
+            }
+            RV::Fixnum(i) => {
+                // -> Sf
+                let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
+                ir.i64_to_stack_and_xmm(i, slot, x);
+                x
+            }
+            _ => {
+                unreachable!("load_xmm_from_C() {:?}", v);
+            }
         }
     }
 
