@@ -22,11 +22,19 @@ class Integer
   end
 
   def step(limit, step = 1)
+    raise ArgumentError, "step can't be 0" if step == 0
     return self.to_enum(:step, limit, step) unless block_given?
     i = self
-    while i <= limit
-      yield i
-      i += step
+    if step > 0
+      while i <= limit
+        yield i
+        i += step
+      end
+    else # step < 0
+      while i >= limit
+        yield i
+        i += step
+      end
     end
     self
   end
