@@ -794,7 +794,13 @@ impl<'a> BytecodeGen<'a> {
         match self.iseq().locals.get(&name) {
             Some(r) => Some((*r).into()),
             None => {
-                assert_eq!(Some(name), self.block_param);
+                if Some(name) != self.block_param {
+                    unreachable!(
+                        "undefined local variable: {} {:?}",
+                        ident,
+                        self.iseq().locals
+                    )
+                };
                 None
             }
         }
@@ -1783,8 +1789,8 @@ impl Visitor {
             NodeKind::UndefMethod(box undef) => {
                 self.visit(undef);
             }
-            NodeKind::Defined(box node) => {
-                self.visit(node);
+            NodeKind::Defined(_) => {
+                //self.visit(node);
             }
         }
     }

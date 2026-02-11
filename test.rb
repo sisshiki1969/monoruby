@@ -1,9 +1,7 @@
- def f
- 	eval("a = 42", $b)
- end
- 
- $b = binding
- 
- a = 100
- f
- puts a
+50.times do
+  i = 0
+  10000000.times do
+    i = i.succ
+  end
+  p i
+end

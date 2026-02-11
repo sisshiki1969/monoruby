@@ -42,7 +42,11 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                             || self.consume_punct_no_term(Punct::Scope)?
                         {
                             (
-                                Some(Node::new_lvar(s, 0, loc)),
+                                if let Some(outer) = self.is_local_var(&s) {
+                                    Some(Node::new_lvar(s, outer, loc))
+                                } else {
+                                    Some(Node::new_identifier(s, loc))
+                                },
                                 self.read_method_name(true)?.0,
                             )
                         } else {

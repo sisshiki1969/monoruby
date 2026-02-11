@@ -115,6 +115,9 @@ impl Codegen {
             }
             BinOpK::Div => {
                 let zero_div = self.jit.label();
+                let exit = self.jit.label();
+                let negative_divisor = self.jit.label();
+                let dec = self.jit.label();
                 monoasm!( &mut self.jit,
                     sarq R(rhs_r), 1;
                     testq R(rhs_r), R(rhs_r);
@@ -123,6 +126,20 @@ impl Codegen {
                     sarq rax, 1;
                     cqo;
                     idiv R(rhs_r);
+                    // rdx: remainder
+                    // rax: quotient
+                    // rhs: divisor
+                    testq R(rhs_r), R(rhs_r);
+                    js negative_divisor;
+                    testq rdx, rdx;
+                    js dec;
+                    jmp exit;
+                negative_divisor:
+                    testq rdx, rdx;
+                    jle exit;
+                dec:
+                    subq rax, 1;
+                exit:
                     salq rax, 1;
                     orq  rax, 1;
                 );
@@ -136,6 +153,9 @@ impl Codegen {
             }
             BinOpK::Rem => {
                 let zero_div = self.jit.label();
+                let exit = self.jit.label();
+                let negative_divisor = self.jit.label();
+                let dec = self.jit.label();
                 monoasm!( &mut self.jit,
                     sarq R(rhs_r), 1;
                     testq R(rhs_r), R(rhs_r);
@@ -144,6 +164,20 @@ impl Codegen {
                     sarq rax, 1;
                     cqo;
                     idiv R(rhs_r);
+                    // rdx: remainder
+                    // rax: quotient
+                    // rhs: divisor
+                    testq R(rhs_r), R(rhs_r);
+                    js negative_divisor;
+                    testq rdx, rdx;
+                    js dec;
+                    jmp exit;
+                negative_divisor:
+                    testq rdx, rdx;
+                    jle exit;
+                dec:
+                    addq rdx, R(rhs_r);
+                exit:
                     movq rax, rdx;
                     salq rax, 1;
                     orq  rax, 1;
