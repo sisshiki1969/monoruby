@@ -16,7 +16,13 @@ pub(super) fn init(globals: &mut Globals) {
         0,
     );
     globals.define_builtin_inline_funcs(RANGE_CLASS, "end", &["last"], end, Box::new(range_end), 0);
-    globals.define_builtin_func(RANGE_CLASS, "exclude_end?", exclude_end, 0);
+    globals.define_builtin_inline_func(
+        RANGE_CLASS,
+        "exclude_end?",
+        exclude_end,
+        Box::new(range_exclude_end),
+        0,
+    );
     globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
     //globals.define_builtin_func(RANGE_CLASS, "reject", reject, 0);
     globals.define_builtin_func(RANGE_CLASS, "include?", include_, 1);
@@ -115,6 +121,32 @@ fn range_end(
 #[monoruby_builtin]
 fn exclude_end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_range().exclude_end()))
+}
+
+fn range_exclude_end(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let dst = callsite.dst;
+    state.load(ir, callsite.recv, GP::Rdi);
+    ir.inline(move |r#gen, _, _| {
+        monoasm! { &mut r#gen.jit,
+            movl rax, [rdi + (crate::rvalue::RANGE_EXCLUDE_END_OFFSET as i32)];
+            shlq rax, 3;
+            orq  rax, (FALSE_VALUE);
+        }
+    });
+
+    state.def_reg2acc(ir, GP::Rax, dst);
+    true
 }
 
 ///

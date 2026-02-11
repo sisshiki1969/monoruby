@@ -1,4 +1,7 @@
-a = -47
-25.times {
-	puts a % 5
-}
+50.times do
+  i = 0
+  10000000.times do
+    i = i.succ
+  end
+  p i
+end

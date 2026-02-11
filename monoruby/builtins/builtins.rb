@@ -191,9 +191,9 @@ class Hash
 end
 
 class Integer
-  def succ
-    self + 1
-  end
+  #def succ
+  #  self + 1
+  #end
 
   def positive?
     self > 0
@@ -278,6 +278,18 @@ class Range
   include Enumerable
   
   alias first begin
+
+  def each
+    return self.to_enum(:each) unless block_given?
+    i = self.begin
+    e = self.end
+    e = e.succ unless self.exclude_end?
+    while i != e
+      yield i
+      i = i.succ
+    end
+    self
+  end
   
   def reject
     return self.to_enum(:reject) unless block_given?
