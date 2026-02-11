@@ -23,15 +23,25 @@ class Range
   
   def reject
     return self.to_enum(:reject) unless block_given?
-    elem = self.begin
+    i = self.begin
+    raise TypeError,"can't iterate from NilClass" if i.nil?
     e = self.end
-    e = e.succ unless self.exclude_end?
     res = []
-    while elem != e
-      if !yield(elem)
-        res << elem
+    if e.nil?
+      while true
+        unless yield(i)
+          res << i
+        end
+        i = i.succ
       end
-      elem = elem.succ
+    else
+      e = e.succ unless self.exclude_end?
+      while i < e
+        unless yield(i)
+          res << i
+        end
+        i = i.succ
+      end
     end
     res
   end
