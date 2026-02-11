@@ -70,8 +70,10 @@ fn range_begin(
     let dst = callsite.dst;
     if let Some(range) = state.is_range_literal(callsite.recv) {
         let start = range.start();
-        state.def_C(dst, start);
-        return true;
+        if start.is_frozen_literal() {
+            state.def_C(dst, start);
+            return true;
+        }
     }
     state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _| {
@@ -110,8 +112,10 @@ fn range_end(
     let dst = callsite.dst;
     if let Some(range) = state.is_range_literal(callsite.recv) {
         let end = range.end();
-        state.def_C(dst, end);
-        return true;
+        if end.is_frozen_literal() {
+            state.def_C(dst, end);
+            return true;
+        }
     }
     state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _| {
@@ -456,6 +460,24 @@ mod tests {
         a
         "#,
         );
+        run_test(
+            r#"
+        a = 0
+        (10..5).each do |x|
+            a += x
+        end
+        a
+        "#,
+        );
+        run_test(
+            r#"
+        a = ''
+        ('a'...'z').each do |x|
+            a += x
+        end
+        a
+        "#,
+        );
     }
 
     #[test]
@@ -588,8 +610,31 @@ mod tests {
         res << (0..4).bsearch {|i| 100 - ary[i] } # => 1, 2 or 3
         res << (0..4).bsearch {|i| 300 - ary[i] } # => nil
         res << (0..4).bsearch {|i|  50 - ary[i] } # => nil
+
+        res << (10..4).bsearch {|i| 100 - ary[i] }
+        res << (10..4).bsearch {|i| 300 - ary[i] }
+        res << (10..4).bsearch {|i|  50 - ary[i] }
         
         res
+        "##,
+        );
+    }
+
+    #[test]
+    fn reject() {
+        run_test(
+            r##"
+        (1..6).reject {|i| i % 2 == 0 }
+        "##,
+        );
+        run_test(
+            r##"
+        (1...6).reject {|i| i % 2 == 0 }
+        "##,
+        );
+        run_test(
+            r##"
+        (10..6).reject {|i| i % 2 == 0 }
         "##,
         );
     }

@@ -763,6 +763,13 @@ impl Value {
     }
 
     ///
+    /// Check if `self` is an immediate, Float or Range object.
+    ///
+    pub fn is_frozen_literal(&self) -> bool {
+        self.is_packed_value() || self.is_float() || self.is_range().is_some()
+    }
+
+    ///
     /// Get a reference to RValue from `self`.
     ///
     /// return None if `self` was a packed value.

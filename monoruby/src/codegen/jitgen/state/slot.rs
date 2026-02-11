@@ -402,6 +402,7 @@ impl SlotState {
     ///
     #[allow(non_snake_case)]
     pub(crate) fn def_C(&mut self, slot: impl Into<Option<SlotId>>, v: Value) {
+        assert!(v.is_frozen_literal(), "{:?}", v);
         if let Some(slot) = slot.into() {
             self.discard(slot);
             self.set_mode(slot, LinkMode::C(v));
