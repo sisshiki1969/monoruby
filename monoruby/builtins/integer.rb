@@ -40,10 +40,14 @@ class Integer
   end
 
   def digits(base = 10)
-    if base < 0
+    if self < 0
       raise Math::DomainError, "out of domain"
-    elsif base == 0
+    end
+    if base < 2
       raise ArgumentError, "invalid radix #{base}"
+    end
+    if self == 0
+      return [0]
     end
     res = []
     n = self
