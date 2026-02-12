@@ -17,8 +17,8 @@ impl<'a> BytecodeGen<'a> {
         } = iter.kind
         {
             assert_eq!(1, param.len());
-            let name = IdentId::get_id(&param[0].1);
-            let counter = self.assign_local(name);
+            let c_name = IdentId::get_id(&param[0].1);
+            let c_outer = param[0].0;
             let break_dest = self.new_label();
             let next_dest = self.new_label();
             let ret = if use_value {
@@ -29,69 +29,173 @@ impl<'a> BytecodeGen<'a> {
             let loop_start = self.new_label();
             let loop_exit = self.new_label();
             self.loop_push(break_dest, next_dest, loop_start, ret);
-            // +------+
-            // | iter | (when use_value)
-            // +------+
-            // | end  |
-            // +------+
-            // | dst  |
-            // +------+
-            let start = if let Some(start) = start {
-                start
-            } else {
-                return Err(self.syntax_error("can't iterate from NilClass", loc));
-            };
-            self.gen_store_expr(counter.into(), start)?;
-            let end = if use_value {
-                let iter = self.push();
-                let end = if let Some(end) = end {
+            if c_outer == 0 {
+                let counter = self.assign_local(c_name);
+
+                // +------+
+                // | iter | (when use_value)
+                // +------+
+                // | end  |
+                // +------+
+                // | dst  |
+                // +------+
+                let start = if let Some(start) = start {
+                    start
+                } else {
+                    return Err(self.syntax_error("can't iterate from NilClass", loc));
+                };
+                self.gen_store_expr(counter.into(), start)?;
+                let end = if use_value {
+                    let iter = self.push();
+                    let end = if let Some(end) = end {
+                        self.push_expr(end)?.into()
+                    } else {
+                        self.push_nil().into()
+                    };
+                    self.emit(
+                        BytecodeInst::Range {
+                            ret: iter.into(),
+                            start: counter.into(),
+                            end,
+                            exclude_end,
+                        },
+                        loc,
+                    );
+                    end
+                } else if let Some(end) = end {
                     self.push_expr(end)?.into()
                 } else {
                     self.push_nil().into()
                 };
+                self.apply_label(loop_start);
+                self.emit(BytecodeInst::LoopStart, loc);
+                let dst = self.push().into();
                 self.emit(
-                    BytecodeInst::Range {
-                        ret: iter.into(),
-                        start: counter.into(),
-                        end,
-                        exclude_end,
+                    BytecodeInst::Cmp(
+                        if exclude_end {
+                            CmpKind::Ge
+                        } else {
+                            CmpKind::Gt
+                        },
+                        Some(dst),
+                        (counter.into(), end),
+                        true,
+                    ),
+                    loc,
+                );
+                self.pop(); // pop *dst*
+                self.emit_condbr(dst, loop_exit, true, true);
+
+                self.gen_expr(*body.body, UseMode2::NotUse)?;
+                self.apply_label(next_dest);
+
+                let inc = self.push().into();
+                self.emit_integer(inc, 1);
+                self.emit(
+                    BytecodeInst::BinOp(BinOpK::Add, Some(counter.into()), (counter.into(), inc)),
+                    loc,
+                );
+            } else {
+                let c_reg: BcReg = self.refer_dynamic_local(c_outer, c_name).unwrap().into();
+                // +------+
+                // | iter | (when use_value)
+                // +------+
+                // | end  |
+                // +------+
+                // | dst  |
+                // +------+
+                let start = if let Some(start) = start {
+                    start
+                } else {
+                    return Err(self.syntax_error("can't iterate from NilClass", loc));
+                };
+                let tmp = self.push_expr(start)?;
+                self.emit(
+                    BytecodeInst::StoreDynVar {
+                        dst: c_reg.into(),
+                        outer: c_outer,
+                        src: tmp.into(),
                     },
                     loc,
                 );
-                end
-            } else if let Some(end) = end {
-                self.push_expr(end)?.into()
-            } else {
-                self.push_nil().into()
-            };
-            self.apply_label(loop_start);
-            self.emit(BytecodeInst::LoopStart, loc);
-            let dst = self.push().into();
-            self.emit(
-                BytecodeInst::Cmp(
-                    if exclude_end {
-                        CmpKind::Ge
+                let end = if use_value {
+                    let iter = tmp;
+                    let end = if let Some(end) = end {
+                        self.push_expr(end)?.into()
                     } else {
-                        CmpKind::Gt
+                        self.push_nil().into()
+                    };
+                    self.emit(
+                        BytecodeInst::Range {
+                            ret: iter.into(),
+                            start: tmp.into(),
+                            end,
+                            exclude_end,
+                        },
+                        loc,
+                    );
+                    end
+                } else if let Some(end) = end {
+                    self.pop();
+                    self.push_expr(end)?.into()
+                } else {
+                    self.pop();
+                    self.push_nil().into()
+                };
+                self.apply_label(loop_start);
+                self.emit(BytecodeInst::LoopStart, loc);
+                let dst = self.push().into();
+                let tmp = self.push().into();
+                self.emit(
+                    BytecodeInst::LoadDynVar {
+                        dst: tmp,
+                        src: c_reg,
+                        outer: c_outer,
                     },
-                    Some(dst),
-                    (counter.into(), end),
-                    true,
-                ),
-                loc,
-            );
-            self.pop(); // pop *dst*
-            self.emit_condbr(dst, loop_exit, true, true);
+                    loc,
+                );
+                self.emit(
+                    BytecodeInst::Cmp(
+                        if exclude_end {
+                            CmpKind::Ge
+                        } else {
+                            CmpKind::Gt
+                        },
+                        Some(dst),
+                        (tmp, end),
+                        true,
+                    ),
+                    loc,
+                );
+                self.pop(); // pop *tmp*
+                self.pop(); // pop *dst*
+                self.emit_condbr(dst, loop_exit, true, true);
 
-            self.gen_expr(*body.body, UseMode2::NotUse)?;
-            self.apply_label(next_dest);
+                self.gen_expr(*body.body, UseMode2::NotUse)?;
+                self.apply_label(next_dest);
 
-            let inc = self.push().into();
-            self.emit_integer(inc, 1);
-            self.emit(
-                BytecodeInst::BinOp(BinOpK::Add, Some(counter.into()), (counter.into(), inc)),
-                loc,
-            );
+                let tmp = self.push().into();
+                self.emit(
+                    BytecodeInst::LoadDynVar {
+                        dst: tmp,
+                        src: c_reg,
+                        outer: c_outer,
+                    },
+                    loc,
+                );
+                let inc = self.push().into();
+                self.emit_integer(inc, 1);
+                self.emit(BytecodeInst::BinOp(BinOpK::Add, Some(tmp), (tmp, inc)), loc);
+                self.emit(
+                    BytecodeInst::StoreDynVar {
+                        dst: c_reg,
+                        outer: c_outer,
+                        src: tmp,
+                    },
+                    loc,
+                );
+                self.pop();
+            }
             self.pop();
             self.emit_br(loop_start);
 
