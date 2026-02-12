@@ -1542,7 +1542,7 @@ impl Value {
 
         match &node.kind {
             NodeKind::CompStmt(stmts) => {
-                assert_eq!(1, stmts.len());
+                assert_eq!(1, stmts.len(), "multiple statements {stmts:?}");
                 Self::from_ast_inner(&stmts[0], vm, globals)
             }
             NodeKind::Integer(num) => Value::integer(*num),
