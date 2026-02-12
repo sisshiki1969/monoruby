@@ -29,6 +29,11 @@ impl<'a> BytecodeGen<'a> {
             let loop_start = self.new_label();
             let loop_exit = self.new_label();
             self.loop_push(break_dest, next_dest, loop_start, ret);
+            let start = if let Some(start) = start {
+                start
+            } else {
+                return Err(self.syntax_error("can't iterate from NilClass", loc));
+            };
             if c_outer == 0 {
                 let counter = self.assign_local(c_name);
 
@@ -39,11 +44,6 @@ impl<'a> BytecodeGen<'a> {
                 // +------+
                 // | dst  |
                 // +------+
-                let start = if let Some(start) = start {
-                    start
-                } else {
-                    return Err(self.syntax_error("can't iterate from NilClass", loc));
-                };
                 self.gen_store_expr(counter.into(), start)?;
                 let end = if use_value {
                     let iter = self.push();
@@ -104,11 +104,6 @@ impl<'a> BytecodeGen<'a> {
                 // +------+
                 // | dst  |
                 // +------+
-                let start = if let Some(start) = start {
-                    start
-                } else {
-                    return Err(self.syntax_error("can't iterate from NilClass", loc));
-                };
                 let tmp = self.push_expr(start)?;
                 self.emit(
                     BytecodeInst::StoreDynVar {
