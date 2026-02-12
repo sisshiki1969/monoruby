@@ -80,6 +80,11 @@ pub fn run_binop_tests(lhs: &[&str], op: &[&str], rhs: &[&str]) {
                     format!("({lhs}) {op} (-({rhs}))"),
                     format!("-({lhs}) {op} ({rhs})"),
                     format!("-({lhs}) {op} -({rhs})"),
+                    format!("@a = ({lhs}); @a {op} ({rhs})"),
+                    format!("@a = ({lhs}); @a.{op}({rhs})"),
+                    format!("@a = ({lhs}); @a {op} (-({rhs}))"),
+                    format!("@a = -({lhs}); @a {op} ({rhs})"),
+                    format!("@a = -({lhs}); @a {op} -({rhs})"),
                 ]);
             }
         }
