@@ -789,4 +789,19 @@ mod tests {
         run_test("100.!=(100.0)");
         run_test(r#"100.!=("100")"#);
     }
+
+    #[test]
+    fn digits() {
+        run_test("100.digits");
+        run_test("100.digits(10)");
+        run_test("100.digits(16)");
+        run_test("100.digits(16.5)");
+        run_test("class C; def to_int; 10; end; end; 100.digits(C.new)");
+
+        run_test_error("(-100).digits(16)");
+        run_test_error("-100.digits(16)");
+        run_test_error("100.digits(-16)");
+        run_test_error("100.digits(0)");
+        run_test_error("100.digits(1)");
+    }
 }
