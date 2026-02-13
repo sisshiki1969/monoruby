@@ -1,5 +1,11 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum Counter {
+    Local(BcReg),
+    DynLocal(usize, BcLocal),
+}
+
 impl<'a> BytecodeGen<'a> {
     pub(super) fn gen_for(
         &mut self,
@@ -11,7 +17,7 @@ impl<'a> BytecodeGen<'a> {
         let loc = iter.loc;
         if let NodeKind::Range {
             start: box Some(start),
-            box end,
+            end: box Some(end),
             exclude_end,
             ..
         } = &iter.kind
@@ -20,6 +26,15 @@ impl<'a> BytecodeGen<'a> {
             assert_eq!(1, param.len());
             let c_name = IdentId::get_id(&param[0].1);
             let c_outer = param[0].0;
+            let counter = if c_outer == 0 {
+                Counter::Local(self.assign_local(c_name).into())
+            } else {
+                Counter::DynLocal(
+                    c_outer,
+                    self.refer_dynamic_local(c_outer, c_name).unwrap().into(),
+                )
+            };
+
             let break_dest = self.new_label();
             let next_dest = self.new_label();
             let ret = if use_value {
@@ -30,148 +45,65 @@ impl<'a> BytecodeGen<'a> {
             let loop_start = self.new_label();
             let loop_exit = self.new_label();
             self.loop_push(break_dest, next_dest, loop_start, ret);
-            if c_outer == 0 {
-                let counter: BcReg = self.assign_local(c_name).into();
 
-                // +------+
-                // | iter | (when use_value)
-                // +------+
-                // | end  |
-                // +------+
-                // | dst  |
-                // +------+
-                self.gen_store_expr(counter, start.clone())?;
-                let end = if use_value {
-                    let iter = self.push().into();
-                    let end = if let Some(end) = end {
-                        self.push_expr(end.clone())?.into()
-                    } else {
-                        self.push_nil().into()
-                    };
-                    self.emit(
-                        BytecodeInst::Range {
-                            ret: iter,
-                            start: counter,
-                            end,
-                            exclude_end: *exclude_end,
-                        },
-                        loc,
-                    );
-                    end
-                } else if let Some(end) = end {
-                    self.push_expr(end.clone())?.into()
-                } else {
-                    self.push_nil().into()
-                };
-                self.apply_label(loop_start);
-                self.emit(BytecodeInst::LoopStart, loc);
-                let dst = self.push().into();
-                self.emit(
-                    BytecodeInst::Cmp(
-                        if *exclude_end {
-                            CmpKind::Ge
-                        } else {
-                            CmpKind::Gt
-                        },
-                        Some(dst),
-                        (counter, end),
-                        true,
-                    ),
-                    loc,
-                );
-                self.pop(); // pop *dst*
-                self.emit_condbr(dst, loop_exit, true, true);
-
-                self.gen_expr(*body.body, UseMode2::NotUse)?;
-                self.apply_label(next_dest);
-
-                let inc = self.push().into();
-                self.emit_integer(inc, 1);
-                self.emit(
-                    BytecodeInst::BinOp(BinOpK::Add, Some(counter), (counter, inc)),
-                    loc,
-                );
+            // +------+
+            // | iter | (when use_value)
+            // +------+
+            // | tmp  |
+            // +------+
+            // | end  |
+            // +------+
+            // | dst  |
+            // +------+
+            let iter = if use_value {
+                Some(self.push().into())
             } else {
-                let c_reg: BcReg = self.refer_dynamic_local(c_outer, c_name).unwrap().into();
-                // +------+
-                // | iter | (when use_value)
-                // +------+
-                // | end  |
-                // +------+
-                // | dst  |
-                // +------+
-                let tmp = self.push_expr(start.clone())?.into();
+                None
+            };
+            let tmp = self.push_expr(start.clone())?.into();
+            let end = self.push_expr(end.clone())?.into();
+            if let Some(iter) = iter {
                 self.emit(
-                    BytecodeInst::StoreDynVar {
-                        dst: c_reg.into(),
-                        outer: c_outer,
-                        src: tmp,
+                    BytecodeInst::Range {
+                        ret: iter,
+                        start: tmp,
+                        end,
+                        exclude_end: *exclude_end,
                     },
                     loc,
                 );
-                let end = if use_value {
-                    let iter = tmp;
-                    let end = if let Some(end) = end {
-                        self.push_expr(end.clone())?.into()
-                    } else {
-                        self.push_nil().into()
-                    };
-                    self.emit(
-                        BytecodeInst::Range {
-                            ret: iter,
-                            start: tmp,
-                            end,
-                            exclude_end: *exclude_end,
-                        },
-                        loc,
-                    );
-                    end
-                } else if let Some(end) = end {
-                    self.pop();
-                    self.push_expr(end.clone())?.into()
-                } else {
-                    self.pop();
-                    self.push_nil().into()
-                };
-                self.apply_label(loop_start);
-                self.emit(BytecodeInst::LoopStart, loc);
-                let dst = self.push().into();
-                let tmp = self.push().into();
-                self.emit(
-                    BytecodeInst::LoadDynVar {
-                        dst: tmp,
-                        src: c_reg,
-                        outer: c_outer,
-                    },
-                    loc,
-                );
-                self.emit(
-                    BytecodeInst::Cmp(
-                        if *exclude_end {
-                            CmpKind::Ge
-                        } else {
-                            CmpKind::Gt
-                        },
-                        Some(dst),
-                        (tmp, end),
-                        true,
-                    ),
-                    loc,
-                );
-                self.pop(); // pop *tmp*
-                self.pop(); // pop *dst*
-                self.emit_condbr(dst, loop_exit, true, true);
-
-                self.gen_expr(*body.body, UseMode2::NotUse)?;
-                self.apply_label(next_dest);
-
-                self.inc_dynamic_local(c_reg, c_outer, loc);
             }
-            self.pop();
+
+            self.apply_label(loop_start);
+            self.emit(BytecodeInst::LoopStart, loc);
+            let dst = self.push().into();
+            self.emit(
+                BytecodeInst::Cmp(
+                    if *exclude_end {
+                        CmpKind::Ge
+                    } else {
+                        CmpKind::Gt
+                    },
+                    Some(dst),
+                    (tmp, end),
+                    true,
+                ),
+                loc,
+            );
+            self.pop(); // pop *dst*
+            self.emit_condbr(dst, loop_exit, true, true);
+
+            self.store_counter(counter, tmp, loc);
+            self.gen_expr(*body.body, UseMode2::NotUse)?;
+            self.apply_label(next_dest);
+            self.load_counter(counter, tmp, loc);
+
+            self.inc_reg(tmp, loc);
             self.emit_br(loop_start);
 
             self.apply_label(loop_exit);
             self.pop(); // pop *end*
+            self.pop(); // pop *tmp*
 
             self.loop_pop();
             self.apply_label(break_dest);
@@ -187,28 +119,47 @@ impl<'a> BytecodeGen<'a> {
         Ok(())
     }
 
-    fn inc_dynamic_local(&mut self, c_reg: BcReg, c_outer: usize, loc: Loc) {
-        let tmp = self.push().into();
-        self.emit(
-            BytecodeInst::LoadDynVar {
-                dst: tmp,
-                src: c_reg,
-                outer: c_outer,
-            },
-            loc,
-        );
+    fn inc_reg(&mut self, tmp: BcReg, loc: Loc) {
         let inc = self.push().into();
         self.emit_integer(inc, 1);
         self.emit(BytecodeInst::BinOp(BinOpK::Add, Some(tmp), (tmp, inc)), loc);
-        self.emit(
-            BytecodeInst::StoreDynVar {
-                dst: c_reg,
-                outer: c_outer,
-                src: tmp,
-            },
-            loc,
-        );
         self.pop();
+    }
+
+    fn store_counter(&mut self, counter: Counter, tmp: BcReg, loc: Loc) {
+        match counter {
+            Counter::Local(counter) => {
+                self.emit_mov(counter, tmp);
+            }
+            Counter::DynLocal(outer, dyn_local) => {
+                self.emit(
+                    BytecodeInst::StoreDynVar {
+                        dst: dyn_local.into(),
+                        outer,
+                        src: tmp,
+                    },
+                    loc,
+                );
+            }
+        }
+    }
+
+    fn load_counter(&mut self, counter: Counter, tmp: BcReg, loc: Loc) {
+        match counter {
+            Counter::Local(counter) => {
+                self.emit_mov(tmp, counter);
+            }
+            Counter::DynLocal(outer, dyn_local) => {
+                self.emit(
+                    BytecodeInst::LoadDynVar {
+                        dst: tmp,
+                        src: dyn_local.into(),
+                        outer,
+                    },
+                    loc,
+                );
+            }
+        }
     }
 
     pub(super) fn gen_while(
