@@ -1073,7 +1073,7 @@ impl Store {
                 .flatten()
         } else {
             let func_id = lfp.method_func_id();
-            let owner = self[func_id].owner_class().unwrap();
+            let owner = self[func_id].owner_class()?;
             let name = self[func_id].name().unwrap();
             self.check_super(recv_class, owner, name)
         }
