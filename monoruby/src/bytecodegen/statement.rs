@@ -96,7 +96,6 @@ impl<'a> BytecodeGen<'a> {
             self.store_counter(counter, tmp, loc);
             self.gen_expr(*body.body, UseMode2::NotUse)?;
             self.apply_label(next_dest);
-            self.load_counter(counter, tmp, loc);
 
             self.inc_reg(tmp, loc);
             self.emit_br(loop_start);
@@ -137,24 +136,6 @@ impl<'a> BytecodeGen<'a> {
                         dst: dyn_local.into(),
                         outer,
                         src: tmp,
-                    },
-                    loc,
-                );
-            }
-        }
-    }
-
-    fn load_counter(&mut self, counter: Counter, tmp: BcReg, loc: Loc) {
-        match counter {
-            Counter::Local(counter) => {
-                self.emit_mov(tmp, counter);
-            }
-            Counter::DynLocal(outer, dyn_local) => {
-                self.emit(
-                    BytecodeInst::LoadDynVar {
-                        dst: tmp,
-                        src: dyn_local.into(),
-                        outer,
                     },
                     loc,
                 );
@@ -529,27 +510,37 @@ impl<'a> BytecodeGen<'a> {
 mod test {
     use crate::tests::*;
     #[test]
-    fn test_for_range_integer1() {
+    fn for_range_integer1() {
         run_test("a = []; for i in 0..3; a << i; end; a << i; a");
     }
 
     #[test]
-    fn test_for_range_integer2() {
+    fn for_range_integer2() {
         run_test("a = []; for i in 0...3; a << i; end; a << i; a");
     }
 
     #[test]
-    fn test_for_range_each() {
+    fn for_range_each() {
         run_test("a = []; r = 0..3; for i in r; a << i; end; a << i; a");
     }
 
     #[test]
-    fn test_for_range_each2() {
+    fn for_range_each2() {
         run_test("a = []; r = 0...3; for i in r; a << i; end; a << i; a");
     }
 
     #[test]
-    fn test_for_range_integer_dyn() {
+    fn for_range_integer_dyn() {
         run_test("a = []; i = 42; 1.times { for i in 0..3; a << i; end }; a << i; a");
+    }
+
+    #[test]
+    fn for_range_modify_loop_var() {
+        run_test("a = []; for i in 0..2; a << i; i = i + 10; end; [a, i]");
+    }
+
+    #[test]
+    fn for_range_modify_loop_var_dyn() {
+        run_test("a = []; i = 42; 1.times { for i in 0..2; a << i; i = i + 10; end }; [a, i]");
     }
 }
