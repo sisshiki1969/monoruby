@@ -154,7 +154,7 @@ impl Codegen {
 
     fn push_cont_frame(&mut self) {
         monoasm! { &mut self.jit,
-            pushq r14;
+            subq  rsp, 8;
             pushq r13;
         };
     }

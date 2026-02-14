@@ -1726,14 +1726,14 @@ impl Debug for Immediate {
 
 impl Immediate {
     fn from_u64(u: u64) -> Immediate {
-        Immediate(std::num::NonZero::new(u).unwrap())
+        Immediate(std::num::NonZeroU64::new(u).unwrap())
     }
 
     ///
     /// ## Safety: Caller must ensure `u` is not zero.
     ///
     const unsafe fn from_u64_unchecked(u: u64) -> Immediate {
-        Immediate(unsafe { std::num::NonZero::new_unchecked(u) })
+        Immediate(unsafe { std::num::NonZeroU64::new_unchecked(u) })
     }
 
     pub const fn nil() -> Self {

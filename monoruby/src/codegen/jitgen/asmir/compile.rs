@@ -917,19 +917,6 @@ impl Codegen {
         self.xmm_restore(using_xmm);
     }
 
-    fn new_lambda(&mut self, func_id: FuncId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
-            movl rdx, (func_id.get());
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (runtime::gen_lambda);
-            call rax;
-        };
-        self.restore_lfp();
-        self.xmm_restore(using_xmm);
-    }
-
     fn new_hash(&mut self, args: SlotId, len: usize, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
