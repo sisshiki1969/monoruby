@@ -150,6 +150,7 @@ impl ClassId {
                 | FLOAT_CLASS
                 | SYMBOL_CLASS
                 | RANGE_CLASS
+                | COMPLEX_CLASS
         )
     }
 

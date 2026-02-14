@@ -73,7 +73,7 @@ impl<'a> JitContext<'a> {
         }
     }
 
-    pub(super) fn binart_cmp_br(
+    pub(super) fn binary_cmp_br(
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,

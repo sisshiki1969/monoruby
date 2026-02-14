@@ -386,7 +386,7 @@ impl<'a> JitContext<'a> {
                 ic,
             } => {
                 let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
-                return self.binart_cmp_br(state, ir, kind, lhs, rhs, dest_bb, brkind, ic, bc_pos);
+                return self.binary_cmp_br(state, ir, kind, lhs, rhs, dest_bb, brkind, ic, bc_pos);
             }
             TraceIr::Index {
                 dst,

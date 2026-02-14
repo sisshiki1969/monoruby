@@ -511,13 +511,14 @@ impl SlotState {
     #[allow(non_snake_case)]
     pub fn coerce_C_f64(&self, slot: SlotId) -> Option<f64> {
         if let LinkMode::C(v) = self.mode(slot) {
-            if let Some(f) = v.try_float() {
-                return Some(f);
-            } else if let Some(i) = v.try_fixnum() {
-                return Some(i as f64);
+            match v.unpack() {
+                RV::Float(f) => Some(f),
+                RV::Fixnum(i) => Some(i as f64),
+                _ => None,
             }
+        } else {
+            None
         }
-        None
     }
 
     pub fn is_u16(&self, slot: SlotId) -> Option<u16> {
@@ -794,10 +795,18 @@ impl AbstractFrame {
                 }
             }
             LinkMode::C(v) => {
-                if v.class() == class {
-                    return;
+                if class == INTEGER_CLASS {
+                    if v.is_fixnum() {
+                        return;
+                    } else {
+                        // If v is Bignum, Guard will fail
+                    }
                 } else {
-                    // in this case, Guard will always fail
+                    if v.class() == class {
+                        return;
+                    } else {
+                        // in this case, Guard will always fail
+                    }
                 }
             }
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {

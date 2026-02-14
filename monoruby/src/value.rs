@@ -766,7 +766,10 @@ impl Value {
     /// Check if `self` is an immediate, Float or Range object.
     ///
     pub fn is_frozen_literal(&self) -> bool {
-        self.is_packed_value() || self.is_float() || self.is_range().is_some()
+        self.is_packed_value()
+            || self.is_float()
+            || self.is_range().is_some()
+            || self.class() == COMPLEX_CLASS
     }
 
     ///
