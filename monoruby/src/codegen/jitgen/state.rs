@@ -320,7 +320,7 @@ impl AbstractFrame {
 
 // write back operations
 impl AbstractFrame {
-    /// Write back *slot* if it is not written back yet.
+    /// Write back the given slots according to their current state.
     pub(crate) fn write_back_slots(&mut self, ir: &mut AsmIr, slot: &[SlotId]) {
         slot.iter().for_each(|r| self.write_back_slot(ir, *r));
     }
