@@ -389,6 +389,28 @@ pub(crate) extern "C" fn create_array(src: *mut Value, len: usize) -> Value {
     Value::array_from_iter(slice.iter().rev().copied())
 }
 
+#[repr(C)]
+pub(super) struct RestKwData {
+    name: Option<IdentId>,
+    id: u32,
+}
+
+pub(super) extern "C" fn correct_rest_kw(mut ptr: *const RestKwData, lfp: Lfp) -> Value {
+    let mut map = RubyMap::default();
+    unsafe {
+        while let RestKwData {
+            name: Some(name),
+            id,
+        } = ptr.read()
+        {
+            let v = lfp.register(SlotId(id as u16)).unwrap();
+            map.insert_sym(RubySymbol::new(name), v);
+            ptr = ptr.add(1);
+        }
+    }
+    Value::hash(map)
+}
+
 pub(super) extern "C" fn vm_handle_arguments(
     vm: &mut Executor,
     globals: &mut Globals,

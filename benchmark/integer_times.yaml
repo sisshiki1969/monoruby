@@ -1,5 +1,6 @@
 prelude: |
   a = [*(0..999)]
+  r = 0..999
 benchmark:
   integer_times: |
     5000.times do
@@ -8,6 +9,15 @@ benchmark:
   integer_step: |
     5000.times do
       0.step(1000, 1) do end
+    end
+  range_each: |
+    5000.times do
+      r.each do |elem| end
+    end
+  for: |
+    5000.times do
+      for elem in 0..999
+      end
     end
   array_each: |
     5000.times do

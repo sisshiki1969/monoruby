@@ -155,16 +155,20 @@ impl AbstractFrame {
 
     #[allow(non_snake_case)]
     fn load_xmm_from_C(&mut self, ir: &mut AsmIr, slot: SlotId, v: Value) -> Xmm {
-        if let Some(f) = v.try_float() {
-            // -> F
-            self.load_xmm_from_f64(ir, slot, f)
-        } else if let Some(i) = v.try_fixnum() {
-            // -> Sf
-            let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
-            ir.i64_to_stack_and_xmm(i, slot, x);
-            x
-        } else {
-            unreachable!()
+        match v.unpack() {
+            RV::Float(f) => {
+                // -> F
+                self.load_xmm_from_f64(ir, slot, f)
+            }
+            RV::Fixnum(i) => {
+                // -> Sf
+                let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
+                ir.i64_to_stack_and_xmm(i, slot, x);
+                x
+            }
+            _ => {
+                unreachable!("load_xmm_from_C() {:?}", v);
+            }
         }
     }
 
@@ -201,5 +205,38 @@ impl AbstractFrame {
                 ir.reg2rsp_offset(GP::Rax, ofs);
             }
         }
+    }
+
+    pub(in crate::codegen::jitgen) fn fetch_rest_for_callee(
+        &mut self,
+        ir: &mut AsmIr,
+        src: SlotId,
+        len: usize,
+        ofs: i32,
+    ) {
+        for i in src..src + len {
+            self.use_as_value(i);
+        }
+        self.write_back_range(ir, src, len as u16);
+        ir.create_array(src, len);
+        ir.reg2rsp_offset(GP::Rax, ofs);
+    }
+
+    pub(in crate::codegen::jitgen) fn fetch_kwrest_for_callee(
+        &mut self,
+        ir: &mut AsmIr,
+        rest_kw: Vec<(SlotId, IdentId)>,
+        ofs: i32,
+    ) {
+        for (slot, _) in &rest_kw {
+            self.use_as_value(*slot);
+            self.write_back_slot(ir, *slot);
+        }
+        if rest_kw.is_empty() {
+            ir.lit2reg(Value::nil(), GP::Rax);
+        } else {
+            ir.kw_rest(rest_kw);
+        }
+        ir.reg2rsp_offset(GP::Rax, ofs);
     }
 }

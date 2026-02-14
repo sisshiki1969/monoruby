@@ -1,5 +1,11 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum Counter {
+    Local(BcReg),
+    DynLocal(usize, BcLocal),
+}
+
 impl<'a> BytecodeGen<'a> {
     pub(super) fn gen_for(
         &mut self,
@@ -10,15 +16,25 @@ impl<'a> BytecodeGen<'a> {
     ) -> Result<()> {
         let loc = iter.loc;
         if let NodeKind::Range {
-            box start,
-            box end,
+            start: box Some(start),
+            end: box Some(end),
             exclude_end,
             ..
-        } = iter.kind
+        } = &iter.kind
+            && let NodeKind::Integer(_) = start.kind
         {
             assert_eq!(1, param.len());
-            let name = IdentId::get_id(&param[0].1);
-            let counter = self.assign_local(name);
+            let c_name = IdentId::get_id(&param[0].1);
+            let c_outer = param[0].0;
+            let counter = if c_outer == 0 {
+                Counter::Local(self.assign_local(c_name).into())
+            } else {
+                Counter::DynLocal(
+                    c_outer,
+                    self.refer_dynamic_local(c_outer, c_name).unwrap().into(),
+                )
+            };
+
             let break_dest = self.new_label();
             let next_dest = self.new_label();
             let ret = if use_value {
@@ -29,53 +45,47 @@ impl<'a> BytecodeGen<'a> {
             let loop_start = self.new_label();
             let loop_exit = self.new_label();
             self.loop_push(break_dest, next_dest, loop_start, ret);
+
             // +------+
             // | iter | (when use_value)
+            // +------+
+            // | tmp  |
             // +------+
             // | end  |
             // +------+
             // | dst  |
             // +------+
-            let start = if let Some(start) = start {
-                start
+            let iter = if use_value {
+                Some(self.push().into())
             } else {
-                return Err(self.syntax_error("can't iterate from NilClass", loc));
+                None
             };
-            self.gen_store_expr(counter.into(), start)?;
-            let end = if use_value {
-                let iter = self.push();
-                let end = if let Some(end) = end {
-                    self.push_expr(end)?.into()
-                } else {
-                    self.push_nil().into()
-                };
+            let tmp = self.push_expr(start.clone())?.into();
+            let end = self.push_expr(end.clone())?.into();
+            if let Some(iter) = iter {
                 self.emit(
                     BytecodeInst::Range {
-                        ret: iter.into(),
-                        start: counter.into(),
+                        ret: iter,
+                        start: tmp,
                         end,
-                        exclude_end,
+                        exclude_end: *exclude_end,
                     },
                     loc,
                 );
-                end
-            } else if let Some(end) = end {
-                self.push_expr(end)?.into()
-            } else {
-                self.push_nil().into()
-            };
+            }
+
             self.apply_label(loop_start);
             self.emit(BytecodeInst::LoopStart, loc);
             let dst = self.push().into();
             self.emit(
                 BytecodeInst::Cmp(
-                    if exclude_end {
+                    if *exclude_end {
                         CmpKind::Ge
                     } else {
                         CmpKind::Gt
                     },
                     Some(dst),
-                    (counter.into(), end),
+                    (tmp, end),
                     true,
                 ),
                 loc,
@@ -83,20 +93,16 @@ impl<'a> BytecodeGen<'a> {
             self.pop(); // pop *dst*
             self.emit_condbr(dst, loop_exit, true, true);
 
+            self.store_counter(counter, tmp, loc);
             self.gen_expr(*body.body, UseMode2::NotUse)?;
             self.apply_label(next_dest);
 
-            let inc = self.push().into();
-            self.emit_integer(inc, 1);
-            self.emit(
-                BytecodeInst::BinOp(BinOpK::Add, Some(counter.into()), (counter.into(), inc)),
-                loc,
-            );
-            self.pop();
+            self.inc_reg(tmp, loc);
             self.emit_br(loop_start);
 
             self.apply_label(loop_exit);
             self.pop(); // pop *end*
+            self.pop(); // pop *tmp*
 
             self.loop_pop();
             self.apply_label(break_dest);
@@ -110,6 +116,31 @@ impl<'a> BytecodeGen<'a> {
             self.gen_each(param, iter, body, use_mode, loc)?;
         }
         Ok(())
+    }
+
+    fn inc_reg(&mut self, tmp: BcReg, loc: Loc) {
+        let inc = self.push().into();
+        self.emit_integer(inc, 1);
+        self.emit(BytecodeInst::BinOp(BinOpK::Add, Some(tmp), (tmp, inc)), loc);
+        self.pop();
+    }
+
+    fn store_counter(&mut self, counter: Counter, tmp: BcReg, loc: Loc) {
+        match counter {
+            Counter::Local(counter) => {
+                self.emit_mov(counter, tmp);
+            }
+            Counter::DynLocal(outer, dyn_local) => {
+                self.emit(
+                    BytecodeInst::StoreDynVar {
+                        dst: dyn_local.into(),
+                        outer,
+                        src: tmp,
+                    },
+                    loc,
+                );
+            }
+        }
     }
 
     pub(super) fn gen_while(
@@ -472,5 +503,44 @@ impl<'a> BytecodeGen<'a> {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::tests::*;
+    #[test]
+    fn for_range_integer1() {
+        run_test("a = []; for i in 0..3; a << i; end; a << i; a");
+    }
+
+    #[test]
+    fn for_range_integer2() {
+        run_test("a = []; for i in 0...3; a << i; end; a << i; a");
+    }
+
+    #[test]
+    fn for_range_each() {
+        run_test("a = []; r = 0..3; for i in r; a << i; end; a << i; a");
+    }
+
+    #[test]
+    fn for_range_each2() {
+        run_test("a = []; r = 0...3; for i in r; a << i; end; a << i; a");
+    }
+
+    #[test]
+    fn for_range_integer_dyn() {
+        run_test("a = []; i = 42; 1.times { for i in 0..3; a << i; end }; a << i; a");
+    }
+
+    #[test]
+    fn for_range_modify_loop_var() {
+        run_test("a = []; for i in 0..2; a << i; i = i + 10; end; [a, i]");
+    }
+
+    #[test]
+    fn for_range_modify_loop_var_dyn() {
+        run_test("a = []; i = 42; 1.times { for i in 0..2; a << i; i = i + 10; end }; [a, i]");
     }
 }

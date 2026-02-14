@@ -12,10 +12,12 @@ mod entry;
 //pub mod raw_entry_v1;
 
 use hashbrown::hash_table;
+use ruby_traits::SymEquivalent;
 
 use crate::vec::{self, Vec};
 use core::mem;
 use core::ops::RangeBounds;
+use std::borrow::Borrow;
 
 use crate::util::simplify_range;
 use crate::{Bucket, Equivalent, HashValue, RubyEql};
@@ -56,6 +58,14 @@ fn equivalent<'a, K, V, E, G, R, Q: ?Sized + Equivalent<K, E, G, R>>(
     entries: &'a [Bucket<K, V>],
 ) -> impl Fn(&usize, &mut E, &mut G) -> Result<bool, R> + 'a {
     move |&i, e, g| Q::equivalent(key, &entries[i].key, e, g)
+}
+
+#[inline]
+fn sym_equivalent<'a, K, V, Q: ?Sized + SymEquivalent<K>>(
+    key: &'a Q,
+    entries: &'a [Bucket<K, V>],
+) -> impl Fn(&usize) -> bool + 'a {
+    move |&i| Q::equivalent(key, &entries[i].key)
 }
 
 #[inline]
@@ -312,6 +322,33 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
                 self.push_entry(hash, key, value);
                 debug_assert_eq!(self.indices.len(), self.entries.len());
                 Ok((i, None))
+            }
+        }
+    }
+
+    pub(crate) fn insert_full_sym<I>(
+        &mut self,
+        hash: HashValue,
+        key: I,
+        value: V,
+    ) -> (usize, Option<V>)
+    where
+        I: ruby_traits::RubySymEql,
+        K: Borrow<I> + From<I>,
+    {
+        let eq = sym_equivalent(&key, &self.entries);
+        let hasher = get_hash(&self.entries);
+        match self.indices.entry_sym(hash.get(), eq, hasher) {
+            hash_table::Entry::Occupied(entry) => {
+                let i = *entry.get();
+                (i, Some(mem::replace(&mut self.entries[i].value, value)))
+            }
+            hash_table::Entry::Vacant(entry) => {
+                let i = self.entries.len();
+                entry.insert(i);
+                self.push_entry(hash, K::from(key), value);
+                debug_assert_eq!(self.indices.len(), self.entries.len());
+                (i, None)
             }
         }
     }

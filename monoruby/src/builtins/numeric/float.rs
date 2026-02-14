@@ -15,13 +15,13 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.set_constant_by_str(FLOAT_CLASS, "MAX_10_EXP", Value::i32(f64::MAX_10_EXP));
     globals.set_constant_by_str(FLOAT_CLASS, "MAX_EXP", Value::i32(f64::MAX_EXP));
     globals.set_constant_by_str(FLOAT_CLASS, "EPSILON", Value::float(f64::EPSILON));
-    globals.define_builtin_func(FLOAT_CLASS, "to_i", toi, 0);
+    globals.define_builtin_funcs(FLOAT_CLASS, "to_i", &["to_int"], toi, 0);
     globals.define_builtin_func(FLOAT_CLASS, "to_f", tof, 0);
 
     globals.define_basic_op(FLOAT_CLASS, "+", add, 1);
     globals.define_basic_op(FLOAT_CLASS, "-", sub, 1);
     globals.define_basic_op(FLOAT_CLASS, "*", mul, 1);
-    globals.define_basic_op(FLOAT_CLASS, "/", div, 1);
+    globals.define_builtin_cfunc_ff_f(FLOAT_CLASS, "/", div, div_ff_f, 1);
     globals.define_builtin_cfunc_ff_f(FLOAT_CLASS, "%", rem, rem_ff_f, 1);
     globals.define_builtin_cfunc_ff_f(FLOAT_CLASS, "**", pow, pow_ff_f, 1);
     globals.define_builtin_func(FLOAT_CLASS, "div", div_floor, 1);
@@ -47,8 +47,12 @@ extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
     lhs.powf(rhs)
 }
 
+extern "C" fn div_ff_f(lhs: f64, rhs: f64) -> f64 {
+    lhs.ruby_div(&rhs)
+}
+
 extern "C" fn rem_ff_f(lhs: f64, rhs: f64) -> f64 {
-    lhs.rem_euclid(rhs)
+    lhs.ruby_mod(&rhs)
 }
 
 ///
@@ -86,7 +90,7 @@ fn toi(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn div_floor(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let lhs = lfp.self_val().try_float().unwrap();
-    let rhs = RealKind::try_from(globals, lfp.arg(0))?.to_f64();
+    let rhs = RealKind::expect(globals, lfp.arg(0))?.to_f64();
     let div_floor = (lhs / rhs).floor();
     Value::coerce_f64_to_int(div_floor)
 }

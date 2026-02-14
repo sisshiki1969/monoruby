@@ -100,16 +100,12 @@ impl Executor {
         globals.set_gvar(IdentId::get_id("$0"), program_name);
         globals.set_gvar(IdentId::get_id("$PROGRAM_NAME"), program_name);
         let mut executor = Self::default();
-        let path = dirs::home_dir().unwrap().join(".monoruby").join("builtins");
-        for file in [
-            "startup.rb",
-            "comparable.rb",
-            "enumerable.rb",
-            "builtins.rb",
-            "pathname_builtins.rb",
-        ] {
-            executor.require(globals, &path.clone().join(file), false)?;
-        }
+        let path = dirs::home_dir()
+            .unwrap()
+            .join(".monoruby")
+            .join("builtins")
+            .join("startup.rb");
+        executor.require(globals, &path, false)?;
         if !globals.no_gems {
             executor.load_gems(globals);
         }
@@ -859,8 +855,7 @@ impl Executor {
         self_val: Value,
         args: &[Value],
     ) -> Result<Value> {
-        let invoker = CODEGEN.with(|codegen| codegen.borrow().block_invoker_with_self);
-        invoker(
+        (globals.invokers.block_with_self)(
             self,
             globals,
             data as _,
@@ -1342,6 +1337,7 @@ pub enum FiberState {
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Hash, Default)]
+#[repr(transparent)]
 pub struct SlotId(pub u16);
 
 impl std::iter::Step for SlotId {

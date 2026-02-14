@@ -57,6 +57,21 @@ impl From<Immediate> for Value {
     }
 }
 
+impl From<RubySymbol> for Value {
+    fn from(sym: RubySymbol) -> Self {
+        Value(sym.0)
+    }
+}
+
+impl std::borrow::Borrow<RubySymbol> for Value {
+    fn borrow(&self) -> &RubySymbol {
+        // SAFETY: If self is a packed value, it is safe to interpret its bits as RubySymbol.
+        // If self is not a packed value, this function should not be called.
+        assert!(self.is_symbol());
+        unsafe { &*(self as *const Value as *const RubySymbol) }
+    }
+}
+
 impl GC<RValue> for Value {
     fn mark(&self, alloc: &mut Allocator<RValue>) {
         if let Some(rvalue) = self.try_rvalue() {
@@ -246,7 +261,8 @@ impl Value {
         if let Some(rv) = self.try_rvalue_mut() {
             rv.change_class(new_class_id);
         } else {
-            unreachable!("the class of primitive class can not be changed.");
+            let class = self.class();
+            unreachable!("the class of primitive class {class:?} can not be changed.");
         }
     }
 
@@ -351,7 +367,7 @@ impl Value {
         Immediate::flonum(num).map(|imm| imm.into())
     }
 
-    fn is_i63(num: i64) -> bool {
+    pub fn is_i63(num: i64) -> bool {
         let top = ((num as u64) >> 62) ^ ((num as u64) >> 63);
         top & 0b1 == 0
     }
@@ -744,6 +760,17 @@ impl Value {
     ///
     pub fn is_packed_value(&self) -> bool {
         self.0.get() & 0b0111 != 0
+    }
+
+    ///
+    /// Check if `self` is an immediate, Float or Range object.
+    ///
+    pub fn is_frozen_literal(&self) -> bool {
+        self.is_packed_value()
+            || self.is_float()
+            || self.is_range().is_some()
+            || self.class() == COMPLEX_CLASS
+        // Bignum is excluded
     }
 
     ///
@@ -1519,7 +1546,7 @@ impl Value {
 
         match &node.kind {
             NodeKind::CompStmt(stmts) => {
-                assert_eq!(1, stmts.len());
+                assert_eq!(1, stmts.len(), "multiple statements {stmts:?}");
                 Self::from_ast_inner(&stmts[0], vm, globals)
             }
             NodeKind::Integer(num) => Value::integer(*num),
@@ -1677,6 +1704,12 @@ impl Deref for Immediate {
     }
 }
 
+impl AsRef<Value> for Immediate {
+    fn as_ref(&self) -> &Value {
+        self.deref()
+    }
+}
+
 impl From<Value> for Immediate {
     fn from(value: Value) -> Self {
         assert!(value.is_packed_value());
@@ -1738,6 +1771,42 @@ impl Immediate {
         } else {
             None
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct RubySymbol(std::num::NonZeroU64);
+
+impl Deref for RubySymbol {
+    type Target = Value;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*(self as *const RubySymbol as *const Value) }
+    }
+}
+
+impl AsRef<Value> for RubySymbol {
+    fn as_ref(&self) -> &Value {
+        self.deref()
+    }
+}
+
+impl RubySymHash for RubySymbol {
+    fn ruby_hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl RubySymEql for RubySymbol {
+    fn eql(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl RubySymbol {
+    pub fn new(id: IdentId) -> Self {
+        RubySymbol(Value::symbol(id).0)
     }
 }
 

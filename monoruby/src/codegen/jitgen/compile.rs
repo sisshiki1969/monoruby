@@ -165,17 +165,19 @@ impl<'a> JitContext<'a> {
                     return Ok(CompileResult::ExitLoop);
                 }
             }
-            TraceIr::Immediate(dst, i) => {
-                state.def_C(dst, i);
-            }
-            TraceIr::Literal(dst, val) => {
-                if val.is_packed_value() || val.is_float() {
+            TraceIr::FrozenLiteral(dst, val) => {
+                if val.is_frozen_literal() {
                     state.def_C(dst, val);
                 } else {
                     state.discard(dst);
-                    ir.deep_copy_lit(state.get_using_xmm(), val);
+                    ir.lit2reg(val, GP::Rax);
                     state.def_reg2acc_concrete_value(ir, GP::Rax, dst, val);
                 }
+            }
+            TraceIr::Literal(dst, val) => {
+                state.discard(dst);
+                ir.deep_copy_lit(state.get_using_xmm(), val);
+                state.def_reg2acc_concrete_value(ir, GP::Rax, dst, val);
             }
             TraceIr::Array { dst, callid } => {
                 let CallSiteInfo { args, pos_num, .. } = self.store[callid];
@@ -184,11 +186,8 @@ impl<'a> JitContext<'a> {
                 ir.new_array(state.get_using_xmm(), callid);
                 state.def_reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
-            TraceIr::Lambda { dst, func_id } => {
-                state.unset_side_effect_guard();
-                state.discard(dst);
-                ir.new_lambda(state.get_using_xmm(), func_id);
-                state.def_rax2acc(ir, dst);
+            TraceIr::Lambda { .. } => {
+                return Err(CompileError);
             }
             TraceIr::Hash { dst, args, len } => {
                 state.write_back_range(ir, args, len * 2);
@@ -386,7 +385,7 @@ impl<'a> JitContext<'a> {
                 ic,
             } => {
                 let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
-                return self.binart_cmp_br(state, ir, kind, lhs, rhs, dest_bb, brkind, ic, bc_pos);
+                return self.binary_cmp_br(state, ir, kind, lhs, rhs, dest_bb, brkind, ic, bc_pos);
             }
             TraceIr::Index {
                 dst,

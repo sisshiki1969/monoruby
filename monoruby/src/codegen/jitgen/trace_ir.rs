@@ -81,9 +81,8 @@ pub(crate) enum TraceIr {
     },
     CheckKwRest(SlotId),
 
-    /// integer(%reg, i32)
-    Immediate(SlotId, Value),
-
+    /// literal(%ret, value)
+    FrozenLiteral(SlotId, Value),
     /// literal(%ret, value)
     Literal(SlotId, Value),
     Array {
@@ -334,7 +333,7 @@ impl TraceIr {
                 3 => TraceIr::Br(op1_l as i32),
                 4 => TraceIr::CondBr(SlotId::new(op1_w), op1_l as i32, false, BrKind::BrIf),
                 5 => TraceIr::CondBr(SlotId::new(op1_w), op1_l as i32, false, BrKind::BrIfNot),
-                6 => TraceIr::Immediate(SlotId::new(op1_w), op2.get_value()),
+                6 => TraceIr::FrozenLiteral(SlotId::new(op1_w), op2.get_value()),
                 7 => TraceIr::Literal(SlotId::new(op1_w), op2.get_value()),
                 10 | 18 => TraceIr::LoadConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
                 11 => TraceIr::StoreConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
@@ -791,7 +790,7 @@ impl TraceIr {
                     "opt_case {cond:?}: else -> {else_dest:?}  {min}..{max} -> branch_table:{branch_table:?}",
                 )
             }
-            TraceIr::Immediate(reg, val) => format!("{:?} = {}", reg, val.debug(store)),
+            TraceIr::FrozenLiteral(reg, val) => format!("{:?} = {}", reg, val.debug(store)),
             TraceIr::Literal(reg, val) => {
                 format!("{:?} = literal[{}]", reg, val.debug(store))
             }

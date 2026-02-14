@@ -10,6 +10,7 @@ use std::ops::{BitAnd, BitOr, BitXor};
 pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_class("Integer", INTEGER_CLASS, numeric, OBJECT_CLASS, None);
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "succ", succ, Box::new(integer_succ), 0);
     //globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
     //globals.define_builtin_func_with(INTEGER_CLASS, "step", step, 1, 2, false);
     globals.define_builtin_func(INTEGER_CLASS, "upto", upto, 1);
@@ -218,6 +219,53 @@ fn chr(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         &globals.store,
         lfp.self_val(),
     ))
+}
+
+#[monoruby_builtin]
+fn succ(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    Ok(match lfp.self_val().unpack() {
+        RV::Fixnum(i) => i
+            .checked_add(1)
+            .map(Value::integer)
+            .unwrap_or_else(|| Value::bigint(BigInt::from(i) + 1)),
+        RV::BigInt(b) => Value::bigint(b + 1),
+        _ => unimplemented!(),
+    })
+}
+
+fn integer_succ(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let CallSiteInfo { dst, recv, .. } = *callsite;
+    if let Some(i) = state.is_fixnum_literal(recv)
+        && Value::is_i63(i + 1)
+    {
+        state.def_C(dst, Value::integer(i + 1));
+        return true;
+    }
+
+    let deopt = ir.new_deopt(state);
+    state.load(ir, recv, GP::Rdi);
+    ir.inline(move |r#gen, _, labels| {
+        let deopt = &labels[deopt];
+        monoasm! { &mut r#gen.jit,
+            addq  rdi, 2;
+            jo    deopt;
+        }
+    });
+    if let Some(dst) = dst {
+        state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+    }
+    true
 }
 
 #[monoruby_builtin]
@@ -659,6 +707,12 @@ mod tests {
     }
 
     #[test]
+    fn succ() {
+        run_test("253.succ.succ.succ");
+        run_test_with_prelude("$a.succ.succ.succ", "$a = 100");
+    }
+
+    #[test]
     fn to_f() {
         run_test("253.to_f");
         run_test("-25253.to_f");
@@ -734,5 +788,20 @@ mod tests {
         run_test("100.!=(50)");
         run_test("100.!=(100.0)");
         run_test(r#"100.!=("100")"#);
+    }
+
+    #[test]
+    fn digits() {
+        run_test("100.digits");
+        run_test("100.digits(10)");
+        run_test("100.digits(16)");
+        run_test("100.digits(16.5)");
+        run_test("class C; def to_int; 10; end; end; 100.digits(C.new)");
+
+        run_test_error("(-100).digits(16)");
+        run_test_error("-100.digits(16)");
+        run_test_error("100.digits(-16)");
+        run_test_error("100.digits(0)");
+        run_test_error("100.digits(1)");
     }
 }

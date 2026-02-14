@@ -402,6 +402,7 @@ impl SlotState {
     ///
     #[allow(non_snake_case)]
     pub(crate) fn def_C(&mut self, slot: impl Into<Option<SlotId>>, v: Value) {
+        assert!(v.is_frozen_literal(), "{:?}", v);
         if let Some(slot) = slot.into() {
             self.discard(slot);
             self.set_mode(slot, LinkMode::C(v));
@@ -499,16 +500,25 @@ impl SlotState {
         }
     }
 
+    pub fn is_range_literal(&self, slot: SlotId) -> Option<RangeInner> {
+        if let LinkMode::C(v) = self.mode(slot) {
+            v.is_range().cloned()
+        } else {
+            None
+        }
+    }
+
     #[allow(non_snake_case)]
     pub fn coerce_C_f64(&self, slot: SlotId) -> Option<f64> {
         if let LinkMode::C(v) = self.mode(slot) {
-            if let Some(f) = v.try_float() {
-                return Some(f);
-            } else if let Some(i) = v.try_fixnum() {
-                return Some(i as f64);
+            match v.unpack() {
+                RV::Float(f) => Some(f),
+                RV::Fixnum(i) => Some(i as f64),
+                _ => None,
             }
+        } else {
+            None
         }
-        None
     }
 
     pub fn is_u16(&self, slot: SlotId) -> Option<u16> {
@@ -785,10 +795,18 @@ impl AbstractFrame {
                 }
             }
             LinkMode::C(v) => {
-                if v.class() == class {
-                    return;
+                if class == INTEGER_CLASS {
+                    if v.is_fixnum() {
+                        return;
+                    } else {
+                        // If v is Bignum, Guard will fail
+                    }
                 } else {
-                    // in this case, Guard will always fail
+                    if v.class() == class {
+                        return;
+                    } else {
+                        // in this case, Guard will always fail
+                    }
                 }
             }
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
@@ -1037,6 +1055,8 @@ pub(in crate::codegen::jitgen) enum LinkMode {
     ///
     /// Concrete value.
     ///
+    /// The `Value` must be a packed value or Float or Range object.
+    ///
     C(Value),
 }
 
@@ -1132,27 +1152,31 @@ impl LinkMode {
         let info = &store[fid];
         let mut slots = vec![];
         slots.push(recv);
-        let (filled_req, filled_opt, filled_post) = info.apply_args(*pos_num);
-        for i in 0..filled_req {
+        let (filled_req, filled_opt, filled_post, rest_len) = info.apply_args(*pos_num);
+        let req_len = filled_req.len();
+        let opt_len = filled_opt.len();
+        let post_len = filled_post.len();
+        for i in filled_req {
             slots.push(state.mode(*args + i));
         }
-        for _ in filled_req..info.req_num() {
+        for _ in req_len..info.req_num() {
             slots.push(Self::nil());
         }
-        for i in filled_req..filled_req + filled_opt {
+        for i in req_len..req_len + opt_len {
             slots.push(state.mode(*args + i));
         }
-        for _ in filled_opt..info.opt_num() {
+        for _ in opt_len..info.opt_num() {
             slots.push(Self::none());
         }
-        for i in filled_req + filled_opt..filled_req + filled_opt + filled_post {
+        if info.is_rest() {
+            slots.push(Self::S(Guarded::Class(ARRAY_CLASS)));
+        }
+        let start = req_len + opt_len + rest_len;
+        for i in start..start + post_len {
             slots.push(state.mode(*args + i));
         }
-        for _ in filled_post..info.post_num() {
+        for _ in post_len..info.post_num() {
             slots.push(Self::nil());
-        }
-        if info.is_rest() {
-            slots.push(Self::default());
         }
         let kw = info.kw_reg_pos();
         assert_eq!(kw.0 as usize, slots.len());
@@ -1162,6 +1186,9 @@ impl LinkMode {
             } else {
                 slots.push(Self::none());
             }
+        }
+        if info.kw_rest().is_some() {
+            slots.push(Self::S(Guarded::Class(HASH_CLASS)));
         }
         slots
     }
@@ -1182,6 +1209,9 @@ impl Guarded {
             Guarded::Fixnum
         } else if v.is_float() {
             Guarded::Float
+        } else if v.class() == INTEGER_CLASS {
+            // Bignum is not Guarded::Fixnum.
+            Guarded::Value
         } else {
             Guarded::Class(v.class())
         }

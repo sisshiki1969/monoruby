@@ -169,3 +169,10 @@ class GC
   end
 end
 
+require_relative 'comparable'
+require_relative 'enumerable'
+require_relative 'integer'
+require_relative 'range'
+require_relative 'array'
+require_relative 'builtins'
+require_relative 'pathname_builtins'

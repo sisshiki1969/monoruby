@@ -436,7 +436,7 @@ fn assert(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     let expected = lfp.arg(0);
     let actual = lfp.arg(1);
     eprintln!(
-        "expected:{} actual:{}",
+        "expected:{}\nactual  :{}",
         expected.inspect(&globals.store),
         actual.inspect(&globals.store)
     );

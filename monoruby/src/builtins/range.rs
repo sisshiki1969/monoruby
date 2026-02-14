@@ -16,7 +16,13 @@ pub(super) fn init(globals: &mut Globals) {
         0,
     );
     globals.define_builtin_inline_funcs(RANGE_CLASS, "end", &["last"], end, Box::new(range_end), 0);
-    globals.define_builtin_func(RANGE_CLASS, "exclude_end?", exclude_end, 0);
+    globals.define_builtin_inline_func(
+        RANGE_CLASS,
+        "exclude_end?",
+        exclude_end,
+        Box::new(range_exclude_end),
+        0,
+    );
     globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
     //globals.define_builtin_func(RANGE_CLASS, "reject", reject, 0);
     globals.define_builtin_func(RANGE_CLASS, "include?", include_, 1);
@@ -62,6 +68,13 @@ fn range_begin(
         return false;
     }
     let dst = callsite.dst;
+    if let Some(range) = state.is_range_literal(callsite.recv) {
+        let start = range.start();
+        if start.is_frozen_literal() {
+            state.def_C(dst, start);
+            return true;
+        }
+    }
     state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _| {
         monoasm! { &mut r#gen.jit,
@@ -97,6 +110,13 @@ fn range_end(
         return false;
     }
     let dst = callsite.dst;
+    if let Some(range) = state.is_range_literal(callsite.recv) {
+        let end = range.end();
+        if end.is_frozen_literal() {
+            state.def_C(dst, end);
+            return true;
+        }
+    }
     state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _| {
         monoasm! { &mut r#gen.jit,
@@ -115,6 +135,37 @@ fn range_end(
 #[monoruby_builtin]
 fn exclude_end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_range().exclude_end()))
+}
+
+fn range_exclude_end(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let dst = callsite.dst;
+    if let Some(range) = state.is_range_literal(callsite.recv) {
+        let exclude_end = range.exclude_end();
+        state.def_C(dst, Value::bool(exclude_end));
+        return true;
+    }
+    state.load(ir, callsite.recv, GP::Rdi);
+    ir.inline(move |r#gen, _, _| {
+        monoasm! { &mut r#gen.jit,
+            movl rax, [rdi + (crate::rvalue::RANGE_EXCLUDE_END_OFFSET as i32)];
+            shlq rax, 3;
+            orq  rax, (FALSE_VALUE);
+        }
+    });
+
+    state.def_reg2acc(ir, GP::Rax, dst);
+    true
 }
 
 ///
@@ -409,6 +460,24 @@ mod tests {
         a
         "#,
         );
+        run_test(
+            r#"
+        a = 0
+        (10..5).each do |x|
+            a += x
+        end
+        a
+        "#,
+        );
+        run_test(
+            r#"
+        a = ''
+        ('a'...'z').each do |x|
+            a += x
+        end
+        a
+        "#,
+        );
     }
 
     #[test]
@@ -541,8 +610,31 @@ mod tests {
         res << (0..4).bsearch {|i| 100 - ary[i] } # => 1, 2 or 3
         res << (0..4).bsearch {|i| 300 - ary[i] } # => nil
         res << (0..4).bsearch {|i|  50 - ary[i] } # => nil
+
+        res << (10..4).bsearch {|i| 100 - ary[i] }
+        res << (10..4).bsearch {|i| 300 - ary[i] }
+        res << (10..4).bsearch {|i|  50 - ary[i] }
         
         res
+        "##,
+        );
+    }
+
+    #[test]
+    fn reject() {
+        run_test(
+            r##"
+        (1..6).reject {|i| i % 2 == 0 }
+        "##,
+        );
+        run_test(
+            r##"
+        (1...6).reject {|i| i % 2 == 0 }
+        "##,
+        );
+        run_test(
+            r##"
+        (10..6).reject {|i| i % 2 == 0 }
         "##,
         );
     }

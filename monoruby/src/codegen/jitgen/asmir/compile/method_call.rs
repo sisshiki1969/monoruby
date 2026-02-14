@@ -335,66 +335,6 @@ impl Codegen {
             call (codeptr - src_point - 5); // CALL_SITE
         }
     }
-
-    ///
-    /// Handle hash splat arguments and a keyword rest parameter.
-    ///
-    /// ### destroy
-    /// - caller save registers
-    ///
-    pub(super) fn handle_hash_splat_kw_rest(
-        &mut self,
-        callid: CallSiteId,
-        meta: Meta,
-        offset: usize,
-        error: &DestLabel,
-    ) {
-        monoasm! { &mut self.jit,
-            movq rdi, rbx; // &mut Executor
-            movq rsi, r12; // &mut Globals
-            movl rdx, (callid.get());
-            movq rcx, (meta.get());
-            lea  r8, [rsp - (RSP_LOCAL_FRAME)];   // callee_lfp
-            subq rsp, (offset);
-            movq rax, (jit_handle_hash_splat_kw_rest);
-            call rax;
-            addq rsp, (offset);
-        }
-        self.handle_error(error);
-    }
-}
-
-///
-/// Handle hash splat arguments and a keyword rest parameter.
-///
-/// ### in
-/// - rdi: &mut Executor
-/// - rsi: &mut Globals
-/// - rdx: CallSiteId
-/// - rcx: Meta
-/// - r8: callee_lfp
-///
-/// ### out
-/// - rax: Option<Value>
-///
-/// ### destroy
-/// - caller save registers
-///
-extern "C" fn jit_handle_hash_splat_kw_rest(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    callid: CallSiteId,
-    meta: Meta,
-    callee_lfp: Lfp,
-) -> Option<Value> {
-    let caller_lfp = vm.cfp().lfp();
-    match runtime::jit_hash_splat_kw_rest(vm, globals, callid, callee_lfp, caller_lfp, meta) {
-        Ok(_) => Some(Value::nil()),
-        Err(err) => {
-            vm.set_error(err);
-            None
-        }
-    }
 }
 
 const CACHE_SIZE: usize = 4;

@@ -367,7 +367,7 @@ impl BytecodePtr {
         if let Some(cached_class) = self.cached_class1() {
             Some(MethodCacheEntry {
                 recv_class: cached_class,
-                func_id: self.cached_fid().unwrap(),
+                func_id: self.cached_fid()?,
                 version: (self + 1).cached_version(),
             })
         } else {

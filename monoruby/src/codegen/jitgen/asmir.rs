@@ -62,7 +62,6 @@ impl std::ops::Index<AsmEvict> for SideExitLabels {
 #[derive(Debug)]
 pub(crate) struct AsmIr {
     codegen_mode: bool,
-    empty: bool,
     inst: Vec<AsmInst>,
     side_exit: Vec<SideExit>,
 }
@@ -95,7 +94,6 @@ impl AsmIr {
     pub(super) fn new(ctx: &JitContext) -> Self {
         Self {
             codegen_mode: ctx.codegen_mode(),
-            empty: true,
             inst: vec![],
             side_exit: vec![],
         }
@@ -104,21 +102,21 @@ impl AsmIr {
     pub(super) fn push(&mut self, inst: AsmInst) {
         if self.codegen_mode {
             self.inst.push(inst);
-            self.empty = false;
         }
     }
 
     pub(super) fn is_empty(&self) -> bool {
-        self.empty
+        self.inst.is_empty()
     }
 
-    pub(super) fn save(&mut self) -> (usize, usize) {
-        (self.inst.len(), self.side_exit.len())
+    pub(super) fn save(&mut self) -> (usize, usize, bool) {
+        (self.inst.len(), self.side_exit.len(), self.codegen_mode)
     }
 
-    pub(super) fn restore(&mut self, (inst, side_exit): (usize, usize)) {
+    pub(super) fn restore(&mut self, (inst, side_exit, codegen_mode): (usize, usize, bool)) {
         self.inst.truncate(inst);
         self.side_exit.truncate(side_exit);
+        self.codegen_mode = codegen_mode;
     }
 
     pub(crate) fn new_evict(&mut self) -> AsmEvict {
@@ -407,6 +405,14 @@ impl AsmIr {
         });
     }
 
+    pub(super) fn create_array(&mut self, src: SlotId, len: usize) {
+        self.push(AsmInst::CreateArray { src, len });
+    }
+
+    pub(super) fn kw_rest(&mut self, rest_kw: Vec<(SlotId, IdentId)>) {
+        self.push(AsmInst::RestKw { rest_kw });
+    }
+
     ///
     /// Compare `lhs and `rhs` with "===" and return the result in rax.
     ///
@@ -452,27 +458,6 @@ impl AsmIr {
             else_label,
             branch_labels,
         });
-    }
-
-    pub(super) fn handle_hash_splat_kwrest(
-        &mut self,
-        store: &Store,
-        callid: CallSiteId,
-        callee_fid: FuncId,
-        error: AsmError,
-    ) {
-        let caller = &store[callid];
-        let callee = &store[callee_fid];
-        if callee.kw_rest().is_some() || !caller.hash_splat_pos.is_empty() {
-            let meta = callee.meta();
-            let offset = callee.get_offset();
-            self.push(AsmInst::SetupHashSplatKwRest {
-                callid,
-                meta,
-                offset,
-                error,
-            });
-        }
     }
 
     ///
@@ -673,10 +658,6 @@ impl AsmIr {
 impl AsmIr {
     pub(super) fn new_array(&mut self, using_xmm: UsingXmm, callid: CallSiteId) {
         self.push(AsmInst::NewArray { callid, using_xmm });
-    }
-
-    pub(super) fn new_lambda(&mut self, using_xmm: UsingXmm, func_id: FuncId) {
-        self.push(AsmInst::NewLambda(func_id, using_xmm));
     }
 
     pub(super) fn new_hash(&mut self, using_xmm: UsingXmm, args: SlotId, len: usize) {
@@ -1011,12 +992,7 @@ pub(super) enum AsmInst {
         meta: Meta,
         outer: usize,
     },
-    SetupHashSplatKwRest {
-        callid: CallSiteId,
-        meta: Meta,
-        offset: usize,
-        error: AsmError,
-    },
+
     ///
     /// Call method
     ///
@@ -1264,10 +1240,6 @@ pub(super) enum AsmInst {
         using_xmm: UsingXmm,
     },
     ///
-    /// Create a new Array object and store it to *rax*
-    ///
-    NewLambda(FuncId, UsingXmm),
-    ///
     /// Create a new Hash object and store it to *rax*
     ///
     NewHash(SlotId, usize, UsingXmm),
@@ -1461,6 +1433,13 @@ pub(super) enum AsmInst {
         rest_pos: Option<usize>,
         using_xmm: UsingXmm,
     },
+    CreateArray {
+        src: SlotId,
+        len: usize,
+    },
+    RestKw {
+        rest_kw: Vec<(SlotId, IdentId)>,
+    },
 
     UndefMethod {
         undef: IdentId,
@@ -1520,6 +1499,7 @@ pub(super) enum AsmInst {
 impl AsmInst {
     #[allow(dead_code)]
     #[cfg(feature = "emit-asm")]
+    #[allow(dead_code)]
     pub fn dump(&self, store: &Store) -> String {
         match self {
             Self::AccToStack(slot) => format!("{:?} = R15", slot),

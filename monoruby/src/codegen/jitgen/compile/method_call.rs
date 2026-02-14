@@ -151,27 +151,15 @@ impl<'a> JitContext<'a> {
             }
         }
 
-        self.call(state, ir, callid, func_id, recv_class)
-    }
-
-    ///
-    /// generate JIT code for a method call which was cached.
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    /// ### out
-    /// - rax: return value: Value
-    ///
-    fn call(
-        &mut self,
-        state: &mut AbstractState,
-        ir: &mut AsmIr,
-        callid: CallSiteId,
-        fid: FuncId,
-        recv_class: ClassId,
-    ) -> Result<CompileResult> {
-        let callsite = &self.store[callid];
+        //
+        // generate JIT code for a cached method call.
+        //
+        // ### in
+        // - rdi: receiver: Value
+        //
+        // ### out
+        // - rax: return value: Value
+        //
         let CallSiteInfo {
             args,
             pos_num,
@@ -180,21 +168,21 @@ impl<'a> JitContext<'a> {
             ..
         } = *callsite;
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
-        let (fid, outer_lfp) = match self.store[fid].kind {
+        let (fid, outer_lfp) = match self.store[func_id].kind {
             FuncKind::AttrReader { ivar_name } => {
                 return Ok(self.attr_reader(state, ir, callid, recv_class, ivar_name));
             }
             FuncKind::AttrWriter { ivar_name } => {
                 return Ok(self.attr_writer(state, ir, callid, recv_class, ivar_name));
             }
-            FuncKind::Builtin { .. } => (fid, None),
+            FuncKind::Builtin { .. } => (func_id, None),
             FuncKind::Const(v) => {
                 state.def_C(dst, v.into());
                 return Ok(CompileResult::Continue);
             }
             FuncKind::Proc(proc) => (proc.func_id(), Some(proc.outer_lfp())),
             FuncKind::ISeq(iseq) => {
-                let specializable = self.store.is_simple_call(fid, callid)
+                let specializable = self.store.is_simple_call(func_id, callid)
                     && (state.is_C(callsite.recv)
                         || (pos_num != 0 && (args..args + pos_num).any(|i| state.is_C(i))));
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
@@ -207,12 +195,12 @@ impl<'a> JitContext<'a> {
                         ir,
                         callid,
                         recv_class,
-                        fid,
+                        func_id,
                         iseq,
                         specializable,
                     );
                 }
-                (fid, None)
+                (func_id, None)
             }
         };
 
@@ -285,13 +273,13 @@ impl<'a> JitContext<'a> {
             JitArgumentInfo::default()
         };
         let (entry, return_state) = match self.compile_specialized_func(
+            state,
             iseq,
             self_class,
             None,
             args_info,
             Some(outer),
             callid,
-            state,
         )? {
             SpecializedCompileResult::Const(v) => {
                 state.def_C(dst, v);
@@ -315,7 +303,6 @@ impl<'a> JitContext<'a> {
         let evict = ir.new_evict();
         let meta = self.store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
-        ir.handle_hash_splat_kwrest(&self.store, callid, callee_fid, error);
         ir.push(AsmInst::SpecializedYield { entry, evict });
         ir.xmm_restore_cont(using_xmm);
         ir.handle_error(error);
@@ -438,13 +425,13 @@ impl<'a> JitContext<'a> {
             Some(self.label())
         };
         let (entry, result) = match self.compile_specialized_func(
+            state,
             iseq,
             recv_class,
             patch_point,
             args_info,
             None,
             callid,
-            state,
         )? {
             SpecializedCompileResult::Const(v) => {
                 state.def_C(dst, v);
@@ -498,13 +485,13 @@ impl<'a> JitContext<'a> {
 
     fn compile_specialized_func(
         &mut self,
+        state: &mut AbstractState,
         iseq_id: ISeqId,
         self_class: ClassId,
         patch_point: Option<JitLabel>,
         args_info: JitArgumentInfo,
         outer: Option<usize>,
         callid: CallSiteId,
-        state: &mut AbstractState,
     ) -> Result<SpecializedCompileResult> {
         let frame = self.new_specialized_frame(iseq_id, outer, args_info, self_class);
 
@@ -607,7 +594,6 @@ impl AbstractState {
             callid,
             outer_lfp,
         });
-        ir.handle_hash_splat_kwrest(store, callid, callee_fid, error);
         ir.push(AsmInst::Call {
             callee_fid,
             recv_class,
@@ -651,7 +637,6 @@ impl AbstractState {
             callid,
             outer_lfp: None,
         });
-        ir.handle_hash_splat_kwrest(store, callid, callee_fid, error);
         ir.push(AsmInst::SpecializedCall {
             entry: inlined_entry,
             patch_point,
@@ -722,17 +707,22 @@ impl AbstractState {
         let callee = &store[callee_fid];
         let callsite = &store[callid];
         if store.is_simple_call(callee_fid, callid) {
-            let stack_offset = if self.callsite_exists_F(store, callid) {
+            let args = callsite.args;
+            let pos_num = callsite.pos_num;
+            let kw_pos = callsite.kw_pos;
+            let kw_num = callsite.kw_len();
+
+            let (filled_req, filled_opt, filled_post, rest_len) = callee.apply_args(pos_num);
+            let stack_offset = if self.callsite_exists_F(store, callid)
+                || callee.is_rest()
+                || callee.kw_rest().is_some()
+            {
                 callee.get_offset() as i32
             } else {
                 0
             };
             ir.reg_sub(GP::Rsp, stack_offset);
 
-            let args = callsite.args;
-            let pos_num = callsite.pos_num;
-            let kw_pos = callsite.kw_pos;
-            let kw_num = callsite.kw_len();
             // write back block argument.
             if let Some(block_arg) = callsite.block_arg {
                 self.write_back_slot(ir, block_arg);
@@ -742,51 +732,57 @@ impl AbstractState {
             let ofs = stack_offset - LFP_SELF;
             self.fetch_for_callee(ir, callsite.recv, ofs);
 
-            // fetch positional arguments.
-            let (filled_req, filled_opt, filled_post) = callee.apply_args(pos_num);
+            let req = filled_req.len();
+            let opt = filled_opt.len();
+            let post = filled_post.len();
 
             // fill required params.
-            for i in 0..filled_req {
-                let reg = args + i;
+            for i in filled_req {
                 let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
-                self.fetch_for_callee(ir, reg, ofs);
+                self.fetch_for_callee(ir, args + i, ofs);
             }
-            if filled_req != callee.req_num() {
-                for i in filled_req..callee.req_num() {
+            if req != callee.req_num() {
+                for i in req..callee.req_num() {
                     let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
                     ir.u64torsp_offset(NIL_VALUE, ofs);
                 }
             }
 
             // fill optional params.
-            for i in callee.req_num()..callee.req_num() + filled_opt {
-                let reg = args + filled_req + (i - callee.req_num());
+            for i in filled_opt {
+                let reg = args + req + (i - callee.req_num());
                 let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
                 self.fetch_for_callee(ir, reg, ofs);
             }
-            if filled_opt != callee.opt_num() {
-                for i in callee.req_num() + filled_opt..callee.reqopt_num() {
+            if opt != callee.opt_num() {
+                for i in callee.req_num() + opt..callee.reqopt_num() {
                     let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
                     ir.zero2rsp_offset(ofs);
                 }
             }
 
+            // fill a rest param.
+            if callee.is_rest() {
+                let ofs = stack_offset - (LFP_ARG0 + (8 * (callee.reqopt_num())) as i32);
+                self.fetch_rest_for_callee(ir, args + req + opt, rest_len, ofs);
+            }
+
             // fill post params.
-            let start = callee.reqopt_num() + callee.is_rest() as usize;
-            for i in start..start + filled_post {
-                let reg = args + filled_req + filled_opt + (i - start);
+            let start = filled_post.start;
+            for i in filled_post {
+                let reg = args + (pos_num - post) + (i - start);
                 let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
                 self.fetch_for_callee(ir, reg, ofs);
             }
-            if filled_post != callee.post_num() {
-                for i in start + filled_post..start + callee.post_num() {
+            if post != callee.post_num() {
+                for i in start + post..start + callee.post_num() {
                     let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
                     ir.u64torsp_offset(NIL_VALUE, ofs);
                 }
             }
 
             // fill keyword arguments
-            let CallSiteInfo { kw_args, .. } = callsite;
+            let kw_args = &callsite.kw_args;
             let mut used_kw = vec![];
             for (i, param_name) in callee.kw_names().iter().enumerate() {
                 let ofs = stack_offset - (LFP_SELF + (callee.kw_reg_pos() + i).0 as i32 * 8);
@@ -802,11 +798,20 @@ impl AbstractState {
                 }
             }
 
-            // write back unused keyword arguments.
+            // check unused keyword arguments.
+            let mut rest_kw = vec![];
             for i in 0..kw_num {
                 if !used_kw.contains(&i) {
-                    self.write_back_slot(ir, kw_pos + i);
+                    let (k, v) = callsite.kw_args.get_index(i).unwrap();
+                    assert_eq!(i, *v);
+                    rest_kw.push((kw_pos + i, *k));
                 }
+            }
+
+            // fill kw rest param.
+            if let Some(kw_rest) = callee.kw_rest() {
+                let ofs = stack_offset - (LFP_SELF + kw_rest.0 as i32 * 8);
+                self.fetch_kwrest_for_callee(ir, rest_kw, ofs);
             }
 
             ir.reg_add(GP::Rsp, stack_offset);
