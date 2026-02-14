@@ -73,7 +73,7 @@ impl<'a> JitContext<'a> {
         if self.store[func_id].possibly_capture_without_block() {
             return Err(CompileError);
         }
-        // We must write back and unlink all local vars when they are possibly accessed or captured from inner blocks.
+        // We must write back all local vars to the stack and set the state to LinkMode::S when they are possibly accessed or captured from inner blocks.
         if callsite.block_fid.is_some() {
             state.locals_to_S(ir);
         }

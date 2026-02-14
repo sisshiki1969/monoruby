@@ -441,7 +441,7 @@ impl SlotState {
     ///
     /// Write back the value of the *slot* to the corresponding stack slot.
     ///
-    /// LinkMode of the *slot* is set to LinkMode::S or Sf.
+    /// LinkMode of the *slot* is set to LinkMode::S or Sf or C.
     ///
     /// ### destroy
     /// - rax, rcx
@@ -454,9 +454,6 @@ impl SlotState {
                 ir.xmm2stack(xmm, slot);
             }
             LinkMode::C(v) => {
-                // C -> S
-                let guarded = Guarded::from_concrete_value(v);
-                self.set_mode(slot, LinkMode::S(guarded));
                 ir.push(AsmInst::LitToStack(v, slot));
             }
             LinkMode::G(guarded) => {
@@ -472,6 +469,42 @@ impl SlotState {
                 unreachable!("write_back_slot() {slot:?} {:?}", self.mode(slot));
             }
         }
+    }
+
+    ///
+    /// Write back the value of the *slot* to the corresponding stack slot.
+    ///
+    /// LinkMode of the *slot* is set to LinkMode::S.
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    ///
+    #[allow(non_snake_case)]
+    pub(super) fn to_S(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        match self.mode(slot) {
+            LinkMode::F(xmm) => {
+                // F -> S
+                ir.xmm2stack(xmm, slot);
+            }
+            LinkMode::C(v) => {
+                // C -> S
+                ir.push(AsmInst::LitToStack(v, slot));
+            }
+            LinkMode::G(_) => {
+                // G -> S
+                ir.acc2stack(slot);
+            }
+            LinkMode::Sf(_, _) | LinkMode::S(_) => {}
+            LinkMode::V => {
+                ir.push(AsmInst::LitToStack(Value::nil(), slot));
+            }
+            LinkMode::MaybeNone | LinkMode::None => {
+                unreachable!("to_S() {:?}", self.mode(slot));
+            }
+        }
+        let guarded = self.guarded(slot);
+        self.clear(slot);
+        self.set_mode(slot, LinkMode::S(guarded));
     }
 }
 
@@ -960,38 +993,38 @@ impl AbstractFrame {
             .collect()
     }
 
-    ///
-    /// Write back the value of the *slot* to the corresponding stack slot.
-    ///
-    /// LinkMode of the *slot* is set to LinkMode::S or V.
-    ///
-    /// ### destroy
-    /// - rax, rcx
-    ///
-    #[allow(non_snake_case)]
-    pub(super) fn to_S(&mut self, ir: &mut AsmIr, slot: SlotId) {
-        match self.mode(slot) {
-            LinkMode::F(xmm) => {
-                ir.xmm2stack(xmm, slot);
-            }
-            LinkMode::C(v) => {
-                ir.push(AsmInst::LitToStack(v, slot));
-            }
-            LinkMode::G(_) => {
-                ir.acc2stack(slot);
-            }
-            LinkMode::Sf(_, _) | LinkMode::S(_) => {}
-            LinkMode::V => {
-                ir.push(AsmInst::LitToStack(Value::nil(), slot));
-            }
-            LinkMode::MaybeNone | LinkMode::None => {
-                unreachable!("to_S() {:?}", self.mode(slot));
-            }
-        }
-        let guarded = self.guarded(slot);
-        self.clear(slot);
-        self.set_mode(slot, LinkMode::S(guarded));
-    }
+    //
+    // Write back the value of the *slot* to the corresponding stack slot.
+    //
+    // LinkMode of the *slot* is set to LinkMode::S or V.
+    //
+    // ### destroy
+    // - rax, rcx
+    //
+    //#[allow(non_snake_case)]
+    //pub(super) fn to_S(&mut self, ir: &mut AsmIr, slot: SlotId) {
+    //    match self.mode(slot) {
+    //        LinkMode::F(xmm) => {
+    //            ir.xmm2stack(xmm, slot);
+    //        }
+    //        LinkMode::C(v) => {
+    //            ir.push(AsmInst::LitToStack(v, slot));
+    //        }
+    //        LinkMode::G(_) => {
+    //            ir.acc2stack(slot);
+    //        }
+    //        LinkMode::Sf(_, _) | LinkMode::S(_) => {}
+    //        LinkMode::V => {
+    //            ir.push(AsmInst::LitToStack(Value::nil(), slot));
+    //        }
+    //        LinkMode::MaybeNone | LinkMode::None => {
+    //            unreachable!("to_S() {:?}", self.mode(slot));
+    //        }
+    //    }
+    //    let guarded = self.guarded(slot);
+    //    self.clear(slot);
+    //    self.set_mode(slot, LinkMode::S(guarded));
+    //}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1338,8 +1371,14 @@ impl AbstractFrame {
                 }
                 ir.reg2stack(GP::Rax, slot);
             }
-            (LinkMode::C(_) | LinkMode::F(_) | LinkMode::G(_), LinkMode::S(_)) => {
+            (LinkMode::F(_) | LinkMode::G(_), LinkMode::S(_)) => {
                 self.write_back_slot(ir, slot);
+            }
+            (LinkMode::C(v), LinkMode::S(_)) => {
+                // C -> S
+                let guarded = Guarded::from_concrete_value(v);
+                self.set_mode(slot, LinkMode::S(guarded));
+                ir.push(AsmInst::LitToStack(v, slot));
             }
             (LinkMode::None, LinkMode::None) => {}
             (LinkMode::MaybeNone, LinkMode::MaybeNone) => {}
