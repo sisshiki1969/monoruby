@@ -770,6 +770,7 @@ impl Value {
             || self.is_float()
             || self.is_range().is_some()
             || self.class() == COMPLEX_CLASS
+        // Bignum is excluded
     }
 
     ///

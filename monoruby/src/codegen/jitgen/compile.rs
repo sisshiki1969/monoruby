@@ -165,17 +165,19 @@ impl<'a> JitContext<'a> {
                     return Ok(CompileResult::ExitLoop);
                 }
             }
-            TraceIr::Immediate(dst, i) => {
-                state.def_C(dst, i);
-            }
-            TraceIr::Literal(dst, val) => {
+            TraceIr::FrozenLiteral(dst, val) => {
                 if val.is_frozen_literal() {
                     state.def_C(dst, val);
                 } else {
                     state.discard(dst);
-                    ir.deep_copy_lit(state.get_using_xmm(), val);
+                    ir.lit2reg(val, GP::Rax);
                     state.def_reg2acc_concrete_value(ir, GP::Rax, dst, val);
                 }
+            }
+            TraceIr::Literal(dst, val) => {
+                state.discard(dst);
+                ir.deep_copy_lit(state.get_using_xmm(), val);
+                state.def_reg2acc_concrete_value(ir, GP::Rax, dst, val);
             }
             TraceIr::Array { dst, callid } => {
                 let CallSiteInfo { args, pos_num, .. } = self.store[callid];

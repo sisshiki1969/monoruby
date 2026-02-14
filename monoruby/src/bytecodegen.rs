@@ -962,12 +962,16 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn emit_imm(&mut self, dst: BcReg, imm: Immediate) {
-        self.emit(BytecodeInst::Immediate(dst, imm), Loc::default());
+        self.emit(BytecodeInst::FrozenLiteral(dst, imm.into()), Loc::default());
     }
 
     fn emit_literal(&mut self, dst: BcReg, v: Value) {
         self.iseq_mut().literals.push(v);
-        self.emit(BytecodeInst::Literal(dst, v), Loc::default());
+        if v.class().is_always_frozen() {
+            self.emit(BytecodeInst::FrozenLiteral(dst, v), Loc::default());
+        } else {
+            self.emit(BytecodeInst::Literal(dst, v), Loc::default());
+        }
     }
 
     fn emit_nil(&mut self, dst: BcReg) {

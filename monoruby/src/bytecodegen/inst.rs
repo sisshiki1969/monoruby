@@ -50,7 +50,9 @@ impl BytecodeIr {
 ///
 #[derive(Debug, Clone)]
 pub(super) enum BytecodeInst {
-    Immediate(BcReg, Immediate),
+    /// Immediate, or a frozen heap object
+    FrozenLiteral(BcReg, Value),
+    /// Heap object (not frozen)
     Literal(BcReg, Value),
     Array(BcReg, Box<CallSite>),
     Hash {
