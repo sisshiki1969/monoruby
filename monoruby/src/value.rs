@@ -1729,30 +1729,37 @@ impl Immediate {
         Immediate(std::num::NonZeroU64::new(u).unwrap())
     }
 
-    pub fn nil() -> Self {
-        Immediate::from_u64(NIL_VALUE)
+    ///
+    /// ## Safety: Caller must ensure `u` is not zero.
+    ///
+    const unsafe fn from_u64_unchecked(u: u64) -> Immediate {
+        Immediate(unsafe { std::num::NonZeroU64::new_unchecked(u) })
     }
 
-    pub fn bool(b: bool) -> Self {
-        Immediate::from_u64(if b { TRUE_VALUE } else { FALSE_VALUE })
+    pub const fn nil() -> Self {
+        unsafe { Immediate::from_u64_unchecked(NIL_VALUE) }
+    }
+
+    pub const fn bool(b: bool) -> Self {
+        unsafe { Immediate::from_u64_unchecked(if b { TRUE_VALUE } else { FALSE_VALUE }) }
     }
 
     fn fixnum(num: i64) -> Self {
-        Immediate::from_u64((num << 1) as u64 | 0b1)
+        unsafe { Immediate::from_u64_unchecked((num << 1) as u64 | 0b1) }
     }
 
     pub fn symbol(id: IdentId) -> Self {
-        Immediate::from_u64((id.get() as u64) << 32 | TAG_SYMBOL)
+        unsafe { Immediate::from_u64_unchecked((id.get() as u64) << 32 | TAG_SYMBOL) }
     }
 
     pub fn flonum(num: f64) -> Option<Self> {
         if num == 0.0 {
-            return Some(Self::from_u64(FLOAT_ZERO));
+            return Some(unsafe { Self::from_u64_unchecked(FLOAT_ZERO) });
         }
         let unum = f64::to_bits(num);
         let exp = ((unum >> 60) & 0b111) + 1;
         if (exp & 0b0110) == 0b0100 {
-            Some(Self::from_u64(((unum.rotate_left(3)) & !1) | 2))
+            Some(unsafe { Self::from_u64_unchecked(((unum.rotate_left(3)) & !1) | 2) })
         } else {
             None
         }

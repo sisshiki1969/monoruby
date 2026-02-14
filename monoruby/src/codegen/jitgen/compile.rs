@@ -186,11 +186,8 @@ impl<'a> JitContext<'a> {
                 ir.new_array(state.get_using_xmm(), callid);
                 state.def_reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
-            TraceIr::Lambda { dst, func_id } => {
-                state.unset_side_effect_guard();
-                state.discard(dst);
-                ir.new_lambda(state.get_using_xmm(), func_id);
-                state.def_rax2acc(ir, dst);
+            TraceIr::Lambda { .. } => {
+                return Err(CompileError);
             }
             TraceIr::Hash { dst, args, len } => {
                 state.write_back_range(ir, args, len * 2);

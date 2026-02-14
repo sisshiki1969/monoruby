@@ -294,7 +294,7 @@ impl<'a> JitContext<'a> {
         let using_xmm = state.get_using_xmm();
         // stack pointer adjustment
         // -using_xmm.offset()
-        ir.xmm_save(using_xmm);
+        ir.xmm_save_cont(using_xmm);
         state.set_arguments(&self.store, ir, callid, callee_fid);
         state.discard(dst);
         state.clear_above_next_sp();
@@ -304,7 +304,7 @@ impl<'a> JitContext<'a> {
         let meta = self.store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
         ir.push(AsmInst::SpecializedYield { entry, evict });
-        ir.xmm_restore(using_xmm);
+        ir.xmm_restore_cont(using_xmm);
         ir.handle_error(error);
         let res = state.def_rax2acc_return(ir, dst, return_state);
         state.immediate_evict(ir, evict);
@@ -582,7 +582,7 @@ impl AbstractState {
         let using_xmm = self.get_using_xmm();
         // stack pointer adjustment
         // -using_xmm.offset()
-        ir.xmm_save(using_xmm);
+        ir.xmm_save_cont(using_xmm);
         self.set_arguments(store, ir, callid, callee_fid);
         self.discard(dst);
         self.clear_above_next_sp();
@@ -599,7 +599,7 @@ impl AbstractState {
             recv_class,
             evict,
         });
-        ir.xmm_restore(using_xmm);
+        ir.xmm_restore_cont(using_xmm);
         ir.handle_error(error);
         self.def_rax2acc(ir, dst);
         self.immediate_evict(ir, evict);
@@ -625,7 +625,7 @@ impl AbstractState {
         let using_xmm = self.get_using_xmm();
         // stack pointer adjustment
         // -using_xmm.offset()
-        ir.xmm_save(using_xmm);
+        ir.xmm_save_cont(using_xmm);
         self.set_arguments(store, ir, callid, callee_fid);
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
@@ -642,7 +642,7 @@ impl AbstractState {
             patch_point,
             evict,
         });
-        ir.xmm_restore(using_xmm);
+        ir.xmm_restore_cont(using_xmm);
         ir.handle_error(error);
         self.unset_side_effect_guard();
     }
@@ -658,13 +658,13 @@ impl AbstractState {
         self.exec_gc(ir, true);
         // stack pointer adjustment
         // -using_xmm.offset()
-        ir.xmm_save(using_xmm);
+        ir.xmm_save_cont(using_xmm);
         ir.push(AsmInst::Yield {
             callid,
             error,
             evict,
         });
-        ir.xmm_restore(using_xmm);
+        ir.xmm_restore_cont(using_xmm);
         ir.handle_error(error);
         self.def_rax2acc(ir, dst);
         self.immediate_evict(ir, evict);

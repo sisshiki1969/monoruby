@@ -35,6 +35,8 @@ type Result<T> = std::result::Result<T, CompileError>;
 
 pub(super) struct CompileError;
 
+const RBP_LOCAL_FRAME: i32 = 24;
+
 ///
 /// Compile result of the current instruction.
 ///
@@ -104,6 +106,10 @@ struct BranchEntry {
 
 pub(crate) fn conv(reg: SlotId) -> i32 {
     reg.0 as i32 * 8 + LFP_SELF
+}
+
+pub(crate) fn rbp_local(reg: SlotId) -> i32 {
+    RBP_LOCAL_FRAME + reg.0 as i32 * 8 + LFP_SELF
 }
 
 ///
@@ -243,12 +249,14 @@ impl SpecializedCodeInfo {
         }
     }
 
+    #[cfg(feature = "jit-log")]
     pub(super) fn format(&self, store: &Store) -> String {
         let mut buf = String::new();
         self.format_inner(store, &mut buf, 0);
         buf
     }
 
+    #[cfg(feature = "jit-log")]
     fn format_inner(&self, store: &Store, buf: &mut String, level: usize) {
         let indent = " ".repeat(level * 2);
         buf.push_str(&format!(
@@ -437,7 +445,7 @@ macro_rules! load_store {
                 let reg = reg.into();
                 if let Some(reg) = reg {
                     monoasm!{ &mut self.jit,
-                        movq [r14 - (conv(reg))], $reg;
+                        movq [rbp - (rbp_local(reg))], $reg;
                     }
                 }
             }
@@ -448,7 +456,7 @@ macro_rules! load_store {
             #[allow(dead_code)]
             pub(crate) fn [<load_ $reg>](&mut self, reg: SlotId) {
                 monoasm!( &mut self.jit,
-                    movq $reg, [r14 - (conv(reg))];
+                    movq $reg, [rbp - (rbp_local(reg))];
                 );
             }
         }
@@ -485,17 +493,21 @@ impl JitModule {
         );
     }
 
+    pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
+        self.xmm_save_with_cont(using_xmm, false);
+    }
+
     ///
     /// Save floating point registers in use.
     ///
     /// ### stack pointer adjustment
     /// - -`using_xmm`.offset()
     ///
-    pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
-        if using_xmm.not_any() {
+    fn xmm_save_with_cont(&mut self, using_xmm: UsingXmm, cont: bool) {
+        if using_xmm.not_any() && !cont {
             return;
         }
-        let sp_offset = using_xmm.offset();
+        let sp_offset = using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 };
         monoasm!( &mut self.jit,
             subq rsp, (sp_offset);
         );
@@ -510,14 +522,18 @@ impl JitModule {
         }
     }
 
+    pub(crate) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
+        self.xmm_restore_with_cont(using_xmm, false);
+    }
+
     ///
     /// Restore floating point registers in use.
     ///
-    pub(crate) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
-        if using_xmm.not_any() {
+    fn xmm_restore_with_cont(&mut self, using_xmm: UsingXmm, cont: bool) {
+        if using_xmm.not_any() && !cont {
             return;
         }
-        let sp_offset = using_xmm.offset();
+        let sp_offset = using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 };
         let mut i = 0;
         for (x, b) in using_xmm.iter().enumerate() {
             if *b {
@@ -557,6 +573,24 @@ impl JitModule {
         }
     }
 
+    fn xmm_to_stack2(&mut self, xmm: Xmm, v: &[SlotId]) {
+        if v.is_empty() {
+            return;
+        }
+        #[cfg(feature = "jit-debug")]
+        eprintln!("      wb: {:?}->{:?}", xmm, v);
+        let f64_to_val = self.f64_to_val.clone();
+        monoasm!( &mut self.jit,
+            movq xmm0, xmm(xmm.enc());
+            call f64_to_val;
+        );
+        for reg in v {
+            monoasm! { &mut self.jit,
+                movq [r14 - (conv(*reg))], rax;
+            }
+        }
+    }
+
     ///
     /// Move Value *v* to stack slot *reg*.
     ///
@@ -564,6 +598,26 @@ impl JitModule {
     /// - rax
     ///
     fn literal_to_stack(&mut self, reg: SlotId, v: Value) {
+        let i = v.id() as i64;
+        if i32::try_from(i).is_ok() {
+            monoasm! { &mut self.jit,
+                movq [rbp - (rbp_local(reg))], (v.id());
+            }
+        } else {
+            monoasm! { &mut self.jit,
+                movq rax, (v.id());
+                movq [rbp - (rbp_local(reg))], rax;
+            }
+        }
+    }
+
+    ///
+    /// Move Value *v* to stack slot *reg*.
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    fn literal_to_stack2(&mut self, reg: SlotId, v: Value) {
         let i = v.id() as i64;
         if i32::try_from(i).is_ok() {
             monoasm! { &mut self.jit,
@@ -628,7 +682,37 @@ impl JitModule {
             self.literal_to_stack(*slot, Value::nil());
         }
         if let Some(slot) = wb.r15 {
-            self.store_r15(slot);
+            monoasm! { self,
+                movq [rbp - (rbp_local(slot))], r15;
+            }
+        }
+    }
+
+    ///
+    /// Generate a code which write back all xmm registers to corresponding stack slots for deopt.
+    ///
+    /// We must use r14-based addressing here, because the local frame can be on the heap just after returning from a method.
+    ///
+    /// xmms are not deallocated.
+    ///
+    /// ### destroy
+    ///
+    /// - rax, rcx
+    ///
+    pub(super) fn gen_write_back_for_deopt(&mut self, wb: &WriteBack) {
+        for (xmm, v) in &wb.xmm {
+            self.xmm_to_stack2(*xmm, v);
+        }
+        for (v, slot) in &wb.literal {
+            self.literal_to_stack2(*slot, *v);
+        }
+        for slot in &wb.void {
+            self.literal_to_stack2(*slot, Value::nil());
+        }
+        if let Some(slot) = wb.r15 {
+            monoasm! { self,
+                movq [r14 - (conv(slot))], r15;
+            }
         }
     }
 }
@@ -641,7 +725,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
         entry:
         );
-        self.gen_write_back(&wb);
+        self.gen_write_back_for_deopt(&wb);
         monoasm!( &mut self.jit,
             movq r13, ((pc + 1).as_ptr());
             jmp  raise;
@@ -682,7 +766,7 @@ impl Codegen {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(entry);
-        self.gen_write_back(wb);
+        self.gen_write_back_for_deopt(wb);
         monoasm!( &mut self.jit,
             movq r13, (pc.as_ptr());
         );

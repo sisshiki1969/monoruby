@@ -16,7 +16,6 @@ mod id_table;
 pub mod tests;
 mod value;
 
-pub(crate) use crate::codegen::jitgen::trace_ir::TraceIr;
 pub(crate) use crate::codegen::runtime::ProcData;
 pub(crate) use bytecode::*;
 pub use bytecodegen::bytecode_compile_script;
@@ -38,6 +37,7 @@ use monoruby_attr::*;
 
 const STRING_INLINE_CAP: usize = 32;
 const MAX_STACK_SIZE: usize = 64 * 1024; // 256 KiB
+const CONTINUATION_FRAME_SIZE: usize = 16;
 
 type RubyMap<K, V> = rubymap::RubyMap<K, V, Executor, Globals, MonorubyErr>;
 type RubySet<T> = rubymap::RubySet<T, Executor, Globals, MonorubyErr, fxhash::FxBuildHasher>;

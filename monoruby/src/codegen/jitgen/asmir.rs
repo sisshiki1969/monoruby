@@ -153,14 +153,22 @@ impl AsmIr {
     /// - -`using_xmm`.offset()
     ///
     pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
-        self.push(AsmInst::XmmSave(using_xmm));
+        self.push(AsmInst::XmmSave(using_xmm, false));
+    }
+
+    pub(crate) fn xmm_save_cont(&mut self, using_xmm: UsingXmm) {
+        self.push(AsmInst::XmmSave(using_xmm, true));
     }
 
     ///
     /// Restore floating point registers in use.
     ///
     pub(crate) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
-        self.push(AsmInst::XmmRestore(using_xmm));
+        self.push(AsmInst::XmmRestore(using_xmm, false));
+    }
+
+    pub(crate) fn xmm_restore_cont(&mut self, using_xmm: UsingXmm) {
+        self.push(AsmInst::XmmRestore(using_xmm, true));
     }
 
     ///
@@ -652,10 +660,6 @@ impl AsmIr {
         self.push(AsmInst::NewArray { callid, using_xmm });
     }
 
-    pub(super) fn new_lambda(&mut self, using_xmm: UsingXmm, func_id: FuncId) {
-        self.push(AsmInst::NewLambda(func_id, using_xmm));
-    }
-
     pub(super) fn new_hash(&mut self, using_xmm: UsingXmm, args: SlotId, len: usize) {
         self.push(AsmInst::NewHash(args, len, using_xmm));
     }
@@ -923,11 +927,11 @@ pub(super) enum AsmInst {
     /// ### stack pointer adjustment
     /// - -`using_xmm`.offset()
     ///
-    XmmSave(UsingXmm),
+    XmmSave(UsingXmm, bool),
     ///
     /// Restore floating point registers in use.
     ///
-    XmmRestore(UsingXmm),
+    XmmRestore(UsingXmm, bool),
     ///
     /// Execute GC.
     ///
@@ -1236,10 +1240,6 @@ pub(super) enum AsmInst {
         using_xmm: UsingXmm,
     },
     ///
-    /// Create a new Array object and store it to *rax*
-    ///
-    NewLambda(FuncId, UsingXmm),
-    ///
     /// Create a new Hash object and store it to *rax*
     ///
     NewHash(SlotId, usize, UsingXmm),
@@ -1497,6 +1497,7 @@ pub(super) enum AsmInst {
 }
 
 impl AsmInst {
+    #[allow(dead_code)]
     #[cfg(feature = "emit-asm")]
     #[allow(dead_code)]
     pub fn dump(&self, store: &Store) -> String {
@@ -1559,8 +1560,8 @@ impl AsmInst {
                 format!("recompile_deopt {:?} {:?}", position, reason)
             }
             Self::HandleError(error) => format!("handle_error {:?}", error),
-            Self::XmmSave(using_xmm) => format!("xmm_save {:?}", using_xmm),
-            Self::XmmRestore(using_xmm) => format!("xmm_restore {:?}", using_xmm),
+            Self::XmmSave(using_xmm, cont) => format!("xmm_save {:?} {cont}", using_xmm),
+            Self::XmmRestore(using_xmm, cont) => format!("xmm_restore {:?} {cont}", using_xmm),
             Self::ExecGc {
                 write_back,
                 error: _,

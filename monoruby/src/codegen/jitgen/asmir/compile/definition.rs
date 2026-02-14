@@ -28,13 +28,13 @@ impl Codegen {
         self.xmm_save(using_xmm);
         // r9 <- base: Option<Value>
         if let Some(base) = base {
-            monoasm! { &mut self.jit, movq r9, [r14 - (conv(base))]; }
+            monoasm! { &mut self.jit, movq r9, [rbp - (rbp_local(base))]; }
         } else {
             monoasm! { &mut self.jit, xorq r9, r9; }
         }
         // rcx <- superclass: Option<Value>
         if let Some(superclass) = superclass {
-            monoasm! { &mut self.jit, movq rcx, [r14 - (conv(superclass))]; }
+            monoasm! { &mut self.jit, movq rcx, [rbp - (rbp_local(superclass))]; }
         } else {
             monoasm! { &mut self.jit, xorq rcx, rcx; }
         }
@@ -66,7 +66,7 @@ impl Codegen {
     ) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
-            movq rdx, [r14 - (conv(base))];  // rdx <- name
+            movq rdx, [rbp - (rbp_local(base))];  // rdx <- name
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::define_singleton_class);
@@ -103,7 +103,7 @@ impl Codegen {
             movq rsi, r12; // &Globals
             movq rdx, (u32::from(name)); // IdentId
             movq rcx, (u32::from(func_id)); // FuncId
-            movq r8, [r14 - (conv(obj))];
+            movq r8, [rbp - (rbp_local(obj))];
             movq rax, (runtime::singleton_define_method);
             call rax;
         );

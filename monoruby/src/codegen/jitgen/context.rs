@@ -310,7 +310,7 @@ impl JitStackFrame {
             basic_block_labels.insert(idx, JitLabel(labels.len()));
             labels.push(None);
         }
-        let stack_offset = store[iseq_id].stack_offset();
+        let stack_offset = store[iseq_id].stack_offset() + CONTINUATION_FRAME_SIZE; // size of continuation frame
         Self {
             asm_info: AsmInfo {
                 jit_type,

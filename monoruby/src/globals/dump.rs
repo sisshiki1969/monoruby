@@ -111,7 +111,9 @@ impl Globals {
             for ((func_id, bc_pos), count) in v.into_iter().take(20) {
                 let iseq_id = self.store[*func_id].as_iseq();
                 let pc = self.store[iseq_id].get_pc(*bc_pos);
-                let fmt = if let Some(fmt) = TraceIr::format(&self.store, iseq_id, pc) {
+                let fmt = if let Some(fmt) =
+                    jitgen::trace_ir::TraceIr::format(&self.store, iseq_id, pc)
+                {
                     fmt
                 } else {
                     "<INVALID>".to_string()
