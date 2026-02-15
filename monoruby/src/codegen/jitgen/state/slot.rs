@@ -454,7 +454,7 @@ impl SlotState {
                 ir.xmm2stack(xmm, slot);
             }
             LinkMode::C(v) => {
-                ir.push(AsmInst::LitToStack(v, slot));
+                ir.lit2stack(v, slot);
             }
             LinkMode::G(guarded) => {
                 // G -> S
@@ -488,7 +488,7 @@ impl SlotState {
             }
             LinkMode::C(v) => {
                 // C -> S
-                ir.push(AsmInst::LitToStack(v, slot));
+                ir.lit2stack(v, slot);
             }
             LinkMode::G(_) => {
                 // G -> S
@@ -496,7 +496,7 @@ impl SlotState {
             }
             LinkMode::Sf(_, _) | LinkMode::S(_) => {}
             LinkMode::V => {
-                ir.push(AsmInst::LitToStack(Value::nil(), slot));
+                ir.lit2stack(Value::nil(), slot);
             }
             LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("to_S() {:?}", self.mode(slot));
@@ -815,31 +815,26 @@ impl AbstractFrame {
                     (SfGuarded::FixnumOrFloat, Guarded::Float) => {
                         *guarded = SfGuarded::Float;
                     }
-                    (_, _) => {
-                        // in this case, Guard will always fail
-                    }
+                    (_, _) => {} // in this case, Guard will always fail
                 }
             }
             LinkMode::F(_) => {
                 if class_guarded == Guarded::Float {
                     return;
-                } else {
-                    // in this case, Guard will always fail
                 }
+                // in this case, Guard will always fail
             }
             LinkMode::C(v) => {
                 if class == INTEGER_CLASS {
                     if v.is_fixnum() {
                         return;
-                    } else {
-                        // If v is Bignum, Guard will fail
                     }
+                    // If v is Bignum, Guard will fail
                 } else {
                     if v.class() == class {
                         return;
-                    } else {
-                        // in this case, Guard will always fail
                     }
+                    // in this case, Guard will always fail
                 }
             }
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
@@ -1271,6 +1266,9 @@ impl AbstractFrame {
                     self.to_sf(ir, slot, l, r, SfGuarded::Float);
                 }
             }
+            (LinkMode::F(_) | LinkMode::G(_), LinkMode::S(_)) => {
+                self.write_back_slot(ir, slot);
+            }
             (LinkMode::Sf(l, _), LinkMode::Sf(r, guarded)) => {
                 if l != r {
                     // Sf(l) -> Sf(r)
@@ -1295,7 +1293,6 @@ impl AbstractFrame {
             }
             (LinkMode::G(_), LinkMode::Sf(x, SfGuarded::Float)) => {
                 // G -> Sf
-                //ir.stack2reg(slot, GP::Rax);
                 let deopt = ir.new_deopt_with_pc(&self, pc + 1);
                 if self.is_xmm_vacant(x) {
                     ir.float_to_xmm(GP::R15, x, deopt);
@@ -1327,25 +1324,21 @@ impl AbstractFrame {
             }
             (LinkMode::C(l), LinkMode::Sf(r, _)) => {
                 self.set_Sf_float(slot, r);
-                if let Some(f) = l.try_float() {
-                    ir.f64_to_xmm(f, r);
-                    ir.lit2reg(Value::float(f), GP::Rax);
+                let (v, f) = if let Some(f) = l.try_float() {
+                    (Value::float(f), f)
                 } else if let Some(i) = l.try_fixnum() {
-                    ir.f64_to_xmm(i as f64, r);
-                    ir.lit2reg(Value::integer(i), GP::Rax);
+                    (Value::integer(i), i as f64)
                 } else {
                     unreachable!()
-                }
-                ir.reg2stack(GP::Rax, slot);
-            }
-            (LinkMode::F(_) | LinkMode::G(_), LinkMode::S(_)) => {
-                self.write_back_slot(ir, slot);
+                };
+                ir.f64_to_xmm(f, r);
+                ir.lit2stack(v, slot);
             }
             (LinkMode::C(v), LinkMode::S(_)) => {
                 // C -> S
                 let guarded = Guarded::from_concrete_value(v);
                 self.set_mode(slot, LinkMode::S(guarded));
-                ir.push(AsmInst::LitToStack(v, slot));
+                ir.lit2stack(v, slot);
             }
             (LinkMode::None, LinkMode::None) => {}
             (LinkMode::MaybeNone, LinkMode::MaybeNone) => {}
