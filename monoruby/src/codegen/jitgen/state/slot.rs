@@ -1370,3 +1370,31 @@ impl AbstractFrame {
         ir.push(AsmInst::XmmSwap(l, r));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    #[test]
+    fn test_join() {
+        run_test_with_prelude(
+            r###"
+        $a = false
+        p f
+        "###,
+            r###"
+        def f
+          if $a
+            a = 1.0
+            b = 1.0
+            c = 100
+          else
+            b = 2.0
+            a = 2.0
+          end
+          "#{a * b}#{c.inspect}"
+        end
+        "###,
+        );
+    }
+}

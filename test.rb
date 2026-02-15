@@ -1,11 +1,19 @@
 def f
-  yield
+  z = 1.0
+  if $a
+    a = 5.0
+    b = 7.5
+    c = 100
+  else
+    z = $b * z * z
+    b = 2.0
+    a = 8.0
+  end
+  "#{a * b}#{c.inspect}"
 end
 
-40.times do
-  i = 0
-  f do
-    i = 42
-  end
-  puts i
+$a = false
+$b = 1.0
+50.times do
+  p f
 end
