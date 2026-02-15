@@ -7,7 +7,7 @@ pub fn run_test(code: &str) {
     let wrapped = format!(
         r##"
       __res = ({0})
-      25.times do
+      for __i in 0..24 do
           __res2 = ({0})
           __assert(__res, __res2)
       end
@@ -47,7 +47,7 @@ pub fn run_tests(codes: &[String]) {
     let wrapped = format!(
         r##"
       __res = ({0})
-      25.times do
+      for __i in 0..24 do
           __res2 = ({0})
           __assert(__res, __res2)
       end

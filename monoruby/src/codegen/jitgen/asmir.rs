@@ -256,6 +256,10 @@ impl AsmIr {
         self.push(AsmInst::XmmToStack(xmm, reg));
     }
 
+    pub fn lit2stack(&mut self, v: Value, reg: SlotId) {
+        self.push(AsmInst::LitToStack(v, reg));
+    }
+
     pub fn lit2reg(&mut self, v: Value, reg: GP) {
         self.push(AsmInst::LitToReg(v, reg));
     }

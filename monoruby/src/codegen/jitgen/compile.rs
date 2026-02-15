@@ -418,8 +418,7 @@ impl<'a> JitContext<'a> {
             TraceIr::InlineCache => {}
 
             TraceIr::ArrayTEq { lhs, rhs } => {
-                state.write_back_slot(ir, lhs);
-                state.write_back_slot(ir, rhs);
+                state.write_back_slots(ir, &[lhs, rhs]);
                 state.discard(lhs);
                 let error = ir.new_error(state);
                 ir.array_teq(state, lhs, rhs);
