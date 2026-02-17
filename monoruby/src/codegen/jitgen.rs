@@ -31,7 +31,7 @@ mod merge;
 mod state;
 pub mod trace_ir;
 
-type Result<T> = std::result::Result<T, CompileError>;
+type JitResult<T> = std::result::Result<T, CompileError>;
 
 pub(super) struct CompileError;
 
@@ -281,7 +281,7 @@ impl Codegen {
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
         class_version: u32,
-    ) -> Result<(
+    ) -> JitResult<(
         Vec<(ClassId, Option<IdentId>, FuncId)>,
         SpecializedCodeInfo,
         DestLabel,

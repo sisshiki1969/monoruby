@@ -15,7 +15,7 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         callid: CallSiteId,
         cache: Option<MethodCacheEntry>,
-    ) -> Result<CompileResult> {
+    ) -> JitResult<CompileResult> {
         let callsite = &self.store[callid];
         let recv_class = state.class(callsite.recv);
         let (recv_class, func_id) = if let Some(cache) = cache {
@@ -64,7 +64,7 @@ impl<'a> JitContext<'a> {
         recv_class: ClassId,
         func_id: FuncId,
         callid: CallSiteId,
-    ) -> Result<CompileResult> {
+    ) -> JitResult<CompileResult> {
         let callsite = &self.store[callid];
         self.inline_method_cache
             .push((recv_class, callsite.name, func_id));
@@ -253,7 +253,7 @@ impl<'a> JitContext<'a> {
         callid: CallSiteId,
         block: &JitBlockInfo,
         iseq: ISeqId,
-    ) -> Result<CompileResult> {
+    ) -> JitResult<CompileResult> {
         let dst = self.store[callid].dst;
         let JitBlockInfo {
             block_fid: callee_fid,
@@ -412,7 +412,7 @@ impl<'a> JitContext<'a> {
         fid: FuncId,
         iseq: ISeqId,
         specializable: bool,
-    ) -> Result<CompileResult> {
+    ) -> JitResult<CompileResult> {
         let dst = self.store[callid].dst;
         let args_info = if specializable {
             JitArgumentInfo::new(LinkMode::from_caller(&self.store, fid, callid, state))
@@ -492,7 +492,7 @@ impl<'a> JitContext<'a> {
         args_info: JitArgumentInfo,
         outer: Option<usize>,
         callid: CallSiteId,
-    ) -> Result<SpecializedCompileResult> {
+    ) -> JitResult<SpecializedCompileResult> {
         let frame = self.new_specialized_frame(iseq_id, outer, args_info, self_class);
 
         let mut frame = self.specialized_compile(state, callid, frame)?;

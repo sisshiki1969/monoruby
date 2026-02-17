@@ -61,7 +61,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         bbid: BasicBlockId,
         no_calc_backedge: bool,
-    ) -> Result<Option<AbstractState>> {
+    ) -> JitResult<Option<AbstractState>> {
         let entries = if let Some(entries) = self.remove_branch(bbid) {
             entries
         } else {

@@ -15,7 +15,7 @@ impl<'a> JitContext<'a> {
         rhs: SlotId,
         ic: Option<(ClassId, ClassId)>,
         bc_pos: BcIndex,
-    ) -> Result<CompileResult> {
+    ) -> JitResult<CompileResult> {
         match state.binop_type(lhs, rhs, ic) {
             BinaryOpType::Integer(mode) => {
                 state.binop_integer(ir, kind, dst, mode);
@@ -56,7 +56,7 @@ impl<'a> JitContext<'a> {
         rhs: SlotId,
         ic: Option<(ClassId, ClassId)>,
         bc_pos: BcIndex,
-    ) -> Result<CompileResult> {
+    ) -> JitResult<CompileResult> {
         match state.binop_type(lhs, rhs, ic) {
             BinaryOpType::Integer(mode) => {
                 state.gen_cmp_integer(ir, kind, dst, mode);
@@ -84,7 +84,7 @@ impl<'a> JitContext<'a> {
         brkind: BrKind,
         ic: Option<(ClassId, ClassId)>,
         bc_pos: BcIndex,
-    ) -> Result<CompileResult> {
+    ) -> JitResult<CompileResult> {
         match state.binop_type(lhs, rhs, ic) {
             BinaryOpType::Integer(mode) => {
                 if let Some(result) = state.check_concrete_i64_cmpbr(mode, kind, brkind, dest_bb) {

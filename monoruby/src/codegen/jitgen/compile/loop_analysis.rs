@@ -6,7 +6,7 @@ impl<'a> JitContext<'a> {
         state: AbstractState,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
-    ) -> Result<()> {
+    ) -> JitResult<()> {
         for x in 0..10 {
             #[cfg(feature = "jit-debug")]
             eprintln!("########## analyse iteration[{x}]");
@@ -46,7 +46,7 @@ impl<'a> JitContext<'a> {
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
         mut state: AbstractState,
-    ) -> Result<(Liveness, Option<AbstractState>)> {
+    ) -> JitResult<(Liveness, Option<AbstractState>)> {
         let pc = self.iseq().get_bb_pc(loop_start);
         let mut ctx = JitContext::loop_analysis(self, pc);
         let mut liveness = Liveness::new(ctx.total_reg_num());
@@ -101,7 +101,7 @@ impl<'a> JitContext<'a> {
         bbid: BasicBlockId,
         is_start: bool,
         is_last: bool,
-    ) -> Result<()> {
+    ) -> JitResult<()> {
         let mut ir = AsmIr::new(self);
         let mut state = match self.incoming_context(bbid, is_start)? {
             Some(bb) => bb,

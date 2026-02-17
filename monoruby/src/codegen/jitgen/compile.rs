@@ -11,7 +11,7 @@ mod method_call;
 mod variables;
 
 impl<'a> JitContext<'a> {
-    pub(super) fn traceir_to_asmir(&mut self, frame: JitStackFrame) -> Result<JitStackFrame> {
+    pub(super) fn traceir_to_asmir(&mut self, frame: JitStackFrame) -> JitResult<JitStackFrame> {
         self.push_frame(frame);
 
         let state = AbstractState::new(&self);
@@ -55,7 +55,7 @@ impl<'a> JitContext<'a> {
         Ok(self.pop_frame())
     }
 
-    fn compile_basic_block(&mut self, bbid: BasicBlockId, last: bool) -> Result<AsmIr> {
+    fn compile_basic_block(&mut self, bbid: BasicBlockId, last: bool) -> JitResult<AsmIr> {
         let mut ir = AsmIr::new(self);
 
         let mut state = match self.incoming_context(bbid, false)? {
@@ -136,7 +136,7 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         state: &mut AbstractState,
         bc_pos: BcIndex,
-    ) -> Result<CompileResult> {
+    ) -> JitResult<CompileResult> {
         assert!(state.no_capture_guard());
         let pc = self.get_pc(bc_pos);
         state.set_pc(pc);
@@ -707,7 +707,7 @@ impl<'a> JitContext<'a> {
         recv_class: ClassId,
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
-    ) -> Result<CompileResult> {
+    ) -> JitResult<CompileResult> {
         if let Some(func_id) = self.jit_check_method(recv_class, name.into()) {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, recv);
@@ -727,7 +727,7 @@ impl<'a> JitContext<'a> {
         lhs_class: ClassId,
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
-    ) -> Result<CompileResult> {
+    ) -> JitResult<CompileResult> {
         if let Some(fid) = self.jit_check_method(lhs_class, name.into()) {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, lhs);
@@ -748,7 +748,7 @@ impl<'a> JitContext<'a> {
         recv_class: ClassId,
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
-    ) -> Result<CompileResult> {
+    ) -> JitResult<CompileResult> {
         if let Some(fid) = self.jit_check_method(recv_class, name.into()) {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, recv);

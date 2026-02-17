@@ -10,7 +10,7 @@ impl<'a> JitContext<'a> {
         idx: SlotId,
         ic: Option<(ClassId, ClassId)>,
         bc_pos: BcIndex,
-    ) -> Result<CompileResult> {
+    ) -> JitResult<CompileResult> {
         let (base_class, idx_class) = state.binary_class(base, idx, ic);
         if let (Some(base_class), Some(INTEGER_CLASS)) = (base_class, idx_class) {
             if self.store[base_class].is_array_ty_instance() {
@@ -41,7 +41,7 @@ impl<'a> JitContext<'a> {
         src: SlotId,
         ic: Option<(ClassId, ClassId)>,
         bc_pos: BcIndex,
-    ) -> Result<CompileResult> {
+    ) -> JitResult<CompileResult> {
         let (base_class, idx_class) = state.binary_class(base, idx, ic);
         if let (Some(base_class), Some(INTEGER_CLASS)) = (base_class, idx_class) {
             if self.store[base_class].is_array_ty_instance() {

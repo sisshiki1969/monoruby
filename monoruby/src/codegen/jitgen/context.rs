@@ -538,7 +538,7 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractFrame,
         callid: CallSiteId,
         frame: JitStackFrame,
-    ) -> Result<JitStackFrame> {
+    ) -> JitResult<JitStackFrame> {
         let stack_offset = state.get_using_xmm().offset();
         let caller = self.current_frame_mut();
         caller.stack_offset += stack_offset;

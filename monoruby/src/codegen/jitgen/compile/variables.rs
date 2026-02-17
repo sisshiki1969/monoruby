@@ -57,7 +57,7 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         dst: SlotId,
         id: ConstSiteId,
-    ) -> Result<CompileResult> {
+    ) -> JitResult<CompileResult> {
         state.discard(dst);
 
         if let Some(cache) = &self.store[id].cache {
