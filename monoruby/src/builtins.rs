@@ -2,6 +2,7 @@ use super::*;
 
 mod array;
 mod binding;
+mod ffi;
 mod fiddle;
 mod class;
 mod dir;
@@ -70,6 +71,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     struct_class::init(globals);
     file::init(globals);
     fiddle::init(globals);
+    ffi::init(globals);
     math::init(globals);
     process::init(globals);
     random::init(globals);

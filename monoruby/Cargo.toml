@@ -68,7 +68,7 @@ html-escape = "0.2.13"
 unicode-general-category = "1.0.0"
 signal-hook = "0.3.17"
 divrem = "1.0.0"
-libffi = "3.2"
+libffi = "5.1.0"
 
 [build-dependencies]
 dirs = "6.0.0"

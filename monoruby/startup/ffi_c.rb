@@ -2,38 +2,53 @@
 #
 # When monoruby finds ffi_c.so in the load path it loads this file instead.
 # This file defines all Ruby-visible classes / constants that ffi_c.so would
-# have provided, building on top of Fiddle (which is already built-in).
+# have provided, using builtin primitives registered directly on the FFI module
+# by the Rust backend (src/builtins/ffi.rs).
 #
 # The pure-Ruby files shipped with the ffi gem
 # (lib/ffi/*.rb – library.rb, struct.rb, pointer.rb, …) are loaded afterwards
 # and add further methods to these base classes.
 
-require 'fiddle'
-
 module FFI
   VERSION = '1.17.0'  # reported version – purely informational
 
   # =========================================================================
-  # FFI::Platform
+  # Type codes – integer constants matching the Rust backend (builtins/ffi.rs)
+  # =========================================================================
+  TYPE_VOID       =  0
+  TYPE_VOIDP      = -1
+  TYPE_CHAR       = -2
+  TYPE_UCHAR      = -3
+  TYPE_SHORT      = -4
+  TYPE_USHORT     = -5
+  TYPE_INT        = -6
+  TYPE_UINT       = -7
+  TYPE_LONG       = -8
+  TYPE_ULONG      = -9
+  TYPE_LONG_LONG  = -10
+  TYPE_ULONG_LONG = -11
+  TYPE_FLOAT      = -12
+  TYPE_DOUBLE     = -13
+  TYPE_BOOL       = -14
+  TYPE_INTPTR_T   = -15
+  TYPE_UINTPTR_T  = -16
+  TYPE_PTRDIFF_T  = -17
+  TYPE_SIZE_T     = -18
+  TYPE_SSIZE_T    = -19
+
+  # =========================================================================
+  # FFI::Platform – minimal constants needed before the gem's platform.rb
+  # The gem's lib/ffi/platform.rb will add/override additional constants.
   # =========================================================================
   module Platform
-    BYTE_ORDER      = :little
     ADDRESS_SIZE    = 64
     LONG_SIZE       = 64
-    INT_SIZE        = 32
-    FLOAT_SIZE      = 32
-    DOUBLE_SIZE     = 64
-    OS              = 'linux'
-    CPU             = 'x86_64'
-    ARCH            = 'x86_64'
-    IS_LITTLE_ENDIAN = true
-    IS_BIG_ENDIAN   = false
-    IS_WINDOWS      = false
-    NULL            = 0
-
-    LIBSUFFIX       = 'so'
-    LIBPREFIX       = 'lib'
   end
+
+  # =========================================================================
+  # Stubs expected by the gem's Ruby files
+  # =========================================================================
+  def self._async_cb_dispatcher_atfork_child; end
 
   # =========================================================================
   # FFI::Type – type descriptor objects
@@ -53,7 +68,7 @@ module FFI
 
     # Subclass used for every built-in primitive type
     class Builtin < Type
-      # type_code: Fiddle TYPE_* constant used when calling Fiddle.___call
+      # type_code: integer constant used when calling FFI.___call
       attr_reader :type_code
 
       def initialize(name, size, alignment, type_code)
@@ -64,26 +79,33 @@ module FFI
 
     # ---------- built-in type constants ------------------------------------
 
-    VOID     = Builtin.new('void',      0, 1,  Fiddle::TYPE_VOID)
-    BOOL     = Builtin.new('bool',      4, 4,  Fiddle::TYPE_BOOL)
+    VOID     = Builtin.new('void',      0, 1,  TYPE_VOID)
+    BOOL     = Builtin.new('bool',      4, 4,  TYPE_BOOL)
 
-    INT8     = Builtin.new('int8',      1, 1,  Fiddle::TYPE_CHAR)
-    UINT8    = Builtin.new('uint8',     1, 1,  Fiddle::TYPE_UCHAR)
-    INT16    = Builtin.new('int16',     2, 2,  Fiddle::TYPE_SHORT)
-    UINT16   = Builtin.new('uint16',    2, 2,  Fiddle::TYPE_USHORT)
-    INT32    = Builtin.new('int32',     4, 4,  Fiddle::TYPE_INT)
-    UINT32   = Builtin.new('uint32',    4, 4,  Fiddle::TYPE_UINT)
-    INT64    = Builtin.new('int64',     8, 8,  Fiddle::TYPE_LONG_LONG)
-    UINT64   = Builtin.new('uint64',    8, 8,  Fiddle::TYPE_ULONG_LONG)
-    FLOAT32  = Builtin.new('float',     4, 4,  Fiddle::TYPE_FLOAT)
-    FLOAT64  = Builtin.new('double',    8, 8,  Fiddle::TYPE_DOUBLE)
-    POINTER  = Builtin.new('pointer',   8, 8,  Fiddle::TYPE_VOIDP)
-    STRING   = Builtin.new('string',    8, 8,  Fiddle::TYPE_VOIDP)  # char*
+    INT8     = Builtin.new('int8',      1, 1,  TYPE_CHAR)
+    UINT8    = Builtin.new('uint8',     1, 1,  TYPE_UCHAR)
+    INT16    = Builtin.new('int16',     2, 2,  TYPE_SHORT)
+    UINT16   = Builtin.new('uint16',    2, 2,  TYPE_USHORT)
+    INT32    = Builtin.new('int32',     4, 4,  TYPE_INT)
+    UINT32   = Builtin.new('uint32',    4, 4,  TYPE_UINT)
+    INT64    = Builtin.new('int64',     8, 8,  TYPE_LONG_LONG)
+    UINT64   = Builtin.new('uint64',    8, 8,  TYPE_ULONG_LONG)
+    FLOAT32  = Builtin.new('float',     4, 4,  TYPE_FLOAT)
+    FLOAT64  = Builtin.new('double',    8, 8,  TYPE_DOUBLE)
+    POINTER  = Builtin.new('pointer',   8, 8,  TYPE_VOIDP)
+    STRING   = Builtin.new('string',    8, 8,  TYPE_VOIDP)  # char*
 
-    LONG     = Builtin.new('long',      8, 8,  Fiddle::TYPE_LONG)
-    ULONG    = Builtin.new('ulong',     8, 8,  Fiddle::TYPE_ULONG)
-    LONGLONG = INT64
-    ULONGLONG = UINT64
+    LONG     = Builtin.new('long',      8, 8,  TYPE_LONG)
+    ULONG    = Builtin.new('ulong',     8, 8,  TYPE_ULONG)
+    LONG_LONG = INT64
+    ULONG_LONG = UINT64
+
+    # long double – on x86-64 Linux, sizeof(long double) == 16 (80-bit extended, 16-byte aligned)
+    # We map it to TYPE_DOUBLE (precision loss) since Ruby Float is a C double.
+    LONGDOUBLE = Builtin.new('long_double', 16, 16, TYPE_DOUBLE)
+
+    # Variadic marker – used by attach_function to detect varargs
+    VARARGS = Builtin.new('varargs', 0, 1, TYPE_VOID)
 
     # C convenience aliases
     CHAR     = INT8
@@ -92,10 +114,31 @@ module FFI
     USHORT   = UINT16
     INT      = INT32
     UINT     = UINT32
+    FLOAT    = FLOAT32
+    DOUBLE   = FLOAT64
 
     BUFFER_IN    = POINTER
     BUFFER_OUT   = POINTER
     BUFFER_INOUT = POINTER
+
+    # Type::Mapped – wraps a DataConverter to add to_native / from_native
+    class Mapped < Type
+      attr_reader :converter
+
+      def initialize(converter)
+        @converter = converter
+        nt = converter.native_type
+        super("mapped(#{nt.name})", nt.size, nt.alignment, nt)
+      end
+
+      def to_native(value, ctx = nil)
+        @converter.to_native(value, ctx)
+      end
+
+      def from_native(value, ctx = nil)
+        @converter.from_native(value, ctx)
+      end
+    end
 
     # Map from ffi gem symbol names to Type objects
     NAMES = {
@@ -115,9 +158,11 @@ module FFI
       string:     STRING,
       long:       LONG,
       ulong:      ULONG,
+      long_double: LONGDOUBLE,
       buffer_in:  BUFFER_IN,
       buffer_out: BUFFER_OUT,
       buffer_inout: BUFFER_INOUT,
+      varargs:    VARARGS,
     }.freeze
 
     def self.[](name)
@@ -158,61 +203,61 @@ module FFI
 
     # ---- typed readers ----
 
-    def get_int8(offset);    Fiddle.___read(@address + offset, Fiddle::TYPE_CHAR);       end
-    def get_uint8(offset);   Fiddle.___read(@address + offset, Fiddle::TYPE_UCHAR);      end
-    def get_int16(offset);   Fiddle.___read(@address + offset, Fiddle::TYPE_SHORT);      end
-    def get_uint16(offset);  Fiddle.___read(@address + offset, Fiddle::TYPE_USHORT);     end
-    def get_int32(offset);   Fiddle.___read(@address + offset, Fiddle::TYPE_INT);        end
-    def get_uint32(offset);  Fiddle.___read(@address + offset, Fiddle::TYPE_UINT);       end
-    def get_int64(offset);   Fiddle.___read(@address + offset, Fiddle::TYPE_LONG_LONG);  end
-    def get_uint64(offset);  Fiddle.___read(@address + offset, Fiddle::TYPE_ULONG_LONG); end
-    def get_float32(offset); Fiddle.___read(@address + offset, Fiddle::TYPE_FLOAT);      end
-    def get_float64(offset); Fiddle.___read(@address + offset, Fiddle::TYPE_DOUBLE);     end
-    def get_long(offset);    Fiddle.___read(@address + offset, Fiddle::TYPE_LONG);       end
-    def get_ulong(offset);   Fiddle.___read(@address + offset, Fiddle::TYPE_ULONG);      end
+    def get_int8(offset);    FFI.___read(@address + offset, TYPE_CHAR);       end
+    def get_uint8(offset);   FFI.___read(@address + offset, TYPE_UCHAR);      end
+    def get_int16(offset);   FFI.___read(@address + offset, TYPE_SHORT);      end
+    def get_uint16(offset);  FFI.___read(@address + offset, TYPE_USHORT);     end
+    def get_int32(offset);   FFI.___read(@address + offset, TYPE_INT);        end
+    def get_uint32(offset);  FFI.___read(@address + offset, TYPE_UINT);       end
+    def get_int64(offset);   FFI.___read(@address + offset, TYPE_LONG_LONG);  end
+    def get_uint64(offset);  FFI.___read(@address + offset, TYPE_ULONG_LONG); end
+    def get_float32(offset); FFI.___read(@address + offset, TYPE_FLOAT);      end
+    def get_float64(offset); FFI.___read(@address + offset, TYPE_DOUBLE);     end
+    def get_long(offset);    FFI.___read(@address + offset, TYPE_LONG);       end
+    def get_ulong(offset);   FFI.___read(@address + offset, TYPE_ULONG);      end
 
     def get_pointer(offset)
-      addr = Fiddle.___read(@address + offset, Fiddle::TYPE_VOIDP)
+      addr = FFI.___read(@address + offset, TYPE_VOIDP)
       FFI::Pointer.new(addr)
     end
 
     def get_string(offset, length = nil)
       if length
-        Fiddle.___read_bytes(@address + offset, length)
+        FFI.___read_bytes(@address + offset, length)
       else
-        Fiddle.___read_string(@address + offset)
+        FFI.___read_string(@address + offset)
       end
     end
 
     def get_bytes(offset, length)
-      Fiddle.___read_bytes(@address + offset, length)
+      FFI.___read_bytes(@address + offset, length)
     end
 
     # ---- typed writers ----
 
-    def put_int8(offset, v);    Fiddle.___write(@address + offset, Fiddle::TYPE_CHAR,       v); end
-    def put_uint8(offset, v);   Fiddle.___write(@address + offset, Fiddle::TYPE_UCHAR,      v); end
-    def put_int16(offset, v);   Fiddle.___write(@address + offset, Fiddle::TYPE_SHORT,      v); end
-    def put_uint16(offset, v);  Fiddle.___write(@address + offset, Fiddle::TYPE_USHORT,     v); end
-    def put_int32(offset, v);   Fiddle.___write(@address + offset, Fiddle::TYPE_INT,        v); end
-    def put_uint32(offset, v);  Fiddle.___write(@address + offset, Fiddle::TYPE_UINT,       v); end
-    def put_int64(offset, v);   Fiddle.___write(@address + offset, Fiddle::TYPE_LONG_LONG,  v); end
-    def put_uint64(offset, v);  Fiddle.___write(@address + offset, Fiddle::TYPE_ULONG_LONG, v); end
-    def put_float32(offset, v); Fiddle.___write(@address + offset, Fiddle::TYPE_FLOAT,      v); end
-    def put_float64(offset, v); Fiddle.___write(@address + offset, Fiddle::TYPE_DOUBLE,     v); end
-    def put_long(offset, v);    Fiddle.___write(@address + offset, Fiddle::TYPE_LONG,       v); end
-    def put_ulong(offset, v);   Fiddle.___write(@address + offset, Fiddle::TYPE_ULONG,      v); end
+    def put_int8(offset, v);    FFI.___write(@address + offset, TYPE_CHAR,       v); end
+    def put_uint8(offset, v);   FFI.___write(@address + offset, TYPE_UCHAR,      v); end
+    def put_int16(offset, v);   FFI.___write(@address + offset, TYPE_SHORT,      v); end
+    def put_uint16(offset, v);  FFI.___write(@address + offset, TYPE_USHORT,     v); end
+    def put_int32(offset, v);   FFI.___write(@address + offset, TYPE_INT,        v); end
+    def put_uint32(offset, v);  FFI.___write(@address + offset, TYPE_UINT,       v); end
+    def put_int64(offset, v);   FFI.___write(@address + offset, TYPE_LONG_LONG,  v); end
+    def put_uint64(offset, v);  FFI.___write(@address + offset, TYPE_ULONG_LONG, v); end
+    def put_float32(offset, v); FFI.___write(@address + offset, TYPE_FLOAT,      v); end
+    def put_float64(offset, v); FFI.___write(@address + offset, TYPE_DOUBLE,     v); end
+    def put_long(offset, v);    FFI.___write(@address + offset, TYPE_LONG,       v); end
+    def put_ulong(offset, v);   FFI.___write(@address + offset, TYPE_ULONG,      v); end
 
     def put_pointer(offset, ptr)
-      Fiddle.___write(@address + offset, Fiddle::TYPE_VOIDP, ptr.to_i)
+      FFI.___write(@address + offset, TYPE_VOIDP, ptr.to_i)
     end
 
     def put_bytes(offset, str, start = 0, length = str.bytesize - start)
-      Fiddle.___write_bytes(@address + offset, str[start, length])
+      FFI.___write_bytes(@address + offset, str[start, length])
     end
 
     def put_string(offset, str)
-      Fiddle.___write_bytes(@address + offset, str + "\x00")
+      FFI.___write_bytes(@address + offset, str + "\x00")
     end
 
     # ---- plural reads (arrays) ----
@@ -276,15 +321,6 @@ module FFI
     end
 
     # read_array_of_* (no-offset convenience wrappers)
-    alias read_array_of_int32   get_array_of_int32
-    alias read_array_of_uint32  get_array_of_uint32
-    alias read_array_of_int64   get_array_of_int64
-    alias read_array_of_uint64  get_array_of_uint64
-    alias read_array_of_float32 get_array_of_float32
-    alias read_array_of_float64 get_array_of_float64
-    alias read_array_of_pointer get_array_of_pointer
-    alias read_array_of_string  get_array_of_string
-
     def read_array_of_int32(count);   get_array_of_int32(0, count);   end
     def read_array_of_uint32(count);  get_array_of_uint32(0, count);  end
     def read_array_of_int64(count);   get_array_of_int64(0, count);   end
@@ -364,7 +400,6 @@ module FFI
   # FFI::Pointer < AbstractMemory
   # =========================================================================
   class Pointer < AbstractMemory
-    NULL = nil  # filled in below after class definition
 
     def initialize(type_or_address = 0, address = nil)
       if address.nil?
@@ -399,7 +434,7 @@ module FFI
     def autorelease=(flag); end  # stub – managed externally
 
     def free
-      Fiddle.___free(@address)
+      FFI.___free(@address)
       @address = 0
     end
 
@@ -428,7 +463,8 @@ module FFI
                    1
                  end
       total = elem_size * count
-      addr = Fiddle.malloc(total)
+      addr = FFI.___malloc(total, true)
+      raise NoMemoryError, "FFI::MemoryPointer malloc(#{total}) failed" if addr == 0
       super(addr, total)
       @total = total
     end
@@ -448,7 +484,7 @@ module FFI
     end
 
     def free
-      Fiddle.___free(@address) if @address != 0
+      FFI.___free(@address) if @address != 0
       @address = 0
     end
 
@@ -470,16 +506,16 @@ module FFI
   # FFI::DynamicLibrary – dlopen wrapper
   # =========================================================================
   class DynamicLibrary
-    RTLD_LAZY   = Fiddle::Handle::RTLD_LAZY
-    RTLD_NOW    = Fiddle::Handle::RTLD_NOW
-    RTLD_GLOBAL = Fiddle::Handle::RTLD_GLOBAL
-    RTLD_LOCAL  = Fiddle::Handle::RTLD_LOCAL
+    RTLD_LAZY   = 1
+    RTLD_NOW    = 2
+    RTLD_GLOBAL = 256
+    RTLD_LOCAL  = 0
 
     attr_reader :name
 
     def initialize(name, flags)
       @name   = name
-      @handle = Kernel.___dlopen(name, flags)
+      @handle = FFI.___dlopen(name, flags)
       if @handle.nil? || @handle == 0
         raise LoadError, "Could not open library '#{name}'"
       end
@@ -487,7 +523,7 @@ module FFI
 
     # Returns an FFI::DynamicLibrary::Symbol or nil
     def find_function(name)
-      ptr = Kernel.___dlsym(@handle, name.to_s)
+      ptr = FFI.___dlsym(@handle, name.to_s)
       return nil if ptr.nil? || ptr == 0
       Symbol.new(name.to_s, ptr)
     end
@@ -546,12 +582,12 @@ module FFI
       end
 
       converted_args = @param_types.zip(args).map { |type, arg|
-        convert_arg_for_fiddle(type, arg)
+        convert_arg(type, arg)
       }
       type_codes = @param_types.map(&:type_code)
       ret_code   = @return_type.type_code
 
-      result = Fiddle.___call(@address, converted_args, type_codes, ret_code)
+      result = FFI.___call(@address, converted_args, type_codes, ret_code)
       convert_result(@return_type, result)
     end
 
@@ -565,27 +601,24 @@ module FFI
 
     private
 
-    def convert_arg_for_fiddle(type, arg)
-      case type
-      when FFI::Type::STRING.class
+    def convert_arg(type, arg)
+      if type.equal?(FFI::Type::STRING)
         # Pass Ruby String as raw char* pointer
         arg.is_a?(String) ? arg : arg.to_s
+      elsif arg.is_a?(FFI::Pointer)
+        arg.address
       else
-        if arg.is_a?(FFI::Pointer)
-          arg.address
-        else
-          arg
-        end
+        arg
       end
     end
 
     def convert_result(type, result)
-      case type
-      when FFI::Type::VOID    then nil
-      when FFI::Type::STRING.class
+      if type.equal?(FFI::Type::VOID)
+        nil
+      elsif type.equal?(FFI::Type::STRING)
         return nil if result.nil? || result == 0
-        Fiddle.___read_string(result)
-      when FFI::Type::POINTER.class
+        FFI.___read_string(result)
+      elsif type.equal?(FFI::Type::POINTER)
         FFI::Pointer.new(result.to_i)
       else
         result
@@ -607,7 +640,7 @@ module FFI
       all_types = (@param_types + param_types.map { |t| FFI::Type.find(t) })
       type_codes = all_types.map(&:type_code)
       ret_code   = @return_type.type_code
-      Fiddle.___call(@func, args, type_codes, ret_code)
+      FFI.___call(@func, args, type_codes, ret_code)
     end
 
     def call(*args)
@@ -635,7 +668,47 @@ module FFI
   class StructLayout
     attr_reader :size, :alignment, :fields
 
-    Field = Struct.new(:name, :type, :offset, :size)
+    # Base field class – mirrors FFI::StructLayout::Field from ffi_c.so.
+    # Constructor: Field.new(name, offset, type)
+    class Field
+      attr_reader :name, :offset, :type
+
+      def initialize(name, offset, type)
+        @name   = name
+        @offset = offset
+        @type   = type
+      end
+
+      def size
+        @type.size
+      end
+
+      def alignment
+        @type.alignment
+      end
+    end
+
+    # Primitive numeric fields (int8 … float64)
+    class Number  < Field; end
+    # Pointer-sized fields
+    class Pointer < Field; end
+    # char* / string fields
+    class String  < Field; end
+    # Function pointer fields
+    class Function < Field; end
+    # Inline array fields
+    class Array   < Field; end
+    # Enum fields – also defined with get/put in struct_layout.rb loaded by gem
+    class Enum    < Field; end
+    # Nested struct fields – also defined with get/put in struct_layout.rb
+    class InnerStruct < Field; end
+    # Mapped (DataConverter) fields – also defined in struct_layout.rb
+    class Mapped  < Field
+      def initialize(name, offset, type, orig_field)
+        @orig_field = orig_field
+        super(name, offset, type)
+      end
+    end
 
     def initialize(fields, size, alignment)
       @fields    = fields
@@ -667,7 +740,7 @@ module FFI
           type = FFI::Type.find(type_sym)
           align = type.alignment
           offset = (offset + align - 1) & ~(align - 1)  # align up
-          fields << StructLayout::Field.new(name, type, offset, type.size)
+          fields << StructLayout::Field.new(name, offset, type)
           offset += type.size
           max_align = [max_align, align].max
         end
@@ -700,7 +773,9 @@ module FFI
         obj = allocate
         if args.empty?
           # allocate fresh memory
-          obj.instance_variable_set(:@address, Fiddle.malloc(size))
+          addr = FFI.___malloc(size, true)
+          raise NoMemoryError, "FFI::Struct malloc(#{size}) failed" if addr == 0
+          obj.instance_variable_set(:@address, addr)
           obj.instance_variable_set(:@size,    size)
           obj.instance_variable_set(:@owned,   true)
         else
@@ -743,7 +818,7 @@ module FFI
 
     def free
       if @owned && @address != 0
-        Fiddle.___free(@address)
+        FFI.___free(@address)
         @address = 0
       end
     end
@@ -751,11 +826,11 @@ module FFI
     private
 
     def read_field(field)
-      Fiddle.___read(@address + field.offset, field.type.type_code)
+      FFI.___read(@address + field.offset, field.type.type_code)
     end
 
     def write_field(field, value)
-      Fiddle.___write(@address + field.offset, field.type.type_code, value)
+      FFI.___write(@address + field.offset, field.type.type_code, value)
     end
   end
 
@@ -768,7 +843,7 @@ module FFI
 
         spec.each_slice(2) do |name, type_sym|
           type = FFI::Type.find(type_sym)
-          fields << StructLayout::Field.new(name, type, 0, type.size)
+          fields << StructLayout::Field.new(name, 0, type)
           max_size  = [max_size, type.size].max
           max_align = [max_align, type.alignment].max
         end
@@ -789,7 +864,7 @@ module FFI
   # =========================================================================
   # FFI::TypeDefs – populated from Type::NAMES
   # =========================================================================
-  TypeDefs = FFI::Type::NAMES.dup.freeze
+  TypeDefs = FFI::Type::NAMES.dup
 
   # =========================================================================
   # Module-level helpers used by FFI::Library
@@ -801,6 +876,56 @@ module FFI
 
   def self.type_size(type)
     FFI::Type.find(type).size
+  end
+
+  # =========================================================================
+  # FFI::NativeType – alias module for Type constants (used by library.rb)
+  # =========================================================================
+  module NativeType
+    VOID       = Type::VOID
+    BOOL       = Type::BOOL
+    INT8       = Type::INT8
+    UINT8      = Type::UINT8
+    INT16      = Type::INT16
+    UINT16     = Type::UINT16
+    INT32      = Type::INT32
+    UINT32     = Type::UINT32
+    INT64      = Type::INT64
+    UINT64     = Type::UINT64
+    FLOAT32    = Type::FLOAT32
+    FLOAT64    = Type::FLOAT64
+    POINTER    = Type::POINTER
+    STRING     = Type::STRING
+    LONG       = Type::LONG
+    ULONG      = Type::ULONG
+    LONGDOUBLE = Type::LONGDOUBLE
+    VARARGS    = Type::VARARGS
+    BUFFER_IN  = Type::BUFFER_IN
+    BUFFER_OUT = Type::BUFFER_OUT
+    BUFFER_INOUT = Type::BUFFER_INOUT
+  end
+
+  # =========================================================================
+  # FFI::FunctionType – function/callback type descriptor
+  # Also aliased as CallbackInfo, FunctionInfo, and Type::Function (matching ffi_c.so behaviour)
+  # =========================================================================
+  class FunctionType < Type
+    attr_reader :return_type, :param_types
+
+    def initialize(return_type, param_types, options = {})
+      @return_type = return_type
+      @param_types = param_types
+      super('callback', 8, 8)
+    end
+  end
+
+  # Aliases registered by the C extension
+  CallbackInfo = FunctionType
+  FunctionInfo = FunctionType
+
+  # FFI::Type::Function = FFI::FunctionType  (used by struct_layout_builder.rb)
+  class Type
+    Function = ::FFI::FunctionType
   end
 
   class NotFoundError < LoadError; end

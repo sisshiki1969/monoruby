@@ -204,6 +204,8 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                         | Reserved::And
                         | Reserved::Or
                         | Reserved::Then
+                        | Reserved::Else
+                        | Reserved::Elsif
                         | Reserved::End
                 ),
                 _ => true,
