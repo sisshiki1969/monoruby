@@ -193,31 +193,46 @@ fn class_allocate(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    self_class: ClassId,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }
     let CallSiteInfo { recv, dst, .. } = *callsite;
+    let mut self_module = store[self_class].get_module();
+    if let Some(origin) = self_module.is_singleton() {
+        self_module = origin.as_class();
+    }
     state.load(ir, recv, GP::Rdi);
     state.write_back_recv_and_callargs(ir, callsite);
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _| {
         monoasm!( &mut r#gen.jit,
-            movq rax, (allocate_object);
+            movl rsi, (self_module.id().u32());
+            movq rax, (allocate_object2);
             call rax;
         );
     });
     ir.xmm_restore(using_xmm);
-    state.def_rax2acc(ir, dst);
+    state.def_reg2acc_class(ir, GP::Rax, dst, self_module.id());
     true
 }
 
 extern "C" fn allocate_object(class_val: Value) -> Value {
     let class_id = class_val.as_class_id();
     Value::object(class_id)
+}
+
+extern "C" fn allocate_object2(class_val: Value, self_class: ClassId) -> Value {
+    let class_id = class_val.as_class_id();
+    debug_assert_eq!(class_id, self_class);
+    //eprintln!(
+    //    "allocate_object: class_id={:?}, self_class={:?}",
+    //    class_id, self_class
+    //);
+    Value::object(self_class)
 }
 
 extern "C" fn check_initializer(globals: &mut Globals, receiver: Value) -> Option<FuncId> {

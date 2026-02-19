@@ -18,39 +18,34 @@ impl<'a> JitContext<'a> {
     ) -> JitResult<CompileResult> {
         let callsite = &self.store[callid];
         let recv_class = state.class(callsite.recv);
-        let (recv_class, func_id) = if let Some(cache) = cache {
-            if cache.version != self.class_version()
-                || (recv_class.is_some() && Some(cache.recv_class) != recv_class)
-            {
-                // the inline method cache is invalid.
-                let recv_class = if let Some(recv_class) = recv_class {
-                    recv_class
-                } else {
-                    cache.recv_class
-                };
-                (
-                    recv_class,
-                    if let Some(fid) = self.jit_check_call(recv_class, callsite.name) {
-                        fid
-                    } else {
-                        return Ok(CompileResult::Recompile(RecompileReason::MethodNotFound));
-                    },
-                )
-            } else {
-                // the inline method cache is valid.
-                (cache.recv_class, cache.func_id)
-            }
-        } else if let Some(recv_class) = recv_class {
-            // no inline cache, but receiver class is known.
+        let (recv_class, func_id) = if let Some(recv_class) = recv_class {
+            // the receiver class is known.
             if let Some(func_id) = self.jit_check_call(recv_class, callsite.name) {
                 (recv_class, func_id)
             } else {
                 return Ok(CompileResult::Recompile(RecompileReason::MethodNotFound));
             }
         } else {
-            return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+            // here, recv_class is none.
+            if let Some(cache) = cache {
+                if cache.version != self.class_version() {
+                    // the inline method cache is invalid.
+                    let recv_class = cache.recv_class;
+                    let func_id = if let Some(fid) = self.jit_check_call(recv_class, callsite.name)
+                    {
+                        fid
+                    } else {
+                        return Ok(CompileResult::Recompile(RecompileReason::MethodNotFound));
+                    };
+                    (recv_class, func_id)
+                } else {
+                    // the inline method cache is valid.
+                    (cache.recv_class, cache.func_id)
+                }
+            } else {
+                return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+            }
         };
-
         self.compile_method_call(state, ir, recv_class, func_id, callid)
     }
 

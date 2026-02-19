@@ -1,19 +1,8 @@
-def f
-  z = 1.0
-  if $a
-    a = 5.0
-    b = 7.5
-    c = 100
-  else
-    z = $b * z * z
-    b = 2.0
-    a = 8.0
+class C
+  def initialize(x)
   end
-  "#{a * b}#{c.inspect}"
 end
 
-$a = false
-$b = 1.0
-50.times do
-  p f
+40.times do
+  C.new(1)
 end
