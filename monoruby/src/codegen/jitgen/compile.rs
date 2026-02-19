@@ -826,9 +826,7 @@ impl<'a> JitContext<'a> {
         // for super
         let mother = self.iseq().mother().0;
         let mother_fid = self.store[mother].func_id();
-        let owner = self.store[mother_fid].owner_class().unwrap();
-        let func_name = self.store[mother_fid].name().unwrap();
-        self.store.check_super(recv_class, owner, func_name)
+        self.store.check_super(recv_class, mother_fid)
     }
 }
 

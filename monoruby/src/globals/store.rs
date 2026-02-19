@@ -584,6 +584,33 @@ impl Store {
         })
     }
 
+    ///
+    /// Check whether a method *name* of class *class_id* exists.
+    ///
+    pub(crate) fn check_super(&self, self_class: ClassId, func_id: FuncId) -> Option<FuncId> {
+        let owner = self[func_id].owner_class().unwrap();
+        let name = self[func_id].name().unwrap();
+        let mut module = self[self_class].get_module();
+        loop {
+            // Step 1: walk up from `module` to find `owner`.
+            loop {
+                if module.id() == owner {
+                    break;
+                }
+                module = module.superclass().unwrap();
+            }
+            // Step 2: owner has no origin -> return one class above owner.
+            // Step 3: owner has origin (prepend host) -> restart from origin.
+            if let Some(origin) = module.origin() {
+                module = origin;
+            } else {
+                break;
+            }
+        }
+        let module = module.superclass()?;
+        self.search_method(module, name)?.func_id()
+    }
+
     pub(super) fn invalidate_jit_code(&mut self) {
         self.iseqs
             .iter_mut()

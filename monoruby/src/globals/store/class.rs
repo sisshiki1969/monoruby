@@ -484,26 +484,6 @@ impl ClassInfoTable {
     }
 
     ///
-    /// Check whether a method *name* of class *class_id* exists.
-    ///
-    pub(crate) fn check_super(
-        &self,
-        self_class: ClassId,
-        owner: ClassId,
-        name: IdentId,
-    ) -> Option<FuncId> {
-        let mut module = self.get_module(self_class);
-        loop {
-            if !module.has_origin() && module.id() == owner {
-                break;
-            }
-            module = module.superclass().unwrap();
-        }
-        let module = module.superclass()?;
-        self.search_method(module, name)?.func_id()
-    }
-
-    ///
     /// Get public and protected method names in the class of *class_id*.
     ///  
     pub(crate) fn get_method_names(&self, class_id: ClassId) -> Vec<Value> {
@@ -1074,9 +1054,7 @@ impl Store {
                 .flatten()
         } else {
             let func_id = lfp.method_func_id();
-            let owner = self[func_id].owner_class()?;
-            let name = self[func_id].name().unwrap();
-            self.check_super(recv_class, owner, name)
+            self.check_super(recv_class, func_id)
         }
     }
 
