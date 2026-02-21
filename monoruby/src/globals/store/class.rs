@@ -807,7 +807,7 @@ impl Store {
         visibility: Visibility,
         is_basic_op: bool,
     ) {
-        self[func_id].set_owner_class(owner);
+        self.set_owner_class(func_id, owner);
         self.insert_method(
             owner,
             name,
@@ -861,24 +861,8 @@ impl Store {
         func_id: FuncId,
         visibility: Visibility,
     ) {
-        #[cfg(feature = "perf")]
-        {
-            let info = self[func_id].get_wrapper_info();
-            let desc = self.func_description(func_id);
-            JitModule::perf_write(info, &desc);
-        }
         let singleton = self.classes.get_metaclass(class_id).id();
-        self[func_id].set_owner_class(class_id);
-        self.insert_method(
-            singleton,
-            name,
-            MethodTableEntry {
-                owner: singleton,
-                func_id: Some(func_id),
-                visibility,
-                is_basic_op: false,
-            },
-        );
+        self.add_method_inner(singleton, name, func_id, visibility, false);
     }
 
     ///

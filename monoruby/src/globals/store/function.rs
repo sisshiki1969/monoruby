@@ -764,10 +764,6 @@ impl FuncInfo {
         self.data.owner
     }
 
-    pub(super) fn set_owner_class(&mut self, class: ClassId) {
-        self.data.owner = Some(class);
-    }
-
     pub(super) fn entry_label(&self) -> DestLabel {
         self.ext.entry.clone().unwrap()
     }
@@ -982,6 +978,10 @@ impl FuncInfo {
 }
 
 impl Store {
+    pub(super) fn set_owner_class(&mut self, func_id: FuncId, class: ClassId) {
+        self[func_id].data.owner = Some(class);
+    }
+
     ///
     /// Check whether this function call is a *simple* call.
     ///

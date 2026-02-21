@@ -52,7 +52,7 @@ enum CArg {
 impl CArg {
     /// Return a libffi Arg pointing into this CArg.
     /// SAFETY: `self` must not be moved or dropped while the Arg is in use.
-    fn as_libffi_arg(&self) -> Arg {
+    fn as_libffi_arg(&'_ self) -> Arg<'_> {
         match self {
             CArg::I8(v) => Arg::new(v),
             CArg::U8(v) => Arg::new(v),
@@ -133,9 +133,7 @@ fn value_to_carg(globals: &mut Globals, val: Value, ty: i64) -> Result<CArg> {
             // Accept: nil → NULL, Integer → address, String → raw bytes ptr
             match val.unpack() {
                 RV::Fixnum(i) => Ok(CArg::U64(i as u64)),
-                RV::BigInt(b) => Ok(CArg::U64(
-                    num::ToPrimitive::to_u64(b).unwrap_or(0),
-                )),
+                RV::BigInt(b) => Ok(CArg::U64(num::ToPrimitive::to_u64(b).unwrap_or(0))),
                 RV::Nil => Ok(CArg::U64(0)),
                 _ => {
                     // String: pass raw content pointer (GC cannot run here)
@@ -247,7 +245,7 @@ fn fiddle_call_inner(
             return Err(MonorubyErr::runtimeerr(format!(
                 "Fiddle: unsupported return type code {}",
                 ret_type_code
-            )))
+            )));
         }
     };
 
@@ -303,23 +301,19 @@ fn fiddle_read(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
             TYPE_USHORT => Value::integer(*(ptr as *const u16) as i64),
             TYPE_INT | TYPE_BOOL => Value::integer(*(ptr as *const i32) as i64),
             TYPE_UINT => Value::integer(*(ptr as *const u32) as i64),
-            TYPE_LONG
-            | TYPE_LONG_LONG
-            | TYPE_INTPTR_T
-            | TYPE_PTRDIFF_T
-            | TYPE_SSIZE_T => Value::integer(*(ptr as *const i64)),
-            TYPE_VOIDP
-            | TYPE_ULONG
-            | TYPE_ULONG_LONG
-            | TYPE_UINTPTR_T
-            | TYPE_SIZE_T => Value::integer(*(ptr as *const u64) as i64),
+            TYPE_LONG | TYPE_LONG_LONG | TYPE_INTPTR_T | TYPE_PTRDIFF_T | TYPE_SSIZE_T => {
+                Value::integer(*(ptr as *const i64))
+            }
+            TYPE_VOIDP | TYPE_ULONG | TYPE_ULONG_LONG | TYPE_UINTPTR_T | TYPE_SIZE_T => {
+                Value::integer(*(ptr as *const u64) as i64)
+            }
             TYPE_FLOAT => Value::float(*(ptr as *const f32) as f64),
             TYPE_DOUBLE => Value::float(*(ptr as *const f64)),
             _ => {
                 return Err(MonorubyErr::runtimeerr(format!(
                     "Fiddle.___read: unsupported type code {}",
                     ty
-                )))
+                )));
             }
         }
     };
@@ -358,7 +352,7 @@ fn fiddle_write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
                 return Err(MonorubyErr::runtimeerr(format!(
                     "Fiddle.___write: unsupported type code {}",
                     ty
-                )))
+                )));
             }
         }
     }
@@ -387,7 +381,9 @@ fn fiddle_read_bytes(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Res
     let ptr = lfp.arg(0).expect_integer(globals)? as *const u8;
     let len = lfp.arg(1).expect_integer(globals)? as usize;
     if ptr.is_null() {
-        return Err(MonorubyErr::runtimeerr("Fiddle.___read_bytes: NULL pointer"));
+        return Err(MonorubyErr::runtimeerr(
+            "Fiddle.___read_bytes: NULL pointer",
+        ));
     }
     let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
     Ok(Value::bytes_from_slice(slice))
