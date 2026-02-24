@@ -23,6 +23,11 @@ pub fn run_test(code: &str) {
     Value::assert_eq(&globals, interp_val, ruby_res);
 }
 
+pub fn test_ruby(code: &str) {
+    let mut globals = Globals::new_test();
+    run_ruby(&mut globals, code);
+}
+
 pub fn run_test_once(code: &str) {
     let wrapped = format!(
         r##"
