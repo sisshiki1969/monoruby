@@ -159,6 +159,7 @@ class Errno
   ENOLCK = 37
   ENOSYS = 38
   ENOTSUP = 95
+  ENOTDIR = 20
 end
 
 class GC
