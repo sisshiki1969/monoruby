@@ -25,7 +25,7 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
     //globals.define_builtin_func(RANGE_CLASS, "reject", reject, 0);
-    globals.define_builtin_func(RANGE_CLASS, "include?", include_, 1);
+    globals.define_builtin_funcs(RANGE_CLASS, "include?", &["member?"], include_, 1);
     globals.define_builtin_func(RANGE_CLASS, "===", teq, 1);
     globals.define_builtin_func(RANGE_CLASS, "all?", all_, 0);
     globals.define_builtin_funcs(RANGE_CLASS, "collect", &["map"], map, 0);
@@ -221,6 +221,133 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
 }*/
 
+/// Shared implementation of the Range cover/include logic.
+///
+/// Mirrors CRuby's `range_include_internal`:
+/// - Numeric endpoints (Fixnum, Float, BigInt) and nil-bounded numeric ranges
+///   are handled with comparison-based cover check (r_cover_p equivalent).
+/// - Both-nil ranges return `true` for numeric values.
+/// - String ranges use lexicographic comparison.
+/// - Beginless/endless ranges with non-numeric, non-nil endpoints raise TypeError.
+/// - All other combinations return `false`.
+fn range_include_impl(start: Value, end: Value, val: Value, excl: bool) -> Result<bool> {
+    /// Convert a Value to f64 if it is numeric; return None otherwise.
+    #[inline]
+    fn to_f64(v: Value) -> Option<f64> {
+        match v.unpack() {
+            RV::Fixnum(n) => Some(n as f64),
+            RV::Float(f) => Some(f),
+            RV::BigInt(b) => b.to_f64(),
+            _ => None,
+        }
+    }
+
+    /// Check `lower <= val` (or lower is None ≡ -∞).
+    #[inline]
+    fn above(lower: Option<f64>, val: f64) -> bool {
+        lower.map_or(true, |lo| lo <= val)
+    }
+
+    /// Check `val <= upper` (or upper is None ≡ +∞), respecting exclusivity.
+    #[inline]
+    fn below(val: f64, upper: Option<f64>, excl: bool) -> bool {
+        upper.map_or(true, |hi| if excl { val < hi } else { val <= hi })
+    }
+
+    match (start.unpack(), end.unpack()) {
+        // ── Both endpoints are Fixnum ───────────────────────────────────────
+        (RV::Fixnum(s), RV::Fixnum(e)) => Ok(match val.unpack() {
+            RV::Fixnum(v) => s <= v && if excl { v < e } else { v <= e },
+            RV::BigInt(v) => {
+                let s = num::BigInt::from(s);
+                let e = num::BigInt::from(e);
+                &s <= v && if excl { v < &e } else { v <= &e }
+            }
+            RV::Float(v) => above(Some(s as f64), v) && below(v, Some(e as f64), excl),
+            _ => false,
+        }),
+
+        // ── Both endpoints are Float ────────────────────────────────────────
+        (RV::Float(s), RV::Float(e)) => Ok(match val.unpack() {
+            RV::Fixnum(v) => above(Some(s), v as f64) && below(v as f64, Some(e), excl),
+            RV::BigInt(v) => {
+                let v = v.to_f64().unwrap_or(f64::NAN);
+                above(Some(s), v) && below(v, Some(e), excl)
+            }
+            RV::Float(v) => above(Some(s), v) && below(v, Some(e), excl),
+            _ => false,
+        }),
+
+        // ── Mixed Fixnum / Float ────────────────────────────────────────────
+        (RV::Fixnum(s), RV::Float(e)) => {
+            let Some(v) = to_f64(val) else {
+                return Ok(false);
+            };
+            Ok(above(Some(s as f64), v) && below(v, Some(e), excl))
+        }
+        (RV::Float(s), RV::Fixnum(e)) => {
+            let Some(v) = to_f64(val) else {
+                return Ok(false);
+            };
+            Ok(above(Some(s), v) && below(v, Some(e as f64), excl))
+        }
+
+        // ── Beginless numeric (nil..end) ────────────────────────────────────
+        (RV::Nil, RV::Fixnum(e)) => {
+            let Some(v) = to_f64(val) else {
+                return Ok(false);
+            };
+            Ok(below(v, Some(e as f64), excl))
+        }
+        (RV::Nil, RV::Float(e)) => {
+            let Some(v) = to_f64(val) else {
+                return Ok(false);
+            };
+            Ok(below(v, Some(e), excl))
+        }
+
+        // ── Endless numeric (beg..nil) ──────────────────────────────────────
+        (RV::Fixnum(s), RV::Nil) => {
+            let Some(v) = to_f64(val) else {
+                return Ok(false);
+            };
+            Ok(above(Some(s as f64), v))
+        }
+        (RV::Float(s), RV::Nil) => {
+            let Some(v) = to_f64(val) else {
+                return Ok(false);
+            };
+            Ok(above(Some(s), v))
+        }
+
+        // ── Both nil (beginless-endless range) ──────────────────────────────
+        // linear objects (Fixnum, Float, BigInt) are always included.
+        (RV::Nil, RV::Nil) => Ok(matches!(
+            val.unpack(),
+            RV::Fixnum(_) | RV::Float(_) | RV::BigInt(_)
+        )),
+
+        // ── Both endpoints are String ────────────────────────────────────────
+        // Use lexicographic comparison (matches CRuby for single-char strings;
+        // for multi-byte strings this is equivalent to Range#cover?).
+        (RV::String(s), RV::String(e)) => Ok(match val.unpack() {
+            RV::String(v) => s <= v && if excl { v < e } else { v <= e },
+            _ => false,
+        }),
+
+        // ── Beginless/endless with non-numeric, non-nil endpoint ────────────
+        // CRuby raises TypeError here.
+        (RV::Nil, _) | (_, RV::Nil) => Err(MonorubyErr::typeerr(
+            "cannot determine inclusion in beginless/endless ranges",
+        )),
+
+        // ── All other types ─────────────────────────────────────────────────
+        // CRuby falls through to Enumerable#include? (iterates the range).
+        // We return false as a conservative fallback.
+        _ => Ok(false),
+    }
+}
+
 ///
 /// ### Range#include?
 ///
@@ -231,38 +358,8 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn include_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    let start = self_.as_range().start();
-    let end = self_.as_range().end();
-    let exclude_end = self_.as_range().exclude_end();
-    let b = match (start.unpack(), end.unpack()) {
-        (RV::Fixnum(start), RV::Fixnum(end)) => match lfp.arg(0).unpack() {
-            RV::Fixnum(obj) => start <= obj && if exclude_end { obj < end } else { obj <= end },
-            RV::BigInt(obj) => {
-                let start = num::BigInt::from(start);
-                let end = num::BigInt::from(end);
-                &start <= obj && if exclude_end { obj < &end } else { obj <= &end }
-            }
-            RV::Float(obj) => {
-                let start = start as f64;
-                let end = end as f64;
-                start <= obj && if exclude_end { obj < end } else { obj <= end }
-            }
-            _ => false,
-        },
-        (RV::Float(start), RV::Float(end)) => match lfp.arg(0).unpack() {
-            RV::Fixnum(obj) => {
-                let obj = obj as f64;
-                start <= obj && if exclude_end { obj < end } else { obj <= end }
-            }
-            RV::BigInt(obj) => {
-                let obj = obj.to_f64().unwrap();
-                start <= obj && if exclude_end { obj < end } else { obj <= end }
-            }
-            RV::Float(obj) => start <= obj && if exclude_end { obj < end } else { obj <= end },
-            _ => false,
-        },
-        _ => return Err(MonorubyErr::runtimeerr("Currently, not supported")),
-    };
+    let range = self_.as_range();
+    let b = range_include_impl(range.start(), range.end(), lfp.arg(0), range.exclude_end())?;
     Ok(Value::bool(b))
 }
 
@@ -275,38 +372,8 @@ fn include_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn teq(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    let start = self_.as_range().start();
-    let end = self_.as_range().end();
-    let exclude_end = self_.as_range().exclude_end();
-    let b = match (start.unpack(), end.unpack()) {
-        (RV::Fixnum(start), RV::Fixnum(end)) => match lfp.arg(0).unpack() {
-            RV::Fixnum(obj) => start <= obj && if exclude_end { obj < end } else { obj <= end },
-            RV::BigInt(obj) => {
-                let start = num::BigInt::from(start);
-                let end = num::BigInt::from(end);
-                &start <= obj && if exclude_end { obj < &end } else { obj <= &end }
-            }
-            RV::Float(obj) => {
-                let start = start as f64;
-                let end = end as f64;
-                start <= obj && if exclude_end { obj < end } else { obj <= end }
-            }
-            _ => false,
-        },
-        (RV::Float(start), RV::Float(end)) => match lfp.arg(0).unpack() {
-            RV::Fixnum(obj) => {
-                let obj = obj as f64;
-                start <= obj && if exclude_end { obj < end } else { obj <= end }
-            }
-            RV::BigInt(obj) => {
-                let obj = obj.to_f64().unwrap();
-                start <= obj && if exclude_end { obj < end } else { obj <= end }
-            }
-            RV::Float(obj) => start <= obj && if exclude_end { obj < end } else { obj <= end },
-            _ => false,
-        },
-        _ => return Err(MonorubyErr::runtimeerr("Currently, not supported")),
-    };
+    let range = self_.as_range();
+    let b = range_include_impl(range.start(), range.end(), lfp.arg(0), range.exclude_end())?;
     Ok(Value::bool(b))
 }
 
@@ -575,6 +642,32 @@ mod tests {
         run_test(r#"(1..5).=== (5)"#);
         run_test(r#"(1..5).=== (5.0)"#);
         run_test(r#"(1..5).=== (:a)"#);
+
+        // Beginless ranges (nil..end)
+        run_test(r#"(nil..5).include?(3)"#);
+        run_test(r#"(nil..5).include?(5)"#);
+        run_test(r#"(nil..5).include?(6)"#);
+        run_test(r#"(nil...5).include?(5)"#);
+        run_test(r#"(nil..5.0).include?(3.0)"#);
+        run_test(r#"(nil..5).include?(:a)"#);
+
+        // Endless ranges (beg..nil)
+        run_test(r#"(1..nil).include?(3)"#);
+        run_test(r#"(1..nil).include?(0)"#);
+        run_test(r#"(1.0..nil).include?(3.0)"#);
+        run_test(r#"(1..nil).include?(:a)"#);
+
+        // String ranges
+        run_test(r#"("a".."z").include?("a")"#);
+        run_test(r#"("a".."z").include?("m")"#);
+        run_test(r#"("a".."z").include?("z")"#);
+        run_test(r#"("a"..."z").include?("z")"#);
+        run_test(r#"("a".."z").include?("A")"#);
+        run_test(r#"("a".."z").include?(1)"#);
+
+        // member? is an alias for include?
+        run_test(r#"(1..5).member?(3)"#);
+        run_test(r#"("a".."z").member?("m")"#);
     }
 
     #[test]
