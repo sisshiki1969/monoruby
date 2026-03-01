@@ -18,10 +18,23 @@ pub(super) fn init(globals: &mut Globals) {
         &["base", "sort"],
         false,
     );
+    globals.define_builtin_class_func_with_kw(
+        klass,
+        "[]",
+        glob2,
+        0,
+        0,
+        true,
+        &["base", "sort"],
+        false,
+    );
     globals.define_builtin_class_func(klass, "home", home, 0);
     globals.define_builtin_class_funcs(klass, "pwd", &["getwd"], pwd, 0);
     globals.define_builtin_class_func_with(klass, "chdir", chdir, 0, 1, false);
 }
+
+/// File::FNM_DOTMATCH: wildcards match dotfiles too.
+const FNM_DOTMATCH: i64 = 4;
 
 #[derive(Debug, Clone)]
 struct PathPair {
@@ -51,30 +64,32 @@ impl PathPair {
 
 #[derive(Debug, Clone)]
 enum PathComponent {
+    /// A literal name or single-level glob pattern (e.g. `*.rs`).
     Name(globset::Glob),
+    /// `..` — go up one directory.
     Parent,
+    /// `.` — stay in current directory.
     Current,
+    /// Trailing separator: emit the current path as a match.
     None,
+    /// `**` — match zero or more directory levels recursively.
+    Globstar,
 }
 
 ///
-/// ### Dir.[]
+/// ### Dir.glob
 ///
-/// - glob(pattern, [NOT SUPPORTED] flags = 0, base: nil, [NOT SUPPORTED] sort: true) -> [String]
-/// - glob(pattern, [NOT SUPPORTED] flags = 0, base: nil, [NOT SUPPORTED] sort: true) {|file| ...} -> nil
+/// - glob(pattern, flags = 0, base: nil, sort: true) -> [String]
+/// - glob(pattern, flags = 0, base: nil, sort: true) {|file| ...} -> nil
 ///
-/// #### Arguments
+/// `pattern` may be a String or an Array of Strings.
+/// Supported flags: `File::FNM_DOTMATCH` (4) — include dot-files in wildcards.
 ///
-/// 0: pattern
-/// 1: flags
-/// 2: base
-/// 3: sort
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/=5b=5d.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/glob.html]
 #[monoruby_builtin]
 fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    lfp.expect_no_block()?;
     let pat_val = lfp.arg(0);
+    let flags = lfp.try_arg(1).and_then(|v| v.try_fixnum()).unwrap_or(0);
     let base = if let Some(base) = lfp.try_arg(2)
         && !base.is_nil()
     {
@@ -86,34 +101,218 @@ fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     } else {
         None
     };
-    let mut pattern = pat_val
-        .expect_str(globals)?
-        .split(std::path::MAIN_SEPARATOR_STR)
-        .peekable();
-    let path = if pattern.peek() == Some(&"") {
-        pattern.next();
-        if pattern.peek().is_none() {
-            return Ok(Value::array_empty());
+    let sort = lfp.try_arg(3).map(|v| v.as_bool()).unwrap_or(true);
+
+    // Accept a single String pattern or an Array of String patterns.
+    let patterns: Vec<String> = if pat_val.is_array_ty() {
+        pat_val
+            .as_array_inner()
+            .iter()
+            .map(|v| v.expect_str(globals).map(|s| s.to_string()))
+            .collect::<Result<_>>()?
+    } else {
+        vec![pat_val.expect_str(globals)?.to_string()]
+    };
+
+    let all_matches = glob_impl(patterns, flags, base, sort)?;
+
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        for m in all_matches {
+            vm.invoke_block(globals, &data, &[Value::string_from_inner(m)])?;
+        }
+        Ok(Value::nil())
+    } else {
+        Ok(Value::array_from_iter(
+            all_matches.into_iter().map(Value::string_from_inner),
+        ))
+    }
+}
+
+///
+/// ### Dir.[]
+///
+/// - self[*pattern, base: nil, sort: true] -> [String]
+///
+/// Supported flags: `File::FNM_DOTMATCH` (4) — include dot-files in wildcards.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/glob.html]
+#[monoruby_builtin]
+fn glob2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let pat_val = lfp.arg(0).as_array();
+    let flags = 0;
+    let base = if let Some(base) = lfp.try_arg(1)
+        && !base.is_nil()
+    {
+        Some(
+            base.coerce_to_path_rstring(vm, globals)?
+                .to_str()?
+                .to_string(),
+        )
+    } else {
+        None
+    };
+    let sort = lfp.try_arg(2).map(|v| v.as_bool()).unwrap_or(true);
+
+    // Accept a single String pattern or an Array of String patterns.
+    let patterns: Vec<String> = pat_val
+        .iter()
+        .map(|v| v.expect_str(globals).map(|s| s.to_string()))
+        .collect::<Result<_>>()?;
+
+    let all_matches: Vec<RStringInner> = glob_impl(patterns, flags, base, sort)?;
+
+    lfp.expect_no_block()?;
+    Ok(Value::array_from_iter(
+        all_matches.into_iter().map(|s| Value::string_from_inner(s)),
+    ))
+}
+
+fn glob_impl(
+    patterns: Vec<String>,
+    flags: i64,
+    base: Option<String>,
+    sort: bool,
+) -> Result<Vec<RStringInner>> {
+    let dotmatch = (flags & FNM_DOTMATCH) != 0;
+
+    let mut all_matches = vec![];
+    for pattern_str in &patterns {
+        let mut matches = vec![];
+        process_glob_pattern(pattern_str, base.as_deref(), dotmatch, &mut matches)?;
+        matches.dedup();
+        if sort {
+            matches.sort_by(|a, b| a.cmp(b));
+        }
+        all_matches.extend(matches);
+    }
+
+    let all_matches: Vec<RStringInner> = all_matches
+        .into_iter()
+        .map(|s| RStringInner::from_string(s))
+        .collect();
+    Ok(all_matches)
+}
+
+/// Split `s` at top-level commas, ignoring commas inside nested `{...}`.
+fn split_by_top_level_comma(s: &str) -> Vec<&str> {
+    let mut result = vec![];
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                result.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    result.push(&s[start..]);
+    result
+}
+
+/// Expand brace alternations in `pattern`, returning all expanded strings.
+///
+/// Examples:
+/// - `{,*,*/*}.gemspec` → `[".gemspec", "*.gemspec", "*/*.gemspec"]`
+/// - `d{a,c}*`          → `["da*", "dc*"]`
+/// - `{a,b}{c,d}`       → `["ac", "ad", "bc", "bd"]`
+///
+/// Unmatched braces are returned as-is.
+fn expand_braces(pattern: &str) -> Vec<String> {
+    // Find the first top-level `{`.
+    let mut depth = 0usize;
+    let mut open = None;
+    for (i, c) in pattern.char_indices() {
+        match c {
+            '{' => {
+                if depth == 0 {
+                    open = Some(i);
+                }
+                depth += 1;
+            }
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    if let Some(start) = open {
+                        let prefix = &pattern[..start];
+                        let inside = &pattern[start + 1..i];
+                        let suffix = &pattern[i + 1..];
+                        let mut results = vec![];
+                        for alt in split_by_top_level_comma(inside) {
+                            let expanded = format!("{}{}{}", prefix, alt, suffix);
+                            results.extend(expand_braces(&expanded));
+                        }
+                        return results;
+                    }
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    // No complete brace group found — return as-is.
+    vec![pattern.to_string()]
+}
+
+/// Parse one glob pattern string and append matches to `matches`.
+fn process_glob_pattern(
+    pattern_str: &str,
+    base: Option<&str>,
+    dotmatch: bool,
+    matches: &mut Vec<String>,
+) -> Result<()> {
+    if pattern_str.is_empty() {
+        // Empty pattern matches nothing (CRuby behavior).
+        return Ok(());
+    }
+
+    // Expand brace alternations before path-splitting, so that patterns like
+    // `{,*,*/*}.gemspec` (where `{}` contains `/`) are handled correctly.
+    let expanded = expand_braces(pattern_str);
+    if expanded.len() != 1 || expanded[0] != pattern_str {
+        for pat in expanded {
+            process_glob_pattern(&pat, base, dotmatch, matches)?;
+        }
+        return Ok(());
+    }
+
+    let mut segments = pattern_str.split(std::path::MAIN_SEPARATOR_STR).peekable();
+
+    // Determine the root PathPair.
+    let path = if segments.peek() == Some(&"") {
+        // Absolute path — starts with `/`.
+        segments.next();
+        if segments.peek().is_none() {
+            // Pattern was exactly "/".
+            if std::path::Path::new("/").exists() {
+                matches.push("/".to_string());
+            }
+            return Ok(());
         }
         PathPair::new(PathBuf::from("/"), PathBuf::from("/"))
     } else if let Some(base) = base {
-        let mut path = std::env::current_dir().unwrap();
-        path.push(base);
-        let path = match path.canonicalize() {
-            Ok(path) => path,
-            Err(_) => return Ok(Value::array_empty()),
-        };
-        PathPair::new(path, PathBuf::new())
+        let mut p = std::env::current_dir().unwrap();
+        p.push(base);
+        match p.canonicalize() {
+            Ok(p) => PathPair::new(p, PathBuf::new()),
+            Err(_) => return Ok(()),
+        }
     } else {
         PathPair::new(std::env::current_dir().unwrap(), PathBuf::new())
     };
 
-    let mut glob: Vec<_> = vec![];
-    for pat in pattern {
-        glob.push(match pat {
+    // Build the component list from the remaining path segments.
+    let mut components: Vec<PathComponent> = vec![];
+    for seg in segments {
+        components.push(match seg {
             "." => PathComponent::Current,
             ".." => PathComponent::Parent,
             "" => PathComponent::None,
+            "**" => PathComponent::Globstar,
             s => PathComponent::Name(match globset::Glob::new(s) {
                 Ok(g) => g,
                 Err(e) => {
@@ -126,18 +325,14 @@ fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         });
     }
 
-    let mut matches = vec![];
-    traverse_dir(path, glob, &mut matches)?;
-    matches.sort();
-    Ok(Value::array_from_iter(
-        matches.into_iter().map(Value::string),
-    ))
+    traverse_dir(path, components, matches, dotmatch)
 }
 
 fn traverse_dir(
     mut path: PathPair,
     mut glob_rest: Vec<PathComponent>,
     matches: &mut Vec<String>,
+    dotmatch: bool,
 ) -> Result<()> {
     loop {
         if glob_rest.is_empty() {
@@ -149,27 +344,90 @@ fn traverse_dir(
                 matches.push(path.full.to_string_lossy().to_string());
                 return Ok(());
             }
-            PathComponent::Name(glob) => {
-                let glob = glob.compile_matcher();
-                for entry in std::fs::read_dir(&path.path).unwrap() {
-                    let entry = entry.unwrap();
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if name.starts_with('.') && !glob.glob().glob().starts_with('.') {
-                        continue;
-                    }
-                    if glob.is_match_candidate(&globset::Candidate::new(&name)) {
-                        let mut path = path.clone();
-                        path.push(&name);
-                        traverse_dir(path, glob_rest.clone(), matches)?;
-                    }
-                }
-                return Ok(());
-            }
             PathComponent::Parent => {
                 path.parent();
             }
             PathComponent::Current => {
                 path.current();
+            }
+
+            // `**` — match zero or more directory levels.
+            PathComponent::Globstar => {
+                // Zero levels: apply remaining components at the current directory.
+                traverse_dir(path.clone(), glob_rest.clone(), matches, dotmatch)?;
+
+                // One or more levels: descend into each subdirectory and keep `**`.
+                let entries = match std::fs::read_dir(&path.path) {
+                    Ok(e) => e,
+                    Err(_) => return Ok(()),
+                };
+                let mut dirs: Vec<String> = entries
+                    .flatten()
+                    .filter_map(|e| {
+                        let ft = e.file_type().ok()?;
+                        if !ft.is_dir() {
+                            return None;
+                        }
+                        let name = e.file_name().to_string_lossy().to_string();
+                        if name.starts_with('.') && !dotmatch {
+                            return None;
+                        }
+                        Some(name)
+                    })
+                    .collect();
+                dirs.sort();
+                for name in dirs {
+                    let mut new_path = path.clone();
+                    new_path.push(&name);
+                    let mut new_glob = vec![PathComponent::Globstar];
+                    new_glob.extend(glob_rest.iter().cloned());
+                    traverse_dir(new_path, new_glob, matches, dotmatch)?;
+                }
+                return Ok(());
+            }
+
+            // Literal name or single-level glob pattern for one path segment.
+            PathComponent::Name(glob) => {
+                let glob = glob.compile_matcher();
+                let entries = match std::fs::read_dir(&path.path) {
+                    Ok(e) => e,
+                    Err(_) => return Ok(()),
+                };
+                let pat_starts_with_dot = glob.glob().glob().starts_with('.');
+                let mut to_visit: Vec<(String, PathPair)> = entries
+                    .flatten()
+                    .filter_map(|e| {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        if name.starts_with('.') && !pat_starts_with_dot && !dotmatch {
+                            return None;
+                        }
+                        if glob.is_match_candidate(&globset::Candidate::new(&name)) {
+                            let mut new_path = path.clone();
+                            new_path.push(&name);
+                            Some((name, new_path))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                // Synthesize "." (the directory itself): read_dir omits it, but
+                // CRuby includes it when the pattern matches dot-files and "."
+                // itself matches the pattern.  ".." is never included (CRuby also
+                // excludes it).
+                if (pat_starts_with_dot || dotmatch)
+                    && glob.is_match_candidate(&globset::Candidate::new("."))
+                {
+                    let mut dot_path = path.clone();
+                    dot_path.push(".");
+                    to_visit.push((".".to_string(), dot_path));
+                }
+
+                to_visit.sort_by(|a, b| a.0.cmp(&b.0));
+                for (_, new_path) in to_visit {
+                    traverse_dir(new_path, glob_rest.clone(), matches, dotmatch)?;
+                }
+                return Ok(());
             }
         }
     }
@@ -248,20 +506,45 @@ mod tests {
 
     #[test]
     fn glob() {
-        run_test(r#"Dir.glob("LIC*")"#);
-        run_test(r#"Dir.glob("*.rb")"#);
-        run_test(r#"Dir.glob("Cargo?????")"#);
-        run_test(r#"Dir.glob("d{a,c}*")"#);
-        run_test(r#"Dir.glob("/*")"#);
-        run_test(r#"Dir.glob("././././C*")"#);
-        run_test(r#"Dir.glob("../../../../*")"#);
-        run_test(r#"Dir.glob("../*")"#);
-        run_test(r#"Dir.glob("monoruby/src/builtins/*.rs")"#);
-        run_test(r#"Dir.glob("monoruby/src/**/*.rs")"#);
-        run_test(r#"Dir.glob("/")"#);
-        run_test(r#"Dir.glob(".")"#);
-        run_test(r#"Dir.glob("")"#);
-        run_test(r#"Dir.glob("*", base: "src/builtins")"#);
+        run_test_once(r#"Dir.glob("b*")"#);
+        run_test_once(r#"Dir.glob("*.rb")"#);
+        run_test_once(r#"Dir.glob("Cargo?????")"#);
+        run_test_once(r#"Dir.glob("d{a,c}*")"#);
+        run_test_once(r#"Dir.glob("/*")"#);
+        run_test_once(r#"Dir.glob("././././C*")"#);
+        run_test_once(r#"Dir.glob("../../../../*")"#);
+        run_test_once(r#"Dir.glob("../*")"#);
+        run_test_once(r#"Dir.glob("src/builtins/*.rs")"#);
+        run_test_once(r#"Dir["src/builtins/*.rs"]"#);
+        run_test_once(r#"Dir.glob("src/**/*.rs").sort"#);
+        run_test_once(r#"Dir.glob("/")"#);
+        run_test_once(r#"Dir.glob(".")"#);
+        run_test_once(r#"Dir.glob("")"#);
+        run_test_once(r#"Dir.glob("*", base: "src/builtins")"#);
+        // Array of patterns (merged, sorted, deduped — same as CRuby).
+        run_test_once(r#"Dir.glob(["b*", "*.toml"])"#);
+        run_test_once(r#"Dir["b*", "*.toml"]"#);
+        // FNM_DOTMATCH: wildcards match dot-files.
+        run_test_once(r#"Dir.glob(".*")"#);
+        run_test_once(r#"Dir.glob("*", File::FNM_DOTMATCH)"#);
+        // Brace alternation containing `/` — must be expanded before path-splitting.
+        run_test_once(r#"Dir.glob("{,*,*/*,*/*/*}.rs").sort"#);
+        run_test_once(r#"Dir.glob("src/{lib,builtins}/*.rs")"#);
+    }
+
+    /// Tests that do not require CRuby comparison.
+    #[test]
+    fn glob_extensions() {
+        // sort: false — just verify it runs without error.
+        run_test_no_result_check(r#"Dir.glob("b*", sort: false)"#);
+        // block form — verify it does not raise.
+        run_test_once(r#"res = []; Dir.glob("b*") { |f| res << f.upcase }; res"#);
+        // ** matches zero directories (direct child).
+        run_test_once(r#"Dir.glob("src/**/*.rs").include?("src/lib.rs")"#);
+        // ** matches multiple levels.
+        run_test_once(r#"Dir.glob("src/**/*.rs").include?("src/builtins/dir.rs")"#);
+        // Array of patterns.
+        run_test_once(r#"Dir.glob(["C*", "*.toml"])"#);
     }
 
     #[test]

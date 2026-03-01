@@ -188,13 +188,14 @@ fn run_ruby(globals: &mut Globals, code: &str) -> Value {
     let mut tmpfile = NamedTempFile::new().unwrap();
     tmpfile.write_all(code.as_bytes()).unwrap();
 
-    let res = match std::process::Command::new("sh")
-        .args(["-c", &format!("ruby {}", tmpfile.path().to_str().unwrap())])
+    let ruby = find_ruby();
+    let res = match std::process::Command::new(&ruby)
+        .arg(tmpfile.path())
         .output()
     {
         Ok(output) => String::from_utf8(output.stdout).unwrap(),
         Err(err) => {
-            panic!("failed to invoke ruby. {}", err);
+            panic!("failed to invoke ruby ({}). {}", ruby, err);
         }
     };
 
@@ -207,4 +208,33 @@ fn run_ruby(globals: &mut Globals, code: &str) -> Value {
 
     eprintln!("ruby: {}", res.inspect(&globals.store));
     res
+}
+
+/// Locate the `ruby` executable.
+/// Tries the system PATH first, then falls back to common rbenv/rvm shim paths.
+fn find_ruby() -> String {
+    // Already on PATH?
+    if std::process::Command::new("ruby")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return "ruby".to_string();
+    }
+    // rbenv shim
+    if let Some(home) = std::env::var_os("HOME") {
+        let shim = std::path::PathBuf::from(home).join(".rbenv/shims/ruby");
+        if shim.exists() {
+            return shim.to_string_lossy().into_owned();
+        }
+    }
+    // rvm
+    if let Some(home) = std::env::var_os("HOME") {
+        let rvm = std::path::PathBuf::from(home).join(".rvm/bin/ruby");
+        if rvm.exists() {
+            return rvm.to_string_lossy().into_owned();
+        }
+    }
+    "ruby".to_string() // last resort — will fail with a clear error message
 }
