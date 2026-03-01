@@ -178,17 +178,19 @@ fn glob_impl(
 
     let mut all_matches = vec![];
     for pattern_str in &patterns {
-        process_glob_pattern(pattern_str, base.as_deref(), dotmatch, &mut all_matches)?;
+        let mut matches = vec![];
+        process_glob_pattern(pattern_str, base.as_deref(), dotmatch, &mut matches)?;
+        matches.dedup();
+        if sort {
+            matches.sort_by(|a, b| a.cmp(b));
+        }
+        all_matches.extend(matches);
     }
 
-    all_matches.dedup();
-    let mut all_matches: Vec<RStringInner> = all_matches
+    let all_matches: Vec<RStringInner> = all_matches
         .into_iter()
         .map(|s| RStringInner::from_string(s))
         .collect();
-    if sort {
-        all_matches.sort_by(|a, b| a.cmp(b));
-    }
     Ok(all_matches)
 }
 
@@ -445,8 +447,8 @@ mod tests {
         run_test_once(r#"Dir.glob("")"#);
         run_test_once(r#"Dir.glob("*", base: "src/builtins")"#);
         // Array of patterns (merged, sorted, deduped — same as CRuby).
-        run_test_once(r#"Dir.glob(["b*", "*.toml"].sort)"#);
-        run_test_once(r#"Dir["b*", "*.toml"].sort"#);
+        run_test_once(r#"Dir.glob(["b*", "*.toml"])"#);
+        run_test_once(r#"Dir["b*", "*.toml"]"#);
         // FNM_DOTMATCH: wildcards match dot-files.
         run_test_once(r#"Dir.glob(".*")"#);
         run_test_once(r#"Dir.glob("*", File::FNM_DOTMATCH)"#);
@@ -456,17 +458,15 @@ mod tests {
     #[test]
     fn glob_extensions() {
         // sort: false — just verify it runs without error.
-        run_test_no_result_check(r#"Dir.glob("*.toml", sort: false)"#);
+        run_test_no_result_check(r#"Dir.glob("b*", sort: false)"#);
         // block form — verify it does not raise.
-        run_test_no_result_check(r#"Dir.glob("LIC*") { |f| }"#);
+        run_test_once(r#"res = []; Dir.glob("b*") { |f| res << f.upcase }; res"#);
         // ** matches zero directories (direct child).
-        run_test_no_result_check(r#"raise unless Dir.glob("src/**/*.rs").include?("src/lib.rs")"#);
+        run_test_once(r#"Dir.glob("src/**/*.rs").include?("src/lib.rs")"#);
         // ** matches multiple levels.
-        run_test_no_result_check(
-            r#"raise unless Dir.glob("src/**/*.rs").include?("src/builtins/dir.rs")"#,
-        );
+        run_test_once(r#"Dir.glob("src/**/*.rs").include?("src/builtins/dir.rs")"#);
         // Array of patterns.
-        run_test_no_result_check(r#"raise if Dir.glob(["LIC*", "*.toml"]).empty?"#);
+        run_test_once(r#"Dir.glob(["C*", "*.toml"])"#);
     }
 
     #[test]
