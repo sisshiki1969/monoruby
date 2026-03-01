@@ -22,6 +22,18 @@ fn require_relative() {
 }
 
 #[test]
+fn load() {
+    run_test(
+        r#"
+        load "b.rb"
+        load "b.rb"
+        load "b.rb"
+        [$count, C::D]
+        "#,
+    );
+}
+
+#[test]
 fn module_autoload() {
     run_test(
         r#"
