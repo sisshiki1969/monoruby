@@ -290,7 +290,7 @@ impl Executor {
         if let Some((file_body, canonicalized_path)) =
             globals.require_lib(file_name, is_relative)?
         {
-            match self.load_impl(globals, file_body, &canonicalized_path) {
+            match self.load_impl(globals, file_body, &canonicalized_path, None) {
                 Ok(()) => {}
                 Err(err) => {
                     globals
@@ -308,23 +308,22 @@ impl Executor {
     ///
     /// Kernel#load — always (re-)executes the file, never checks loaded_features.
     ///
-    /// When `wrap` is true the file should run inside an anonymous module;
-    /// that is not yet supported and will raise `NotImplementedError`.
+    /// When `r#priv` is true the file should run inside an anonymous module;
     ///
     pub fn load(
         &mut self,
         globals: &mut Globals,
         file_name: &std::path::Path,
-        wrap: bool,
+        r#priv: bool,
     ) -> Result<()> {
-        if wrap {
-            return Err(MonorubyErr::runtimeerr(
-                "Kernel#load with wrap=true is not yet supported",
-            ));
-        }
+        let wrap = if r#priv {
+            Some(globals.define_toplevel_module(""))
+        } else {
+            None
+        };
 
         let (file_body, path) = globals.find_for_load(file_name)?;
-        self.load_impl(globals, file_body, &path)?;
+        self.load_impl(globals, file_body, &path, wrap)?;
         Ok(())
     }
 
@@ -333,6 +332,7 @@ impl Executor {
         globals: &mut Globals,
         file_body: String,
         path: &std::path::Path,
+        wrap: Option<Module>,
     ) -> Result<()> {
         let _level = self.inc_require_level();
 
@@ -340,6 +340,9 @@ impl Executor {
         eprintln!("{} > {:?}", "  ".repeat(_level), path);
 
         self.enter_class_context();
+        if let Some(wrap) = wrap {
+            self.push_class_context(wrap.id());
+        }
         let res = self.exec_script(globals, file_body, path);
         self.exit_class_context();
 

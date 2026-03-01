@@ -34,6 +34,21 @@ fn load() {
 }
 
 #[test]
+fn load_priv() {
+    run_test_once(
+        r#"
+        class C
+          D = nil
+        end
+        load "a.rb", true
+        load "a.rb", true
+        load "a.rb", true
+        [$count, C::D]
+        "#,
+    );
+}
+
+#[test]
 fn module_autoload() {
     run_test(
         r#"
