@@ -167,33 +167,39 @@ fn binread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/join.html]
 #[monoruby_builtin]
-fn join(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    fn flatten(globals: &Globals, path: &mut String, val: Value) -> Result<()> {
+fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    fn flatten(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        path: &mut String,
+        val: Value,
+    ) -> Result<()> {
         match val.try_array_ty() {
             Some(ainfo) => {
                 for v in ainfo.iter().cloned() {
-                    flatten(globals, path, v)?;
+                    flatten(vm, globals, path, v)?;
                 }
             }
             None => {
                 if !path.is_empty() && !path.ends_with('/') {
                     path.push('/');
                 }
-                let s = val.expect_str(globals)?;
-                path.push_str(if !path.is_empty() && !s.is_empty() && s.starts_with('/') {
-                    &s[1..]
+                let rs = val.coerce_to_path_rstring(vm, globals)?;
+                let s = rs.to_str()?;
+                if !path.is_empty() && !s.is_empty() && s.starts_with('/') {
+                    path.push_str(&s[1..]);
                 } else if path.is_empty() && s.is_empty() {
-                    "/"
+                    path.push('/');
                 } else {
-                    s
-                });
+                    path.push_str(&s);
+                }
             }
         }
         Ok(())
     }
     let mut path = String::new();
     for v in lfp.arg(0).as_array().iter().cloned() {
-        flatten(globals, &mut path, v)?;
+        flatten(vm, globals, &mut path, v)?;
     }
     Ok(Value::string(path))
 }
