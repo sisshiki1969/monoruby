@@ -60,6 +60,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_with(kernel_class, "Array", kernel_array, 1, 1, false);
     globals.define_builtin_module_func(kernel_class, "require", require, 1);
     globals.define_builtin_module_func(kernel_class, "require_relative", require_relative, 1);
+    globals.define_builtin_module_func_with(kernel_class, "load", load_, 1, 2, false);
     globals.define_builtin_module_func(kernel_class, "autoload", autoload, 2);
     globals.define_builtin_module_func_with_effect(
         kernel_class,
@@ -639,6 +640,23 @@ fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
     file_name.set_extension("rb");
     let b = vm.require(globals, &file_name, true)?;
     Ok(Value::bool(b))
+}
+
+///
+/// ### Kernel.#load
+///
+/// - load(filename, wrap=false) -> true
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/load.html]
+#[monoruby_builtin]
+fn load_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let file_name = std::path::PathBuf::from(lfp.arg(0).expect_string(globals)?);
+    let wrap = lfp
+        .try_arg(1)
+        .map(|v| v.as_bool())
+        .unwrap_or(false);
+    vm.load(globals, &file_name, wrap)?;
+    Ok(Value::bool(true))
 }
 
 ///
