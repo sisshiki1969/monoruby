@@ -78,6 +78,7 @@ end
 class File
   include File::Constants
   FNM_SYSCASE = 0
+  FNM_DOTMATCH = 4
   FNM_CASEFOLD = 8
   NULL = "/dev/null"
 
@@ -85,6 +86,12 @@ class File
   SEPARATOR = "/"
   ALT_SEPARATOR = nil
   PATH_SEPARATOR = ":"
+end
+
+class Signal
+  def self.trap(signal, command = nil, &block)
+    # No-op for now.
+  end
 end
 
 class Thread
@@ -160,6 +167,12 @@ class Errno
   ENOSYS = 38
   ENOTSUP = 95
   ENOTDIR = 20
+end
+
+module Kernel
+  module_function
+  def at_exit(&block)
+  end
 end
 
 class GC

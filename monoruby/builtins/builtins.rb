@@ -42,6 +42,10 @@ class NilClass
   def &(other)
     false
   end
+
+  def to_i
+    0
+  end
 end
 
 class Hash
