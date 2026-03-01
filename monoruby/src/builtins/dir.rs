@@ -194,6 +194,70 @@ fn glob_impl(
     Ok(all_matches)
 }
 
+/// Split `s` at top-level commas, ignoring commas inside nested `{...}`.
+fn split_by_top_level_comma(s: &str) -> Vec<&str> {
+    let mut result = vec![];
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                result.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    result.push(&s[start..]);
+    result
+}
+
+/// Expand brace alternations in `pattern`, returning all expanded strings.
+///
+/// Examples:
+/// - `{,*,*/*}.gemspec` → `[".gemspec", "*.gemspec", "*/*.gemspec"]`
+/// - `d{a,c}*`          → `["da*", "dc*"]`
+/// - `{a,b}{c,d}`       → `["ac", "ad", "bc", "bd"]`
+///
+/// Unmatched braces are returned as-is.
+fn expand_braces(pattern: &str) -> Vec<String> {
+    // Find the first top-level `{`.
+    let mut depth = 0usize;
+    let mut open = None;
+    for (i, c) in pattern.char_indices() {
+        match c {
+            '{' => {
+                if depth == 0 {
+                    open = Some(i);
+                }
+                depth += 1;
+            }
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    if let Some(start) = open {
+                        let prefix = &pattern[..start];
+                        let inside = &pattern[start + 1..i];
+                        let suffix = &pattern[i + 1..];
+                        let mut results = vec![];
+                        for alt in split_by_top_level_comma(inside) {
+                            let expanded = format!("{}{}{}", prefix, alt, suffix);
+                            results.extend(expand_braces(&expanded));
+                        }
+                        return results;
+                    }
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    // No complete brace group found — return as-is.
+    vec![pattern.to_string()]
+}
+
 /// Parse one glob pattern string and append matches to `matches`.
 fn process_glob_pattern(
     pattern_str: &str,
@@ -205,6 +269,17 @@ fn process_glob_pattern(
         // Empty pattern matches nothing (CRuby behavior).
         return Ok(());
     }
+
+    // Expand brace alternations before path-splitting, so that patterns like
+    // `{,*,*/*}.gemspec` (where `{}` contains `/`) are handled correctly.
+    let expanded = expand_braces(pattern_str);
+    if expanded.len() != 1 || expanded[0] != pattern_str {
+        for pat in expanded {
+            process_glob_pattern(&pat, base, dotmatch, matches)?;
+        }
+        return Ok(());
+    }
+
     let mut segments = pattern_str.split(std::path::MAIN_SEPARATOR_STR).peekable();
 
     // Determine the root PathPair.
@@ -452,6 +527,9 @@ mod tests {
         // FNM_DOTMATCH: wildcards match dot-files.
         run_test_once(r#"Dir.glob(".*")"#);
         run_test_once(r#"Dir.glob("*", File::FNM_DOTMATCH)"#);
+        // Brace alternation containing `/` — must be expanded before path-splitting.
+        run_test_once(r#"Dir.glob("{,*,*/*,*/*/*}.rs").sort"#);
+        run_test_once(r#"Dir.glob("src/{lib,builtins}/*.rs")"#);
     }
 
     /// Tests that do not require CRuby comparison.
