@@ -167,7 +167,7 @@ impl std::cmp::PartialOrd<Cfp> for Lfp {
 impl alloc::GC<RValue> for Lfp {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         let meta = self.meta();
-        for r in SlotId(0)..SlotId(0) + meta.reg_num() as usize {
+        for r in meta.regs() {
             if let Some(v) = self.register(r) {
                 v.mark(alloc);
             }

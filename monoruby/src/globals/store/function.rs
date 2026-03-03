@@ -110,32 +110,37 @@ impl FuncData {
 /// +-------+-------+---------+----+----+
 /// ~~~
 ///
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct Meta {
-    func_id: Option<FuncId>,
+    func_id: FuncId,
     reg_num: u16,
     mode: u8,
     /// bit 7:  0:on_stack 1:on_heap
     /// bit 4:  1:simple (no optional, no rest, no keyword, no block)
     /// bit 2:  0:method_style arg 1:block_style arg
     /// bit 1:  0:Ruby 1:native
-    /// bit 0:  0:method 1:class_def
     kind: u8,
+}
+
+impl std::default::Default for Meta {
+    fn default() -> Self {
+        Self {
+            func_id: FuncId::new(1),
+            reg_num: 0,
+            mode: 0,
+            kind: 0,
+        }
+    }
 }
 
 impl std::fmt::Debug for Meta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:?} {}{}{}{} reg_num:{}",
+            "{:?} {}{}{} reg_num:{}",
             self.func_id(),
             if self.is_native() { "NATIVE " } else { "" },
-            if self.is_class_def() {
-                "class_def "
-            } else {
-                ""
-            },
             if self.is_simple() { "SIMPLE " } else { "" },
             if self.on_stack() { "stack" } else { "heap" },
             self.reg_num()
@@ -145,21 +150,17 @@ impl std::fmt::Debug for Meta {
 
 impl Meta {
     pub fn new(
-        func_id: Option<FuncId>,
+        func_id: FuncId,
         reg_num: u16,
         is_simple: bool,
         is_native: bool,
-        is_class_def: bool,
         is_block_style: bool,
     ) -> Self {
         Self {
             func_id,
             reg_num,
             mode: 0,
-            kind: (is_simple as u8) << 4
-                | (is_block_style as u8) << 2
-                | (is_native as u8) << 1
-                | is_class_def as u8,
+            kind: (is_simple as u8) << 4 | (is_block_style as u8) << 2 | (is_native as u8) << 1,
         }
     }
 
@@ -167,49 +168,32 @@ impl Meta {
         unsafe { std::mem::transmute(*self) }
     }
 
-    fn vm_method(
-        func_id: impl Into<Option<FuncId>>,
-        reg_num: i64,
-        is_block_style: bool,
-        is_simple: bool,
-    ) -> Self {
-        let reg_num = reg_num as i16 as u16;
-        Self::new(
-            func_id.into(),
-            reg_num,
-            is_simple,
-            false,
-            false,
-            is_block_style,
-        )
+    fn vm_method(func_id: FuncId, reg_num: u16, is_block_style: bool, is_simple: bool) -> Self {
+        Self::new(func_id, reg_num, is_simple, false, is_block_style)
     }
 
-    fn vm_classdef(func_id: impl Into<Option<FuncId>>, reg_num: i64) -> Self {
-        let reg_num = reg_num as i16 as u16;
-        Self::new(func_id.into(), reg_num, true, false, true, false)
+    fn vm_classdef(func_id: FuncId, reg_num: u16) -> Self {
+        Self::new(func_id, reg_num, true, false, false)
     }
 
-    fn proc(func_id: FuncId, reg_num: usize, is_simple: bool, is_block_style: bool) -> Self {
-        Self::new(
-            Some(func_id),
-            reg_num as u16,
-            is_simple,
-            false,
-            false,
-            is_block_style,
-        )
+    fn proc(func_id: FuncId, reg_num: u16, is_simple: bool, is_block_style: bool) -> Self {
+        Self::new(func_id, reg_num, is_simple, false, is_block_style)
     }
 
     fn native(func_id: FuncId, reg_num: usize, is_simple: bool) -> Self {
-        Self::new(Some(func_id), reg_num as u16, is_simple, true, false, false)
+        Self::new(func_id, reg_num as u16, is_simple, true, false)
     }
 
     pub fn func_id(&self) -> FuncId {
-        self.func_id.unwrap()
+        self.func_id
     }
 
-    pub fn reg_num(&self) -> i64 {
-        self.reg_num as i16 as i64
+    pub fn reg_num(&self) -> u16 {
+        self.reg_num
+    }
+
+    pub fn regs(&self) -> std::ops::Range<SlotId> {
+        SlotId(0)..SlotId(self.reg_num)
     }
 
     ///
@@ -217,15 +201,15 @@ impl Meta {
     ///
     /// "simple" means that the function has no optional, rest, keyword, keyword rest, and block parameters.
     ///
-    pub fn is_simple(&self) -> bool {
+    fn is_simple(&self) -> bool {
         (self.kind & 0b1_0000) != 0
     }
 
-    pub fn is_block_style(&self) -> bool {
+    fn is_block_style(&self) -> bool {
         (self.kind & 0b100) != 0
     }
 
-    pub fn set_method_style(&mut self) {
+    fn set_method_style(&mut self) {
         self.kind &= !0b100
     }
 
@@ -239,11 +223,6 @@ impl Meta {
 
     pub fn set_on_heap(&mut self) {
         self.kind |= 0b1000_0000;
-    }
-
-    /// method:0 class_def:1
-    pub fn is_class_def(&self) -> bool {
-        (self.kind & 0b1) == 1
     }
 
     ///
@@ -263,17 +242,14 @@ mod tests {
         let meta = Meta::vm_method(FuncId::new(12), 42, false, false);
         assert_eq!(FuncId::new(12), meta.func_id());
         assert_eq!(42, meta.reg_num());
-        assert_eq!(false, meta.is_class_def());
-        let mut meta = Meta::vm_method(FuncId::new(42), -1, false, false);
+        let mut meta = Meta::vm_method(FuncId::new(42), 1, false, false);
         assert_eq!(FuncId::new(42), meta.func_id());
-        assert_eq!(-1, meta.reg_num());
+        assert_eq!(1, meta.reg_num());
         meta.set_reg_num(12);
         assert_eq!(FuncId::new(42), meta.func_id());
         assert_eq!(12, meta.reg_num());
         let mut meta = Meta::vm_classdef(FuncId::new(12), 42);
-        assert_eq!(true, meta.is_class_def());
         meta.set_reg_num(12);
-        assert_eq!(true, meta.is_class_def());
         assert_eq!(8, std::mem::size_of::<i64>());
         assert_eq!(8, std::mem::size_of::<Option<monoasm::CodePtr>>());
         assert_eq!(8, std::mem::size_of::<BytecodePtr>());
@@ -353,7 +329,7 @@ impl Funcs {
     pub(super) fn new_proc_method(&mut self, proc: Proc) -> FuncId {
         let func_id = self.next_func_id();
         let is_block_style = self[proc.func_id()].is_block_style();
-        let reg_num = self[proc.func_id()].meta().reg_num() as usize;
+        let reg_num = self[proc.func_id()].meta().reg_num();
         let params = self[proc.func_id()].params();
         self.info.push(FuncInfo::new_proc(
             func_id,
@@ -670,7 +646,7 @@ impl FuncInfo {
         name: String,
         proc: Proc,
         params: ParamsInfo,
-        reg_num: usize,
+        reg_num: u16,
         is_block_style: bool,
     ) -> Self {
         Self::new(
