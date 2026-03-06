@@ -401,7 +401,7 @@ impl<'a> BytecodeGen<'a> {
                 let opcode = if callsite.is_simple() { 30 } else { 31 };
                 self.encode_call(opcode, callsite, bc_pos)?
             }
-            BytecodeInst::MethodCallBlock(box callsite) => {
+            BytecodeInst::Super(box callsite) => {
                 // 32, 33
                 let opcode = if callsite.is_simple() { 32 } else { 33 };
                 self.encode_call(opcode, callsite, bc_pos)?
