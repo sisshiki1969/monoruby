@@ -505,7 +505,7 @@ impl ClassInfoTable {
 
     ///
     /// Get public and protected method names in the class of *class_id*.
-    ///  
+    ///
     pub(crate) fn get_method_names(&self, class_id: ClassId) -> Vec<Value> {
         self[class_id]
             .methods
