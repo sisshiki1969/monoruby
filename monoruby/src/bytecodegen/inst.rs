@@ -189,7 +189,7 @@ pub(super) enum BytecodeInst {
     Raise(BcReg),
     EnsureEnd,
     MethodCall(Box<CallSite>),
-    MethodCallBlock(Box<CallSite>),
+    Super(Box<CallSite>),
     Yield(Box<CallSite>),
     InlineCache(Box<CallSite>),
     InitMethod(FnInitInfo),

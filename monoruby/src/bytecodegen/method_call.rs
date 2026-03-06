@@ -4,14 +4,12 @@ mod arguments;
 
 impl<'a> BytecodeGen<'a> {
     pub(super) fn emit_call(&mut self, callsite: CallSite, loc: Loc) {
-        if callsite.block_fid.is_some() {
-            self.emit(
-                BytecodeInst::MethodCallBlock(Box::new(callsite.clone())),
-                loc,
-            )
-        } else {
-            self.emit(BytecodeInst::MethodCall(Box::new(callsite.clone())), loc);
-        };
+        self.emit(BytecodeInst::MethodCall(Box::new(callsite.clone())), loc);
+        self.emit(BytecodeInst::InlineCache(Box::new(callsite)), loc);
+    }
+
+    pub(super) fn emit_super(&mut self, callsite: CallSite, loc: Loc) {
+        self.emit(BytecodeInst::Super(Box::new(callsite.clone())), loc);
         self.emit(BytecodeInst::InlineCache(Box::new(callsite)), loc);
     }
 
@@ -123,7 +121,7 @@ impl<'a> BytecodeGen<'a> {
         if ret_pop_flag {
             self.push();
         };
-        self.emit_call(callid, loc);
+        self.emit_super(callid, loc);
         if use_mode.is_ret() {
             self.emit_ret(None)?;
         }

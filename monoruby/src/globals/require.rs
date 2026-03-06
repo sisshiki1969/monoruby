@@ -6,11 +6,11 @@ impl Globals {
     ///
     /// Load external library.
     ///
-    pub(crate) fn load_lib(
+    pub(crate) fn require_lib(
         &mut self,
         file_name: &std::path::Path,
         is_relative: bool,
-    ) -> Result<Option<(String, std::path::PathBuf, std::path::PathBuf)>> {
+    ) -> Result<Option<(String, std::path::PathBuf)>> {
         if !is_relative {
             let mut file = PathBuf::from(file_name);
             file.set_extension("rb");
@@ -23,10 +23,10 @@ impl Globals {
             }
 
             if let Some(file) = self.search_lib(file_name) {
-                return self.load_lib_file(file);
+                return self.require_lib_file(file);
             }
         } else if file_name.exists() {
-            return self.load_lib_file(file_name.into());
+            return self.require_lib_file(file_name.into());
         }
         Err(MonorubyErr::cant_load(None, file_name))
     }
@@ -65,10 +65,10 @@ impl Globals {
     ///
     /// When an error occured in loading, returns Err.
     ///
-    fn load_lib_file(
+    fn require_lib_file(
         &mut self,
         path: std::path::PathBuf,
-    ) -> Result<Option<(String, std::path::PathBuf, std::path::PathBuf)>> {
+    ) -> Result<Option<(String, std::path::PathBuf)>> {
         let canonicalized_path = match path.canonicalize() {
             Ok(path) => path,
             Err(err) => return Err(MonorubyErr::cant_load(Some(err), &path)),
@@ -80,39 +80,51 @@ impl Globals {
         {
             return Ok(None);
         }
-        match self.load(&canonicalized_path) {
-            Ok(res) => {
-                Ok(res.map(|(file_body, load_path)| (file_body, load_path, canonicalized_path)))
-            }
-            Err(err) => Err(MonorubyErr::cant_load(Some(err), &canonicalized_path)),
-        }
-    }
-
-    fn load(
-        &mut self,
-        canonicalized_path: &std::path::Path,
-    ) -> std::result::Result<Option<(String, std::path::PathBuf)>, std::io::Error> {
-        let mut file_body = String::new();
-        let load_path = if let Some(b"so") = canonicalized_path.extension().map(|s| s.as_bytes()) {
+        let res = if let Some(b"so") = canonicalized_path.extension().map(|s| s.as_bytes()) {
             let mut lib = dirs::home_dir()
                 .unwrap()
                 .join(".monoruby")
                 .join(canonicalized_path.file_name().unwrap());
             lib.set_extension("rb");
-            lib
+            load_file(&lib)?
         } else {
-            canonicalized_path.to_path_buf()
+            load_file(&canonicalized_path)?
         };
-        let mut file = std::fs::OpenOptions::new().read(true).open(&load_path)?;
-        file.read_to_string(&mut file_body)?;
         self.loaded_canonicalized_files
             .insert(canonicalized_path.to_path_buf());
-        Ok(Some((file_body, load_path)))
+        Ok(Some(res))
+    }
+
+    ///
+    /// Find and read a file for `Kernel#load`.
+    ///
+    /// Unlike `require_lib`, this function:
+    /// - Does NOT check or update `loaded_canonicalized_files`.
+    /// - Does NOT add `.rb` / `.so` extensions automatically.
+    /// - Resolves relative paths against `$LOAD_PATH` (or the cwd for
+    ///   paths that start with `./` / `../`).
+    ///
+    pub(crate) fn find_for_load(
+        &mut self,
+        file_name: &std::path::Path,
+    ) -> Result<(String, std::path::PathBuf)> {
+        //eprintln!("{:?}", std::env::current_dir());
+        for lib in self.load_path.as_array().iter() {
+            let lib = match lib.is_str() {
+                Some(s) => s,
+                None => continue,
+            };
+            let lib = std::path::PathBuf::from(lib).join(file_name);
+            if let Ok(res) = load_file(&lib) {
+                return Ok(res);
+            }
+        }
+        load_file(file_name)
     }
 }
 
-pub fn load_file(path: &std::path::PathBuf) -> Result<(String, std::path::PathBuf)> {
-    fn inner(path: &std::path::PathBuf) -> std::io::Result<(String, std::path::PathBuf)> {
+pub fn load_file(path: &std::path::Path) -> Result<(String, std::path::PathBuf)> {
+    fn inner(path: &std::path::Path) -> std::io::Result<(String, std::path::PathBuf)> {
         let canonicalized_path = path.canonicalize()?;
         let mut file_body = String::new();
         let mut file = std::fs::OpenOptions::new()

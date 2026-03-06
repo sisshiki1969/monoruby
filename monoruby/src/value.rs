@@ -922,6 +922,15 @@ impl Value {
         unsafe { self.rvalue().as_complex() }
     }
 
+    // https://github.com/ruby/ruby/blob/3251792f491bd6f8bff71c6fd3352f66ac635902/range.c#L357
+    pub fn is_linear(&self) -> bool {
+        match self.unpack() {
+            RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_) | RV::Complex(_) => true,
+            RV::Object(rv) if rv.ty() == ObjTy::TIME => true,
+            _ => false,
+        }
+    }
+
     fn is_symbol(&self) -> bool {
         self.id() & 0xff == TAG_SYMBOL
     }

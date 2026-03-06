@@ -390,7 +390,7 @@ impl BytecodePtr {
 impl BytecodePtr {
     pub(crate) fn next(&self) -> BytecodePtr {
         match self.opcode() {
-            // MethodCall and Yield have an extra instruction (InlineCache)
+            // MethodCall, Yield, and Super have an extra instruction (InlineCache)
             30..=35 => *self + 2,
             _ => *self + 1,
         }

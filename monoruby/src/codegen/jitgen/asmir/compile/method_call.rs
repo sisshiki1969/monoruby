@@ -133,17 +133,12 @@ impl Codegen {
         // rdi <- outer, r15 <- &FuncData
 
         monoasm! { &mut self.jit,
-            subq  rsp, 32;
-            // set outer
-            pushq rdi;
-            // set meta
-            pushq [r15 + (FUNCDATA_META)];
-            // set block
-            xorq rax, rax;
-            pushq rax;
-            // set self
-            pushq [rdi - (LFP_SELF)];
-            addq  rsp, 64;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], rdi;
+            movq rax, [r15 + (FUNCDATA_META)];
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rax;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], 0;
+            movq rax, [rdi - (LFP_SELF)];
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
         };
 
         monoasm! { &mut self.jit,
@@ -168,45 +163,22 @@ impl Codegen {
         outer_lfp: Option<Lfp>,
     ) {
         let callsite = &store[callid];
-        monoasm! { &mut self.jit,
-            subq rsp, 32;
-        }
         if let Some(outer_lfp) = outer_lfp {
             monoasm! { &mut self.jit,
                 movq rax, (outer_lfp.as_ptr());
+                movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], rax;
             }
         } else {
             monoasm! { &mut self.jit,
-                xorq rax, rax;
+                movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], 0;
             }
         }
         monoasm! { &mut self.jit,
-            // set outer
-            pushq rax;
-            // set meta.
             movq rax, (meta.get());
-            pushq rax;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rax;
         }
-        // set block
-        if let Some(func_id) = callsite.block_fid {
-            let bh = BlockHandler::from_caller(func_id);
-            monoasm!( &mut self.jit,
-                movq rax, (bh.id());
-                pushq rax;
-            );
-        } else if let Some(block) = callsite.block_arg {
-            monoasm!( &mut self.jit,
-                movq rax, [rbp - (rbp_local(block))];
-                pushq rax;
-            );
-        } else {
-            monoasm!( &mut self.jit,
-                xorq rax, rax;
-                pushq rax;
-            );
-        }
+        self.set_block(callsite.block_fid, callsite.block_arg);
         monoasm! { &mut self.jit,
-            addq rsp, 56;
         }
     }
 
@@ -229,23 +201,17 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rdi, [rdi - (CFP_LFP)];
             // rdi <- outer LFP
-            subq  rsp, 16;
-            // set prev_cfp
-            pushq [rbx + (EXECUTOR_CFP)];
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rsp - (RSP_CFP)], rax;
             // set lfp
             lea   rax, [rsp + (24 - RSP_LOCAL_FRAME)];
-            pushq rax;
-            // set outer
-            pushq rdi;
-            // set meta
+            movq [rsp - (RSP_CFP + CFP_LFP)], rax;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], rdi;
             movq  rax, (meta.get());
-            pushq rax;
-            // set block
-            xorq rax, rax;
-            pushq rax;
-            // set self
-            pushq [rdi - (LFP_SELF)];
-            addq  rsp, 64;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rax;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], 0;
+            movq rax, [rdi - (LFP_SELF)];
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
         };
     }
 
@@ -305,26 +271,26 @@ impl Codegen {
     }
 
     ///
-    /// Push block.
+    /// Set block.
     ///
     /// ### destroy
     /// - rax
     ///
-    fn push_block(&mut self, block_fid: Option<FuncId>, block_arg: Option<SlotId>) {
+    fn set_block(&mut self, block_fid: Option<FuncId>, block_arg: Option<SlotId>) {
         if let Some(func_id) = block_fid {
             let bh = BlockHandler::from_caller(func_id);
             monoasm!( &mut self.jit,
                 movq rax, (bh.id());
-                pushq rax;
+                movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], rax;
             );
         } else if let Some(block) = block_arg {
             monoasm!( &mut self.jit,
-                pushq [rbp - (rbp_local(block))];
+                movq rax, [rbp - (rbp_local(block))];
+                movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], rax;
             );
         } else {
             monoasm!( &mut self.jit,
-                xorq rax, rax;
-                pushq rax;
+                movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], 0;
             );
         }
     }
@@ -453,19 +419,14 @@ impl Codegen {
         // r15 <- &FuncData
 
         monoasm! { &mut self.jit,
-            subq  rsp, 32;
-            // set outer
-            xorq rax, rax;
-            pushq rax;
-            // set meta.
-            pushq [r15 + (FUNCDATA_META)];
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], 0;
+            movq rax, [r15 + (FUNCDATA_META)];
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rax;
         };
-        // set block
-        self.push_block(block_fid, block_arg);
-        // set self
+        self.set_block(block_fid, block_arg);
         monoasm!( &mut self.jit,
-            pushq [rbp - (rbp_local(recv))];
-            addq  rsp, 64;
+            movq rax, [rbp - (rbp_local(recv))];
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
         );
 
         if no_splat {

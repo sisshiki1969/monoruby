@@ -657,13 +657,14 @@ impl Globals {
         end: Value,
         exclude_end: bool,
     ) -> Result<Value> {
-        if !start.is_nil()
-            && !end.is_nil()
-            && start.real_class(&self.store).id() != end.real_class(&self.store).id()
+        if start.is_nil()
+            || end.is_nil()
+            || start.is_linear() && end.is_linear()
+            || start.real_class(&self.store).id() == end.real_class(&self.store).id()
         {
-            return Err(MonorubyErr::bad_range(start, end));
+            return Ok(Value::range(start, end, exclude_end));
         }
-        Ok(Value::range(start, end, exclude_end))
+        return Err(MonorubyErr::bad_range(start, end));
     }
 
     pub(crate) fn format_by_args(&mut self, self_str: &str, arguments: &[Value]) -> Result<String> {

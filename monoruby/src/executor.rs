@@ -287,32 +287,72 @@ impl Executor {
         file_name: &std::path::Path,
         is_relative: bool,
     ) -> Result<bool> {
-        if let Some((file_body, path, canonicalized_path)) =
-            globals.load_lib(file_name, is_relative)?
+        if let Some((file_body, canonicalized_path)) =
+            globals.require_lib(file_name, is_relative)?
         {
-            let _level = self.inc_require_level();
-
-            #[cfg(feature = "dump-require")]
-            eprintln!("{} > {:?}", "  ".repeat(_level), canonicalized_path);
-
-            self.enter_class_context();
-            let res = self.exec_script(globals, file_body, &path);
-            self.exit_class_context();
-
-            #[cfg(feature = "dump-require")]
-            eprintln!("{} < {:?}", "  ".repeat(_level), canonicalized_path);
-
-            self.dec_require_level();
-            if res.is_err() {
-                globals
-                    .loaded_canonicalized_files
-                    .shift_remove(&canonicalized_path);
-            }
-            res?;
+            match self.load_impl(globals, file_body, &canonicalized_path, None) {
+                Ok(()) => {}
+                Err(err) => {
+                    globals
+                        .loaded_canonicalized_files
+                        .shift_remove(&canonicalized_path);
+                    return Err(err);
+                }
+            };
             Ok(true)
         } else {
             Ok(false)
         }
+    }
+
+    ///
+    /// Kernel#load — always (re-)executes the file, never checks loaded_features.
+    ///
+    /// When `r#priv` is true the file should run inside an anonymous module;
+    ///
+    pub fn load(
+        &mut self,
+        globals: &mut Globals,
+        file_name: &std::path::Path,
+        r#priv: bool,
+    ) -> Result<()> {
+        let wrap = if r#priv {
+            Some(globals.define_toplevel_module(""))
+        } else {
+            None
+        };
+
+        let (file_body, path) = globals.find_for_load(file_name)?;
+        self.load_impl(globals, file_body, &path, wrap)?;
+        Ok(())
+    }
+
+    fn load_impl(
+        &mut self,
+        globals: &mut Globals,
+        file_body: String,
+        path: &std::path::Path,
+        wrap: Option<Module>,
+    ) -> Result<()> {
+        let _level = self.inc_require_level();
+
+        #[cfg(feature = "dump-require")]
+        eprintln!("{} > {:?}", "  ".repeat(_level), path);
+
+        self.enter_class_context();
+        if let Some(wrap) = wrap {
+            self.push_class_context(wrap.id());
+        }
+        let res = self.exec_script(globals, file_body, path);
+        self.exit_class_context();
+
+        #[cfg(feature = "dump-require")]
+        eprintln!("{} < {:?}", "  ".repeat(_level), path);
+
+        self.dec_require_level();
+
+        res?;
+        Ok(())
     }
 
     pub(crate) fn enter_class_context(&mut self) {
