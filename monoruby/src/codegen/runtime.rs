@@ -32,7 +32,7 @@ fn find_super(vm: &mut Executor, globals: &mut Globals) -> Result<FuncId> {
     let owner = globals.store[func_id].owner_class().unwrap();
     let func_name = globals.store[func_id].name().unwrap();
     let self_class = self_val.class();
-    match globals.store.check_super(self_class, owner, func_name) {
+    match globals.store.check_super(self_class, owner, func_id, func_name) {
         Some(func_id) => Ok(func_id),
         None => Err(MonorubyErr::method_not_found(globals, func_name, self_val)),
     }
@@ -861,7 +861,7 @@ pub(super) extern "C" fn defined_super(vm: &mut Executor, globals: &mut Globals)
     let owner = globals.store[func_id].owner_class().unwrap();
     let name = globals.store[func_id].name().unwrap();
     let self_class = self_val.class();
-    if globals.check_super(self_class, owner, name).is_some() {
+    if globals.check_super(self_class, owner, func_id, name).is_some() {
         Value::string_from_str("super")
     } else {
         Value::nil()

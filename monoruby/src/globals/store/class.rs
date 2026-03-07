@@ -484,23 +484,43 @@ impl ClassInfoTable {
     }
 
     ///
-    /// Check whether a method *name* of class *class_id* exists.
+    /// Check whether a super method for *current_func_id* exists in the ancestor chain.
+    ///
+    /// Walks the ancestor chain of *self_class* to find the module with *owner* ClassId,
+    /// then searches for the method *name* starting from its superclass.
+    ///
+    /// When the same module appears multiple times in the ancestor chain (e.g., through
+    /// include + include-via-module, or include + prepend), this method skips duplicate
+    /// entries by checking if the found super method has the same func_id as the current
+    /// method being executed.
     ///
     pub(crate) fn check_super(
         &self,
         self_class: ClassId,
         owner: ClassId,
+        current_func_id: FuncId,
         name: IdentId,
     ) -> Option<FuncId> {
         let mut module = self.get_module(self_class);
         loop {
             if !module.has_origin() && module.id() == owner {
-                break;
+                if let Some(super_module) = module.superclass() {
+                    if let Some(super_fid) = self.search_method(super_module, name)?.func_id() {
+                        if super_fid != current_func_id {
+                            return Some(super_fid);
+                        }
+                        // The super method has the same func_id as the current method,
+                        // meaning we found a duplicate iclass of the same module in the chain.
+                        // Continue walking to find the next occurrence.
+                    } else {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
             }
-            module = module.superclass().unwrap();
+            module = module.superclass()?;
         }
-        let module = module.superclass()?;
-        self.search_method(module, name)?.func_id()
     }
 
     ///
@@ -1076,7 +1096,7 @@ impl Store {
             let func_id = lfp.method_func_id();
             let owner = self[func_id].owner_class()?;
             let name = self[func_id].name().unwrap();
-            self.check_super(recv_class, owner, name)
+            self.check_super(recv_class, owner, func_id, name)
         }
     }
 
