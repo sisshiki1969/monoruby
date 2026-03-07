@@ -191,7 +191,7 @@ pub(super) enum BytecodeInst {
     MethodCall(Box<CallSite>),
     Super(Box<CallSite>),
     Yield(Box<CallSite>),
-    InlineCache(Box<CallSite>),
+    InlineCache,
     InitMethod(FnInitInfo),
     MethodDef {
         name: IdentId,

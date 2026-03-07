@@ -5,17 +5,17 @@ mod arguments;
 impl<'a> BytecodeGen<'a> {
     pub(super) fn emit_call(&mut self, callsite: CallSite, loc: Loc) {
         self.emit(BytecodeInst::MethodCall(Box::new(callsite.clone())), loc);
-        self.emit(BytecodeInst::InlineCache(Box::new(callsite)), loc);
+        self.emit(BytecodeInst::InlineCache, loc);
     }
 
     pub(super) fn emit_super(&mut self, callsite: CallSite, loc: Loc) {
         self.emit(BytecodeInst::Super(Box::new(callsite.clone())), loc);
-        self.emit(BytecodeInst::InlineCache(Box::new(callsite)), loc);
+        self.emit(BytecodeInst::InlineCache, loc);
     }
 
     pub(super) fn emit_yield(&mut self, callsite: CallSite, loc: Loc) {
         self.emit(BytecodeInst::Yield(Box::new(callsite.clone())), loc);
-        self.emit(BytecodeInst::InlineCache(Box::new(callsite)), loc);
+        self.emit(BytecodeInst::InlineCache, loc);
     }
 
     pub(super) fn emit_binary_op(

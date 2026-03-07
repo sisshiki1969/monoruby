@@ -411,7 +411,7 @@ impl<'a> BytecodeGen<'a> {
                 let opcode = if callsite.is_simple() { 34 } else { 35 };
                 self.encode_call(opcode, callsite, bc_pos)?
             }
-            BytecodeInst::InlineCache(box callsite) => self.encode_cache(130, callsite)?,
+            BytecodeInst::InlineCache => self.encode_cache(130)?,
             BytecodeInst::Not { ret, src } => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&src);
@@ -608,29 +608,31 @@ impl<'a> BytecodeGen<'a> {
         callsite: CallSite,
         bc_pos: BcIndex,
     ) -> Result<Bytecode> {
-        let CallSite { dst, .. } = callsite;
-        let ret = match dst {
-            None => 0,
-            Some(ret) => self.slot_id(&ret).0,
-        };
-        let callid = self.new_callsite(callsite, bc_pos)?;
-        Ok(Bytecode::from(enc_wl(opcode, ret, callid.get())))
-    }
-
-    fn encode_cache(&self, opcode: u16, callsite: CallSite) -> Result<Bytecode> {
         let CallSite {
+            dst,
             args,
             pos_num,
             recv,
             ..
         } = callsite;
+        let ret = match dst {
+            None => 0,
+            Some(ret) => self.slot_id(&ret).0,
+        };
+        let callid = self.new_callsite(callsite, bc_pos)?;
+        let op1 = enc_wl(opcode, ret, callid.get());
+        let op2 = enc_www(
+            0,
+            self.slot_id(&recv).0,
+            self.slot_id(&args).0,
+            pos_num as _,
+        );
+        Ok(Bytecode::from_u64(op1, op2))
+    }
+
+    fn encode_cache(&self, opcode: u16) -> Result<Bytecode> {
         Ok(Bytecode::from_with_class_and_version(
-            enc_www(
-                opcode,
-                self.slot_id(&recv).0,
-                self.slot_id(&args).0,
-                pos_num as _,
-            ),
+            enc_wl(opcode, 0, 0),
             None,
             -1i32 as u32,
         ))
