@@ -21,6 +21,10 @@ class Object
     yield self
     self
   end
+
+  def <=>(other)
+    0 if equal?(other)
+  end
 end
 
 #class Class
