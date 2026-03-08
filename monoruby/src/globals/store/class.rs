@@ -484,26 +484,6 @@ impl ClassInfoTable {
     }
 
     ///
-    /// Check whether a method *name* of class *class_id* exists.
-    ///
-    pub(crate) fn check_super(
-        &self,
-        self_class: ClassId,
-        owner: ClassId,
-        name: IdentId,
-    ) -> Option<FuncId> {
-        let mut module = self.get_module(self_class);
-        loop {
-            if !module.has_origin() && module.id() == owner {
-                break;
-            }
-            module = module.superclass().unwrap();
-        }
-        let module = module.superclass()?;
-        self.search_method(module, name)?.func_id()
-    }
-
-    ///
     /// Get public and protected method names in the class of *class_id*.
     ///
     pub(crate) fn get_method_names(&self, class_id: ClassId) -> Vec<Value> {
@@ -1074,9 +1054,8 @@ impl Store {
                 .flatten()
         } else {
             let func_id = lfp.method_func_id();
-            let owner = self[func_id].owner_class()?;
             let name = self[func_id].name().unwrap();
-            self.check_super(recv_class, owner, name)
+            self.check_super(recv_class, func_id, name)
         }
     }
 
@@ -1102,6 +1081,40 @@ impl Store {
         });
 
         true
+    }
+
+    ///
+    /// Check whether a super method for *current_func_id* exists in the ancestor chain.
+    ///
+    /// Walks the ancestor chain of *self_class* to find the module with *owner* ClassId,
+    /// then searches for the method *name* starting from its superclass.
+    ///
+    /// When the same module appears multiple times in the ancestor chain (e.g., through
+    /// include + include-via-module, or include + prepend), this method skips duplicate
+    /// entries by checking if the found super method has the same func_id as the current
+    /// method being executed.
+    ///
+    pub(crate) fn check_super(
+        &self,
+        self_class: ClassId,
+        current_func_id: FuncId,
+        name: IdentId,
+    ) -> Option<FuncId> {
+        let owner = self[current_func_id].owner_class();
+        let mut module = self.get_module(self_class);
+        loop {
+            if !module.has_origin() && owner.contains(&module.id()) {
+                let super_module = module.superclass()?;
+                let super_fid = self.search_method(super_module, name)?.func_id()?;
+                if super_fid != current_func_id {
+                    return Some(super_fid);
+                }
+                // The super method has the same func_id as the current method,
+                // meaning we found a duplicate iclass of the same module in the chain.
+                // Continue walking to find the next occurrence.
+            }
+            module = module.superclass().unwrap();
+        }
     }
 }
 

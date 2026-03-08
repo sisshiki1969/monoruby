@@ -148,7 +148,7 @@ impl JitModule {
             // set lfp
             movq r14, rdx;
             // set FuncId
-            movl rdx, [r14 - (LFP_META)];
+            movl rdx, [r14 - (LFP_FUNCID)];
         };
         self.get_func_data();
         self.call_invoker_with_binding();

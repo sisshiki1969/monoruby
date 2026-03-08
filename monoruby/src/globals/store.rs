@@ -262,9 +262,9 @@ impl Store {
                 String::new()
             }
         };
-        match info.owner_class() {
+        match info.owner_class().get(0) {
             Some(owner) => {
-                if let Some(obj) = self[owner].get_module().is_singleton() {
+                if let Some(obj) = self[*owner].get_module().is_singleton() {
                     if let Some(class) = obj.is_class() {
                         format!("{}.{name}", class.id().get_name(self))
                     } else {

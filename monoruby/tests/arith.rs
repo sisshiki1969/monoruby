@@ -1307,6 +1307,7 @@ fn defined() {
         r#"
             class S
               def f
+                defined?(super)
               end
             end
 
