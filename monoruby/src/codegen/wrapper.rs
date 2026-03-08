@@ -103,7 +103,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             pushq rbp;
             movq rbp, rsp;
-            movzxw rax, [r14 - (LFP_META_REGNUM)];
+            movzxw rax, [r14 - (LFP_REGNUM)];
             addq rax, ((RSP_LOCAL_FRAME + LFP_ARG0) / 8 + 1);
             andq rax, (-2);
             shlq rax, 3;

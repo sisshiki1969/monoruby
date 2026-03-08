@@ -26,9 +26,9 @@ pub(crate) const LFP_OUTER: i32 = 0;
 /// Meta 8bytes
 pub(crate) const LFP_META: i32 = 8;
 /// Meta::Regnum 2bytes
-pub(crate) const LFP_META_REGNUM: i32 = LFP_META - META_REGNUM as i32;
+pub(crate) const LFP_REGNUM: i32 = LFP_META - META_REGNUM as i32;
 /// Meta::FuncId 4bytes
-//pub(crate) const LBP_META_FUNCID: i64 = LBP_META + META_FUNCID as i64;
+pub(crate) const LFP_FUNCID: i32 = LFP_META + META_FUNCID as i32;
 pub(crate) const LFP_BLOCK: i32 = 16;
 pub(crate) const LFP_SELF: i32 = 24;
 pub const LFP_ARG0: i32 = LFP_SELF + 8;
