@@ -23,8 +23,7 @@ class Object
   end
 
   def <=>(other)
-    return 0 if equal?(other)
-    0 if self == other
+    0 if equal?(other)
   end
 end
 
