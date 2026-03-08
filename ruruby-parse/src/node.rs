@@ -82,6 +82,7 @@ pub enum NodeKind {
     Break(Box<Node>),
     Next(Box<Node>),
     Redo,
+    Retry,
     Return(Box<Node>),
     Yield(Box<ArgList>),
     MethodDef(String, Box<BlockInfo>), // id, params, body
@@ -824,6 +825,10 @@ impl Node {
 
     pub(crate) fn new_redo(loc: Loc) -> Self {
         Node::new(NodeKind::Redo, loc)
+    }
+
+    pub(crate) fn new_retry(loc: Loc) -> Self {
+        Node::new(NodeKind::Retry, loc)
     }
 
     pub(crate) fn new_return(val: Node, loc: Loc) -> Self {

@@ -615,6 +615,16 @@ impl<'a> JitContext<'a> {
                 ir.push(AsmInst::Raise);
                 return Ok(CompileResult::Raise);
             }
+            TraceIr::Retry => {
+                state.locals_to_S(ir);
+                ir.push(AsmInst::Retry(pc));
+                return Ok(CompileResult::Raise);
+            }
+            TraceIr::Redo => {
+                state.locals_to_S(ir);
+                ir.push(AsmInst::Redo(pc));
+                return Ok(CompileResult::Raise);
+            }
 
             TraceIr::EnsureEnd => {
                 state.locals_to_S(ir);

@@ -285,6 +285,7 @@ impl<'a> BytecodeGen<'a> {
             | NodeKind::ClassDef { .. }
             | NodeKind::SingletonClassDef { .. }
             | NodeKind::Redo
+            | NodeKind::Retry
             | NodeKind::DiscardLhs => {}
             NodeKind::CompStmt(nodes)
             | NodeKind::InterporatedString(nodes)

@@ -871,6 +871,8 @@ pub(super) enum AsmInst {
         rbp_offset: usize,
     },
     Raise,
+    Retry(BytecodePtr),
+    Redo(BytecodePtr),
     EnsureEnd,
     ///
     /// Conditional branch

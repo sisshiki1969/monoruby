@@ -498,6 +498,8 @@ struct BytecodeGen<'a> {
     block_param: Option<IdentId>,
     /// The label for redo.
     redo_label: Label,
+    /// The labels for retry (stack of begin body_start labels).
+    retry_labels: Vec<Label>,
     /// The current register id.
     temp: u16,
     /// The number of temporary registers.
@@ -545,6 +547,7 @@ impl<'a> BytecodeGen<'a> {
             ensure: vec![],
             block_param,
             redo_label: Label(0),
+            retry_labels: vec![],
             temp: 0,
             temp_num: 0,
             sourceinfo,
@@ -638,18 +641,8 @@ impl<'a> BytecodeGen<'a> {
             self.store[self.func_id].kind = FuncKind::Const(imm);
             return Ok(());
         }
-        let loc = info.loc;
         self.apply_label(self.redo_label);
-        // we must check whether redo exist in the function.
-        let mut v = Visitor { redo_flag: false };
-        v.visit(&ast);
-        if v.redo_flag {
-            self.emit(BytecodeInst::LoopStart, loc);
-        }
         self.gen_expr(ast, UseMode2::Ret)?;
-        if v.redo_flag {
-            self.emit(BytecodeInst::LoopEnd, loc);
-        }
         self.replace_init(&info.params);
         self.iseq_mut().loc = info.loc;
         self.into_bytecode()
@@ -1642,182 +1635,4 @@ impl UnOpK {
     //        UnOpK::Neg => neg_value,
     //    }
     //}
-}
-
-struct Visitor {
-    redo_flag: bool,
-}
-
-impl Visitor {
-    fn visit(&mut self, node: &Node) {
-        match &node.kind {
-            NodeKind::Nil
-            | NodeKind::Bool(_)
-            | NodeKind::SelfValue
-            | NodeKind::Integer(_)
-            | NodeKind::Symbol(_)
-            | NodeKind::Bignum(_)
-            | NodeKind::Float(_)
-            | NodeKind::Imaginary(_)
-            | NodeKind::String(_)
-            | NodeKind::Bytes(_)
-            | NodeKind::Const { .. }
-            | NodeKind::InstanceVar(_)
-            | NodeKind::ClassVar(_)
-            | NodeKind::GlobalVar(_)
-            | NodeKind::SpecialVar(_)
-            | NodeKind::LocalVar(..)
-            | NodeKind::Ident(..)
-            | NodeKind::Lambda(_)
-            | NodeKind::DiscardLhs => {}
-            NodeKind::Array(nodes, _)
-            | NodeKind::RegExp(nodes, _, _)
-            | NodeKind::InterporatedString(nodes)
-            | NodeKind::CompStmt(nodes) => self.visit_nodes(nodes),
-            NodeKind::Hash(pairs) => pairs.iter().for_each(|(k, v)| {
-                self.visit(k);
-                self.visit(v);
-            }),
-            NodeKind::UnOp(_, node)
-            | NodeKind::Next(node)
-            | NodeKind::Break(node)
-            | NodeKind::Return(node)
-            | NodeKind::Splat(node)
-            | NodeKind::Command(node) => self.visit(node),
-            NodeKind::Range {
-                box start, box end, ..
-            } => {
-                if let Some(start) = start {
-                    self.visit(start);
-                }
-                if let Some(end) = end {
-                    self.visit(end);
-                }
-            }
-            NodeKind::BinOp(_, lhs, rhs) | NodeKind::AssignOp(_, lhs, rhs) => {
-                self.visit(lhs);
-                self.visit(rhs);
-            }
-            NodeKind::Index { base, index } => {
-                self.visit(base);
-                self.visit_nodes(index);
-            }
-            NodeKind::MulAssign(lhs, rhs) => {
-                self.visit_nodes(lhs);
-                self.visit_nodes(rhs);
-            }
-            NodeKind::MethodCall {
-                box receiver,
-                arglist,
-                ..
-            } => {
-                self.visit(receiver);
-                self.visit_arglist(arglist);
-            }
-            NodeKind::FuncCall { arglist, .. } | NodeKind::Yield(arglist) => {
-                self.visit_arglist(arglist);
-            }
-            NodeKind::Super(arglist) => {
-                if let Some(arglist) = arglist {
-                    self.visit_arglist(arglist);
-                }
-            }
-            NodeKind::If {
-                box cond,
-                box then_,
-                box else_,
-            } => {
-                self.visit(cond);
-                self.visit(then_);
-                self.visit(else_);
-            }
-            NodeKind::While { .. } => {}
-            NodeKind::For { .. } => {}
-            NodeKind::Case {
-                cond,
-                when_,
-                box else_,
-            } => {
-                if let Some(cond) = cond {
-                    self.visit(cond);
-                }
-                for case in when_ {
-                    self.visit_nodes(&case.when);
-                    self.visit(&case.body)
-                }
-                self.visit(else_);
-            }
-            NodeKind::Redo => {
-                self.redo_flag = true;
-            }
-            NodeKind::Begin {
-                box body,
-                rescue,
-                else_,
-                ensure,
-            } => {
-                self.visit(body);
-                for rescue in rescue {
-                    self.visit_nodes(&rescue.exception_list);
-                    if let Some(assign) = &rescue.assign {
-                        self.visit(assign);
-                    }
-                    self.visit(&rescue.body);
-                }
-                if let Some(else_) = else_ {
-                    self.visit(else_);
-                }
-                if let Some(ensure) = ensure {
-                    self.visit(ensure);
-                }
-            }
-            NodeKind::MethodDef(..) => {}
-            NodeKind::SingletonMethodDef(box obj, ..) => {
-                self.visit(obj);
-            }
-            NodeKind::ClassDef {
-                base, superclass, ..
-            } => {
-                if let Some(base) = base {
-                    self.visit(base);
-                }
-                if let Some(superclass) = superclass {
-                    self.visit(superclass);
-                }
-            }
-            NodeKind::SingletonClassDef { box singleton, .. } => {
-                self.visit(singleton);
-            }
-
-            NodeKind::AliasMethod(box new, box old) => {
-                self.visit(new);
-                self.visit(old);
-            }
-            NodeKind::UndefMethod(box undef) => {
-                self.visit(undef);
-            }
-            NodeKind::Defined(_) => {
-                //self.visit(node);
-            }
-        }
-    }
-
-    fn visit_nodes(&mut self, nodes: &[Node]) {
-        for node in nodes {
-            self.visit(node);
-        }
-    }
-
-    fn visit_arglist(&mut self, arglist: &ArgList) {
-        for arg in &arglist.args {
-            self.visit(arg);
-        }
-        for kw in &arglist.kw_args {
-            self.visit(&kw.1);
-        }
-        self.visit_nodes(&arglist.hash_splat);
-        if let Some(node) = &arglist.block {
-            self.visit(node);
-        }
-    }
 }

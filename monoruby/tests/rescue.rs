@@ -195,3 +195,81 @@ fn block_return_ensure() {
             "#,
     );
 }
+
+#[test]
+fn retry1() {
+    run_test(
+        r#"
+            $x = 0
+            begin
+              $x += 1
+              raise "err" if $x < 3
+            rescue
+              retry
+            end
+            $x
+        "#,
+    );
+}
+
+#[test]
+fn retry2() {
+    run_test(
+        r#"
+            x = 0.0
+            $res = []
+            begin
+              x += 1.0
+              $res << x
+              raise "err" if x < 3.0
+              $res << "done"
+            rescue
+              $res << "caught"
+              retry
+            end
+            $res
+        "#,
+    );
+}
+
+#[test]
+fn retry3() {
+    run_test(
+        r#"
+            $x = 0
+            begin
+              $x += 1
+              raise "err" if $x < 2
+              $x
+            rescue
+              retry
+            ensure
+              $x += 10
+            end
+        "#,
+    );
+}
+
+#[test]
+fn retry_in_loop() {
+    run_test(
+        r#"
+            res = []
+            50.times do
+              x = 0.0
+              begin
+                x += 1.0
+                raise "err" if x < 3.0
+              rescue
+                i = 0
+                while i < 50
+                  retry if i == 49
+                  i += 1
+                end
+              end
+              res << x
+            end
+            res
+        "#,
+    );
+}

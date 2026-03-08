@@ -184,6 +184,11 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         Ok(Node::new_redo(loc))
     }
 
+    pub(super) fn parse_retry(&mut self) -> Result<Node, LexerErr> {
+        let loc = self.prev_loc();
+        Ok(Node::new_retry(loc))
+    }
+
     fn parse_break_sub(&mut self) -> Result<(Node, Loc), LexerErr> {
         let loc = self.prev_loc();
         let tok = self.peek_no_term()?;

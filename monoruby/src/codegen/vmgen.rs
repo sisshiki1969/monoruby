@@ -146,6 +146,26 @@ impl Codegen {
             jmp raise;
         };
 
+        //BcOp::Retry
+        let retry = self.jit.get_current_address();
+        let raise = self.entry_raise();
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rax, (runtime::err_retry);
+            call rax;
+            jmp raise;
+        };
+
+        //BcOp::Redo
+        let redo = self.jit.get_current_address();
+        let raise = self.entry_raise();
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rax, (runtime::err_redo);
+            call rax;
+            jmp raise;
+        };
+
         //BcOp::EnsureEnd
         let ensure_end = self.jit.get_current_address();
         let raise = self.entry_raise();
@@ -260,7 +280,9 @@ impl Codegen {
         self.dispatch[81] = method_ret;
         self.dispatch[82] = block_break;
         self.dispatch[83] = raise_err;
+        self.dispatch[84] = retry;
         self.dispatch[85] = ensure_end;
+        self.dispatch[87] = redo;
         self.dispatch[86] = self.vm_concat_regexp();
 
         self.dispatch[120] = self.vm_not();

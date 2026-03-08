@@ -144,6 +144,8 @@ impl MonorubyErr {
             MonorubyErrKind::SystemExit(..) => "SystemExit",
             MonorubyErrKind::Other(class_id) => return class_id.get_name(store),
             MonorubyErrKind::MethodReturn(..) => "MethodReturn",
+            MonorubyErrKind::Retry => "Retry",
+            MonorubyErrKind::Redo => "Redo",
         }
         .to_string()
     }
@@ -170,7 +172,9 @@ impl MonorubyErr {
             MonorubyErrKind::StopIteration => STOP_ITERATION_CLASS,
             MonorubyErrKind::SystemExit(..) => SYSTEM_EXIT_ERROR_CLASS,
             MonorubyErrKind::Other(class_id) => *class_id,
-            MonorubyErrKind::MethodReturn(..) => unreachable!(),
+            MonorubyErrKind::MethodReturn(..) | MonorubyErrKind::Retry | MonorubyErrKind::Redo => {
+                unreachable!()
+            }
         }
     }
 }
@@ -276,6 +280,14 @@ impl MonorubyErr {
             MonorubyErrKind::MethodReturn(val, target_lfp),
             String::new(),
         )
+    }
+
+    pub(crate) fn retry() -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Retry, String::new())
+    }
+
+    pub(crate) fn redo() -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Redo, String::new())
     }
 
     pub(crate) fn method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
@@ -584,6 +596,8 @@ pub enum MonorubyErrKind {
     SystemExit(u8),
     Other(ClassId),
     MethodReturn(Value, Lfp),
+    Retry,
+    Redo,
 }
 
 impl MonorubyErrKind {
