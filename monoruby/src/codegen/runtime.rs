@@ -899,6 +899,10 @@ pub(super) extern "C" fn err_block_break(vm: &mut Executor, _globals: &mut Globa
     vm.set_error(MonorubyErr::method_return(val, target_lfp));
 }
 
+pub(super) extern "C" fn err_retry(vm: &mut Executor) {
+    vm.set_error(MonorubyErr::retry());
+}
+
 pub(super) extern "C" fn check_err(vm: &mut Executor) -> usize {
     vm.exception().is_some().into()
 }

@@ -622,7 +622,7 @@ impl<'a> BytecodeGen<'a> {
                 }
                 match self.retry_labels.last() {
                     Some(&label) => {
-                        self.emit(BytecodeInst::Br(label), loc);
+                        self.emit(BytecodeInst::Retry(label), loc);
                     }
                     None => {
                         return Err(self.syntax_error("Invalid retry.", loc));

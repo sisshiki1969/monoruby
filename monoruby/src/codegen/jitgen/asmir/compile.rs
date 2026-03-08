@@ -315,6 +315,16 @@ impl Codegen {
                     jmp  raise;
                 };
             }
+            AsmInst::Retry(pc) => {
+                let raise = self.entry_raise();
+                monoasm! { &mut self.jit,
+                    movq r13, ((pc + 1).as_ptr());
+                    movq rdi, rbx;
+                    movq rax, (runtime::err_retry);
+                    call rax;
+                    jmp  raise;
+                };
+            }
             AsmInst::EnsureEnd => {
                 let raise = self.entry_raise();
                 monoasm! { &mut self.jit,
