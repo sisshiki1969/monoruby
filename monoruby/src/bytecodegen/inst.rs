@@ -188,6 +188,7 @@ pub(super) enum BytecodeInst {
     BlockBreak(BcReg),
     Raise(BcReg),
     Retry(Label),
+    Redo(Label),
     EnsureEnd,
     MethodCall(Box<CallSite>),
     Super(Box<CallSite>),
@@ -280,6 +281,7 @@ impl BytecodeInst {
             | Self::BlockBreak(_)
             | Self::Raise(_)
             | Self::Retry(_)
+            | Self::Redo(_)
             | Self::OptCase { .. } => true,
             _ => false,
         }

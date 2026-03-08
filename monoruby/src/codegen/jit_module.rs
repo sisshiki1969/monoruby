@@ -332,12 +332,14 @@ pub(super) extern "C" fn handle_error(
     match &func_info.kind {
         FuncKind::ISeq(info) => {
             let bc_base = globals.store[*info].get_top_pc();
-            // check Retry first.
-            // Retry opcode encodes disp in the lower 32 bits of op1.
-            // handle_error receives pc pointing to the retry instruction itself
+            // check Retry/Redo first.
+            // Retry/Redo opcode encodes disp in the lower 32 bits of op1.
+            // handle_error receives pc pointing to the retry/redo instruction itself
             // (entry_raise subtracts 16 from r13).
-            // retry dest = pc + 1 + disp
-            if let MonorubyErrKind::Retry = vm.exception().unwrap().kind() {
+            // dest = pc + 1 + disp
+            if let MonorubyErrKind::Retry | MonorubyErrKind::Redo =
+                vm.exception().unwrap().kind()
+            {
                 vm.take_error();
                 let disp = pc.op1 as i32;
                 let dest = pc + (1 + disp as isize);

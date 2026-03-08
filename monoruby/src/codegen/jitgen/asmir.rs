@@ -872,6 +872,7 @@ pub(super) enum AsmInst {
     },
     Raise,
     Retry(BytecodePtr),
+    Redo(BytecodePtr),
     EnsureEnd,
     ///
     /// Conditional branch

@@ -606,7 +606,7 @@ impl<'a> BytecodeGen<'a> {
                     Some(data) => data,
                     None => {
                         if self.is_block() {
-                            self.emit(BytecodeInst::Br(self.redo_label), loc);
+                            self.emit(BytecodeInst::Redo(self.redo_label), loc);
                             return Ok(());
                         } else {
                             return Err(self.escape_from_eval("redo", loc));

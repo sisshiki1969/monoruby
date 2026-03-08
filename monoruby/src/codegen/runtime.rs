@@ -903,6 +903,10 @@ pub(super) extern "C" fn err_retry(vm: &mut Executor) {
     vm.set_error(MonorubyErr::retry());
 }
 
+pub(super) extern "C" fn err_redo(vm: &mut Executor) {
+    vm.set_error(MonorubyErr::redo());
+}
+
 pub(super) extern "C" fn check_err(vm: &mut Executor) -> usize {
     vm.exception().is_some().into()
 }

@@ -210,6 +210,8 @@ pub(crate) enum TraceIr {
     Raise(SlotId),
     /// retry
     Retry,
+    /// redo
+    Redo,
     /// ensure_end
     EnsureEnd,
     /// toa{%src, %dst}
@@ -506,6 +508,7 @@ impl TraceIr {
                 83 => TraceIr::Raise(SlotId::new(op1_w1)),
                 84 => TraceIr::Retry,
                 85 => TraceIr::EnsureEnd,
+                87 => TraceIr::Redo,
                 86 => TraceIr::ConcatRegexp(SlotId::from(op1_w1), SlotId::new(op2_w2), op3_w3),
                 120 => TraceIr::Not {
                     dst: SlotId::new(op1_w1),
@@ -977,6 +980,7 @@ impl TraceIr {
             TraceIr::BlockBreak(reg) => format!("break {:?}", reg),
             TraceIr::Raise(reg) => format!("raise {:?}", reg),
             TraceIr::Retry => format!("retry"),
+            TraceIr::Redo => format!("redo"),
             TraceIr::EnsureEnd => format!("ensure_end"),
             TraceIr::ToA { dst, src } => format!("{dst:?} = {src:?}.to_a"),
             TraceIr::Mov(dst, src) => format!("{dst:?} = {src:?}"),

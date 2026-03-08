@@ -229,6 +229,13 @@ impl<'a> BytecodeGen<'a> {
                 // terminal inst.
                 Bytecode::from(enc_l(84, op1 as u32))
             }
+            BytecodeInst::Redo(dst) => {
+                // 87
+                let dst = self[dst];
+                let op1 = dst - bc_pos - 1;
+                // terminal inst.
+                Bytecode::from(enc_l(87, op1 as u32))
+            }
             BytecodeInst::LoopStart => {
                 // 14
                 Bytecode::from(enc_l(14, 0))
