@@ -3,6 +3,16 @@ use ruruby_parse::Parser;
 use std::{io::Write, path::PathBuf};
 use tempfile::NamedTempFile;
 
+use std::sync::LazyLock;
+
+// Note: static items do not call [`Drop`] on program termination, so this won't be deallocated.
+// this is fine, as the OS can deallocate the terminated program faster than we can free memory
+// but tools like valgrind might report "memory leaks" as it isn't obvious this is intentional.
+static RUBY: LazyLock<String> = LazyLock::new(|| {
+    // M3 Ultra takes about 16 million years in --release config
+    find_ruby()
+});
+
 pub fn run_test(code: &str) {
     let wrapped = format!(
         r##"
@@ -188,14 +198,13 @@ fn run_ruby(globals: &mut Globals, code: &str) -> Value {
     let mut tmpfile = NamedTempFile::new().unwrap();
     tmpfile.write_all(code.as_bytes()).unwrap();
 
-    let ruby = find_ruby();
-    let res = match std::process::Command::new(&ruby)
+    let res = match std::process::Command::new(&*RUBY)
         .arg(tmpfile.path())
         .output()
     {
         Ok(output) => String::from_utf8(output.stdout).unwrap(),
         Err(err) => {
-            panic!("failed to invoke ruby ({}). {}", ruby, err);
+            panic!("failed to invoke ruby ({}). {}", *RUBY, err);
         }
     };
 
