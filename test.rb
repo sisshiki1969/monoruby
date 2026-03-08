@@ -1,19 +1,13 @@
-def f
-  z = 1.0
-  if $a
-    a = 5.0
-    b = 7.5
-    c = 100
-  else
-    z = $b * z * z
-    b = 2.0
-    a = 8.0
-  end
-  "#{a * b}#{c.inspect}"
-end
-
-$a = false
-$b = 1.0
 50.times do
-  p f
+  x = 0.0
+  begin
+    x += 1.0
+    raise "err" if x < 3.0
+  rescue
+    i = 0
+    while i < 50
+      retry if i == 49
+      i += 1
+    end
+  end
 end

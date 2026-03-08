@@ -216,12 +216,12 @@ fn retry1() {
 fn retry2() {
     run_test(
         r#"
-            $x = 0
+            x = 0.0
             $res = []
             begin
-              $x += 1
-              $res << $x
-              raise "err" if $x < 3
+              x += 1.0
+              $res << x
+              raise "err" if x < 3.0
               $res << "done"
             rescue
               $res << "caught"

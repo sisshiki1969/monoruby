@@ -1113,7 +1113,7 @@ impl Store {
                 // meaning we found a duplicate iclass of the same module in the chain.
                 // Continue walking to find the next occurrence.
             }
-            module = module.superclass().unwrap();
+            module = module.superclass()?;
         }
     }
 }
