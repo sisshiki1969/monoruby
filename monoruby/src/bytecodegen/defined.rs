@@ -277,6 +277,7 @@ fn defined_str(node: &Node) -> &'static str {
         | NodeKind::Next(_)
         | NodeKind::Return(_)
         | NodeKind::Redo
+        | NodeKind::Retry
         | NodeKind::Defined(_)
         | NodeKind::ClassDef { .. }
         | NodeKind::SingletonClassDef { .. }

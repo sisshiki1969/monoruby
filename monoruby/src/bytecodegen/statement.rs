@@ -405,6 +405,7 @@ impl<'a> BytecodeGen<'a> {
             let err_reg = self.push().into();
             let rescue_pos = self.new_label();
             self.apply_label(rescue_pos);
+            self.retry_labels.push(body_start);
 
             for RescueEntry {
                 exception_list,
@@ -436,6 +437,7 @@ impl<'a> BytecodeGen<'a> {
                 self.temp = base + 1;
                 self.apply_label(next_pos);
             }
+            self.retry_labels.pop();
             self.temp = finish;
             // no rescue branch was matched.
             if let Some(box ensure) = &ensure {

@@ -498,6 +498,8 @@ struct BytecodeGen<'a> {
     block_param: Option<IdentId>,
     /// The label for redo.
     redo_label: Label,
+    /// The labels for retry (stack of begin body_start labels).
+    retry_labels: Vec<Label>,
     /// The current register id.
     temp: u16,
     /// The number of temporary registers.
@@ -545,6 +547,7 @@ impl<'a> BytecodeGen<'a> {
             ensure: vec![],
             block_param,
             redo_label: Label(0),
+            retry_labels: vec![],
             temp: 0,
             temp_num: 0,
             sourceinfo,
@@ -1750,6 +1753,7 @@ impl Visitor {
             NodeKind::Redo => {
                 self.redo_flag = true;
             }
+            NodeKind::Retry => {}
             NodeKind::Begin {
                 box body,
                 rescue,

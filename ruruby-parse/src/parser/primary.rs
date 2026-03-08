@@ -174,6 +174,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 Reserved::Break => self.parse_break(),
                 Reserved::Next => self.parse_next(),
                 Reserved::Redo => self.parse_redo(),
+                Reserved::Retry => self.parse_retry(),
                 Reserved::Begin => self.parse_begin(),
                 Reserved::Defined => {
                     if self.consume_punct_no_term(Punct::LParen)? {

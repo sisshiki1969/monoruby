@@ -616,6 +616,20 @@ impl<'a> BytecodeGen<'a> {
                 self.emit(BytecodeInst::Br(*redo_dest), loc);
                 return Ok(());
             }
+            NodeKind::Retry => {
+                if use_mode == UseMode2::Push {
+                    self.push();
+                }
+                match self.retry_labels.last() {
+                    Some(&label) => {
+                        self.emit(BytecodeInst::Br(label), loc);
+                    }
+                    None => {
+                        return Err(self.syntax_error("Invalid retry.", loc));
+                    }
+                };
+                return Ok(());
+            }
             NodeKind::Return(box val) => {
                 if self.is_block() {
                     self.gen_method_return(val, use_mode)?;
