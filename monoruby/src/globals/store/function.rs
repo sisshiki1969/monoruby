@@ -43,7 +43,11 @@ impl FuncId {
                 .cloned()
                 .unwrap_or(OBJECT_CLASS)
         } else {
-            store[self].owner_class().unwrap_or(OBJECT_CLASS)
+            store[self]
+                .owner_class()
+                .get(0)
+                .cloned()
+                .unwrap_or(OBJECT_CLASS)
         }
     }
 }
@@ -60,8 +64,7 @@ pub(crate) struct FuncData {
     ofs: u16,
     min: u16,
     max: u16,
-    /// class id which this function belongs to.
-    owner: Option<ClassId>,
+    _padding: u32,
 }
 
 impl FuncData {
@@ -522,6 +525,8 @@ struct FuncExt {
     name: Option<IdentId>,
     /// type of this function.
     ty: FuncType,
+    /// class id which this function belongs to.
+    owner: Vec<ClassId>,
     /// `DestLabel` of entry site.
     entry: Option<DestLabel>,
     /// parameter information of this function.
@@ -577,7 +582,7 @@ impl FuncInfo {
             ofs: 0,
             min,
             max,
-            owner: None,
+            _padding: 0,
         };
         data.set_offset(max);
         Self {
@@ -586,6 +591,7 @@ impl FuncInfo {
             ext: Box::new(FuncExt {
                 name,
                 ty,
+                owner: vec![],
                 entry: None,
                 params,
                 effect,
@@ -760,12 +766,12 @@ impl FuncInfo {
         self.ext.effect.clone().is_eval() || self.ext.effect.clone().is_binding()
     }
 
-    pub(crate) fn owner_class(&self) -> Option<ClassId> {
-        self.data.owner
+    pub(crate) fn owner_class(&self) -> &[ClassId] {
+        &self.ext.owner
     }
 
     pub(super) fn set_owner_class(&mut self, class: ClassId) {
-        self.data.owner = Some(class);
+        self.ext.owner.push(class);
     }
 
     pub(super) fn entry_label(&self) -> DestLabel {
