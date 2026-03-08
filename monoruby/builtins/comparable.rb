@@ -8,6 +8,8 @@ module Comparable
     case res
     when Integer
       res == 0
+    when nil
+      false
     else
       raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
     end
