@@ -135,11 +135,22 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                         }
                         _ => None,
                     } {
+                        // Check for value-omitted keyword argument shorthand (Ruby 3.1+)
+                        // e.g., foo(x:) is equivalent to foo(x: x)
+                        let next_kind = self.peek_no_term()?.kind;
+                        let value = if next_kind == TokenKind::Punct(Punct::RParen)
+                            || next_kind == TokenKind::Punct(Punct::Comma)
+                        {
+                            // Value-omitted shorthand: use the identifier as the value
+                            node.clone()
+                        } else {
+                            self.parse_arg(false)?
+                        };
                         if as_hash_splat.is_empty() {
-                            kw_args.push((id, self.parse_arg(false)?));
+                            kw_args.push((id, value));
                         } else {
                             as_hash_splat
-                                .push((Node::new_symbol(id, node.loc), self.parse_arg(false)?));
+                                .push((Node::new_symbol(id, node.loc), value));
                         }
                     } else {
                         arglist.args.push(node);
@@ -204,6 +215,8 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                         | Reserved::And
                         | Reserved::Or
                         | Reserved::Then
+                        | Reserved::Else
+                        | Reserved::Elsif
                         | Reserved::End
                 ),
                 _ => true,

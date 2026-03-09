@@ -1173,9 +1173,16 @@ impl Executor {
 impl Executor {
     pub fn generate_proc(&mut self, bh: BlockHandler) -> Result<Proc> {
         if let Some(proxy) = bh.try_proxy() {
-            let outer_lfp = self.cfp().prev().unwrap().lfp();
-            outer_lfp.move_frame_to_heap();
-            let proc = Proc::from(ProcData::from_proxy(self, proxy).to_proc().unwrap());
+            // Walk back through the call frame chain to the block's outer scope,
+            // using the proxy's depth index.
+            let mut cfp = self.cfp();
+            for _ in 0..proxy.1 {
+                cfp = cfp.prev().unwrap();
+            }
+            // Move the correct outer frame (and its lexical chain) to the heap,
+            // so the proc can safely reference it after the current scope exits.
+            let outer_lfp = cfp.lfp().move_frame_to_heap();
+            let proc = Proc::from_parts(outer_lfp, proxy.0);
             Ok(proc)
         } else if let Some(proc) = bh.try_proc() {
             Ok(proc)

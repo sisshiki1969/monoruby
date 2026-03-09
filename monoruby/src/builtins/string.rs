@@ -70,6 +70,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(STRING_CLASS, "to_s", &["to_str"], tos, 0);
     globals.define_builtin_func_with(STRING_CLASS, "to_i", to_i, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "to_f", to_f, 0);
+    globals.define_builtin_func(STRING_CLASS, "hex", hex, 0);
+    globals.define_builtin_func(STRING_CLASS, "oct", oct, 0);
     globals.define_builtin_funcs(STRING_CLASS, "to_sym", &["intern"], to_sym, 0);
     globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
     globals.define_builtin_func(STRING_CLASS, "upcase!", upcase_, 0);
@@ -1739,6 +1741,71 @@ fn to_i(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
     } else {
         10
+    };
+    if let Some((i, negative)) = parse_i64(s, radix) {
+        if negative {
+            if let Some(i) = i.checked_neg() {
+                Ok(Value::integer(i))
+            } else {
+                Ok(Value::bigint(-BigInt::from(i)))
+            }
+        } else {
+            Ok(Value::integer(i))
+        }
+    } else {
+        Ok(Value::bigint(parse_bigint(s, radix)))
+    }
+}
+
+///
+/// ### String#hex
+///
+/// - hex -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/hex.html]
+#[monoruby_builtin]
+fn hex(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let s = self_.as_str();
+    let s = s.trim_start();
+    // Strip optional 0x/0X prefix
+    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    if let Some((i, negative)) = parse_i64(s, 16) {
+        if negative {
+            if let Some(i) = i.checked_neg() {
+                Ok(Value::integer(i))
+            } else {
+                Ok(Value::bigint(-BigInt::from(i)))
+            }
+        } else {
+            Ok(Value::integer(i))
+        }
+    } else {
+        Ok(Value::bigint(parse_bigint(s, 16)))
+    }
+}
+
+///
+/// ### String#oct
+///
+/// - oct -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/oct.html]
+#[monoruby_builtin]
+fn oct(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let s = self_.as_str();
+    let s = s.trim_start();
+    let (s, radix) = if let Some(rest) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        (rest, 16)
+    } else if let Some(rest) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
+        (rest, 2)
+    } else if let Some(rest) = s.strip_prefix("0d").or_else(|| s.strip_prefix("0D")) {
+        (rest, 10)
+    } else if let Some(rest) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")) {
+        (rest, 8)
+    } else {
+        (s, 8)
     };
     if let Some((i, negative)) = parse_i64(s, radix) {
         if negative {

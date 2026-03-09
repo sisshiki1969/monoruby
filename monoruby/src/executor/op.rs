@@ -449,7 +449,47 @@ pub(crate) extern "C" fn bitnot_value(
 }
 
 pub(crate) fn integer_index1(store: &Store, base: Value, index: Value) -> Result<Value> {
-    // we must support Integer#[Range].
+    // Handle Integer#[Range]
+    if let Some(range) = index.is_range() {
+        let start = range.start().coerce_to_i64(store)?;
+        let end = range.end().coerce_to_i64(store)?;
+        let exclude_end = range.exclude_end();
+        let end = if exclude_end { end } else { end + 1 };
+        return match base.unpack() {
+            RV::Fixnum(base) => {
+                if start < 0 {
+                    Ok(Value::integer(0))
+                } else {
+                    let width = end - start;
+                    if width <= 0 {
+                        Ok(Value::integer(0))
+                    } else {
+                        let mask = if width >= 64 {
+                            !0i64
+                        } else {
+                            (1i64 << width) - 1
+                        };
+                        Ok(Value::integer((base >> start) & mask))
+                    }
+                }
+            }
+            RV::BigInt(base) => {
+                if start < 0 {
+                    Ok(Value::integer(0))
+                } else {
+                    let width = end - start;
+                    if width <= 0 {
+                        Ok(Value::integer(0))
+                    } else {
+                        let mask = (num::BigInt::from(1) << width as usize) - 1;
+                        let val = (base >> start as usize) & mask;
+                        Ok(Value::bigint(val))
+                    }
+                }
+            }
+            _ => unreachable!(),
+        };
+    }
     match (base.unpack(), index.unpack()) {
         (RV::Fixnum(base), RV::Fixnum(index)) => {
             let val = if index < 0 {

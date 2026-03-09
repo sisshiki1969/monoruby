@@ -48,6 +48,7 @@ pub struct LvarCollector {
     block: Option<LvarId>,
     pub forwarding_param: Option<LvarId>,
     pub numbered_param: Option<crate::Loc>,
+    pub numbered_param_max: u8,
     pub prohibit_numbered_param: Option<crate::Loc>,
 }
 
@@ -62,6 +63,7 @@ impl LvarCollector {
             block: None,
             forwarding_param: None,
             numbered_param: None,
+            numbered_param_max: 0,
             prohibit_numbered_param: None,
         }
     }
@@ -77,6 +79,7 @@ impl LvarCollector {
             block: None,
             forwarding_param: None,
             numbered_param: None,
+            numbered_param_max: 0,
             prohibit_numbered_param: None,
         }
     }
