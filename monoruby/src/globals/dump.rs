@@ -37,7 +37,7 @@ impl Globals {
         } else {
             vec![]
         };
-        for r in SlotId(0)..SlotId(0) + meta.reg_num() as usize {
+        for r in meta.regs() {
             eprint!(
                 "{:?}{}:[{}] ",
                 r,
@@ -69,7 +69,7 @@ impl Globals {
     pub(crate) unsafe fn check_frame_info(&self, lfp: Lfp) -> bool {
         let meta = lfp.meta();
         let mut invalid = false;
-        for r in SlotId(0)..SlotId(0) + meta.reg_num() as usize {
+        for r in meta.regs() {
             if let Some(v) = lfp.register(r) {
                 if v.debug_check(&self.store).is_none() {
                     invalid = true;

@@ -109,7 +109,7 @@ impl Bytecode {
     }
 
     fn fid(&self) -> Option<FuncId> {
-        let op = self.op2.0 as u32;
+        let op = self.op1 as u32;
         if op == 0 { None } else { Some(FuncId::new(op)) }
     }
 
@@ -135,6 +135,13 @@ impl Bytecode {
         Self {
             op1,
             op2: Bc2::from(op2 as u64),
+        }
+    }
+
+    pub fn from_u64(op1: u64, op2: u64) -> Self {
+        Self {
+            op1,
+            op2: Bc2::from(op2),
         }
     }
 
@@ -352,7 +359,7 @@ impl BytecodePtr {
     }
 
     pub fn cached_fid(self) -> Option<FuncId> {
-        (*self).fid()
+        (*(self + 1)).fid()
     }
 
     pub fn cached_class1(self) -> Option<ClassId> {

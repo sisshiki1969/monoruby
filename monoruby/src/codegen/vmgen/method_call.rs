@@ -1,14 +1,14 @@
 use super::*;
 
 const CALLSITE_ID: i64 = 0 - 16;
-const CACHED_CLASS: i64 = 24 - 16;
-const CACHED_VERSION: i64 = 28 - 16;
-const CACHED_FUNCID: i64 = 8 - 16;
 const RET_REG: i64 = 4 - 16;
 const OPCODE_SUB: i64 = 7 - 16;
-const POS_NUM: i64 = 0;
-const ARG_REG: i64 = 18 - 16;
-const RECV_REG: i64 = 20 - 16;
+const POS_NUM: i64 = 8 - 16;
+const ARG_REG: i64 = 10 - 16;
+const RECV_REG: i64 = 12 - 16;
+const CACHED_FUNCID: i64 = 16 - 16;
+const CACHED_CLASS: i64 = 24 - 16;
+const CACHED_VERSION: i64 = 28 - 16;
 
 impl Codegen {
     ///
@@ -18,12 +18,12 @@ impl Codegen {
     /// MethodCall
     /// 0   2   4   6    8   10  12  14
     /// +---+---+---+---++---+---+---+---+
-    /// |callid |ret| op||  fid  |   -   |
+    /// |callid |ret| op||pos|arg|rcv|   |
     /// +---+---+---+---++---+---+---+---+
     /// InlineCache
     /// 16  18  20  22   24  26  28  30
     /// +---+---+---+---++---+---+---+---+
-    /// |pos|arg|rcv| op|| class |version|
+    /// |  fid  |   | op|| class |version|
     /// +---+---+---+---++---+---+---+---+
     ///
     /// operands
