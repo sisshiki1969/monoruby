@@ -455,40 +455,50 @@ pub(crate) fn integer_index1(store: &Store, base: Value, index: Value) -> Result
         let end = range.end().coerce_to_i64(store)?;
         let exclude_end = range.exclude_end();
         let end = if exclude_end { end } else { end + 1 };
-        return match base.unpack() {
+        let width = end - start;
+        let shifted = |base: &BigInt| -> BigInt {
+            if start >= 0 {
+                base >> start
+            } else {
+                base << (-start) as usize
+            }
+        };
+        // When width < 0, extract all bits from start (no masking)
+        if width < 0 {
+            return match base.unpack() {
+                RV::Fixnum(base) => {
+                    let val = if start >= 0 {
+                        base >> start
+                    } else {
+                        base << -start
+                    };
+                    Ok(Value::integer(val))
+                }
+                RV::BigInt(base) => Ok(Value::bigint(shifted(base))),
+                _ => unreachable!(),
+            };
+        }
+        // Use BigInt path when width >= 64 since mask won't fit in i64
+        let base_bigint = match base.unpack() {
             RV::Fixnum(base) => {
-                if start < 0 {
-                    Ok(Value::integer(0))
-                } else {
-                    let width = end - start;
-                    if width <= 0 {
-                        Ok(Value::integer(0))
-                    } else {
-                        let mask = if width >= 64 {
-                            !0i64
+                if width < 64 {
+                    let mask = (1i64 << width) - 1;
+                    return Ok(Value::integer(
+                        (if start >= 0 {
+                            base >> start
                         } else {
-                            (1i64 << width) - 1
-                        };
-                        Ok(Value::integer((base >> start) & mask))
-                    }
+                            base << -start
+                        }) & mask,
+                    ));
                 }
+                BigInt::from(base)
             }
-            RV::BigInt(base) => {
-                if start < 0 {
-                    Ok(Value::integer(0))
-                } else {
-                    let width = end - start;
-                    if width <= 0 {
-                        Ok(Value::integer(0))
-                    } else {
-                        let mask = (num::BigInt::from(1) << width as usize) - 1;
-                        let val = (base >> start as usize) & mask;
-                        Ok(Value::bigint(val))
-                    }
-                }
-            }
+            RV::BigInt(base) => base.clone(),
             _ => unreachable!(),
         };
+        let mask = (BigInt::from(1) << width as usize) - 1;
+        let val = shifted(&base_bigint) & mask;
+        return Ok(Value::bigint(val));
     }
     match (base.unpack(), index.unpack()) {
         (RV::Fixnum(base), RV::Fixnum(index)) => {
