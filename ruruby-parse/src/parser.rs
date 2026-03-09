@@ -1062,4 +1062,68 @@ mod test {
         "#,
         );*/
     }
+
+    #[test]
+    fn numbered_param_basic() {
+        // Basic usage in block
+        parse_test("[1,2,3].map { _1 }");
+        parse_test("[1,2,3].each { _1 + _2 }");
+        parse_test("[1,2,3].map { _1 * 2 }");
+        // Multiple numbered params
+        parse_test("[[1,2],[3,4]].map { _1 + _2 }");
+        // In do..end block
+        parse_test("[1,2,3].each do _1 end");
+        parse_test("[1,2,3].each do _1 + _2 end");
+        // Nested expressions with numbered params
+        parse_test("[1,2,3].map { _1.to_s }");
+        parse_test("[1,2,3].map { _1 > 1 ? _1 : 0 }");
+    }
+
+    #[test]
+    fn numbered_param_as_func_call() {
+        // _1() should be parsed as a method call (parse_func_call)
+        parse_test("1.times { _1() }");
+        parse_test("1.times { _1(42) }");
+        parse_test("1.times { _2(1, 2) }");
+    }
+
+    #[test]
+    fn numbered_param_errors() {
+        // Numbered param cannot be used in comma expression (multiple assignment lhs)
+        parse_test_err("1.times { _1, x = 1, 2 }");
+        // Numbered param in def method name position
+        parse_test_err("def _1; end");
+        // Numbered param used as formal param name
+        parse_test_err("1.times { |_1| }");
+    }
+
+    #[test]
+    fn parse_func_call() {
+        // Simple function calls
+        parse_test("foo()");
+        parse_test("foo(1)");
+        parse_test("foo(1, 2, 3)");
+        // Function call with block
+        parse_test("foo {}");
+        parse_test("foo do end");
+        parse_test("foo { |x| x }");
+        parse_test("foo do |x| x end");
+        // Function call with args and block
+        parse_test("foo(1) {}");
+        parse_test("foo(1) do end");
+        parse_test("foo(1, 2) { |x| x }");
+        // Function call with keyword args
+        parse_test("foo(a: 1, b: 2)");
+        parse_test("foo(1, a: 1)");
+        // No-paren function calls
+        parse_test("foo 1");
+        parse_test("foo 1, 2");
+        parse_test("foo 1, a: 2");
+        // Splat in args
+        parse_test("foo(*a)");
+        parse_test("foo(1, *a)");
+        // Block arg
+        parse_test("foo(&b)");
+        parse_test("foo(1, &b)");
+    }
 }

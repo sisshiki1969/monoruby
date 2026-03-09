@@ -51,12 +51,21 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     }
                 };
 
-                if let Some(arglist) = self.parse_arguments_unparen(true)? {
-                    Ok(Node::new_fcall(name, arglist, false, loc))
-                } else {
-                    let node = Node::new_identifier(name, loc);
-                    Ok(node)
+                // Register as a local variable in the current block scope
+                // and track the maximum numbered param used.
+                {
+                    let scope = self.scope.last_mut().unwrap();
+                    if i > scope.lvar.numbered_param_max {
+                        scope.lvar.numbered_param_max = i;
+                    }
+                    // Register all numbered params from _1 to _i as local variables
+                    for j in 1..=i {
+                        let param_name = format!("_{}", j);
+                        scope.lvar.insert(&param_name);
+                    }
                 }
+                let node = Node::new_lvar(name, 0, loc);
+                Ok(node)
             }
             TokenKind::Const(name) => {
                 if let Some(arglist) = self.parse_arguments(false)? {
@@ -306,6 +315,14 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         self.loop_stack.pop().unwrap();
         let lvar = self.scope.pop().unwrap().lvar;
         let loc = loc.merge(self.prev_loc());
+        // If numbered parameters (_1, _2, etc.) were used, generate implicit params
+        let params = if params.is_empty() && lvar.numbered_param_max > 0 {
+            (1..=lvar.numbered_param_max)
+                .map(|i| FormalParam::req_param(format!("_{}", i), loc))
+                .collect()
+        } else {
+            params
+        };
         let node = Node::new_lambda(params, body, lvar, loc);
         Ok(Some(Box::new(node)))
     }
@@ -338,6 +355,8 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                         | Reserved::And
                         | Reserved::Or
                         | Reserved::Then
+                        | Reserved::Else
+                        | Reserved::Elsif
                         | Reserved::End
                 ),
                 _ => true,

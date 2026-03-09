@@ -70,6 +70,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(STRING_CLASS, "to_s", &["to_str"], tos, 0);
     globals.define_builtin_func_with(STRING_CLASS, "to_i", to_i, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "to_f", to_f, 0);
+    globals.define_builtin_func(STRING_CLASS, "hex", hex, 0);
+    globals.define_builtin_func(STRING_CLASS, "oct", oct, 0);
     globals.define_builtin_funcs(STRING_CLASS, "to_sym", &["intern"], to_sym, 0);
     globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
     globals.define_builtin_func(STRING_CLASS, "upcase!", upcase_, 0);
@@ -1755,6 +1757,84 @@ fn to_i(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
 }
 
+///
+/// ### String#hex
+///
+/// - hex -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/hex.html]
+#[monoruby_builtin]
+fn hex(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let s = self_.as_str();
+    let s = s.trim_start();
+    // Handle optional sign before 0x/0X prefix
+    let (s, negative) = if let Some(rest) = s.strip_prefix('-') {
+        (rest, true)
+    } else if let Some(rest) = s.strip_prefix('+') {
+        (rest, false)
+    } else {
+        (s, false)
+    };
+    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    Ok(parse_int_value(s, 16, negative))
+}
+
+///
+/// ### String#oct
+///
+/// - oct -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/oct.html]
+#[monoruby_builtin]
+fn oct(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let s = self_.as_str();
+    let s = s.trim_start();
+    // Handle optional sign before prefix
+    let (s, negative) = if let Some(rest) = s.strip_prefix('-') {
+        (rest, true)
+    } else if let Some(rest) = s.strip_prefix('+') {
+        (rest, false)
+    } else {
+        (s, false)
+    };
+    let (s, radix) = if let Some(rest) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        (rest, 16)
+    } else if let Some(rest) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
+        (rest, 2)
+    } else if let Some(rest) = s.strip_prefix("0d").or_else(|| s.strip_prefix("0D")) {
+        (rest, 10)
+    } else if let Some(rest) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")) {
+        (rest, 8)
+    } else {
+        (s, 8)
+    };
+    Ok(parse_int_value(s, radix, negative))
+}
+
+/// Parse a non-negative integer string with the given radix, then optionally negate.
+fn parse_int_value(s: &str, radix: u32, negative: bool) -> Value {
+    if let Some((i, _)) = parse_i64(s, radix) {
+        if negative {
+            if let Some(i) = (i as i64).checked_neg() {
+                Value::integer(i)
+            } else {
+                Value::bigint(-BigInt::from(i))
+            }
+        } else {
+            Value::integer(i)
+        }
+    } else {
+        let v = parse_bigint(s, radix);
+        if negative {
+            Value::bigint(-v)
+        } else {
+            Value::bigint(v)
+        }
+    }
+}
+
 fn parse_i64(s: &str, radix: u32) -> Option<(i64, bool)> {
     let mut i = 0i64;
     let mut sign = None;
@@ -3008,6 +3088,40 @@ mod tests {
         run_test_error(r"'42581'.to_i(-10)");
         run_test_error(r"'42581'.to_i(100)");
     }
+
+    #[test]
+    fn hex() {
+        run_test(r#""0x0a".hex"#);
+        run_test(r#""ff".hex"#);
+        run_test(r#""0xFF".hex"#);
+        run_test(r#""-0x7f".hex"#);
+        run_test(r#""+0x7f".hex"#);
+        run_test(r#""  -0xFF".hex"#);
+        run_test(r#""0".hex"#);
+        run_test(r#""".hex"#);
+        run_test(r#""xyz".hex"#);
+        run_test(r#""10".hex"#);
+        run_test(r#""CE".hex"#);
+        run_test(r#""0xdeadbeef".hex"#);
+    }
+
+    #[test]
+    fn oct() {
+        run_test(r#""77".oct"#);
+        run_test(r#""0o77".oct"#);
+        run_test(r#""077".oct"#);
+        run_test(r#""-077".oct"#);
+        run_test(r#""0x1f".oct"#);
+        run_test(r#""-0x1f".oct"#);
+        run_test(r#""0b1010".oct"#);
+        run_test(r#""-0b1010".oct"#);
+        run_test(r#""0d99".oct"#);
+        run_test(r#""-0d99".oct"#);
+        run_test(r#""0".oct"#);
+        run_test(r#""".oct"#);
+        run_test(r#""xyz".oct"#);
+    }
+
     #[test]
     fn to_f() {
         run_test(r"'4285'.to_f");
