@@ -1768,21 +1768,16 @@ fn hex(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let s = self_.as_str();
     let s = s.trim_start();
-    // Strip optional 0x/0X prefix
-    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
-    if let Some((i, negative)) = parse_i64(s, 16) {
-        if negative {
-            if let Some(i) = i.checked_neg() {
-                Ok(Value::integer(i))
-            } else {
-                Ok(Value::bigint(-BigInt::from(i)))
-            }
-        } else {
-            Ok(Value::integer(i))
-        }
+    // Handle optional sign before 0x/0X prefix
+    let (s, negative) = if let Some(rest) = s.strip_prefix('-') {
+        (rest, true)
+    } else if let Some(rest) = s.strip_prefix('+') {
+        (rest, false)
     } else {
-        Ok(Value::bigint(parse_bigint(s, 16)))
-    }
+        (s, false)
+    };
+    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    Ok(parse_int_value(s, 16, negative))
 }
 
 ///
@@ -1796,6 +1791,14 @@ fn oct(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let s = self_.as_str();
     let s = s.trim_start();
+    // Handle optional sign before prefix
+    let (s, negative) = if let Some(rest) = s.strip_prefix('-') {
+        (rest, true)
+    } else if let Some(rest) = s.strip_prefix('+') {
+        (rest, false)
+    } else {
+        (s, false)
+    };
     let (s, radix) = if let Some(rest) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         (rest, 16)
     } else if let Some(rest) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
@@ -1807,18 +1810,28 @@ fn oct(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     } else {
         (s, 8)
     };
-    if let Some((i, negative)) = parse_i64(s, radix) {
+    Ok(parse_int_value(s, radix, negative))
+}
+
+/// Parse a non-negative integer string with the given radix, then optionally negate.
+fn parse_int_value(s: &str, radix: u32, negative: bool) -> Value {
+    if let Some((i, _)) = parse_i64(s, radix) {
         if negative {
-            if let Some(i) = i.checked_neg() {
-                Ok(Value::integer(i))
+            if let Some(i) = (i as i64).checked_neg() {
+                Value::integer(i)
             } else {
-                Ok(Value::bigint(-BigInt::from(i)))
+                Value::bigint(-BigInt::from(i))
             }
         } else {
-            Ok(Value::integer(i))
+            Value::integer(i)
         }
     } else {
-        Ok(Value::bigint(parse_bigint(s, radix)))
+        let v = parse_bigint(s, radix);
+        if negative {
+            Value::bigint(-v)
+        } else {
+            Value::bigint(v)
+        }
     }
 }
 
@@ -3075,6 +3088,40 @@ mod tests {
         run_test_error(r"'42581'.to_i(-10)");
         run_test_error(r"'42581'.to_i(100)");
     }
+
+    #[test]
+    fn hex() {
+        run_test(r#""0x0a".hex"#);
+        run_test(r#""ff".hex"#);
+        run_test(r#""0xFF".hex"#);
+        run_test(r#""-0x7f".hex"#);
+        run_test(r#""+0x7f".hex"#);
+        run_test(r#""  -0xFF".hex"#);
+        run_test(r#""0".hex"#);
+        run_test(r#""".hex"#);
+        run_test(r#""xyz".hex"#);
+        run_test(r#""10".hex"#);
+        run_test(r#""CE".hex"#);
+        run_test(r#""0xdeadbeef".hex"#);
+    }
+
+    #[test]
+    fn oct() {
+        run_test(r#""77".oct"#);
+        run_test(r#""0o77".oct"#);
+        run_test(r#""077".oct"#);
+        run_test(r#""-077".oct"#);
+        run_test(r#""0x1f".oct"#);
+        run_test(r#""-0x1f".oct"#);
+        run_test(r#""0b1010".oct"#);
+        run_test(r#""-0b1010".oct"#);
+        run_test(r#""0d99".oct"#);
+        run_test(r#""-0d99".oct"#);
+        run_test(r#""0".oct"#);
+        run_test(r#""".oct"#);
+        run_test(r#""xyz".oct"#);
+    }
+
     #[test]
     fn to_f() {
         run_test(r"'4285'.to_f");
