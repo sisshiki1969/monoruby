@@ -123,12 +123,13 @@ module FFI
 
     # Type::Mapped – wraps a DataConverter to add to_native / from_native
     class Mapped < Type
-      attr_reader :converter
+      attr_reader :converter, :type_code
 
       def initialize(converter)
         @converter = converter
         nt = converter.native_type
-        super("mapped(#{nt.name})", nt.size, nt.alignment, nt)
+        @type_code = nt.type_code
+        super("mapped(#{nt.name})", nt.size, nt.alignment)
       end
 
       def to_native(value, ctx = nil)
@@ -566,14 +567,13 @@ module FFI
       @return_type = FFI::Type.find(return_type)
       @param_types = param_types.map { |t| FFI::Type.find(t) }
 
-      addr = if address_or_proc.respond_to?(:to_i)
-               address_or_proc.to_i
-             elsif address_or_proc.is_a?(Proc) || address_or_proc.is_a?(Method)
-               raise NotImplementedError, "Proc/Method FFI::Function not yet supported"
-             else
-               0
-             end
-      super(addr)
+      if address_or_proc.is_a?(Proc) || address_or_proc.is_a?(Method)
+        @callable = address_or_proc
+        super(0)
+      else
+        addr = address_or_proc.respond_to?(:to_i) ? address_or_proc.to_i : 0
+        super(addr)
+      end
     end
 
     def call(*args)
@@ -617,6 +617,10 @@ module FFI
     private
 
     def convert_arg(type, arg)
+      if type.is_a?(FFI::Type::Mapped)
+        arg = type.to_native(arg, nil)
+        return arg.is_a?(FFI::Pointer) ? arg.address : arg
+      end
       if type.equal?(FFI::Type::STRING)
         # Pass Ruby String as raw char* pointer
         arg.is_a?(String) ? arg : arg.to_s
@@ -851,6 +855,13 @@ module FFI
     end
 
     def write_field(field, value)
+      if value.nil? && field.type.type_code == FFI::TYPE_VOIDP
+        value = 0
+      elsif value.is_a?(FFI::Pointer)
+        value = value.address
+      elsif value.respond_to?(:to_ptr)
+        value = value.to_ptr.address
+      end
       FFI.___write(@address + field.offset, field.type.type_code, value)
     end
   end

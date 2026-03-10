@@ -292,6 +292,8 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
             'L' | 'I' => (Template::U32, Endianness::Little),
             'q' => (Template::I64, Endianness::Little),
             'Q' => (Template::U64, Endianness::Little),
+            'v' => (Template::U16, Endianness::Little),
+            'V' => (Template::U32, Endianness::Little),
             'n' => (Template::U16, Endianness::Big),
             'N' => (Template::U32, Endianness::Big),
             'U' => (Template::Utf8, Endianness::Little),
