@@ -853,13 +853,19 @@ fn index_assign(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
             )))
         }
     } else {
-        let i = lfp.arg(0).coerce_to_i64(globals)?;
+        let mut i = lfp.arg(0).coerce_to_i64(globals)?;
         let l = lfp.arg(1).coerce_to_i64(globals)?;
         if l < 0 {
             return Err(MonorubyErr::indexerr(format!("negative length ({})", l)));
         }
         if i < 0 {
-            return Err(MonorubyErr::index_too_small(i, 0));
+            i += ary.len() as i64;
+            if i < 0 {
+                return Err(MonorubyErr::index_too_small(
+                    lfp.arg(0).coerce_to_i64(globals)?,
+                    0,
+                ));
+            }
         }
         let val = lfp.arg(2);
         ary.set_index2(i as usize, l as usize, val)

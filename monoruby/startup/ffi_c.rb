@@ -10,7 +10,7 @@
 # and add further methods to these base classes.
 
 module FFI
-  VERSION = '1.17.0'  # reported version – purely informational
+  # VERSION is set by the ffi gem's lib/ffi/version.rb
 
   # =========================================================================
   # Type codes – integer constants matching the Rust backend (builtins/ffi.rs)
@@ -345,6 +345,12 @@ module FFI
     def read_long;    get_long(0);    end
     def read_ulong;   get_ulong(0);   end
     def read_pointer; get_pointer(0); end
+    def read_int;     get_int32(0);   end
+    def read_uint;    get_uint32(0);  end
+    def read_short;   get_int16(0);   end
+    def read_ushort;  get_uint16(0);  end
+    def read_char;    get_int8(0);    end
+    def read_uchar;   get_uint8(0);   end
     def read_bytes(length); get_bytes(0, length); end
     def read_string(length = nil)
       length ? get_bytes(0, length) : get_string(0)
@@ -363,12 +369,25 @@ module FFI
     def write_long(v);   put_long(0, v);   end
     def write_ulong(v);  put_ulong(0, v);  end
     def write_pointer(v); put_pointer(0, v); end
+    def write_int(v);     put_int32(0, v);  end
+    def write_uint(v);    put_uint32(0, v); end
+    def write_short(v);   put_int16(0, v);  end
+    def write_ushort(v);  put_uint16(0, v); end
+    def write_char(v);    put_int8(0, v);   end
+    def write_uchar(v);   put_uint8(0, v);  end
     def write_bytes(str, start = 0, length = str.bytesize - start)
       put_bytes(0, str, start, length)
     end
     def write_string(str, length = str.bytesize)
       put_bytes(0, str, 0, length)
     end
+
+    def write_array_of_int32(ary);   put_array_of_int32(0, ary);   end
+    def write_array_of_uint32(ary);  put_array_of_uint32(0, ary);  end
+    def write_array_of_int64(ary);   put_array_of_int64(0, ary);   end
+    def write_array_of_uint64(ary);  put_array_of_uint64(0, ary);  end
+    def write_array_of_float64(ary); put_array_of_float64(0, ary); end
+    def write_array_of_pointer(ary); put_array_of_pointer(0, ary); end
 
     def [](index)
       if index.is_a?(Range)
@@ -621,7 +640,9 @@ module FFI
         arg = type.to_native(arg, nil)
         return arg.is_a?(FFI::Pointer) ? arg.address : arg
       end
-      if type.equal?(FFI::Type::STRING)
+      if arg.nil?
+        0  # NULL pointer
+      elsif type.equal?(FFI::Type::STRING)
         # Pass Ruby String as raw char* pointer
         arg.is_a?(String) ? arg : arg.to_s
       elsif arg.is_a?(FFI::Pointer)
