@@ -465,7 +465,8 @@ module FFI
       total = elem_size * count
       addr = FFI.___malloc(total, true)
       raise NoMemoryError, "FFI::MemoryPointer malloc(#{total}) failed" if addr == 0
-      super(addr, total)
+      super(addr)
+      @size = total
       @total = total
     end
 

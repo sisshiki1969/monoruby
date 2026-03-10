@@ -25,7 +25,6 @@
       },
       "args": [
         "/home/monochrome/optcarrot/bin/optcarrot",
-        "-b",
         "/home/monochrome/optcarrot/examples/Lan_Master.nes",
       ],
       "cwd": "${workspaceFolder}"
