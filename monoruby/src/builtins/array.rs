@@ -3327,4 +3327,14 @@ mod tests {
         "##,
         );
     }
+
+    #[test]
+    fn index_assign_negative() {
+        run_test(r##"a = [1,2,3,4,5]; a[-2, 2] = []; a"##);
+        run_test(r##"a = [1,2,3,4,5]; a[-3, 1] = [99]; a"##);
+        run_test(r##"a = [1,2,3,4,5]; a[-5, 3] = [:a, :b]; a"##);
+        run_test(r##"a = [1,2,3,4,5]; a[-1, 1] = [:x, :y, :z]; a"##);
+        run_test(r##"a = [1,2,3]; a[-3, 0] = [:a]; a"##);
+        run_test_error(r##"a = [1,2,3]; a[-4, 1] = []"##);
+    }
 }

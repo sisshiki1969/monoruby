@@ -2875,6 +2875,26 @@ mod tests {
         [res, a, $&, $']
         "##,
         );
+        run_test(
+            r##"
+        a = []
+        "hello world hello".scan(/hel+o/) {|s| a << $& }
+        a
+        "##,
+        );
+        run_test(
+            r##"
+        a = []
+        "abc def ghi".scan(/\w+/) {|m| a << [$&, m] }
+        a
+        "##,
+        );
+        run_test(
+            r##"
+        "nothing".scan(/xyz/) {|s| }
+        $&
+        "##,
+        );
     }
 
     #[test]
@@ -3352,6 +3372,13 @@ mod tests {
         run_test(r#""\x01\xFE".unpack("h3")"#);
         run_test(r#""\x01\xFE".unpack("H*")"#);
         run_test(r#""\x01\xFE".unpack("H3")"#);
+
+        run_test(r#"[0,1,65535].pack("v*")"#);
+        run_test(r#""\x01\x00\xFF\x7F\x00\x80".unpack("v*")"#);
+        run_test(r#"[0,1,4294967295].pack("V*")"#);
+        run_test(r#""\x01\x00\x00\x00\xFF\xFF\xFF\x7F\x00\x00\x00\x80".unpack("V*")"#);
+        run_test(r#"[0x1234].pack("v")"#);
+        run_test(r#"[0x12345678].pack("V")"#);
     }
 
     #[test]
