@@ -1331,43 +1331,63 @@ fn gsub_main(
 fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let given = self_.expect_str(globals)?;
-    let vec = if let Some(s) = lfp.arg(0).is_str() {
-        let re = RegexpInner::from_escaped(s)?;
-        re.scan(vm, given)?
-    } else if let Some(re) = lfp.arg(0).is_regex() {
-        re.scan(vm, given)?
+    let arg0 = lfp.arg(0);
+    let owned_re;
+    let re: &RegexpInner = if let Some(s) = arg0.is_str() {
+        owned_re = RegexpInner::from_escaped(s)?;
+        &owned_re
+    } else if arg0.is_regex().is_some() {
+        arg0.as_regexp_inner()
     } else {
         return Err(MonorubyErr::argumenterr(
             "1st arg must be RegExp or String.",
         ));
     };
     match lfp.block() {
-        None => Ok(Value::array_from_vec(vec)),
+        None => {
+            let vec = re.scan(vm, given)?;
+            Ok(Value::array_from_vec(vec))
+        }
         Some(block) => {
-            let ary = Value::array_from_vec(vec);
-            vm.temp_push(ary);
-            let res = scan_inner(vm, globals, block, &ary.as_array());
-            vm.temp_pop();
-            res?;
+            scan_with_block(vm, globals, re, given, block)?;
             Ok(lfp.self_val())
         }
     }
 }
 
-fn scan_inner(
+fn scan_with_block(
     vm: &mut Executor,
     globals: &mut Globals,
+    re: &RegexpInner,
+    given: &str,
     block: BlockHandler,
-    vec: &[Value],
 ) -> Result<()> {
+    // We must own the string since `given` borrows from self_val,
+    // and invoke_block may mutate self_val.
+    let given = given.to_string();
     let data = vm.get_block_data(globals, block)?;
-    for arg in vec {
-        match arg.try_array_ty() {
-            Some(ary) => {
-                vm.invoke_block(globals, &data, &ary)?;
+    vm.clear_capture_special_variables();
+    for cap in re.captures_iter(&given) {
+        let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
+        vm.save_capture_special_variables(&cap);
+        match cap.len() {
+            0 => unreachable!(),
+            1 => {
+                let val = Value::string(cap.get(0).unwrap().to_string());
+                vm.invoke_block(globals, &data, &[val])?;
             }
-            None => {
-                vm.invoke_block(globals, &data, &[*arg])?;
+            len => {
+                let mut vec = vec![];
+                for i in 1..len {
+                    match cap.get(i) {
+                        Some(m) => {
+                            vec.push(Value::string(m.as_str().to_string()));
+                        }
+                        None => vec.push(Value::nil()),
+                    }
+                }
+                let val = Value::array_from_vec(vec);
+                vm.invoke_block(globals, &data, &val.as_array())?;
             }
         }
     }
@@ -2855,6 +2875,26 @@ mod tests {
         [res, a, $&, $']
         "##,
         );
+        run_test(
+            r##"
+        a = []
+        "hello world hello".scan(/hel+o/) {|s| a << $& }
+        a
+        "##,
+        );
+        run_test(
+            r##"
+        a = []
+        "abc def ghi".scan(/\w+/) {|m| a << [$&, m] }
+        a
+        "##,
+        );
+        run_test(
+            r##"
+        "nothing".scan(/xyz/) {|s| }
+        $&
+        "##,
+        );
     }
 
     #[test]
@@ -3332,6 +3372,13 @@ mod tests {
         run_test(r#""\x01\xFE".unpack("h3")"#);
         run_test(r#""\x01\xFE".unpack("H*")"#);
         run_test(r#""\x01\xFE".unpack("H3")"#);
+
+        run_test(r#"[0,1,65535].pack("v*")"#);
+        run_test(r#""\x01\x00\xFF\x7F\x00\x80".unpack("v*")"#);
+        run_test(r#"[0,1,4294967295].pack("V*")"#);
+        run_test(r#""\x01\x00\x00\x00\xFF\xFF\xFF\x7F\x00\x00\x00\x80".unpack("V*")"#);
+        run_test(r#"[0x1234].pack("v")"#);
+        run_test(r#"[0x12345678].pack("V")"#);
     }
 
     #[test]

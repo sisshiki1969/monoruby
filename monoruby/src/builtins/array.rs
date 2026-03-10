@@ -853,13 +853,19 @@ fn index_assign(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
             )))
         }
     } else {
-        let i = lfp.arg(0).coerce_to_i64(globals)?;
+        let mut i = lfp.arg(0).coerce_to_i64(globals)?;
         let l = lfp.arg(1).coerce_to_i64(globals)?;
         if l < 0 {
             return Err(MonorubyErr::indexerr(format!("negative length ({})", l)));
         }
         if i < 0 {
-            return Err(MonorubyErr::index_too_small(i, 0));
+            i += ary.len() as i64;
+            if i < 0 {
+                return Err(MonorubyErr::index_too_small(
+                    lfp.arg(0).coerce_to_i64(globals)?,
+                    0,
+                ));
+            }
         }
         let val = lfp.arg(2);
         ary.set_index2(i as usize, l as usize, val)
@@ -3320,5 +3326,15 @@ mod tests {
         res
         "##,
         );
+    }
+
+    #[test]
+    fn index_assign_negative() {
+        run_test(r##"a = [1,2,3,4,5]; a[-2, 2] = []; a"##);
+        run_test(r##"a = [1,2,3,4,5]; a[-3, 1] = [99]; a"##);
+        run_test(r##"a = [1,2,3,4,5]; a[-5, 3] = [:a, :b]; a"##);
+        run_test(r##"a = [1,2,3,4,5]; a[-1, 1] = [:x, :y, :z]; a"##);
+        run_test(r##"a = [1,2,3]; a[-3, 0] = [:a]; a"##);
+        run_test_error(r##"a = [1,2,3]; a[-4, 1] = []"##);
     }
 }

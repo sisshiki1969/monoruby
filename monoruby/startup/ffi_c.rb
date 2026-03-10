@@ -10,7 +10,7 @@
 # and add further methods to these base classes.
 
 module FFI
-  VERSION = '1.17.0'  # reported version – purely informational
+  # VERSION is set by the ffi gem's lib/ffi/version.rb
 
   # =========================================================================
   # Type codes – integer constants matching the Rust backend (builtins/ffi.rs)
@@ -123,12 +123,13 @@ module FFI
 
     # Type::Mapped – wraps a DataConverter to add to_native / from_native
     class Mapped < Type
-      attr_reader :converter
+      attr_reader :converter, :type_code
 
       def initialize(converter)
         @converter = converter
         nt = converter.native_type
-        super("mapped(#{nt.name})", nt.size, nt.alignment, nt)
+        @type_code = nt.type_code
+        super("mapped(#{nt.name})", nt.size, nt.alignment)
       end
 
       def to_native(value, ctx = nil)
@@ -216,6 +217,13 @@ module FFI
     def get_long(offset);    FFI.___read(@address + offset, TYPE_LONG);       end
     def get_ulong(offset);   FFI.___read(@address + offset, TYPE_ULONG);      end
 
+    alias get_int    get_int32
+    alias get_uint   get_uint32
+    alias get_short  get_int16
+    alias get_ushort get_uint16
+    alias get_char   get_int8
+    alias get_uchar  get_uint8
+
     def get_pointer(offset)
       addr = FFI.___read(@address + offset, TYPE_VOIDP)
       FFI::Pointer.new(addr)
@@ -247,6 +255,13 @@ module FFI
     def put_float64(offset, v); FFI.___write(@address + offset, TYPE_DOUBLE,     v); end
     def put_long(offset, v);    FFI.___write(@address + offset, TYPE_LONG,       v); end
     def put_ulong(offset, v);   FFI.___write(@address + offset, TYPE_ULONG,      v); end
+
+    alias put_int    put_int32
+    alias put_uint   put_uint32
+    alias put_short  put_int16
+    alias put_ushort put_uint16
+    alias put_char   put_int8
+    alias put_uchar  put_uint8
 
     def put_pointer(offset, ptr)
       FFI.___write(@address + offset, TYPE_VOIDP, ptr.to_i)
@@ -344,6 +359,12 @@ module FFI
     def read_long;    get_long(0);    end
     def read_ulong;   get_ulong(0);   end
     def read_pointer; get_pointer(0); end
+    def read_int;     get_int32(0);   end
+    def read_uint;    get_uint32(0);  end
+    def read_short;   get_int16(0);   end
+    def read_ushort;  get_uint16(0);  end
+    def read_char;    get_int8(0);    end
+    def read_uchar;   get_uint8(0);   end
     def read_bytes(length); get_bytes(0, length); end
     def read_string(length = nil)
       length ? get_bytes(0, length) : get_string(0)
@@ -362,12 +383,25 @@ module FFI
     def write_long(v);   put_long(0, v);   end
     def write_ulong(v);  put_ulong(0, v);  end
     def write_pointer(v); put_pointer(0, v); end
+    def write_int(v);     put_int32(0, v);  end
+    def write_uint(v);    put_uint32(0, v); end
+    def write_short(v);   put_int16(0, v);  end
+    def write_ushort(v);  put_uint16(0, v); end
+    def write_char(v);    put_int8(0, v);   end
+    def write_uchar(v);   put_uint8(0, v);  end
     def write_bytes(str, start = 0, length = str.bytesize - start)
       put_bytes(0, str, start, length)
     end
     def write_string(str, length = str.bytesize)
       put_bytes(0, str, 0, length)
     end
+
+    def write_array_of_int32(ary);   put_array_of_int32(0, ary);   end
+    def write_array_of_uint32(ary);  put_array_of_uint32(0, ary);  end
+    def write_array_of_int64(ary);   put_array_of_int64(0, ary);   end
+    def write_array_of_uint64(ary);  put_array_of_uint64(0, ary);  end
+    def write_array_of_float64(ary); put_array_of_float64(0, ary); end
+    def write_array_of_pointer(ary); put_array_of_pointer(0, ary); end
 
     def [](index)
       if index.is_a?(Range)
@@ -566,14 +600,13 @@ module FFI
       @return_type = FFI::Type.find(return_type)
       @param_types = param_types.map { |t| FFI::Type.find(t) }
 
-      addr = if address_or_proc.respond_to?(:to_i)
-               address_or_proc.to_i
-             elsif address_or_proc.is_a?(Proc) || address_or_proc.is_a?(Method)
-               raise NotImplementedError, "Proc/Method FFI::Function not yet supported"
-             else
-               0
-             end
-      super(addr)
+      if address_or_proc.is_a?(Proc) || address_or_proc.is_a?(Method)
+        @callable = address_or_proc
+        super(0)
+      else
+        addr = address_or_proc.respond_to?(:to_i) ? address_or_proc.to_i : 0
+        super(addr)
+      end
     end
 
     def call(*args)
@@ -596,6 +629,20 @@ module FFI
       @param_types.length
     end
 
+    def attach(mod, mname)
+      mname = mname.to_sym
+      mod.module_eval <<-code, __FILE__, __LINE__
+        def self.#{mname}(*args)
+          @ffi_functions[#{mname.inspect}].call(*args)
+        end
+
+        def #{mname}(*args)
+          self.class.instance_variable_get(:@ffi_functions)[#{mname.inspect}].call(*args)
+        end
+      code
+      self
+    end
+
     def free
       # no-op for non-closure functions
     end
@@ -603,11 +650,19 @@ module FFI
     private
 
     def convert_arg(type, arg)
-      if type.equal?(FFI::Type::STRING)
+      if type.is_a?(FFI::Type::Mapped)
+        arg = type.to_native(arg, nil)
+        return arg.is_a?(FFI::Pointer) ? arg.address : arg
+      end
+      if arg.nil?
+        0  # NULL pointer
+      elsif type.equal?(FFI::Type::STRING)
         # Pass Ruby String as raw char* pointer
         arg.is_a?(String) ? arg : arg.to_s
       elsif arg.is_a?(FFI::Pointer)
         arg.address
+      elsif arg.respond_to?(:to_ptr)
+        arg.to_ptr.address
       else
         arg
       end
@@ -801,8 +856,12 @@ module FFI
       write_field(field, value)
     end
 
-    def to_ptr
+    def pointer
       FFI::Pointer.new(@address)
+    end
+
+    def to_ptr
+      pointer
     end
 
     def members
@@ -831,6 +890,13 @@ module FFI
     end
 
     def write_field(field, value)
+      if value.nil? && field.type.type_code == FFI::TYPE_VOIDP
+        value = 0
+      elsif value.is_a?(FFI::Pointer)
+        value = value.address
+      elsif value.respond_to?(:to_ptr)
+        value = value.to_ptr.address
+      end
       FFI.___write(@address + field.offset, field.type.type_code, value)
     end
   end

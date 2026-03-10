@@ -534,7 +534,7 @@ impl<'a> JitContext<'a> {
                 ir.push(AsmInst::DefinedYield { dst, using_xmm });
             }
             TraceIr::DefinedConst { dst, siteid } => {
-                state.write_back_slots(ir, &[dst]);
+                state.to_S_unguarded(ir, dst);
                 let using_xmm = state.get_using_xmm();
                 ir.push(AsmInst::DefinedConst {
                     dst,
@@ -543,8 +543,8 @@ impl<'a> JitContext<'a> {
                 });
             }
             TraceIr::DefinedMethod { dst, recv, name } => {
-                state.write_back_slots(ir, &[dst, recv]);
-                state.def_S(dst);
+                state.write_back_slots(ir, &[recv]);
+                state.to_S_unguarded(ir, dst);
                 let using_xmm = state.get_using_xmm();
                 ir.push(AsmInst::DefinedMethod {
                     dst,
@@ -568,7 +568,7 @@ impl<'a> JitContext<'a> {
                 });
             }
             TraceIr::DefinedIvar { dst, name } => {
-                state.write_back_slots(ir, &[dst]);
+                state.to_S_unguarded(ir, dst);
                 let using_xmm = state.get_using_xmm();
                 ir.push(AsmInst::DefinedIvar {
                     dst,

@@ -135,10 +135,15 @@ fn value_to_carg(globals: &mut Globals, val: Value, ty: i64) -> Result<CArg> {
                 RV::Fixnum(i) => Ok(CArg::U64(i as u64)),
                 RV::BigInt(b) => Ok(CArg::U64(num::ToPrimitive::to_u64(b).unwrap_or(0))),
                 RV::Nil => Ok(CArg::U64(0)),
-                _ => {
+                RV::String(_) => {
                     // String: pass raw content pointer (GC cannot run here)
                     let ptr = val.as_rstring_inner().as_ptr() as u64;
                     Ok(CArg::U64(ptr))
+                }
+                _ => {
+                    // Other objects (e.g. FFI::Pointer): coerce via to_i
+                    let addr = val.expect_integer(globals)?;
+                    Ok(CArg::U64(addr as u64))
                 }
             }
         }
