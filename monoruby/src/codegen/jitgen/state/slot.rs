@@ -506,6 +506,32 @@ impl SlotState {
         self.clear(slot);
         self.set_mode(slot, LinkMode::S(guarded));
     }
+
+    /// Same as `to_S`, but resets guarded info to `Value` (unknown).
+    /// Used by `locals_to_S` because blocks may modify locals via `dynvar`.
+    #[allow(non_snake_case)]
+    pub(super) fn to_S_unguarded(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        match self.mode(slot) {
+            LinkMode::F(xmm) => {
+                ir.xmm2stack(xmm, slot);
+            }
+            LinkMode::C(v) => {
+                ir.lit2stack(v, slot);
+            }
+            LinkMode::G(_) => {
+                ir.acc2stack(slot);
+            }
+            LinkMode::Sf(_, _) | LinkMode::S(_) => {}
+            LinkMode::V => {
+                ir.lit2stack(Value::nil(), slot);
+            }
+            LinkMode::MaybeNone | LinkMode::None => {
+                unreachable!("to_S_unguarded() {:?}", self.mode(slot));
+            }
+        }
+        self.clear(slot);
+        self.set_mode(slot, LinkMode::S(Guarded::Value));
+    }
 }
 
 impl SlotState {

@@ -8,6 +8,8 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRUCT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(STRUCT_CLASS, "to_s", inspect, 0);
     globals.define_builtin_func(STRUCT_CLASS, "members", members, 0);
+    globals.define_builtin_funcs(STRUCT_CLASS, "==", &["eql?"], eq, 1);
+    globals.define_builtin_func(STRUCT_CLASS, "!=", ne, 1);
 }
 
 ///
@@ -69,6 +71,8 @@ fn struct_initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resu
     );
     globals.define_builtin_class_func(class_id, "members", struct_members, 0);
     globals.define_builtin_func_rest(class_id, "initialize", initialize);
+    globals.define_builtin_funcs(class_id, "==", &["eql?"], eq, 1);
+    globals.define_builtin_func(class_id, "!=", ne, 1);
 
     let members = ArrayInner::from_iter(args.iter().cloned());
 
@@ -168,6 +172,61 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     inspect += ">";
 
     Ok(Value::string(inspect))
+}
+
+///
+/// Struct#==
+/// - self == other -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Struct/i/=3d=3d.html]
+#[monoruby_builtin]
+fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let other = lfp.arg(0);
+    // Must be the same class
+    if self_val.class() != other.class() {
+        return Ok(Value::bool(false));
+    }
+    let members = get_members(globals, self_val.get_class_obj(globals))?;
+    for member in members.iter() {
+        let name = member.try_symbol().unwrap();
+        let ivar_name = IdentId::add_ivar_prefix(name);
+        let lhs = globals
+            .store
+            .get_ivar(self_val, ivar_name)
+            .unwrap_or_default();
+        let rhs = globals.store.get_ivar(other, ivar_name).unwrap_or_default();
+        if vm.ne_values_bool(globals, lhs, rhs)? {
+            return Ok(Value::bool(false));
+        }
+    }
+    Ok(Value::bool(true))
+}
+
+///
+/// Struct#!=
+///
+#[monoruby_builtin]
+fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let other = lfp.arg(0);
+    if self_val.class() != other.class() {
+        return Ok(Value::bool(true));
+    }
+    let members = get_members(globals, self_val.get_class_obj(globals))?;
+    for member in members.iter() {
+        let name = member.try_symbol().unwrap();
+        let ivar_name = IdentId::add_ivar_prefix(name);
+        let lhs = globals
+            .store
+            .get_ivar(self_val, ivar_name)
+            .unwrap_or_default();
+        let rhs = globals.store.get_ivar(other, ivar_name).unwrap_or_default();
+        if vm.ne_values_bool(globals, lhs, rhs)? {
+            return Ok(Value::bool(true));
+        }
+    }
+    Ok(Value::bool(false))
 }
 
 #[monoruby_builtin]

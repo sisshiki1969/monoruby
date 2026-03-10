@@ -357,7 +357,7 @@ impl AbstractFrame {
     #[allow(non_snake_case)]
     pub(super) fn locals_to_S(&mut self, ir: &mut AsmIr) {
         for i in self.locals() {
-            self.to_S(ir, i);
+            self.to_S_unguarded(ir, i);
         }
     }
 }
