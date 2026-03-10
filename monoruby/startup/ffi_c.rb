@@ -217,6 +217,13 @@ module FFI
     def get_long(offset);    FFI.___read(@address + offset, TYPE_LONG);       end
     def get_ulong(offset);   FFI.___read(@address + offset, TYPE_ULONG);      end
 
+    alias get_int    get_int32
+    alias get_uint   get_uint32
+    alias get_short  get_int16
+    alias get_ushort get_uint16
+    alias get_char   get_int8
+    alias get_uchar  get_uint8
+
     def get_pointer(offset)
       addr = FFI.___read(@address + offset, TYPE_VOIDP)
       FFI::Pointer.new(addr)
@@ -248,6 +255,13 @@ module FFI
     def put_float64(offset, v); FFI.___write(@address + offset, TYPE_DOUBLE,     v); end
     def put_long(offset, v);    FFI.___write(@address + offset, TYPE_LONG,       v); end
     def put_ulong(offset, v);   FFI.___write(@address + offset, TYPE_ULONG,      v); end
+
+    alias put_int    put_int32
+    alias put_uint   put_uint32
+    alias put_short  put_int16
+    alias put_ushort put_uint16
+    alias put_char   put_int8
+    alias put_uchar  put_uint8
 
     def put_pointer(offset, ptr)
       FFI.___write(@address + offset, TYPE_VOIDP, ptr.to_i)
