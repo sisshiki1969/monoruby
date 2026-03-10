@@ -295,8 +295,65 @@ mod tests {
         let code = r###"
         S = Struct.new(:a,:b)
         s = S.new(100,200)
-        [s.a, s.b, s.inspect] 
+        [s.a, s.b, s.inspect]
         "###;
         run_test(code);
+    }
+
+    #[test]
+    fn struct_eq() {
+        let prelude = r##"
+        S = Struct.new(:a, :b)
+        T = Struct.new(:a, :b)
+        "##;
+        let code = r##"
+        res = []
+        # equal structs
+        res << (S.new(1, 2) == S.new(1, 2))
+        # different values
+        res << (S.new(1, 2) == S.new(1, 3))
+        # different struct classes with same members and values
+        res << (S.new(1, 2) == T.new(1, 2))
+        # comparison with non-struct
+        res << (S.new(1, 2) == [1, 2])
+        # eql? behaves the same as ==
+        res << (S.new(1, 2).eql?(S.new(1, 2)))
+        res << (S.new(1, 2).eql?(S.new(1, 3)))
+        # nested structs
+        res << (S.new(S.new(1, 2), 3) == S.new(S.new(1, 2), 3))
+        res << (S.new(S.new(1, 2), 3) == S.new(S.new(1, 9), 3))
+        # default (nil) members
+        res << (S.new == S.new)
+        res << (S.new(1) == S.new)
+        res
+        "##;
+        run_test_with_prelude(code, prelude);
+    }
+
+    #[test]
+    fn struct_ne() {
+        let prelude = r##"
+        S = Struct.new(:a, :b)
+        T = Struct.new(:a, :b)
+        "##;
+        let code = r##"
+        res = []
+        # equal structs
+        res << (S.new(1, 2) != S.new(1, 2))
+        # different values
+        res << (S.new(1, 2) != S.new(1, 3))
+        # different struct classes
+        res << (S.new(1, 2) != T.new(1, 2))
+        # comparison with non-struct
+        res << (S.new(1, 2) != [1, 2])
+        # nested structs
+        res << (S.new(S.new(1, 2), 3) != S.new(S.new(1, 2), 3))
+        res << (S.new(S.new(1, 2), 3) != S.new(S.new(1, 9), 3))
+        # default (nil) members
+        res << (S.new != S.new)
+        res << (S.new(1) != S.new)
+        res
+        "##;
+        run_test_with_prelude(code, prelude);
     }
 }
