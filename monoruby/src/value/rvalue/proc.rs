@@ -17,10 +17,6 @@ impl Proc {
         }
     }
 
-    pub(crate) fn from(block: ProcInner) -> Self {
-        Proc(Value::new_proc(block))
-    }
-
     pub(crate) fn from_parts(outer_lfp: Lfp, func_id: FuncId) -> Self {
         Proc(Value::new_proc(ProcInner::new(outer_lfp, func_id)))
     }

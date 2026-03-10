@@ -88,14 +88,6 @@ impl ProcData {
             func_id: Some(proxy.0),
         }
     }
-
-    pub(crate) fn to_proc(self) -> Option<ProcInner> {
-        if let Some(func_id) = self.func_id {
-            Some(ProcInner::new(self.outer.unwrap(), func_id))
-        } else {
-            None
-        }
-    }
 }
 
 ///
