@@ -740,7 +740,7 @@ pub struct Codegen {
     pub(crate) resume_fiber: extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value>,
     pub(crate) yield_fiber: extern "C" fn(*mut Executor, Value) -> Option<Value>,
     pub(crate) startup_flag: bool,
-    #[cfg(feature = "jit-log")]
+    #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
     pub(crate) jit_compile_time: std::time::Duration,
 }
 
@@ -803,7 +803,7 @@ impl Codegen {
             resume_fiber,
             yield_fiber,
             startup_flag: false,
-            #[cfg(feature = "jit-log")]
+            #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
             jit_compile_time: std::time::Duration::default(),
         };
         codegen.construct_vm();
