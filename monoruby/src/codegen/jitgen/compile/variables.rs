@@ -78,7 +78,9 @@ impl<'a> JitContext<'a> {
     }
 
     pub(super) fn load_dynvar(&self, state: &AbstractState, ir: &mut AsmIr, src: DynVar) {
-        if let Some((offset, not_captured)) = self.outer_stack_offset(state, src.outer) {
+        if let Some((offset, not_captured)) = self.outer_stack_offset(state, src.outer)
+            && not_captured
+        {
             assert!(not_captured);
             ir.push(AsmInst::LoadDynVarSpecialized {
                 offset,

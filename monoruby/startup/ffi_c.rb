@@ -596,6 +596,20 @@ module FFI
       @param_types.length
     end
 
+    def attach(mod, mname)
+      mname = mname.to_sym
+      mod.module_eval <<-code, __FILE__, __LINE__
+        def self.#{mname}(*args)
+          @ffi_functions[#{mname.inspect}].call(*args)
+        end
+
+        def #{mname}(*args)
+          self.class.instance_variable_get(:@ffi_functions)[#{mname.inspect}].call(*args)
+        end
+      code
+      self
+    end
+
     def free
       # no-op for non-closure functions
     end
@@ -608,6 +622,8 @@ module FFI
         arg.is_a?(String) ? arg : arg.to_s
       elsif arg.is_a?(FFI::Pointer)
         arg.address
+      elsif arg.respond_to?(:to_ptr)
+        arg.to_ptr.address
       else
         arg
       end
@@ -801,8 +817,12 @@ module FFI
       write_field(field, value)
     end
 
-    def to_ptr
+    def pointer
       FFI::Pointer.new(@address)
+    end
+
+    def to_ptr
+      pointer
     end
 
     def members
