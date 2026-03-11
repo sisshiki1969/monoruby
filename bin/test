@@ -1,4 +1,6 @@
 #!/bin/bash
+set -euo pipefail
+
 cargo llvm-cov clean --workspace
 cargo llvm-cov nextest --features emit-asm --features deopt --features perf --features gc-debug --features jit-debug --features emit-cfg --no-report
 
