@@ -41,6 +41,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set, 2);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get, 1);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variables", iv, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "remove_instance_variable", iv_remove, 1);
     globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
     globals.define_builtin_inline_funcs_with_kw(
         OBJECT_CLASS,
@@ -582,6 +583,23 @@ fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         .into_iter()
         .map(|(id, _)| Value::symbol(id));
     Ok(Value::array_from_iter(iter))
+}
+
+///
+/// ### Object#remove_instance_variable
+///
+/// - remove_instance_variable(name) -> Object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/remove_instance_variable.html]
+#[monoruby_builtin]
+fn iv_remove(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+    match globals.store.remove_ivar(lfp.self_val(), id) {
+        Some(val) => Ok(val),
+        None => Err(MonorubyErr::nameerr(format!(
+            "instance variable {id} not defined"
+        ))),
+    }
 }
 
 #[cfg(test)]
