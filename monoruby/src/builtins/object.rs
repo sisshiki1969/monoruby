@@ -662,6 +662,62 @@ mod tests {
     }
 
     #[test]
+    fn remove_instance_variable() {
+        run_test2(
+            r#"
+            class Foo
+              def initialize
+                @a = 1
+                @b = 2
+              end
+            end
+            f = Foo.new
+            f.remove_instance_variable(:@a)
+            "#,
+        );
+        run_test2(
+            r#"
+            class Foo
+              def initialize
+                @a = 1
+                @b = 2
+              end
+            end
+            f = Foo.new
+            f.remove_instance_variable(:@a)
+            f.instance_variables
+            "#,
+        );
+        run_test2(
+            r#"
+            class Foo
+              def initialize
+                @a = 1
+                @b = 2
+              end
+            end
+            f = Foo.new
+            f.remove_instance_variable("@a")
+            f.instance_variables
+            "#,
+        );
+        run_test2(
+            r#"
+            module M
+              @x = 42
+              remove_instance_variable(:@x)
+            end
+            "#,
+        );
+        run_test_error(
+            r#"
+            obj = Object.new
+            obj.remove_instance_variable(:@nonexistent)
+            "#,
+        );
+    }
+
+    #[test]
     fn extend() {
         run_test_with_prelude(
             r#"
