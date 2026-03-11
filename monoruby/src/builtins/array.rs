@@ -2568,7 +2568,7 @@ mod tests {
         ary
         "##,
         );
-        run_test_error(
+        run_test(
             r##"
         ary = [0, 1, 2, 3]
         ary[-1, 10] = ["a"]
