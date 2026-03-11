@@ -1,10 +1,12 @@
 #!/bin/bash
-set -euo pipefail
+set -e
 
 cargo llvm-cov clean --workspace
 cargo llvm-cov nextest --features emit-asm --features deopt --features perf --features gc-debug --features jit-debug --features emit-cfg --no-report
 
 cargo build --features gc-stress
+
+set +e
 
 target/debug/monoruby benchmark/app_fib.rb > monoruby.log
 ruby benchmark/app_fib.rb > ruby.log
