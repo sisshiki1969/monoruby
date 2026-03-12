@@ -806,6 +806,18 @@ mod tests {
     }
 
     #[test]
+    fn transform_keys() {
+        run_test(r##"{a: 1, b: 2}.transform_keys {|k| k.to_s}"##);
+        run_test(r##"{a: 1, b: 2}.transform_keys {|k| k.to_s.upcase}"##);
+    }
+
+    #[test]
+    fn transform_values() {
+        run_test(r##"{a: 1, b: 2}.transform_values {|v| v * 10}"##);
+        run_test(r##"{a: "x", b: "y"}.transform_values {|v| v.upcase}"##);
+    }
+
+    #[test]
     fn replace() {
         run_test(
             r##"

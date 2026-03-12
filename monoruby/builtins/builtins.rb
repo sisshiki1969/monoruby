@@ -2,6 +2,33 @@ class Enumerator
   include Enumerable
 end
 
+class CallerLocation
+  def initialize(path, lineno, label)
+    @path = path
+    @lineno = lineno
+    @label = label
+  end
+  attr_reader :path, :lineno, :label
+
+  def to_s
+    "#{@path}:#{@lineno}:in '#{@label}'"
+  end
+  alias inspect to_s
+end
+
+def caller_locations(start = 1, length = nil)
+  frames = caller(start + 1)
+  return nil if frames.nil?
+  frames = frames[0, length] if length
+  frames.map do |frame|
+    if frame =~ /\A(.+):(\d+):in ['`](.+)'\z/
+      CallerLocation.new($1, $2.to_i, $3)
+    else
+      CallerLocation.new(frame, 0, "")
+    end
+  end
+end
+
 class TrueClass
   def ^(other)
     !other
@@ -65,6 +92,38 @@ class Hash
     }
     h
   end
+
+  def transform_keys(&block)
+    return to_enum(:transform_keys) unless block
+    h = {}
+    each { |k, v| h[block.call(k)] = v }
+    h
+  end
+
+  def transform_keys!(&block)
+    return to_enum(:transform_keys!) unless block
+    keys.each { |k| self[block.call(k)] = delete(k) }
+    self
+  end
+
+  def transform_values(&block)
+    return to_enum(:transform_values) unless block
+    h = {}
+    each { |k, v| h[k] = block.call(v) }
+    h
+  end
+
+  def transform_values!(&block)
+    return to_enum(:transform_values!) unless block
+    each { |k, v| self[k] = block.call(v) }
+    self
+  end
+end
+
+class Module
+  def ruby2_keywords(*)
+    # no-op for compatibility
+  end
 end
 
 class Float
@@ -76,6 +135,10 @@ end
 class Symbol
   def match(other)
     self.to_s.match(other)
+  end
+
+  def match?(other)
+    self.to_s.match?(other)
   end
 
   def to_proc
@@ -99,5 +162,22 @@ class String
   end
   def -@
     self
+  end
+
+  def encode(**opts)
+    if opts[:xml] == :attr
+      s = gsub("&", "&amp;")
+      s = s.gsub("<", "&lt;")
+      s = s.gsub(">", "&gt;")
+      s = s.gsub("\"", "&quot;")
+      "\"#{s}\""
+    elsif opts[:xml] == :text
+      s = gsub("&", "&amp;")
+      s = s.gsub("<", "&lt;")
+      s = s.gsub(">", "&gt;")
+      s
+    else
+      self
+    end
   end
 end

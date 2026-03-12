@@ -344,6 +344,10 @@ impl RealKind {
             RealKind::Float(_) => false,
         }
     }
+
+    pub fn is_float(&self) -> bool {
+        matches!(self, RealKind::Float(_))
+    }
 }
 
 macro_rules! binops {

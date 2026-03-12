@@ -67,6 +67,13 @@ mod tests {
     }
 
     #[test]
+    fn symbol_match() {
+        run_test(r#":hello.match?(/ell/)"#);
+        run_test(r#":hello.match?(/xyz/)"#);
+        run_test(r#":hello.match?(/\A[a-z]+\z/)"#);
+    }
+
+    #[test]
     fn symbol_to_proc() {
         run_test(
             r#"
