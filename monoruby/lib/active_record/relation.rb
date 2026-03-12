@@ -524,13 +524,18 @@ module ActiveRecord
       grouped = {}
       rows.each do |row|
         record = assoc_class._instantiate_from_row(row, col_names)
-        fk_val = record.send(foreign_key)
+        fk_val = record[foreign_key]
         (grouped[fk_val] ||= []) << record
       end
 
       @records.each do |parent|
         children = grouped[parent.id] || []
-        parent.instance_variable_set(:"@_association_cache_#{assoc_name}", children)
+        cache = parent.instance_variable_get(:@_association_cache) || {}
+        cache[assoc_name.to_sym] = CollectionProxy.new(parent, assoc_name, assoc).tap { |p|
+          p.instance_variable_set(:@loaded, true)
+          p.instance_variable_set(:@records, children)
+        }
+        parent.instance_variable_set(:@_association_cache, cache)
       end
     end
 
@@ -551,20 +556,22 @@ module ActiveRecord
       grouped = {}
       rows.each do |row|
         record = assoc_class._instantiate_from_row(row, col_names)
-        fk_val = record.send(foreign_key)
+        fk_val = record[foreign_key]
         grouped[fk_val] = record
       end
 
       @records.each do |parent|
         child = grouped[parent.id]
-        parent.instance_variable_set(:"@_association_cache_#{assoc_name}", child)
+        cache = parent.instance_variable_get(:@_association_cache) || {}
+        cache[assoc_name.to_sym] = child
+        parent.instance_variable_set(:@_association_cache, cache)
       end
     end
 
     def _eager_load_belongs_to(assoc_name, assoc)
       return if @records.empty?
       foreign_key = assoc[:foreign_key]
-      ids = @records.map { |r| r.send(foreign_key) }.compact.uniq
+      ids = @records.map { |r| r[foreign_key] }.compact.uniq
       return if ids.empty?
 
       assoc_class = _resolve_class(assoc[:class_name])
@@ -582,8 +589,10 @@ module ActiveRecord
       end
 
       @records.each do |parent|
-        fk_val = parent.send(foreign_key)
-        parent.instance_variable_set(:"@_association_cache_#{assoc_name}", indexed[fk_val])
+        fk_val = parent[foreign_key]
+        cache = parent.instance_variable_get(:@_association_cache) || {}
+        cache[assoc_name.to_sym] = indexed[fk_val]
+        parent.instance_variable_set(:@_association_cache, cache)
       end
     end
 

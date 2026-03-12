@@ -383,6 +383,7 @@ module ActiveRecord
       @_ar_persisted = false
       @_changes = {}
       @_previous_changes = {}
+      @_association_cache = {}
 
       _set_defaults
       assign_attributes(attributes) if attributes && !attributes.empty?
@@ -582,15 +583,17 @@ module ActiveRecord
       inspect
     end
 
-    # --- Dynamic attribute methods ---
+    # --- Dynamic attribute and association methods ---
 
     def respond_to_missing?(method_name, include_private = false)
       name_s = method_name.to_s
       if name_s.end_with?("=")
         col = name_s[0..-2]
         return true if self.class.column_names.include?(col)
+        return true if self.class._ar_associations.key?(col.to_sym)
       else
         return true if self.class.column_names.include?(name_s)
+        return true if self.class._ar_associations.key?(name_s.to_sym)
       end
       super
     end
@@ -603,9 +606,15 @@ module ActiveRecord
           _write_attribute(col, args[0])
           return args[0]
         end
+        if self.class._ar_associations.key?(col.to_sym)
+          return _set_association(col.to_sym, args[0])
+        end
       else
         if self.class.column_names.include?(name_s)
           return _read_attribute(name_s)
+        end
+        if self.class._ar_associations.key?(name_s.to_sym)
+          return _get_association(name_s.to_sym)
         end
       end
       super
@@ -662,6 +671,7 @@ module ActiveRecord
       @_ar_persisted = true
       @_changes = {}
       @_previous_changes = {}
+      @_association_cache = {}
 
       attrs.each do |key, value|
         @_ar_attributes[key.to_s] = _type_cast_from_db(key.to_s, value)

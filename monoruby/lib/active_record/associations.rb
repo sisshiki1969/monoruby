@@ -1,6 +1,9 @@
 # frozen_string_literal: true
 #
 # ActiveRecord::Associations - has_many, belongs_to, has_one DSL.
+#
+# Uses method_missing instead of define_method to avoid monoruby issues
+# with closures in define_method on included modules.
 
 module ActiveRecord
   module Associations
@@ -21,7 +24,6 @@ module ActiveRecord
       end
 
       # has_many :posts
-      # has_many :posts, class_name: "BlogPost", foreign_key: "author_id"
       def has_many(name, options = {})
         name = name.to_sym
         class_name = options[:class_name] || _classify_association(name)
@@ -34,36 +36,9 @@ module ActiveRecord
           foreign_key: foreign_key,
           dependent: dependent
         }
-
-        # Define getter
-        define_method(name) do
-          cache_ivar = :"@_association_cache_#{name}"
-          if instance_variable_defined?(cache_ivar)
-            cached = instance_variable_get(cache_ivar)
-            # If it's already an array from eager loading, wrap it in a CollectionProxy
-            if cached.is_a?(Array)
-              proxy = CollectionProxy.new(self, name, self.class._ar_associations[name])
-              proxy.instance_variable_set(:@loaded, true)
-              proxy.instance_variable_set(:@records, cached)
-              instance_variable_set(cache_ivar, proxy)
-              return proxy
-            end
-            return cached
-          end
-          proxy = CollectionProxy.new(self, name, self.class._ar_associations[name])
-          instance_variable_set(cache_ivar, proxy)
-          proxy
-        end
-
-        # Define setter
-        define_method(:"#{name}=") do |records|
-          cache_ivar = :"@_association_cache_#{name}"
-          instance_variable_set(cache_ivar, records)
-        end
       end
 
       # belongs_to :user
-      # belongs_to :author, class_name: "User", foreign_key: "author_id"
       def belongs_to(name, options = {})
         name = name.to_sym
         class_name = options[:class_name] || _classify_association_singular(name)
@@ -76,33 +51,6 @@ module ActiveRecord
           foreign_key: foreign_key,
           optional: optional
         }
-
-        # Define getter
-        define_method(name) do
-          cache_ivar = :"@_association_cache_#{name}"
-          if instance_variable_defined?(cache_ivar)
-            return instance_variable_get(cache_ivar)
-          end
-          fk_value = send(foreign_key)
-          return nil if fk_value.nil?
-          assoc_def = self.class._ar_associations[name]
-          assoc_class = _resolve_association_class(assoc_def[:class_name])
-          return nil unless assoc_class
-          result = assoc_class.find_by(assoc_class.primary_key.to_sym => fk_value)
-          instance_variable_set(cache_ivar, result)
-          result
-        end
-
-        # Define setter
-        define_method(:"#{name}=") do |record|
-          cache_ivar = :"@_association_cache_#{name}"
-          if record
-            send(:"#{foreign_key}=", record.id)
-          else
-            send(:"#{foreign_key}=", nil)
-          end
-          instance_variable_set(cache_ivar, record)
-        end
       end
 
       # has_one :profile
@@ -118,39 +66,12 @@ module ActiveRecord
           foreign_key: foreign_key,
           dependent: dependent
         }
-
-        # Define getter
-        define_method(name) do
-          cache_ivar = :"@_association_cache_#{name}"
-          if instance_variable_defined?(cache_ivar)
-            return instance_variable_get(cache_ivar)
-          end
-          assoc_def = self.class._ar_associations[name]
-          assoc_class = _resolve_association_class(assoc_def[:class_name])
-          return nil unless assoc_class
-          result = assoc_class.find_by(assoc_def[:foreign_key].to_sym => self.id)
-          instance_variable_set(cache_ivar, result)
-          result
-        end
-
-        # Define setter
-        define_method(:"#{name}=") do |record|
-          cache_ivar = :"@_association_cache_#{name}"
-          if record
-            assoc_def = self.class._ar_associations[name]
-            record.send(:"#{assoc_def[:foreign_key]}=", self.id)
-            record.save
-          end
-          instance_variable_set(cache_ivar, record)
-        end
       end
 
       private
 
       def _classify_association(name)
-        # has_many :posts -> "Post"
         word = name.to_s
-        # singularize then classify
         singular = ActiveSupport::Inflector.singularize(word)
         s = singular
         s = s[0].upcase + s[1..-1] if s.length > 0
@@ -158,18 +79,99 @@ module ActiveRecord
       end
 
       def _classify_association_singular(name)
-        # belongs_to :user -> "User"
         s = name.to_s
         s = s[0].upcase + s[1..-1] if s.length > 0
         s
       end
 
       def _default_foreign_key
-        # User -> user_id
         n = self.name || ""
         base = ActiveSupport::Inflector.underscore(ActiveSupport::Inflector.demodulize(n))
         "#{base}_id"
       end
+    end
+
+    # --- Instance-level association access via method_missing ---
+
+    def _get_association(assoc_name)
+      assoc_name = assoc_name.to_sym
+      assoc_def = self.class._ar_associations[assoc_name]
+      return nil unless assoc_def
+
+      # Use a hash for association caching instead of dynamic ivars
+      @_association_cache ||= {}
+
+      case assoc_def[:type]
+      when :has_many
+        cached = @_association_cache[assoc_name]
+        if cached
+          return cached
+        end
+        proxy = CollectionProxy.new(self, assoc_name, assoc_def)
+        @_association_cache[assoc_name] = proxy
+        proxy
+
+      when :belongs_to
+        if @_association_cache.key?(assoc_name)
+          return @_association_cache[assoc_name]
+        end
+        fk_value = _read_attribute(assoc_def[:foreign_key])
+        return nil if fk_value.nil?
+        assoc_class = _resolve_association_class(assoc_def[:class_name])
+        return nil unless assoc_class
+        result = assoc_class.find_by(assoc_class.primary_key.to_sym => fk_value)
+        @_association_cache[assoc_name] = result
+        result
+
+      when :has_one
+        if @_association_cache.key?(assoc_name)
+          return @_association_cache[assoc_name]
+        end
+        assoc_class = _resolve_association_class(assoc_def[:class_name])
+        return nil unless assoc_class
+        result = assoc_class.find_by(assoc_def[:foreign_key].to_sym => self.id)
+        @_association_cache[assoc_name] = result
+        result
+      end
+    end
+
+    def _set_association(assoc_name, value)
+      assoc_name = assoc_name.to_sym
+      assoc_def = self.class._ar_associations[assoc_name]
+      return unless assoc_def
+
+      @_association_cache ||= {}
+
+      case assoc_def[:type]
+      when :belongs_to
+        if value
+          _write_attribute(assoc_def[:foreign_key], value.id)
+        else
+          _write_attribute(assoc_def[:foreign_key], nil)
+        end
+        @_association_cache[assoc_name] = value
+
+      when :has_one
+        if value
+          value.send(:_write_attribute, assoc_def[:foreign_key], self.id)
+          value.save
+        end
+        @_association_cache[assoc_name] = value
+
+      when :has_many
+        @_association_cache[assoc_name] = value
+      end
+    end
+
+    def respond_to_missing?(method_name, include_private = false)
+      name_s = method_name.to_s
+      if name_s.end_with?("=")
+        assoc = name_s[0..-2].to_sym
+        return true if self.class._ar_associations.key?(assoc)
+      else
+        return true if self.class._ar_associations.key?(method_name.to_sym)
+      end
+      super
     end
 
     private
@@ -203,8 +205,9 @@ module ActiveRecord
       return @records if @loaded
       assoc_class = _resolve_class(@association_def[:class_name])
       return [] unless assoc_class
-      foreign_key = @association_def[:foreign_key]
-      @records = assoc_class.where(foreign_key.to_sym => @owner.id).to_a
+      fk = @association_def[:foreign_key]
+      fk_sym = fk.to_sym
+      @records = assoc_class.where(fk_sym => @owner.id).to_a
       @loaded = true
       @records
     end
@@ -228,13 +231,17 @@ module ActiveRecord
       if @loaded
         @records.length
       else
-        _build_relation.count
+        count
       end
     end
     alias length size
 
     def count
-      _build_relation.count
+      assoc_class = _resolve_class(@association_def[:class_name])
+      return 0 unless assoc_class
+      fk = @association_def[:foreign_key]
+      fk_sym = fk.to_sym
+      assoc_class.where(fk_sym => @owner.id).count
     end
 
     def empty?
@@ -293,8 +300,8 @@ module ActiveRecord
     alias new build
 
     def <<(record)
-      foreign_key = @association_def[:foreign_key]
-      record.send(:"#{foreign_key}=", @owner.id)
+      fk = @association_def[:foreign_key]
+      record.send(:_write_attribute, fk, @owner.id)
       record.save
       @records << record if @loaded
       self
@@ -302,8 +309,8 @@ module ActiveRecord
     alias push <<
 
     def delete(record)
-      foreign_key = @association_def[:foreign_key]
-      record.send(:"#{foreign_key}=", nil)
+      fk = @association_def[:foreign_key]
+      record.send(:_write_attribute, fk, nil)
       record.save
       @records.delete(record) if @loaded
     end
@@ -315,25 +322,45 @@ module ActiveRecord
     end
 
     def delete_all
-      _build_relation.delete_all
+      assoc_class = _resolve_class(@association_def[:class_name])
+      return unless assoc_class
+      fk = @association_def[:foreign_key]
+      fk_sym = fk.to_sym
+      assoc_class.where(fk_sym => @owner.id).delete_all
       @records = []
       @loaded = true
     end
 
     def where(conditions = nil, *values)
-      _build_relation.where(conditions, *values)
+      assoc_class = _resolve_class(@association_def[:class_name])
+      return ActiveRecord::Relation.new(assoc_class) unless assoc_class
+      fk = @association_def[:foreign_key]
+      fk_sym = fk.to_sym
+      assoc_class.where(fk_sym => @owner.id).where(conditions, *values)
     end
 
     def order(*args)
-      _build_relation.order(*args)
+      assoc_class = _resolve_class(@association_def[:class_name])
+      return ActiveRecord::Relation.new(assoc_class) unless assoc_class
+      fk = @association_def[:foreign_key]
+      fk_sym = fk.to_sym
+      assoc_class.where(fk_sym => @owner.id).order(*args)
     end
 
     def limit(value)
-      _build_relation.limit(value)
+      assoc_class = _resolve_class(@association_def[:class_name])
+      return ActiveRecord::Relation.new(assoc_class) unless assoc_class
+      fk = @association_def[:foreign_key]
+      fk_sym = fk.to_sym
+      assoc_class.where(fk_sym => @owner.id).limit(value)
     end
 
     def pluck(*columns)
-      _build_relation.pluck(*columns)
+      assoc_class = _resolve_class(@association_def[:class_name])
+      return [] unless assoc_class
+      fk = @association_def[:foreign_key]
+      fk_sym = fk.to_sym
+      assoc_class.where(fk_sym => @owner.id).pluck(*columns)
     end
 
     def reload
@@ -349,13 +376,6 @@ module ActiveRecord
     end
 
     private
-
-    def _build_relation
-      assoc_class = _resolve_class(@association_def[:class_name])
-      return Relation.new(assoc_class) unless assoc_class
-      foreign_key = @association_def[:foreign_key]
-      assoc_class.where(foreign_key.to_sym => @owner.id)
-    end
 
     def _resolve_class(class_name)
       if class_name.is_a?(::String)
