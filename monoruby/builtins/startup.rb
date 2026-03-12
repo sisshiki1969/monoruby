@@ -102,6 +102,20 @@ class File
   FNM_DOTMATCH = 4
   FNM_CASEFOLD = 8
   NULL = "/dev/null"
+  BINARY = 0
+
+  RDONLY   = 0
+  WRONLY   = 1
+  RDWR     = 2
+  APPEND   = 1024
+  CREAT    = 64
+  EXCL     = 128
+  TRUNC    = 512
+  NONBLOCK = 2048
+  LOCK_SH  = 1
+  LOCK_EX  = 2
+  LOCK_UN  = 8
+  LOCK_NB  = 4
 
   Separator = "/"
   SEPARATOR = "/"

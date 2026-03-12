@@ -245,7 +245,11 @@ impl<'a> BytecodeGen<'a> {
                 self.emit(BytecodeInst::DefinedGvar { dst: ret, name }, node.loc);
             }
             NodeKind::SpecialVar(..) => {}
-            NodeKind::ClassVar(..) | NodeKind::Lambda(_) => {
+            NodeKind::ClassVar(name) => {
+                let name = IdentId::get_id_from_string(name);
+                self.emit(BytecodeInst::DefinedCvar { dst: ret, name }, node.loc);
+            }
+            NodeKind::Lambda(_) => {
                 return Err(self.unsupported_node(&node));
             }
             _ => {}
