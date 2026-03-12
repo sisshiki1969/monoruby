@@ -31,6 +31,33 @@ class Date
     'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
   ].freeze
 
+  # Zero-pad a number to n digits
+  def self._zpad(num, width)
+    s = num.to_s
+    if num < 0
+      # Handle negative: pad after the minus sign
+      s = s[1..-1]
+      while s.length < width - 1
+        s = "0#{s}"
+      end
+      "-#{s}"
+    else
+      while s.length < width
+        s = "0#{s}"
+      end
+      s
+    end
+  end
+
+  # Space-pad a number to n chars
+  def self._spad(num, width)
+    s = num.to_s
+    while s.length < width
+      s = " #{s}"
+    end
+    s
+  end
+
   # --- Internal helpers: Julian Day Number <-> Civil date ---
   # Gregorian calendar conversion.
 
@@ -90,7 +117,6 @@ class Date
   # --- Class methods ---
 
   def self.new(year = -4712, month = 1, day = 1, start = ITALY)
-    # Handle negative months/days (Ruby's Date doesn't, but be safe)
     unless _valid_civil?(year, month, day)
       raise ArgumentError, "invalid date"
     end
@@ -319,7 +345,7 @@ class Date
   # --- Formatting ---
 
   def to_s
-    format('%04d-%02d-%02d', year, month, day)
+    "#{Date._zpad(year, 4)}-#{Date._zpad(month, 2)}-#{Date._zpad(day, 2)}"
   end
 
   def inspect
@@ -332,13 +358,13 @@ class Date
 
   def strftime(fmt = '%F')
     result = fmt.dup
-    result = result.gsub('%Y', format('%04d', year))
-    result = result.gsub('%C', format('%02d', year / 100))
-    result = result.gsub('%y', format('%02d', year % 100))
-    result = result.gsub('%m', format('%02d', month))
-    result = result.gsub('%d', format('%02d', day))
-    result = result.gsub('%e', format('%2d', day))
-    result = result.gsub('%j', format('%03d', yday))
+    result = result.gsub('%Y', Date._zpad(year, 4))
+    result = result.gsub('%C', Date._zpad(year / 100, 2))
+    result = result.gsub('%y', Date._zpad(year % 100, 2))
+    result = result.gsub('%m', Date._zpad(month, 2))
+    result = result.gsub('%d', Date._zpad(day, 2))
+    result = result.gsub('%e', Date._spad(day, 2))
+    result = result.gsub('%j', Date._zpad(yday, 3))
     result = result.gsub('%w', wday.to_s)
     result = result.gsub('%u', (wday == 0 ? 7 : wday).to_s)
     result = result.gsub('%A', DAYNAMES[wday])
@@ -346,9 +372,9 @@ class Date
     result = result.gsub('%B', MONTHNAMES[month])
     result = result.gsub('%b', ABBR_MONTHNAMES[month])
     result = result.gsub('%h', ABBR_MONTHNAMES[month])
-    result = result.gsub('%F', format('%04d-%02d-%02d', year, month, day))
-    result = result.gsub('%D', format('%02d/%02d/%02d', month, day, year % 100))
-    result = result.gsub('%x', format('%02d/%02d/%02d', month, day, year % 100))
+    result = result.gsub('%F', "#{Date._zpad(year, 4)}-#{Date._zpad(month, 2)}-#{Date._zpad(day, 2)}")
+    result = result.gsub('%D', "#{Date._zpad(month, 2)}/#{Date._zpad(day, 2)}/#{Date._zpad(year % 100, 2)}")
+    result = result.gsub('%x', "#{Date._zpad(month, 2)}/#{Date._zpad(day, 2)}/#{Date._zpad(year % 100, 2)}")
     result = result.gsub('%n', "\n")
     result = result.gsub('%t', "\t")
     result = result.gsub('%%', '%')
@@ -399,21 +425,15 @@ class Date
 
   def cweek
     # ISO 8601 week number
-    # Thursday of the current week determines the year
     jan1 = Date.new(year, 1, 1)
     jan1_wday = jan1.wday
-    # ISO weekday: Monday=1..Sunday=7
     jan1_iso = jan1_wday == 0 ? 7 : jan1_wday
     this_iso = wday == 0 ? 7 : wday
-    # Day of year
     doy = yday
-    # Calculate week number
     wk = (doy - this_iso + 10) / 7
     if wk < 1
-      # Last week of previous year
       wk = Date.new(year - 1, 12, 31).cweek
     elsif wk > 52
-      # Check if it's actually week 1 of next year
       dec31 = Date.new(year, 12, 31)
       dec31_iso = dec31.wday == 0 ? 7 : dec31.wday
       if dec31_iso < 4
@@ -454,7 +474,6 @@ class DateTime < Date
 
   def self.now(start = ITALY)
     t = Time.now
-    # offset as a Rational fraction of a day
     offset_sec = t.strftime('%z').to_i
     offset_hours = offset_sec / 100
     offset_minutes = offset_sec % 100
@@ -517,12 +536,12 @@ class DateTime < Date
       total_seconds = total_seconds.abs
       h = total_seconds / 3600
       m = (total_seconds % 3600) / 60
-      format('%s%02d:%02d', sign, h, m)
+      "#{sign}#{Date._zpad(h, 2)}:#{Date._zpad(m, 2)}"
     end
   end
 
   def to_s
-    format('%04d-%02d-%02dT%02d:%02d:%02d%s', year, month, day, @hour, @minute, @second, zone)
+    "#{Date._zpad(year, 4)}-#{Date._zpad(month, 2)}-#{Date._zpad(day, 2)}T#{Date._zpad(@hour, 2)}:#{Date._zpad(@minute, 2)}:#{Date._zpad(@second, 2)}#{zone}"
   end
 
   def inspect
@@ -535,11 +554,11 @@ class DateTime < Date
 
   def strftime(fmt = '%FT%T%:z')
     result = super(fmt)
-    result = result.gsub('%H', format('%02d', @hour))
-    result = result.gsub('%M', format('%02d', @minute))
-    result = result.gsub('%S', format('%02d', @second))
-    result = result.gsub('%T', format('%02d:%02d:%02d', @hour, @minute, @second))
-    result = result.gsub('%R', format('%02d:%02d', @hour, @minute))
+    result = result.gsub('%H', Date._zpad(@hour, 2))
+    result = result.gsub('%M', Date._zpad(@minute, 2))
+    result = result.gsub('%S', Date._zpad(@second, 2))
+    result = result.gsub('%T', "#{Date._zpad(@hour, 2)}:#{Date._zpad(@minute, 2)}:#{Date._zpad(@second, 2)}")
+    result = result.gsub('%R', "#{Date._zpad(@hour, 2)}:#{Date._zpad(@minute, 2)}")
     result = result.gsub('%:z', zone)
     result = result.gsub('%z', zone.delete(':'))
     result
@@ -569,7 +588,6 @@ class DateTime < Date
 
   def -(other)
     if other.is_a?(Date)
-      # Return difference in days (as a rational for DateTime)
       if other.is_a?(DateTime)
         day_diff = jd - other.jd
         time_diff = (@hour - other.hour) * 3600 + (@minute - other.minute) * 60 + (@second - other.second)

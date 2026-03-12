@@ -63,7 +63,7 @@ module SecureRandom
 
       loop do
         result = 0
-        random_bytes(bytes_needed).each_byte do |b|
+        random_bytes(bytes_needed).bytes.each do |b|
           result = (result << 8) | b
         end
         return result % n if result < n * 2  # Simple bias reduction
@@ -76,7 +76,7 @@ module SecureRandom
     chars = ('A'..'Z').to_a + ('a'..'z').to_a + ('0'..'9').to_a
     result = ''
     while result.length < n
-      random_bytes(n).each_byte do |b|
+      random_bytes(n).bytes.each do |b|
         break if result.length >= n
         idx = b % 64
         result << chars[idx] if idx < chars.length
@@ -105,22 +105,23 @@ module SecureRandom
 
   def self._encode_base64(data)
     result = ''
+    byte_ary = data.bytes
     i = 0
-    while i < data.length
-      b0 = data.getbyte(i) || 0
-      b1 = (i + 1 < data.length) ? data.getbyte(i + 1) : 0
-      b2 = (i + 2 < data.length) ? data.getbyte(i + 2) : 0
+    while i < byte_ary.length
+      b0 = byte_ary[i] || 0
+      b1 = (i + 1 < byte_ary.length) ? byte_ary[i + 1] : 0
+      b2 = (i + 2 < byte_ary.length) ? byte_ary[i + 2] : 0
 
       result << B64_CHARS[(b0 >> 2) & 0x3f]
       result << B64_CHARS[((b0 << 4) | (b1 >> 4)) & 0x3f]
 
-      if i + 1 < data.length
+      if i + 1 < byte_ary.length
         result << B64_CHARS[((b1 << 2) | (b2 >> 6)) & 0x3f]
       else
         result << '='
       end
 
-      if i + 2 < data.length
+      if i + 2 < byte_ary.length
         result << B64_CHARS[b2 & 0x3f]
       else
         result << '='

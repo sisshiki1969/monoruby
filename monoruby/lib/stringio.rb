@@ -107,7 +107,7 @@ class StringIO
   def getbyte
     _check_readable
     return nil if @pos >= @string.length
-    b = @string.getbyte(@pos)
+    b = @string[@pos].ord
     @pos += 1
     b
   end
@@ -135,13 +135,13 @@ class StringIO
     nil
   end
 
-  def gets(sep = $/, limit = nil)
+  def gets(sep = "\n", limit = nil)
     _check_readable
     return nil if eof?
 
     if sep.is_a?(Integer)
       limit = sep
-      sep = $/
+      sep = "\n"
     end
 
     if sep.nil?
@@ -192,7 +192,7 @@ class StringIO
     line
   end
 
-  def readlines(sep = $/, limit = nil)
+  def readlines(sep = "\n", limit = nil)
     _check_readable
     lines = []
     while (line = gets(sep, limit))
@@ -201,7 +201,7 @@ class StringIO
     lines
   end
 
-  def each(sep = $/, limit = nil, &block)
+  def each(sep = "\n", limit = nil, &block)
     return to_enum(:each, sep, limit) unless block
     while (line = gets(sep, limit))
       block.call(line)
@@ -255,8 +255,7 @@ class StringIO
     else
       args.each do |arg|
         if arg.nil?
-          write("nil\n")  # This matches "nil" not ""
-          # Actually Ruby's puts prints empty string for nil. Let me fix:
+          write("\n")
         elsif arg.is_a?(Array)
           arg.each { |a| puts(a) }
         else
@@ -270,7 +269,7 @@ class StringIO
   end
 
   def printf(fmt, *args)
-    write(sprintf(fmt, *args))
+    write(fmt % args)
     nil
   end
 

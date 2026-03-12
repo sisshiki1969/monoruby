@@ -6,29 +6,24 @@
 #
 
 module URI
-  TBLENCWWWCOMP_ = {} # :nodoc:
-  TBLDECWWWCOMP_ = {} # :nodoc:
+  # Check if a byte is an unreserved URI character
+  def self._unreserved_byte?(b)
+    (b >= 65 && b <= 90) ||   # A-Z
+    (b >= 97 && b <= 122) ||  # a-z
+    (b >= 48 && b <= 57) ||   # 0-9
+    b == 45 || b == 95 || b == 46 || b == 126  # - _ . ~
+  end
 
-  # Percent-encode a single byte
-  256.times do |i|
-    c = i.chr
-    # Unreserved characters: A-Z a-z 0-9 - _ . ~
-    if c =~ /[A-Za-z0-9\-_\.~]/
-      TBLENCWWWCOMP_[c] = c
-    elsif c == ' '
-      TBLENCWWWCOMP_[c] = '+'
+  # Percent-encode a byte
+  def self._encode_byte(b)
+    if _unreserved_byte?(b)
+      b.chr
+    elsif b == 32  # space
+      '+'
     else
-      TBLENCWWWCOMP_[c] = format('%%%02X', i)
+      "%%%02X" % b
     end
   end
-  TBLENCWWWCOMP_.freeze
-
-  # Build decode table
-  TBLENCWWWCOMP_.each do |k, v|
-    TBLDECWWWCOMP_[v] = k
-  end
-  TBLDECWWWCOMP_['+'] = ' '
-  TBLDECWWWCOMP_.freeze
 
   class Error < StandardError; end
   class InvalidURIError < Error; end
@@ -296,11 +291,13 @@ module URI
 
   def self.encode_www_form_component(str, enc = nil)
     str = str.to_s
-    str.each_byte.map { |b| TBLENCWWWCOMP_[b.chr] || format('%%%02X', b) }.join
+    str.bytes.map { |b| _encode_byte(b) }.join
   end
 
   def self.decode_www_form_component(str, enc = nil)
-    str.gsub(/\+/, ' ').gsub(/%([0-9A-Fa-f]{2})/) { [$1].pack('H2') }
+    str.gsub(/\+/, ' ').gsub(/%([0-9A-Fa-f]{2})/) do
+      $1.to_i(16).chr
+    end
   end
 
   def self.encode_www_form(enum)

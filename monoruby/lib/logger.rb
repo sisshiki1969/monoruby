@@ -131,7 +131,7 @@ class Logger
       FORMAT % [
         severity[0..0],
         format_datetime(time),
-        $$,
+        ($$ || 0),
         severity,
         progname,
         msg2str(msg)
