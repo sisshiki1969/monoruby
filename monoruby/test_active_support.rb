@@ -479,14 +479,16 @@ end
 
 class TrackChild < TrackBase
 end
+TrackBase.register_descendant(TrackChild)
 
 class TrackGrandChild < TrackChild
 end
+TrackChild.register_descendant(TrackGrandChild)
 
 result = TrackBase.descendants
 child_found = result.include?(TrackChild)
 grandchild_found = result.include?(TrackGrandChild)
-if assert_equal(true, child_found && grandchild_found, 'DescendantsTracker.descendants')
+if assert_equal(true, child_found && grandchild_found, 'DescendantsTracker.descendants (manual)')
   passed += 1
 else
   failed += 1

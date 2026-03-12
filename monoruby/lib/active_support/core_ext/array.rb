@@ -15,6 +15,8 @@ class Array
   def self.wrap(object)
     if object.nil?
       []
+    elsif object.is_a?(Array)
+      object
     elsif object.respond_to?(:to_ary)
       result = object.to_ary
       result.nil? ? [object] : result

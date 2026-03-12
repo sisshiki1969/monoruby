@@ -3,14 +3,19 @@
 # ActiveSupport::DescendantsTracker for monoruby.
 # Tracks descendants of a class for efficient lookup.
 #
+# NOTE: monoruby doesn't support `inherited` hooks.
+# Classes must manually register via `register_descendant` or
+# this module provides a polling-based `descendants` that walks
+# known registered classes.
+#
 
 module ActiveSupport
   module DescendantsTracker
-    @@direct_descendants = {}
+    @_direct_descendants = {}
 
     class << self
       def direct_descendants(klass)
-        @@direct_descendants[klass] || []
+        @_direct_descendants[klass] || []
       end
 
       def descendants(klass)
@@ -24,19 +29,20 @@ module ActiveSupport
       end
 
       def clear
-        @@direct_descendants.each do |klass, descendants|
-          @@direct_descendants[klass] = descendants.select { |d| d.name }
+        @_direct_descendants.each do |klass, descs|
+          @_direct_descendants[klass] = descs.select { |d| d.name }
         end
       end
 
       def store_inherited(klass, descendant)
-        (@@direct_descendants[klass] ||= []) << descendant
+        (@_direct_descendants[klass] ||= []) << descendant
       end
     end
 
-    def inherited(base)
-      DescendantsTracker.store_inherited(self, base)
-      super
+    # Since monoruby doesn't support `inherited` hooks, provide
+    # a manual registration method
+    def register_descendant(descendant)
+      DescendantsTracker.store_inherited(self, descendant)
     end
 
     def direct_descendants

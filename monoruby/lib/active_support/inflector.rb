@@ -29,6 +29,23 @@ unless "".respond_to?(:capitalize!)
   end
 end
 
+# Polyfill for Integer#abs if missing
+unless 0.respond_to?(:abs)
+  class Integer
+    def abs
+      self < 0 ? -self : self
+    end
+  end
+end
+
+unless 0.0.respond_to?(:abs)
+  class Float
+    def abs
+      self < 0 ? -self : self
+    end
+  end
+end
+
 module ActiveSupport
   module Inflector
     class Inflections

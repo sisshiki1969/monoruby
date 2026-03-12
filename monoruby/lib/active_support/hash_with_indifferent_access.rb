@@ -1,22 +1,29 @@
 # frozen_string_literal: true
 #
 # ActiveSupport::HashWithIndifferentAccess for monoruby.
-# A Hash subclass that treats string and symbol keys interchangeably.
+# Treats string and symbol keys interchangeably.
+#
+# NOTE: Uses composition (wrapping a Hash) rather than inheritance
+# due to monoruby Hash subclass alias limitations.
 #
 
 module ActiveSupport
-  class HashWithIndifferentAccess < Hash
+  class HashWithIndifferentAccess
+    include Enumerable
+
     def initialize(constructor = nil)
-      super()
+      @data = {}
       if constructor.is_a?(Hash)
-        update(constructor)
+        constructor.each do |k, v|
+          @data[convert_key(k)] = convert_value(v)
+        end
       end
     end
 
     def self.[](*args)
       h = new
       if args.length == 1 && args[0].is_a?(Hash)
-        h.update(args[0])
+        args[0].each { |k, v| h[k] = v }
       elsif args.length.even?
         i = 0
         while i < args.length
@@ -27,36 +34,175 @@ module ActiveSupport
       h
     end
 
-    def default(key = nil)
-      if key.is_a?(Symbol)
-        super(key.to_s)
-      else
-        super
-      end
-    end
-
     def []=(key, value)
-      super(convert_key(key), convert_value(value))
+      @data[convert_key(key)] = convert_value(value)
     end
     alias store []=
 
     def [](key)
-      super(convert_key(key))
+      @data[convert_key(key)]
     end
 
     def fetch(key, *args, &block)
-      super(convert_key(key), *args, &block)
+      k = convert_key(key)
+      if @data.key?(k)
+        @data[k]
+      elsif args.length > 0
+        args[0]
+      elsif block
+        block.call(key)
+      else
+        raise KeyError, "key not found: #{key.inspect}"
+      end
     end
 
     def key?(key)
-      super(convert_key(key))
+      @data.key?(convert_key(key))
     end
     alias include? key?
     alias has_key? key?
     alias member? key?
 
     def delete(key, &block)
-      super(convert_key(key), &block)
+      @data.delete(convert_key(key), &block)
+    end
+
+    def each(&block)
+      @data.each(&block)
+    end
+    alias each_pair each
+
+    def keys
+      @data.keys
+    end
+
+    def values
+      @data.values
+    end
+
+    def size
+      @data.size
+    end
+    alias length size
+
+    def empty?
+      @data.empty?
+    end
+
+    def clear
+      @data.clear
+      self
+    end
+
+    def to_hash
+      result = {}
+      @data.each do |k, v|
+        result[k] = v.is_a?(HashWithIndifferentAccess) ? v.to_hash : v
+      end
+      result
+    end
+    alias to_h to_hash
+
+    def merge(other_hash, &block)
+      dup.update(other_hash, &block)
+    end
+
+    def merge!(other_hash, &block)
+      update(other_hash, &block)
+    end
+
+    def update(other_hash, &block)
+      other_hash.each do |key, value|
+        k = convert_key(key)
+        if block && @data.key?(k)
+          @data[k] = block.call(k, @data[k], convert_value(value))
+        else
+          @data[k] = convert_value(value)
+        end
+      end
+      self
+    end
+
+    def reverse_merge(other_hash)
+      self.class.new(other_hash).update(self)
+    end
+
+    def reverse_merge!(other_hash)
+      other_hash.each do |key, value|
+        k = convert_key(key)
+        @data[k] = convert_value(value) unless @data.key?(k)
+      end
+      self
+    end
+
+    def replace(other_hash)
+      @data.clear
+      other_hash.each do |k, v|
+        @data[convert_key(k)] = convert_value(v)
+      end
+      self
+    end
+
+    def dup
+      result = self.class.new
+      @data.each { |k, v| result.store(k, v) }
+      result
+    end
+
+    def except(*keys)
+      dup.tap do |hash|
+        keys.each { |k| hash.delete(k) }
+      end
+    end
+
+    def slice(*keys)
+      result = self.class.new
+      keys.each do |k|
+        ck = convert_key(k)
+        result.store(ck, @data[ck]) if @data.key?(ck)
+      end
+      result
+    end
+
+    def extract!(*keys)
+      result = self.class.new
+      keys.each do |key|
+        ck = convert_key(key)
+        if @data.key?(ck)
+          result.store(ck, @data.delete(ck))
+        end
+      end
+      result
+    end
+
+    def select(&block)
+      return to_enum(:select) unless block
+      result = self.class.new
+      @data.each do |k, v|
+        result.store(k, v) if block.call(k, v)
+      end
+      result
+    end
+
+    def reject(&block)
+      return to_enum(:reject) unless block
+      result = self.class.new
+      @data.each do |k, v|
+        result.store(k, v) unless block.call(k, v)
+      end
+      result
+    end
+
+    def map(&block)
+      @data.map(&block)
+    end
+
+    def any?(&block)
+      if block
+        @data.any?(&block)
+      else
+        !@data.empty?
+      end
     end
 
     def dig(key, *rest)
@@ -70,94 +216,6 @@ module ActiveSupport
       end
     end
 
-    def merge(other_hash, &block)
-      dup.update(other_hash, &block)
-    end
-
-    def merge!(other_hash, &block)
-      update(other_hash, &block)
-    end
-
-    def update(other_hash, &block)
-      if other_hash.is_a?(Hash)
-        other_hash.each do |key, value|
-          k = convert_key(key)
-          if block && key?(k)
-            value = block.call(k, self[k], convert_value(value))
-            super_store(k, value)
-          else
-            super_store(k, convert_value(value))
-          end
-        end
-      end
-      self
-    end
-
-    def reverse_merge(other_hash)
-      other = self.class.new(other_hash)
-      other.update(self)
-    end
-
-    def reverse_merge!(other_hash)
-      replace(reverse_merge(other_hash))
-    end
-
-    def replace(other_hash)
-      super(self.class.new(other_hash))
-    end
-
-    def dup
-      self.class.new.tap do |new_hash|
-        each do |key, value|
-          new_hash.super_store(key, value)
-        end
-        new_hash.default = default
-      end
-    end
-
-    def to_hash
-      h = {}
-      each do |key, value|
-        h[key] = value.is_a?(HashWithIndifferentAccess) ? value.to_hash : value
-      end
-      h
-    end
-
-    def select(&block)
-      return to_enum(:select) unless block
-      dup.tap do |hash|
-        hash.clear
-        each do |key, value|
-          hash.super_store(key, value) if block.call(key, value)
-        end
-      end
-    end
-
-    def reject(&block)
-      return to_enum(:reject) unless block
-      dup.tap do |hash|
-        hash.clear
-        each do |key, value|
-          hash.super_store(key, value) unless block.call(key, value)
-        end
-      end
-    end
-
-    def except(*keys)
-      dup.tap do |hash|
-        keys.each { |k| hash.delete(k) }
-      end
-    end
-
-    def slice(*keys)
-      result = self.class.new
-      keys.each do |k|
-        ck = convert_key(k)
-        result.super_store(ck, self[ck]) if key?(ck)
-      end
-      result
-    end
-
     def stringify_keys
       dup
     end
@@ -168,8 +226,12 @@ module ActiveSupport
 
     def symbolize_keys
       h = {}
-      each { |key, value| h[key.to_sym] = value }
+      @data.each { |key, value| h[key.to_sym] = value }
       h
+    end
+
+    def deep_symbolize_keys
+      _deep_transform(symbolize: true)
     end
 
     def to_options
@@ -177,9 +239,40 @@ module ActiveSupport
     end
     alias to_options! to_options
 
-    # Internal helper to bypass convert_key
-    def super_store(key, value)
-      super(key, value)
+    def respond_to?(method_name, include_private = false)
+      super || @data.respond_to?(method_name, include_private)
+    end
+
+    def inspect
+      @data.inspect
+    end
+
+    def to_s
+      @data.to_s
+    end
+
+    def ==(other)
+      if other.is_a?(HashWithIndifferentAccess)
+        @data == other.to_hash
+      elsif other.is_a?(Hash)
+        @data == self.class.new(other).to_hash
+      else
+        false
+      end
+    end
+
+    def is_a?(klass)
+      klass == Hash || klass == HashWithIndifferentAccess || super
+    end
+    alias kind_of? is_a?
+
+    # Allow Hash-like method_missing delegation
+    def method_missing(method_name, *args, &block)
+      if @data.respond_to?(method_name)
+        @data.send(method_name, *args, &block)
+      else
+        super
+      end
     end
 
     private
@@ -190,18 +283,35 @@ module ActiveSupport
 
     def convert_value(value)
       case value
+      when HashWithIndifferentAccess
+        value
       when Hash
-        if value.is_a?(HashWithIndifferentAccess)
-          value
-        else
-          self.class.new(value)
-        end
+        self.class.new(value)
       when Array
         value.map { |v| convert_value(v) }
       else
         value
       end
     end
+
+    def _deep_transform(symbolize: false)
+      result = {}
+      @data.each do |k, v|
+        new_key = symbolize ? k.to_sym : k
+        new_value = case v
+                    when HashWithIndifferentAccess
+                      v._deep_transform(symbolize: symbolize)
+                    when Hash
+                      self.class.new(v)._deep_transform(symbolize: symbolize)
+                    else
+                      v
+                    end
+        result[new_key] = new_value
+      end
+      result
+    end
+
+    protected :_deep_transform
   end
 end
 

@@ -60,15 +60,18 @@ module ActiveModel
       private
 
       def _define_callback_registrar(kind, callback)
-        method_name = :"#{kind}_#{callback}"
+        method_name = "#{kind}_#{callback}"
+        cb_name = callback
+        cb_kind = kind
 
         # Use define_method on the singleton class
-        (class << self; self; end).define_method(method_name) do |*methods, **opts, &block|
+        sc = (class << self; self; end)
+        sc.define_method(method_name.to_sym) do |*methods, **opts, &block|
           methods.each do |method|
-            _model_callbacks[callback][kind] << { method: method, options: opts }
+            _model_callbacks[cb_name][cb_kind] << { method: method, options: opts }
           end
           if block
-            _model_callbacks[callback][kind] << { block: block, options: opts }
+            _model_callbacks[cb_name][cb_kind] << { block: block, options: opts }
           end
         end
       end
