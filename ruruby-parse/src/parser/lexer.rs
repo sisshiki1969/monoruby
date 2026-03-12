@@ -564,7 +564,16 @@ impl<'a> Lexer<'a> {
         allow_assign_like: bool,
     ) -> Result<(String, Loc), LexerErr> {
         self.flush();
-        while self.consume_whitespace() || self.consume_newline() {}
+        loop {
+            if self.consume_whitespace() || self.consume_newline() {
+                continue;
+            }
+            if self.peek() == Some('#') {
+                self.goto_eol();
+                continue;
+            }
+            break;
+        }
         self.token_start_pos = self.pos;
         let ch = self.get()?;
         if ch.is_ascii_punctuation() && ch != '_' {

@@ -1711,3 +1711,16 @@ fn define_index() {
         "##,
     );
 }
+
+#[test]
+fn comment_in_method_chain() {
+    run_test(
+        r##"
+        [1,2,3].
+          # this is a comment
+          map {|x| x * 2}.
+          # another comment
+          select {|x| x > 2}
+        "##,
+    );
+}
