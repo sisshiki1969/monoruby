@@ -87,7 +87,7 @@ enum PathComponent {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/glob.html]
 #[monoruby_builtin]
-fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let pat_val = lfp.arg(0);
     let flags = lfp.try_arg(1).and_then(|v| v.try_fixnum()).unwrap_or(0);
     let base = if let Some(base) = lfp.try_arg(2)
@@ -138,7 +138,7 @@ fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/glob.html]
 #[monoruby_builtin]
-fn glob2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn glob2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let pat_val = lfp.arg(0).as_array();
     let flags = 0;
     let base = if let Some(base) = lfp.try_arg(1)
@@ -441,7 +441,7 @@ fn traverse_dir(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/home.html]
 #[monoruby_builtin]
-fn home(_: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
+fn home(_: &mut Executor, _: &mut Globals, _: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let home = match dirs::home_dir() {
         Some(home) => home,
         None => return Ok(Value::nil()),
@@ -457,7 +457,7 @@ fn home(_: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/getwd.html]
 #[monoruby_builtin]
-fn pwd(_: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
+fn pwd(_: &mut Executor, _: &mut Globals, _: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let pwd = std::env::current_dir()
         .unwrap()
         .to_string_lossy()
@@ -475,7 +475,7 @@ fn pwd(_: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/chdir.html]
 #[monoruby_builtin]
-fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let path = if let Some(path) = lfp.try_arg(0) {
         path.coerce_to_string(vm, globals)?
     } else {

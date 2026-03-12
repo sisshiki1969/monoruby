@@ -40,7 +40,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/s/new.html]
 #[monoruby_builtin]
-fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     globals.generate_range(lfp.arg(0), lfp.arg(1), false)
 }
 
@@ -51,7 +51,7 @@ fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/begin.html]
 #[monoruby_builtin]
-fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val().as_range().start())
 }
 
@@ -93,7 +93,7 @@ fn range_begin(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/end.html]
 #[monoruby_builtin]
-fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val().as_range().end())
 }
 
@@ -133,7 +133,7 @@ fn range_end(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/exclude_end=3f.html]
 #[monoruby_builtin]
-fn exclude_end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn exclude_end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_range().exclude_end()))
 }
 
@@ -176,7 +176,7 @@ fn range_exclude_end(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/each.html]
 #[monoruby_builtin]
-fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
@@ -198,7 +198,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/reject.html]
 #[monoruby_builtin]
-fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if let Some(bh) = lfp.block() {
@@ -421,7 +421,7 @@ fn range_include_impl(start: Value, end: Value, val: Value, excl: bool) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/include=3f.html]
 #[monoruby_builtin]
-fn include_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn include_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let range = self_.as_range();
     let b = range_include_impl(range.start(), range.end(), lfp.arg(0), range.exclude_end())?;
@@ -435,7 +435,7 @@ fn include_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/=3d=3d=3d.html]
 #[monoruby_builtin]
-fn teq(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn teq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let range = self_.as_range();
     let b = range_include_impl(range.start(), range.end(), lfp.arg(0), range.exclude_end())?;
@@ -451,7 +451,7 @@ fn teq(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/all=3f.html]
 #[monoruby_builtin]
-fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let self_ = lfp.self_val();
         let range = self_.as_range();
@@ -482,7 +482,7 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect.html]
 #[monoruby_builtin]
-fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
@@ -507,7 +507,7 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect_concat.html]
 #[monoruby_builtin]
-fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
@@ -531,7 +531,7 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/entries.html]
 #[monoruby_builtin]
-fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if let Some((start, end)) = range.try_fixnum() {

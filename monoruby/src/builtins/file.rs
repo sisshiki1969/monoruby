@@ -59,7 +59,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/write.html]
 #[monoruby_builtin]
-fn file_write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn file_write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.arg(0);
     let name = self_.expect_str(globals)?;
     let mut file = match File::create(name) {
@@ -90,7 +90,7 @@ fn file_write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/read.html]
 #[monoruby_builtin]
-fn file_read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn file_read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let filename = to_path(vm, globals, lfp.arg(0))?;
     let mut file = match File::open(&filename) {
         Ok(file) => file,
@@ -118,7 +118,7 @@ fn file_read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/binread.html]
 #[monoruby_builtin]
-fn binread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn binread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let filename = to_path(vm, globals, lfp.arg(0))?;
     let length = if let Some(arg1) = lfp.try_arg(1) {
         Some(arg1.coerce_to_i64(globals)?)
@@ -167,7 +167,7 @@ fn binread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/join.html]
 #[monoruby_builtin]
-fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     fn flatten(
         vm: &mut Executor,
         globals: &mut Globals,
@@ -211,7 +211,7 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/expand_path.html]
 #[monoruby_builtin]
-fn expand_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn expand_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(err) => {
@@ -250,7 +250,7 @@ fn expand_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/dirname.html]
 #[monoruby_builtin]
-fn dirname(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn dirname(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let filename = to_path(vm, globals, lfp.arg(0))?;
     let mut dirname = match filename.parent() {
         Some(ostr) => conv_pathbuf(ostr),
@@ -268,7 +268,7 @@ fn dirname(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/basename.html]
 #[monoruby_builtin]
-fn basename(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn basename(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let filename = lfp.arg(0).coerce_to_path_rstring(vm, globals)?;
     let suffix = if let Some(arg1) = lfp.try_arg(1) {
         let s = arg1.expect_str(globals)?;
@@ -305,7 +305,7 @@ fn basename(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/directory=3f.html]
 #[monoruby_builtin]
-fn directory_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn directory_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     match to_canonicalized_path(vm, globals, lfp.arg(0), "1st arg") {
         Ok(path) => Ok(Value::bool(path.is_dir())),
         Err(_) => Ok(Value::bool(false)),
@@ -318,7 +318,7 @@ fn directory_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/symlink=3f.html]
 #[monoruby_builtin]
-fn symlink_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn symlink_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     match to_canonicalized_path(vm, globals, lfp.arg(0), "1st arg") {
         Ok(path) => Ok(Value::bool(path.is_symlink())),
         Err(_) => Ok(Value::bool(false)),
@@ -331,7 +331,7 @@ fn symlink_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/extname.html]
 #[monoruby_builtin]
-fn extname(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn extname(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let filename = to_path(vm, globals, lfp.arg(0))?;
     let extname = match filename.extension() {
         Some(ostr) => format!(".{}", ostr.to_string_lossy()),
@@ -346,7 +346,7 @@ fn extname(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/exist=3f.html]
 #[monoruby_builtin]
-fn exist(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn exist(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let b = to_canonicalized_path(vm, globals, lfp.arg(0), "1st arg").is_ok();
     Ok(Value::bool(b))
 }
@@ -357,7 +357,7 @@ fn exist(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/file=3f.html]
 #[monoruby_builtin]
-fn file_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn file_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     match to_canonicalized_path(vm, globals, lfp.arg(0), "1st arg") {
         Ok(path) => Ok(Value::bool(path.is_file())),
         Err(_) => Ok(Value::bool(false)),
@@ -370,7 +370,7 @@ fn file_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/path.html]
 #[monoruby_builtin]
-fn path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(Value::string(to_path_str(vm, globals, lfp.arg(0))?))
 }
 
@@ -380,7 +380,7 @@ fn path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/realpath.html]
 #[monoruby_builtin]
-fn realpath(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn realpath(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let mut pathname = if let Some(arg1) = lfp.try_arg(1) {
         let path = std::path::PathBuf::from(arg1.expect_string(globals)?);
         match path.canonicalize() {
@@ -420,7 +420,7 @@ fn realpath(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/new.html]
 #[monoruby_builtin]
-fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let mode = if let Some(arg1) = lfp.try_arg(1) {
         arg1.expect_string(globals)?
     } else {
@@ -461,7 +461,7 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/write.html]
 #[monoruby_builtin]
-fn write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let data = lfp.arg(0).as_array();
     let mut self_ = lfp.self_val();
     let mut count = 0i64;
@@ -480,7 +480,7 @@ fn write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/length.html]
 #[monoruby_builtin]
-fn resolve_feature_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn resolve_feature_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let file_name = to_path(vm, globals, lfp.arg(0))?;
     match globals.search_lib(&file_name) {
         Some(path) => {

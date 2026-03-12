@@ -46,7 +46,7 @@ fn main() {
     let meta = globals[dummy_fid].meta();
     let dummy_outer = Lfp::heap_frame(globals.main_object, meta);
 
-    let binding = Binding::from_outer(dummy_outer);
+    let binding = Binding::new(dummy_outer);
     executor.temp_push(binding.as_val());
 
     loop {

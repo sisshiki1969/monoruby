@@ -493,6 +493,8 @@ impl JitModule {
         self.push_frame();
         self.set_lfp();
         monoasm! { &mut self.jit,
+            // set call site bc ptr in rcx for with_pc builtins (r13 = InlineCache = call_site + 16)
+            lea  rcx, [r13 - 16];
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];
             call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE

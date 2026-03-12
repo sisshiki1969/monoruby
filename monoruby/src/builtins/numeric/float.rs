@@ -62,7 +62,7 @@ extern "C" fn rem_ff_f(lhs: f64, rhs: f64) -> f64 {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/to_f.html]
 #[monoruby_builtin]
-fn tof(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn tof(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val())
 }
 
@@ -74,7 +74,7 @@ fn tof(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/to_i.html]
 #[monoruby_builtin]
-fn toi(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn toi(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     match lfp.self_val().unpack() {
         RV::Float(f) => Ok(Value::integer(f.trunc() as i64)),
         _ => unreachable!(),
@@ -88,7 +88,7 @@ fn toi(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/div.html]
 #[monoruby_builtin]
-fn div_floor(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn div_floor(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().try_float().unwrap();
     let rhs = RealKind::expect(globals, lfp.arg(0))?.to_f64();
     let div_floor = (lhs / rhs).floor();
@@ -103,7 +103,7 @@ fn div_floor(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3d=3d.html]
 #[monoruby_builtin]
-fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let b = vm.eq_values_bool(globals, lfp.self_val(), lfp.arg(0))?;
     Ok(Value::bool(b))
 }
@@ -114,7 +114,7 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// - self != other -> bool
 ///
 #[monoruby_builtin]
-fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let b = vm.ne_values_bool(globals, lfp.self_val(), lfp.arg(0))?;
     Ok(Value::bool(b))
 }
@@ -126,7 +126,7 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/=3c=3d=3e.html]
 #[monoruby_builtin]
-fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
     let ord = match (lhs.try_float(), rhs.unpack()) {
@@ -149,7 +149,7 @@ fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e=3d.html]
 #[monoruby_builtin]
-fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     crate::executor::op::cmp_ge_values(vm, globals, lfp.self_val(), lfp.arg(0))
         .ok_or_else(|| vm.take_error())
 }
@@ -161,7 +161,7 @@ fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e.html]
 #[monoruby_builtin]
-fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     crate::executor::op::cmp_gt_values(vm, globals, lfp.self_val(), lfp.arg(0))
         .ok_or_else(|| vm.take_error())
 }
@@ -173,7 +173,7 @@ fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c=3d.html]
 #[monoruby_builtin]
-fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     crate::executor::op::cmp_le_values(vm, globals, lfp.self_val(), lfp.arg(0))
         .ok_or_else(|| vm.take_error())
 }
@@ -185,7 +185,7 @@ fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c.html]
 #[monoruby_builtin]
-fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     crate::executor::op::cmp_lt_values(vm, globals, lfp.self_val(), lfp.arg(0))
         .ok_or_else(|| vm.take_error())
 }
@@ -197,7 +197,7 @@ fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/floor.html]
 #[monoruby_builtin]
-fn floor(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn floor(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     match lfp.self_val().unpack() {
         RV::Float(f) => Ok(Value::integer(f.floor() as i64)),
         _ => unreachable!(),
@@ -212,7 +212,7 @@ fn floor(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/round.html]
 #[monoruby_builtin]
-fn round(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn round(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let ndigits = if let Some(d) = lfp.try_arg(0) {
         d.expect_integer(globals)?
     } else {
@@ -253,7 +253,7 @@ fn round(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/finite=3f.html]
 #[monoruby_builtin]
-fn finite(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn finite(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().try_float().unwrap().is_finite()))
 }
 
@@ -264,7 +264,7 @@ fn finite(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/infinite=3f.html]
 #[monoruby_builtin]
-fn infinite(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn infinite(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let f = lfp.self_val().try_float().unwrap();
     if f.is_infinite() {
         Ok(Value::integer(num::signum(f) as i64))
@@ -280,7 +280,7 @@ fn infinite(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/nan=3f.html]
 #[monoruby_builtin]
-fn nan(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn nan(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().try_float().unwrap().is_nan()))
 }
 
@@ -292,7 +292,7 @@ fn nan(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/abs.html]
 #[monoruby_builtin]
-fn abs(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn abs(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let f = lfp.self_val().try_float().unwrap();
     Ok(Value::float(f.abs()))
 }

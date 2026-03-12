@@ -122,6 +122,7 @@ pub(super) extern "C" fn block_arg(
     vm: &mut Executor,
     _: &mut Globals,
     block_handler: Option<BlockHandler>,
+    pc: BytecodePtr,
 ) -> Option<Value> {
     let bh = match block_handler {
         Some(bh) => bh,
@@ -132,7 +133,7 @@ pub(super) extern "C" fn block_arg(
     if bh.get().is_nil() {
         return Some(Value::nil());
     }
-    match vm.generate_proc(bh) {
+    match vm.generate_proc(bh, pc) {
         Ok(val) => Some(val.into()),
         Err(err) => {
             vm.set_error(err);
@@ -194,8 +195,13 @@ pub(super) extern "C" fn array_teq(
     }
 }
 
-pub(super) extern "C" fn gen_lambda(vm: &mut Executor, _: &mut Globals, func_id: FuncId) -> Value {
-    vm.generate_lambda(func_id).into()
+pub(super) extern "C" fn gen_lambda(
+    vm: &mut Executor,
+    _: &mut Globals,
+    func_id: FuncId,
+    pc: BytecodePtr,
+) -> Value {
+    vm.generate_lambda(func_id, pc).into()
 }
 
 pub(super) extern "C" fn gen_hash(

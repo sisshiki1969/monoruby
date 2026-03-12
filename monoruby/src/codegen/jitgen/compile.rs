@@ -279,7 +279,7 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::BlockArg(ret, outer) => {
                 state.def_S(ret);
-                ir.block_arg(state, ret, outer);
+                ir.block_arg(state, ret, outer, pc);
                 state.unset_side_effect_guard();
             }
 

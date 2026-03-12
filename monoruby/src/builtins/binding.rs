@@ -7,10 +7,49 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Binding", BINDING_CLASS, ObjTy::BINDING);
     globals.define_builtin_func(BINDING_CLASS, "local_variables", local_variables, 0);
+    globals.define_builtin_func(BINDING_CLASS, "source_location", source_location, 0);
 }
 
 #[monoruby_builtin]
-fn local_variables(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn source_location(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let binding = self_val.as_binding_inner();
+    if let Some(pc) = binding.pc {
+        let outer_fid = binding.outer_lfp().func_id();
+        if let Some(iseq) = globals.store[outer_fid].is_iseq() {
+            let iseq_info = &globals.store[iseq];
+            let bc_index = pc - iseq_info.get_top_pc();
+            if bc_index.to_usize() < iseq_info.sourcemap.len() {
+                let loc = iseq_info.sourcemap[bc_index.to_usize()];
+                let file_name = Value::string(iseq_info.sourceinfo.short_file_name().to_string());
+                let line = Value::integer(iseq_info.sourceinfo.get_line(&loc) as i64);
+                return Ok(Value::array2(file_name, line));
+            }
+        }
+    }
+    let fid = if let Some(fid) = binding.func_id() {
+        fid
+    } else {
+        binding.outer_lfp().func_id()
+    };
+    let iseq = globals.store.iseq(fid);
+    let file_name = Value::string(iseq.sourceinfo.short_file_name().to_string());
+    let line = Value::integer(iseq.sourceinfo.get_line(&iseq.loc) as i64);
+    Ok(Value::array2(file_name, line))
+}
+
+#[monoruby_builtin]
+fn local_variables(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_val = lfp.self_val();
     let binding = self_val.as_binding_inner();
     let fid = if let Some(fid) = binding.func_id() {

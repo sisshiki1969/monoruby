@@ -19,7 +19,7 @@ pub(crate) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Struct/s/=5b=5d.html]
 #[monoruby_builtin]
-fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     let (args, name) = if let Some(arg0) = args.first()
         && let Some(s) = arg0.is_str()
@@ -57,7 +57,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Struct/s/=5b=5d.html]
 #[monoruby_builtin]
-fn struct_initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn struct_initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let mut new_struct = lfp.self_val();
     let class_id = new_struct.as_class().id();
     let args = lfp.arg(0).as_array();
@@ -95,7 +95,7 @@ fn struct_initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resu
 }
 
 #[monoruby_builtin]
-fn struct_members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn struct_members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let members = globals
         .store
         .get_ivar(lfp.self_val(), IdentId::get_id("/members"))
@@ -104,8 +104,8 @@ fn struct_members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
 }
 
 #[monoruby_builtin]
-fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    super::class::__new(vm, globals, lfp)
+fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+    super::class::__new(vm, globals, lfp, _pc)
 }
 
 fn get_members(globals: &mut Globals, mut class: Module) -> Result<Array> {
@@ -131,7 +131,7 @@ fn get_members(globals: &mut Globals, mut class: Module) -> Result<Array> {
 }
 
 #[monoruby_builtin]
-fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let len = lfp.arg(0).as_array().len();
     let self_val = lfp.self_val();
     let members = get_members(globals, self_val.get_class_obj(globals))?;
@@ -147,7 +147,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 }
 
 #[monoruby_builtin]
-fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let mut inspect = "#<struct ".to_string();
     let self_val = lfp.self_val();
     let class_id = self_val.class();
@@ -180,7 +180,7 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Struct/i/=3d=3d.html]
 #[monoruby_builtin]
-fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
     // Must be the same class
@@ -207,7 +207,7 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// Struct#!=
 ///
 #[monoruby_builtin]
-fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
     if self_val.class() != other.class() {
@@ -230,7 +230,7 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 #[monoruby_builtin]
-fn members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let class_obj = lfp.self_val().get_class_obj(globals).as_val();
     let members = globals
         .store

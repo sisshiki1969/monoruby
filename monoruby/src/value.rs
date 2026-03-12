@@ -627,8 +627,8 @@ impl Value {
         RValue::new_generator(proc).pack()
     }
 
-    pub(crate) fn new_binding(outer_lfp: Lfp) -> Self {
-        RValue::new_binding(outer_lfp).pack()
+    pub(crate) fn new_binding(outer_lfp: Lfp, pc: Option<BytecodePtr>) -> Self {
+        RValue::new_binding(outer_lfp, pc).pack()
     }
 
     pub(crate) fn new_matchdata(captures: Captures, heystack: &str, regex: Regexp) -> Self {

@@ -220,6 +220,7 @@ impl Codegen {
         store: &Store,
         callee_fid: FuncId,
         recv_class: ClassId,
+        call_site_bc_ptr: BytecodePtr,
     ) -> CodePtr {
         let callee = &store[callee_fid];
         let (_, codeptr, pc) = callee.get_data();
@@ -242,6 +243,11 @@ impl Codegen {
                 }
             };
         } else {
+            // builtin: always set rcx to call site bc ptr
+            let call_site_ptr_val = call_site_bc_ptr.as_ptr() as u64;
+            monoasm! { &mut self.jit,
+                movq rcx, (call_site_ptr_val);
+            }
             self.call_codeptr(codeptr)
         }
         let return_addr = self.jit.get_current_address();

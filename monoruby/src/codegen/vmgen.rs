@@ -817,6 +817,7 @@ impl Codegen {
             movl rdx, rdi;
             movq rdi, rbx;
             movq rsi, r12;
+            lea  rcx, [r13 - 16];
             movq rax, (runtime::gen_lambda);
             call rax;
         }
@@ -973,6 +974,7 @@ impl Codegen {
             movq rdx, [rax - (LFP_BLOCK)];
             movq rdi, rbx;
             movq rsi, r12;
+            lea  rcx, [r13 - 16];
             movq rax, (runtime::block_arg);
             call rax;
             testq rax, rax;
