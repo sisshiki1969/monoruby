@@ -112,7 +112,7 @@ pub(crate) extern "C" fn div_values(
 ) -> Option<Value> {
     match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
         (Some(lhs), Some(rhs)) => {
-            if rhs.check_zero_div() {
+            if rhs.check_zero_div() && !lhs.is_float() {
                 vm.err_divide_by_zero();
                 return None;
             } else {

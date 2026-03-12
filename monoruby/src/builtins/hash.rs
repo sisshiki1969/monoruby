@@ -793,8 +793,28 @@ mod tests {
     }
 
     #[test]
+    fn hash_splat() {
+        run_test(r##"h = {a: 1}; {**h}"##);
+        run_test(r##"h = {a: 1, b: 2}; {c: 3, **h}"##);
+        run_test(r##"h1 = {a: 1}; h2 = {b: 2}; {**h1, **h2}"##);
+        run_test(r##"h = {a: 1}; {a: 0, **h}"##);
+    }
+
+    #[test]
     fn clear() {
         run_test(r##"a = {a:1,b:2}; a.clear; a[:c] = 100; a"##);
+    }
+
+    #[test]
+    fn transform_keys() {
+        run_test(r##"{a: 1, b: 2}.transform_keys {|k| k.to_s}"##);
+        run_test(r##"{a: 1, b: 2}.transform_keys {|k| k.to_s.upcase}"##);
+    }
+
+    #[test]
+    fn transform_values() {
+        run_test(r##"{a: 1, b: 2}.transform_values {|v| v * 10}"##);
+        run_test(r##"{a: "x", b: "y"}.transform_values {|v| v.upcase}"##);
     }
 
     #[test]

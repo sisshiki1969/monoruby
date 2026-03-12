@@ -183,7 +183,7 @@ class GC
   def self.auto_compact=(x)
   end
 
-  def self.start
+  def self.start(**opts)
   end
 end
 

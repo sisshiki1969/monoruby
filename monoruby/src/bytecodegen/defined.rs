@@ -68,10 +68,13 @@ impl<'a> BytecodeGen<'a> {
                     self.check_defined(n, nil_label, ret, false)?
                 }
             }
-            NodeKind::Hash(v) => {
+            NodeKind::Hash(v, splat) => {
                 for (k, v) in v {
                     self.check_defined(k, nil_label, ret, false)?;
                     self.check_defined(v, nil_label, ret, false)?;
+                }
+                for s in splat {
+                    self.check_defined(s, nil_label, ret, false)?;
                 }
             }
             NodeKind::Splat(box n)

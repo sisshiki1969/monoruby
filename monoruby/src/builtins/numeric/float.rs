@@ -345,4 +345,13 @@ mod tests {
         run_test("(Float::NAN).nan?");
         run_test("(5.5).nan?");
     }
+
+    #[test]
+    fn float_division_by_zero() {
+        run_test("(0.0/0).nan?");
+        run_test("(0.0/0.0).nan?");
+        run_test("1.0/0 == Float::INFINITY");
+        run_test("-1.0/0 == -Float::INFINITY");
+        run_test("1.0/0.0 == Float::INFINITY");
+    }
 }

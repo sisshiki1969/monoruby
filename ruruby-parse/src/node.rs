@@ -24,7 +24,7 @@ pub enum NodeKind {
         is_const: bool,
     }, // start, end, exclude_end
     Array(Vec<Node>, bool),          // Vec<ELEM>, is_constant_expr
-    Hash(Vec<(Node, Node)>),         // Vec<KEY, VALUE>
+    Hash(Vec<(Node, Node)>, Vec<Node>), // Vec<KEY, VALUE>, Vec<SPLAT>
     RegExp(Vec<Node>, String, bool), // Vec<STRING>, option, is_constant_expr
 
     LocalVar(usize, String),
@@ -455,7 +455,15 @@ impl Node {
     }
 
     pub(crate) fn new_hash(key_value: Vec<(Node, Node)>, loc: Loc) -> Self {
-        Node::new(NodeKind::Hash(key_value), loc)
+        Node::new(NodeKind::Hash(key_value, vec![]), loc)
+    }
+
+    pub(crate) fn new_hash_with_splat(
+        key_value: Vec<(Node, Node)>,
+        splat: Vec<Node>,
+        loc: Loc,
+    ) -> Self {
+        Node::new(NodeKind::Hash(key_value, splat), loc)
     }
 
     pub(crate) fn new_regexp(regex: Vec<Node>, postfix: String, loc: Loc) -> Self {

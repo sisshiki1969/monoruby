@@ -408,21 +408,31 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
 
     pub(super) fn parse_hash_literal(&mut self, no_brace: bool) -> Result<Node, LexerErr> {
         let mut kvp = vec![];
+        let mut splat = vec![];
         let loc = self.prev_loc();
         loop {
             if !no_brace && self.consume_punct(Punct::RBrace)? {
-                return Ok(Node::new_hash(kvp, loc.merge(self.prev_loc())));
+                return Ok(Node::new_hash_with_splat(
+                    kvp,
+                    splat,
+                    loc.merge(self.prev_loc()),
+                ));
             }
-            let mut key = self.parse_arg(false)?;
-            if let Some(sym) = key.is_symbol_key()
-                && self.consume_punct(Punct::Colon)?
-            {
-                key = Node::new_symbol(sym, key.loc());
+            if self.consume_punct(Punct::DMul)? {
+                let expr = self.parse_arg(false)?;
+                splat.push(expr);
             } else {
-                self.expect_punct(Punct::FatArrow)?;
+                let mut key = self.parse_arg(false)?;
+                if let Some(sym) = key.is_symbol_key()
+                    && self.consume_punct(Punct::Colon)?
+                {
+                    key = Node::new_symbol(sym, key.loc());
+                } else {
+                    self.expect_punct(Punct::FatArrow)?;
+                }
+                let value = self.parse_arg(false)?;
+                kvp.push((key, value));
             }
-            let value = self.parse_arg(false)?;
-            kvp.push((key, value));
             if !self.consume_punct(Punct::Comma)? {
                 break;
             };
@@ -430,7 +440,11 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         if !no_brace {
             self.expect_punct(Punct::RBrace)?;
         }
-        Ok(Node::new_hash(kvp, loc.merge(self.prev_loc())))
+        Ok(Node::new_hash_with_splat(
+            kvp,
+            splat,
+            loc.merge(self.prev_loc()),
+        ))
     }
 
     pub(super) fn parse_symbol(&mut self) -> Result<Node, LexerErr> {

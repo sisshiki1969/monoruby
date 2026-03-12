@@ -353,16 +353,22 @@ fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=25.html]
 #[monoruby_builtin]
-fn rem(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let arguments = match lfp.arg(0).try_array_ty() {
-        Some(ary) => ary.to_vec(),
-        None => vec![lfp.arg(0)],
-    };
+fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let arg = lfp.arg(0);
     let self_ = lfp.self_val();
-    let format_str = globals.format_by_args(self_.as_str(), &arguments)?;
-
-    let res = Value::string(format_str);
-    Ok(res)
+    if let Some(hash) = arg.try_hash_ty() {
+        let format_str = globals.format_by_hash(vm, self_.as_str(), hash)?;
+        let res = Value::string(format_str);
+        Ok(res)
+    } else {
+        let arguments = match arg.try_array_ty() {
+            Some(ary) => ary.to_vec(),
+            None => vec![arg],
+        };
+        let format_str = globals.format_by_args(self_.as_str(), &arguments)?;
+        let res = Value::string(format_str);
+        Ok(res)
+    }
 }
 
 ///
@@ -2638,6 +2644,21 @@ mod tests {
         run_test2(r###""%15.1e" % 12785.34578e-127"###);
         run_test2(r###""%15.1E" % 12785.34578e-127"###);
         run_test2(r###""%c %c %c" % [46, 52.0, "r"]"###);
+    }
+
+    #[test]
+    fn string_format_hash() {
+        run_test2(r###""%{name} is %{age}" % {name: "Alice", age: 30}"###);
+        run_test2(r###""%{x}" % {x: "hello"}"###);
+        run_test2(r###""%{a}-%{b}" % {a: 1, b: 2}"###);
+    }
+
+    #[test]
+    fn string_encode_xml() {
+        run_test_no_result_check(r###""hello".encode(xml: :attr)"###);
+        run_test_no_result_check(r###""a&b<c>d".encode(xml: :attr)"###);
+        run_test_no_result_check(r###""a&b<c>d".encode(xml: :text)"###);
+        run_test_no_result_check(r###""plain".encode(xml: :text)"###);
     }
 
     #[test]

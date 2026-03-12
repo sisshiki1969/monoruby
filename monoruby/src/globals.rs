@@ -223,6 +223,14 @@ impl Globals {
                 String::new()
             }
         };
+        // prepend monoruby-specific lib directory so it can override CRuby stdlib files
+        let monoruby_lib = dirs::home_dir()
+            .unwrap()
+            .join(".monoruby")
+            .join("lib");
+        globals.extend_load_path(std::iter::once(
+            monoruby_lib.to_string_lossy().to_string(),
+        ));
         let list: Vec<_> = path_list.split('\n').map(|s| s.to_string()).collect();
         globals.extend_load_path(list.iter().cloned());
 
@@ -828,6 +836,54 @@ impl Globals {
             next_char!(ch, chars);
         }
 
+        Ok(format_str)
+    }
+
+    pub(crate) fn format_by_hash(
+        &mut self,
+        vm: &mut Executor,
+        self_str: &str,
+        hash: Hashmap,
+    ) -> Result<String> {
+        let mut format_str = String::new();
+        let mut chars = self_str.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch != '%' {
+                format_str.push(ch);
+                continue;
+            }
+            match chars.peek() {
+                Some('%') => {
+                    chars.next();
+                    format_str.push('%');
+                    continue;
+                }
+                Some('{') => {
+                    chars.next(); // consume '{'
+                    let mut key = String::new();
+                    loop {
+                        match chars.next() {
+                            Some('}') => break,
+                            Some(c) => key.push(c),
+                            None => {
+                                return Err(MonorubyErr::argumenterr(
+                                    "malformed format string - missing '}'",
+                                ));
+                            }
+                        }
+                    }
+                    let key_val = Value::symbol_from_str(&key);
+                    let val = hash.get(key_val, vm, self)?.unwrap_or(Value::nil());
+                    format_str += &val.to_s(&self.store);
+                }
+                _ => {
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "malformed format string - %{}",
+                        chars.peek().map_or(' ', |c| *c)
+                    )));
+                }
+            }
+        }
         Ok(format_str)
     }
 }

@@ -971,6 +971,33 @@ mod test {
     }
 
     #[test]
+    fn comment_in_method_chain() {
+        parse_test(
+            r#"
+            [1,2,3].
+              # comment
+              map {|x| x * 2}
+            "#,
+        );
+        parse_test(
+            r#"
+            a. # comment
+              b. # another comment
+              c
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_splat() {
+        parse_test("{**h}");
+        parse_test("{a: 1, **h}");
+        parse_test("{a: 1, **h, b: 2}");
+        parse_test("{**h1, **h2}");
+        parse_test("{1 => 2, **h}");
+    }
+
+    #[test]
     fn special_vars() {
         parse_node(
             "$&",
