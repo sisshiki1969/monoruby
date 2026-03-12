@@ -60,6 +60,16 @@ impl Store {
         Ok(())
     }
 
+    ///
+    /// Remove the instance variable with *name* from *base*, returning its value.
+    ///
+    pub(crate) fn remove_ivar(&mut self, mut base: Value, name: IdentId) -> Option<Value> {
+        let class_id = base.class();
+        let rval = base.try_rvalue_mut()?;
+        let id = self.classes[class_id].get_ivarid(name)?;
+        rval.remove_ivar_by_ivarid(id)
+    }
+
     pub(crate) fn get_ivar_id(&mut self, class_id: ClassId, ivar_name: IdentId) -> IvarId {
         let table = &mut self.classes[class_id].ivar_names;
         match table.get(&ivar_name) {

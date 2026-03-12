@@ -41,6 +41,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set, 2);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get, 1);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variables", iv, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "remove_instance_variable", iv_remove, 1);
     globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
     globals.define_builtin_inline_funcs_with_kw(
         OBJECT_CLASS,
@@ -584,6 +585,23 @@ fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::array_from_iter(iter))
 }
 
+///
+/// ### Object#remove_instance_variable
+///
+/// - remove_instance_variable(name) -> Object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/remove_instance_variable.html]
+#[monoruby_builtin]
+fn iv_remove(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+    match globals.store.remove_ivar(lfp.self_val(), id) {
+        Some(val) => Ok(val),
+        None => Err(MonorubyErr::nameerr(format!(
+            "instance variable {id} not defined"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -640,6 +658,62 @@ mod tests {
             a = -49.52
             id = a.object_id
             "##,
+        );
+    }
+
+    #[test]
+    fn remove_instance_variable() {
+        run_test2(
+            r#"
+            class Foo
+              def initialize
+                @a = 1
+                @b = 2
+              end
+            end
+            f = Foo.new
+            f.remove_instance_variable(:@a)
+            "#,
+        );
+        run_test2(
+            r#"
+            class Foo
+              def initialize
+                @a = 1
+                @b = 2
+              end
+            end
+            f = Foo.new
+            f.remove_instance_variable(:@a)
+            f.instance_variables
+            "#,
+        );
+        run_test2(
+            r#"
+            class Foo
+              def initialize
+                @a = 1
+                @b = 2
+              end
+            end
+            f = Foo.new
+            f.remove_instance_variable("@a")
+            f.instance_variables
+            "#,
+        );
+        run_test2(
+            r#"
+            module M
+              @x = 42
+              remove_instance_variable(:@x)
+            end
+            "#,
+        );
+        run_test_error(
+            r#"
+            obj = Object.new
+            obj.remove_instance_variable(:@nonexistent)
+            "#,
         );
     }
 

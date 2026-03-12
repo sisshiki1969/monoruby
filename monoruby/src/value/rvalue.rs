@@ -726,6 +726,27 @@ impl RValue {
         None
     }
 
+    pub(crate) fn remove_ivar_by_ivarid(&mut self, id: IvarId) -> Option<Value> {
+        let mut i = id.into_usize();
+        if self.ty() == ObjTy::OBJECT {
+            if i < OBJECT_INLINE_IVAR {
+                let val = self.as_object()[i];
+                self.as_object_mut()[i] = None;
+                return val;
+            } else {
+                i -= OBJECT_INLINE_IVAR;
+            }
+        }
+        if let Some(v) = &mut self.var_table {
+            if v.len() > i {
+                let val = v[i];
+                v[i] = None;
+                return val;
+            }
+        }
+        None
+    }
+
     pub(crate) fn set_ivar_by_ivarid(&mut self, id: IvarId, val: Value) {
         let mut i = id.into_usize();
         if self.ty() == ObjTy::OBJECT {
