@@ -18,6 +18,7 @@ pub(super) fn init(globals: &mut Globals) {
         &[],
         true,
     );
+    globals.define_builtin_func(PROC_CLASS, "binding", binding_, 0);
 }
 
 ///
@@ -50,6 +51,19 @@ fn new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
     vm.invoke_proc(globals, &proc, &lfp.arg(0).as_array())
+}
+
+///
+/// ### Proc#binding
+///
+/// - binding -> Binding
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/binding.html]
+#[monoruby_builtin]
+fn binding_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let proc = Proc::new(lfp.self_val());
+    let outer_lfp = proc.outer_lfp();
+    Ok(Binding::from_outer(outer_lfp).as_val())
 }
 
 #[cfg(test)]
@@ -190,6 +204,33 @@ mod tests {
         end
         "#,
         )
+    }
+
+    #[test]
+    fn proc_binding() {
+        run_test(
+            r#"
+        x = 42
+        p = Proc.new { x }
+        b = p.binding
+        b.is_a?(Binding)
+        "#,
+        );
+        run_test(
+            r#"
+        x = 42
+        p = Proc.new { x }
+        b = p.binding
+        b.local_variables.include?(:x)
+        "#,
+        );
+        run_test(
+            r#"
+        x = 10
+        p = proc { x + 1 }
+        eval("x", p.binding)
+        "#,
+        );
     }
 
     #[test]
