@@ -1245,6 +1245,17 @@ impl Value {
         }
     }
 
+    pub(crate) fn is_umethod(&self) -> Option<&UMethodInner> {
+        if let Some(rvalue) = self.try_rvalue() {
+            match rvalue.ty() {
+                ObjTy::UMETHOD => Some(self.rvalue().as_umethod()),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn expect_class_or_module(&self, store: &Store) -> Result<Module> {
         match self.is_class_or_module() {
             Some(class) => Ok(class),

@@ -408,6 +408,10 @@ fn define_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
             let func_id = method.func_id();
             globals.add_public_method(class_id, name, func_id);
             return Ok(Value::symbol(name));
+        } else if let Some(umethod) = method.is_umethod() {
+            let func_id = umethod.func_id();
+            globals.add_public_method(class_id, name, func_id);
+            return Ok(Value::symbol(name));
         } else {
             return Err(MonorubyErr::wrong_argument_type(
                 globals,
@@ -958,6 +962,19 @@ mod tests {
         }
         g
         "##,
+        );
+        run_test_with_prelude(
+            r#"
+            C.new.foo
+        "#,
+            r#"
+            class C
+              def bar
+                42
+              end
+              define_method :foo, instance_method(:bar)
+            end
+            "#,
         );
     }
 
