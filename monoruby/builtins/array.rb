@@ -123,4 +123,38 @@ class Array
     end
     mode == :find_min ? self[low] : nil
   end
+
+  def dig(idx, *rest)
+    val = self[idx]
+    return val if rest.empty? || val.nil?
+    raise TypeError, "#{val.class} does not have #dig method" unless val.respond_to?(:dig)
+    val.dig(*rest)
+  end
+
+  def sum(init = 0)
+    if block_given?
+      each { |x| init = init + yield(x) }
+    else
+      each { |x| init = init + x }
+    end
+    init
+  end
+
+  def tally
+    h = {}
+    each do |x|
+      h[x] = (h[x] || 0) + 1
+    end
+    h
+  end
+
+  def filter_map
+    return to_enum(:filter_map) unless block_given?
+    res = []
+    each do |x|
+      y = yield(x)
+      res << y if y
+    end
+    res
+  end
 end

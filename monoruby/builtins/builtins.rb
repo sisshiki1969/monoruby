@@ -118,6 +118,92 @@ class Hash
     each { |k, v| self[k] = block.call(v) }
     self
   end
+
+  def slice(*keys)
+    h = {}
+    keys.each { |k| h[k] = self[k] if key?(k) }
+    h
+  end
+
+  def except(*keys)
+    h = dup
+    keys.each { |k| h.delete(k) }
+    h
+  end
+
+  def dig(key, *rest)
+    val = self[key]
+    return val if rest.empty? || val.nil?
+    raise TypeError, "#{val.class} does not have #dig method" unless val.respond_to?(:dig)
+    val.dig(*rest)
+  end
+
+  def each_with_object(obj)
+    return to_enum(:each_with_object, obj) unless block_given?
+    each { |k, v| yield [k, v], obj }
+    obj
+  end
+
+  def any?
+    if block_given?
+      each { |k, v| return true if yield(k, v) }
+    else
+      return !empty?
+    end
+    false
+  end
+
+  def all?
+    if block_given?
+      each { |k, v| return false unless yield(k, v) }
+    else
+      each { |k, v| return false unless v }
+    end
+    true
+  end
+
+  def count(*args)
+    if block_given?
+      n = 0
+      each { |k, v| n += 1 if yield(k, v) }
+      n
+    elsif args.empty?
+      size
+    else
+      n = 0
+      target = args[0]
+      each { |k, v| n += 1 if [k, v] == target }
+      n
+    end
+  end
+
+  def flat_map
+    return to_enum(:flat_map) unless block_given?
+    res = []
+    each { |k, v|
+      r = yield(k, v)
+      if r.is_a?(Array)
+        res.concat(r)
+      else
+        res << r
+      end
+    }
+    res
+  end
+
+  def min_by
+    return to_enum(:min_by) unless block_given?
+    min_entry = nil
+    min_val = nil
+    each do |k, v|
+      val = yield(k, v)
+      if min_val.nil? || val < min_val
+        min_entry = [k, v]
+        min_val = val
+      end
+    end
+    min_entry
+  end
 end
 
 class Module
@@ -164,7 +250,15 @@ class String
     self
   end
 
-  def encode(**opts)
+  def freeze
+    self
+  end
+
+  def frozen?
+    true
+  end
+
+  def encode(*args, **opts)
     if opts[:xml] == :attr
       s = gsub("&", "&amp;")
       s = s.gsub("<", "&lt;")
@@ -177,6 +271,26 @@ class String
       s = s.gsub(">", "&gt;")
       s
     else
+      self
+    end
+  end
+
+  def squeeze(*args)
+    if args.empty?
+      gsub(/(.)\1+/, '\1')
+    else
+      chars_to_squeeze = args.join
+      escaped = chars_to_squeeze.gsub(/[\\\[\]\-\^]/) { |c| "\\#{c}" }
+      gsub(/([#{escaped}])\1+/, '\1')
+    end
+  end
+
+  def squeeze!(*args)
+    result = squeeze(*args)
+    if result == self
+      nil
+    else
+      replace(result)
       self
     end
   end
