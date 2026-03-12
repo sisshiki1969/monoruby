@@ -17,8 +17,12 @@ impl Binding {
         }
     }
 
-    pub fn from_outer(outer_lfp: Lfp) -> Self {
-        Binding(Value::new_binding(outer_lfp))
+    pub fn new(outer_lfp: Lfp) -> Self {
+        Binding(Value::new_binding(outer_lfp, None))
+    }
+
+    pub(crate) fn from_outer(outer_lfp: Lfp, call_site_pc: Option<BytecodePtr>) -> Self {
+        Binding(Value::new_binding(outer_lfp, call_site_pc))
     }
 }
 
@@ -27,6 +31,7 @@ impl Binding {
 pub struct BindingInner {
     binding_lfp: Option<Lfp>,
     outer_lfp: Lfp,
+    pub(crate) pc: Option<BytecodePtr>,
 }
 
 impl alloc::GC<RValue> for BindingInner {
@@ -40,10 +45,11 @@ impl alloc::GC<RValue> for BindingInner {
 }
 
 impl BindingInner {
-    pub(crate) fn from(outer_lfp: Lfp) -> Self {
+    pub(crate) fn from(outer_lfp: Lfp, pc: Option<BytecodePtr>) -> Self {
         Self {
             binding_lfp: None,
             outer_lfp,
+            pc,
         }
     }
 

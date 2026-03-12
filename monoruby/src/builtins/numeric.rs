@@ -29,7 +29,7 @@ macro_rules! binop {
     ($op:ident) => {
         paste! {
             #[monoruby_builtin]
-            fn $op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+            fn $op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
                 match super::op::[<$op _values>](vm, globals, lfp.self_val(), lfp.arg(0)) {
                     Some(val) => Ok(val),
                     None => {
@@ -55,7 +55,7 @@ binop!(add, sub, mul, div, rem, pow);
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/divmod.html]
 #[monoruby_builtin]
-fn divmod(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn divmod(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
 
@@ -76,7 +76,7 @@ macro_rules! unop {
     ($op:ident) => {
         paste! {
             #[monoruby_builtin]
-            fn $op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+            fn $op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
                 match super::op::[<$op _value>](vm, globals, lfp.self_val()) {
                     Some(val) => Ok(val),
                     None => {
@@ -102,7 +102,7 @@ unop!(neg, bitnot);
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/=2b=40.html]
 #[monoruby_builtin]
-fn pos(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn pos(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val())
 }
 

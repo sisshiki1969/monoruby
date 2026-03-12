@@ -19,7 +19,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/=3c=3d=3e.html]
 #[monoruby_builtin]
-fn cmp(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn cmp(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
     match (lhs.as_symbol(), rhs.try_symbol()) {
@@ -35,7 +35,7 @@ fn cmp(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/=3d=3d.html]
 #[monoruby_builtin]
-fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
     match (lhs.as_symbol(), rhs.try_symbol()) {
@@ -45,7 +45,7 @@ fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 #[monoruby_builtin]
-fn ne(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn ne(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
     match (lhs.as_symbol(), rhs.try_symbol()) {

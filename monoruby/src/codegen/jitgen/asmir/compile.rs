@@ -421,8 +421,9 @@ impl Codegen {
                 callee_fid,
                 recv_class,
                 evict,
+                pc: call_site_bc_ptr,
             } => {
-                let return_addr = self.do_call(store, callee_fid, recv_class);
+                let return_addr = self.do_call(store, callee_fid, recv_class, call_site_bc_ptr);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
             AsmInst::SpecializedCall {
@@ -596,9 +597,10 @@ impl Codegen {
                 outer,
                 using_xmm,
                 error,
+                call_site_bc_ptr,
             } => {
                 self.get_method_lfp(outer);
-                self.block_arg(using_xmm);
+                self.block_arg(using_xmm, call_site_bc_ptr);
                 self.handle_error(&labels[error]);
                 self.store_rax(ret);
             }
@@ -1037,12 +1039,14 @@ impl Codegen {
     ///
     /// Get a block argument of current frame.
     ///
-    fn block_arg(&mut self, using_xmm: UsingXmm) {
+    fn block_arg(&mut self, using_xmm: UsingXmm, call_site_bc_ptr: BytecodePtr) {
+        let call_site_ptr_val = call_site_bc_ptr.as_ptr() as u64;
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
             movq rdx, [rax - (LFP_BLOCK)];
             movq rdi, rbx;
             movq rsi, r12;
+            movq rcx, (call_site_ptr_val);
             movq rax, (runtime::block_arg);
             call rax;
         };

@@ -147,6 +147,9 @@ class Thread
     end
   end
 
+  class Queue
+  end
+
   class Backtrace
     class Location
       def initialize(frame)

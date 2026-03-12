@@ -148,7 +148,12 @@ fn encoding_class(globals: &Globals) -> ClassId {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/s/new.html]
 #[monoruby_builtin]
-fn string_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn string_new(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let s = match lfp.try_arg(0) {
         Some(string) => string.expect_string(globals)?,
         None => "".to_string(),
@@ -163,7 +168,12 @@ fn string_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/s/try_convert.html]
 #[monoruby_builtin]
-fn string_try_convert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn string_try_convert(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     match lfp.arg(0).coerce_to_rstring(vm, globals) {
         Ok(rstring) => Ok(rstring.into()),
         Err(_) => Ok(Value::nil()),
@@ -177,7 +187,7 @@ fn string_try_convert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2b.html]
 #[monoruby_builtin]
-fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val().dup();
     let other = lfp.arg(0).coerce_to_rstring(vm, globals)?;
     self_.as_rstring_inner_mut().extend(&other)?;
@@ -191,7 +201,7 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2a.html]
 #[monoruby_builtin]
-fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let count = match lfp.arg(0).coerce_to_i64(globals)? {
         i if i < 0 => return Err(MonorubyErr::negative_argument()),
         i => i as usize,
@@ -210,7 +220,7 @@ fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3d=3d.html]
 #[monoruby_builtin]
-fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs = self_.as_rstring_inner();
     let b = equal(lhs, lfp.arg(0));
@@ -224,7 +234,7 @@ fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// []
 #[monoruby_builtin]
-fn ne(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn ne(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs = self_.as_rstring_inner();
     let b = equal(lhs, lfp.arg(0));
@@ -261,7 +271,7 @@ fn string_cmp2(lfp: Lfp) -> Result<std::cmp::Ordering> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3c=3d=3e.html]
 #[monoruby_builtin]
-fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(string_cmp(lfp)?.map(Value::from_ord).unwrap_or_default())
 }
 
@@ -272,7 +282,7 @@ fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3c=3d.html]
 #[monoruby_builtin]
-fn le(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn le(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let ord = string_cmp2(lfp)?;
     Ok(Value::bool(ord != std::cmp::Ordering::Greater))
 }
@@ -284,7 +294,7 @@ fn le(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3c.html]
 #[monoruby_builtin]
-fn lt(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn lt(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let ord = string_cmp2(lfp)?;
     Ok(Value::bool(ord == std::cmp::Ordering::Less))
 }
@@ -296,7 +306,7 @@ fn lt(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3e=3d.html]
 #[monoruby_builtin]
-fn ge(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn ge(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let ord = string_cmp2(lfp)?;
     Ok(Value::bool(ord != std::cmp::Ordering::Less))
 }
@@ -308,7 +318,7 @@ fn ge(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3e.html]
 #[monoruby_builtin]
-fn gt(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn gt(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let ord = string_cmp2(lfp)?;
     Ok(Value::bool(ord == std::cmp::Ordering::Greater))
 }
@@ -320,7 +330,7 @@ fn gt(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3c=3c.html]
 #[monoruby_builtin]
-fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     if let Some(other) = lfp.arg(0).is_rstring() {
         self_.as_rstring_inner_mut().extend(&other)?;
@@ -353,7 +363,7 @@ fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=25.html]
 #[monoruby_builtin]
-fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let arg = lfp.arg(0);
     let self_ = lfp.self_val();
     if let Some(hash) = arg.try_hash_ty() {
@@ -378,7 +388,7 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3d=7e.html]
 #[monoruby_builtin]
-fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let given = self_val.expect_str(globals)?;
     let regex = &lfp.arg(0).expect_regexp_or_string(globals)?;
@@ -428,7 +438,7 @@ fn get_range(s: &str, index: usize, len: usize) -> std::ops::Range<usize> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=5b=5d.html]
 #[monoruby_builtin]
-fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs = self_.as_rstring_inner();
     let enc = lhs.encoding();
@@ -528,7 +538,12 @@ fn string_match_index(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=5b=5d=3d.html]
 #[monoruby_builtin]
-fn index_assign(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn index_assign(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let (arg1, subst) = if let Some(arg2) = lfp.try_arg(2) {
         (Some(lfp.arg(1)), arg2.expect_string(globals)?)
     } else {
@@ -721,7 +736,12 @@ pub fn str_next(self_: &str) -> String {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/start_with=3f.html]
 #[monoruby_builtin]
-fn start_with(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn start_with(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
     let arg0 = lfp.arg(0).as_array();
@@ -740,7 +760,12 @@ fn start_with(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/include=3f.html]
 #[monoruby_builtin]
-fn include_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn include_(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
     let substr = lfp.arg(0);
@@ -755,7 +780,12 @@ fn include_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/delete_prefix=21.html]
 #[monoruby_builtin]
-fn delete_prefix_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn delete_prefix_(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
     let arg0 = lfp.arg(0);
@@ -775,7 +805,12 @@ fn delete_prefix_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/delete_prefix.html]
 #[monoruby_builtin]
-fn delete_prefix(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn delete_prefix(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
     let arg0 = lfp.arg(0);
@@ -794,7 +829,12 @@ fn delete_prefix(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/end_with=3f.html]
 #[monoruby_builtin]
-fn end_with(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn end_with(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
     let arg0 = lfp.arg(0).as_array();
@@ -816,7 +856,7 @@ fn end_with(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/split.html]
 #[monoruby_builtin]
-fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
     let lim = if let Some(arg1) = lfp.try_arg(1) {
@@ -957,7 +997,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/slice=21.html]
 #[monoruby_builtin]
-fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     fn slice_sub(lfp: Lfp, mut lhs: String, r: std::ops::Range<usize>) -> Value {
         let res = Value::string_from_str(&lhs[r.clone()]);
         lhs.replace_range(r, "");
@@ -1074,7 +1114,7 @@ fn chomp_sub<'a>(self_: &'a str, rs: &str) -> &'a str {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/chomp.html]
 #[monoruby_builtin]
-fn chomp(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn chomp(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.try_arg(0);
     let rs = if let Some(arg0) = &arg0 {
         if arg0.is_nil() {
@@ -1098,7 +1138,7 @@ fn chomp(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/chomp.html]
 #[monoruby_builtin]
-fn chomp_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn chomp_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.try_arg(0);
     let rs = if let Some(arg0) = &arg0 {
         if arg0.is_nil() {
@@ -1129,7 +1169,7 @@ const STRIP: &[char] = &[' ', '\n', '\t', '\x0d', '\x0c', '\x0b', '\x00'];
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/strip.html]
 #[monoruby_builtin]
-fn strip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn strip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let self_ = self_val
         .expect_str(globals)?
@@ -1145,7 +1185,7 @@ fn strip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/strip=21.html]
 #[monoruby_builtin]
-fn strip_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn strip_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let orig = self_val.expect_str(globals)?;
     let self_ = orig.trim_end_matches(STRIP).trim_start_matches(STRIP);
@@ -1163,7 +1203,7 @@ fn strip_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/rstrip.html]
 #[monoruby_builtin]
-fn rstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn rstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let self_ = self_val.expect_str(globals)?.trim_end_matches(STRIP);
     Ok(Value::string_from_str(self_))
@@ -1176,7 +1216,7 @@ fn rstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/rstrip=21.html]
 #[monoruby_builtin]
-fn rstrip_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn rstrip_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let orig = self_val.expect_str(globals)?;
     let self_ = orig.trim_end_matches(STRIP);
@@ -1194,7 +1234,7 @@ fn rstrip_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/lstrip.html]
 #[monoruby_builtin]
-fn lstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn lstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let self_ = self_val.expect_str(globals)?.trim_start_matches(STRIP);
     Ok(Value::string_from_str(self_))
@@ -1207,7 +1247,7 @@ fn lstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/lstrip=21.html]
 #[monoruby_builtin]
-fn lstrip_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn lstrip_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let orig = self_val.expect_str(globals)?;
     let self_ = orig.trim_start_matches(STRIP);
@@ -1226,7 +1266,7 @@ fn lstrip_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/sub.html]
 #[monoruby_builtin]
-fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let (res, _) = sub_main(vm, globals, lfp.self_val(), lfp)?;
     Ok(Value::string(res))
 }
@@ -1239,7 +1279,7 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/sub=21.html]
 #[monoruby_builtin]
-fn sub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn sub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let (res, changed) = sub_main(vm, globals, self_, lfp)?;
     self_.replace_string(res);
@@ -1280,7 +1320,7 @@ fn sub_main(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/gsub.html]
 #[monoruby_builtin]
-fn gsub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn gsub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let (res, _) = gsub_main(vm, globals, lfp.self_val(), lfp)?;
     Ok(Value::string(res))
 }
@@ -1294,7 +1334,7 @@ fn gsub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/gsub=21.html]
 #[monoruby_builtin]
-fn gsub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn gsub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let (res, changed) = gsub_main(vm, globals, self_, lfp)?;
     self_.replace_string(res);
@@ -1334,7 +1374,7 @@ fn gsub_main(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/scan.html]
 #[monoruby_builtin]
-fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let given = self_.expect_str(globals)?;
     let arg0 = lfp.arg(0);
@@ -1408,7 +1448,12 @@ fn scan_with_block(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/match.html]
 #[monoruby_builtin]
-fn string_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn string_match(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let pos = if let Some(arg1) = lfp.try_arg(1) {
         match arg1.coerce_to_i64(globals)? {
             pos if pos >= 0 => pos as usize,
@@ -1431,7 +1476,12 @@ fn string_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/match=3f.html]
 #[monoruby_builtin]
-fn string_match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn string_match_(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let pos = if let Some(arg1) = lfp.try_arg(1) {
         match arg1.coerce_to_i64(globals)? {
             pos if pos >= 0 => pos as usize,
@@ -1455,7 +1505,12 @@ fn string_match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/index.html]
 #[monoruby_builtin]
-fn string_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn string_index(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let char_pos = if let Some(arg1) = lfp.try_arg(1) {
         arg1.coerce_to_i64(globals)?
     } else {
@@ -1489,7 +1544,12 @@ fn string_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/rindex.html]
 #[monoruby_builtin]
-fn string_rindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn string_rindex(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
     let re = lfp.arg(0).expect_regexp_or_string(globals)?;
@@ -1554,7 +1614,7 @@ fn string_rindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_s.html]
 #[monoruby_builtin]
-fn tos(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn tos(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val())
 }
 
@@ -1566,7 +1626,7 @@ fn tos(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/length.html]
 #[monoruby_builtin]
-fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let length = lfp.self_val().as_rstring_inner().char_length()?;
     Ok(Value::integer(length as i64))
 }
@@ -1578,7 +1638,12 @@ fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/bytesize.html]
 #[monoruby_builtin]
-fn bytesize(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn bytesize(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let length = lfp.self_val().as_rstring_inner().len();
     Ok(Value::integer(length as i64))
 }
@@ -1590,7 +1655,7 @@ fn bytesize(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/ord.html]
 #[monoruby_builtin]
-fn ord(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn ord(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(Value::integer(
         lfp.self_val().as_rstring_inner().first_code()? as _,
     ))
@@ -1610,7 +1675,7 @@ fn gen_pad(padding: &str, len: usize) -> String {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/ljust.html]
 #[monoruby_builtin]
-fn ljust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn ljust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let arg1 = lfp.try_arg(1);
     let padding = if let Some(arg1) = &arg1 {
         arg1.expect_str(globals)?
@@ -1638,7 +1703,7 @@ fn ljust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/rjust.html]
 #[monoruby_builtin]
-fn rjust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn rjust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let arg1 = lfp.try_arg(1);
     let padding = if let Some(arg1) = &arg1 {
         arg1.expect_str(globals)?
@@ -1667,7 +1732,7 @@ fn rjust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/lines.html]
 #[monoruby_builtin]
-fn lines(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn lines(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     if lfp.block().is_some() {
         return Err(MonorubyErr::runtimeerr("block is not supported."));
     }
@@ -1685,7 +1750,7 @@ fn lines(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/bytes.html]
 #[monoruby_builtin]
-fn bytes(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn bytes(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let receiver = lfp.self_val();
     let iter = receiver
         .as_rstring_inner()
@@ -1707,7 +1772,12 @@ fn bytes(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/each_line.html]
 #[monoruby_builtin]
-fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn each_line(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let arg0 = lfp.try_arg(0);
     let rs = if let Some(arg0) = &arg0 {
         arg0.expect_str(globals)?
@@ -1730,7 +1800,7 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/empty=3f.html]
 #[monoruby_builtin]
-fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_rstring_inner().is_empty()))
 }
 
@@ -1741,7 +1811,7 @@ fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_f.html]
 #[monoruby_builtin]
-fn to_f(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn to_f(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let s = self_.expect_str(globals)?;
     let f = parse_f64(s).0;
@@ -1755,7 +1825,7 @@ fn to_f(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_i.html]
 #[monoruby_builtin]
-fn to_i(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn to_i(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let s = self_.as_str();
     let radix = if let Some(arg0) = lfp.try_arg(0) {
@@ -1790,7 +1860,7 @@ fn to_i(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/hex.html]
 #[monoruby_builtin]
-fn hex(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn hex(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let s = self_.as_str();
     let s = s.trim_start();
@@ -1802,7 +1872,10 @@ fn hex(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     } else {
         (s, false)
     };
-    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    let s = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
     Ok(parse_int_value(s, 16, negative))
 }
 
@@ -1813,7 +1886,7 @@ fn hex(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/oct.html]
 #[monoruby_builtin]
-fn oct(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn oct(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let s = self_.as_str();
     let s = s.trim_start();
@@ -1946,7 +2019,7 @@ fn parse_bigint(s: &str, radix: u32) -> BigInt {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/intern.html]
 #[monoruby_builtin]
-fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let sym = Value::symbol_from_str(self_val.as_str());
     Ok(sym)
@@ -1959,7 +2032,7 @@ fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase.html]
 #[monoruby_builtin]
-fn upcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn upcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let s = self_val.as_str().to_uppercase();
     Ok(Value::string(s))
@@ -1972,7 +2045,12 @@ fn upcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase=21.html]
 #[monoruby_builtin]
-fn upcase_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn upcase_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let mut self_val = lfp.self_val();
     let s = self_val.as_str().to_uppercase();
     let changed = &s != self_val.as_str();
@@ -1992,7 +2070,12 @@ fn upcase_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/downcase.html]
 #[monoruby_builtin]
-fn downcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn downcase(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let self_val = lfp.self_val();
     let s = self_val.as_str().to_lowercase();
     Ok(Value::string(s))
@@ -2005,7 +2088,12 @@ fn downcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/downcase=21.html]
 #[monoruby_builtin]
-fn downcase_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn downcase_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let mut self_val = lfp.self_val();
     let s = self_val.as_str().to_lowercase();
     let changed = &s != self_val.as_str();
@@ -2179,7 +2267,7 @@ fn tr_test() {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/delete.html]
 #[monoruby_builtin]
-fn delete(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn delete(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let mut res = lfp.self_val().as_str().to_string();
     let args = lfp.arg(0).as_array();
     if args.is_empty() {
@@ -2205,7 +2293,7 @@ fn delete(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/tr.html]
 #[monoruby_builtin]
-fn tr(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn tr(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     // TODO: support tr(1)
     let self_ = lfp.self_val();
     let arg0 = lfp.arg(0);
@@ -2224,7 +2312,7 @@ fn tr(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/count.html]
 #[monoruby_builtin]
-fn count(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn count(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     let self_ = lfp.self_val();
     let target = self_.as_str();
@@ -2248,7 +2336,7 @@ fn count(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/sum.html]
 #[monoruby_builtin]
-fn sum(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn sum(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let bits = if let Some(arg0) = lfp.try_arg(0) {
         arg0.coerce_to_i64(globals)?
     } else {
@@ -2270,7 +2358,7 @@ fn sum(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/replace.html]
 #[monoruby_builtin]
-fn replace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn replace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     lfp.self_val().replace_str(lfp.arg(0).expect_str(globals)?);
     Ok(lfp.self_val())
 }
@@ -2283,7 +2371,7 @@ fn replace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/chars.html]
 #[monoruby_builtin]
-fn chars(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn chars(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let recv = self_.expect_str(globals)?;
     let iter = recv.chars().map(|c| Value::string(c.to_string()));
@@ -2303,7 +2391,7 @@ fn chars(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/each_char.html]
 #[monoruby_builtin]
-fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let recv = self_.expect_str(globals)?;
     if let Some(bh) = lfp.block() {
@@ -2311,7 +2399,7 @@ fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
         vm.invoke_block_iter1(globals, bh, iter)?;
         Ok(lfp.self_val())
     } else {
-        vm.generate_enumerator(IdentId::get_id("each_char"), lfp.self_val(), vec![])
+        vm.generate_enumerator(IdentId::get_id("each_char"), lfp.self_val(), vec![], pc)
     }
 }
 
@@ -2322,7 +2410,7 @@ fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/center.html]
 #[monoruby_builtin]
-fn center(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn center(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let arg1 = lfp.try_arg(1);
     let padding = if let Some(arg) = &arg1 {
         arg.expect_str(globals)?
@@ -2356,7 +2444,7 @@ fn center(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/next.html]
 #[monoruby_builtin]
-fn next(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn next(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let recv = self_.expect_str(globals)?;
     let res = Value::string(str_next(recv));
@@ -2370,7 +2458,7 @@ fn next(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/encoding.html]
 #[monoruby_builtin]
-fn encoding(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn encoding(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let enc = self_.as_rstring_inner().encoding();
     let enc_class = vm
@@ -2393,7 +2481,7 @@ fn encoding(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/b.html]
 #[monoruby_builtin]
-fn b(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn b(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let mut res = lfp.self_val().dup();
     res.as_rstring_inner_mut().set_encoding(Encoding::Ascii8);
     Ok(res)
@@ -2406,7 +2494,7 @@ fn b(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/unpack.html]
 #[monoruby_builtin]
-fn unpack(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn unpack(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     rvalue::unpack(
         self_.as_rstring_inner(),
@@ -2422,7 +2510,7 @@ fn unpack(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/unpack1.html]
 #[monoruby_builtin]
-fn unpack1(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn unpack1(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     rvalue::unpack(
         self_.as_rstring_inner(),
@@ -2438,7 +2526,7 @@ fn unpack1(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/dump.html]
 #[monoruby_builtin]
-fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(Value::string(format!(
         r#""{}""#,
         lfp.self_val().as_rstring_inner().dump()
@@ -2452,7 +2540,12 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/force_encoding.html]
 #[monoruby_builtin]
-fn force_encoding(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn force_encoding(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let enc = if let Some(s) = arg0.is_str() {
         Encoding::try_from_str(s)?
@@ -2473,7 +2566,7 @@ fn force_encoding(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/valid_encoding=3f.html]
 #[monoruby_builtin]
-fn valid_encoding(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn valid_encoding(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_rstring_inner().valid()))
 }
 
@@ -2484,7 +2577,7 @@ fn valid_encoding(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/ascii_only=3f.html]
 #[monoruby_builtin]
-fn ascii_only(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn ascii_only(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_rstring_inner().is_ascii()))
 }
 

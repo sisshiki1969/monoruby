@@ -10,7 +10,7 @@ pub use op::*;
 use ruruby_parse::{Loc, SourceInfoRef};
 
 pub type Result<T> = std::result::Result<T, MonorubyErr>;
-pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<Value>;
+pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, Lfp, BytecodePtr) -> Option<Value>;
 pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>;
 pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value) -> Option<Value>;
 
@@ -1171,19 +1171,18 @@ impl Executor {
 }
 
 impl Executor {
-    pub fn generate_proc(&mut self, bh: BlockHandler) -> Result<Proc> {
-        if let Some(proxy) = bh.try_proxy() {
+    pub(crate) fn generate_proc(&mut self, bh: BlockHandler, pc: BytecodePtr) -> Result<Proc> {
+        if let Some((fid, outer)) = bh.try_proxy() {
             // Walk back through the call frame chain to the block's outer scope,
             // using the proxy's depth index.
             let mut cfp = self.cfp();
-            for _ in 0..proxy.1 {
+            for _ in 0..outer {
                 cfp = cfp.prev().unwrap();
             }
             // Move the correct outer frame (and its lexical chain) to the heap,
             // so the proc can safely reference it after the current scope exits.
             let outer_lfp = cfp.lfp().move_frame_to_heap();
-            let proc = Proc::from_parts(outer_lfp, proxy.0);
-            Ok(proc)
+            Ok(Proc::from_parts(outer_lfp, fid, pc))
         } else if let Some(proc) = bh.try_proc() {
             Ok(proc)
         } else {
@@ -1191,15 +1190,15 @@ impl Executor {
         }
     }
 
-    pub fn generate_lambda(&mut self, func_id: FuncId) -> Proc {
+    pub(crate) fn generate_lambda(&mut self, func_id: FuncId, pc: BytecodePtr) -> Proc {
         let outer_lfp = self.cfp().lfp();
         outer_lfp.move_frame_to_heap();
-        Proc::from_parts(outer_lfp, func_id)
+        Proc::from_parts(outer_lfp, func_id, pc)
     }
 
-    pub fn generate_binding(&mut self) -> Binding {
+    pub(crate) fn generate_binding(&mut self, pc: BytecodePtr) -> Binding {
         let lfp = self.cfp().prev().unwrap().lfp();
-        Binding::from_outer(lfp)
+        Binding::from_outer(lfp, Some(pc))
     }
 
     ///
@@ -1213,14 +1212,15 @@ impl Executor {
     /// ### return
     /// - the generated proc object.
     ///
-    pub fn generate_enumerator(
+    pub(crate) fn generate_enumerator(
         &mut self,
         method: IdentId,
         obj: Value,
         args: Vec<Value>,
+        pc: BytecodePtr,
     ) -> Result<Value> {
         let outer_lfp = Lfp::dummy_heap_frame_with_self(obj);
-        let proc = Proc::from_parts(outer_lfp, FuncId::new(1));
+        let proc = Proc::from_parts(outer_lfp, FuncId::new(1), pc);
         let e = Value::new_enumerator(obj, method, proc, args);
         Ok(e)
     }

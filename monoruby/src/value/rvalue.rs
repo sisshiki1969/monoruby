@@ -331,9 +331,9 @@ impl ObjKind {
         }
     }
 
-    fn binding_from_outer(outer_lfp: Lfp) -> Self {
+    fn binding(outer_lfp: Lfp, pc: Option<BytecodePtr>) -> Self {
         Self {
-            binding: ManuallyDrop::new(BindingInner::from(outer_lfp)),
+            binding: ManuallyDrop::new(BindingInner::from(outer_lfp, pc)),
         }
     }
 
@@ -1247,12 +1247,12 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_binding(outer_lfp: Lfp) -> Self {
+    pub(super) fn new_binding(outer_lfp: Lfp, call_site_pc: Option<BytecodePtr>) -> Self {
         let outer_lfp = outer_lfp.move_frame_to_heap();
         assert!(!outer_lfp.on_stack());
         RValue {
             header: Header::new(BINDING_CLASS, ObjTy::BINDING),
-            kind: ObjKind::binding_from_outer(outer_lfp),
+            kind: ObjKind::binding(outer_lfp, call_site_pc),
             var_table: None,
         }
     }

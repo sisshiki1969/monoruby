@@ -58,11 +58,11 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/s/new.html]
 #[monoruby_builtin]
-fn enumerator_new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn enumerator_new(vm: &mut Executor, _: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let proc = vm.generate_proc(bh)?;
+    let proc = vm.generate_proc(bh, pc)?;
     let obj = Value::new_generator(proc);
-    vm.generate_enumerator(IdentId::EACH, obj, vec![])
+    vm.generate_enumerator(IdentId::EACH, obj, vec![], pc)
 }
 
 ///
@@ -72,7 +72,7 @@ fn enumerator_new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/next.html]
 #[monoruby_builtin]
-fn next(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn next(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let mut e = Enumerator::new(lfp.self_val());
     e.next(vm, globals)
 }
@@ -84,7 +84,12 @@ fn next(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/next_values.html]
 #[monoruby_builtin]
-fn next_values(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn next_values(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let mut e = Enumerator::new(lfp.self_val());
     Ok(e.next_values(vm, globals)?.into())
 }
@@ -97,7 +102,7 @@ fn next_values(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/each.html]
 #[monoruby_builtin]
-fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     fn each_inner(
         vm: &mut Executor,
         globals: &mut Globals,
@@ -136,7 +141,12 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/with_index.html]
 #[monoruby_builtin]
-fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn with_index(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
     fn with_index_inner(
         vm: &mut Executor,
         globals: &mut Globals,
@@ -181,7 +191,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let data = if let Some(bh) = lfp.block() {
         vm.get_block_data(globals, bh)?
     } else {
-        return vm.generate_enumerator(id, lfp.self_val(), vec![]);
+        return vm.generate_enumerator(id, lfp.self_val(), vec![], pc);
     };
 
     let internal = Fiber::from(self_val.proc);
@@ -198,7 +208,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/peek.html]
 #[monoruby_builtin]
-fn peek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn peek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let mut e = Enumerator::new(lfp.self_val());
     e.peek(vm, globals)
 }
@@ -210,7 +220,7 @@ fn peek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/rewind.html]
 #[monoruby_builtin]
-fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let mut e = Enumerator::new(lfp.self_val());
     e.rewind();
     Ok(e.into())
@@ -223,7 +233,12 @@ fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aYielder/i/=3c=3c.html]
 #[monoruby_builtin]
-fn yielder_push(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn yielder_push(
+    vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     vm.yield_fiber(Value::array1(lfp.arg(0)))
 }
 
@@ -234,7 +249,12 @@ fn yielder_push(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aYielder/i/yield.html]
 #[monoruby_builtin]
-fn yielder_yield(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn yielder_yield(
+    vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     vm.yield_fiber(lfp.arg(0))
 }
 
@@ -244,9 +264,14 @@ fn yielder_yield(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<
 /// - new() {|y| ... } -> Enumerator
 ///
 #[monoruby_builtin]
-fn generator_new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn generator_new(
+    vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let proc = vm.generate_proc(bh)?;
+    let proc = vm.generate_proc(bh, pc)?;
     Ok(Value::new_generator(proc))
 }
 
@@ -256,7 +281,12 @@ fn generator_new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<
 /// - each {...} -> object
 ///
 #[monoruby_builtin]
-fn generator_each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn generator_each(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     fn each_inner(
         vm: &mut Executor,
         globals: &mut Globals,

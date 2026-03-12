@@ -352,7 +352,13 @@ impl AsmIr {
         self.push(AsmInst::CheckBOP { deopt });
     }
 
-    pub(super) fn block_arg(&mut self, state: &AbstractFrame, ret: SlotId, outer: usize) {
+    pub(super) fn block_arg(
+        &mut self,
+        state: &AbstractFrame,
+        ret: SlotId,
+        outer: usize,
+        call_site_bc_ptr: BytecodePtr,
+    ) {
         let using_xmm = state.get_using_xmm();
         let error = self.new_error(state);
         self.push(AsmInst::BlockArg {
@@ -360,6 +366,7 @@ impl AsmIr {
             outer,
             using_xmm,
             error,
+            call_site_bc_ptr,
         });
     }
 
@@ -1012,6 +1019,7 @@ pub(super) enum AsmInst {
         callee_fid: FuncId,
         recv_class: ClassId,
         evict: AsmEvict,
+        pc: BytecodePtr,
     },
     ///
     /// Call specialized method
@@ -1282,6 +1290,7 @@ pub(super) enum AsmInst {
         outer: usize,
         using_xmm: UsingXmm,
         error: AsmError,
+        call_site_bc_ptr: BytecodePtr,
     },
 
     /// Load instance var *ivarid* of the object *rdi* into register *rax*.

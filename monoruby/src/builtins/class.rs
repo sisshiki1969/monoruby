@@ -40,7 +40,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/s/new.html]
 #[monoruby_builtin]
-fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     lfp.expect_no_block()?;
     let superclass = if lfp.try_arg(0).is_none() {
         None
@@ -57,7 +57,7 @@ fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/new.html]
 #[monoruby_builtin]
-pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let obj =
         vm.invoke_method_inner(globals, IdentId::ALLOCATE, lfp.self_val(), &[], None, None)?;
 
@@ -84,7 +84,7 @@ pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/superclass.html]
 #[monoruby_builtin]
-fn superclass(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn superclass(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let class = lfp.self_val().as_class();
     match class.get_real_superclass() {
         Some(class) => Ok(class.into()),
@@ -97,7 +97,7 @@ fn superclass(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
 #[monoruby_builtin]
-fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let obj = Value::object(class_id);
     Ok(obj)

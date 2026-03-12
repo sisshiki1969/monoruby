@@ -120,7 +120,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/nil=3f.html]
 #[monoruby_builtin]
-fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().is_nil()))
 }
 
@@ -206,7 +206,7 @@ fn kernel_block_given(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
 #[monoruby_builtin]
-fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     fn decompose(collector: &mut Vec<Value>, val: Value) {
         match val.try_array_ty() {
             Some(ary) => {
@@ -235,7 +235,7 @@ fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/gets.html]
 #[monoruby_builtin]
-fn gets(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
+fn gets(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let mut buffer = String::new();
     match std::io::stdin().read_line(&mut buffer) {
         Ok(_) => {}
@@ -251,7 +251,7 @@ fn gets(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/print.html]
 #[monoruby_builtin]
-fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     for v in lfp.arg(0).as_array().iter().cloned() {
         globals.print_value(v);
     }
@@ -266,9 +266,9 @@ fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/lambda.html]
 #[monoruby_builtin]
-fn proc(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn proc(vm: &mut Executor, _: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     if let Some(bh) = lfp.block() {
-        let p = vm.generate_proc(bh)?;
+        let p = vm.generate_proc(bh, pc)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())
@@ -276,11 +276,11 @@ fn proc(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 #[monoruby_builtin]
-fn lambda(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn lambda(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let func_id = bh.func_id();
         globals.store[func_id].set_method_style();
-        let p = vm.generate_proc(bh)?;
+        let p = vm.generate_proc(bh, pc)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())
@@ -294,8 +294,8 @@ fn lambda(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/binding.html]
 #[monoruby_builtin]
-fn binding(vm: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
-    Ok(vm.generate_binding().as_val())
+fn binding(vm: &mut Executor, _: &mut Globals, _: Lfp, pc: BytecodePtr) -> Result<Value> {
+    Ok(vm.generate_binding(pc).as_val())
 }
 
 ///
@@ -305,7 +305,7 @@ fn binding(vm: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/loop.html]
 #[monoruby_builtin]
-fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let data = vm.get_block_data(globals, bh)?;
     loop {
@@ -331,7 +331,7 @@ fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/fail.html]
 #[monoruby_builtin]
-fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     if lfp.try_arg(0).is_none() {
         let ex = globals.get_gvar(IdentId::get_id("$!")).unwrap_or_default();
         return Err(MonorubyErr::new_from_exception(ex.is_exception().unwrap()));
@@ -367,7 +367,12 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/block_given=3f.html]
 #[monoruby_builtin]
-fn block_given(vm: &mut Executor, _globals: &mut Globals, _: Lfp) -> Result<Value> {
+fn block_given(
+    vm: &mut Executor,
+    _globals: &mut Globals,
+    _: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     Ok(Value::bool(vm.cfp().prev().unwrap().block_given()))
 }
 
@@ -378,7 +383,7 @@ fn block_given(vm: &mut Executor, _globals: &mut Globals, _: Lfp) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/p.html]
 #[monoruby_builtin]
-fn p(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn p(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let len = lfp.arg(0).as_array().len();
     let mut buf = String::new();
     for v in lfp.arg(0).as_array().iter() {
@@ -403,7 +408,7 @@ fn p(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/caller.html]
 #[monoruby_builtin]
-fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let mut cfp = vm.cfp();
     let mut v = Vec::new();
     let level = if let Some(arg0) = lfp.try_arg(0) {
@@ -433,7 +438,7 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 #[monoruby_builtin]
-fn assert(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn assert(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let expected = lfp.arg(0);
     let actual = lfp.arg(1);
     eprintln!(
@@ -446,13 +451,18 @@ fn assert(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 }
 
 #[monoruby_builtin]
-fn dump(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
+fn dump(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     crate::runtime::_dump_stacktrace(vm, globals);
     Ok(Value::nil())
 }
 
 #[monoruby_builtin]
-fn check_stack(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
+fn check_stack(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     if crate::runtime::_check_stack(vm, globals) {
         crate::runtime::_dump_stacktrace(vm, globals);
     }
@@ -460,7 +470,12 @@ fn check_stack(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Va
 }
 
 #[monoruby_builtin]
-fn instance_ty(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn instance_ty(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let class_id = lfp.self_val().class();
     let i = if let Some(ty) = globals.store[class_id].instance_ty() {
         ty.get()
@@ -478,7 +493,7 @@ fn instance_ty(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/rand.html]
 #[monoruby_builtin]
-fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let i = if let Some(arg0) = lfp.try_arg(0) {
         if let Some(range) = arg0.is_range() {
             let start = range.start();
@@ -512,7 +527,12 @@ fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Integer.html]
 #[monoruby_builtin]
-fn kernel_integer(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn kernel_integer(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let arg0 = lfp.arg(0);
     match arg0.unpack() {
         RV::Fixnum(num) => return Ok(Value::integer(num)),
@@ -544,7 +564,12 @@ fn kernel_integer(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Float.html]
 #[monoruby_builtin]
-fn kernel_float(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn kernel_float(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let arg0 = lfp.arg(0);
     match arg0.unpack() {
         RV::Fixnum(num) => return Ok(Value::float(num as f64)),
@@ -577,7 +602,12 @@ fn kernel_float(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Complex.html]
 #[monoruby_builtin]
-fn kernel_complex(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn kernel_complex(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let r = Real::try_from(globals, lfp.arg(0))?;
     let i = if let Some(i) = lfp.try_arg(1) {
         Real::try_from(globals, i)?
@@ -594,7 +624,12 @@ fn kernel_complex(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Array.html]
 #[monoruby_builtin]
-fn kernel_array(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn kernel_array(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let arg = lfp.arg(0);
     if arg.is_array_ty() {
         return Ok(arg);
@@ -618,7 +653,7 @@ fn kernel_array(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require.html]
 #[monoruby_builtin]
-fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let feature = lfp.arg(0).expect_string(globals)?;
     let file_name = std::path::PathBuf::from(feature);
     let b = vm.require(globals, &file_name, false)?;
@@ -632,7 +667,12 @@ fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require_relative.html]
 #[monoruby_builtin]
-fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn require_relative(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let mut file_name: std::path::PathBuf = globals.current_source_path(vm).into();
     file_name.pop();
     let feature = std::path::PathBuf::from(lfp.arg(0).expect_string(globals)?);
@@ -649,12 +689,9 @@ fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/load.html]
 #[monoruby_builtin]
-fn load_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn load_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let file_name = std::path::PathBuf::from(lfp.arg(0).expect_string(globals)?);
-    let wrap = lfp
-        .try_arg(1)
-        .map(|v| v.as_bool())
-        .unwrap_or(false);
+    let wrap = lfp.try_arg(1).map(|v| v.as_bool()).unwrap_or(false);
     vm.load(globals, &file_name, wrap)?;
     Ok(Value::bool(true))
 }
@@ -666,7 +703,7 @@ fn load_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/autoload.html]
 #[monoruby_builtin]
-fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let const_name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let feature = lfp.arg(1).coerce_to_string(vm, globals)?;
     globals
@@ -683,7 +720,7 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/eval.html]
 #[monoruby_builtin]
-fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let expr = lfp.arg(0).expect_string(globals)?;
     let cfp = vm.cfp();
     if let Some(bind) = lfp.try_arg(1)
@@ -732,7 +769,7 @@ fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/system.html]
 #[monoruby_builtin]
-fn system(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn system(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     use std::process::Command;
     let arg0 = lfp.arg(0);
     let (program, mut args) = prepare_command_arg(arg0.as_str());
@@ -754,7 +791,12 @@ fn system(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/=60.html]
 #[monoruby_builtin]
-fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn command(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let (program, args) = prepare_command_arg(arg0.as_str());
     match std::process::Command::new(program).args(&args).output() {
@@ -774,7 +816,7 @@ fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/sleep.html]
 #[monoruby_builtin]
-fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let now = std::time::Instant::now();
     if let Some(sec) = lfp.try_arg(0) {
         let sec = sec.coerce_to_f64(globals)?;
@@ -796,7 +838,7 @@ fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.html]
 #[monoruby_builtin]
-fn abort(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn abort(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
         match arg0.is_str() {
             Some(s) => eprintln!("{}", s),
@@ -819,7 +861,7 @@ fn abort(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/exit.html]
 #[monoruby_builtin]
-fn exit(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn exit(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
         if let Some(i) = arg0.try_fixnum() {
             std::process::exit(i as i32);
@@ -841,7 +883,7 @@ fn exit(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/warn.html]
 #[monoruby_builtin]
-fn warn(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn warn(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let message = lfp.arg(0);
     if lfp.try_arg(1).is_some() {
         return Err(MonorubyErr::runtimeerr("uplevel is not supported"));
@@ -873,7 +915,7 @@ fn warn(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/__dir__.html]
 #[monoruby_builtin]
-fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
+fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let path = globals.current_source_path(vm).parent().unwrap();
     Ok(Value::string(path.to_string_lossy().to_string()))
 }
@@ -885,7 +927,7 @@ fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/__method__.html]
 #[monoruby_builtin]
-fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
+fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let fid = vm.cfp().prev().unwrap().method_func_id();
     if !globals.store[fid].is_method() {
         return Ok(Value::nil());
@@ -902,7 +944,7 @@ fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiddle/m/dlopen.html]
 #[monoruby_builtin]
-fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     // see: https://github.com/ruby/fiddle/blob/2b3747e919df5d044c835cbbb27ebf9e27df74f9/ext/fiddle/handle.c#L136
     let arg0 = lfp.arg(0);
     let flags = if let Some(arg1) = lfp.try_arg(1) {
@@ -955,7 +997,7 @@ fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiddle=3a=3aHandle/s/=5b=5d.html]
 #[monoruby_builtin]
-fn dlsym(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn dlsym(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     // see: https://github.com/ruby/fiddle/blob/2b3747e919df5d044c835cbbb27ebf9e27df74f9/ext/fiddle/handle.c#L136
     let arg0 = if lfp.arg(0).is_nil() {
         0
@@ -974,7 +1016,7 @@ fn dlsym(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// - call(ptr, args) -> Integer
 ///
 #[monoruby_builtin]
-fn dlcall(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn dlcall(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     fn conv(store: &Store, arg: Value, ty: u32) -> Result<u64> {
         // VOID = 0
         // VOIDP = 1
@@ -1123,7 +1165,7 @@ fn dlcall(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 /// - malloc(size, clear) -> Integer
 ///
 #[monoruby_builtin]
-fn malloc(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn malloc(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let size = lfp.arg(0).expect_integer(globals)? as usize;
     let clear = if let Some(clear) = lfp.try_arg(1) {
         clear.as_bool()
@@ -1151,7 +1193,7 @@ fn malloc(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// - memcpyv(dst, value, size)
 ///
 #[monoruby_builtin]
-fn memcpyv(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn memcpyv(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let dest = lfp.arg(0).expect_integer(globals)? as *mut u8;
     let value = lfp.arg(1).expect_integer(globals)?;
     let n = lfp.arg(2).expect_integer(globals)? as usize;
@@ -1165,7 +1207,12 @@ fn memcpyv(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// - read_memory(ptr, length)
 ///
 #[monoruby_builtin]
-fn read_memory(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn read_memory(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let ptr = lfp.arg(0).expect_integer(globals)? as *mut u8;
     let len = lfp.arg(1).expect_integer(globals)? as usize;
     let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
@@ -1177,7 +1224,7 @@ fn read_memory(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 /// - ____max(f1:Float, f2:Float) -> Float
 ///
 #[monoruby_builtin]
-fn max(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn max(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let f1 = lfp.arg(0).coerce_to_f64(globals)?;
     let f2 = lfp.arg(1).coerce_to_f64(globals)?;
     Ok(Value::float(f64::max(f1, f2)))
@@ -1187,7 +1234,7 @@ fn max(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// - ____min(f1:Float, f2:Float) -> Float
 ///
 #[monoruby_builtin]
-fn min(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn min(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let f1 = lfp.arg(0).coerce_to_f64(globals)?;
     let f2 = lfp.arg(1).coerce_to_f64(globals)?;
     Ok(Value::float(f64::min(f1, f2)))

@@ -593,6 +593,7 @@ impl AbstractState {
             callee_fid,
             recv_class,
             evict,
+            pc: self.pc(),
         });
         ir.xmm_restore_cont(using_xmm);
         ir.handle_error(error);

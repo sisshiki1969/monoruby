@@ -189,6 +189,20 @@ impl Store {
         Some(&mut self[iseq])
     }
 
+    ///
+    /// Search for the `ISeqId` whose bytecode contains *pc*.
+    ///
+    /// Returns `Some(ISeqId)` if found, `None` otherwise.
+    ///
+    #[allow(dead_code)]
+    pub(crate) fn iseq_id_from_pc(&self, pc: BytecodePtr) -> Option<(ISeqId, BcIndex)> {
+        self.iseqs
+            .iter()
+            .enumerate()
+            .find(|(_, iseq)| iseq.contains_pc(pc))
+            .map(|(idx, info)| (ISeqId::new(idx), info.get_pc_index(Some(pc))))
+    }
+
     pub fn ancestors(&self, class_id: ClassId) -> Vec<Module> {
         let mut class = self[class_id].get_module();
         let mut v = vec![class];

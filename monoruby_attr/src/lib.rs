@@ -17,8 +17,9 @@ pub fn monoruby_builtin(_attr: TokenStream, item: TokenStream) -> TokenStream {
             vm: &mut Executor,
             globals: &mut Globals,
             lfp: Lfp,
+            pc: BytecodePtr,
         ) -> Option<Value> {
-            match #wrapped(vm, globals, lfp) {
+            match #wrapped(vm, globals, lfp, pc) {
                 Ok(val) => Some(val),
                 Err(mut err) => {
                     if let MonorubyErrKind::MethodReturn(val, target_lfp) = err.kind() && lfp == *target_lfp {

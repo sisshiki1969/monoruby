@@ -53,7 +53,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/times.html]
 #[monoruby_builtin]
-fn times(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn times(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let bh = lfp.expect_block()?;
     match lfp.self_val().unpack() {
         RV::Fixnum(i) => vm.invoke_block_iter1(globals, bh, (0..i).map(Value::integer))?,
@@ -111,7 +111,7 @@ impl Iterator for NegStep {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/step.html]
 #[monoruby_builtin]
-fn step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("step");
@@ -149,11 +149,11 @@ fn step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/upto.html]
 #[monoruby_builtin]
-fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("upto");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect());
+            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
         }
         Some(block) => block,
     };
@@ -180,11 +180,11 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/downto.html]
 #[monoruby_builtin]
-fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("downto");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect());
+            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
         }
         Some(block) => block,
     };
@@ -209,7 +209,7 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/chr.html]
 #[monoruby_builtin]
-fn chr(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn chr(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     if let Some(i) = lfp.self_val().try_fixnum() {
         if let Ok(b) = u8::try_from(i) {
             return Ok(Value::bytes_from_slice(&[b]));
@@ -222,7 +222,7 @@ fn chr(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 #[monoruby_builtin]
-fn succ(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn succ(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(match lfp.self_val().unpack() {
         RV::Fixnum(i) => i
             .checked_add(1)
@@ -269,7 +269,7 @@ fn integer_succ(
 }
 
 #[monoruby_builtin]
-fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let f = match lfp.self_val().unpack() {
         RV::Fixnum(i) => i as f64,
         RV::BigInt(b) => b.to_f64().unwrap(),
@@ -312,7 +312,7 @@ fn integer_tof(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/to_i.html]
 #[monoruby_builtin]
-fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val())
 }
 
@@ -322,7 +322,7 @@ macro_rules! binop {
     ($op:ident) => {
         paste! {
             #[monoruby_builtin]
-            fn $op(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+            fn $op(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
                 let lhs = lfp.self_val();
                 let rhs = lfp.arg(0);
                 match (lhs.unpack(), rhs.unpack()) {
@@ -356,7 +356,7 @@ binop!(bitand, bitor, bitxor);
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3d=3d.html]
 #[monoruby_builtin]
-fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let b = vm.eq_values_bool(globals, lfp.self_val(), lfp.arg(0))?;
     Ok(Value::bool(b))
 }
@@ -367,7 +367,7 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// - self != other -> bool
 ///
 #[monoruby_builtin]
-fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let b = vm.ne_values_bool(globals, lfp.self_val(), lfp.arg(0))?;
     Ok(Value::bool(b))
 }
@@ -379,7 +379,7 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c=3d=3e.html]
 #[monoruby_builtin]
-fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
     let ord = match (lhs.unpack(), rhs.unpack()) {
@@ -410,7 +410,7 @@ macro_rules! cmpop {
     ($op:ident) => {
         paste! {
             #[monoruby_builtin]
-            fn $op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+            fn $op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
                 let lhs = lfp.self_val();
                 let rhs = lfp.arg(0);
                 match crate::executor::op::[<cmp_ $op _values>](vm, globals, lhs, rhs) {
@@ -438,7 +438,7 @@ cmpop!(ge, gt, le, lt);
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e=3e.html]
 #[monoruby_builtin]
-fn shr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn shr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     super::op::shr_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
@@ -476,7 +476,7 @@ fn integer_shr(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c=3c.html]
 #[monoruby_builtin]
-fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     super::op::shl_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
@@ -524,7 +524,7 @@ fn integer_shl(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=5b=5d.html]
 #[monoruby_builtin]
-fn index(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn index(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     op::integer_index1(globals, self_val, lfp.arg(0))
 }
@@ -536,7 +536,7 @@ fn index(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/even=3f.html]
 #[monoruby_builtin]
-fn even_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn even_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let b = match lfp.self_val().unpack() {
         RV::Fixnum(i) => i % 2 == 0,
         RV::BigInt(b) => (b % 2u32).is_zero(),
@@ -552,7 +552,7 @@ fn even_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/odd=3f.html]
 #[monoruby_builtin]
-fn odd_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn odd_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let b = match lfp.self_val().unpack() {
         RV::Fixnum(i) => i % 2 != 0,
         RV::BigInt(b) => !(b % 2u32).is_zero(),
@@ -568,7 +568,12 @@ fn odd_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/nonzero=3f.html]
 #[monoruby_builtin]
-fn nonzero_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn nonzero_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     if match lfp.self_val().unpack() {
         RV::Fixnum(i) => i == 0,
         RV::BigInt(b) => b.is_zero(),
@@ -587,7 +592,7 @@ fn nonzero_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/zero=3f.html]
 #[monoruby_builtin]
-fn zero_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn zero_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let b = match lfp.self_val().unpack() {
         RV::Fixnum(i) => i == 0,
         RV::BigInt(b) => b.is_zero(),
