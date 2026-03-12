@@ -793,6 +793,14 @@ mod tests {
     }
 
     #[test]
+    fn hash_splat() {
+        run_test(r##"h = {a: 1}; {**h}"##);
+        run_test(r##"h = {a: 1, b: 2}; {c: 3, **h}"##);
+        run_test(r##"h1 = {a: 1}; h2 = {b: 2}; {**h1, **h2}"##);
+        run_test(r##"h = {a: 1}; {a: 0, **h}"##);
+    }
+
+    #[test]
     fn clear() {
         run_test(r##"a = {a:1,b:2}; a.clear; a[:c] = 100; a"##);
     }

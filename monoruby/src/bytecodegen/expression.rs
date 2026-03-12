@@ -99,7 +99,7 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::String(s) => self.emit_string(dst, s),
             NodeKind::Bytes(b) => self.emit_bytes(dst, b),
             NodeKind::Array(nodes, false) => self.gen_array(dst, nodes, loc)?,
-            NodeKind::Hash(nodes) => self.gen_hash(dst, nodes, loc)?,
+            NodeKind::Hash(nodes, splat) => self.gen_hash(dst, nodes, splat, loc)?,
             NodeKind::RegExp(nodes, op, false) => self.gen_regexp(dst, nodes, op, loc)?,
             NodeKind::Array(_, true) | NodeKind::Range { is_const: true, .. } => {
                 let val = Value::from_const_ast(&rhs);
@@ -954,7 +954,13 @@ impl<'a> BytecodeGen<'a> {
         Ok(())
     }
 
-    fn gen_hash(&mut self, ret: BcReg, nodes: Vec<(Node, Node)>, loc: Loc) -> Result<()> {
+    fn gen_hash(
+        &mut self,
+        ret: BcReg,
+        nodes: Vec<(Node, Node)>,
+        splat: Vec<Node>,
+        loc: Loc,
+    ) -> Result<()> {
         let len = nodes.len();
         let old_reg = self.temp;
         let args = self.sp();
@@ -964,6 +970,18 @@ impl<'a> BytecodeGen<'a> {
         }
         self.temp = old_reg;
         self.emit_hash(ret, args.into(), len, loc);
+        if !splat.is_empty() {
+            // For each splat, call merge! on the hash
+            let merge_id = IdentId::get_id("merge!");
+            for s in splat {
+                let old_reg2 = self.temp;
+                let splat_arg = self.sp();
+                self.push_expr(s)?;
+                self.temp = old_reg2;
+                let callsite = CallSite::simple(merge_id, 1, splat_arg.into(), ret, Some(ret));
+                self.emit_call(callsite, loc);
+            }
+        }
         Ok(())
     }
 

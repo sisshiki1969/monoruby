@@ -1626,7 +1626,7 @@ impl Value {
                 };
                 Value::range(start, end, *exclude_end)
             }
-            NodeKind::Hash(v) => {
+            NodeKind::Hash(v, _splat) => {
                 let mut map = RubyMap::default();
                 for (k, v) in v.iter() {
                     let k = Self::from_ast_inner(k, vm, globals);

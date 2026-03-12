@@ -971,6 +971,15 @@ mod test {
     }
 
     #[test]
+    fn hash_splat() {
+        parse_test("{**h}");
+        parse_test("{a: 1, **h}");
+        parse_test("{a: 1, **h, b: 2}");
+        parse_test("{**h1, **h2}");
+        parse_test("{1 => 2, **h}");
+    }
+
+    #[test]
     fn special_vars() {
         parse_node(
             "$&",
