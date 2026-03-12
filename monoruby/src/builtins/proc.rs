@@ -29,7 +29,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Proc/s/new.html]
 #[monoruby_builtin]
-fn new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+fn new(vm: &mut Executor, _: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let p = vm.generate_proc(bh, pc)?;
         Ok(p.into())
@@ -283,6 +283,48 @@ mod tests {
         a = 1
         p.call
         a
+        "#,
+        );
+    }
+
+    #[test]
+    fn proc_source_location() {
+        // source_location returns [String, Integer]
+        run_test_once(
+            r#"
+        p = proc {}
+        sl = p.source_location
+        [sl.is_a?(Array), sl.size == 2, sl[0].is_a?(String), sl[1].is_a?(Integer)]
+        "#,
+        );
+        // source_location line matches the proc creation line
+        run_test_once(
+            r#"
+        line = __LINE__; p = proc {}
+        p.source_location[1] == line
+        "#,
+        );
+        // lambda source_location line matches creation line
+        run_test_once(
+            r#"
+        line = __LINE__; l = lambda {}
+        l.source_location[1] == line
+        "#,
+        );
+        // two procs on consecutive lines have consecutive line numbers
+        run_test_once(
+            r#"
+        p1 = proc {}
+        p2 = proc {}
+        p2.source_location[1] == p1.source_location[1] + 1
+        "#,
+        );
+        // Proc#binding.source_location returns the same line as the proc
+        run_test_once(
+            r#"
+        p = proc {}
+        b = p.binding
+        p.source_location[1] == b.source_location[1]
         "#,
         );
     }

@@ -19,19 +19,25 @@ fn source_location(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let binding = self_val.as_binding_inner();
+    let fid = binding.outer_lfp().func_id();
     if let Some(pc) = binding.pc {
-        let outer_fid = binding.outer_lfp().func_id();
-        if let Some(iseq) = globals.store[outer_fid].is_iseq() {
+        if let Some(iseq) = globals.store[fid].is_iseq() {
             let iseq_info = &globals.store[iseq];
-            let bc_index = pc - iseq_info.get_top_pc();
-            if bc_index.to_usize() < iseq_info.sourcemap.len() {
-                let loc = iseq_info.sourcemap[bc_index.to_usize()];
-                let file_name = Value::string(iseq_info.sourceinfo.short_file_name().to_string());
-                let line = Value::integer(iseq_info.sourceinfo.get_line(&loc) as i64);
-                return Ok(Value::array2(file_name, line));
+            let top_pc = iseq_info.get_top_pc();
+            if pc.as_ptr() as usize >= top_pc.as_ptr() as usize {
+                let bc_index = pc - top_pc;
+                if bc_index.to_usize() < iseq_info.sourcemap.len() {
+                    let loc = iseq_info.sourcemap[bc_index.to_usize()];
+                    let file_name =
+                        Value::string(iseq_info.sourceinfo.short_file_name().to_string());
+                    let line = Value::integer(iseq_info.sourceinfo.get_line(&loc) as i64);
+                    return Ok(Value::array2(file_name, line));
+                }
             }
         }
     }
+    // pc is not within outer_fid's ISeq (e.g. block captured as &param).
+    // Fall back to the outer_lfp's ISeq start position.
     let fid = if let Some(fid) = binding.func_id() {
         fid
     } else {
@@ -179,6 +185,36 @@ mod tests {
           eval("x += 1", $b)
         end
             "#,
+        );
+    }
+
+    #[test]
+    fn binding_source_location() {
+        // source_location returns [String, Integer]
+        run_test_once(
+            r#"
+        b = binding
+        sl = b.source_location
+        [sl.is_a?(Array), sl.size == 2, sl[0].is_a?(String), sl[1].is_a?(Integer)]
+        "#,
+        );
+        // source_location line matches the binding call line
+        run_test_once(
+            r#"
+        line = __LINE__; b = binding
+        b.source_location[1] == line
+        "#,
+        );
+        // binding inside a block returns the block's line
+        run_test_once(
+            r#"
+        b = nil
+        line = nil
+        1.times do
+          line = __LINE__; b = binding
+        end
+        b.source_location[1] == line
+        "#,
         );
     }
 }

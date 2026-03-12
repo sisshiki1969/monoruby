@@ -309,6 +309,19 @@ impl ISeqInfo {
     }
 
     ///
+    /// Returns `true` if *pc* points to an instruction within this ISeq's bytecode.
+    ///
+    pub(crate) fn contains_pc(&self, pc: BytecodePtr) -> bool {
+        let Some(bc) = self.bytecode.as_ref() else {
+            return false;
+        };
+        let top = bc.as_ptr() as usize;
+        let end = top + bc.len() * std::mem::size_of::<Bytecode>();
+        let addr = pc.as_ptr() as usize;
+        addr >= top && addr < end
+    }
+
+    ///
     /// Get an instruction index(*usize*) corresponding to pc(*BytecodePtr*).
     ///
     pub(crate) fn get_pc_index(&self, pc: Option<BytecodePtr>) -> BcIndex {

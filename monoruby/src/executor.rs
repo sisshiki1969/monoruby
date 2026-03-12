@@ -1172,17 +1172,17 @@ impl Executor {
 
 impl Executor {
     pub(crate) fn generate_proc(&mut self, bh: BlockHandler, pc: BytecodePtr) -> Result<Proc> {
-        if let Some(proxy) = bh.try_proxy() {
+        if let Some((fid, outer)) = bh.try_proxy() {
             // Walk back through the call frame chain to the block's outer scope,
             // using the proxy's depth index.
             let mut cfp = self.cfp();
-            for _ in 0..proxy.1 {
+            for _ in 0..outer {
                 cfp = cfp.prev().unwrap();
             }
             // Move the correct outer frame (and its lexical chain) to the heap,
             // so the proc can safely reference it after the current scope exits.
             let outer_lfp = cfp.lfp().move_frame_to_heap();
-            Ok(Proc::from_parts(outer_lfp, proxy.0, pc))
+            Ok(Proc::from_parts(outer_lfp, fid, pc))
         } else if let Some(proc) = bh.try_proc() {
             Ok(proc)
         } else {
