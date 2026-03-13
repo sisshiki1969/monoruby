@@ -203,7 +203,7 @@ class Hash
     min_val = nil
     each do |k, v|
       val = yield(k, v)
-      if min_val.nil? || val < min_val
+      if min_val.nil? || (val <=> min_val) < 0
         min_entry = [k, v]
         min_val = val
       end

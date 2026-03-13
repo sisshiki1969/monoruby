@@ -184,7 +184,7 @@ module Enumerable
         elem = x
         res = r
       else
-        if r < res
+        if (r <=> res) < 0
           elem = x
           res = r
         end
@@ -327,7 +327,7 @@ module Enumerable
     res = nil
     self.each do |x|
       r = yield(x)
-      if res.nil? || r > res
+      if res.nil? || (r <=> res) > 0
         elem = x
         res = r
       end
