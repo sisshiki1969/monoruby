@@ -120,6 +120,12 @@ class Thread
     @thread_local[key]
   end
 
+  def self.each_caller_location
+    caller_locations(1).each do |loc|
+      yield loc
+    end
+  end
+
   class Mutex
     def synchronize
       yield
