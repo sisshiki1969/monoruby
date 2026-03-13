@@ -1470,8 +1470,8 @@ mod tests {
     fn warn() {
         run_test(r#"warn("woo")"#);
         run_test(r#"warn("woo", :boo, 100)"#);
-        run_test_error(r#"warn(uplevel:1)"#);
-        run_test_error(r#"warn(category:100)"#);
+        run_test(r#"warn(100, uplevel:1)"#);
+        run_test(r#"warn(100, category: :experimental)"#);
         run_test_error(r#"raise "Woo""#);
     }
 
