@@ -39,10 +39,10 @@ fn main() {
             std::path::PathBuf::from("builtins"),
             lib_path.join("builtins"),
         ),
-        (
-            std::path::PathBuf::from("lib"),
-            lib_path.join("lib"),
-        ),
+        //(
+        //    std::path::PathBuf::from("lib"),
+        //    lib_path.join("lib"),
+        //),
     ];
 
     while let Some((from_dir, to_dir)) = directories.pop() {
@@ -62,7 +62,7 @@ fn copy_dir(
     }
     let mut directories = vec![];
     for entry in fs::read_dir(&from_dir)? {
-        let from = entry.unwrap().path();
+        let from = entry?.path();
         let from_name = from.file_name().unwrap();
         let to = to_dir.join(from_name);
         if from.is_dir() {
