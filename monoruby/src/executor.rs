@@ -1193,8 +1193,7 @@ impl Executor {
     }
 
     pub(crate) fn generate_lambda(&mut self, func_id: FuncId, pc: BytecodePtr) -> Proc {
-        let outer_lfp = self.cfp().lfp();
-        outer_lfp.move_frame_to_heap();
+        let outer_lfp = self.cfp().lfp().move_frame_to_heap();
         Proc::from_parts(outer_lfp, func_id, pc)
     }
 
