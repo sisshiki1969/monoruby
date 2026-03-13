@@ -186,6 +186,14 @@ module Kernel
   module_function
   def at_exit(&block)
   end
+
+  # Prevent CRuby's bundled_gems.rb from patching require with warning
+  # logic.  monoruby provides its own implementations of formerly-bundled
+  # gems (fiddle, strscan, etc.) so the warnings are not applicable.
+  # bundled_gems.rb's replace_require checks for this method and returns
+  # early if it already exists.
+  alias no_warning_require require
+  module_function :no_warning_require
 end
 
 class GC

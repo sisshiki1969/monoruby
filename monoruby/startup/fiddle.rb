@@ -40,6 +40,13 @@ module Fiddle
     SSIZE_T    = -19
   end
 
+  # ---------------------------------------------------------------------------
+  # Top-level TYPE_* constants (mirrors CRuby's fiddle gem behaviour)
+  # ---------------------------------------------------------------------------
+  Types.constants.each do |name|
+    const_set("TYPE_#{name}", Types.const_get(name))
+  end
+
   # WINDOWS flag (always false on Linux)
   WINDOWS = false
 
