@@ -101,4 +101,18 @@ impl Codegen {
         };
         self.xmm_restore(using_xmm);
     }
+
+    pub(super) fn defined_cvar(&mut self, dst: SlotId, name: IdentId, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;  // &mut Executor
+            movq rsi, r12;  // &mut Globals
+            movl rdx, (name.get());
+            movq rax, (runtime::defined_cvar);
+            call rax;
+            lea  rdi, [rbp - (rbp_local(dst))];
+            movq [rdi], rax;
+        };
+        self.xmm_restore(using_xmm);
+    }
 }

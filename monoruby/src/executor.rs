@@ -142,6 +142,10 @@ impl Executor {
                 panic!("error occured in loading {gem}");
             }
         }
+        if let Err(err) = self.require(globals, &std::path::PathBuf::from("set"), false) {
+            err.show_error_message_and_all_loc(&globals.store);
+            panic!("error occurred in loading pp.");
+        }
     }
 
     pub fn cfp(&self) -> Cfp {

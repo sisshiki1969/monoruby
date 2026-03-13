@@ -815,6 +815,12 @@ impl Codegen {
                 using_xmm,
             } => self.defined_ivar(dst, name, using_xmm),
 
+            AsmInst::DefinedCvar {
+                dst,
+                name,
+                using_xmm,
+            } => self.defined_cvar(dst, name, using_xmm),
+
             AsmInst::Inline(proc) => (proc.proc)(self, store, labels),
             AsmInst::CFunc_F_F {
                 f,

@@ -309,6 +309,10 @@ pub(crate) enum TraceIr {
         dst: SlotId,
         name: IdentId,
     },
+    DefinedCvar {
+        dst: SlotId,
+        name: IdentId,
+    },
     /// loop start marker
     LoopStart {
         counter: u32,
@@ -510,6 +514,10 @@ impl TraceIr {
                 85 => TraceIr::EnsureEnd,
                 87 => TraceIr::Redo,
                 86 => TraceIr::ConcatRegexp(SlotId::from(op1_w1), SlotId::new(op2_w2), op3_w3),
+                88 => TraceIr::DefinedCvar {
+                    dst: SlotId::new(op1_w1),
+                    name: IdentId::from(op2.0 as u32),
+                },
                 120 => TraceIr::Not {
                     dst: SlotId::new(op1_w1),
                     src: SlotId::new(op2_w2),
@@ -1120,6 +1128,9 @@ impl TraceIr {
             }
             TraceIr::DefinedIvar { dst, name } => {
                 format!("{:?} = defined?(ivar) {}", dst, name)
+            }
+            TraceIr::DefinedCvar { dst, name } => {
+                format!("{:?} = defined?(cvar) {}", dst, name)
             }
             TraceIr::LoopStart { counter, jit_addr } => {
                 format!("loop_start counter={counter} jit-addr={:?}", jit_addr)

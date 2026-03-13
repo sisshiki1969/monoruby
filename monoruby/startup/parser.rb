@@ -5,7 +5,7 @@ module JSON
   module Ext
     # This class implements the JSON parser that is used to parse a JSON string
     # into a Ruby data structure.
-    class Parser
+    class Parser < StringScanner
       STRING                = /" ((?:[^\x0-\x1f"\\] |
                                    # escaped special characters:
                                   \\["\\\/bfnrt] |

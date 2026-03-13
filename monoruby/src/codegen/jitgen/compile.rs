@@ -576,6 +576,15 @@ impl<'a> JitContext<'a> {
                     using_xmm,
                 });
             }
+            TraceIr::DefinedCvar { dst, name } => {
+                state.def_S(dst);
+                let using_xmm = state.get_using_xmm();
+                ir.push(AsmInst::DefinedCvar {
+                    dst,
+                    name,
+                    using_xmm,
+                });
+            }
 
             TraceIr::Ret(ret) => {
                 assert!(state.no_capture_guard());
