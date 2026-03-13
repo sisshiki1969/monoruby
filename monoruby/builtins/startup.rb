@@ -22,8 +22,16 @@ class Object
     self
   end
 
+  def itself
+    self
+  end
+
   def <=>(other)
     0 if equal?(other)
+  end
+
+  def frozen?
+    false
   end
 end
 
