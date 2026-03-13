@@ -10,6 +10,12 @@ class CallerLocation
   end
   attr_reader :path, :lineno, :label
 
+  def base_label
+    l = @label
+    l = $1 while l =~ /\Ablock in (.+)\z/
+    l
+  end
+
   def to_s
     "#{@path}:#{@lineno}:in '#{@label}'"
   end
