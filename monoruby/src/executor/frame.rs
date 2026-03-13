@@ -412,7 +412,9 @@ impl Lfp {
         } else {
             unsafe { p.sub(args_len - 1) }
         };
-        unsafe { std::slice::from_raw_parts(p, args_len).to_vec() }
+        let mut v = unsafe { std::slice::from_raw_parts(p, args_len).to_vec() };
+        v.reverse();
+        v
     }
 }
 

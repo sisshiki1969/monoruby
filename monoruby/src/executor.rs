@@ -841,10 +841,13 @@ impl Executor {
             }
             Some(Value::hash_from_inner(map).as_hash())
         };
+        // method_missing should always be callable regardless of visibility.
+        // In Ruby, method_missing is conventionally private, but the VM must
+        // still dispatch to it when a method is not found.
         let res = self.invoke_method(
             globals,
             IdentId::METHOD_MISSING,
-            is_func_call,
+            true,
             receiver,
             &args,
             bh,
