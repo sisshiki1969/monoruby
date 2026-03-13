@@ -39,10 +39,10 @@ fn main() {
             std::path::PathBuf::from("builtins"),
             lib_path.join("builtins"),
         ),
-        //(
-        //    std::path::PathBuf::from("lib"),
-        //    lib_path.join("lib"),
-        //),
+        (
+            std::path::PathBuf::from("lib"),
+            lib_path.join("lib"),
+        ),
     ];
 
     while let Some((from_dir, to_dir)) = directories.pop() {
