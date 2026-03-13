@@ -59,7 +59,12 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/write.html]
 #[monoruby_builtin]
-fn file_write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn file_write(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.arg(0);
     let name = self_.expect_str(globals)?;
     let mut file = match File::create(name) {
@@ -90,7 +95,12 @@ fn file_write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: Bytecode
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/read.html]
 #[monoruby_builtin]
-fn file_read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn file_read(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let filename = to_path(vm, globals, lfp.arg(0))?;
     let mut file = match File::open(&filename) {
         Ok(file) => file,
@@ -211,7 +221,12 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/expand_path.html]
 #[monoruby_builtin]
-fn expand_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn expand_path(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(err) => {
@@ -305,7 +320,12 @@ fn basename(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/directory=3f.html]
 #[monoruby_builtin]
-fn directory_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn directory_(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     match to_canonicalized_path(vm, globals, lfp.arg(0), "1st arg") {
         Ok(path) => Ok(Value::bool(path.is_dir())),
         Err(_) => Ok(Value::bool(false)),
@@ -480,7 +500,12 @@ fn write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/length.html]
 #[monoruby_builtin]
-fn resolve_feature_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn resolve_feature_path(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
     let file_name = to_path(vm, globals, lfp.arg(0))?;
     match globals.search_lib(&file_name) {
         Some(path) => {
@@ -681,7 +706,7 @@ mod tests {
 
     #[test]
     fn open() {
-        run_test(r##"$LOAD_PATH.resolve_feature_path("json")"##);
+        run_test(r##"$LOAD_PATH.resolve_feature_path("pp")"##);
         run_test(r##"$LOAD_PATH.resolve_feature_path("zzzz")"##);
     }
 }

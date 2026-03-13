@@ -18,6 +18,7 @@ name = "irm"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
+default = []
 dump-bc = []
 dump-traceir = []
 emit-asm = ["dump-bc", "dump-traceir", "jit-log"]
