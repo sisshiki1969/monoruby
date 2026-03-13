@@ -22,7 +22,7 @@ monoruby/                   # Workspace root
 │   │   ├── lib.rs          # Library root; re-exports public API
 │   │   ├── alloc.rs        # Custom GC allocator (mark-and-sweep)
 │   │   ├── id_table.rs     # Interned identifier table (IdentId)
-│   │   ├── value.rs        # Value type (NaN-boxed, 64-bit)
+│   │   ├── value.rs        # Value type (tagged-union, 64-bit, NonZeroU64)
 │   │   ├── value/
 │   │   │   ├── numeric.rs  # Numeric helpers (Fixnum/Float/BigInt)
 │   │   │   └── rvalue/     # Heap-allocated Ruby values (RValue)
@@ -117,17 +117,31 @@ Native x86-64 code
 
 ### Value Representation (`value.rs`)
 
-`Value` is a NaN-boxed 64-bit non-zero integer. Immediate types are embedded in the bits:
+`Value` is a 64-bit non-zero integer using a **tagged-union** scheme: the lower 3 bits encode the kind of value. It is **not** NaN-boxing.
 
-| Tag | Type |
-|-----|------|
-| `0x04` | `nil` |
-| `0x14` | `false` |
-| `0x1c` | `true` |
-| `0x0c` | Symbol |
-| Low bit = 1 | Fixnum (i63, shifted) |
-| Specific NaN pattern | Float |
-| Pointer (aligned) | Heap object (`RValue`) |
+#### Dispatch on lower 3 bits
+
+| Lower bits (`& 0b111`) | Kind |
+|------------------------|------|
+| `???????1` (bit 0 = 1) | **Fixnum** — integer stored in bits 63:1 as i63 (`value >> 1`) |
+| `??????10` (bits 1:0 = `10`) | **Flonum** — double-precision float encoded inline (bit-rotated) |
+| `??????00` (bits 2:0 = `000`) | **Heap pointer** — raw pointer to a GC-managed `RValue` |
+| Other (bit 2 = 1, bits 1:0 ≠ `10`) | **Other immediate** — nil / true / false / Symbol |
+
+The method `is_packed_value()` tests `bits & 0b0111 != 0`; if true, the value is an immediate and `try_rvalue()` returns `None`. If false, the bits are a valid `*const RValue` pointer.
+
+#### Immediate tag constants
+
+| Constant | Hex | Binary | Meaning |
+|----------|-----|--------|---------|
+| `NIL_VALUE` | `0x04` | `0000_0100` | `nil` |
+| `FALSE_VALUE` | `0x14` | `0001_0100` | `false` |
+| `TRUE_VALUE` | `0x1c` | `0001_1100` | `true` |
+| `TAG_SYMBOL` | `0x0c` | `0000_1100` | Symbol (IdentId packed in upper 32 bits) |
+
+`FLOAT_ZERO` (`(0b1000 << 60) | 0b10`) is the flonum encoding of `0.0`.
+
+Floats that cannot be represented as a flonum (exponent out of range) are heap-allocated as `RValue` objects of class `Float`.
 
 ### Global State (`globals.rs`)
 
@@ -214,6 +228,24 @@ External crates (fetched from git):
 ---
 
 ## Development Workflows
+
+### Build Script (`build.rs`)
+
+`monoruby/build.rs` runs at **every `cargo build`** and performs two jobs:
+
+1. **Capture CRuby metadata** — Executes the system `ruby` binary to query `$LOAD_PATH` and `RUBY_VERSION`, writing the results to:
+   - `~/.monoruby/library_path` — newline-separated list of CRuby's stdlib directories
+   - `~/.monoruby/ruby_version` — CRuby's version string (e.g. `3.4.1`)
+
+   At runtime, monoruby reads these files to set `$LOAD_PATH` and `RUBY_VERSION` so that `require` resolves to CRuby's standard library. If `ruby` is not in `PATH`, a warning is printed and the files are not written.
+
+2. **Install Ruby library stubs** — Recursively copies two source directories into `~/.monoruby/`:
+   - `monoruby/startup/` → `~/.monoruby/` — Ruby files that are loaded automatically at interpreter start (e.g. `startup.rb`, `enumerable.rb`, `comparable.rb`, `integer.rb`, `range.rb`, …)
+   - `monoruby/builtins/` → `~/.monoruby/builtins/` — additional built-in Ruby files (e.g. `array.rb`, `builtins.rb`)
+
+   These files implement parts of the Ruby standard library in Ruby rather than Rust.
+
+> **Note**: Because `build.rs` has no `cargo:rerun-if-changed` directive for the startup files (the line is commented out), changes to files in `startup/` or `builtins/` will **not** automatically trigger a rebuild. Run `touch monoruby/build.rs` or `cargo build` after editing them to force re-installation.
 
 ### Building
 
@@ -389,6 +421,6 @@ When modifying these, be aware changes affect the whole workspace.
 2. **x86-64 Linux only**: The VM interpreter and JIT emit x86-64 assembly directly. No other architecture is supported.
 3. **Ruby in PATH**: Tests compare output against a system `ruby` binary (3.4.1). Ensure Ruby is installed and the binary is accessible.
 4. **optcarrot**: The full CI test requires optcarrot cloned at `../optcarrot` relative to the repo root.
-5. **Library path**: At startup, monoruby reads `~/.monoruby/library_path` and `~/.monoruby/ruby_version` to configure `$LOAD_PATH` and `RUBY_VERSION`. Without these files a warning is printed.
+5. **Library path**: `build.rs` writes `~/.monoruby/library_path` and `~/.monoruby/ruby_version` by running the system `ruby` binary at build time. At runtime, monoruby reads these files to configure `$LOAD_PATH` and `RUBY_VERSION`. If `ruby` was absent at build time, these files will be missing and a warning is printed at startup.
 6. **gc-stress in tests**: The `bin/test` script builds with `--features gc-stress` to catch GC bugs; this makes the binary much slower than a normal debug build.
 7. **Thread-local CODEGEN**: The JIT compiler is a thread-local singleton. Do not attempt to use it across threads.
