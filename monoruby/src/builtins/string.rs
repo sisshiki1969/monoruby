@@ -65,6 +65,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(STRING_CLASS, "rjust", rjust, 1, 2, false);
     globals.define_builtin_func(STRING_CLASS, "lines", lines, 0);
     globals.define_builtin_func(STRING_CLASS, "bytes", bytes, 0);
+    globals.define_builtin_func(STRING_CLASS, "getbyte", getbyte, 1);
+    globals.define_builtin_func(STRING_CLASS, "setbyte", setbyte, 2);
     globals.define_builtin_func_with(STRING_CLASS, "each_line", each_line, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
     globals.define_builtin_funcs(STRING_CLASS, "to_s", &["to_str"], tos, 0);
@@ -1765,6 +1767,64 @@ fn bytes(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -
 }
 
 ///
+/// ### String#getbyte
+///
+/// - getbyte(index) -> Integer | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/getbyte.html]
+#[monoruby_builtin]
+fn getbyte(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
+    let receiver = lfp.self_val();
+    let s = receiver.as_rstring_inner();
+    let len = s.len() as i64;
+    let mut idx = lfp.arg(0).expect_integer(globals)?;
+    if idx < 0 {
+        idx += len;
+    }
+    if idx < 0 || idx >= len {
+        Ok(Value::nil())
+    } else {
+        Ok(Value::integer(s[idx as usize] as i64))
+    }
+}
+
+///
+/// ### String#setbyte
+///
+/// - setbyte(index, value) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/setbyte.html]
+#[monoruby_builtin]
+fn setbyte(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let byte_val = lfp.arg(1).expect_integer(globals)?;
+    let s = self_.as_rstring_inner();
+    let len = s.len() as i64;
+    let mut idx = lfp.arg(0).expect_integer(globals)?;
+    if idx < 0 {
+        idx += len;
+    }
+    if idx < 0 || idx >= len {
+        return Err(MonorubyErr::indexerr(format!(
+            "index {} out of string",
+            lfp.arg(0).expect_integer(globals)?
+        )));
+    }
+    self_.as_rstring_inner_mut().set_byte(idx as usize, byte_val as u8);
+    Ok(lfp.arg(1))
+}
+
+///
 /// ### String#each_line
 ///
 /// - each_line(rs = $/, [NOT SUPPORTED] chomp: false) {|line| ... } -> self
@@ -3115,6 +3175,21 @@ mod tests {
     #[test]
     fn bytes() {
         run_test(r##""aa\nbb\ncc\n".bytes"##);
+    }
+
+    #[test]
+    fn getbyte() {
+        run_test(r##""ABC".getbyte(0)"##);
+        run_test(r##""ABC".getbyte(2)"##);
+        run_test(r##""ABC".getbyte(-1)"##);
+        run_test(r##""ABC".getbyte(3)"##);
+        run_test(r##""ABC".getbyte(-4)"##);
+    }
+
+    #[test]
+    fn setbyte() {
+        run_test(r##"s = "ABC"; s.setbyte(0, 90); s"##);
+        run_test(r##"s = "ABC"; s.setbyte(-1, 90); s"##);
     }
 
     #[test]
