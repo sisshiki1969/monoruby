@@ -192,7 +192,7 @@ Global registers in JIT-compiled code:
 Built-in methods are Rust functions with the signature:
 
 ```rust
-fn foo(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
+fn foo(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value>
 ```
 
 The `#[monoruby_builtin]` proc-macro (from `monoruby_attr`) wraps them in an `extern "C"` trampoline that converts `Result<Value>` to `Option<Value>` and installs error handling.
