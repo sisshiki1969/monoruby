@@ -54,6 +54,15 @@ impl Globals {
                 return Some(lib);
             }
         }
+        // Fallback: check ~/.monoruby/ for override files (e.g. fiddle.rb, strscan.rb)
+        // that replace native extensions not found in $LOAD_PATH.
+        if file_name.extension().is_none() {
+            let mut fallback = dirs::home_dir().unwrap().join(".monoruby").join(file_name);
+            fallback.set_extension("rb");
+            if fallback.exists() {
+                return Some(fallback);
+            }
+        }
         None
     }
 
