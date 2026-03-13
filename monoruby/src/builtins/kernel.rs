@@ -885,12 +885,7 @@ fn exit(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) 
 #[monoruby_builtin]
 fn warn(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let message = lfp.arg(0);
-    if lfp.try_arg(1).is_some() {
-        return Err(MonorubyErr::runtimeerr("uplevel is not supported"));
-    }
-    if lfp.try_arg(2).is_some() {
-        return Err(MonorubyErr::runtimeerr("category is not supported"));
-    }
+    // uplevel and category keyword arguments are accepted but ignored for now.
     if let Some(ary) = message.try_array_ty() {
         for m in ary.iter() {
             if let Some(s) = m.is_str() {
