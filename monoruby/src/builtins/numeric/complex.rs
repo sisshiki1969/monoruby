@@ -51,13 +51,13 @@ fn eq_bool(store: &Store, lhs: &ComplexInner, rhs: Value) -> bool {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Complex/i/=3d=3d.html]
 #[monoruby_builtin]
-fn eq(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn eq(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     Ok(Value::bool(eq_bool(globals, lhs.as_complex(), lfp.arg(0))))
 }
 
 #[monoruby_builtin]
-fn ne(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn ne(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     Ok(Value::bool(!eq_bool(globals, lhs.as_complex(), lfp.arg(0))))
 }
@@ -69,7 +69,7 @@ fn ne(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Complex/s/polar.html]
 #[monoruby_builtin]
-fn complex_polar(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn complex_polar(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let r = RealKind::expect(globals, lfp.arg(0))?.to_f64();
     let theta = if let Some(theta) = lfp.try_arg(1) {
         RealKind::expect(globals, theta)?.to_f64()
@@ -88,7 +88,7 @@ fn complex_polar(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: Bytecod
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Complex/s/rect.html]
 #[monoruby_builtin]
-fn complex_rect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn complex_rect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let r = Real::try_from(globals, lfp.arg(0))?;
     let i = if let Some(i) = lfp.try_arg(1) {
         Real::try_from(globals, i)?
@@ -106,7 +106,7 @@ fn complex_rect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: Bytecode
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Complex/i/abs.html]
 #[monoruby_builtin]
-fn abs(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn abs(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let abs = lfp.self_val().as_complex().to_complex_f64().norm();
     Ok(Value::float(abs))
 }
@@ -119,7 +119,7 @@ fn abs(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Complex/i/rect.html]
 #[monoruby_builtin]
-fn rect(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn rect(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let r = self_.as_complex().re();
     let i = self_.as_complex().im();

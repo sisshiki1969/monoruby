@@ -296,7 +296,7 @@ impl alloc::GC<RValue> for Funcs {
 }
 
 #[monoruby_builtin]
-fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let e = Enumerator::new(lfp.self_val());
     let receiver = e.obj;
     let method = e.method;
@@ -312,7 +312,7 @@ fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: Bytecod
 }
 
 #[monoruby_builtin]
-fn yielder(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn yielder(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     vm.yield_fiber(lfp.arg(0))
 }
 

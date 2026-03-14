@@ -23,7 +23,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Method/i/=3d=3d=3d.html]
 #[monoruby_builtin]
-fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
     let func_id = method.func_id();
@@ -68,7 +68,7 @@ fn to_proc(_: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/bind.html]
 /// TODO: we must reject invalid objects for *obj*
 #[monoruby_builtin]
-fn bind(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn bind(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
     Ok(Value::new_method(

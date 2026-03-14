@@ -41,7 +41,7 @@ pub(crate) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/compile.html]
 #[monoruby_builtin]
-fn regexp_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn regexp_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let string = arg0.expect_string(globals)?;
     let option = if let Some(option) = lfp.try_arg(1) {
@@ -67,7 +67,7 @@ fn regexp_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: Bytecode
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/escape.html]
 #[monoruby_builtin]
-fn regexp_escape(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn regexp_escape(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let string = arg0.expect_str(globals)?;
     let val = Value::string(RegexpInner::escape(string));
@@ -80,7 +80,7 @@ fn regexp_escape(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: Bytec
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/union.html]
 #[monoruby_builtin]
-fn regexp_union(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn regexp_union(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut rest = lfp.arg(0).as_array();
     let mut v = vec![];
     if rest.len() == 1
@@ -113,7 +113,7 @@ fn regexp_union(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: Byteco
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/last_match.html]
 #[monoruby_builtin]
-fn regexp_last_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn regexp_last_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
         let nth = arg0.coerce_to_i64(globals)?;
         Ok(vm.get_special_matches(nth))
@@ -127,7 +127,7 @@ fn regexp_last_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: By
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/=3d=3d=3d.html]
 #[monoruby_builtin]
-fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
     let given = match lfp.arg(0).expect_symbol_or_string(globals) {
@@ -144,7 +144,7 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/=3d=7e.html]
 #[monoruby_builtin]
-fn regexp_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn regexp_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if lfp.arg(0).is_nil() {
         vm.clear_capture_special_variables();
         return Ok(Value::nil());
@@ -185,7 +185,7 @@ fn conv_index(i: i64, len: usize) -> Option<usize> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/source.html]
 #[monoruby_builtin]
-fn source(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn source(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     Ok(Value::string_from_str(self_.is_regex().unwrap().as_str()))
 }
@@ -196,7 +196,7 @@ fn source(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/match=3f.html]
 #[monoruby_builtin]
-fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
     let given_val = lfp.arg(0);
@@ -226,7 +226,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/match=3f.html]
 #[monoruby_builtin]
-fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let regex = lfp.self_val().as_regexp();
     let heystack_val = lfp.arg(0);
     let heystack = heystack_val.expect_str(globals)?;

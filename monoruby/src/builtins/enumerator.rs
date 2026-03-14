@@ -72,7 +72,7 @@ fn enumerator_new(vm: &mut Executor, _: &mut Globals, lfp: Lfp, pc: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/next.html]
 #[monoruby_builtin]
-fn next(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn next(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut e = Enumerator::new(lfp.self_val());
     e.next(vm, globals)
 }
@@ -88,7 +88,7 @@ fn next_values(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let mut e = Enumerator::new(lfp.self_val());
     Ok(e.next_values(vm, globals)?.into())
@@ -102,7 +102,7 @@ fn next_values(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/each.html]
 #[monoruby_builtin]
-fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     fn each_inner(
         vm: &mut Executor,
         globals: &mut Globals,
@@ -208,7 +208,7 @@ fn with_index(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/peek.html]
 #[monoruby_builtin]
-fn peek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn peek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut e = Enumerator::new(lfp.self_val());
     e.peek(vm, globals)
 }
@@ -220,7 +220,7 @@ fn peek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/rewind.html]
 #[monoruby_builtin]
-fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut e = Enumerator::new(lfp.self_val());
     e.rewind();
     Ok(e.into())
@@ -237,7 +237,7 @@ fn yielder_push(
     vm: &mut Executor,
     _globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     vm.yield_fiber(Value::array1(lfp.arg(0)))
 }
@@ -253,7 +253,7 @@ fn yielder_yield(
     vm: &mut Executor,
     _globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     vm.yield_fiber(lfp.arg(0))
 }
@@ -285,7 +285,7 @@ fn generator_each(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     fn each_inner(
         vm: &mut Executor,
