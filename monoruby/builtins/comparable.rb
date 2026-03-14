@@ -66,9 +66,12 @@ module Comparable
       min_val = range.first
       max_val = range.last
       # Exclude end not supported for clamp with range that has exclude_end
+      if max_val && range.exclude_end?
+        raise ArgumentError, "cannot clamp with an exclusive range"
+      end
     end
     if min_val && max_val && (min_val <=> max_val) > 0
-      raise ArgumentError, "min argument must be smaller than max argument"
+      raise ArgumentError, "min argument must be less than or equal to max argument"
     end
     if min_val && (self <=> min_val) < 0
       min_val

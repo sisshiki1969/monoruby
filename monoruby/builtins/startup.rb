@@ -14,10 +14,6 @@ class Object
     self
   end
 
-  def frozen?
-    true
-  end
-
   def initialize(...)
   end
 
@@ -362,6 +358,9 @@ class Errno
 
   class ENOTEMPTY < SystemCallError
     Errno = 39
+    def initialize(msg = nil)
+      super(msg ? "Directory not empty - #{msg}" : "Directory not empty")
+    end
   end
 
   class ELOOP < SystemCallError
@@ -394,6 +393,9 @@ class Errno
 
   class ECONNRESET < SystemCallError
     Errno = 104
+    def initialize(msg = nil)
+      super(msg ? "Connection reset by peer - #{msg}" : "Connection reset by peer")
+    end
   end
 
   class ENOBUFS < SystemCallError
@@ -410,10 +412,16 @@ class Errno
 
   class ETIMEDOUT < SystemCallError
     Errno = 110
+    def initialize(msg = nil)
+      super(msg ? "Connection timed out - #{msg}" : "Connection timed out")
+    end
   end
 
   class ECONNREFUSED < SystemCallError
     Errno = 111
+    def initialize(msg = nil)
+      super(msg ? "Connection refused - #{msg}" : "Connection refused")
+    end
   end
 
   class EHOSTUNREACH < SystemCallError
@@ -446,12 +454,6 @@ class Errno
     end
   end
 
-  class ENOTEMPTY < SystemCallError
-    def initialize(msg = nil)
-      super(msg ? "Directory not empty - #{msg}" : "Directory not empty")
-    end
-  end
-
   class EINVAL < SystemCallError
     def initialize(msg = nil)
       super(msg ? "Invalid argument - #{msg}" : "Invalid argument")
@@ -467,24 +469,6 @@ class Errno
   class EAGAIN < SystemCallError
     def initialize(msg = nil)
       super(msg ? "Resource temporarily unavailable - #{msg}" : "Resource temporarily unavailable")
-    end
-  end
-
-  class ECONNREFUSED < SystemCallError
-    def initialize(msg = nil)
-      super(msg ? "Connection refused - #{msg}" : "Connection refused")
-    end
-  end
-
-  class ETIMEDOUT < SystemCallError
-    def initialize(msg = nil)
-      super(msg ? "Connection timed out - #{msg}" : "Connection timed out")
-    end
-  end
-
-  class ECONNRESET < SystemCallError
-    def initialize(msg = nil)
-      super(msg ? "Connection reset by peer - #{msg}" : "Connection reset by peer")
     end
   end
 

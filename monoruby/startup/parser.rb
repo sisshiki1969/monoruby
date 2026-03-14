@@ -79,6 +79,7 @@ module JSON
       def initialize(source, opts = nil)
         opts ||= {}
         source = convert_encoding source
+        super(source)
         @source = source
         if !opts.key?(:max_nesting) # defaults to 100
           @max_nesting = 100

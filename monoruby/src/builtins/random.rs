@@ -20,7 +20,12 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/s/srand.html]
 #[monoruby_builtin]
-fn srand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn random_srand(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let old_seed = globals.random_seed();
     let new_seed = if lfp.try_arg(0).is_none() {
         None
@@ -43,7 +48,12 @@ fn srand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/s/rand.html]
 #[monoruby_builtin]
-fn rand(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn random_rand(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let f = globals.random_gen();
     Ok(Value::float(f))
 }

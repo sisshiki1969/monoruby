@@ -200,7 +200,7 @@ fn isatty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/close.html]
 #[monoruby_builtin]
 fn close(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().as_io_inner().close()?;
+    lfp.self_val().as_io_inner_mut().close()?;
     Ok(Value::nil())
 }
 
@@ -327,14 +327,14 @@ fn io_class_read(
             )));
         }
     };
-    let mut contents = String::new();
-    match std::io::Read::read_to_string(&mut file, &mut contents) {
+    let mut contents = Vec::new();
+    match std::io::Read::read_to_end(&mut file, &mut contents) {
         Ok(_) => {}
         Err(_) => {
             return Err(MonorubyErr::runtimeerr("Could not read the file."));
         }
     };
-    Ok(Value::string(contents))
+    Ok(Value::bytes(contents))
 }
 
 ///

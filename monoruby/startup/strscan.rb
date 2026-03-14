@@ -209,8 +209,8 @@ class StringScanner
     rest_str = @str[@pos..-1]
     return nil if rest_str.nil?
 
-    # We need the match to be anchored at the current position
-    m = rest_str.match(/\A(?:#{pattern.source})/m)
+    # We need the match to be anchored at the current position, preserving original options
+    m = rest_str.match(Regexp.new("\\A(?:#{pattern.source})", pattern.options))
     if m
       @match = m
       matched_str = m[0]

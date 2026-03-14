@@ -291,10 +291,10 @@ module Enumerable
   def zip(*others)
     result = []
     arr = self.to_a
+    others_arrays = others.map(&:to_a)
     arr.each_with_index do |x, i|
       entry = [x]
-      others.each do |o|
-        oa = o.to_a
+      others_arrays.each do |oa|
         entry << oa[i]
       end
       if block_given?

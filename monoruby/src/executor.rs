@@ -142,10 +142,6 @@ impl Executor {
                 panic!("error occured in loading {gem}");
             }
         }
-        if let Err(err) = self.require(globals, &std::path::PathBuf::from("set"), false) {
-            err.show_error_message_and_all_loc(&globals.store);
-            panic!("error occurred in loading pp.");
-        }
     }
 
     pub fn cfp(&self) -> Cfp {
@@ -813,7 +809,7 @@ impl Executor {
         let callsite = &globals.store[callsite];
         assert!(callsite.splat_pos.is_empty());
         assert!(!callsite.has_hash_splat());
-        let is_func_call = callsite.is_func_call();
+        //let is_func_call = callsite.is_func_call();
         let method_name = if let Some(name) = callsite.name {
             name
         } else {
