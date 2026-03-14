@@ -16,6 +16,7 @@ mod io;
 mod kernel;
 mod main_object;
 mod match_data;
+mod marshal;
 mod math;
 mod method;
 mod module;
@@ -72,6 +73,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     file::init(globals);
     fiddle::init(globals);
     ffi::init(globals);
+    marshal::init(globals);
     math::init(globals);
     process::init(globals);
     random::init(globals);
