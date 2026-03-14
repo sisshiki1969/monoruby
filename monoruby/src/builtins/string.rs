@@ -1783,12 +1783,6 @@ fn getbyte(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 fn setbyte(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let byte_val = lfp.arg(1).expect_integer(globals)?;
-    if byte_val < -128 || byte_val > 255 {
-        return Err(MonorubyErr::rangeerr(format!(
-            "{} out of range of unsigned byte",
-            byte_val
-        )));
-    }
     let s = self_.as_rstring_inner();
     let len = s.len() as i64;
     let mut idx = lfp.arg(0).expect_integer(globals)?;
@@ -3160,8 +3154,8 @@ mod tests {
         run_test(r##"s = "ABC"; s.setbyte(-1, 90); s"##);
         run_test(r##"s = "ABC"; s.setbyte(0, 255); s.getbyte(0)"##);
         run_test(r##"s = "ABC"; s.setbyte(0, -1); s.getbyte(0)"##);
-        run_test_error(r##""ABC".setbyte(0, 256)"##);
-        run_test_error(r##""ABC".setbyte(0, -129)"##);
+        run_test(r##"s = "ABC"; s.setbyte(0, 256); s.getbyte(0)"##);
+        run_test(r##"s = "ABC"; s.setbyte(0, -129); s.getbyte(0)"##);
         run_test_error(r##""ABC".setbyte(3, 0)"##);
         run_test_error(r##""ABC".setbyte(-4, 0)"##);
     }
