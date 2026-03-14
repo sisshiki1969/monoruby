@@ -113,7 +113,10 @@ fn float_to_marshal_string(f: f64) -> String {
     let prefix = if neg { "-" } else { "" };
     let ndigits = digits.len() as i32;
 
-    if exponent <= -4 || (exponent > ndigits && exponent > 1) || (exponent >= 1 && has_trailing_zeros(&digits, exponent)) {
+    if exponent <= -4
+        || (exponent > ndigits && exponent > 1)
+        || (exponent >= 1 && has_trailing_zeros(&digits, exponent))
+    {
         // Exponential form
         let exp = exponent - 1;
         let sig = if ndigits == 1 {
@@ -224,6 +227,44 @@ fn marshal_write_float(buf: &mut Vec<u8>, f: f64) {
     buf.extend_from_slice(s.as_bytes());
 }
 
+/// Write a Symbol in Marshal format.
+///
+/// Format: ':' + marshal_int(length) + bytes
+fn marshal_write_symbol(buf: &mut Vec<u8>, id: IdentId) {
+    buf.push(b':');
+    let name = id.get_name();
+    let bytes = name.as_bytes();
+    marshal_write_fixnum(buf, bytes.len() as i32);
+    buf.extend_from_slice(bytes);
+}
+
+/// Write a String in Marshal format.
+///
+/// - ASCII-8BIT: '"' + marshal_int(length) + bytes
+/// - UTF-8: 'I' + '"' + marshal_int(length) + bytes + ivar_count(1) + :E + true
+fn marshal_write_string(buf: &mut Vec<u8>, s: &RStringInner) {
+    let bytes = s.as_bytes();
+    match s.encoding() {
+        Encoding::Utf8 => {
+            buf.push(b'I');
+            buf.push(b'"');
+            marshal_write_fixnum(buf, bytes.len() as i32);
+            buf.extend_from_slice(bytes);
+            // Instance variable: encoding = UTF-8
+            marshal_write_fixnum(buf, 1); // 1 ivar
+            buf.push(b':');
+            marshal_write_fixnum(buf, 1); // symbol "E" length
+            buf.push(b'E');
+            buf.push(b'T'); // true
+        }
+        Encoding::Ascii8 => {
+            buf.push(b'"');
+            marshal_write_fixnum(buf, bytes.len() as i32);
+            buf.extend_from_slice(bytes);
+        }
+    }
+}
+
 fn marshal_dump_value(buf: &mut Vec<u8>, obj: Value, globals: &Globals) -> Result<()> {
     match obj.unpack() {
         RV::Nil => {
@@ -261,6 +302,12 @@ fn marshal_dump_value(buf: &mut Vec<u8>, obj: Value, globals: &Globals) -> Resul
         }
         RV::Float(f) => {
             marshal_write_float(buf, f);
+        }
+        RV::Symbol(id) => {
+            marshal_write_symbol(buf, id);
+        }
+        RV::String(s) => {
+            marshal_write_string(buf, s);
         }
         _ => {
             return Err(MonorubyErr::typeerr(format!(
@@ -344,5 +391,24 @@ mod tests {
         run_test("Marshal.dump(2.718281828459045)");
         run_test("Marshal.dump(10.0)");
         run_test("Marshal.dump(1000.0)");
+    }
+
+    #[test]
+    fn marshal_dump_symbol() {
+        run_test("Marshal.dump(:hello)");
+        run_test("Marshal.dump(:foo)");
+        run_test("Marshal.dump(:\"\")");
+        run_test("Marshal.dump(:a)");
+        run_test("Marshal.dump(:marshal_test_symbol)");
+    }
+
+    #[test]
+    fn marshal_dump_string() {
+        run_test(r#"Marshal.dump("hello")"#);
+        run_test(r#"Marshal.dump("")"#);
+        run_test(r#"Marshal.dump("a")"#);
+        run_test(r#"Marshal.dump("hello world")"#);
+        run_test(r#"Marshal.dump("hello".b)"#);
+        run_test(r#"Marshal.dump("".b)"#);
     }
 }
