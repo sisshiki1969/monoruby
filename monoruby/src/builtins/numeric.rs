@@ -267,4 +267,52 @@ mod tests {
         run_test("+(0x12345678)");
         run_test("+(0x123456789abcdef0)");
     }
+
+    #[test]
+    fn comparable_clamp() {
+        run_test_once(
+            r#"
+            class MyNum
+              include Comparable
+              attr_reader :val
+              def initialize(v); @val = v; end
+              def <=>(other); @val <=> other.val; end
+            end
+            a = MyNum.new(1)
+            b = MyNum.new(3)
+            c = MyNum.new(5)
+            d = MyNum.new(4)
+            [a.clamp(b, c).val, c.clamp(b, c).val, d.clamp(b, c).val]
+        "#,
+        );
+        run_test_error(
+            r#"
+            class MyNum
+              include Comparable
+              attr_reader :val
+              def initialize(v); @val = v; end
+              def <=>(other); @val <=> other.val; end
+            end
+            MyNum.new(1).clamp(MyNum.new(0)...MyNum.new(2))
+        "#,
+        );
+    }
+
+    #[test]
+    fn comparable_between() {
+        run_test_once(
+            r#"
+            class MyNum
+              include Comparable
+              attr_reader :val
+              def initialize(v); @val = v; end
+              def <=>(other); @val <=> other.val; end
+            end
+            a = MyNum.new(3)
+            lo = MyNum.new(1)
+            hi = MyNum.new(5)
+            [a.between?(lo, hi), MyNum.new(0).between?(lo, hi), MyNum.new(6).between?(lo, hi)]
+        "#,
+        );
+    }
 }

@@ -3158,6 +3158,12 @@ mod tests {
     fn setbyte() {
         run_test(r##"s = "ABC"; s.setbyte(0, 90); s"##);
         run_test(r##"s = "ABC"; s.setbyte(-1, 90); s"##);
+        run_test(r##"s = "ABC"; s.setbyte(0, 255); s.getbyte(0)"##);
+        run_test(r##"s = "ABC"; s.setbyte(0, -1); s.getbyte(0)"##);
+        run_test_error(r##""ABC".setbyte(0, 256)"##);
+        run_test_error(r##""ABC".setbyte(0, -129)"##);
+        run_test_error(r##""ABC".setbyte(3, 0)"##);
+        run_test_error(r##""ABC".setbyte(-4, 0)"##);
     }
 
     #[test]

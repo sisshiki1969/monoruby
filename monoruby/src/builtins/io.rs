@@ -422,6 +422,42 @@ mod tests {
     }
 
     #[test]
+    fn io_close() {
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            w.close
+            [w.closed?, r.closed?]
+        "#,
+        );
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            r.close
+            w.close
+            [r.closed?, w.closed?]
+        "#,
+        );
+        run_test_once(
+            r#"
+            IO.read("Cargo.toml").is_a?(String)
+        "#,
+        );
+    }
+
+    #[test]
+    fn io_pipe() {
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            w << "hello"
+            w.close
+            r.read
+        "#,
+        );
+    }
+
+    #[test]
     fn each_line() {
         run_test_once(
             r##"
