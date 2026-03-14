@@ -217,7 +217,7 @@ class StringIO
     total = 0
     strs.each do |str|
       str = str.to_s unless str.is_a?(String)
-      return 0 if str.empty?
+      next if str.empty?
 
       if @pos == @string.length
         @string << str
