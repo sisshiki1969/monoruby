@@ -79,14 +79,18 @@ fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -
             let f: f64 = globals.random_gen();
             Ok(Value::integer((f * max as f64) as i64))
         } else if let Some(max) = arg.try_float() {
-            if max <= 0.0 {
+            if max < 0.0 {
                 return Err(MonorubyErr::argumenterr(format!(
                     "invalid argument - {}",
                     max
                 )));
             }
             let f: f64 = globals.random_gen();
-            Ok(Value::float(f * max))
+            if max == 0.0 {
+                Ok(Value::float(f))
+            } else {
+                Ok(Value::float(f * max))
+            }
         } else if let Some(_) = arg.is_range() {
             return Err(MonorubyErr::runtimeerr(
                 "Range argument is not supported in Random#rand",
@@ -173,8 +177,18 @@ mod tests {
         a.is_a?(Float) && a >= 0.0 && a < 1.5
         "#,
         );
+        run_test(
+            r#"
+        rng = Random.new(42)
+        a = rng.rand(0.0)
+        a.is_a?(Float) && a >= 0.0 && a < 1.0
+        "#,
+        );
         run_test_error("Random.new(42).rand(0)");
         run_test_error("Random.new(42).rand(-1)");
+        run_test_error("Random.new(42).rand(-100)");
+        run_test_error("Random.new(42).rand(-1.5)");
+        run_test_error("Random.new(42).rand(-0.1)");
     }
 
     #[test]
