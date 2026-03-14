@@ -46,7 +46,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/=3c=3c.html]
 #[monoruby_builtin]
-fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     if let Some(b) = lfp.arg(0).try_bytes() {
@@ -66,7 +66,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/puts.html]
 #[monoruby_builtin]
-fn puts(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn puts(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     fn decompose(collector: &mut Vec<Value>, val: Value) {
         match val.try_array_ty() {
             Some(ary) => {
@@ -96,7 +96,7 @@ fn puts(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/print.html]
 #[monoruby_builtin]
-fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     for v in lfp.arg(0).as_array().iter().cloned() {
@@ -112,7 +112,7 @@ fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/printf.html]
 #[monoruby_builtin]
-fn printf(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn printf(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     let format_str = lfp.arg(0).expect_string(globals)?;
@@ -156,7 +156,7 @@ fn io_write(globals: &Globals, io: &mut IoInner, v: Value) -> Result<()> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/flush.html]
 #[monoruby_builtin]
-fn flush(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn flush(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     self_.as_io_inner_mut().flush()?;
 
@@ -170,7 +170,7 @@ fn flush(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/gets.html]
 #[monoruby_builtin]
-fn gets(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn gets(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     Ok(if let Some(buf) = io.read_line()? {
@@ -188,7 +188,7 @@ fn gets(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/isatty.html]
 #[monoruby_builtin]
-fn isatty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn isatty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_io_inner_mut().isatty()))
 }
 
@@ -199,7 +199,7 @@ fn isatty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/close.html]
 #[monoruby_builtin]
-fn close(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn close(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().as_io_inner().close()?;
     Ok(Value::nil())
 }
@@ -211,17 +211,22 @@ fn close(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/closed=3f.html]
 #[monoruby_builtin]
-fn closed_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn closed_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_io_inner().is_closed()))
 }
 
 #[monoruby_builtin]
-fn sync(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn sync(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(false))
 }
 
 #[monoruby_builtin]
-fn assign_sync(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn assign_sync(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(lfp.arg(0))
 }
 
@@ -232,7 +237,7 @@ fn assign_sync(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: Byteco
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/read.html
 #[monoruby_builtin]
-fn read(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn read(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let length = match lfp.try_arg(0) {
         Some(v) => {
             if v.is_nil() {
@@ -263,7 +268,7 @@ fn read(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readline.html]
 #[monoruby_builtin]
-fn readline(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn readline(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let s = match lfp.self_val().as_io_inner_mut().read_line()? {
         Some(s) => s,
         None => return Err(MonorubyErr::runtimeerr("end of file reached")),
@@ -290,7 +295,7 @@ fn readline(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/each.html]
 #[monoruby_builtin]
-fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     if let Some(bh) = lfp.block() {
@@ -315,7 +320,7 @@ fn io_class_read(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let filename = lfp.arg(0).expect_string(globals)?;
     let mut file = match File::open(&filename) {
@@ -344,12 +349,7 @@ fn io_class_read(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/pipe.html]
 #[monoruby_builtin]
-fn io_pipe(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: Lfp,
-    _pc: BytecodePtr,
-) -> Result<Value> {
+fn io_pipe(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut fds: [libc::c_int; 2] = [0; 2];
     // SAFETY: fds is a valid pointer to a 2-element array of c_int.
     let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };

@@ -87,7 +87,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/s/exception.html]
 #[monoruby_builtin]
-fn exception_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn exception_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().expect_class(globals)?.id();
     let obj = Value::new_exception_from("".to_string(), class_id);
 
@@ -110,7 +110,7 @@ fn exception_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: Byteco
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/s/exception.html]
 #[monoruby_builtin]
-fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let class_id = self_.real_class(&globals.store).id();
     let message = if let Some(msg) = lfp.try_arg(0) {
@@ -130,7 +130,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: Bytecode
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/message.html]
 #[monoruby_builtin]
-fn message(_vm: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn message(_vm: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let ex = self_.is_exception().unwrap();
     Ok(Value::string(ex.get_error_message()))
@@ -143,7 +143,7 @@ fn message(_vm: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/backtrace.html]
 #[monoruby_builtin]
-fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let iter = self_
         .is_exception()
@@ -161,7 +161,7 @@ fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodeP
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/LoadError/i/path.html]
 #[monoruby_builtin]
-fn loaderror_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn loaderror_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     Ok(globals
         .store
@@ -176,7 +176,7 @@ fn loaderror_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: Byte
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/SystemExit/s/new.html]
 #[monoruby_builtin]
-fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().expect_class(globals)?.id();
     let name = class_id.get_name(&globals.store);
     let (status, msg) = if let Some(arg0) = lfp.try_arg(0) {

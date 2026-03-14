@@ -24,7 +24,7 @@ fn random_srand(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let old_seed = globals.random_seed();
     let new_seed = if lfp.try_arg(0).is_none() {
@@ -52,7 +52,7 @@ fn random_rand(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let f = globals.random_gen();
     Ok(Value::float(f))
@@ -67,7 +67,7 @@ fn random_rand(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/i/rand.html]
 #[monoruby_builtin]
-fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if let Some(arg) = lfp.try_arg(0) {
         if let Some(max) = arg.try_fixnum() {
             if max <= 0 {
@@ -111,7 +111,7 @@ fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -
 ///
 /// - urandom(size) -> String
 #[monoruby_builtin]
-fn urandom(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn urandom(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let size = if let Some(size) = lfp.arg(0).try_fixnum() {
         size
     } else if let Some(size) = lfp.arg(0).try_float() {

@@ -25,7 +25,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/sqrt.html]
 #[monoruby_builtin]
-fn sqrt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn sqrt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let f = match arg0.unpack() {
         RV::Float(f) => f,
@@ -43,7 +43,7 @@ fn sqrt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/sin.html]
 #[monoruby_builtin]
-fn sin(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn sin(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let f = match arg0.unpack() {
         RV::Float(f) => f,
@@ -61,7 +61,7 @@ fn sin(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/cos.html]
 #[monoruby_builtin]
-fn cos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn cos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let f = match arg0.unpack() {
         RV::Float(f) => f,
@@ -79,7 +79,7 @@ fn cos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/log10.html]
 #[monoruby_builtin]
-fn log10(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn log10(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let f = match arg0.unpack() {
         RV::Float(f) => f,

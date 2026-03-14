@@ -172,7 +172,7 @@ fn allocate(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = Value::array_empty_with_class(class);
@@ -222,7 +222,7 @@ fn initialize(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let mut self_val = lfp.self_val().as_array();
     if lfp.try_arg(0).is_none() {
@@ -272,7 +272,7 @@ fn initialize(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/length.html]
 #[monoruby_builtin]
-fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let len = lfp.self_val().as_array().len();
     Ok(Value::integer(len as i64))
 }
@@ -311,7 +311,7 @@ fn array_size(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/clone.html]
 #[monoruby_builtin]
-fn clone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn clone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().class();
     Ok(Value::array_with_class(
         lfp.self_val().as_array_inner().clone(),
@@ -360,7 +360,7 @@ extern "C" fn array_dup(val: Value) -> Value {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/count.html]
 #[monoruby_builtin]
-fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
         if lfp.block().is_some() {
             eprintln!("warning: given block not used");
@@ -394,7 +394,7 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/empty=3f.html]
 #[monoruby_builtin]
-fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let b = lfp.self_val().as_array().is_empty();
     Ok(Value::bool(b))
 }
@@ -406,7 +406,7 @@ fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_a.html]
 #[monoruby_builtin]
-fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val())
 }
 
@@ -418,7 +418,7 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/to_h.html]
 #[monoruby_builtin]
-fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     fn inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<()> {
         let self_ = lfp.self_val().as_array();
         let block = match lfp.block() {
@@ -465,7 +465,7 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/hash.html]
 #[monoruby_builtin]
-fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let h = lfp.self_val().calculate_hash(vm, globals)?;
     Ok(Value::integer_from_u64(h))
 }
@@ -477,7 +477,7 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2b.html]
 #[monoruby_builtin]
-fn add(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn add(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut lhs = lfp.self_val().dup().as_array();
     let rhs = match lfp.arg(0).try_array_ty() {
         Some(v) => v,
@@ -500,7 +500,7 @@ fn add(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2d.html]
 #[monoruby_builtin]
-fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs_v = lfp.self_val();
     let rhs = match lfp.arg(0).try_array_ty() {
         Some(ary) => ary,
@@ -536,7 +536,7 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2a.html]
 #[monoruby_builtin]
-fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
     if let Some(v) = lfp.arg(0).try_fixnum() {
         if v < 0 {
@@ -564,7 +564,7 @@ fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=26.html]
 #[monoruby_builtin]
-fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut lhs = lfp.self_val().dup().as_array();
     let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
     lhs.uniq(vm, globals)?;
@@ -579,7 +579,7 @@ fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=7c.html]
 #[monoruby_builtin]
-fn or(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn or(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut lhs = lfp.self_val().dup().as_array();
     let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
     lhs.extend(rhs.iter().cloned());
@@ -594,7 +594,7 @@ fn or(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/shift.html]
 #[monoruby_builtin]
-fn shift(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn shift(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     if lfp.try_arg(0).is_none() {
         if ary.len() == 0 {
@@ -626,7 +626,7 @@ fn unshift(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     ary.insert_many(0, lfp.arg(0).as_array().iter().cloned());
@@ -641,7 +641,7 @@ fn unshift(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/concat.html]
 #[monoruby_builtin]
-fn concat(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn concat(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ary = lfp.self_val().as_array();
     let mut ary: Array = Array::new_empty();
     for a in lfp.arg(0).as_array().iter().cloned() {
@@ -662,7 +662,7 @@ fn concat(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=3c=3c.html]
 #[monoruby_builtin]
-fn shl(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn shl(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     ary.push(lfp.arg(0));
     Ok(ary.into())
@@ -711,7 +711,7 @@ fn array_shl(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/append.html]
 #[monoruby_builtin]
-fn push(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn push(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     ary.extend(lfp.arg(0).as_array().iter().cloned());
     Ok(ary.into())
@@ -725,7 +725,7 @@ fn push(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/pop.html]
 #[monoruby_builtin]
-fn pop(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn pop(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     let res = ary.pop().unwrap_or_default();
     Ok(res)
@@ -738,7 +738,7 @@ fn pop(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/eql=3f.html]
 #[monoruby_builtin]
-fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
     let rhs = if let Some(rhs) = lfp.arg(0).try_array_ty() {
         rhs
@@ -763,7 +763,7 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=3d=3d.html]
 #[monoruby_builtin]
-fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
     let rhs = if let Some(rhs) = lfp.arg(0).try_array_ty() {
         rhs
@@ -788,7 +788,7 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/3.2/method/Array/i/=3c=3d=3e.html]
 #[monoruby_builtin]
-fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
     let rhs = if let Some(rhs) = lfp.arg(0).try_array_ty() {
         rhs
@@ -820,7 +820,7 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d.html]
 #[monoruby_builtin]
-fn index(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn index(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if lfp.try_arg(1).is_none() {
         let idx = lfp.arg(0);
@@ -841,7 +841,7 @@ fn index_assign(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     if lfp.try_arg(2).is_none() {
@@ -899,7 +899,7 @@ fn index_assign(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/fill.html]
 #[monoruby_builtin]
-fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.expect_no_block()?;
     let mut ary = lfp.self_val().as_array();
     ary.clear();
@@ -918,7 +918,7 @@ fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/fill.html]
 #[monoruby_builtin]
-fn fill(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn fill(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.expect_no_block()?;
     let mut ary = lfp.self_val().as_array();
     ary.fill(lfp.arg(0));
@@ -932,7 +932,7 @@ fn fill(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/drop.html]
 #[monoruby_builtin]
-fn drop(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn drop(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     let num = lfp.arg(0).coerce_to_i64(globals)?;
     if num < 0 {
@@ -957,7 +957,7 @@ fn drop(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/zip.html]
 #[monoruby_builtin]
-fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ary = lfp.self_val().as_array();
     let mut args_ary = vec![];
     for a in lfp.arg(0).as_array().iter() {
@@ -1001,7 +1001,7 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/inject.html]
 #[monoruby_builtin]
-fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val().as_array();
     let mut iter = self_.iter().cloned();
     if let Some(bh) = lfp.block() {
@@ -1038,7 +1038,7 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/join.html]
 #[monoruby_builtin]
-fn join(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn join(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.try_arg(0);
     let sep = if let Some(sep) = &arg0 {
         sep.expect_string(globals)?
@@ -1065,7 +1065,7 @@ fn array_join(store: &Store, ary: Array, sep: &str) -> String {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/first.html]
 #[monoruby_builtin]
-fn first(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn first(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if lfp.try_arg(0).is_none() {
         Ok(ary.first().cloned().unwrap_or_default())
@@ -1091,7 +1091,7 @@ fn first(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/last.html]
 #[monoruby_builtin]
-fn last(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn last(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if lfp.try_arg(0).is_none() {
         Ok(ary.last().cloned().unwrap_or_default())
@@ -1116,7 +1116,7 @@ fn last(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/take.html]
 #[monoruby_builtin]
-fn take(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn take(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     let n = lfp.arg(0).coerce_to_i64(globals)?;
     if n < 0 {
@@ -1138,7 +1138,7 @@ fn take(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sum.html]
 #[monoruby_builtin]
-fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut sum = if lfp.try_arg(0).is_none() {
         Value::i32(0)
     } else {
@@ -1175,7 +1175,7 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/min.html]
 #[monoruby_builtin]
-fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.expect_no_block()?;
     let ary = lfp.self_val().as_array();
     if ary.len() == 0 {
@@ -1200,7 +1200,7 @@ fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/max.html]
 #[monoruby_builtin]
-fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.expect_no_block()?;
     let ary = lfp.self_val().as_array();
     if ary.len() == 0 {
@@ -1227,7 +1227,7 @@ fn partition(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let aref = lfp.self_val().expect_array_ty(globals)?;
@@ -1275,7 +1275,7 @@ fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
 #[monoruby_builtin]
-fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     let gc_enabled = Globals::gc_enable(false);
     let res = sort_inner(vm, globals, lfp, ary);
@@ -1291,7 +1291,7 @@ fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
 #[monoruby_builtin]
-fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().dup().as_array();
     let gc_enabled = Globals::gc_enable(false);
     let res = sort_inner(vm, globals, lfp, ary);
@@ -1307,7 +1307,7 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort_by=21.html]
 #[monoruby_builtin]
-fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let data = vm.get_block_data(globals, bh)?;
     let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
@@ -1532,7 +1532,7 @@ fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/each.html]
 #[monoruby_builtin]
-fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if let Some(bh) = lfp.block() {
         vm.invoke_block_iter1(globals, bh, ary.iter().cloned())?;
@@ -1550,7 +1550,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/each_with_index.html]
 #[monoruby_builtin]
-fn each_with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn each_with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if let Some(bh) = lfp.block() {
         vm.invoke_block_iter_with_index1(globals, bh, ary.iter().cloned())?;
@@ -1567,7 +1567,7 @@ fn each_with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: Byte
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/collect.html]
 #[monoruby_builtin]
-fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     let size_hint = ary.len();
     let iter = ary.iter().cloned();
@@ -1588,7 +1588,7 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/collect=21.html]
 #[monoruby_builtin]
-fn map_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn map_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     let size_hint = ary.len();
     let iter = ary.iter().cloned();
@@ -1611,7 +1611,7 @@ fn map_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect_concat.html]
 #[monoruby_builtin]
-fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let ary = lfp.self_val().as_array();
     let size_hint = ary.len();
@@ -1651,7 +1651,7 @@ fn all_any_inner(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/all=3f.html]
 #[monoruby_builtin]
-fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     all_any_inner(vm, globals, lfp, true)
 }
 
@@ -1664,7 +1664,7 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/any=3f.html]
 #[monoruby_builtin]
-fn any_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn any_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     all_any_inner(vm, globals, lfp, false)
 }
 
@@ -1676,7 +1676,7 @@ fn any_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/detect.html]
 #[monoruby_builtin]
-fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     let bh = lfp.expect_block()?;
     let data = vm.get_block_data(globals, bh)?;
@@ -1696,7 +1696,7 @@ fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/grep.html]
 #[monoruby_builtin]
-fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     let ary: Vec<_> = match lfp.block() {
         None => {
@@ -1720,7 +1720,7 @@ fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/include=3f.html]
 #[monoruby_builtin]
-fn include_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn include_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     let rhs = lfp.arg(0);
     for lhs in ary.iter().cloned() {
@@ -1742,7 +1742,7 @@ fn reverse(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     let iter = ary.iter().rev().cloned();
@@ -1760,7 +1760,7 @@ fn reverse_(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     ary.reverse();
@@ -1778,7 +1778,7 @@ fn transpose(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if ary.len() == 0 {
@@ -1812,7 +1812,7 @@ fn transpose(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/rotate=21.html]
 #[monoruby_builtin]
-fn rotate_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn rotate_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let i = if let Some(arg0) = lfp.try_arg(0) {
         arg0.coerce_to_i64(globals)?
     } else {
@@ -1838,7 +1838,7 @@ fn rotate_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/rotate.html]
 #[monoruby_builtin]
-fn rotate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn rotate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let i = if let Some(arg0) = lfp.try_arg(0) {
         arg0.coerce_to_i64(globals)?
     } else {
@@ -1865,7 +1865,7 @@ fn rotate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/product.html]
 #[monoruby_builtin]
-fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
     let mut lists = vec![];
     for rhs in lfp.arg(0).as_array().into_iter() {
@@ -1912,7 +1912,7 @@ fn product_inner(lhs: Array, rhs: Vec<Array>) -> Vec<Array> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/union.html]
 #[monoruby_builtin]
-fn union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().dup().as_array();
     for rhs in lfp.arg(0).as_array().into_iter() {
         let rhs = rhs.expect_array_ty(globals)?;
@@ -1933,7 +1933,7 @@ fn intersect_(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
     for rhs in lfp.arg(0).as_array().iter().cloned() {
@@ -1956,7 +1956,7 @@ fn intersect_(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/uniq.html]
 #[monoruby_builtin]
-fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().dup().as_array();
     match lfp.block() {
         None => ary.uniq(vm, globals)?,
@@ -1966,7 +1966,7 @@ fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 }
 
 #[monoruby_builtin]
-fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     let deleted = match lfp.block() {
         None => ary.uniq(vm, globals)?,
@@ -2018,7 +2018,7 @@ fn uniq_inner(
 ///
 /// https://docs.ruby-lang.org/ja/latest/method/Array/i/slice=21.html
 #[monoruby_builtin]
-fn slice_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn slice_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if let Some(arg1) = lfp.try_arg(1) {
         let start = match ary.get_array_index(lfp.arg(0).coerce_to_i64(globals)?) {
@@ -2075,7 +2075,7 @@ fn slice_inner(mut aref: Array, start: usize, len: usize) -> Value {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/pack.html]
 #[monoruby_builtin]
-fn pack(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn pack(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     rvalue::pack(globals, &ary, lfp.arg(0).expect_str(globals)?)
 }
@@ -2107,7 +2107,7 @@ fn flatten_inner(ary: &Array, res: &mut Vec<Value>, lv: Option<usize>, changed: 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/flatten.html]
 #[monoruby_builtin]
-fn flatten(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn flatten(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     let lv = if let Some(arg0) = lfp.try_arg(0) {
         if arg0.is_nil() {
@@ -2134,7 +2134,7 @@ fn flatten(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/flatten.html]
 #[monoruby_builtin]
-fn flatten_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn flatten_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     let lv = if let Some(arg0) = lfp.try_arg(0) {
         if arg0.is_nil() {
@@ -2163,14 +2163,14 @@ fn flatten_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/compact.html]
 #[monoruby_builtin]
-fn compact(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn compact(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().dup().as_array();
     ary.retain(|v| Ok(!v.is_nil()))?;
     Ok(ary.into())
 }
 
 #[monoruby_builtin]
-fn compact_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn compact_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     Ok(if ary.retain(|v| Ok(!v.is_nil()))?.is_some() {
         lfp.self_val()
@@ -2187,7 +2187,7 @@ fn compact_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/shuffle=21.html]
 #[monoruby_builtin]
-fn shuffle_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn shuffle_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     ary.shuffle(&mut rand::rng());
     Ok(lfp.self_val())
@@ -2201,7 +2201,7 @@ fn shuffle_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/delete.html]
 #[monoruby_builtin]
-fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     let arg0 = lfp.arg(0);
     let f = |v: &Value| Ok(!vm.eq_values_bool(globals, *v, arg0)?);
@@ -2221,7 +2221,7 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/delete_at.html]
 #[monoruby_builtin]
-fn delete_at(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn delete_at(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     let pos = lfp.arg(0).coerce_to_i64(globals)?;
     let pos = if pos < 0 {
@@ -2289,7 +2289,7 @@ fn find_index(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/insert.html]
 #[monoruby_builtin]
-fn insert(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn insert(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let val = lfp.arg(1).as_array();
     if val.len() == 0 {
         return Ok(lfp.self_val());

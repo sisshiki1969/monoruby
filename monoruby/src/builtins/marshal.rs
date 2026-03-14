@@ -17,7 +17,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Marshal/m/dump.html]
 #[monoruby_builtin]
-fn dump(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn dump(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let obj = lfp.arg(0);
     let mut buf: Vec<u8> = Vec::new();
     // Marshal version header
@@ -33,7 +33,7 @@ fn dump(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Marshal/m/load.html]
 #[monoruby_builtin]
-fn load(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn load(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let source = lfp.arg(0);
     let data = source.expect_bytes(&globals.store)?;
     if data.len() < 2 {

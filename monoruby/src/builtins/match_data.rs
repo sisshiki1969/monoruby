@@ -17,7 +17,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/captures.html]
 #[monoruby_builtin]
-fn captures(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn captures(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::array_from_iter(
         lfp.self_val().as_match_data().captures().skip(1).map(|s| {
             if let Some(s) = s {
@@ -37,7 +37,7 @@ fn captures(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/=5b=5d.html]
 #[monoruby_builtin]
-fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
     if let Some(idx) = lfp.arg(0).try_fixnum() {

@@ -42,7 +42,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/new.html]
 #[monoruby_builtin]
-fn time_now(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn time_now(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let time_info = TimeInner::Local(Local::now().into());
     Ok(Value::new_time(time_info))
 }
@@ -54,7 +54,7 @@ fn time_now(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _pc: Bytecode
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/local.html]
 #[monoruby_builtin]
-fn time_local(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn time_local(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let t = generate_time(globals, Local, lfp)?;
     let time_info = TimeInner::Local(t.into());
     Ok(Value::new_time(time_info))
@@ -67,7 +67,7 @@ fn time_local(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: Bytecode
 ///
 /// [utc(year, mon = 1, day = 1, hour = 0, min = 0, sec = 0, usec = 0) -> Time]
 #[monoruby_builtin]
-fn time_gm(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn time_gm(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let t = generate_time(globals, Utc, lfp)?;
     let time_info = TimeInner::Utc(t);
     Ok(Value::new_time(time_info))
@@ -163,7 +163,7 @@ fn generate_time<Tz: TimeZone>(store: &Store, tz: Tz, lfp: Lfp) -> Result<DateTi
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/gmt=3f.html]
 #[monoruby_builtin]
-fn gmt_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn gmt_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let b = lfp.self_val().as_time().is_utc();
     Ok(Value::bool(b))
 }
@@ -175,7 +175,7 @@ fn gmt_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/gmtime.html]
 #[monoruby_builtin]
-fn gmtime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn gmtime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().as_time_mut().utc();
     Ok(lfp.self_val())
 }
@@ -187,7 +187,7 @@ fn gmtime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/localtime.html]
 #[monoruby_builtin]
-fn localtime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn localtime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().as_time_mut().local();
     Ok(lfp.self_val())
 }
@@ -198,7 +198,7 @@ fn localtime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: Bytecode
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/inspect.html]
 #[monoruby_builtin]
-fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let time = lfp.self_val().as_time().to_string();
     Ok(Value::string(time))
 }
@@ -209,7 +209,7 @@ fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePt
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/strftime.html]
 #[monoruby_builtin]
-fn strftime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn strftime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let fmt = lfp.arg(0).expect_string(globals)?.replace("%N", "%f");
     let s = match lfp.self_val().as_time() {
         TimeInner::Local(t) => t.format(&fmt).to_string(),
@@ -227,7 +227,7 @@ fn strftime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePt
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/to_s.html]
 #[monoruby_builtin]
-fn to_s(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn to_s(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let s = match lfp.self_val().as_time() {
         TimeInner::Local(t) => t.format("%Y-%m-%d %H:%M:%S %z"),
         TimeInner::Utc(t) => t.format("%Y-%m-%d %H:%M:%S UTC"),
@@ -242,7 +242,7 @@ fn to_s(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/year.html]
 #[monoruby_builtin]
-fn year(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn year(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let year = match lfp.self_val().as_time() {
         TimeInner::Local(t) => t.year(),
         TimeInner::Utc(t) => t.year(),
@@ -257,7 +257,7 @@ fn year(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/mon.html]
 #[monoruby_builtin]
-fn month(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn month(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let month = match lfp.self_val().as_time() {
         TimeInner::Local(t) => t.month(),
         TimeInner::Utc(t) => t.month(),
@@ -272,7 +272,7 @@ fn month(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/day.html]
 #[monoruby_builtin]
-fn day(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn day(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let day = match lfp.self_val().as_time() {
         TimeInner::Local(t) => t.day(),
         TimeInner::Utc(t) => t.day(),
@@ -285,7 +285,7 @@ fn day(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/=2d.html]
 #[monoruby_builtin]
-fn sub(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn sub(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs = self_.as_time().clone();
     let rhs_rv = lfp.arg(0);

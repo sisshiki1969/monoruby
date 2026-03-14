@@ -108,7 +108,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// []
 #[monoruby_builtin]
-fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let rhs = match lfp.arg(0).is_class_or_module() {
         Some(class) => class.id(),
         None => return Ok(Value::bool(false)),
@@ -136,7 +136,7 @@ fn less_than(lhs: Module, rhs: Module) -> Value {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3c.html]
 #[monoruby_builtin]
-fn lt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn lt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let rhs = lfp.arg(0).expect_class_or_module(&globals.store)?;
     let lhs = lfp.self_val().as_class();
     Ok(less_than(lhs, rhs))
@@ -149,7 +149,7 @@ fn lt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3e.html]
 #[monoruby_builtin]
-fn gt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn gt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let rhs = lfp.arg(0).expect_class_or_module(&globals.store)?;
     let lhs = lfp.self_val().as_class();
     Ok(less_than(rhs, lhs))
@@ -162,7 +162,7 @@ fn gt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3d=3d=3d.html]
 #[monoruby_builtin]
-fn teq(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn teq(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     Ok(Value::bool(lfp.arg(0).is_kind_of(&globals.store, class)))
 }
@@ -178,7 +178,7 @@ fn alias_method(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let new_name = lfp.arg(0).expect_symbol_or_string(globals)?;
@@ -198,7 +198,7 @@ fn attr_accessor(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let mut ary = Array::new_empty();
     let class_id = lfp.self_val().as_class_id();
@@ -224,7 +224,7 @@ fn attr_reader(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let mut ary = Array::new_empty();
     let class_id = lfp.self_val().as_class_id();
@@ -248,7 +248,7 @@ fn attr_writer(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let mut ary = Array::new_empty();
     let class_id = lfp.self_val().as_class_id();
@@ -268,7 +268,7 @@ fn attr_writer(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/autoload.html]
 #[monoruby_builtin]
-fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let const_name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let feature = lfp.arg(1).coerce_to_string(vm, globals)?;
     globals
@@ -285,12 +285,7 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_eval.html]
 #[monoruby_builtin]
-fn class_eval(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _pc: BytecodePtr,
-) -> Result<Value> {
+fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let module = lfp.self_val().as_class();
 
     if let Some(bh) = lfp.block() {
@@ -330,7 +325,7 @@ fn class_eval(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/ancestors.html]
 #[monoruby_builtin]
-fn ancestors(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn ancestors(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let v = globals
         .ancestors(class_id)
@@ -351,7 +346,7 @@ fn const_defined(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let module = lfp.self_val().as_class();
@@ -368,12 +363,7 @@ fn const_defined(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_get.html]
 #[monoruby_builtin]
-fn const_get(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _pc: BytecodePtr,
-) -> Result<Value> {
+fn const_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let module = lfp.self_val().as_class();
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
@@ -387,7 +377,7 @@ fn const_get(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_set.html]
 #[monoruby_builtin]
-fn const_set(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn const_set(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let module = lfp.self_val().as_class().id();
     let val = lfp.arg(1);
@@ -406,7 +396,7 @@ fn remove_const(
     _: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let module = lfp.self_val().as_class().id();
@@ -421,12 +411,7 @@ fn remove_const(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/constants.html]
 #[monoruby_builtin]
-fn constants(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _pc: BytecodePtr,
-) -> Result<Value> {
+fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class = lfp.self_val().expect_class_or_module(&globals.store)?;
     let v = if lfp.try_arg(0).is_none() || lfp.arg(0).as_bool() {
         globals.store.get_constant_names_inherit(class)
@@ -493,7 +478,7 @@ fn deprecate_constant(
     _: &mut Executor,
     _: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     Ok(lfp.self_val())
 }
@@ -509,7 +494,7 @@ fn instance_methods(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
@@ -531,7 +516,7 @@ fn private_instance_methods(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
@@ -548,7 +533,7 @@ fn private_instance_methods(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/include.html]
 #[monoruby_builtin]
-fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
@@ -578,7 +563,7 @@ fn included(
     _vm: &mut Executor,
     _globals: &mut Globals,
     _lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     Ok(Value::nil())
 }
@@ -589,7 +574,7 @@ fn included(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/prepend.html]
 #[monoruby_builtin]
-fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
@@ -618,7 +603,7 @@ fn prepend_features(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let mut base = lfp.arg(0).expect_class_or_module(&globals.store)?;
     let prepend_module = lfp.self_val().as_class();
@@ -637,7 +622,7 @@ fn instance_method(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let klass = lfp.self_val().as_class();
     let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
@@ -660,7 +645,7 @@ fn undef_method(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let names = lfp.arg(0).as_array();
@@ -682,7 +667,7 @@ fn remove_method(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let names = lfp.arg(0).as_array();
@@ -715,7 +700,7 @@ fn method_defined(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     Ok(Value::bool(match check_method_defined(globals, lfp)? {
         Some(v) => matches!(v, Visibility::Public | Visibility::Protected),
@@ -734,7 +719,7 @@ fn private_method_defined(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     Ok(Value::bool(
         check_method_defined(globals, lfp)? == Some(Visibility::Private),
@@ -752,7 +737,7 @@ fn public_method_defined(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     Ok(Value::bool(
         check_method_defined(globals, lfp)? == Some(Visibility::Public),
@@ -770,7 +755,7 @@ fn protected_method_defined(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     Ok(Value::bool(
         check_method_defined(globals, lfp)? == Some(Visibility::Protected),
@@ -788,7 +773,7 @@ fn private_class_method(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let singleton = globals.store.get_singleton(lfp.self_val());
     let arg = lfp.arg(0).as_array();
@@ -803,7 +788,7 @@ fn private_class_method(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
 #[monoruby_builtin]
-fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_name = globals.store.get_class_name(lfp.self_val().as_class_id());
     let res = Value::string(class_name);
     Ok(res)
@@ -815,7 +800,7 @@ fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/name.html]
 #[monoruby_builtin]
-fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     match globals.store[class_id].get_name() {
         Some(_) => {
@@ -836,7 +821,7 @@ fn module_function(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let len = arg0.as_array().len();
@@ -862,7 +847,7 @@ fn module_function(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private.html]
 #[monoruby_builtin]
-fn private(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn private(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg = lfp.arg(0).as_array();
     change_visi(vm, globals, lfp.self_val(), arg, Visibility::Private)
 }
@@ -874,12 +859,7 @@ fn private(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/protected.html]
 #[monoruby_builtin]
-fn protected(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _pc: BytecodePtr,
-) -> Result<Value> {
+fn protected(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg = lfp.arg(0).as_array();
     change_visi(vm, globals, lfp.self_val(), arg, Visibility::Protected)
 }
@@ -891,7 +871,7 @@ fn protected(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public.html]
 #[monoruby_builtin]
-fn public(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn public(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg = lfp.arg(0).as_array();
     change_visi(vm, globals, lfp.self_val(), arg, Visibility::Public)
 }

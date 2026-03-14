@@ -49,7 +49,7 @@ fn new(vm: &mut Executor, _: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<
 /// TODO: we must support [] with >2 args.
 /// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/=3d=3d=3d.html]
 #[monoruby_builtin]
-fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
     vm.invoke_proc(globals, &proc, &lfp.arg(0).as_array())
 }
@@ -65,7 +65,7 @@ fn source_location(
     _: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
     // fallback: use the proc's own ISeq location
@@ -87,7 +87,7 @@ fn source_location(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/binding.html]
 #[monoruby_builtin]
-fn binding_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+fn binding_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
     let outer_lfp = proc.outer_lfp();
     let pc = proc.source();
