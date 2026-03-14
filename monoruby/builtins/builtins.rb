@@ -152,7 +152,7 @@ class Hash
 
   def any?
     if block_given?
-      each { |k, v| return true if yield(k, v) }
+      each { |k, v| return true if yield([k, v]) }
     else
       return !empty?
     end
@@ -161,7 +161,7 @@ class Hash
 
   def all?
     if block_given?
-      each { |k, v| return false unless yield(k, v) }
+      each { |k, v| return false unless yield([k, v]) }
     else
       each { |k, v| return false unless v }
     end
@@ -171,7 +171,7 @@ class Hash
   def count(*args)
     if block_given?
       n = 0
-      each { |k, v| n += 1 if yield(k, v) }
+      each { |k, v| n += 1 if yield([k, v]) }
       n
     elsif args.empty?
       size
