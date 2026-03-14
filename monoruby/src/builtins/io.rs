@@ -1,4 +1,5 @@
 use super::*;
+use std::fs::File;
 
 //
 // IO class
@@ -14,12 +15,15 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "flush", flush, 0);
     globals.define_builtin_func(IO_CLASS, "gets", gets, 0);
     globals.define_builtin_funcs(IO_CLASS, "isatty", &["tty?"], isatty, 0);
+    globals.define_builtin_func(IO_CLASS, "close", close, 0);
     globals.define_builtin_func(IO_CLASS, "closed?", closed_, 0);
     globals.define_builtin_func(IO_CLASS, "sync", sync, 0);
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
     globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 1, false);
     globals.define_builtin_func(IO_CLASS, "readline", readline, 0);
     globals.define_builtin_funcs(IO_CLASS, "each", &["each_line"], each_line, 0);
+    globals.define_builtin_class_func(IO_CLASS, "read", io_class_read, 1);
+    globals.define_builtin_class_func(IO_CLASS, "pipe", io_pipe, 0);
 
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
@@ -189,6 +193,18 @@ fn isatty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr
 }
 
 ///
+/// ### IO#close
+///
+/// - close -> nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/close.html]
+#[monoruby_builtin]
+fn close(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+    lfp.self_val().as_io_inner().close()?;
+    Ok(Value::nil())
+}
+
+///
 /// ### IO#closed?
 ///
 /// - closed? -> bool
@@ -286,6 +302,63 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePt
         unimplemented!()
     };
     Ok(lfp.self_val())
+}
+
+///
+/// ### IO.read
+///
+/// - read(path) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/read.html]
+#[monoruby_builtin]
+fn io_class_read(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
+    let filename = lfp.arg(0).expect_string(globals)?;
+    let mut file = match File::open(&filename) {
+        Ok(file) => file,
+        Err(_) => {
+            return Err(MonorubyErr::runtimeerr(format!(
+                "No such file or directory @ rb_sysopen - {}",
+                filename
+            )));
+        }
+    };
+    let mut contents = String::new();
+    match std::io::Read::read_to_string(&mut file, &mut contents) {
+        Ok(_) => {}
+        Err(_) => {
+            return Err(MonorubyErr::runtimeerr("Could not read the file."));
+        }
+    };
+    Ok(Value::string(contents))
+}
+
+///
+/// ### IO.pipe
+///
+/// - pipe -> [read_io, write_io]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/pipe.html]
+#[monoruby_builtin]
+fn io_pipe(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _pc: BytecodePtr,
+) -> Result<Value> {
+    let mut fds: [libc::c_int; 2] = [0; 2];
+    // SAFETY: fds is a valid pointer to a 2-element array of c_int.
+    let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if ret == -1 {
+        return Err(MonorubyErr::runtimeerr("pipe(2) failed"));
+    }
+    let read_io = Value::new_io(IoInner::from_raw_fd(fds[0], "pipe".to_string()));
+    let write_io = Value::new_io(IoInner::from_raw_fd(fds[1], "pipe".to_string()));
+    Ok(Value::array2(read_io, write_io))
 }
 
 #[cfg(test)]

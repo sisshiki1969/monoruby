@@ -111,14 +111,14 @@ fn file_read(
             )));
         }
     };
-    let mut contents = String::new();
-    match std::io::Read::read_to_string(&mut file, &mut contents) {
-        Ok(file) => file,
+    let mut contents = vec![];
+    match std::io::Read::read_to_end(&mut file, &mut contents) {
+        Ok(_) => {}
         Err(_) => {
             return Err(MonorubyErr::runtimeerr("Could not read the file."));
         }
     };
-    Ok(Value::string(contents))
+    Ok(Value::string_from_vec(contents))
 }
 
 ///

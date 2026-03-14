@@ -563,6 +563,10 @@ impl Value {
         RValue::new_regexp(regexp).pack()
     }
 
+    pub(crate) fn new_io(io: IoInner) -> Self {
+        RValue::new_io(io).pack()
+    }
+
     pub(crate) fn new_io_stdin() -> Self {
         RValue::new_io_stdin().pack()
     }

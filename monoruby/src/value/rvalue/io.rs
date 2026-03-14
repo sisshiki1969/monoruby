@@ -1,6 +1,6 @@
 use std::{
     io::{BufRead, IsTerminal, Read, Write},
-    os::fd::AsRawFd,
+    os::fd::{AsRawFd, FromRawFd},
     rc::Rc,
 };
 
@@ -67,6 +67,16 @@ impl IoInner {
         unsafe { libc::fcntl(fd, libc::F_GETFD) == -1 && *libc::__errno_location() == libc::EBADF }
     }
 
+    pub fn close(&self) -> Result<()> {
+        let fd = self.fd();
+        // SAFETY: fd is a valid file descriptor.
+        let ret = unsafe { libc::close(fd) };
+        if ret == -1 {
+            return Err(MonorubyErr::runtimeerr("close(2) failed"));
+        }
+        Ok(())
+    }
+
     pub(super) fn stdin() -> Self {
         Self::Stdin
     }
@@ -80,6 +90,15 @@ impl IoInner {
     }
 
     pub(super) fn file(file: std::fs::File, name: String) -> Self {
+        Self::File(Rc::new(FileDescriptor {
+            reader: std::io::BufReader::new(file),
+            name,
+        }))
+    }
+
+    pub(crate) fn from_raw_fd(fd: i32, name: String) -> Self {
+        // SAFETY: fd is a valid file descriptor obtained from pipe().
+        let file = unsafe { std::fs::File::from_raw_fd(fd) };
         Self::File(Rc::new(FileDescriptor {
             reader: std::io::BufReader::new(file),
             name,
