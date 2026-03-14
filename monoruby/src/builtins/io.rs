@@ -221,12 +221,7 @@ fn sync(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -
 }
 
 #[monoruby_builtin]
-fn assign_sync(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn assign_sync(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(lfp.arg(0))
 }
 
