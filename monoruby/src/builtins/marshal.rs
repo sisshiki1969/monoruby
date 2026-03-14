@@ -441,7 +441,8 @@ impl<'a> MarshalReader<'a> {
     /// Read a user-marshal object ('u' tag).
     /// Format: symbol(class_name) + raw_data
     ///
-    /// We just skip and return nil for now, or try to handle known types.
+    /// Currently, this reads the class name symbol, then reads and returns
+    /// the nested value, effectively ignoring the class information.
     fn read_user_marshal(
         &mut self,
         vm: &mut Executor,
