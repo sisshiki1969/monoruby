@@ -470,4 +470,32 @@ mod tests {
         "##,
         );
     }
+
+    #[test]
+    fn stringio_write() {
+        run_test_once(
+            r#"
+            require "stringio"
+            sio = StringIO.new
+            sio.write("hello", "", " world")
+            sio.string
+        "#,
+        );
+        run_test_once(
+            r#"
+            require "stringio"
+            sio = StringIO.new
+            n = sio.write("ab", "cd", "ef")
+            [sio.string, n]
+        "#,
+        );
+        run_test_once(
+            r#"
+            require "stringio"
+            sio = StringIO.new
+            n = sio.write("", "hello", "")
+            [sio.string, n]
+        "#,
+        );
+    }
 }
