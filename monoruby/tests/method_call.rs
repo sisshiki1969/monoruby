@@ -605,6 +605,83 @@ fn forwarding_super() {
 }
 
 #[test]
+fn anonymous_block_forwarding1() {
+    run_test(
+        r##"
+        def bar(&)
+          yield 42
+        end
+
+        def foo(&)
+          bar(&)
+        end
+
+        foo { |x| x * 2 }
+        "##,
+    );
+}
+
+#[test]
+fn anonymous_block_forwarding2() {
+    run_test(
+        r##"
+        def baz(&)
+          if block_given?
+            yield 10
+          else
+            "no block"
+          end
+        end
+
+        [baz { |x| x + 1 }, baz]
+        "##,
+    );
+}
+
+#[test]
+fn anonymous_block_forwarding3() {
+    run_test_with_prelude(
+        r##"
+        $res = []
+        C.new.f { |x| x * 3 }
+        $res
+        "##,
+        r##"
+        class C
+          def g(&)
+            $res << yield(7)
+          end
+
+          def f(&)
+            g(&)
+          end
+        end
+        "##,
+    );
+}
+
+#[test]
+fn anonymous_block_forwarding4() {
+    run_test(
+        r##"
+        def inner(&)
+          yield 1, 2, 3
+        end
+
+        def middle(&)
+          inner(&)
+        end
+
+        def outer(&)
+          middle(&)
+        end
+
+        outer { |a, b, c| a + b + c }
+        "##,
+    );
+}
+
+#[test]
 fn destruct() {
     run_test_with_prelude(
         r#"
