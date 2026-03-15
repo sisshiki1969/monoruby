@@ -66,13 +66,8 @@ impl<'a> BytecodeGen<'a> {
 
         let nil_exit = if safe_nav {
             let nil_exit = self.new_label();
-            let org_temp = self.temp;
-            self.temp = old_temp;
-            if push_flag {
-                self.push();
-            }
-            self.emit_nilbr(recv, nil_exit);
-            self.temp = org_temp;
+            let merge_sp = if push_flag { old_temp + 1 } else { old_temp };
+            self.emit_nilbr(recv, nil_exit, merge_sp);
             Some(nil_exit)
         } else {
             None
@@ -347,9 +342,7 @@ impl<'a> BytecodeGen<'a> {
                     self.level_down(n1, level);
                     self.level_down(n2, level);
                 });
-                splat
-                    .iter_mut()
-                    .for_each(|n| self.level_down(n, level));
+                splat.iter_mut().for_each(|n| self.level_down(n, level));
             }
             NodeKind::FuncCall { arglist, .. } | NodeKind::Yield(arglist) => {
                 self.level_down_arglist(arglist, level);
