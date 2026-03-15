@@ -56,7 +56,14 @@ fn regexp_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
     } else {
         onigmo_regex::ONIG_OPTION_NONE
     };
-    let regexp = RegexpInner::with_option(string, option)?;
+    let encoding = if option & RegexpInner::NOENCODING != 0 {
+        onigmo_regex::OnigmoEncoding::ASCII
+    } else {
+        onigmo_regex::OnigmoEncoding::UTF8
+    };
+    // Strip Ruby-specific encoding flags before passing to onigmo
+    let onigmo_option = option & !(RegexpInner::NOENCODING | RegexpInner::FIXEDENCODING);
+    let regexp = RegexpInner::with_option_and_encoding(string, onigmo_option, encoding)?;
     let val = Value::regexp(regexp);
     Ok(val)
 }
