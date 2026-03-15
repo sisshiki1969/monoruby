@@ -32,7 +32,6 @@ pub(super) fn init(globals: &mut Globals) {
         true,
     );
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
-    globals.define_private_builtin_func(CLASS_CLASS, "inherited", inherited, 1);
 }
 
 /// ### Class.new
@@ -54,7 +53,7 @@ fn class_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let obj = globals.store.define_unnamed_class(superclass).as_val();
     vm.invoke_method_if_exists(
         globals,
-        IdentId::get_id("inherited"),
+        IdentId::INHERITED,
         superclass_val,
         &[obj],
         None,
@@ -249,16 +248,6 @@ extern "C" fn allocate_object2(class_val: Value, self_class: ClassId) -> Value {
 
 extern "C" fn check_initializer(globals: &mut Globals, receiver: Value) -> Option<FuncId> {
     globals.check_method(receiver, IdentId::INITIALIZE)
-}
-
-///
-/// ### Class#inherited
-/// - inherited(subclass) -> ()
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Class/i/inherited.html]
-#[monoruby_builtin]
-fn inherited(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::nil())
 }
 
 #[cfg(test)]

@@ -168,6 +168,12 @@ impl IdentId {
     pub const METHOD_REMOVED: IdentId = id!(60);
     pub const METHOD_UNDEFINED: IdentId = id!(61);
     pub const CONST_ADDED: IdentId = id!(62);
+    pub const INHERITED: IdentId = id!(63);
+    pub const APPEND_FEATURES: IdentId = id!(64);
+    pub const EXTEND_OBJECT: IdentId = id!(65);
+    pub const EXTENDED: IdentId = id!(66);
+    pub const INCLUDED: IdentId = id!(67);
+    pub const PREPENDED: IdentId = id!(68);
 }
 
 impl IdentId {
@@ -316,6 +322,12 @@ impl IdentifierTable {
         table.set_id("method_removed", IdentId::METHOD_REMOVED);
         table.set_id("method_undefined", IdentId::METHOD_UNDEFINED);
         table.set_id("const_added", IdentId::CONST_ADDED);
+        table.set_id("inherited", IdentId::INHERITED);
+        table.set_id("append_features", IdentId::APPEND_FEATURES);
+        table.set_id("extend_object", IdentId::EXTEND_OBJECT);
+        table.set_id("extended", IdentId::EXTENDED);
+        table.set_id("included", IdentId::INCLUDED);
+        table.set_id("prepended", IdentId::PREPENDED);
         table
     }
 

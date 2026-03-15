@@ -1186,7 +1186,7 @@ impl Executor {
                         globals.define_class_with_identid(name, Some(superclass), parent);
                     self.invoke_method_if_exists(
                         globals,
-                        IdentId::get_id("inherited"),
+                        IdentId::INHERITED,
                         superclass.as_val(),
                         &[new_class.as_val()],
                         None,

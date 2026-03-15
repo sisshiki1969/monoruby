@@ -44,13 +44,11 @@ class Object
   end
 end
 
-#class Class
-#  def new(...)
-#    o = allocate
-#    o.initialize(...)
-#    o
-#  end
-#end
+class Class
+  private
+  def inherited(subclass)
+  end
+end
 
 class Regexp
   IGNORECASE = 1
@@ -59,6 +57,17 @@ class Regexp
 end
 
 class Module
+  private
+  def extended(mod)
+  end
+
+  def prepended(mod)
+  end
+
+  def included(mod)
+  end
+
+  public
   def private_constant(*x)
   end
 

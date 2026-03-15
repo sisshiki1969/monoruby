@@ -61,9 +61,6 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func_rest(MODULE_CLASS, "include", include);
     globals.define_builtin_func(MODULE_CLASS, "append_features", append_features, 1);
-    globals.define_private_builtin_func(MODULE_CLASS, "included", included, 1);
-    globals.define_private_builtin_func(MODULE_CLASS, "extended", extended, 1);
-    globals.define_private_builtin_func(MODULE_CLASS, "prepended", prepended, 1);
     globals.define_private_builtin_func(MODULE_CLASS, "extend_object", extend_object, 1);
     globals.define_builtin_func_rest(MODULE_CLASS, "prepend", prepend);
     globals.define_builtin_func(MODULE_CLASS, "prepend_features", prepend_features, 1);
@@ -523,7 +520,7 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     for v in args.iter().cloned().rev() {
         vm.invoke_method_inner(
             globals,
-            IdentId::get_id("append_features"),
+            IdentId::APPEND_FEATURES,
             v,
             &[self_],
             None,
@@ -531,7 +528,7 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         )?;
         vm.invoke_method_if_exists(
             globals,
-            IdentId::get_id("included"),
+            IdentId::INCLUDED,
             v,
             &[self_],
             None,
@@ -552,36 +549,6 @@ fn append_features(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
     let include_module = lfp.self_val().expect_module(globals)?;
     base.include_module(include_module)?;
     Ok(lfp.self_val())
-}
-
-///
-/// ### Module#included
-/// - included(class_or_module) -> ()
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/included.html]
-#[monoruby_builtin]
-fn included(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::nil())
-}
-
-///
-/// ### Module#extended
-/// - extended(class_or_module) -> ()
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/extended.html]
-#[monoruby_builtin]
-fn extended(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::nil())
-}
-
-///
-/// ### Module#prepended
-/// - prepended(class_or_module) -> ()
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/prepended.html]
-#[monoruby_builtin]
-fn prepended(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::nil())
 }
 
 ///
@@ -621,7 +588,7 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         )?;
         vm.invoke_method_if_exists(
             globals,
-            IdentId::get_id("prepended"),
+            IdentId::PREPENDED,
             v,
             &[self_],
             None,

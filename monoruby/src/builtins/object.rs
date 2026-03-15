@@ -203,7 +203,7 @@ fn extend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     for v in args.iter().cloned().rev() {
         vm.invoke_method_inner(
             globals,
-            IdentId::get_id("extend_object"),
+            IdentId::EXTEND_OBJECT,
             v,
             &[self_val],
             None,
@@ -211,7 +211,7 @@ fn extend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         )?;
         vm.invoke_method_if_exists(
             globals,
-            IdentId::get_id("extended"),
+            IdentId::EXTENDED,
             v,
             &[self_val],
             None,
