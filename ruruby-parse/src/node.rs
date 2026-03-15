@@ -178,7 +178,11 @@ impl FormalParam {
     }
 
     pub(crate) fn block(name: String, loc: Loc) -> Self {
-        FormalParam::new(ParamKind::Block(name), loc)
+        FormalParam::new(ParamKind::Block(Some(name)), loc)
+    }
+
+    pub(crate) fn block_discard(loc: Loc) -> Self {
+        FormalParam::new(ParamKind::Block(None), loc)
     }
 
     pub(crate) fn forwarding(loc: Loc) -> Self {
@@ -201,7 +205,7 @@ pub enum ParamKind {
     Rest(Option<String>),
     Keyword(String, Option<Box<Node>>), // name, default expr
     KWRest(Option<String>),
-    Block(String),
+    Block(Option<String>),
     Forwarding,
     Destruct(Vec<(String, Loc)>),
 }
@@ -224,6 +228,8 @@ pub struct ArgList {
     pub block: Option<Box<Node>>,
     /// args forwarding
     pub forwarding: bool,
+    /// anonymous block forwarding (&)
+    pub delegate_block: bool,
     /// has splat argument
     pub splat: bool,
 }
@@ -247,6 +253,7 @@ impl ArgList {
             hash_splat: vec![],
             block: None,
             forwarding: false,
+            delegate_block: false,
             splat: false,
         }
     }
@@ -258,6 +265,7 @@ impl ArgList {
             hash_splat: vec![],
             block: Some(block),
             forwarding: false,
+            delegate_block: false,
             splat: false,
         }
     }
