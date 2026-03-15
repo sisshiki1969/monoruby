@@ -60,7 +60,11 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func_rest(MODULE_CLASS, "include", include);
+    globals.define_builtin_func(MODULE_CLASS, "append_features", append_features, 1);
     globals.define_private_builtin_func(MODULE_CLASS, "included", included, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "extended", extended, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "prepended", prepended, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "extend_object", extend_object, 1);
     globals.define_builtin_func_rest(MODULE_CLASS, "prepend", prepend);
     globals.define_builtin_func(MODULE_CLASS, "prepend_features", prepend_features, 1);
     globals.define_builtin_func(MODULE_CLASS, "instance_method", instance_method, 1);
@@ -493,18 +497,38 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
-    let mut class = lfp.self_val().as_class();
+    let self_ = lfp.self_val();
     for v in args.iter().cloned().rev() {
+        vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("append_features"),
+            v,
+            &[self_],
+            None,
+            None,
+        )?;
         vm.invoke_method_if_exists(
             globals,
             IdentId::get_id("included"),
             v,
-            &[lfp.self_val()],
+            &[self_],
             None,
             None,
         )?;
-        class.include_module(v.expect_module(globals)?)?;
     }
+    Ok(lfp.self_val())
+}
+
+///
+/// ### Module#append_features
+/// - append_features(mod) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/append_features.html]
+#[monoruby_builtin]
+fn append_features(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut base = lfp.arg(0).expect_class_or_module(&globals.store)?;
+    let include_module = lfp.self_val().expect_module(globals)?;
+    base.include_module(include_module)?;
     Ok(lfp.self_val())
 }
 
@@ -516,6 +540,40 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn included(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::nil())
+}
+
+///
+/// ### Module#extended
+/// - extended(class_or_module) -> ()
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/extended.html]
+#[monoruby_builtin]
+fn extended(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::nil())
+}
+
+///
+/// ### Module#prepended
+/// - prepended(class_or_module) -> ()
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/prepended.html]
+#[monoruby_builtin]
+fn prepended(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::nil())
+}
+
+///
+/// ### Module#extend_object
+/// - extend_object(obj) -> obj
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/extend_object.html]
+#[monoruby_builtin]
+fn extend_object(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let obj = lfp.arg(0);
+    let mut class = globals.store.get_singleton(obj);
+    let include_module = lfp.self_val().expect_module(globals)?;
+    class.include_module(include_module)?;
+    Ok(obj)
 }
 
 ///
@@ -534,6 +592,14 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         vm.invoke_method_inner(
             globals,
             IdentId::get_id("prepend_features"),
+            v,
+            &[self_],
+            None,
+            None,
+        )?;
+        vm.invoke_method_if_exists(
+            globals,
+            IdentId::get_id("prepended"),
             v,
             &[self_],
             None,
@@ -1701,5 +1767,115 @@ mod tests {
         x
         "##,
         )
+    }
+
+    #[test]
+    fn included_callback() {
+        run_test(
+            r##"
+        $res = []
+        module M
+          def self.included(base)
+            $res << "included:#{base}"
+          end
+        end
+        class C
+          include M
+        end
+        $res
+        "##,
+        );
+    }
+
+    #[test]
+    fn extended_callback() {
+        run_test(
+            r##"
+        $res = []
+        module Foo
+          def self.extended(base)
+            $res << "extended:#{base}"
+          end
+        end
+        module Bar
+          extend Foo
+        end
+        $res
+        "##,
+        );
+        run_test(
+            r##"
+        $res = []
+        module M
+          def self.extended(base)
+            $res << "extended:#{base}"
+          end
+        end
+        class C
+          extend M
+        end
+        $res
+        "##,
+        );
+    }
+
+    #[test]
+    fn prepended_callback() {
+        run_test(
+            r##"
+        $res = []
+        module M
+          def self.prepended(base)
+            $res << "prepended:#{base}"
+          end
+        end
+        class C
+          prepend M
+        end
+        $res
+        "##,
+        );
+    }
+
+    #[test]
+    fn append_features_callback() {
+        run_test(
+            r##"
+        $res = []
+        module M
+          def self.append_features(base)
+            $res << "append_features:#{base}"
+            super
+          end
+        end
+        class C
+          include M
+        end
+        $res
+        "##,
+        );
+    }
+
+    #[test]
+    fn extend_object_callback() {
+        run_test(
+            r##"
+        $res = []
+        module M
+          def self.extend_object(obj)
+            $res << "extend_object:#{obj}"
+            super
+          end
+          def hello
+            "hello"
+          end
+        end
+        class C
+          extend M
+        end
+        $res << C.hello
+        $res
+        "##,
+        );
     }
 }

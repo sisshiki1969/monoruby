@@ -1162,7 +1162,17 @@ impl Executor {
                 if is_module {
                     globals.define_module_with_identid(name, parent)
                 } else {
-                    globals.define_class_with_identid(name, Some(superclass), parent)
+                    let new_class =
+                        globals.define_class_with_identid(name, Some(superclass), parent);
+                    self.invoke_method_if_exists(
+                        globals,
+                        IdentId::get_id("inherited"),
+                        superclass.as_val(),
+                        &[new_class.as_val()],
+                        None,
+                        None,
+                    )?;
+                    new_class
                 }
             }
         };
