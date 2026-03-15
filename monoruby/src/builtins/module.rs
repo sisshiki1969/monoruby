@@ -60,7 +60,8 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func_rest(MODULE_CLASS, "include", include);
-    globals.define_private_builtin_func(MODULE_CLASS, "included", included, 1);
+    globals.define_builtin_func(MODULE_CLASS, "append_features", append_features, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "extend_object", extend_object, 1);
     globals.define_builtin_func_rest(MODULE_CLASS, "prepend", prepend);
     globals.define_builtin_func(MODULE_CLASS, "prepend_features", prepend_features, 1);
     globals.define_builtin_func(MODULE_CLASS, "instance_method", instance_method, 1);
@@ -352,11 +353,20 @@ fn const_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_set.html]
 #[monoruby_builtin]
-fn const_set(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn const_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let module = lfp.self_val().as_class().id();
     let val = lfp.arg(1);
     globals.set_constant(module, name, val);
+    let receiver = globals.store[module].get_module().into();
+    vm.invoke_method_if_exists(
+        globals,
+        IdentId::CONST_ADDED,
+        receiver,
+        &[Value::symbol(name)],
+        None,
+        None,
+    )?;
     Ok(val)
 }
 
@@ -407,17 +417,19 @@ fn define_method(
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    let proc = if let Some(method) = lfp.try_arg(1) {
+    let func_id = if let Some(method) = lfp.try_arg(1) {
         if let Some(proc) = method.is_proc() {
-            proc
+            let func_id = globals.define_proc_method(proc);
+            globals.add_public_method(class_id, name, func_id);
+            func_id
         } else if let Some(method) = method.is_method() {
             let func_id = method.func_id();
             globals.add_public_method(class_id, name, func_id);
-            return Ok(Value::symbol(name));
+            func_id
         } else if let Some(umethod) = method.is_umethod() {
             let func_id = umethod.func_id();
             globals.add_public_method(class_id, name, func_id);
-            return Ok(Value::symbol(name));
+            func_id
         } else {
             return Err(MonorubyErr::wrong_argument_type(
                 globals,
@@ -426,12 +438,23 @@ fn define_method(
             ));
         }
     } else if let Some(bh) = lfp.block() {
-        vm.generate_proc(bh, pc)?
+        let proc = vm.generate_proc(bh, pc)?;
+        let func_id = globals.define_proc_method(proc);
+        globals.add_public_method(class_id, name, func_id);
+        func_id
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
-    let func_id = globals.define_proc_method(proc);
-    globals.add_public_method(class_id, name, func_id);
+    let _ = func_id;
+    let receiver = globals.store[class_id].get_module().into();
+    vm.invoke_method_if_exists(
+        globals,
+        IdentId::METHOD_ADDED,
+        receiver,
+        &[Value::symbol(name)],
+        None,
+        None,
+    )?;
     Ok(Value::symbol(name))
 }
 
@@ -493,29 +516,53 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
-    let mut class = lfp.self_val().as_class();
+    let self_ = lfp.self_val();
     for v in args.iter().cloned().rev() {
-        vm.invoke_method_if_exists(
+        vm.invoke_method_inner(
             globals,
-            IdentId::get_id("included"),
+            IdentId::APPEND_FEATURES,
             v,
-            &[lfp.self_val()],
+            &[self_],
             None,
             None,
         )?;
-        class.include_module(v.expect_module(globals)?)?;
+        vm.invoke_method_if_exists(
+            globals,
+            IdentId::INCLUDED,
+            v,
+            &[self_],
+            None,
+            None,
+        )?;
     }
     Ok(lfp.self_val())
 }
 
 ///
-/// ### Module#included
-/// - included(class_or_module) -> ()
+/// ### Module#append_features
+/// - append_features(mod) -> self
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/included.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/append_features.html]
 #[monoruby_builtin]
-fn included(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::nil())
+fn append_features(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut base = lfp.arg(0).expect_class_or_module(&globals.store)?;
+    let include_module = lfp.self_val().expect_module(globals)?;
+    base.include_module(include_module)?;
+    Ok(lfp.self_val())
+}
+
+///
+/// ### Module#extend_object
+/// - extend_object(obj) -> obj
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/extend_object.html]
+#[monoruby_builtin]
+fn extend_object(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let obj = lfp.arg(0);
+    let mut class = globals.store.get_singleton(obj);
+    let include_module = lfp.self_val().expect_module(globals)?;
+    class.include_module(include_module)?;
+    Ok(obj)
 }
 
 ///
@@ -534,6 +581,14 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         vm.invoke_method_inner(
             globals,
             IdentId::get_id("prepend_features"),
+            v,
+            &[self_],
+            None,
+            None,
+        )?;
+        vm.invoke_method_if_exists(
+            globals,
+            IdentId::PREPENDED,
             v,
             &[self_],
             None,
@@ -581,12 +636,21 @@ fn instance_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/undef_method.html]
 #[monoruby_builtin]
-fn undef_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn undef_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
+    let receiver = globals.store[class_id].get_module().into();
     let names = lfp.arg(0).as_array();
     for name in names.iter().cloned() {
         let name = name.expect_symbol_or_string(globals)?;
         globals.undef_method_for_class(class_id, name)?;
+        vm.invoke_method_if_exists(
+            globals,
+            IdentId::METHOD_UNDEFINED,
+            receiver,
+            &[Value::symbol(name)],
+            None,
+            None,
+        )?;
     }
     Ok(lfp.self_val())
 }
@@ -598,12 +662,21 @@ fn undef_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/remove_method.html]
 #[monoruby_builtin]
-fn remove_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn remove_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
+    let receiver = globals.store[class_id].get_module().into();
     let names = lfp.arg(0).as_array();
     for name in names.iter().cloned() {
         let name = name.expect_symbol_or_string(globals)?;
         globals.remove_method(class_id, name)?;
+        vm.invoke_method_if_exists(
+            globals,
+            IdentId::METHOD_REMOVED,
+            receiver,
+            &[Value::symbol(name)],
+            None,
+            None,
+        )?;
     }
     Ok(lfp.self_val())
 }
@@ -730,11 +803,20 @@ fn module_function(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
         Ok(Value::nil())
     } else {
         let class_id = lfp.self_val().as_class_id();
+        let receiver = globals.store[class_id].get_module().into();
         let visi = vm.context_visibility();
         for v in arg0.as_array().iter() {
             let name = v.expect_symbol_or_string(globals)?;
             let func_id = globals.find_method_for_class(class_id, name)?.0;
             globals.add_singleton_method(class_id, name, func_id, visi);
+            vm.invoke_method_if_exists(
+                globals,
+                IdentId::SINGLETON_METHOD_ADDED,
+                receiver,
+                &[Value::symbol(name)],
+                None,
+                None,
+            )?;
         }
         Ok(arg0)
     }
@@ -1701,5 +1783,253 @@ mod tests {
         x
         "##,
         )
+    }
+
+    #[test]
+    fn included_callback() {
+        run_test(
+            r##"
+        $res = []
+        module M
+          def self.included(base)
+            $res << "included:#{base}"
+          end
+        end
+        class C
+          include M
+        end
+        $res
+        "##,
+        );
+    }
+
+    #[test]
+    fn extended_callback() {
+        run_test(
+            r##"
+        $res = []
+        module Foo
+          def self.extended(base)
+            $res << "extended:#{base}"
+          end
+        end
+        module Bar
+          extend Foo
+        end
+        $res
+        "##,
+        );
+        run_test(
+            r##"
+        $res = []
+        module M
+          def self.extended(base)
+            $res << "extended:#{base}"
+          end
+        end
+        class C
+          extend M
+        end
+        $res
+        "##,
+        );
+    }
+
+    #[test]
+    fn prepended_callback() {
+        run_test(
+            r##"
+        $res = []
+        module M
+          def self.prepended(base)
+            $res << "prepended:#{base}"
+          end
+        end
+        class C
+          prepend M
+        end
+        $res
+        "##,
+        );
+    }
+
+    #[test]
+    fn append_features_callback() {
+        run_test(
+            r##"
+        $res = []
+        module M
+          def self.append_features(base)
+            $res << "append_features:#{base}"
+            super
+          end
+        end
+        class C
+          include M
+        end
+        $res
+        "##,
+        );
+    }
+
+    #[test]
+    fn extend_object_callback() {
+        run_test(
+            r##"
+        $res = []
+        module M
+          def self.extend_object(obj)
+            $res << "extend_object:#{obj}"
+            super
+          end
+          def hello
+            "hello"
+          end
+        end
+        class C
+          extend M
+        end
+        $res << C.hello
+        $res
+        "##,
+        );
+    }
+
+    #[test]
+    fn method_added_hook() {
+        run_test_once(
+            r##"
+            $res = []
+            class C
+              def self.method_added(name)
+                $res << name
+              end
+              def foo; end
+              def bar; end
+            end
+            $res
+            "##,
+        );
+    }
+
+    #[test]
+    fn singleton_method_added_hook() {
+        run_test_once(
+            r##"
+            $res = []
+            class C
+              def self.singleton_method_added(name)
+                $res << name
+              end
+              def self.foo; end
+              def self.bar; end
+            end
+            $res
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_removed_hook() {
+        run_test_once(
+            r##"
+            $res = []
+            class C
+              def self.method_removed(name)
+                $res << name
+              end
+              def foo; end
+              def bar; end
+              remove_method :foo
+            end
+            $res
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_undefined_hook() {
+        run_test_once(
+            r##"
+            $res = []
+            class C
+              def self.method_undefined(name)
+                $res << name
+              end
+              def foo; end
+              undef_method :foo
+            end
+            $res
+            "##,
+        );
+    }
+
+    #[test]
+    fn const_added_hook() {
+        run_test_once(
+            r##"
+            $res = []
+            class C
+              def self.const_added(name)
+                $res << name
+              end
+              FOO = 1
+              BAR = 2
+            end
+            $res
+            "##,
+        );
+    }
+
+    #[test]
+    fn const_added_const_set() {
+        run_test_once(
+            r##"
+            $res = []
+            class C
+              def self.const_added(name)
+                $res << name
+              end
+            end
+            C.const_set(:FOO, 1)
+            $res
+            "##,
+        );
+    }
+
+    #[test]
+    fn define_method_hook() {
+        run_test_once(
+            r##"
+            $res = []
+            class C
+              def self.method_added(name)
+                $res << name
+              end
+              define_method(:foo) { 42 }
+            end
+            $res
+            "##,
+        );
+    }
+
+    #[test]
+    fn module_function_hook() {
+        run_test_once(
+            r##"
+            $res = []
+            module M
+              def self.method_added(name)
+                $res << [:method_added, name]
+              end
+              def self.singleton_method_added(name)
+                $res << [:singleton_method_added, name]
+              end
+              def foo; end
+              module_function :foo
+            end
+            $res
+            "##,
+        );
     }
 }

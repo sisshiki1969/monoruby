@@ -194,14 +194,29 @@ pub fn object_send(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/extend.html]
 #[monoruby_builtin]
-fn extend(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn extend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
-    let mut class = globals.store.get_singleton(lfp.self_val());
+    let self_val = lfp.self_val();
     for v in args.iter().cloned().rev() {
-        class.include_module(v.expect_module(globals)?)?;
+        vm.invoke_method_inner(
+            globals,
+            IdentId::EXTEND_OBJECT,
+            v,
+            &[self_val],
+            None,
+            None,
+        )?;
+        vm.invoke_method_if_exists(
+            globals,
+            IdentId::EXTENDED,
+            v,
+            &[self_val],
+            None,
+            None,
+        )?;
     }
     Ok(lfp.self_val())
 }

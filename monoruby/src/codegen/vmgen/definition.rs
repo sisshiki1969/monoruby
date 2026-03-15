@@ -148,6 +148,7 @@ impl Codegen {
     /// ~~~
     pub(super) fn vm_singleton_method_def(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        let raise = self.entry_raise();
         self.fetch_val_r15();
         monoasm! { &mut self.jit,
             movq r8, r15;
@@ -157,6 +158,8 @@ impl Codegen {
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::singleton_define_method);
             call rax;
+            testq rax, rax;
+            jz   raise;
         };
         self.fetch_and_dispatch();
         label

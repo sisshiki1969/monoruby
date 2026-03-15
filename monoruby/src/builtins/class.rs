@@ -40,14 +40,25 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/s/new.html]
 #[monoruby_builtin]
-fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn class_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.expect_no_block()?;
     let superclass = if lfp.try_arg(0).is_none() {
         None
     } else {
         Some(lfp.arg(0).expect_class(globals)?)
     };
+    let superclass_val = superclass
+        .unwrap_or_else(|| globals.store.object_class())
+        .as_val();
     let obj = globals.store.define_unnamed_class(superclass).as_val();
+    vm.invoke_method_if_exists(
+        globals,
+        IdentId::INHERITED,
+        superclass_val,
+        &[obj],
+        None,
+        None,
+    )?;
     Ok(obj)
 }
 
@@ -297,6 +308,54 @@ mod tests {
             $res << a.inspect
           end
         end
+        "##,
+        );
+    }
+
+    #[test]
+    fn inherited_callback() {
+        run_test_once(
+            r##"
+        $res = []
+        class A
+          def self.inherited(subclass)
+            $res << "inherited:#{subclass}"
+          end
+        end
+        class B < A
+        end
+        $res
+        "##,
+        );
+        run_test_once(
+            r##"
+        $res = []
+        class A
+          def self.inherited(subclass)
+            $res << "inherited:#{subclass}"
+          end
+        end
+        class B < A
+        end
+        class C < B
+        end
+        $res
+        "##,
+        );
+    }
+
+    #[test]
+    fn inherited_callback_class_new() {
+        run_test(
+            r##"
+        $res = []
+        class A
+          def self.inherited(subclass)
+            $res << "inherited"
+          end
+        end
+        Class.new(A)
+        $res
         "##,
         );
     }

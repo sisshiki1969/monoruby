@@ -1179,6 +1179,7 @@ pub(super) enum AsmInst {
     StoreConstant {
         id: ConstSiteId,
         using_xmm: UsingXmm,
+        error: AsmError,
     },
 
     ///
@@ -1434,12 +1435,14 @@ pub(super) enum AsmInst {
         name: IdentId,
         func_id: FuncId,
         using_xmm: UsingXmm,
+        error: AsmError,
     },
     SingletonMethodDef {
         obj: SlotId,
         name: IdentId,
         func_id: FuncId,
         using_xmm: UsingXmm,
+        error: AsmError,
     },
 
     ExpandArray {

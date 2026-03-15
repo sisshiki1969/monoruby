@@ -604,6 +604,15 @@ impl Executor {
                 .id();
         }
         globals.set_constant(parent, name, val);
+        let receiver = globals.store[parent].get_module().into();
+        self.invoke_method_if_exists(
+            globals,
+            IdentId::CONST_ADDED,
+            receiver,
+            &[Value::symbol(name)],
+            None,
+            None,
+        )?;
         Ok(())
     }
 
@@ -681,14 +690,25 @@ impl Executor {
             globals.add_singleton_method(class_id, name, func, visibility);
         }
         Codegen::check_bop_redefine(self.cfp());
+        let receiver = globals.store[class_id].get_module().into();
         self.invoke_method_if_exists(
             globals,
             IdentId::METHOD_ADDED,
-            globals.store[class_id].get_module().into(),
+            receiver,
             &[Value::symbol(name)],
             None,
             None,
         )?;
+        if module_function {
+            self.invoke_method_if_exists(
+                globals,
+                IdentId::SINGLETON_METHOD_ADDED,
+                receiver,
+                &[Value::symbol(name)],
+                None,
+                None,
+            )?;
+        }
         Ok(Value::nil())
     }
 }
@@ -1162,7 +1182,17 @@ impl Executor {
                 if is_module {
                     globals.define_module_with_identid(name, parent)
                 } else {
-                    globals.define_class_with_identid(name, Some(superclass), parent)
+                    let new_class =
+                        globals.define_class_with_identid(name, Some(superclass), parent);
+                    self.invoke_method_if_exists(
+                        globals,
+                        IdentId::INHERITED,
+                        superclass.as_val(),
+                        &[new_class.as_val()],
+                        None,
+                        None,
+                    )?;
+                    new_class
                 }
             }
         };
