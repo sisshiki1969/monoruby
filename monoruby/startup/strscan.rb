@@ -3,6 +3,7 @@
 # StringScanner implementation for monoruby.
 # Provides a simple lexical scanning interface for strings.
 #
+# Note: pos is always a byte offset, consistent with CRuby's StringScanner.
 
 class StringScanner
   def initialize(str)
@@ -16,7 +17,7 @@ class StringScanner
   alias pointer pos
 
   def pos=(n)
-    raise RangeError, "index out of range" if n < 0 || n > @str.length
+    raise RangeError, "index out of range" if n < 0 || n > @str.bytesize
     @pos = n
   end
   alias pointer= pos=
@@ -44,14 +45,14 @@ class StringScanner
   end
 
   def terminate
-    @pos = @str.length
+    @pos = @str.bytesize
     @match = nil
     self
   end
   alias clear terminate
 
   def eos?
-    @pos >= @str.length
+    @pos >= @str.bytesize
   end
 
   def rest?
@@ -59,11 +60,11 @@ class StringScanner
   end
 
   def rest
-    @str[@pos..-1] || ""
+    @str.byteslice(@pos..-1) || ""
   end
 
   def rest_size
-    @str.length - @pos
+    @str.bytesize - @pos
   end
 
   # --- Scanning methods ---
@@ -78,7 +79,7 @@ class StringScanner
 
   def skip(pattern)
     result = _match_at_pos(pattern, true, false)
-    result ? result.length : nil
+    result ? result.bytesize : nil
   end
 
   def skip_until(pattern)
@@ -88,7 +89,7 @@ class StringScanner
 
   def match?(pattern)
     result = _match_at_pos(pattern, false, false)
-    result ? result.length : nil
+    result ? result.bytesize : nil
   end
 
   def check(pattern)
@@ -105,13 +106,13 @@ class StringScanner
   end
 
   def peek(len)
-    @str[@pos, len] || ""
+    @str.byteslice(@pos, len) || ""
   end
   alias peep peek
 
   def getch
     return nil if eos?
-    ch = @str[@pos]
+    ch = @str.byteslice(@pos, 1)
     @prev_pos = @pos
     @pos += 1
     @match = nil
@@ -120,7 +121,7 @@ class StringScanner
 
   def get_byte
     return nil if eos?
-    byte = @str[@pos]
+    byte = @str.byteslice(@pos, 1)
     @prev_pos = @pos
     @pos += 1
     @match = nil
@@ -146,7 +147,7 @@ class StringScanner
   end
 
   def matched_size
-    @match ? @match[0].length : nil
+    @match ? @match[0].bytesize : nil
   end
 
   def [](n)
@@ -154,22 +155,22 @@ class StringScanner
   end
 
   def pre_match
-    @match ? @str[0...(@pos - @match[0].length)] : nil
+    @match ? @str.byteslice(0, @pos - @match[0].bytesize) : nil
   end
 
   def post_match
-    @match ? @str[@pos..-1] : nil
+    @match ? @str.byteslice(@pos..-1) : nil
   end
 
   # --- Misc ---
 
   def beginning_of_line?
-    @pos == 0 || @str[@pos - 1] == "\n"
+    @pos == 0 || @str.byteslice(@pos - 1, 1) == "\n"
   end
   alias bol? beginning_of_line?
 
   def charpos
-    @pos
+    @str.byteslice(0, @pos).length
   end
 
   def size
@@ -192,9 +193,9 @@ class StringScanner
     if eos?
       "#<StringScanner fin>"
     else
-      before = @pos > 5 ? "...#{@str[@pos-5...@pos].inspect}" : @str[0...@pos].inspect
-      after = rest_size > 5 ? "#{@str[@pos, 5].inspect}..." : rest.inspect
-      "#<StringScanner #{@pos}/#{@str.length} #{before} @ #{after}>"
+      before = @pos > 5 ? "...#{@str.byteslice(@pos-5, 5).inspect}" : @str.byteslice(0, @pos).inspect
+      after = rest_size > 5 ? "#{@str.byteslice(@pos, 5).inspect}..." : rest.inspect
+      "#<StringScanner #{@pos}/#{@str.bytesize} #{before} @ #{after}>"
     end
   end
 
@@ -206,7 +207,7 @@ class StringScanner
 
   def _match_at_pos(pattern, advance, return_string)
     @prev_pos = @pos
-    rest_str = @str[@pos..-1]
+    rest_str = @str.byteslice(@pos..-1)
     return nil if rest_str.nil?
 
     # We need the match to be anchored at the current position, preserving original options
@@ -214,7 +215,7 @@ class StringScanner
     if m
       @match = m
       matched_str = m[0]
-      @pos += matched_str.length if advance
+      @pos += matched_str.bytesize if advance
       return_string ? matched_str : matched_str
     else
       @match = nil
@@ -224,7 +225,7 @@ class StringScanner
 
   def _match_forward(pattern, advance, return_string)
     @prev_pos = @pos
-    rest_str = @str[@pos..-1]
+    rest_str = @str.byteslice(@pos..-1)
     return nil if rest_str.nil?
 
     m = rest_str.match(pattern)
@@ -234,7 +235,7 @@ class StringScanner
       if advance
         @pos += end_pos
       end
-      return_string ? @str[@prev_pos...(@prev_pos + end_pos)] : true
+      return_string ? @str.byteslice(@prev_pos, end_pos) : true
     else
       @match = nil
       nil
