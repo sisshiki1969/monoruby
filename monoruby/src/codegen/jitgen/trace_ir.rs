@@ -835,8 +835,8 @@ impl TraceIr {
                 }
                 format!("{s}]")
             }
-            TraceIr::Lambda { dst, func_id } => {
-                format!("{:?} = lambda[{:?}]", dst, func_id)
+            TraceIr::Lambda => {
+                format!("lambda (JIT aborted)")
             }
             TraceIr::Hash { dst, args, len } => {
                 format!("{:?} = hash[{:?}; {}]", dst, args, len)
