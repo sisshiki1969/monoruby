@@ -251,6 +251,46 @@ fn retry3() {
 }
 
 #[test]
+fn return_in_ensure() {
+    run_test_with_prelude(
+        "foo",
+        r#"
+            def foo
+              1
+            ensure
+              return 42
+            end
+        "#,
+    );
+    run_test_with_prelude(
+        "bar",
+        r#"
+            def bar
+              1
+            rescue
+              2
+            ensure
+              return 99
+            end
+        "#,
+    );
+    run_test_with_prelude(
+        "[baz, $x]",
+        r#"
+            def baz
+              $x = []
+              $x << :body
+              $x << :ensure_start
+              return 100 unless $!
+            ensure
+              $x << :ensure
+              return 200
+            end
+        "#,
+    );
+}
+
+#[test]
 fn retry_in_loop() {
     run_test(
         r#"
