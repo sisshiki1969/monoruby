@@ -24,6 +24,7 @@ impl<'a> BytecodeGen<'a> {
             BinOp::Shr => self.gen_binop_method(IdentId::_SHR, lhs, rhs, use_mode, loc),
             BinOp::Shl => self.gen_binop_method(IdentId::_SHL, lhs, rhs, use_mode, loc),
             BinOp::Match => self.gen_binop_method(IdentId::_MATCH, lhs, rhs, use_mode, loc),
+            BinOp::Unmatch => self.gen_binop_method(IdentId::_UNMATCH, lhs, rhs, use_mode, loc),
             BinOp::Compare => self.gen_binop_method(IdentId::_CMP, lhs, rhs, use_mode, loc),
             BinOp::LAnd => self.gen_land(use_mode, lhs, rhs),
             BinOp::LOr => self.gen_lor(use_mode, lhs, rhs),

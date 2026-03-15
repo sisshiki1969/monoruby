@@ -350,9 +350,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             Ok(Node::new_binop(BinOp::Match, lhs, rhs))
         } else if self.consume_punct_no_term(Punct::Unmatch)? {
             let rhs = self.parse_arg_comp()?;
-            let loc = lhs.loc().merge(rhs.loc());
-            let node = Node::new_binop(BinOp::Match, lhs, rhs);
-            Ok(Node::new_unop(UnOp::Not, node, loc))
+            Ok(Node::new_binop(BinOp::Unmatch, lhs, rhs))
         } else {
             Ok(lhs)
         }

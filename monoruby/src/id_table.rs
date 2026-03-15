@@ -174,6 +174,8 @@ impl IdentId {
     pub const EXTENDED: IdentId = id!(66);
     pub const INCLUDED: IdentId = id!(67);
     pub const PREPENDED: IdentId = id!(68);
+    pub const _UNMATCH: IdentId = id!(69);
+    pub const _NOT: IdentId = id!(70);
 }
 
 impl IdentId {
@@ -328,6 +330,8 @@ impl IdentifierTable {
         table.set_id("extended", IdentId::EXTENDED);
         table.set_id("included", IdentId::INCLUDED);
         table.set_id("prepended", IdentId::PREPENDED);
+        table.set_id("!~", IdentId::_UNMATCH);
+        table.set_id("!", IdentId::_NOT);
         table
     }
 

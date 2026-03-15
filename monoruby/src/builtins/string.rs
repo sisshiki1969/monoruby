@@ -2836,6 +2836,23 @@ mod tests {
         [res, s, $&, $']
         "##,
         );
+        // backreference expansion in gsub
+        run_test(
+            r##"
+        "abc-def-ghi".gsub(/(\w+)-(\w+)/, '\2-\1')
+        "##,
+        );
+        run_test(
+            r##"
+        "hello world".gsub(/(\w+)/, '[\1]')
+        "##,
+        );
+        // escaped backslash in gsub replacement
+        run_test(
+            r##"
+        "abc".gsub(/b/, '\\\\')
+        "##,
+        );
     }
 
     #[test]
@@ -2865,6 +2882,18 @@ mod tests {
             r##"
         s = "abcdefghdefr"
         s.sub!(/def1/, "!!")
+        "##,
+        );
+        // backreference expansion in sub
+        run_test(
+            r##"
+        "abc-def".sub(/(\w+)-(\w+)/, '\2-\1')
+        "##,
+        );
+        // escaped backslash in sub replacement
+        run_test(
+            r##"
+        "abc".sub(/b/, '\\\\')
         "##,
         );
     }

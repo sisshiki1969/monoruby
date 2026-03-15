@@ -290,6 +290,7 @@ impl Codegen {
         self.dispatch[121] = self.vm_pos();
         self.dispatch[122] = self.vm_neg();
         self.dispatch[123] = self.vm_bitnot();
+
         self.dispatch[132] = self.vm_index();
         self.dispatch[133] = self.vm_index_assign();
 

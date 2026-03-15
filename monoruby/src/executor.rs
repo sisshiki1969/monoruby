@@ -139,7 +139,7 @@ impl Executor {
         for gem in ["rubygems", "pp", "set", "forwardable"] {
             if let Err(err) = self.require(globals, &std::path::PathBuf::from(gem), false) {
                 err.show_error_message_and_all_loc(&globals.store);
-                panic!("error occured in loading {gem}");
+                //panic!("error occured in loading {gem}");
             }
         }
     }

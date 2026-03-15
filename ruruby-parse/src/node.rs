@@ -23,9 +23,9 @@ pub enum NodeKind {
         exclude_end: bool,
         is_const: bool,
     }, // start, end, exclude_end
-    Array(Vec<Node>, bool),          // Vec<ELEM>, is_constant_expr
+    Array(Vec<Node>, bool),             // Vec<ELEM>, is_constant_expr
     Hash(Vec<(Node, Node)>, Vec<Node>), // Vec<KEY, VALUE>, Vec<SPLAT>
-    RegExp(Vec<Node>, String, bool), // Vec<STRING>, option, is_constant_expr
+    RegExp(Vec<Node>, String, bool),    // Vec<STRING>, option, is_constant_expr
 
     LocalVar(usize, String),
     Ident(String),
@@ -347,6 +347,7 @@ pub enum BinOp {
     LAnd,
     LOr,
     Match,
+    Unmatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

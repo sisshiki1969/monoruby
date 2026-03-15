@@ -979,6 +979,7 @@ pub struct CallSiteInfo {
     pub(crate) hash_splat_pos: Vec<SlotId>,
     /// Position where the result is to be stored to.
     pub(crate) dst: Option<SlotId>,
+    #[allow(dead_code)]
     pub(crate) forwarding: bool,
 }
 

@@ -660,6 +660,7 @@ impl ParamsInfo {
         self.rest.map(|i| i as u16)
     }
 
+    #[allow(dead_code)]
     pub fn forwarding(&self) -> bool {
         self.forwarding
     }
