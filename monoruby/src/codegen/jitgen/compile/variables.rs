@@ -148,7 +148,12 @@ impl AbstractState {
     pub(super) fn store_constant(&mut self, ir: &mut AsmIr, src: SlotId, id: ConstSiteId) {
         self.load(ir, src, GP::Rax);
         let using_xmm = self.get_using_xmm();
-        ir.push(AsmInst::StoreConstant { id, using_xmm });
+        let error = ir.new_error(self);
+        ir.push(AsmInst::StoreConstant {
+            id,
+            using_xmm,
+            error,
+        });
         self.unset_side_effect_guard();
     }
 

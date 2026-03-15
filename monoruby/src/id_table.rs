@@ -164,6 +164,10 @@ impl IdentId {
     pub const EQL_: IdentId = id!(56);
     pub const TO_STR: IdentId = id!(57);
     pub const TO_PATH: IdentId = id!(58);
+    pub const SINGLETON_METHOD_ADDED: IdentId = id!(59);
+    pub const METHOD_REMOVED: IdentId = id!(60);
+    pub const METHOD_UNDEFINED: IdentId = id!(61);
+    pub const CONST_ADDED: IdentId = id!(62);
 }
 
 impl IdentId {
@@ -308,6 +312,10 @@ impl IdentifierTable {
         table.set_id("eql?", IdentId::EQL_);
         table.set_id("to_str", IdentId::TO_STR);
         table.set_id("to_path", IdentId::TO_PATH);
+        table.set_id("singleton_method_added", IdentId::SINGLETON_METHOD_ADDED);
+        table.set_id("method_removed", IdentId::METHOD_REMOVED);
+        table.set_id("method_undefined", IdentId::METHOD_UNDEFINED);
+        table.set_id("const_added", IdentId::CONST_ADDED);
         table
     }
 

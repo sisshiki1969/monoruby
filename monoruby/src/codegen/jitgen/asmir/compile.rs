@@ -542,8 +542,13 @@ impl Codegen {
                 let deopt = &labels[deopt];
                 self.guard_const_version(const_version, deopt);
             }
-            AsmInst::StoreConstant { id, using_xmm } => {
+            AsmInst::StoreConstant {
+                id,
+                using_xmm,
+                error,
+            } => {
                 self.store_constant(id, using_xmm);
+                self.handle_error(&labels[error]);
             }
 
             AsmInst::ArrayU16Index { idx } => {
@@ -689,16 +694,20 @@ impl Codegen {
                 name,
                 func_id,
                 using_xmm,
+                error,
             } => {
                 self.method_def(name, func_id, using_xmm);
+                self.handle_error(&labels[error]);
             }
             AsmInst::SingletonMethodDef {
                 obj,
                 name,
                 func_id,
                 using_xmm,
+                error,
             } => {
                 self.singleton_method_def(obj, name, func_id, using_xmm);
+                self.handle_error(&labels[error]);
             }
 
             AsmInst::ExpandArray {

@@ -604,6 +604,15 @@ impl Executor {
                 .id();
         }
         globals.set_constant(parent, name, val);
+        let receiver = globals.store[parent].get_module().into();
+        self.invoke_method_if_exists(
+            globals,
+            IdentId::CONST_ADDED,
+            receiver,
+            &[Value::symbol(name)],
+            None,
+            None,
+        )?;
         Ok(())
     }
 
@@ -681,14 +690,25 @@ impl Executor {
             globals.add_singleton_method(class_id, name, func, visibility);
         }
         Codegen::check_bop_redefine(self.cfp());
+        let receiver = globals.store[class_id].get_module().into();
         self.invoke_method_if_exists(
             globals,
             IdentId::METHOD_ADDED,
-            globals.store[class_id].get_module().into(),
+            receiver,
             &[Value::symbol(name)],
             None,
             None,
         )?;
+        if module_function {
+            self.invoke_method_if_exists(
+                globals,
+                IdentId::SINGLETON_METHOD_ADDED,
+                receiver,
+                &[Value::symbol(name)],
+                None,
+                None,
+            )?;
+        }
         Ok(Value::nil())
     }
 }

@@ -479,10 +479,12 @@ impl<'a> JitContext<'a> {
 
             TraceIr::MethodDef { name, func_id } => {
                 let using_xmm = state.get_using_xmm();
+                let error = ir.new_error(state);
                 ir.push(AsmInst::MethodDef {
                     name,
                     func_id,
                     using_xmm,
+                    error,
                 });
                 ir.check_bop(state);
                 state.unset_class_version_guard();
@@ -491,11 +493,13 @@ impl<'a> JitContext<'a> {
             TraceIr::SingletonMethodDef { obj, name, func_id } => {
                 state.write_back_slots(ir, &[obj]);
                 let using_xmm = state.get_using_xmm();
+                let error = ir.new_error(state);
                 ir.push(AsmInst::SingletonMethodDef {
                     obj,
                     name,
                     func_id,
                     using_xmm,
+                    error,
                 });
                 ir.check_bop(state);
                 state.unset_class_version_guard();

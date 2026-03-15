@@ -65,6 +65,18 @@ class Module
   def method_added(name)
   end
 
+  def method_removed(name)
+  end
+
+  def method_undefined(name)
+  end
+
+  def singleton_method_added(name)
+  end
+
+  def const_added(name)
+  end
+
   def const_missing(name)
     raise NameError, "uninitialized constant #{self}::#{name}"
   end

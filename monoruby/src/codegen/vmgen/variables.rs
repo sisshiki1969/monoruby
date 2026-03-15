@@ -116,6 +116,7 @@ impl Codegen {
     //
     pub(super) fn vm_store_const(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        let raise = self.entry_raise();
         let const_version = self.const_version_label();
         self.fetch2();
         self.vm_get_slot_value(GP::R15);
@@ -127,6 +128,8 @@ impl Codegen {
             addq [rip + const_version], 1;
             movq rax, (runtime::set_constant);
             call rax;
+            testq rax, rax;
+            jz   raise;
         };
         self.fetch_and_dispatch();
         label

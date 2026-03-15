@@ -610,8 +610,14 @@ pub(super) extern "C" fn set_constant(
     globals: &mut Globals,
     id: ConstSiteId,
     val: Value,
-) {
-    vm.set_constant(globals, id, val).unwrap();
+) -> Option<Value> {
+    match vm.set_constant(globals, id, val) {
+        Ok(_) => Some(Value::nil()),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 ///
@@ -747,7 +753,7 @@ pub(super) extern "C" fn singleton_define_method(
     name: IdentId,
     func: FuncId,
     obj: Value,
-) {
+) -> Option<Value> {
     let current_func = vm.method_func_id();
     if let Some(iseq) = globals.store[func].is_iseq() {
         globals.store[iseq].lexical_context =
@@ -755,6 +761,20 @@ pub(super) extern "C" fn singleton_define_method(
     }
     let class_id = globals.store.get_singleton(obj).id();
     globals.add_public_method(class_id, name, func);
+    match vm.invoke_method_if_exists(
+        globals,
+        IdentId::SINGLETON_METHOD_ADDED,
+        obj,
+        &[Value::symbol(name)],
+        None,
+        None,
+    ) {
+        Ok(_) => Some(Value::nil()),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 pub(super) extern "C" fn undef_method(
@@ -764,15 +784,29 @@ pub(super) extern "C" fn undef_method(
 ) -> Option<Value> {
     let func_id = vm.cfp().lfp().func_id();
     let class_id = func_id.lexical_class(globals);
-    globals
-        .undef_method_for_class(class_id, method)
-        .map_or_else(
-            |err| {
-                vm.set_error(err);
-                None
-            },
-            |_| Some(Value::nil()),
-        )
+    match globals.undef_method_for_class(class_id, method) {
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+        Ok(_) => {
+            let receiver = globals.store[class_id].get_module().into();
+            match vm.invoke_method_if_exists(
+                globals,
+                IdentId::METHOD_UNDEFINED,
+                receiver,
+                &[Value::symbol(method)],
+                None,
+                None,
+            ) {
+                Ok(_) => Some(Value::nil()),
+                Err(err) => {
+                    vm.set_error(err);
+                    None
+                }
+            }
+        }
+    }
 }
 
 pub(super) extern "C" fn alias_method(
