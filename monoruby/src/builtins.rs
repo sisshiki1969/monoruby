@@ -28,6 +28,7 @@ mod process;
 mod random;
 mod range;
 mod regexp;
+mod set;
 mod string;
 mod struct_class;
 mod symbol;
@@ -81,6 +82,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     binding::init(globals);
     dir::init(globals);
     match_data::init(globals);
+    set::init(globals);
     main_object::init(globals);
     globals.object_class().include_module(kernel).unwrap();
 }

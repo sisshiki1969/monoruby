@@ -57,6 +57,7 @@ pub const STOP_ITERATION_CLASS: ClassId = ClassId::new(47);
 pub const SYSTEM_EXIT_ERROR_CLASS: ClassId = ClassId::new(48);
 
 pub const MATCHDATA_CLASS: ClassId = ClassId::new(49);
+pub const SET_CLASS: ClassId = ClassId::new(50);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
@@ -116,6 +117,7 @@ impl std::fmt::Debug for ClassId {
             48 => write!(f, "SYSTEM_EXIT_ERROR"),
 
             49 => write!(f, "MATCHDATA"),
+            50 => write!(f, "SET"),
             n => write!(f, "ClassId({n})"),
         }
     }

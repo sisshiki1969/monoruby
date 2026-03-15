@@ -81,6 +81,10 @@ class NilClass
   end
 end
 
+class Set
+  include Enumerable
+end
+
 class Hash
   include Enumerable
 

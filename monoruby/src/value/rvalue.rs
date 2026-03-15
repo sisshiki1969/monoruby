@@ -602,6 +602,7 @@ impl alloc::GC<RValue> for RValue {
                 ObjTy::GENERATOR => self.as_generator().mark(alloc),
                 ObjTy::BINDING => self.as_binding().mark(alloc),
                 ObjTy::UMETHOD => {}
+                ObjTy::MATCHDATA => {}
                 _ => unreachable!("mark {:016x} {:?}", self.id(), self.ty()),
             }
         }
