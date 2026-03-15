@@ -919,10 +919,16 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn emit_ret(&mut self, src: Option<BcReg>) -> Result<()> {
-        let ensure: Vec<_> = self.ensure.iter().rev().filter_map(|e| e.clone()).collect();
-        for ensure in ensure.into_iter() {
+        // Temporarily take the ensure stack to avoid infinite recursion when
+        // a `return` appears inside an `ensure` block.  Without this, the
+        // `return` in the ensure body would call `emit_ret` again, which would
+        // re-generate the same ensure block, leading to unbounded recursion.
+        let ensures: Vec<_> = std::mem::take(&mut self.ensure);
+        let ensure_nodes: Vec<_> = ensures.iter().rev().filter_map(|e| e.clone()).collect();
+        for ensure in ensure_nodes.into_iter() {
             self.gen_expr(ensure.clone(), UseMode2::NotUse)?;
         }
+        self.ensure = ensures;
         let ret = match src {
             Some(ret) => ret,
             None => self.pop().into(),
