@@ -851,7 +851,7 @@ impl std::ops::IndexMut<ClassId> for ClassInfoTable {
 impl ClassInfoTable {
     fn new() -> Self {
         Self {
-            table: vec![ClassInfo::new(); 50],
+            table: vec![ClassInfo::new(); 100],
         }
     }
 
