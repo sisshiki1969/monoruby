@@ -89,10 +89,7 @@ pub(crate) enum TraceIr {
         dst: SlotId,
         callid: CallSiteId,
     },
-    Lambda {
-        dst: SlotId,
-        func_id: FuncId,
-    },
+    Lambda,
     Hash {
         dst: SlotId,
         args: SlotId,
@@ -315,7 +312,9 @@ pub(crate) enum TraceIr {
     },
     /// loop start marker
     LoopStart {
+        #[cfg(feature = "dump-traceir")]
         counter: u32,
+        #[cfg(feature = "dump-traceir")]
         jit_addr: *const u8,
     },
     LoopEnd,
@@ -352,7 +351,9 @@ impl TraceIr {
                     BrKind::from(opcode - 12),
                 ),
                 14 => TraceIr::LoopStart {
+                    #[cfg(feature = "dump-traceir")]
                     counter: op1_l,
+                    #[cfg(feature = "dump-traceir")]
                     jit_addr: pc.into_jit_addr(),
                 },
                 15 => TraceIr::LoopEnd,
@@ -450,10 +451,7 @@ impl TraceIr {
                     }
                 }
                 37 => TraceIr::NilBr(SlotId::new(op1_w), op1_l as i32),
-                38 => TraceIr::Lambda {
-                    dst: SlotId::new(op1_w),
-                    func_id: FuncId::new(op1_l),
-                },
+                38 => TraceIr::Lambda,
                 39 => TraceIr::Array {
                     dst: SlotId::new(op1_w),
                     callid: CallSiteId::from(op1_l),

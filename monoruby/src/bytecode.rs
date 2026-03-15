@@ -113,6 +113,7 @@ impl Bytecode {
         if op == 0 { None } else { Some(FuncId::new(op)) }
     }
 
+    #[cfg(feature = "dump-traceir")]
     pub fn into_jit_addr(self) -> *const u8 {
         self.op2.0 as _
     }
