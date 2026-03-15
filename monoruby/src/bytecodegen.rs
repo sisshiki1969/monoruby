@@ -963,8 +963,11 @@ impl<'a> BytecodeGen<'a> {
         );
     }
 
-    fn emit_nilbr(&mut self, cond: BcReg, jmp_pos: Label) {
+    fn emit_nilbr(&mut self, cond: BcReg, jmp_pos: Label, merge_sp: u16) {
+        let saved_temp = self.temp;
+        self.temp = merge_sp;
         self.add_merge(jmp_pos);
+        self.temp = saved_temp;
         self.emit(BytecodeInst::NilBr(cond, jmp_pos), Loc::default());
     }
 

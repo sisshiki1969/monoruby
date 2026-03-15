@@ -478,6 +478,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     Ok("-")
                 }
             }
+            Punct::DMul => Ok("**"),
             Punct::Mul => Ok("*"),
             Punct::Div => Ok("/"),
             Punct::Rem => Ok("%"),
