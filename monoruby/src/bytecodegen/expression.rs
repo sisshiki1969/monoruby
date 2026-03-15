@@ -697,6 +697,16 @@ impl<'a> BytecodeGen<'a> {
             }
             NodeKind::AliasMethod(box new, box old) => {
                 match (new.kind, old.kind) {
+                    (NodeKind::Symbol(ref new_name), NodeKind::Symbol(ref old_name))
+                        if new_name.starts_with('$') && old_name.starts_with('$') =>
+                    {
+                        // TODO:Global variable alias (e.g. alias $MATCH $&)
+                        // Currently a no-op; global variable aliases are not yet supported.
+                        return Err(self.unsupported_feature(
+                            "Global variable aliasing is not supported.",
+                            loc,
+                        ));
+                    }
                     (NodeKind::Symbol(new), NodeKind::Symbol(old)) => {
                         let temp = self.temp;
                         let new = IdentId::get_id_from_string(new);

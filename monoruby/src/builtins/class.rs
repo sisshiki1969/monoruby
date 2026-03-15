@@ -68,7 +68,12 @@ fn class_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/new.html]
 #[monoruby_builtin]
-pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn new(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let obj =
         vm.invoke_method_inner(globals, IdentId::ALLOCATE, lfp.self_val(), &[], None, None)?;
 
@@ -95,7 +100,12 @@ pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/superclass.html]
 #[monoruby_builtin]
-fn superclass(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn superclass(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let class = lfp.self_val().as_class();
     match class.get_real_superclass() {
         Some(class) => Ok(class.into()),
@@ -375,5 +385,103 @@ mod tests {
         "#,
         );
         run_test("Math::DomainError");
+    }
+
+    #[test]
+    fn alias_keyword() {
+        run_test(
+            r#"
+            class Foo
+              def bar; "bar"; end
+              alias baz bar
+            end
+            Foo.new.baz
+            "#,
+        );
+    }
+
+    #[test]
+    fn alias_global_var_error() {
+        run_test_error(
+            r#"
+            alias $MATCH $&
+            "#,
+        );
+    }
+
+    #[test]
+    fn def_operator_dmul() {
+        run_test(
+            r#"
+            class Foo
+              def **(other)
+                "pow #{other}"
+              end
+            end
+            Foo.new ** 3
+            "#,
+        );
+    }
+
+    //#[test]
+    //fn def_operator_not() {
+    //    // Parsing `def !` is now supported; verify it doesn't cause a parse error.
+    //    run_test(
+    //        r#"
+    //        class Foo
+    //          def !
+    //            "negated"
+    //          end
+    //        end
+    //        !Foo.new
+    //        "#,
+    //    );
+    //}
+
+    #[test]
+    fn def_operator_unmatch() {
+        // Parsing `def !~` is now supported; verify it doesn't cause a parse error.
+        run_test(
+            r#"
+            class Foo
+              def !~(other)
+                "not match #{other}"
+              end
+            end
+            Foo.new !~ /regex/
+            "#,
+        );
+    }
+
+    #[test]
+    fn unmatch_operator() {
+        // Default !~ (negation of =~)
+        run_test(r#""hello" !~ /ell/"#);
+        run_test(r#""hello" !~ /xyz/"#);
+        // Override both =~ and !~
+        run_test(
+            r#"
+            class Bar
+              def =~(other)
+                "matched"
+              end
+              def !~(other)
+                "custom not match"
+              end
+            end
+            [Bar.new =~ "x", Bar.new !~ "x"]
+            "#,
+        );
+        // Override only =~; default !~ should negate it
+        run_test(
+            r#"
+            class Baz
+              def =~(other)
+                true
+              end
+            end
+            Baz.new !~ "x"
+            "#,
+        );
     }
 }

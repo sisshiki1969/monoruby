@@ -12,6 +12,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     let klass = globals.define_toplevel_module("Kernel");
     let kernel_class = klass.id();
     globals.define_builtin_inline_func(kernel_class, "nil?", nil, Box::new(kernel_nil), 0);
+    globals.define_builtin_func(kernel_class, "!~", not_match, 1);
     globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
     globals.define_builtin_module_func(kernel_class, "gets", gets, 0);
     globals.define_builtin_module_func_rest(kernel_class, "print", print);
@@ -158,6 +159,19 @@ fn kernel_nil(
         state.def_rax2acc(ir, dst);
     }
     true
+}
+
+///
+/// ### Kernel#!~
+///
+/// - self !~ (other) -> bool
+///
+#[monoruby_builtin]
+fn not_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let lhs = lfp.self_val();
+    let rhs = lfp.arg(0);
+    let res = vm.invoke_method_inner(globals, IdentId::_MATCH, lhs, &[rhs], None, None)?;
+    Ok(Value::bool(!res.as_bool()))
 }
 
 fn kernel_block_given(
@@ -367,12 +381,7 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/block_given=3f.html]
 #[monoruby_builtin]
-fn block_given(
-    vm: &mut Executor,
-    _globals: &mut Globals,
-    _: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn block_given(vm: &mut Executor, _globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(vm.cfp().prev().unwrap().block_given()))
 }
 
@@ -791,12 +800,7 @@ fn system(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/=60.html]
 #[monoruby_builtin]
-fn command(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let (program, args) = prepare_command_arg(arg0.as_str());
     match std::process::Command::new(program).args(&args).output() {
@@ -1202,12 +1206,7 @@ fn memcpyv(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// - read_memory(ptr, length)
 ///
 #[monoruby_builtin]
-fn read_memory(
-    _: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn read_memory(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ptr = lfp.arg(0).expect_integer(globals)? as *mut u8;
     let len = lfp.arg(1).expect_integer(globals)? as usize;
     let slice = unsafe { std::slice::from_raw_parts(ptr, len) };

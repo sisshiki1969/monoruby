@@ -462,7 +462,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     /// Return IdentId of the operator.
     fn parse_op_definable(&mut self, punct: &Punct) -> Result<&'static str, LexerErr> {
         // TODO: must support
-        // **  ` !  !~
+        // ` !
         match punct {
             Punct::Plus => {
                 if self.consume_char('@') {
@@ -497,6 +497,9 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             Punct::TEq => Ok("==="),
             Punct::Match => Ok("=~"),
             Punct::BitXor => Ok("^"),
+            Punct::DMul => Ok("**"),
+            //Punct::Not => Ok("!"),
+            Punct::Unmatch => Ok("!~"),
             Punct::LBracket => {
                 if self.consume_punct_no_term(Punct::RBracket)? {
                     if self.consume_punct_no_term(Punct::Assign)? {
@@ -1158,5 +1161,24 @@ mod test {
         // Block arg
         parse_test("foo(&b)");
         parse_test("foo(1, &b)");
+    }
+
+    #[test]
+    fn parse_def_operators() {
+        parse_test("class Foo; def **(other); end; end");
+        //parse_test("class Foo; def !; end; end");
+        parse_test("class Foo; def !~(other); end; end");
+    }
+
+    #[test]
+    fn parse_alias_special_var() {
+        parse_test("alias $MATCH $&");
+        parse_test("alias $PREMATCH $'");
+        parse_test("alias $LOAD_PATH $:");
+    }
+
+    #[test]
+    fn parse_alias_method() {
+        parse_test("class Foo; def bar; end; alias baz bar; end");
     }
 }

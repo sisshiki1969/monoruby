@@ -382,19 +382,20 @@ impl RegexpInner {
         given: &str,
         replace: &str,
     ) -> Result<(String, bool)> {
-        let mut range = vec![];
+        let mut replacements = vec![];
         vm.clear_capture_special_variables();
         let mut last_captures = None;
         for cap in self.captures_iter(given) {
             let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
             let m = cap.get(0).unwrap();
-            range.push(m.range());
+            let rep = Self::expand_backref(replace, &cap);
+            replacements.push((m.range(), rep));
             last_captures = Some(cap);
         }
         let mut res = given.to_string();
-        let is_empty = range.is_empty();
-        for r in range.into_iter().rev() {
-            res.replace_range(r, replace);
+        let is_empty = replacements.is_empty();
+        for (r, rep) in replacements.into_iter().rev() {
+            res.replace_range(r, &rep);
         }
 
         if let Some(c) = last_captures {
@@ -402,6 +403,35 @@ impl RegexpInner {
         }
 
         Ok((res, !is_empty))
+    }
+
+    /// Expand backreference sequences (`\1`, `\2`, etc.) in `replace` using `captures`.
+    fn expand_backref(replace: &str, captures: &Captures) -> String {
+        let mut rep = String::new();
+        let mut escape = false;
+        for ch in replace.chars() {
+            if escape {
+                match ch {
+                    '0'..='9' => {
+                        let i = ch as usize - '0' as usize;
+                        if let Some(m) = captures.get(i) {
+                            rep += m.as_str()
+                        }
+                    }
+                    '\\' => rep.push('\\'),
+                    _ => {
+                        rep.push('\\');
+                        rep.push(ch);
+                    }
+                };
+                escape = false;
+            } else if ch != '\\' {
+                rep.push(ch);
+            } else {
+                escape = true;
+            }
+        }
+        rep
     }
 
     /// Replaces the leftmost-first match for `self` in `given` string with `replace`.
@@ -419,26 +449,7 @@ impl RegexpInner {
             Some(captures) => {
                 let mut res = given.to_string();
                 let m = captures.get(0).unwrap();
-                let mut rep = "".to_string();
-                let mut escape = false;
-                for ch in replace.chars() {
-                    if escape {
-                        match ch {
-                            '0'..='9' => {
-                                let i = ch as usize - '0' as usize;
-                                if let Some(m) = captures.get(i) {
-                                    rep += m.as_str()
-                                }
-                            }
-                            _ => rep.push(ch),
-                        };
-                        escape = false;
-                    } else if ch != '\\' {
-                        rep.push(ch);
-                    } else {
-                        escape = true;
-                    }
-                }
+                let rep = Self::expand_backref(replace, &captures);
                 res.replace_range(m.start()..m.end(), &rep);
                 Ok((res, Some(captures)))
             }
