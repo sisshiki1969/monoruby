@@ -6,7 +6,7 @@ use std::sync::{LazyLock, RwLock};
 static REGEX_CACHE: LazyLock<RwLock<RegexCache>> = LazyLock::new(|| RwLock::new(RegexCache::new()));
 
 #[derive(Debug, Default)]
-struct RegexCache(HashMap<(String, u32), Arc<Regex>>);
+struct RegexCache(HashMap<(String, u32, OnigmoEncoding), Arc<Regex>>);
 
 impl RegexCache {
     fn new() -> Self {
@@ -18,24 +18,47 @@ impl RegexCache {
 pub struct Regexp(Value);
 
 #[derive(Clone, Debug)]
-pub struct RegexpInner(Arc<Regex>);
+pub struct RegexpInner {
+    regex: Arc<Regex>,
+    encoding: OnigmoEncoding,
+}
 
 impl PartialEq for RegexpInner {
     fn eq(&self, other: &Self) -> bool {
-        if Arc::ptr_eq(&self.0, &other.0) {
+        if Arc::ptr_eq(&self.regex, &other.regex) {
             return true;
         }
-        self.as_str() == other.as_str()
+        self.as_str() == other.as_str() && self.encoding == other.encoding
     }
 }
 
 impl RegexpInner {
+    /// Ruby's Regexp::NOENCODING constant (value 32).
+    /// When set in options, the regexp uses ASCII-8BIT (binary) encoding.
+    pub const NOENCODING: u32 = 32;
+
+    /// Ruby's Regexp::FIXEDENCODING constant (value 16).
+    pub const FIXEDENCODING: u32 = 16;
+
     pub fn as_str(&self) -> &str {
-        self.0.as_str()
+        self.regex.as_str()
+    }
+
+    pub fn encoding(&self) -> OnigmoEncoding {
+        self.encoding
     }
 
     pub fn option(&self) -> u32 {
-        self.0.option()
+        let mut opt = self.regex.option();
+        if self.encoding == OnigmoEncoding::ASCII {
+            opt |= Self::NOENCODING;
+        }
+        opt
+    }
+
+    /// Returns the raw onigmo option without Ruby encoding flags.
+    pub fn raw_option(&self) -> u32 {
+        self.regex.option()
     }
 
     pub fn option_string(&self) -> String {
@@ -78,17 +101,18 @@ impl RegexpInner {
             .write()
             .unwrap()
             .0
-            .entry((reg_str.clone(), option))
+            .entry((reg_str.clone(), option, encoding))
         {
-            std::collections::hash_map::Entry::Occupied(entry) => {
-                Ok(RegexpInner(entry.get().clone()))
-            }
+            std::collections::hash_map::Entry::Occupied(entry) => Ok(RegexpInner {
+                regex: entry.get().clone(),
+                encoding,
+            }),
             std::collections::hash_map::Entry::Vacant(entry) => {
                 match Regex::new_with_option_and_encoding(&reg_str, option, encoding) {
                     Ok(regexp) => {
                         let regex = Arc::new(regexp);
                         entry.insert(regex.clone());
-                        Ok(RegexpInner(regex))
+                        Ok(RegexpInner { regex, encoding })
                     }
                     Err(err) => Err(MonorubyErr::regexerr(err)),
                 }
@@ -97,11 +121,11 @@ impl RegexpInner {
     }
 
     pub fn get_group_members(&self, name: &str) -> Vec<i32> {
-        self.0.get_group_nembers(name)
+        self.regex.get_group_nembers(name)
     }
 
     pub fn capture_names(&self) -> Result<Vec<String>> {
-        self.0
+        self.regex
             .capture_names()
             .map_err(|err| MonorubyErr::regexerr(err.message()))
     }
@@ -116,7 +140,7 @@ impl RegexpInner {
         pos: usize,
         vm: &mut Executor,
     ) -> Result<Option<Captures<'a>>> {
-        match self.0.captures_from_pos(given, pos) {
+        match self.regex.captures_from_pos(given, pos) {
             Ok(res) => {
                 if let Some(captures) = &res {
                     vm.save_capture_special_variables(captures)
@@ -130,7 +154,7 @@ impl RegexpInner {
     }
 
     pub fn captures_iter<'a>(&self, given: &'a str) -> FindCaptures<'_, 'a> {
-        self.0.captures_iter(given)
+        self.regex.captures_iter(given)
     }
 
     /// Find the leftmost-first match for `given`.
@@ -339,7 +363,7 @@ impl RegexpInner {
         let mut ary = vec![];
         let mut last_captures = None;
         vm.clear_capture_special_variables();
-        for cap in self.0.captures_iter(given) {
+        for cap in self.regex.captures_iter(given) {
             let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
             match cap.len() {
                 0 => unreachable!(),
