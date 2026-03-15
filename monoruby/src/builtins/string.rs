@@ -66,6 +66,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "lines", lines, 0);
     globals.define_builtin_func(STRING_CLASS, "bytes", bytes, 0);
     globals.define_builtin_func(STRING_CLASS, "getbyte", getbyte, 1);
+    globals.define_builtin_func_with(STRING_CLASS, "byteslice", byteslice, 1, 2, false);
     globals.define_builtin_func(STRING_CLASS, "setbyte", setbyte, 2);
     globals.define_builtin_func_with(STRING_CLASS, "each_line", each_line, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
@@ -1802,6 +1803,138 @@ fn setbyte(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 }
 
 ///
+/// ### String#byteslice
+///
+/// - byteslice(nth) -> String | nil
+/// - byteslice(nth, len) -> String | nil
+/// - byteslice(range) -> String | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/byteslice.html]
+#[monoruby_builtin]
+fn byteslice(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let s = self_.as_rstring_inner();
+    let byte_len = s.len();
+    let enc = s.encoding();
+
+    let conv_byte_index = |i: i64| -> Option<usize> {
+        if i >= 0 {
+            if (i as usize) < byte_len {
+                Some(i as usize)
+            } else {
+                None
+            }
+        } else {
+            let idx = byte_len as i64 + i;
+            if idx < 0 {
+                None
+            } else {
+                Some(idx as usize)
+            }
+        }
+    };
+
+    if let Some(range) = lfp.arg(0).is_range() {
+        let start = range.start().expect_integer(globals)?;
+        let end = range.end().expect_integer(globals)?;
+        let start = match {
+            if start >= 0 {
+                if (start as usize) <= byte_len {
+                    Some(start as usize)
+                } else {
+                    None
+                }
+            } else {
+                let idx = byte_len as i64 + start;
+                if idx < 0 {
+                    None
+                } else {
+                    Some(idx as usize)
+                }
+            }
+        } {
+            Some(s) => s,
+            None => return Ok(Value::nil()),
+        };
+        let end = if end >= 0 {
+            let e = if range.exclude_end() {
+                end as usize
+            } else {
+                (end as usize).saturating_add(1)
+            };
+            e.min(byte_len)
+        } else {
+            let idx = byte_len as i64 + end;
+            if idx < 0 {
+                return Ok(Value::nil());
+            }
+            let e = if range.exclude_end() {
+                idx as usize
+            } else {
+                (idx as usize).saturating_add(1)
+            };
+            e.min(byte_len)
+        };
+        if start > end {
+            return Ok(Value::string_from_inner(RStringInner::from_encoding(
+                &[], enc,
+            )));
+        }
+        Ok(Value::string_from_inner(RStringInner::from_encoding(
+            &s[start..end],
+            enc,
+        )))
+    } else {
+        let i = lfp.arg(0).expect_integer(globals)?;
+        if let Some(arg1) = lfp.try_arg(1) {
+            // byteslice(nth, len)
+            let len = arg1.coerce_to_i64(globals)?;
+            if len < 0 {
+                return Ok(Value::nil());
+            }
+            let start = match {
+                if i >= 0 {
+                    if (i as usize) <= byte_len {
+                        Some(i as usize)
+                    } else {
+                        None
+                    }
+                } else {
+                    let idx = byte_len as i64 + i;
+                    if idx < 0 {
+                        None
+                    } else {
+                        Some(idx as usize)
+                    }
+                }
+            } {
+                Some(s) => s,
+                None => return Ok(Value::nil()),
+            };
+            let end = (start + len as usize).min(byte_len);
+            Ok(Value::string_from_inner(RStringInner::from_encoding(
+                &s[start..end],
+                enc,
+            )))
+        } else {
+            // byteslice(nth)
+            match conv_byte_index(i) {
+                Some(idx) => Ok(Value::string_from_inner(RStringInner::from_encoding(
+                    &s[idx..idx + 1],
+                    enc,
+                ))),
+                None => Ok(Value::nil()),
+            }
+        }
+    }
+}
+
+///
 /// ### String#each_line
 ///
 /// - each_line(rs = $/, [NOT SUPPORTED] chomp: false) {|line| ... } -> self
@@ -3187,6 +3320,22 @@ mod tests {
         run_test(r##"s = "ABC"; s.setbyte(0, -129); s.getbyte(0)"##);
         run_test_error(r##""ABC".setbyte(3, 0)"##);
         run_test_error(r##""ABC".setbyte(-4, 0)"##);
+    }
+
+    #[test]
+    fn byteslice() {
+        run_test(r##""hello".byteslice(1)"##);
+        run_test(r##""hello".byteslice(-1)"##);
+        run_test(r##""hello".byteslice(5)"##);
+        run_test(r##""hello".byteslice(-6)"##);
+        run_test(r##""hello".byteslice(1, 2)"##);
+        run_test(r##""hello".byteslice(1, 0)"##);
+        run_test(r##""hello".byteslice(1, -1)"##);
+        run_test(r##""hello".byteslice(1..3)"##);
+        run_test(r##""hello".byteslice(1...3)"##);
+        run_test(r##""hello".byteslice(-3..-1)"##);
+        run_test(r##""hello".byteslice(0, 5)"##);
+        run_test(r##""hello".byteslice(0, 100)"##);
     }
 
     #[test]

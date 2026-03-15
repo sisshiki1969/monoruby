@@ -28,6 +28,7 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_func(REGEXP_CLASS, "=~", regexp_match, 1);
     globals.define_builtin_func(REGEXP_CLASS, "===", teq, 1);
     globals.define_builtin_func(REGEXP_CLASS, "source", source, 0);
+    globals.define_builtin_func(REGEXP_CLASS, "options", options, 0);
     globals.define_builtin_func_with(REGEXP_CLASS, "match?", match_, 1, 2, false);
     globals.define_builtin_func_with(REGEXP_CLASS, "match", rmatch, 1, 2, false);
 }
@@ -191,6 +192,18 @@ fn source(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result
 }
 
 ///
+/// ### Regexp#options
+/// - options -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/options.html]
+#[monoruby_builtin]
+fn options(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let regexp = self_.is_regex().unwrap();
+    Ok(Value::integer(regexp.option() as i64))
+}
+
+///
 /// ### Regexp#match?
 /// - match?(str, pos = 0) -> bool
 ///
@@ -314,6 +327,15 @@ mod tests {
     #[test]
     fn union() {
         run_test(r##"Regexp.union(/g/i, "a(b)[c]d", /bbbb/x, /cccc/m).to_s"##);
+    }
+
+    #[test]
+    fn regexp_options() {
+        run_test(r##"/foo/.options"##);
+        run_test(r##"/foo/i.options"##);
+        run_test(r##"/foo/m.options"##);
+        run_test(r##"/foo/x.options"##);
+        run_test(r##"/foo/mix.options"##);
     }
 
     #[test]

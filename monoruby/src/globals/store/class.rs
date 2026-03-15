@@ -766,6 +766,10 @@ impl Store {
         self.add_method(class_id, name, func_id, Visibility::Public)
     }
 
+    pub(crate) fn add_private_method(&mut self, class_id: ClassId, name: IdentId, func_id: FuncId) {
+        self.add_method(class_id, name, func_id, Visibility::Private)
+    }
+
     ///
     /// Add a new method *func* with *name* to the class of *class_id*.
     ///

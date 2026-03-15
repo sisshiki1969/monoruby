@@ -73,6 +73,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "join", join, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "first", first, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "last", last, 0, 1, false);
+    globals.define_builtin_func_with(ARRAY_CLASS, "fetch", fetch, 1, 2, false);
     globals.define_builtin_func(ARRAY_CLASS, "take", take, 1);
     globals.define_builtin_func_with(ARRAY_CLASS, "sum", sum, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "min", min, 0);
@@ -1106,6 +1107,41 @@ fn last(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             ary.len() - n as usize
         };
         Ok(Value::array_from_iter(ary[n..].iter().cloned()))
+    }
+}
+
+///
+/// ### Array#fetch
+///
+/// - fetch(nth) -> object
+/// - fetch(nth, ifnone) -> object
+/// - fetch(nth) {|nth| ... } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/fetch.html]
+#[monoruby_builtin]
+fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ary = lfp.self_val().as_array();
+    let index = lfp.arg(0).coerce_to_i64(globals)?;
+    let resolved = ary.get_array_index(index);
+    if let Some(idx) = resolved {
+        if let Some(val) = ary.get(idx) {
+            return Ok(*val);
+        }
+    }
+    // Index out of bounds
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let val = vm.invoke_block(globals, &data, &[lfp.arg(0)])?;
+        Ok(val)
+    } else if let Some(default) = lfp.try_arg(1) {
+        Ok(default)
+    } else {
+        Err(MonorubyErr::indexerr(format!(
+            "index {} outside of array bounds: {}...{}",
+            index,
+            -(ary.len() as i64),
+            ary.len()
+        )))
     }
 }
 
@@ -2764,6 +2800,18 @@ mod tests {
         [a.last(0), a.last(1), a.last(2), a.last(3), a.last(4)]
         "##,
         );
+    }
+
+    #[test]
+    fn fetch() {
+        run_test(r##"[0,1,2,3].fetch(1)"##);
+        run_test(r##"[0,1,2,3].fetch(-1)"##);
+        run_test(r##"[0,1,2,3].fetch(-4)"##);
+        run_test(r##"[0,1,2,3].fetch(4, 999)"##);
+        run_test(r##"[0,1,2,3].fetch(-5, 999)"##);
+        run_test(r##"[0,1,2,3].fetch(4) { |i| i * 10 }"##);
+        run_test_error(r##"[0,1,2,3].fetch(4)"##);
+        run_test_error(r##"[0,1,2,3].fetch(-5)"##);
     }
 
     #[test]

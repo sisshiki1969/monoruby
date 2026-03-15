@@ -11,6 +11,7 @@ mod exception;
 mod false_class;
 mod fiber;
 mod file;
+mod gc;
 mod hash;
 mod io;
 mod kernel;
@@ -77,6 +78,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     marshal::init(globals);
     math::init(globals);
     process::init(globals);
+    gc::init(globals);
     random::init(globals);
     symbol::init(globals);
     binding::init(globals);

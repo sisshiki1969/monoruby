@@ -16,6 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
     let object_class = globals.store.object_class();
     globals.define_class("Tms", object_class, klass);
     globals.define_builtin_module_func(klass, "pid", pid, 0);
+    globals.define_builtin_module_func(klass, "fork", process_fork, 0);
     globals.define_builtin_module_func(klass, "times", times, 0);
     globals.define_builtin_module_func_with(klass, "clock_gettime", clock_gettime, 1, 2, false);
 }
@@ -71,6 +72,41 @@ fn pid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) ->
 }
 
 ///
+/// ### Process.#fork
+///
+/// - fork -> Integer | nil
+/// - fork { ... } -> Integer | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Process/m/fork.html]
+#[monoruby_builtin]
+fn process_fork(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    // SAFETY: fork() is a POSIX system call. We call it in a single-threaded context.
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return Err(MonorubyErr::runtimeerr("fork failed"));
+    }
+    if pid == 0 {
+        // Child process
+        if let Some(bh) = lfp.block() {
+            let data = vm.get_block_data(globals, bh)?;
+            match vm.invoke_block(globals, &data, &[]) {
+                Ok(_) => std::process::exit(0),
+                Err(_) => std::process::exit(1),
+            }
+        }
+        Ok(Value::nil())
+    } else {
+        // Parent process
+        Ok(Value::integer(pid as i64))
+    }
+}
+
+///
 /// ### Process.#clock_gettime
 ///
 /// - clock_gettime(clock_id, unit=:float_second) -> Float | Integer
@@ -120,5 +156,15 @@ mod tests {
         run_test_no_result_check("Process.clock_gettime Process::CLOCK_MONOTONIC, :nanosecond");
         run_test_no_result_check("Process.clock_gettime Process::CLOCK_MONOTONIC");
         run_test_no_result_check("Process.times");
+    }
+
+    #[test]
+    fn process_fork() {
+        run_test(
+            r#"
+            pid = Process.fork { exit 0 }
+            pid.is_a?(Integer)
+            "#,
+        );
     }
 }
