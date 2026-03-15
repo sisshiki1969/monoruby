@@ -83,7 +83,16 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 arglist.hash_splat.push(self.parse_arg(false)?);
             } else if self.consume_punct(Punct::BitAnd)? {
                 // block argument
-                arglist.block = Some(Box::new(self.parse_arg(false)?));
+                let next = self.peek()?;
+                if next.kind == TokenKind::Punct(Punct::RParen)
+                    || next.kind == TokenKind::Punct(Punct::Comma)
+                    || next.is_term()
+                {
+                    // anonymous block forwarding: foo(&)
+                    arglist.delegate_block = true;
+                } else {
+                    arglist.block = Some(Box::new(self.parse_arg(false)?));
+                }
             } else {
                 let node = self.parse_arg(false)?;
                 if self.consume_punct(Punct::FatArrow)? {

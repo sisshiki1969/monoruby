@@ -41,16 +41,24 @@ impl<'a> BytecodeGen<'a> {
 
         let kw = self.keyword_arg(&mut arglist)?;
 
-        let block_arg = self.sp().into();
-        let block_fid = if let Some(box block) = std::mem::take(&mut arglist.block) {
-            self.block_arg(block, loc)?
+        let (block_fid, block_arg) = if arglist.delegate_block {
+            let (_, _, outer) = self.mother.clone();
+            let block = self.push().into();
+            self.emit(BytecodeInst::BlockArgProxy(block, outer), loc);
+            (None, Some(block))
         } else {
-            None
-        };
-        let block_arg = if block_arg == self.sp().into() {
-            None
-        } else {
-            Some(block_arg)
+            let block_arg = self.sp().into();
+            let block_fid = if let Some(box block) = std::mem::take(&mut arglist.block) {
+                self.block_arg(block, loc)?
+            } else {
+                None
+            };
+            let block_arg = if block_arg == self.sp().into() {
+                None
+            } else {
+                Some(block_arg)
+            };
+            (block_fid, block_arg)
         };
 
         let callsite = CallSite::new(

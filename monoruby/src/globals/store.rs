@@ -794,8 +794,10 @@ impl Store {
                     args_names.push(name);
                 }
                 ParamKind::Block(name) => {
-                    let name = IdentId::get_id_from_string(name.clone());
-                    block_param = Some(name);
+                    block_param = Some(match name {
+                        Some(name) => IdentId::get_id_from_string(name.clone()),
+                        None => IdentId::get_id(""),
+                    });
                 }
             }
         }

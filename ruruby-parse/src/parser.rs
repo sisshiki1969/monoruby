@@ -570,10 +570,16 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 break;
             } else if self.consume_punct(Punct::BitAnd)? {
                 // Block param
-                let name = self.expect_ident()?;
                 loc = loc.merge(self.prev_loc());
-                args.push(FormalParam::block(name.clone(), loc));
-                self.new_block_param(name, loc)?;
+                match self.consume_ident()? {
+                    Some(name) => {
+                        args.push(FormalParam::block(name.clone(), loc));
+                        self.new_block_param(name, loc)?;
+                    }
+                    None => {
+                        args.push(FormalParam::block_discard(loc));
+                    }
+                }
                 break;
             } else if self.consume_punct(Punct::Mul)? {
                 // Splat(Rest) param
