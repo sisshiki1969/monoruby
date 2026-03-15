@@ -74,6 +74,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     );
     globals.define_builtin_module_func_with(kernel_class, "system", system, 1, 1, true);
     globals.define_builtin_module_func(kernel_class, "`", command, 1);
+    globals.define_builtin_module_func(kernel_class, "fork", fork, 0);
     globals.define_builtin_module_func_with(kernel_class, "sleep", sleep, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "abort", abort, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "exit", exit, 0, 1, false);
@@ -791,6 +792,36 @@ fn system(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         Ok(status) => Value::bool(status.success()),
         Err(_) => Value::nil(),
     })
+}
+
+///
+/// ### Kernel.#fork
+///
+/// - fork -> Integer | nil
+/// - fork { ... } -> Integer | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/fork.html]
+#[monoruby_builtin]
+fn fork(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // SAFETY: fork() is a POSIX system call. We call it in a single-threaded context.
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return Err(MonorubyErr::runtimeerr("fork failed"));
+    }
+    if pid == 0 {
+        // Child process
+        if let Some(bh) = lfp.block() {
+            let data = vm.get_block_data(globals, bh)?;
+            match vm.invoke_block(globals, &data, &[]) {
+                Ok(_) => std::process::exit(0),
+                Err(_) => std::process::exit(1),
+            }
+        }
+        Ok(Value::nil())
+    } else {
+        // Parent process
+        Ok(Value::integer(pid as i64))
+    }
 }
 
 ///
