@@ -537,6 +537,11 @@ impl<'a> BytecodeGen<'a> {
                 let op1 = self.slot_id(&ret);
                 Bytecode::from_u32(enc_www(68, op1.0, 0, 0), name.get())
             }
+            BytecodeInst::DefinedCvar { dst, name } => {
+                // 88
+                let op1 = self.slot_id(&dst);
+                Bytecode::from_u32(enc_www(88, op1.0, 0, 0), name.get())
+            }
             BytecodeInst::DefinedSuper { dst } => {
                 // 69
                 let op1 = self.slot_id(&dst);

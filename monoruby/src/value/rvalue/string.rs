@@ -281,6 +281,11 @@ impl RStringInner {
         &self.content
     }
 
+    pub fn set_byte(&mut self, index: usize, byte: u8) {
+        self.content[index] = byte;
+        self.ty = Encoding::Ascii8;
+    }
+
     ///
     /// Get the length in char of the string `self`.
     ///

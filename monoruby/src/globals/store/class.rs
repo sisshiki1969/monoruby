@@ -209,9 +209,9 @@ pub struct ClassInfo {
     ///
     class_variables: Option<HashMap<IdentId, Value>>,
     ///
-    /// instance variable table.
+    /// instance variable table (insertion-ordered).
     ///
-    ivar_names: HashMap<IdentId, IvarId>,
+    ivar_names: indexmap::IndexMap<IdentId, IvarId>,
     ///
     /// Object type of instances of this class.
     ///
@@ -245,7 +245,7 @@ impl ClassInfo {
             methods: HashMap::default(),
             constants: HashMap::default(),
             class_variables: None,
-            ivar_names: HashMap::default(),
+            ivar_names: indexmap::IndexMap::default(),
             instance_ty: None,
         }
     }

@@ -822,6 +822,18 @@ pub(super) extern "C" fn defined_gvar(
     }
 }
 
+pub(super) extern "C" fn defined_cvar(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    name: IdentId,
+) -> Value {
+    if vm.find_class_variable(globals, name).is_ok() {
+        Value::string_from_str("class variable")
+    } else {
+        Value::nil()
+    }
+}
+
 pub(super) extern "C" fn defined_ivar(
     vm: &mut Executor,
     globals: &mut Globals,

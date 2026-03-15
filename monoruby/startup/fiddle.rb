@@ -5,12 +5,9 @@
 # by the Rust builtin module in src/builtins/fiddle.rs.
 # dlopen / dlsym / malloc are still delegated to Kernel.___dlopen etc.
 #
-# IMPORTANT: TYPE_* constants are NOT defined here at the top level.
-# The ffi gem's fiddle.rb reads Fiddle::Types.constants and calls
-#   Fiddle.const_set("TYPE_#{name}", value)
-# for each one.  Defining them ourselves beforehand would cause
-# "already initialized constant" warnings.
-# Internal code uses Fiddle::Types::* directly.
+# TYPE_* constants are defined at the top level of Fiddle below,
+# mirrored from Fiddle::Types via const_set.
+# Internal code may also use Fiddle::Types::* directly.
 
 module Fiddle
   # ---------------------------------------------------------------------------
@@ -38,6 +35,13 @@ module Fiddle
     PTRDIFF_T  = -17
     SIZE_T     = -18
     SSIZE_T    = -19
+  end
+
+  # ---------------------------------------------------------------------------
+  # Top-level TYPE_* constants (mirrors CRuby's fiddle gem behaviour)
+  # ---------------------------------------------------------------------------
+  Types.constants.each do |name|
+    const_set("TYPE_#{name}", Types.const_get(name))
   end
 
   # WINDOWS flag (always false on Linux)

@@ -92,7 +92,8 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func_rest(MODULE_CLASS, "private_class_method", private_class_method);
-    globals.define_builtin_func(MODULE_CLASS, "to_s", tos, 0);
+    globals.define_builtin_funcs(MODULE_CLASS, "to_s", &["inspect"], tos, 0);
+    globals.define_builtin_func(MODULE_CLASS, "name", name, 0);
     // private methods
     globals.define_private_builtin_func_rest(MODULE_CLASS, "module_function", module_function);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "private", private);
@@ -398,7 +399,12 @@ fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/define_method.html]
 #[monoruby_builtin]
-fn define_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+fn define_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let proc = if let Some(method) = lfp.try_arg(1) {
@@ -691,6 +697,23 @@ fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let class_name = globals.store.get_class_name(lfp.self_val().as_class_id());
     let res = Value::string(class_name);
     Ok(res)
+}
+
+///
+/// ### Module#name
+/// - name -> String | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/name.html]
+#[monoruby_builtin]
+fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    match globals.store[class_id].get_name() {
+        Some(_) => {
+            let class_name = globals.store.get_class_name(class_id);
+            Ok(Value::string(class_name))
+        }
+        None => Ok(Value::nil()),
+    }
 }
 
 ///

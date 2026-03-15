@@ -217,6 +217,31 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_underscore_param() {
+        // `_` can appear multiple times in block parameters (Ruby spec).
+        // The name `_` resolves to the first occurrence.
+        run_test(
+            r#"
+        [[1,2,3,4]].map { |x, _, y, _| [x, _, y] }
+        "#,
+        );
+        // Destructured block parameters with duplicate `_`.
+        run_test(
+            r#"
+        [[1,2,3,4]].sort_by { |(_, b, _, d)| d }
+        "#,
+        );
+        // `_` used alone multiple times.
+        run_test(
+            r#"
+        res = []
+        {a: 1, b: 2}.each { |_, _| res << _ }
+        res
+        "#,
+        );
+    }
+
+    #[test]
     fn proc() {
         run_test_with_prelude(
             r#"

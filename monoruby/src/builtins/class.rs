@@ -57,12 +57,7 @@ fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/new.html]
 #[monoruby_builtin]
-pub(super) fn new(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let obj =
         vm.invoke_method_inner(globals, IdentId::ALLOCATE, lfp.self_val(), &[], None, None)?;
 
@@ -89,12 +84,7 @@ pub(super) fn new(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/superclass.html]
 #[monoruby_builtin]
-fn superclass(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn superclass(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class = lfp.self_val().as_class();
     match class.get_real_superclass() {
         Some(class) => Ok(class.into()),

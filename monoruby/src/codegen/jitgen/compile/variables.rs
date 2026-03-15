@@ -100,7 +100,9 @@ impl<'a> JitContext<'a> {
     ) {
         let r = GP::Rdi;
         state.load(ir, src, r);
-        if let Some((offset, not_captured)) = self.outer_stack_offset(state, dst.outer) {
+        if let Some((offset, not_captured)) = self.outer_stack_offset(state, dst.outer)
+            && not_captured
+        {
             assert!(not_captured);
             ir.push(AsmInst::StoreDynVarSpecialized {
                 offset,

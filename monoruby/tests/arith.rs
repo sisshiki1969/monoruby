@@ -1318,6 +1318,111 @@ fn defined() {
             end
     "#,
     );
+    // instance variables
+    run_test(
+        r#"
+        class A
+          def initialize; @x = 1; end
+          def f; defined?(@x); end
+          def g; defined?(@y); end
+        end
+        [A.new.f, A.new.g]
+    "#,
+    );
+    run_test(
+        r#"
+        class A
+          def f; @v = 10; [defined?(@v), defined?(@w)]; end
+        end
+        A.new.f
+    "#,
+    );
+    // global variables
+    run_test(
+        r#"
+        $gx = 1
+        [defined?($gx), defined?($gy)]
+    "#,
+    );
+    run_test(r#"defined? $stdout"#);
+    run_test(r#"defined? $0"#);
+    run_test(r#"defined? $LOAD_PATH"#);
+    // constants
+    run_test(
+        r#"
+        module M
+          C = 1
+        end
+        [defined?(M::C), defined?(M::D)]
+    "#,
+    );
+    run_test(r#"defined? Integer"#);
+    run_test(r#"defined? String"#);
+    run_test(r#"defined? NoSuchConstant"#);
+    run_test(
+        r#"
+        class A
+          B = 42
+          def f; defined?(B); end
+        end
+        A.new.f
+    "#,
+    );
+    // methods
+    run_test(r#"defined? to_s"#);
+    run_test(r#"defined? no_such_method"#);
+    run_test(
+        r#"
+        class A
+          def foo; end
+          def f; defined?(foo); end
+          def g; defined?(bar); end
+        end
+        [A.new.f, A.new.g]
+    "#,
+    );
+    run_test(r#"defined? [].map"#);
+    run_test(r#"defined? [].no_such_method"#);
+    run_test(r#"defined? 1.to_s"#);
+    // class variables
+    run_test(
+        r#"
+        class A
+          @@x = 1
+          def f; defined?(@@x); end
+        end
+        A.new.f
+    "#,
+    );
+    run_test(
+        r#"
+        class A
+          def f; defined?(@@x); end
+        end
+        A.new.f
+    "#,
+    );
+    run_test(
+        r#"
+        class A
+          @@v = 10
+          def f; defined?(@@v); end
+          def g; defined?(@@w); end
+        end
+        [A.new.f, A.new.g]
+    "#,
+    );
+    run_test(
+        r#"
+        class B
+          @@b = 1
+        end
+        class C < B
+          def f; defined?(@@b); end
+        end
+        C.new.f
+    "#,
+    );
 }
 
 #[test]

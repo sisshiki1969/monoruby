@@ -1159,4 +1159,43 @@ mod tests {
         "##,
         );
     }
+
+    #[test]
+    fn method_missing_private() {
+        // private method_missing should still be dispatched
+        run_test(
+            r#"
+            class Foo
+              private
+              def method_missing(name, *args)
+                "mm:#{name}:#{args}"
+              end
+            end
+            Foo.new.hello
+            "#,
+        );
+        // arguments should be forwarded in correct order
+        run_test(
+            r#"
+            class Foo
+              private
+              def method_missing(name, *args)
+                "mm:#{name}:#{args}"
+              end
+            end
+            Foo.new.bar(1, 2)
+            "#,
+        );
+        // public method_missing should also work
+        run_test(
+            r#"
+            class Foo
+              def method_missing(name, *args)
+                "mm:#{name}:#{args}"
+              end
+            end
+            Foo.new.baz(10, 20, 30)
+            "#,
+        );
+    }
 }

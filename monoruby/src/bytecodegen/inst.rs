@@ -267,6 +267,10 @@ pub(super) enum BytecodeInst {
         ret: BcReg,
         name: IdentId,
     },
+    DefinedCvar {
+        dst: BcReg,
+        name: IdentId,
+    },
     LoopStart,
     LoopEnd,
 }

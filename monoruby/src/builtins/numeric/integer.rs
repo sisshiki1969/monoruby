@@ -43,6 +43,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, "odd?", odd_, 0);
     globals.define_builtin_func(INTEGER_CLASS, "nonzero?", nonzero_, 0);
     globals.define_builtin_func(INTEGER_CLASS, "zero?", zero_, 0);
+    globals.define_builtin_func(INTEGER_CLASS, "size", size, 0);
 }
 
 /*///
@@ -599,6 +600,29 @@ fn zero_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         _ => unreachable!(),
     };
     Ok(Value::bool(b))
+}
+
+///
+/// ### Integer#size
+///
+/// - size -> Integer
+///
+/// Returns the number of bytes in the machine representation of the integer.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/size.html]
+#[monoruby_builtin]
+fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    match lfp.self_val().unpack() {
+        RV::Fixnum(_) => Ok(Value::integer(std::mem::size_of::<i64>() as i64)),
+        RV::BigInt(b) => {
+            let bytes = b.to_signed_bytes_le().len();
+            // Round up to the nearest machine word size
+            let word_size = std::mem::size_of::<i64>();
+            let size = ((bytes + word_size - 1) / word_size) * word_size;
+            Ok(Value::integer(size as i64))
+        }
+        _ => unreachable!(),
+    }
 }
 
 #[cfg(test)]

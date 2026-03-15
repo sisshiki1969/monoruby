@@ -1509,6 +1509,11 @@ pub(super) enum AsmInst {
         name: IdentId,
         using_xmm: UsingXmm,
     },
+    DefinedCvar {
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    },
 }
 
 impl AsmInst {

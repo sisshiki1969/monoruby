@@ -65,6 +65,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(STRING_CLASS, "rjust", rjust, 1, 2, false);
     globals.define_builtin_func(STRING_CLASS, "lines", lines, 0);
     globals.define_builtin_func(STRING_CLASS, "bytes", bytes, 0);
+    globals.define_builtin_func(STRING_CLASS, "getbyte", getbyte, 1);
+    globals.define_builtin_func(STRING_CLASS, "setbyte", setbyte, 2);
     globals.define_builtin_func_with(STRING_CLASS, "each_line", each_line, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
     globals.define_builtin_funcs(STRING_CLASS, "to_s", &["to_str"], tos, 0);
@@ -760,12 +762,7 @@ fn start_with(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/include=3f.html]
 #[monoruby_builtin]
-fn include_(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn include_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
     let substr = lfp.arg(0);
@@ -829,12 +826,7 @@ fn delete_prefix(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/end_with=3f.html]
 #[monoruby_builtin]
-fn end_with(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn end_with(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
     let arg0 = lfp.arg(0).as_array();
@@ -1638,12 +1630,7 @@ fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/bytesize.html]
 #[monoruby_builtin]
-fn bytesize(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn bytesize(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let length = lfp.self_val().as_rstring_inner().len();
     Ok(Value::integer(length as i64))
 }
@@ -1765,6 +1752,56 @@ fn bytes(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 }
 
 ///
+/// ### String#getbyte
+///
+/// - getbyte(index) -> Integer | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/getbyte.html]
+#[monoruby_builtin]
+fn getbyte(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let receiver = lfp.self_val();
+    let s = receiver.as_rstring_inner();
+    let len = s.len() as i64;
+    let mut idx = lfp.arg(0).expect_integer(globals)?;
+    if idx < 0 {
+        idx += len;
+    }
+    if idx < 0 || idx >= len {
+        Ok(Value::nil())
+    } else {
+        Ok(Value::integer(s[idx as usize] as i64))
+    }
+}
+
+///
+/// ### String#setbyte
+///
+/// - setbyte(index, value) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/setbyte.html]
+#[monoruby_builtin]
+fn setbyte(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let byte_val = lfp.arg(1).expect_integer(globals)?;
+    let s = self_.as_rstring_inner();
+    let len = s.len() as i64;
+    let mut idx = lfp.arg(0).expect_integer(globals)?;
+    if idx < 0 {
+        idx += len;
+    }
+    if idx < 0 || idx >= len {
+        return Err(MonorubyErr::indexerr(format!(
+            "index {} out of string",
+            lfp.arg(0).expect_integer(globals)?
+        )));
+    }
+    self_
+        .as_rstring_inner_mut()
+        .set_byte(idx as usize, byte_val as u8);
+    Ok(lfp.arg(1))
+}
+
+///
 /// ### String#each_line
 ///
 /// - each_line(rs = $/, [NOT SUPPORTED] chomp: false) {|line| ... } -> self
@@ -1772,12 +1809,7 @@ fn bytes(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/each_line.html]
 #[monoruby_builtin]
-fn each_line(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.try_arg(0);
     let rs = if let Some(arg0) = &arg0 {
         arg0.expect_str(globals)?
@@ -2045,12 +2077,7 @@ fn upcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase=21.html]
 #[monoruby_builtin]
-fn upcase_(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn upcase_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_val = lfp.self_val();
     let s = self_val.as_str().to_uppercase();
     let changed = &s != self_val.as_str();
@@ -2070,12 +2097,7 @@ fn upcase_(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/downcase.html]
 #[monoruby_builtin]
-fn downcase(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn downcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let s = self_val.as_str().to_lowercase();
     Ok(Value::string(s))
@@ -3115,6 +3137,27 @@ mod tests {
     #[test]
     fn bytes() {
         run_test(r##""aa\nbb\ncc\n".bytes"##);
+    }
+
+    #[test]
+    fn getbyte() {
+        run_test(r##""ABC".getbyte(0)"##);
+        run_test(r##""ABC".getbyte(2)"##);
+        run_test(r##""ABC".getbyte(-1)"##);
+        run_test(r##""ABC".getbyte(3)"##);
+        run_test(r##""ABC".getbyte(-4)"##);
+    }
+
+    #[test]
+    fn setbyte() {
+        run_test(r##"s = "ABC"; s.setbyte(0, 90); s"##);
+        run_test(r##"s = "ABC"; s.setbyte(-1, 90); s"##);
+        run_test(r##"s = "ABC"; s.setbyte(0, 255); s.getbyte(0)"##);
+        run_test(r##"s = "ABC"; s.setbyte(0, -1); s.getbyte(0)"##);
+        run_test(r##"s = "ABC"; s.setbyte(0, 256); s.getbyte(0)"##);
+        run_test(r##"s = "ABC"; s.setbyte(0, -129); s.getbyte(0)"##);
+        run_test_error(r##""ABC".setbyte(3, 0)"##);
+        run_test_error(r##""ABC".setbyte(-4, 0)"##);
     }
 
     #[test]

@@ -809,7 +809,7 @@ impl Executor {
         let callsite = &globals.store[callsite];
         assert!(callsite.splat_pos.is_empty());
         assert!(!callsite.has_hash_splat());
-        let is_func_call = callsite.is_func_call();
+        //let is_func_call = callsite.is_func_call();
         let method_name = if let Some(name) = callsite.name {
             name
         } else {
@@ -837,10 +837,13 @@ impl Executor {
             }
             Some(Value::hash_from_inner(map).as_hash())
         };
+        // method_missing should always be callable regardless of visibility.
+        // In Ruby, method_missing is conventionally private, but the VM must
+        // still dispatch to it when a method is not found.
         let res = self.invoke_method(
             globals,
             IdentId::METHOD_MISSING,
-            is_func_call,
+            true,
             receiver,
             &args,
             bh,
@@ -1189,8 +1192,7 @@ impl Executor {
     }
 
     pub(crate) fn generate_lambda(&mut self, func_id: FuncId, pc: BytecodePtr) -> Proc {
-        let outer_lfp = self.cfp().lfp();
-        outer_lfp.move_frame_to_heap();
+        let outer_lfp = self.cfp().lfp().move_frame_to_heap();
         Proc::from_parts(outer_lfp, func_id, pc)
     }
 

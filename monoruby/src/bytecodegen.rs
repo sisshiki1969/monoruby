@@ -811,11 +811,31 @@ impl<'a> BytecodeGen<'a> {
             .cloned()
     }
 
-    /// Add a variable identifier without checking duplicates.
+    /// Add a variable identifier.
+    ///
+    /// In Ruby, identifiers starting with `_` (most commonly the bare `_`)
+    /// are allowed to appear multiple times in the same parameter list
+    /// (e.g. `|(a, _, b, _)|`).  When a duplicate `_`-prefixed name is
+    /// encountered we still allocate a fresh register slot so that the
+    /// corresponding argument value is consumed, but we leave the name → slot
+    /// mapping unchanged (pointing at the first occurrence).
     fn add_local(&mut self, ident: impl Into<Option<IdentId>>) -> BcLocal {
         let local = BcLocal(self.labels.non_temp_num);
         if let Some(ident) = ident.into() {
-            assert!(self.iseq_mut().locals.insert(ident, local).is_none());
+            let existing = self.iseq_mut().locals.insert(ident, local);
+            if existing.is_some() {
+                // Duplicate — only tolerate `_`-prefixed names.
+                let name = ident.get_name();
+                assert!(
+                    name.starts_with('_'),
+                    "duplicate local variable: {:?} in {:?}",
+                    ident,
+                    self.sourceinfo.path
+                );
+                // Restore the original mapping so that references to `_`
+                // resolve to the first slot (matching CRuby behaviour).
+                self.iseq_mut().locals.insert(ident, existing.unwrap());
+            }
         };
         self.labels.non_temp_num += 1;
         local

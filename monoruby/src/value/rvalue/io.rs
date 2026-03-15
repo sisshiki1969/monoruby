@@ -1,6 +1,6 @@
 use std::{
     io::{BufRead, IsTerminal, Read, Write},
-    os::fd::AsRawFd,
+    os::fd::FromRawFd,
     rc::Rc,
 };
 
@@ -18,6 +18,7 @@ pub enum IoInner {
     Stdout,
     Stderr,
     File(Rc<FileDescriptor>),
+    Closed,
 }
 
 impl std::clone::Clone for IoInner {
@@ -27,6 +28,7 @@ impl std::clone::Clone for IoInner {
             Self::Stdout => Self::Stdout,
             Self::Stderr => Self::Stderr,
             Self::File(file) => Self::File(file.clone()),
+            Self::Closed => Self::Closed,
         }
     }
 }
@@ -38,33 +40,34 @@ impl std::fmt::Display for IoInner {
             Self::Stdout => write!(f, "#<IO:<STDOUT>>"),
             Self::Stderr => write!(f, "#<IO:<STDERR>>"),
             Self::File(file) => write!(f, "#<File:{}>", file.name),
+            Self::Closed => write!(f, "#<IO:(closed)>"),
         }
     }
 }
 
 impl IoInner {
-    fn fd(&self) -> i32 {
-        match self {
-            Self::Stdin => std::io::stdin().as_raw_fd(),
-            Self::Stdout => std::io::stdout().as_raw_fd(),
-            Self::Stderr => std::io::stderr().as_raw_fd(),
-            Self::File(file) => file.reader.get_ref().as_raw_fd(),
-        }
-    }
-
     pub fn flush(&mut self) -> Result<()> {
         let res = match self {
             Self::Stdin => return Ok(()),
             Self::Stdout => std::io::stdout().flush(),
             Self::Stderr => std::io::stderr().flush(),
             Self::File(file) => file.reader.get_ref().flush(),
+            Self::Closed => return Err(MonorubyErr::runtimeerr("closed stream")),
         };
         res.map_err(|err| MonorubyErr::runtimeerr(err.to_string()))
     }
 
     pub fn is_closed(&self) -> bool {
-        let fd = self.fd();
-        unsafe { libc::fcntl(fd, libc::F_GETFD) == -1 && *libc::__errno_location() == libc::EBADF }
+        matches!(self, Self::Closed)
+    }
+
+    pub fn close(&mut self) -> Result<()> {
+        if self.is_closed() {
+            return Err(MonorubyErr::runtimeerr("closed stream"));
+        }
+        // Replace self with Closed, dropping the File and letting it close the fd naturally.
+        *self = Self::Closed;
+        Ok(())
     }
 
     pub(super) fn stdin() -> Self {
@@ -86,8 +89,18 @@ impl IoInner {
         }))
     }
 
+    pub(crate) fn from_raw_fd(fd: i32, name: String) -> Self {
+        // SAFETY: fd is a valid file descriptor obtained from pipe().
+        let file = unsafe { std::fs::File::from_raw_fd(fd) };
+        Self::File(Rc::new(FileDescriptor {
+            reader: std::io::BufReader::new(file),
+            name,
+        }))
+    }
+
     pub fn write(&mut self, data: &[u8]) -> Result<()> {
         match self {
+            Self::Closed => return Err(MonorubyErr::runtimeerr("closed stream")),
             Self::Stdin => Err(MonorubyErr::argumenterr("can't write to $stdin")),
             Self::Stdout => match std::io::stdout().write(data) {
                 Ok(_) => Ok(()),
@@ -111,6 +124,7 @@ impl IoInner {
 
     pub fn read(&mut self, length: Option<usize>) -> Result<Vec<u8>> {
         match self {
+            Self::Closed => return Err(MonorubyErr::runtimeerr("closed stream")),
             Self::Stdin => {
                 if let Some(length) = length {
                     let buf = match std::io::stdin().bytes().take(length).collect() {
@@ -149,6 +163,7 @@ impl IoInner {
 
     pub fn read_line(&mut self) -> Result<Option<String>> {
         match self {
+            Self::Closed => return Err(MonorubyErr::runtimeerr("closed stream")),
             Self::Stdin => {
                 let mut buf = String::new();
                 std::io::stdin()
@@ -177,7 +192,7 @@ impl IoInner {
             Self::Stdin => std::io::stdin().is_terminal(),
             Self::Stdout => std::io::stdout().is_terminal(),
             Self::Stderr => std::io::stderr().is_terminal(),
-            Self::File(_) => false,
+            Self::File(_) | Self::Closed => false,
         }
     }
 }
