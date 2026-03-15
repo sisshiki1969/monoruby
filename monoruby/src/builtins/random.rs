@@ -192,6 +192,24 @@ mod tests {
     }
 
     #[test]
+    fn random_rand() {
+        run_test(
+            r#"
+        Random.srand(42)
+        a = Random.rand
+        a.is_a?(Float) && a >= 0.0 && a < 1.0
+        "#,
+        );
+        run_test(
+            r#"
+        Random.srand(42)
+        results = 10.times.map { Random.rand }
+        results.all? { |x| x.is_a?(Float) && x >= 0.0 && x < 1.0 } && results.uniq.size == results.size
+        "#,
+        );
+    }
+
+    #[test]
     fn urandom() {
         run_test(
             r##"

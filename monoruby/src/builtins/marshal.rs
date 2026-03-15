@@ -772,6 +772,20 @@ fn marshal_dump_value(
                         marshal_dump_value(buf, v, globals, symbols)?;
                     }
                 }
+                Some(ObjTy::OBJECT) => {
+                    // User-defined object with instance variables: 'o' tag
+                    let class_id = obj.class();
+                    let class_name = globals.get_class_name(class_id);
+                    let class_name_id = IdentId::get_id(&class_name);
+                    let ivars = globals.get_ivars(obj);
+                    buf.push(b'o');
+                    marshal_write_symbol(buf, class_name_id, symbols);
+                    marshal_write_fixnum(buf, ivars.len() as i32);
+                    for (name, val) in ivars {
+                        marshal_write_symbol(buf, name, symbols);
+                        marshal_dump_value(buf, val, globals, symbols)?;
+                    }
+                }
                 _ => {
                     return Err(MonorubyErr::typeerr(format!(
                         "no _dump_data is defined for class {}",
@@ -979,5 +993,80 @@ mod tests {
     #[test]
     fn marshal_roundtrip_complex() {
         run_test(r#"Marshal.load(Marshal.dump({a: [1, 2, 3], b: "hello", c: {d: :e}}))"#);
+    }
+
+    #[test]
+    fn marshal_dump_user_object() {
+        run_test(
+            r#"
+            class Foo
+              def initialize(x, y)
+                @x = x
+                @y = y
+              end
+            end
+            Marshal.dump(Foo.new(1, 2))
+        "#,
+        );
+        run_test(
+            r#"
+            class Bar
+              def initialize
+                @name = "hello"
+                @value = 42
+                @items = [1, 2, 3]
+              end
+            end
+            Marshal.dump(Bar.new)
+        "#,
+        );
+    }
+
+    #[test]
+    fn marshal_roundtrip_user_object() {
+        run_test(
+            r#"
+            class Foo
+              attr_accessor :x, :y
+              def initialize(x, y)
+                @x = x
+                @y = y
+              end
+            end
+            obj = Marshal.load(Marshal.dump(Foo.new(1, 2)))
+            [obj.class.name, obj.x, obj.y]
+        "#,
+        );
+        run_test(
+            r#"
+            class Baz
+              attr_accessor :name, :items
+              def initialize
+                @name = "test"
+                @items = [1, :foo, nil]
+              end
+            end
+            obj = Marshal.load(Marshal.dump(Baz.new))
+            [obj.name, obj.items]
+        "#,
+        );
+    }
+
+    #[test]
+    fn marshal_load_errors() {
+        // Empty data
+        run_test_error(r#"Marshal.load("")"#);
+        // Too short (only 1 byte)
+        run_test_error(r#"Marshal.load("\x04")"#);
+        // Wrong version
+        run_test_error(r#"Marshal.load("\x03\x08")"#);
+        // Unsupported type tag
+        run_test_error(r#"Marshal.load("\x04\x08Q")"#);
+    }
+
+    #[test]
+    fn marshal_dump_unsupported() {
+        // Regexp is not supported
+        run_test_error(r#"Marshal.dump(/foo/)"#);
     }
 }
