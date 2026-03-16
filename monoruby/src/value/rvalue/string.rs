@@ -437,6 +437,36 @@ impl RStringInner {
         RStringInner::from(SmallVec::from_vec(vec), ty)
     }
 
+    /// Replace byte range `start..start+len` with `replacement` bytes.
+    /// After replacement, validates encoding consistency.
+    pub fn bytesplice(&mut self, start: usize, len: usize, replacement: &[u8]) {
+        let end = start + len;
+        let new_len = self.content.len() - len + replacement.len();
+        if replacement.len() > len {
+            // Need to grow: extend first, then shift
+            let extra = replacement.len() - len;
+            self.content.resize(new_len, 0);
+            // Shift tail right
+            self.content.copy_within(end..new_len - extra, end + extra);
+        } else if replacement.len() < len {
+            // Shrink: shift tail left, then truncate
+            let shrink = len - replacement.len();
+            let old_len = self.content.len();
+            self.content.copy_within(end..old_len, end - shrink);
+            self.content.truncate(new_len);
+        }
+        // Copy replacement in
+        self.content[start..start + replacement.len()].copy_from_slice(replacement);
+        // Re-check encoding
+        if self.ty == Encoding::Utf8 {
+            if std::str::from_utf8(&self.content).is_err() {
+                self.ty = Encoding::Ascii8;
+            }
+        } else if self.content.is_ascii() || std::str::from_utf8(&self.content).is_ok() {
+            // Keep Ascii8
+        }
+    }
+
     pub fn first_code(&self) -> Result<u32> {
         if self.len() == 0 {
             return Err(MonorubyErr::argumenterr("empty string"));
