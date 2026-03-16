@@ -2094,9 +2094,54 @@ fn bytesplice(
         str_bytes
     };
 
-    // Check encoding compatibility
+    // Check character boundary for UTF-8 strings
     let self_enc = self_.as_rstring_inner().encoding();
+    if self_enc == Encoding::Utf8 {
+        let self_bytes = self_.as_rstring_inner().as_bytes();
+        if !is_char_boundary(self_bytes, start) {
+            return Err(MonorubyErr::indexerr(format!(
+                "offset {} does not land on character boundary",
+                start
+            )));
+        }
+        let end = start + splice_len;
+        if !is_char_boundary(self_bytes, end) {
+            return Err(MonorubyErr::indexerr(format!(
+                "offset {} does not land on character boundary",
+                end
+            )));
+        }
+    }
+
+    // Check character boundary for UTF-8 source string
     let str_enc = str_inner.encoding();
+    if str_enc == Encoding::Utf8 && has_src_range {
+        // replacement slice was already extracted from str_bytes,
+        // but we need to verify the offsets used were on char boundaries.
+        // The offsets are relative to str_bytes, so we check using the
+        // replacement pointer offset from str_bytes start.
+        let rep_start = if replacement.is_empty() {
+            0
+        } else {
+            // SAFETY: replacement is a subslice of str_bytes
+            unsafe { replacement.as_ptr().offset_from(str_bytes.as_ptr()) as usize }
+        };
+        let rep_end = rep_start + replacement.len();
+        if !is_char_boundary(str_bytes, rep_start) {
+            return Err(MonorubyErr::indexerr(format!(
+                "offset {} does not land on character boundary",
+                rep_start
+            )));
+        }
+        if !is_char_boundary(str_bytes, rep_end) {
+            return Err(MonorubyErr::indexerr(format!(
+                "offset {} does not land on character boundary",
+                rep_end
+            )));
+        }
+    }
+
+    // Check encoding compatibility
     match (self_enc, str_enc) {
         (Encoding::Utf8, Encoding::Ascii8) => {
             if !replacement.is_ascii() && !self_.as_rstring_inner().as_bytes().is_ascii() {
@@ -2141,6 +2186,16 @@ fn conv_byte_index_for_splice(idx: i64, byte_len: usize) -> Result<usize> {
             Ok(actual as usize)
         }
     }
+}
+
+/// Check if the given byte offset is on a UTF-8 character boundary.
+/// Returns true for offset == bytes.len() (end of string).
+fn is_char_boundary(bytes: &[u8], offset: usize) -> bool {
+    if offset == 0 || offset >= bytes.len() {
+        return true;
+    }
+    // A byte is a char boundary if it's not a UTF-8 continuation byte (0x80..0xBF)
+    !matches!(bytes[offset], 0x80..=0xBF)
 }
 
 ///
@@ -4122,5 +4177,47 @@ mod tests {
         run_test(r#"s = "hello"; s.bytesplice(-5, 5, "HELLO"); s"#);
         // insert at end
         run_test(r#"s = "hello"; s.bytesplice(5, 0, "!"); s"#);
+        // UTF-8 splice at character boundary
+        run_test(r#"s = "あいう"; s.bytesplice(0, 3, "X"); s"#);
+        run_test(r#"s = "あいう"; s.bytesplice(3, 3, "X"); s"#);
+        run_test(r#"s = "あいう"; s.bytesplice(6, 3, "え"); s"#);
+        // UTF-8 splice at boundary, replace with ASCII
+        run_test(r#"s = "あいう"; s.bytesplice(3, 3, "B"); s"#);
+        // UTF-8 + ASCII-8BIT (ascii-only) at char boundary
+        run_test(
+            r##"
+            s = "あいう"
+            s.bytesplice(0, 3, "AB".force_encoding("ASCII-8BIT"))
+            [s, s.encoding == Encoding::UTF_8]
+        "##,
+        );
+        // ASCII-8BIT string: no boundary check, splice freely
+        run_test(
+            r##"
+            s = "\xe3\x81\x82\xe3\x81\x84".force_encoding("ASCII-8BIT")
+            s.bytesplice(1, 2, "AB")
+            s.bytes.to_a
+        "##,
+        );
+        // src string UTF-8, valid boundary in src range
+        run_test(r#"s = "hello"; s.bytesplice(0, 5, "あいう", 0, 3); s"#);
+        // bytesplice(range, str, str_range) with valid boundaries
+        run_test(r#"s = "hello"; s.bytesplice(0..4, "あいう", 0..2); s"#);
+    }
+
+    #[test]
+    fn string_bytesplice_boundary_error() {
+        // UTF-8: start offset not on character boundary
+        run_test_error(r#"s = "あいう"; s.bytesplice(1, 2, "X")"#);
+        // UTF-8: end offset not on character boundary
+        run_test_error(r#"s = "あいう"; s.bytesplice(0, 2, "X")"#);
+        // UTF-8 range form: start not on boundary
+        run_test_error(r#"s = "あいう"; s.bytesplice(1..2, "X")"#);
+        // UTF-8 range form: end not on boundary
+        run_test_error(r#"s = "あいう"; s.bytesplice(0..1, "X")"#);
+        // src string UTF-8: non-boundary in src range (index, length form)
+        run_test_error(r#"s = "hello"; s.bytesplice(0, 5, "あいう", 1, 2)"#);
+        // src string UTF-8: non-boundary in src range (range form)
+        run_test_error(r#"s = "hello"; s.bytesplice(0..4, "あいう", 1..2)"#);
     }
 }
