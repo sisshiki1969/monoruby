@@ -1994,17 +1994,16 @@ fn bytesplice(
         } else {
             let idx = byte_len as i64 + rend;
             if idx < 0 {
-                return Err(MonorubyErr::indexerr(format!(
-                    "index {} out of string",
-                    rend
-                )));
-            }
-            let e = if range.exclude_end() {
-                idx as usize
+                // Negative end that resolves below 0 means length=0 (insert, no replace)
+                0
             } else {
-                (idx as usize).saturating_add(1)
-            };
-            e.min(byte_len)
+                let e = if range.exclude_end() {
+                    idx as usize
+                } else {
+                    (idx as usize).saturating_add(1)
+                };
+                e.min(byte_len)
+            }
         };
         let len = if end > start { end - start } else { 0 };
         (start, len)
@@ -2059,17 +2058,15 @@ fn bytesplice(
             } else {
                 let idx = str_byte_len as i64 + src_end;
                 if idx < 0 {
-                    return Err(MonorubyErr::indexerr(format!(
-                        "index {} out of string",
-                        src_end
-                    )));
-                }
-                let e = if src_range.exclude_end() {
-                    idx as usize
+                    0
                 } else {
-                    (idx as usize).saturating_add(1)
-                };
-                e.min(str_byte_len)
+                    let e = if src_range.exclude_end() {
+                        idx as usize
+                    } else {
+                        (idx as usize).saturating_add(1)
+                    };
+                    e.min(str_byte_len)
+                }
             };
             if src_start > src_end_val {
                 &[]
@@ -4219,5 +4216,28 @@ mod tests {
         run_test_error(r#"s = "hello"; s.bytesplice(0, 5, "あいう", 1, 2)"#);
         // src string UTF-8: non-boundary in src range (range form)
         run_test_error(r#"s = "hello"; s.bytesplice(0..4, "あいう", 1..2)"#);
+        // wrong number of arguments (1 arg)
+        run_test_error(r#""hello".bytesplice("x")"#);
+        // wrong number of arguments (4 args)
+        run_test_error(r#""hello".bytesplice(0, 1, "x", 0)"#);
+        // Range with negative end (exclude_end=false)
+        run_test(r#"s = "hello world"; s.bytesplice(0..-6, "HELLO"); s"#);
+        run_test(r#"s = "hello world"; s.bytesplice(0..-1, "BYE"); s"#);
+        // Range with negative end (exclude_end=true)
+        run_test(r#"s = "hello world"; s.bytesplice(0...-6, "HELLO"); s"#);
+        run_test(r#"s = "hello world"; s.bytesplice(0...-1, "HELLO"); s"#);
+        // Negative end resolves to < start => len=0 (insert)
+        run_test(r#"s = "hello"; s.bytesplice(0..-7, "X"); s"#);
+        run_test(r#"s = "hello"; s.bytesplice(0...-7, "X"); s"#);
+        run_test(r#"s = "hello"; s.bytesplice(0..-100, "X"); s"#);
+        // Negative start out of range => RangeError
+        run_test_error(r#"s = "hello"; s.bytesplice(-100..-1, "X")"#);
+        // bytesplice(range, str, str_range) with negative end in str_range
+        run_test(r#"s = "hello world"; s.bytesplice(0..4, "HELLO WORLD", 0..-7); s"#);
+        run_test(r#"s = "hello world"; s.bytesplice(0..4, "HELLO WORLD", 0...-7); s"#);
+        // str_range with very negative end => len=0
+        run_test(r#"s = "hello world"; s.bytesplice(0..4, "ABCDE", 0..-100); s"#);
+        // str_range with negative start out of range => RangeError
+        run_test_error(r#"s = "hello"; s.bytesplice(0..4, "AB", -100..-1)"#);
     }
 }
