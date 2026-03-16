@@ -23,6 +23,8 @@ enum Template {
     U32,
     I64,
     U64,
+    F32,
+    F64,
     Utf8,
     Null,
     Back,
@@ -131,6 +133,62 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
             Template::U16 => unpack!(2, u16, repeat, endian),
             Template::I8 => unpack!(1, i8, repeat, endian),
             Template::U8 => unpack!(1, u8, repeat, endian),
+            Template::F64 => {
+                if let Some(repeat) = repeat {
+                    for _ in 0..repeat {
+                        if let Some(chunk) = b.next_chunk::<8>() {
+                            let f = if endian {
+                                f64::from_be_bytes(chunk.clone())
+                            } else {
+                                f64::from_le_bytes(chunk.clone())
+                            };
+                            ary.push(Value::float(f));
+                        } else {
+                            break;
+                        }
+                        if b.is_empty() {
+                            break;
+                        }
+                    }
+                } else {
+                    while let Some(chunk) = b.next_chunk::<8>() {
+                        let f = if endian {
+                            f64::from_be_bytes(chunk.clone())
+                        } else {
+                            f64::from_le_bytes(chunk.clone())
+                        };
+                        ary.push(Value::float(f));
+                    }
+                }
+            }
+            Template::F32 => {
+                if let Some(repeat) = repeat {
+                    for _ in 0..repeat {
+                        if let Some(chunk) = b.next_chunk::<4>() {
+                            let f = if endian {
+                                f32::from_be_bytes(chunk.clone()) as f64
+                            } else {
+                                f32::from_le_bytes(chunk.clone()) as f64
+                            };
+                            ary.push(Value::float(f));
+                        } else {
+                            break;
+                        }
+                        if b.is_empty() {
+                            break;
+                        }
+                    }
+                } else {
+                    while let Some(chunk) = b.next_chunk::<4>() {
+                        let f = if endian {
+                            f32::from_be_bytes(chunk.clone()) as f64
+                        } else {
+                            f32::from_le_bytes(chunk.clone()) as f64
+                        };
+                        ary.push(Value::float(f));
+                    }
+                }
+            }
             Template::Hex => {
                 let mut s = String::new();
                 if let Some(mut repeat) = repeat {
@@ -248,6 +306,68 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
             Template::U16 => pack!(store, 2, u16, repeat, endianness),
             Template::I8 => pack!(store, 1, i8, repeat, endianness),
             Template::U8 => pack!(store, 1, u8, repeat, endianness),
+            Template::F64 => {
+                let mut process = |repeat: Option<usize>| -> Result<()> {
+                    if let Some(repeat) = repeat {
+                        for _ in 0..repeat {
+                            if let Some(value) = iter.next() {
+                                let f = value.coerce_to_f64(store)?;
+                                let bytes = if endianness {
+                                    f64::to_be_bytes(f)
+                                } else {
+                                    f64::to_le_bytes(f)
+                                };
+                                packed.extend_from_slice(&bytes);
+                            } else {
+                                return Err(MonorubyErr::argumenterr("too few arguments"));
+                            }
+                        }
+                    } else {
+                        while let Some(value) = iter.next() {
+                            let f = value.coerce_to_f64(store)?;
+                            let bytes = if endianness {
+                                f64::to_be_bytes(f)
+                            } else {
+                                f64::to_le_bytes(f)
+                            };
+                            packed.extend_from_slice(&bytes);
+                        }
+                    }
+                    Ok(())
+                };
+                process(repeat)?;
+            }
+            Template::F32 => {
+                let mut process = |repeat: Option<usize>| -> Result<()> {
+                    if let Some(repeat) = repeat {
+                        for _ in 0..repeat {
+                            if let Some(value) = iter.next() {
+                                let f = value.coerce_to_f64(store)? as f32;
+                                let bytes = if endianness {
+                                    f32::to_be_bytes(f)
+                                } else {
+                                    f32::to_le_bytes(f)
+                                };
+                                packed.extend_from_slice(&bytes);
+                            } else {
+                                return Err(MonorubyErr::argumenterr("too few arguments"));
+                            }
+                        }
+                    } else {
+                        while let Some(value) = iter.next() {
+                            let f = value.coerce_to_f64(store)? as f32;
+                            let bytes = if endianness {
+                                f32::to_be_bytes(f)
+                            } else {
+                                f32::to_le_bytes(f)
+                            };
+                            packed.extend_from_slice(&bytes);
+                        }
+                    }
+                    Ok(())
+                };
+                process(repeat)?;
+            }
             Template::Null => {
                 if let Some(repeat) = repeat {
                     for _ in 0..repeat {
@@ -296,6 +416,12 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
             'V' => (Template::U32, Endianness::Little),
             'n' => (Template::U16, Endianness::Big),
             'N' => (Template::U32, Endianness::Big),
+            'd' | 'D' => (Template::F64, Endianness::Little),
+            'f' | 'F' => (Template::F32, Endianness::Little),
+            'e' => (Template::F32, Endianness::Little),
+            'E' => (Template::F64, Endianness::Little),
+            'g' => (Template::F32, Endianness::Big),
+            'G' => (Template::F64, Endianness::Big),
             'U' => (Template::Utf8, Endianness::Little),
             'x' => (Template::Null, Endianness::Little),
             'X' => (Template::Back, Endianness::Little),

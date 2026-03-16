@@ -3772,4 +3772,22 @@ mod tests {
         run_test_error(r#""\x01\x02\x03".unpack1("C", offset: 10)"#);
         run_test_error(r#""\x01\x02\x03".unpack("C", offset: -1)"#);
     }
+
+    #[test]
+    fn pack_unpack_float() {
+        run_test(r#"[1.5].pack("E")"#);
+        run_test(r#"[1.5].pack("E").unpack1("E")"#);
+        run_test(r#"[1.5, -2.25, 0.0].pack("E*").unpack("E*")"#);
+        run_test(r#"[1.5].pack("e")"#);
+        run_test(r#"[1.5].pack("e").unpack1("e")"#);
+        run_test(r#"[1.5, -2.25].pack("e*").unpack("e*")"#);
+        run_test(r#"[1.5].pack("G")"#);
+        run_test(r#"[1.5].pack("G").unpack1("G")"#);
+        run_test(r#"[1.5].pack("g")"#);
+        run_test(r#"[1.5].pack("g").unpack1("g")"#);
+        run_test(r#"[3.14].pack("d").unpack1("d")"#);
+        run_test(r#"[3.14].pack("D").unpack1("D")"#);
+        run_test(r#"[3.14].pack("f").unpack1("f")"#);
+        run_test(r#"[3.14].pack("F").unpack1("F")"#);
+    }
 }
