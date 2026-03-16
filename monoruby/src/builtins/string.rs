@@ -343,12 +343,21 @@ fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             Err(_) => return Err(MonorubyErr::char_out_of_range(&globals.store, lfp.arg(0))),
         };
         let bytes = self_.as_rstring_inner_mut();
-        if let Ok(ch) = u8::try_from(ch) {
-            bytes.extend_from_slice_checked(&[ch])?;
+        if bytes.encoding() == Encoding::Utf8 {
+            let c = char::from_u32(ch).ok_or_else(|| {
+                MonorubyErr::char_out_of_range(&globals.store, lfp.arg(0))
+            })?;
+            let mut buf = [0u8; 4];
+            let encoded = c.encode_utf8(&mut buf);
+            bytes.extend_from_slice_checked(encoded.as_bytes())?;
         } else {
-            bytes.extend_from_slice_checked(&ch.to_ne_bytes())?;
+            // ASCII-8BIT: append raw byte(s)
+            if let Ok(b) = u8::try_from(ch) {
+                bytes.extend_from_slice_checked(&[b])?;
+            } else {
+                return Err(MonorubyErr::char_out_of_range(&globals.store, lfp.arg(0)));
+            }
         }
-        bytes.check_utf8()?;
     } else {
         return Err(MonorubyErr::no_implicit_conversion(
             globals,
@@ -2805,6 +2814,105 @@ mod tests {
             a
         "##,
         );*/
+    }
+
+    #[test]
+    fn string_shl_encoding() {
+        // UTF-8 << ASCII-8BIT (ASCII chars only) => keeps UTF-8
+        run_test(
+            r##"
+            s = "hello".encode("UTF-8")
+            s << "world".force_encoding("ASCII-8BIT")
+            [s, s.encoding == Encoding::UTF_8]
+        "##,
+        );
+        // UTF-8 << ASCII-8BIT (non-ASCII) => downgrades to ASCII-8BIT
+        run_test(
+            r##"
+            s = "hello".encode("UTF-8")
+            s << "\x80".force_encoding("ASCII-8BIT")
+            s.encoding == Encoding::ASCII_8BIT
+        "##,
+        );
+        // ASCII-8BIT (ASCII only) << UTF-8 (non-ASCII) => upgrades to UTF-8
+        run_test(
+            r##"
+            s = "hello".force_encoding("ASCII-8BIT")
+            s << "こんにちは"
+            [s, s.encoding == Encoding::UTF_8]
+        "##,
+        );
+        // UTF-8 (non-ASCII) << ASCII-8BIT (non-ASCII) => Encoding::CompatibilityError
+        run_test_error(
+            r##"
+            s = "こんにちは"
+            s << "\x80".force_encoding("ASCII-8BIT")
+        "##,
+        );
+        // ASCII-8BIT << UTF-8 (ASCII only) => keeps ASCII-8BIT
+        run_test(
+            r##"
+            s = "hello".force_encoding("ASCII-8BIT")
+            s << "world".encode("UTF-8")
+            [s, s.encoding == Encoding::ASCII_8BIT]
+        "##,
+        );
+        // empty UTF-8 << ASCII-8BIT (ASCII only) => keeps UTF-8
+        run_test(
+            r##"
+            s = "".encode("UTF-8")
+            s << "hello".force_encoding("ASCII-8BIT")
+            [s, s.encoding == Encoding::UTF_8]
+        "##,
+        );
+        // empty UTF-8 << ASCII-8BIT (non-ASCII) => downgrades to ASCII-8BIT
+        run_test(
+            r##"
+            s = "".encode("UTF-8")
+            s << "\x80".force_encoding("ASCII-8BIT")
+            s.encoding == Encoding::ASCII_8BIT
+        "##,
+        );
+        // empty ASCII-8BIT << UTF-8 (ASCII only) => keeps ASCII-8BIT
+        run_test(
+            r##"
+            s = "".force_encoding("ASCII-8BIT")
+            s << "hello".encode("UTF-8")
+            [s, s.encoding == Encoding::ASCII_8BIT]
+        "##,
+        );
+        // empty ASCII-8BIT << UTF-8 (non-ASCII) => upgrades to UTF-8
+        run_test(
+            r##"
+            s = "".force_encoding("ASCII-8BIT")
+            s << "こんにちは"
+            [s, s.encoding == Encoding::UTF_8]
+        "##,
+        );
+        // Integer argument: UTF-8 string << Unicode codepoint
+        run_test(
+            r##"
+            s = "hello"
+            s << 0x3042
+            [s, s.encoding == Encoding::UTF_8]
+        "##,
+        );
+        // Integer argument: ASCII-8BIT << 0x80
+        run_test(
+            r##"
+            s = "hello".force_encoding("ASCII-8BIT")
+            s << 0x80
+            [s.bytes.to_a, s.encoding == Encoding::ASCII_8BIT]
+        "##,
+        );
+        // Integer argument: ASCII char
+        run_test(
+            r##"
+            s = "hello"
+            s << 33
+            [s, s.encoding == Encoding::UTF_8]
+        "##,
+        );
     }
 
     #[test]
