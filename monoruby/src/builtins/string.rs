@@ -91,8 +91,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(STRING_CLASS, "next", &["succ"], next, 0);
     globals.define_builtin_func(STRING_CLASS, "encoding", encoding, 0);
     globals.define_builtin_func(STRING_CLASS, "b", b, 0);
-    globals.define_builtin_func(STRING_CLASS, "unpack1", unpack1, 1);
-    globals.define_builtin_func(STRING_CLASS, "unpack", unpack, 1);
+    globals.define_builtin_func_with_kw(STRING_CLASS, "unpack1", unpack1, 1, 1, false, &["offset"], false);
+    globals.define_builtin_func_with_kw(STRING_CLASS, "unpack", unpack, 1, 1, false, &["offset"], false);
     globals.define_builtin_func(STRING_CLASS, "dump", dump, 0);
     globals.define_builtin_func(STRING_CLASS, "force_encoding", force_encoding, 1);
     globals.define_builtin_func(STRING_CLASS, "valid_encoding?", valid_encoding, 0);
@@ -2646,13 +2646,15 @@ fn b(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Valu
 /// ### String#unpack
 ///
 /// - unpack(template) -> Array
+/// - unpack(template, offset: integer) -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/unpack.html]
 #[monoruby_builtin]
 fn unpack(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
+    let offset = unpack_offset(globals, lfp, self_.as_rstring_inner().len())?;
     rvalue::unpack(
-        self_.as_rstring_inner(),
+        &self_.as_rstring_inner()[offset..],
         lfp.arg(0).expect_str(globals)?,
         false,
     )
@@ -2662,16 +2664,32 @@ fn unpack(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// ### String#unpack1
 ///
 /// - unpack1(format) -> object
+/// - unpack1(format, offset: integer) -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/unpack1.html]
 #[monoruby_builtin]
 fn unpack1(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
+    let offset = unpack_offset(globals, lfp, self_.as_rstring_inner().len())?;
     rvalue::unpack(
-        self_.as_rstring_inner(),
+        &self_.as_rstring_inner()[offset..],
         lfp.arg(0).expect_str(globals)?,
         true,
     )
+}
+
+fn unpack_offset(globals: &Globals, lfp: Lfp, len: usize) -> Result<usize> {
+    match lfp.try_arg(1) {
+        Some(v) => {
+            let offset = v.expect_integer(globals)?;
+            if offset < 0 || offset as usize > len {
+                Err(MonorubyErr::argumenterr("offset outside of string"))
+            } else {
+                Ok(offset as usize)
+            }
+        }
+        None => Ok(0),
+    }
 }
 
 ///
@@ -3742,5 +3760,16 @@ mod tests {
         run_test(r#"''.ascii_only?"#);
         run_test(r#"'日本語'.ascii_only?"#);
         run_test(r#"'日本語abc123'.ascii_only?"#);
+    }
+
+    #[test]
+    fn unpack1_offset() {
+        run_test(r#""\x01\x02\x03\x04\x05\x06\x07\x08".unpack1("L", offset: 4)"#);
+        run_test(r#""\x01\x02\x03\x04\x05\x06\x07\x08".unpack1("L", offset: 0)"#);
+        run_test(r#""\x01\x02\x03\x04\x05\x06\x07\x08".unpack("CC", offset: 2)"#);
+        run_test(r#""\x01\x02\x03\x04".unpack1("L")"#);
+        run_test(r#""\x01\x02".unpack("CC")"#);
+        run_test_error(r#""\x01\x02\x03".unpack1("C", offset: 10)"#);
+        run_test_error(r#""\x01\x02\x03".unpack("C", offset: -1)"#);
     }
 }
