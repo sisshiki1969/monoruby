@@ -1,6 +1,7 @@
 use num::{BigInt, Zero};
 
 use super::*;
+use jitgen::JitContext;
 
 //
 // String class
@@ -59,7 +60,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(STRING_CLASS, "index", string_index, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "rindex", string_rindex, 1, 2, false);
     globals.define_builtin_funcs(STRING_CLASS, "length", &["size"], length, 0);
-    globals.define_builtin_funcs(STRING_CLASS, "bytesize", &[], bytesize, 0);
+    globals.define_builtin_inline_funcs(
+        STRING_CLASS,
+        "bytesize",
+        &[],
+        bytesize,
+        Box::new(string_bytesize),
+        0,
+    );
     globals.define_builtin_func(STRING_CLASS, "ord", ord, 0);
     globals.define_builtin_func_with(STRING_CLASS, "ljust", ljust, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "rjust", rjust, 1, 2, false);
@@ -1644,6 +1652,33 @@ fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 fn bytesize(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let length = lfp.self_val().as_rstring_inner().len();
     Ok(Value::integer(length as i64))
+}
+
+fn string_bytesize(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let dst = callsite.dst;
+    state.load(ir, callsite.recv, GP::Rdi);
+    ir.inline(move |r#gen, _, _| {
+        monoasm! { &mut r#gen.jit,
+            movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+            cmpq rax, (STRING_INLINE_CAP);
+            cmovgtq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+            salq rax, 1;
+            orq  rax, 1;
+        }
+    });
+    state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+    true
 }
 
 ///
