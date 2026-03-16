@@ -67,6 +67,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "bytes", bytes, 0);
     globals.define_builtin_func(STRING_CLASS, "getbyte", getbyte, 1);
     globals.define_builtin_func_with(STRING_CLASS, "byteslice", byteslice, 1, 2, false);
+    globals.define_builtin_func_with(STRING_CLASS, "bytesplice", bytesplice, 2, 5, false);
     globals.define_builtin_func(STRING_CLASS, "setbyte", setbyte, 2);
     globals.define_builtin_func_with(STRING_CLASS, "each_line", each_line, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
@@ -1939,6 +1940,205 @@ fn byteslice(
                 ))),
                 None => Ok(Value::nil()),
             }
+        }
+    }
+}
+
+///
+/// ### String#bytesplice
+///
+/// - bytesplice(index, length, str) -> self
+/// - bytesplice(index, length, str, str_index, str_length) -> self
+/// - bytesplice(range, str) -> self
+/// - bytesplice(range, str, str_range) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/bytesplice.html]
+#[monoruby_builtin]
+fn bytesplice(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg_count = if lfp.try_arg(4).is_some() {
+        5
+    } else if lfp.try_arg(3).is_some() {
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 4, expected 2, 3, or 5)",
+        ));
+    } else if lfp.try_arg(2).is_some() {
+        3
+    } else if lfp.try_arg(1).is_some() {
+        2
+    } else {
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 1, expected 2, 3, or 5)",
+        ));
+    };
+
+    let mut self_ = lfp.self_val();
+    let byte_len = self_.as_rstring_inner().len();
+
+    // Parse target range (index, length) from the first args
+    let (start, splice_len) = if let Some(range) = lfp.arg(0).is_range() {
+        let rstart = range.start().expect_integer(globals)?;
+        let rend = range.end().expect_integer(globals)?;
+        let start = conv_byte_index_for_splice(rstart, byte_len)?;
+        let end = if rend >= 0 {
+            let e = if range.exclude_end() {
+                rend as usize
+            } else {
+                (rend as usize).saturating_add(1)
+            };
+            e.min(byte_len)
+        } else {
+            let idx = byte_len as i64 + rend;
+            if idx < 0 {
+                return Err(MonorubyErr::indexerr(format!(
+                    "index {} out of string",
+                    rend
+                )));
+            }
+            let e = if range.exclude_end() {
+                idx as usize
+            } else {
+                (idx as usize).saturating_add(1)
+            };
+            e.min(byte_len)
+        };
+        let len = if end > start { end - start } else { 0 };
+        (start, len)
+    } else {
+        // index, length form
+        if arg_count < 3 {
+            return Err(MonorubyErr::typeerr(
+                "wrong argument type Integer (expected Range)",
+            ));
+        }
+        let idx = lfp.arg(0).expect_integer(globals)?;
+        let len = lfp.arg(1).expect_integer(globals)?;
+        if len < 0 {
+            return Err(MonorubyErr::indexerr(format!("negative length {}", len)));
+        }
+        let start = conv_byte_index_for_splice(idx, byte_len)?;
+        let splice_len = (len as usize).min(byte_len - start);
+        (start, splice_len)
+    };
+
+    // Determine the replacement string and optional sub-range
+    let (str_arg_idx, has_src_range) = if lfp.arg(0).is_range().is_some() {
+        // range form: bytesplice(range, str) or bytesplice(range, str, str_range)
+        (1, arg_count == 3)
+    } else {
+        // index form: bytesplice(idx, len, str) or bytesplice(idx, len, str, str_idx, str_len)
+        (2, arg_count == 5)
+    };
+
+    let str_val = lfp.arg(str_arg_idx);
+    let str_inner = str_val.as_rstring_inner();
+    let str_bytes = str_inner.as_bytes();
+    let str_byte_len = str_bytes.len();
+
+    let replacement = if has_src_range {
+        if lfp.arg(0).is_range().is_some() {
+            // bytesplice(range, str, str_range)
+            let src_range = lfp.arg(str_arg_idx + 1);
+            let src_range = src_range
+                .is_range()
+                .ok_or_else(|| MonorubyErr::typeerr("wrong argument type Integer (expected Range)"))?;
+            let src_start = src_range.start().expect_integer(globals)?;
+            let src_end = src_range.end().expect_integer(globals)?;
+            let src_start = conv_byte_index_for_splice(src_start, str_byte_len)?;
+            let src_end_val = if src_end >= 0 {
+                let e = if src_range.exclude_end() {
+                    src_end as usize
+                } else {
+                    (src_end as usize).saturating_add(1)
+                };
+                e.min(str_byte_len)
+            } else {
+                let idx = str_byte_len as i64 + src_end;
+                if idx < 0 {
+                    return Err(MonorubyErr::indexerr(format!(
+                        "index {} out of string",
+                        src_end
+                    )));
+                }
+                let e = if src_range.exclude_end() {
+                    idx as usize
+                } else {
+                    (idx as usize).saturating_add(1)
+                };
+                e.min(str_byte_len)
+            };
+            if src_start > src_end_val {
+                &[]
+            } else {
+                &str_bytes[src_start..src_end_val]
+            }
+        } else {
+            // bytesplice(idx, len, str, str_idx, str_len)
+            let src_idx = lfp.arg(str_arg_idx + 1).expect_integer(globals)?;
+            let src_len = lfp.arg(str_arg_idx + 2).expect_integer(globals)?;
+            if src_len < 0 {
+                return Err(MonorubyErr::indexerr(format!(
+                    "negative length {}",
+                    src_len
+                )));
+            }
+            let src_start = conv_byte_index_for_splice(src_idx, str_byte_len)?;
+            let src_splice_len = (src_len as usize).min(str_byte_len - src_start);
+            &str_bytes[src_start..src_start + src_splice_len]
+        }
+    } else {
+        str_bytes
+    };
+
+    // Check encoding compatibility
+    let self_enc = self_.as_rstring_inner().encoding();
+    let str_enc = str_inner.encoding();
+    match (self_enc, str_enc) {
+        (Encoding::Utf8, Encoding::Ascii8) => {
+            if !replacement.is_ascii() && !self_.as_rstring_inner().as_bytes().is_ascii() {
+                return Err(MonorubyErr::runtimeerr(
+                    "incompatible character encodings: UTF-8 and ASCII-8BIT",
+                ));
+            }
+        }
+        (Encoding::Ascii8, Encoding::Utf8) => {
+            // OK
+        }
+        _ => {}
+    }
+
+    self_
+        .as_rstring_inner_mut()
+        .bytesplice(start, splice_len, replacement);
+
+    Ok(self_)
+}
+
+/// Convert a signed byte index to unsigned, raising IndexError if out of bounds.
+/// For splice operations, index == byte_len is valid (for appending).
+fn conv_byte_index_for_splice(idx: i64, byte_len: usize) -> Result<usize> {
+    if idx >= 0 {
+        if (idx as usize) <= byte_len {
+            Ok(idx as usize)
+        } else {
+            Err(MonorubyErr::indexerr(format!(
+                "index {} out of string",
+                idx
+            )))
+        }
+    } else {
+        let actual = byte_len as i64 + idx;
+        if actual < 0 {
+            Err(MonorubyErr::indexerr(format!(
+                "index {} out of string",
+                idx
+            )))
+        } else {
+            Ok(actual as usize)
         }
     }
 }
@@ -3897,5 +4097,30 @@ mod tests {
         run_test(r#"[3.14].pack("D").unpack1("D")"#);
         run_test(r#"[3.14].pack("f").unpack1("f")"#);
         run_test(r#"[3.14].pack("F").unpack1("F")"#);
+    }
+
+    #[test]
+    fn string_bytesplice() {
+        // bytesplice(index, length, str)
+        run_test(r#"s = "hello world"; s.bytesplice(5, 1, "---"); s"#);
+        run_test(r#"s = "hello"; s.bytesplice(0, 1, "H"); s"#);
+        run_test(r#"s = "hello"; s.bytesplice(5, 0, " world"); s"#);
+        run_test(r#"s = "hello world"; s.bytesplice(-5, 5, "WORLD"); s"#);
+        // bytesplice(index, length, str, str_index, str_length)
+        run_test(r#"s = "hello world"; s.bytesplice(0, 5, "HELLO WORLD", 0, 5); s"#);
+        run_test(
+            r#"s = "hello world"; s.bytesplice(6, 5, "BEAUTIFUL WORLD", 10, 5); s"#,
+        );
+        // bytesplice(range, str)
+        run_test(r#"s = "hello world"; s.bytesplice(0..4, "HELLO"); s"#);
+        run_test(r#"s = "hello world"; s.bytesplice(0...5, "HELLO"); s"#);
+        // bytesplice(range, str, str_range)
+        run_test(r#"s = "hello world"; s.bytesplice(0..4, "HELLO WORLD", 0..4); s"#);
+        // return value is self
+        run_test(r#"s = "hello"; r = s.bytesplice(0, 1, "H"); r.equal?(s)"#);
+        // negative index
+        run_test(r#"s = "hello"; s.bytesplice(-5, 5, "HELLO"); s"#);
+        // insert at end
+        run_test(r#"s = "hello"; s.bytesplice(5, 0, "!"); s"#);
     }
 }
