@@ -388,20 +388,36 @@ impl RStringInner {
     }
 
     pub fn extend(&mut self, other: &Self) -> Result<()> {
-        if self.is_empty() {
-            self.content.extend_from_slice(other);
-            self.ty = other.ty;
+        if other.is_empty() {
             return Ok(());
         }
-        if self.ty == other.ty || other.is_ascii() {
-            self.content.extend_from_slice(other);
-            Ok(())
-        } else {
-            Err(MonorubyErr::runtimeerr(format!(
-                "incompatible character encodings: {:?} and {:?}",
-                self.ty, other.ty
-            )))
+        let self_ascii_only = self.content.is_ascii();
+        let other_ascii_only = other.content.is_ascii();
+        match (self.ty, other.ty) {
+            (Encoding::Utf8, Encoding::Ascii8) => {
+                if other_ascii_only {
+                    // ASCII-8BIT with only ASCII bytes is compatible with UTF-8
+                } else if self_ascii_only {
+                    // self is UTF-8 but ASCII-only, other is binary non-ASCII => downgrade
+                    self.ty = Encoding::Ascii8;
+                } else {
+                    // both have non-ASCII bytes => incompatible
+                    return Err(MonorubyErr::runtimeerr(
+                        "incompatible character encodings: UTF-8 and ASCII-8BIT",
+                    ));
+                }
+            }
+            (Encoding::Ascii8, Encoding::Utf8) => {
+                if self_ascii_only && !other_ascii_only {
+                    // self is binary but ASCII-only, other has non-ASCII UTF-8 => upgrade
+                    self.ty = Encoding::Utf8;
+                }
+                // otherwise keep ASCII-8BIT
+            }
+            _ => {}
         }
+        self.content.extend_from_slice(other);
+        Ok(())
     }
 
     pub fn extend_from_slice_checked(&mut self, slice: &[u8]) -> Result<()> {
