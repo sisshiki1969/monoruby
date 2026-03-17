@@ -572,7 +572,14 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 if let TokenKind::Const(_) = self.peek()?.kind {
                     let loc = node.loc;
                     let name = self.expect_const()?;
-                    if let Some(arglist) = self.parse_arguments(true)? {
+                    // Suppress `do...end` blocks for `Foo::BAR do end` — in CRuby,
+                    // `do...end` does not attach to a constant-style method call.
+                    // Only `{ }` blocks attach (e.g. `Foo::BAR { }`).
+                    let old = self.suppress_do_block;
+                    self.suppress_do_block = true;
+                    let arglist = self.parse_arguments(true)?;
+                    self.suppress_do_block = old;
+                    if let Some(arglist) = arglist {
                         // Foo::Bar()
                         Node::new_mcall(node, name, arglist, false, self.prev_loc())
                     } else if let NodeKind::Const {
