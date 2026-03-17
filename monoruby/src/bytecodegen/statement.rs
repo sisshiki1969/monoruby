@@ -422,8 +422,12 @@ impl<'a> BytecodeGen<'a> {
                 let cont_pos = self.new_label();
                 let next_pos = self.new_label();
                 if !exception_list.is_empty() {
-                    //assert_eq!(1, exception_list.len());
                     for ex in exception_list {
+                        if ex.is_splat() {
+                            // TODO: support splat in rescue exception list
+                            // For now, skip splat entries (e.g. rescue Foo, *bar)
+                            continue;
+                        }
                         self.gen_teq_condbr(ex, err_reg, cont_pos, true)?;
                     }
                     self.emit_br(next_pos);
