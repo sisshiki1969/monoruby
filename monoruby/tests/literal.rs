@@ -312,3 +312,26 @@ fn regexp_free_format() {
     run_test(r##"/x y/x.match?("x y")"##);
     run_test(r##"/x\ y/x.match?("x y")"##);
 }
+
+#[test]
+fn string_format() {
+    // %d with integer
+    run_test(r#""%d" % 42"#);
+    // %d with float (truncates to integer)
+    run_test(r#""%d" % 5.7"#);
+    run_test(r#""%d" % -3.9"#);
+    run_test(r#""%d" % 0.0"#);
+    // %d with float exceeding i64 range
+    run_test(r#""%d" % 1.0e19"#);
+    run_test(r#""%d" % -1.0e19"#);
+    // %d with format flags and float
+    run_test(r#""%02d:%02d:%02d" % [1, 2, 5.784]"#);
+    // %i (alias for %d) with float
+    run_test(r#""%i" % 3.14"#);
+    // %f with float
+    run_test(r#""%f" % 3.14"#);
+    // %s with string
+    run_test(r#""%s" % "hello""#);
+    // multiple format specifiers
+    run_test(r#""%d %f %s" % [1.5, 2.5, "x"]"#);
+}
