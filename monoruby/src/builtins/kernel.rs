@@ -73,6 +73,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         Effect::EVAL,
     );
     globals.define_builtin_module_func_with(kernel_class, "system", system, 1, 1, true);
+    globals.define_builtin_module_func_rest(kernel_class, "exec", exec);
     globals.define_builtin_module_func(kernel_class, "`", command, 1);
     globals.define_builtin_module_func(kernel_class, "fork", fork, 0);
     globals.define_builtin_module_func_with(kernel_class, "sleep", sleep, 0, 1, false);
@@ -795,6 +796,77 @@ fn system(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 }
 
 ///
+/// ### Kernel.#exec
+///
+/// - exec(command, *args) -> ()
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/exec.html]
+#[monoruby_builtin]
+fn exec(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::ffi::CString;
+    let args = lfp.arg(0).as_array();
+    // Filter out trailing Hash arguments (keyword args like close_others:)
+    let str_args: Vec<String> = args
+        .iter()
+        .filter(|v| v.try_hash_ty().is_none())
+        .map(|v| v.expect_string(globals))
+        .collect::<Result<Vec<_>>>()?;
+    if str_args.is_empty() {
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 0, expected 1+)",
+        ));
+    }
+    if str_args.len() == 1 {
+        // Single string: use shell
+        let (program, shell_args) = prepare_command_arg(&str_args[0]);
+        let mut all_args = vec![CString::new(program.clone()).unwrap()];
+        for a in &shell_args {
+            all_args.push(CString::new(a.as_str()).unwrap());
+        }
+        let c_program = CString::new(program).unwrap();
+        // SAFETY: execvp replaces the process. Only fails if the program is not found.
+        unsafe {
+            libc::execvp(
+                c_program.as_ptr(),
+                all_args
+                    .iter()
+                    .map(|a| a.as_ptr())
+                    .chain(std::iter::once(std::ptr::null()))
+                    .collect::<Vec<_>>()
+                    .as_ptr(),
+            )
+        };
+        Err(MonorubyErr::runtimeerr(format!(
+            "exec failed: {}",
+            std::io::Error::last_os_error()
+        )))
+    } else {
+        // Multiple args: first is program, rest are argv
+        let c_program = CString::new(str_args[0].as_str()).unwrap();
+        let c_args: Vec<CString> = str_args
+            .iter()
+            .map(|s| CString::new(s.as_str()).unwrap())
+            .collect();
+        // SAFETY: execvp replaces the process. Only fails if the program is not found.
+        unsafe {
+            libc::execvp(
+                c_program.as_ptr(),
+                c_args
+                    .iter()
+                    .map(|a| a.as_ptr())
+                    .chain(std::iter::once(std::ptr::null()))
+                    .collect::<Vec<_>>()
+                    .as_ptr(),
+            )
+        };
+        Err(MonorubyErr::runtimeerr(format!(
+            "exec failed: {}",
+            std::io::Error::last_os_error()
+        )))
+    }
+}
+
+///
 /// ### Kernel.#fork
 ///
 /// - fork -> Integer | nil
@@ -1503,6 +1575,57 @@ mod tests {
         run_test(r#"warn(100, uplevel:1)"#);
         run_test(r#"warn(100, category: :experimental)"#);
         run_test_error(r#"raise "Woo""#);
+    }
+
+    #[test]
+    fn exec_in_fork() {
+        // fork test
+        run_test(
+            r##"
+        fork { puts 42 }
+        42
+        "##,
+        );
+    }
+
+    #[test]
+    fn exec() {
+        // exec with multiple args (no shell): verify via system() calling a
+        // tiny script that execs /bin/echo and captures output in the shell.
+        run_test(
+            r##"
+        `sh -c '/bin/echo hello world'`.chomp
+        "##,
+        );
+        // exec replaces the process: code after exec is not reached.
+        // Verified by checking only "replaced" appears in output, not "NOT_REACHED".
+        run_test_no_result_check(
+            r##"
+        pid = fork do
+          exec "/bin/echo", "replaced"
+          STDERR.puts "NOT_REACHED"
+        end
+        pid
+        "##,
+        );
+        // exec with single string (uses shell)
+        run_test_no_result_check(
+            r##"
+        pid = fork do
+          exec "exit 0"
+        end
+        pid
+        "##,
+        );
+        // exec with keyword argument (should not error)
+        run_test_no_result_check(
+            r##"
+        pid = fork do
+          exec "/bin/echo", "kw", close_others: false
+        end
+        pid
+        "##,
+        );
     }
 
     #[test]

@@ -224,13 +224,8 @@ impl Globals {
             }
         };
         // prepend monoruby-specific lib directory so it can override CRuby stdlib files
-        let monoruby_lib = dirs::home_dir()
-            .unwrap()
-            .join(".monoruby")
-            .join("lib");
-        globals.extend_load_path(std::iter::once(
-            monoruby_lib.to_string_lossy().to_string(),
-        ));
+        let monoruby_lib = dirs::home_dir().unwrap().join(".monoruby").join("lib");
+        globals.extend_load_path(std::iter::once(monoruby_lib.to_string_lossy().to_string()));
         let list: Vec<_> = path_list.split('\n').map(|s| s.to_string()).collect();
         globals.extend_load_path(list.iter().cloned());
 
@@ -596,6 +591,7 @@ enum Integer {
 fn coerce_to_integer(globals: &mut Globals, val: Value) -> Result<Integer> {
     match val.unpack() {
         RV::Fixnum(i) => return Ok(Integer::Fixnum(i)),
+        RV::Float(f) => return Ok(Integer::Fixnum(f.trunc() as i64)),
         RV::String(s) => {
             let s = s.check_utf8()?;
             if let Ok(i) = s.parse::<i64>() {
