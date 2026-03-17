@@ -729,6 +729,14 @@ mod tests {
     }
 
     #[test]
+    fn executable_() {
+        run_test(r##"File.executable?("/bin/sh")"##);
+        run_test(r##"File.executable?("../LICENSE-MIT")"##);
+        run_test(r##"File.executable?("nonexistent_file_xyz")"##);
+        run_test(r##"FileTest.executable?("/bin/sh")"##);
+    }
+
+    #[test]
     fn open() {
         run_test(r##"$LOAD_PATH.resolve_feature_path("pp")"##);
         run_test(r##"$LOAD_PATH.resolve_feature_path("zzzz")"##);

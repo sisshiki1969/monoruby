@@ -242,6 +242,54 @@ mod tests {
     }
 
     #[test]
+    fn source_location() {
+        run_test(
+            r##"
+        def foo; end
+        m = method(:foo)
+        loc = m.source_location
+        [loc[0].is_a?(String), loc[1].is_a?(Integer)]
+        "##,
+        );
+        run_test(
+            r##"
+        def bar(x); x * 2; end
+        m = method(:bar)
+        loc = m.source_location
+        [loc[0].is_a?(String), loc[1].is_a?(Integer)]
+        "##,
+        );
+        // built-in methods return nil
+        run_test(
+            r##"
+        m = method(:puts)
+        m.source_location
+        "##,
+        );
+    }
+
+    #[test]
+    fn usource_location() {
+        run_test(
+            r##"
+        class Foo
+          def baz; end
+        end
+        um = Foo.instance_method(:baz)
+        loc = um.source_location
+        [loc[0].is_a?(String), loc[1].is_a?(Integer)]
+        "##,
+        );
+        // built-in methods return nil
+        run_test(
+            r##"
+        um = Integer.instance_method(:to_s)
+        um.source_location
+        "##,
+        );
+    }
+
+    #[test]
     fn bind2() {
         run_test_with_prelude(
             r##"

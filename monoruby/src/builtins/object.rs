@@ -990,6 +990,50 @@ mod tests {
     }
 
     #[test]
+    fn instance_exec() {
+        run_test_with_prelude(
+            r#"
+        some = Foo.new('hello')
+        res = []
+        res << some.instance_exec { @key }
+        res << some.instance_exec(10) { |x| @key * x }
+        res
+        "#,
+            r#"
+        class Foo
+          def initialize(data)
+            @key = data
+          end
+        end
+        "#,
+        );
+        run_test(
+            r#"
+        class Foo
+          def initialize
+            @x = 42
+          end
+        end
+        Foo.new.instance_exec { @x }
+        "#,
+        );
+        run_test(
+            r#"
+        class Foo
+          private
+          def secret; "secret"; end
+        end
+        Foo.new.instance_exec { secret }
+        "#,
+        );
+        run_test(
+            r#"
+        1.instance_exec(2, 3) { |a, b| self + a + b }
+        "#,
+        );
+    }
+
+    #[test]
     fn object_isa() {
         run_test("4.is_a? Integer");
         run_test("4.5.is_a? Integer");
