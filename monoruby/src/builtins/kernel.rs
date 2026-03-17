@@ -1639,6 +1639,73 @@ mod tests {
     }
 
     #[test]
+    fn exit_raises_system_exit() {
+        run_test_once(
+            r##"
+        begin
+          exit
+        rescue SystemExit => e
+          e.status
+        end
+        "##,
+        );
+    }
+
+    #[test]
+    fn exit_with_status() {
+        run_test_once(
+            r##"
+        begin
+          exit(42)
+        rescue SystemExit => e
+          e.status
+        end
+        "##,
+        );
+    }
+
+    #[test]
+    fn abort_raises_system_exit() {
+        run_test_once(
+            r##"
+        begin
+          abort("test")
+        rescue SystemExit => e
+          e.status
+        end
+        "##,
+        );
+    }
+
+    #[test]
+    fn sleep_nan_error() {
+        run_test_no_result_check(
+            r##"
+        begin
+          sleep(Float::NAN)
+          false
+        rescue ArgumentError
+          true
+        end
+        "##,
+        );
+    }
+
+    #[test]
+    fn sleep_negative_error() {
+        run_test_no_result_check(
+            r##"
+        begin
+          sleep(-1)
+          false
+        rescue ArgumentError
+          true
+        end
+        "##,
+        );
+    }
+
+    #[test]
     fn mem() {
         run_test_no_result_check(
             r##"
