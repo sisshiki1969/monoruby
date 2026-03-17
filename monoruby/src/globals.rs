@@ -591,7 +591,6 @@ enum Integer {
 fn coerce_to_integer(globals: &mut Globals, val: Value) -> Result<Integer> {
     match val.unpack() {
         RV::Fixnum(i) => return Ok(Integer::Fixnum(i)),
-        RV::Float(f) => return Ok(Integer::Fixnum(f.trunc() as i64)),
         RV::String(s) => {
             let s = s.check_utf8()?;
             if let Ok(i) = s.parse::<i64>() {
