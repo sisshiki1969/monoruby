@@ -895,6 +895,14 @@ impl Executor {
         // method_missing should always be callable regardless of visibility.
         // In Ruby, method_missing is conventionally private, but the VM must
         // still dispatch to it when a method is not found.
+        //
+        // When a proxy block handler is present, we must adjust its depth by -1.
+        // invoke_method_missing is called from JIT/VM code without adding a
+        // frame to the CFP chain, but invoke_func (called downstream) applies
+        // delegate() which increments the proxy depth by 1. Without this
+        // pre-adjustment, block_arg in the method_missing body would try to
+        // walk too many frames and panic.
+        let bh = bh.map(|bh| bh.undelegate());
         let res = self.invoke_method(
             globals,
             IdentId::METHOD_MISSING,
@@ -1411,6 +1419,15 @@ impl BlockHandler {
     pub fn delegate(self) -> Self {
         match self.0.try_fixnum() {
             Some(i) => Self(Value::integer(i + 1)),
+            None => self,
+        }
+    }
+
+    /// Reverse of delegate(): decrement the proxy depth by 1.
+    /// Non-proxy block handlers (e.g. Proc) are returned unchanged.
+    pub fn undelegate(self) -> Self {
+        match self.0.try_fixnum() {
+            Some(i) => Self(Value::integer(i - 1)),
             None => self,
         }
     }

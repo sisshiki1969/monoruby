@@ -1355,4 +1355,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn method_missing_with_block() {
+        // &blk parameter
+        run_test_once(
+            r#"
+            class Foo
+              def method_missing(name, *args, &blk)
+                [name, args, blk ? blk.call : nil]
+              end
+            end
+            Foo.new.bar(1, 2) { 42 }
+            "#,
+        );
+        // block with yield
+        run_test_once(
+            r#"
+            class Foo
+              def method_missing(name, *args)
+                yield(*args) if block_given?
+              end
+            end
+            Foo.new.bar(3, 4) { |a, b| a + b }
+            "#,
+        );
+        // no block passed
+        run_test(
+            r#"
+            class Foo
+              def method_missing(name, *args, &blk)
+                [name, blk.nil?]
+              end
+            end
+            Foo.new.baz
+            "#,
+        );
+    }
 }
