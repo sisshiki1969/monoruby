@@ -42,6 +42,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(file, "file?", file_, 1);
     globals.define_builtin_module_func(file_test, "file?", file_, 1);
 
+    globals.define_builtin_class_func(file, "executable?", executable_, 1);
+    globals.define_builtin_module_func(file_test, "executable?", executable_, 1);
+
     globals.define_builtin_func_rest(file, "write", write);
 
     globals.define_builtin_singleton_func(
@@ -382,6 +385,27 @@ fn file_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         Ok(path) => Ok(Value::bool(path.is_file())),
         Err(_) => Ok(Value::bool(false)),
     }
+}
+
+///
+/// ### File.executable?
+/// - executable?(path) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/executable=3f.html]
+#[monoruby_builtin]
+fn executable_(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    use std::os::unix::fs::PermissionsExt;
+    let path = to_path(vm, globals, lfp.arg(0))?;
+    let b = match std::fs::metadata(&path) {
+        Ok(meta) => meta.permissions().mode() & 0o111 != 0,
+        Err(_) => false,
+    };
+    Ok(Value::bool(b))
 }
 
 ///

@@ -8,9 +8,11 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Method", METHOD_CLASS, ObjTy::METHOD);
     globals.define_builtin_funcs_rest(METHOD_CLASS, "call", &["[]", "==="], call);
     globals.define_builtin_func(METHOD_CLASS, "to_proc", to_proc, 0);
+    globals.define_builtin_func(METHOD_CLASS, "source_location", source_location, 0);
 
     globals.define_builtin_class_under_obj("UnboundMethod", UMETHOD_CLASS, ObjTy::METHOD);
     globals.define_builtin_func(UMETHOD_CLASS, "bind", bind, 1);
+    globals.define_builtin_func(UMETHOD_CLASS, "source_location", usource_location, 0);
 }
 
 ///
@@ -76,6 +78,58 @@ fn bind(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
         method.func_id(),
         method.owner(),
     ))
+}
+
+///
+/// ### Method#source_location
+///
+/// - source_location -> [String, Integer] | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Method/i/source_location.html]
+#[monoruby_builtin]
+fn source_location(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_method();
+    let func_id = method.func_id();
+    if let Some(iseq) = globals.store[func_id].is_iseq() {
+        let iseq_info = &globals.store[iseq];
+        let file_name = Value::string(iseq_info.sourceinfo.short_file_name().to_string());
+        let line = Value::integer(iseq_info.sourceinfo.get_line(&iseq_info.loc) as i64);
+        Ok(Value::array2(file_name, line))
+    } else {
+        Ok(Value::nil())
+    }
+}
+
+///
+/// ### UnboundMethod#source_location
+///
+/// - source_location -> [String, Integer] | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/source_location.html]
+#[monoruby_builtin]
+fn usource_location(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_umethod();
+    let func_id = method.func_id();
+    if let Some(iseq) = globals.store[func_id].is_iseq() {
+        let iseq_info = &globals.store[iseq];
+        let file_name = Value::string(iseq_info.sourceinfo.short_file_name().to_string());
+        let line = Value::integer(iseq_info.sourceinfo.get_line(&iseq_info.loc) as i64);
+        Ok(Value::array2(file_name, line))
+    } else {
+        Ok(Value::nil())
+    }
 }
 
 #[cfg(test)]
