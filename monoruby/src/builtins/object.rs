@@ -13,6 +13,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "hash", hash, 0);
     globals.define_builtin_func(OBJECT_CLASS, "eql?", eql_, 1);
     globals.define_builtin_funcs(OBJECT_CLASS, "dup", &["clone"], dup, 0);
+    globals.define_private_builtin_func(OBJECT_CLASS, "initialize_copy", initialize_copy, 1);
+    globals.define_private_builtin_func(OBJECT_CLASS, "initialize_clone", initialize_copy, 1);
+    globals.define_private_builtin_func(OBJECT_CLASS, "initialize_dup", initialize_copy, 1);
     globals.define_builtin_funcs_rest(OBJECT_CLASS, "enum_for", &["to_enum"], to_enum);
     globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_, 1);
     globals.define_builtin_func_rest(OBJECT_CLASS, "extend", extend);
@@ -311,6 +314,18 @@ fn equal_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result
 #[monoruby_builtin]
 fn dup(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val().dup())
+}
+
+/// ### Object#initialize_copy
+/// - initialize_copy(obj) -> object
+#[monoruby_builtin]
+fn initialize_copy(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(lfp.self_val())
 }
 
 ///
