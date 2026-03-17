@@ -846,6 +846,7 @@ impl Codegen {
             movq rax, (runtime::gen_hash);
             call rax;
         };
+        self.vm_handle_error();
         self.vm_store_r15(GP::Rax);
         self.fetch_and_dispatch();
         label
