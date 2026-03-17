@@ -591,6 +591,17 @@ enum Integer {
 fn coerce_to_integer(globals: &mut Globals, val: Value) -> Result<Integer> {
     match val.unpack() {
         RV::Fixnum(i) => return Ok(Integer::Fixnum(i)),
+        RV::Float(f) => {
+            let t = f.trunc();
+            return if i64::MIN as f64 <= t && t <= i64::MAX as f64 {
+                Ok(Integer::Fixnum(t as i64))
+            } else {
+                use num::FromPrimitive;
+                Ok(Integer::BigInt(
+                    num::BigInt::from_f64(t).expect("float is not NaN or infinite"),
+                ))
+            };
+        }
         RV::String(s) => {
             let s = s.check_utf8()?;
             if let Ok(i) = s.parse::<i64>() {
