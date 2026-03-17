@@ -2032,4 +2032,59 @@ mod tests {
             "##,
         );
     }
+
+    #[test]
+    fn scope_const_with_do_block() {
+        run_test(
+            r##"
+        module Foo
+          BAR = 42
+        end
+        def baz(x)
+          [x, block_given?]
+        end
+        baz Foo::BAR do end
+        "##,
+        );
+        run_test(
+            r##"
+        module Foo
+          BAR = 42
+        end
+        def baz(x)
+          x + yield
+        end
+        baz Foo::BAR do 10 end
+        "##,
+        );
+        run_test(
+            r##"
+        module A
+          module B
+            C = 99
+          end
+        end
+        def f(x)
+          [x, block_given?]
+        end
+        f A::B::C do end
+        "##,
+        );
+        run_test(
+            r##"
+        module Foo
+          def self.bar; yield; end
+        end
+        Foo::bar { 55 }
+        "##,
+        );
+        run_test(
+            r##"
+        module Foo
+          def self.Bar; yield; end
+        end
+        Foo::Bar { 77 }
+        "##,
+        );
+    }
 }
