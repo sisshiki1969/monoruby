@@ -297,7 +297,7 @@ impl alloc::GC<RValue> for Funcs {
 
 #[monoruby_builtin]
 fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let e = Enumerator::new(lfp.self_val());
+    let e = Enumerator::new(lfp.self_val())?;
     let receiver = e.obj;
     let method = e.method;
     let args = &*e.args;

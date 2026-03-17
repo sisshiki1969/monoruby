@@ -927,6 +927,9 @@ fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let now = std::time::Instant::now();
     if let Some(sec) = lfp.try_arg(0) {
         let sec = sec.coerce_to_f64(globals)?;
+        if sec.is_nan() || sec < 0.0 {
+            return Err(MonorubyErr::argumenterr("time interval must not be negative or NaN"));
+        }
         std::thread::sleep(std::time::Duration::from_secs_f64(sec));
     } else {
         loop {
@@ -946,9 +949,13 @@ fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.html]
 #[monoruby_builtin]
 fn abort(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    if let Some(arg0) = lfp.try_arg(0) {
+    let msg = if let Some(arg0) = lfp.try_arg(0) {
         match arg0.is_str() {
-            Some(s) => eprintln!("{}", s),
+            Some(s) => {
+                let s = s.to_string();
+                eprintln!("{}", s);
+                s
+            }
             None => {
                 return Err(MonorubyErr::no_implicit_conversion(
                     globals,
@@ -957,8 +964,10 @@ fn abort(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 ));
             }
         }
-    }
-    std::process::exit(1);
+    } else {
+        "abort".to_string()
+    };
+    Err(MonorubyErr::new(MonorubyErrKind::SystemExit(1), msg))
 }
 
 ///
@@ -969,18 +978,19 @@ fn abort(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/exit.html]
 #[monoruby_builtin]
 fn exit(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    if let Some(arg0) = lfp.try_arg(0) {
+    let status = if let Some(arg0) = lfp.try_arg(0) {
         if let Some(i) = arg0.try_fixnum() {
-            std::process::exit(i as i32);
+            i as u8
         } else {
             match arg0.as_bool() {
-                true => std::process::exit(0),
-                false => std::process::exit(1),
+                true => 0,
+                false => 1,
             }
         }
     } else {
-        std::process::exit(0);
-    }
+        0
+    };
+    Err(MonorubyErr::new(MonorubyErrKind::SystemExit(status), "exit"))
 }
 
 ///

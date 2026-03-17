@@ -3,6 +3,11 @@ use rand::seq::SliceRandom;
 use smallvec::smallvec;
 use smallvec::Drain;
 use smallvec::SmallVec;
+use std::cell::RefCell;
+
+thread_local! {
+    static HASH_RECURSION_GUARD: RefCell<Vec<u64>> = RefCell::new(Vec::new());
+}
 
 pub const ARRAY_INLINE_CAPA: usize = 5;
 
@@ -109,10 +114,25 @@ impl RubyHash<Executor, Globals, MonorubyErr> for ArrayInner {
         e: &mut Executor,
         g: &mut Globals,
     ) -> Result<()> {
-        for v in self.iter() {
-            v.ruby_hash(state, e, g)?;
+        let ptr = self.0.as_ptr() as u64;
+        let is_recursive = HASH_RECURSION_GUARD.with(|guard| {
+            let g = guard.borrow();
+            g.contains(&ptr)
+        });
+        if is_recursive {
+            // Return a fixed hash value for recursive arrays, matching CRuby behavior.
+            0u64.hash(state);
+            return Ok(());
         }
-        Ok(())
+        HASH_RECURSION_GUARD.with(|guard| guard.borrow_mut().push(ptr));
+        let result = (|| {
+            for v in self.iter() {
+                v.ruby_hash(state, e, g)?;
+            }
+            Ok(())
+        })();
+        HASH_RECURSION_GUARD.with(|guard| guard.borrow_mut().pop());
+        result
     }
 }
 
@@ -249,6 +269,21 @@ impl ArrayInner {
             }
         }
     }
+
+    pub(crate) fn inspect_inner(&self, store: &Store, set: &mut HashSet<u64>) -> String {
+        match self.len() {
+            0 => "[]".to_string(),
+            1 => format!("[{}]", self[0].inspect_inner(store, set)),
+            _ => {
+                let mut s = format!("[{}", self[0].inspect_inner(store, set));
+                for val in self[1..].iter() {
+                    s += &format!(", {}", val.inspect_inner(store, set));
+                }
+                s += "]";
+                s
+            }
+        }
+    }
 }
 
 impl ArrayInner {
@@ -360,6 +395,9 @@ impl ArrayInner {
                 i if i < 0 => len + i,
                 i => i,
             };
+            if i_start < 0 {
+                return Ok(Value::nil());
+            }
             let start = match len {
                 i if i == i_start => return Ok(Value::array_empty()),
                 i if i < i_start => return Ok(Value::nil()),
@@ -375,7 +413,11 @@ impl ArrayInner {
                     end
                 }
             } else {
-                (len + i_end + if range.exclude_end() { 0 } else { 1 }) as usize
+                let e = len + i_end + if range.exclude_end() { 0 } else { 1 };
+                if e < 0 {
+                    return Ok(Value::array_empty());
+                }
+                e as usize
             };
             if start >= end {
                 return Ok(Value::array_empty());

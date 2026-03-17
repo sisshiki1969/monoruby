@@ -266,13 +266,12 @@ impl Value {
         }
     }
 
-    pub(crate) fn get_singleton(self, store: &mut Store) -> Value {
+    pub(crate) fn get_singleton(self, store: &mut Store) -> Result<Value> {
         if let Some(class) = self.is_class_or_module() {
-            store.get_metaclass(class.id())
+            Ok(store.get_metaclass(class.id()).as_val())
         } else {
-            store.get_singleton(self)
+            Ok(store.get_singleton(self)?.as_val())
         }
-        .as_val()
     }
 
     ///
@@ -471,6 +470,10 @@ impl Value {
 
     pub fn object(class_id: ClassId) -> Self {
         RValue::new_object(class_id).pack()
+    }
+
+    pub fn object_with_ty(class_id: ClassId, ty: ObjTy) -> Self {
+        RValue::new_object_with_ty(class_id, ty).pack()
     }
 
     pub fn yielder_object() -> Self {
@@ -702,7 +705,7 @@ impl Value {
         let s = match self.unpack() {
             RV::Nil => "".to_string(),
             RV::Symbol(id) => id.to_string(),
-            RV::String(s) => s.to_str().unwrap().to_string(),
+            RV::String(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
             _ => self.debug(store),
         };
         s
@@ -721,9 +724,18 @@ impl Value {
         self.inspect_inner(store, &mut set)
     }
 
-    fn inspect_inner(&self, store: &Store, set: &mut HashSet<u64>) -> String {
-        if !set.insert(self.id()) {
-            return "...".to_string();
+    pub(crate) fn inspect_inner(&self, store: &Store, set: &mut HashSet<u64>) -> String {
+        // Only track heap-allocated objects for recursion detection.
+        // Packed values (Fixnum, Flonum, Symbol, nil, true, false) cannot
+        // form reference cycles.
+        if !self.is_packed_value() {
+            if !set.insert(self.id()) {
+                return match self.ty() {
+                    Some(ObjTy::HASH) => "{...}".to_string(),
+                    Some(ObjTy::ARRAY) => "[...]".to_string(),
+                    _ => "...".to_string(),
+                };
+            }
         }
         let s = match self.unpack() {
             RV::Object(rvalue) => rvalue.inspect(store, set),

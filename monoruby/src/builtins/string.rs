@@ -1537,7 +1537,16 @@ fn string_index(
     };
 
     let s = given.check_utf8()?;
-    let byte_pos = s.char_indices().nth(char_pos).unwrap().0;
+    let byte_pos = match s.char_indices().nth(char_pos) {
+        Some((pos, _)) => pos,
+        None => {
+            if char_pos == s.chars().count() {
+                s.len()
+            } else {
+                return Ok(Value::nil());
+            }
+        }
+    };
     match re.captures_from_pos(s, byte_pos, vm)? {
         None => Ok(Value::nil()),
         Some(captures) => {
@@ -2482,7 +2491,9 @@ fn parse_bigint(s: &str, radix: u32) -> BigInt {
 #[monoruby_builtin]
 fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let sym = Value::symbol_from_str(self_val.as_str());
+    let bytes = self_val.try_bytes().unwrap();
+    let s = String::from_utf8_lossy(bytes.as_bytes());
+    let sym = Value::symbol_from_str(&s);
     Ok(sym)
 }
 

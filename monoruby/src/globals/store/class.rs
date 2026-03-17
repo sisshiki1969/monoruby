@@ -397,7 +397,8 @@ impl ClassInfoTable {
             }
             singleton
         } else {
-            self.get_singleton(original_obj.as_val())
+            // This is called for module/class objects which are always heap-allocated
+            self.get_singleton(original_obj.as_val()).unwrap()
         }
     }
 
@@ -406,10 +407,17 @@ impl ClassInfoTable {
     ///
     /// If not exists, create a new singleton class.
     ///
-    pub(crate) fn get_singleton(&mut self, mut obj: Value) -> Module {
+    pub(crate) fn get_singleton(&mut self, mut obj: Value) -> Result<Module> {
+        if obj.is_packed_value() {
+            let class = obj.class();
+            return match class {
+                NIL_CLASS | TRUE_CLASS | FALSE_CLASS => Ok(self[class].get_module()),
+                _ => Err(MonorubyErr::typeerr("can't define singleton")),
+            };
+        }
         let org_class = self[obj.class()].get_module();
         if org_class.is_singleton().is_some() {
-            return org_class;
+            return Ok(org_class);
         }
         let mut singleton = self.new_singleton_class(org_class, obj, org_class.id());
         obj.change_class(singleton.id());
@@ -419,7 +427,7 @@ impl ClassInfoTable {
         {
             assert_eq!(singleton.id(), obj.class());
         }
-        singleton
+        Ok(singleton)
     }
 
     ///

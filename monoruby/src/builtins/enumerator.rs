@@ -73,7 +73,7 @@ fn enumerator_new(vm: &mut Executor, _: &mut Globals, lfp: Lfp, pc: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/next.html]
 #[monoruby_builtin]
 fn next(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut e = Enumerator::new(lfp.self_val());
+    let mut e = Enumerator::new(lfp.self_val())?;
     e.next(vm, globals)
 }
 
@@ -90,7 +90,7 @@ fn next_values(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut e = Enumerator::new(lfp.self_val());
+    let mut e = Enumerator::new(lfp.self_val())?;
     Ok(e.next_values(vm, globals)?.into())
 }
 
@@ -119,7 +119,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             vm.invoke_block(globals, block_data, &[a.peel()])?;
         }
     }
-    let self_val: Enumerator = Enumerator::new(lfp.self_val());
+    let self_val: Enumerator = Enumerator::new(lfp.self_val())?;
     let data = if let Some(bh) = lfp.block() {
         vm.get_block_data(globals, bh)?
     } else {
@@ -185,7 +185,7 @@ fn with_index(
             }
         }
     };
-    let self_val = Enumerator::new(lfp.self_val());
+    let self_val = Enumerator::new(lfp.self_val())?;
 
     let id = IdentId::get_id("with_index");
     let data = if let Some(bh) = lfp.block() {
@@ -209,7 +209,7 @@ fn with_index(
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/peek.html]
 #[monoruby_builtin]
 fn peek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut e = Enumerator::new(lfp.self_val());
+    let mut e = Enumerator::new(lfp.self_val())?;
     e.peek(vm, globals)
 }
 
@@ -221,7 +221,7 @@ fn peek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/rewind.html]
 #[monoruby_builtin]
 fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut e = Enumerator::new(lfp.self_val());
+    let mut e = Enumerator::new(lfp.self_val())?;
     e.rewind();
     Ok(e.into())
 }

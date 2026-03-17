@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 use std::hash::Hash;
 use std::ops::Deref;
 
@@ -205,26 +206,19 @@ impl HashmapInner {
     }
 
     pub fn to_s(&self, store: &Store) -> String {
+        let mut set = HashSet::new();
+        self.inspect_inner(store, &mut set)
+    }
+
+    pub fn inspect_inner(&self, store: &Store, set: &mut HashSet<u64>) -> String {
         match self.len() {
             0 => "{}".to_string(),
             _ => {
                 let mut result = "".to_string();
                 let mut first = true;
                 for (k, v) in self.iter() {
-                    let k_inspect = if let Some(h) = k.try_hash_ty()
-                        && h.id() == self.id()
-                    {
-                        "{...}".to_string()
-                    } else {
-                        k.inspect(store)
-                    };
-                    let v_inspect = if let Some(h) = v.try_hash_ty()
-                        && h.id() == self.id()
-                    {
-                        "{...}".to_string()
-                    } else {
-                        v.inspect(store)
-                    };
+                    let k_inspect = k.inspect_inner(store, set);
+                    let v_inspect = v.inspect_inner(store, set);
                     let s = if let Some(k) = k.try_symbol() {
                         format!("{k}: {v_inspect}")
                     } else {

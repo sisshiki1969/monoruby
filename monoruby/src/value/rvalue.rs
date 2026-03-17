@@ -83,7 +83,7 @@ impl std::fmt::Debug for ObjTy {
                 20 => "BINDING",
                 21 => "UMETHOD",
                 22 => "MATCHDATA",
-                _ => unreachable!("Invalid ty: {ty}"),
+                _ => "UNKNOWN",
             }
         )
     }
@@ -484,6 +484,8 @@ impl RValue {
                 }
                 ObjTy::REGEXP => self.as_regex().inspect(),
                 ObjTy::MATCHDATA => self.as_match_data().inspect(),
+                ObjTy::ARRAY => self.as_array().inspect_inner(store, set),
+                ObjTy::HASH => self.as_hashmap().inspect_inner(store, set),
                 _ => self.to_s(store),
             }
         }
@@ -1022,6 +1024,22 @@ impl RValue {
         RValue {
             header: Header::new(class_id, ObjTy::OBJECT),
             kind: ObjKind::object(),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_object_with_ty(class_id: ClassId, ty: ObjTy) -> Self {
+        let kind = match ty {
+            ObjTy::HASH => ObjKind::hash_from(RubyMap::default()),
+            ObjTy::ARRAY => ObjKind::array(ArrayInner::new()),
+            ObjTy::STRING => ObjKind::string_from_str(""),
+            ObjTy::IO => ObjKind::io(IoInner::stdin()), // placeholder
+            ObjTy::EXCEPTION => ObjKind::object(),
+            _ => ObjKind::object(),
+        };
+        RValue {
+            header: Header::new(class_id, ty),
+            kind,
             var_table: None,
         }
     }

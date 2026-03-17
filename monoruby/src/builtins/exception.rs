@@ -19,9 +19,12 @@ pub(super) fn init(globals: &mut Globals) {
 
     let standarderr = globals.define_class("StandardError", exception_class, OBJECT_CLASS);
 
-    let system_exit_id = globals
-        .define_class("SystemExit", exception_class, OBJECT_CLASS)
-        .id();
+    let system_exit = globals.define_builtin_exception_class(
+        "SystemExit",
+        SYSTEM_EXIT_ERROR_CLASS,
+        exception_class,
+    );
+    let system_exit_id = system_exit.id();
     globals.define_builtin_class_func_with(system_exit_id, "new", system_exit_new, 0, 2, false);
     globals.define_attr_reader(
         system_exit_id,

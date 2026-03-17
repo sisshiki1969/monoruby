@@ -41,9 +41,11 @@ impl EnumeratorInner {
 }
 
 impl Enumerator {
-    pub(crate) fn new(val: Value) -> Self {
-        assert_eq!(val.ty(), Some(ObjTy::ENUMERATOR));
-        Self(val)
+    pub(crate) fn new(val: Value) -> Result<Self> {
+        if val.ty() != Some(ObjTy::ENUMERATOR) {
+            return Err(MonorubyErr::typeerr("not an enumerator"));
+        }
+        Ok(Self(val))
     }
 
     pub fn rewind(&mut self) {
