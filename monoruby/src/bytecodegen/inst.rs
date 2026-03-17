@@ -226,8 +226,8 @@ pub(super) enum BytecodeInst {
     ConcatRegexp(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
     ExpandArray(BcReg, BcReg, u16, Option<u16>), // (src, dst, len, rest_pos)
     AliasMethod {
-        new: IdentId,
-        old: IdentId,
+        new: BcReg,
+        old: BcReg,
     },
     UndefMethod {
         undef: IdentId,

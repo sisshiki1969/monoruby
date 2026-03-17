@@ -209,7 +209,22 @@ pub(super) extern "C" fn gen_hash(
     globals: &mut Globals,
     src: *const Value,
     len: usize,
-) -> Value {
+) -> Option<Value> {
+    match gen_hash_inner(vm, globals, src, len) {
+        Ok(map) => Some(Value::hash(map)),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+fn gen_hash_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: *const Value,
+    len: usize,
+) -> Result<RubyMap<Value, Value>> {
     let mut map = RubyMap::default();
     if len > 0 {
         let mut iter = unsafe { std::slice::from_raw_parts(src.sub(len * 2 - 1), len * 2) }
@@ -217,10 +232,10 @@ pub(super) extern "C" fn gen_hash(
             .copied()
             .rev();
         while let Ok(chunk) = iter.next_chunk::<2>() {
-            map.insert(chunk[0], chunk[1], vm, globals).unwrap();
+            map.insert(chunk[0], chunk[1], vm, globals)?;
         }
     }
-    Value::hash(map)
+    Ok(map)
 }
 
 pub(super) extern "C" fn empty_hash() -> Value {
@@ -812,9 +827,23 @@ pub(super) extern "C" fn undef_method(
 pub(super) extern "C" fn alias_method(
     vm: &mut Executor,
     globals: &mut Globals,
-    old: IdentId,
-    new: IdentId,
+    old: Value,
+    new: Value,
 ) -> Option<Value> {
+    let new = match new.expect_symbol_or_string(&globals.store) {
+        Ok(id) => id,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
+    let old = match old.expect_symbol_or_string(&globals.store) {
+        Ok(id) => id,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
     let func_id = vm.cfp().lfp().func_id();
     let class_id = func_id.lexical_class(globals);
     globals

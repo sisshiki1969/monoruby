@@ -192,7 +192,9 @@ impl<'a> JitContext<'a> {
             TraceIr::Hash { dst, args, len } => {
                 state.write_back_range(ir, args, len * 2);
                 state.discard(dst);
+                let error = ir.new_error(state);
                 ir.new_hash(state.get_using_xmm(), args, len as _);
+                ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
             }
             TraceIr::Range {
@@ -472,6 +474,7 @@ impl<'a> JitContext<'a> {
                 state.unset_side_effect_guard();
             }
             TraceIr::AliasMethod { new, old } => {
+                state.write_back_slots(ir, &[new, old]);
                 ir.alias_method(state, new, old);
                 state.unset_class_version_guard();
                 state.unset_side_effect_guard();

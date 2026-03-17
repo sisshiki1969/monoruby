@@ -792,8 +792,8 @@ impl Codegen {
                 monoasm!( &mut self.jit,
                     movq rdi, rbx;
                     movq rsi, r12;
-                    movl rdx, (old.get());
-                    movl rcx, (new.get());
+                    movq rdx, [r14 - (conv(old))];
+                    movq rcx, [r14 - (conv(new))];
                     movq rax, (runtime::alias_method);
                     call rax;
                 );

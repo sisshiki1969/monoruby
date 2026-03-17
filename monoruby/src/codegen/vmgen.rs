@@ -637,23 +637,26 @@ impl Codegen {
     }
 
     /// Alias method
+    /// Alias method
     ///
     /// ~~~text
-    ///                  -8      -4
     /// +---+---+---+---++---+---+---+---+
-    /// | op|   |   |   ||  new  |  old  |
+    /// | op|new|old|   ||       |       |
     /// +---+---+---+---++---+---+---+---+
     ///
-    /// new: a new symbol
-    /// old: a old symbol
+    /// new: register holding the new name (Symbol or String Value)
+    /// old: register holding the old name (Symbol or String Value)
     /// ~~~
     fn vm_alias_method(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        self.fetch3();
+        self.vm_get_slot_value(GP::R15);
+        self.vm_get_slot_value(GP::Rdi);
         monoasm! { &mut self.jit,
+            movq rdx, rdi;  // old
+            movq rcx, r15;  // new
             movq rdi, rbx;
             movq rsi, r12;
-            movl rdx, [r13 - 4];  // old
-            movl rcx, [r13 - 8];  // new
             movq rax, (runtime::alias_method);
             call rax;
         };
@@ -846,6 +849,7 @@ impl Codegen {
             movq rax, (runtime::gen_hash);
             call rax;
         };
+        self.vm_handle_error();
         self.vm_store_r15(GP::Rax);
         self.fetch_and_dispatch();
         label
