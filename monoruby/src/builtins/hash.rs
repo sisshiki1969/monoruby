@@ -293,13 +293,21 @@ fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn replace(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
+    let arg = lfp.arg(0);
+    if arg.try_hash_ty().is_none() {
+        return Err(MonorubyErr::no_implicit_conversion(
+            &globals.store,
+            arg,
+            HASH_CLASS,
+        ));
+    }
     let h = self_.as_hashmap_inner_mut();
-    *h = lfp.arg(0).as_hashmap_inner().clone();
+    *h = arg.as_hashmap_inner().clone();
 
     Ok(lfp.self_val())
 }
@@ -570,7 +578,10 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/inspect.html]
 #[monoruby_builtin]
 fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = lfp.self_val().as_hash().to_s(&globals.store);
+    let self_val = lfp.self_val();
+    let mut set = std::collections::HashSet::new();
+    set.insert(self_val.id());
+    let s = self_val.as_hash().inspect_inner(&globals.store, &mut set);
     Ok(Value::string(s))
 }
 

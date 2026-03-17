@@ -721,9 +721,18 @@ impl Value {
         self.inspect_inner(store, &mut set)
     }
 
-    fn inspect_inner(&self, store: &Store, set: &mut HashSet<u64>) -> String {
-        if !set.insert(self.id()) {
-            return "...".to_string();
+    pub(crate) fn inspect_inner(&self, store: &Store, set: &mut HashSet<u64>) -> String {
+        // Only track heap-allocated objects for recursion detection.
+        // Packed values (Fixnum, Flonum, Symbol, nil, true, false) cannot
+        // form reference cycles.
+        if !self.is_packed_value() {
+            if !set.insert(self.id()) {
+                return match self.ty() {
+                    Some(ObjTy::HASH) => "{...}".to_string(),
+                    Some(ObjTy::ARRAY) => "[...]".to_string(),
+                    _ => "...".to_string(),
+                };
+            }
         }
         let s = match self.unpack() {
             RV::Object(rvalue) => rvalue.inspect(store, set),

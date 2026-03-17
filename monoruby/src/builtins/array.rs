@@ -1907,6 +1907,16 @@ fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     for rhs in lfp.arg(0).as_array().into_iter() {
         lists.push(rhs.expect_array_ty(globals)?);
     }
+    // Check total product size to avoid memory exhaustion.
+    let mut total: usize = lhs.len();
+    for l in &lists {
+        total = total.checked_mul(l.len()).ok_or_else(|| {
+            MonorubyErr::rangeerr("too big to product")
+        })?;
+        if total > 1_000_000 {
+            return Err(MonorubyErr::rangeerr("too big to product"));
+        }
+    }
     let v: Vec<Value> = product_inner(lhs, lists)
         .into_iter()
         .map(|a| Value::array_from_iter(a.into_iter().cloned()))
@@ -2082,7 +2092,14 @@ fn slice_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let len = end - start + if range.exclude_end() { 0 } else { 1 };
         Ok(slice_inner(ary, start, len))
     } else {
-        unimplemented!()
+        let index = lfp.arg(0).coerce_to_i64(globals)?;
+        let index = match ary.get_array_index(index) {
+            Some(i) if i < ary.len() => i,
+            _ => return Ok(Value::nil()),
+        };
+        let mut ary = ary;
+        let val = ary.remove(index);
+        Ok(val)
     }
 }
 
@@ -2116,24 +2133,39 @@ fn pack(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     rvalue::pack(globals, &ary, lfp.arg(0).expect_str(globals)?)
 }
 
-fn flatten_inner(ary: &Array, res: &mut Vec<Value>, lv: Option<usize>, changed: &mut bool) {
+fn flatten_inner(
+    ary: &Array,
+    res: &mut Vec<Value>,
+    lv: Option<usize>,
+    changed: &mut bool,
+    seen: &mut Vec<u64>,
+) -> Result<()> {
+    let id = ary.id();
+    if seen.contains(&id) {
+        return Err(MonorubyErr::argumenterr(
+            "tried to flatten recursive array",
+        ));
+    }
+    seen.push(id);
     for v in ary.iter() {
-        if let Some(ary) = v.try_array_ty() {
+        if let Some(inner) = v.try_array_ty() {
             if let Some(lv) = lv {
                 if lv == 0 {
                     res.push(*v);
                 } else {
                     *changed = true;
-                    flatten_inner(&ary, res, Some(lv - 1), changed);
+                    flatten_inner(&inner, res, Some(lv - 1), changed, seen)?;
                 }
             } else {
                 *changed = true;
-                flatten_inner(&ary, res, None, changed);
+                flatten_inner(&inner, res, None, changed, seen)?;
             }
         } else {
             res.push(*v);
         }
     }
+    seen.pop();
+    Ok(())
 }
 
 ///
@@ -2159,7 +2191,8 @@ fn flatten(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     };
     let mut res = vec![];
     let mut changed = false;
-    flatten_inner(&ary, &mut res, lv, &mut changed);
+    let mut seen = vec![];
+    flatten_inner(&ary, &mut res, lv, &mut changed, &mut seen)?;
     Ok(Value::array_from_vec(res))
 }
 
@@ -2186,7 +2219,8 @@ fn flatten_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     };
     let mut res = vec![];
     let mut changed = false;
-    flatten_inner(&ary, &mut res, lv, &mut changed);
+    let mut seen = vec![];
+    flatten_inner(&ary, &mut res, lv, &mut changed, &mut seen)?;
     ary.replace(res);
     Ok(if changed { ary.into() } else { Value::nil() })
 }
