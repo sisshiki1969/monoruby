@@ -401,6 +401,71 @@ mod tests {
     }
 
     #[test]
+    fn alias_keyword_with_symbol() {
+        run_test(
+            r#"
+            class Foo
+              def bar; "bar"; end
+              alias :baz :bar
+            end
+            Foo.new.baz
+            "#,
+        );
+        run_test(
+            r#"
+            class Foo
+              def bar; "bar"; end
+              alias :'baz' bar
+            end
+            Foo.new.baz
+            "#,
+        );
+        run_test(
+            r#"
+            class Foo
+              def bar; "bar"; end
+              alias :"baz" :bar
+            end
+            Foo.new.baz
+            "#,
+        );
+    }
+
+    #[test]
+    fn alias_keyword_interpolated_symbol() {
+        run_test(
+            r##"
+            class Foo
+              def bar; "bar"; end
+              x = "baz"
+              alias :"#{x}" bar
+            end
+            Foo.new.baz
+            "##,
+        );
+        run_test(
+            r##"
+            class Foo
+              def hello; "hello"; end
+              alias greet :"hel#{"lo"}"
+            end
+            Foo.new.greet
+            "##,
+        );
+        run_test(
+            r##"
+            class Foo
+              def bar; "bar"; end
+              x = "ba"
+              y = "r"
+              alias :"foo" :"#{x}#{y}"
+            end
+            Foo.new.foo
+            "##,
+        );
+    }
+
+    #[test]
     fn alias_global_var_error() {
         run_test_error(
             r#"
