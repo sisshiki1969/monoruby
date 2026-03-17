@@ -3461,6 +3461,46 @@ mod tests {
     }
 
     #[test]
+    fn flatten_recursive() {
+        run_test_once(
+            r##"
+        a = [1, 2]
+        a << a
+        begin
+          a.flatten
+          false
+        rescue ArgumentError
+          true
+        end
+        "##,
+        );
+    }
+
+    #[test]
+    fn product_size_check() {
+        run_test_no_result_check(
+            r##"
+        begin
+          ([0] * 1000).product([0] * 1000, [0] * 1000)
+          false
+        rescue RangeError
+          true
+        end
+        "##,
+        );
+    }
+
+    #[test]
+    fn slice_bang_integer() {
+        run_test(
+            r##"
+        a = [1, 2, 3, 4, 5]
+        [a.slice!(2), a]
+        "##,
+        );
+    }
+
+    #[test]
     fn index_assign_negative() {
         run_test(r##"a = [1,2,3,4,5]; a[-2, 2] = []; a"##);
         run_test(r##"a = [1,2,3,4,5]; a[-3, 1] = [99]; a"##);

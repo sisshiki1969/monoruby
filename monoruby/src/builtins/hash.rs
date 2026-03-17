@@ -1090,6 +1090,31 @@ mod tests {
     }
 
     #[test]
+    fn hash_inspect_recursive() {
+        run_test_once(
+            r##"
+        h = {}
+        h[:self] = h
+        h.inspect
+        "##,
+        );
+    }
+
+    #[test]
+    fn hash_replace_type_check() {
+        run_test_once(
+            r##"
+        begin
+          {}.replace(42)
+          false
+        rescue TypeError
+          true
+        end
+        "##,
+        );
+    }
+
+    #[test]
     fn hash_new() {
         run_test(
             r##"
