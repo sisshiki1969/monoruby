@@ -12,7 +12,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "hash", hash, 0);
     globals.define_builtin_func(OBJECT_CLASS, "eql?", eql_, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
+    globals.define_builtin_funcs(OBJECT_CLASS, "dup", &["clone"], dup, 0);
     globals.define_builtin_funcs_rest(OBJECT_CLASS, "enum_for", &["to_enum"], to_enum);
     globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_, 1);
     globals.define_builtin_func_rest(OBJECT_CLASS, "extend", extend);
