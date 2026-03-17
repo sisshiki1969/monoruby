@@ -65,6 +65,16 @@ pub(super) fn init(globals: &mut Globals) {
         false,
         Effect::EVAL,
     );
+    globals.define_builtin_funcs_with_effect(
+        OBJECT_CLASS,
+        "instance_exec",
+        &[],
+        instance_exec,
+        0,
+        0,
+        true,
+        Effect::EVAL,
+    );
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
     globals.define_builtin_func_with(OBJECT_CLASS, "methods", methods, 0, 1, false);
     globals.define_builtin_func_with(
@@ -482,6 +492,25 @@ fn singleton_class(
 }
 
 ///
+/// ### BasicObject#instance_exec
+///
+/// - instance_exec(*args) {|*args| ... } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/BasicObject/i/instance_exec.html]
+#[monoruby_builtin]
+fn instance_exec(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let bh = lfp.expect_block()?;
+    let data = vm.get_block_data(globals, bh)?;
+    let args = lfp.arg(0).as_array();
+    vm.invoke_block_with_self(globals, &data, self_val, &args)
+}
+
 /// ### BasicObject#instance_eval
 ///
 /// - instance_eval(expr, filename = "(eval)", lineno = 1) -> object
@@ -956,6 +985,50 @@ mod tests {
             'secret'
           end
         end
+        "#,
+        );
+    }
+
+    #[test]
+    fn instance_exec() {
+        run_test_with_prelude(
+            r#"
+        some = Foo.new('hello')
+        res = []
+        res << some.instance_exec { @key }
+        res << some.instance_exec(10) { |x| @key * x }
+        res
+        "#,
+            r#"
+        class Foo
+          def initialize(data)
+            @key = data
+          end
+        end
+        "#,
+        );
+        run_test(
+            r#"
+        class Foo
+          def initialize
+            @x = 42
+          end
+        end
+        Foo.new.instance_exec { @x }
+        "#,
+        );
+        run_test(
+            r#"
+        class Foo
+          private
+          def secret; "secret"; end
+        end
+        Foo.new.instance_exec { secret }
+        "#,
+        );
+        run_test(
+            r#"
+        1.instance_exec(2, 3) { |a, b| self + a + b }
         "#,
         );
     }
