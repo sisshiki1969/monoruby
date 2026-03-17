@@ -3938,6 +3938,17 @@ mod tests {
     }
 
     #[test]
+    fn to_sym_basic() {
+        run_test(r#""hello".to_sym"#);
+    }
+
+    #[test]
+    fn string_index_boundary() {
+        run_test(r#""hello"[/o/, 0]"#);
+        run_test(r#""hello".index("o")"#);
+    }
+
+    #[test]
     fn upcase() {
         run_test(r"'AkrFj妖精u35]['.upcase");
         run_test(r"'AkrFj妖精u35]['.downcase");

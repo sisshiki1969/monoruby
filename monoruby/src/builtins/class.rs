@@ -511,6 +511,11 @@ mod tests {
     //}
 
     #[test]
+    fn allocate_builtin_types() {
+        run_test_once(r#"[Hash.allocate.class, Array.allocate.class, String.allocate.class]"#);
+    }
+
+    #[test]
     fn def_operator_unmatch() {
         // Parsing `def !~` is now supported; verify it doesn't cause a parse error.
         run_test(

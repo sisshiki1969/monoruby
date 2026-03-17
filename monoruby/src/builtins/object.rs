@@ -1249,6 +1249,16 @@ mod tests {
     }
 
     #[test]
+    fn singleton_class_test() {
+        run_test_once(
+            r#"
+            obj = Object.new
+            obj.singleton_class.is_a?(Class)
+            "#,
+        );
+    }
+
+    #[test]
     fn method_missing_private() {
         // private method_missing should still be dispatched
         run_test(

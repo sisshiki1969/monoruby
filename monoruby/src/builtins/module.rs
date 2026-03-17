@@ -1686,6 +1686,23 @@ mod tests {
     }
 
     #[test]
+    fn private_class_method_test() {
+        run_test_once(
+            r#"
+            class Foo
+              def self.bar; "bar"; end
+              private_class_method :bar
+            end
+            begin
+              Foo.bar
+            rescue NoMethodError
+              true
+            end
+            "#,
+        );
+    }
+
+    #[test]
     fn public() {
         run_test_with_prelude(
             r#"
