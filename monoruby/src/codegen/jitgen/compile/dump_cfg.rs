@@ -75,7 +75,11 @@ pub(super) fn dump_cfg(
     let path = std::path::PathBuf::from(".cfg");
     match path.try_exists() {
         Ok(true) => {}
-        _ => std::fs::create_dir(&path).unwrap(),
+        _ => {
+            if std::fs::create_dir(&path).is_err() {
+                assert!(path.try_exists().unwrap());
+            }
+        }
     }
     std::fs::write(path.join(format!("fid-{}.dot", iseq.func_id().get())), s).unwrap();
 }
