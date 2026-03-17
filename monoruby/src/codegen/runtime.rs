@@ -742,7 +742,13 @@ pub(super) extern "C" fn define_singleton_class(
     globals: &mut Globals,
     base: Value,
 ) -> Option<Value> {
-    let self_val = globals.store.get_singleton(base);
+    let self_val = match globals.store.get_singleton(base) {
+        Ok(v) => v,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
     vm.push_class_context(self_val.id());
     Some(self_val.as_val())
 }
@@ -774,7 +780,13 @@ pub(super) extern "C" fn singleton_define_method(
         globals.store[iseq].lexical_context =
             globals.store.iseq(current_func).lexical_context.clone();
     }
-    let class_id = globals.store.get_singleton(obj).id();
+    let class_id = match globals.store.get_singleton(obj) {
+        Ok(v) => v.id(),
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
     globals.add_public_method(class_id, name, func);
     match vm.invoke_method_if_exists(
         globals,
@@ -968,7 +980,7 @@ pub(super) extern "C" fn err_method_return(vm: &mut Executor, _globals: &mut Glo
 }
 
 pub(super) extern "C" fn err_block_break(vm: &mut Executor, _globals: &mut Globals, val: Value) {
-    let target_lfp = vm.cfp().caller().lfp();
+    let target_lfp = vm.cfp().caller().unwrap().lfp();
     vm.set_error(MonorubyErr::method_return(val, target_lfp));
 }
 

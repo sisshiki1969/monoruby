@@ -249,6 +249,21 @@ impl ArrayInner {
             }
         }
     }
+
+    pub(crate) fn inspect_inner(&self, store: &Store, set: &mut HashSet<u64>) -> String {
+        match self.len() {
+            0 => "[]".to_string(),
+            1 => format!("[{}]", self[0].inspect_inner(store, set)),
+            _ => {
+                let mut s = format!("[{}", self[0].inspect_inner(store, set));
+                for val in self[1..].iter() {
+                    s += &format!(", {}", val.inspect_inner(store, set));
+                }
+                s += "]";
+                s
+            }
+        }
+    }
 }
 
 impl ArrayInner {

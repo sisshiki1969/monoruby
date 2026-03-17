@@ -447,9 +447,10 @@ impl<'a> BytecodeGen<'a> {
                         },
                         loc,
                     );
-                } else {
-                    assert_eq!(Some(lvar), self.outer_block_param_name(outer));
+                } else if Some(lvar) == self.outer_block_param_name(outer) {
                     self.emit(BytecodeInst::BlockArg(ret, outer), loc);
+                } else {
+                    return Err(self.unsupported_feature("outer local variable access", loc));
                 }
             }
 

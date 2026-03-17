@@ -404,6 +404,10 @@ impl ISeqInfo {
             .collect::<Vec<_>>()
     }
 
+    pub(crate) fn has_jit_code(&self, self_class: ClassId) -> bool {
+        self.jit_entry.contains_key(&self_class)
+    }
+
     pub(crate) fn add_jit_code(
         &mut self,
         self_class: ClassId,

@@ -31,6 +31,13 @@ impl Codegen {
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
         let self_class = lfp.self_val().class();
+        // Skip compilation if JIT code already exists for this class.
+        if globals.store[iseq_id].has_jit_code(self_class) {
+            let vm_entry = self.vm_entry();
+            self.jit.apply_jmp_patch_address(entry, &vm_entry);
+            self.jit.finalize();
+            return None;
+        }
         if let Some((cache, class_version_label)) = self.compile_method(
             globals,
             iseq_id,

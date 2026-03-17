@@ -102,11 +102,11 @@ pub(super) fn new(
 #[monoruby_builtin]
 fn superclass(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let class = lfp.self_val().as_class();
+    let class = lfp.self_val().expect_class(globals)?;
     match class.get_real_superclass() {
         Some(class) => Ok(class.into()),
         None => Ok(Value::nil()),
@@ -118,9 +118,16 @@ fn superclass(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
 #[monoruby_builtin]
-fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
-    let obj = Value::object(class_id);
+fn allocate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let class_id = lfp.self_val().expect_class(globals)?.id();
+    let obj = match globals.store[class_id].instance_ty() {
+        // Only create typed objects for types that can be safely zero-initialized
+        Some(ObjTy::HASH) | Some(ObjTy::ARRAY) | Some(ObjTy::STRING) | Some(ObjTy::IO)
+        | Some(ObjTy::EXCEPTION) => {
+            Value::object_with_ty(class_id, globals.store[class_id].instance_ty().unwrap())
+        }
+        _ => Value::object(class_id),
+    };
     Ok(obj)
 }
 

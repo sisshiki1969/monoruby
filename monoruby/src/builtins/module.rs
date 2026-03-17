@@ -559,7 +559,7 @@ fn append_features(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
 #[monoruby_builtin]
 fn extend_object(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let obj = lfp.arg(0);
-    let mut class = globals.store.get_singleton(obj);
+    let mut class = globals.store.get_singleton(obj)?;
     let include_module = lfp.self_val().expect_module(globals)?;
     class.include_module(include_module)?;
     Ok(obj)
@@ -606,7 +606,7 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn prepend_features(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut base = lfp.arg(0).expect_class_or_module(&globals.store)?;
-    let prepend_module = lfp.self_val().as_class();
+    let prepend_module = lfp.self_val().expect_class_or_module(&globals.store)?;
     base.prepend_module(prepend_module)?;
     Ok(lfp.self_val())
 }
@@ -753,7 +753,7 @@ fn protected_method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp,
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private_class_method.html]
 #[monoruby_builtin]
 fn private_class_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let singleton = globals.store.get_singleton(lfp.self_val());
+    let singleton = globals.store.get_singleton(lfp.self_val())?;
     let arg = lfp.arg(0).as_array();
     let (_, names) = extract_names(globals, arg)?;
     globals.change_method_visibility_for_class(singleton.id(), &names, Visibility::Private)?;
