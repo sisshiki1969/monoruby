@@ -1079,6 +1079,25 @@ mod tests {
     }
 
     #[test]
+    fn hash_literal_error_propagation() {
+        run_test_error(
+            r##"
+        class Foo
+          def hash
+            raise "boom"
+          end
+        end
+        h = {Foo.new => 1}
+        "##,
+        );
+    }
+
+    #[test]
+    fn hash_literal() {
+        run_test(r#"{1 => "a", 2 => "b", 3 => "c"}"#);
+    }
+
+    #[test]
     fn hash_new() {
         run_test(
             r##"
