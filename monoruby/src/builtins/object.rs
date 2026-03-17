@@ -79,6 +79,16 @@ pub(super) fn init(globals: &mut Globals) {
         Effect::EVAL,
     );
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
+    globals.define_builtin_funcs_with_effect(
+        OBJECT_CLASS,
+        "define_singleton_method",
+        &[],
+        define_singleton_method,
+        1,
+        2,
+        false,
+        Effect::EVAL,
+    );
     globals.define_builtin_func_with(OBJECT_CLASS, "methods", methods, 0, 1, false);
     globals.define_builtin_func_with(
         OBJECT_CLASS,
@@ -314,6 +324,43 @@ fn equal_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result
 #[monoruby_builtin]
 fn dup(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val().dup())
+}
+
+/// ### Object#define_singleton_method
+/// - define_singleton_method(name, method) -> Symbol
+/// - define_singleton_method(name) { ... } -> Symbol
+#[monoruby_builtin]
+fn define_singleton_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let class_id = globals.store.get_singleton(self_val).id();
+    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    if let Some(method) = lfp.try_arg(1) {
+        if let Some(proc) = method.is_proc() {
+            let func_id = globals.define_proc_method(proc);
+            globals.add_public_method(class_id, name, func_id);
+        } else if let Some(method) = method.is_method() {
+            let func_id = method.func_id();
+            globals.add_public_method(class_id, name, func_id);
+        } else {
+            return Err(MonorubyErr::wrong_argument_type(
+                globals,
+                method,
+                "Proc/Method/UnboundMethod",
+            ));
+        }
+    } else if let Some(bh) = lfp.block() {
+        let proc = vm.generate_proc(bh, pc)?;
+        let func_id = globals.define_proc_method(proc);
+        globals.add_public_method(class_id, name, func_id);
+    } else {
+        return Err(MonorubyErr::wrong_number_of_arg(2, 1));
+    };
+    Ok(Value::symbol(name))
 }
 
 /// ### Object#initialize_copy
