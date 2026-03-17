@@ -95,6 +95,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "private_class_method", private_class_method);
     globals.define_builtin_funcs(MODULE_CLASS, "to_s", &["inspect"], tos, 0);
     globals.define_builtin_func(MODULE_CLASS, "name", name, 0);
+    globals.define_builtin_func(MODULE_CLASS, "set_temporary_name", set_temporary_name, 1);
     // private methods
     globals.define_private_builtin_func_rest(MODULE_CLASS, "module_function", module_function);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "private", private);
@@ -787,6 +788,26 @@ fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
         None => Ok(Value::nil()),
     }
+}
+
+/// ### Module#set_temporary_name
+/// - set_temporary_name(name) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/set_temporary_name.html]
+#[monoruby_builtin]
+fn set_temporary_name(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let name_val = lfp.arg(0);
+    if !name_val.is_nil() {
+        let name = name_val.expect_string(&globals.store)?;
+        globals.store[class_id].set_name(name);
+    }
+    Ok(lfp.self_val())
 }
 
 ///
