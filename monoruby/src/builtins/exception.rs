@@ -77,6 +77,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(EXCEPTION_CLASS, "initialize", initialize, 0, 1, false);
     globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
+    globals.define_builtin_func(EXCEPTION_CLASS, "set_backtrace", set_backtrace, 1);
 }
 
 ///
@@ -152,6 +153,21 @@ fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         .into_iter()
         .map(|s| Value::string(s));
     Ok(Value::array_from_iter(iter))
+}
+
+/// ### Exception#set_backtrace
+/// - set_backtrace(backtrace) -> Array | String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/set_backtrace.html]
+#[monoruby_builtin]
+fn set_backtrace(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    // For now, just return the argument (no-op — monoruby tracks backtrace internally)
+    Ok(lfp.arg(0))
 }
 
 ///
