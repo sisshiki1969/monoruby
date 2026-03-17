@@ -826,40 +826,83 @@ impl Executor {
         lfp: Lfp,
         callsite: CallSiteId,
     ) -> Option<Value> {
-        let callsite = &globals.store[callsite];
-        assert!(callsite.splat_pos.is_empty());
-        assert!(!callsite.has_hash_splat());
-        //let is_func_call = callsite.is_func_call();
-        let method_name = if let Some(name) = callsite.name {
+        // Extract all needed fields from callsite before we mutably borrow self/globals.
+        let cs = &globals.store[callsite];
+        let cs_name = cs.name;
+        let cs_args = cs.args;
+        let cs_pos_num = cs.pos_num;
+        let cs_splat_pos = cs.splat_pos.clone();
+        let cs_kw_pos = cs.kw_pos;
+        let cs_kw_len = cs.kw_len();
+        let cs_kw_args = cs.kw_args.clone();
+        let cs_hash_splat_pos = cs.hash_splat_pos.clone();
+        let bh = cs.block_handler(lfp);
+
+        let method_name = if let Some(name) = cs_name {
             name
         } else {
             let func_id = self.method_func_id();
             globals.store[func_id].name().unwrap()
         };
-        let bh = callsite.block_handler(lfp);
         // SAFETY: args_to_vec safely accesses the arguments stored in the local frame pointer.
         // The callsite.args and callsite.pos_num are valid and within bounds.
-        let mut args = unsafe { lfp.args_to_vec(callsite.args, callsite.pos_num) };
+        let mut args = unsafe { lfp.args_to_vec(cs_args, cs_pos_num) };
+        // Expand splat arguments: positions listed in splat_pos hold Array values
+        // that must be flattened into the argument list.
+        if !cs_splat_pos.is_empty() {
+            let mut expanded = Vec::new();
+            for (i, v) in args.into_iter().enumerate() {
+                if cs_splat_pos.contains(&i) {
+                    if let Some(ary) = v.try_array_ty() {
+                        expanded.extend_from_slice(&ary);
+                    } else {
+                        expanded.push(v);
+                    }
+                } else {
+                    expanded.push(v);
+                }
+            }
+            args = expanded;
+        }
         args.insert(0, Value::symbol(method_name));
-        let kw_pos = callsite.kw_pos;
-        let kw = if callsite.kw_len() == 0 {
+        let kw = if cs_kw_len == 0 {
             None
         } else {
             let mut map = HashmapInner::default();
-            for (k, offset) in callsite.kw_args.clone().into_iter() {
+            for (k, offset) in cs_kw_args.into_iter() {
                 map.insert(
                     Value::symbol(k),
-                    lfp.register(kw_pos + offset).unwrap(),
+                    lfp.register(cs_kw_pos + offset).unwrap(),
                     self,
                     globals,
                 )
                 .unwrap();
+            }
+            // Merge hash splat arguments into the keyword hash.
+            for pos in cs_hash_splat_pos.iter() {
+                if let Some(v) = lfp.register(*pos) {
+                    if !v.is_nil() {
+                        if let Some(hash) = v.try_hash_ty() {
+                            for (k, v) in hash.iter() {
+                                map.insert(k, v, self, globals).unwrap();
+                            }
+                        }
+                    }
+                }
             }
             Some(Value::hash_from_inner(map).as_hash())
         };
         // method_missing should always be callable regardless of visibility.
         // In Ruby, method_missing is conventionally private, but the VM must
         // still dispatch to it when a method is not found.
+        //
+        // When a proxy block handler is present, we must adjust its depth by -1.
+        // invoke_method_missing is called from JIT/VM code without adding a
+        // frame to the CFP chain, but invoke_func (called downstream) applies
+        // delegate() which increments the proxy depth by 1. Without this
+        // pre-adjustment, block_arg in the method_missing body would try to
+        // walk too many frames and panic.
+        let bh = bh.map(|bh| bh.undelegate());
         let res = self.invoke_method(
             globals,
             IdentId::METHOD_MISSING,
@@ -1376,6 +1419,15 @@ impl BlockHandler {
     pub fn delegate(self) -> Self {
         match self.0.try_fixnum() {
             Some(i) => Self(Value::integer(i + 1)),
+            None => self,
+        }
+    }
+
+    /// Reverse of delegate(): decrement the proxy depth by 1.
+    /// Non-proxy block handlers (e.g. Proc) are returned unchanged.
+    pub fn undelegate(self) -> Self {
+        match self.0.try_fixnum() {
+            Some(i) => Self(Value::integer(i - 1)),
             None => self,
         }
     }

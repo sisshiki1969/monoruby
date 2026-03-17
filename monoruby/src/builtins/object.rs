@@ -1286,4 +1286,109 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn method_missing_splat() {
+        // splat arguments should be expanded and forwarded
+        run_test(
+            r#"
+            class Foo
+              def method_missing(name, *args)
+                [name, args]
+              end
+            end
+            a = [1, 2, 3]
+            Foo.new.bar(*a)
+            "#,
+        );
+        // empty splat
+        run_test(
+            r#"
+            class Foo
+              def method_missing(name, *args)
+                [name, args]
+              end
+            end
+            a = []
+            Foo.new.bar(*a)
+            "#,
+        );
+        // splat mixed with normal args
+        run_test(
+            r#"
+            class Foo
+              def method_missing(name, *args)
+                [name, args]
+              end
+            end
+            a = [2, 3]
+            Foo.new.bar(1, *a, 4)
+            "#,
+        );
+    }
+
+    #[test]
+    fn method_missing_hash_splat() {
+        // hash splat should be merged into keyword hash
+        run_test(
+            r#"
+            class Foo
+              def method_missing(name, *args)
+                [name, args]
+              end
+            end
+            h = {a: 1, b: 2}
+            Foo.new.bar(**h)
+            "#,
+        );
+        // keyword args combined with hash splat
+        run_test(
+            r#"
+            class Foo
+              def method_missing(name, *args)
+                [name, args]
+              end
+            end
+            h = {b: 2}
+            Foo.new.bar(a: 1, **h)
+            "#,
+        );
+    }
+
+    #[test]
+    fn method_missing_with_block() {
+        // &blk parameter
+        run_test_once(
+            r#"
+            class Foo
+              def method_missing(name, *args, &blk)
+                [name, args, blk ? blk.call : nil]
+              end
+            end
+            Foo.new.bar(1, 2) { 42 }
+            "#,
+        );
+        // block with yield
+        run_test_once(
+            r#"
+            class Foo
+              def method_missing(name, *args)
+                yield(*args) if block_given?
+              end
+            end
+            Foo.new.bar(3, 4) { |a, b| a + b }
+            "#,
+        );
+        // no block passed
+        run_test(
+            r#"
+            class Foo
+              def method_missing(name, *args, &blk)
+                [name, blk.nil?]
+              end
+            end
+            Foo.new.baz
+            "#,
+        );
+    }
 }
