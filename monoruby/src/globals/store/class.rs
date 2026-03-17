@@ -661,6 +661,11 @@ impl ClassInfoTable {
         self.define_class_inner(None, superclass, None, false, Some(ObjTy::OBJECT))
     }
 
+    pub(crate) fn define_unnamed_module(&mut self) -> Module {
+        let object_class = self.object_class();
+        self.define_class_inner(None, Some(object_class), None, true, None)
+    }
+
     pub(crate) fn define_struct_class(
         &mut self,
         name: Option<IdentId>,

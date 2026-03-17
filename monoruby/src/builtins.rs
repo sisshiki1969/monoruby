@@ -57,6 +57,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     nil_class::init(globals);
     module::init(globals);
     class::init(globals);
+    module::init_class_methods(globals);
     let kernel = kernel::init(globals);
     exception::init(globals);
     numeric::init(globals);

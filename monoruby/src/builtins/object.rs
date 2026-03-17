@@ -46,7 +46,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_inline_funcs_with_kw(
         OBJECT_CLASS,
         "send",
-        &["__send__"],
+        &["__send__", "public_send"],
         crate::builtins::send,
         Box::new(crate::builtins::object_send),
         0,
