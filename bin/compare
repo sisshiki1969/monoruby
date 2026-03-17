@@ -1,0 +1,135 @@
+#!/bin/bash
+#
+# bin/compare - Compare monoruby benchmark performance between two commits.
+#
+# Usage:
+#   bin/compare [OLD_REF] [NEW_REF] [BENCHMARK...]
+#
+# Arguments:
+#   OLD_REF      Git ref for the baseline (default: HEAD~1)
+#   NEW_REF      Git ref for the new version (default: HEAD)
+#   BENCHMARK    Benchmark files to run (default: a standard set)
+#
+# Examples:
+#   bin/compare                          # HEAD~1 vs HEAD, standard benchmarks
+#   bin/compare abc1234 def5678          # specific commits
+#   bin/compare HEAD~5 HEAD app_fib.yml  # specific benchmark
+#   bin/compare HEAD~1 HEAD -- app_fib.yml so_nbody.yml
+#
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+
+# --- Parse arguments ---
+OLD_REF="${1:-HEAD~1}"
+NEW_REF="${2:-HEAD}"
+shift 2 2>/dev/null || true
+
+# Skip "--" separator if present
+[[ "${1:-}" == "--" ]] && shift
+
+# Default benchmark set
+DEFAULT_BENCHMARKS=(
+  app_fib.yml
+  so_nbody.yml
+  so_mandelbrot.yml
+  quick_sort.yaml
+  integer.yml
+  vm_send.yml
+  vm_block.yml
+  vm_yield.yml
+)
+
+if [[ $# -gt 0 ]]; then
+  BENCHMARKS=("$@")
+else
+  BENCHMARKS=("${DEFAULT_BENCHMARKS[@]}")
+fi
+
+# --- Resolve refs to short hashes for display ---
+OLD_SHA=$(git rev-parse --short "$OLD_REF")
+NEW_SHA=$(git rev-parse --short "$NEW_REF")
+OLD_DESC=$(git log --oneline -1 "$OLD_REF")
+NEW_DESC=$(git log --oneline -1 "$NEW_REF")
+
+echo "=== monoruby benchmark comparison ==="
+echo "  OLD: $OLD_DESC"
+echo "  NEW: $NEW_DESC"
+echo ""
+
+# --- Setup worktrees ---
+WORK_OLD=$(mktemp -d /tmp/monoruby-compare-old.XXXXXX)
+WORK_NEW=$(mktemp -d /tmp/monoruby-compare-new.XXXXXX)
+BIN_OLD="$WORK_OLD/target/release/monoruby"
+BIN_NEW="$WORK_NEW/target/release/monoruby"
+
+cleanup() {
+  echo ""
+  echo "Cleaning up worktrees..."
+  git worktree remove --force "$WORK_OLD" 2>/dev/null || rm -rf "$WORK_OLD"
+  git worktree remove --force "$WORK_NEW" 2>/dev/null || rm -rf "$WORK_NEW"
+}
+trap cleanup EXIT
+
+echo "Creating worktrees..."
+git worktree add --detach "$WORK_OLD" "$OLD_REF" --quiet
+git worktree add --detach "$WORK_NEW" "$NEW_REF" --quiet
+
+# --- Build both in parallel ---
+echo "Building OLD ($OLD_SHA) and NEW ($NEW_SHA) in parallel..."
+echo ""
+
+build_one() {
+  local dir="$1" label="$2"
+  cd "$dir"
+  if cargo build --release 2>&1 | tail -1; then
+    echo "  $label: build OK"
+  else
+    echo "  $label: BUILD FAILED" >&2
+    exit 1
+  fi
+}
+
+build_one "$WORK_OLD" "OLD($OLD_SHA)" &
+PID_OLD=$!
+build_one "$WORK_NEW" "NEW($NEW_SHA)" &
+PID_NEW=$!
+
+FAIL=0
+wait $PID_OLD || FAIL=1
+wait $PID_NEW || FAIL=1
+
+if [[ $FAIL -ne 0 ]]; then
+  echo "Build failed. Aborting." >&2
+  exit 1
+fi
+
+echo ""
+
+# --- Prepare benchmark file paths ---
+BENCH_FILES=()
+for b in "${BENCHMARKS[@]}"; do
+  f="$REPO_ROOT/benchmark/$b"
+  if [[ -f "$f" ]]; then
+    BENCH_FILES+=("$f")
+  else
+    echo "Warning: benchmark file not found: $f" >&2
+  fi
+done
+
+if [[ ${#BENCH_FILES[@]} -eq 0 ]]; then
+  echo "No benchmark files found. Aborting." >&2
+  exit 1
+fi
+
+# --- Run benchmarks ---
+echo "Running benchmarks..."
+echo ""
+
+benchmark-driver \
+  -o markdown \
+  "${BENCH_FILES[@]}" \
+  -e "OLD($OLD_SHA)::$BIN_OLD" \
+  -e "NEW($NEW_SHA)::$BIN_NEW" \
+  --repeat-count 3
