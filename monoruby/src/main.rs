@@ -2,6 +2,14 @@ use std::io::Read;
 
 use monoruby::*;
 
+fn handle_error(err: MonorubyErr, globals: &Globals) -> ! {
+    if let MonorubyErrKind::SystemExit(status) = err.kind {
+        std::process::exit(status as i32);
+    }
+    err.show_error_message_and_all_loc(&globals.store);
+    std::process::exit(1);
+}
+
 #[derive(clap::Parser, Debug)]
 #[command(author, about, long_about = None)]
 struct CommandLineArgs {
@@ -63,8 +71,7 @@ fn main() {
                     }
                     Err(err) => {
                         let err = MonorubyErr::parse(err);
-                        err.show_error_message_and_all_loc(&globals.store);
-                        std::process::exit(1);
+                        handle_error(err, &globals);
                     }
                 }
             }
@@ -76,8 +83,7 @@ fn main() {
                         eprintln!("=> {:?}", _val)
                     }
                     Err(err) => {
-                        err.show_error_message_and_all_loc(&globals.store);
-                        std::process::exit(1);
+                        handle_error(err, &globals);
                     }
                 }
             }
@@ -93,8 +99,7 @@ fn main() {
         match load_file(&std::path::PathBuf::from(&file_name)) {
             Ok(res) => res,
             Err(err) => {
-                eprintln!("{}", err.get_error_message(&globals.store));
-                std::process::exit(1);
+                handle_error(err, &globals);
             }
         }
     } else {
@@ -107,12 +112,9 @@ fn main() {
     };
     if args.ast {
         if let Err(err) = ruruby_parse::Parser::parse_program(code, path) {
-            let err = MonorubyErr::parse(err);
-            err.show_error_message_and_all_loc(&globals.store);
-            std::process::exit(1);
+            handle_error(MonorubyErr::parse(err), &globals);
         }
     } else if let Err(err) = globals.run(code, &path) {
-        err.show_error_message_and_all_loc(&globals.store);
-        std::process::exit(1);
+        handle_error(err, &globals);
     }
 }

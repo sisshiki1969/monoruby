@@ -175,6 +175,11 @@ fn run_test_main(globals: &mut Globals, code: &str) -> Value {
     let res = match globals.run(code, std::path::Path::new(".")) {
         Ok(res) => res,
         Err(err) => {
+            if let MonorubyErrKind::SystemExit(status) = &err.kind {
+                if *status == 0 {
+                    return Value::nil();
+                }
+            }
             err.show_error_message_and_all_loc(&globals.store);
             panic!();
         }
