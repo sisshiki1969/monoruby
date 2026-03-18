@@ -584,7 +584,9 @@ impl<'a> BytecodeGen<'a> {
             }
             BytecodeInst::UndefMethod { undef } => Bytecode::from(enc_wl(172, 0, undef.get())),
             BytecodeInst::AliasMethod { new, old } => {
-                Bytecode::from_with_ident2(enc_www(173, 0, 0, 0), new, old)
+                let op1 = self.slot_id(&new);
+                let op2 = self.slot_id(&old);
+                Bytecode::from(enc_ww(173, op1.0, op2.0))
             }
             BytecodeInst::Hash { ret, args, len } => {
                 let op1 = self.slot_id(&ret);

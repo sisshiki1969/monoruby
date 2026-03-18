@@ -445,7 +445,7 @@ impl AsmIr {
         self.handle_error(error);
     }
 
-    pub(super) fn alias_method(&mut self, state: &AbstractFrame, new: IdentId, old: IdentId) {
+    pub(super) fn alias_method(&mut self, state: &AbstractFrame, new: SlotId, old: SlotId) {
         let using_xmm = state.get_using_xmm();
         let error = self.new_error(state);
         self.push(AsmInst::AliasMethod {
@@ -1464,8 +1464,8 @@ pub(super) enum AsmInst {
         using_xmm: UsingXmm,
     },
     AliasMethod {
-        new: IdentId,
-        old: IdentId,
+        new: SlotId,
+        old: SlotId,
         using_xmm: UsingXmm,
     },
     ///

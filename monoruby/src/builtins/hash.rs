@@ -291,12 +291,7 @@ fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/replace.html]
 #[monoruby_builtin]
-fn replace(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn replace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let arg = lfp.arg(0);
     if arg.try_hash_ty().is_none() {
@@ -727,12 +722,7 @@ fn compare_by_identity(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/=5b=5d.html]
 #[monoruby_builtin]
-fn env_index(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn env_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let key = lfp.arg(0);
     if key.is_str().is_none() {
         return Err(MonorubyErr::no_implicit_conversion(
@@ -1109,9 +1099,28 @@ mod tests {
           false
         rescue TypeError
           true
-        end
+        end        
         "##,
         );
+    }
+
+    #[test]
+    fn hash_literal_error_propagation() {
+        run_test_error(
+            r##"
+        class Foo
+          def hash
+            raise "boom"
+          end
+        end
+        h = {Foo.new => 1}
+        "##,
+        );
+    }
+
+    #[test]
+    fn hash_literal() {
+        run_test(r#"{1 => "a", 2 => "b", 3 => "c"}"#);
     }
 
     #[test]

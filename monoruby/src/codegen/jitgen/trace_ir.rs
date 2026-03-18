@@ -265,8 +265,8 @@ pub(crate) enum TraceIr {
         undef: IdentId,
     },
     AliasMethod {
-        new: IdentId,
-        old: IdentId,
+        new: SlotId,
+        old: SlotId,
     },
     ///
     /// Check if `yield` is callable.
@@ -654,10 +654,10 @@ impl TraceIr {
                     let undef = IdentId::from(dec_wl(op1).1);
                     TraceIr::UndefMethod { undef }
                 }
-                173 => {
-                    let (new, old) = op2.get_ident2();
-                    TraceIr::AliasMethod { new, old }
-                }
+                173 => TraceIr::AliasMethod {
+                    new: SlotId::new(op1_w1),
+                    old: SlotId::new(op2_w2),
+                },
                 174 => TraceIr::Hash {
                     dst: SlotId::new(op1_w1),
                     args: SlotId::new(op2_w2),

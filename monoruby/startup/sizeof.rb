@@ -1,5 +1,5 @@
 begin
-  _result = `ruby -e 'require "rbconfig/sizeof"; puts [RbConfig::SIZEOF, RbConfig::LIMITS]'`
+  _result = `ruby -e 'require "rbconfig/sizeof"; p [RbConfig::SIZEOF, RbConfig::LIMITS]'`
   _sizeof, _limits = eval(_result)
   raise "failed" unless _sizeof
   RbConfig::SIZEOF = _sizeof
