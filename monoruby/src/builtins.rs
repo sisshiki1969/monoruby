@@ -2,22 +2,22 @@ use super::*;
 
 mod array;
 mod binding;
-mod ffi;
-mod fiddle;
 mod class;
 mod dir;
 pub(crate) mod enumerator;
 mod exception;
 mod false_class;
+mod ffi;
 mod fiber;
+mod fiddle;
 mod file;
 mod gc;
 mod hash;
 mod io;
 mod kernel;
 mod main_object;
-mod match_data;
 mod marshal;
+mod match_data;
 mod math;
 mod method;
 mod module;
@@ -52,13 +52,14 @@ pub use time::TimeInner;
 
 pub(crate) fn init_builtins(globals: &mut Globals) {
     object::init(globals);
+    let module = globals.define_builtin_class_under_obj("Module", MODULE_CLASS, ObjTy::MODULE);
+    globals.define_builtin_class("Class", CLASS_CLASS, module, OBJECT_CLASS, ObjTy::CLASS);
     true_class::init(globals);
     false_class::init(globals);
     nil_class::init(globals);
     module::init(globals);
     class::init(globals);
-    globals.define_builtin_class_func(MODULE_CLASS, "new", module::module_new, 0);
-    module::init_class_methods(globals);
+
     let kernel = kernel::init(globals);
     exception::init(globals);
     numeric::init(globals);
