@@ -207,6 +207,7 @@ impl HashmapInner {
 
     pub fn to_s(&self, store: &Store) -> String {
         let mut set = HashSet::new();
+        set.insert(self.id());
         self.inspect_inner(store, &mut set)
     }
 
