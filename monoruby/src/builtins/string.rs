@@ -40,7 +40,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "delete_prefix!", delete_prefix_, 1);
     globals.define_builtin_func(STRING_CLASS, "delete_prefix", delete_prefix, 1);
     globals.define_builtin_func_rest(STRING_CLASS, "end_with?", end_with);
-    globals.define_builtin_func_with(STRING_CLASS, "split", split, 1, 2, false);
+    globals.define_builtin_func_with(STRING_CLASS, "split", split, 0, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "slice!", slice_, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "chomp", chomp, 0, 1, false);
     globals.define_builtin_func_with(STRING_CLASS, "chomp!", chomp_, 0, 1, false);
@@ -875,7 +875,8 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         0
     };
-    if let Some(sep) = lfp.arg(0).is_str() {
+    let arg0 = lfp.try_arg(0).unwrap_or(Value::string_from_str(" "));
+    if let Some(sep) = arg0.is_str() {
         let v: Vec<Value> = if sep == " " {
             match lim {
                 lim if lim < 0 => {
@@ -935,7 +936,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             }
             None => Ok(Value::array_from_vec(v)),
         }
-    } else if let Some(re) = lfp.arg(0).is_regex() {
+    } else if let Some(re) = arg0.is_regex() {
         let all_cap = re.captures_iter(string);
         let mut cursor = 0usize;
         let mut res = vec![];
@@ -992,7 +993,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             None => Ok(Value::array_from_iter(iter)),
         }
     } else {
-        Err(MonorubyErr::is_not_regexp_nor_string(globals, lfp.arg(0)))
+        Err(MonorubyErr::is_not_regexp_nor_string(globals, arg0))
     }
 }
 
@@ -3785,7 +3786,12 @@ mod tests {
         run_test(r##""   a \t  b \n  c".split(' ', -1)"##);
         run_test(r##""   a \t  b \n  c  ".split(' ', 0)"##);
         run_test(r##""   a \t  b \n  c  ".split(' ', 2)"##);
-        //run_test(r##""   a \t  b \n  c".split"##);
+        run_test(r##""   a \t  b \n  c".split"##);
+        run_test(r##""hello world".split"##);
+        run_test(r##""  hello  world  ".split"##);
+        run_test(r##""\t\n hello \t world \n".split"##);
+        run_test(r##""".split"##);
+        run_test(r##""   ".split"##);
         run_test(r##"'1-10,20'.split(/([-,])/)"##);
         run_test(r##"'hi there'.split(/\s*/).join(':')"##);
         run_test(r##"'hi there'.split(//).join(':')"##);
