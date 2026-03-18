@@ -1339,6 +1339,99 @@ mod tests {
     }
 
     #[test]
+    fn define_singleton_method() {
+        // with block
+        run_test(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method(:greet) { "hello" }
+            obj.greet
+            "#,
+        );
+        // with block taking arguments
+        run_test(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method(:add) { |a, b| a + b }
+            obj.add(3, 4)
+            "#,
+        );
+        // returns symbol
+        run_test(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method(:foo) { 42 }
+            "#,
+        );
+        // with string name
+        run_test(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method("bar") { "baz" }
+            obj.bar
+            "#,
+        );
+        // with Proc
+        run_test(
+            r#"
+            obj = Object.new
+            pr = Proc.new { |x| x * 2 }
+            obj.define_singleton_method(:double, pr)
+            obj.double(5)
+            "#,
+        );
+        // with Method
+        run_test(
+            r#"
+            class Foo
+              def hello
+                "hello from Foo"
+              end
+            end
+            obj = Foo.new
+            obj.define_singleton_method(:greet, obj.method(:hello))
+            obj.greet
+            "#,
+        );
+        // with UnboundMethod
+        run_test(
+            r#"
+            class Foo
+              def hi
+                "hi"
+              end
+            end
+            obj = Foo.new
+            obj.define_singleton_method(:greet, Foo.instance_method(:hi))
+            obj.greet
+            "#,
+        );
+        // does not affect other instances
+        run_test(
+            r#"
+            a = Object.new
+            b = Object.new
+            a.define_singleton_method(:only_a) { "only a" }
+            [a.only_a, b.respond_to?(:only_a)]
+            "#,
+        );
+        // error: no block and no method given
+        run_test_error(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method(:foo)
+            "#,
+        );
+        // error: wrong argument type
+        run_test_error(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method(:foo, 42)
+            "#,
+        );
+    }
+
+    #[test]
     fn initialize_copy() {
         // initialize_copy with same object returns self
         run_test(
