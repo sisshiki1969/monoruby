@@ -790,6 +790,17 @@ fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
+/// ### Module.new
+/// - new -> Module
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/s/new.html]
+#[monoruby_builtin]
+pub(super) fn module_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.expect_no_block()?;
+    let obj = globals.store.define_unnamed_module().as_val();
+    Ok(obj)
+}
+
 /// ### Module#set_temporary_name
 /// - set_temporary_name(name) -> self
 ///
@@ -803,7 +814,9 @@ fn set_temporary_name(
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let name_val = lfp.arg(0);
-    if !name_val.is_nil() {
+    if name_val.is_nil() {
+        globals.store[class_id].clear_name();
+    } else {
         let name = name_val.expect_string(&globals.store)?;
         globals.store[class_id].set_name(name);
     }
@@ -1100,6 +1113,59 @@ mod tests {
               end
               define_method :foo, instance_method(:bar)
             end
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_new() {
+        // Module.new returns an anonymous module with nil name
+        run_test_once(
+            r#"
+            m = Module.new
+            m.name
+            "#,
+        );
+        // Module.new creates a proper Module
+        run_test_once(
+            r#"
+            Module.new.is_a?(Module)
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name() {
+        // set_temporary_name returns self
+        run_test_once(
+            r#"
+            m = Module.new
+            m.set_temporary_name("foo").equal?(m)
+            "#,
+        );
+        // set_temporary_name changes name
+        run_test_once(
+            r#"
+            m = Module.new
+            m.set_temporary_name("my_temp")
+            m.name
+            "#,
+        );
+        // set_temporary_name with nil resets name
+        run_test_once(
+            r#"
+            m = Module.new
+            m.set_temporary_name("temp")
+            m.set_temporary_name(nil)
+            m.name
+            "#,
+        );
+        // set_temporary_name works on Class.new
+        run_test_once(
+            r#"
+            c = Class.new
+            c.set_temporary_name("my_cls")
+            c.name
             "#,
         );
     }
