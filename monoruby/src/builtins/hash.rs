@@ -572,12 +572,47 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/inspect.html]
 #[monoruby_builtin]
-fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let mut set = std::collections::HashSet::new();
-    set.insert(self_val.id());
-    let s = self_val.as_hash().inspect_inner(&globals.store, &mut set);
-    Ok(Value::string(s))
+    crate::value::exec_recursive(
+        self_val.id(),
+        || {
+            let hash = self_val.as_hash();
+            if hash.len() == 0 {
+                return Ok(Value::string("{}".to_string()));
+            }
+            let mut s = String::from("{");
+            let mut first = true;
+            for (k, v) in hash.iter() {
+                if !first {
+                    s.push_str(", ");
+                }
+                first = false;
+                let v_inspect =
+                    vm.invoke_method_inner(globals, IdentId::INSPECT, v, &[], None, None)?;
+                if let Some(sym) = k.try_symbol() {
+                    s.push_str(&format!("{sym}: {}", v_inspect.to_s(&globals.store)));
+                } else {
+                    let k_inspect = vm.invoke_method_inner(
+                        globals,
+                        IdentId::INSPECT,
+                        k,
+                        &[],
+                        None,
+                        None,
+                    )?;
+                    s.push_str(&format!(
+                        "{} => {}",
+                        k_inspect.to_s(&globals.store),
+                        v_inspect.to_s(&globals.store)
+                    ));
+                }
+            }
+            s.push('}');
+            Ok(Value::string(s))
+        },
+        Value::string("{...}".to_string()),
+    )
 }
 
 ///
@@ -1135,6 +1170,74 @@ mod tests {
         h = {a: 1}
         h[:self] = h
         h.to_s
+        "##,
+        );
+    }
+
+    #[test]
+    fn hash_inspect_user_defined() {
+        // User-defined inspect on custom objects inside hash values
+        run_test(
+            r##"
+        class Bar
+          def inspect
+            "custom_bar"
+          end
+        end
+        {a: Bar.new, b: 1}.inspect
+        "##,
+        );
+    }
+
+    #[test]
+    fn hash_inspect() {
+        // Empty hash
+        run_test(r#"{}.inspect"#);
+        run_test(r#"{}.to_s"#);
+        // Symbol keys
+        run_test(r#"{a: 1, b: 2, c: 3}.inspect"#);
+        // String keys
+        run_test(r#"{"a" => 1, "b" => 2}.inspect"#);
+        // Integer keys
+        run_test(r#"{1 => "one", 2 => "two"}.inspect"#);
+        // Mixed key types
+        run_test(r#"{a: 1, "b" => 2, 3 => :three}.inspect"#);
+        // Nested hash
+        run_test(r#"{a: {b: {c: 1}}}.inspect"#);
+        // Hash containing array
+        run_test(r#"{a: [1, 2, 3], b: [4, 5]}.inspect"#);
+        // Various value types
+        run_test(r#"{a: nil, b: true, c: false, d: 1, e: 2.5, f: "str", g: :sym}.inspect"#);
+        // Hash with Range values
+        run_test(r#"{a: 1..5, b: 1...5}.inspect"#);
+        // to_s is aliased to inspect
+        run_test(r#"{a: 1}.to_s"#);
+        // User-defined inspect in nested values
+        run_test(
+            r##"
+        class MyVal
+          def inspect
+            "<val>"
+          end
+        end
+        {a: MyVal.new, b: [MyVal.new]}.inspect
+        "##,
+        );
+        // User-defined inspect as keys
+        run_test(
+            r##"
+        class MyKey
+          def inspect
+            "<key>"
+          end
+          def hash
+            42
+          end
+          def eql?(other)
+            true
+          end
+        end
+        {MyKey.new => "value"}.inspect
         "##,
         );
     }

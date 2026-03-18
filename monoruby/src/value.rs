@@ -80,6 +80,27 @@ impl GC<RValue> for Value {
     }
 }
 
+thread_local! {
+    static HASH_RECURSION_GUARD: std::cell::RefCell<HashSet<u64>> = std::cell::RefCell::new(HashSet::new());
+    static INSPECT_RECURSION_GUARD: std::cell::RefCell<HashSet<u64>> = std::cell::RefCell::new(HashSet::new());
+}
+
+/// Execute `f` with recursion protection for inspect/to_s.
+/// If `id` is already in the guard, returns `on_recursive` without calling `f`.
+pub(crate) fn exec_recursive<F>(id: u64, f: F, on_recursive: Value) -> Result<Value>
+where
+    F: FnOnce() -> Result<Value>,
+{
+    let is_recursive =
+        INSPECT_RECURSION_GUARD.with(|guard| !guard.borrow_mut().insert(id));
+    if is_recursive {
+        return Ok(on_recursive);
+    }
+    let result = f();
+    INSPECT_RECURSION_GUARD.with(|guard| guard.borrow_mut().remove(&id));
+    result
+}
+
 impl RubyHash<Executor, Globals, MonorubyErr> for Value {
     fn ruby_hash<H: std::hash::Hasher>(
         &self,
@@ -97,9 +118,22 @@ impl RubyHash<Executor, Globals, MonorubyErr> for Value {
                     ObjTy::BIGNUM => lhs.as_bignum().hash(state),
                     ObjTy::FLOAT => lhs.as_float().to_bits().hash(state),
                     ObjTy::STRING => lhs.as_rstring().hash(state),
-                    ObjTy::ARRAY => lhs.as_array().ruby_hash(state, e, g)?,
+                    ObjTy::ARRAY | ObjTy::HASH => {
+                        let id = self.id();
+                        let is_recursive = HASH_RECURSION_GUARD
+                            .with(|guard| !guard.borrow_mut().insert(id));
+                        if is_recursive {
+                            0u64.hash(state);
+                            return Ok(());
+                        }
+                        let result = match lhs.ty() {
+                            ObjTy::ARRAY => lhs.as_array().ruby_hash(state, e, g),
+                            _ => lhs.as_hashmap().ruby_hash(state, e, g),
+                        };
+                        HASH_RECURSION_GUARD.with(|guard| guard.borrow_mut().remove(&id));
+                        result?;
+                    }
                     ObjTy::RANGE => lhs.as_range().ruby_hash(state, e, g)?,
-                    ObjTy::HASH => lhs.as_hashmap().ruby_hash(state, e, g)?,
                     //ObjTy::METHOD => lhs.method().hash(state),
                     _ => {
                         e.invoke_method_inner(g, IdentId::HASH, *self, &[], None, None)?

@@ -3,11 +3,6 @@ use rand::seq::SliceRandom;
 use smallvec::Drain;
 use smallvec::SmallVec;
 use smallvec::smallvec;
-use std::cell::RefCell;
-
-thread_local! {
-    static HASH_RECURSION_GUARD: RefCell<Vec<u64>> = RefCell::new(Vec::new());
-}
 
 pub const ARRAY_INLINE_CAPA: usize = 5;
 
@@ -114,25 +109,10 @@ impl RubyHash<Executor, Globals, MonorubyErr> for ArrayInner {
         e: &mut Executor,
         g: &mut Globals,
     ) -> Result<()> {
-        let ptr = self.0.as_ptr() as u64;
-        let is_recursive = HASH_RECURSION_GUARD.with(|guard| {
-            let g = guard.borrow();
-            g.contains(&ptr)
-        });
-        if is_recursive {
-            // Return a fixed hash value for recursive arrays, matching CRuby behavior.
-            0u64.hash(state);
-            return Ok(());
+        for v in self.iter() {
+            v.ruby_hash(state, e, g)?;
         }
-        HASH_RECURSION_GUARD.with(|guard| guard.borrow_mut().push(ptr));
-        let result = (|| {
-            for v in self.iter() {
-                v.ruby_hash(state, e, g)?;
-            }
-            Ok(())
-        })();
-        HASH_RECURSION_GUARD.with(|guard| guard.borrow_mut().pop());
-        result
+        Ok(())
     }
 }
 
