@@ -156,7 +156,7 @@ fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 }
 
 /// ### Exception#set_backtrace
-/// - set_backtrace(backtrace) -> Array | String
+/// - set_backtrace(backtrace) -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/set_backtrace.html]
 #[monoruby_builtin]
@@ -166,8 +166,14 @@ fn set_backtrace(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    // For now, just return the argument (no-op — monoruby tracks backtrace internally)
-    Ok(lfp.arg(0))
+    let arg = lfp.arg(0);
+    if arg.is_nil() {
+        Ok(Value::nil())
+    } else if arg.is_str().is_some() {
+        Ok(Value::array1(arg))
+    } else {
+        Ok(arg)
+    }
 }
 
 ///
@@ -236,6 +242,28 @@ mod tests {
             r##"
             raise StopIteration.new "woo"
         "##,
+        );
+    }
+
+    #[test]
+    fn set_backtrace() {
+        run_test(
+            r#"
+            e = RuntimeError.new("test")
+            e.set_backtrace(["foo.rb:1:in `bar'", "baz.rb:2:in `qux'"])
+        "#,
+        );
+        run_test(
+            r#"
+            e = RuntimeError.new("test")
+            e.set_backtrace("foo.rb:1:in `bar'")
+        "#,
+        );
+        run_test(
+            r#"
+            e = RuntimeError.new("test")
+            e.set_backtrace(nil)
+        "#,
         );
     }
 
