@@ -49,7 +49,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_inline_funcs_with_kw(
         OBJECT_CLASS,
         "send",
-        &["__send__"],
+        &["__send__", "public_send"],
         crate::builtins::send,
         Box::new(crate::builtins::object_send),
         0,
@@ -1285,6 +1285,34 @@ mod tests {
             o.send(:b, x, 2, 3)
           end 
             "##,
+        );
+    }
+
+    #[test]
+    fn public_send() {
+        run_test(
+            r##"
+        class C
+          def foo; "foo"; end
+        end
+        C.new.public_send(:foo)
+        "##,
+        );
+        run_test(
+            r##"
+        class C
+          def bar(x); x * 2; end
+        end
+        C.new.public_send(:bar, 21)
+        "##,
+        );
+        run_test(
+            r##"
+        class C
+          def baz; yield + 1; end
+        end
+        C.new.public_send(:baz) { 41 }
+        "##,
         );
     }
 
