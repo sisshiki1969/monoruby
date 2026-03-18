@@ -738,6 +738,11 @@ impl Value {
             RV::Object(rvalue) => rvalue.inspect(store, set),
             _ => self.debug(store),
         };
+        // Remove from set after processing so sibling references to the
+        // same object are not falsely detected as recursion.
+        if !self.is_packed_value() {
+            set.remove(&self.id());
+        }
         s
     }
 }

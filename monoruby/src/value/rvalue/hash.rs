@@ -125,7 +125,7 @@ impl HashmapInner {
     }
 
     fn id(&self) -> HashId {
-        HashId(&self as *const _ as usize)
+        HashId(self as *const _ as usize)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -205,9 +205,9 @@ impl HashmapInner {
         }
     }
 
-    pub fn to_s(&self, store: &Store) -> String {
+    pub fn to_s(&self, store: &Store, self_id: u64) -> String {
         let mut set = HashSet::new();
-        set.insert(self.id());
+        set.insert(self_id);
         self.inspect_inner(store, &mut set)
     }
 

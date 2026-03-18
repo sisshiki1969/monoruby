@@ -3477,6 +3477,21 @@ mod tests {
     }
 
     #[test]
+    fn array_tos_recursive() {
+        // Self-containing array
+        run_test_once(
+            r##"
+        a = [1, 2]
+        a << a
+        a.to_s
+        "##,
+        );
+        // Same object appearing multiple times (not recursive)
+        run_test(r#"a = [1]; b = [a, a]; b.to_s"#);
+        run_test(r#"h = {x: 1}; [h, h].to_s"#);
+    }
+
+    #[test]
     fn product_size_check() {
         run_test_no_result_check(
             r##"

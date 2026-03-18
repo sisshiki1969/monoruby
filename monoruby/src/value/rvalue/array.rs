@@ -1,8 +1,8 @@
 use super::*;
 use rand::seq::SliceRandom;
-use smallvec::smallvec;
 use smallvec::Drain;
 use smallvec::SmallVec;
+use smallvec::smallvec;
 use std::cell::RefCell;
 
 thread_local! {
@@ -255,19 +255,10 @@ impl ArrayInner {
         }
     }
 
-    pub fn to_s(&self, store: &Store) -> String {
-        match self.len() {
-            0 => "[]".to_string(),
-            1 => format!("[{}]", self[0].inspect(store)),
-            _ => {
-                let mut s = format!("[{}", self[0].inspect(store));
-                for val in self[1..].iter() {
-                    s += &format!(", {}", val.inspect(store));
-                }
-                s += "]";
-                s
-            }
-        }
+    pub fn to_s(&self, store: &Store, self_id: u64) -> String {
+        let mut set = HashSet::new();
+        set.insert(self_id);
+        self.inspect_inner(store, &mut set)
     }
 
     pub(crate) fn inspect_inner(&self, store: &Store, set: &mut HashSet<u64>) -> String {
@@ -407,11 +398,7 @@ impl ArrayInner {
             let i_end = range.end().coerce_to_i64(store)?;
             let end = if i_end >= 0 {
                 let end = i_end as usize + if range.exclude_end() { 0 } else { 1 };
-                if self.len() < end {
-                    self.len()
-                } else {
-                    end
-                }
+                if self.len() < end { self.len() } else { end }
             } else {
                 let e = len + i_end + if range.exclude_end() { 0 } else { 1 };
                 if e < 0 {

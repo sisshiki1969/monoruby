@@ -1124,6 +1124,22 @@ mod tests {
     }
 
     #[test]
+    fn hash_tos_recursive() {
+        // Same object appearing multiple times (not recursive)
+        run_test(r#"a = [1]; {a:a, b:a}.to_s"#);
+        run_test(r#"a = {a:1}; {a:a, b:a}.to_s"#);
+        run_test(r#"a = {a:1}; {a:[a], b:a}.to_s"#);
+        // Self-containing hash
+        run_test_once(
+            r##"
+        h = {a: 1}
+        h[:self] = h
+        h.to_s
+        "##,
+        );
+    }
+
+    #[test]
     fn hash_new() {
         run_test(
             r##"
