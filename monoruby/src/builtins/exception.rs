@@ -19,15 +19,14 @@ pub(super) fn init(globals: &mut Globals) {
 
     let standarderr = globals.define_class("StandardError", exception_class, OBJECT_CLASS);
 
-    let system_exit_id = globals
-        .define_class("SystemExit", exception_class, OBJECT_CLASS)
-        .id();
-    globals.define_builtin_class_func_with(system_exit_id, "new", system_exit_new, 0, 2, false);
-    globals.define_attr_reader(
-        system_exit_id,
-        IdentId::get_id("status"),
-        Visibility::Public,
+    let system_exit = globals.define_builtin_exception_class(
+        "SystemExit",
+        SYSTEM_EXIT_ERROR_CLASS,
+        exception_class,
     );
+    let system_exit_id = system_exit.id();
+    globals.define_builtin_class_func_with(system_exit_id, "new", system_exit_new, 0, 2, false);
+    globals.define_builtin_func(system_exit_id, "status", system_exit_status, 0);
 
     globals.define_class("NoMemoryError", standarderr, OBJECT_CLASS);
     globals.define_class("SecurityError", standarderr, OBJECT_CLASS);
@@ -170,6 +169,21 @@ fn loaderror_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
 }
 
 ///
+/// ### SystemExit#status
+///
+/// - status -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/SystemExit/i/status.html]
+#[monoruby_builtin]
+fn system_exit_status(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    Ok(globals
+        .store
+        .get_ivar(self_, IdentId::get_id("/status"))
+        .unwrap_or_default())
+}
+
+///
 /// ### SystemExit.new
 ///
 /// - new(status = 0, error_message = "") -> SystemExit
@@ -189,8 +203,11 @@ fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
     } else {
         (0, name.clone())
     };
-    let mut ex = Value::new_exception_from(msg, class_id);
-    ex.set_instance_var(&mut globals.store, "@status", Value::integer(status))?;
+    let ex = Value::new_exception_from(msg, class_id);
+    globals
+        .store
+        .set_ivar(ex, IdentId::get_id("/status"), Value::integer(status))
+        .unwrap();
 
     Ok(ex)
 }

@@ -313,3 +313,16 @@ fn retry_in_loop() {
         "#,
     );
 }
+
+#[test]
+fn load_error_path() {
+    run_test(
+        r#"
+            begin
+              require "nonexistent_file_that_does_not_exist_12345"
+            rescue LoadError => e
+              [e.class.name, e.path]
+            end
+        "#,
+    );
+}

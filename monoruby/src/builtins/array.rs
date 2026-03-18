@@ -46,6 +46,7 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func_with(ARRAY_CLASS, "count", count, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "empty?", empty, 0);
+    globals.define_builtin_funcs(ARRAY_CLASS, "inspect", &["to_s"], inspect, 0);
     globals.define_builtin_func(ARRAY_CLASS, "to_a", to_a, 0);
     globals.define_builtin_func(ARRAY_CLASS, "to_h", to_h, 0);
     globals.define_builtin_func(ARRAY_CLASS, "hash", hash, 0);
@@ -398,6 +399,39 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let b = lfp.self_val().as_array().is_empty();
     Ok(Value::bool(b))
+}
+
+///
+/// ### Array#inspect
+///
+/// - inspect -> String
+/// - to_s -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/inspect.html]
+#[monoruby_builtin]
+fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    crate::value::exec_recursive(
+        self_val.id(),
+        || {
+            let ary = self_val.as_array();
+            if ary.len() == 0 {
+                return Ok(Value::string("[]".to_string()));
+            }
+            let mut s = String::from("[");
+            for (i, elem) in ary.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                let inspected =
+                    vm.invoke_method_inner(globals, IdentId::INSPECT, *elem, &[], None, None)?;
+                s.push_str(&inspected.to_s(&globals.store));
+            }
+            s.push(']');
+            Ok(Value::string(s))
+        },
+        Value::string("[...]".to_string()),
+    )
 }
 
 ///
@@ -1907,6 +1941,16 @@ fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     for rhs in lfp.arg(0).as_array().into_iter() {
         lists.push(rhs.expect_array_ty(globals)?);
     }
+    // Check total product size to avoid memory exhaustion.
+    let mut total: usize = lhs.len();
+    for l in &lists {
+        total = total.checked_mul(l.len()).ok_or_else(|| {
+            MonorubyErr::rangeerr("too big to product")
+        })?;
+        if total > 1_000_000 {
+            return Err(MonorubyErr::rangeerr("too big to product"));
+        }
+    }
     let v: Vec<Value> = product_inner(lhs, lists)
         .into_iter()
         .map(|a| Value::array_from_iter(a.into_iter().cloned()))
@@ -2082,7 +2126,14 @@ fn slice_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let len = end - start + if range.exclude_end() { 0 } else { 1 };
         Ok(slice_inner(ary, start, len))
     } else {
-        unimplemented!()
+        let index = lfp.arg(0).coerce_to_i64(globals)?;
+        let index = match ary.get_array_index(index) {
+            Some(i) if i < ary.len() => i,
+            _ => return Ok(Value::nil()),
+        };
+        let mut ary = ary;
+        let val = ary.remove(index);
+        Ok(val)
     }
 }
 
@@ -2116,24 +2167,39 @@ fn pack(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     rvalue::pack(globals, &ary, lfp.arg(0).expect_str(globals)?)
 }
 
-fn flatten_inner(ary: &Array, res: &mut Vec<Value>, lv: Option<usize>, changed: &mut bool) {
+fn flatten_inner(
+    ary: &Array,
+    res: &mut Vec<Value>,
+    lv: Option<usize>,
+    changed: &mut bool,
+    seen: &mut Vec<u64>,
+) -> Result<()> {
+    let id = ary.id();
+    if seen.contains(&id) {
+        return Err(MonorubyErr::argumenterr(
+            "tried to flatten recursive array",
+        ));
+    }
+    seen.push(id);
     for v in ary.iter() {
-        if let Some(ary) = v.try_array_ty() {
+        if let Some(inner) = v.try_array_ty() {
             if let Some(lv) = lv {
                 if lv == 0 {
                     res.push(*v);
                 } else {
                     *changed = true;
-                    flatten_inner(&ary, res, Some(lv - 1), changed);
+                    flatten_inner(&inner, res, Some(lv - 1), changed, seen)?;
                 }
             } else {
                 *changed = true;
-                flatten_inner(&ary, res, None, changed);
+                flatten_inner(&inner, res, None, changed, seen)?;
             }
         } else {
             res.push(*v);
         }
     }
+    seen.pop();
+    Ok(())
 }
 
 ///
@@ -2159,7 +2225,8 @@ fn flatten(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     };
     let mut res = vec![];
     let mut changed = false;
-    flatten_inner(&ary, &mut res, lv, &mut changed);
+    let mut seen = vec![];
+    flatten_inner(&ary, &mut res, lv, &mut changed, &mut seen)?;
     Ok(Value::array_from_vec(res))
 }
 
@@ -2186,7 +2253,8 @@ fn flatten_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     };
     let mut res = vec![];
     let mut changed = false;
-    flatten_inner(&ary, &mut res, lv, &mut changed);
+    let mut seen = vec![];
+    flatten_inner(&ary, &mut res, lv, &mut changed, &mut seen)?;
     ary.replace(res);
     Ok(if changed { ary.into() } else { Value::nil() })
 }
@@ -3422,6 +3490,125 @@ mod tests {
         res << ary.bsearch {|x| 4 - x / 2 } # => nil
         
         res
+        "##,
+        );
+    }
+
+    #[test]
+    fn flatten_recursive() {
+        run_test_once(
+            r##"
+        a = [1, 2]
+        a << a
+        begin
+          a.flatten
+          false
+        rescue ArgumentError
+          true
+        end
+        "##,
+        );
+    }
+
+    #[test]
+    fn array_tos_recursive() {
+        // Self-containing array
+        run_test_once(
+            r##"
+        a = [1, 2]
+        a << a
+        a.to_s
+        "##,
+        );
+        // Same object appearing multiple times (not recursive)
+        run_test(r#"a = [1]; b = [a, a]; b.to_s"#);
+        run_test(r#"h = {x: 1}; [h, h].to_s"#);
+    }
+
+    #[test]
+    fn array_inspect_user_defined() {
+        // User-defined inspect on custom objects inside arrays
+        run_test(
+            r##"
+        class Foo
+          def inspect
+            "custom_foo"
+          end
+        end
+        [Foo.new, 1, "hello"].inspect
+        "##,
+        );
+    }
+
+    #[test]
+    fn array_inspect() {
+        // Empty array
+        run_test(r#"[].inspect"#);
+        run_test(r#"[].to_s"#);
+        // Single element
+        run_test(r#"[1].inspect"#);
+        // Various types
+        run_test(r#"[1, 2.5, "str", :sym, nil, true, false].inspect"#);
+        // Nested arrays
+        run_test(r#"[[1, 2], [3, [4, 5]]].inspect"#);
+        // Array containing hash
+        run_test(r#"[{a: 1, b: 2}, {c: 3}].inspect"#);
+        // Mixed nesting
+        run_test(r#"[1, [2, {a: 3}], "hello", :world].inspect"#);
+        // Array with string containing special characters
+        run_test(r#"["hello\nworld", "tab\there"].inspect"#);
+        // Array with Range
+        run_test(r#"[1..5, 1...5].inspect"#);
+        // to_s is aliased to inspect
+        run_test(r#"[1, 2, 3].to_s"#);
+        // User-defined to_s should NOT affect inspect output
+        // (inspect uses inspect, not to_s, for each element)
+        run_test(
+            r##"
+        class Baz
+          def to_s
+            "baz_to_s"
+          end
+          def inspect
+            "baz_inspect"
+          end
+        end
+        [Baz.new].inspect
+        "##,
+        );
+        // User-defined inspect inside nested structures
+        run_test(
+            r##"
+        class MyObj
+          def inspect
+            "<my>"
+          end
+        end
+        [[MyObj.new], {k: MyObj.new}].inspect
+        "##,
+        );
+    }
+
+    #[test]
+    fn product_size_check() {
+        run_test_no_result_check(
+            r##"
+        begin
+          ([0] * 1000).product([0] * 1000, [0] * 1000)
+          false
+        rescue RangeError
+          true
+        end
+        "##,
+        );
+    }
+
+    #[test]
+    fn slice_bang_integer() {
+        run_test(
+            r##"
+        a = [1, 2, 3, 4, 5]
+        [a.slice!(2), a]
         "##,
         );
     }
