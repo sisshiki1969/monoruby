@@ -289,6 +289,10 @@ impl ClassInfo {
         self.name = Some(name);
     }
 
+    pub(crate) fn clear_name(&mut self) {
+        self.name = None;
+    }
+
     pub(crate) fn get_name(&self) -> Option<&str> {
         self.name.as_ref().map(|x| x.as_str())
     }
@@ -659,6 +663,11 @@ impl ClassInfoTable {
             None => self.object_class(),
         };
         self.define_class_inner(None, superclass, None, false, Some(ObjTy::OBJECT))
+    }
+
+    pub(crate) fn define_unnamed_module(&mut self) -> Module {
+        let object_class = self.object_class();
+        self.define_class_inner(None, Some(object_class), None, true, None)
     }
 
     pub(crate) fn define_struct_class(

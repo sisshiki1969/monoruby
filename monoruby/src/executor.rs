@@ -449,16 +449,26 @@ impl Executor {
 
     pub(crate) fn take_ex_obj(&mut self, globals: &mut Globals) -> Value {
         let err = self.take_error();
-        if let MonorubyErrKind::Load(path) = &err.kind() {
-            let path = Value::string_from_str(path.as_os_str().to_str().unwrap());
-            let v = Value::new_exception(err);
-            globals
-                .store
-                .set_ivar(v, IdentId::get_id("/path"), path)
-                .unwrap();
-            v
-        } else {
-            Value::new_exception(err)
+        match err.kind() {
+            MonorubyErrKind::Load(path) => {
+                let path = Value::string_from_str(path.as_os_str().to_str().unwrap());
+                let v = Value::new_exception(err);
+                globals
+                    .store
+                    .set_ivar(v, IdentId::get_id("/path"), path)
+                    .unwrap();
+                v
+            }
+            MonorubyErrKind::SystemExit(status) => {
+                let status = *status;
+                let v = Value::new_exception(err);
+                globals
+                    .store
+                    .set_ivar(v, IdentId::get_id("/status"), Value::integer(status as i64))
+                    .unwrap();
+                v
+            }
+            _ => Value::new_exception(err),
         }
     }
 

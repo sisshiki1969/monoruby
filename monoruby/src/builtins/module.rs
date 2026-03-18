@@ -5,7 +5,9 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj("Module", MODULE_CLASS, ObjTy::MODULE);
+    // class methods
+    globals.define_builtin_class_func(MODULE_CLASS, "new", module_new, 0);
+
     // instance methods
     globals.define_builtin_func(MODULE_CLASS, "==", eq, 1);
     globals.define_builtin_func(MODULE_CLASS, "===", teq, 1);
@@ -95,11 +97,28 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "private_class_method", private_class_method);
     globals.define_builtin_funcs(MODULE_CLASS, "to_s", &["inspect"], tos, 0);
     globals.define_builtin_func(MODULE_CLASS, "name", name, 0);
+    globals.define_builtin_func(MODULE_CLASS, "set_temporary_name", set_temporary_name, 1);
     // private methods
     globals.define_private_builtin_func_rest(MODULE_CLASS, "module_function", module_function);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "private", private);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "protected", protected);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "public", public);
+}
+
+/// ### Module.new
+/// - new -> Module
+/// - new {|mod| ... } -> Module
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/s/new.html]
+#[monoruby_builtin]
+fn module_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let module = globals.store.define_unnamed_module();
+    let module_val = module.as_val();
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        vm.invoke_block_with_self(globals, &data, module_val, &[module_val])?;
+    }
+    Ok(module_val)
 }
 
 ///
@@ -175,7 +194,12 @@ fn teq(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/alias_method.html]
 #[monoruby_builtin]
-fn alias_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn alias_method(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let new_name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let old_name = lfp.arg(1).expect_symbol_or_string(globals)?;
@@ -190,7 +214,12 @@ fn alias_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_accessor.html]
 #[monoruby_builtin]
-fn attr_accessor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn attr_accessor(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let mut ary = Array::new_empty();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
@@ -211,7 +240,12 @@ fn attr_accessor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_reader.html]
 #[monoruby_builtin]
-fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn attr_reader(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let mut ary = Array::new_empty();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
@@ -230,7 +264,12 @@ fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_writer.html]
 #[monoruby_builtin]
-fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn attr_writer(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let mut ary = Array::new_empty();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
@@ -323,7 +362,12 @@ fn ancestors(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// https://docs.ruby-lang.org/ja/latest/method/Module/i/const_defined=3f.html]
 #[monoruby_builtin]
-fn const_defined(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn const_defined(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let module = lfp.self_val().as_class();
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
@@ -377,7 +421,12 @@ fn const_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/remove_const.html]
 #[monoruby_builtin]
-fn remove_const(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn remove_const(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let module = lfp.self_val().as_class().id();
     globals
@@ -467,7 +516,12 @@ fn define_method(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/deprecate_constant.html]
 #[monoruby_builtin]
-fn deprecate_constant(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn deprecate_constant(
+    _: &mut Executor,
+    _: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(lfp.self_val())
 }
 
@@ -478,7 +532,12 @@ fn deprecate_constant(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePt
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/instance_methods.html]
 #[monoruby_builtin]
-fn instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn instance_methods(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
     Ok(Value::array_from_vec(if !inherited_too {
@@ -495,7 +554,12 @@ fn instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byte
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private_instance_methods.html]
 #[monoruby_builtin]
-fn private_instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn private_instance_methods(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
     Ok(Value::array_from_vec(if !inherited_too {
@@ -518,22 +582,8 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     }
     let self_ = lfp.self_val();
     for v in args.iter().cloned().rev() {
-        vm.invoke_method_inner(
-            globals,
-            IdentId::APPEND_FEATURES,
-            v,
-            &[self_],
-            None,
-            None,
-        )?;
-        vm.invoke_method_if_exists(
-            globals,
-            IdentId::INCLUDED,
-            v,
-            &[self_],
-            None,
-            None,
-        )?;
+        vm.invoke_method_inner(globals, IdentId::APPEND_FEATURES, v, &[self_], None, None)?;
+        vm.invoke_method_if_exists(globals, IdentId::INCLUDED, v, &[self_], None, None)?;
     }
     Ok(lfp.self_val())
 }
@@ -544,7 +594,12 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/append_features.html]
 #[monoruby_builtin]
-fn append_features(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn append_features(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let mut base = lfp.arg(0).expect_class_or_module(&globals.store)?;
     let include_module = lfp.self_val().expect_module(globals)?;
     base.include_module(include_module)?;
@@ -557,7 +612,12 @@ fn append_features(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/extend_object.html]
 #[monoruby_builtin]
-fn extend_object(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn extend_object(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let obj = lfp.arg(0);
     let mut class = globals.store.get_singleton(obj);
     let include_module = lfp.self_val().expect_module(globals)?;
@@ -586,14 +646,7 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             None,
             None,
         )?;
-        vm.invoke_method_if_exists(
-            globals,
-            IdentId::PREPENDED,
-            v,
-            &[self_],
-            None,
-            None,
-        )?;
+        vm.invoke_method_if_exists(globals, IdentId::PREPENDED, v, &[self_], None, None)?;
     }
     Ok(lfp.self_val())
 }
@@ -604,7 +657,12 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/prepend_features.html]
 #[monoruby_builtin]
-fn prepend_features(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn prepend_features(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let mut base = lfp.arg(0).expect_class_or_module(&globals.store)?;
     let prepend_module = lfp.self_val().as_class();
     base.prepend_module(prepend_module)?;
@@ -618,7 +676,12 @@ fn prepend_features(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byte
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/instance_method.html]
 #[monoruby_builtin]
-fn instance_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn instance_method(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let klass = lfp.self_val().as_class();
     let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let (func_id, _, owner) = globals
@@ -636,7 +699,12 @@ fn instance_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/undef_method.html]
 #[monoruby_builtin]
-fn undef_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn undef_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let receiver = globals.store[class_id].get_module().into();
     let names = lfp.arg(0).as_array();
@@ -662,7 +730,12 @@ fn undef_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/remove_method.html]
 #[monoruby_builtin]
-fn remove_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn remove_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let receiver = globals.store[class_id].get_module().into();
     let names = lfp.arg(0).as_array();
@@ -699,7 +772,12 @@ fn check_method_defined(globals: &Globals, lfp: Lfp) -> Result<Option<Visibility
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/method_defined=3f.html]
 #[monoruby_builtin]
-fn method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn method_defined(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(Value::bool(match check_method_defined(globals, lfp)? {
         Some(v) => matches!(v, Visibility::Public | Visibility::Protected),
         None => false,
@@ -713,7 +791,12 @@ fn method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private_method_defined=3f.html]
 #[monoruby_builtin]
-fn private_method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn private_method_defined(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(Value::bool(
         check_method_defined(globals, lfp)? == Some(Visibility::Private),
     ))
@@ -726,7 +809,12 @@ fn private_method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public_method_defined=3f.html]
 #[monoruby_builtin]
-fn public_method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn public_method_defined(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(Value::bool(
         check_method_defined(globals, lfp)? == Some(Visibility::Public),
     ))
@@ -739,7 +827,12 @@ fn public_method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _:
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/protected_method_defined=3f.html]
 #[monoruby_builtin]
-fn protected_method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn protected_method_defined(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(Value::bool(
         check_method_defined(globals, lfp)? == Some(Visibility::Protected),
     ))
@@ -752,7 +845,12 @@ fn protected_method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp,
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private_class_method.html]
 #[monoruby_builtin]
-fn private_class_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn private_class_method(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let singleton = globals.store.get_singleton(lfp.self_val());
     let arg = lfp.arg(0).as_array();
     let (_, names) = extract_names(globals, arg)?;
@@ -789,13 +887,40 @@ fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
+/// ### Module#set_temporary_name
+/// - set_temporary_name(name) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/set_temporary_name.html]
+#[monoruby_builtin]
+fn set_temporary_name(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let name_val = lfp.arg(0);
+    if name_val.is_nil() {
+        globals.store[class_id].clear_name();
+    } else {
+        let name = name_val.expect_string(&globals.store)?;
+        globals.store[class_id].set_name(name);
+    }
+    Ok(lfp.self_val())
+}
+
 ///
 /// ### Module#module_function
 /// - module_function(*name) -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/module_function.html]
 #[monoruby_builtin]
-fn module_function(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn module_function(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let len = arg0.as_array().len();
     if len == 0 {
@@ -1079,6 +1204,59 @@ mod tests {
               end
               define_method :foo, instance_method(:bar)
             end
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_new() {
+        // Module.new returns an anonymous module with nil name
+        run_test_once(
+            r#"
+            m = Module.new
+            m.name
+            "#,
+        );
+        // Module.new creates a proper Module
+        run_test_once(
+            r#"
+            Module.new.is_a?(Module)
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name() {
+        // set_temporary_name returns self
+        run_test_once(
+            r#"
+            m = Module.new
+            m.set_temporary_name("foo").equal?(m)
+            "#,
+        );
+        // set_temporary_name changes name
+        run_test_once(
+            r#"
+            m = Module.new
+            m.set_temporary_name("my_temp")
+            m.name
+            "#,
+        );
+        // set_temporary_name with nil resets name
+        run_test_once(
+            r#"
+            m = Module.new
+            m.set_temporary_name("temp")
+            m.set_temporary_name(nil)
+            m.name
+            "#,
+        );
+        // set_temporary_name works on Class.new
+        run_test_once(
+            r#"
+            c = Class.new
+            c.set_temporary_name("my_cls")
+            c.name
             "#,
         );
     }
@@ -2084,6 +2262,55 @@ mod tests {
           def self.Bar; yield; end
         end
         Foo::Bar { 77 }
+        "##,
+        );
+    }
+
+    #[test]
+    fn module_new2() {
+        run_test(
+            r##"
+        m = Module.new
+        m.class
+        "##,
+        );
+        run_test(
+            r##"
+        m = Module.new
+        m.is_a?(Module)
+        "##,
+        );
+        run_test(
+            r##"
+        $res = []
+        m = Module.new do |mod|
+          $res << mod.class
+          def self.foo; 42; end
+        end
+        $res << m.foo
+        $res
+        "##,
+        );
+        run_test(
+            r##"
+        m = Module.new
+        m.module_eval do
+          def hello; "hello"; end
+        end
+        c = Class.new
+        c.include(m)
+        c.new.hello
+        "##,
+        );
+        run_test(
+            r##"
+        m = Module.new
+        res = []
+        res << m.is_a?(Module)
+        res << m.class
+        n = Module.new
+        res << (m == n)
+        res
         "##,
         );
     }

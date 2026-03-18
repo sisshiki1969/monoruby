@@ -180,13 +180,6 @@ impl Bytecode {
             op2: Bc2::class2(None, None),
         }
     }
-
-    pub fn from_with_ident2(op1: u64, id1: IdentId, id2: IdentId) -> Self {
-        Self {
-            op1,
-            op2: Bc2::ident2(id1, id2),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -221,18 +214,8 @@ impl Bc2 {
         Self(((id2 as u64) << 32) + (id1 as u64))
     }
 
-    fn ident2(id1: IdentId, id2: IdentId) -> Self {
-        Self(((id2.get() as u64) << 32) + (id1.get() as u64))
-    }
-
     pub fn get_value(&self) -> Value {
         Value::from_u64(self.0)
-    }
-
-    pub fn get_ident2(&self) -> (IdentId, IdentId) {
-        let id1 = IdentId::from(self.0 as u32);
-        let id2 = IdentId::from((self.0 >> 32) as u32);
-        (id1, id2)
     }
 
     pub fn get_u16(&self) -> u16 {

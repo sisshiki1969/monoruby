@@ -19,15 +19,14 @@ pub(super) fn init(globals: &mut Globals) {
 
     let standarderr = globals.define_class("StandardError", exception_class, OBJECT_CLASS);
 
-    let system_exit_id = globals
-        .define_class("SystemExit", exception_class, OBJECT_CLASS)
-        .id();
-    globals.define_builtin_class_func_with(system_exit_id, "new", system_exit_new, 0, 2, false);
-    globals.define_attr_reader(
-        system_exit_id,
-        IdentId::get_id("status"),
-        Visibility::Public,
+    let system_exit = globals.define_builtin_exception_class(
+        "SystemExit",
+        SYSTEM_EXIT_ERROR_CLASS,
+        exception_class,
     );
+    let system_exit_id = system_exit.id();
+    globals.define_builtin_class_func_with(system_exit_id, "new", system_exit_new, 0, 2, false);
+    globals.define_builtin_func(system_exit_id, "status", system_exit_status, 0);
 
     globals.define_class("NoMemoryError", standarderr, OBJECT_CLASS);
     globals.define_class("SecurityError", standarderr, OBJECT_CLASS);
@@ -77,6 +76,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(EXCEPTION_CLASS, "initialize", initialize, 0, 1, false);
     globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
+    globals.define_builtin_func(EXCEPTION_CLASS, "set_backtrace", set_backtrace, 1);
 }
 
 ///
@@ -154,6 +154,27 @@ fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     Ok(Value::array_from_iter(iter))
 }
 
+/// ### Exception#set_backtrace
+/// - set_backtrace(backtrace) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/set_backtrace.html]
+#[monoruby_builtin]
+fn set_backtrace(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    if arg.is_nil() {
+        Ok(Value::nil())
+    } else if arg.is_str().is_some() {
+        Ok(Value::array1(arg))
+    } else {
+        Ok(arg)
+    }
+}
+
 ///
 /// ### LoadError#path
 ///
@@ -166,6 +187,21 @@ fn loaderror_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
     Ok(globals
         .store
         .get_ivar(self_, IdentId::get_id("/path"))
+        .unwrap_or_default())
+}
+
+///
+/// ### SystemExit#status
+///
+/// - status -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/SystemExit/i/status.html]
+#[monoruby_builtin]
+fn system_exit_status(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    Ok(globals
+        .store
+        .get_ivar(self_, IdentId::get_id("/status"))
         .unwrap_or_default())
 }
 
@@ -189,8 +225,11 @@ fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
     } else {
         (0, name.clone())
     };
-    let mut ex = Value::new_exception_from(msg, class_id);
-    ex.set_instance_var(&mut globals.store, "@status", Value::integer(status))?;
+    let ex = Value::new_exception_from(msg, class_id);
+    globals
+        .store
+        .set_ivar(ex, IdentId::get_id("/status"), Value::integer(status))
+        .unwrap();
 
     Ok(ex)
 }
@@ -220,6 +259,28 @@ mod tests {
             r##"
             raise StopIteration.new "woo"
         "##,
+        );
+    }
+
+    #[test]
+    fn set_backtrace() {
+        run_test(
+            r#"
+            e = RuntimeError.new("test")
+            e.set_backtrace(["foo.rb:1:in `bar'", "baz.rb:2:in `qux'"])
+        "#,
+        );
+        run_test(
+            r#"
+            e = RuntimeError.new("test")
+            e.set_backtrace("foo.rb:1:in `bar'")
+        "#,
+        );
+        run_test(
+            r#"
+            e = RuntimeError.new("test")
+            e.set_backtrace(nil)
+        "#,
         );
     }
 
