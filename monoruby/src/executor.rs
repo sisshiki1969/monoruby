@@ -464,7 +464,7 @@ impl Executor {
                 let v = Value::new_exception(err);
                 globals
                     .store
-                    .set_ivar(v, IdentId::get_id("@status"), Value::integer(status as i64))
+                    .set_ivar(v, IdentId::get_id("/status"), Value::integer(status as i64))
                     .unwrap();
                 v
             }
