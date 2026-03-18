@@ -2107,4 +2107,53 @@ mod tests {
         "##,
         );
     }
+
+    #[test]
+    fn module_new() {
+        run_test(
+            r##"
+        m = Module.new
+        m.class
+        "##,
+        );
+        run_test(
+            r##"
+        m = Module.new
+        m.is_a?(Module)
+        "##,
+        );
+        run_test(
+            r##"
+        $res = []
+        m = Module.new do |mod|
+          $res << mod.class
+          def self.foo; 42; end
+        end
+        $res << m.foo
+        $res
+        "##,
+        );
+        run_test(
+            r##"
+        m = Module.new
+        m.module_eval do
+          def hello; "hello"; end
+        end
+        c = Class.new
+        c.include(m)
+        c.new.hello
+        "##,
+        );
+        run_test(
+            r##"
+        m = Module.new
+        res = []
+        res << m.is_a?(Module)
+        res << m.class
+        n = Module.new
+        res << (m == n)
+        res
+        "##,
+        );
+    }
 }

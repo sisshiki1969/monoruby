@@ -1199,6 +1199,34 @@ mod tests {
     }
 
     #[test]
+    fn public_send() {
+        run_test(
+            r##"
+        class C
+          def foo; "foo"; end
+        end
+        C.new.public_send(:foo)
+        "##,
+        );
+        run_test(
+            r##"
+        class C
+          def bar(x); x * 2; end
+        end
+        C.new.public_send(:bar, 21)
+        "##,
+        );
+        run_test(
+            r##"
+        class C
+          def baz; yield + 1; end
+        end
+        C.new.public_send(:baz) { 41 }
+        "##,
+        );
+    }
+
+    #[test]
     fn methods() {
         run_test_with_prelude(
             r##"
