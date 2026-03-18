@@ -76,6 +76,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(EXCEPTION_CLASS, "initialize", initialize, 0, 1, false);
     globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
+    globals.define_builtin_func(EXCEPTION_CLASS, "set_backtrace", set_backtrace, 1);
 }
 
 ///
@@ -151,6 +152,27 @@ fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         .into_iter()
         .map(|s| Value::string(s));
     Ok(Value::array_from_iter(iter))
+}
+
+/// ### Exception#set_backtrace
+/// - set_backtrace(backtrace) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/set_backtrace.html]
+#[monoruby_builtin]
+fn set_backtrace(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    if arg.is_nil() {
+        Ok(Value::nil())
+    } else if arg.is_str().is_some() {
+        Ok(Value::array1(arg))
+    } else {
+        Ok(arg)
+    }
 }
 
 ///
@@ -237,6 +259,28 @@ mod tests {
             r##"
             raise StopIteration.new "woo"
         "##,
+        );
+    }
+
+    #[test]
+    fn set_backtrace() {
+        run_test(
+            r#"
+            e = RuntimeError.new("test")
+            e.set_backtrace(["foo.rb:1:in `bar'", "baz.rb:2:in `qux'"])
+        "#,
+        );
+        run_test(
+            r#"
+            e = RuntimeError.new("test")
+            e.set_backtrace("foo.rb:1:in `bar'")
+        "#,
+        );
+        run_test(
+            r#"
+            e = RuntimeError.new("test")
+            e.set_backtrace(nil)
+        "#,
         );
     }
 
