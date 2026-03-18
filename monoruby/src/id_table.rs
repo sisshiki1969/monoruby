@@ -176,6 +176,7 @@ impl IdentId {
     pub const PREPENDED: IdentId = id!(68);
     pub const _UNMATCH: IdentId = id!(69);
     pub const _NOT: IdentId = id!(70);
+    pub const INSPECT: IdentId = id!(71);
 }
 
 impl IdentId {
@@ -332,6 +333,7 @@ impl IdentifierTable {
         table.set_id("prepended", IdentId::PREPENDED);
         table.set_id("!~", IdentId::_UNMATCH);
         table.set_id("!", IdentId::_NOT);
+        table.set_id("inspect", IdentId::INSPECT);
         table
     }
 

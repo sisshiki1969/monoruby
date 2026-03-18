@@ -394,11 +394,13 @@ fn block_given(vm: &mut Executor, _globals: &mut Globals, _: Lfp, _: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/p.html]
 #[monoruby_builtin]
-fn p(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let len = lfp.arg(0).as_array().len();
     let mut buf = String::new();
     for v in lfp.arg(0).as_array().iter() {
-        buf += &v.inspect(&globals.store);
+        let inspected =
+            vm.invoke_method_inner(globals, IdentId::INSPECT, *v, &[], None, None)?;
+        buf += &inspected.to_s(&globals.store);
         buf += "\n";
     }
     globals.write_stdout(buf.as_bytes());
@@ -1712,6 +1714,21 @@ mod tests {
             ptr = ___malloc(32, true)
             ___memcpyv(ptr + 8, 0x12345678, 4)
             __assert(___read_memory(ptr, 32), "\x00\x00\x00\x00\x00\x00\x00\x00xV4\x12\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
+        "##,
+        );
+    }
+
+    #[test]
+    fn p_user_defined_inspect() {
+        // p calls inspect on each argument via Ruby method dispatch
+        run_test_no_result_check(
+            r##"
+        class PFoo
+          def inspect
+            "pfoo_inspect"
+          end
+        end
+        p PFoo.new
         "##,
         );
     }
