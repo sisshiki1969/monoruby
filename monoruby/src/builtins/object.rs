@@ -79,6 +79,14 @@ pub(super) fn init(globals: &mut Globals) {
         Effect::EVAL,
     );
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
+    globals.define_builtin_func_with(
+        OBJECT_CLASS,
+        "define_singleton_method",
+        define_singleton_method,
+        1,
+        2,
+        false,
+    );
     globals.define_builtin_func_with(OBJECT_CLASS, "methods", methods, 0, 1, false);
     globals.define_builtin_func_with(
         OBJECT_CLASS,
@@ -300,6 +308,46 @@ fn equal_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result
 #[monoruby_builtin]
 fn dup(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val().dup())
+}
+
+/// ### Object#define_singleton_method
+///
+/// - define_singleton_method(name, method) -> Symbol
+/// - define_singleton_method(name) { ... } -> Symbol
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/define_singleton_method.html]
+#[monoruby_builtin]
+fn define_singleton_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let class_id = globals.store.get_singleton(self_val).id();
+    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let func_id = if let Some(method) = lfp.try_arg(1) {
+        if let Some(proc) = method.is_proc() {
+            globals.define_proc_method(proc)
+        } else if let Some(method) = method.is_method() {
+            method.func_id()
+        } else if let Some(method) = method.is_umethod() {
+            method.func_id()
+        } else {
+            return Err(MonorubyErr::wrong_argument_type(
+                globals,
+                method,
+                "Proc/Method/UnboundMethod",
+            ));
+        }
+    } else if let Some(bh) = lfp.block() {
+        let proc = vm.generate_proc(bh, pc)?;
+        globals.define_proc_method(proc)
+    } else {
+        return Err(MonorubyErr::wrong_number_of_arg(2, 1));
+    };
+    globals.add_public_method(class_id, name, func_id);
+    Ok(Value::symbol(name))
 }
 
 /// ### Object#initialize_copy
@@ -1287,6 +1335,99 @@ mod tests {
           public;    def public_self()    end
         end
         "##,
+        );
+    }
+
+    #[test]
+    fn define_singleton_method() {
+        // with block
+        run_test(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method(:greet) { "hello" }
+            obj.greet
+            "#,
+        );
+        // with block taking arguments
+        run_test(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method(:add) { |a, b| a + b }
+            obj.add(3, 4)
+            "#,
+        );
+        // returns symbol
+        run_test(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method(:foo) { 42 }
+            "#,
+        );
+        // with string name
+        run_test(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method("bar") { "baz" }
+            obj.bar
+            "#,
+        );
+        // with Proc
+        run_test(
+            r#"
+            obj = Object.new
+            pr = Proc.new { |x| x * 2 }
+            obj.define_singleton_method(:double, pr)
+            obj.double(5)
+            "#,
+        );
+        // with Method
+        run_test(
+            r#"
+            class Foo
+              def hello
+                "hello from Foo"
+              end
+            end
+            obj = Foo.new
+            obj.define_singleton_method(:greet, obj.method(:hello))
+            obj.greet
+            "#,
+        );
+        // with UnboundMethod
+        run_test(
+            r#"
+            class Foo
+              def hi
+                "hi"
+              end
+            end
+            obj = Foo.new
+            obj.define_singleton_method(:greet, Foo.instance_method(:hi))
+            obj.greet
+            "#,
+        );
+        // does not affect other instances
+        run_test(
+            r#"
+            a = Object.new
+            b = Object.new
+            a.define_singleton_method(:only_a) { "only a" }
+            [a.only_a, b.respond_to?(:only_a)]
+            "#,
+        );
+        // error: no block and no method given
+        run_test_error(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method(:foo)
+            "#,
+        );
+        // error: wrong argument type
+        run_test_error(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method(:foo, 42)
+            "#,
         );
     }
 
