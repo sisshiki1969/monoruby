@@ -3786,7 +3786,12 @@ mod tests {
         run_test(r##""   a \t  b \n  c".split(' ', -1)"##);
         run_test(r##""   a \t  b \n  c  ".split(' ', 0)"##);
         run_test(r##""   a \t  b \n  c  ".split(' ', 2)"##);
-        //run_test(r##""   a \t  b \n  c".split"##);
+        run_test(r##""   a \t  b \n  c".split"##);
+        run_test(r##""hello world".split"##);
+        run_test(r##""  hello  world  ".split"##);
+        run_test(r##""\t\n hello \t world \n".split"##);
+        run_test(r##""".split"##);
+        run_test(r##""   ".split"##);
         run_test(r##"'1-10,20'.split(/([-,])/)"##);
         run_test(r##"'hi there'.split(/\s*/).join(':')"##);
         run_test(r##"'hi there'.split(//).join(':')"##);
