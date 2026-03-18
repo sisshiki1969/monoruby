@@ -289,6 +289,10 @@ impl ClassInfo {
         self.name = Some(name);
     }
 
+    pub(crate) fn clear_name(&mut self) {
+        self.name = None;
+    }
+
     pub(crate) fn get_name(&self) -> Option<&str> {
         self.name.as_ref().map(|x| x.as_str())
     }
