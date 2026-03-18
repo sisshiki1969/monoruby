@@ -186,12 +186,19 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         globals: &mut Globals,
         path: &mut String,
         val: Value,
+        seen: &mut Vec<u64>,
     ) -> Result<()> {
         match val.try_array_ty() {
             Some(ainfo) => {
-                for v in ainfo.iter().cloned() {
-                    flatten(vm, globals, path, v)?;
+                let id = val.id();
+                if seen.contains(&id) {
+                    return Err(MonorubyErr::argumenterr("recursive array"));
                 }
+                seen.push(id);
+                for v in ainfo.iter().cloned() {
+                    flatten(vm, globals, path, v, seen)?;
+                }
+                seen.pop();
             }
             None => {
                 if !path.is_empty() && !path.ends_with('/') {
@@ -211,8 +218,9 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         Ok(())
     }
     let mut path = String::new();
+    let mut seen = vec![];
     for v in lfp.arg(0).as_array().iter().cloned() {
-        flatten(vm, globals, &mut path, v)?;
+        flatten(vm, globals, &mut path, v, &mut seen)?;
     }
     Ok(Value::string(path))
 }

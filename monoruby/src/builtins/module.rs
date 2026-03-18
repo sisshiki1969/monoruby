@@ -103,6 +103,26 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_private_builtin_func_rest(MODULE_CLASS, "public", public);
 }
 
+pub(super) fn init_class_methods(globals: &mut Globals) {
+    globals.define_builtin_class_func_with(MODULE_CLASS, "new", module_new, 0, 0, true);
+}
+
+/// ### Module.new
+/// - new -> Module
+/// - new {|mod| ... } -> Module
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/s/new.html]
+#[monoruby_builtin]
+fn module_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let module = globals.store.define_unnamed_module();
+    let module_val = module.as_val();
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        vm.invoke_block_with_self(globals, &data, module_val, &[module_val])?;
+    }
+    Ok(module_val)
+}
+
 ///
 /// ### Module#==
 ///
@@ -2171,6 +2191,55 @@ mod tests {
           def self.Bar; yield; end
         end
         Foo::Bar { 77 }
+        "##,
+        );
+    }
+
+    #[test]
+    fn module_new() {
+        run_test(
+            r##"
+        m = Module.new
+        m.class
+        "##,
+        );
+        run_test(
+            r##"
+        m = Module.new
+        m.is_a?(Module)
+        "##,
+        );
+        run_test(
+            r##"
+        $res = []
+        m = Module.new do |mod|
+          $res << mod.class
+          def self.foo; 42; end
+        end
+        $res << m.foo
+        $res
+        "##,
+        );
+        run_test(
+            r##"
+        m = Module.new
+        m.module_eval do
+          def hello; "hello"; end
+        end
+        c = Class.new
+        c.include(m)
+        c.new.hello
+        "##,
+        );
+        run_test(
+            r##"
+        m = Module.new
+        res = []
+        res << m.is_a?(Module)
+        res << m.class
+        n = Module.new
+        res << (m == n)
+        res
         "##,
         );
     }

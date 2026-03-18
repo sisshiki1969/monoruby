@@ -12,7 +12,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "hash", hash, 0);
     globals.define_builtin_func(OBJECT_CLASS, "eql?", eql_, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
+    globals.define_builtin_funcs(OBJECT_CLASS, "dup", &["clone"], dup, 0);
+    globals.define_private_builtin_func(OBJECT_CLASS, "initialize_copy", initialize_copy, 1);
+    globals.define_private_builtin_func(OBJECT_CLASS, "initialize_clone", initialize_clone, 1);
+    globals.define_private_builtin_func(OBJECT_CLASS, "initialize_dup", initialize_clone, 1);
     globals.define_builtin_funcs_rest(OBJECT_CLASS, "enum_for", &["to_enum"], to_enum);
     globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_, 1);
     globals.define_builtin_func_rest(OBJECT_CLASS, "extend", extend);
@@ -46,7 +49,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_inline_funcs_with_kw(
         OBJECT_CLASS,
         "send",
-        &["__send__"],
+        &["__send__", "public_send"],
         crate::builtins::send,
         Box::new(crate::builtins::object_send),
         0,
@@ -76,6 +79,14 @@ pub(super) fn init(globals: &mut Globals) {
         Effect::EVAL,
     );
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
+    globals.define_builtin_func_with(
+        OBJECT_CLASS,
+        "define_singleton_method",
+        define_singleton_method,
+        1,
+        2,
+        false,
+    );
     globals.define_builtin_func_with(OBJECT_CLASS, "methods", methods, 0, 1, false);
     globals.define_builtin_func_with(
         OBJECT_CLASS,
@@ -211,22 +222,8 @@ fn extend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
     let self_val = lfp.self_val();
     for v in args.iter().cloned().rev() {
-        vm.invoke_method_inner(
-            globals,
-            IdentId::EXTEND_OBJECT,
-            v,
-            &[self_val],
-            None,
-            None,
-        )?;
-        vm.invoke_method_if_exists(
-            globals,
-            IdentId::EXTENDED,
-            v,
-            &[self_val],
-            None,
-            None,
-        )?;
+        vm.invoke_method_inner(globals, IdentId::EXTEND_OBJECT, v, &[self_val], None, None)?;
+        vm.invoke_method_if_exists(globals, IdentId::EXTENDED, v, &[self_val], None, None)?;
     }
     Ok(lfp.self_val())
 }
@@ -311,6 +308,99 @@ fn equal_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result
 #[monoruby_builtin]
 fn dup(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val().dup())
+}
+
+/// ### Object#define_singleton_method
+///
+/// - define_singleton_method(name, method) -> Symbol
+/// - define_singleton_method(name) { ... } -> Symbol
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/define_singleton_method.html]
+#[monoruby_builtin]
+fn define_singleton_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let class_id = globals.store.get_singleton(self_val).id();
+    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let func_id = if let Some(method) = lfp.try_arg(1) {
+        if let Some(proc) = method.is_proc() {
+            globals.define_proc_method(proc)
+        } else if let Some(method) = method.is_method() {
+            method.func_id()
+        } else if let Some(method) = method.is_umethod() {
+            method.func_id()
+        } else {
+            return Err(MonorubyErr::wrong_argument_type(
+                globals,
+                method,
+                "Proc/Method/UnboundMethod",
+            ));
+        }
+    } else if let Some(bh) = lfp.block() {
+        let proc = vm.generate_proc(bh, pc)?;
+        globals.define_proc_method(proc)
+    } else {
+        return Err(MonorubyErr::wrong_number_of_arg(2, 1));
+    };
+    globals.add_public_method(class_id, name, func_id);
+    Ok(Value::symbol(name))
+}
+
+/// ### Object#initialize_copy
+///
+/// - initialize_copy(obj) -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/initialize_copy.html]
+#[monoruby_builtin]
+fn initialize_copy(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let orig = lfp.arg(0);
+    let self_val = lfp.self_val();
+    if orig.id() == self_val.id() {
+        return Ok(self_val);
+    }
+    if self_val.real_class(globals).id() != orig.real_class(globals).id()
+        || self_val.ty() != orig.ty()
+    {
+        return Err(MonorubyErr::typeerr(format!(
+            "initialize_copy should take same class object self:{} original:{}",
+            self_val.class().get_name(globals),
+            orig.class().get_name(globals)
+        )));
+    }
+    Ok(self_val)
+}
+
+/// ### Object#initialize_clone
+///
+/// - initialize_clone(obj) -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/initialize_clone.html]
+#[monoruby_builtin]
+fn initialize_clone(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let orig = lfp.arg(0);
+    let self_val = lfp.self_val();
+    vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("initialize_copy"),
+        self_val,
+        &[orig],
+        None,
+        None,
+    )
 }
 
 ///
@@ -1199,6 +1289,34 @@ mod tests {
     }
 
     #[test]
+    fn public_send() {
+        run_test(
+            r##"
+        class C
+          def foo; "foo"; end
+        end
+        C.new.public_send(:foo)
+        "##,
+        );
+        run_test(
+            r##"
+        class C
+          def bar(x); x * 2; end
+        end
+        C.new.public_send(:bar, 21)
+        "##,
+        );
+        run_test(
+            r##"
+        class C
+          def baz; yield + 1; end
+        end
+        C.new.public_send(:baz) { 41 }
+        "##,
+        );
+    }
+
+    #[test]
     fn methods() {
         run_test_with_prelude(
             r##"
@@ -1245,6 +1363,232 @@ mod tests {
           public;    def public_self()    end
         end
         "##,
+        );
+    }
+
+    #[test]
+    fn define_singleton_method() {
+        // with block
+        run_test(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method(:greet) { "hello" }
+            obj.greet
+            "#,
+        );
+        // with block taking arguments
+        run_test(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method(:add) { |a, b| a + b }
+            obj.add(3, 4)
+            "#,
+        );
+        // returns symbol
+        run_test(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method(:foo) { 42 }
+            "#,
+        );
+        // with string name
+        run_test(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method("bar") { "baz" }
+            obj.bar
+            "#,
+        );
+        // with Proc
+        run_test(
+            r#"
+            obj = Object.new
+            pr = Proc.new { |x| x * 2 }
+            obj.define_singleton_method(:double, pr)
+            obj.double(5)
+            "#,
+        );
+        // with Method
+        run_test(
+            r#"
+            class Foo
+              def hello
+                "hello from Foo"
+              end
+            end
+            obj = Foo.new
+            obj.define_singleton_method(:greet, obj.method(:hello))
+            obj.greet
+            "#,
+        );
+        // with UnboundMethod
+        run_test(
+            r#"
+            class Foo
+              def hi
+                "hi"
+              end
+            end
+            obj = Foo.new
+            obj.define_singleton_method(:greet, Foo.instance_method(:hi))
+            obj.greet
+            "#,
+        );
+        // does not affect other instances
+        run_test(
+            r#"
+            a = Object.new
+            b = Object.new
+            a.define_singleton_method(:only_a) { "only a" }
+            [a.only_a, b.respond_to?(:only_a)]
+            "#,
+        );
+        // error: no block and no method given
+        run_test_error(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method(:foo)
+            "#,
+        );
+        // error: wrong argument type
+        run_test_error(
+            r#"
+            obj = Object.new
+            obj.define_singleton_method(:foo, 42)
+            "#,
+        );
+    }
+
+    #[test]
+    fn initialize_copy() {
+        // initialize_copy with same object returns self
+        run_test(
+            r#"
+            class Foo
+              def initialize
+                @a = 1
+              end
+            end
+            obj = Foo.new
+            obj.send(:initialize_copy, obj).equal?(obj)
+            "#,
+        );
+        // initialize_copy with same class succeeds
+        run_test(
+            r#"
+            class Foo
+              def initialize
+                @a = 1
+              end
+            end
+            a = Foo.new
+            b = Foo.new
+            b.send(:initialize_copy, a).equal?(b)
+            "#,
+        );
+        // initialize_copy with different class raises TypeError
+        run_test_error(
+            r#"
+            class Foo; end
+            class Bar; end
+            a = Foo.new
+            b = Bar.new
+            a.send(:initialize_copy, b)
+            "#,
+        );
+    }
+
+    #[test]
+    fn initialize_clone() {
+        // initialize_clone delegates to initialize_copy
+        run_test(
+            r#"
+            class Foo
+              def initialize
+                @a = 1
+              end
+            end
+            a = Foo.new
+            b = Foo.new
+            b.send(:initialize_clone, a).equal?(b)
+            "#,
+        );
+        // initialize_clone with different class raises TypeError via initialize_copy
+        run_test_error(
+            r#"
+            class Foo; end
+            class Bar; end
+            a = Foo.new
+            b = Bar.new
+            a.send(:initialize_clone, b)
+            "#,
+        );
+        // overridden initialize_clone is called
+        run_test(
+            r#"
+            $called = []
+            class Foo
+              def initialize_clone(orig)
+                $called << :initialize_clone
+                super
+              end
+              def initialize_copy(orig)
+                $called << :initialize_copy
+                super
+              end
+            end
+            a = Foo.new
+            b = Foo.new
+            b.send(:initialize_clone, a)
+            $called
+            "#,
+        );
+    }
+
+    #[test]
+    fn initialize_dup() {
+        // initialize_dup delegates to initialize_copy
+        run_test(
+            r#"
+            class Foo
+              def initialize
+                @a = 1
+              end
+            end
+            a = Foo.new
+            b = Foo.new
+            b.send(:initialize_dup, a).equal?(b)
+            "#,
+        );
+        // initialize_dup with different class raises TypeError via initialize_copy
+        run_test_error(
+            r#"
+            class Foo; end
+            class Bar; end
+            a = Foo.new
+            b = Bar.new
+            a.send(:initialize_dup, b)
+            "#,
+        );
+        // overridden initialize_dup is called
+        run_test(
+            r#"
+            $called = []
+            class Foo
+              def initialize_dup(orig)
+                $called << :initialize_dup
+                super
+              end
+              def initialize_copy(orig)
+                $called << :initialize_copy
+                super
+              end
+            end
+            a = Foo.new
+            b = Foo.new
+            b.send(:initialize_dup, a)
+            $called
+            "#,
         );
     }
 

@@ -456,11 +456,11 @@ impl RValue {
         unsafe {
             match self.ty() {
                 ObjTy::CLASS | ObjTy::MODULE => store.get_class_name(self.as_class_id()),
-                ObjTy::ARRAY => self.as_array().to_s(store),
+                ObjTy::ARRAY => self.as_array().to_s(store, self.id()),
                 ObjTy::OBJECT => self.object_tos(store),
                 ObjTy::RANGE => self.as_range().to_s(store),
                 ObjTy::PROC => self.proc_tos(),
-                ObjTy::HASH => self.as_hashmap().to_s(store),
+                ObjTy::HASH => self.as_hashmap().to_s(store, self.id()),
                 ObjTy::METHOD => self.as_method().to_s(store),
                 ObjTy::ENUMERATOR => self.enumerator_tos(store),
                 ObjTy::GENERATOR => self.object_tos(store),

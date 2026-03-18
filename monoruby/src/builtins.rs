@@ -58,6 +58,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     module::init(globals);
     class::init(globals);
     globals.define_builtin_class_func(MODULE_CLASS, "new", module::module_new, 0);
+    module::init_class_methods(globals);
     let kernel = kernel::init(globals);
     exception::init(globals);
     numeric::init(globals);
