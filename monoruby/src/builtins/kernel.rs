@@ -54,6 +54,8 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         0,
     );
     globals.define_builtin_module_func_rest(kernel_class, "p", p);
+    globals.define_builtin_module_func_rest(kernel_class, "format", format);
+    globals.define_builtin_module_func_rest(kernel_class, "sprintf", format);
     globals.define_builtin_module_func_with(kernel_class, "rand", rand, 0, 1, false);
     globals.define_builtin_module_func(kernel_class, "Integer", kernel_integer, 1);
     globals.define_builtin_module_func(kernel_class, "Float", kernel_float, 1);
@@ -410,6 +412,25 @@ fn p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
         1 => lfp.arg(0).as_array()[0],
         _ => lfp.arg(0),
     })
+}
+
+///
+/// ### Kernel.#format
+///
+/// - format(format_string, *args) -> String
+/// - sprintf(format_string, *args) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/format.html]
+#[monoruby_builtin]
+fn format(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    if args.is_empty() {
+        return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
+    }
+    let fmt = args[0].expect_string(&globals.store)?;
+    let arguments = &args[1..];
+    let result = globals.format_by_args(&fmt, arguments)?;
+    Ok(Value::string(result))
 }
 
 ///

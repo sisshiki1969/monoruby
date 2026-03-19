@@ -335,3 +335,21 @@ fn string_format() {
     // multiple format specifiers
     run_test(r#""%d %f %s" % [1.5, 2.5, "x"]"#);
 }
+
+#[test]
+fn kernel_format() {
+    run_test(r#"format("%d", 42)"#);
+    run_test(r#"sprintf("%d", 42)"#);
+    run_test(r#"format("%s", "hello")"#);
+    run_test(r#"format("%05d", 42)"#);
+    run_test(r#"format("%x", 255)"#);
+    run_test(r#"format("%X", 255)"#);
+    run_test(r#"format("%b", 10)"#);
+    run_test(r#"format("%f", 3.14)"#);
+    run_test(r#"format("%.2f", 3.14159)"#);
+    run_test(r#"format("%c", 65)"#);
+    run_test(r#"format("%%")"#);
+    run_test(r#"format("%d %s %f", 1, "hello", 3.14)"#);
+    run_test(r#"format("Hello %s, you are %d years old", "Alice", 30)"#);
+    run_test(r#"format("%02d:%02d:%02d", 1, 2, 3)"#);
+}
