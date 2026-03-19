@@ -538,6 +538,24 @@ mod tests {
     }
 
     #[test]
+    fn class_allocate() {
+        // Class.allocate returns an instance of Class
+        run_test("Class.allocate.class");
+        // Class.allocate returns a Class object (is_a?(Class))
+        run_test("Class.allocate.is_a?(Class)");
+        // Normal class allocate still works
+        run_test("String.allocate.class");
+        run_test(
+            r#"
+            class Foo; end
+            Foo.allocate.class
+            "#,
+        );
+        // Class.allocate returns distinct objects
+        run_test("Class.allocate.equal?(Class.allocate)");
+    }
+
+    #[test]
     fn unmatch_operator() {
         // Default !~ (negation of =~)
         run_test(r#""hello" !~ /ell/"#);
