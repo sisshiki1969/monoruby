@@ -44,8 +44,13 @@ impl Codegen {
             self.class_guard_stub(self_class, &patch_point, &jit_entry, &guard);
             let old_entry =
                 globals.store[iseq_id].add_jit_code(self_class, patch_point, class_version_label);
-            assert!(old_entry.is_none());
-
+            if let Some(_) = old_entry {
+                panic!(
+                    "JIT code already exists for {}#{} {entry:?}",
+                    self_class.get_name(globals),
+                    globals.store[iseq_id].name()
+                );
+            }
             globals.store[iseq_id].set_cache_map(self_class, cache);
             self.jit.apply_jmp_patch_address(entry, &guard);
             self.jit.finalize();
@@ -85,7 +90,7 @@ impl Codegen {
         guard:
             movq rdi, [r14 - (LFP_SELF)];
         }
-        self.guard_class_rdi(self_class, &failed);
+        self.guard_class2(GP::Rdi, self_class, &failed);
         monoasm! { &mut self.jit,
         patch_point:
             jmp jit_entry;

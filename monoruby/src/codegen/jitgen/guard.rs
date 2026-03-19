@@ -77,19 +77,6 @@ impl Codegen {
     /// If the type was not matched, go to *deopt*.
     ///
     /// ### in
-    /// - rdi: Value
-    ///
-    pub(crate) fn guard_class_rdi(&mut self, class_id: ClassId, deopt: &DestLabel) {
-        self.guard_class(GP::Rdi, class_id, deopt)
-    }
-
-    ///
-    /// Type guard.
-    ///
-    /// Generate type guard for *class_id*.
-    /// If the type was not matched, go to *deopt*.
-    ///
-    /// ### in
     /// - R(*reg*): Value
     ///
     pub(super) fn guard_class(&mut self, reg: GP, class_id: ClassId, fail: &DestLabel) {
@@ -124,6 +111,86 @@ impl Codegen {
                     testq R(reg as _), 0b001;
                     jz fail;
                 );
+            }
+            FLOAT_CLASS => {
+                let exit = self.jit.label();
+                monoasm!( &mut self.jit,
+                    testq R(reg as _), 0b001;
+                    jnz fail;
+                    testq R(reg as _), 0b010;
+                    jnz exit;
+                );
+                self.guard_rvalue(reg, FLOAT_CLASS, &fail);
+                self.jit.bind_label(exit);
+            }
+            NIL_CLASS => {
+                monoasm!( &mut self.jit,
+                    cmpq R(reg as _), (NIL_VALUE);
+                    jnz fail;
+                );
+            }
+            SYMBOL_CLASS => {
+                monoasm!( &mut self.jit,
+                    cmpb R(reg as _), (TAG_SYMBOL);
+                    jnz fail;
+                );
+            }
+            TRUE_CLASS => {
+                monoasm!( &mut self.jit,
+                    cmpq R(reg as _), (TRUE_VALUE);
+                    jnz fail;
+                );
+            }
+            FALSE_CLASS => {
+                monoasm!( &mut self.jit,
+                    cmpq R(reg as _), (FALSE_VALUE);
+                    jnz fail;
+                );
+            }
+            _ => self.guard_rvalue(reg, class_id, &fail),
+        }
+        //if reg != GP::Rdi {
+        //    monoasm!( &mut self.jit,
+        //        xchgq R(reg as _), rdi;
+        //    );
+        //}
+    }
+
+    pub(crate) fn guard_class2(&mut self, reg: GP, class_id: ClassId, fail: &DestLabel) {
+        let fail = if reg != GP::Rdi {
+            let label = self.jit.label();
+            if self.jit.get_page() == 0 {
+                self.jit.select_page(1);
+                monoasm!( &mut self.jit,
+                label:
+                    movq rdi, R(reg as _);
+                    jmp fail;
+                );
+                self.jit.select_page(0);
+            } else {
+                let label = self.jit.label();
+                let exit = self.jit.label();
+                monoasm!( &mut self.jit,
+                    jmp exit;
+                label:
+                    movq rdi, R(reg as _);
+                    jmp fail;
+                exit:
+                );
+            }
+            label
+        } else {
+            fail.clone()
+        };
+        match class_id {
+            INTEGER_CLASS => {
+                let exit = self.jit.label();
+                monoasm!( &mut self.jit,
+                    testq R(reg as _), 0b001;
+                    jnz exit;
+                );
+                self.guard_rvalue(reg, INTEGER_CLASS, &fail);
+                self.jit.bind_label(exit);
             }
             FLOAT_CLASS => {
                 let exit = self.jit.label();
@@ -384,7 +451,7 @@ mod tests {
             (FALSE_CLASS, Value::bool(false)),
         ] {
             let entry_point = r#gen.jit.get_current_address();
-            r#gen.guard_class_rdi(class, &side_exit);
+            r#gen.guard_class(GP::Rdi, class, &side_exit);
             monoasm!( &mut r#gen.jit,
                 xorq rax, rax;
                 ret;
