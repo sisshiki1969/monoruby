@@ -135,10 +135,6 @@ pub(crate) enum TraceIr {
         dst: SlotId,
         id: u32,
     },
-    Not {
-        dst: SlotId,
-        src: SlotId,
-    },
     UnOp {
         kind: UnOpK,
         dst: SlotId,
@@ -516,11 +512,7 @@ impl TraceIr {
                     dst: SlotId::new(op1_w1),
                     name: IdentId::from(op2.0 as u32),
                 },
-                120 => TraceIr::Not {
-                    dst: SlotId::new(op1_w1),
-                    src: SlotId::new(op2_w2),
-                },
-                121..=123 => {
+                121..=124 => {
                     let kind = UnOpK::from(opcode - 121);
                     let dst = SlotId::new(op1_w1);
                     let src = SlotId::new(op2_w2);
@@ -948,11 +940,6 @@ impl TraceIr {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
                 format!("{:36} [{}]", op1, store.debug_class_name(src_class),)
             }
-            TraceIr::Not { dst, src } => {
-                let op1 = format!("{:?} = !{:?}", dst, src);
-                format!("{:36}", op1)
-            }
-
             TraceIr::BinOp {
                 kind,
                 dst,

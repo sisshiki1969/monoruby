@@ -1072,7 +1072,6 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
     },
 
-    Not,
     FixnumNeg {
         reg: GP,
         deopt: AsmDeopt,

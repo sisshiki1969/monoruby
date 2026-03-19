@@ -92,6 +92,7 @@ impl From<UnOpK> for IdentId {
             UnOpK::Neg => IdentId::_UMINUS,
             UnOpK::Pos => IdentId::_UPLUS,
             UnOpK::BitNot => IdentId::_BNOT,
+            UnOpK::Not => IdentId::_NOT,
         }
     }
 }

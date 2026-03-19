@@ -498,7 +498,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             Punct::TEq => Ok("==="),
             Punct::Match => Ok("=~"),
             Punct::BitXor => Ok("^"),
-            //Punct::Not => Ok("!"),
+            Punct::Not => Ok("!"),
             Punct::Unmatch => Ok("!~"),
             Punct::LBracket => {
                 if self.consume_punct_no_term(Punct::RBracket)? {

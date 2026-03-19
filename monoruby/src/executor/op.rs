@@ -394,7 +394,8 @@ macro_rules! unop_value_no_opt {
 unop_value_no_opt!(
     (bitnot, IdentId::_BNOT),
     (pos, IdentId::_UPLUS),
-    (neg, IdentId::_UMINUS)
+    (neg, IdentId::_UMINUS),
+    (not, IdentId::_NOT)
 );
 
 pub(crate) extern "C" fn neg_value(
@@ -431,6 +432,14 @@ pub(crate) extern "C" fn pos_value(
         }
     };
     Some(v)
+}
+
+pub(crate) extern "C" fn not_value(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+) -> Option<Value> {
+    vm.invoke_method_simple(globals, IdentId::_NOT, lhs, &[])
 }
 
 pub(crate) extern "C" fn bitnot_value(

@@ -426,11 +426,6 @@ impl<'a> BytecodeGen<'a> {
                 self.encode_call(opcode, callsite, bc_pos)?
             }
             BytecodeInst::InlineCache => self.encode_cache(130)?,
-            BytecodeInst::Not { ret, src } => {
-                let op1 = self.slot_id(&ret);
-                let op2 = self.slot_id(&src);
-                Bytecode::from(enc_ww(120, op1.0, op2.0))
-            }
             BytecodeInst::UnOp {
                 kind,
                 dst: ret,

@@ -7,6 +7,8 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     //globals.define_builtin_class_func(OBJECT_CLASS, "new", object_new, -1);
 
+    globals.define_builtin_func(BASIC_OBJECT_CLASS, "!", not_, 0);
+
     globals.define_builtin_func(OBJECT_CLASS, "==", eq, 1);
     globals.define_builtin_func(OBJECT_CLASS, "!=", ne, 1);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
@@ -96,6 +98,18 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         false,
     );
+}
+
+///
+/// ### BasicObject#!
+///
+/// - !obj -> bool
+///
+/// Returns the boolean negation of the object.
+///
+#[monoruby_builtin]
+fn not_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(!lfp.self_val().as_bool()))
 }
 
 #[monoruby_builtin]
