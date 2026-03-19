@@ -1,4 +1,5 @@
 use super::*;
+use jitgen::JitContext;
 
 //
 // Object class
@@ -7,7 +8,13 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     //globals.define_builtin_class_func(OBJECT_CLASS, "new", object_new, -1);
 
-    globals.define_builtin_func(BASIC_OBJECT_CLASS, "!", not_, 0);
+    globals.define_builtin_inline_func(
+        BASIC_OBJECT_CLASS,
+        "!",
+        not_,
+        Box::new(object_not),
+        0,
+    );
 
     globals.define_builtin_func(OBJECT_CLASS, "==", eq, 1);
     globals.define_builtin_func(OBJECT_CLASS, "!=", ne, 1);
@@ -110,6 +117,43 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn not_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(!lfp.self_val().as_bool()))
+}
+
+fn object_not(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let CallSiteInfo { recv, dst, .. } = *callsite;
+    if state.is_truthy(recv) {
+        if let Some(dst) = dst {
+            state.def_C(dst, Value::bool(false));
+        }
+    } else if state.is_falsy(recv) {
+        if let Some(dst) = dst {
+            state.def_C(dst, Value::bool(true));
+        }
+    } else {
+        state.load(ir, recv, GP::Rdi);
+        ir.inline(|r#gen, _, _| {
+            monoasm! { &mut r#gen.jit,
+                orq  rdi, (0x10);
+                movq rax, (TRUE_VALUE);
+                movq rsi, (FALSE_VALUE);
+                cmpq rdi, (FALSE_VALUE);
+                cmovneq rax, rsi;
+            }
+        });
+        state.def_rax2acc(ir, dst);
+    }
+    true
 }
 
 #[monoruby_builtin]

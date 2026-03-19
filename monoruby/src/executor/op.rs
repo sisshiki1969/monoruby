@@ -439,7 +439,20 @@ pub(crate) extern "C" fn not_value(
     globals: &mut Globals,
     lhs: Value,
 ) -> Option<Value> {
-    vm.invoke_method_simple(globals, IdentId::_NOT, lhs, &[])
+    let v = match lhs.unpack() {
+        RV::Fixnum(_)
+        | RV::BigInt(_)
+        | RV::Float(_)
+        | RV::String(_)
+        | RV::Symbol(_)
+        | RV::Complex(_)
+        | RV::Bool(true) => Value::bool(false),
+        RV::Bool(false) | RV::Nil => Value::bool(true),
+        _ => {
+            return vm.invoke_method_simple(globals, IdentId::_NOT, lhs, &[]);
+        }
+    };
+    Some(v)
 }
 
 pub(crate) extern "C" fn bitnot_value(
