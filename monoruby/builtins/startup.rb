@@ -193,6 +193,54 @@ class Thread
   end
 
   class Queue
+    def initialize
+      @items = []
+    end
+
+    def push(item)
+      @items.push(item)
+      self
+    end
+    alias << push
+    alias enq push
+
+    def pop(non_block = false, timeout: nil)
+      if @items.empty?
+        raise ThreadError, "queue empty" if non_block
+        # With timeout, return nil (no threading in monoruby)
+        return nil
+      end
+      @items.shift
+    end
+    alias shift pop
+    alias deq pop
+
+    def empty?
+      @items.empty?
+    end
+
+    def size
+      @items.size
+    end
+    alias length size
+
+    def clear
+      @items.clear
+      self
+    end
+
+    def close
+      @closed = true
+      self
+    end
+
+    def closed?
+      @closed || false
+    end
+
+    def num_waiting
+      0
+    end
   end
 
   class Backtrace
@@ -207,6 +255,10 @@ class Thread
     end
   end
 end
+
+# Top-level aliases (CRuby compatibility)
+class ThreadError < StandardError; end unless defined?(::ThreadError)
+Queue = Thread::Queue
 
 class Exception
   def backtrace_locations
