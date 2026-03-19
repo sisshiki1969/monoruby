@@ -100,28 +100,32 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(STRING_CLASS, "next", &["succ"], next, 0);
     globals.define_builtin_func(STRING_CLASS, "encoding", encoding, 0);
     globals.define_builtin_func(STRING_CLASS, "b", b, 0);
-    globals.define_builtin_func_with_kw(STRING_CLASS, "unpack1", unpack1, 1, 1, false, &["offset"], false);
-    globals.define_builtin_func_with_kw(STRING_CLASS, "unpack", unpack, 1, 1, false, &["offset"], false);
+    globals.define_builtin_func_with_kw(
+        STRING_CLASS,
+        "unpack1",
+        unpack1,
+        1,
+        1,
+        false,
+        &["offset"],
+        false,
+    );
+    globals.define_builtin_func_with_kw(
+        STRING_CLASS,
+        "unpack",
+        unpack,
+        1,
+        1,
+        false,
+        &["offset"],
+        false,
+    );
     globals.define_builtin_func(STRING_CLASS, "dump", dump, 0);
     globals.define_builtin_func(STRING_CLASS, "force_encoding", force_encoding, 1);
     globals.define_builtin_func(STRING_CLASS, "valid_encoding?", valid_encoding, 0);
     globals.define_builtin_func(STRING_CLASS, "ascii_only?", ascii_only, 0);
 
     let enc = globals.define_class_under_obj("Encoding");
-    let val = Value::object(enc.id());
-    globals
-        .store
-        .set_ivar(
-            val,
-            IdentId::_NAME,
-            Value::string_from_str("#<Encoding:UTF-8>"),
-        )
-        .unwrap();
-    globals
-        .store
-        .set_ivar(val, IdentId::_ENCODING, Value::string_from_str("UTF-8"))
-        .unwrap();
-    globals.set_constant(enc.id(), IdentId::UTF_8, val);
     let val = Value::object(enc.id());
     globals
         .store
@@ -141,6 +145,29 @@ pub(super) fn init(globals: &mut Globals) {
         .unwrap();
     globals.set_constant(enc.id(), IdentId::ASCII_8BIT, val);
     globals.set_constant_by_str(enc.id(), "BINARY", val);
+    // Add UTF-16 encoding constants (placeholder objects for compatibility).
+    // monoruby does not actually support UTF-16, but these constants must exist
+    // so that code like `str.encoding == Encoding::UTF_16LE` can evaluate to false.
+    for name in ["UTF_8", "UTF_16LE", "UTF_16BE", "UTF_16"] {
+        let val = Value::object(enc.id());
+        globals
+            .store
+            .set_ivar(
+                val,
+                IdentId::_NAME,
+                Value::string_from_str(&format!("#<Encoding:{}>", name.replace('_', "-"))),
+            )
+            .unwrap();
+        globals
+            .store
+            .set_ivar(
+                val,
+                IdentId::_ENCODING,
+                Value::string_from_str(&name.replace('_', "-")),
+            )
+            .unwrap();
+        globals.set_constant_by_str(enc.id(), name, val);
+    }
 }
 
 fn encoding_class(globals: &Globals) -> ClassId {
@@ -353,9 +380,8 @@ fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         };
         let bytes = self_.as_rstring_inner_mut();
         if bytes.encoding() == Encoding::Utf8 {
-            let c = char::from_u32(ch).ok_or_else(|| {
-                MonorubyErr::char_out_of_range(&globals.store, lfp.arg(0))
-            })?;
+            let c = char::from_u32(ch)
+                .ok_or_else(|| MonorubyErr::char_out_of_range(&globals.store, lfp.arg(0)))?;
             let mut buf = [0u8; 4];
             let encoded = c.encode_utf8(&mut buf);
             bytes.extend_from_slice_checked(encoded.as_bytes())?;
@@ -1857,12 +1883,7 @@ fn setbyte(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/byteslice.html]
 #[monoruby_builtin]
-fn byteslice(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn byteslice(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let s = self_.as_rstring_inner();
     let byte_len = s.len();
@@ -1877,11 +1898,7 @@ fn byteslice(
             }
         } else {
             let idx = byte_len as i64 + i;
-            if idx < 0 {
-                None
-            } else {
-                Some(idx as usize)
-            }
+            if idx < 0 { None } else { Some(idx as usize) }
         }
     };
 
@@ -1897,11 +1914,7 @@ fn byteslice(
                 }
             } else {
                 let idx = byte_len as i64 + start;
-                if idx < 0 {
-                    None
-                } else {
-                    Some(idx as usize)
-                }
+                if idx < 0 { None } else { Some(idx as usize) }
             }
         } {
             Some(s) => s,
@@ -1928,7 +1941,8 @@ fn byteslice(
         };
         if start > end {
             return Ok(Value::string_from_inner(RStringInner::from_encoding(
-                &[], enc,
+                &[],
+                enc,
             )));
         }
         Ok(Value::string_from_inner(RStringInner::from_encoding(
@@ -1952,11 +1966,7 @@ fn byteslice(
                     }
                 } else {
                     let idx = byte_len as i64 + i;
-                    if idx < 0 {
-                        None
-                    } else {
-                        Some(idx as usize)
-                    }
+                    if idx < 0 { None } else { Some(idx as usize) }
                 }
             } {
                 Some(s) => s,
@@ -2078,9 +2088,9 @@ fn bytesplice(
         if lfp.arg(0).is_range().is_some() {
             // bytesplice(range, str, str_range)
             let src_range = lfp.arg(str_arg_idx + 1);
-            let src_range = src_range
-                .is_range()
-                .ok_or_else(|| MonorubyErr::typeerr("wrong argument type Integer (expected Range)"))?;
+            let src_range = src_range.is_range().ok_or_else(|| {
+                MonorubyErr::typeerr("wrong argument type Integer (expected Range)")
+            })?;
             let src_start = src_range.start().expect_integer(globals)?;
             let src_end = src_range.end().expect_integer(globals)?;
             let src_start = conv_byte_index_for_splice(src_start, str_byte_len)?;
@@ -4201,9 +4211,7 @@ mod tests {
         run_test(r#"s = "hello world"; s.bytesplice(-5, 5, "WORLD"); s"#);
         // bytesplice(index, length, str, str_index, str_length)
         run_test(r#"s = "hello world"; s.bytesplice(0, 5, "HELLO WORLD", 0, 5); s"#);
-        run_test(
-            r#"s = "hello world"; s.bytesplice(6, 5, "BEAUTIFUL WORLD", 10, 5); s"#,
-        );
+        run_test(r#"s = "hello world"; s.bytesplice(6, 5, "BEAUTIFUL WORLD", 10, 5); s"#);
         // bytesplice(range, str)
         run_test(r#"s = "hello world"; s.bytesplice(0..4, "HELLO"); s"#);
         run_test(r#"s = "hello world"; s.bytesplice(0...5, "HELLO"); s"#);
