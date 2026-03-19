@@ -267,7 +267,8 @@ binop_values_no_opt!(
 pub(crate) extern "C" fn pow_ii(lhs: i64, rhs: i64) -> Value {
     if let Ok(rhs) = i32::try_from(rhs) {
         if rhs < 0 {
-            unimplemented!("a**b: b<0 in not supported yet.")
+            // TODO: support negative exponent for integer base.
+            return Value::float((lhs as f64).powf(rhs as f64));
         }
         let rhs = rhs as u32;
         match lhs.checked_pow(rhs) {

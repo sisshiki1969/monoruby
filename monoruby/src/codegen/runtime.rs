@@ -968,7 +968,17 @@ pub(super) extern "C" fn err_method_return(vm: &mut Executor, _globals: &mut Glo
 }
 
 pub(super) extern "C" fn err_block_break(vm: &mut Executor, _globals: &mut Globals, val: Value) {
-    let target_lfp = vm.cfp().caller().lfp();
+    let caller = match vm.cfp().caller() {
+        Some(caller) => caller,
+        None => {
+            vm.set_error(MonorubyErr::new(
+                MonorubyErrKind::LocalJump,
+                "illegal break from block".to_string(),
+            ));
+            return;
+        }
+    };
+    let target_lfp = caller.lfp();
     vm.set_error(MonorubyErr::method_return(val, target_lfp));
 }
 

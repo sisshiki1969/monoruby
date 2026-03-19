@@ -141,8 +141,17 @@ fn superclass(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
 #[monoruby_builtin]
-fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn allocate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
+    match class_id {
+        TRUE_CLASS | FALSE_CLASS | NIL_CLASS | SYMBOL_CLASS => {
+            return Err(MonorubyErr::typeerr(&format!(
+                "allocator undefined for {}",
+                class_id.get_name(globals)
+            )));
+        }
+        _ => {}
+    }
     let obj = Value::object(class_id);
     Ok(obj)
 }

@@ -420,6 +420,10 @@ impl ISeqInfo {
         )
     }
 
+    pub(crate) fn dump_jit_enntry(&self) {
+        eprintln!("{:?}", self.jit_entry);
+    }
+
     pub(crate) fn get_cache_map(
         &self,
         self_class: ClassId,

@@ -1538,6 +1538,12 @@ struct Metadata {
 
 impl Header {
     fn new(class: ClassId, ty: ObjTy) -> Self {
+        match class {
+            TRUE_CLASS | FALSE_CLASS | NIL_CLASS | SYMBOL_CLASS => {
+                panic!("Invalid class for Header. class_id: {class:?}, ty: {ty:?}");
+            }
+            _ => {}
+        }
         Header {
             meta: Metadata {
                 flag: 1,

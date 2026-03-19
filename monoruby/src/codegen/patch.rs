@@ -45,6 +45,7 @@ impl Codegen {
             let old_entry =
                 globals.store[iseq_id].add_jit_code(self_class, patch_point, class_version_label);
             if let Some(_) = old_entry {
+                globals.store[iseq_id].dump_jit_enntry();
                 panic!(
                     "JIT code already exists for {}#{} {entry:?}",
                     self_class.get_name(globals),

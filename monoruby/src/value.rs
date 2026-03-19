@@ -91,8 +91,7 @@ pub(crate) fn exec_recursive<F>(id: u64, f: F, on_recursive: Value) -> Result<Va
 where
     F: FnOnce() -> Result<Value>,
 {
-    let is_recursive =
-        INSPECT_RECURSION_GUARD.with(|guard| !guard.borrow_mut().insert(id));
+    let is_recursive = INSPECT_RECURSION_GUARD.with(|guard| !guard.borrow_mut().insert(id));
     if is_recursive {
         return Ok(on_recursive);
     }
@@ -120,8 +119,8 @@ impl RubyHash<Executor, Globals, MonorubyErr> for Value {
                     ObjTy::STRING => lhs.as_rstring().hash(state),
                     ObjTy::ARRAY | ObjTy::HASH => {
                         let id = self.id();
-                        let is_recursive = HASH_RECURSION_GUARD
-                            .with(|guard| !guard.borrow_mut().insert(id));
+                        let is_recursive =
+                            HASH_RECURSION_GUARD.with(|guard| !guard.borrow_mut().insert(id));
                         if is_recursive {
                             0u64.hash(state);
                             return Ok(());
@@ -1179,7 +1178,10 @@ impl Value {
     }
 
     pub(crate) fn as_hash(self) -> Hashmap {
-        self.try_hash_ty().unwrap()
+        self.try_hash_ty().expect(&format!(
+            "Value expected to be a hash but was {:?}",
+            self.ty()
+        ))
     }
 
     pub(crate) fn as_hashmap_inner(&self) -> &HashmapInner {
