@@ -363,7 +363,10 @@ impl ClassInfoTable {
             if parent == OBJECT_CLASS {
                 break;
             }
-            parents.push(self[parent].name.as_ref().unwrap().to_string());
+            match self[parent].name.as_ref() {
+                Some(name) => parents.push(name.to_string()),
+                None => break,
+            }
             class = parent;
         }
         parents

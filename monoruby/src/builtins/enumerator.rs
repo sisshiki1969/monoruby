@@ -119,7 +119,12 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             vm.invoke_block(globals, block_data, &[a.peel()])?;
         }
     }
-    let self_val: Enumerator = Enumerator::new(lfp.self_val());
+    let self_val: Enumerator = match Enumerator::try_new(lfp.self_val()) {
+        Some(e) => e,
+        None => {
+            return Err(MonorubyErr::typeerr("not an Enumerator"));
+        }
+    };
     let data = if let Some(bh) = lfp.block() {
         vm.get_block_data(globals, bh)?
     } else {

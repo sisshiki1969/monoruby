@@ -46,6 +46,14 @@ impl Enumerator {
         Self(val)
     }
 
+    pub(crate) fn try_new(val: Value) -> Option<Self> {
+        if val.ty() == Some(ObjTy::ENUMERATOR) {
+            Some(Self(val))
+        } else {
+            None
+        }
+    }
+
     pub fn rewind(&mut self) {
         self.internal = Some(Fiber::from(self.proc));
         self.buffer = None;

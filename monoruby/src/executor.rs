@@ -1283,7 +1283,9 @@ impl Executor {
         } else if let Some(proc) = bh.try_proc() {
             Ok(proc)
         } else {
-            unimplemented!("bh: {bh:?}")
+            Err(MonorubyErr::runtimeerr(format!(
+                "not yet implemented: block handler {bh:?}"
+            )))
         }
     }
 
