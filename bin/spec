@@ -1,0 +1,3 @@
+cargo install --path monoruby
+cd ../spec
+../mspec/bin/mspec :core -t monoruby
