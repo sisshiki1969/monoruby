@@ -152,7 +152,11 @@ fn allocate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         }
         _ => {}
     }
-    let obj = Value::object(class_id);
+    let obj = match globals.store[class_id].instance_ty() {
+        Some(ObjTy::HASH) => Value::hash_with_class_and_default(class_id, Value::nil()),
+        Some(ObjTy::ARRAY) => Value::array_with_class(ArrayInner::new(), class_id),
+        _ => Value::object(class_id),
+    };
     Ok(obj)
 }
 
