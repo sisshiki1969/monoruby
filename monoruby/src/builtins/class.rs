@@ -11,6 +11,9 @@ pub fn gen_class_new_object() -> Box<InlineGen> {
 pub(super) fn init(globals: &mut Globals) {
     // class methods
     globals.define_builtin_class_func_with(CLASS_CLASS, "new", class_new, 0, 1, false);
+    // Override allocate on Class's singleton class so that Class.allocate
+    // creates a proper (uninitialized) Class object instead of a plain object.
+    globals.define_builtin_class_func(CLASS_CLASS, "allocate", allocate_class, 0);
 
     // instance methods
     globals.define_builtin_inline_func(
@@ -123,6 +126,21 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let class_id = lfp.self_val().as_class_id();
     let obj = Value::object(class_id);
     Ok(obj)
+}
+
+/// Class.allocate (singleton method on Class)
+///
+/// Returns an uninitialized Class object.
+#[monoruby_builtin]
+fn allocate_class(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    lfp.expect_no_block()?;
+    let obj = globals.store.allocate_uninit_class();
+    Ok(obj.as_val())
 }
 
 pub(super) fn gen_class_new(

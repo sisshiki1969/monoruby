@@ -665,6 +665,12 @@ impl ClassInfoTable {
         self.define_class_inner(None, superclass, None, false, Some(ObjTy::OBJECT))
     }
 
+    /// Allocate an uninitialized class object (no superclass).
+    /// This corresponds to `Class.allocate` in Ruby.
+    pub(crate) fn allocate_uninit_class(&mut self) -> Module {
+        self.define_class_inner(None, None::<Module>, None, false, Some(ObjTy::OBJECT))
+    }
+
     pub(crate) fn define_unnamed_module(&mut self) -> Module {
         let object_class = self.object_class();
         self.define_class_inner(None, Some(object_class), None, true, None)
