@@ -7,7 +7,7 @@ use std::fs::File;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("IO", IO_CLASS, ObjTy::IO);
-    //globals.define_builtin_singleton_func(IO_CLASS, "new", now, 0);
+    globals.define_builtin_class_func(IO_CLASS, "new", io_new, 0);
     globals.define_builtin_func(IO_CLASS, "<<", shl, 1);
     globals.define_builtin_func_with(IO_CLASS, "puts", puts, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "print", print, 0, 0, true);
@@ -37,6 +37,11 @@ pub(super) fn init(globals: &mut Globals) {
     let stderr = Value::new_io_stderr();
     globals.set_constant_by_str(OBJECT_CLASS, "STDERR", stderr);
     globals.set_gvar(IdentId::get_id("$stderr"), stderr);
+}
+
+#[monoruby_builtin]
+fn io_new(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Err(MonorubyErr::argumenterr("IO.new is not supported"))
 }
 
 ///
@@ -221,7 +226,12 @@ fn sync(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -
 }
 
 #[monoruby_builtin]
-fn assign_sync(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn assign_sync(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(lfp.arg(0))
 }
 

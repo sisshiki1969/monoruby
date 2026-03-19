@@ -1,3 +1,3 @@
-cargo install --path monoruby
+RUSTFLAGS=-Cforce-frame-pointers cargo install --path monoruby
 cd ../spec
 RUST_BACKTRACE=1 ../mspec/bin/mspec :core -t monoruby

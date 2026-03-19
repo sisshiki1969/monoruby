@@ -67,13 +67,13 @@ impl Cfp {
         self.outermost_lfp().block().is_some()
     }
 
-    pub(crate) fn caller(&self) -> Cfp {
-        let target_lfp = self.lfp().outer().unwrap();
+    pub(crate) fn caller(&self) -> Option<Cfp> {
+        let target_lfp = self.lfp().outer()?;
         let mut cfp = *self;
         loop {
-            let cfp_prev = cfp.prev().unwrap();
+            let cfp_prev = cfp.prev()?;
             if cfp_prev.lfp() == target_lfp {
-                return cfp;
+                return Some(cfp);
             }
             cfp = cfp_prev;
         }

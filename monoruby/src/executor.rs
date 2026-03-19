@@ -519,6 +519,11 @@ impl Executor {
     }
 
     pub(crate) fn yield_fiber(&mut self, val: Value) -> Result<Value> {
+        if self.parent_fiber.is_none() {
+            return Err(MonorubyErr::fibererr(
+                "can't yield from main fiber".to_string(),
+            ));
+        }
         let invoker = CODEGEN.with(|codegen| codegen.borrow().yield_fiber);
         match invoker(self as _, val) {
             Some(res) => Ok(res),
