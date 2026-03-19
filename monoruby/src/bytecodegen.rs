@@ -1162,16 +1162,6 @@ impl<'a> BytecodeGen<'a> {
         Ok(())
     }
 
-    fn emit_not(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
-        if let Some(rhs) = self.is_refer_local(&rhs) {
-            self.emit(BytecodeInst::Not { ret, src: rhs }, loc);
-        } else {
-            self.gen_store_expr(ret, rhs)?;
-            self.emit(BytecodeInst::Not { ret, src: ret }, loc);
-        }
-        Ok(())
-    }
-
     fn push_nil(&mut self) -> BcReg {
         let reg = self.push().into();
         self.emit_nil(reg);
@@ -1635,6 +1625,7 @@ pub(crate) enum UnOpK {
     Pos = 0,
     Neg = 1,
     BitNot = 2,
+    Not = 3,
 }
 
 impl std::fmt::Display for UnOpK {
@@ -1643,6 +1634,7 @@ impl std::fmt::Display for UnOpK {
             UnOpK::Pos => "+",
             UnOpK::Neg => "-",
             UnOpK::BitNot => "~",
+            UnOpK::Not => "!",
         };
         write!(f, "{}", s)
     }
@@ -1654,6 +1646,7 @@ impl UnOpK {
             0 => UnOpK::Pos,
             1 => UnOpK::Neg,
             2 => UnOpK::BitNot,
+            3 => UnOpK::Not,
             _ => unreachable!(),
         }
     }

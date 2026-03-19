@@ -285,17 +285,6 @@ impl<'a> JitContext<'a> {
                 state.unset_side_effect_guard();
             }
 
-            TraceIr::Not { dst, src, .. } => {
-                if state.is_truthy(src) {
-                    state.def_C(dst, Value::bool(false));
-                } else if state.is_falsy(src) {
-                    state.def_C(dst, Value::bool(true));
-                } else {
-                    state.load(ir, src, GP::Rdi);
-                    ir.push(AsmInst::Not);
-                    state.def_rax2acc(ir, dst);
-                }
-            }
             TraceIr::UnOp { kind, dst, src, ic } => {
                 let class = if let Some(class) = state.class(src) {
                     Some(class)
@@ -303,6 +292,13 @@ impl<'a> JitContext<'a> {
                     ic
                 };
                 match class {
+                    _ if kind == UnOpK::Not => {
+                        if let Some(recv_class) = class {
+                            return self.call_unary_method(state, ir, src, recv_class, kind, bc_pos);
+                        } else {
+                            return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+                        }
+                    }
                     Some(INTEGER_CLASS) => {
                         if let Some(src) = state.is_fixnum_literal(src) {
                             match kind {
@@ -321,6 +317,7 @@ impl<'a> JitContext<'a> {
                                     state.def_C(dst, Value::integer(!src));
                                     return Ok(CompileResult::Continue);
                                 }
+                                UnOpK::Not => unreachable!(),
                             };
                         }
                         state.load_fixnum(ir, src, GP::Rdi);
@@ -336,15 +333,16 @@ impl<'a> JitContext<'a> {
                             UnOpK::BitNot => {
                                 ir.push(AsmInst::FixnumBitNot { reg: GP::Rdi });
                             }
+                            UnOpK::Not => unreachable!(),
                         }
                         state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
                     }
-                    Some(FLOAT_CLASS) if kind != UnOpK::BitNot => {
+                    Some(FLOAT_CLASS) if kind != UnOpK::BitNot && kind != UnOpK::Not => {
                         if let Some(f) = state.is_float_literal(src) {
                             let res = match kind {
                                 UnOpK::Neg => -f,
                                 UnOpK::Pos => f,
-                                UnOpK::BitNot => unreachable!(),
+                                UnOpK::BitNot | UnOpK::Not => unreachable!(),
                             };
                             state.def_C(dst, Value::float(res));
                             return Ok(CompileResult::Continue);

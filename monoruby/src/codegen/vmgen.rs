@@ -286,10 +286,10 @@ impl Codegen {
         self.dispatch[87] = redo;
         self.dispatch[86] = self.vm_concat_regexp();
 
-        self.dispatch[120] = self.vm_not();
         self.dispatch[121] = self.vm_pos();
         self.dispatch[122] = self.vm_neg();
         self.dispatch[123] = self.vm_bitnot();
+        self.dispatch[124] = self.vm_not();
 
         self.dispatch[132] = self.vm_index();
         self.dispatch[133] = self.vm_index_assign();
@@ -341,10 +341,10 @@ impl Codegen {
     pub(super) fn remove_vm_bop_optimization(&mut self) {
         self.dispatch[14] = self.vm_loop_start_no_opt();
 
-        self.dispatch[120] = self.vm_not();
         self.dispatch[121] = self.vm_pos_no_opt();
         self.dispatch[122] = self.vm_neg_no_opt();
         self.dispatch[123] = self.vm_bitnot_no_opt();
+        self.dispatch[124] = self.vm_not_no_opt();
 
         self.dispatch[140] = self.vm_eq_rr();
         self.dispatch[141] = self.vm_ne_rr();
@@ -1100,11 +1100,19 @@ impl Codegen {
 
     fn vm_not(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        let generic = self.jit.label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.not_rdi_to_rax();
-        self.vm_store_r15(GP::Rax);
-        self.fetch_and_dispatch();
+        self.vm_generic_unop(&generic, not_value);
+        label
+    }
+
+    fn vm_not_no_opt(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let generic = self.jit.label();
+        self.fetch3();
+        self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
+        self.vm_generic_unop(&generic, not_value_no_opt);
         label
     }
 

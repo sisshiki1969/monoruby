@@ -394,7 +394,8 @@ macro_rules! unop_value_no_opt {
 unop_value_no_opt!(
     (bitnot, IdentId::_BNOT),
     (pos, IdentId::_UPLUS),
-    (neg, IdentId::_UMINUS)
+    (neg, IdentId::_UMINUS),
+    (not, IdentId::_NOT)
 );
 
 pub(crate) extern "C" fn neg_value(
@@ -428,6 +429,27 @@ pub(crate) extern "C" fn pos_value(
         RV::Float(lhs) => Value::float(lhs),
         _ => {
             return vm.invoke_method_simple(globals, IdentId::_UPLUS, lhs, &[]);
+        }
+    };
+    Some(v)
+}
+
+pub(crate) extern "C" fn not_value(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+) -> Option<Value> {
+    let v = match lhs.unpack() {
+        RV::Fixnum(_)
+        | RV::BigInt(_)
+        | RV::Float(_)
+        | RV::String(_)
+        | RV::Symbol(_)
+        | RV::Complex(_)
+        | RV::Bool(true) => Value::bool(false),
+        RV::Bool(false) | RV::Nil => Value::bool(true),
+        _ => {
+            return vm.invoke_method_simple(globals, IdentId::_NOT, lhs, &[]);
         }
     };
     Some(v)

@@ -452,9 +452,6 @@ impl Codegen {
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
 
-            AsmInst::Not => {
-                self.not_rdi_to_rax();
-            }
             AsmInst::FixnumNeg { reg, deopt } => {
                 let deopt = &labels[deopt];
                 let r = reg as u64;

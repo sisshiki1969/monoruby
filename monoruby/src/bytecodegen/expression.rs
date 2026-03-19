@@ -151,7 +151,7 @@ impl<'a> BytecodeGen<'a> {
                         _ => self.emit_unary_op(UnOpK::Pos, dst, rhs, loc)?,
                     };
                 }
-                UnOp::Not => self.emit_not(dst, rhs, loc)?,
+                UnOp::Not => self.emit_unary_op(UnOpK::Not, dst, rhs, loc)?,
                 UnOp::BitNot => self.emit_unary_op(UnOpK::BitNot, dst, rhs, loc)?,
             },
             NodeKind::BinOp(op, box lhs, box rhs) => {
