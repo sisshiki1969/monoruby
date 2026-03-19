@@ -300,13 +300,19 @@ impl Value {
         }
     }
 
-    pub(crate) fn get_singleton(self, store: &mut Store) -> Value {
+    pub(crate) fn get_singleton(self, store: &mut Store) -> Result<Value> {
         if let Some(class) = self.is_class_or_module() {
-            store.get_metaclass(class.id())
+            Ok(store.get_metaclass(class.id()).as_val())
+        } else if self.is_packed_value() {
+            match self.0.get() {
+                NIL_VALUE => Ok(store[NIL_CLASS].get_module().as_val()),
+                TRUE_VALUE => Ok(store[TRUE_CLASS].get_module().as_val()),
+                FALSE_VALUE => Ok(store[FALSE_CLASS].get_module().as_val()),
+                _ => Err(MonorubyErr::typeerr("can't define singleton")),
+            }
         } else {
-            store.get_singleton(self)
+            Ok(store.get_singleton(self).as_val())
         }
-        .as_val()
     }
 
     ///

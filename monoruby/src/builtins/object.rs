@@ -636,7 +636,7 @@ fn singleton_class(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(lfp.self_val().get_singleton(&mut globals.store))
+    lfp.self_val().get_singleton(&mut globals.store)
 }
 
 ///

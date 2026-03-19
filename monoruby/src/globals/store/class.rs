@@ -363,7 +363,10 @@ impl ClassInfoTable {
             if parent == OBJECT_CLASS {
                 break;
             }
-            parents.push(self[parent].name.as_ref().unwrap().to_string());
+            match self[parent].name.as_ref() {
+                Some(name) => parents.push(name.to_string()),
+                None => break,
+            }
             class = parent;
         }
         parents
@@ -663,6 +666,12 @@ impl ClassInfoTable {
             None => self.object_class(),
         };
         self.define_class_inner(None, superclass, None, false, Some(ObjTy::OBJECT))
+    }
+
+    /// Allocate an uninitialized class object (no superclass).
+    /// This corresponds to `Class.allocate` in Ruby.
+    pub(crate) fn allocate_uninit_class(&mut self) -> Module {
+        self.define_class_inner(None, None::<Module>, None, false, Some(ObjTy::OBJECT))
     }
 
     pub(crate) fn define_unnamed_module(&mut self) -> Module {

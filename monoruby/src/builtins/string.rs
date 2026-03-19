@@ -2491,9 +2491,10 @@ fn parse_bigint(s: &str, radix: u32) -> BigInt {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/intern.html]
 #[monoruby_builtin]
-fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn to_sym(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let sym = Value::symbol_from_str(self_val.as_str());
+    let s = self_val.expect_str(&globals.store)?;
+    let sym = Value::symbol_from_str(s);
     Ok(sym)
 }
 
