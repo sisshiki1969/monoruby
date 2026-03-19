@@ -13,14 +13,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with(CLASS_CLASS, "new", class_new, 0, 1, false);
     // Override allocate on Class's singleton class so that Class.allocate
     // creates a proper (uninitialized) Class object instead of a plain object.
-    globals.define_builtin_class_func(CLASS_CLASS, "allocate", allocate_class, 0);
+    globals.define_builtin_class_func(CLASS_CLASS, "allocate", class_allocate, 0);
 
     // instance methods
     globals.define_builtin_inline_func(
         CLASS_CLASS,
         "allocate",
         allocate,
-        Box::new(class_allocate),
+        Box::new(inline_allocate),
         0,
     );
     globals.define_builtin_inline_funcs_with_kw(
@@ -45,7 +45,6 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/s/new.html]
 #[monoruby_builtin]
 fn class_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.expect_no_block()?;
     let superclass = if lfp.try_arg(0).is_none() {
         None
     } else {
@@ -54,7 +53,11 @@ fn class_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let superclass_val = superclass
         .unwrap_or_else(|| globals.store.object_class())
         .as_val();
-    let obj = globals.store.define_unnamed_class(superclass).as_val();
+    let m = globals.store.define_unnamed_class(superclass);
+    let obj = m.as_val();
+    if let Some(block) = lfp.block() {
+        vm.module_eval(globals, m, block)?;
+    }
     vm.invoke_method_if_exists(
         globals,
         IdentId::INHERITED,
@@ -64,6 +67,22 @@ fn class_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         None,
     )?;
     Ok(obj)
+}
+
+/// ### Class.allocate
+/// - allocate -> Class
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
+#[monoruby_builtin]
+fn class_allocate(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    lfp.expect_no_block()?;
+    let obj = globals.store.allocate_uninit_class();
+    Ok(obj.as_val())
 }
 
 /// ### Class#new
@@ -126,21 +145,6 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let class_id = lfp.self_val().as_class_id();
     let obj = Value::object(class_id);
     Ok(obj)
-}
-
-/// Class.allocate (singleton method on Class)
-///
-/// Returns an uninitialized Class object.
-#[monoruby_builtin]
-fn allocate_class(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    lfp.expect_no_block()?;
-    let obj = globals.store.allocate_uninit_class();
-    Ok(obj.as_val())
 }
 
 pub(super) fn gen_class_new(
@@ -227,7 +231,7 @@ pub(super) fn gen_class_new(
     }
 }
 
-fn class_allocate(
+fn inline_allocate(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
@@ -386,6 +390,76 @@ mod tests {
         Class.new(A)
         $res
         "##,
+        );
+    }
+
+    #[test]
+    fn class_new() {
+        // Class.new creates an anonymous class whose superclass is Object
+        run_test("Class.new.superclass");
+        // Class.new with explicit superclass
+        run_test(
+            r#"
+            class A; end
+            Class.new(A).superclass
+            "#,
+        );
+        // Instance of anonymous class
+        run_test(
+            r#"
+            k = Class.new
+            k.new.is_a?(k)
+            "#,
+        );
+        // Methods defined on anonymous class
+        run_test(
+            r#"
+            k = Class.new
+            k.define_method(:foo) { 42 }
+            k.new.foo
+            "#,
+        );
+        // Inherits methods from superclass
+        run_test(
+            r#"
+            class A
+              def greet; "hello"; end
+            end
+            k = Class.new(A)
+            k.new.greet
+            "#,
+        );
+        // Class.new with non-class argument raises TypeError
+        run_test_error("Class.new(42)");
+        run_test_error("Class.new(:sym)");
+    }
+
+    #[test]
+    fn class_new_with_block() {
+        // Class.new with block yields the new class
+        run_test(
+            r#"
+            k = Class.new { |c| c.define_method(:foo) { 42 } }
+            k.new.foo
+            "#,
+        );
+        // Block receives the anonymous class as argument
+        run_test(
+            r#"
+            res = nil
+            k = Class.new { |c| res = c }
+            res == k
+            "#,
+        );
+        // Class.new(superclass) with block
+        run_test(
+            r#"
+            class A
+              def greet; "hello"; end
+            end
+            k = Class.new(A) { def shout; "HI"; end }
+            [k.new.greet, k.new.shout]
+            "#,
         );
     }
 

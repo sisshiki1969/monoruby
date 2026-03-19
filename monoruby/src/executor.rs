@@ -981,6 +981,19 @@ impl Executor {
         .ok_or_else(|| self.take_error())
     }
 
+    pub(crate) fn module_eval(
+        &mut self,
+        globals: &mut Globals,
+        module: Module,
+        bh: BlockHandler,
+    ) -> Result<Value> {
+        let data = self.get_block_data(globals, bh)?;
+        self.push_class_context(module.id());
+        let res = self.invoke_block_with_self(globals, &data, module.get(), &[module.get()]);
+        self.pop_class_context();
+        res
+    }
+
     pub(crate) fn invoke_block_once(
         &mut self,
         globals: &mut Globals,

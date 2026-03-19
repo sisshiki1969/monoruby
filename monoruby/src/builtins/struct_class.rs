@@ -64,7 +64,8 @@ fn struct_initialize(
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut new_struct = lfp.self_val();
-    let class_id = new_struct.as_class().id();
+    let new_module = new_struct.as_class();
+    let class_id = new_module.id();
     let args = lfp.arg(0).as_array();
 
     globals.define_builtin_class_inline_funcs_catch_all(
@@ -90,11 +91,7 @@ fn struct_initialize(
     new_struct.set_instance_var(&mut globals.store, "/members", Value::array(members))?;
 
     if let Some(bh) = lfp.block() {
-        vm.push_class_context(class_id);
-        let data = vm.get_block_data(globals, bh)?;
-        let res = vm.invoke_block_with_self(globals, &data, new_struct, &[new_struct]);
-        vm.pop_class_context();
-        res?;
+        vm.module_eval(globals, new_module, bh)?;
     };
     Ok(Value::nil())
 }

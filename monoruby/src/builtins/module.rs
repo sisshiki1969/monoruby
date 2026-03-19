@@ -312,11 +312,7 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         if lfp.try_arg(0).is_some() {
             return Err(MonorubyErr::wrong_number_of_arg(0, lfp.args_count(3)));
         }
-        let data = vm.get_block_data(globals, bh)?;
-        vm.push_class_context(module.id());
-        let res = vm.invoke_block_with_self(globals, &data, module.get(), &[module.get()]);
-        vm.pop_class_context();
-        res
+        vm.module_eval(globals, module, bh)
     } else if let Some(arg0) = lfp.try_arg(0) {
         let expr = arg0.coerce_to_string(vm, globals)?;
         let cfp = vm.cfp();
