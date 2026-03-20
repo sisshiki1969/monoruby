@@ -31,9 +31,23 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_func(REGEXP_CLASS, "options", options, 0);
     globals.define_builtin_func_with(REGEXP_CLASS, "match?", match_, 1, 2, false);
     globals.define_builtin_func_with(REGEXP_CLASS, "match", rmatch, 1, 2, false);
+    globals.define_builtin_class_func(REGEXP_CLASS, "allocate", allocate, 0);
 }
 
 // Class methods
+
+/// ### Regexp.allocate
+#[monoruby_builtin]
+fn allocate(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let regexp = RegexpInner::with_option("", 0)?;
+    Ok(Value::regexp_with_class(regexp, class_id))
+}
 
 ///
 /// ### Regexp.new

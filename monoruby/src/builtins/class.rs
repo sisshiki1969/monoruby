@@ -141,7 +141,12 @@ fn superclass(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
 #[monoruby_builtin]
-fn allocate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn allocate(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     match class_id {
         TRUE_CLASS | FALSE_CLASS | NIL_CLASS | SYMBOL_CLASS => {
@@ -154,6 +159,22 @@ fn allocate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     }
     let obj = Value::object(class_id);
     Ok(obj)
+}
+
+/// allocate that raises "allocator undefined for ClassName".
+/// Used for classes that cannot be instantiated (TrueClass, FalseClass, NilClass, Symbol, Integer, Float).
+#[monoruby_builtin]
+pub(super) fn undef_allocate(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    Err(MonorubyErr::typeerr(&format!(
+        "allocator undefined for {}",
+        class_id.get_name(globals)
+    )))
 }
 
 pub(super) fn gen_class_new(
@@ -636,6 +657,61 @@ mod tests {
         );
         // Class.allocate returns distinct objects
         run_test("Class.allocate.equal?(Class.allocate)");
+        // Hash.allocate returns a Hash
+        run_test("Hash.allocate.class");
+        run_test("Hash.allocate.is_a?(Hash)");
+        // Hash subclass allocate
+        run_test(
+            r#"
+            class MyHash < Hash; end
+            MyHash.allocate.class
+            "#,
+        );
+        // Array.allocate returns an Array
+        run_test("Array.allocate.class");
+        // Array subclass allocate
+        run_test(
+            r#"
+            class MyArray < Array; end
+            MyArray.allocate.class
+            "#,
+        );
+        // allocator undefined for immediate classes
+        run_test_error("NilClass.allocate");
+        run_test_error("TrueClass.allocate");
+        run_test_error("FalseClass.allocate");
+        run_test_error("Symbol.allocate");
+        // String.allocate returns an empty String
+        run_test("String.allocate.class");
+        run_test("String.allocate");
+        run_test(
+            r#"
+            class MyString < String; end
+            MyString.allocate.class
+            "#,
+        );
+        // Time.allocate returns a Time
+        run_test("Time.allocate.class");
+        // Range.allocate returns a Range
+        run_test("Range.allocate.class");
+        // Exception.allocate returns an Exception
+        run_test("Exception.allocate.class");
+        run_test(
+            r#"
+            class MyError < StandardError; end
+            MyError.allocate.class
+            "#,
+        );
+        // Regexp.allocate returns a Regexp
+        run_test("Regexp.allocate.class");
+        // IO.allocate returns an IO
+        run_test("IO.allocate.class");
+        // allocator undefined for special classes
+        run_test_error("Proc.allocate");
+        run_test_error("Method.allocate");
+        run_test_error("UnboundMethod.allocate");
+        run_test_error("Binding.allocate");
+        run_test_error("Struct.allocate");
     }
 
     #[test]

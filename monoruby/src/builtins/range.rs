@@ -7,6 +7,7 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Range", RANGE_CLASS, ObjTy::RANGE);
     globals.define_builtin_class_func_with(RANGE_CLASS, "new", range_new, 2, 2, false);
+    globals.define_builtin_class_func(RANGE_CLASS, "allocate", allocate, 0);
     globals.define_builtin_inline_funcs(
         RANGE_CLASS,
         "begin",
@@ -42,6 +43,23 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     globals.generate_range(lfp.arg(0), lfp.arg(1), false)
+}
+
+/// ### Range.allocate
+#[monoruby_builtin]
+fn allocate(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    Ok(Value::range_with_class(
+        Value::nil(),
+        Value::nil(),
+        false,
+        class_id,
+    ))
 }
 
 ///

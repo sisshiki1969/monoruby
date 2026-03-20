@@ -1034,6 +1034,14 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_string_with_class(s: &str, class_id: ClassId) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::STRING),
+            kind: ObjKind::string_from_str(s),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_string_from_inner(inner: RStringInner) -> Self {
         RValue {
             header: Header::new(STRING_CLASS, ObjTy::STRING),
@@ -1141,8 +1149,24 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_regexp_with_class(regexp: RegexpInner, class_id: ClassId) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::REGEXP),
+            kind: ObjKind::regexp(regexp),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_exception(err: MonorubyErr) -> Self {
         let class_id = err.class_id();
+        RValue {
+            header: Header::new(class_id, ObjTy::EXCEPTION),
+            kind: ObjKind::exception(err),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_exception_with_class(err: MonorubyErr, class_id: ClassId) -> Self {
         RValue {
             header: Header::new(class_id, ObjTy::EXCEPTION),
             kind: ObjKind::exception(err),
@@ -1153,6 +1177,14 @@ impl RValue {
     pub(super) fn new_io(io: IoInner) -> Self {
         RValue {
             header: Header::new(IO_CLASS, ObjTy::IO),
+            kind: ObjKind::io(io),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_io_with_class(io: IoInner, class_id: ClassId) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::IO),
             kind: ObjKind::io(io),
             var_table: None,
         }
@@ -1187,9 +1219,30 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_time_with_class(time: TimeInner, class_id: ClassId) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::TIME),
+            kind: ObjKind::time(time),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_range(start: Value, end: Value, exclude_end: bool) -> Self {
         RValue {
             header: Header::new(RANGE_CLASS, ObjTy::RANGE),
+            kind: ObjKind::range(start, end, exclude_end),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_range_with_class(
+        start: Value,
+        end: Value,
+        exclude_end: bool,
+        class_id: ClassId,
+    ) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::RANGE),
             kind: ObjKind::range(start, end, exclude_end),
             var_table: None,
         }

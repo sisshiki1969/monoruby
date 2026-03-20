@@ -522,6 +522,10 @@ impl Value {
         RValue::new_string(s).pack()
     }
 
+    pub fn string_with_class(s: &str, class_id: ClassId) -> Self {
+        RValue::new_string_with_class(s, class_id).pack()
+    }
+
     pub fn bytes(s: Vec<u8>) -> Self {
         RValue::new_bytes(s).pack()
     }
@@ -602,8 +606,16 @@ impl Value {
         RValue::new_regexp(regexp).pack()
     }
 
+    pub fn regexp_with_class(regexp: RegexpInner, class_id: ClassId) -> Self {
+        RValue::new_regexp_with_class(regexp, class_id).pack()
+    }
+
     pub(crate) fn new_io(io: IoInner) -> Self {
         RValue::new_io(io).pack()
+    }
+
+    pub(crate) fn new_io_with_class(io: IoInner, class_id: ClassId) -> Self {
+        RValue::new_io_with_class(io, class_id).pack()
     }
 
     pub(crate) fn new_io_stdin() -> Self {
@@ -626,6 +638,15 @@ impl Value {
         RValue::new_range(start, end, exclude_end).pack()
     }
 
+    pub fn range_with_class(
+        start: Value,
+        end: Value,
+        exclude_end: bool,
+        class_id: ClassId,
+    ) -> Self {
+        RValue::new_range_with_class(start, end, exclude_end, class_id).pack()
+    }
+
     pub fn new_exception(err: MonorubyErr) -> Self {
         RValue::new_exception(err).pack()
     }
@@ -637,8 +658,21 @@ impl Value {
         ))
     }
 
+    pub fn new_exception_from_with_class(
+        message: String,
+        err_class_id: ClassId,
+        obj_class_id: ClassId,
+    ) -> Self {
+        let err = MonorubyErr::new(MonorubyErrKind::from_class_id(err_class_id), message);
+        RValue::new_exception_with_class(err, obj_class_id).pack()
+    }
+
     pub fn new_time(time: TimeInner) -> Self {
         RValue::new_time(time).pack()
+    }
+
+    pub fn new_time_with_class(time: TimeInner, class_id: ClassId) -> Self {
+        RValue::new_time_with_class(time, class_id).pack()
     }
 
     pub(in crate::value) fn new_proc(block: ProcInner) -> Self {

@@ -19,6 +19,7 @@ pub(super) fn init(globals: &mut Globals) {
         &["encoding", "capacity"],
         false,
     );
+    globals.define_builtin_class_func(STRING_CLASS, "allocate", allocate, 0);
     globals.define_builtin_class_func(STRING_CLASS, "try_convert", string_try_convert, 1);
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
     globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
@@ -198,6 +199,18 @@ fn string_new(
         None => "".to_string(),
     };
     Ok(Value::string(s))
+}
+
+/// ### String.allocate
+#[monoruby_builtin]
+fn allocate(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    Ok(Value::string_with_class("", class_id))
 }
 
 ///

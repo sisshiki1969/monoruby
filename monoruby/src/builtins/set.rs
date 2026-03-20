@@ -10,6 +10,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Set", SET_CLASS, ObjTy::HASH);
     globals.define_builtin_class_func_rest(SET_CLASS, "[]", set_index);
     globals.define_builtin_class_func_with(SET_CLASS, "new", new, 0, 1, false);
+    globals.define_builtin_class_func(SET_CLASS, "allocate", allocate, 0);
 
     globals.define_builtin_func(SET_CLASS, "<<", add, 1);
     globals.define_builtin_func(SET_CLASS, "add", add, 1);
@@ -93,6 +94,18 @@ fn enum_to_vec(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<V
     let result = vm.invoke_method_inner(globals, IdentId::TO_A, val, &[], None, None)?;
     let ary = result.expect_array_ty(globals)?;
     Ok(ary.iter().copied().collect())
+}
+
+/// ### Set.allocate
+#[monoruby_builtin]
+fn allocate(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    Ok(Value::hash_with_class_and_default(class_id, Value::nil()))
 }
 
 ///
