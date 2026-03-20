@@ -677,6 +677,57 @@ impl Executor {
 }
 
 impl Executor {
+    /// Invoke method_added or singleton_method_added callback for `class_id`.
+    pub(crate) fn invoke_method_added(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Result<()> {
+        let module = globals.store[class_id].get_module();
+        let (hook, receiver) = if let Some(original_obj) = module.is_singleton() {
+            (IdentId::SINGLETON_METHOD_ADDED, original_obj)
+        } else {
+            (IdentId::METHOD_ADDED, module.into())
+        };
+        self.invoke_method_if_exists(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
+        Ok(())
+    }
+
+    /// Invoke method_removed or singleton_method_removed callback for `class_id`.
+    pub(crate) fn invoke_method_removed(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Result<()> {
+        let module = globals.store[class_id].get_module();
+        let (hook, receiver) = if let Some(original_obj) = module.is_singleton() {
+            (IdentId::SINGLETON_METHOD_REMOVED, original_obj)
+        } else {
+            (IdentId::METHOD_REMOVED, module.into())
+        };
+        self.invoke_method_if_exists(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
+        Ok(())
+    }
+
+    /// Invoke method_undefined or singleton_method_undefined callback for `class_id`.
+    pub(crate) fn invoke_method_undefined(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Result<()> {
+        let module = globals.store[class_id].get_module();
+        let (hook, receiver) = if let Some(original_obj) = module.is_singleton() {
+            (IdentId::SINGLETON_METHOD_UNDEFINED, original_obj)
+        } else {
+            (IdentId::METHOD_UNDEFINED, module.into())
+        };
+        self.invoke_method_if_exists(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
+        Ok(())
+    }
+
     pub(crate) fn define_method(
         &mut self,
         globals: &mut Globals,
@@ -705,36 +756,18 @@ impl Executor {
             globals.add_singleton_method(class_id, name, func, visibility);
         }
         Codegen::check_bop_redefine(self.cfp());
-        let module = globals.store[class_id].get_module();
-        let receiver: Value = module.into();
-        if let Some(original_obj) = module.is_singleton() {
+        self.invoke_method_added(globals, class_id, name)?;
+        if module_function {
+            let module = globals.store[class_id].get_module();
+            let receiver: Value = module.into();
             self.invoke_method_if_exists(
                 globals,
                 IdentId::SINGLETON_METHOD_ADDED,
-                original_obj,
-                &[Value::symbol(name)],
-                None,
-                None,
-            )?;
-        } else {
-            self.invoke_method_if_exists(
-                globals,
-                IdentId::METHOD_ADDED,
                 receiver,
                 &[Value::symbol(name)],
                 None,
                 None,
             )?;
-            if module_function {
-                self.invoke_method_if_exists(
-                    globals,
-                    IdentId::SINGLETON_METHOD_ADDED,
-                    receiver,
-                    &[Value::symbol(name)],
-                    None,
-                    None,
-                )?;
-            }
         }
         Ok(Value::nil())
     }

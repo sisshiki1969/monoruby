@@ -781,14 +781,7 @@ pub(super) extern "C" fn singleton_define_method(
     }
     let class_id = globals.store.get_singleton(obj).id();
     globals.add_public_method(class_id, name, func);
-    match vm.invoke_method_if_exists(
-        globals,
-        IdentId::SINGLETON_METHOD_ADDED,
-        obj,
-        &[Value::symbol(name)],
-        None,
-        None,
-    ) {
+    match vm.invoke_method_added(globals, class_id, name) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);
@@ -809,23 +802,13 @@ pub(super) extern "C" fn undef_method(
             vm.set_error(err);
             None
         }
-        Ok(_) => {
-            let receiver = globals.store[class_id].get_module().into();
-            match vm.invoke_method_if_exists(
-                globals,
-                IdentId::METHOD_UNDEFINED,
-                receiver,
-                &[Value::symbol(method)],
-                None,
-                None,
-            ) {
-                Ok(_) => Some(Value::nil()),
-                Err(err) => {
-                    vm.set_error(err);
-                    None
-                }
+        Ok(_) => match vm.invoke_method_undefined(globals, class_id, method) {
+            Ok(_) => Some(Value::nil()),
+            Err(err) => {
+                vm.set_error(err);
+                None
             }
-        }
+        },
     }
 }
 
@@ -855,20 +838,7 @@ pub(super) extern "C" fn alias_method(
         vm.set_error(err);
         return None;
     }
-    let module = globals.store[class_id].get_module();
-    let hook_id = if let Some(original_obj) = module.is_singleton() {
-        (IdentId::SINGLETON_METHOD_ADDED, original_obj)
-    } else {
-        (IdentId::METHOD_ADDED, module.into())
-    };
-    match vm.invoke_method_if_exists(
-        globals,
-        hook_id.0,
-        hook_id.1,
-        &[Value::symbol(new)],
-        None,
-        None,
-    ) {
+    match vm.invoke_method_added(globals, class_id, new) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);

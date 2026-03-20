@@ -214,27 +214,7 @@ fn alias_method(
     let new_name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let old_name = lfp.arg(1).expect_symbol_or_string(globals)?;
     globals.alias_method_for_class(class_id, new_name, old_name)?;
-    let module = globals.store[class_id].get_module();
-    if let Some(original_obj) = module.is_singleton() {
-        vm.invoke_method_if_exists(
-            globals,
-            IdentId::SINGLETON_METHOD_ADDED,
-            original_obj,
-            &[Value::symbol(new_name)],
-            None,
-            None,
-        )?;
-    } else {
-        let receiver: Value = module.into();
-        vm.invoke_method_if_exists(
-            globals,
-            IdentId::METHOD_ADDED,
-            receiver,
-            &[Value::symbol(new_name)],
-            None,
-            None,
-        )?;
-    }
+    vm.invoke_method_added(globals, class_id, new_name)?;
     Ok(Value::symbol(new_name))
 }
 
@@ -257,8 +237,10 @@ fn attr_accessor(
     for v in lfp.arg(0).as_array().iter() {
         let arg_name = v.expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
+        vm.invoke_method_added(globals, class_id, method_name)?;
         ary.push(Value::symbol(method_name));
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
+        vm.invoke_method_added(globals, class_id, method_name)?;
         ary.push(Value::symbol(method_name));
     }
     Ok(ary.into())
@@ -283,6 +265,7 @@ fn attr_reader(
     for v in lfp.arg(0).as_array().iter() {
         let arg_name = v.expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
+        vm.invoke_method_added(globals, class_id, method_name)?;
         ary.push(Value::symbol(method_name));
     }
     Ok(ary.into())
@@ -307,6 +290,7 @@ fn attr_writer(
     for v in lfp.arg(0).as_array().iter() {
         let arg_name = v.expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
+        vm.invoke_method_added(globals, class_id, method_name)?;
         ary.push(Value::symbol(method_name));
     }
     Ok(ary.into())
@@ -522,27 +506,7 @@ fn define_method(
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
     let _ = func_id;
-    let module = globals.store[class_id].get_module();
-    if let Some(original_obj) = module.is_singleton() {
-        vm.invoke_method_if_exists(
-            globals,
-            IdentId::SINGLETON_METHOD_ADDED,
-            original_obj,
-            &[Value::symbol(name)],
-            None,
-            None,
-        )?;
-    } else {
-        let receiver: Value = module.into();
-        vm.invoke_method_if_exists(
-            globals,
-            IdentId::METHOD_ADDED,
-            receiver,
-            &[Value::symbol(name)],
-            None,
-            None,
-        )?;
-    }
+    vm.invoke_method_added(globals, class_id, name)?;
     Ok(Value::symbol(name))
 }
 
@@ -767,32 +731,11 @@ fn undef_method(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let module = globals.store[class_id].get_module();
-    let receiver: Value = module.into();
-    let singleton_owner = module.is_singleton();
     let names = lfp.arg(0).as_array();
     for name in names.iter().cloned() {
         let name = name.expect_symbol_or_string(globals)?;
         globals.undef_method_for_class(class_id, name)?;
-        if let Some(obj) = singleton_owner {
-            vm.invoke_method_if_exists(
-                globals,
-                IdentId::SINGLETON_METHOD_UNDEFINED,
-                obj,
-                &[Value::symbol(name)],
-                None,
-                None,
-            )?;
-        } else {
-            vm.invoke_method_if_exists(
-                globals,
-                IdentId::METHOD_UNDEFINED,
-                receiver,
-                &[Value::symbol(name)],
-                None,
-                None,
-            )?;
-        }
+        vm.invoke_method_undefined(globals, class_id, name)?;
     }
     Ok(lfp.self_val())
 }
@@ -811,32 +754,11 @@ fn remove_method(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let module = globals.store[class_id].get_module();
-    let receiver: Value = module.into();
-    let singleton_owner = module.is_singleton();
     let names = lfp.arg(0).as_array();
     for name in names.iter().cloned() {
         let name = name.expect_symbol_or_string(globals)?;
         globals.remove_method(class_id, name)?;
-        if let Some(obj) = singleton_owner {
-            vm.invoke_method_if_exists(
-                globals,
-                IdentId::SINGLETON_METHOD_REMOVED,
-                obj,
-                &[Value::symbol(name)],
-                None,
-                None,
-            )?;
-        } else {
-            vm.invoke_method_if_exists(
-                globals,
-                IdentId::METHOD_REMOVED,
-                receiver,
-                &[Value::symbol(name)],
-                None,
-                None,
-            )?;
-        }
+        vm.invoke_method_removed(globals, class_id, name)?;
     }
     Ok(lfp.self_val())
 }
