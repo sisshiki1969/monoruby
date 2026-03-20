@@ -148,6 +148,15 @@ fn allocate(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
+    match class_id {
+        TRUE_CLASS | FALSE_CLASS | NIL_CLASS | SYMBOL_CLASS => {
+            return Err(MonorubyErr::typeerr(&format!(
+                "allocator undefined for {}",
+                class_id.get_name(globals)
+            )));
+        }
+        _ => {}
+    }
     let obj = Value::object(class_id);
     Ok(obj)
 }
