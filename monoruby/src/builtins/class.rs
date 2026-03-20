@@ -141,23 +141,31 @@ fn superclass(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
 #[monoruby_builtin]
-fn allocate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn allocate(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    match class_id {
-        TRUE_CLASS | FALSE_CLASS | NIL_CLASS | SYMBOL_CLASS => {
-            return Err(MonorubyErr::typeerr(&format!(
-                "allocator undefined for {}",
-                class_id.get_name(globals)
-            )));
-        }
-        _ => {}
-    }
-    let obj = match globals.store[class_id].instance_ty() {
-        Some(ObjTy::HASH) => Value::hash_with_class_and_default(class_id, Value::nil()),
-        Some(ObjTy::ARRAY) => Value::array_with_class(ArrayInner::new(), class_id),
-        _ => Value::object(class_id),
-    };
+    let obj = Value::object(class_id);
     Ok(obj)
+}
+
+/// allocate that raises "allocator undefined for ClassName".
+/// Used for classes that cannot be instantiated (TrueClass, FalseClass, NilClass, Symbol, Integer, Float).
+#[monoruby_builtin]
+pub(super) fn undef_allocate(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    Err(MonorubyErr::typeerr(&format!(
+        "allocator undefined for {}",
+        class_id.get_name(globals)
+    )))
 }
 
 pub(super) fn gen_class_new(
@@ -640,6 +648,30 @@ mod tests {
         );
         // Class.allocate returns distinct objects
         run_test("Class.allocate.equal?(Class.allocate)");
+        // Hash.allocate returns a Hash
+        run_test("Hash.allocate.class");
+        run_test("Hash.allocate.is_a?(Hash)");
+        // Hash subclass allocate
+        run_test(
+            r#"
+            class MyHash < Hash; end
+            MyHash.allocate.class
+            "#,
+        );
+        // Array.allocate returns an Array
+        run_test("Array.allocate.class");
+        // Array subclass allocate
+        run_test(
+            r#"
+            class MyArray < Array; end
+            MyArray.allocate.class
+            "#,
+        );
+        // allocator undefined for immediate classes
+        run_test_error("NilClass.allocate");
+        run_test_error("TrueClass.allocate");
+        run_test_error("FalseClass.allocate");
+        run_test_error("Symbol.allocate");
     }
 
     #[test]

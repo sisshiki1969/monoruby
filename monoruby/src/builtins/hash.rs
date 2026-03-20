@@ -7,6 +7,7 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS, ObjTy::HASH);
     globals.define_builtin_class_func_with_effect(HASH_CLASS, "new", new, 0, 1, Effect::CAPTURE);
+    globals.define_builtin_class_func(HASH_CLASS, "allocate", allocate, 0);
 
     globals.define_builtin_func_with(HASH_CLASS, "default", default, 0, 1, false);
     globals.define_builtin_func(HASH_CLASS, "default_proc", default_proc, 0);
@@ -95,6 +96,21 @@ fn new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         Value::hash_with_class_and_default(class, default)
     };
     Ok(obj)
+}
+
+/// ### Hash.allocate
+/// - allocate -> Hash
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
+#[monoruby_builtin]
+fn allocate(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    Ok(Value::hash_with_class_and_default(class_id, Value::nil()))
 }
 
 ///

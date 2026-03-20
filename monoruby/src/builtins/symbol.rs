@@ -6,6 +6,7 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Symbol", SYMBOL_CLASS, None);
+    globals.define_builtin_class_func(SYMBOL_CLASS, "allocate", super::class::undef_allocate, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func(SYMBOL_CLASS, "===", eq, 1);
     globals.define_builtin_func(SYMBOL_CLASS, "==", eq, 1);
