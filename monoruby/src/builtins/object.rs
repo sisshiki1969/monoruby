@@ -6,17 +6,20 @@ use jitgen::JitContext;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    //globals.define_builtin_class_func(OBJECT_CLASS, "new", object_new, -1);
+    // BasicObject methods
 
+    globals.define_private_builtin_func(BASIC_OBJECT_CLASS, "initialize", bo_initialize, 0);
     globals.define_builtin_inline_func(
         BASIC_OBJECT_CLASS,
         "__id__",
-        basicobject_id,
+        object_id,
         Box::new(object_object_id),
         0,
     );
+    globals.define_builtin_func(BASIC_OBJECT_CLASS, "==", eq, 1);
+    globals.define_builtin_func(BASIC_OBJECT_CLASS, "equal?", eq, 1);
     globals.define_builtin_inline_func(BASIC_OBJECT_CLASS, "!", not_, Box::new(object_not), 0);
-    globals.define_builtin_func(BASIC_OBJECT_CLASS, "equal?", equal_, 1);
+    globals.define_builtin_func(BASIC_OBJECT_CLASS, "!=", ne, 1);
     globals.define_builtin_funcs_with_effect(
         BASIC_OBJECT_CLASS,
         "instance_eval",
@@ -38,8 +41,6 @@ pub(super) fn init(globals: &mut Globals) {
         Effect::EVAL,
     );
 
-    globals.define_builtin_func(BASIC_OBJECT_CLASS, "==", eq, 1);
-    globals.define_builtin_func(BASIC_OBJECT_CLASS, "!=", ne, 1);
     globals.define_builtin_inline_funcs_with_kw(
         BASIC_OBJECT_CLASS,
         "__send__",
@@ -52,12 +53,13 @@ pub(super) fn init(globals: &mut Globals) {
         &[],
         true,
     );
-    globals.define_private_builtin_func(BASIC_OBJECT_CLASS, "initialize", bo_initialize, 0);
     globals.define_private_builtin_func_rest(
         BASIC_OBJECT_CLASS,
         "method_missing",
         bo_method_missing,
     );
+
+    // Object methods
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "hash", hash, 0);
     globals.define_builtin_func(OBJECT_CLASS, "eql?", eql_, 1);
@@ -124,17 +126,6 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         false,
     );
-}
-
-///
-/// ### BasicObject#__id__
-///
-/// __id__ -> Integer
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/BasicObject/i/__id__.html]
-#[monoruby_builtin]
-fn basicobject_id(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::integer(lfp.self_val().id() as i64))
 }
 
 ///
@@ -401,17 +392,6 @@ fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         )
     };
     vm.generate_enumerator(method, lfp.self_val(), args, pc)
-}
-
-///
-/// ### Object#equal
-///
-/// - equal?(other) -> bool
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/equal=3f.html]
-#[monoruby_builtin]
-fn equal_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(lfp.self_val().id() == lfp.arg(0).id()))
 }
 
 ///
