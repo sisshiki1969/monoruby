@@ -495,6 +495,10 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Arguments, msg)
     }
 
+    pub(crate) fn exponent_is_too_large() -> MonorubyErr {
+        MonorubyErr::argumenterr("exponent is too large")
+    }
+
     pub(crate) fn zero_width_padding() -> MonorubyErr {
         MonorubyErr::argumenterr("zero width padding")
     }
