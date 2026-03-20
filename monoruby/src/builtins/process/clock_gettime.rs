@@ -22,9 +22,13 @@ impl TimeSpec {
     }
 }
 
-pub(super) fn clock_gettime(clk_id: i32, tp: &mut TimeSpec) {
+pub(super) fn clock_gettime(clk_id: i32, tp: &mut TimeSpec) -> Result<(), i32> {
     unsafe {
         let res = libc::clock_gettime(clk_id, tp as *mut _ as *mut libc::timespec);
-        assert!(res == 0);
+        if res == 0 {
+            Ok(())
+        } else {
+            Err(*libc::__errno_location())
+        }
     }
 }

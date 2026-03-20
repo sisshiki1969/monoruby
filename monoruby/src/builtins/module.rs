@@ -861,9 +861,18 @@ fn private_class_method(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
 #[monoruby_builtin]
 fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let class_name = globals.store.get_class_name(lfp.self_val().as_class_id());
-    let res = Value::string(class_name);
-    Ok(res)
+    let self_val = lfp.self_val();
+    if let Some(module) = self_val.is_class_or_module() {
+        let class_name = globals.store.get_class_name(module.id());
+        Ok(Value::string(class_name))
+    } else {
+        let class_name = globals.store.get_class_name(self_val.class());
+        Ok(Value::string(format!(
+            "#<{}:0x{:016x}>",
+            class_name,
+            self_val.id()
+        )))
+    }
 }
 
 ///
