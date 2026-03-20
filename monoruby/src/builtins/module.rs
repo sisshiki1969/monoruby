@@ -205,7 +205,7 @@ fn teq(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/alias_method.html]
 #[monoruby_builtin]
 fn alias_method(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -214,6 +214,27 @@ fn alias_method(
     let new_name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let old_name = lfp.arg(1).expect_symbol_or_string(globals)?;
     globals.alias_method_for_class(class_id, new_name, old_name)?;
+    let module = globals.store[class_id].get_module();
+    if let Some(original_obj) = module.is_singleton() {
+        vm.invoke_method_if_exists(
+            globals,
+            IdentId::SINGLETON_METHOD_ADDED,
+            original_obj,
+            &[Value::symbol(new_name)],
+            None,
+            None,
+        )?;
+    } else {
+        let receiver: Value = module.into();
+        vm.invoke_method_if_exists(
+            globals,
+            IdentId::METHOD_ADDED,
+            receiver,
+            &[Value::symbol(new_name)],
+            None,
+            None,
+        )?;
+    }
     Ok(Value::symbol(new_name))
 }
 
@@ -501,15 +522,27 @@ fn define_method(
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
     let _ = func_id;
-    let receiver = globals.store[class_id].get_module().into();
-    vm.invoke_method_if_exists(
-        globals,
-        IdentId::METHOD_ADDED,
-        receiver,
-        &[Value::symbol(name)],
-        None,
-        None,
-    )?;
+    let module = globals.store[class_id].get_module();
+    if let Some(original_obj) = module.is_singleton() {
+        vm.invoke_method_if_exists(
+            globals,
+            IdentId::SINGLETON_METHOD_ADDED,
+            original_obj,
+            &[Value::symbol(name)],
+            None,
+            None,
+        )?;
+    } else {
+        let receiver: Value = module.into();
+        vm.invoke_method_if_exists(
+            globals,
+            IdentId::METHOD_ADDED,
+            receiver,
+            &[Value::symbol(name)],
+            None,
+            None,
+        )?;
+    }
     Ok(Value::symbol(name))
 }
 

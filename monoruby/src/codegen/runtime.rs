@@ -846,15 +846,30 @@ pub(super) extern "C" fn alias_method(
     };
     let func_id = vm.cfp().lfp().func_id();
     let class_id = func_id.lexical_class(globals);
-    globals
-        .alias_method_for_class(class_id, new, old)
-        .map_or_else(
-            |err| {
-                vm.set_error(err);
-                None
-            },
-            |_| Some(Value::nil()),
-        )
+    if let Err(err) = globals.alias_method_for_class(class_id, new, old) {
+        vm.set_error(err);
+        return None;
+    }
+    let module = globals.store[class_id].get_module();
+    let hook_id = if let Some(original_obj) = module.is_singleton() {
+        (IdentId::SINGLETON_METHOD_ADDED, original_obj)
+    } else {
+        (IdentId::METHOD_ADDED, module.into())
+    };
+    match vm.invoke_method_if_exists(
+        globals,
+        hook_id.0,
+        hook_id.1,
+        &[Value::symbol(new)],
+        None,
+        None,
+    ) {
+        Ok(_) => Some(Value::nil()),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 pub(super) extern "C" fn defined_const(
