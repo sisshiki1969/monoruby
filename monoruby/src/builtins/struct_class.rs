@@ -2,6 +2,7 @@ use super::*;
 
 pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Struct", STRUCT_CLASS, ObjTy::CLASS);
+    globals.define_builtin_class_func(STRUCT_CLASS, "allocate", allocate, 0);
     globals.define_builtin_class_func_rest(STRUCT_CLASS, "new", struct_new);
     globals.define_builtin_class_func_rest(STRUCT_CLASS, "initialize", struct_initialize);
 
@@ -10,6 +11,22 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRUCT_CLASS, "members", members, 0);
     globals.define_builtin_funcs(STRUCT_CLASS, "==", &["eql?"], eq, 1);
     globals.define_builtin_func(STRUCT_CLASS, "!=", ne, 1);
+}
+
+/// Struct.allocate raises "allocator undefined" for the base Struct class,
+/// but allows allocate on Struct subclasses (e.g. Customer = Struct.new(:name)).
+#[monoruby_builtin]
+fn allocate(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    if class_id == STRUCT_CLASS {
+        return Err(MonorubyErr::typeerr("allocator undefined for Struct"));
+    }
+    Ok(Value::object(class_id))
 }
 
 ///

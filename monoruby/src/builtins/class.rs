@@ -672,6 +672,37 @@ mod tests {
         run_test_error("TrueClass.allocate");
         run_test_error("FalseClass.allocate");
         run_test_error("Symbol.allocate");
+        // String.allocate returns an empty String
+        run_test("String.allocate.class");
+        run_test("String.allocate");
+        run_test(
+            r#"
+            class MyString < String; end
+            MyString.allocate.class
+            "#,
+        );
+        // Time.allocate returns a Time
+        run_test("Time.allocate.class");
+        // Range.allocate returns a Range
+        run_test("Range.allocate.class");
+        // Exception.allocate returns an Exception
+        run_test("Exception.allocate.class");
+        run_test(
+            r#"
+            class MyError < StandardError; end
+            MyError.allocate.class
+            "#,
+        );
+        // Regexp.allocate returns a Regexp
+        run_test("Regexp.allocate.class");
+        // IO.allocate returns an IO
+        run_test("IO.allocate.class");
+        // allocator undefined for special classes
+        run_test_error("Proc.allocate");
+        run_test_error("Method.allocate");
+        run_test_error("UnboundMethod.allocate");
+        run_test_error("Binding.allocate");
+        run_test_error("Struct.allocate");
     }
 
     #[test]

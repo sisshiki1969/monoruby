@@ -8,6 +8,7 @@ use std::fs::File;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("IO", IO_CLASS, ObjTy::IO);
     globals.define_builtin_class_func(IO_CLASS, "new", io_new, 0);
+    globals.define_builtin_class_func(IO_CLASS, "allocate", allocate, 0);
     globals.define_builtin_func(IO_CLASS, "<<", shl, 1);
     globals.define_builtin_func_with(IO_CLASS, "puts", puts, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "print", print, 0, 0, true);
@@ -42,6 +43,18 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn io_new(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Err(MonorubyErr::argumenterr("IO.new is not supported"))
+}
+
+/// ### IO.allocate
+#[monoruby_builtin]
+fn allocate(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    Ok(Value::new_io_with_class(IoInner::Closed, class_id))
 }
 
 ///

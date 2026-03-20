@@ -17,6 +17,8 @@ pub(super) fn init(globals: &mut Globals) {
         true,
     );
 
+    globals.define_builtin_class_func(EXCEPTION_CLASS, "allocate", allocate, 0);
+
     let standarderr = globals.define_class("StandardError", exception_class, OBJECT_CLASS);
 
     let system_exit = globals.define_builtin_exception_class(
@@ -77,6 +79,23 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "set_backtrace", set_backtrace, 1);
+}
+
+/// ### Exception.allocate
+#[monoruby_builtin]
+fn allocate(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let name = class_id.get_name(globals);
+    Ok(Value::new_exception_from_with_class(
+        name,
+        class_id,
+        class_id,
+    ))
 }
 
 ///
