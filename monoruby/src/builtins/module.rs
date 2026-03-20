@@ -61,6 +61,14 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         false,
     );
+    globals.define_builtin_func_with(
+        MODULE_CLASS,
+        "public_instance_methods",
+        public_instance_methods,
+        0,
+        1,
+        false,
+    );
     globals.define_builtin_func_rest(MODULE_CLASS, "include", include);
     globals.define_builtin_func(MODULE_CLASS, "append_features", append_features, 1);
     globals.define_private_builtin_func(MODULE_CLASS, "extend_object", extend_object, 1);
@@ -95,6 +103,8 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func_rest(MODULE_CLASS, "private_class_method", private_class_method);
+    globals.define_builtin_func(MODULE_CLASS, "class_variable_set", class_variable_set, 2);
+    globals.define_builtin_func(MODULE_CLASS, "class_variable_get", class_variable_get, 1);
     globals.define_builtin_funcs(MODULE_CLASS, "to_s", &["inspect"], tos, 0);
     globals.define_builtin_func(MODULE_CLASS, "name", name, 0);
     globals.define_builtin_func(MODULE_CLASS, "set_temporary_name", set_temporary_name, 1);
@@ -566,6 +576,28 @@ fn private_instance_methods(
 }
 
 ///
+/// ### Module#public_instance_methods
+///
+/// - public_instance_methods(inherited_too = true) -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public_instance_methods.html]
+#[monoruby_builtin]
+fn public_instance_methods(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    Ok(Value::array_from_vec(if !inherited_too {
+        globals.store.get_method_names(class_id)
+    } else {
+        globals.store.get_method_names_inherit(class_id, false)
+    }))
+}
+
+///
 /// ### Module#include
 /// - include(*mod) -> self
 ///
@@ -890,6 +922,45 @@ fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
         None => Ok(Value::nil()),
     }
+}
+
+///
+/// ### Module#class_variable_set
+///
+/// - class_variable_set(name, val) -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_variable_set.html]
+#[monoruby_builtin]
+fn class_variable_set(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let val = lfp.arg(1);
+    globals.set_class_variable(class_id, name, val);
+    Ok(val)
+}
+
+///
+/// ### Module#class_variable_get
+///
+/// - class_variable_get(name) -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_variable_get.html]
+#[monoruby_builtin]
+fn class_variable_get(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let module = globals.store[class_id].get_module();
+    globals.get_class_variable(module, name).map(|(_, v)| v)
 }
 
 /// ### Module#set_temporary_name

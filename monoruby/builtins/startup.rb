@@ -1,11 +1,17 @@
 RUBY_PLATFORM = "x86_64-linux"
 RUBY_PATCHLEVEL = 0
 
-require 'rbconfig' 
+require 'rbconfig'
 
 class BasicObject
-  def method_missing(name, *args)
-    raise NoMethodError, "undefined method '#{name}' for an instance of #{self.class}"
+  private
+  def singleton_method_added(name)
+  end
+
+  def singleton_method_removed(name)
+  end
+
+  def singleton_method_undefined(name)
   end
 end
 
@@ -78,9 +84,6 @@ class Module
   end
 
   def method_undefined(name)
-  end
-
-  def singleton_method_added(name)
   end
 
   def const_added(name)

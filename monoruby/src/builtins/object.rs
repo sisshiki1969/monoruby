@@ -10,14 +10,54 @@ pub(super) fn init(globals: &mut Globals) {
 
     globals.define_builtin_inline_func(
         BASIC_OBJECT_CLASS,
-        "!",
-        not_,
-        Box::new(object_not),
+        "__id__",
+        basicobject_id,
+        Box::new(object_object_id),
         0,
     );
+    globals.define_builtin_inline_func(BASIC_OBJECT_CLASS, "!", not_, Box::new(object_not), 0);
+    globals.define_builtin_func(BASIC_OBJECT_CLASS, "equal?", equal_, 1);
+    globals.define_builtin_funcs_with_effect(
+        BASIC_OBJECT_CLASS,
+        "instance_eval",
+        &[],
+        instance_eval,
+        0,
+        3,
+        false,
+        Effect::EVAL,
+    );
+    globals.define_builtin_funcs_with_effect(
+        BASIC_OBJECT_CLASS,
+        "instance_exec",
+        &[],
+        instance_exec,
+        0,
+        0,
+        true,
+        Effect::EVAL,
+    );
 
-    globals.define_builtin_func(OBJECT_CLASS, "==", eq, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "!=", ne, 1);
+    globals.define_builtin_func(BASIC_OBJECT_CLASS, "==", eq, 1);
+    globals.define_builtin_func(BASIC_OBJECT_CLASS, "!=", ne, 1);
+    globals.define_builtin_inline_funcs_with_kw(
+        BASIC_OBJECT_CLASS,
+        "__send__",
+        &[],
+        crate::builtins::send,
+        Box::new(crate::builtins::object_send),
+        0,
+        0,
+        true,
+        &[],
+        true,
+    );
+    globals.define_private_builtin_func(BASIC_OBJECT_CLASS, "initialize", bo_initialize, 0);
+    globals.define_private_builtin_func_rest(
+        BASIC_OBJECT_CLASS,
+        "method_missing",
+        bo_method_missing,
+    );
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "hash", hash, 0);
     globals.define_builtin_func(OBJECT_CLASS, "eql?", eql_, 1);
@@ -26,7 +66,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_private_builtin_func(OBJECT_CLASS, "initialize_clone", initialize_clone, 1);
     globals.define_private_builtin_func(OBJECT_CLASS, "initialize_dup", initialize_clone, 1);
     globals.define_builtin_funcs_rest(OBJECT_CLASS, "enum_for", &["to_enum"], to_enum);
-    globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_, 1);
     globals.define_builtin_func_rest(OBJECT_CLASS, "extend", extend);
     globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
     globals.define_builtin_inline_func(
@@ -67,26 +106,6 @@ pub(super) fn init(globals: &mut Globals) {
         &[],
         true,
     );
-    globals.define_builtin_funcs_with_effect(
-        OBJECT_CLASS,
-        "instance_eval",
-        &[],
-        instance_eval,
-        0,
-        3,
-        false,
-        Effect::EVAL,
-    );
-    globals.define_builtin_funcs_with_effect(
-        OBJECT_CLASS,
-        "instance_exec",
-        &[],
-        instance_exec,
-        0,
-        0,
-        true,
-        Effect::EVAL,
-    );
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
     globals.define_builtin_func_with(
         OBJECT_CLASS,
@@ -105,6 +124,44 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         false,
     );
+}
+
+///
+/// ### BasicObject#__id__
+///
+/// __id__ -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/BasicObject/i/__id__.html]
+#[monoruby_builtin]
+fn basicobject_id(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::integer(lfp.self_val().id() as i64))
+}
+
+///
+/// ### BasicObject#initialize
+///
+#[monoruby_builtin]
+fn bo_initialize(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::nil())
+}
+
+///
+/// ### BasicObject#method_missing
+///
+#[monoruby_builtin]
+fn bo_method_missing(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    let name = args[0].expect_symbol_or_string(globals)?;
+    Err(MonorubyErr::method_not_found(
+        &globals.store,
+        name,
+        lfp.self_val(),
+    ))
 }
 
 ///
@@ -861,7 +918,7 @@ mod tests {
     fn object_id() {
         run_test_with_prelude(
             r##"
-            id == a.object_id
+            [id == a.object_id, a.__id__ == a.object_id]
             "##,
             r##"
             a = [1,2,3]
@@ -870,7 +927,7 @@ mod tests {
         );
         run_test_with_prelude(
             r##"
-            id == a.object_id
+            [id == a.object_id, a.__id__ == a.object_id]
             "##,
             r##"
             a = 1356
@@ -879,7 +936,7 @@ mod tests {
         );
         run_test_with_prelude(
             r##"
-            id == a.object_id
+            [id == a.object_id, a.__id__ == a.object_id]
             "##,
             r##"
             a = -49.52
