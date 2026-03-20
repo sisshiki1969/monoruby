@@ -903,6 +903,12 @@ impl RValue {
                         ObjTy::METHOD => ObjKind {
                             method: self.kind.method.clone(),
                         },
+                        ObjTy::UMETHOD => ObjKind {
+                            umethod: self.kind.umethod.clone(),
+                        },
+                        ObjTy::MATCHDATA => ObjKind {
+                            matchdata: self.kind.matchdata.clone(),
+                        },
                         ty => unreachable!("{ty:?}"),
                     }
                 } else {
