@@ -297,7 +297,8 @@ pub(crate) extern "C" fn pow_ii(lhs: i64, rhs: i64, vm: &mut Executor) -> Option
             }
         }
     } else {
-        Some(Value::float(f64::INFINITY))
+        vm.set_error(MonorubyErr::exponent_is_too_large());
+        return None;
     }
 }
 
@@ -314,18 +315,9 @@ pub(crate) extern "C" fn pow_values(
 ) -> Option<Value> {
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => pow_ii(lhs, rhs, vm)?,
-        (RV::Fixnum(lhs), RV::BigInt(rhs)) => {
-            if let Ok(rhs) = u32::try_from(rhs) {
-                let base_bits = 64 - lhs.unsigned_abs().leading_zeros() as u64;
-                if !check_pow_limit(base_bits, rhs as u64) {
-                    vm.set_error(MonorubyErr::exponent_is_too_large());
-                    return None;
-                }
-                Value::bigint(BigInt::from(lhs).pow(rhs))
-            } else {
-                vm.set_error(MonorubyErr::exponent_is_too_large());
-                return None;
-            }
+        (RV::Fixnum(_), RV::BigInt(_)) => {
+            vm.set_error(MonorubyErr::exponent_is_too_large());
+            return None;
         }
         (RV::Fixnum(lhs), RV::Float(rhs)) => pow_ff(lhs as f64, rhs),
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => {
