@@ -2319,4 +2319,24 @@ mod tests {
         "##,
         );
     }
+
+    #[test]
+    fn module_to_s() {
+        run_test("Integer.to_s");
+        run_test("String.to_s");
+        run_test("Module.to_s");
+        run_test("Class.to_s");
+        run_test(
+            r##"
+        module Foo; end
+        Foo.to_s
+        "##,
+        );
+        run_test(
+            r##"
+        class Bar; end
+        Bar.to_s
+        "##,
+        );
+    }
 }

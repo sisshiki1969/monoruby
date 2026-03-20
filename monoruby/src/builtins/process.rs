@@ -164,6 +164,11 @@ mod tests {
     }
 
     #[test]
+    fn clock_gettime_invalid() {
+        run_test_error("Process.clock_gettime(-1)");
+    }
+
+    #[test]
     fn process_fork() {
         run_test(
             r#"
