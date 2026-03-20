@@ -210,8 +210,11 @@ fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Val
 }
 
 #[monoruby_builtin]
-fn ne(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(lfp.self_val().id() != lfp.arg(0).id()))
+fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let other = lfp.arg(0);
+    let res = vm.invoke_method_inner(globals, IdentId::_EQ, self_val, &[other], None, None)?;
+    Ok(Value::bool(!res.as_bool()))
 }
 
 ///

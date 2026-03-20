@@ -767,10 +767,13 @@ impl Executor {
                         }
                     }
                     Visibility::Protected => {
-                        //if !is_func_call {
-                        //    self.err_protected_method_called(func_name, obj);
-                        //    return None;
-                        //}
+                        let caller_self = self.cfp().lfp().self_val();
+                        let recv_class = recv.real_class(&globals.store).id();
+                        if !caller_self.is_kind_of(&globals.store, recv_class) {
+                            return Err(MonorubyErr::protected_method_called(
+                                globals, func_name, recv,
+                            ));
+                        }
                     }
                     _ => {}
                 }

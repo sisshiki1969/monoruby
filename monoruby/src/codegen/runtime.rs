@@ -769,6 +769,11 @@ pub(super) extern "C" fn singleton_define_method(
     func: FuncId,
     obj: Value,
 ) -> Option<Value> {
+    let class = obj.class();
+    if class == INTEGER_CLASS || class == FLOAT_CLASS || class == SYMBOL_CLASS {
+        vm.set_error(MonorubyErr::typeerr("can't define singleton"));
+        return None;
+    }
     let current_func = vm.method_func_id();
     if let Some(iseq) = globals.store[func].is_iseq() {
         globals.store[iseq].lexical_context =
