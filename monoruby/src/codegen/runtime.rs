@@ -962,6 +962,10 @@ pub(super) extern "C" fn err_divide_by_zero(vm: &mut Executor) {
     vm.err_divide_by_zero();
 }
 
+pub(super) extern "C" fn err_exponent_too_large(vm: &mut Executor) {
+    vm.set_error(MonorubyErr::argumenterr("exponent is too large"));
+}
+
 pub(super) extern "C" fn err_method_return(vm: &mut Executor, _globals: &mut Globals, val: Value) {
     let target_lfp = vm.cfp().outermost_lfp();
     vm.set_error(MonorubyErr::method_return(val, target_lfp));

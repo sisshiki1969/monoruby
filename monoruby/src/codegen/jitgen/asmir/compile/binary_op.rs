@@ -232,14 +232,27 @@ impl Codegen {
     }
 
     pub(super) fn integer_exp(&mut self, using_xmm: UsingXmm) {
+        let raise = self.entry_raise();
+        let exp_too_large = self.jit.label();
         self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
             sarq rdi, 1;
             sarq rsi, 1;
             movq rax, (pow_ii as u64);
             call rax;
+            cmpq rax, (Value::nil().id());
+            jeq  exp_too_large;
         );
         self.xmm_restore(using_xmm);
+        self.jit.select_page(1);
+        monoasm!( &mut self.jit,
+        exp_too_large:
+            movq rdi, rbx;
+            movq rax, (runtime::err_exponent_too_large);
+            call rax;
+            jmp  raise;
+        );
+        self.jit.select_page(0);
     }
 }
 
