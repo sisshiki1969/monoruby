@@ -734,19 +734,32 @@ fn undef_method(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let receiver = globals.store[class_id].get_module().into();
+    let module = globals.store[class_id].get_module();
+    let receiver: Value = module.into();
+    let singleton_owner = module.is_singleton();
     let names = lfp.arg(0).as_array();
     for name in names.iter().cloned() {
         let name = name.expect_symbol_or_string(globals)?;
         globals.undef_method_for_class(class_id, name)?;
-        vm.invoke_method_if_exists(
-            globals,
-            IdentId::METHOD_UNDEFINED,
-            receiver,
-            &[Value::symbol(name)],
-            None,
-            None,
-        )?;
+        if let Some(obj) = singleton_owner {
+            vm.invoke_method_if_exists(
+                globals,
+                IdentId::SINGLETON_METHOD_UNDEFINED,
+                obj,
+                &[Value::symbol(name)],
+                None,
+                None,
+            )?;
+        } else {
+            vm.invoke_method_if_exists(
+                globals,
+                IdentId::METHOD_UNDEFINED,
+                receiver,
+                &[Value::symbol(name)],
+                None,
+                None,
+            )?;
+        }
     }
     Ok(lfp.self_val())
 }
@@ -765,19 +778,32 @@ fn remove_method(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let receiver = globals.store[class_id].get_module().into();
+    let module = globals.store[class_id].get_module();
+    let receiver: Value = module.into();
+    let singleton_owner = module.is_singleton();
     let names = lfp.arg(0).as_array();
     for name in names.iter().cloned() {
         let name = name.expect_symbol_or_string(globals)?;
         globals.remove_method(class_id, name)?;
-        vm.invoke_method_if_exists(
-            globals,
-            IdentId::METHOD_REMOVED,
-            receiver,
-            &[Value::symbol(name)],
-            None,
-            None,
-        )?;
+        if let Some(obj) = singleton_owner {
+            vm.invoke_method_if_exists(
+                globals,
+                IdentId::SINGLETON_METHOD_REMOVED,
+                obj,
+                &[Value::symbol(name)],
+                None,
+                None,
+            )?;
+        } else {
+            vm.invoke_method_if_exists(
+                globals,
+                IdentId::METHOD_REMOVED,
+                receiver,
+                &[Value::symbol(name)],
+                None,
+                None,
+            )?;
+        }
     }
     Ok(lfp.self_val())
 }
@@ -2212,6 +2238,84 @@ mod tests {
               end
               def foo; end
               undef_method :foo
+            end
+            $res
+            "##,
+        );
+    }
+
+    #[test]
+    fn singleton_method_removed_hook() {
+        run_test_once(
+            r##"
+            $res = []
+            class C
+              def self.singleton_method_removed(name)
+                $res << name
+              end
+              def self.foo; end
+              def self.bar; end
+              class << self
+                remove_method :foo
+              end
+            end
+            $res
+            "##,
+        );
+    }
+
+    #[test]
+    fn singleton_method_undefined_hook() {
+        run_test_once(
+            r##"
+            $res = []
+            class C
+              def self.singleton_method_undefined(name)
+                $res << name
+              end
+              def self.foo; end
+              def self.bar; end
+              class << self
+                undef_method :foo, :bar
+              end
+            end
+            $res
+            "##,
+        );
+    }
+
+    #[test]
+    fn singleton_method_removed_on_object() {
+        run_test_once(
+            r##"
+            $res = []
+            obj = Object.new
+            def obj.singleton_method_removed(name)
+              $res << name
+            end
+            def obj.foo; end
+            def obj.bar; end
+            class << obj
+              remove_method :foo, :bar
+            end
+            $res
+            "##,
+        );
+    }
+
+    #[test]
+    fn singleton_method_undefined_on_object() {
+        run_test_once(
+            r##"
+            $res = []
+            obj = Object.new
+            def obj.singleton_method_undefined(name)
+              $res << name
+            end
+            def obj.foo; end
+            def obj.bar; end
+            class << obj
+              undef_method :foo, :bar
             end
             $res
             "##,
