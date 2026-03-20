@@ -537,9 +537,9 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn integer_exp(&mut self, state: &AbstractFrame) {
+    pub(super) fn integer_exp(&mut self, state: &AbstractFrame, deopt: AsmDeopt) {
         let using_xmm = state.get_using_xmm();
-        self.push(AsmInst::IntegerExp { using_xmm });
+        self.push(AsmInst::IntegerExp { using_xmm, deopt });
     }
 
     ///
@@ -1103,6 +1103,7 @@ pub(super) enum AsmInst {
     },
     IntegerExp {
         using_xmm: UsingXmm,
+        deopt: AsmDeopt,
     },
 
     ///

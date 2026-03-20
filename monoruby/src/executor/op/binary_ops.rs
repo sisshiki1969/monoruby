@@ -264,19 +264,41 @@ binop_values_no_opt!(
     (bitxor, IdentId::_BXOR)
 );
 
-pub(crate) extern "C" fn pow_ii(lhs: i64, rhs: i64) -> Value {
+/// Maximum result size in bits for integer exponentiation (16 GB on 64-bit).
+/// Matches CRuby's BIGLEN_LIMIT in bignum.c.
+const BIGLEN_LIMIT: u64 = 1u64 << 34;
+
+/// Check if the result of base ** exp would exceed the size limit.
+/// Returns true if the exponentiation is safe to perform.
+fn check_pow_limit(base_bits: u64, exp: u64) -> bool {
+    base_bits <= BIGLEN_LIMIT
+        && exp <= BIGLEN_LIMIT
+        && base_bits
+            .checked_mul(exp)
+            .map_or(false, |v| v <= BIGLEN_LIMIT)
+}
+
+pub(crate) extern "C" fn pow_ii(lhs: i64, rhs: i64, vm: &mut Executor) -> Option<Value> {
     if let Ok(rhs) = i32::try_from(rhs) {
         if rhs < 0 {
             // TODO: support negative exponent for integer base.
-            return Value::float((lhs as f64).powf(rhs as f64));
+            return Some(Value::float((lhs as f64).powf(rhs as f64)));
         }
         let rhs = rhs as u32;
         match lhs.checked_pow(rhs) {
-            Some(res) => Value::integer(res),
-            None => Value::bigint(BigInt::from(lhs).pow(rhs)),
+            Some(res) => Some(Value::integer(res)),
+            None => {
+                let base_bits = 64 - lhs.unsigned_abs().leading_zeros() as u64;
+                if !check_pow_limit(base_bits, rhs as u64) {
+                    vm.set_error(MonorubyErr::exponent_is_too_large());
+                    return None;
+                }
+                Some(Value::bigint(BigInt::from(lhs).pow(rhs)))
+            }
         }
     } else {
-        Value::float(f64::INFINITY)
+        vm.set_error(MonorubyErr::exponent_is_too_large());
+        return None;
     }
 }
 
@@ -292,29 +314,34 @@ pub(crate) extern "C" fn pow_values(
     rhs: Value,
 ) -> Option<Value> {
     let v = match (lhs.unpack(), rhs.unpack()) {
-        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => pow_ii(lhs, rhs),
-        (RV::Fixnum(lhs), RV::BigInt(rhs)) => {
-            if let Ok(rhs) = rhs.try_into() {
-                Value::bigint(BigInt::from(lhs).pow(rhs))
-            } else {
-                Value::float(f64::INFINITY)
-            }
+        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => pow_ii(lhs, rhs, vm)?,
+        (RV::Fixnum(_), RV::BigInt(_)) => {
+            vm.set_error(MonorubyErr::exponent_is_too_large());
+            return None;
         }
         (RV::Fixnum(lhs), RV::Float(rhs)) => pow_ff(lhs as f64, rhs),
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => {
-            if let Ok(rhs) = i32::try_from(rhs) {
-                let rhs = rhs as u32;
-                Value::bigint(lhs.pow(rhs))
-            } else {
+            if rhs < 0 {
+                // TODO: support negative exponent for bigint base.
                 Value::float(f64::INFINITY)
+            } else {
+                let base_bits = lhs.bits();
+                if !check_pow_limit(base_bits, rhs as u64) {
+                    vm.set_error(MonorubyErr::exponent_is_too_large());
+                    return None;
+                }
+                if let Ok(rhs) = u32::try_from(rhs) {
+                    Value::bigint(lhs.pow(rhs))
+                } else {
+                    vm.set_error(MonorubyErr::exponent_is_too_large());
+                    return None;
+                }
             }
         }
-        (RV::BigInt(lhs), RV::BigInt(rhs)) => {
-            if let Ok(rhs) = rhs.try_into() {
-                Value::bigint(lhs.pow(rhs))
-            } else {
-                Value::float(f64::INFINITY)
-            }
+        (RV::BigInt(_), RV::BigInt(_)) => {
+            // If exponent is a BigInt, it's always too large (matches CRuby behavior).
+            vm.set_error(MonorubyErr::exponent_is_too_large());
+            return None;
         }
         (RV::BigInt(lhs), RV::Float(rhs)) => pow_ff(lhs.to_f64().unwrap(), rhs),
         (RV::Fixnum(_) | RV::BigInt(_), _) => {

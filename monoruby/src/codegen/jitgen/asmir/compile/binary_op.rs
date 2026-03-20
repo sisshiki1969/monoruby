@@ -190,6 +190,7 @@ impl Codegen {
                 );
                 self.jit.select_page(0);
             }
+            BinOpK::Exp => unreachable!(),
             BinOpK::BitOr => match mode {
                 OpMode::RR(_, _) => {
                     monoasm!( &mut self.jit,
@@ -227,19 +228,31 @@ impl Codegen {
                     );
                 }
             },
-            _ => unreachable!(),
         }
     }
 
-    pub(super) fn integer_exp(&mut self, using_xmm: UsingXmm) {
+    pub(super) fn integer_exp(&mut self, using_xmm: UsingXmm, deopt: &DestLabel) {
+        let too_large = self.jit.label();
         self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
             sarq rdi, 1;
             sarq rsi, 1;
+            movq rdx, rbx;
             movq rax, (pow_ii as u64);
             call rax;
         );
         self.xmm_restore(using_xmm);
+        monoasm!( &mut self.jit,
+            testq rax, rax;
+            jeq too_large;
+        );
+        self.jit.select_page(1);
+        monoasm!( &mut self.jit,
+        too_large:
+            movq rdi, (Value::symbol_from_str("_exponent_too_large").id());
+            jmp deopt;
+        );
+        self.jit.select_page(0);
     }
 }
 

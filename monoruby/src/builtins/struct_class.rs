@@ -16,12 +16,7 @@ pub(crate) fn init(globals: &mut Globals) {
 /// Struct.allocate raises "allocator undefined" for the base Struct class,
 /// but allows allocate on Struct subclasses (e.g. Customer = Struct.new(:name)).
 #[monoruby_builtin]
-fn allocate(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn allocate(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     if class_id == STRUCT_CLASS {
         return Err(MonorubyErr::typeerr("allocator undefined for Struct"));
