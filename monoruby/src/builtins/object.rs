@@ -743,15 +743,12 @@ fn instance_eval_inner(
         } else {
             "(eval)".into()
         };
-        let fid =
-            globals.compile_script_eval(expr, path, caller_cfp, Some(self_val.class()))?;
+        let fid = globals.compile_script_eval(expr, path, caller_cfp, Some(self_val.class()))?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block_with_self(globals, &proc, self_val, &[])
     } else {
         Err(MonorubyErr::wrong_number_of_arg_range(0, 1..=3))
-    };
-    vm.pop_class_context();
-    res
+    }
 }
 
 ///
