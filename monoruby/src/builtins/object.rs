@@ -77,26 +77,30 @@ pub(super) fn init(globals: &mut Globals) {
         1,
     );
 
-    // Object methods
-    globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "hash", hash, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "eql?", eql_, 1);
-    globals.define_builtin_funcs(OBJECT_CLASS, "dup", &["clone"], dup, 0);
-    globals.define_private_builtin_func(OBJECT_CLASS, "initialize_copy", initialize_copy, 1);
-    globals.define_private_builtin_func(OBJECT_CLASS, "initialize_clone", initialize_clone, 1);
-    globals.define_private_builtin_func(OBJECT_CLASS, "initialize_dup", initialize_clone, 1);
-    globals.define_builtin_funcs_rest(OBJECT_CLASS, "enum_for", &["to_enum"], to_enum);
-    globals.define_builtin_func_rest(OBJECT_CLASS, "extend", extend);
-    globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
+}
+
+/// Register methods that belong to the Kernel module.
+/// In CRuby, these are all defined on Kernel, not Object.
+pub(super) fn init_kernel(globals: &mut Globals, kernel_class: ClassId) {
+    globals.define_builtin_func(kernel_class, "class", class, 0);
+    globals.define_builtin_func(kernel_class, "hash", hash, 0);
+    globals.define_builtin_func(kernel_class, "eql?", eql_, 1);
+    globals.define_builtin_funcs(kernel_class, "dup", &["clone"], dup, 0);
+    globals.define_private_builtin_func(kernel_class, "initialize_copy", initialize_copy, 1);
+    globals.define_private_builtin_func(kernel_class, "initialize_clone", initialize_clone, 1);
+    globals.define_private_builtin_func(kernel_class, "initialize_dup", initialize_clone, 1);
+    globals.define_builtin_funcs_rest(kernel_class, "enum_for", &["to_enum"], to_enum);
+    globals.define_builtin_func_rest(kernel_class, "extend", extend);
+    globals.define_builtin_func(kernel_class, "kind_of?", is_a, 1);
     globals.define_builtin_inline_func(
-        OBJECT_CLASS,
+        kernel_class,
         "object_id",
         object_id,
         Box::new(object_object_id),
         0,
     );
     globals.define_builtin_inline_func_with(
-        OBJECT_CLASS,
+        kernel_class,
         "respond_to?",
         respond_to,
         Box::new(object_respond_to),
@@ -104,18 +108,18 @@ pub(super) fn init(globals: &mut Globals) {
         2,
         false,
     );
-    globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_defined?", iv_defined, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set, 2);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_variables", iv, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "remove_instance_variable", iv_remove, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
+    globals.define_builtin_func(kernel_class, "singleton_class", singleton_class, 0);
+    globals.define_builtin_func(kernel_class, "to_s", to_s, 0);
+    globals.define_builtin_func(kernel_class, "inspect", inspect, 0);
+    globals.define_builtin_func(kernel_class, "instance_of?", instance_of, 1);
+    globals.define_builtin_func(kernel_class, "instance_variable_defined?", iv_defined, 1);
+    globals.define_builtin_func(kernel_class, "instance_variable_set", iv_set, 2);
+    globals.define_builtin_func(kernel_class, "instance_variable_get", iv_get, 1);
+    globals.define_builtin_func(kernel_class, "instance_variables", iv, 0);
+    globals.define_builtin_func(kernel_class, "remove_instance_variable", iv_remove, 1);
+    globals.define_builtin_func(kernel_class, "is_a?", is_a, 1);
     globals.define_builtin_inline_funcs_with_kw(
-        OBJECT_CLASS,
+        kernel_class,
         "send",
         &["__send__", "public_send"],
         crate::builtins::send,
@@ -126,18 +130,18 @@ pub(super) fn init(globals: &mut Globals) {
         &[],
         true,
     );
-    globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
+    globals.define_builtin_func(kernel_class, "method", method, 1);
     globals.define_builtin_func_with(
-        OBJECT_CLASS,
+        kernel_class,
         "define_singleton_method",
         define_singleton_method,
         1,
         2,
         false,
     );
-    globals.define_builtin_func_with(OBJECT_CLASS, "methods", methods, 0, 1, false);
+    globals.define_builtin_func_with(kernel_class, "methods", methods, 0, 1, false);
     globals.define_builtin_func_with(
-        OBJECT_CLASS,
+        kernel_class,
         "singleton_methods",
         singleton_methods,
         0,

@@ -115,6 +115,9 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     //globals.define_builtin_inline_func(kernel_class, "____max", max, Box::new(inline_max), 2);
     //globals.define_builtin_inline_func(kernel_class, "____min", min, Box::new(inline_min), 2);
 
+    // Methods defined in object.rs that belong to Kernel (matching CRuby)
+    super::object::init_kernel(globals, kernel_class);
+
     klass
 }
 
