@@ -474,6 +474,19 @@ impl Executor {
                     .unwrap();
                 v
             }
+            MonorubyErrKind::NotMethod(Some(receiver)) => {
+                let receiver = *receiver;
+                let v = Value::new_exception(err);
+                globals
+                    .store
+                    .set_ivar(
+                        v,
+                        IdentId::get_id("/receiver"),
+                        Value::from_u64(receiver),
+                    )
+                    .unwrap();
+                v
+            }
             _ => Value::new_exception(err),
         }
     }
@@ -626,7 +639,7 @@ impl Executor {
         }
         globals.set_constant(parent, name, val);
         let receiver = globals.store[parent].get_module().into();
-        self.invoke_method_if_exists(
+        self.invoke_method_inner(
             globals,
             IdentId::CONST_ADDED,
             receiver,
@@ -696,7 +709,7 @@ impl Executor {
         } else {
             (IdentId::METHOD_ADDED, module.into())
         };
-        self.invoke_method_if_exists(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
+        self.invoke_method_inner(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
         Ok(())
     }
 
@@ -713,7 +726,7 @@ impl Executor {
         } else {
             (IdentId::METHOD_REMOVED, module.into())
         };
-        self.invoke_method_if_exists(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
+        self.invoke_method_inner(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
         Ok(())
     }
 
@@ -730,7 +743,7 @@ impl Executor {
         } else {
             (IdentId::METHOD_UNDEFINED, module.into())
         };
-        self.invoke_method_if_exists(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
+        self.invoke_method_inner(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
         Ok(())
     }
 
@@ -766,7 +779,7 @@ impl Executor {
         if cref.module_function {
             let module = globals.store[class_id].get_module();
             let receiver: Value = module.into();
-            self.invoke_method_if_exists(
+            self.invoke_method_inner(
                 globals,
                 IdentId::SINGLETON_METHOD_ADDED,
                 receiver,
@@ -1309,7 +1322,7 @@ impl Executor {
                 } else {
                     let new_class =
                         globals.define_class_with_identid(name, Some(superclass), parent);
-                    self.invoke_method_if_exists(
+                    self.invoke_method_inner(
                         globals,
                         IdentId::INHERITED,
                         superclass.as_val(),

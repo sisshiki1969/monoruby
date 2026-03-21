@@ -323,6 +323,13 @@ impl ClassInfo {
         self.class_variables.as_ref()?.get(&name).cloned()
     }
 
+    fn cvar_names(&self) -> Vec<IdentId> {
+        match &self.class_variables {
+            Some(cv) => cv.keys().cloned().collect(),
+            None => vec![],
+        }
+    }
+
     ///
     /// Remove a constant with *name* in the class of *class_id*.
     ///
@@ -785,6 +792,10 @@ impl ClassInfoTable {
 }
 
 impl Store {
+    pub(crate) fn get_class_variable_names(&self, class_id: ClassId) -> Vec<IdentId> {
+        self[class_id].cvar_names()
+    }
+
     ///
     /// Add a new public method *func* with *name* to the class of *class_id*.
     ///

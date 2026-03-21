@@ -105,6 +105,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "private_class_method", private_class_method);
     globals.define_builtin_func(MODULE_CLASS, "class_variable_set", class_variable_set, 2);
     globals.define_builtin_func(MODULE_CLASS, "class_variable_get", class_variable_get, 1);
+    globals.define_builtin_func(MODULE_CLASS, "class_variables", class_variables, 0);
     globals.define_builtin_funcs(MODULE_CLASS, "to_s", &["inspect"], tos, 0);
     globals.define_builtin_func(MODULE_CLASS, "name", name, 0);
     globals.define_builtin_func(MODULE_CLASS, "set_temporary_name", set_temporary_name, 1);
@@ -113,6 +114,25 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_private_builtin_func_rest(MODULE_CLASS, "private", private);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "protected", protected);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "public", public);
+    // hook methods (no-op by default)
+    globals.define_private_builtin_func(MODULE_CLASS, "method_added", module_noop_hook, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "method_removed", module_noop_hook, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "method_undefined", module_noop_hook, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "included", module_noop_hook, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "prepended", module_noop_hook, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "extended", module_noop_hook, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "const_added", module_noop_hook, 1);
+}
+
+/// No-op hook for method_added/removed/undefined, included/prepended/extended, const_added.
+#[monoruby_builtin]
+fn module_noop_hook(
+    _: &mut Executor,
+    _: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::nil())
 }
 
 /// ### Module.new
@@ -338,7 +358,7 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             "(eval)".into()
         };
 
-        let fid = globals.compile_script_eval(expr, path, caller_cfp)?;
+        let fid = globals.compile_script_eval(expr, path, caller_cfp, Some(module.id()))?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.push_class_context(module.id());
         let res = vm.invoke_block_with_self(globals, &proc, module.get(), &[]);
@@ -414,7 +434,7 @@ fn const_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let val = lfp.arg(1);
     globals.set_constant(module, name, val);
     let receiver = globals.store[module].get_module().into();
-    vm.invoke_method_if_exists(
+    vm.invoke_method_inner(
         globals,
         IdentId::CONST_ADDED,
         receiver,
@@ -608,7 +628,7 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let self_ = lfp.self_val();
     for v in args.iter().cloned().rev() {
         vm.invoke_method_inner(globals, IdentId::APPEND_FEATURES, v, &[self_], None, None)?;
-        vm.invoke_method_if_exists(globals, IdentId::INCLUDED, v, &[self_], None, None)?;
+        vm.invoke_method_inner(globals, IdentId::INCLUDED, v, &[self_], None, None)?;
     }
     Ok(lfp.self_val())
 }
@@ -671,7 +691,7 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             None,
             None,
         )?;
-        vm.invoke_method_if_exists(globals, IdentId::PREPENDED, v, &[self_], None, None)?;
+        vm.invoke_method_inner(globals, IdentId::PREPENDED, v, &[self_], None, None)?;
     }
     Ok(lfp.self_val())
 }
@@ -944,6 +964,25 @@ fn class_variable_get(
     globals.get_class_variable(module, name).map(|(_, v)| v)
 }
 
+///
+/// ### Module#class_variables
+///
+/// - class_variables -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_variables.html]
+#[monoruby_builtin]
+fn class_variables(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let names = globals.store.get_class_variable_names(class_id);
+    let ary: Vec<Value> = names.into_iter().map(Value::symbol).collect();
+    Ok(Value::array_from_vec(ary))
+}
+
 /// ### Module#set_temporary_name
 /// - set_temporary_name(name) -> self
 ///
@@ -991,7 +1030,7 @@ fn module_function(
             let name = v.expect_symbol_or_string(globals)?;
             let func_id = globals.find_method_for_class(class_id, name)?.0;
             globals.add_singleton_method(class_id, name, func_id, visi);
-            vm.invoke_method_if_exists(
+            vm.invoke_method_inner(
                 globals,
                 IdentId::SINGLETON_METHOD_ADDED,
                 receiver,
@@ -1347,6 +1386,15 @@ mod tests {
         "#,
             r#"
         class C
+        end
+        "#,
+        );
+        // constant lookup in class_eval with string
+        run_test_with_prelude(
+            r#"C.class_eval("X")"#,
+            r#"
+        class C
+          X = 99
         end
         "#,
         );

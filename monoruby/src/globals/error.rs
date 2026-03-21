@@ -124,7 +124,7 @@ impl MonorubyErr {
     pub fn class_name(&self, store: &Store) -> String {
         match &self.kind {
             MonorubyErrKind::Exception => "Exception",
-            MonorubyErrKind::NotMethod => "NoMethodError",
+            MonorubyErrKind::NotMethod(_) => "NoMethodError",
             MonorubyErrKind::Arguments => "ArgumentError",
             MonorubyErrKind::Syntax => "SyntaxError",
             MonorubyErrKind::Unimplemented => "RuntimeError",
@@ -153,7 +153,7 @@ impl MonorubyErr {
     pub fn class_id(&self) -> ClassId {
         match &self.kind {
             MonorubyErrKind::Exception => EXCEPTION_CLASS,
-            MonorubyErrKind::NotMethod => NO_METHOD_ERROR_CLASS,
+            MonorubyErrKind::NotMethod(_) => NO_METHOD_ERROR_CLASS,
             MonorubyErrKind::Arguments => ARGUMENTS_ERROR_CLASS,
             MonorubyErrKind::Syntax => SYNTAX_ERROR_CLASS,
             MonorubyErrKind::Unimplemented => UNIMPLEMENTED_ERROR_CLASS,
@@ -292,7 +292,7 @@ impl MonorubyErr {
 
     pub(crate) fn method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod,
+            MonorubyErrKind::NotMethod(Some(obj.id())),
             format!(
                 "undefined method `{name}' for {}",
                 obj.get_real_class_name(store)
@@ -306,7 +306,7 @@ impl MonorubyErr {
         class: ClassId,
     ) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod,
+            MonorubyErrKind::NotMethod(None),
             format!(
                 "undefined method `{name}' for {}",
                 store.get_class_name(class)
@@ -316,7 +316,7 @@ impl MonorubyErr {
 
     pub(crate) fn private_method_called(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod,
+            MonorubyErrKind::NotMethod(Some(obj.id())),
             format!(
                 "private method `{name}' called for {}:{}",
                 obj.to_s(store),
@@ -331,7 +331,7 @@ impl MonorubyErr {
         obj: Value,
     ) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod,
+            MonorubyErrKind::NotMethod(Some(obj.id())),
             format!(
                 "protected method `{name}' called for {}:{}",
                 obj.to_s(store),
@@ -559,7 +559,7 @@ impl MonorubyErr {
         MonorubyErr::frozenerr(format!(
             "can't modify frozen {}: {}",
             val.get_real_class_name(store),
-            val.to_s(store),
+            val.inspect(store),
         ))
     }
 
@@ -597,7 +597,7 @@ impl MonorubyErr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MonorubyErrKind {
     Exception,
-    NotMethod,
+    NotMethod(Option<u64>),
     Arguments,
     Syntax,
     Unimplemented,
@@ -625,7 +625,7 @@ impl MonorubyErrKind {
     pub fn from_class_id(class_id: ClassId) -> Self {
         match class_id {
             EXCEPTION_CLASS => MonorubyErrKind::Exception,
-            NO_METHOD_ERROR_CLASS => MonorubyErrKind::NotMethod,
+            NO_METHOD_ERROR_CLASS => MonorubyErrKind::NotMethod(None),
             ARGUMENTS_ERROR_CLASS => MonorubyErrKind::Arguments,
             SYNTAX_ERROR_CLASS => MonorubyErrKind::Syntax,
             UNIMPLEMENTED_ERROR_CLASS => MonorubyErrKind::Unimplemented,

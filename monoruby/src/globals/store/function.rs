@@ -851,6 +851,21 @@ impl FuncInfo {
         self.ext.params.total_positional_args()
     }
 
+    ///
+    /// Calculate Ruby arity for this function.
+    ///
+    /// - No optional/rest: arity = required + post
+    /// - Optional or rest: arity = -(required + post + 1)
+    ///
+    pub(crate) fn arity(&self) -> i64 {
+        let min = self.min_positional_args() as i64;
+        if self.opt_num() > 0 || self.is_rest() {
+            -(min + 1)
+        } else {
+            min
+        }
+    }
+
     /*pub(crate) fn discard_excess_positional_args(&self) -> bool {
         self.is_block_style() && !self.is_rest()
     }*/

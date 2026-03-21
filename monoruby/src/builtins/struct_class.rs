@@ -50,7 +50,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         .define_struct_class(name, lfp.self_val().as_class())
         .as_val();
 
-    vm.invoke_method_if_exists(
+    vm.invoke_method_inner(
         globals,
         IdentId::INITIALIZE,
         new_struct,

@@ -85,7 +85,7 @@ fn main_define_method(
     };
     let _ = func_id;
     let receiver = globals.store[class_id].get_module().into();
-    vm.invoke_method_if_exists(
+    vm.invoke_method_inner(
         globals,
         IdentId::METHOD_ADDED,
         receiver,
