@@ -734,7 +734,8 @@ fn instance_eval(
             "(eval)".into()
         };
 
-        let fid = globals.compile_script_eval(expr, path, caller_cfp)?;
+        let fid =
+            globals.compile_script_eval(expr, path, caller_cfp, Some(self_val.class()))?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block_with_self(globals, &proc, self_val, &[])
     } else {
@@ -1179,6 +1180,30 @@ mod tests {
             'secret'
           end
         end
+        "#,
+        );
+        // constant lookup in instance_eval with string
+        run_test_with_prelude(
+            r#"
+        some = Foo.new
+        some.instance_eval("BAR")
+        "#,
+            r#"
+        class Foo
+          BAR = 42
+        end
+        "#,
+        );
+        // constant lookup in instance_eval with string (caller's lexical scope)
+        run_test(
+            r#"
+        class A
+          X = 100
+          def test
+            instance_eval("X")
+          end
+        end
+        A.new.test
         "#,
         );
     }

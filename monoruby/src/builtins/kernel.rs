@@ -769,7 +769,7 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         vm.invoke_binding(globals, binding.binding().unwrap())
     } else {
         let caller_cfp = cfp.prev().unwrap();
-        let fid = globals.compile_script_eval(expr, "(eval)", caller_cfp)?;
+        let fid = globals.compile_script_eval(expr, "(eval)", caller_cfp, None)?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block(globals, &proc, &[])
     }

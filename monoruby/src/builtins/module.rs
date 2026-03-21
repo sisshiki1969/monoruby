@@ -338,7 +338,7 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             "(eval)".into()
         };
 
-        let fid = globals.compile_script_eval(expr, path, caller_cfp)?;
+        let fid = globals.compile_script_eval(expr, path, caller_cfp, Some(module.id()))?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.push_class_context(module.id());
         let res = vm.invoke_block_with_self(globals, &proc, module.get(), &[]);
@@ -1347,6 +1347,15 @@ mod tests {
         "#,
             r#"
         class C
+        end
+        "#,
+        );
+        // constant lookup in class_eval with string
+        run_test_with_prelude(
+            r#"C.class_eval("X")"#,
+            r#"
+        class C
+          X = 99
         end
         "#,
         );
