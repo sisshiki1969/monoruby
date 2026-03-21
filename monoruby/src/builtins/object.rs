@@ -6,18 +6,60 @@ use jitgen::JitContext;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    //globals.define_builtin_class_func(OBJECT_CLASS, "new", object_new, -1);
+    // BasicObject methods
 
+    globals.define_private_builtin_func(BASIC_OBJECT_CLASS, "initialize", bo_initialize, 0);
     globals.define_builtin_inline_func(
         BASIC_OBJECT_CLASS,
-        "!",
-        not_,
-        Box::new(object_not),
+        "__id__",
+        object_id,
+        Box::new(object_object_id),
         0,
     );
+    globals.define_builtin_func(BASIC_OBJECT_CLASS, "==", eq, 1);
+    globals.define_builtin_func(BASIC_OBJECT_CLASS, "equal?", eq, 1);
+    globals.define_builtin_inline_func(BASIC_OBJECT_CLASS, "!", not_, Box::new(object_not), 0);
+    globals.define_builtin_func(BASIC_OBJECT_CLASS, "!=", ne, 1);
+    globals.define_builtin_funcs_with_effect(
+        BASIC_OBJECT_CLASS,
+        "instance_eval",
+        &[],
+        instance_eval,
+        0,
+        3,
+        false,
+        Effect::EVAL,
+    );
+    globals.define_builtin_funcs_with_effect(
+        BASIC_OBJECT_CLASS,
+        "instance_exec",
+        &[],
+        instance_exec,
+        0,
+        0,
+        true,
+        Effect::EVAL,
+    );
 
-    globals.define_builtin_func(OBJECT_CLASS, "==", eq, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "!=", ne, 1);
+    globals.define_builtin_inline_funcs_with_kw(
+        BASIC_OBJECT_CLASS,
+        "__send__",
+        &[],
+        crate::builtins::send,
+        Box::new(crate::builtins::object_send),
+        0,
+        0,
+        true,
+        &[],
+        true,
+    );
+    globals.define_private_builtin_func_rest(
+        BASIC_OBJECT_CLASS,
+        "method_missing",
+        bo_method_missing,
+    );
+
+    // Object methods
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "hash", hash, 0);
     globals.define_builtin_func(OBJECT_CLASS, "eql?", eql_, 1);
@@ -26,7 +68,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_private_builtin_func(OBJECT_CLASS, "initialize_clone", initialize_clone, 1);
     globals.define_private_builtin_func(OBJECT_CLASS, "initialize_dup", initialize_clone, 1);
     globals.define_builtin_funcs_rest(OBJECT_CLASS, "enum_for", &["to_enum"], to_enum);
-    globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_, 1);
     globals.define_builtin_func_rest(OBJECT_CLASS, "extend", extend);
     globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
     globals.define_builtin_inline_func(
@@ -67,26 +108,6 @@ pub(super) fn init(globals: &mut Globals) {
         &[],
         true,
     );
-    globals.define_builtin_funcs_with_effect(
-        OBJECT_CLASS,
-        "instance_eval",
-        &[],
-        instance_eval,
-        0,
-        3,
-        false,
-        Effect::EVAL,
-    );
-    globals.define_builtin_funcs_with_effect(
-        OBJECT_CLASS,
-        "instance_exec",
-        &[],
-        instance_exec,
-        0,
-        0,
-        true,
-        Effect::EVAL,
-    );
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
     globals.define_builtin_func_with(
         OBJECT_CLASS,
@@ -105,6 +126,33 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         false,
     );
+}
+
+///
+/// ### BasicObject#initialize
+///
+#[monoruby_builtin]
+fn bo_initialize(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::nil())
+}
+
+///
+/// ### BasicObject#method_missing
+///
+#[monoruby_builtin]
+fn bo_method_missing(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    let name = args[0].expect_symbol_or_string(globals)?;
+    Err(MonorubyErr::method_not_found(
+        &globals.store,
+        name,
+        lfp.self_val(),
+    ))
 }
 
 ///
@@ -162,8 +210,11 @@ fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Val
 }
 
 #[monoruby_builtin]
-fn ne(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(lfp.self_val().id() != lfp.arg(0).id()))
+fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let other = lfp.arg(0);
+    let res = vm.invoke_method_inner(globals, IdentId::_EQ, self_val, &[other], None, None)?;
+    Ok(Value::bool(!res.as_bool()))
 }
 
 ///
@@ -344,17 +395,6 @@ fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         )
     };
     vm.generate_enumerator(method, lfp.self_val(), args, pc)
-}
-
-///
-/// ### Object#equal
-///
-/// - equal?(other) -> bool
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/equal=3f.html]
-#[monoruby_builtin]
-fn equal_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(lfp.self_val().id() == lfp.arg(0).id()))
 }
 
 ///
@@ -861,7 +901,7 @@ mod tests {
     fn object_id() {
         run_test_with_prelude(
             r##"
-            id == a.object_id
+            [id == a.object_id, a.__id__ == a.object_id]
             "##,
             r##"
             a = [1,2,3]
@@ -870,7 +910,7 @@ mod tests {
         );
         run_test_with_prelude(
             r##"
-            id == a.object_id
+            [id == a.object_id, a.__id__ == a.object_id]
             "##,
             r##"
             a = 1356
@@ -879,7 +919,7 @@ mod tests {
         );
         run_test_with_prelude(
             r##"
-            id == a.object_id
+            [id == a.object_id, a.__id__ == a.object_id]
             "##,
             r##"
             a = -49.52
@@ -1790,6 +1830,55 @@ mod tests {
               end
             end
             Foo.new.baz
+            "#,
+        );
+    }
+
+    #[test]
+    fn initialize() {
+        // default initialize returns the new object
+        run_test("Object.new.class");
+        run_test("Object.new.is_a?(Object)");
+        // custom initialize sets instance variables
+        run_test(
+            r#"
+            class Foo
+              def initialize(x)
+                @x = x
+              end
+              def x; @x; end
+            end
+            Foo.new(42).x
+            "#,
+        );
+        // super in initialize
+        run_test(
+            r#"
+            class A
+              def initialize
+                @a = 1
+              end
+            end
+            class B < A
+              def initialize
+                super
+                @b = 2
+              end
+              def vals; [@a, @b]; end
+            end
+            B.new.vals
+            "#,
+        );
+        // initialize with block
+        run_test(
+            r#"
+            class C
+              def initialize(&blk)
+                @v = blk.call
+              end
+              def v; @v; end
+            end
+            C.new { 99 }.v
             "#,
         );
     }

@@ -178,6 +178,8 @@ impl IdentId {
     pub const _UNMATCH: IdentId = id!(69);
     pub const _NOT: IdentId = id!(70);
     pub const INSPECT: IdentId = id!(71);
+    pub const SINGLETON_METHOD_REMOVED: IdentId = id!(72);
+    pub const SINGLETON_METHOD_UNDEFINED: IdentId = id!(73);
 }
 
 impl IdentId {
@@ -335,6 +337,8 @@ impl IdentifierTable {
         table.set_id("!~", IdentId::_UNMATCH);
         table.set_id("!", IdentId::_NOT);
         table.set_id("inspect", IdentId::INSPECT);
+        table.set_id("singleton_method_removed", IdentId::SINGLETON_METHOD_REMOVED);
+        table.set_id("singleton_method_undefined", IdentId::SINGLETON_METHOD_UNDEFINED);
         table
     }
 

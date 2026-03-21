@@ -351,7 +351,10 @@ impl RegexpInner {
                 } else {
                     let mut ary = Array::new_empty();
                     for i in 0..captures.len() {
-                        ary.push(Value::string_from_str(captures.get(i).unwrap().as_str()));
+                        match captures.get(i) {
+                            Some(m) => ary.push(Value::string_from_str(m.as_str())),
+                            None => ary.push(Value::nil()),
+                        }
                     }
                     Ok(ary.into())
                 }

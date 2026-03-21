@@ -325,6 +325,21 @@ impl MonorubyErr {
         )
     }
 
+    pub(crate) fn protected_method_called(
+        store: &Store,
+        name: IdentId,
+        obj: Value,
+    ) -> MonorubyErr {
+        MonorubyErr::new(
+            MonorubyErrKind::NotMethod,
+            format!(
+                "protected method `{name}' called for {}:{}",
+                obj.to_s(store),
+                obj.get_real_class_name(store)
+            ),
+        )
+    }
+
     pub fn wrong_number_of_arg(expected: usize, given: usize) -> MonorubyErr {
         Self::argumenterr(format!(
             "wrong number of arguments (given {given}, expected {expected})"
@@ -336,7 +351,9 @@ impl MonorubyErr {
         range: std::ops::RangeInclusive<usize>,
     ) -> MonorubyErr {
         Self::argumenterr(format!(
-            "wrong number of arguments (given {given}, expeted {range:?})"
+            "wrong number of arguments (given {given}, expected {}..{})",
+            range.start(),
+            range.end()
         ))
     }
 

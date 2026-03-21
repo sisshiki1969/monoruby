@@ -61,6 +61,14 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         false,
     );
+    globals.define_builtin_func_with(
+        MODULE_CLASS,
+        "public_instance_methods",
+        public_instance_methods,
+        0,
+        1,
+        false,
+    );
     globals.define_builtin_func_rest(MODULE_CLASS, "include", include);
     globals.define_builtin_func(MODULE_CLASS, "append_features", append_features, 1);
     globals.define_private_builtin_func(MODULE_CLASS, "extend_object", extend_object, 1);
@@ -95,6 +103,8 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func_rest(MODULE_CLASS, "private_class_method", private_class_method);
+    globals.define_builtin_func(MODULE_CLASS, "class_variable_set", class_variable_set, 2);
+    globals.define_builtin_func(MODULE_CLASS, "class_variable_get", class_variable_get, 1);
     globals.define_builtin_funcs(MODULE_CLASS, "to_s", &["inspect"], tos, 0);
     globals.define_builtin_func(MODULE_CLASS, "name", name, 0);
     globals.define_builtin_func(MODULE_CLASS, "set_temporary_name", set_temporary_name, 1);
@@ -195,7 +205,7 @@ fn teq(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/alias_method.html]
 #[monoruby_builtin]
 fn alias_method(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -204,6 +214,7 @@ fn alias_method(
     let new_name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let old_name = lfp.arg(1).expect_symbol_or_string(globals)?;
     globals.alias_method_for_class(class_id, new_name, old_name)?;
+    vm.invoke_method_added(globals, class_id, new_name)?;
     Ok(Value::symbol(new_name))
 }
 
@@ -226,8 +237,10 @@ fn attr_accessor(
     for v in lfp.arg(0).as_array().iter() {
         let arg_name = v.expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
+        vm.invoke_method_added(globals, class_id, method_name)?;
         ary.push(Value::symbol(method_name));
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
+        vm.invoke_method_added(globals, class_id, method_name)?;
         ary.push(Value::symbol(method_name));
     }
     Ok(ary.into())
@@ -252,6 +265,7 @@ fn attr_reader(
     for v in lfp.arg(0).as_array().iter() {
         let arg_name = v.expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
+        vm.invoke_method_added(globals, class_id, method_name)?;
         ary.push(Value::symbol(method_name));
     }
     Ok(ary.into())
@@ -276,6 +290,7 @@ fn attr_writer(
     for v in lfp.arg(0).as_array().iter() {
         let arg_name = v.expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
+        vm.invoke_method_added(globals, class_id, method_name)?;
         ary.push(Value::symbol(method_name));
     }
     Ok(ary.into())
@@ -491,15 +506,7 @@ fn define_method(
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
     let _ = func_id;
-    let receiver = globals.store[class_id].get_module().into();
-    vm.invoke_method_if_exists(
-        globals,
-        IdentId::METHOD_ADDED,
-        receiver,
-        &[Value::symbol(name)],
-        None,
-        None,
-    )?;
+    vm.invoke_method_added(globals, class_id, name)?;
     Ok(Value::symbol(name))
 }
 
@@ -562,6 +569,28 @@ fn private_instance_methods(
         globals.store.get_private_method_names(class_id)
     } else {
         globals.store.get_private_method_names_inherit(class_id)
+    }))
+}
+
+///
+/// ### Module#public_instance_methods
+///
+/// - public_instance_methods(inherited_too = true) -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public_instance_methods.html]
+#[monoruby_builtin]
+fn public_instance_methods(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    Ok(Value::array_from_vec(if !inherited_too {
+        globals.store.get_method_names(class_id)
+    } else {
+        globals.store.get_method_names_inherit(class_id, false)
     }))
 }
 
@@ -702,19 +731,11 @@ fn undef_method(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let receiver = globals.store[class_id].get_module().into();
     let names = lfp.arg(0).as_array();
     for name in names.iter().cloned() {
         let name = name.expect_symbol_or_string(globals)?;
         globals.undef_method_for_class(class_id, name)?;
-        vm.invoke_method_if_exists(
-            globals,
-            IdentId::METHOD_UNDEFINED,
-            receiver,
-            &[Value::symbol(name)],
-            None,
-            None,
-        )?;
+        vm.invoke_method_undefined(globals, class_id, name)?;
     }
     Ok(lfp.self_val())
 }
@@ -733,19 +754,11 @@ fn remove_method(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let receiver = globals.store[class_id].get_module().into();
     let names = lfp.arg(0).as_array();
     for name in names.iter().cloned() {
         let name = name.expect_symbol_or_string(globals)?;
         globals.remove_method(class_id, name)?;
-        vm.invoke_method_if_exists(
-            globals,
-            IdentId::METHOD_REMOVED,
-            receiver,
-            &[Value::symbol(name)],
-            None,
-            None,
-        )?;
+        vm.invoke_method_removed(globals, class_id, name)?;
     }
     Ok(lfp.self_val())
 }
@@ -861,9 +874,18 @@ fn private_class_method(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
 #[monoruby_builtin]
 fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let class_name = globals.store.get_class_name(lfp.self_val().as_class_id());
-    let res = Value::string(class_name);
-    Ok(res)
+    let self_val = lfp.self_val();
+    if let Some(module) = self_val.is_class_or_module() {
+        let class_name = globals.store.get_class_name(module.id());
+        Ok(Value::string(class_name))
+    } else {
+        let class_name = globals.store.get_class_name(self_val.class());
+        Ok(Value::string(format!(
+            "#<{}:0x{:016x}>",
+            class_name,
+            self_val.id()
+        )))
+    }
 }
 
 ///
@@ -881,6 +903,45 @@ fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
         None => Ok(Value::nil()),
     }
+}
+
+///
+/// ### Module#class_variable_set
+///
+/// - class_variable_set(name, val) -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_variable_set.html]
+#[monoruby_builtin]
+fn class_variable_set(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let val = lfp.arg(1);
+    globals.set_class_variable(class_id, name, val);
+    Ok(val)
+}
+
+///
+/// ### Module#class_variable_get
+///
+/// - class_variable_get(name) -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_variable_get.html]
+#[monoruby_builtin]
+fn class_variable_get(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let module = globals.store[class_id].get_module();
+    globals.get_class_variable(module, name).map(|(_, v)| v)
 }
 
 /// ### Module#set_temporary_name
@@ -2139,6 +2200,84 @@ mod tests {
     }
 
     #[test]
+    fn singleton_method_removed_hook() {
+        run_test_once(
+            r##"
+            $res = []
+            class C
+              def self.singleton_method_removed(name)
+                $res << name
+              end
+              def self.foo; end
+              def self.bar; end
+              class << self
+                remove_method :foo
+              end
+            end
+            $res
+            "##,
+        );
+    }
+
+    #[test]
+    fn singleton_method_undefined_hook() {
+        run_test_once(
+            r##"
+            $res = []
+            class C
+              def self.singleton_method_undefined(name)
+                $res << name
+              end
+              def self.foo; end
+              def self.bar; end
+              class << self
+                undef_method :foo, :bar
+              end
+            end
+            $res
+            "##,
+        );
+    }
+
+    #[test]
+    fn singleton_method_removed_on_object() {
+        run_test_once(
+            r##"
+            $res = []
+            obj = Object.new
+            def obj.singleton_method_removed(name)
+              $res << name
+            end
+            def obj.foo; end
+            def obj.bar; end
+            class << obj
+              remove_method :foo, :bar
+            end
+            $res
+            "##,
+        );
+    }
+
+    #[test]
+    fn singleton_method_undefined_on_object() {
+        run_test_once(
+            r##"
+            $res = []
+            obj = Object.new
+            def obj.singleton_method_undefined(name)
+              $res << name
+            end
+            def obj.foo; end
+            def obj.bar; end
+            class << obj
+              undef_method :foo, :bar
+            end
+            $res
+            "##,
+        );
+    }
+
+    #[test]
     fn const_added_hook() {
         run_test_once(
             r##"
@@ -2308,6 +2447,110 @@ mod tests {
         res << (m == n)
         res
         "##,
+        );
+    }
+
+    #[test]
+    fn module_to_s() {
+        run_test("Integer.to_s");
+        run_test("String.to_s");
+        run_test("Module.to_s");
+        run_test("Class.to_s");
+        run_test(
+            r##"
+        module Foo; end
+        Foo.to_s
+        "##,
+        );
+        run_test(
+            r##"
+        class Bar; end
+        Bar.to_s
+        "##,
+        );
+    }
+
+    #[test]
+    fn public_instance_methods() {
+        run_test(
+            r#"
+            class A
+              def foo; end
+              def bar; end
+              private
+              def baz; end
+            end
+            A.public_instance_methods(false).sort
+            "#,
+        );
+        run_test(
+            r#"
+            class B
+              def x; end
+            end
+            class C < B
+              def y; end
+            end
+            C.public_instance_methods(false).sort
+            "#,
+        );
+        run_test(
+            r#"
+            class D
+              def m1; end
+            end
+            class E < D
+              def m2; end
+            end
+            (E.public_instance_methods(true) & [:m1, :m2]).sort
+            "#,
+        );
+    }
+
+    #[test]
+    fn class_variable_get_set() {
+        run_test(
+            r#"
+            class Foo
+              @@x = 42
+              def self.get_x; class_variable_get(:@@x); end
+            end
+            Foo.get_x
+            "#,
+        );
+        run_test(
+            r#"
+            class Bar
+              class_variable_set(:@@val, "hello")
+              class_variable_get(:@@val)
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            class A
+              @@shared = 10
+            end
+            class B < A
+              def self.read; class_variable_get(:@@shared); end
+            end
+            B.read
+            "#,
+        );
+        run_test(
+            r#"
+            class C
+              class_variable_set(:@@a, 1)
+              class_variable_set(:@@a, 2)
+              class_variable_get(:@@a)
+            end
+            "#,
+        );
+        run_test_error(
+            r#"
+            class D; end
+            D.class_variable_get(:@@missing)
+            "#,
         );
     }
 }

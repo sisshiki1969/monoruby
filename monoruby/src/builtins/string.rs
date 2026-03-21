@@ -3631,6 +3631,16 @@ mod tests {
         $&
         "##,
         );
+        run_test(
+            r##"
+        "abc-def-ghi".scan(/(.)-(.)/)
+        "##,
+        );
+        run_test(
+            r##"
+        "test".scan(/(z)?e/)
+        "##,
+        );
     }
 
     #[test]
