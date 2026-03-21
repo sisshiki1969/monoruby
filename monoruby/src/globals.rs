@@ -300,6 +300,7 @@ impl Globals {
         code: String,
         path: impl Into<PathBuf>,
         caller_cfp: Cfp,
+        receiver_class: Option<ClassId>,
     ) -> Result<FuncId> {
         let outer_fid = caller_cfp.lfp().func_id();
         let outer = self.store[outer_fid].as_iseq();
@@ -307,11 +308,16 @@ impl Globals {
 
         match Parser::parse_program_eval(code, path.into(), Some(&external_context)) {
             Ok(result) => {
-                let res =
-                    bytecodegen::bytecode_compile_eval(self, result, outer, Loc::default(), None);
+                let fid =
+                    bytecodegen::bytecode_compile_eval(self, result, outer, Loc::default(), None)?;
+                if let Some(class_id) = receiver_class {
+                    if let Some(info) = self.store.iseq_mut(fid) {
+                        info.lexical_context.push(class_id);
+                    }
+                }
                 #[cfg(feature = "emit-bc")]
                 self.dump_bc();
-                res
+                Ok(fid)
             }
             Err(err) => Err(MonorubyErr::parse(err)),
         }

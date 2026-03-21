@@ -474,6 +474,19 @@ impl Executor {
                     .unwrap();
                 v
             }
+            MonorubyErrKind::NotMethod(Some(receiver)) => {
+                let receiver = *receiver;
+                let v = Value::new_exception(err);
+                globals
+                    .store
+                    .set_ivar(
+                        v,
+                        IdentId::get_id("/receiver"),
+                        Value::from_u64(receiver),
+                    )
+                    .unwrap();
+                v
+            }
             _ => Value::new_exception(err),
         }
     }
@@ -626,7 +639,7 @@ impl Executor {
         }
         globals.set_constant(parent, name, val);
         let receiver = globals.store[parent].get_module().into();
-        self.invoke_method_if_exists(
+        self.invoke_method_inner(
             globals,
             IdentId::CONST_ADDED,
             receiver,
@@ -696,7 +709,7 @@ impl Executor {
         } else {
             (IdentId::METHOD_ADDED, module.into())
         };
-        self.invoke_method_if_exists(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
+        self.invoke_method_inner(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
         Ok(())
     }
 
@@ -713,7 +726,7 @@ impl Executor {
         } else {
             (IdentId::METHOD_REMOVED, module.into())
         };
-        self.invoke_method_if_exists(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
+        self.invoke_method_inner(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
         Ok(())
     }
 
@@ -730,7 +743,7 @@ impl Executor {
         } else {
             (IdentId::METHOD_UNDEFINED, module.into())
         };
-        self.invoke_method_if_exists(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
+        self.invoke_method_inner(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
         Ok(())
     }
 
@@ -766,7 +779,7 @@ impl Executor {
         if cref.module_function {
             let module = globals.store[class_id].get_module();
             let receiver: Value = module.into();
-            self.invoke_method_if_exists(
+            self.invoke_method_inner(
                 globals,
                 IdentId::SINGLETON_METHOD_ADDED,
                 receiver,
@@ -873,8 +886,23 @@ impl Executor {
         bh: Option<BlockHandler>,
         kw_args: Option<Hashmap>,
     ) -> Result<Value> {
-        let func_id = self.find_method(globals, receiver, method, true)?;
-        self.invoke_func_inner(globals, func_id, receiver, args, bh, kw_args)
+        match self.find_method(globals, receiver, method, true) {
+            Ok(func_id) => self.invoke_func_inner(globals, func_id, receiver, args, bh, kw_args),
+            Err(original_err) => {
+                // Fall back to method_missing, matching CRuby behavior.
+                match self.find_method(globals, receiver, IdentId::METHOD_MISSING, true) {
+                    Ok(mm_func_id) => {
+                        let mut mm_args = Vec::with_capacity(args.len() + 1);
+                        mm_args.push(Value::symbol(method));
+                        mm_args.extend_from_slice(args);
+                        self.invoke_func_inner(
+                            globals, mm_func_id, receiver, &mm_args, bh, kw_args,
+                        )
+                    }
+                    Err(_) => Err(original_err),
+                }
+            }
+        }
     }
 
     pub(crate) fn invoke_eq(
@@ -1309,7 +1337,7 @@ impl Executor {
                 } else {
                     let new_class =
                         globals.define_class_with_identid(name, Some(superclass), parent);
-                    self.invoke_method_if_exists(
+                    self.invoke_method_inner(
                         globals,
                         IdentId::INHERITED,
                         superclass.as_val(),

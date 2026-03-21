@@ -43,7 +43,7 @@ pub use monoasm::*;
 pub use monoasm_macro::*;
 use monoruby_attr::monoruby_builtin;
 use num::ToPrimitive;
-pub(crate) use object::{object_send, send};
+pub(crate) use kernel::{object_send, send};
 pub use time::TimeInner;
 
 //

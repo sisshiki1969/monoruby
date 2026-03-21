@@ -104,10 +104,6 @@ impl Executor {
                 },
             };
         }
-        if let Some(v) = self.get_constant(globals, OBJECT_CLASS, name)? {
-            // for BasicObject class
-            return Ok(v);
-        }
         Err(MonorubyErr::uninitialized_constant(name))
     }
 
@@ -117,12 +113,32 @@ impl Executor {
         name: IdentId,
         current_func: FuncId,
     ) -> Result<Value> {
+        // Search the current frame's lexical_context first (covers string
+        // eval where the eval's ISeqInfo has the receiver's class set).
+        let frame_func = self.cfp().lfp().func_id();
+        if frame_func != current_func {
+            if let Some(v) = self.search_lexical_stack(globals, name, frame_func)? {
+                return Ok(v);
+            }
+        }
+        // Then search the enclosing method's lexical_context.
         if let Some(v) = self.search_lexical_stack(globals, name, current_func)? {
             return Ok(v);
         }
-        let module = current_func.lexical_class(globals);
-        let module = globals[module].get_module();
-
+        // For superclass fallback, prefer the frame's lexical class if the
+        // frame has its own lexical_context (i.e. string eval), otherwise
+        // use the enclosing method's lexical class.
+        let lexical_class = if frame_func != current_func {
+            let fc = frame_func.lexical_class(globals);
+            if fc != OBJECT_CLASS {
+                fc
+            } else {
+                current_func.lexical_class(globals)
+            }
+        } else {
+            current_func.lexical_class(globals)
+        };
+        let module = globals[lexical_class].get_module();
         self.get_constant_superclass_checked(globals, module, name)
     }
 

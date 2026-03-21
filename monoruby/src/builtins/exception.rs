@@ -60,6 +60,7 @@ pub(super) fn init(globals: &mut Globals) {
     let nameerr =
         globals.define_builtin_exception_class("NameError", NAME_ERROR_CLASS, standarderr);
     globals.define_builtin_exception_class("NoMethodError", NO_METHOD_ERROR_CLASS, nameerr);
+    globals.define_builtin_func(NO_METHOD_ERROR_CLASS, "receiver", nomethoderr_receiver, 0);
 
     let runtimeerr =
         globals.define_builtin_exception_class("RuntimeError", RUNTIME_ERROR_CLASS, standarderr);
@@ -79,6 +80,22 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "set_backtrace", set_backtrace, 1);
+}
+
+/// ### NoMethodError#receiver
+#[monoruby_builtin]
+fn nomethoderr_receiver(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let v = globals
+        .store
+        .get_ivar(self_val, IdentId::get_id("/receiver"))
+        .unwrap_or_default();
+    Ok(v)
 }
 
 /// ### Exception.allocate
@@ -110,7 +127,7 @@ fn exception_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
     let class_id = lfp.self_val().expect_class(globals)?.id();
     let obj = Value::new_exception_from("".to_string(), class_id);
 
-    vm.invoke_method_if_exists(
+    vm.invoke_method_inner(
         globals,
         IdentId::INITIALIZE,
         obj,
@@ -152,7 +169,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
 fn message(_vm: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let ex = self_.is_exception().unwrap();
-    Ok(Value::string(ex.get_error_message()))
+    Ok(Value::string(ex.message().to_string()))
 }
 
 ///
