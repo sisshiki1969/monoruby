@@ -716,34 +716,40 @@ fn instance_eval(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
-
     vm.push_instance_eval_context(self_val);
-    let res = if let Some(bh) = lfp.block() {
+    let res = instance_eval_inner(vm, globals, lfp, self_val);
+    vm.pop_class_context();
+    res
+}
+
+fn instance_eval_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    self_val: Value,
+) -> Result<Value> {
+    if let Some(bh) = lfp.block() {
         if lfp.try_arg(0).is_some() {
-            vm.pop_class_context();
             return Err(MonorubyErr::wrong_number_of_arg(0, lfp.args_count(3)));
         }
         let data = vm.get_block_data(globals, bh)?;
         vm.invoke_block_with_self(globals, &data, self_val, &[self_val])
     } else if let Some(arg0) = lfp.try_arg(0) {
-        let expr = arg0.expect_string(globals)?;
+        let expr = arg0.coerce_to_str(vm, globals)?;
         let cfp = vm.cfp();
         let caller_cfp = cfp.prev().unwrap();
         let path = if let Some(arg1) = lfp.try_arg(1) {
-            arg1.expect_string(globals)?
+            arg1.coerce_to_str(vm, globals)?
         } else {
             "(eval)".into()
         };
-
         let fid =
             globals.compile_script_eval(expr, path, caller_cfp, Some(self_val.class()))?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block_with_self(globals, &proc, self_val, &[])
     } else {
         Err(MonorubyErr::wrong_number_of_arg_range(0, 1..=3))
-    };
-    vm.pop_class_context();
-    res
+    }
 }
 
 ///

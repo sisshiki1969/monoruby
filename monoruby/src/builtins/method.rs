@@ -56,7 +56,7 @@ fn arity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let self_val = lfp.self_val();
     let method = self_val.as_method();
     let func_id = method.func_id();
-    Ok(Value::integer(globals.func_arity(func_id)))
+    Ok(Value::integer(globals[func_id].arity()))
 }
 
 ///
@@ -69,7 +69,7 @@ fn uarity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
     let func_id = method.func_id();
-    Ok(Value::integer(globals.func_arity(func_id)))
+    Ok(Value::integer(globals[func_id].arity()))
 }
 
 ///

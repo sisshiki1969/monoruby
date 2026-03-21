@@ -820,29 +820,34 @@ impl Value {
     }
 }
 
-fn search_method(
+fn coerce_to_rstring_inner(
     vm: &mut Executor,
     globals: &mut Globals,
-    methods: &[IdentId],
     recv: Value,
+    methods: &[IdentId],
 ) -> Result<RString> {
     if let Some(s) = recv.is_rstring() {
         return Ok(s);
     }
     for &method in methods {
         if let Some(func_id) = globals.check_method(recv, method) {
-            let v = vm.invoke_func_inner(globals, func_id, recv, &[], None, None)?;
-            if let Some(s) = v.is_rstring() {
+            let result = vm.invoke_func_inner(globals, func_id, recv, &[], None, None)?;
+            if let Some(s) = result.is_rstring() {
                 return Ok(s);
             }
-            break;
+            return Err(MonorubyErr::typeerr(format!(
+                "can't convert {} into String ({}#{} gives {})",
+                recv.get_real_class_name(&globals.store),
+                recv.get_real_class_name(&globals.store),
+                method,
+                result.get_real_class_name(&globals.store),
+            )));
         }
     }
-    Err(MonorubyErr::no_implicit_conversion(
-        globals,
-        recv,
-        STRING_CLASS,
-    ))
+    Err(MonorubyErr::typeerr(format!(
+        "no implicit conversion of {} into String",
+        recv.get_real_class_name(&globals.store)
+    )))
 }
 
 impl Value {
@@ -1428,7 +1433,7 @@ impl Value {
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<RString> {
-        search_method(vm, globals, &[IdentId::TO_STR], *self)
+        coerce_to_rstring_inner(vm, globals, *self, &[IdentId::TO_STR])
     }
 
     pub(crate) fn coerce_to_string(
@@ -1439,12 +1444,20 @@ impl Value {
         Ok(self.coerce_to_rstring(vm, globals)?.to_str()?.to_string())
     }
 
+    pub(crate) fn coerce_to_str(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<String> {
+        self.coerce_to_string(vm, globals)
+    }
+
     pub(crate) fn coerce_to_path_rstring(
         &self,
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<RString> {
-        search_method(vm, globals, &[IdentId::TO_STR, IdentId::TO_PATH], *self)
+        coerce_to_rstring_inner(vm, globals, *self, &[IdentId::TO_STR, IdentId::TO_PATH])
     }
 
     pub(crate) fn expect_regexp_or_string(&self, store: &Store) -> Result<Regexp> {
