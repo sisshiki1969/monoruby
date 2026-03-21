@@ -127,7 +127,7 @@ fn exception_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
     let class_id = lfp.self_val().expect_class(globals)?.id();
     let obj = Value::new_exception_from("".to_string(), class_id);
 
-    vm.invoke_method_if_exists(
+    vm.invoke_method_inner(
         globals,
         IdentId::INITIALIZE,
         obj,

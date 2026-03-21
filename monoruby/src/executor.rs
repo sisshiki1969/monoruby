@@ -1322,7 +1322,7 @@ impl Executor {
                 } else {
                     let new_class =
                         globals.define_class_with_identid(name, Some(superclass), parent);
-                    self.invoke_method_if_exists(
+                    self.invoke_method_inner(
                         globals,
                         IdentId::INHERITED,
                         superclass.as_val(),

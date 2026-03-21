@@ -434,7 +434,7 @@ fn const_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let val = lfp.arg(1);
     globals.set_constant(module, name, val);
     let receiver = globals.store[module].get_module().into();
-    vm.invoke_method_if_exists(
+    vm.invoke_method_inner(
         globals,
         IdentId::CONST_ADDED,
         receiver,
@@ -1030,7 +1030,7 @@ fn module_function(
             let name = v.expect_symbol_or_string(globals)?;
             let func_id = globals.find_method_for_class(class_id, name)?.0;
             globals.add_singleton_method(class_id, name, func_id, visi);
-            vm.invoke_method_if_exists(
+            vm.invoke_method_inner(
                 globals,
                 IdentId::SINGLETON_METHOD_ADDED,
                 receiver,

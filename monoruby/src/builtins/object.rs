@@ -371,7 +371,7 @@ fn extend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn object_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = Value::object(class);
-    vm.invoke_method_if_exists(
+    vm.invoke_method_inner(
         globals,
         IdentId::INITIALIZE,
         obj,
