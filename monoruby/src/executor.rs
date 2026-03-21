@@ -639,7 +639,7 @@ impl Executor {
         }
         globals.set_constant(parent, name, val);
         let receiver = globals.store[parent].get_module().into();
-        self.invoke_method_if_exists(
+        self.invoke_method_inner(
             globals,
             IdentId::CONST_ADDED,
             receiver,
@@ -709,7 +709,7 @@ impl Executor {
         } else {
             (IdentId::METHOD_ADDED, module.into())
         };
-        self.invoke_method_if_exists(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
+        self.invoke_method_inner(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
         Ok(())
     }
 
@@ -726,7 +726,7 @@ impl Executor {
         } else {
             (IdentId::METHOD_REMOVED, module.into())
         };
-        self.invoke_method_if_exists(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
+        self.invoke_method_inner(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
         Ok(())
     }
 
@@ -743,7 +743,7 @@ impl Executor {
         } else {
             (IdentId::METHOD_UNDEFINED, module.into())
         };
-        self.invoke_method_if_exists(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
+        self.invoke_method_inner(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
         Ok(())
     }
 
@@ -779,7 +779,7 @@ impl Executor {
         if cref.module_function {
             let module = globals.store[class_id].get_module();
             let receiver: Value = module.into();
-            self.invoke_method_if_exists(
+            self.invoke_method_inner(
                 globals,
                 IdentId::SINGLETON_METHOD_ADDED,
                 receiver,

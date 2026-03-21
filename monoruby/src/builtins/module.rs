@@ -114,6 +114,25 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_private_builtin_func_rest(MODULE_CLASS, "private", private);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "protected", protected);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "public", public);
+    // hook methods (no-op by default)
+    globals.define_private_builtin_func(MODULE_CLASS, "method_added", module_noop_hook, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "method_removed", module_noop_hook, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "method_undefined", module_noop_hook, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "included", module_noop_hook, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "prepended", module_noop_hook, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "extended", module_noop_hook, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "const_added", module_noop_hook, 1);
+}
+
+/// No-op hook for method_added/removed/undefined, included/prepended/extended, const_added.
+#[monoruby_builtin]
+fn module_noop_hook(
+    _: &mut Executor,
+    _: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::nil())
 }
 
 /// ### Module.new
@@ -609,7 +628,7 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let self_ = lfp.self_val();
     for v in args.iter().cloned().rev() {
         vm.invoke_method_inner(globals, IdentId::APPEND_FEATURES, v, &[self_], None, None)?;
-        vm.invoke_method_if_exists(globals, IdentId::INCLUDED, v, &[self_], None, None)?;
+        vm.invoke_method_inner(globals, IdentId::INCLUDED, v, &[self_], None, None)?;
     }
     Ok(lfp.self_val())
 }
@@ -672,7 +691,7 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             None,
             None,
         )?;
-        vm.invoke_method_if_exists(globals, IdentId::PREPENDED, v, &[self_], None, None)?;
+        vm.invoke_method_inner(globals, IdentId::PREPENDED, v, &[self_], None, None)?;
     }
     Ok(lfp.self_val())
 }

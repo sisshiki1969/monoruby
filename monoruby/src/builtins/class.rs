@@ -36,6 +36,19 @@ pub(super) fn init(globals: &mut Globals) {
         true,
     );
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
+    // hook method (no-op by default)
+    globals.define_private_builtin_func(CLASS_CLASS, "inherited", class_noop_hook, 1);
+}
+
+/// No-op hook for Class#inherited.
+#[monoruby_builtin]
+fn class_noop_hook(
+    _: &mut Executor,
+    _: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::nil())
 }
 
 /// ### Class.new
@@ -58,7 +71,7 @@ fn class_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     if let Some(block) = lfp.block() {
         vm.module_eval(globals, m, block)?;
     }
-    vm.invoke_method_if_exists(
+    vm.invoke_method_inner(
         globals,
         IdentId::INHERITED,
         superclass_val,
@@ -100,7 +113,7 @@ pub(super) fn new(
     let obj =
         vm.invoke_method_inner(globals, IdentId::ALLOCATE, lfp.self_val(), &[], None, None)?;
 
-    vm.invoke_method_if_exists(
+    vm.invoke_method_inner(
         globals,
         IdentId::INITIALIZE,
         obj,

@@ -58,6 +58,24 @@ pub(super) fn init(globals: &mut Globals) {
         "method_missing",
         bo_method_missing,
     );
+    globals.define_private_builtin_func(
+        BASIC_OBJECT_CLASS,
+        "singleton_method_added",
+        bo_noop_hook,
+        1,
+    );
+    globals.define_private_builtin_func(
+        BASIC_OBJECT_CLASS,
+        "singleton_method_removed",
+        bo_noop_hook,
+        1,
+    );
+    globals.define_private_builtin_func(
+        BASIC_OBJECT_CLASS,
+        "singleton_method_undefined",
+        bo_noop_hook,
+        1,
+    );
 
     // Object methods
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
@@ -133,6 +151,12 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 #[monoruby_builtin]
 fn bo_initialize(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::nil())
+}
+
+/// No-op hook for singleton_method_added/removed/undefined on BasicObject.
+#[monoruby_builtin]
+fn bo_noop_hook(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::nil())
 }
 
@@ -332,7 +356,7 @@ fn extend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let self_val = lfp.self_val();
     for v in args.iter().cloned().rev() {
         vm.invoke_method_inner(globals, IdentId::EXTEND_OBJECT, v, &[self_val], None, None)?;
-        vm.invoke_method_if_exists(globals, IdentId::EXTENDED, v, &[self_val], None, None)?;
+        vm.invoke_method_inner(globals, IdentId::EXTENDED, v, &[self_val], None, None)?;
     }
     Ok(lfp.self_val())
 }
