@@ -404,7 +404,8 @@ impl ClassInfoTable {
             }
             singleton
         } else {
-            self.get_singleton(original_obj.as_val())
+            // only happen when original_obj is Module, so we can unwrap() safely.
+            self.get_singleton(original_obj.as_val()).unwrap()
         }
     }
 
@@ -413,10 +414,19 @@ impl ClassInfoTable {
     ///
     /// If not exists, create a new singleton class.
     ///
-    pub(crate) fn get_singleton(&mut self, mut obj: Value) -> Module {
+    pub(crate) fn get_singleton(&mut self, mut obj: Value) -> Result<Module> {
         let org_class = self[obj.class()].get_module();
         if org_class.is_singleton().is_some() {
-            return org_class;
+            return Ok(org_class);
+        }
+        match org_class.id() {
+            INTEGER_CLASS | FLOAT_CLASS | SYMBOL_CLASS => {
+                return Err(MonorubyErr::typeerr("can't define singleton"));
+            }
+            RANGE_CLASS | COMPLEX_CLASS => {
+                return Err(MonorubyErr::frozenerr("can't define singleton"));
+            }
+            _ => {}
         }
         let mut singleton = self.new_singleton_class(org_class, obj, org_class.id());
         obj.change_class(singleton.id());
@@ -426,7 +436,7 @@ impl ClassInfoTable {
         {
             assert_eq!(singleton.id(), obj.class());
         }
-        singleton
+        Ok(singleton)
     }
 
     ///

@@ -644,7 +644,7 @@ fn extend_object(
     _: BytecodePtr,
 ) -> Result<Value> {
     let obj = lfp.arg(0);
-    let mut class = globals.store.get_singleton(obj);
+    let mut class = globals.store.get_singleton(obj)?;
     let include_module = lfp.self_val().expect_module(globals)?;
     class.include_module(include_module)?;
     Ok(obj)
@@ -860,7 +860,7 @@ fn private_class_method(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let singleton = globals.store.get_singleton(lfp.self_val());
+    let singleton = globals.store.get_singleton(lfp.self_val())?;
     let arg = lfp.arg(0).as_array();
     let (_, names) = extract_names(globals, arg)?;
     globals.change_method_visibility_for_class(singleton.id(), &names, Visibility::Private)?;

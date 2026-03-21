@@ -368,12 +368,15 @@ impl Executor {
             .push(Cref::new(class_id, false, Visibility::Public));
     }
 
-    pub(crate) fn pop_class_context(&mut self) -> Option<ClassId> {
+    pub(crate) fn push_instance_eval_context(&mut self, receiver: Value) {
         self.lexical_class
             .last_mut()
             .unwrap()
-            .pop()
-            .map(|x| x.class_id)
+            .push(Cref::new_instance_eval(receiver, Visibility::Public));
+    }
+
+    pub(crate) fn pop_class_context(&mut self) {
+        self.lexical_class.last_mut().unwrap().pop();
     }
 
     pub(crate) fn set_module_function(&mut self) {
@@ -399,7 +402,10 @@ impl Executor {
             .last()
             .unwrap()
             .last()
-            .map(|cref| cref.class_id)
+            .map(|cref| match cref.context {
+                DefinitionContext::Class(class_id) => class_id,
+                DefinitionContext::Receiver(val) => val.class(),
+            })
             .unwrap_or(OBJECT_CLASS)
     }
 
@@ -734,11 +740,7 @@ impl Executor {
         name: IdentId,
         func: FuncId,
     ) -> Result<Value> {
-        let Cref {
-            class_id,
-            module_function,
-            visibility,
-        } = self.get_class_context();
+        let cref = self.get_class_context();
         let current_func = self.method_func_id();
         if let Some(iseq) = globals.store[func].is_iseq() {
             globals.store[iseq].lexical_context =
@@ -751,13 +753,17 @@ impl Executor {
                 (func.get() as u64) + ((name.get() as u64) << 32)
             )));
         }
-        globals.add_method(class_id, name, func, visibility);
-        if module_function {
-            globals.add_singleton_method(class_id, name, func, visibility);
+        let class_id = match cref.context {
+            DefinitionContext::Class(class_id) => class_id,
+            DefinitionContext::Receiver(receiver) => globals.store.get_singleton(receiver)?.id(),
+        };
+        globals.add_method(class_id, name, func, cref.visibility);
+        if cref.module_function {
+            globals.add_singleton_method(class_id, name, func, cref.visibility);
         }
         Codegen::check_bop_redefine(self.cfp());
         self.invoke_method_added(globals, class_id, name)?;
-        if module_function {
+        if cref.module_function {
             let module = globals.store[class_id].get_module();
             let receiver: Value = module.into();
             self.invoke_method_if_exists(
@@ -1519,9 +1525,19 @@ impl BlockHandler {
     }
 }
 
-#[derive(Debug, Clone)]
+/// The default definee context for `def`.
+#[derive(Clone, Copy, Debug)]
+enum DefinitionContext {
+    /// A normal class/module context. `def` defines a method on this class.
+    Class(ClassId),
+    /// An `instance_eval`/`instance_exec` context. `def` defines a singleton method
+    /// on this receiver. The singleton class is created lazily at `def` time.
+    Receiver(Value),
+}
+
+#[derive(Clone, Copy, Debug)]
 struct Cref {
-    pub(crate) class_id: ClassId,
+    pub(crate) context: DefinitionContext,
     pub(crate) module_function: bool,
     pub(crate) visibility: Visibility,
 }
@@ -1529,8 +1545,16 @@ struct Cref {
 impl Cref {
     fn new(class_id: ClassId, module_function: bool, visibility: Visibility) -> Self {
         Self {
-            class_id,
+            context: DefinitionContext::Class(class_id),
             module_function,
+            visibility,
+        }
+    }
+
+    fn new_instance_eval(receiver: Value, visibility: Visibility) -> Self {
+        Self {
+            context: DefinitionContext::Receiver(receiver),
+            module_function: false,
             visibility,
         }
     }

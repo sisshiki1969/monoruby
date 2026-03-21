@@ -310,7 +310,7 @@ impl Value {
                 _ => Err(MonorubyErr::typeerr("can't define singleton")),
             }
         } else {
-            Ok(store.get_singleton(self).as_val())
+            Ok(store.get_singleton(self)?.as_val())
         }
     }
 
