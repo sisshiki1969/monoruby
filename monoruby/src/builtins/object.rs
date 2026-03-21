@@ -749,7 +749,9 @@ fn instance_eval_inner(
         vm.invoke_block_with_self(globals, &proc, self_val, &[])
     } else {
         Err(MonorubyErr::wrong_number_of_arg_range(0, 1..=3))
-    }
+    };
+    vm.pop_class_context();
+    res
 }
 
 ///
