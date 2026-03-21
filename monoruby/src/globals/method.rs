@@ -718,7 +718,7 @@ impl Globals {
         address: BuiltinFn,
         arg_num: usize,
     ) -> FuncId {
-        let class_id = self.store.get_singleton(obj).id();
+        let class_id = self.store.get_singleton(obj).unwrap().id();
         self.define_builtin_func(class_id, name, address, arg_num)
     }
 
@@ -731,7 +731,7 @@ impl Globals {
         max: usize,
         rest: bool,
     ) -> FuncId {
-        let class_id = self.store.get_singleton(obj).id();
+        let class_id = self.store.get_singleton(obj).unwrap().id();
         self.define_builtin_func_with(class_id, name, address, min, max, rest)
     }
 

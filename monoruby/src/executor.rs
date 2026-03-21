@@ -755,9 +755,7 @@ impl Executor {
         }
         let class_id = match cref.context {
             DefinitionContext::Class(class_id) => class_id,
-            DefinitionContext::Receiver(receiver) => {
-                globals.store.get_singleton(receiver).id()
-            }
+            DefinitionContext::Receiver(receiver) => globals.store.get_singleton(receiver)?.id(),
         };
         globals.add_method(class_id, name, func, cref.visibility);
         if cref.module_function {

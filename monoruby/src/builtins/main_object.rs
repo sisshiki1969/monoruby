@@ -7,7 +7,7 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     let main = globals.main_object;
     globals.define_builtin_singleton_func_with(main, "include", include, 0, 0, true);
-    let singleton_class_id = globals.store.get_singleton(main).id();
+    let singleton_class_id = globals.store.get_singleton(main).unwrap().id();
     globals.define_builtin_funcs_with_effect(
         singleton_class_id,
         "define_method",

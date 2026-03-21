@@ -422,7 +422,7 @@ fn define_singleton_method(
     pc: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
-    let class_id = globals.store.get_singleton(self_val).id();
+    let class_id = globals.store.get_singleton(self_val)?.id();
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let func_id = if let Some(method) = lfp.try_arg(1) {
         if let Some(proc) = method.is_proc() {
