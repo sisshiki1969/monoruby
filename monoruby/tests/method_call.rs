@@ -1801,3 +1801,125 @@ fn comment_in_method_chain() {
         "##,
     );
 }
+
+#[test]
+fn method_missing_basic() {
+    run_test_with_prelude(
+        r#"
+        C.new.hello
+        "#,
+        r#"
+        class C
+          def method_missing(name, *args)
+            "missing: #{name}"
+          end
+        end
+        "#,
+    );
+}
+
+#[test]
+fn method_missing_with_args() {
+    run_test_with_prelude(
+        r#"
+        C.new.foo(1, 2, 3)
+        "#,
+        r#"
+        class C
+          def method_missing(name, *args)
+            [name, args]
+          end
+        end
+        "#,
+    );
+}
+
+#[test]
+fn method_missing_with_splat() {
+    run_test_with_prelude(
+        r#"
+        a = [2, 3]
+        C.new.foo(1, *a, 4)
+        "#,
+        r#"
+        class C
+          def method_missing(name, *args)
+            [name, args]
+          end
+        end
+        "#,
+    );
+}
+
+#[test]
+fn method_missing_with_kwargs() {
+    run_test_with_prelude(
+        r#"
+        C.new.foo(1, x: 10, y: 20)
+        "#,
+        r#"
+        class C
+          def method_missing(name, *args, **kwargs)
+            [name, args, kwargs]
+          end
+        end
+        "#,
+    );
+}
+
+#[test]
+fn method_missing_with_hash_splat() {
+    run_test_with_prelude(
+        r#"
+        h = {a: 1, b: 2}
+        C.new.bar(**h)
+        "#,
+        r#"
+        class C
+          def method_missing(name, *args, **kwargs)
+            [name, args, kwargs]
+          end
+        end
+        "#,
+    );
+}
+
+#[test]
+fn method_missing_via_undef() {
+    run_test_with_prelude(
+        r#"
+        C.new.foo(10, 20)
+        "#,
+        r#"
+        class C
+          def foo(*args)
+            args
+          end
+          undef_method :foo
+          def method_missing(name, *args)
+            "undef caught: #{name} #{args}"
+          end
+        end
+        "#,
+    );
+}
+
+#[test]
+fn method_missing_hook_via_singleton_class() {
+    run_test_once(
+        r#"
+        $result = []
+        class C
+          class << self
+            undef_method :singleton_method_added
+            def method_missing(name, *args)
+              $result << [name, args]
+              nil
+            end
+          end
+          def self.foo; end
+        end
+        $result
+        "#,
+    );
+}
