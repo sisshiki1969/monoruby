@@ -105,6 +105,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "private_class_method", private_class_method);
     globals.define_builtin_func(MODULE_CLASS, "class_variable_set", class_variable_set, 2);
     globals.define_builtin_func(MODULE_CLASS, "class_variable_get", class_variable_get, 1);
+    globals.define_builtin_func(MODULE_CLASS, "class_variables", class_variables, 0);
     globals.define_builtin_funcs(MODULE_CLASS, "to_s", &["inspect"], tos, 0);
     globals.define_builtin_func(MODULE_CLASS, "name", name, 0);
     globals.define_builtin_func(MODULE_CLASS, "set_temporary_name", set_temporary_name, 1);
@@ -942,6 +943,25 @@ fn class_variable_get(
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let module = globals.store[class_id].get_module();
     globals.get_class_variable(module, name).map(|(_, v)| v)
+}
+
+///
+/// ### Module#class_variables
+///
+/// - class_variables -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_variables.html]
+#[monoruby_builtin]
+fn class_variables(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let names = globals.store.get_class_variable_names(class_id);
+    let ary: Vec<Value> = names.into_iter().map(Value::symbol).collect();
+    Ok(Value::array_from_vec(ary))
 }
 
 /// ### Module#set_temporary_name

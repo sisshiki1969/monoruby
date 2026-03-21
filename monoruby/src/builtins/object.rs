@@ -720,6 +720,7 @@ fn instance_eval(
     vm.push_instance_eval_context(self_val);
     let res = if let Some(bh) = lfp.block() {
         if lfp.try_arg(0).is_some() {
+            vm.pop_class_context();
             return Err(MonorubyErr::wrong_number_of_arg(0, lfp.args_count(3)));
         }
         let data = vm.get_block_data(globals, bh)?;

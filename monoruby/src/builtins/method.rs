@@ -8,11 +8,13 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Method", METHOD_CLASS, ObjTy::METHOD);
     globals.define_builtin_class_func(METHOD_CLASS, "allocate", super::class::undef_allocate, 0);
     globals.define_builtin_funcs_rest(METHOD_CLASS, "call", &["[]", "==="], call);
+    globals.define_builtin_func(METHOD_CLASS, "arity", arity, 0);
     globals.define_builtin_func(METHOD_CLASS, "to_proc", to_proc, 0);
     globals.define_builtin_func(METHOD_CLASS, "source_location", source_location, 0);
 
     globals.define_builtin_class_under_obj("UnboundMethod", UMETHOD_CLASS, ObjTy::METHOD);
     globals.define_builtin_class_func(UMETHOD_CLASS, "allocate", super::class::undef_allocate, 0);
+    globals.define_builtin_func(UMETHOD_CLASS, "arity", uarity, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "bind", bind, 1);
     globals.define_builtin_func(UMETHOD_CLASS, "source_location", usource_location, 0);
 }
@@ -41,6 +43,33 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         lfp.block(),
         None,
     )
+}
+
+///
+/// ### Method#arity
+///
+/// - arity -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Method/i/arity.html]
+#[monoruby_builtin]
+fn arity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_method();
+    let func_id = method.func_id();
+    Ok(Value::integer(globals.func_arity(func_id)))
+}
+
+///
+/// ### UnboundMethod#arity
+///
+/// - arity -> Integer
+///
+#[monoruby_builtin]
+fn uarity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_umethod();
+    let func_id = method.func_id();
+    Ok(Value::integer(globals.func_arity(func_id)))
 }
 
 ///

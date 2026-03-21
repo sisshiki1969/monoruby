@@ -965,6 +965,22 @@ impl FuncInfo {
 
 impl Store {
     ///
+    /// Calculate Ruby arity for a function.
+    ///
+    /// - No optional/rest: arity = required + post
+    /// - Optional or rest: arity = -(required + post + 1)
+    ///
+    pub(crate) fn func_arity(&self, func_id: FuncId) -> i64 {
+        let info = &self[func_id];
+        let min = info.min_positional_args() as i64;
+        if info.opt_num() > 0 || info.is_rest() {
+            -(min + 1)
+        } else {
+            min
+        }
+    }
+
+    ///
     /// Check whether this function call is a *simple* call.
     ///
     /// *simple* call means that:

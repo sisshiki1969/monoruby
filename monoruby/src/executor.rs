@@ -474,6 +474,19 @@ impl Executor {
                     .unwrap();
                 v
             }
+            MonorubyErrKind::NotMethod(Some(receiver)) => {
+                let receiver = *receiver;
+                let v = Value::new_exception(err);
+                globals
+                    .store
+                    .set_ivar(
+                        v,
+                        IdentId::get_id("/receiver"),
+                        Value::from_u64(receiver),
+                    )
+                    .unwrap();
+                v
+            }
             _ => Value::new_exception(err),
         }
     }
