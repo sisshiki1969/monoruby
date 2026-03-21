@@ -886,8 +886,23 @@ impl Executor {
         bh: Option<BlockHandler>,
         kw_args: Option<Hashmap>,
     ) -> Result<Value> {
-        let func_id = self.find_method(globals, receiver, method, true)?;
-        self.invoke_func_inner(globals, func_id, receiver, args, bh, kw_args)
+        match self.find_method(globals, receiver, method, true) {
+            Ok(func_id) => self.invoke_func_inner(globals, func_id, receiver, args, bh, kw_args),
+            Err(original_err) => {
+                // Fall back to method_missing, matching CRuby behavior.
+                match self.find_method(globals, receiver, IdentId::METHOD_MISSING, true) {
+                    Ok(mm_func_id) => {
+                        let mut mm_args = Vec::with_capacity(args.len() + 1);
+                        mm_args.push(Value::symbol(method));
+                        mm_args.extend_from_slice(args);
+                        self.invoke_func_inner(
+                            globals, mm_func_id, receiver, &mm_args, bh, kw_args,
+                        )
+                    }
+                    Err(_) => Err(original_err),
+                }
+            }
+        }
     }
 
     pub(crate) fn invoke_eq(
