@@ -193,6 +193,11 @@ impl Globals {
             ObjTy::OBJECT,
         );
         object_class.set_superclass(Some(basic_object));
+        globals.set_constant(
+            BASIC_OBJECT_CLASS,
+            IdentId::get_id("BasicObject"),
+            basic_object.get(),
+        );
         assert_eq!(
             FuncId::new(1),
             globals.define_builtin_func(OBJECT_CLASS, "", enum_yielder, 0)
