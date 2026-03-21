@@ -145,8 +145,7 @@ fn module_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let module = globals.store.define_unnamed_module();
     let module_val = module.as_val();
     if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, bh)?;
-        vm.invoke_block_with_self(globals, &data, module_val, &[module_val])?;
+        vm.module_eval(globals, module, bh)?;
     }
     Ok(module_val)
 }
@@ -2494,6 +2493,26 @@ mod tests {
         n = Module.new
         res << (m == n)
         res
+        "##,
+        );
+        run_test(
+            r##"
+        m = Module.new do
+          def foo; 42; end
+        end
+        Class.new { include m }.new.foo
+        "##,
+        );
+        run_test(
+            r##"
+        m1 = Module.new do
+          def foo; "m1"; end
+        end
+        m2 = Module.new do
+          include m1
+          def foo; super + "+m2"; end
+        end
+        Class.new { include m2 }.new.foo
         "##,
         );
     }
