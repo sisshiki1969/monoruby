@@ -1833,4 +1833,53 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn initialize() {
+        // default initialize returns the new object
+        run_test("Object.new.class");
+        run_test("Object.new.is_a?(Object)");
+        // custom initialize sets instance variables
+        run_test(
+            r#"
+            class Foo
+              def initialize(x)
+                @x = x
+              end
+              def x; @x; end
+            end
+            Foo.new(42).x
+            "#,
+        );
+        // super in initialize
+        run_test(
+            r#"
+            class A
+              def initialize
+                @a = 1
+              end
+            end
+            class B < A
+              def initialize
+                super
+                @b = 2
+              end
+              def vals; [@a, @b]; end
+            end
+            B.new.vals
+            "#,
+        );
+        // initialize with block
+        run_test(
+            r#"
+            class C
+              def initialize(&blk)
+                @v = blk.call
+              end
+              def v; @v; end
+            end
+            C.new { 99 }.v
+            "#,
+        );
+    }
 }

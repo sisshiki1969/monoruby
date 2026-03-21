@@ -2469,4 +2469,88 @@ mod tests {
         "##,
         );
     }
+
+    #[test]
+    fn public_instance_methods() {
+        run_test(
+            r#"
+            class A
+              def foo; end
+              def bar; end
+              private
+              def baz; end
+            end
+            A.public_instance_methods(false).sort
+            "#,
+        );
+        run_test(
+            r#"
+            class B
+              def x; end
+            end
+            class C < B
+              def y; end
+            end
+            C.public_instance_methods(false).sort
+            "#,
+        );
+        run_test(
+            r#"
+            class D
+              def m1; end
+            end
+            class E < D
+              def m2; end
+            end
+            (E.public_instance_methods(true) & [:m1, :m2]).sort
+            "#,
+        );
+    }
+
+    #[test]
+    fn class_variable_get_set() {
+        run_test(
+            r#"
+            class Foo
+              @@x = 42
+              def self.get_x; class_variable_get(:@@x); end
+            end
+            Foo.get_x
+            "#,
+        );
+        run_test(
+            r#"
+            class Bar
+              class_variable_set(:@@val, "hello")
+              class_variable_get(:@@val)
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            class A
+              @@shared = 10
+            end
+            class B < A
+              def self.read; class_variable_get(:@@shared); end
+            end
+            B.read
+            "#,
+        );
+        run_test(
+            r#"
+            class C
+              class_variable_set(:@@a, 1)
+              class_variable_set(:@@a, 2)
+              class_variable_get(:@@a)
+            end
+            "#,
+        );
+        run_test_error(
+            r#"
+            class D; end
+            D.class_variable_get(:@@missing)
+            "#,
+        );
+    }
 }
