@@ -696,7 +696,10 @@ fn instance_exec(
     let bh = lfp.expect_block()?;
     let data = vm.get_block_data(globals, bh)?;
     let args = lfp.arg(0).as_array();
-    vm.invoke_block_with_self(globals, &data, self_val, &args)
+    vm.push_instance_eval_context(self_val);
+    let res = vm.invoke_block_with_self(globals, &data, self_val, &args);
+    vm.pop_class_context();
+    res
 }
 
 /// ### BasicObject#instance_eval
@@ -714,7 +717,8 @@ fn instance_eval(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
 
-    if let Some(bh) = lfp.block() {
+    vm.push_instance_eval_context(self_val);
+    let res = if let Some(bh) = lfp.block() {
         if lfp.try_arg(0).is_some() {
             return Err(MonorubyErr::wrong_number_of_arg(0, lfp.args_count(3)));
         }
@@ -735,7 +739,9 @@ fn instance_eval(
         vm.invoke_block_with_self(globals, &proc, self_val, &[])
     } else {
         Err(MonorubyErr::wrong_number_of_arg_range(0, 1..=3))
-    }
+    };
+    vm.pop_class_context();
+    res
 }
 
 ///
