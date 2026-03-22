@@ -318,26 +318,26 @@ pub(crate) enum TraceIr {
 
 impl TraceIr {
     pub(crate) fn from_pc(pc: BytecodePtr, store: &Store) -> Self {
-        let op1 = pc.op1;
-        let op2 = pc.op2;
+        let op1 = pc.op1();
+        let op2 = pc.op2();
         let opcode = pc.opcode();
         if opcode & 0xc0 == 0 {
             let (op1_w, op1_l) = dec_wl(op1);
             match opcode {
                 1 => TraceIr::SingletonMethodDef {
                     obj: SlotId::new(op1_w),
-                    name: IdentId::from(op2.0 as u32),
-                    func_id: FuncId::new((op2.0 >> 32) as u32),
+                    name: IdentId::from(op2 as u32),
+                    func_id: FuncId::new((op2 >> 32) as u32),
                 },
                 2 => TraceIr::MethodDef {
-                    name: IdentId::from((op2.0) as u32),
-                    func_id: FuncId::new((op2.0 >> 32) as u32),
+                    name: IdentId::from((op2) as u32),
+                    func_id: FuncId::new((op2 >> 32) as u32),
                 },
                 3 => TraceIr::Br(op1_l as i32),
                 4 => TraceIr::CondBr(SlotId::new(op1_w), op1_l as i32, false, BrKind::BrIf),
                 5 => TraceIr::CondBr(SlotId::new(op1_w), op1_l as i32, false, BrKind::BrIfNot),
-                6 => TraceIr::FrozenLiteral(SlotId::new(op1_w), op2.get_value()),
-                7 => TraceIr::Literal(SlotId::new(op1_w), op2.get_value()),
+                6 => TraceIr::FrozenLiteral(SlotId::new(op1_w), Value::from_u64(op2)),
+                7 => TraceIr::Literal(SlotId::new(op1_w), Value::from_u64(op2)),
                 10 | 18 => TraceIr::LoadConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
                 11 => TraceIr::StoreConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
                 12..=13 => TraceIr::CondBr(
@@ -379,7 +379,7 @@ impl TraceIr {
                 22 => TraceIr::SingletonClassDef {
                     dst: SlotId::from(op1_w),
                     base: SlotId::new(op1_l as u16),
-                    func_id: FuncId::new((op2.0 >> 32) as u32),
+                    func_id: FuncId::new((op2 >> 32) as u32),
                 },
                 23 => TraceIr::BlockArg(SlotId::new(op1_w), op1_l as usize),
                 24 => TraceIr::CheckCvar {
@@ -469,20 +469,20 @@ impl TraceIr {
                 },
                 65 => TraceIr::DefinedConst {
                     dst: SlotId::new(op1_w1),
-                    siteid: ConstSiteId(op2.0 as u32),
+                    siteid: ConstSiteId(op2 as u32),
                 },
                 66 => TraceIr::DefinedMethod {
                     dst: SlotId::new(op1_w1),
                     recv: SlotId::new(op2_w2),
-                    name: IdentId::from(op2.0 as u32),
+                    name: IdentId::from(op2 as u32),
                 },
                 67 => TraceIr::DefinedGvar {
                     dst: SlotId::new(op1_w1),
-                    name: IdentId::from(op2.0 as u32),
+                    name: IdentId::from(op2 as u32),
                 },
                 68 => TraceIr::DefinedIvar {
                     dst: SlotId::new(op1_w1),
-                    name: IdentId::from(op2.0 as u32),
+                    name: IdentId::from(op2 as u32),
                 },
                 69 => TraceIr::DefinedSuper {
                     dst: SlotId::new(op1_w1),
@@ -491,14 +491,14 @@ impl TraceIr {
                     dst: SlotId::from(op1_w1),
                     base: SlotId::from(op2_w2),
                     superclass: SlotId::from(op3_w3),
-                    name: IdentId::from((op2.0) as u32),
-                    func_id: FuncId::new((op2.0 >> 32) as u32),
+                    name: IdentId::from((op2) as u32),
+                    func_id: FuncId::new((op2 >> 32) as u32),
                 },
                 71 => TraceIr::ModuleDef {
                     dst: SlotId::from(op1_w1),
                     base: SlotId::from(op2_w2),
-                    name: IdentId::from((op2.0) as u32),
-                    func_id: FuncId::new((op2.0 >> 32) as u32),
+                    name: IdentId::from(op2 as u32),
+                    func_id: FuncId::new((op2 >> 32) as u32),
                 },
                 80 => TraceIr::Ret(SlotId::new(op1_w1)),
                 81 => TraceIr::MethodRet(SlotId::new(op1_w1)),
@@ -510,7 +510,7 @@ impl TraceIr {
                 86 => TraceIr::ConcatRegexp(SlotId::from(op1_w1), SlotId::new(op2_w2), op3_w3),
                 88 => TraceIr::DefinedCvar {
                     dst: SlotId::new(op1_w1),
-                    name: IdentId::from(op2.0 as u32),
+                    name: IdentId::from(op2 as u32),
                 },
                 121..=124 => {
                     let kind = UnOpK::from(opcode - 121);
@@ -638,7 +638,7 @@ impl TraceIr {
                 171 => TraceIr::ExpandArray {
                     src: SlotId::new(op1_w1),
                     dst: (SlotId::new(op2_w2), op3_w3, {
-                        let rest = op2.get_u16();
+                        let rest = op2 as u16;
                         if rest == 0 { None } else { Some(rest - 1) }
                     }),
                 },

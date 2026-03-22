@@ -84,12 +84,20 @@ impl BcIndex {
 
 #[derive(Clone, Copy, PartialEq)]
 #[repr(C)]
-pub(crate) struct Bytecode {
-    pub op1: u64,
-    pub op2: Bc2,
+pub struct Bytecode {
+    op1: u64,
+    op2: Bc2,
 }
 
 impl Bytecode {
+    pub fn op1(&self) -> u64 {
+        self.op1
+    }
+
+    pub fn op2(&self) -> u64 {
+        self.op2.0
+    }
+
     pub fn classid1(&self) -> Option<ClassId> {
         ClassId::from(self.op2.0 as u32)
     }
@@ -213,14 +221,6 @@ impl Bc2 {
         };
         Self(((id2 as u64) << 32) + (id1 as u64))
     }
-
-    pub fn get_value(&self) -> Value {
-        Value::from_u64(self.0)
-    }
-
-    pub fn get_u16(&self) -> u16 {
-        self.0 as u16
-    }
 }
 
 ///
@@ -265,7 +265,7 @@ impl BytecodePtrBase {
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
-pub(crate) struct BytecodePtr(std::ptr::NonNull<Bytecode>);
+pub struct BytecodePtr(std::ptr::NonNull<Bytecode>);
 
 impl std::ops::Sub<BytecodePtrBase> for BytecodePtr {
     type Output = BcIndex;
@@ -354,7 +354,7 @@ impl BytecodePtr {
         self.classid1()
     }
 
-    pub fn method_cache(self) -> Option<MethodCacheEntry> {
+    pub(crate) fn method_cache(self) -> Option<MethodCacheEntry> {
         if let Some(cached_class) = self.cached_class1() {
             Some(MethodCacheEntry {
                 recv_class: cached_class,
