@@ -26,8 +26,8 @@ pub(super) fn init(globals: &mut Globals) {
         &[],
         instance_eval,
         0,
-        3,
-        false,
+        0,
+        true,
         Effect::EVAL,
     );
     globals.define_builtin_funcs_with_effect(
@@ -282,18 +282,20 @@ fn instance_eval_inner(
     lfp: Lfp,
     self_val: Value,
 ) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    let argc = args.len();
     if let Some(bh) = lfp.block() {
-        if lfp.try_arg(0).is_some() {
-            return Err(MonorubyErr::wrong_number_of_arg(0, lfp.args_count(3)));
+        if argc > 0 {
+            return Err(MonorubyErr::wrong_number_of_arg(0, argc));
         }
         let data = vm.get_block_data(globals, bh)?;
         vm.invoke_block_with_self(globals, &data, self_val, &[self_val])
-    } else if let Some(arg0) = lfp.try_arg(0) {
-        let expr = arg0.coerce_to_str(vm, globals)?;
+    } else if argc >= 1 && argc <= 3 {
+        let expr = args[0].coerce_to_str(vm, globals)?;
         let cfp = vm.cfp();
         let caller_cfp = cfp.prev().unwrap();
-        let path = if let Some(arg1) = lfp.try_arg(1) {
-            arg1.coerce_to_str(vm, globals)?
+        let path = if argc >= 2 {
+            args[1].coerce_to_str(vm, globals)?
         } else {
             "(eval)".into()
         };
@@ -301,7 +303,7 @@ fn instance_eval_inner(
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block_with_self(globals, &proc, self_val, &[])
     } else {
-        Err(MonorubyErr::wrong_number_of_arg_range(0, 1..=3))
+        Err(MonorubyErr::wrong_number_of_arg_range(argc, 1..=3))
     }
 }
 
