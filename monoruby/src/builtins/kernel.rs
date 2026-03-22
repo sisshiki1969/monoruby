@@ -420,7 +420,11 @@ fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if lfp.try_arg(0).is_none() {
         let ex = globals.get_gvar(IdentId::get_id("$!")).unwrap_or_default();
-        return Err(MonorubyErr::new_from_exception(ex.is_exception().unwrap()));
+        if let Some(ex) = ex.is_exception() {
+            return Err(MonorubyErr::new_from_exception(ex));
+        } else {
+            return Err(MonorubyErr::runtimeerr(""));
+        }
     }
     if let Some(ex) = lfp.arg(0).is_exception() {
         let mut err = MonorubyErr::new_from_exception(ex);
@@ -822,14 +826,14 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/eval.html]
 #[monoruby_builtin]
-fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let expr = lfp.arg(0).expect_string(globals)?;
     let cfp = vm.cfp();
     let caller_cfp = cfp.prev().unwrap();
     let fname = if let Some(f) = lfp.try_arg(2) {
         f.coerce_to_str(vm, globals)?
     } else {
-        let caller_loc = globals.store.get_caller_loc(caller_cfp);
+        let caller_loc = globals.store.get_caller_loc(caller_cfp, Some(pc));
         format!("(eval at {})", caller_loc)
     };
     let lineno: i64 = if let Some(l) = lfp.try_arg(3) {

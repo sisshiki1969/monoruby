@@ -428,3 +428,118 @@ fn load_error_path() {
         "#,
     );
 }
+
+#[test]
+fn dollar_bang_cleared_after_rescue() {
+    run_test(
+        r#"
+            begin
+              raise "err"
+            rescue
+            end
+            $!
+        "#,
+    );
+}
+
+#[test]
+fn dollar_bang_cleared_on_return_from_rescue() {
+    run_test_with_prelude(
+        "foo",
+        r#"
+            def foo
+              begin
+                raise "err"
+              rescue
+                return $!.message
+              end
+            end
+        "#,
+    );
+    run_test_with_prelude(
+        "[bar, $!.inspect]",
+        r#"
+            def bar
+              begin
+                raise "err"
+              rescue
+                return 42
+              end
+            end
+        "#,
+    );
+}
+
+#[test]
+fn dollar_bang_nil_at_toplevel() {
+    run_test(
+        r#"
+            $!
+        "#,
+    );
+}
+
+#[test]
+fn raise_no_args_without_current_exception() {
+    run_test_error(
+        r#"
+            raise
+        "#,
+    );
+}
+
+#[test]
+fn eval_custom_filename_and_lineno() {
+    run_test(
+        r#"
+            eval("__FILE__", nil, "myfile.rb", 10)
+        "#,
+    );
+    run_test(
+        r#"
+            eval("__LINE__", nil, "myfile.rb", 10)
+        "#,
+    );
+}
+
+#[test]
+fn instance_eval_custom_filename() {
+    run_test(
+        r#"
+            Object.new.instance_eval("__FILE__", "inst.rb", 3)
+        "#,
+    );
+    run_test(
+        r#"
+            Object.new.instance_eval("__LINE__", "inst.rb", 3)
+        "#,
+    );
+}
+
+#[test]
+fn class_eval_custom_filename() {
+    run_test(
+        r#"
+            Integer.class_eval("__FILE__", "cls.rb", 7)
+        "#,
+    );
+    run_test(
+        r#"
+            Integer.class_eval("__LINE__", "cls.rb", 7)
+        "#,
+    );
+}
+
+#[test]
+fn module_eval_custom_filename() {
+    run_test(
+        r#"
+            Integer.module_eval("__FILE__", "custom.rb", 5)
+        "#,
+    );
+    run_test(
+        r#"
+            Integer.module_eval("__LINE__", "custom.rb", 5)
+        "#,
+    );
+}
