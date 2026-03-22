@@ -40,7 +40,7 @@ pub struct SourceInfo {
     /// source code text.
     pub code: String,
     /// line number offset for eval (0-based: e.g. lineno=1 means offset=0, lineno=42 means offset=41).
-    pub line_offset: usize,
+    pub line_offset: i64,
 }
 
 impl Default for SourceInfo {
@@ -68,7 +68,7 @@ impl SourceInfo {
     pub fn new_eval(
         path: impl Into<PathBuf>,
         code: impl Into<String>,
-        line_offset: usize,
+        line_offset: i64,
     ) -> Self {
         let mut code = code.into();
         if !code.ends_with('\n') {
@@ -81,13 +81,13 @@ impl SourceInfo {
         }
     }
 
-    pub fn get_line(&self, loc: &Loc) -> usize {
+    pub fn get_line(&self, loc: &Loc) -> i64 {
         if loc.0 >= self.code.len() {
             return self
                 .code
                 .char_indices()
                 .filter_map(|(pos, ch)| if ch == '\n' { Some(pos) } else { None })
-                .count()
+                .count() as i64
                 + self.line_offset;
         }
         let mut line_top = 0;
@@ -102,7 +102,7 @@ impl SourceInfo {
             })
             .find_map(|line| {
                 if line.end >= loc.0 && line.top <= loc.0 {
-                    Some(line.line_no + self.line_offset)
+                    Some(line.line_no as i64 + self.line_offset)
                 } else {
                     None
                 }
@@ -149,7 +149,7 @@ impl SourceInfo {
         let term = console::Term::stdout();
         let term_width = term.size().1 as usize;
         if let Some(line) = lines.first() {
-            res_string += &format!("{}:{}\n", self.file_name(), line.line_no);
+            res_string += &format!("{}:{}\n", self.file_name(), line.line_no as i64 + self.line_offset);
             for line in &lines {
                 let start = line.top;
                 let end = line.end;
@@ -224,7 +224,6 @@ impl SourceInfo {
         let mut line_top = 0;
         let mut line_max = 1;
         let code_len = self.code.len();
-        let offset = self.line_offset;
         let mut lines: Vec<_> = self
             .code
             .char_indices()
@@ -234,7 +233,7 @@ impl SourceInfo {
                 let top = line_top;
                 line_top = pos + 1;
                 line_max = idx + 1;
-                Line::new(idx + 1 + offset, top, pos)
+                Line::new(idx + 1, top, pos)
             })
             .filter(|line| {
                 if loc.0 == loc.1 {

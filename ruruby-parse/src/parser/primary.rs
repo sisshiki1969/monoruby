@@ -12,8 +12,8 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     "nil" => return Ok(Node::new_nil(loc)),
                     "self" => return Ok(Node::new_self(loc)),
                     "__LINE__" => {
-                        let line = self.lexer.get_line(loc.0) + self.line_offset;
-                        return Ok(Node::new_integer(line as i64, loc));
+                        let line = self.lexer.get_line(loc.0) as i64 + self.line_offset;
+                        return Ok(Node::new_integer(line, loc));
                     }
                     "__FILE__" => {
                         let file = self.path.to_string_lossy().to_string();

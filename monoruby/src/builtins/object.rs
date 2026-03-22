@@ -297,10 +297,11 @@ fn instance_eval_inner(
         let path = if argc >= 2 {
             args[1].coerce_to_str(vm, globals)?
         } else {
-            "(eval)".into()
+            let caller_loc = globals.store.get_caller_loc(caller_cfp);
+            format!("(eval at {})", caller_loc)
         };
-        let lineno = if argc >= 3 {
-            args[2].coerce_to_i64(globals)? as usize
+        let lineno: i64 = if argc >= 3 {
+            args[2].coerce_to_int(vm, globals)?
         } else {
             1
         };

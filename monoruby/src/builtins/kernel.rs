@@ -825,13 +825,15 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let expr = lfp.arg(0).expect_string(globals)?;
     let cfp = vm.cfp();
+    let caller_cfp = cfp.prev().unwrap();
     let fname = if let Some(f) = lfp.try_arg(2) {
-        f.expect_string(globals)?
+        f.coerce_to_str(vm, globals)?
     } else {
-        "(eval)".into()
+        let caller_loc = globals.store.get_caller_loc(caller_cfp);
+        format!("(eval at {})", caller_loc)
     };
-    let lineno = if let Some(l) = lfp.try_arg(3) {
-        l.coerce_to_i64(globals)? as usize
+    let lineno: i64 = if let Some(l) = lfp.try_arg(3) {
+        l.coerce_to_int(vm, globals)?
     } else {
         1
     };
@@ -846,7 +848,6 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         globals.compile_script_binding(expr, fname, binding, lineno)?;
         vm.invoke_binding(globals, binding.binding().unwrap())
     } else {
-        let caller_cfp = cfp.prev().unwrap();
         let fid = globals.compile_script_eval(expr, fname, caller_cfp, None, lineno)?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block(globals, &proc, &[])

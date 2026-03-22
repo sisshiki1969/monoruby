@@ -301,9 +301,9 @@ impl Globals {
         path: impl Into<PathBuf>,
         caller_cfp: Cfp,
         receiver_class: Option<ClassId>,
-        lineno: usize,
+        lineno: i64,
     ) -> Result<FuncId> {
-        let line_offset = lineno.saturating_sub(1);
+        let line_offset = lineno - 1;
         let outer_fid = caller_cfp.lfp().func_id();
         let outer = self.store[outer_fid].as_iseq();
         let external_context = self.store.scoped_locals(outer);
@@ -330,9 +330,9 @@ impl Globals {
         code: String,
         path: impl Into<PathBuf>,
         binding: Binding,
-        lineno: usize,
+        lineno: i64,
     ) -> Result<()> {
-        let line_offset = lineno.saturating_sub(1);
+        let line_offset = lineno - 1;
         let outer_fid = binding.outer_lfp().func_id();
         let outer = self.store[outer_fid].as_iseq();
         let external_context = self.store.scoped_locals(outer);

@@ -52,7 +52,7 @@ pub struct Parser<'a, OuterContext: LocalsContext> {
     /// defined? mode: allow invalid break/next.
     defined_mode: bool,
     /// line number offset for eval (0-based).
-    line_offset: usize,
+    line_offset: i64,
 }
 
 impl<'a> Parser<'a, DummyContext> {
@@ -68,7 +68,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         code: String,
         path: PathBuf,
         extern_context: Option<&'a OuterContext>,
-        line_offset: usize,
+        line_offset: i64,
     ) -> Result<ParseResult, ParseErr> {
         let parse_ctx = LvarScope::new_eval(None);
         parse(code, path, extern_context, parse_ctx, line_offset)
@@ -79,7 +79,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         path: PathBuf,
         context: Option<LvarCollector>,
         extern_context: Option<&OuterContext>,
-        line_offset: usize,
+        line_offset: i64,
     ) -> Result<ParseResult, ParseErr> {
         let parse_ctx = LvarScope::new_block(context);
         parse(code, path, extern_context, parse_ctx, line_offset)
@@ -90,7 +90,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         path: PathBuf,
         extern_context: Option<&'a OuterContext>,
         scope: LvarScope,
-        line_offset: usize,
+        line_offset: i64,
     ) -> Result<(Node, LvarCollector, Token), LexerErr> {
         let lexer = Lexer::new(code);
         let mut parser = Parser {
@@ -761,7 +761,7 @@ fn parse(
     path: PathBuf,
     extern_context: Option<&impl LocalsContext>,
     parse_context: LvarScope,
-    line_offset: usize,
+    line_offset: i64,
 ) -> Result<ParseResult, ParseErr> {
     match Parser::parse(&code, path.clone(), extern_context, parse_context, line_offset) {
         Ok((node, lvar_collector, tok)) => {
