@@ -479,11 +479,7 @@ impl Executor {
                 let v = Value::new_exception(err);
                 globals
                     .store
-                    .set_ivar(
-                        v,
-                        IdentId::get_id("/receiver"),
-                        Value::from_u64(receiver),
-                    )
+                    .set_ivar(v, IdentId::get_id("/receiver"), Value::from_u64(receiver))
                     .unwrap();
                 v
             }
@@ -723,8 +719,7 @@ impl Executor {
         visibility: Visibility,
     ) -> Result<()> {
         let singleton_id = globals.store.get_metaclass(class_id).id();
-        globals.add_method(singleton_id, name, func_id, visibility);
-        self.invoke_method_added(globals, singleton_id, name)
+        self.add_method(globals, singleton_id, name, func_id, visibility)
     }
 
     /// Register a public method and invoke the method_added hook.
@@ -735,8 +730,7 @@ impl Executor {
         name: IdentId,
         func_id: FuncId,
     ) -> Result<()> {
-        globals.add_method(class_id, name, func_id, Visibility::Public);
-        self.invoke_method_added(globals, class_id, name)
+        self.add_method(globals, class_id, name, func_id, Visibility::Public)
     }
 
     /// Register a private method and invoke the method_added hook.
@@ -747,8 +741,7 @@ impl Executor {
         name: IdentId,
         func_id: FuncId,
     ) -> Result<()> {
-        globals.add_method(class_id, name, func_id, Visibility::Private);
-        self.invoke_method_added(globals, class_id, name)
+        self.add_method(globals, class_id, name, func_id, Visibility::Private)
     }
 
     /// Register a method with the given visibility and invoke the method_added hook.
@@ -971,9 +964,7 @@ impl Executor {
                         let mut mm_args = Vec::with_capacity(args.len() + 1);
                         mm_args.push(Value::symbol(method));
                         mm_args.extend_from_slice(args);
-                        self.invoke_func_inner(
-                            globals, mm_func_id, receiver, &mm_args, bh, kw_args,
-                        )
+                        self.invoke_func_inner(globals, mm_func_id, receiver, &mm_args, bh, kw_args)
                     }
                     Err(_) => Err(original_err),
                 }

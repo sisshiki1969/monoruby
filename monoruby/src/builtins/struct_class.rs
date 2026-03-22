@@ -96,8 +96,8 @@ fn struct_initialize(
 
     for arg in members.iter() {
         let name = arg.expect_symbol_or_string(globals)?;
-        globals.define_attr_reader(class_id, name, Visibility::Public);
-        globals.define_attr_writer(class_id, name, Visibility::Public);
+        vm.define_attr_reader(globals, class_id, name, Visibility::Public)?;
+        vm.define_attr_writer(globals, class_id, name, Visibility::Public)?;
     }
 
     new_struct.set_instance_var(&mut globals.store, "/members", Value::array(members))?;
@@ -379,5 +379,34 @@ mod tests {
         res
         "##;
         run_test_with_prelude(code, prelude);
+    }
+
+    #[test]
+    fn struct_method_added() {
+        run_test(
+            r##"
+        $added = []
+        S = Struct.new(:x, :y) do
+          def self.method_added(name)
+            $added << name
+          end
+        end
+        $added
+        "##,
+        );
+        run_test_once(
+            r##"
+        $added = []
+        class Module
+          alias_method :orig_method_added, :method_added
+          def method_added(name)
+            $added << name if self.ancestors.include?(Struct)
+            orig_method_added(name)
+          end
+        end
+        S = Struct.new(:x, :y)
+        $added
+        "##,
+        );
     }
 }
