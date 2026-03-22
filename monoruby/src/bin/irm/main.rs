@@ -68,6 +68,7 @@ fn main() {
                     buf.clone(),
                     std::path::Path::new(&format!("(irm):{script_line}")),
                     binding,
+                    1,
                 ) {
                     Ok(_) => {}
                     Err(err) => {

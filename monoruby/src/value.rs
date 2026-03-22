@@ -1147,6 +1147,33 @@ impl Value {
         }
     }
 
+    /// Convert `self` to i64 via `to_int` if needed.
+    pub(crate) fn coerce_to_int(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<i64> {
+        if let RV::Fixnum(i) = self.unpack() {
+            return Ok(i);
+        }
+        if let Some(func_id) = globals.check_method(*self, IdentId::TO_INT) {
+            let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
+            if let RV::Fixnum(i) = result.unpack() {
+                return Ok(i);
+            }
+            return Err(MonorubyErr::typeerr(format!(
+                "can't convert {} into Integer ({}#to_int gives {})",
+                self.get_real_class_name(&globals.store),
+                self.get_real_class_name(&globals.store),
+                result.get_real_class_name(&globals.store),
+            )));
+        }
+        Err(MonorubyErr::typeerr(format!(
+            "no implicit conversion of {} into Integer",
+            self.get_real_class_name(&globals.store)
+        )))
+    }
+
     ///
     /// Try to convert `self` to i64.
     ///

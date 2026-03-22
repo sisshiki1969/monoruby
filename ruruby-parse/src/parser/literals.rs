@@ -567,6 +567,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             suppress_mul_assign: false,
             suppress_do_block: false,
             defined_mode: false,
+            line_offset: self.line_offset,
         }
     }
 }

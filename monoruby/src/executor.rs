@@ -922,9 +922,22 @@ impl Executor {
     ) -> Option<Value> {
         let func_id = match self.find_method(globals, receiver, method, is_func_call) {
             Ok(id) => id,
-            Err(err) => {
-                self.set_error(err);
-                return None;
+            Err(original_err) => {
+                // Fall back to method_missing, matching CRuby behavior.
+                match self.find_method(globals, receiver, IdentId::METHOD_MISSING, true) {
+                    Ok(mm_func_id) => {
+                        let mut mm_args = Vec::with_capacity(args.len() + 1);
+                        mm_args.push(Value::symbol(method));
+                        mm_args.extend_from_slice(args);
+                        return self.invoke_func(
+                            globals, mm_func_id, receiver, &mm_args, bh, kw_args,
+                        );
+                    }
+                    Err(_) => {
+                        self.set_error(original_err);
+                        return None;
+                    }
+                }
             }
         };
         self.invoke_func(globals, func_id, receiver, args, bh, kw_args)

@@ -13,11 +13,18 @@ pub struct FileDescriptor {
 }
 
 #[derive(Debug)]
+pub struct PopenDescriptor {
+    child: std::process::Child,
+    reader: Option<std::io::BufReader<std::process::ChildStdout>>,
+}
+
+#[derive(Debug)]
 pub enum IoInner {
     Stdin,
     Stdout,
     Stderr,
     File(Rc<FileDescriptor>),
+    Popen(Rc<PopenDescriptor>),
     Closed,
 }
 
@@ -28,6 +35,7 @@ impl std::clone::Clone for IoInner {
             Self::Stdout => Self::Stdout,
             Self::Stderr => Self::Stderr,
             Self::File(file) => Self::File(file.clone()),
+            Self::Popen(popen) => Self::Popen(popen.clone()),
             Self::Closed => Self::Closed,
         }
     }
@@ -40,6 +48,7 @@ impl std::fmt::Display for IoInner {
             Self::Stdout => write!(f, "#<IO:<STDOUT>>"),
             Self::Stderr => write!(f, "#<IO:<STDERR>>"),
             Self::File(file) => write!(f, "#<File:{}>", file.name),
+            Self::Popen(_) => write!(f, "#<IO:popen>"),
             Self::Closed => write!(f, "#<IO:(closed)>"),
         }
     }
@@ -52,6 +61,7 @@ impl IoInner {
             Self::Stdout => std::io::stdout().flush(),
             Self::Stderr => std::io::stderr().flush(),
             Self::File(file) => file.reader.get_ref().flush(),
+            Self::Popen(_) => return Ok(()),
             Self::Closed => return Err(MonorubyErr::runtimeerr("closed stream")),
         };
         res.map_err(|err| MonorubyErr::runtimeerr(err.to_string()))
@@ -64,6 +74,11 @@ impl IoInner {
     pub fn close(&mut self) -> Result<()> {
         if self.is_closed() {
             return Err(MonorubyErr::runtimeerr("closed stream"));
+        }
+        if let Self::Popen(popen) = self {
+            // Wait for child process to finish before closing.
+            let popen = Rc::get_mut(popen).unwrap();
+            let _ = popen.child.wait();
         }
         // Replace self with Closed, dropping the File and letting it close the fd naturally.
         *self = Self::Closed;
@@ -87,6 +102,18 @@ impl IoInner {
             reader: std::io::BufReader::new(file),
             name,
         }))
+    }
+
+    pub(crate) fn popen(child: std::process::Child) -> Self {
+        let reader = None;
+        Self::Popen(Rc::new(PopenDescriptor { child, reader }))
+    }
+
+    pub(crate) fn pid(&self) -> Option<u32> {
+        match self {
+            Self::Popen(popen) => Some(popen.child.id()),
+            _ => None,
+        }
     }
 
     pub(crate) fn from_raw_fd(fd: i32, name: String) -> Self {
@@ -118,6 +145,17 @@ impl IoInner {
                     .write(data)
                     .map_err(|e| MonorubyErr::rangeerr(e.to_string()))?;
                 Ok(())
+            }
+            Self::Popen(popen) => {
+                let popen = Rc::get_mut(popen).unwrap();
+                if let Some(ref mut stdin) = popen.child.stdin {
+                    stdin
+                        .write(data)
+                        .map_err(|e| MonorubyErr::rangeerr(e.to_string()))?;
+                    Ok(())
+                } else {
+                    Err(MonorubyErr::runtimeerr("popen: stdin not available"))
+                }
             }
         }
     }
@@ -158,6 +196,25 @@ impl IoInner {
                     Ok(buf)
                 }
             }
+            Self::Popen(popen) => {
+                let popen = Rc::get_mut(popen).unwrap();
+                let stdout = popen
+                    .child
+                    .stdout
+                    .as_mut()
+                    .ok_or_else(|| MonorubyErr::runtimeerr("popen: stdout not available"))?;
+                if let Some(length) = length {
+                    let buf: std::result::Result<Vec<u8>, _> =
+                        stdout.bytes().take(length).collect();
+                    buf.map_err(|e| MonorubyErr::runtimeerr(e.to_string()))
+                } else {
+                    let mut buf = vec![];
+                    stdout
+                        .read_to_end(&mut buf)
+                        .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+                    Ok(buf)
+                }
+            }
         }
     }
 
@@ -184,6 +241,21 @@ impl IoInner {
                 }
                 Ok(Some(buf))
             }
+            Self::Popen(popen) => {
+                let popen = Rc::get_mut(popen).unwrap();
+                let reader = popen.reader.get_or_insert_with(|| {
+                    let stdout = popen.child.stdout.take().unwrap();
+                    std::io::BufReader::new(stdout)
+                });
+                let mut buf = String::new();
+                let size = reader
+                    .read_line(&mut buf)
+                    .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+                if size == 0 {
+                    return Ok(None);
+                }
+                Ok(Some(buf))
+            }
         }
     }
 
@@ -192,7 +264,7 @@ impl IoInner {
             Self::Stdin => std::io::stdin().is_terminal(),
             Self::Stdout => std::io::stdout().is_terminal(),
             Self::Stderr => std::io::stderr().is_terminal(),
-            Self::File(_) | Self::Closed => false,
+            Self::File(_) | Self::Popen(_) | Self::Closed => false,
         }
     }
 }

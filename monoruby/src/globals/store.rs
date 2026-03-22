@@ -306,6 +306,21 @@ impl Store {
         }
     }
 
+    /// Get the caller's file:line location string from a CFP.
+    pub fn get_caller_loc(&self, cfp: Cfp) -> String {
+        let func_id = cfp.lfp().func_id();
+        if let Some(iseq_id) = self[func_id].is_iseq() {
+            let iseq = &self[iseq_id];
+            format!(
+                "{}:{}",
+                iseq.sourceinfo.file_name(),
+                iseq.sourceinfo.get_line(&iseq.loc)
+            )
+        } else {
+            "<internal>:0".to_string()
+        }
+    }
+
     pub fn internal_location(&self, func_id: FuncId) -> String {
         format!("<internal>:in '{}'", self.func_description(func_id))
     }
