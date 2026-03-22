@@ -57,17 +57,11 @@ fn main_define_method(
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let func_id = if let Some(method) = lfp.try_arg(1) {
         if let Some(proc) = method.is_proc() {
-            let func_id = globals.define_proc_method(proc);
-            globals.add_private_method(class_id, name, func_id);
-            func_id
+            globals.define_proc_method(proc)
         } else if let Some(method) = method.is_method() {
-            let func_id = method.func_id();
-            globals.add_private_method(class_id, name, func_id);
-            func_id
+            method.func_id()
         } else if let Some(umethod) = method.is_umethod() {
-            let func_id = umethod.func_id();
-            globals.add_private_method(class_id, name, func_id);
-            func_id
+            umethod.func_id()
         } else {
             return Err(MonorubyErr::wrong_argument_type(
                 globals,
@@ -77,22 +71,11 @@ fn main_define_method(
         }
     } else if let Some(bh) = lfp.block() {
         let proc = vm.generate_proc(bh, pc)?;
-        let func_id = globals.define_proc_method(proc);
-        globals.add_private_method(class_id, name, func_id);
-        func_id
+        globals.define_proc_method(proc)
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
-    let _ = func_id;
-    let receiver = globals.store[class_id].get_module().into();
-    vm.invoke_method_inner(
-        globals,
-        IdentId::METHOD_ADDED,
-        receiver,
-        &[Value::symbol(name)],
-        None,
-        None,
-    )?;
+    vm.add_private_method(globals, class_id, name, func_id)?;
     Ok(Value::symbol(name))
 }
 

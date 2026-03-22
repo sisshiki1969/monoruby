@@ -792,8 +792,7 @@ pub(super) extern "C" fn singleton_define_method(
             return None;
         }
     };
-    globals.add_public_method(class_id, name, func);
-    match vm.invoke_method_added(globals, class_id, name) {
+    match vm.add_public_method(globals, class_id, name, func) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);
@@ -846,11 +845,7 @@ pub(super) extern "C" fn alias_method(
     };
     let func_id = vm.cfp().lfp().func_id();
     let class_id = func_id.lexical_class(globals);
-    if let Err(err) = globals.alias_method_for_class(class_id, new, old) {
-        vm.set_error(err);
-        return None;
-    }
-    match vm.invoke_method_added(globals, class_id, new) {
+    match vm.alias_method_for_class(globals, class_id, new, old) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);

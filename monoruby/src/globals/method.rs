@@ -123,7 +123,7 @@ impl Globals {
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, Visibility::Private);
         let class_id = self.store.get_metaclass(class_id).id();
-        self.add_public_method(class_id, method_name, func_id);
+        self.add_method(class_id, method_name, func_id, Visibility::Public);
         func_id
     }
 

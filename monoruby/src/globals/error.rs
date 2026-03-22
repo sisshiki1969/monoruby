@@ -295,7 +295,7 @@ impl MonorubyErr {
             MonorubyErrKind::NotMethod(Some(obj.id())),
             format!(
                 "undefined method `{name}' for {}",
-                obj.get_real_class_name(store)
+                obj.to_s(store)
             ),
         )
     }
