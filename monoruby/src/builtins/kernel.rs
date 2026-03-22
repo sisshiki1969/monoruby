@@ -818,13 +818,23 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// ### Kernel.#eval
 ///
 /// - eval(expr) -> object
-/// - eval(expr, bind, [NOT SUPPORTED] fname = "(eval)", [NOT SUPPORTED] lineno = 1) -> object
+/// - eval(expr, bind, fname = "(eval)", lineno = 1) -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/eval.html]
 #[monoruby_builtin]
 fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let expr = lfp.arg(0).expect_string(globals)?;
     let cfp = vm.cfp();
+    let fname = if let Some(f) = lfp.try_arg(2) {
+        f.expect_string(globals)?
+    } else {
+        "(eval)".into()
+    };
+    let lineno = if let Some(l) = lfp.try_arg(3) {
+        l.coerce_to_i64(globals)? as usize
+    } else {
+        1
+    };
     if let Some(bind) = lfp.try_arg(1)
         && !bind.is_nil()
     {
@@ -833,11 +843,11 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         } else {
             return Err(MonorubyErr::typeerr("Binding expected"));
         };
-        globals.compile_script_binding(expr, "(eval)", binding)?;
+        globals.compile_script_binding(expr, fname, binding, lineno)?;
         vm.invoke_binding(globals, binding.binding().unwrap())
     } else {
         let caller_cfp = cfp.prev().unwrap();
-        let fid = globals.compile_script_eval(expr, "(eval)", caller_cfp, None)?;
+        let fid = globals.compile_script_eval(expr, fname, caller_cfp, None, lineno)?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block(globals, &proc, &[])
     }

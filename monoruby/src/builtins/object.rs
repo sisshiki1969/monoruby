@@ -299,7 +299,12 @@ fn instance_eval_inner(
         } else {
             "(eval)".into()
         };
-        let fid = globals.compile_script_eval(expr, path, caller_cfp, Some(self_val.class()))?;
+        let lineno = if argc >= 3 {
+            args[2].coerce_to_i64(globals)? as usize
+        } else {
+            1
+        };
+        let fid = globals.compile_script_eval(expr, path, caller_cfp, Some(self_val.class()), lineno)?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block_with_self(globals, &proc, self_val, &[])
     } else {

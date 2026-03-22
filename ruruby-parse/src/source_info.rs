@@ -39,6 +39,8 @@ pub struct SourceInfo {
     pub path: PathBuf,
     /// source code text.
     pub code: String,
+    /// line number offset for eval (0-based: e.g. lineno=1 means offset=0, lineno=42 means offset=41).
+    pub line_offset: usize,
 }
 
 impl Default for SourceInfo {
@@ -59,6 +61,23 @@ impl SourceInfo {
         SourceInfo {
             path: path.into(),
             code,
+            line_offset: 0,
+        }
+    }
+
+    pub fn new_eval(
+        path: impl Into<PathBuf>,
+        code: impl Into<String>,
+        line_offset: usize,
+    ) -> Self {
+        let mut code = code.into();
+        if !code.ends_with('\n') {
+            code.push('\n');
+        }
+        SourceInfo {
+            path: path.into(),
+            code,
+            line_offset,
         }
     }
 
@@ -68,7 +87,8 @@ impl SourceInfo {
                 .code
                 .char_indices()
                 .filter_map(|(pos, ch)| if ch == '\n' { Some(pos) } else { None })
-                .count();
+                .count()
+                + self.line_offset;
         }
         let mut line_top = 0;
         self.code
@@ -82,7 +102,7 @@ impl SourceInfo {
             })
             .find_map(|line| {
                 if line.end >= loc.0 && line.top <= loc.0 {
-                    Some(line.line_no)
+                    Some(line.line_no + self.line_offset)
                 } else {
                     None
                 }
@@ -204,6 +224,7 @@ impl SourceInfo {
         let mut line_top = 0;
         let mut line_max = 1;
         let code_len = self.code.len();
+        let offset = self.line_offset;
         let mut lines: Vec<_> = self
             .code
             .char_indices()
@@ -213,7 +234,7 @@ impl SourceInfo {
                 let top = line_top;
                 line_top = pos + 1;
                 line_max = idx + 1;
-                Line::new(idx + 1, top, pos)
+                Line::new(idx + 1 + offset, top, pos)
             })
             .filter(|line| {
                 if loc.0 == loc.1 {

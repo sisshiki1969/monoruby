@@ -329,7 +329,7 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// ### Module#class_eval
 ///
-/// - module_eval(expr, fname = "(eval)", [NOT SUPPORTED] lineno = 1) -> object
+/// - module_eval(expr, fname = "(eval)", lineno = 1) -> object
 /// - module_eval {|mod| ... } -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_eval.html]
@@ -351,8 +351,13 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         } else {
             "(eval)".into()
         };
+        let lineno = if let Some(arg2) = lfp.try_arg(2) {
+            arg2.coerce_to_i64(globals)? as usize
+        } else {
+            1
+        };
 
-        let fid = globals.compile_script_eval(expr, path, caller_cfp, Some(module.id()))?;
+        let fid = globals.compile_script_eval(expr, path, caller_cfp, Some(module.id()), lineno)?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.push_class_context(module.id());
         let res = vm.invoke_block_with_self(globals, &proc, module.get(), &[]);

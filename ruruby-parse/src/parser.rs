@@ -51,13 +51,15 @@ pub struct Parser<'a, OuterContext: LocalsContext> {
     suppress_do_block: bool,
     /// defined? mode: allow invalid break/next.
     defined_mode: bool,
+    /// line number offset for eval (0-based).
+    line_offset: usize,
 }
 
 impl<'a> Parser<'a, DummyContext> {
     pub fn parse_program(code: String, path: impl Into<PathBuf>) -> Result<ParseResult, ParseErr> {
         let path = path.into();
         let parse_ctx = LvarScope::new_eval(None);
-        parse(code, path, None::<&DummyContext>, parse_ctx)
+        parse(code, path, None::<&DummyContext>, parse_ctx, 0)
     }
 }
 
@@ -66,9 +68,10 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         code: String,
         path: PathBuf,
         extern_context: Option<&'a OuterContext>,
+        line_offset: usize,
     ) -> Result<ParseResult, ParseErr> {
         let parse_ctx = LvarScope::new_eval(None);
-        parse(code, path, extern_context, parse_ctx)
+        parse(code, path, extern_context, parse_ctx, line_offset)
     }
 
     pub fn parse_program_binding(
@@ -76,9 +79,10 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         path: PathBuf,
         context: Option<LvarCollector>,
         extern_context: Option<&OuterContext>,
+        line_offset: usize,
     ) -> Result<ParseResult, ParseErr> {
         let parse_ctx = LvarScope::new_block(context);
-        parse(code, path, extern_context, parse_ctx)
+        parse(code, path, extern_context, parse_ctx, line_offset)
     }
 
     fn parse(
@@ -86,6 +90,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         path: PathBuf,
         extern_context: Option<&'a OuterContext>,
         scope: LvarScope,
+        line_offset: usize,
     ) -> Result<(Node, LvarCollector, Token), LexerErr> {
         let lexer = Lexer::new(code);
         let mut parser = Parser {
@@ -99,6 +104,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             suppress_mul_assign: false,
             suppress_do_block: false,
             defined_mode: false,
+            line_offset,
         };
         let node = parser.parse_comp_stmt()?;
         let lvar = parser.scope.pop().unwrap().lvar;
@@ -755,10 +761,11 @@ fn parse(
     path: PathBuf,
     extern_context: Option<&impl LocalsContext>,
     parse_context: LvarScope,
+    line_offset: usize,
 ) -> Result<ParseResult, ParseErr> {
-    match Parser::parse(&code, path.clone(), extern_context, parse_context) {
+    match Parser::parse(&code, path.clone(), extern_context, parse_context, line_offset) {
         Ok((node, lvar_collector, tok)) => {
-            let source_info = SourceInfoRef::new(SourceInfo::new(path, code));
+            let source_info = SourceInfoRef::new(SourceInfo::new_eval(path, code, line_offset));
             if tok.is_eof() {
                 let result = ParseResult {
                     node,
@@ -772,7 +779,7 @@ fn parse(
             }
         }
         Err(err) => {
-            let source_info = SourceInfoRef::new(SourceInfo::new(path, code));
+            let source_info = SourceInfoRef::new(SourceInfo::new_eval(path, code, line_offset));
             Err(ParseErr::from_lexer_err(err, source_info))
         }
     }

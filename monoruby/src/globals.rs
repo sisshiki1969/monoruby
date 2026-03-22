@@ -301,12 +301,14 @@ impl Globals {
         path: impl Into<PathBuf>,
         caller_cfp: Cfp,
         receiver_class: Option<ClassId>,
+        lineno: usize,
     ) -> Result<FuncId> {
+        let line_offset = lineno.saturating_sub(1);
         let outer_fid = caller_cfp.lfp().func_id();
         let outer = self.store[outer_fid].as_iseq();
         let external_context = self.store.scoped_locals(outer);
 
-        match Parser::parse_program_eval(code, path.into(), Some(&external_context)) {
+        match Parser::parse_program_eval(code, path.into(), Some(&external_context), line_offset) {
             Ok(result) => {
                 let fid =
                     bytecodegen::bytecode_compile_eval(self, result, outer, Loc::default(), None)?;
@@ -328,7 +330,9 @@ impl Globals {
         code: String,
         path: impl Into<PathBuf>,
         binding: Binding,
+        lineno: usize,
     ) -> Result<()> {
+        let line_offset = lineno.saturating_sub(1);
         let outer_fid = binding.outer_lfp().func_id();
         let outer = self.store[outer_fid].as_iseq();
         let external_context = self.store.scoped_locals(outer);
@@ -348,6 +352,7 @@ impl Globals {
             path.into(),
             context.clone(),
             Some(&external_context),
+            line_offset,
         ) {
             Ok(res) => {
                 let res =

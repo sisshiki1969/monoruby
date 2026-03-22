@@ -12,7 +12,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     "nil" => return Ok(Node::new_nil(loc)),
                     "self" => return Ok(Node::new_self(loc)),
                     "__LINE__" => {
-                        let line = self.lexer.get_line(loc.0);
+                        let line = self.lexer.get_line(loc.0) + self.line_offset;
                         return Ok(Node::new_integer(line as i64, loc));
                     }
                     "__FILE__" => {
