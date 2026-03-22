@@ -315,6 +315,108 @@ fn retry_in_loop() {
 }
 
 #[test]
+fn rescue_modifier_simple_assign() {
+    run_test(
+        r#"
+            x = raise("err") rescue 42
+            x
+        "#,
+    );
+}
+
+#[test]
+fn rescue_modifier_op_assign() {
+    run_test(
+        r#"
+            x = 10
+            x += raise("err") rescue 5
+            x
+        "#,
+    );
+}
+
+#[test]
+fn rescue_modifier_or_assign() {
+    run_test(
+        r#"
+            x = nil
+            x ||= raise("err") rescue 99
+            x
+        "#,
+    );
+}
+
+#[test]
+fn rescue_modifier_and_assign() {
+    run_test(
+        r#"
+            x = true
+            x &&= raise("err") rescue 77
+            x
+        "#,
+    );
+}
+
+#[test]
+fn rescue_modifier_multi_assign() {
+    run_test(
+        r#"
+            a, b = raise("err") rescue [1, 2]
+            [a, b]
+        "#,
+    );
+}
+
+#[test]
+fn rescue_modifier_constant_assign() {
+    run_test_once(
+        r#"
+            X = raise("err") rescue 100
+            X
+        "#,
+    );
+}
+
+#[test]
+fn rescue_modifier_no_rescue() {
+    run_test(
+        r#"
+            x = 42
+            x
+        "#,
+    );
+}
+
+#[test]
+fn rescue_modifier_ivar_assign() {
+    run_test(
+        r#"
+            class C
+              def initialize
+                @x = raise("err") rescue 55
+              end
+              def x; @x; end
+            end
+            C.new.x
+        "#,
+    );
+}
+
+#[test]
+fn rescue_modifier_accessor_assign() {
+    run_test(
+        r#"
+            class D
+              attr_accessor :val
+            end
+            d = D.new
+            d.val = raise("err") rescue 33
+            d.val
+        "#,
+    );
+}
+
+#[test]
 fn load_error_path() {
     run_test(
         r#"
