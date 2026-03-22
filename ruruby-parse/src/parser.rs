@@ -865,7 +865,7 @@ impl RescueEntry {
         }
     }
 
-    fn new_postfix(body: Node) -> Self {
+    pub(crate) fn new_postfix(body: Node) -> Self {
         Self {
             exception_list: vec![],
             assign: None,
