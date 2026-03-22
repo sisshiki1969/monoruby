@@ -384,6 +384,16 @@ mod tests {
     }
 
     #[test]
+    fn instance_eval_lineno() {
+        // instance_eval with filename and lineno
+        run_test(r#"instance_eval("__LINE__", "test.rb", 42)"#);
+        run_test(r#"instance_eval("__FILE__", "test.rb", 42)"#);
+        run_test(
+            r#"instance_eval("__LINE__\n__LINE__", "test.rb", 10)"#,
+        );
+    }
+
+    #[test]
     fn instance_exec() {
         run_test_with_prelude(
             r#"

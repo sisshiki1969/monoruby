@@ -898,6 +898,7 @@ mod test {
             std::path::PathBuf::new(),
             None,
             LvarScope::new_eval(None),
+            0,
         )
         .unwrap()
         .0;
@@ -910,6 +911,7 @@ mod test {
             std::path::PathBuf::new(),
             None,
             LvarScope::new_eval(None),
+            0,
         )
         .unwrap()
         .0;
@@ -922,6 +924,7 @@ mod test {
             std::path::PathBuf::new(),
             None,
             LvarScope::new_eval(None),
+            0,
         )
         .unwrap_err();
     }

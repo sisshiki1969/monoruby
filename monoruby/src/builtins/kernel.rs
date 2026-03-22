@@ -2091,6 +2091,13 @@ mod tests {
     }
 
     #[test]
+    fn eval_lineno() {
+        run_test(r#"eval("__LINE__", nil, "test.rb", 42)"#);
+        run_test(r#"eval("__FILE__", nil, "test.rb", 42)"#);
+        run_test(r#"eval("__LINE__\n__LINE__", nil, "test.rb", 10)"#);
+    }
+
+    #[test]
     fn eval_binding() {
         run_test(
             r##"
