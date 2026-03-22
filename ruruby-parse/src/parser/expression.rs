@@ -159,7 +159,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             return Err(error_unexpected(loc, "Expected '='."));
         }
 
-        let mrhs = self.parse_mul_assign_rhs(None, false)?;
+        let mrhs = self.parse_mul_assign_rhs_with_rescue()?;
         for lhs in &mut mlhs {
             *lhs = self.check_lhs(std::mem::take(lhs))?;
         }
@@ -177,6 +177,12 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             let mrhs = self.parse_mul_assign_rhs(None, false)?;
             Ok(mrhs)
         }
+    }
+
+    /// Parse rhs of assignment with trailing rescue modifier support.
+    fn parse_mul_assign_rhs_if_allowed_with_rescue(&mut self) -> Result<Vec<Node>, LexerErr> {
+        let mrhs = self.parse_mul_assign_rhs_if_allowed()?;
+        self.wrap_mrhs_with_rescue(mrhs)
     }
 
     /// Parse rhs of multiple assignment. cf: a,b,*c,d
@@ -261,7 +267,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             return Ok(lhs);
         }
         if self.consume_punct_no_term(Punct::Assign)? {
-            let mrhs = self.parse_mul_assign_rhs(None, false)?;
+            let mrhs = self.parse_mul_assign_rhs_with_rescue()?;
             let lhs = self.check_lhs(lhs)?;
             Ok(Node::new_mul_assign(vec![lhs], mrhs))
         } else if let Some(op) = self.consume_assign_op_no_term()? {
@@ -269,6 +275,31 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             self.parse_assign_op(lhs, op)
         } else {
             Ok(lhs)
+        }
+    }
+
+    /// Parse RHS of assignment, wrapping with rescue modifier if present.
+    /// e.g. `X = expr rescue value` => RHS becomes `(begin; expr; rescue; value; end)`
+    fn parse_mul_assign_rhs_with_rescue(&mut self) -> Result<Vec<Node>, LexerErr> {
+        let mrhs = self.parse_mul_assign_rhs(None, false)?;
+        self.wrap_mrhs_with_rescue(mrhs)
+    }
+
+    /// If a rescue modifier follows, wrap the given mrhs nodes in begin..rescue.
+    fn wrap_mrhs_with_rescue(&mut self, mrhs: Vec<Node>) -> Result<Vec<Node>, LexerErr> {
+        if self.consume_reserved_no_skip_line_term(Reserved::Rescue)? {
+            let rescue_val = self.parse_expr()?;
+            let rhs_loc = mrhs[0].loc().merge(mrhs.last().unwrap().loc());
+            let rhs_body = if mrhs.len() == 1 {
+                mrhs.into_iter().next().unwrap()
+            } else {
+                Node::new_array(mrhs, rhs_loc)
+            };
+            let wrapped =
+                Node::new_begin(rhs_body, vec![RescueEntry::new_postfix(rescue_val)], None, None);
+            Ok(vec![wrapped])
+        } else {
+            Ok(mrhs)
         }
     }
 
@@ -496,7 +527,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     fn parse_accesory_assign(&mut self, lhs: Node) -> Result<Node, LexerErr> {
         if !self.suppress_acc_assign {
             if self.consume_punct_no_term(Punct::Assign)? {
-                let mrhs = self.parse_mul_assign_rhs_if_allowed()?;
+                let mrhs = self.parse_mul_assign_rhs_if_allowed_with_rescue()?;
                 let lhs = self.check_lhs(lhs)?;
                 return Ok(Node::new_mul_assign(vec![lhs], mrhs));
             } else if let Some(op) = self.consume_assign_op_no_term()? {
@@ -512,7 +543,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         match op {
             BinOp::LOr | BinOp::LAnd => {
                 self.get()?;
-                let rhs = self.parse_arg(false)?;
+                let rhs = self.parse_arg_with_rescue()?;
                 let lhs = self.check_lhs(lhs)?;
                 let node =
                     Node::new_binop(op, lhs.clone(), Node::new_mul_assign(vec![lhs], vec![rhs]));
@@ -520,10 +551,26 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             }
             _ => {
                 self.get()?;
-                let rhs = self.parse_arg(false)?;
+                let rhs = self.parse_arg_with_rescue()?;
                 let lhs = self.check_lhs(lhs)?;
                 Ok(Node::new_assign_op(op, lhs, rhs))
             }
+        }
+    }
+
+    /// Parse a single arg expression, wrapping with rescue modifier if present.
+    fn parse_arg_with_rescue(&mut self) -> Result<Node, LexerErr> {
+        let arg = self.parse_arg(false)?;
+        if self.consume_reserved_no_skip_line_term(Reserved::Rescue)? {
+            let rescue_val = self.parse_expr()?;
+            Ok(Node::new_begin(
+                arg,
+                vec![RescueEntry::new_postfix(rescue_val)],
+                None,
+                None,
+            ))
+        } else {
+            Ok(arg)
         }
     }
 
@@ -726,7 +773,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         if self.consume_punct_no_term(Punct::Comma)? {
             self.parse_mul_assign(first_lhs)
         } else if self.consume_punct_no_term(Punct::Assign)? {
-            let mrhs = self.parse_mul_assign_rhs_if_allowed()?;
+            let mrhs = self.parse_mul_assign_rhs_if_allowed_with_rescue()?;
             let lhs = self.check_lhs(first_lhs)?;
             Ok(Node::new_mul_assign(vec![lhs], mrhs))
         } else {
