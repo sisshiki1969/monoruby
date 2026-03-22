@@ -697,7 +697,7 @@ impl Executor {
 
 impl Executor {
     /// Invoke method_added or singleton_method_added callback for `class_id`.
-    pub(crate) fn invoke_method_added(
+    fn invoke_method_added(
         &mut self,
         globals: &mut Globals,
         class_id: ClassId,
@@ -711,6 +711,95 @@ impl Executor {
         };
         self.invoke_method_inner(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
         Ok(())
+    }
+
+    /// Register a singleton method and invoke the singleton_method_added hook.
+    pub(crate) fn add_singleton_method(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        name: IdentId,
+        func_id: FuncId,
+        visibility: Visibility,
+    ) -> Result<()> {
+        let singleton_id = globals.store.get_metaclass(class_id).id();
+        globals.add_method(singleton_id, name, func_id, visibility);
+        self.invoke_method_added(globals, singleton_id, name)
+    }
+
+    /// Register a public method and invoke the method_added hook.
+    pub(crate) fn add_public_method(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        name: IdentId,
+        func_id: FuncId,
+    ) -> Result<()> {
+        globals.add_method(class_id, name, func_id, Visibility::Public);
+        self.invoke_method_added(globals, class_id, name)
+    }
+
+    /// Register a private method and invoke the method_added hook.
+    pub(crate) fn add_private_method(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        name: IdentId,
+        func_id: FuncId,
+    ) -> Result<()> {
+        globals.add_method(class_id, name, func_id, Visibility::Private);
+        self.invoke_method_added(globals, class_id, name)
+    }
+
+    /// Register a method with the given visibility and invoke the method_added hook.
+    pub(crate) fn add_method(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        name: IdentId,
+        func_id: FuncId,
+        visibility: Visibility,
+    ) -> Result<()> {
+        globals.add_method(class_id, name, func_id, visibility);
+        self.invoke_method_added(globals, class_id, name)
+    }
+
+    /// Create an alias and invoke the method_added hook.
+    pub(crate) fn alias_method_for_class(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        new_name: IdentId,
+        old_name: IdentId,
+    ) -> Result<()> {
+        globals.alias_method_for_class(class_id, new_name, old_name)?;
+        self.invoke_method_added(globals, class_id, new_name)
+    }
+
+    /// Define an attr_reader and invoke the method_added hook.
+    pub(crate) fn define_attr_reader(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        method_name: IdentId,
+        visi: Visibility,
+    ) -> Result<IdentId> {
+        let name = globals.define_attr_reader(class_id, method_name, visi);
+        self.invoke_method_added(globals, class_id, name)?;
+        Ok(name)
+    }
+
+    /// Define an attr_writer and invoke the method_added hook.
+    pub(crate) fn define_attr_writer(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        method_name: IdentId,
+        visi: Visibility,
+    ) -> Result<IdentId> {
+        let name = globals.define_attr_writer(class_id, method_name, visi);
+        self.invoke_method_added(globals, class_id, name)?;
+        Ok(name)
     }
 
     /// Invoke method_removed or singleton_method_removed callback for `class_id`.
@@ -770,23 +859,10 @@ impl Executor {
             DefinitionContext::Class(class_id) => class_id,
             DefinitionContext::Receiver(receiver) => globals.store.get_singleton(receiver)?.id(),
         };
-        globals.add_method(class_id, name, func, cref.visibility);
-        if cref.module_function {
-            globals.add_singleton_method(class_id, name, func, cref.visibility);
-        }
         Codegen::check_bop_redefine(self.cfp());
-        self.invoke_method_added(globals, class_id, name)?;
+        self.add_method(globals, class_id, name, func, cref.visibility)?;
         if cref.module_function {
-            let module = globals.store[class_id].get_module();
-            let receiver: Value = module.into();
-            self.invoke_method_inner(
-                globals,
-                IdentId::SINGLETON_METHOD_ADDED,
-                receiver,
-                &[Value::symbol(name)],
-                None,
-                None,
-            )?;
+            self.add_singleton_method(globals, class_id, name, func, cref.visibility)?;
         }
         Ok(Value::nil())
     }

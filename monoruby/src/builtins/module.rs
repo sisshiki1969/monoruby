@@ -232,8 +232,7 @@ fn alias_method(
     let class_id = lfp.self_val().as_class_id();
     let new_name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let old_name = lfp.arg(1).expect_symbol_or_string(globals)?;
-    globals.alias_method_for_class(class_id, new_name, old_name)?;
-    vm.invoke_method_added(globals, class_id, new_name)?;
+    vm.alias_method_for_class(globals, class_id, new_name, old_name)?;
     Ok(Value::symbol(new_name))
 }
 
@@ -255,11 +254,9 @@ fn attr_accessor(
     let visi = vm.context_visibility();
     for v in lfp.arg(0).as_array().iter() {
         let arg_name = v.expect_symbol_or_string(globals)?;
-        let method_name = globals.define_attr_reader(class_id, arg_name, visi);
-        vm.invoke_method_added(globals, class_id, method_name)?;
+        let method_name = vm.define_attr_reader(globals, class_id, arg_name, visi)?;
         ary.push(Value::symbol(method_name));
-        let method_name = globals.define_attr_writer(class_id, arg_name, visi);
-        vm.invoke_method_added(globals, class_id, method_name)?;
+        let method_name = vm.define_attr_writer(globals, class_id, arg_name, visi)?;
         ary.push(Value::symbol(method_name));
     }
     Ok(ary.into())
@@ -283,8 +280,7 @@ fn attr_reader(
     let visi = vm.context_visibility();
     for v in lfp.arg(0).as_array().iter() {
         let arg_name = v.expect_symbol_or_string(globals)?;
-        let method_name = globals.define_attr_reader(class_id, arg_name, visi);
-        vm.invoke_method_added(globals, class_id, method_name)?;
+        let method_name = vm.define_attr_reader(globals, class_id, arg_name, visi)?;
         ary.push(Value::symbol(method_name));
     }
     Ok(ary.into())
@@ -308,8 +304,7 @@ fn attr_writer(
     let visi = vm.context_visibility();
     for v in lfp.arg(0).as_array().iter() {
         let arg_name = v.expect_symbol_or_string(globals)?;
-        let method_name = globals.define_attr_writer(class_id, arg_name, visi);
-        vm.invoke_method_added(globals, class_id, method_name)?;
+        let method_name = vm.define_attr_writer(globals, class_id, arg_name, visi)?;
         ary.push(Value::symbol(method_name));
     }
     Ok(ary.into())
@@ -498,17 +493,11 @@ fn define_method(
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let func_id = if let Some(method) = lfp.try_arg(1) {
         if let Some(proc) = method.is_proc() {
-            let func_id = globals.define_proc_method(proc);
-            globals.add_public_method(class_id, name, func_id);
-            func_id
+            globals.define_proc_method(proc)
         } else if let Some(method) = method.is_method() {
-            let func_id = method.func_id();
-            globals.add_public_method(class_id, name, func_id);
-            func_id
+            method.func_id()
         } else if let Some(umethod) = method.is_umethod() {
-            let func_id = umethod.func_id();
-            globals.add_public_method(class_id, name, func_id);
-            func_id
+            umethod.func_id()
         } else {
             return Err(MonorubyErr::wrong_argument_type(
                 globals,
@@ -518,14 +507,11 @@ fn define_method(
         }
     } else if let Some(bh) = lfp.block() {
         let proc = vm.generate_proc(bh, pc)?;
-        let func_id = globals.define_proc_method(proc);
-        globals.add_public_method(class_id, name, func_id);
-        func_id
+        globals.define_proc_method(proc)
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
-    let _ = func_id;
-    vm.invoke_method_added(globals, class_id, name)?;
+    vm.add_public_method(globals, class_id, name, func_id)?;
     Ok(Value::symbol(name))
 }
 
@@ -1023,20 +1009,11 @@ fn module_function(
         Ok(Value::nil())
     } else {
         let class_id = lfp.self_val().as_class_id();
-        let receiver = globals.store[class_id].get_module().into();
         let visi = vm.context_visibility();
         for v in arg0.as_array().iter() {
             let name = v.expect_symbol_or_string(globals)?;
             let func_id = globals.find_method_for_class(class_id, name)?.0;
-            globals.add_singleton_method(class_id, name, func_id, visi);
-            vm.invoke_method_inner(
-                globals,
-                IdentId::SINGLETON_METHOD_ADDED,
-                receiver,
-                &[Value::symbol(name)],
-                None,
-                None,
-            )?;
+            vm.add_singleton_method(globals, class_id, name, func_id, visi)?;
         }
         Ok(arg0)
     }

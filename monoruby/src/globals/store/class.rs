@@ -797,19 +797,6 @@ impl Store {
     }
 
     ///
-    /// Add a new public method *func* with *name* to the class of *class_id*.
-    ///
-    /// This fn increments class version.
-    ///
-    pub(crate) fn add_public_method(&mut self, class_id: ClassId, name: IdentId, func_id: FuncId) {
-        self.add_method(class_id, name, func_id, Visibility::Public)
-    }
-
-    pub(crate) fn add_private_method(&mut self, class_id: ClassId, name: IdentId, func_id: FuncId) {
-        self.add_method(class_id, name, func_id, Visibility::Private)
-    }
-
-    ///
     /// Add a new method *func* with *name* to the class of *class_id*.
     ///
     /// This fn increments class version.
@@ -892,22 +879,6 @@ impl Store {
                 is_basic_op: false,
             },
         );
-    }
-
-    ///
-    /// Add a new singleton method *func* with *name* to the class of *class_id*.
-    ///
-    /// This fn increments class version.
-    ///
-    pub(crate) fn add_singleton_method(
-        &mut self,
-        class_id: ClassId,
-        name: IdentId,
-        func_id: FuncId,
-        visibility: Visibility,
-    ) {
-        let singleton = self.classes.get_metaclass(class_id).id();
-        self.add_method_inner(singleton, name, func_id, visibility, false);
     }
 
     ///

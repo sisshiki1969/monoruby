@@ -1664,8 +1664,7 @@ fn define_singleton_method(
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
-    globals.add_public_method(class_id, name, func_id);
-    vm.invoke_method_added(globals, class_id, name)?;
+    vm.add_public_method(globals, class_id, name, func_id)?;
     Ok(Value::symbol(name))
 }
 
