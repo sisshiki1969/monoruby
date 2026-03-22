@@ -434,8 +434,21 @@ impl<'a> BytecodeGen<'a> {
                 };
                 self.apply_label(cont_pos);
                 self.temp = base;
+                self.rescue_depth += 1;
                 self.gen_expr(body, rescue_use)?;
+                self.rescue_depth -= 1;
                 if !rescue_use.is_ret() {
+                    // Clear $! when leaving rescue block (CRuby restores $! to nil).
+                    let tmp = self.push().into();
+                    self.emit_nil(tmp);
+                    self.emit(
+                        BytecodeInst::StoreGvar {
+                            val: tmp,
+                            name: IdentId::get_id("$!"),
+                        },
+                        Loc::default(),
+                    );
+                    self.pop();
                     self.emit_br(ensure_label);
                 }
                 self.temp = base + 1;

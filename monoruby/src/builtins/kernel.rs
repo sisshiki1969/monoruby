@@ -420,7 +420,11 @@ fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if lfp.try_arg(0).is_none() {
         let ex = globals.get_gvar(IdentId::get_id("$!")).unwrap_or_default();
-        return Err(MonorubyErr::new_from_exception(ex.is_exception().unwrap()));
+        if let Some(ex) = ex.is_exception() {
+            return Err(MonorubyErr::new_from_exception(ex));
+        } else {
+            return Err(MonorubyErr::runtimeerr(""));
+        }
     }
     if let Some(ex) = lfp.arg(0).is_exception() {
         let mut err = MonorubyErr::new_from_exception(ex);

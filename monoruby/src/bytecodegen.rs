@@ -507,6 +507,8 @@ struct BytecodeGen<'a> {
 
     /// Source info.
     sourceinfo: SourceInfoRef,
+    /// Nesting depth of rescue blocks (for clearing $! on return).
+    rescue_depth: usize,
     /// Exception jump table.
     exception_table: Vec<ExceptionEntry>,
     /// Merge info.
@@ -551,6 +553,7 @@ impl<'a> BytecodeGen<'a> {
             temp: 0,
             temp_num: 0,
             sourceinfo,
+            rescue_depth: 0,
             exception_table: vec![],
             merge_info: HashMap::default(),
         };
@@ -929,6 +932,19 @@ impl<'a> BytecodeGen<'a> {
             self.gen_expr(ensure.clone(), UseMode2::NotUse)?;
         }
         self.ensure = ensures;
+        // Clear $! when returning from within a rescue block.
+        if self.rescue_depth > 0 {
+            let tmp = self.push().into();
+            self.emit_nil(tmp);
+            self.emit(
+                BytecodeInst::StoreGvar {
+                    val: tmp,
+                    name: IdentId::get_id("$!"),
+                },
+                Loc::default(),
+            );
+            self.pop();
+        }
         let ret = match src {
             Some(ret) => ret,
             None => self.pop().into(),

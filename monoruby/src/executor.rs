@@ -109,6 +109,8 @@ impl Executor {
         if !globals.no_gems {
             executor.load_gems(globals);
         }
+        // Clear stale $! that may have been set during startup/gem loading.
+        globals.set_gvar(IdentId::get_id("$!"), Value::nil());
         CODEGEN.with(|codegen| {
             codegen.borrow_mut().startup_flag = true;
         });
