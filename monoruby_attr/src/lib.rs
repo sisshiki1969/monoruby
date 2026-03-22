@@ -25,8 +25,13 @@ pub fn monoruby_builtin(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     if let MonorubyErrKind::MethodReturn(val, target_lfp) = err.kind() && lfp == *target_lfp {
                         return Some(*val);
                     }
-                    let fid = lfp.func_id();
-                    err.push_internal_trace(fid);
+                    // Only add builtin trace for errors propagating through
+                    // this function (trace already has entries), not for errors
+                    // originating here like Kernel#raise (trace is empty).
+                    if !err.trace().is_empty() {
+                        let fid = lfp.func_id();
+                        err.push_internal_trace(fid);
+                    }
                     vm.set_error(err);
                     None
                 }

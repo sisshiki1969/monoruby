@@ -334,7 +334,7 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_eval.html]
 #[monoruby_builtin]
-fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let module = lfp.self_val().as_class();
 
     if let Some(bh) = lfp.block() {
@@ -349,7 +349,7 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         let path = if let Some(arg1) = lfp.try_arg(1) {
             arg1.coerce_to_str(vm, globals)?
         } else {
-            let caller_loc = globals.store.get_caller_loc(caller_cfp);
+            let caller_loc = globals.store.get_caller_loc(caller_cfp, Some(pc));
             format!("(eval at {})", caller_loc)
         };
         let lineno: i64 = if let Some(arg2) = lfp.try_arg(2) {

@@ -267,11 +267,11 @@ fn instance_eval(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _: BytecodePtr,
+    pc: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     vm.push_instance_eval_context(self_val);
-    let res = instance_eval_inner(vm, globals, lfp, self_val);
+    let res = instance_eval_inner(vm, globals, lfp, self_val, pc);
     vm.pop_class_context();
     res
 }
@@ -281,6 +281,7 @@ fn instance_eval_inner(
     globals: &mut Globals,
     lfp: Lfp,
     self_val: Value,
+    pc: BytecodePtr,
 ) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     let argc = args.len();
@@ -297,7 +298,7 @@ fn instance_eval_inner(
         let path = if argc >= 2 {
             args[1].coerce_to_str(vm, globals)?
         } else {
-            let caller_loc = globals.store.get_caller_loc(caller_cfp);
+            let caller_loc = globals.store.get_caller_loc(caller_cfp, Some(pc));
             format!("(eval at {})", caller_loc)
         };
         let lineno: i64 = if argc >= 3 {

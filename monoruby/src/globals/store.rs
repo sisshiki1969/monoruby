@@ -307,14 +307,23 @@ impl Store {
     }
 
     /// Get the caller's file:line location string from a CFP.
-    pub fn get_caller_loc(&self, cfp: Cfp) -> String {
+    ///
+    /// If `pc` is provided, uses the sourcemap to resolve the actual call-site
+    /// line number instead of the function definition location.
+    pub fn get_caller_loc(&self, cfp: Cfp, pc: Option<BytecodePtr>) -> String {
         let func_id = cfp.lfp().func_id();
         if let Some(iseq_id) = self[func_id].is_iseq() {
             let iseq = &self[iseq_id];
+            let loc = if let Some(pc) = pc {
+                let bc_index = iseq.get_pc_index(Some(pc));
+                iseq.sourcemap[bc_index.to_usize()]
+            } else {
+                iseq.loc
+            };
             format!(
                 "{}:{}",
                 iseq.sourceinfo.file_name(),
-                iseq.sourceinfo.get_line(&iseq.loc)
+                iseq.sourceinfo.get_line(&loc)
             )
         } else {
             "<internal>:0".to_string()
