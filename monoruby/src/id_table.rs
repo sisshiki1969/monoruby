@@ -180,6 +180,7 @@ impl IdentId {
     pub const INSPECT: IdentId = id!(71);
     pub const SINGLETON_METHOD_REMOVED: IdentId = id!(72);
     pub const SINGLETON_METHOD_UNDEFINED: IdentId = id!(73);
+    pub const TO_INT: IdentId = id!(74);
 }
 
 impl IdentId {
@@ -339,6 +340,7 @@ impl IdentifierTable {
         table.set_id("inspect", IdentId::INSPECT);
         table.set_id("singleton_method_removed", IdentId::SINGLETON_METHOD_REMOVED);
         table.set_id("singleton_method_undefined", IdentId::SINGLETON_METHOD_UNDEFINED);
+        table.set_id("to_int", IdentId::TO_INT);
         table
     }
 

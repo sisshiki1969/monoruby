@@ -818,13 +818,25 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// ### Kernel.#eval
 ///
 /// - eval(expr) -> object
-/// - eval(expr, bind, [NOT SUPPORTED] fname = "(eval)", [NOT SUPPORTED] lineno = 1) -> object
+/// - eval(expr, bind, fname = "(eval)", lineno = 1) -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/eval.html]
 #[monoruby_builtin]
 fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let expr = lfp.arg(0).expect_string(globals)?;
     let cfp = vm.cfp();
+    let caller_cfp = cfp.prev().unwrap();
+    let fname = if let Some(f) = lfp.try_arg(2) {
+        f.coerce_to_str(vm, globals)?
+    } else {
+        let caller_loc = globals.store.get_caller_loc(caller_cfp);
+        format!("(eval at {})", caller_loc)
+    };
+    let lineno: i64 = if let Some(l) = lfp.try_arg(3) {
+        l.coerce_to_int(vm, globals)?
+    } else {
+        1
+    };
     if let Some(bind) = lfp.try_arg(1)
         && !bind.is_nil()
     {
@@ -833,11 +845,10 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         } else {
             return Err(MonorubyErr::typeerr("Binding expected"));
         };
-        globals.compile_script_binding(expr, "(eval)", binding)?;
+        globals.compile_script_binding(expr, fname, binding, lineno)?;
         vm.invoke_binding(globals, binding.binding().unwrap())
     } else {
-        let caller_cfp = cfp.prev().unwrap();
-        let fid = globals.compile_script_eval(expr, "(eval)", caller_cfp, None)?;
+        let fid = globals.compile_script_eval(expr, fname, caller_cfp, None, lineno)?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block(globals, &proc, &[])
     }
@@ -2078,6 +2089,13 @@ mod tests {
         );
         run_test_error(r##"eval "1/0""##);
         run_test_error(r##"eval "jk""##);
+    }
+
+    #[test]
+    fn eval_lineno() {
+        run_test(r#"eval("__LINE__", nil, "test.rb", 42)"#);
+        run_test(r#"eval("__FILE__", nil, "test.rb", 42)"#);
+        run_test(r#"eval("__LINE__\n__LINE__", nil, "test.rb", 10)"#);
     }
 
     #[test]

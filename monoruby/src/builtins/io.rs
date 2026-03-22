@@ -1,5 +1,6 @@
 use super::*;
 use std::fs::File;
+use std::process::{Command, Stdio};
 
 //
 // IO class
@@ -25,6 +26,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(IO_CLASS, "each", &["each_line"], each_line, 0);
     globals.define_builtin_class_func(IO_CLASS, "read", io_class_read, 1);
     globals.define_builtin_class_func(IO_CLASS, "pipe", io_pipe, 0);
+    globals.define_builtin_class_func_rest(IO_CLASS, "popen", io_popen);
+    globals.define_builtin_func(IO_CLASS, "pid", io_pid, 0);
 
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
@@ -377,6 +380,77 @@ fn io_pipe(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr
     let read_io = Value::new_io(IoInner::from_raw_fd(fds[0], "pipe".to_string()));
     let write_io = Value::new_io(IoInner::from_raw_fd(fds[1], "pipe".to_string()));
     Ok(Value::array2(read_io, write_io))
+}
+
+/// ### IO.popen
+///
+/// - IO.popen(command) -> IO
+/// - IO.popen(command) {|io| ... } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/popen.html]
+#[monoruby_builtin]
+fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    if args.is_empty() {
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 0, expected 1+)",
+        ));
+    }
+    let cmd_val = args[0];
+
+    // Build the command from either a String or an Array of strings.
+    let mut command = if let Some(ary) = cmd_val.try_array_ty() {
+        let parts: Vec<String> = ary
+            .iter()
+            .map(|v| v.to_s(globals))
+            .collect();
+        if parts.is_empty() {
+            return Err(MonorubyErr::argumenterr("popen: empty command array"));
+        }
+        let mut cmd = Command::new(&parts[0]);
+        for part in &parts[1..] {
+            cmd.arg(part);
+        }
+        cmd
+    } else {
+        let cmd_str = cmd_val.coerce_to_str(vm, globals)?;
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(cmd_str.to_string());
+        cmd
+    };
+
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::inherit());
+
+    let child = command
+        .spawn()
+        .map_err(|e| MonorubyErr::runtimeerr(format!("popen: {}", e)))?;
+
+    let io_val = Value::new_io(IoInner::popen(child));
+
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let res = vm.invoke_block(globals, &data, &[io_val]);
+        let mut io_close = io_val;
+        let _ = io_close.as_io_inner_mut().close();
+        res
+    } else {
+        Ok(io_val)
+    }
+}
+
+/// ### IO#pid
+///
+/// - pid -> Integer | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/pid.html]
+#[monoruby_builtin]
+fn io_pid(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    match self_.as_io_inner().pid() {
+        Some(pid) => Ok(Value::integer(pid as i64)),
+        None => Ok(Value::nil()),
+    }
 }
 
 #[cfg(test)]
