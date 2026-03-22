@@ -337,11 +337,9 @@ pub(super) extern "C" fn handle_error(
             // handle_error receives pc pointing to the retry/redo instruction itself
             // (entry_raise subtracts 16 from r13).
             // dest = pc + 1 + disp
-            if let MonorubyErrKind::Retry | MonorubyErrKind::Redo =
-                vm.exception().unwrap().kind()
-            {
+            if let MonorubyErrKind::Retry | MonorubyErrKind::Redo = vm.exception().unwrap().kind() {
                 vm.take_error();
-                let disp = pc.op1 as i32;
+                let disp = pc.op1() as i32;
                 let dest = pc + (1 + disp as isize);
                 return ErrorReturn::goto(dest);
             }
