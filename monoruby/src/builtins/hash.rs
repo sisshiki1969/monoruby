@@ -802,7 +802,6 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     Ok(h)
 }
 
-
 ///
 /// ### Hash#delete_if
 ///
@@ -1665,9 +1664,9 @@ mod tests {
             r##"
         [Hash.new("default").shift, Hash.new.shift]
         "##,
-      　);
+        );
     }
-    
+
     #[test]
     fn hash_compare() {
         // <
@@ -1695,8 +1694,6 @@ mod tests {
         // different values
         run_test(r#"{a: 1} < {a: 2, b: 2}"#);
         run_test(r#"{a: 1} <= {a: 2}"#);
-        "##,
-        );
     }
 
     #[test]
@@ -1721,7 +1718,7 @@ mod tests {
     }
 
     #[test]
-  　fn hash_reject_bang() {
+    fn hash_reject_bang() {
         run_test(
             r##"
         h = {a: 1, b: 2, c: 3}
@@ -1743,8 +1740,8 @@ mod tests {
         "##,
         );
     }
-  
-  　#[test]
+
+    #[test]
     fn hash_bracket() {
         run_test(r#"Hash[]"#);
         run_test(r#"Hash["a", 1, "b", 2]"#);
