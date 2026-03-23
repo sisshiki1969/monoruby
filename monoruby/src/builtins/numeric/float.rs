@@ -36,6 +36,8 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(FLOAT_CLASS, "!=", ne, 1);
     globals.define_builtin_func(FLOAT_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func(FLOAT_CLASS, "floor", floor, 0);
+    globals.define_builtin_func_with(FLOAT_CLASS, "ceil", ceil, 0, 1, false);
+    globals.define_builtin_func_with(FLOAT_CLASS, "truncate", truncate, 0, 1, false);
     globals.define_builtin_func_with(FLOAT_CLASS, "round", round, 0, 1, false);
     globals.define_builtin_func(FLOAT_CLASS, "finite?", finite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "infinite?", infinite, 0);
@@ -201,6 +203,88 @@ fn floor(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     match lfp.self_val().unpack() {
         RV::Float(f) => Ok(Value::integer(f.floor() as i64)),
         _ => unreachable!(),
+    }
+}
+
+///
+/// ### Float#ceil
+///
+/// - ceil(ndigits = 0) -> Integer | Float
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/ceil.html]
+#[monoruby_builtin]
+fn ceil(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ndigits = if let Some(d) = lfp.try_arg(0) {
+        d.expect_integer(globals)?
+    } else {
+        0
+    };
+    let f = lfp.self_val().try_float().unwrap();
+    if ndigits == 0 {
+        return Ok(Value::integer(f.ceil() as i64));
+    }
+    if ndigits > 0 {
+        if let Ok(ndigits) = u32::try_from(ndigits) {
+            let mul = 10i32.pow(ndigits) as f64;
+            let f = (f * mul).ceil() / mul;
+            Ok(Value::float(f))
+        } else {
+            Err(MonorubyErr::rangeerr("too big to convert to u32"))
+        }
+    } else {
+        if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
+            let mul = 10i32.pow(neg_ndigits) as f64;
+            let f = (f / mul).ceil() * mul;
+            if let Some(v) = Value::integer_from_f64(f) {
+                return Ok(v);
+            } else {
+                return Err(MonorubyErr::rangeerr(format!(
+                    "[unreachable] invalid f64: {f}"
+                )));
+            }
+        }
+        Err(MonorubyErr::rangeerr("too small to convert to u32"))
+    }
+}
+
+///
+/// ### Float#truncate
+///
+/// - truncate(ndigits = 0) -> Integer | Float
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/truncate.html]
+#[monoruby_builtin]
+fn truncate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ndigits = if let Some(d) = lfp.try_arg(0) {
+        d.expect_integer(globals)?
+    } else {
+        0
+    };
+    let f = lfp.self_val().try_float().unwrap();
+    if ndigits == 0 {
+        return Ok(Value::integer(f.trunc() as i64));
+    }
+    if ndigits > 0 {
+        if let Ok(ndigits) = u32::try_from(ndigits) {
+            let mul = 10i32.pow(ndigits) as f64;
+            let f = (f * mul).trunc() / mul;
+            Ok(Value::float(f))
+        } else {
+            Err(MonorubyErr::rangeerr("too big to convert to u32"))
+        }
+    } else {
+        if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
+            let mul = 10i32.pow(neg_ndigits) as f64;
+            let f = (f / mul).trunc() * mul;
+            if let Some(v) = Value::integer_from_f64(f) {
+                return Ok(v);
+            } else {
+                return Err(MonorubyErr::rangeerr(format!(
+                    "[unreachable] invalid f64: {f}"
+                )));
+            }
+        }
+        Err(MonorubyErr::rangeerr("too small to convert to u32"))
     }
 }
 

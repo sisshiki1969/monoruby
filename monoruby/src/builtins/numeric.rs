@@ -315,4 +315,63 @@ mod tests {
         "#,
         );
     }
+
+    #[test]
+    fn float_truncate() {
+        run_test("1.5.truncate");
+        run_test("(-1.5).truncate");
+        run_test("1.567.truncate(2)");
+        run_test("(-1.567).truncate(2)");
+    }
+
+    #[test]
+    fn float_ceil() {
+        run_test("1.1.ceil");
+        run_test("(-1.1).ceil");
+        run_test("1.0.ceil");
+        run_test("1.123.ceil(2)");
+    }
+
+    #[test]
+    fn float_positive_negative() {
+        run_test("1.0.positive?");
+        run_test("(-1.0).positive?");
+        run_test("0.0.positive?");
+        run_test("1.0.negative?");
+        run_test("(-1.0).negative?");
+        run_test("0.0.negative?");
+    }
+
+    #[test]
+    fn float_integer() {
+        run_test("1.0.integer?");
+        run_test("1.5.integer?");
+    }
+
+    #[test]
+    fn float_coerce() {
+        run_test("1.0.coerce(2)");
+        run_test("1.0.coerce(2.5)");
+    }
+
+    #[test]
+    fn float_remainder() {
+        run_test("5.0.remainder(3.0)");
+        run_test("(-5.0).remainder(3.0)");
+        run_test("5.0.remainder(-3.0)");
+    }
+
+    #[test]
+    fn float_fdiv() {
+        run_test("1.0.fdiv(2)");
+        run_test("1.0.fdiv(2.0)");
+    }
+
+    #[test]
+    fn numeric_abs() {
+        run_test("1.0.abs");
+        run_test("(-1.0).abs");
+        run_test("0.0.abs");
+        run_test("1.0.magnitude");
+    }
 }
