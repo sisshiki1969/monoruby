@@ -375,17 +375,6 @@ macro_rules! jit_cmp_opt_main {
                     },
                 }
             }
-
-            fn [<condbr_float_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
-                match brkind {
-                    BrKind::BrIf => monoasm! { &mut self.jit,
-                        [<j $op>] branch_dest;
-                    },
-                    BrKind::BrIfNot => monoasm! { &mut self.jit,
-                        [<j $rev_op>] branch_dest;
-                    },
-                }
-            }
         }
     };
     (($op1:ident, $rev_op1:ident, $sop1:ident, $rev_sop1:ident), $(($op2:ident, $rev_op2:ident, $sop2:ident, $rev_sop2:ident)),+) => {
@@ -508,8 +497,24 @@ impl Codegen {
     pub(super) fn condbr_float(&mut self, kind: CmpKind, branch_dest: DestLabel, brkind: BrKind) {
         match (kind, brkind) {
             // Gt and Ge are correct as-is (ja/jae exclude NaN)
-            (CmpKind::Gt, _) => self.condbr_float_gt(branch_dest, brkind),
-            (CmpKind::Ge, _) => self.condbr_float_ge(branch_dest, brkind),
+            (CmpKind::Gt, _) => match brkind {
+                BrKind::BrIf => monoasm! { &mut self.jit,
+                    jgt branch_dest;
+                },
+                BrKind::BrIfNot => monoasm! { &mut self.jit,
+                    jle branch_dest;
+                },
+            },
+            //self.condbr_float_gt(branch_dest, brkind),
+            (CmpKind::Ge, _) => match brkind {
+                BrKind::BrIf => monoasm! { &mut self.jit,
+                    jge branch_dest;
+                },
+                BrKind::BrIfNot => monoasm! { &mut self.jit,
+                    jlt branch_dest;
+                },
+            },
+            //self.condbr_float_ge(branch_dest, brkind),
 
             // Eq BrIf: branch if equal AND not unordered
             (CmpKind::Eq | CmpKind::TEq, BrKind::BrIf) => {
