@@ -836,11 +836,11 @@ fn coerce_to_rstring_inner(
                 return Ok(s);
             }
             return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} into String ({}#{} gives {})",
+                "can't convert {} to String",
                 recv.get_real_class_name(&globals.store),
-                recv.get_real_class_name(&globals.store),
-                method,
-                result.get_real_class_name(&globals.store),
+                //recv.get_real_class_name(&globals.store),
+                //method,
+                //result.get_real_class_name(&globals.store),
             )));
         }
     }
@@ -1148,11 +1148,7 @@ impl Value {
     }
 
     /// Convert `self` to i64 via `to_int` if needed.
-    pub(crate) fn coerce_to_int(
-        &self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<i64> {
+    pub(crate) fn coerce_to_int(&self, vm: &mut Executor, globals: &mut Globals) -> Result<i64> {
         if let RV::Fixnum(i) = self.unpack() {
             return Ok(i);
         }
@@ -1162,10 +1158,10 @@ impl Value {
                 return Ok(i);
             }
             return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} into Integer ({}#to_int gives {})",
+                "can't convert {} to Integer",
                 self.get_real_class_name(&globals.store),
-                self.get_real_class_name(&globals.store),
-                result.get_real_class_name(&globals.store),
+                //self.get_real_class_name(&globals.store),
+                //result.get_real_class_name(&globals.store),
             )));
         }
         Err(MonorubyErr::typeerr(format!(
@@ -1471,11 +1467,7 @@ impl Value {
         Ok(self.coerce_to_rstring(vm, globals)?.to_str()?.to_string())
     }
 
-    pub(crate) fn coerce_to_str(
-        &self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<String> {
+    pub(crate) fn coerce_to_str(&self, vm: &mut Executor, globals: &mut Globals) -> Result<String> {
         self.coerce_to_string(vm, globals)
     }
 

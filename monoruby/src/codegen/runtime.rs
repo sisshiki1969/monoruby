@@ -1009,9 +1009,9 @@ pub(super) extern "C" fn to_a(
             Some(ary)
         } else {
             let src_class = src.class().get_name(&globals.store);
-            let res_class = ary.class().get_name(&globals.store);
+            //let res_class = ary.class().get_name(&globals.store);
             vm.set_error(MonorubyErr::typeerr(format!(
-                "can't convert {src_class} to Array ({src_class}#to_a gives {res_class})"
+                "can't convert {src_class} to Array"
             )));
             None
         }
