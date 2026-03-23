@@ -40,7 +40,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(HASH_CLASS, "merge", merge);
     globals.define_builtin_funcs_rest(HASH_CLASS, "merge!", &["update"], merge_);
     globals.define_builtin_funcs(HASH_CLASS, "size", &["length"], size, 0);
+    globals.define_builtin_func(HASH_CLASS, "delete_if", delete_if, 0);
     globals.define_builtin_func(HASH_CLASS, "reject", reject, 0);
+    globals.define_builtin_func(HASH_CLASS, "reject!", reject_, 0);
     globals.define_builtin_func(HASH_CLASS, "sort", sort, 0);
     globals.define_builtin_func(HASH_CLASS, "store", index_assign, 2);
     globals.define_builtin_func(HASH_CLASS, "values", values, 0);
@@ -652,6 +654,72 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
     let h = vm.temp_pop();
     Ok(h)
+}
+
+
+///
+/// ### Hash#delete_if
+///
+/// - delete_if -> Enumerator
+/// - delete_if {|key, value| ... } -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/delete_if.html]
+#[monoruby_builtin]
+fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("delete_if");
+            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+        }
+        Some(block) => block,
+    };
+    let data = vm.get_block_data(globals, bh)?;
+    let mut remove = vec![];
+    for (k, v) in lfp.self_val().as_hash().iter() {
+        if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+            remove.push(k);
+        }
+    }
+    let mut h = lfp.self_val().as_hash();
+    for k in remove {
+        h.remove(k, vm, globals)?;
+    }
+    Ok(lfp.self_val())
+}
+
+///
+/// ### Hash#reject!
+///
+/// - reject! -> Enumerator
+/// - reject! {|key, value| ... } -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/reject=21.html]
+#[monoruby_builtin]
+fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("reject!");
+            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+        }
+        Some(block) => block,
+    };
+    let data = vm.get_block_data(globals, bh)?;
+    let mut remove = vec![];
+    for (k, v) in lfp.self_val().as_hash().iter() {
+        if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+            remove.push(k);
+        }
+    }
+    let changed = !remove.is_empty();
+    let mut h = lfp.self_val().as_hash();
+    for k in remove {
+        h.remove(k, vm, globals)?;
+    }
+    Ok(if changed {
+        lfp.self_val()
+    } else {
+        Value::nil()
+    })
 }
 
 ///
@@ -1310,6 +1378,30 @@ mod tests {
         res << h.default_proc.call({}, :foo)
         res << h
         res
+        "##,
+        );
+    }
+
+    #[test]
+    fn hash_delete_if() {
+        run_test(
+            r##"
+        h = {a: 1, b: 2, c: 3}
+        res = h.delete_if {|k, v| v > 1}
+        [h, res.equal?(h)]
+        "##,
+        );
+    }
+
+    #[test]
+    fn hash_reject_bang() {
+        run_test(
+            r##"
+        h = {a: 1, b: 2, c: 3}
+        res1 = h.reject! {|k, v| v > 1}
+        h2 = {a: 1}
+        res2 = h2.reject! {|k, v| v > 10}
+        [h, res1.equal?(h), res2]
         "##,
         );
     }
