@@ -139,6 +139,7 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func_with(ARRAY_CLASS, "insert", insert, 1, 1, true);
+    globals.define_builtin_funcs(ARRAY_CLASS, "replace", &["initialize_copy"], replace, 1);
 }
 
 ///
@@ -939,6 +940,32 @@ fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let mut ary = lfp.self_val().as_array();
     ary.clear();
     Ok(ary.into())
+}
+
+///
+/// ### Array#replace
+///
+/// - replace(other) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/replace.html]
+#[monoruby_builtin]
+fn replace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_ary = lfp.self_val().as_array();
+    let other = match lfp.arg(0).try_array_ty() {
+        Some(v) => v,
+        None => {
+            return Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                lfp.arg(0),
+                ARRAY_CLASS,
+            ));
+        }
+    };
+    // Copy elements first to handle the case where self and other are the same array.
+    let elems: Vec<Value> = other.iter().cloned().collect();
+    self_ary.clear();
+    self_ary.extend_from_slice(&elems);
+    Ok(self_ary.into())
 }
 
 ///
@@ -3621,5 +3648,13 @@ mod tests {
         run_test(r##"a = [1,2,3,4,5]; a[-1, 1] = [:x, :y, :z]; a"##);
         run_test(r##"a = [1,2,3]; a[-3, 0] = [:a]; a"##);
         run_test_error(r##"a = [1,2,3]; a[-4, 1] = []"##);
+    }
+
+    #[test]
+    fn replace() {
+        run_test(r##"a = [1,2,3]; b = [4,5]; a.replace(b); [a, b]"##);
+        run_test(r##"a = [1,2,3]; a.replace([]); a"##);
+        run_test(r##"a = []; a.replace([1,2,3]); a"##);
+        run_test(r##"a = [1,2,3]; a.replace(a); a"##);
     }
 }
