@@ -403,13 +403,37 @@ impl Codegen {
     }
 
     pub(super) fn setflag_float(&mut self, kind: CmpKind) {
+        // ucomisd sets ZF=1, PF=1, CF=1 for NaN (unordered).
+        // - Gt (seta: CF=0 && ZF=0) and Ge (setae: CF=0) are correct (NaN → false).
+        // - Eq (seteq: ZF=1) is wrong for NaN → need seteq AND setnp.
+        // - Ne (setne: ZF=0) is wrong for NaN → need setne OR setp.
+        // - Lt (setb: CF=1) is wrong for NaN → need setb AND setnp.
+        // - Le (setbe: CF=1||ZF=1) is wrong for NaN → need setbe AND setnp.
         match kind {
-            CmpKind::Eq | CmpKind::TEq => monoasm! { &mut self.jit, seteq rax; },
-            CmpKind::Ne => monoasm! { &mut self.jit, setne rax; },
+            CmpKind::Eq | CmpKind::TEq => monoasm! { &mut self.jit,
+                seteq rax;
+                setnp rcx;
+                andq rax, rcx;
+            },
+            CmpKind::Ne => monoasm! { &mut self.jit,
+                // !(equal AND not_unordered) = not_equal OR unordered
+                seteq rax;
+                setnp rcx;
+                andq rax, rcx;
+                xorq rax, 1;
+            },
             CmpKind::Ge => monoasm! { &mut self.jit, setae rax; },
             CmpKind::Gt => monoasm! { &mut self.jit, seta rax; },
-            CmpKind::Le => monoasm! { &mut self.jit, setbe rax; },
-            CmpKind::Lt => monoasm! { &mut self.jit, setb rax; },
+            CmpKind::Le => monoasm! { &mut self.jit,
+                setbe rax;
+                setnp rcx;
+                andq rax, rcx;
+            },
+            CmpKind::Lt => monoasm! { &mut self.jit,
+                setb rax;
+                setnp rcx;
+                andq rax, rcx;
+            },
         }
         monoasm! { &mut self.jit,
             shlq rax, 3;
@@ -476,15 +500,84 @@ impl Codegen {
         (be, a, le, gt)
     );
 
+    /// Float conditional branch with proper NaN (unordered) handling.
+    ///
+    /// ucomisd sets ZF=1, PF=1, CF=1 for NaN. We must check PF for Eq/Ne/Lt/Le
+    /// because their default jcc instructions don't exclude unordered results.
+    /// Gt (ja: CF=0&&ZF=0) and Ge (jae: CF=0) naturally exclude NaN.
     pub(super) fn condbr_float(&mut self, kind: CmpKind, branch_dest: DestLabel, brkind: BrKind) {
-        match kind {
-            CmpKind::Eq => self.condbr_float_eq(branch_dest, brkind),
-            CmpKind::Ne => self.condbr_float_ne(branch_dest, brkind),
-            CmpKind::Ge => self.condbr_float_ge(branch_dest, brkind),
-            CmpKind::Gt => self.condbr_float_gt(branch_dest, brkind),
-            CmpKind::Le => self.condbr_float_le(branch_dest, brkind),
-            CmpKind::Lt => self.condbr_float_lt(branch_dest, brkind),
-            CmpKind::TEq => self.condbr_float_eq(branch_dest, brkind),
+        match (kind, brkind) {
+            // Gt and Ge are correct as-is (ja/jae exclude NaN)
+            (CmpKind::Gt, _) => self.condbr_float_gt(branch_dest, brkind),
+            (CmpKind::Ge, _) => self.condbr_float_ge(branch_dest, brkind),
+
+            // Eq BrIf: branch if equal AND not unordered
+            (CmpKind::Eq | CmpKind::TEq, BrKind::BrIf) => {
+                let skip = self.jit.label();
+                monoasm! { &mut self.jit,
+                    jp skip;
+                    jeq branch_dest;
+                skip:
+                };
+            }
+            // Eq BrIfNot: branch if not-equal OR unordered
+            (CmpKind::Eq | CmpKind::TEq, BrKind::BrIfNot) => {
+                monoasm! { &mut self.jit,
+                    jp branch_dest;
+                    jne branch_dest;
+                };
+            }
+
+            // Ne BrIf: branch if not-equal OR unordered
+            (CmpKind::Ne, BrKind::BrIf) => {
+                monoasm! { &mut self.jit,
+                    jp branch_dest;
+                    jne branch_dest;
+                };
+            }
+            // Ne BrIfNot: branch if equal AND not unordered
+            (CmpKind::Ne, BrKind::BrIfNot) => {
+                let skip = self.jit.label();
+                monoasm! { &mut self.jit,
+                    jp skip;
+                    jeq branch_dest;
+                skip:
+                };
+            }
+
+            // Lt BrIf: branch if below AND not unordered
+            (CmpKind::Lt, BrKind::BrIf) => {
+                let skip = self.jit.label();
+                monoasm! { &mut self.jit,
+                    jp skip;
+                    jb branch_dest;
+                skip:
+                };
+            }
+            // Lt BrIfNot: branch if above-or-equal OR unordered
+            (CmpKind::Lt, BrKind::BrIfNot) => {
+                monoasm! { &mut self.jit,
+                    jp branch_dest;
+                    jae branch_dest;
+                };
+            }
+
+            // Le BrIf: branch if below-or-equal AND not unordered
+            (CmpKind::Le, BrKind::BrIf) => {
+                let skip = self.jit.label();
+                monoasm! { &mut self.jit,
+                    jp skip;
+                    jbe branch_dest;
+                skip:
+                };
+            }
+            // Le BrIfNot: branch if above OR unordered
+            (CmpKind::Le, BrKind::BrIfNot) => {
+                monoasm! { &mut self.jit,
+                    jp branch_dest;
+                    ja branch_dest;
+                };
+            }
         }
     }
 
