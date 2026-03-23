@@ -108,12 +108,7 @@ fn new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
 #[monoruby_builtin]
-fn allocate(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     Ok(Value::hash_with_class_and_default(class_id, Value::nil()))
 }
@@ -159,7 +154,8 @@ fn hash_bracket(
                         }
                     } else {
                         return Err(MonorubyErr::argumenterr(
-                            "wrong number of arguments (odd number of arguments for Hash)".to_string(),
+                            "wrong number of arguments (odd number of arguments for Hash)"
+                                .to_string(),
                         ));
                     }
                 }
@@ -760,14 +756,8 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                 if let Some(sym) = k.try_symbol() {
                     s.push_str(&format!("{sym}: {}", v_inspect.to_s(&globals.store)));
                 } else {
-                    let k_inspect = vm.invoke_method_inner(
-                        globals,
-                        IdentId::INSPECT,
-                        k,
-                        &[],
-                        None,
-                        None,
-                    )?;
+                    let k_inspect =
+                        vm.invoke_method_inner(globals, IdentId::INSPECT, k, &[], None, None)?;
                     s.push_str(&format!(
                         "{} => {}",
                         k_inspect.to_s(&globals.store),
@@ -1464,7 +1454,7 @@ mod tests {
         "##,
         );
     }
-  
+
     #[test]
     fn hash_compare() {
         // <
@@ -1492,10 +1482,8 @@ mod tests {
         // different values
         run_test(r#"{a: 1} < {a: 2, b: 2}"#);
         run_test(r#"{a: 1} <= {a: 2}"#);
-        "##,
-        );
     }
-      
+
     #[test]
     fn hash_bracket() {
         run_test(r#"Hash[]"#);
