@@ -8,6 +8,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS, ObjTy::HASH);
     globals.define_builtin_class_func_with_effect(HASH_CLASS, "new", new, 0, 1, Effect::CAPTURE);
     globals.define_builtin_class_func(HASH_CLASS, "allocate", allocate, 0);
+    globals.define_builtin_class_func_rest(HASH_CLASS, "[]", hash_bracket);
 
     globals.define_builtin_func_with(HASH_CLASS, "default", default, 0, 1, false);
     globals.define_builtin_func(HASH_CLASS, "default_proc", default_proc, 0);
@@ -113,6 +114,73 @@ fn allocate(
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     Ok(Value::hash_with_class_and_default(class_id, Value::nil()))
+}
+
+///
+/// ### Hash.[]
+///
+/// - Hash[] -> {}
+/// - Hash[key, value, ...] -> {key => value, ...}
+/// - Hash[hash] -> new_hash (copy)
+/// - Hash[object] -> attempts conversion
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/s/=5b=5d.html]
+#[monoruby_builtin]
+fn hash_bracket(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    let len = args.len();
+    match len {
+        0 => Ok(Value::hash(RubyMap::default())),
+        1 => {
+            let arg = args[0];
+            if arg.try_hash_ty().is_some() {
+                // Single hash argument: return a copy
+                let inner = arg.as_hashmap_inner().clone();
+                Ok(Value::hash_from_inner(inner))
+            } else if let Some(ary) = arg.try_array_ty() {
+                // Single array argument: try to convert [[k,v], ...] to hash
+                let mut map = RubyMap::default();
+                for elem in ary.iter() {
+                    if let Some(pair) = elem.try_array_ty() {
+                        if pair.len() == 2 {
+                            map.insert(pair[0], pair[1], vm, globals)?;
+                        } else {
+                            return Err(MonorubyErr::argumenterr(format!(
+                                "invalid number of elements ({} for 1..2)",
+                                pair.len()
+                            )));
+                        }
+                    } else {
+                        return Err(MonorubyErr::argumenterr(
+                            "wrong number of arguments (odd number of arguments for Hash)".to_string(),
+                        ));
+                    }
+                }
+                Ok(Value::hash(map))
+            } else {
+                Err(MonorubyErr::argumenterr(
+                    "odd number of arguments for Hash".to_string(),
+                ))
+            }
+        }
+        _ => {
+            if len % 2 != 0 {
+                return Err(MonorubyErr::argumenterr(
+                    "odd number of arguments for Hash".to_string(),
+                ));
+            }
+            let mut map = RubyMap::default();
+            for i in (0..len).step_by(2) {
+                map.insert(args[i], args[i + 1], vm, globals)?;
+            }
+            Ok(Value::hash(map))
+        }
+    }
 }
 
 ///
@@ -1402,6 +1470,20 @@ mod tests {
         h2 = {a: 1}
         res2 = h2.reject! {|k, v| v > 10}
         [h, res1.equal?(h), res2]
+        "##,
+        );
+    }
+
+    #[test]
+    fn hash_bracket() {
+        run_test(r#"Hash[]"#);
+        run_test(r#"Hash["a", 1, "b", 2]"#);
+        run_test(r#"Hash[{a: 1, b: 2}]"#);
+        run_test(r#"Hash[["a", 1], ["b", 2]]"#);
+        run_test(
+            r##"
+        h = Hash["a", 1, "b", 2, "c", 3]
+        [h["a"], h["b"], h["c"]]
         "##,
         );
     }
