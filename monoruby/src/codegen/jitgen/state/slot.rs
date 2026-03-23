@@ -49,7 +49,7 @@ impl SlotState {
     pub(super) fn new_method(cc: &JitContext) -> Self {
         let mut ctx = SlotState::new(cc, LinkMode::V);
         for i in cc.locals() {
-            ctx.set_mode(i, LinkMode::C(Value::nil()));
+            ctx.set_mode(i, LinkMode::C(Immediate::nil()));
         }
         for i in cc.args() {
             ctx.set_mode(i, LinkMode::default());
@@ -393,16 +393,20 @@ impl SlotState {
     /// Link *slot* to a concrete flonum value *i*.
     ///
     #[allow(non_snake_case)]
-    pub(crate) fn def_C_float(&mut self, slot: impl Into<Option<SlotId>>, f: f64) {
-        self.def_C(slot, Value::float(f));
+    pub(crate) fn def_C_float(&mut self, slot: impl Into<Option<SlotId>>, f: f64) -> bool {
+        if let Some(imm) = Immediate::flonum(f) {
+            self.def_C(slot, imm);
+            true
+        } else {
+            false
+        }
     }
 
     ///
     /// Link *slot* to a concrete value *v*.
     ///
     #[allow(non_snake_case)]
-    pub(crate) fn def_C(&mut self, slot: impl Into<Option<SlotId>>, v: Value) {
-        assert!(v.is_frozen_literal(), "{:?}", v);
+    pub(crate) fn def_C(&mut self, slot: impl Into<Option<SlotId>>, v: Immediate) {
         if let Some(slot) = slot.into() {
             self.discard(slot);
             self.set_mode(slot, LinkMode::C(v));
@@ -454,7 +458,7 @@ impl SlotState {
                 ir.xmm2stack(xmm, slot);
             }
             LinkMode::C(v) => {
-                ir.lit2stack(v, slot);
+                ir.lit2stack(v.into(), slot);
             }
             LinkMode::G(guarded) => {
                 // G -> S
@@ -486,7 +490,7 @@ impl SlotState {
                 ir.xmm2stack(xmm, slot);
             }
             LinkMode::C(v) => {
-                ir.lit2stack(v, slot);
+                ir.lit2stack(v.into(), slot);
             }
             LinkMode::G(_) => {
                 ir.acc2stack(slot);
@@ -513,7 +517,7 @@ impl SlotState {
         }
     }
 
-    pub fn is_fixnum_literal(&self, slot: SlotId) -> Option<i64> {
+    pub fn is_fixnum_literal(&self, slot: SlotId) -> Option<Fixnum> {
         if let LinkMode::C(v) = self.mode(slot) {
             v.try_fixnum()
         } else {
@@ -521,9 +525,9 @@ impl SlotState {
         }
     }
 
-    pub fn is_float_literal(&self, slot: SlotId) -> Option<f64> {
+    pub fn is_flonum_literal(&self, slot: SlotId) -> Option<Flonum> {
         if let LinkMode::C(v) = self.mode(slot) {
-            v.try_float()
+            v.try_flonum()
         } else {
             None
         }
@@ -551,30 +555,18 @@ impl SlotState {
     }
 
     pub fn is_u16(&self, slot: SlotId) -> Option<u16> {
-        if let LinkMode::C(v) = self.mode(slot) {
-            let i = v.try_fixnum()?;
-            u16::try_from(i).ok()
-        } else {
-            None
-        }
+        let i = self.is_fixnum_literal(slot)?.get();
+        u16::try_from(i).ok()
     }
 
     pub fn is_i16_literal(&self, slot: SlotId) -> Option<i16> {
-        if let LinkMode::C(v) = self.mode(slot) {
-            let i = v.try_fixnum()?;
-            i16::try_from(i).ok()
-        } else {
-            None
-        }
+        let i = self.is_fixnum_literal(slot)?.get();
+        i16::try_from(i).ok()
     }
 
     pub fn is_u8_literal(&self, slot: SlotId) -> Option<u8> {
-        if let LinkMode::C(v) = self.mode(slot) {
-            let i = v.try_fixnum()?;
-            u8::try_from(i).ok()
-        } else {
-            None
-        }
+        let i = self.is_fixnum_literal(slot)?.get();
+        u8::try_from(i).ok()
     }
 
     pub fn is_array_ty(&self, store: &Store, slot: SlotId) -> bool {
@@ -695,6 +687,7 @@ impl SlotState {
         if self.is_r15(slot) { GP::R15 } else { optb }
     }
 
+    ///
     ///
     /// Write back acc(`r15``) to the stack slot.
     ///
@@ -962,7 +955,7 @@ impl AbstractFrame {
             .collect()
     }
 
-    fn wb_literal(&self, f: impl Fn(SlotId) -> bool) -> Vec<(Value, SlotId)> {
+    fn wb_literal(&self, f: impl Fn(SlotId) -> bool) -> Vec<(Immediate, SlotId)> {
         self.slots
             .iter()
             .enumerate()
@@ -1044,11 +1037,9 @@ pub(in crate::codegen::jitgen) enum LinkMode {
     ///
     Sf(Xmm, SfGuarded),
     ///
-    /// Concrete value.
+    /// Concrete value (immediate / packed).
     ///
-    /// The `Value` must be a packed value or Float or Range object.
-    ///
-    C(Value),
+    C(Immediate),
 }
 
 impl LinkMode {
@@ -1061,7 +1052,7 @@ impl LinkMode {
     }
 
     fn nil() -> Self {
-        LinkMode::C(Value::nil())
+        LinkMode::C(Immediate::nil())
     }
 
     fn guarded(&self) -> Guarded {
@@ -1069,7 +1060,7 @@ impl LinkMode {
             LinkMode::S(guarded) | LinkMode::G(guarded) => *guarded,
             LinkMode::Sf(_, guarded) => (*guarded).into(),
             LinkMode::F(_) => Guarded::Float,
-            LinkMode::C(v) => Guarded::from_concrete_value(*v),
+            LinkMode::C(v) => Guarded::from_concrete_value((*v).into()),
             LinkMode::V => Guarded::Class(NIL_CLASS),
             _ => unreachable!("{:?}", self),
         }
@@ -1320,10 +1311,10 @@ impl AbstractFrame {
             }
             (LinkMode::C(l), LinkMode::Sf(r, _)) => {
                 self.set_Sf_float(slot, r);
-                let (v, f) = if let Some(f) = l.try_float() {
-                    (Value::float(f), f)
+                let (v, f) = if let Some(f) = l.try_flonum() {
+                    (Value::float(f.get()), f.get())
                 } else if let Some(i) = l.try_fixnum() {
-                    (Value::integer(i), i as f64)
+                    (Value::integer(i.get()), i.get() as f64)
                 } else {
                     unreachable!()
                 };
@@ -1332,9 +1323,9 @@ impl AbstractFrame {
             }
             (LinkMode::C(v), LinkMode::S(_)) => {
                 // C -> S
-                let guarded = Guarded::from_concrete_value(v);
+                let guarded = Guarded::from_concrete_value(v.into());
                 self.set_mode(slot, LinkMode::S(guarded));
-                ir.lit2stack(v, slot);
+                ir.lit2stack(v.into(), slot);
             }
             (LinkMode::None, LinkMode::None) => {}
             (LinkMode::MaybeNone, LinkMode::MaybeNone) => {}

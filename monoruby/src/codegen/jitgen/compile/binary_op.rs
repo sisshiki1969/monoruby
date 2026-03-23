@@ -143,22 +143,22 @@ impl AbstractFrame {
         T: PartialEq + PartialOrd,
     {
         let b = cmp(kind, lhs, rhs);
-        self.def_C(dst, Value::bool(b));
+        self.def_C(dst, Immediate::bool(b));
     }
 
     fn check_concrete_i64(&self, mode: OpMode) -> Option<(i64, i64)> {
         match mode {
             OpMode::RR(lhs, rhs) => {
-                let lhs = self.is_fixnum_literal(lhs)?;
-                let rhs = self.is_fixnum_literal(rhs)?;
+                let lhs = self.is_fixnum_literal(lhs)?.get();
+                let rhs = self.is_fixnum_literal(rhs)?.get();
                 Some((lhs, rhs))
             }
             OpMode::RI(lhs, rhs) => {
-                let lhs = self.is_fixnum_literal(lhs)?;
+                let lhs = self.is_fixnum_literal(lhs)?.get();
                 Some((lhs, rhs as i64))
             }
             OpMode::IR(lhs, rhs) => {
-                let rhs = self.is_fixnum_literal(rhs)?;
+                let rhs = self.is_fixnum_literal(rhs)?.get();
                 Some((lhs as i64, rhs))
             }
         }
@@ -208,50 +208,51 @@ impl AbstractFrame {
         None
     }
 
-    fn binop_integer_folded(&mut self, kind: BinOpK, lhs: i64, rhs: i64) -> Option<Value> {
+    fn binop_integer_folded(&mut self, kind: BinOpK, lhs: i64, rhs: i64) -> Option<Immediate> {
         match kind {
             BinOpK::Add => {
                 if let Some(result) = lhs.checked_add(rhs) {
-                    return Value::check_fixnum(result);
+                    return Immediate::check_fixnum(result);
                 }
             }
             BinOpK::Sub => {
                 if let Some(result) = lhs.checked_sub(rhs) {
-                    return Value::check_fixnum(result);
+                    return Immediate::check_fixnum(result);
                 }
             }
             BinOpK::Mul => {
                 if let Some(result) = lhs.checked_mul(rhs) {
-                    return Value::check_fixnum(result);
+                    return Immediate::check_fixnum(result);
                 }
             }
             BinOpK::Div => {
                 if rhs.is_zero() {
                     return None;
                 }
-                return Value::check_fixnum(lhs.ruby_div(&rhs));
+                return Immediate::check_fixnum(lhs.ruby_div(&rhs));
             }
             BinOpK::Rem => {
                 if rhs.is_zero() {
                     return None;
                 }
-                return Value::check_fixnum(lhs.ruby_mod(&rhs));
+                return Immediate::check_fixnum(lhs.ruby_mod(&rhs));
             }
             BinOpK::Exp => {
                 if let Ok(rhs) = u32::try_from(rhs)
                     && let Some(result) = lhs.checked_pow(rhs)
                 {
-                    return Value::check_fixnum(result);
+                    return Immediate::check_fixnum(result);
                 }
             }
             BinOpK::BitOr => {
-                return Some(Value::integer(lhs | rhs));
+                // Bitwise ops on two i63 values always produce i63 results
+                return Immediate::check_fixnum(lhs | rhs);
             }
             BinOpK::BitAnd => {
-                return Some(Value::integer(lhs & rhs));
+                return Immediate::check_fixnum(lhs & rhs);
             }
             BinOpK::BitXor => {
-                return Some(Value::integer(lhs ^ rhs));
+                return Immediate::check_fixnum(lhs ^ rhs);
             }
         }
         None
@@ -341,8 +342,8 @@ impl AbstractFrame {
     fn binop_float(&mut self, ir: &mut AsmIr, kind: BinOpK, dst: Option<SlotId>, info: FBinOpInfo) {
         if let Some((lhs, rhs)) = self.check_binary_C_f64(info.lhs, info.rhs)
             && let Some(result) = self.binop_float_folded(kind, lhs, rhs)
+            && self.def_C_float(dst, result)
         {
-            self.def_C_float(dst, result);
             return;
         };
 

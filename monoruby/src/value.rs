@@ -858,6 +858,15 @@ impl Value {
         self.0.get() & 0b0111 != 0
     }
 
+    /// Return `Some(Immediate)` if `self` is a packed (immediate) value.
+    pub fn is_immediate(&self) -> Option<Immediate> {
+        if self.is_packed_value() {
+            Some(Immediate(self.0))
+        } else {
+            None
+        }
+    }
+
     ///
     /// Check if `self` is an immediate, Float or Range object.
     ///
@@ -1856,13 +1865,6 @@ impl AsRef<Value> for Immediate {
     }
 }
 
-impl From<Value> for Immediate {
-    fn from(value: Value) -> Self {
-        assert!(value.is_packed_value());
-        Self(value.0)
-    }
-}
-
 impl Debug for Immediate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let v: Value = (*self).into();
@@ -1917,6 +1919,60 @@ impl Immediate {
         } else {
             None
         }
+    }
+
+    pub fn try_fixnum(self) -> Option<Fixnum> {
+        let i = (*self).try_fixnum()?;
+        Some(Fixnum(i))
+    }
+
+    pub fn try_flonum(self) -> Option<Flonum> {
+        let f = (*self).try_float()?;
+        Some(Flonum(f))
+    }
+}
+
+/// A Value that is guaranteed to be a Fixnum (i63 integer).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Fixnum(i64);
+
+impl Fixnum {
+    pub fn get(&self) -> i64 {
+        self.0
+    }
+}
+
+impl From<Fixnum> for Immediate {
+    fn from(f: Fixnum) -> Self {
+        Immediate::fixnum(f.0)
+    }
+}
+
+impl From<Fixnum> for Value {
+    fn from(f: Fixnum) -> Self {
+        Value::fixnum(f.0)
+    }
+}
+
+/// A Value that is guaranteed to be a Flonum (inline-encoded f64).
+#[derive(Clone, Copy, PartialEq)]
+pub struct Flonum(f64);
+
+impl Flonum {
+    pub fn get(&self) -> f64 {
+        self.0
+    }
+}
+
+impl From<Flonum> for Immediate {
+    fn from(f: Flonum) -> Self {
+        Immediate::flonum(f.0).unwrap()
+    }
+}
+
+impl From<Flonum> for Value {
+    fn from(f: Flonum) -> Self {
+        Value::float(f.0)
     }
 }
 

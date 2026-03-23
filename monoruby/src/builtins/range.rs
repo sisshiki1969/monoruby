@@ -87,8 +87,7 @@ fn range_begin(
     }
     let dst = callsite.dst;
     if let Some(range) = state.is_range_literal(callsite.recv) {
-        let start = range.start();
-        if start.is_frozen_literal() {
+        if let Some(start) = range.start().is_immediate() {
             state.def_C(dst, start);
             return true;
         }
@@ -129,8 +128,7 @@ fn range_end(
     }
     let dst = callsite.dst;
     if let Some(range) = state.is_range_literal(callsite.recv) {
-        let end = range.end();
-        if end.is_frozen_literal() {
+        if let Some(end) = range.end().is_immediate() {
             state.def_C(dst, end);
             return true;
         }
@@ -170,7 +168,7 @@ fn range_exclude_end(
     let dst = callsite.dst;
     if let Some(range) = state.is_range_literal(callsite.recv) {
         let exclude_end = range.exclude_end();
-        state.def_C(dst, Value::bool(exclude_end));
+        state.def_C(dst, Immediate::bool(exclude_end));
         return true;
     }
     state.load(ir, callsite.recv, GP::Rdi);

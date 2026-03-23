@@ -139,11 +139,11 @@ fn object_not(
     let CallSiteInfo { recv, dst, .. } = *callsite;
     if state.is_truthy(recv) {
         if let Some(dst) = dst {
-            state.def_C(dst, Value::bool(false));
+            state.def_C(dst, Immediate::bool(false));
         }
     } else if state.is_falsy(recv) {
         if let Some(dst) = dst {
-            state.def_C(dst, Value::bool(true));
+            state.def_C(dst, Immediate::bool(true));
         }
     } else {
         state.load(ir, recv, GP::Rdi);

@@ -371,7 +371,7 @@ pub(super) struct ReturnState {
 #[derive(Debug, Clone, Copy)]
 enum ReturnValue {
     UD,
-    Const(Value),
+    Const(Immediate),
     Class(ClassId),
     Value,
 }
@@ -407,7 +407,7 @@ impl ReturnState {
         }
     }
 
-    pub(in crate::codegen::jitgen) fn const_folded(&self) -> Option<Value> {
+    pub(in crate::codegen::jitgen) fn const_folded(&self) -> Option<Immediate> {
         if !self.invariants.side_effect_guard {
             return None;
         }
