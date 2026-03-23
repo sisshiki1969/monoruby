@@ -344,8 +344,11 @@ impl<'a> JitContext<'a> {
                                 UnOpK::Pos => f,
                                 UnOpK::BitNot | UnOpK::Not => unreachable!(),
                             };
-                            state.def_C(dst, Value::float(res));
-                            return Ok(CompileResult::Continue);
+                            let v = Value::float(res);
+                            if v.is_packed_value() {
+                                state.def_C(dst, v);
+                                return Ok(CompileResult::Continue);
+                            }
                         }
                         let fsrc = state.load_xmm(ir, src);
                         let dst = state.def_F(dst);

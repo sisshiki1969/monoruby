@@ -412,6 +412,12 @@ impl ReturnState {
             return None;
         }
         if let ReturnValue::Const(v) = self.ret {
+            // Do not constant-fold heap-allocated objects (e.g., NaN, Infinity as heap Floats).
+            // Their pointers would be embedded directly in JIT code without being registered
+            // as GC roots, causing them to be collected and leading to use-after-free crashes.
+            if !v.is_packed_value() {
+                return None;
+            }
             return Some(v);
         }
         None
