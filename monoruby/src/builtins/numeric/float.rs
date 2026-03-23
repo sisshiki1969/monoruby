@@ -43,6 +43,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(FLOAT_CLASS, "infinite?", infinite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "nan?", nan, 0);
     globals.define_builtin_funcs(FLOAT_CLASS, "abs", &["magnitude"], abs, 0);
+    globals.define_builtin_funcs(FLOAT_CLASS, "angle", &["arg", "phase"], angle, 0);
 }
 
 extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
@@ -381,9 +382,46 @@ fn abs(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(Value::float(f.abs()))
 }
 
+///
+/// ### Float#angle
+///
+/// - angle -> 0 | Float
+/// - arg -> 0 | Float
+/// - phase -> 0 | Float
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/angle.html]
+#[monoruby_builtin]
+fn angle(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = lfp.self_val().try_float().unwrap();
+    if f.is_nan() {
+        Ok(Value::float(f64::NAN))
+    } else if f.is_sign_negative() {
+        Ok(Value::float(std::f64::consts::PI))
+    } else {
+        Ok(Value::integer(0))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn angle() {
+        run_test("1.0.angle");
+        run_test("(-1.0).angle");
+        run_test("0.0.angle");
+        run_test("(1.0/0).angle");
+        run_test("(-1.0/0).angle");
+        run_test_once("Float::NAN.angle.nan?");
+        run_test("1.0.arg");
+        run_test("(-1.0).arg");
+        run_test("1.0.phase");
+        run_test("(-1.0).phase");
+        run_test("1.angle");
+        run_test("(-1).angle");
+        run_test("0.angle");
+    }
 
     #[test]
     fn float() {
