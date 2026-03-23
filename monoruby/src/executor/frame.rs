@@ -130,7 +130,6 @@ impl Executor {
         })
     }
 
-    // TODO: this does not support nexted fibers.
     pub fn prev_cfp(vm: &Executor, cfp: Cfp) -> (&Executor, Cfp) {
         match cfp.prev() {
             Some(prev) => (vm, prev),

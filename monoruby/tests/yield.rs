@@ -81,3 +81,51 @@ fn test_yield_over_fiber() {
         "#,
     );
 }
+
+#[test]
+fn test_yield_over_nested_fibers() {
+    run_test_with_prelude(
+        r#"
+        nested_yield { |x| puts x }
+        "#,
+        r#"
+        def nested_yield
+          Fiber.new {
+            Fiber.new {
+              yield 42
+            }.resume
+          }.resume
+        end
+        "#,
+    );
+    run_test_with_prelude(
+        r#"
+        foo { |x| puts x }
+        "#,
+        r#"
+        def foo(&blk)
+          Fiber.new {
+            Fiber.new {
+              blk.call("deep")
+            }.resume
+          }.resume
+        end
+        "#,
+    );
+    run_test_with_prelude(
+        r#"
+        deep_yield { |x| puts x }
+        "#,
+        r#"
+        def deep_yield
+          Fiber.new {
+            Fiber.new {
+              Fiber.new {
+                yield 99
+              }.resume
+            }.resume
+          }.resume
+        end
+        "#,
+    );
+}
