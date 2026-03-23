@@ -88,7 +88,7 @@ fn range_begin(
     let dst = callsite.dst;
     if let Some(range) = state.is_range_literal(callsite.recv) {
         let start = range.start();
-        if start.is_frozen_literal() {
+        if start.is_packed_value() {
             state.def_C(dst, start);
             return true;
         }
@@ -130,7 +130,7 @@ fn range_end(
     let dst = callsite.dst;
     if let Some(range) = state.is_range_literal(callsite.recv) {
         let end = range.end();
-        if end.is_frozen_literal() {
+        if end.is_packed_value() {
             state.def_C(dst, end);
             return true;
         }

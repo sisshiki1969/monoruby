@@ -393,8 +393,13 @@ impl SlotState {
     /// Link *slot* to a concrete flonum value *i*.
     ///
     #[allow(non_snake_case)]
-    pub(crate) fn def_C_float(&mut self, slot: impl Into<Option<SlotId>>, f: f64) {
-        self.def_C(slot, Value::float(f));
+    pub(crate) fn def_C_float(&mut self, slot: impl Into<Option<SlotId>>, f: f64) -> bool {
+        let v = Value::float(f);
+        if !v.is_packed_value() {
+            return false;
+        }
+        self.def_C(slot, v);
+        true
     }
 
     ///
@@ -402,7 +407,7 @@ impl SlotState {
     ///
     #[allow(non_snake_case)]
     pub(crate) fn def_C(&mut self, slot: impl Into<Option<SlotId>>, v: Value) {
-        assert!(v.is_frozen_literal(), "{:?}", v);
+        assert!(v.is_packed_value(), "{:?}", v);
         if let Some(slot) = slot.into() {
             self.discard(slot);
             self.set_mode(slot, LinkMode::C(v));

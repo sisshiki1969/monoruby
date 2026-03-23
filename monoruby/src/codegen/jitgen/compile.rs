@@ -166,7 +166,7 @@ impl<'a> JitContext<'a> {
                 }
             }
             TraceIr::FrozenLiteral(dst, val) => {
-                if val.is_frozen_literal() {
+                if val.is_packed_value() {
                     state.def_C(dst, val);
                 } else {
                     state.discard(dst);
@@ -344,9 +344,7 @@ impl<'a> JitContext<'a> {
                                 UnOpK::Pos => f,
                                 UnOpK::BitNot | UnOpK::Not => unreachable!(),
                             };
-                            let v = Value::float(res);
-                            if v.is_packed_value() {
-                                state.def_C(dst, v);
+                            if state.def_C_float(dst, res) {
                                 return Ok(CompileResult::Continue);
                             }
                         }

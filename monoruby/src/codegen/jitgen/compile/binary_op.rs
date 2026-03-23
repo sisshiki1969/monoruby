@@ -341,14 +341,9 @@ impl AbstractFrame {
     fn binop_float(&mut self, ir: &mut AsmIr, kind: BinOpK, dst: Option<SlotId>, info: FBinOpInfo) {
         if let Some((lhs, rhs)) = self.check_binary_C_f64(info.lhs, info.rhs)
             && let Some(result) = self.binop_float_folded(kind, lhs, rhs)
+            && self.def_C_float(dst, result)
         {
-            // Only constant-fold if the result can be represented as a flonum (packed value).
-            // Heap-allocated Floats (NaN, Infinity) cannot be safely embedded as constants
-            // in JIT code because their pointers are not registered as GC roots.
-            if Value::float(result).is_packed_value() {
-                self.def_C_float(dst, result);
-                return;
-            }
+            return;
         };
 
         let (lhs, rhs, dst) = self.load_binary_ret_xmm(ir, dst, info);

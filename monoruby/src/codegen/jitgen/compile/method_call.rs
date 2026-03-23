@@ -97,10 +97,12 @@ impl<'a> JitContext<'a> {
                     let CallSiteInfo { args, dst, .. } = *callsite;
                     if let Some(args) = state.coerce_C_f64(args) {
                         let res = f(args);
-                        if let Some(dst) = dst {
-                            state.def_C_float(dst, res);
+                        if match dst {
+                            Some(dst) => state.def_C_float(dst, res),
+                            None => true,
+                        } {
+                            return Ok(CompileResult::Continue);
                         }
-                        return Ok(CompileResult::Continue);
                     }
                     if let Some(dst) = dst {
                         let src = state.load_xmm(ir, args);
@@ -122,10 +124,12 @@ impl<'a> JitContext<'a> {
                     } = *callsite;
                     if let Some((lhs, rhs)) = state.check_binary_C_f64(recv, args) {
                         let res = f(lhs, rhs);
-                        if let Some(dst) = dst {
-                            state.def_C_float(dst, res);
+                        if match dst {
+                            Some(dst) => state.def_C_float(dst, res),
+                            None => true,
+                        } {
+                            return Ok(CompileResult::Continue);
                         }
-                        return Ok(CompileResult::Continue);
                     }
                     if let Some(dst) = dst {
                         let lhs = state.load_xmm(ir, recv);
