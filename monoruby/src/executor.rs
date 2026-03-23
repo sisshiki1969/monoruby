@@ -931,9 +931,8 @@ impl Executor {
                         let mut mm_args = Vec::with_capacity(args.len() + 1);
                         mm_args.push(Value::symbol(method));
                         mm_args.extend_from_slice(args);
-                        return self.invoke_func(
-                            globals, mm_func_id, receiver, &mm_args, bh, kw_args,
-                        );
+                        return self
+                            .invoke_func(globals, mm_func_id, receiver, &mm_args, bh, kw_args);
                     }
                     Err(_) => {
                         self.set_error(original_err);
@@ -1437,13 +1436,14 @@ impl Executor {
 }
 
 impl Executor {
-    pub(crate) fn generate_proc(&mut self, bh: BlockHandler, pc: BytecodePtr) -> Result<Proc> {
+    pub(crate) fn generate_proc(&self, bh: BlockHandler, pc: BytecodePtr) -> Result<Proc> {
         if let Some((fid, outer)) = bh.try_proxy() {
             // Walk back through the call frame chain to the block's outer scope,
             // using the proxy's depth index.
             let mut cfp = self.cfp();
+            let mut vm = self;
             for _ in 0..outer {
-                cfp = cfp.prev().unwrap();
+                (vm, cfp) = Self::prev_cfp(vm, cfp);
             }
             // Move the correct outer frame (and its lexical chain) to the heap,
             // so the proc can safely reference it after the current scope exits.

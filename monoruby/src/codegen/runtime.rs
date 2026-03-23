@@ -78,10 +78,10 @@ impl ProcData {
         }
     }
 
-    pub(crate) fn from_proxy(executor: &Executor, proxy: (FuncId, u16)) -> Self {
+    pub(crate) fn from_proxy(mut executor: &Executor, proxy: (FuncId, u16)) -> Self {
         let mut cfp = executor.cfp();
         for _ in 0..proxy.1 {
-            cfp = cfp.prev().unwrap();
+            (executor, cfp) = Executor::prev_cfp(executor, cfp);
         }
         ProcData {
             outer: Some(cfp.lfp()),
@@ -102,7 +102,7 @@ impl ProcData {
 /// - rdx: FuncId
 ///
 pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals) -> ProcData {
-    let bh = match vm.cfp().get_block() {
+    let bh = match vm.get_block() {
         Some(data) => data,
         None => {
             vm.set_error(MonorubyErr::no_block_given());

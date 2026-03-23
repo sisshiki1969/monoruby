@@ -99,28 +99,6 @@ impl Cfp {
     }
 
     ///
-    /// Get *BlockHandler* of a current method / classdef.
-    ///
-    pub fn get_block(&self) -> Option<BlockHandler> {
-        let lfp = self.outermost_lfp();
-
-        lfp.block().map(|bh| match bh.0.try_fixnum() {
-            Some(mut i) => {
-                let mut cfp = *self;
-                loop {
-                    if cfp.lfp() == lfp {
-                        break;
-                    }
-                    i += 1;
-                    cfp = cfp.prev().unwrap();
-                }
-                BlockHandler::new(Value::integer(i))
-            }
-            None => bh,
-        })
-    }
-
-    ///
     /// Get *FuncId* of a current position in the source code.
     ///
     pub fn get_source_pos(&self) -> FuncId {
@@ -132,6 +110,45 @@ impl Cfp {
             cfp = inner_cfp.prev();
         }
         unreachable!("get_source_pos: non-native method not found.")
+    }
+}
+
+impl Executor {
+    ///
+    /// Get *BlockHandler* of a current method / classdef.
+    ///
+    pub fn get_block(&self) -> Option<BlockHandler> {
+        let cfp = self.cfp();
+        let lfp = cfp.outermost_lfp();
+        let bh = lfp.block()?;
+        Some(match bh.0.try_fixnum() {
+            Some(mut i) => {
+                i = Self::traverse_cfp(self, cfp, lfp, i);
+                BlockHandler::new(Value::integer(i))
+            }
+            None => bh,
+        })
+    }
+
+    // TODO: this does not support nexted fibers.
+    pub fn prev_cfp(vm: &Executor, cfp: Cfp) -> (&Executor, Cfp) {
+        match cfp.prev() {
+            Some(prev) => (vm, prev),
+            None => {
+                let vm = unsafe { vm.parent_fiber.unwrap().as_ref() };
+                (vm, vm.cfp())
+            }
+        }
+    }
+
+    fn traverse_cfp(mut vm: &Executor, mut cfp: Cfp, lfp: Lfp, mut i: i64) -> i64 {
+        loop {
+            if cfp.lfp() == lfp {
+                return i;
+            }
+            i += 1;
+            (vm, cfp) = Self::prev_cfp(vm, cfp);
+        }
     }
 }
 

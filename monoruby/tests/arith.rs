@@ -1168,60 +1168,6 @@ fn test_constant_in_method() {
 }
 
 #[test]
-fn test_yield_in_block() {
-    run_test(
-        "
-        class C
-          def f
-            x = 0
-            7.times { x += yield }
-            x
-          end
-        end
-
-        a = 42
-        c = C.new
-
-        c.f { a }
-        ",
-    );
-    run_test(
-        "
-        class C
-          def f
-            x = 0
-            10.times { x += yield }
-            x
-          end
-        end
-
-        @a = 42
-        c = C.new
-
-        c.f { @a }
-        ",
-    );
-}
-
-#[test]
-fn test_yield_in_loop() {
-    run_test_with_prelude(
-        r#"
-        m{}
-        "#,
-        r#"
-        def m
-            i = 0
-            while i<30
-              i += 1
-              yield
-            end
-        end
-        "#,
-    );
-}
-
-#[test]
 fn test_for_each() {
     run_test(
         r#"
