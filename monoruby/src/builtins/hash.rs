@@ -35,6 +35,8 @@ pub(super) fn init(globals: &mut Globals) {
         1,
     );
     globals.define_builtin_funcs(HASH_CLASS, "inspect", &["to_s"], inspect, 0);
+    globals.define_builtin_func(HASH_CLASS, "assoc", assoc, 1);
+    globals.define_builtin_func(HASH_CLASS, "rassoc", rassoc, 1);
     globals.define_builtin_func(HASH_CLASS, "invert", invert, 0);
     globals.define_builtin_func(HASH_CLASS, "keys", keys, 0);
     globals.define_builtin_func_rest(HASH_CLASS, "merge", merge);
@@ -675,6 +677,42 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 }
 
 ///
+/// ### Hash#assoc
+///
+/// - assoc(key) -> [key, value] | nil
+///
+/// [https://docs.ruby-lang.org/ja/3.2/method/Hash/i/assoc.html]
+#[monoruby_builtin]
+fn assoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let key = lfp.arg(0);
+    let hash = lfp.self_val().as_hash();
+    for (k, v) in hash.iter() {
+        if vm.eq_values_bool(globals, key, k)? {
+            return Ok(Value::array_from_vec(vec![k, v]));
+        }
+    }
+    Ok(Value::nil())
+}
+
+///
+/// ### Hash#rassoc
+///
+/// - rassoc(value) -> [key, value] | nil
+///
+/// [https://docs.ruby-lang.org/ja/3.2/method/Hash/i/rassoc.html]
+#[monoruby_builtin]
+fn rassoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let value = lfp.arg(0);
+    let hash = lfp.self_val().as_hash();
+    for (k, v) in hash.iter() {
+        if vm.eq_values_bool(globals, value, v)? {
+            return Ok(Value::array_from_vec(vec![k, v]));
+        }
+    }
+    Ok(Value::nil())
+}
+
+///
 /// ### Hash#invert
 ///
 /// - invert -> Hash
@@ -1028,6 +1066,23 @@ mod tests {
         res
         "##,
         );
+    }
+
+    #[test]
+    fn assoc() {
+        run_test(r##"{a: 1, b: 2, c: 3}.assoc(:a)"##);
+        run_test(r##"{a: 1, b: 2, c: 3}.assoc(:b)"##);
+        run_test(r##"{a: 1, b: 2, c: 3}.assoc(:z)"##);
+        run_test(r##"{"a" => 1, "b" => 2}.assoc("b")"##);
+        run_test(r##"{1 => :a, 1.0 => :b}.assoc(1)"##);
+    }
+
+    #[test]
+    fn rassoc() {
+        run_test(r##"{a: 1, b: 2, c: 3}.rassoc(1)"##);
+        run_test(r##"{a: 1, b: 2, c: 3}.rassoc(2)"##);
+        run_test(r##"{a: 1, b: 2, c: 3}.rassoc(9)"##);
+        run_test(r##"{"a" => 1, "b" => 2}.rassoc(2)"##);
     }
 
     #[test]
