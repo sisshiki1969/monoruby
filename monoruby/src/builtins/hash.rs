@@ -41,8 +41,11 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs_rest(HASH_CLASS, "merge!", &["update"], merge_);
     globals.define_builtin_funcs(HASH_CLASS, "size", &["length"], size, 0);
     globals.define_builtin_func(HASH_CLASS, "reject", reject, 0);
+    globals.define_builtin_func(HASH_CLASS, "shift", shift, 0);
     globals.define_builtin_func(HASH_CLASS, "sort", sort, 0);
     globals.define_builtin_func(HASH_CLASS, "store", index_assign, 2);
+    globals.define_builtin_func(HASH_CLASS, "key", key, 1);
+    globals.define_builtin_func(HASH_CLASS, "keep_if", keep_if, 0);
     globals.define_builtin_func(HASH_CLASS, "values", values, 0);
     globals.define_builtin_funcs(HASH_CLASS, "clone", &["dup"], clone, 0);
 
@@ -838,6 +841,69 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(s)
 }
 
+///
+/// ### Hash#shift
+///
+/// - shift -> [key, value] | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/shift.html]
+#[monoruby_builtin]
+fn shift(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut h = lfp.self_val().as_hash();
+    match h.shift(vm, globals)? {
+        Some((k, v)) => Ok(Value::array2(k, v)),
+        None => Ok(Value::nil()),
+    }
+}
+
+///
+/// ### Hash#key
+///
+/// - key(value) -> key | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/key.html]
+#[monoruby_builtin]
+fn key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let hash = lfp.self_val().as_hash();
+    let target = lfp.arg(0);
+    for (k, v) in hash.iter() {
+        if vm.eq_values_bool(globals, v, target)? {
+            return Ok(k);
+        }
+    }
+    Ok(Value::nil())
+}
+
+///
+/// ### Hash#keep_if
+///
+/// - keep_if {|key, value| ... } -> self
+/// - keep_if -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/keep_if.html]
+#[monoruby_builtin]
+fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("keep_if");
+            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+        }
+        Some(block) => block,
+    };
+    let data = vm.get_block_data(globals, bh)?;
+    let mut remove = vec![];
+    for (k, v) in lfp.self_val().as_hash().iter() {
+        if !vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+            remove.push(k);
+        }
+    }
+    let mut h = lfp.self_val().as_hash();
+    for k in remove {
+        h.remove(k, vm, globals)?;
+    }
+    Ok(lfp.self_val())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -1310,6 +1376,51 @@ mod tests {
         res << h.default_proc.call({}, :foo)
         res << h
         res
+        "##,
+        );
+    }
+
+    #[test]
+    fn shift() {
+        run_test(
+            r##"
+        h = {a: 1, b: 2, c: 3}
+        res = []
+        res << h.shift
+        res << h
+        res
+        "##,
+        );
+        run_test(
+            r##"
+        h = {}
+        h.shift
+        "##,
+        );
+        run_test(
+            r##"
+        [Hash.new("default").shift, Hash.new.shift]
+        "##,
+        );
+    }
+
+    #[test]
+    fn key() {
+        run_test(
+            r##"
+        h = {a: 1, b: 2, c: 3}
+        [h.key(2), h.key(4)]
+        "##,
+        );
+    }
+
+    #[test]
+    fn keep_if() {
+        run_test(
+            r##"
+        h = {a: 1, b: 2, c: 3}
+        res = h.keep_if {|k, v| v > 1}
+        [res, h, res.equal?(h)]
         "##,
         );
     }
