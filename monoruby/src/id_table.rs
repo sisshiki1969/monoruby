@@ -251,6 +251,16 @@ impl IdentId {
     pub(crate) fn add_assign_postfix(id: IdentId) -> IdentId {
         ID.write().unwrap().add_assign_postfix(id)
     }
+
+    ///
+    /// Get all interned symbol IDs.
+    ///
+    pub(crate) fn all_symbols() -> Vec<IdentId> {
+        let id = ID.read().unwrap();
+        (1..=id.table.len() as u32)
+            .map(IdentId::from)
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
