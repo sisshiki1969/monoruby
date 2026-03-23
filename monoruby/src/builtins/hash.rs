@@ -11,6 +11,7 @@ pub(super) fn init(globals: &mut Globals) {
 
     globals.define_builtin_func_with(HASH_CLASS, "default", default, 0, 1, false);
     globals.define_builtin_func(HASH_CLASS, "default_proc", default_proc, 0);
+    globals.define_builtin_func(HASH_CLASS, "default_proc=", default_proc_assign, 1);
     globals.define_builtin_func(HASH_CLASS, "default=", default_assign, 1);
     globals.define_builtin_funcs(HASH_CLASS, "==", &["===", "eql?"], eq, 1);
     globals.define_builtin_inline_func(HASH_CLASS, "[]", index, Box::new(hash_index), 1);
@@ -148,6 +149,35 @@ fn default(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn default_proc(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let hash = lfp.self_val().as_hash();
     Ok(hash.defalut_proc().map(Proc::as_val).unwrap_or_default())
+}
+
+///
+/// ### Hash#default_proc=
+///
+/// - default_proc=(proc_or_nil)
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/default_proc=3d.html]
+#[monoruby_builtin]
+fn default_proc_assign(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    let mut hash = lfp.self_val().as_hash();
+    if arg.is_nil() {
+        hash.set_defalut_value(Value::nil());
+        Ok(Value::nil())
+    } else if let Some(proc) = arg.is_proc() {
+        hash.set_defalut_proc(proc);
+        Ok(arg)
+    } else {
+        Err(MonorubyErr::typeerr(format!(
+            "wrong default_proc type {} (expected Proc)",
+            arg.get_real_class_name(globals)
+        )))
+    }
 }
 
 ///
