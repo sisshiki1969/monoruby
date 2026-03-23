@@ -26,7 +26,7 @@ impl AbstractFrame {
                 if dst == GP::R15 {
                     assert!(self.no_r15());
                 }
-                ir.lit2reg(v, dst);
+                ir.lit2reg(v.into(), dst);
             }
             LinkMode::Sf(_, _) | LinkMode::S(_) => {
                 if dst == GP::R15 {
@@ -154,7 +154,7 @@ impl AbstractFrame {
     }
 
     #[allow(non_snake_case)]
-    fn load_xmm_from_C(&mut self, ir: &mut AsmIr, slot: SlotId, v: Value) -> Xmm {
+    fn load_xmm_from_C(&mut self, ir: &mut AsmIr, slot: SlotId, v: Immediate) -> Xmm {
         match v.unpack() {
             RV::Float(f) => {
                 // -> F

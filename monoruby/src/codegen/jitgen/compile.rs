@@ -166,8 +166,8 @@ impl<'a> JitContext<'a> {
                 }
             }
             TraceIr::FrozenLiteral(dst, val) => {
-                if val.is_frozen_literal() {
-                    state.def_C(dst, val);
+                if let Some(imm) = val.is_immediate() {
+                    state.def_C(dst, imm);
                 } else {
                     state.discard(dst);
                     ir.lit2reg(val, GP::Rax);
@@ -301,10 +301,11 @@ impl<'a> JitContext<'a> {
                     }
                     Some(INTEGER_CLASS) => {
                         if let Some(src) = state.is_fixnum_literal(src) {
+                            let i = src.get();
                             match kind {
                                 UnOpK::Neg => {
-                                    if let Some(res) = src.checked_neg()
-                                        && let Some(res) = Value::check_fixnum(res)
+                                    if let Some(res) = i.checked_neg()
+                                        && let Some(res) = Immediate::check_fixnum(res)
                                     {
                                         state.def_C(dst, res);
                                         return Ok(CompileResult::Continue);
@@ -314,7 +315,8 @@ impl<'a> JitContext<'a> {
                                     return Ok(CompileResult::Continue);
                                 }
                                 UnOpK::BitNot => {
-                                    state.def_C(dst, Value::integer(!src));
+                                    // Bitwise NOT of an i63 value always fits in i63
+                                    state.def_C(dst, Immediate::check_fixnum(!i).unwrap());
                                     return Ok(CompileResult::Continue);
                                 }
                                 UnOpK::Not => unreachable!(),
@@ -338,15 +340,14 @@ impl<'a> JitContext<'a> {
                         state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
                     }
                     Some(FLOAT_CLASS) if kind != UnOpK::BitNot && kind != UnOpK::Not => {
-                        if let Some(f) = state.is_float_literal(src) {
+                        if let Some(f) = state.is_flonum_literal(src) {
+                            let f = f.get();
                             let res = match kind {
                                 UnOpK::Neg => -f,
                                 UnOpK::Pos => f,
                                 UnOpK::BitNot | UnOpK::Not => unreachable!(),
                             };
-                            let v = Value::float(res);
-                            if v.is_packed_value() {
-                                state.def_C(dst, v);
+                            if state.def_C_float(dst, res) {
                                 return Ok(CompileResult::Continue);
                             }
                         }

@@ -108,7 +108,7 @@ impl SfGuarded {
         }
     }
 
-    fn from_concrete_value(v: Value) -> Self {
+    fn from_concrete_value(v: Immediate) -> Self {
         if v.is_fixnum() {
             SfGuarded::Fixnum
         } else if v.is_float() {

@@ -248,9 +248,9 @@ fn integer_succ(
     }
     let CallSiteInfo { dst, recv, .. } = *callsite;
     if let Some(i) = state.is_fixnum_literal(recv)
-        && Value::is_i63(i + 1)
+        && Value::is_i63(i.get() + 1)
     {
-        state.def_C(dst, Value::integer(i + 1));
+        state.def_C(dst, Immediate::check_fixnum(i.get() + 1).unwrap());
         return true;
     }
 
@@ -506,7 +506,7 @@ fn integer_shl(
     } else if let Some(lhs) = state.is_fixnum_literal(recv) {
         state.load_fixnum(ir, args, GP::Rcx);
         let deopt = ir.new_deopt(state);
-        ir.inline(move |r#gen, _, labels| r#gen.gen_shl_lhs_imm(lhs, &labels[deopt]));
+        ir.inline(move |r#gen, _, labels| r#gen.gen_shl_lhs_imm(lhs.get(), &labels[deopt]));
     } else {
         state.load_fixnum(ir, args, GP::Rcx);
         let deopt = ir.new_deopt(state);

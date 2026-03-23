@@ -371,7 +371,7 @@ pub(super) struct ReturnState {
 #[derive(Debug, Clone, Copy)]
 enum ReturnValue {
     UD,
-    Const(Value),
+    Const(Immediate),
     Class(ClassId),
     Value,
 }
@@ -407,17 +407,11 @@ impl ReturnState {
         }
     }
 
-    pub(in crate::codegen::jitgen) fn const_folded(&self) -> Option<Value> {
+    pub(in crate::codegen::jitgen) fn const_folded(&self) -> Option<Immediate> {
         if !self.invariants.side_effect_guard {
             return None;
         }
         if let ReturnValue::Const(v) = self.ret {
-            // Do not constant-fold heap-allocated objects (e.g., NaN, Infinity as heap Floats).
-            // Their pointers would be embedded directly in JIT code without being registered
-            // as GC roots, causing them to be collected and leading to use-after-free crashes.
-            if !v.is_packed_value() {
-                return None;
-            }
             return Some(v);
         }
         None

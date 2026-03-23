@@ -212,11 +212,11 @@ fn kernel_nil(
     let CallSiteInfo { recv, dst, .. } = *callsite;
     if state.is_nil(recv) {
         if let Some(dst) = dst {
-            state.def_C(dst, Value::bool(true));
+            state.def_C(dst, Immediate::bool(true));
         }
     } else if state.is_not_nil(recv) {
         if let Some(dst) = dst {
-            state.def_C(dst, Value::bool(false));
+            state.def_C(dst, Immediate::bool(false));
         }
     } else {
         state.load(ir, recv, GP::Rdi);
@@ -263,7 +263,7 @@ fn kernel_block_given(
         && let Some(b) = store[callid].block_given()
     {
         if let Some(dst) = dst {
-            state.def_C(dst, Value::bool(b));
+            state.def_C(dst, Immediate::bool(b));
         }
     } else {
         ir.inline(|r#gen, _, _| {
@@ -1817,7 +1817,7 @@ fn object_respond_to(
     } else {
         false
     };
-    state.def_C(dst, Value::bool(b));
+    state.def_C(dst, Immediate::bool(b));
     true
 }
 
