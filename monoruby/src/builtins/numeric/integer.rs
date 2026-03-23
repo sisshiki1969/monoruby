@@ -44,6 +44,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, "nonzero?", nonzero_, 0);
     globals.define_builtin_func(INTEGER_CLASS, "zero?", zero_, 0);
     globals.define_builtin_func(INTEGER_CLASS, "size", size, 0);
+    globals.define_builtin_func(INTEGER_CLASS, "bit_length", bit_length, 0);
 }
 
 /*///
@@ -625,6 +626,39 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
 }
 
+///
+/// ### Integer#bit_length
+///
+/// - bit_length -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/bit_length.html]
+#[monoruby_builtin]
+fn bit_length(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    match lfp.self_val().unpack() {
+        RV::Fixnum(i) => {
+            let n = if i < 0 { !(i as u64) } else { i as u64 };
+            Ok(Value::integer(64 - n.leading_zeros() as i64))
+        }
+        RV::BigInt(b) => {
+            use num::traits::sign::Signed;
+            let bits = if b.is_negative() {
+                // For negative numbers, bit_length = bits(~n) = bits(-n - 1)
+                let complement: BigInt = -(b) - 1;
+                complement.bits()
+            } else {
+                b.bits()
+            };
+            Ok(Value::integer(bits as i64))
+        }
+        _ => unreachable!(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -884,5 +918,165 @@ mod tests {
         run_test_error("100.digits(-16)");
         run_test_error("100.digits(0)");
         run_test_error("100.digits(1)");
+    }
+
+    #[test]
+    fn integer_abs() {
+        run_test("42.abs");
+        run_test("(-42).abs");
+        run_test("0.abs");
+        run_test("42.magnitude");
+        run_test("(-42).magnitude");
+    }
+
+    #[test]
+    fn integer_negative() {
+        run_test("42.negative?");
+        run_test("(-42).negative?");
+        run_test("0.negative?");
+        run_test("42.positive?");
+        run_test("(-42).positive?");
+        run_test("0.positive?");
+    }
+
+    #[test]
+    fn integer_integer() {
+        run_test("42.integer?");
+        run_test("0.integer?");
+    }
+
+    #[test]
+    fn integer_ord() {
+        run_test("42.ord");
+        run_test("0.ord");
+    }
+
+    #[test]
+    fn integer_ceil() {
+        run_test("42.ceil");
+        run_test("42.ceil(0)");
+        run_test("42.ceil(-1)");
+        run_test("45.ceil(-1)");
+        run_test("(-42).ceil(-1)");
+        run_test("123.ceil(-2)");
+    }
+
+    #[test]
+    fn integer_round() {
+        run_test("42.round");
+        run_test("42.round(0)");
+        run_test("42.round(-1)");
+        run_test("45.round(-1)");
+        run_test("(-42).round(-1)");
+        run_test("15.round(-1)");
+        run_test("25.round(-1)");
+        run_test("35.round(-1)");
+    }
+
+    #[test]
+    fn integer_truncate() {
+        run_test("42.truncate");
+        run_test("42.truncate(0)");
+        run_test("42.truncate(-1)");
+        run_test("(-42).truncate(-1)");
+        run_test("123.truncate(-2)");
+    }
+
+    #[test]
+    fn integer_next_pred() {
+        run_test("42.next");
+        run_test("(-1).next");
+        run_test("42.pred");
+        run_test("0.pred");
+    }
+
+    #[test]
+    fn integer_remainder() {
+        run_test("5.remainder(3)");
+        run_test("(-5).remainder(3)");
+        run_test("5.remainder(-3)");
+        run_test("(-5).remainder(-3)");
+    }
+
+    #[test]
+    fn integer_fdiv() {
+        run_test("1.fdiv(2)");
+        run_test("(-1).fdiv(2)");
+        run_test("1.fdiv(2.0)");
+    }
+
+    #[test]
+    fn integer_gcd_lcm() {
+        run_test("12.gcd(8)");
+        run_test("12.gcd(-8)");
+        run_test("(-12).gcd(8)");
+        run_test("0.gcd(5)");
+        run_test("5.gcd(0)");
+        run_test("12.lcm(8)");
+        run_test("12.lcm(-8)");
+        run_test("0.lcm(5)");
+        run_test("12.gcdlcm(8)");
+    }
+
+    #[test]
+    fn integer_pow() {
+        run_test("2.pow(10)");
+        run_test("2.pow(10, 1000)");
+        run_test("2.pow(0)");
+    }
+
+    #[test]
+    fn integer_allbits() {
+        run_test("0b1010.allbits?(0b1010)");
+        run_test("0b1010.allbits?(0b1000)");
+        run_test("0b1010.allbits?(0b1011)");
+        run_test("0b1010.anybits?(0b0001)");
+        run_test("0b1010.anybits?(0b1001)");
+        run_test("0b1010.nobits?(0b0101)");
+        run_test("0b1010.nobits?(0b0001)");
+    }
+
+    #[test]
+    fn integer_bit_length() {
+        run_test("0.bit_length");
+        run_test("1.bit_length");
+        run_test("255.bit_length");
+        run_test("256.bit_length");
+        run_test("(-1).bit_length");
+        run_test("(-256).bit_length");
+        run_test("(-257).bit_length");
+        run_test("(2**100).bit_length");
+        run_test("(-(2**100)).bit_length");
+    }
+
+    #[test]
+    fn integer_coerce() {
+        run_test("1.coerce(2)");
+        run_test("1.coerce(2.5)");
+    }
+
+    #[test]
+    fn integer_numerator_denominator() {
+        run_test("42.numerator");
+        run_test("42.denominator");
+        run_test("0.numerator");
+        run_test("0.denominator");
+    }
+
+    #[test]
+    fn integer_sqrt() {
+        run_test("Integer.sqrt(0)");
+        run_test("Integer.sqrt(1)");
+        run_test("Integer.sqrt(4)");
+        run_test("Integer.sqrt(9)");
+        run_test("Integer.sqrt(10)");
+        run_test("Integer.sqrt(100)");
+    }
+
+    #[test]
+    fn integer_try_convert() {
+        run_test("Integer.try_convert(1)");
+        run_test("Integer.try_convert(nil)");
+        run_test(r#"Integer.try_convert("1")"#);
     }
 }

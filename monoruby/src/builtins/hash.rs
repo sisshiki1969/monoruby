@@ -8,6 +8,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS, ObjTy::HASH);
     globals.define_builtin_class_func_with_effect(HASH_CLASS, "new", new, 0, 1, Effect::CAPTURE);
     globals.define_builtin_class_func(HASH_CLASS, "allocate", allocate, 0);
+    globals.define_builtin_class_func_rest(HASH_CLASS, "[]", hash_bracket);
 
     globals.define_builtin_func_with(HASH_CLASS, "default", default, 0, 1, false);
     globals.define_builtin_func(HASH_CLASS, "default_proc", default_proc, 0);
@@ -35,13 +36,17 @@ pub(super) fn init(globals: &mut Globals) {
         1,
     );
     globals.define_builtin_funcs(HASH_CLASS, "inspect", &["to_s"], inspect, 0);
+    globals.define_builtin_func(HASH_CLASS, "assoc", assoc, 1);
+    globals.define_builtin_func(HASH_CLASS, "rassoc", rassoc, 1);
     globals.define_builtin_func(HASH_CLASS, "invert", invert, 0);
     globals.define_builtin_func(HASH_CLASS, "keys", keys, 0);
     globals.define_builtin_func_rest(HASH_CLASS, "merge", merge);
     globals.define_builtin_funcs_rest(HASH_CLASS, "merge!", &["update"], merge_);
     globals.define_builtin_funcs(HASH_CLASS, "size", &["length"], size, 0);
+    globals.define_builtin_func(HASH_CLASS, "delete_if", delete_if, 0);
     globals.define_builtin_func(HASH_CLASS, "reject", reject, 0);
     globals.define_builtin_func(HASH_CLASS, "shift", shift, 0);
+    globals.define_builtin_func(HASH_CLASS, "reject!", reject_, 0);
     globals.define_builtin_func(HASH_CLASS, "sort", sort, 0);
     globals.define_builtin_func(HASH_CLASS, "store", index_assign, 2);
     globals.define_builtin_func(HASH_CLASS, "key", key, 1);
@@ -114,6 +119,73 @@ fn allocate(
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     Ok(Value::hash_with_class_and_default(class_id, Value::nil()))
+}
+
+///
+/// ### Hash.[]
+///
+/// - Hash[] -> {}
+/// - Hash[key, value, ...] -> {key => value, ...}
+/// - Hash[hash] -> new_hash (copy)
+/// - Hash[object] -> attempts conversion
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/s/=5b=5d.html]
+#[monoruby_builtin]
+fn hash_bracket(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    let len = args.len();
+    match len {
+        0 => Ok(Value::hash(RubyMap::default())),
+        1 => {
+            let arg = args[0];
+            if arg.try_hash_ty().is_some() {
+                // Single hash argument: return a copy
+                let inner = arg.as_hashmap_inner().clone();
+                Ok(Value::hash_from_inner(inner))
+            } else if let Some(ary) = arg.try_array_ty() {
+                // Single array argument: try to convert [[k,v], ...] to hash
+                let mut map = RubyMap::default();
+                for elem in ary.iter() {
+                    if let Some(pair) = elem.try_array_ty() {
+                        if pair.len() == 2 {
+                            map.insert(pair[0], pair[1], vm, globals)?;
+                        } else {
+                            return Err(MonorubyErr::argumenterr(format!(
+                                "invalid number of elements ({} for 1..2)",
+                                pair.len()
+                            )));
+                        }
+                    } else {
+                        return Err(MonorubyErr::argumenterr(
+                            "wrong number of arguments (odd number of arguments for Hash)".to_string(),
+                        ));
+                    }
+                }
+                Ok(Value::hash(map))
+            } else {
+                Err(MonorubyErr::argumenterr(
+                    "odd number of arguments for Hash".to_string(),
+                ))
+            }
+        }
+        _ => {
+            if len % 2 != 0 {
+                return Err(MonorubyErr::argumenterr(
+                    "odd number of arguments for Hash".to_string(),
+                ));
+            }
+            let mut map = RubyMap::default();
+            for i in (0..len).step_by(2) {
+                map.insert(args[i], args[i + 1], vm, globals)?;
+            }
+            Ok(Value::hash(map))
+        }
+    }
 }
 
 ///
@@ -657,6 +729,72 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     Ok(h)
 }
 
+
+///
+/// ### Hash#delete_if
+///
+/// - delete_if -> Enumerator
+/// - delete_if {|key, value| ... } -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/delete_if.html]
+#[monoruby_builtin]
+fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("delete_if");
+            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+        }
+        Some(block) => block,
+    };
+    let data = vm.get_block_data(globals, bh)?;
+    let mut remove = vec![];
+    for (k, v) in lfp.self_val().as_hash().iter() {
+        if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+            remove.push(k);
+        }
+    }
+    let mut h = lfp.self_val().as_hash();
+    for k in remove {
+        h.remove(k, vm, globals)?;
+    }
+    Ok(lfp.self_val())
+}
+
+///
+/// ### Hash#reject!
+///
+/// - reject! -> Enumerator
+/// - reject! {|key, value| ... } -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/reject=21.html]
+#[monoruby_builtin]
+fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("reject!");
+            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+        }
+        Some(block) => block,
+    };
+    let data = vm.get_block_data(globals, bh)?;
+    let mut remove = vec![];
+    for (k, v) in lfp.self_val().as_hash().iter() {
+        if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+            remove.push(k);
+        }
+    }
+    let changed = !remove.is_empty();
+    let mut h = lfp.self_val().as_hash();
+    for k in remove {
+        h.remove(k, vm, globals)?;
+    }
+    Ok(if changed {
+        lfp.self_val()
+    } else {
+        Value::nil()
+    })
+}
+
 ///
 /// ### Enumerable#sort
 ///
@@ -675,6 +813,42 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         res.push(Value::array2(k, hash.get(k, vm, globals)?.unwrap()))
     }
     Ok(Value::array_from_vec(res))
+}
+
+///
+/// ### Hash#assoc
+///
+/// - assoc(key) -> [key, value] | nil
+///
+/// [https://docs.ruby-lang.org/ja/3.2/method/Hash/i/assoc.html]
+#[monoruby_builtin]
+fn assoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let key = lfp.arg(0);
+    let hash = lfp.self_val().as_hash();
+    for (k, v) in hash.iter() {
+        if vm.eq_values_bool(globals, key, k)? {
+            return Ok(Value::array_from_vec(vec![k, v]));
+        }
+    }
+    Ok(Value::nil())
+}
+
+///
+/// ### Hash#rassoc
+///
+/// - rassoc(value) -> [key, value] | nil
+///
+/// [https://docs.ruby-lang.org/ja/3.2/method/Hash/i/rassoc.html]
+#[monoruby_builtin]
+fn rassoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let value = lfp.arg(0);
+    let hash = lfp.self_val().as_hash();
+    for (k, v) in hash.iter() {
+        if vm.eq_values_bool(globals, value, v)? {
+            return Ok(Value::array_from_vec(vec![k, v]));
+        }
+    }
+    Ok(Value::nil())
 }
 
 ///
@@ -1097,6 +1271,23 @@ mod tests {
     }
 
     #[test]
+    fn assoc() {
+        run_test(r##"{a: 1, b: 2, c: 3}.assoc(:a)"##);
+        run_test(r##"{a: 1, b: 2, c: 3}.assoc(:b)"##);
+        run_test(r##"{a: 1, b: 2, c: 3}.assoc(:z)"##);
+        run_test(r##"{"a" => 1, "b" => 2}.assoc("b")"##);
+        run_test(r##"{1 => :a, 1.0 => :b}.assoc(1)"##);
+    }
+
+    #[test]
+    fn rassoc() {
+        run_test(r##"{a: 1, b: 2, c: 3}.rassoc(1)"##);
+        run_test(r##"{a: 1, b: 2, c: 3}.rassoc(2)"##);
+        run_test(r##"{a: 1, b: 2, c: 3}.rassoc(9)"##);
+        run_test(r##"{"a" => 1, "b" => 2}.rassoc(2)"##);
+    }
+
+    #[test]
     fn invert() {
         run_test(
             r##"
@@ -1401,6 +1592,17 @@ mod tests {
             r##"
         [Hash.new("default").shift, Hash.new.shift]
         "##,
+      　);
+    }
+     
+    #[test]
+    fn hash_delete_if() {
+        run_test(
+            r##"
+        h = {a: 1, b: 2, c: 3}
+        res = h.delete_if {|k, v| v > 1}
+        [h, res.equal?(h)]
+        "##,
         );
     }
 
@@ -1415,12 +1617,39 @@ mod tests {
     }
 
     #[test]
+  　fn hash_reject_bang() {
+        run_test(
+            r##"
+        h = {a: 1, b: 2, c: 3}
+        res1 = h.reject! {|k, v| v > 1}
+        h2 = {a: 1}
+        res2 = h2.reject! {|k, v| v > 10}
+        [h, res1.equal?(h), res2]
+        "##,
+        );
+    }
+
+    #[test]
     fn keep_if() {
         run_test(
             r##"
         h = {a: 1, b: 2, c: 3}
         res = h.keep_if {|k, v| v > 1}
         [res, h, res.equal?(h)]
+        "##,
+        );
+    }
+  
+  　#[test]
+    fn hash_bracket() {
+        run_test(r#"Hash[]"#);
+        run_test(r#"Hash["a", 1, "b", 2]"#);
+        run_test(r#"Hash[{a: 1, b: 2}]"#);
+        run_test(r#"Hash[["a", 1], ["b", 2]]"#);
+        run_test(
+            r##"
+        h = Hash["a", 1, "b", 2, "c", 3]
+        [h["a"], h["b"], h["c"]]
         "##,
         );
     }

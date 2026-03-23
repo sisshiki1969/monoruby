@@ -26,6 +26,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "==", eq, 1);
     globals.define_builtin_func(STRING_CLASS, "===", eq, 1);
     globals.define_builtin_func(STRING_CLASS, "<=>", cmp, 1);
+    globals.define_builtin_func(STRING_CLASS, "casecmp", casecmp, 1);
+    globals.define_builtin_func(STRING_CLASS, "casecmp?", casecmp_p, 1);
     globals.define_builtin_func(STRING_CLASS, "!=", ne, 1);
     globals.define_builtin_func(STRING_CLASS, ">=", ge, 1);
     globals.define_builtin_func(STRING_CLASS, ">", gt, 1);
@@ -90,6 +92,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "upcase!", upcase_, 0);
     globals.define_builtin_func(STRING_CLASS, "downcase", downcase, 0);
     globals.define_builtin_func(STRING_CLASS, "downcase!", downcase_, 0);
+    globals.define_builtin_func(STRING_CLASS, "capitalize", capitalize, 0);
+    globals.define_builtin_func(STRING_CLASS, "capitalize!", capitalize_, 0);
+    globals.define_builtin_func(STRING_CLASS, "swapcase", swapcase, 0);
+    globals.define_builtin_func(STRING_CLASS, "swapcase!", swapcase_, 0);
     globals.define_builtin_func_with(STRING_CLASS, "delete", delete, 0, 0, true);
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
     globals.define_builtin_func_rest(STRING_CLASS, "count", count);
@@ -325,6 +331,54 @@ fn string_cmp2(lfp: Lfp) -> Result<std::cmp::Ordering> {
 #[monoruby_builtin]
 fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(string_cmp(lfp)?.map(Value::from_ord).unwrap_or_default())
+}
+
+///
+/// ### String#casecmp
+///
+/// - casecmp(other) -> -1 | 0 | 1 | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/casecmp.html]
+#[monoruby_builtin]
+fn casecmp(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let lhs = lfp.self_val();
+    let rhs = lfp.arg(0);
+    if let Some(rhs_str) = rhs.is_str() {
+        let lhs_lower = lhs.as_str().to_lowercase();
+        let rhs_lower = rhs_str.to_lowercase();
+        Ok(Value::from_ord(lhs_lower.cmp(&rhs_lower)))
+    } else {
+        Ok(Value::nil())
+    }
+}
+
+///
+/// ### String#casecmp?
+///
+/// - casecmp?(other) -> true | false | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/casecmp=3f.html]
+#[monoruby_builtin]
+fn casecmp_p(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let lhs = lfp.self_val();
+    let rhs = lfp.arg(0);
+    if let Some(rhs_str) = rhs.is_str() {
+        let lhs_lower = lhs.as_str().to_lowercase();
+        let rhs_lower = rhs_str.to_lowercase();
+        Ok(Value::bool(lhs_lower == rhs_lower))
+    } else {
+        Ok(Value::nil())
+    }
 }
 
 ///
@@ -2582,6 +2636,146 @@ fn downcase_(
     })
 }
 
+///
+/// ### String#capitalize
+///
+/// - capitalize([NOT SUPPORTED]*options) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/capitalize.html]
+#[monoruby_builtin]
+fn capitalize(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let s = self_val.as_str();
+    let mut result = String::with_capacity(s.len());
+    let mut first = true;
+    for c in s.chars() {
+        if first {
+            for uc in c.to_uppercase() {
+                result.push(uc);
+            }
+            first = false;
+        } else {
+            for lc in c.to_lowercase() {
+                result.push(lc);
+            }
+        }
+    }
+    Ok(Value::string(result))
+}
+
+///
+/// ### String#capitalize!
+///
+/// - capitalize!([NOT SUPPORTED]*options) -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/capitalize=21.html]
+#[monoruby_builtin]
+fn capitalize_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    let s = self_val.as_str();
+    let mut result = String::with_capacity(s.len());
+    let mut first = true;
+    for c in s.chars() {
+        if first {
+            for uc in c.to_uppercase() {
+                result.push(uc);
+            }
+            first = false;
+        } else {
+            for lc in c.to_lowercase() {
+                result.push(lc);
+            }
+        }
+    }
+    let changed = &result != self_val.as_str();
+    self_val.replace_string(result);
+    Ok(if changed {
+        lfp.self_val()
+    } else {
+        Value::nil()
+    })
+}
+
+///
+/// ### String#swapcase
+///
+/// - swapcase([NOT SUPPORTED]*options) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/swapcase.html]
+#[monoruby_builtin]
+fn swapcase(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let s = self_val.as_str();
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_uppercase() {
+            for lc in c.to_lowercase() {
+                result.push(lc);
+            }
+        } else if c.is_lowercase() {
+            for uc in c.to_uppercase() {
+                result.push(uc);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    Ok(Value::string(result))
+}
+
+///
+/// ### String#swapcase!
+///
+/// - swapcase!([NOT SUPPORTED]*options) -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/swapcase=21.html]
+#[monoruby_builtin]
+fn swapcase_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    let s = self_val.as_str();
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_uppercase() {
+            for lc in c.to_lowercase() {
+                result.push(lc);
+            }
+        } else if c.is_lowercase() {
+            for uc in c.to_uppercase() {
+                result.push(uc);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    let changed = &result != self_val.as_str();
+    self_val.replace_string(result);
+    Ok(if changed {
+        lfp.self_val()
+    } else {
+        Value::nil()
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Tr {
     elems: Vec<TrElement>,
@@ -3974,6 +4168,33 @@ mod tests {
         run_test(r"s = 'RUBY'; [s.upcase!, s]");
         run_test(r"s = 'AkrFj妖精u35]['; [s.downcase!, s]");
         run_test(r"s = 'rust'; [s.downcase!, s]");
+    }
+
+    #[test]
+    fn capitalize() {
+        run_test(r"'hello'.capitalize");
+        run_test(r"'HELLO'.capitalize");
+        run_test(r"'hELLO'.capitalize");
+        run_test(r"s = 'hello'; [s.capitalize!, s]");
+        run_test(r"s = 'Hello'; [s.capitalize!, s]");
+    }
+
+    #[test]
+    fn swapcase() {
+        run_test(r"'Hello'.swapcase");
+        run_test(r"'hELLO'.swapcase");
+        run_test(r"s = 'Hello'; [s.swapcase!, s]");
+        run_test(r"s = 'hello'; [s.swapcase!, s]");
+    }
+
+    #[test]
+    fn casecmp() {
+        run_test(r#""abc".casecmp("ABC")"#);
+        run_test(r#""abc".casecmp("abd")"#);
+        run_test(r#""abc".casecmp?("ABC")"#);
+        run_test(r#""abc".casecmp?("abd")"#);
+        run_test(r#""abc".casecmp(42)"#);
+        run_test(r#""abc".casecmp?(42)"#);
     }
 
     #[test]

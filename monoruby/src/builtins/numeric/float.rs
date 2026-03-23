@@ -36,11 +36,14 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(FLOAT_CLASS, "!=", ne, 1);
     globals.define_builtin_func(FLOAT_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func(FLOAT_CLASS, "floor", floor, 0);
+    globals.define_builtin_func_with(FLOAT_CLASS, "ceil", ceil, 0, 1, false);
+    globals.define_builtin_func_with(FLOAT_CLASS, "truncate", truncate, 0, 1, false);
     globals.define_builtin_func_with(FLOAT_CLASS, "round", round, 0, 1, false);
     globals.define_builtin_func(FLOAT_CLASS, "finite?", finite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "infinite?", infinite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "nan?", nan, 0);
     globals.define_builtin_funcs(FLOAT_CLASS, "abs", &["magnitude"], abs, 0);
+    globals.define_builtin_funcs(FLOAT_CLASS, "angle", &["arg", "phase"], angle, 0);
 }
 
 extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
@@ -205,6 +208,88 @@ fn floor(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 }
 
 ///
+/// ### Float#ceil
+///
+/// - ceil(ndigits = 0) -> Integer | Float
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/ceil.html]
+#[monoruby_builtin]
+fn ceil(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ndigits = if let Some(d) = lfp.try_arg(0) {
+        d.expect_integer(globals)?
+    } else {
+        0
+    };
+    let f = lfp.self_val().try_float().unwrap();
+    if ndigits == 0 {
+        return Ok(Value::integer(f.ceil() as i64));
+    }
+    if ndigits > 0 {
+        if let Ok(ndigits) = u32::try_from(ndigits) {
+            let mul = 10i32.pow(ndigits) as f64;
+            let f = (f * mul).ceil() / mul;
+            Ok(Value::float(f))
+        } else {
+            Err(MonorubyErr::rangeerr("too big to convert to u32"))
+        }
+    } else {
+        if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
+            let mul = 10i32.pow(neg_ndigits) as f64;
+            let f = (f / mul).ceil() * mul;
+            if let Some(v) = Value::integer_from_f64(f) {
+                return Ok(v);
+            } else {
+                return Err(MonorubyErr::rangeerr(format!(
+                    "[unreachable] invalid f64: {f}"
+                )));
+            }
+        }
+        Err(MonorubyErr::rangeerr("too small to convert to u32"))
+    }
+}
+
+///
+/// ### Float#truncate
+///
+/// - truncate(ndigits = 0) -> Integer | Float
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/truncate.html]
+#[monoruby_builtin]
+fn truncate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ndigits = if let Some(d) = lfp.try_arg(0) {
+        d.expect_integer(globals)?
+    } else {
+        0
+    };
+    let f = lfp.self_val().try_float().unwrap();
+    if ndigits == 0 {
+        return Ok(Value::integer(f.trunc() as i64));
+    }
+    if ndigits > 0 {
+        if let Ok(ndigits) = u32::try_from(ndigits) {
+            let mul = 10i32.pow(ndigits) as f64;
+            let f = (f * mul).trunc() / mul;
+            Ok(Value::float(f))
+        } else {
+            Err(MonorubyErr::rangeerr("too big to convert to u32"))
+        }
+    } else {
+        if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
+            let mul = 10i32.pow(neg_ndigits) as f64;
+            let f = (f / mul).trunc() * mul;
+            if let Some(v) = Value::integer_from_f64(f) {
+                return Ok(v);
+            } else {
+                return Err(MonorubyErr::rangeerr(format!(
+                    "[unreachable] invalid f64: {f}"
+                )));
+            }
+        }
+        Err(MonorubyErr::rangeerr("too small to convert to u32"))
+    }
+}
+
+///
 /// ### Float#round
 ///
 /// - round(ndigits = 0) -> Integer | Float
@@ -297,9 +382,46 @@ fn abs(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(Value::float(f.abs()))
 }
 
+///
+/// ### Float#angle
+///
+/// - angle -> 0 | Float
+/// - arg -> 0 | Float
+/// - phase -> 0 | Float
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/angle.html]
+#[monoruby_builtin]
+fn angle(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = lfp.self_val().try_float().unwrap();
+    if f.is_nan() {
+        Ok(Value::float(f64::NAN))
+    } else if f.is_sign_negative() {
+        Ok(Value::float(std::f64::consts::PI))
+    } else {
+        Ok(Value::integer(0))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn angle() {
+        run_test("1.0.angle");
+        run_test("(-1.0).angle");
+        run_test("0.0.angle");
+        run_test("(1.0/0).angle");
+        run_test("(-1.0/0).angle");
+        run_test_once("Float::NAN.angle.nan?");
+        run_test("1.0.arg");
+        run_test("(-1.0).arg");
+        run_test("1.0.phase");
+        run_test("(-1.0).phase");
+        run_test("1.angle");
+        run_test("(-1).angle");
+        run_test("0.angle");
+    }
 
     #[test]
     fn float() {

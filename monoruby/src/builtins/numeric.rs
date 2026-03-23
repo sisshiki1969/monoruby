@@ -23,6 +23,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(NUMERIC_CLASS, "-@", neg, 0);
     globals.define_builtin_func(NUMERIC_CLASS, "+@", pos, 0);
     globals.define_builtin_func(NUMERIC_CLASS, "~", bitnot, 0);
+    globals.define_builtin_funcs(NUMERIC_CLASS, "angle", &["arg", "phase"], angle, 0);
 }
 
 macro_rules! binop {
@@ -104,6 +105,28 @@ unop!(neg, bitnot);
 #[monoruby_builtin]
 fn pos(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val())
+}
+
+///
+/// ### Numeric#angle
+///
+/// - angle -> 0 | Float
+/// - arg -> 0 | Float
+/// - phase -> 0 | Float
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/angle.html]
+#[monoruby_builtin]
+fn angle(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let is_negative = match super::op::cmp_lt_values(vm, globals, self_val, Value::integer(0)) {
+        Some(v) => v == Value::bool(true),
+        None => return Err(vm.take_error()),
+    };
+    if is_negative {
+        Ok(Value::float(std::f64::consts::PI))
+    } else {
+        Ok(Value::integer(0))
+    }
 }
 
 #[cfg(test)]
@@ -314,5 +337,64 @@ mod tests {
             [a.between?(lo, hi), MyNum.new(0).between?(lo, hi), MyNum.new(6).between?(lo, hi)]
         "#,
         );
+    }
+
+    #[test]
+    fn float_truncate() {
+        run_test("1.5.truncate");
+        run_test("(-1.5).truncate");
+        run_test("1.567.truncate(2)");
+        run_test("(-1.567).truncate(2)");
+    }
+
+    #[test]
+    fn float_ceil() {
+        run_test("1.1.ceil");
+        run_test("(-1.1).ceil");
+        run_test("1.0.ceil");
+        run_test("1.123.ceil(2)");
+    }
+
+    #[test]
+    fn float_positive_negative() {
+        run_test("1.0.positive?");
+        run_test("(-1.0).positive?");
+        run_test("0.0.positive?");
+        run_test("1.0.negative?");
+        run_test("(-1.0).negative?");
+        run_test("0.0.negative?");
+    }
+
+    #[test]
+    fn float_integer() {
+        run_test("1.0.integer?");
+        run_test("1.5.integer?");
+    }
+
+    #[test]
+    fn float_coerce() {
+        run_test("1.0.coerce(2)");
+        run_test("1.0.coerce(2.5)");
+    }
+
+    #[test]
+    fn float_remainder() {
+        run_test("5.0.remainder(3.0)");
+        run_test("(-5.0).remainder(3.0)");
+        run_test("5.0.remainder(-3.0)");
+    }
+
+    #[test]
+    fn float_fdiv() {
+        run_test("1.0.fdiv(2)");
+        run_test("1.0.fdiv(2.0)");
+    }
+
+    #[test]
+    fn numeric_abs() {
+        run_test("1.0.abs");
+        run_test("(-1.0).abs");
+        run_test("0.0.abs");
+        run_test("1.0.magnitude");
     }
 }
