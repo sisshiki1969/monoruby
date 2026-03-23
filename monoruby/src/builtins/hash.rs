@@ -14,6 +14,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "default_proc", default_proc, 0);
     globals.define_builtin_func(HASH_CLASS, "default=", default_assign, 1);
     globals.define_builtin_funcs(HASH_CLASS, "==", &["===", "eql?"], eq, 1);
+    globals.define_builtin_func(HASH_CLASS, "<", lt, 1);
+    globals.define_builtin_func(HASH_CLASS, "<=", le, 1);
+    globals.define_builtin_func(HASH_CLASS, ">", gt, 1);
+    globals.define_builtin_func(HASH_CLASS, ">=", ge, 1);
     globals.define_builtin_inline_func(HASH_CLASS, "[]", index, Box::new(hash_index), 1);
     globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
     globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
@@ -111,12 +115,7 @@ fn new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
 #[monoruby_builtin]
-fn allocate(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     Ok(Value::hash_with_class_and_default(class_id, Value::nil()))
 }
@@ -162,7 +161,8 @@ fn hash_bracket(
                         }
                     } else {
                         return Err(MonorubyErr::argumenterr(
-                            "wrong number of arguments (odd number of arguments for Hash)".to_string(),
+                            "wrong number of arguments (odd number of arguments for Hash)"
+                                .to_string(),
                         ));
                     }
                 }
@@ -281,6 +281,85 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
         }
     }
     Ok(Value::bool(true))
+}
+
+/// Check if all key-value pairs in `sub` exist in `sup`.
+fn hash_subset(
+    sub: Hashmap,
+    sup: Hashmap,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<bool> {
+    for (k, sub_value) in sub.iter() {
+        if let Some(sup_value) = sup.get(k, vm, globals)?
+            && vm.eq_values_bool(globals, sub_value, sup_value)?
+        {
+            continue;
+        } else {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+///
+/// ### Hash#<
+///
+/// - self < other -> bool
+///
+/// Returns true if self is a proper subset of other.
+///
+#[monoruby_builtin]
+fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let lhs = lfp.self_val().as_hash();
+    let rhs = lfp.arg(0).expect_hash_ty(globals)?;
+    let result = lhs.len() < rhs.len() && hash_subset(lhs, rhs, vm, globals)?;
+    Ok(Value::bool(result))
+}
+
+///
+/// ### Hash#<=
+///
+/// - self <= other -> bool
+///
+/// Returns true if self is a subset of other.
+///
+#[monoruby_builtin]
+fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let lhs = lfp.self_val().as_hash();
+    let rhs = lfp.arg(0).expect_hash_ty(globals)?;
+    let result = lhs.len() <= rhs.len() && hash_subset(lhs, rhs, vm, globals)?;
+    Ok(Value::bool(result))
+}
+
+///
+/// ### Hash#>
+///
+/// - self > other -> bool
+///
+/// Returns true if self is a proper superset of other.
+///
+#[monoruby_builtin]
+fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let lhs = lfp.self_val().as_hash();
+    let rhs = lfp.arg(0).expect_hash_ty(globals)?;
+    let result = lhs.len() > rhs.len() && hash_subset(rhs, lhs, vm, globals)?;
+    Ok(Value::bool(result))
+}
+
+///
+/// ### Hash#>=
+///
+/// - self >= other -> bool
+///
+/// Returns true if self is a superset of other.
+///
+#[monoruby_builtin]
+fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let lhs = lfp.self_val().as_hash();
+    let rhs = lfp.arg(0).expect_hash_ty(globals)?;
+    let result = lhs.len() >= rhs.len() && hash_subset(rhs, lhs, vm, globals)?;
+    Ok(Value::bool(result))
 }
 
 ///
@@ -684,14 +763,8 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                 if let Some(sym) = k.try_symbol() {
                     s.push_str(&format!("{sym}: {}", v_inspect.to_s(&globals.store)));
                 } else {
-                    let k_inspect = vm.invoke_method_inner(
-                        globals,
-                        IdentId::INSPECT,
-                        k,
-                        &[],
-                        None,
-                        None,
-                    )?;
+                    let k_inspect =
+                        vm.invoke_method_inner(globals, IdentId::INSPECT, k, &[], None, None)?;
                     s.push_str(&format!(
                         "{} => {}",
                         k_inspect.to_s(&globals.store),
@@ -1594,7 +1667,38 @@ mod tests {
         "##,
       　);
     }
-     
+    
+    #[test]
+    fn hash_compare() {
+        // <
+        run_test(r#"{a: 1} < {a: 1, b: 2}"#);
+        run_test(r#"{a: 1, b: 2} < {a: 1, b: 2}"#);
+        run_test(r#"{a: 1, b: 2} < {a: 1}"#);
+        run_test(r#"{} < {a: 1}"#);
+        run_test(r#"{} < {}"#);
+        // <=
+        run_test(r#"{a: 1} <= {a: 1, b: 2}"#);
+        run_test(r#"{a: 1, b: 2} <= {a: 1, b: 2}"#);
+        run_test(r#"{a: 1, b: 2} <= {a: 1}"#);
+        run_test(r#"{} <= {}"#);
+        // >
+        run_test(r#"{a: 1, b: 2} > {a: 1}"#);
+        run_test(r#"{a: 1, b: 2} > {a: 1, b: 2}"#);
+        run_test(r#"{a: 1} > {a: 1, b: 2}"#);
+        run_test(r#"{a: 1} > {}"#);
+        run_test(r#"{} > {}"#);
+        // >=
+        run_test(r#"{a: 1, b: 2} >= {a: 1}"#);
+        run_test(r#"{a: 1, b: 2} >= {a: 1, b: 2}"#);
+        run_test(r#"{a: 1} >= {a: 1, b: 2}"#);
+        run_test(r#"{} >= {}"#);
+        // different values
+        run_test(r#"{a: 1} < {a: 2, b: 2}"#);
+        run_test(r#"{a: 1} <= {a: 2}"#);
+        "##,
+        );
+    }
+
     #[test]
     fn hash_delete_if() {
         run_test(
