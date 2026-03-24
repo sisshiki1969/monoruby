@@ -1069,4 +1069,11 @@ mod tests {
         // Regexp is not supported
         run_test_error(r#"Marshal.dump(/foo/)"#);
     }
+
+    #[test]
+    fn marshal_version_constants() {
+        run_test(r##"Marshal::MAJOR_VERSION"##);
+        run_test(r##"Marshal::MINOR_VERSION"##);
+        run_test(r##"[Marshal::MAJOR_VERSION, Marshal::MINOR_VERSION]"##);
+    }
 }

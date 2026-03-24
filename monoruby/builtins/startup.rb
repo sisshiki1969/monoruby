@@ -273,9 +273,42 @@ end
 
 Mutex = Thread::Mutex
 
+class TrueClass
+  TRUE_TO_S = "true"
+  def to_s
+    TRUE_TO_S
+  end
+end
+
+class FalseClass
+  FALSE_TO_S = "false"
+  def to_s
+    FALSE_TO_S
+  end
+end
+
+class NilClass
+  NIL_TO_S = ""
+  def to_s
+    NIL_TO_S
+  end
+
+  def to_a
+    []
+  end
+
+  def =~(_other)
+    nil
+  end
+
+  def to_c
+    Complex(0, 0)
+  end
+end
+
 class Marshal
-  MAJOR_VERSION = 3
-  MINOR_VERSION = 0
+  MAJOR_VERSION = 4
+  MINOR_VERSION = 8
 end
 
 class Errno
