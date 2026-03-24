@@ -199,4 +199,38 @@ mod tests {
         "##,
         );
     }
+
+    #[test]
+    fn fiber_yield_across_block() {
+        // yield across method boundary via block in Fiber
+        run_test_once(
+            r##"
+            def foo
+              yield 42
+            end
+            f = Fiber.new { foo { |x| Fiber.yield x }; :done }
+            [f.resume, f.resume]
+        "##,
+        );
+        // yield across method boundary via &block param in Fiber
+        run_test_once(
+            r##"
+            def bar(&blk)
+              blk.call(10)
+            end
+            f = Fiber.new { bar { |x| Fiber.yield x }; :done }
+            [f.resume, f.resume]
+        "##,
+        );
+        // yield across nested block in Fiber
+        run_test_once(
+            r##"
+            def baz(&blk)
+              [1,2,3].each { |i| blk.call(i) }
+            end
+            f = Fiber.new { baz { |x| Fiber.yield x }; :done }
+            [f.resume, f.resume, f.resume, f.resume]
+        "##,
+        );
+    }
 }

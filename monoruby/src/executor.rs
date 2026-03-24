@@ -1445,6 +1445,10 @@ impl Executor {
             for _ in 0..outer {
                 (vm, cfp) = Self::prev_cfp(vm, cfp);
             }
+            // Before moving to heap, resolve any proxy block handlers in the
+            // frame chain. After the frame is on the heap, the CFP chain that
+            // proxies reference will no longer be valid.
+            Self::resolve_proxy_blocks(vm, cfp, pc);
             // Move the correct outer frame (and its lexical chain) to the heap,
             // so the proc can safely reference it after the current scope exits.
             let outer_lfp = cfp.lfp().move_frame_to_heap();
@@ -1455,6 +1459,31 @@ impl Executor {
             Err(MonorubyErr::runtimeerr(format!(
                 "not yet implemented: block handler {bh:?}"
             )))
+        }
+    }
+
+    /// Resolve proxy block handlers in the LFP chain starting from `cfp`,
+    /// converting them to heap-allocated Procs while the CFP chain is still valid.
+    fn resolve_proxy_blocks(vm: &Executor, cfp: Cfp, pc: BytecodePtr) {
+        let mut lfp = cfp.lfp();
+        loop {
+            if let Some(bh) = lfp.block()
+                && let Some((block_fid, block_depth)) = bh.try_proxy()
+            {
+                // Resolve this proxy: walk the CFP chain to find the block's outer LFP.
+                let mut resolve_cfp = cfp;
+                let mut resolve_vm = vm;
+                for _ in 0..block_depth {
+                    (resolve_vm, resolve_cfp) = Self::prev_cfp(resolve_vm, resolve_cfp);
+                }
+                let block_outer_lfp = resolve_cfp.lfp().move_frame_to_heap();
+                let proc = Proc::from_parts(block_outer_lfp, block_fid, pc);
+                lfp.set_block(Some(BlockHandler::new(proc.into())));
+            }
+            match lfp.outer() {
+                Some(outer) => lfp = outer,
+                None => break,
+            }
         }
     }
 

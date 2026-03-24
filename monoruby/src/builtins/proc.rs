@@ -354,4 +354,24 @@ mod tests {
         "#,
         );
     }
+
+    #[test]
+    fn proc_yield_after_method_return() {
+        // yield inside a Proc that outlives its defining method.
+        // The proxy block handler must be resolved to a Proc before the
+        // method frame is gone, otherwise yield cannot find the block.
+        run_test_once(
+            r#"
+            def create
+              Proc.new do |&b|
+                yield
+              end
+            end
+            $res = []
+            a_proc = create { $res << 7 }
+            a_proc.call { 3 }
+            $res
+        "#,
+        );
+    }
 }
