@@ -171,12 +171,7 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
 #[monoruby_builtin]
-fn allocate(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = Value::array_empty_with_class(class);
     Ok(obj)
@@ -221,12 +216,7 @@ extern "C" fn allocate_array(class_val: Value) -> Value {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/s/new.html]
 #[monoruby_builtin]
-fn initialize(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_val = lfp.self_val().as_array();
     if lfp.try_arg(0).is_none() {
         return Ok(self_val.into());
@@ -658,12 +648,7 @@ fn shift(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/prepend.html]
 #[monoruby_builtin]
-fn unshift(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn unshift(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     ary.insert_many(0, lfp.arg(0).as_array().iter().cloned());
     Ok(ary.into())
@@ -1320,12 +1305,7 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/max.html]
 #[monoruby_builtin]
-fn partition(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let aref = lfp.self_val().expect_array_ty(globals)?;
     let mut res_true = vec![];
@@ -1835,12 +1815,7 @@ fn include_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reverse.html]
 #[monoruby_builtin]
-fn reverse(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn reverse(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     let iter = ary.iter().rev().cloned();
     Ok(Value::array_from_iter(iter))
@@ -1853,12 +1828,7 @@ fn reverse(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reverse.html]
 #[monoruby_builtin]
-fn reverse_(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn reverse_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     ary.reverse();
     Ok(ary.into())
@@ -1971,9 +1941,9 @@ fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // Check total product size to avoid memory exhaustion.
     let mut total: usize = lhs.len();
     for l in &lists {
-        total = total.checked_mul(l.len()).ok_or_else(|| {
-            MonorubyErr::rangeerr("too big to product")
-        })?;
+        total = total
+            .checked_mul(l.len())
+            .ok_or_else(|| MonorubyErr::rangeerr("too big to product"))?;
         if total > 1_000_000 {
             return Err(MonorubyErr::rangeerr("too big to product"));
         }
@@ -2036,14 +2006,9 @@ fn union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/intersect=3f.html]
 #[monoruby_builtin]
-fn intersect_(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn intersect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
-    for rhs in lfp.arg(0).as_array().iter().cloned() {
+    for rhs in lfp.arg(0).coerce_to_array(vm, globals)?.iter().cloned() {
         for lhs in lhs.iter().cloned() {
             if lhs.eql(&rhs, vm, globals)? {
                 return Ok(Value::bool(true));
@@ -2203,9 +2168,7 @@ fn flatten_inner(
 ) -> Result<()> {
     let id = ary.id();
     if seen.contains(&id) {
-        return Err(MonorubyErr::argumenterr(
-            "tried to flatten recursive array",
-        ));
+        return Err(MonorubyErr::argumenterr("tried to flatten recursive array"));
     }
     seen.push(id);
     for v in ary.iter() {
