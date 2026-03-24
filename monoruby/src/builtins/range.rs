@@ -825,6 +825,97 @@ mod tests {
     }
 
     #[test]
+    fn count() {
+        run_test("(1..10).count");
+        run_test("(1...10).count");
+        run_test("(1..1).count");
+        run_test("(5..1).count");
+    }
+
+    #[test]
+    fn count_infinite() {
+        // Endless and beginless ranges should return Float::INFINITY
+        run_test_once("(1..).count == Float::INFINITY");
+        run_test_once("(1...).count == Float::INFINITY");
+        run_test_once("(..1).count == Float::INFINITY");
+        run_test_once("(...1).count == Float::INFINITY");
+        run_test_once("(nil..nil).count == Float::INFINITY");
+    }
+
+    #[test]
+    fn min() {
+        run_test("(1..10).min");
+        run_test("('f'..'l').min");
+        run_test("(303.20..908.1111).min");
+        run_test("(100..10).min");
+        run_test("('z'..'l').min");
+        run_test("(7...7).min");
+        run_test("(7..7).min");
+        run_test("(3003.20..908.1111).min");
+    }
+
+    #[test]
+    fn min_endless() {
+        run_test_once("(1..).min");
+        run_test_once("(1.0...).min");
+    }
+
+    #[test]
+    fn min_beginless_error() {
+        run_test_error("(..1).min");
+    }
+
+    #[test]
+    fn max() {
+        run_test("(1..10).max");
+        run_test("(1...10).max");
+        run_test("(303.20..908.1111).max");
+        run_test("(100..10).max");
+        run_test("(5...5).max");
+        run_test("(5..5).max");
+        run_test("(3003.20..908.1111).max");
+    }
+
+    #[test]
+    fn max_endless_error() {
+        run_test_error("(1..).max");
+    }
+
+    #[test]
+    fn max_beginless() {
+        run_test_once("(..1).max");
+        run_test_once("(..1.0).max");
+    }
+
+    #[test]
+    fn max_exclusive_float_error() {
+        run_test_error("(303.20...908.1111).max");
+    }
+
+    #[test]
+    fn max_large_exclusive() {
+        run_test_once("(0...2**64).max");
+    }
+
+    #[test]
+    fn minmax() {
+        run_test("(1..3).minmax");
+        run_test("(1...3).minmax");
+        run_test("(100..10).minmax");
+        run_test("(5...5).minmax");
+    }
+
+    #[test]
+    fn minmax_endless_error() {
+        run_test_error("(1..).minmax");
+    }
+
+    #[test]
+    fn minmax_beginless_error() {
+        run_test_error("(..1).minmax");
+    }
+
+    #[test]
     fn reject() {
         run_test(
             r##"
