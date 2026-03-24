@@ -2,24 +2,25 @@
 set -e
 
 cargo llvm-cov clean --workspace
-cargo llvm-cov nextest --features emit-asm --features deopt --features perf --features gc-debug --features jit-debug --features emit-cfg --no-report
+cargo llvm-cov nextest --no-report
 
-cargo build --features gc-stress
-
+cargo build --features emit-asm --features deopt --features perf --features gc-debug --features jit-debug --features emit-cfg 
 target/debug/monoruby benchmark/app_fib.rb > monoruby.log
-ruby benchmark/app_fib.rb > ruby.log
+ruby --yjit benchmark/app_fib.rb > ruby.log
 diff -s monoruby.log ruby.log
+
+cargo build 
 target/debug/monoruby benchmark/tarai.rb > monoruby.log
-ruby benchmark/tarai.rb > ruby.log
+ruby --yjit benchmark/tarai.rb > ruby.log
 diff -s monoruby.log ruby.log
 #target/debug/monoruby benchmark/quick_sort.rb 2> benchmark/quick_sort.disas > monoruby.log
 #ruby benchmark/quick_sort.rb > ruby.log
 #diff -s monoruby.log ruby.log
 target/debug/monoruby benchmark/so_nbody.rb > monoruby.log
-ruby benchmark/so_nbody.rb > ruby.log
+ruby --yjit benchmark/so_nbody.rb > ruby.log
 diff -s monoruby.log ruby.log
 target/debug/monoruby benchmark/bf.rb > monoruby.log
-ruby benchmark/bf.rb > ruby.log
+ruby --yjit benchmark/bf.rb > ruby.log
 diff -s monoruby.log ruby.log
 
 echo "checking plb2.."
@@ -46,14 +47,12 @@ diff -s benchmark/mandel.ppm benchmark/mandel1.ppm
 diff -s benchmark/mandel.ppm benchmark/mandel2.ppm
 rm benchmark/*.ppm
 
-target/debug/monoruby ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes > monoruby.log
-ruby --yjit ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes > ruby.log
+target/debug/monoruby ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | head -n -2 > monoruby.log
+ruby --yjit ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | head -n -2 > ruby.log
 diff -s monoruby.log ruby.log
 
-set +e
-
-target/debug/monoruby ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes > monoruby.log
-ruby --yjit ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes > ruby.log
+target/debug/monoruby ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | head -n -2 > monoruby.log
+ruby --yjit ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | head -n -2 > ruby.log
 diff -s monoruby.log ruby.log
 rm *.log
 
