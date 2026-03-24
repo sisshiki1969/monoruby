@@ -13,3 +13,5 @@ perf.data
 out.*
 lcov.info
 /.*
+/spec/
+/mspec/
