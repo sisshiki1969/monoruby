@@ -869,8 +869,10 @@ mod tests {
     fn max() {
         run_test("(1..10).max");
         run_test("(1...10).max");
+        run_test("('f'..'l').max");
         run_test("(303.20..908.1111).max");
         run_test("(100..10).max");
+        run_test("('z'..'l').max");
         run_test("(5...5).max");
         run_test("(5..5).max");
         run_test("(3003.20..908.1111).max");
