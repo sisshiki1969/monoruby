@@ -14,6 +14,25 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn to_s() {
+        run_test(r##"true.to_s"##);
+        run_test(r##"true.to_s.class"##);
+        run_test(r##"true.to_s == "true""##);
+        run_test(r##"true.to_s.equal?(true.to_s)"##);
+    }
+
+    #[test]
+    fn inspect() {
+        run_test(r##"true.inspect"##);
+    }
+
+    #[test]
+    fn class_name() {
+        run_test(r##"true.class"##);
+        run_test(r##"true.is_a?(TrueClass)"##);
+    }
+
+    #[test]
     fn xor() {
         run_test(r##"true ^ true"##);
         run_test(r##"true ^ false"##);
@@ -62,5 +81,14 @@ mod tests {
         run_test(r##"true.| 100"##);
         run_test(r##"true.| //"##);
         run_test(r##"true.| "100""##);
+    }
+
+    #[test]
+    fn equality() {
+        run_test(r##"true == true"##);
+        run_test(r##"true == false"##);
+        run_test(r##"true == nil"##);
+        run_test(r##"true != false"##);
+        run_test(r##"true.equal?(true)"##);
     }
 }

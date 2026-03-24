@@ -268,10 +268,7 @@ impl Globals {
 
     pub fn run(&mut self, code: impl Into<String>, path: &std::path::Path) -> Result<Value> {
         let code = code.into();
-        let program_name = match path.file_name() {
-            Some(name) => name.to_string_lossy().to_string(),
-            None => ".".to_string(),
-        };
+        let program_name = path.to_string_lossy().to_string();
         let mut executor = Executor::init(self, &program_name)?;
         executor.init_stack_limit(self);
         let res = executor.exec_script(self, code, path);

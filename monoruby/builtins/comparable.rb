@@ -5,19 +5,20 @@ module Comparable
     rescue NoMethodError, ArgumentError
       return false
     end
-    case res
-    when Integer
-      res == 0
-    when nil
+    if res.nil?
       false
+    elsif res.is_a?(Numeric)
+      res == 0
     else
       raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
     end
   end
 
   def !=(other)
-    case res = self <=> other
-    when Integer
+    res = self <=> other
+    if res.nil?
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    elsif res.is_a?(Numeric)
       res != 0
     else
       raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
@@ -25,8 +26,10 @@ module Comparable
   end
 
   def >=(other)
-    case res = self <=> other
-    when Integer
+    res = self <=> other
+    if res.nil?
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    elsif res.is_a?(Numeric)
       res >= 0
     else
       raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
@@ -34,8 +37,10 @@ module Comparable
   end
 
   def >(other)
-    case res = self <=> other
-    when Integer
+    res = self <=> other
+    if res.nil?
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    elsif res.is_a?(Numeric)
       res > 0
     else
       raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
@@ -43,8 +48,10 @@ module Comparable
   end
 
   def <=(other)
-    case res = self <=> other
-    when Integer
+    res = self <=> other
+    if res.nil?
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    elsif res.is_a?(Numeric)
       res <= 0
     else
       raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
@@ -52,8 +59,10 @@ module Comparable
   end
 
   def <(other)
-    case res = self <=> other
-    when Integer
+    res = self <=> other
+    if res.nil?
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    elsif res.is_a?(Numeric)
       res < 0
     else
       raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"

@@ -313,12 +313,16 @@ fn string_cmp(lfp: Lfp) -> Result<Option<std::cmp::Ordering>> {
     Ok(res)
 }
 
-fn string_cmp2(lfp: Lfp) -> Result<std::cmp::Ordering> {
+fn string_cmp2(lfp: Lfp, globals: &Globals) -> Result<std::cmp::Ordering> {
     match string_cmp(lfp)? {
         Some(ord) => Ok(ord),
-        None => Err(MonorubyErr::argumenterr(
-            "comparison of String with non-String failed",
-        )),
+        None => {
+            let other = lfp.arg(0);
+            Err(MonorubyErr::argumenterr(format!(
+                "comparison of String with {} failed",
+                other.inspect(&globals.store)
+            )))
+        }
     }
 }
 
@@ -388,8 +392,8 @@ fn casecmp_p(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3c=3d.html]
 #[monoruby_builtin]
-fn le(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ord = string_cmp2(lfp)?;
+fn le(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ord = string_cmp2(lfp, globals)?;
     Ok(Value::bool(ord != std::cmp::Ordering::Greater))
 }
 
@@ -400,8 +404,8 @@ fn le(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3c.html]
 #[monoruby_builtin]
-fn lt(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ord = string_cmp2(lfp)?;
+fn lt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ord = string_cmp2(lfp, globals)?;
     Ok(Value::bool(ord == std::cmp::Ordering::Less))
 }
 
@@ -412,8 +416,8 @@ fn lt(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3e=3d.html]
 #[monoruby_builtin]
-fn ge(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ord = string_cmp2(lfp)?;
+fn ge(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ord = string_cmp2(lfp, globals)?;
     Ok(Value::bool(ord != std::cmp::Ordering::Less))
 }
 
@@ -424,8 +428,8 @@ fn ge(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3e.html]
 #[monoruby_builtin]
-fn gt(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ord = string_cmp2(lfp)?;
+fn gt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ord = string_cmp2(lfp, globals)?;
     Ok(Value::bool(ord == std::cmp::Ordering::Greater))
 }
 
