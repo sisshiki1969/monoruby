@@ -1784,4 +1784,17 @@ mod tests {
         "##,
         );
     }
+
+    #[test]
+    fn index_splat() {
+        run_test(r#"a = ["a", 1, "b", 2]; Hash[*a]"#);
+        run_test(
+            r##"
+        args = ["a", 1, "b", 2, "c", 3]
+        h = Hash[*args]
+        [h["a"], h["b"], h["c"]]
+        "##,
+        );
+        run_test(r#"a = [1, 2, 3]; [*a]"#);
+    }
 }

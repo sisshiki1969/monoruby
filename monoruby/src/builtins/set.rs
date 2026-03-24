@@ -540,6 +540,9 @@ fn subset_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let self_val = lfp.self_val();
     let self_inner = self_val.as_hashmap_inner();
     let other = lfp.arg(0);
+    if !is_set(other, &globals.store) {
+        return Err(MonorubyErr::argumenterr("value must be a set"));
+    }
     let other_inner = other.as_hashmap_inner();
     if self_inner.len() > other_inner.len() {
         return Ok(Value::bool(false));
@@ -560,6 +563,9 @@ fn superset_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let self_val = lfp.self_val();
     let self_inner = self_val.as_hashmap_inner();
     let other = lfp.arg(0);
+    if !is_set(other, &globals.store) {
+        return Err(MonorubyErr::argumenterr("value must be a set"));
+    }
     let other_inner = other.as_hashmap_inner();
     if self_inner.len() < other_inner.len() {
         return Ok(Value::bool(false));
@@ -585,6 +591,9 @@ fn proper_subset_(
     let self_val = lfp.self_val();
     let self_inner = self_val.as_hashmap_inner();
     let other = lfp.arg(0);
+    if !is_set(other, &globals.store) {
+        return Err(MonorubyErr::argumenterr("value must be a set"));
+    }
     let other_inner = other.as_hashmap_inner();
     if self_inner.len() >= other_inner.len() {
         return Ok(Value::bool(false));
@@ -610,6 +619,9 @@ fn proper_superset_(
     let self_val = lfp.self_val();
     let self_inner = self_val.as_hashmap_inner();
     let other = lfp.arg(0);
+    if !is_set(other, &globals.store) {
+        return Err(MonorubyErr::argumenterr("value must be a set"));
+    }
     let other_inner = other.as_hashmap_inner();
     if self_inner.len() <= other_inner.len() {
         return Ok(Value::bool(false));
@@ -670,17 +682,30 @@ fn disjoint_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let self_val = lfp.self_val();
     let self_inner = self_val.as_hashmap_inner();
     let other = lfp.arg(0);
-    let other_inner = other.as_hashmap_inner();
 
-    if self_inner.len() <= other_inner.len() {
-        for (k, _) in self_inner.iter() {
-            if other_inner.contains_key(k, vm, globals)? {
-                return Ok(Value::bool(false));
+    if is_set(other, &globals.store) {
+        let other_inner = other.as_hashmap_inner();
+        if self_inner.len() <= other_inner.len() {
+            for (k, _) in self_inner.iter() {
+                if other_inner.contains_key(k, vm, globals)? {
+                    return Ok(Value::bool(false));
+                }
+            }
+        } else {
+            for (k, _) in other_inner.iter() {
+                if self_inner.contains_key(k, vm, globals)? {
+                    return Ok(Value::bool(false));
+                }
             }
         }
     } else {
-        for (k, _) in other_inner.iter() {
-            if self_inner.contains_key(k, vm, globals)? {
+        let elems = match enum_to_vec(vm, globals, other) {
+            Ok(v) => v,
+            Err(_) => return Err(MonorubyErr::argumenterr("value must be enumerable")),
+        };
+        let self_inner = self_val.as_hashmap_inner();
+        for elem in elems {
+            if self_inner.contains_key(elem, vm, globals)? {
                 return Ok(Value::bool(false));
             }
         }
@@ -696,17 +721,30 @@ fn intersect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let self_val = lfp.self_val();
     let self_inner = self_val.as_hashmap_inner();
     let other = lfp.arg(0);
-    let other_inner = other.as_hashmap_inner();
 
-    if self_inner.len() <= other_inner.len() {
-        for (k, _) in self_inner.iter() {
-            if other_inner.contains_key(k, vm, globals)? {
-                return Ok(Value::bool(true));
+    if is_set(other, &globals.store) {
+        let other_inner = other.as_hashmap_inner();
+        if self_inner.len() <= other_inner.len() {
+            for (k, _) in self_inner.iter() {
+                if other_inner.contains_key(k, vm, globals)? {
+                    return Ok(Value::bool(true));
+                }
+            }
+        } else {
+            for (k, _) in other_inner.iter() {
+                if self_inner.contains_key(k, vm, globals)? {
+                    return Ok(Value::bool(true));
+                }
             }
         }
     } else {
-        for (k, _) in other_inner.iter() {
-            if self_inner.contains_key(k, vm, globals)? {
+        let elems = match enum_to_vec(vm, globals, other) {
+            Ok(v) => v,
+            Err(_) => return Err(MonorubyErr::argumenterr("value must be enumerable")),
+        };
+        let self_inner = self_val.as_hashmap_inner();
+        for elem in elems {
+            if self_inner.contains_key(elem, vm, globals)? {
                 return Ok(Value::bool(true));
             }
         }

@@ -120,7 +120,7 @@ impl<'a> BytecodeGen<'a> {
                 box base,
                 mut index,
             } => {
-                if index.len() == 1 {
+                if index.len() == 1 && !index[0].is_splat() {
                     self.gen_index(Some(dst), base, index.remove(0), loc)?;
                 } else {
                     let arglist = ArgList::from_args(index);
@@ -366,7 +366,7 @@ impl<'a> BytecodeGen<'a> {
                 box base,
                 mut index,
             } => {
-                if index.len() == 1 {
+                if index.len() == 1 && !index[0].is_splat() {
                     self.gen_index(None, base, index.remove(0), loc)?;
                 } else {
                     let arglist = ArgList::from_args(index);
