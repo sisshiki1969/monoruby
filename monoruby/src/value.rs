@@ -775,7 +775,7 @@ impl Value {
         let s = match self.unpack() {
             RV::Nil => "".to_string(),
             RV::Symbol(id) => id.to_string(),
-            RV::String(s) => s.to_str().unwrap().to_string(),
+            RV::String(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
             _ => self.debug(store),
         };
         s
@@ -2037,7 +2037,7 @@ impl<'a> std::fmt::Debug for RV<'a> {
             RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
             RV::Complex(c) => write!(f, "{:?}", c),
             RV::Symbol(id) => write!(f, ":{}", id),
-            RV::String(s) => write!(f, "\"{}\"", s.to_str().unwrap()),
+            RV::String(s) => write!(f, "\"{}\"", String::from_utf8_lossy(s.as_bytes())),
             RV::Object(rvalue) => write!(f, "{rvalue:?}"),
         }
     }
@@ -2054,7 +2054,7 @@ impl<'a> std::fmt::Display for RV<'a> {
             RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
             RV::Complex(c) => write!(f, "{}", c),
             RV::Symbol(id) => write!(f, ":{}", id),
-            RV::String(s) => write!(f, "\"{}\"", s.to_str().unwrap()),
+            RV::String(s) => write!(f, "\"{}\"", String::from_utf8_lossy(s.as_bytes())),
             RV::Object(rvalue) => write!(f, "{rvalue:?}"),
         }
     }
