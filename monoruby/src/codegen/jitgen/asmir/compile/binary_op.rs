@@ -497,24 +497,24 @@ impl Codegen {
     pub(super) fn condbr_float(&mut self, kind: CmpKind, branch_dest: DestLabel, brkind: BrKind) {
         match (kind, brkind) {
             // Gt and Ge are correct as-is (ja/jae exclude NaN)
+            // NOTE: ucomisd sets CF/ZF/PF, so we must use unsigned conditions
+            // (ja/jbe/jae/jb), NOT signed conditions (jg/jle/jge/jl).
             (CmpKind::Gt, _) => match brkind {
                 BrKind::BrIf => monoasm! { &mut self.jit,
-                    jgt branch_dest;
+                    ja branch_dest;
                 },
                 BrKind::BrIfNot => monoasm! { &mut self.jit,
-                    jle branch_dest;
+                    jbe branch_dest;
                 },
             },
-            //self.condbr_float_gt(branch_dest, brkind),
             (CmpKind::Ge, _) => match brkind {
                 BrKind::BrIf => monoasm! { &mut self.jit,
-                    jge branch_dest;
+                    jae branch_dest;
                 },
                 BrKind::BrIfNot => monoasm! { &mut self.jit,
-                    jlt branch_dest;
+                    jb branch_dest;
                 },
             },
-            //self.condbr_float_ge(branch_dest, brkind),
 
             // Eq BrIf: branch if equal AND not unordered
             (CmpKind::Eq | CmpKind::TEq, BrKind::BrIf) => {
