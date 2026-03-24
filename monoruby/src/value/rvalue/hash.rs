@@ -477,6 +477,24 @@ impl HashContent {
         }
     }
 
+    pub(crate) fn shift(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Option<(Value, Value)>> {
+        if self.len() == 0 {
+            return Ok(None);
+        }
+        match self {
+            HashContent::Map(box map) => {
+                map.shift_remove_index(0, vm, globals).map(|opt| opt.map(|(k, v)| (k, v)))
+            }
+            HashContent::IdentMap(box map) => {
+                map.shift_remove_index(0, vm, globals).map(|opt| opt.map(|(k, v)| (k.0, v)))
+            }
+        }
+    }
+
     pub(crate) fn compare_by_identity(
         &mut self,
         vm: &mut Executor,
