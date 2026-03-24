@@ -47,12 +47,12 @@ diff -s benchmark/mandel.ppm benchmark/mandel1.ppm
 diff -s benchmark/mandel.ppm benchmark/mandel2.ppm
 rm benchmark/*.ppm
 
-target/debug/monoruby ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | head -n -2 > monoruby.log
-ruby --yjit ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | head -n -2 > ruby.log
+target/debug/monoruby ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > monoruby.log
+ruby --yjit ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > ruby.log
 diff -s monoruby.log ruby.log
 
-target/debug/monoruby ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | head -n -2 > monoruby.log
-ruby --yjit ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | head -n -2 > ruby.log
+target/debug/monoruby ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > monoruby.log
+ruby --yjit ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > ruby.log
 diff -s monoruby.log ruby.log
 rm *.log
 
