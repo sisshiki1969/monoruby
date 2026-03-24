@@ -1103,7 +1103,7 @@ impl Value {
     ) -> Result<Array> {
         if let Some(ary) = self.try_array_ty() {
             return Ok(ary);
-        } else if let Some(fid) = globals.check_method(*self, IdentId::get_id("to_ary")) {
+        } else if let Some(fid) = globals.check_method(*self, IdentId::TO_ARY) {
             let v = vm.invoke_func_inner(globals, fid, *self, &[], None, None)?;
             if let Some(ary) = v.try_array_ty() {
                 return Ok(ary);
