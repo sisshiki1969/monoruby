@@ -31,6 +31,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(klass, "home", home, 0);
     globals.define_builtin_class_funcs(klass, "pwd", &["getwd"], pwd, 0);
     globals.define_builtin_class_func_with(klass, "chdir", chdir, 0, 1, false);
+    globals.define_builtin_class_func(klass, "exist?", exist, 1);
 }
 
 /// File::FNM_DOTMATCH: wildcards match dotfiles too.
@@ -500,9 +501,37 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
+///
+/// ### Dir.exist?
+///
+/// - exist?(path) -> bool
+///
+/// Returns `true` if the given path exists and is a directory, `false` otherwise.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/exist=3f.html]
+#[monoruby_builtin]
+fn exist(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let path_str = lfp
+        .arg(0)
+        .coerce_to_path_rstring(vm, globals)?
+        .to_str()?
+        .to_string();
+    let path = std::path::Path::new(&path_str);
+    Ok(Value::bool(path.is_dir()))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn exist() {
+        run_test(r#"Dir.exist?(".")"#);
+        run_test(r#"Dir.exist?("..")"#);
+        run_test(r#"Dir.exist?("src")"#);
+        run_test(r#"Dir.exist?("nonexistent_dir_xyz")"#);
+        run_test(r#"Dir.exist?("Cargo.toml")"#);
+    }
 
     #[test]
     fn glob() {
