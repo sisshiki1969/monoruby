@@ -383,7 +383,7 @@ impl std::fmt::Debug for RValue {
                             ObjTy::OBJECT => format!("{:?}", self.kind.object),
                             ObjTy::BIGNUM => format!("{:?}", self.kind.bignum),
                             ObjTy::FLOAT => format!("{:?}", self.kind.float),
-                            ObjTy::STRING => format!("{}", self.kind.string.to_str().unwrap()),
+                            ObjTy::STRING => format!("{}", String::from_utf8_lossy(self.kind.string.as_bytes())),
                             ObjTy::TIME => format!("{:?}", self.kind.time),
                             ObjTy::ARRAY => format!("{:?}", self.kind.array),
                             ObjTy::RANGE => format!("{:?}", self.kind.range),

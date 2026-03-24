@@ -127,22 +127,11 @@ impl RStringInner {
                 }
                 res
             }
-            Encoding::Utf8 => match std::str::from_utf8(self) {
-                Ok(s) => {
-                    let mut res = String::with_capacity(self.len());
-                    for c in s.chars() {
-                        utf8_escape(&mut res, c);
-                    }
-                    res
-                }
-                Err(err) => {
-                    let s = String::from_utf8_lossy(self).to_string();
-                    panic!("invalid byte sequence: {s} {err}");
-                    //Err(MonorubyErr::runtimeerr(format!(
-                    //    "invalid byte sequence: {s}",
-                    //)))
-                }
-            },
+            Encoding::Utf8 => {
+                let mut res = String::with_capacity(self.len());
+                utf8_escape_bytes(&mut res, self.as_bytes(), utf8_escape);
+                res
+            }
         }
     }
 
@@ -155,22 +144,11 @@ impl RStringInner {
                 }
                 res
             }
-            Encoding::Utf8 => match std::str::from_utf8(self) {
-                Ok(s) => {
-                    let mut res = String::with_capacity(self.len());
-                    for c in s.chars() {
-                        utf8_inspect(&mut res, c);
-                    }
-                    res
-                }
-                Err(err) => {
-                    let s = String::from_utf8_lossy(self).to_string();
-                    panic!("invalid byte sequence: {s} {err}");
-                    //Err(MonorubyErr::runtimeerr(format!(
-                    //    "invalid byte sequence: {s}",
-                    //)))
-                }
-            },
+            Encoding::Utf8 => {
+                let mut res = String::with_capacity(self.len());
+                utf8_escape_bytes(&mut res, self.as_bytes(), utf8_inspect);
+                res
+            }
         }
     }
 
@@ -223,6 +201,40 @@ fn ascii_escape(s: &mut String, ch: u8) {
         }
     };
     s.push_str(str);
+}
+
+/// Process a byte slice as UTF-8, applying `escape_fn` to valid characters
+/// and escaping invalid bytes as `\xHH`. This avoids panicking on non-UTF-8
+/// byte sequences in UTF-8 encoded strings.
+fn utf8_escape_bytes(res: &mut String, bytes: &[u8], escape_fn: fn(&mut String, char)) {
+    let mut i = 0;
+    while i < bytes.len() {
+        match std::str::from_utf8(&bytes[i..]) {
+            Ok(valid) => {
+                for c in valid.chars() {
+                    escape_fn(res, c);
+                }
+                break;
+            }
+            Err(err) => {
+                let valid_up_to = err.valid_up_to();
+                // Process valid UTF-8 prefix
+                if valid_up_to > 0 {
+                    // SAFETY: from_utf8 confirmed these bytes are valid UTF-8.
+                    let valid_str = unsafe { std::str::from_utf8_unchecked(&bytes[i..i + valid_up_to]) };
+                    for c in valid_str.chars() {
+                        escape_fn(res, c);
+                    }
+                }
+                // Escape the invalid byte(s)
+                let error_len = err.error_len().unwrap_or(bytes.len() - i - valid_up_to);
+                for b in &bytes[i + valid_up_to..i + valid_up_to + error_len] {
+                    res.push_str(&format!("\\x{:0>2X}", b));
+                }
+                i += valid_up_to + error_len;
+            }
+        }
+    }
 }
 
 impl RStringInner {
@@ -368,21 +380,32 @@ impl RStringInner {
                     index..index + len
                 }
             }
-            Encoding::Utf8 => {
-                let s = self.check_utf8().unwrap();
-                let mut start = 0;
-                let mut end = 0;
-                for (char_i, (byte_i, _)) in s.char_indices().enumerate() {
-                    if char_i == index {
-                        start = byte_i;
-                        end = s.len();
+            Encoding::Utf8 => match std::str::from_utf8(self) {
+                Ok(s) => {
+                    let mut start = 0;
+                    let mut end = 0;
+                    for (char_i, (byte_i, _)) in s.char_indices().enumerate() {
+                        if char_i == index {
+                            start = byte_i;
+                            end = s.len();
+                        }
+                        if char_i == index + len {
+                            end = byte_i;
+                            break;
+                        }
                     }
-                    if char_i == index + len {
-                        end = byte_i;
-                        break;
+                    start..end
+                }
+                Err(_) => {
+                    // Fall back to byte-based indexing for invalid UTF-8
+                    if self.len() <= index {
+                        0..0
+                    } else if self.len() <= index + len {
+                        index..self.len()
+                    } else {
+                        index..index + len
                     }
                 }
-                start..end
             }
         }
     }

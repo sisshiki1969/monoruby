@@ -1195,7 +1195,7 @@ fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 lib
             )));
         }
-        let message = { unsafe { std::ffi::CStr::from_ptr(err).to_str().unwrap().to_string() } };
+        let message = { unsafe { std::ffi::CStr::from_ptr(err).to_string_lossy().into_owned() } };
         let path = match lib {
             Some(lib) => lib.to_string_lossy().to_string(),
             None => "".to_string(),
