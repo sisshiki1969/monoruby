@@ -459,7 +459,7 @@ impl Executor {
         let err = self.take_error();
         match err.kind() {
             MonorubyErrKind::Load(path) => {
-                let path = Value::string_from_str(path.as_os_str().to_str().unwrap());
+                let path = Value::string_from_str(&path.as_os_str().to_string_lossy());
                 let v = Value::new_exception(err);
                 globals
                     .store
