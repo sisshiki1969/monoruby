@@ -80,6 +80,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "set_backtrace", set_backtrace, 1);
+    globals.define_builtin_func(EXCEPTION_CLASS, "cause", cause, 0);
 }
 
 /// ### NoMethodError#receiver
@@ -268,6 +269,13 @@ fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
         .unwrap();
 
     Ok(ex)
+}
+
+/// ### Exception#cause
+#[monoruby_builtin]
+fn cause(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    Ok(globals.store.get_ivar(self_, IdentId::get_id("/cause")).unwrap_or_default())
 }
 
 #[cfg(test)]
