@@ -4,149 +4,108 @@
 
 ruby/spec core カテゴリ全58分野を mspec で実行し、SEGV/パニック(SIGABRT)/ハング(タイムアウト)が発生するケースを特定しました。
 
+**前回調査からの差分:**
+- Range#to_a SEGV → **解消**
+- Range#count/min/max/minmax HANG×4 → **解消** (PR #215 で実装)
+- String#modulo PANIC → 原因が変化 (バイトコード生成assert → JIT recompile)
+
 ## ruby/spec core 全体結果
 
-| 指標 | 件数 |
-|------|------|
-| カテゴリ総数 | 58 |
-| 正常完了カテゴリ | 49 |
-| **SEGV** | **1件** (Range#to_a) |
-| **パニック (SIGABRT)** | **7件** (6 spec + 1 category-level) |
-| **ハング (タイムアウト)** | **6件** |
+| 指標 | 件数 | 前回 |
+|------|------|------|
+| カテゴリ総数 | 58 | 58 |
+| 正常完了カテゴリ | 52 | 49 |
+| **SEGV** | **0件** | 1件 |
+| **パニック (SIGABRT)** | **5件** | 7件 |
+| **ハング (タイムアウト)** | **2件** | 6件 |
 
 ---
 
-## SEGV (1件)
+## SEGV (0件)
 
-### 1. Range#to_a — JIT生成コードのSEGV
-
-| 項目 | 詳細 |
-|------|------|
-| **spec** | `core/range/to_a_spec.rb` |
-| **再現** | release ビルド + mspec経由のみ。debug ビルドでは再現せず |
-| **直接実行** | `monoruby -e 'p (-5..5).to_a'` → 正常動作 |
-| **コード箇所** | JIT生成コード（ネイティブx86-64命令列内） |
-| **原因推定** | mspec インフラ読み込みでJITが多くのメソッドをコンパイルした後、Range#to_a 実行時にJIT生成コードが不正メモリアクセス。release最適化でのみ顕在化するため、JITコード生成またはインラインキャッシュの問題 |
-| **repro** | `repro/segv_range_to_a.sh` |
+前回報告の Range#to_a SEGV は解消済み。
 
 ---
 
-## パニック — SIGABRT (7件)
+## パニック — SIGABRT (5件)
 
-影響範囲の大きい順に並べています。
+### 1. JIT再コンパイル/コンパイル時パニック (影響: array, string/modulo, numeric/step)
 
-### 1. JIT再コンパイル時のインラインキャッシュ未初期化 (影響: array カテゴリ全体)
+3つのカテゴリで同じJITパニックが発生。根本原因は共通と推定。
 
-| 項目 | 詳細 |
-|------|------|
-| **spec** | `core/array` (全体実行時。個別specでは再現せず) |
-| **コード箇所** | `globals/store/iseq.rs:431` — `get_cache_map()` の `.unwrap()` |
-| **原因** | `jit_entry.get(&self_class)` が `None` を返す。JITがメソッドを再コンパイルする際、対象クラスのインラインキャッシュマップが未初期化のケースがある。多数のspecを連続実行してJITキャッシュが蓄積した状態でのみ発生 |
-| **呼出しパス** | `jit_recompile_method_with_recovery` → `update_inline_cache` → `get_cache_map` → `unwrap()` → PANIC |
-| **repro** | `repro/panic_array_jit_recompile.sh` |
+| spec | パニック箇所 |
+|------|-------------|
+| `core/array` (全体実行時) | `jit_recompile_method_with_recovery` |
+| `core/string/modulo_spec.rb` | `jit_recompile_method_with_recovery` |
+| `core/numeric/step_spec.rb` | `jit_compile_patch` |
 
-### 2. String#% (modulo) — バイトコード生成のassert失敗
+- **原因**: JITがメソッドを再コンパイル/パッチする際、インラインキャッシュまたは型状態の不整合でパニック。多数のspecを連続実行してJITキャッシュが蓄積した状態でのみ発生。個別spec単独実行では再現しないケースもある。
+- **前回との差分**: String#modulo は前回 `bytecodegen/expression.rs:451` のassert失敗だったが、今回は JIT recompile パニックに変化。
 
-| 項目 | 詳細 |
-|------|------|
-| **spec** | `core/string/modulo_spec.rb` |
-| **コード箇所** | `bytecodegen/expression.rs:451` — `assert_eq!(Some(lvar), self.outer_block_param_name(outer))` |
-| **原因** | String#% specで使われるブロックパラメータのパターンが、バイトコード生成器の想定と一致しない。外側ブロックの引数名の一致確認が失敗 |
-| **repro** | `repro/panic_string_modulo.sh` |
-
-### 3. Numeric#step — JIT型状態マージの unreachable
-
-| 項目 | 詳細 |
-|------|------|
-| **spec** | `core/numeric/step_spec.rb` |
-| **コード箇所** | `codegen/jitgen/state/slot.rs:1333` — `unreachable!()` in `gen_bridge` |
-| **原因** | Fixnum/Float 混在の step 呼び出しで、JITの抽象型状態マージが対応していないLinkMode組み合わせに到達。型状態のブリッジ生成で `(l, r)` のcatch-allアームに落ちる |
-| **repro** | `repro/panic_numeric_step.sh` |
-
-### 4. Fiber#transfer — FuncInfo の as_iseq unreachable
+### 2. Fiber#transfer — send() 内パニック
 
 | 項目 | 詳細 |
 |------|------|
 | **spec** | `core/fiber/transfer_spec.rb` |
-| **コード箇所** | `globals/store/function.rs:963` — `as_iseq()` の `unreachable!()` |
-| **呼出しパス** | `send(:transfer)` → `method_not_found` → `RValue::to_s` → `RValue::debug` → builtin FuncInfo に対して `as_iseq()` |
-| **原因** | エラーメッセージ生成中に、Builtin関数の `FuncInfo` に対して `as_iseq()` を呼び、`ISeq` でない種別で `unreachable!()` に到達 |
-| **repro** | `repro/panic_fiber_transfer.sh` |
+| **パニック箇所** | `builtins::kernel::send` |
+| **原因** | `send(:transfer)` 呼び出し時に、エラーメッセージ生成中にBuiltin FuncInfoに対して不正な操作を行いパニック |
 
-### 5. Set#flatten — スタックオーバーフロー
-
-| 項目 | 詳細 |
-|------|------|
-| **spec** | `core/set/flatten_spec.rb` |
-| **コード箇所** | Rust スタック (再帰の深さ超過) |
-| **原因** | 再帰的 Set 構造 (`s << s; s.flatten`) でサイクル検出なしに無限再帰。CRuby は `ArgumentError` を発生させる |
-| **repro** | `repro/panic_set_flatten.sh` |
-
-### 6. Process.getrlimit — Array#flatten の unimplemented
+### 3. Process.getrlimit — Array#grep 内パニック
 
 | 項目 | 詳細 |
 |------|------|
 | **spec** | `core/process/getrlimit_spec.rb` |
-| **コード箇所** | `builtins/array.rs:1788` — `unimplemented!()` |
-| **原因** | `Array#flatten` が対応していない引数パターンで `unimplemented!()` に到達 |
-| **repro** | `repro/panic_process_getrlimit.sh` |
+| **パニック箇所** | `builtins::array::grep` |
+| **原因** | `Array#grep` が対応していない引数パターンでパニック (前回は `Array#flatten` の `unimplemented!()` だったが変化) |
 
----
-
-## ハング — タイムアウト (6件)
-
-### 1. Range#count, #min, #max, #minmax (4件) — 未実装メソッドでの無限イテレーション
+### 4. Set#flatten — スタックオーバーフロー
 
 | 項目 | 詳細 |
 |------|------|
-| **spec** | `core/range/count_spec.rb`, `min_spec.rb`, `max_spec.rb`, `minmax_spec.rb` |
-| **原因** | `Range#count`, `#min`, `#max`, `#minmax` が Range クラスに未実装。`Enumerable` のフォールバック実装が呼ばれ、endless range `(1..)` に対して無限にイテレーションする |
-| **CRuby動作** | `Range#count` on endless range → `Float::INFINITY`、`#max` on endless range → `RangeError` |
-| **repro** | `repro/hang_range_count_min_max.sh` |
+| **spec** | `core/set/flatten_spec.rb` |
+| **原因** | 再帰的 Set 構造 (`s << s; s.flatten`) でサイクル検出なしに無限再帰。CRuby は `ArgumentError` を発生させる |
 
-### 2. IO#close (1件) — IO.popen サブプロセスの無応答
+---
+
+## ハング — タイムアウト (2件)
+
+### 1. IO#close — IO.popen サブプロセスの無応答
 
 | 項目 | 詳細 |
 |------|------|
 | **spec** | `core/io/close_spec.rb` |
-| **原因** | spec後半で `IO.popen(ruby_cmd(...))` を使用。mspec の `ruby_cmd` がサブプロセスを起動するが、子プロセスが正常に終了せず `IO#close` がブロック |
-| **repro** | `repro/hang_io_close.sh` |
+| **原因** | spec後半で `IO.popen(ruby_cmd(...))` を使用。子プロセスが正常に終了せず `IO#close` がブロック |
 
-### 3. Process.exit (1件) — Thread + sleep でのデッドロック
+### 2. Process.exit — Thread + sleep でのデッドロック
 
 | 項目 | 詳細 |
 |------|------|
 | **spec** | `core/process/exit_spec.rb` |
-| **原因** | spec内で `Thread.new { exit 42 }` + `sleep`（メインスレッド）のパターンを使用。`SystemExit` がスレッド間で正しく伝播しないため、メインスレッドの `sleep` が永久にブロック。`Process.exit!` も未実装 |
-| **repro** | `repro/hang_process_exit.sh` |
+| **原因** | `Thread.new { exit 42 }` + `sleep` で、`SystemExit` がスレッド間で正しく伝播しないためメインスレッドがブロック |
 
 ---
 
 ## 影響範囲順の優先度表
 
-| 優先度 | 問題 | 種別 | 影響 | コード箇所 | 根本原因 |
-|--------|------|------|------|-----------|---------|
-| **1** | JIT再コンパイル時キャッシュ未初期化 | PANIC | array全体がクラッシュ。多数のメソッド実行後に発生するため他カテゴリでも潜在的に影響 | `iseq.rs:431` | `jit_entry` に `self_class` のエントリがない状態で `unwrap()` |
-| **2** | Range#to_a SEGV | SEGV | release + mspec でのみ再現。JIT生成コードの品質問題 | JIT生成ネイティブコード | mspec読み込み後のJIT状態でSEGV |
-| **3** | JIT型状態マージ failure | PANIC | Numeric#step が使えない | `slot.rs:1333` | Fixnum/Float混在で `gen_bridge` の unreachable |
-| **4** | Range#count/min/max/minmax 未実装 | HANG×4 | endless range で無限ループ | `builtins/range.rs` | メソッド未実装→Enumerable fallback→無限イテレーション |
-| **5** | String#% バイトコード生成 assert | PANIC | String#% specが使えない | `expression.rs:451` | ブロックパラメータ名の assert 失敗 |
-| **6** | Fiber#transfer エラーメッセージ生成 | PANIC | send(:transfer) でクラッシュ | `function.rs:963` | Builtin FuncInfo に対する `as_iseq()` |
-| **7** | Set#flatten スタックオーバーフロー | PANIC | 再帰Set構造でクラッシュ | Rustスタック | サイクル検出なし |
-| **8** | Process.exit Thread伝播 | HANG | Thread + SystemExit テスト不可 | Thread/sleep実装 | SystemExit のスレッド間伝播未対応 |
-| **9** | IO#close IO.popen | HANG | IO.popen テスト不可 | IO.popen/ruby_cmd | サブプロセス管理の問題 |
-| **10** | Array#flatten unimplemented | PANIC | 特定引数パターンで落ちる | `array.rs:1788` | `unimplemented!()` catch-all |
+| 優先度 | 問題 | 種別 | 影響 | 根本原因 |
+|--------|------|------|------|---------|
+| **1** | JIT再コンパイル/パッチ時パニック | PANIC×3 | array全体・string/modulo・numeric/step がクラッシュ | JITインラインキャッシュ/型状態不整合 |
+| **2** | Fiber#transfer send() パニック | PANIC | send(:transfer) でクラッシュ | Builtin FuncInfo のエラーメッセージ生成 |
+| **3** | Process.getrlimit Array#grep パニック | PANIC | getrlimit specがクラッシュ | Array#grep の未対応パターン |
+| **4** | Set#flatten スタックオーバーフロー | PANIC | 再帰Set構造でクラッシュ | サイクル検出なし |
+| **5** | IO#close IO.popen ハング | HANG | IO.popen テスト不可 | サブプロセス管理の問題 |
+| **6** | Process.exit Thread伝播ハング | HANG | Thread + SystemExit テスト不可 | SystemExit のスレッド間伝播未対応 |
 
 ---
 
-## 修正済みのクラッシュ (本ブランチ + PR)
+## 解消済みの問題
 
-### PR #210: String メソッドクラッシュ修正 (5件)
-### PR #211: Proc#call yield パニック修正 (2件)
-### PR #212: String メソッド invalid UTF-8 パニック (6件)
-### 本ブランチ: is_str() 根本修正 (2件)
-
-詳細は git log 参照。
+| 問題 | 種別 | 解消方法 |
+|------|------|---------|
+| Range#to_a SEGV | SEGV | 本ブランチの修正で解消 (JIT生成コードの問題が修正された) |
+| Range#count/min/max/minmax ハング | HANG×4 | PR #215 で Range#min/max/count/minmax を実装 |
+| String#modulo バイトコード生成assert | PANIC | パニック箇所が変化 (JIT recompile に統合) |
+| Array#flatten unimplemented | PANIC | パニック箇所が変化 (Array#grep に統合) |
 
 ---
 
