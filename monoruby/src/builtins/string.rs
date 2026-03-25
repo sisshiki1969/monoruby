@@ -352,10 +352,14 @@ fn casecmp(
 ) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
-    if let Some(rhs_str) = rhs.is_str() {
-        let lhs_lower = lhs.as_str().to_lowercase();
-        let rhs_lower = rhs_str.to_lowercase();
-        Ok(Value::from_ord(lhs_lower.cmp(&rhs_lower)))
+    if let Some(rhs_inner) = rhs.is_rstring_inner() {
+        let lhs_inner = lhs.as_rstring_inner();
+        // ASCII case-insensitive byte comparison (matches CRuby behavior)
+        let ord = lhs_inner
+            .iter()
+            .map(|b| b.to_ascii_lowercase())
+            .cmp(rhs_inner.iter().map(|b| b.to_ascii_lowercase()));
+        Ok(Value::from_ord(ord))
     } else {
         Ok(Value::nil())
     }
@@ -376,8 +380,12 @@ fn casecmp_p(
 ) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
-    if let Some(rhs_str) = rhs.is_str() {
-        let lhs_lower = lhs.as_str().to_lowercase();
+    if let Some(rhs_inner) = rhs.is_rstring_inner() {
+        let lhs_inner = lhs.as_rstring_inner();
+        // CRuby's casecmp? does Unicode case folding; raises on invalid UTF-8
+        let lhs_str = lhs_inner.check_utf8()?;
+        let rhs_str = rhs_inner.check_utf8()?;
+        let lhs_lower = lhs_str.to_lowercase();
         let rhs_lower = rhs_str.to_lowercase();
         Ok(Value::bool(lhs_lower == rhs_lower))
     } else {
@@ -1635,6 +1643,16 @@ fn string_index(
     };
 
     let s = given.check_utf8()?;
+    let char_len = s.chars().count();
+    if char_pos == char_len {
+        // At end of string, only empty-width matches are possible
+        return match re.captures("", vm)? {
+            Some(captures) if captures.get(0).unwrap().range().is_empty() => {
+                Ok(Value::integer(char_pos as i64))
+            }
+            _ => Ok(Value::nil()),
+        };
+    }
     let byte_pos = s.char_indices().nth(char_pos).unwrap().0;
     match re.captures_from_pos(s, byte_pos, vm)? {
         None => Ok(Value::nil()),
@@ -1662,17 +1680,19 @@ fn string_rindex(
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
     let re = lfp.arg(0).expect_regexp_or_string(globals)?;
-    let max_char_pos = if let Some(arg1) = lfp.try_arg(1) {
-        arg1.coerce_to_i64(globals)?
-    } else {
-        -1
-    };
-    let max_char_pos = match given.conv_char_index2(max_char_pos)? {
-        Some(pos) => pos,
-        None => return Ok(Value::nil()),
-    };
 
     let s = given.check_utf8()?;
+    let char_len = s.chars().count();
+
+    let max_char_pos = if let Some(arg1) = lfp.try_arg(1) {
+        let pos = arg1.coerce_to_i64(globals)?;
+        match given.conv_char_index2(pos)? {
+            Some(pos) => pos,
+            None => return Ok(Value::nil()),
+        }
+    } else {
+        char_len
+    };
 
     let mut last_byte_pos = match re.captures_from_pos(s, 0, vm)? {
         None => {
@@ -1681,7 +1701,6 @@ fn string_rindex(
         Some(captures) => captures.get(0).unwrap().start(),
     };
 
-    // Option<(char_pos:usize, byte_pos:usize)>
     let mut last_char_pos = if last_byte_pos == 0 { Some(0) } else { None };
     for (char_pos, (byte_pos, _)) in s.char_indices().enumerate() {
         if last_byte_pos == byte_pos {
@@ -1712,7 +1731,24 @@ fn string_rindex(
             }
         }
     }
-    Ok(Value::integer(last_char_pos.unwrap() as i64))
+    // Handle match at end of string (e.g. zero-width match past last char_indices entry)
+    // Check if the pattern can match empty at the end of string
+    if char_len <= max_char_pos {
+        if last_byte_pos == s.len() {
+            last_char_pos = Some(char_len);
+        } else if last_byte_pos < s.len() {
+            // Try to find a zero-width match at the end of string
+            if let Ok(Some(captures)) = re.captures("", vm) {
+                if captures.get(0).unwrap().range().is_empty() {
+                    last_char_pos = Some(char_len);
+                }
+            }
+        }
+    }
+    Ok(match last_char_pos {
+        Some(pos) => Value::integer(pos as i64),
+        None => Value::nil(),
+    })
 }
 
 ///
@@ -4537,5 +4573,43 @@ mod tests {
         run_test(r#"s = "hello world"; s.bytesplice(0..4, "ABCDE", 0..-100); s"#);
         // str_range with negative start out of range => RangeError
         run_test_error(r#"s = "hello"; s.bytesplice(0..4, "AB", -100..-1)"#);
+    }
+
+    #[test]
+    fn string_casecmp_invalid_utf8() {
+        run_test(r#""\xc3".casecmp("\xe3")"#);
+        run_test(r#""\xc3".casecmp("\xc3")"#);
+        run_test(r#""a".casecmp("A")"#);
+        run_test(r#""abc".casecmp("ABC")"#);
+    }
+
+    #[test]
+    fn string_casecmp_p_invalid_utf8() {
+        // CRuby's casecmp? raises ArgumentError on invalid UTF-8
+        run_test_error(r#""\xc3".casecmp?("\xc3")"#);
+        run_test_error(r#""\xc3".casecmp?("\xe3")"#);
+        run_test(r#""a".casecmp?("A")"#);
+        run_test(r#""abc".casecmp?("ABC")"#);
+    }
+
+    #[test]
+    fn string_index_at_end() {
+        run_test(r#""blablabla".index("", 9)"#);
+        run_test(r#""blablabla".index("", 10)"#);
+        run_test(r#""abc".index("", 3)"#);
+        run_test(r#""abc".index("", 0)"#);
+    }
+
+    #[test]
+    fn string_rindex_zero_width() {
+        run_test(r#""blablabla".rindex(/.{0}/)"#);
+        run_test(r#""blablabla".rindex(/.*/)"#);
+        run_test(r#""hello".rindex(/.{0}/)"#);
+    }
+
+    #[test]
+    fn string_split_invalid_utf8() {
+        run_test_error(r#""\xDF".force_encoding("UTF-8").split"#);
+        run_test_error(r#""\xDF".force_encoding("UTF-8").split(":")"#);
     }
 }
