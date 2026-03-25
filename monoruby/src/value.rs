@@ -1568,15 +1568,23 @@ impl Value {
     pub(crate) fn as_str(&self) -> &str {
         assert_eq!(ObjTy::STRING, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue contains a string.
-        unsafe { self.rvalue().as_str() }
+        // Panics if the string contains invalid UTF-8. Prefer expect_str()
+        // for user-facing code paths.
+        unsafe {
+            self.rvalue()
+                .as_str()
+                .expect("as_str called on non-UTF-8 string")
+        }
     }
 
     pub(crate) fn is_str(&self) -> Option<&str> {
         let rv = self.try_rvalue()?;
         // SAFETY: The type check ensures this RValue contains a string.
+        // Returns None if the value is not a String OR if it contains
+        // invalid UTF-8 byte sequences.
         unsafe {
             match rv.ty() {
-                ObjTy::STRING => Some(rv.as_str()),
+                ObjTy::STRING => rv.as_str(),
                 _ => None,
             }
         }
