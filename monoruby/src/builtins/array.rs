@@ -3128,6 +3128,9 @@ mod tests {
     fn grep() {
         run_test(r#"['aa', 'bb', 'cc', 'dd', 'ee'].grep(/[bc]/)"#);
         //run_test(r#"Array.instance_methods.grep(/gr/)"#);
+        run_test(r#"['aa', 'bb', 'cc', 'dd', 'ee'].grep(/[bc]/) {|s| s.upcase }"#);
+        run_test(r#"[1, 2, 3, 4, 5].grep(Integer) {|n| n * 2 }"#);
+        run_test(r#"[1, 'a', 2, 'b'].grep(String)"#);
     }
 
     #[test]
