@@ -21,6 +21,8 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func(PROC_CLASS, "binding", binding_, 0);
     globals.define_builtin_func(PROC_CLASS, "source_location", source_location, 0);
+    globals.define_builtin_func(PROC_CLASS, "lambda?", lambda_, 0);
+    globals.define_builtin_func(PROC_CLASS, "arity", proc_arity, 0);
 }
 
 ///
@@ -93,6 +95,22 @@ fn binding_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
     let outer_lfp = proc.outer_lfp();
     let pc = proc.source();
     Ok(Binding::from_outer(outer_lfp, Some(pc)).as_val())
+}
+
+/// ### Proc#lambda?
+#[monoruby_builtin]
+fn lambda_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let proc = Proc::new(lfp.self_val());
+    let func_id = proc.func_id();
+    Ok(Value::bool(!globals[func_id].is_block_style()))
+}
+
+/// ### Proc#arity
+#[monoruby_builtin]
+fn proc_arity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let proc = Proc::new(lfp.self_val());
+    let func_id = proc.func_id();
+    Ok(Value::integer(globals[func_id].arity()))
 }
 
 #[cfg(test)]
@@ -393,5 +411,22 @@ mod tests {
         call_with_block { 42 }
         "#,
         );
+    }
+
+    #[test]
+    fn lambda_q() {
+        run_test("Proc.new {}.lambda?");
+        run_test("lambda {}.lambda?");
+        run_test("->(x) { x }.lambda?");
+    }
+
+    #[test]
+    fn proc_arity() {
+        run_test("Proc.new {}.arity");
+        run_test("Proc.new {|x| x}.arity");
+        run_test("Proc.new {|x, y| x}.arity");
+        run_test("lambda {}.arity");
+        run_test("lambda {|x| x}.arity");
+        run_test("->(x, y) { x }.arity");
     }
 }

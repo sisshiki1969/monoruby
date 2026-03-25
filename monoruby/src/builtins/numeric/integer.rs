@@ -1079,4 +1079,14 @@ mod tests {
         run_test("Integer.try_convert(nil)");
         run_test(r#"Integer.try_convert("1")"#);
     }
+
+    #[test]
+    fn positive_negative() {
+        run_test("42.positive?");
+        run_test("(-42).positive?");
+        run_test("0.positive?");
+        run_test("42.negative?");
+        run_test("(-42).negative?");
+        run_test("0.negative?");
+    }
 }
