@@ -354,4 +354,44 @@ mod tests {
         "#,
         );
     }
+
+    #[test]
+    fn proc_yield_detached_context() {
+        // yield in Proc whose enclosing method was called with a block but has
+        // already returned should raise LocalJumpError, not panic.
+        run_test_error(
+            r#"
+        def make_proc
+          Proc.new { yield }
+        end
+        def get_proc_with_block
+          make_proc { 99 }
+        end
+        get_proc_with_block.call
+        "#,
+        );
+        // yield in Proc whose enclosing method was called without a block
+        run_test_error(
+            r#"
+        def make_proc
+          Proc.new { yield }
+        end
+        make_proc.call
+        "#,
+        );
+    }
+
+    #[test]
+    fn proc_yield_same_context() {
+        // yield in Proc called within the same method context should work
+        run_test(
+            r#"
+        def call_with_block
+          p = Proc.new { yield }
+          p.call
+        end
+        call_with_block { 42 }
+        "#,
+        );
+    }
 }
