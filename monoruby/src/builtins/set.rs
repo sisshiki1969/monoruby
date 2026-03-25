@@ -906,7 +906,9 @@ fn collect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
 fn flatten(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let mut result = new_empty_set();
-    flatten_set_into(&mut result, self_val, vm, globals)?;
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(self_val.id());
+    flatten_set_into(&mut result, self_val, vm, globals, &mut seen)?;
     Ok(result)
 }
 
@@ -915,11 +917,18 @@ fn flatten_set_into(
     set: Value,
     vm: &mut Executor,
     globals: &mut Globals,
+    seen: &mut std::collections::HashSet<u64>,
 ) -> Result<()> {
     let keys = set_keys(set);
     for val in keys {
         if is_set(val, &globals.store) {
-            flatten_set_into(result, val, vm, globals)?;
+            if !seen.insert(val.id()) {
+                return Err(MonorubyErr::argumenterr(
+                    "tried to flatten recursive Set".to_string(),
+                ));
+            }
+            flatten_set_into(result, val, vm, globals, seen)?;
+            seen.remove(&val.id());
         } else {
             result
                 .as_hashmap_inner_mut()
@@ -941,7 +950,9 @@ fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         return Ok(Value::nil());
     }
     let mut result = new_empty_set();
-    flatten_set_into(&mut result, self_val, vm, globals)?;
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(self_val.id());
+    flatten_set_into(&mut result, self_val, vm, globals, &mut seen)?;
     // Replace self's contents
     let mut self_val = lfp.self_val();
     self_val.as_hashmap_inner_mut().clear();
@@ -1116,5 +1127,15 @@ mod tests {
         run_test("s = Set[Set[1, 2], Set[3, 4], 5]; s.flatten!.equal?(s)");
         run_test("s = Set[1, 2, 3]; s.flatten!.nil?");
         run_test("Set[Set[Set[1]], 2].flatten.to_a.sort");
+    }
+
+    #[test]
+    fn set_flatten_recursive() {
+        run_test_error("s = Set.new; s << s; s.flatten");
+    }
+
+    #[test]
+    fn set_flatten_bang_recursive() {
+        run_test_error("s = Set.new; s << s; s.flatten!");
     }
 }
