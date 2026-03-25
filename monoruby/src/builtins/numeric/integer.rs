@@ -45,8 +45,6 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, "zero?", zero_, 0);
     globals.define_builtin_func(INTEGER_CLASS, "size", size, 0);
     globals.define_builtin_func(INTEGER_CLASS, "bit_length", bit_length, 0);
-    globals.define_builtin_func(INTEGER_CLASS, "positive?", int_positive, 0);
-    globals.define_builtin_func(INTEGER_CLASS, "negative?", int_negative, 0);
 }
 
 /*///
@@ -659,28 +657,6 @@ fn bit_length(
         }
         _ => unreachable!(),
     }
-}
-
-/// ### Integer#positive?
-#[monoruby_builtin]
-fn int_positive(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let b = match lfp.self_val().unpack() {
-        RV::Fixnum(i) => i > 0,
-        RV::BigInt(b) => b > &BigInt::from(0),
-        _ => unreachable!(),
-    };
-    Ok(Value::bool(b))
-}
-
-/// ### Integer#negative?
-#[monoruby_builtin]
-fn int_negative(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let b = match lfp.self_val().unpack() {
-        RV::Fixnum(i) => i < 0,
-        RV::BigInt(b) => b < &BigInt::from(0),
-        _ => unreachable!(),
-    };
-    Ok(Value::bool(b))
 }
 
 #[cfg(test)]
