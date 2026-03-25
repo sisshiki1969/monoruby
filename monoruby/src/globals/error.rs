@@ -377,7 +377,7 @@ impl MonorubyErr {
     pub(crate) fn no_block_given() -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::LocalJump,
-            "no block given (yield).".to_string(),
+            "no block given (yield)".to_string(),
         )
     }
 

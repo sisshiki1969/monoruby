@@ -123,31 +123,49 @@ impl Executor {
         let bh = lfp.block()?;
         Some(match bh.0.try_fixnum() {
             Some(mut i) => {
-                i = Self::traverse_cfp(self, cfp, lfp, i);
+                i = Self::traverse_cfp(self, cfp, lfp, i)?;
                 BlockHandler::new(Value::integer(i))
             }
             None => bh,
         })
     }
 
-    // TODO: this does not support nexted fibers.
+    // TODO: this does not support nested fibers.
     pub fn prev_cfp(vm: &Executor, cfp: Cfp) -> (&Executor, Cfp) {
         match cfp.prev() {
             Some(prev) => (vm, prev),
             None => {
+                // SAFETY: parent_fiber is set when a fiber is resumed.
                 let vm = unsafe { vm.parent_fiber.unwrap().as_ref() };
                 (vm, vm.cfp())
             }
         }
     }
 
-    fn traverse_cfp(mut vm: &Executor, mut cfp: Cfp, lfp: Lfp, mut i: i64) -> i64 {
+    /// Try to get the previous CFP, returning `None` if there is no previous
+    /// frame and no parent fiber (i.e. the Proc's enclosing method has already
+    /// returned — "detached context").
+    fn try_prev_cfp(vm: &Executor, cfp: Cfp) -> Option<(&Executor, Cfp)> {
+        match cfp.prev() {
+            Some(prev) => Some((vm, prev)),
+            None => {
+                // SAFETY: parent_fiber is set when a fiber is resumed.
+                let parent = unsafe { vm.parent_fiber?.as_ref() };
+                Some((parent, parent.cfp()))
+            }
+        }
+    }
+
+    /// Traverse the CFP chain to find the target LFP.
+    /// Returns `None` if the CFP chain is exhausted before finding the target
+    /// (detached Proc context — the enclosing method has already returned).
+    fn traverse_cfp(mut vm: &Executor, mut cfp: Cfp, lfp: Lfp, mut i: i64) -> Option<i64> {
         loop {
             if cfp.lfp() == lfp {
-                return i;
+                return Some(i);
             }
             i += 1;
-            (vm, cfp) = Self::prev_cfp(vm, cfp);
+            (vm, cfp) = Self::try_prev_cfp(vm, cfp)?;
         }
     }
 }
