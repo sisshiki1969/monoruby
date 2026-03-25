@@ -46,9 +46,6 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_funcs(FLOAT_CLASS, "angle", &["arg", "phase"], angle, 0);
     globals.define_builtin_func(FLOAT_CLASS, "next_float", next_float, 0);
     globals.define_builtin_func(FLOAT_CLASS, "prev_float", prev_float, 0);
-    globals.define_builtin_func(FLOAT_CLASS, "zero?", float_zero, 0);
-    globals.define_builtin_func(FLOAT_CLASS, "positive?", float_positive, 0);
-    globals.define_builtin_func(FLOAT_CLASS, "negative?", float_negative, 0);
 }
 
 extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
@@ -429,24 +426,6 @@ fn prev_float(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodeP
     let bits = f.to_bits();
     let prev_bits = if f == 0.0 { (1u64 << 63) | 1u64 } else if f > 0.0 { bits - 1 } else { bits + 1 };
     Ok(Value::float(f64::from_bits(prev_bits)))
-}
-
-/// ### Float#zero?
-#[monoruby_builtin]
-fn float_zero(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(lfp.self_val().try_float().unwrap() == 0.0))
-}
-
-/// ### Float#positive?
-#[monoruby_builtin]
-fn float_positive(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(lfp.self_val().try_float().unwrap() > 0.0))
-}
-
-/// ### Float#negative?
-#[monoruby_builtin]
-fn float_negative(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(lfp.self_val().try_float().unwrap() < 0.0))
 }
 
 #[cfg(test)]
