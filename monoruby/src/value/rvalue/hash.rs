@@ -135,6 +135,10 @@ impl HashmapInner {
         }
     }
 
+    pub fn is_compare_by_identity(&self) -> bool {
+        matches!(&self.content, HashContent::IdentMap(_))
+    }
+
     pub fn get(&self, v: Value, vm: &mut Executor, globals: &mut Globals) -> Result<Option<Value>> {
         Ok(match &self.content {
             HashContent::Map(box map) => map.get(&v, vm, globals)?.copied(),

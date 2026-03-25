@@ -44,6 +44,11 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(FLOAT_CLASS, "nan?", nan, 0);
     globals.define_builtin_funcs(FLOAT_CLASS, "abs", &["magnitude"], abs, 0);
     globals.define_builtin_funcs(FLOAT_CLASS, "angle", &["arg", "phase"], angle, 0);
+    globals.define_builtin_func(FLOAT_CLASS, "next_float", next_float, 0);
+    globals.define_builtin_func(FLOAT_CLASS, "prev_float", prev_float, 0);
+    globals.define_builtin_func(FLOAT_CLASS, "zero?", float_zero, 0);
+    globals.define_builtin_func(FLOAT_CLASS, "positive?", float_positive, 0);
+    globals.define_builtin_func(FLOAT_CLASS, "negative?", float_negative, 0);
 }
 
 extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
@@ -400,6 +405,48 @@ fn angle(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     } else {
         Ok(Value::integer(0))
     }
+}
+
+/// ### Float#next_float
+#[monoruby_builtin]
+fn next_float(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = lfp.self_val().try_float().unwrap();
+    if f.is_nan() || (f.is_infinite() && f.is_sign_positive()) {
+        return Ok(Value::float(f));
+    }
+    let bits = f.to_bits();
+    let next_bits = if f == 0.0 { 1u64 } else if f > 0.0 { bits + 1 } else { bits - 1 };
+    Ok(Value::float(f64::from_bits(next_bits)))
+}
+
+/// ### Float#prev_float
+#[monoruby_builtin]
+fn prev_float(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = lfp.self_val().try_float().unwrap();
+    if f.is_nan() || (f.is_infinite() && f.is_sign_negative()) {
+        return Ok(Value::float(f));
+    }
+    let bits = f.to_bits();
+    let prev_bits = if f == 0.0 { (1u64 << 63) | 1u64 } else if f > 0.0 { bits - 1 } else { bits + 1 };
+    Ok(Value::float(f64::from_bits(prev_bits)))
+}
+
+/// ### Float#zero?
+#[monoruby_builtin]
+fn float_zero(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().try_float().unwrap() == 0.0))
+}
+
+/// ### Float#positive?
+#[monoruby_builtin]
+fn float_positive(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().try_float().unwrap() > 0.0))
+}
+
+/// ### Float#negative?
+#[monoruby_builtin]
+fn float_negative(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().try_float().unwrap() < 0.0))
 }
 
 #[cfg(test)]
