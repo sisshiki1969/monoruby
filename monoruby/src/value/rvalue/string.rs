@@ -253,9 +253,8 @@ impl RStringInner {
     pub fn check_utf8(&self) -> Result<&str> {
         match std::str::from_utf8(self) {
             Ok(s) => Ok(s),
-            Err(_) => Err(MonorubyErr::runtimeerr(format!(
-                "invalid byte sequence. {:?}",
-                self.to_str()
+            Err(_) => Err(MonorubyErr::argumenterr(format!(
+                "invalid byte sequence in UTF-8"
             ))),
         }
     }
