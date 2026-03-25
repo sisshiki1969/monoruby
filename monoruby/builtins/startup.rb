@@ -162,6 +162,45 @@ class Thread
   def self.current
     @@current
   end
+
+  def initialize(*args, &block)
+    @value = nil
+    @exception = nil
+    @alive = true
+    if block
+      begin
+        @value = block.call(*args)
+      rescue Exception => e
+        @exception = e
+      end
+      @alive = false
+    end
+  end
+
+  def value
+    raise @exception if @exception
+    @value
+  end
+
+  def join(limit = nil)
+    raise @exception if @exception
+    self
+  end
+
+  def alive?
+    @alive
+  end
+
+  def status
+    if @exception
+      nil
+    elsif @alive
+      "run"
+    else
+      false
+    end
+  end
+
   def [](key)
     @keys ||= {}
     @keys[key]
