@@ -419,6 +419,7 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         cmd
     };
 
+    command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::inherit());
 
@@ -565,6 +566,41 @@ mod tests {
         end
         res
         "##,
+        );
+    }
+
+    #[test]
+    fn popen_close() {
+        // Verify IO.popen + close doesn't deadlock when child writes to stdout.
+        run_test_no_result_check(
+            r#"
+            io = IO.popen("echo hello")
+            s = io.read
+            io.close
+            s
+            "#,
+        );
+    }
+
+    #[test]
+    fn popen_close_without_read() {
+        // Closing without reading should not hang (child gets SIGPIPE).
+        run_test_no_result_check(
+            r#"
+            io = IO.popen("echo hello")
+            io.close
+            "#,
+        );
+    }
+
+    #[test]
+    fn popen_block() {
+        // IO.popen with block should auto-close.
+        run_test_no_result_check(
+            r#"
+            result = IO.popen("echo hello") {|io| io.read }
+            result
+            "#,
         );
     }
 

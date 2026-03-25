@@ -307,10 +307,10 @@ fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 
     for v in collector {
-        globals.print_value(v);
-        globals.write_stdout(b"\n");
+        globals.print_value(v)?;
+        globals.write_stdout(b"\n")?;
     }
-    globals.flush_stdout();
+    globals.flush_stdout()?;
     Ok(Value::nil())
 }
 
@@ -339,7 +339,7 @@ fn gets(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     for v in lfp.arg(0).as_array().iter().cloned() {
-        globals.print_value(v);
+        globals.print_value(v)?;
     }
     Ok(Value::nil())
 }
@@ -477,8 +477,8 @@ fn p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
         buf += &inspected.to_s(&globals.store);
         buf += "\n";
     }
-    globals.write_stdout(buf.as_bytes());
-    globals.flush_stdout();
+    globals.write_stdout(buf.as_bytes())?;
+    globals.flush_stdout()?;
     Ok(match len {
         0 => Value::nil(),
         1 => lfp.arg(0).as_array()[0],
