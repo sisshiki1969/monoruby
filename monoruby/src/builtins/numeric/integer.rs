@@ -1081,6 +1081,16 @@ mod tests {
     }
 
     #[test]
+    fn positive_negative() {
+        run_test("42.positive?");
+        run_test("(-42).positive?");
+        run_test("0.positive?");
+        run_test("42.negative?");
+        run_test("(-42).negative?");
+        run_test("0.negative?");
+    }
+
+    #[test]
     fn bop_redefinition() {
         // Verify that redefining Integer#+ does not crash the JIT.
         // Uses run_test_no_result_check because BOP redefinition

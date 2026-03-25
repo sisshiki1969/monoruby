@@ -1188,6 +1188,62 @@ mod tests {
     }
 
     #[test]
+    fn min() {
+        run_test("(1..5).min");
+        run_test("(1...5).min");
+        run_test("(5..1).min");
+        run_test("(1..1).min");
+        run_test("(1...1).min");
+        run_test("('a'..'z').min");
+    }
+
+    #[test]
+    fn min_with_block() {
+        run_test("(1..5).min {|a, b| b <=> a }");
+        run_test("(1...5).min {|a, b| b <=> a }");
+    }
+
+    #[test]
+    fn max() {
+        run_test("(1..5).max");
+        run_test("(1...5).max");
+        run_test("(5..1).max");
+        run_test("(1..1).max");
+        run_test("(1...1).max");
+        run_test("('a'..'z').max");
+    }
+
+    #[test]
+    fn max_with_block() {
+        run_test("(1..5).max {|a, b| b <=> a }");
+        run_test("(1...5).max {|a, b| b <=> a }");
+    }
+
+    #[test]
+    fn count() {
+        run_test("(1..5).count");
+        run_test("(1...5).count");
+        run_test("(5..1).count");
+        run_test("(1..1).count");
+        run_test("(1...1).count");
+    }
+
+    #[test]
+    fn minmax() {
+        run_test("(1..5).minmax");
+        run_test("(1...5).minmax");
+        run_test("(5..1).minmax");
+        run_test("(1..1).minmax");
+        run_test("(1...1).minmax");
+        run_test("('a'..'z').minmax");
+    }
+
+    #[test]
+    fn minmax_with_block() {
+        run_test("(1..5).minmax {|a, b| b <=> a }");
+    }
+
+    #[test]
     fn min_errors() {
         // beginless range
         run_test_error("(..5).min");

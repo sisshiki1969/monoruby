@@ -200,7 +200,7 @@ class Integer
       elsif result.is_a?(Integer)
         result
       else
-        raise TypeError, "can't convert #{obj.class} to Integer (#{obj.class}#to_int gives #{result.class})"
+        raise TypeError, "can't convert #{obj.class} into Integer"
       end
     else
       nil

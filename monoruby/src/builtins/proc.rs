@@ -412,4 +412,21 @@ mod tests {
         "#,
         );
     }
+
+    #[test]
+    fn lambda_q() {
+        run_test("Proc.new {}.lambda?");
+        run_test("lambda {}.lambda?");
+        run_test("->(x) { x }.lambda?");
+    }
+
+    #[test]
+    fn proc_arity() {
+        run_test("Proc.new {}.arity");
+        run_test("Proc.new {|x| x}.arity");
+        run_test("Proc.new {|x, y| x}.arity");
+        run_test("lambda {}.arity");
+        run_test("lambda {|x| x}.arity");
+        run_test("->(x, y) { x }.arity");
+    }
 }

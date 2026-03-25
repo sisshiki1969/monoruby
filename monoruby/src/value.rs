@@ -836,7 +836,7 @@ fn coerce_to_rstring_inner(
                 return Ok(s);
             }
             return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} to String",
+                "can't convert {} into String",
                 recv.get_real_class_name(&globals.store),
                 //recv.get_real_class_name(&globals.store),
                 //method,
@@ -1167,7 +1167,7 @@ impl Value {
                 return Ok(i);
             }
             return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} to Integer",
+                "can't convert {} into Integer",
                 self.get_real_class_name(&globals.store),
                 //self.get_real_class_name(&globals.store),
                 //result.get_real_class_name(&globals.store),
