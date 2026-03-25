@@ -430,4 +430,92 @@ mod tests {
         "##,
         );
     }
+
+    #[test]
+    fn name() {
+        run_test(r##"method(:puts).name"##);
+        run_test_with_prelude(
+            r##"
+            Foo.new.method(:bar).name
+            "##,
+            r##"
+            class Foo
+              def bar; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn receiver() {
+        run_test_with_prelude(
+            r##"
+            f = Foo.new
+            f.method(:bar).receiver == f
+            "##,
+            r##"
+            class Foo
+              def bar; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn owner() {
+        run_test_with_prelude(
+            r##"
+            Foo.new.method(:bar).owner
+            "##,
+            r##"
+            class Foo
+              def bar; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn unbind() {
+        run_test_with_prelude(
+            r##"
+            m = Foo.new.method(:bar)
+            um = m.unbind
+            um.is_a?(UnboundMethod)
+            "##,
+            r##"
+            class Foo
+              def bar; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn uname() {
+        run_test_with_prelude(
+            r##"
+            Foo.instance_method(:bar).name
+            "##,
+            r##"
+            class Foo
+              def bar; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn uowner() {
+        run_test_with_prelude(
+            r##"
+            Foo.instance_method(:bar).owner
+            "##,
+            r##"
+            class Foo
+              def bar; end
+            end
+            "##,
+        );
+    }
 }
