@@ -3633,4 +3633,55 @@ mod tests {
         run_test(r##"a = []; a.replace([1,2,3]); a"##);
         run_test(r##"a = [1,2,3]; a.replace(a); a"##);
     }
+
+    #[test]
+    fn cycle() {
+        run_test(
+            r##"
+            res = []
+            [1,2,3].cycle(2) { |x| res << x }
+            res
+            "##,
+        );
+        run_test(
+            r##"
+            res = []
+            [1,2].cycle(0) { |x| res << x }
+            res
+            "##,
+        );
+        run_test("[].cycle(3) { |x| x }");
+    }
+
+    #[test]
+    fn combination() {
+        run_test(
+            r##"
+            res = []
+            [1,2,3,4].combination(2) { |c| res << c }
+            res
+            "##,
+        );
+        run_test(
+            r##"
+            res = []
+            [1,2,3].combination(0) { |c| res << c }
+            res
+            "##,
+        );
+        run_test(
+            r##"
+            res = []
+            [1,2,3].combination(1) { |c| res << c }
+            res
+            "##,
+        );
+    }
+
+    #[test]
+    fn bsearch_index() {
+        run_test("[1,2,3,4,5].bsearch_index { |x| x >= 3 }");
+        run_test("[1,2,3,4,5].bsearch_index { |x| x >= 6 }");
+        run_test("[1,3,5,7,9].bsearch_index { |x| x <=> 5 }");
+    }
 }

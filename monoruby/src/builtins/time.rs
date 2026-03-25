@@ -22,6 +22,7 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_class_funcs_with(TIME_CLASS, "gm", &["utc"], time_gm, 1, 7, false);
     globals.define_builtin_class_func(TIME_CLASS, "now", time_now, 0);
+    globals.define_builtin_class_func_with(TIME_CLASS, "at", time_at, 1, 2, false);
     globals.define_builtin_class_func(TIME_CLASS, "allocate", allocate, 0);
 
     globals.define_builtin_funcs(TIME_CLASS, "gmtime", &["utc"], gmtime, 0);
@@ -45,6 +46,37 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn time_now(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let time_info = TimeInner::Local(Local::now().into());
+    Ok(Value::new_time(time_info))
+}
+
+///
+/// ### Time.at
+/// - at(time) -> Time
+/// - at(time, usec) -> Time
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/s/at.html]
+#[monoruby_builtin]
+fn time_at(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let secs_val = lfp.arg(0);
+    let (secs, nsecs) = if let Some(f) = secs_val.try_float() {
+        let s = f.floor() as i64;
+        let ns = ((f - f.floor()) * 1_000_000_000.0) as u32;
+        (s, ns)
+    } else {
+        let s = secs_val.coerce_to_i64(globals)?;
+        (s, 0u32)
+    };
+    let usec_ns = if let Some(arg1) = lfp.try_arg(1) {
+        let u = arg1.coerce_to_i64(globals)?;
+        (u * 1000) as u32
+    } else {
+        0
+    };
+    let total_ns = nsecs + usec_ns;
+    let dt = DateTime::from_timestamp(secs, total_ns)
+        .ok_or_else(|| MonorubyErr::argumenterr("out of Time range"))?;
+    let local: DateTime<Local> = dt.into();
+    let time_info = TimeInner::Local(local.into());
     Ok(Value::new_time(time_info))
 }
 
@@ -420,6 +452,28 @@ mod tests {
             res << t.day                              # => 1
             res
        "#,
+        );
+    }
+
+    #[test]
+    fn test_time_at() {
+        run_test(
+            r#"
+            t = Time.at(0)
+            t.utc.year
+            "#,
+        );
+        run_test(
+            r#"
+            t = Time.at(946684800)
+            t.utc.year
+            "#,
+        );
+        run_test_once(
+            r#"
+            t = Time.at(1000000000, 500000)
+            t.utc.to_s
+            "#,
         );
     }
 }

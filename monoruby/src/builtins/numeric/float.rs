@@ -529,4 +529,10 @@ mod tests {
         run_test("(-1.0).negative?");
         run_test("0.0.negative?");
     }
+
+    #[test]
+    fn float_to_r() {
+        run_test_once("1.5.respond_to?(:to_r)");
+        run_test_once("1.5.respond_to?(:rationalize)");
+    }
 }

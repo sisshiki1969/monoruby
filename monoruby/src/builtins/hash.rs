@@ -9,6 +9,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with_effect(HASH_CLASS, "new", new, 0, 1, Effect::CAPTURE);
     globals.define_builtin_class_func(HASH_CLASS, "allocate", allocate, 0);
     globals.define_builtin_class_func_rest(HASH_CLASS, "[]", hash_bracket);
+    globals.define_builtin_class_func(HASH_CLASS, "try_convert", try_convert, 1);
 
     globals.define_builtin_func_with(HASH_CLASS, "default", default, 0, 1, false);
     globals.define_builtin_func(HASH_CLASS, "default_proc", default_proc, 0);
@@ -191,6 +192,43 @@ fn hash_bracket(
             Ok(Value::hash(map))
         }
     }
+}
+
+///
+/// ### Hash.try_convert
+///
+/// - try_convert(obj) -> Hash | nil
+///
+/// Tries to convert obj into a Hash, using to_hash method.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/s/try_convert.html]
+#[monoruby_builtin]
+fn try_convert(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    if arg.try_hash_ty().is_some() {
+        return Ok(arg);
+    }
+    let method = IdentId::get_id("to_hash");
+    if let Some(result) = vm.invoke_method_if_exists(globals, method, arg, &[], None, None)? {
+        if result.is_nil() {
+            return Ok(Value::nil());
+        }
+        if result.try_hash_ty().is_some() {
+            return Ok(result);
+        }
+        return Err(MonorubyErr::typeerr(format!(
+            "can't convert {} to Hash ({}#to_hash gives {})",
+            arg.get_real_class_name(globals),
+            arg.get_real_class_name(globals),
+            result.get_real_class_name(globals),
+        )));
+    }
+    Ok(Value::nil())
 }
 
 ///
@@ -1894,5 +1932,12 @@ mod tests {
     #[test]
     fn to_h_with_block() {
         run_test("{a: 1, b: 2}.to_h {|k, v| [k, v.to_s] }");
+    }
+
+    #[test]
+    fn try_convert() {
+        run_test("Hash.try_convert({a: 1})");
+        run_test("Hash.try_convert(1)");
+        run_test("Hash.try_convert(nil)");
     }
 }

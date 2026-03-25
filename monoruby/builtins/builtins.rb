@@ -260,21 +260,37 @@ class Float
     end
   end
 
-  #def numerator
-  #  Rational(self).numerator
-  #end
+  def numerator
+    if defined?(Rational)
+      to_r.numerator
+    else
+      raise TypeError, "can't convert Float into Rational"
+    end
+  end
 
-  #def denominator
-  #  Rational(self).denominator
-  #end
+  def denominator
+    if defined?(Rational)
+      to_r.denominator
+    else
+      raise TypeError, "can't convert Float into Rational"
+    end
+  end
 
-  #def to_r
-  #  Rational(self)
-  #end
+  def to_r
+    if defined?(Rational)
+      Rational(self)
+    else
+      self
+    end
+  end
 
-  #def rationalize(eps = nil)
-  #  Rational(self)
-  #end
+  def rationalize(eps = nil)
+    if defined?(Rational)
+      Rational(self)
+    else
+      self
+    end
+  end
 
   def fdiv(other)
     self / other.to_f

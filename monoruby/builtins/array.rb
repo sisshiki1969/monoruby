@@ -157,4 +157,84 @@ class Array
     end
     res
   end
+
+  def cycle(n = nil)
+    return to_enum(:cycle, n) unless block_given?
+    return nil if empty?
+    if n.nil?
+      loop do
+        each { |x| yield x }
+      end
+    else
+      n = n.to_i
+      n.times do
+        each { |x| yield x }
+      end
+    end
+    nil
+  end
+
+  def combination(n)
+    return to_enum(:combination, n) unless block_given?
+    n = n.to_i
+    len = self.size
+    if n == 0
+      yield []
+    elsif n == 1
+      each { |x| yield [x] }
+    elsif n > 0 && n <= len
+      # iterative combination generation
+      indices = (0...n).to_a
+      loop do
+        yield indices.map { |i| self[i] }
+        # find rightmost index that can be incremented
+        i = n - 1
+        i -= 1 while i >= 0 && indices[i] == len - n + i
+        break if i < 0
+        indices[i] += 1
+        (i + 1...n).each { |j| indices[j] = indices[j - 1] + 1 }
+      end
+    end
+    self
+  end
+
+  def bsearch_index
+    return to_enum(:bsearch_index) unless block_given?
+    low = 0
+    high = size
+    mode = nil
+    while low < high
+      mid = (low + high) / 2
+      val = self[mid]
+      res = yield(val)
+
+      if mode.nil?
+        if res == true || res == false
+          mode = :find_min
+        elsif res.is_a?(Numeric)
+          mode = :find_exact
+        else
+          raise TypeError, "unexpected block result #{res.inspect}"
+        end
+      end
+
+      case mode
+      when :find_min
+        if res
+          high = mid
+        else
+          low = mid + 1
+        end
+      when :find_exact
+        if res < 0
+          low = mid + 1
+        elsif res > 0
+          high = mid
+        else
+          return mid
+        end
+      end
+    end
+    mode == :find_min ? low < size ? low : nil : nil
+  end
 end

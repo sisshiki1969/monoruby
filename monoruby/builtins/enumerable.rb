@@ -501,4 +501,5 @@ module Enumerable
     end
     res
   end
+
 end

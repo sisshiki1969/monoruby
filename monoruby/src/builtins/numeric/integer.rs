@@ -1113,4 +1113,10 @@ mod tests {
             "##,
         );
     }
+
+    #[test]
+    fn integer_to_r() {
+        run_test_once("3.respond_to?(:to_r)");
+        run_test_once("3.respond_to?(:rationalize)");
+    }
 }

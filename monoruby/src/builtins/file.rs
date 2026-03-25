@@ -3,6 +3,7 @@ use std::{
     fs::File,
     io::{Seek, SeekFrom, Write},
 };
+use std::path::Path;
 
 //
 // File class
@@ -46,6 +47,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(file_test, "executable?", executable_, 1);
 
     globals.define_builtin_func_rest(file, "write", write);
+
+    globals.define_builtin_class_func_with(file, "umask", umask, 0, 1, false);
+    globals.define_builtin_class_funcs_with(file, "fnmatch", &["fnmatch?"], fnmatch, 2, 3, false);
+    globals.define_builtin_class_func_with(file, "absolute_path", absolute_path, 1, 2, false);
+    globals.define_builtin_class_func(file, "absolute_path?", absolute_path_, 1);
+    globals.define_builtin_class_func(file, "split", file_split, 1);
 
     globals.define_builtin_singleton_func(
         globals.get_load_path(),
@@ -557,6 +564,251 @@ fn resolve_feature_path(
     }
 }
 
+///
+/// ### File.umask
+/// - umask -> Integer
+/// - umask(mask) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/umask.html]
+#[monoruby_builtin]
+fn umask(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    if let Some(arg0) = lfp.try_arg(0) {
+        let mask = arg0.coerce_to_i64(globals)? as u32;
+        // SAFETY: umask is a POSIX system call that is safe to call.
+        let old = unsafe { libc::umask(mask as libc::mode_t) };
+        Ok(Value::integer(old as i64))
+    } else {
+        // Get current umask by setting and restoring
+        // SAFETY: umask is a POSIX system call that is safe to call.
+        let current = unsafe { libc::umask(0) };
+        unsafe { libc::umask(current) };
+        Ok(Value::integer(current as i64))
+    }
+}
+
+///
+/// ### File.fnmatch
+/// - fnmatch(pattern, path, flags = 0) -> bool
+/// - fnmatch?(pattern, path, flags = 0) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/fnmatch.html]
+#[monoruby_builtin]
+fn fnmatch(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let pattern = lfp.arg(0).expect_string(globals)?;
+    let path_str = lfp.arg(1).expect_string(globals)?;
+    let flags = if let Some(arg2) = lfp.try_arg(2) {
+        arg2.coerce_to_i64(globals)? as u32
+    } else {
+        0
+    };
+    let fnm_dotmatch = 0x0004;
+    let fnm_pathname = 0x0002;
+    let dotmatch = flags & fnm_dotmatch != 0;
+    let pathname = flags & fnm_pathname != 0;
+    let result = fnmatch_pattern(&pattern, &path_str, dotmatch, pathname);
+    Ok(Value::bool(result))
+}
+
+/// Simple glob-style pattern matching.
+fn fnmatch_pattern(pattern: &str, string: &str, dotmatch: bool, pathname: bool) -> bool {
+    fn match_inner(pat: &[u8], s: &[u8], dotmatch: bool, pathname: bool) -> bool {
+        let mut pi = 0;
+        let mut si = 0;
+        let mut star_pi = None;
+        let mut star_si = None;
+
+        while si < s.len() {
+            if pi < pat.len() && pat[pi] == b'*' {
+                // Don't match dot at start unless dotmatch
+                if si == 0 && s[si] == b'.' && !dotmatch {
+                    return false;
+                }
+                // In pathname mode, * doesn't match /
+                star_pi = Some(pi);
+                star_si = Some(si);
+                pi += 1;
+                continue;
+            }
+            if pi < pat.len() && pat[pi] == b'?' {
+                if pathname && s[si] == b'/' {
+                    return false;
+                }
+                if si == 0 && s[si] == b'.' && !dotmatch {
+                    return false;
+                }
+                pi += 1;
+                si += 1;
+                continue;
+            }
+            if pi < pat.len() && pat[pi] == b'[' {
+                if let Some((matched, new_pi)) = match_bracket(&pat[pi..], s[si]) {
+                    if matched {
+                        pi = pi + new_pi;
+                        si += 1;
+                        continue;
+                    }
+                }
+                if let Some(spi) = star_pi {
+                    pi = spi + 1;
+                    let ssi = star_si.unwrap() + 1;
+                    if pathname && s[star_si.unwrap()] == b'/' {
+                        return false;
+                    }
+                    star_si = Some(ssi);
+                    si = ssi;
+                    continue;
+                }
+                return false;
+            }
+            if pi < pat.len() && (pat[pi] == s[si] || pat[pi] == b'\\' && pi + 1 < pat.len() && pat[pi + 1] == s[si]) {
+                if pat[pi] == b'\\' {
+                    pi += 1;
+                }
+                pi += 1;
+                si += 1;
+                continue;
+            }
+            if let Some(spi) = star_pi {
+                pi = spi + 1;
+                let ssi = star_si.unwrap() + 1;
+                if pathname && s[star_si.unwrap()] == b'/' {
+                    return false;
+                }
+                star_si = Some(ssi);
+                si = ssi;
+                continue;
+            }
+            return false;
+        }
+        while pi < pat.len() && pat[pi] == b'*' {
+            pi += 1;
+        }
+        pi == pat.len()
+    }
+
+    fn match_bracket(pat: &[u8], ch: u8) -> Option<(bool, usize)> {
+        if pat.is_empty() || pat[0] != b'[' {
+            return None;
+        }
+        let mut i = 1;
+        let negate = if i < pat.len() && (pat[i] == b'^' || pat[i] == b'!') {
+            i += 1;
+            true
+        } else {
+            false
+        };
+        let mut matched = false;
+        while i < pat.len() && pat[i] != b']' {
+            if i + 2 < pat.len() && pat[i + 1] == b'-' {
+                if ch >= pat[i] && ch <= pat[i + 2] {
+                    matched = true;
+                }
+                i += 3;
+            } else {
+                if ch == pat[i] {
+                    matched = true;
+                }
+                i += 1;
+            }
+        }
+        if i < pat.len() && pat[i] == b']' {
+            Some((matched ^ negate, i + 1))
+        } else {
+            None
+        }
+    }
+
+    match_inner(pattern.as_bytes(), string.as_bytes(), dotmatch, pathname)
+}
+
+///
+/// ### File.absolute_path
+/// - absolute_path(file_name, dir_string = nil) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/absolute_path.html]
+#[monoruby_builtin]
+fn absolute_path(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let file_name = to_path_str(vm, globals, lfp.arg(0))?;
+    if Path::new(&file_name).is_absolute() {
+        return Ok(Value::string(file_name));
+    }
+    let base = if let Some(arg1) = lfp.try_arg(1)
+        && !arg1.is_nil()
+    {
+        std::path::PathBuf::from(to_path_str(vm, globals, arg1)?)
+    } else {
+        match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(err) => return Err(MonorubyErr::runtimeerr(err)),
+        }
+    };
+    let mut result = base;
+    result.push(&file_name);
+    Ok(Value::string(conv_pathbuf(&result)))
+}
+
+///
+/// ### File.absolute_path?
+/// - absolute_path?(file_name) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/absolute_path=3f.html]
+#[monoruby_builtin]
+fn absolute_path_(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let file_name = lfp.arg(0).expect_string(globals)?;
+    Ok(Value::bool(file_name.starts_with('/')))
+}
+
+///
+/// ### File.split
+/// - split(pathname) -> [dirname, basename]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/split.html]
+#[monoruby_builtin]
+fn file_split(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let filename = to_path(vm, globals, lfp.arg(0))?;
+    let mut dir = match filename.parent() {
+        Some(ostr) => conv_pathbuf(ostr),
+        None => "".to_string(),
+    };
+    if dir.is_empty() {
+        dir = ".".to_string();
+    }
+    let base = match filename.file_name() {
+        Some(ostr) => ostr.to_string_lossy().to_string(),
+        None => {
+            if filename.as_os_str() == "/" {
+                "/".to_string()
+            } else {
+                "".to_string()
+            }
+        }
+    };
+    Ok(Value::array2(
+        Value::string(dir),
+        Value::string(base),
+    ))
+}
+
 // Utils
 
 fn extend(path: &mut std::path::PathBuf, extend: std::path::PathBuf) -> Result<()> {
@@ -748,5 +1000,51 @@ mod tests {
     fn open() {
         run_test(r##"$LOAD_PATH.resolve_feature_path("pp")"##);
         run_test(r##"$LOAD_PATH.resolve_feature_path("zzzz")"##);
+    }
+
+    #[test]
+    fn umask() {
+        run_test_no_result_check(
+            r#"
+            old = File.umask(0022)
+            cur = File.umask
+            File.umask(old)
+            raise "umask should be Integer" unless cur.is_a?(Integer)
+            raise "umask should be 0022" unless cur == 0022
+            "#,
+        );
+    }
+
+    #[test]
+    fn fnmatch() {
+        run_test(r##"File.fnmatch("cat", "cat")"##);
+        run_test(r##"File.fnmatch("cat", "category")"##);
+        run_test(r##"File.fnmatch("c*", "cats")"##);
+        run_test(r##"File.fnmatch("c?t", "cat")"##);
+        run_test(r##"File.fnmatch("c?t", "cot")"##);
+        run_test(r##"File.fnmatch("c?t", "ct")"##);
+        run_test(r##"File.fnmatch("c[ao]t", "cat")"##);
+        run_test(r##"File.fnmatch("c[ao]t", "cot")"##);
+        run_test(r##"File.fnmatch("c[ao]t", "cut")"##);
+        run_test(r##"File.fnmatch?("cat", "cat")"##);
+    }
+
+    #[test]
+    fn absolute_path() {
+        run_test(r##"File.absolute_path("/tmp")"##);
+        run_test(r##"File.absolute_path?("/tmp")"##);
+        run_test(r##"File.absolute_path?("tmp")"##);
+    }
+
+    #[test]
+    fn absolute_path_relative() {
+        run_test(r##"File.absolute_path("foo", "/tmp")"##);
+    }
+
+    #[test]
+    fn file_split() {
+        run_test(r##"File.split("/home/user/file.txt")"##);
+        run_test(r##"File.split("file.txt")"##);
+        run_test(r##"File.split("/home/user/")"##);
     }
 }
