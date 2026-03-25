@@ -1449,10 +1449,10 @@ impl RValue {
         unsafe { &mut self.kind.string }
     }
 
-    pub(super) unsafe fn as_str(&self) -> &str {
-        // SAFETY: Caller must ensure this RValue contains a STRING type with valid UTF-8.
-        // Accessing the string union field and calling check_utf8() is valid for STRING types.
-        unsafe { self.kind.string.check_utf8().unwrap() }
+    pub(super) unsafe fn as_str(&self) -> Option<&str> {
+        // SAFETY: Caller must ensure this RValue contains a STRING type.
+        // Returns None if the string contains invalid UTF-8.
+        unsafe { self.kind.string.check_utf8().ok() }
     }
 
     /*pub(crate) fn as_string_mut(&mut self) -> &mut InnerVec {
