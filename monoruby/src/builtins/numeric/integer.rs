@@ -1079,4 +1079,28 @@ mod tests {
         run_test("Integer.try_convert(nil)");
         run_test(r#"Integer.try_convert("1")"#);
     }
+
+    #[test]
+    fn bop_redefinition() {
+        // Verify that redefining Integer#+ does not crash the JIT.
+        // Uses run_test_no_result_check because BOP redefinition
+        // affects global state and the result may differ from CRuby.
+        run_test_no_result_check(
+            r##"
+            res = []
+            res << (1 + 2)
+            class Integer
+              def +(other)
+                self - other
+              end
+            end
+            res << (1 + 2)
+            class Integer
+              remove_method :+
+            end
+            res << (1 + 2)
+            res
+            "##,
+        );
+    }
 }
