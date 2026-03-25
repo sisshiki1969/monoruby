@@ -31,6 +31,10 @@ impl MethodInner {
         self.func_id
     }
 
+    pub fn owner(&self) -> ClassId {
+        self.owner
+    }
+
     pub fn debug(&self, store: &Store) -> String {
         format!(
             "#<Method: {}#{}()>",
