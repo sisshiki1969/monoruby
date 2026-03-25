@@ -4,66 +4,27 @@
 
 ruby/spec core カテゴリ全58分野を mspec で実行し、SEGV/パニック(SIGABRT)/ハング(タイムアウト)が発生するケースを特定しました。
 
-**前回調査からの差分:**
-- Range#to_a SEGV → **解消**
-- Range#count/min/max/minmax HANG×4 → **解消** (PR #215 で実装)
-- String#modulo PANIC → 原因が変化 (バイトコード生成assert → JIT recompile)
-
 ## ruby/spec core 全体結果
 
-| 指標 | 件数 | 前回 |
-|------|------|------|
-| カテゴリ総数 | 58 | 58 |
-| 正常完了カテゴリ | 52 | 49 |
-| **SEGV** | **0件** | 1件 |
-| **パニック (SIGABRT)** | **5件** | 7件 |
-| **ハング (タイムアウト)** | **2件** | 6件 |
+| 指標 | 件数 | 前回 | 初回 |
+|------|------|------|------|
+| カテゴリ総数 | 58 | 58 | 58 |
+| 正常完了カテゴリ | 55 | 52 | 49 |
+| **SEGV** | **0件** | 0件 | 1件 |
+| **パニック (SIGABRT)** | **1件** | 5件 | 7件 |
+| **ハング (タイムアウト)** | **2件** | 2件 | 6件 |
 
 ---
 
-## SEGV (0件)
+## パニック — SIGABRT (1件)
 
-前回報告の Range#to_a SEGV は解消済み。
-
----
-
-## パニック — SIGABRT (5件)
-
-### 1. JIT再コンパイル/コンパイル時パニック (影響: array, string/modulo, numeric/step)
-
-3つのカテゴリで同じJITパニックが発生。根本原因は共通と推定。
-
-| spec | パニック箇所 |
-|------|-------------|
-| `core/array` (全体実行時) | `jit_recompile_method_with_recovery` |
-| `core/string/modulo_spec.rb` | `jit_recompile_method_with_recovery` |
-| `core/numeric/step_spec.rb` | `jit_compile_patch` |
-
-- **原因**: JITがメソッドを再コンパイル/パッチする際、インラインキャッシュまたは型状態の不整合でパニック。多数のspecを連続実行してJITキャッシュが蓄積した状態でのみ発生。個別spec単独実行では再現しないケースもある。
-- **前回との差分**: String#modulo は前回 `bytecodegen/expression.rs:451` のassert失敗だったが、今回は JIT recompile パニックに変化。
-
-### 2. Fiber#transfer — send() 内パニック
+### Fiber#transfer — send() 内パニック
 
 | 項目 | 詳細 |
 |------|------|
 | **spec** | `core/fiber/transfer_spec.rb` |
 | **パニック箇所** | `builtins::kernel::send` |
 | **原因** | `send(:transfer)` 呼び出し時に、エラーメッセージ生成中にBuiltin FuncInfoに対して不正な操作を行いパニック |
-
-### 3. Process.getrlimit — Array#grep 内パニック
-
-| 項目 | 詳細 |
-|------|------|
-| **spec** | `core/process/getrlimit_spec.rb` |
-| **パニック箇所** | `builtins::array::grep` |
-| **原因** | `Array#grep` が対応していない引数パターンでパニック (前回は `Array#flatten` の `unimplemented!()` だったが変化) |
-
-### 4. Set#flatten — スタックオーバーフロー
-
-| 項目 | 詳細 |
-|------|------|
-| **spec** | `core/set/flatten_spec.rb` |
-| **原因** | 再帰的 Set 構造 (`s << s; s.flatten`) でサイクル検出なしに無限再帰。CRuby は `ArgumentError` を発生させる |
 
 ---
 
@@ -85,16 +46,13 @@ ruby/spec core カテゴリ全58分野を mspec で実行し、SEGV/パニック
 
 ---
 
-## 影響範囲順の優先度表
+## 優先度表
 
-| 優先度 | 問題 | 種別 | 影響 | 根本原因 |
-|--------|------|------|------|---------|
-| **1** | JIT再コンパイル/パッチ時パニック | PANIC×3 | array全体・string/modulo・numeric/step がクラッシュ | JITインラインキャッシュ/型状態不整合 |
-| **2** | Fiber#transfer send() パニック | PANIC | send(:transfer) でクラッシュ | Builtin FuncInfo のエラーメッセージ生成 |
-| **3** | Process.getrlimit Array#grep パニック | PANIC | getrlimit specがクラッシュ | Array#grep の未対応パターン |
-| **4** | Set#flatten スタックオーバーフロー | PANIC | 再帰Set構造でクラッシュ | サイクル検出なし |
-| **5** | IO#close IO.popen ハング | HANG | IO.popen テスト不可 | サブプロセス管理の問題 |
-| **6** | Process.exit Thread伝播ハング | HANG | Thread + SystemExit テスト不可 | SystemExit のスレッド間伝播未対応 |
+| 優先度 | 問題 | 種別 | 根本原因 |
+|--------|------|------|---------|
+| **1** | Fiber#transfer send() パニック | PANIC | Builtin FuncInfo のエラーメッセージ生成 |
+| **2** | IO#close IO.popen ハング | HANG | サブプロセス管理の問題 |
+| **3** | Process.exit Thread伝播ハング | HANG | SystemExit のスレッド間伝播未対応 |
 
 ---
 
@@ -102,16 +60,18 @@ ruby/spec core カテゴリ全58分野を mspec で実行し、SEGV/パニック
 
 | 問題 | 種別 | 解消方法 |
 |------|------|---------|
-| Range#to_a SEGV | SEGV | 本ブランチの修正で解消 (JIT生成コードの問題が修正された) |
+| Range#to_a SEGV | SEGV | JIT生成コードの問題が修正された |
 | Range#count/min/max/minmax ハング | HANG×4 | PR #215 で Range#min/max/count/minmax を実装 |
-| String#modulo バイトコード生成assert | PANIC | パニック箇所が変化 (JIT recompile に統合) |
-| Array#flatten unimplemented | PANIC | パニック箇所が変化 (Array#grep に統合) |
+| JIT再コンパイル/パッチ時パニック (array, string/modulo, numeric/step) | PANIC×3 | PR #220 で BOP再定義後のJITエントリ消失に対応 + catch_unwind安全策 |
+| Set#flatten スタックオーバーフロー | PANIC | PR #220 でサイクル検出を追加 |
+| Array#grep ブロック付き呼び出しパニック | PANIC | PR #220 でブロック対応を実装 |
+| Process.getrlimit Array#grep パニック | PANIC | PR #220 で解消 (Array#grep修正の副次効果) |
 
 ---
 
 ## cargo test 結果
 
-- **568 passed**, 10 failed (master と同一)
+- **578 passed**, 10 failed
 - 失敗10件は全て CRuby との出力不一致（`Value::assert_eq` アサート失敗）
 - SEGV/ハング/パニックはゼロ
 
