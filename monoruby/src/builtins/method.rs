@@ -207,7 +207,7 @@ fn receiver(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
 fn owner(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
-    Ok(globals.get_class_obj(method.owner()))
+    Ok(globals.store[method.owner()].get_module().get())
 }
 
 ///
@@ -248,7 +248,7 @@ fn uname(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn uowner(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
-    Ok(globals.get_class_obj(method.owner()))
+    Ok(globals.store[method.owner()].get_module().get())
 }
 
 #[cfg(test)]
