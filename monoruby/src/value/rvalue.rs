@@ -383,7 +383,9 @@ impl std::fmt::Debug for RValue {
                             ObjTy::OBJECT => format!("{:?}", self.kind.object),
                             ObjTy::BIGNUM => format!("{:?}", self.kind.bignum),
                             ObjTy::FLOAT => format!("{:?}", self.kind.float),
-                            ObjTy::STRING => format!("{}", String::from_utf8_lossy(self.kind.string.as_bytes())),
+                            ObjTy::STRING => {
+                                format!("{}", String::from_utf8_lossy(self.kind.string.as_bytes()))
+                            }
                             ObjTy::TIME => format!("{:?}", self.kind.time),
                             ObjTy::ARRAY => format!("{:?}", self.kind.array),
                             ObjTy::RANGE => format!("{:?}", self.kind.range),
@@ -540,7 +542,10 @@ impl RValue {
         format!(
             "#<Fiber:0x{:016x} {} ({state})>",
             self.id(),
-            store.iseq(func_id).get_location(),
+            match store[func_id].is_iseq() {
+                Some(iseq) => store[iseq].get_location(),
+                None => "<internal>".to_string(),
+            }
         )
     }
 

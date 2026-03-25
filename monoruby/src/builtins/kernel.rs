@@ -472,8 +472,7 @@ fn p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
     let len = lfp.arg(0).as_array().len();
     let mut buf = String::new();
     for v in lfp.arg(0).as_array().iter() {
-        let inspected =
-            vm.invoke_method_inner(globals, IdentId::INSPECT, *v, &[], None, None)?;
+        let inspected = vm.invoke_method_inner(globals, IdentId::INSPECT, *v, &[], None, None)?;
         buf += &inspected.to_s(&globals.store);
         buf += "\n";
     }
@@ -1034,13 +1033,14 @@ fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if let Some(sec) = lfp.try_arg(0) {
         let sec = sec.coerce_to_f64(globals)?;
         if sec.is_nan() || sec < 0.0 {
-            return Err(MonorubyErr::argumenterr("time interval must not be negative or NaN"));
+            return Err(MonorubyErr::argumenterr(
+                "time interval must not be negative or NaN",
+            ));
         }
         std::thread::sleep(std::time::Duration::from_secs_f64(sec));
     } else {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(100));
-        }
+        // TODO: we must sleep forever
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
     let elapsed = now.elapsed().as_secs();
     Ok(Value::integer(elapsed as i64))
@@ -1096,7 +1096,10 @@ fn exit(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     } else {
         0
     };
-    Err(MonorubyErr::new(MonorubyErrKind::SystemExit(status), "exit"))
+    Err(MonorubyErr::new(
+        MonorubyErrKind::SystemExit(status),
+        "exit",
+    ))
 }
 
 ///
