@@ -1785,7 +1785,17 @@ fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             }
             res
         }
-        _ => unimplemented!(),
+        Some(bh) => {
+            let bh = vm.get_block_data(globals, bh)?;
+            let mut res = vec![];
+            for v in lfp.self_val().as_array().iter() {
+                if cmp_teq_values_bool(vm, globals, lfp.arg(0), *v)? {
+                    let mapped = vm.invoke_block(globals, &bh, &[*v])?;
+                    res.push(mapped);
+                }
+            }
+            res
+        }
     };
     Ok(Value::array_from_vec(ary))
 }
@@ -3118,6 +3128,9 @@ mod tests {
     fn grep() {
         run_test(r#"['aa', 'bb', 'cc', 'dd', 'ee'].grep(/[bc]/)"#);
         //run_test(r#"Array.instance_methods.grep(/gr/)"#);
+        run_test(r#"['aa', 'bb', 'cc', 'dd', 'ee'].grep(/[bc]/) {|s| s.upcase }"#);
+        run_test(r#"[1, 2, 3, 4, 5].grep(Integer) {|n| n * 2 }"#);
+        run_test(r#"[1, 'a', 2, 'b'].grep(String)"#);
     }
 
     #[test]

@@ -1065,15 +1065,22 @@ impl Store {
         let self_class = lfp.self_val().class();
         let iseq_id = self[func_id].as_iseq();
         let iseq = &self[iseq_id];
-        for (recv_class, name, comptime_fid) in iseq.get_cache_map(self_class) {
+        let Some(cache_map) = iseq.get_cache_map(self_class) else {
+            // JIT entry was invalidated (e.g. by BOP redefinition). Fall back to recompile.
+            return false;
+        };
+        for (recv_class, name, comptime_fid) in cache_map {
             let func_id = self.check_method_for_name(lfp, *recv_class, *name);
             if func_id != Some(*comptime_fid) {
                 return false;
             }
         }
-        let version_label = self[iseq_id]
+        let Some(version_label) = self[iseq_id]
             .get_jit_class_version(lfp.self_val().class())
-            .unwrap();
+        else {
+            // JIT entry was invalidated between cache_map check and here.
+            return false;
+        };
         CODEGEN.with(|codegen| {
             codegen
                 .borrow_mut()

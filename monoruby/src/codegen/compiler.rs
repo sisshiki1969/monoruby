@@ -290,10 +290,14 @@ impl Codegen {
             let patch_point = self.jit.get_label_address(&patch_point);
             self.jit.apply_jmp_patch_address(patch_point, &jit_entry);
         } else {
-            unreachable!(
-                "Warning: recompilation of invalidated method: {:?}",
+            // JIT entry was invalidated (e.g. by BOP redefinition).
+            // The compiled code is discarded; execution falls back to the VM interpreter.
+            #[cfg(feature = "jit-log")]
+            eprintln!(
+                "[JIT] recompilation skipped for invalidated method: {:?}",
                 globals.store[func_id].name()
             );
+            return None;
         }
         Some(())
     }
@@ -372,17 +376,29 @@ extern "C" fn jit_compile_patch(
     lfp: Lfp,
     entry_patch_point: monoasm::CodePtr,
 ) {
-    CODEGEN.with(|codegen| {
-        codegen
-            .borrow_mut()
-            .compile_patch(globals, lfp, entry_patch_point);
-    });
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CODEGEN.with(|codegen| {
+            codegen
+                .borrow_mut()
+                .compile_patch(globals, lfp, entry_patch_point);
+        });
+    }));
+    if result.is_err() {
+        #[cfg(feature = "jit-log")]
+        eprintln!("[JIT] compile_patch panicked, falling back to VM interpreter");
+    }
 }
 
 extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: RecompileReason) {
-    CODEGEN.with(|codegen| {
-        codegen.borrow_mut().recompile_method(globals, lfp, reason);
-    });
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CODEGEN.with(|codegen| {
+            codegen.borrow_mut().recompile_method(globals, lfp, reason);
+        });
+    }));
+    if result.is_err() {
+        #[cfg(feature = "jit-log")]
+        eprintln!("[JIT] recompile_method panicked, falling back to VM interpreter");
+    }
 }
 
 extern "C" fn jit_recompile_method_with_recovery(
@@ -393,9 +409,17 @@ extern "C" fn jit_recompile_method_with_recovery(
     if globals.store.update_inline_cache(lfp) {
         return 1;
     };
-    CODEGEN.with(|codegen| {
-        codegen.borrow_mut().recompile_method(globals, lfp, reason);
-    });
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CODEGEN.with(|codegen| {
+            codegen.borrow_mut().recompile_method(globals, lfp, reason);
+        });
+    }));
+    if result.is_err() {
+        #[cfg(feature = "jit-log")]
+        eprintln!(
+            "[JIT] recompile_method_with_recovery panicked, falling back to VM interpreter"
+        );
+    }
     0
 }
 

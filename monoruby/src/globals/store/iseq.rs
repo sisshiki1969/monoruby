@@ -427,8 +427,10 @@ impl ISeqInfo {
     pub(crate) fn get_cache_map(
         &self,
         self_class: ClassId,
-    ) -> &Vec<(ClassId, Option<IdentId>, FuncId)> {
-        &self.jit_entry.get(&self_class).unwrap().inline_cache_map
+    ) -> Option<&Vec<(ClassId, Option<IdentId>, FuncId)>> {
+        self.jit_entry
+            .get(&self_class)
+            .map(|info| &info.inline_cache_map)
     }
 
     pub(crate) fn set_cache_map(
