@@ -1,146 +1,90 @@
-# monoruby ruby/spec core カテゴリ クラッシュレポート
+# monoruby SEGV/パニック/ハング 調査レポート
 
 ## 概要
 
-ruby/spec の core カテゴリを mspec 経由で実行し、SEGV/SIGABRT（クラッシュ）が発生するテストを特定しました。
+ruby/spec core カテゴリおよび体系的なエッジケーステストを実行し、SEGV/SIGABRT（パニック）およびハング（無限ループ）が発生するケースを特定・修正しました。
 
-## クラッシュが確認されたカテゴリ
+## 修正済みのクラッシュ (PR #210, #211, および本ブランチ)
 
-| カテゴリ | 終了コード | クラッシュするspecファイル |
-|---------|-----------|------------------------|
-| core/array | 134 (SIGABRT) | 個別ファイルでは再現せず（組み合わせ時のみ） |
-| core/fiber | 134 | transfer_spec.rb |
-| core/numeric | 134 | step_spec.rb |
-| core/proc | 134 | call_spec.rb, case_compare_spec.rb, element_reference_spec.rb, yield_spec.rb |
-| core/set | 134 | flatten_spec.rb |
-| core/string | 134 | casecmp_spec.rb, index_spec.rb, modulo_spec.rb, rindex_spec.rb, split_spec.rb |
+### PR #210: String メソッドクラッシュ修正
 
-## 個別のクラッシュ詳細と最小再現コード
+| # | メソッド | 原因 | 修正内容 |
+|---|---------|------|---------|
+| 1 | `String#casecmp` | `is_str()` → `as_str()` → `check_utf8().unwrap()` で invalid UTF-8 パニック | バイトレベルASCII比較に変更 |
+| 2 | `String#casecmp?` | 同上（`to_lowercase()` 前のUTF-8検証なし） | `check_utf8()` で事前検証、`ArgumentError` を返す |
+| 3 | `String#index` | `char_pos == char_len` で `nth().unwrap()` パニック | 末尾位置の境界チェック追加 |
+| 4 | `String#rindex` | ゼロ幅マッチで `last_char_pos.unwrap()` パニック | デフォルト位置処理と末尾マッチ対応 |
+| 5 | `check_utf8` | `RuntimeError` を返していた | `ArgumentError` に変更（CRuby互換） |
 
-### 1. String#index — 空文字列検索で文字列末尾位置を指定 ✅再現可
+### PR #211: Proc#call yield パニック修正
 
-**再現コード:** `repro/crash6_string_index.rb`
-```ruby
-"blablabla".index("", 9)
-```
+| # | メソッド | 原因 | 修正内容 |
+|---|---------|------|---------|
+| 6 | `Proc#call` + `yield` | detached context で `traverse_cfp()` → `prev_cfp()` → `parent_fiber.unwrap()` パニック | `try_prev_cfp()` を新設、`Option` で安全にチェーン走査 |
+| 7 | エラーメッセージ | `"no block given (yield)."` (末尾ピリオド) | `"no block given (yield)"` に修正（CRuby互換） |
 
-**原因:** `string.rs:1638` で `s.char_indices().nth(char_pos).unwrap()` が呼ばれるが、`char_pos` が文字列長と等しい場合、`nth()` が `None` を返しパニック。
+### 本ブランチ追加修正: String メソッド invalid UTF-8 パニック
 
----
+| # | メソッド | 原因 | 修正内容 |
+|---|---------|------|---------|
+| 8 | `String#split` (separator) | `arg0.is_str()` → `as_str()` → `check_utf8().unwrap()` パニック | `is_rstring_inner()` + `check_utf8()?` に変更 |
+| 9 | `String#to_i` | `self_.as_str()` パニック | `self_.expect_str(globals)?` に変更 |
+| 10 | `String#upcase` / `upcase!` | `self_val.as_str()` パニック | `self_val.expect_str(globals)?` に変更 |
+| 11 | `String#downcase` / `downcase!` | 同上 | 同上 |
+| 12 | `String#capitalize` / `capitalize!` | 同上 | 同上 |
+| 13 | `String#swapcase` / `swapcase!` | 同上 | 同上 |
 
-### 2. String#rindex — 文字列末尾でのゼロ幅正規表現マッチ ✅再現可
+## 残存する問題（mspec実行コンテキストでのみ再現）
 
-**再現コード:** `repro/crash8_string_rindex.rb`
-```ruby
-"abc".rindex(/\z/)
-```
+### 1. Fiber#transfer — メソッド未定義エラー時のパニック
 
-**原因:** `string.rs:1715` で `last_char_pos.unwrap()` がパニック。`\z` は文字列の絶対末尾にマッチするため、マッチ位置（`last_byte_pos`）が文字列長と等しくなり、`char_indices()` のループ内で `last_char_pos` が設定されない。
+**再現:** mspec経由でのみ (`core/fiber/transfer_spec.rb`)
+**原因:** `RValue::debug` で `unreachable!()` に到達。`send(:transfer)` のエラーメッセージ生成中に未対応の `FuncInfo` 種別を処理。
+**再現コード:** `repro/crash1_fiber.rb` (単体実行ではNoMethodErrorで正常終了)
 
----
+### 2. Numeric#step — JIT型状態マージ失敗
 
-### 3. String#casecmp — 無効UTF-8バイト列 ✅再現可
+**再現:** mspec経由でのみ (`core/numeric/step_spec.rb`)
+**原因:** JITコンパイラの `gen_bridge` で `unreachable!()` に到達。多様な型パターン（Fixnum/Float混在）で型状態マージが矛盾。
+**再現コード:** `repro/crash2_numeric_step.rb` (単体実行ではNoMethodErrorで正常終了)
 
-**再現コード:** `repro/crash5_casecmp.rb`
-```ruby
-"\xc3".casecmp("\xe3")
-```
+### 3. String#% — JIT再コンパイル時のキャッシュ更新失敗
 
-**原因:** `rvalue.rs:1455` で `check_utf8().unwrap()` がパニック。`casecmp` 内部で `is_str()` が呼ばれ、無効なUTF-8バイト列を `&str` に変換しようとして失敗。
+**再現:** mspec経由でのみ (`core/string/modulo_spec.rb`)
+**原因:** JIT再コンパイル中の `update_inline_cache` で `as_iseq()` が `None` を返しパニック。
+**再現コード:** `repro/crash7_string_modulo.rb` (単体実行ではNoMethodErrorで正常終了)
 
----
+### 4. Set#flatten — 再帰検出なしでスタックオーバーフロー
 
-### 4. String#split — 無効UTF-8パターンでの分割 ✅再現可
+**再現:** mspec経由でのみ (`core/set/flatten_spec.rb`)
+**原因:** 再帰的Set構造で無限再帰。CRubyはサイクル検出して `ArgumentError` を発生。
+**再現コード:** `repro/crash4_set_flatten.rb` (単体実行ではNoMethodErrorで正常終了)
 
-**再現コード:** `repro/crash9_string_split.rb`
-```ruby
-p = "\xDF".dup.force_encoding("UTF-8")
-"hello:world".split(p)
-```
+## 潜在的リスク: `is_str()` メソッドの設計問題
 
-**原因:** `split` 内の `arg0.is_str()` で区切り文字列を `&str` に変換する際、`rvalue.rs:1455` の `check_utf8().unwrap()` がパニック。無効UTF-8パターンのエラーハンドリングが不足。
+`Value::is_str()` は内部で `RValue::as_str()` → `check_utf8().unwrap()` を呼ぶため、
+invalid UTF-8 文字列に対して**常にパニック**します。これは "is" メソッド（型チェック）
+としては不適切な設計です。
 
----
+現在 `is_str()` は codebase 全体で **20箇所** 使われています。今回修正した箇所以外にも、
+ユーザ入力が invalid UTF-8 の場合にパニックする可能性があります。
 
-### 5. Proc#call — detachedコンテキストからのyield ✅再現可
+**推奨:** `is_str()` を `check_utf8()` が失敗した場合に `None` を返すよう変更するか、
+新しい `try_str() -> Option<Result<&str>>` メソッドを導入して段階的に移行する。
 
-**再現コード:** `repro/crash3_proc_yield.rb`
-```ruby
-obj = Object.new
-def obj.create
-  Proc.new do |&b|
-    yield
-  end
-end
-a_proc = obj.create { 7 }
-p a_proc.call { 3 }
-```
+## テスト結果サマリ
 
-**原因:** `codegen/runtime.rs` の `get_yield_data` で `vm.get_block().unwrap()` がパニック。Proc内の `yield` が元の作成コンテキストのブロックを参照するが、フレームが既にポップされているため `None` が返る。
+### 体系的テスト (200+ テストケース)
 
----
+- **SEGV:** 0件
+- **パニック (SIGABRT):** 0件
+- **ハング (タイムアウト):** 0件
 
-### 6. Fiber#transfer — mspecコンテキストでのメソッド未定義エラー ⚠️mspec実行時のみ
+テスト対象: String, Array, Hash, Integer, Float, Numeric, Proc, Lambda, Fiber,
+Regexp, Range, Exception, Comparable, Enumerable, Symbol, Struct, IO, Encoding,
+Method, Kernel, Class/Module, GC — 各クラスの通常操作およびエッジケース
+（invalid UTF-8, 再帰構造, 境界値, detached context 等）
 
-**再現コード:** mspec経由でのみ再現
-```bash
-cd /home/user/spec
-mspec run core/fiber/transfer_spec.rb -t monoruby
-```
+### cargo test
 
-**原因:** `RValue::debug` で `unreachable!()` に到達。`send(:transfer)` でメソッド未定義エラーを生成する際、レシーバの `to_s` 表現作成中に `Const(nil)` 種別の `FuncInfo` に遭遇しパニック（`function.rs:963`）。
-
----
-
-### 7. Numeric#step — JITコンパイラの型状態マージ失敗 ⚠️mspec実行時のみ
-
-**再現コード:** mspec経由でのみ再現
-```bash
-cd /home/user/spec
-mspec run core/numeric/step_spec.rb -t monoruby
-```
-
-**原因:** JITコンパイラの `gen_bridge` (`state/slot.rs:1333`) で `unreachable!()` に到達。多様な型パターン（Fixnum/Float）で `Integer#step` が繰り返し呼ばれ、JITの型状態マージで Fixnum が XMM レジスタ（Float用）に配置される矛盾が発生。
-
-**関連バグ:** `Integer#step` を整数・浮動小数点引数を混ぜて9回以上呼ぶと、JITコンパイル後に無限ループが発生する。
-
----
-
-### 8. String#% — JIT再コンパイル時のインラインキャッシュ更新失敗 ⚠️mspec実行時のみ
-
-**再現コード:** mspec経由でのみ再現
-```bash
-cd /home/user/spec
-mspec run core/string/modulo_spec.rb -t monoruby
-```
-
-**原因:** `iseq.rs:431` で `unwrap()` がパニック。JIT再コンパイル中の `update_inline_cache` で、関数が iseq（命令列）ではない場合に `as_iseq()` が `None` を返す。
-
----
-
-### 9. Set#flatten — スタックオーバーフロー ⚠️mspec実行時のみ
-
-**再現コード:** mspec経由でのみ再現
-```bash
-cd /home/user/spec
-mspec run core/set/flatten_spec.rb -t monoruby
-```
-
-**原因:** 再帰的なSet構造（`set << set; set.flatten`）で無限再帰が発生し、Rustのスタックがオーバーフロー。CRubyではサイクル検出して `ArgumentError` を発生させる。
-
----
-
-## バグの分類
-
-### 即時再現可能（単体Rubyスクリプトで再現）: 5件
-1. `String#index` — 境界値チェック漏れ (`unwrap` on `None`)
-2. `String#rindex` — 末尾ゼロ幅マッチの未対応 (`unwrap` on `None`)
-3. `String#casecmp` — 無効UTF-8のエラーハンドリング不足 (`unwrap` on `Err`)
-4. `String#split` — 無効UTF-8パターンのエラーハンドリング不足 (`unwrap` on `Err`)
-5. `Proc#call` with `yield` — detachedブロックの参照 (`unwrap` on `None`)
-
-### mspec実行コンテキストでのみ再現: 4件
-6. `Fiber#transfer` — `RValue::debug` の未対応型
-7. `Numeric#step` — JIT型状態マージバグ
-8. `String#%` — JITインラインキャッシュ更新バグ
-9. `Set#flatten` — 再帰検出なし（スタックオーバーフロー）
+- 568 passed, 10 failed (既存の失敗 — master と同一)

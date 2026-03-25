@@ -981,7 +981,8 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         0
     };
     let arg0 = lfp.try_arg(0).unwrap_or(Value::string_from_str(" "));
-    if let Some(sep) = arg0.is_str() {
+    if let Some(sep_inner) = arg0.is_rstring_inner() {
+        let sep = sep_inner.check_utf8()?;
         let v: Vec<Value> = if sep == " " {
             match lim {
                 lim if lim < 0 => {
@@ -2406,7 +2407,7 @@ fn to_f(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn to_i(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let s = self_.as_str();
+    let s = self_.expect_str(globals)?;
     let radix = if let Some(arg0) = lfp.try_arg(0) {
         match arg0.expect_integer(globals)? {
             n if !(2..=36).contains(&n) => {
@@ -2612,9 +2613,9 @@ fn to_sym(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase.html]
 #[monoruby_builtin]
-fn upcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn upcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let s = self_val.as_str().to_uppercase();
+    let s = self_val.expect_str(globals)?.to_uppercase();
     Ok(Value::string(s))
 }
 
@@ -2625,10 +2626,10 @@ fn upcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase=21.html]
 #[monoruby_builtin]
-fn upcase_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn upcase_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_val = lfp.self_val();
-    let s = self_val.as_str().to_uppercase();
-    let changed = &s != self_val.as_str();
+    let s = self_val.expect_str(globals)?.to_uppercase();
+    let changed = &s != self_val.expect_str(globals)?;
     self_val.replace_string(s);
 
     Ok(if changed {
@@ -2645,9 +2646,9 @@ fn upcase_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/downcase.html]
 #[monoruby_builtin]
-fn downcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn downcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let s = self_val.as_str().to_lowercase();
+    let s = self_val.expect_str(globals)?.to_lowercase();
     Ok(Value::string(s))
 }
 
@@ -2660,13 +2661,13 @@ fn downcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 #[monoruby_builtin]
 fn downcase_(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut self_val = lfp.self_val();
-    let s = self_val.as_str().to_lowercase();
-    let changed = &s != self_val.as_str();
+    let s = self_val.expect_str(globals)?.to_lowercase();
+    let changed = &s != self_val.expect_str(globals)?;
     self_val.replace_string(s);
 
     Ok(if changed {
@@ -2685,12 +2686,12 @@ fn downcase_(
 #[monoruby_builtin]
 fn capitalize(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
-    let s = self_val.as_str();
+    let s = self_val.expect_str(globals)?;
     let mut result = String::with_capacity(s.len());
     let mut first = true;
     for c in s.chars() {
@@ -2717,12 +2718,12 @@ fn capitalize(
 #[monoruby_builtin]
 fn capitalize_(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut self_val = lfp.self_val();
-    let s = self_val.as_str();
+    let s = self_val.expect_str(globals)?;
     let mut result = String::with_capacity(s.len());
     let mut first = true;
     for c in s.chars() {
@@ -2737,7 +2738,7 @@ fn capitalize_(
             }
         }
     }
-    let changed = &result != self_val.as_str();
+    let changed = &result != self_val.expect_str(globals)?;
     self_val.replace_string(result);
     Ok(if changed {
         lfp.self_val()
@@ -2755,12 +2756,12 @@ fn capitalize_(
 #[monoruby_builtin]
 fn swapcase(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
-    let s = self_val.as_str();
+    let s = self_val.expect_str(globals)?;
     let mut result = String::with_capacity(s.len());
     for c in s.chars() {
         if c.is_uppercase() {
@@ -2787,12 +2788,12 @@ fn swapcase(
 #[monoruby_builtin]
 fn swapcase_(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut self_val = lfp.self_val();
-    let s = self_val.as_str();
+    let s = self_val.expect_str(globals)?;
     let mut result = String::with_capacity(s.len());
     for c in s.chars() {
         if c.is_uppercase() {
@@ -2807,7 +2808,7 @@ fn swapcase_(
             result.push(c);
         }
     }
-    let changed = &result != self_val.as_str();
+    let changed = &result != self_val.expect_str(globals)?;
     self_val.replace_string(result);
     Ok(if changed {
         lfp.self_val()

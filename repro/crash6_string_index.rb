@@ -1,1 +1,0 @@
-"blablabla".index("", 9)

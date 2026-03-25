@@ -1,1 +1,0 @@
-"abc".rindex(/\z/)
