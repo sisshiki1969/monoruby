@@ -502,4 +502,31 @@ mod tests {
         run_test("-1.0/0 == -Float::INFINITY");
         run_test("1.0/0.0 == Float::INFINITY");
     }
+
+    #[test]
+    fn next_float() {
+        run_test("1.0.next_float");
+        run_test("0.0.next_float");
+        run_test("(-1.0).next_float");
+    }
+
+    #[test]
+    fn prev_float() {
+        run_test("1.0.prev_float");
+        run_test("0.0.prev_float");
+        run_test("(-1.0).prev_float");
+    }
+
+    #[test]
+    fn zero_positive_negative() {
+        run_test("0.0.zero?");
+        run_test("1.0.zero?");
+        run_test("(-1.0).zero?");
+        run_test("1.0.positive?");
+        run_test("(-1.0).positive?");
+        run_test("0.0.positive?");
+        run_test("1.0.negative?");
+        run_test("(-1.0).negative?");
+        run_test("0.0.negative?");
+    }
 }

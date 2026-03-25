@@ -1860,4 +1860,28 @@ mod tests {
         );
         run_test(r#"a = [1, 2, 3]; [*a]"#);
     }
+
+    #[test]
+    fn compare_by_identity_q() {
+        run_test("h = {}; h.compare_by_identity?");
+        run_test("h = {}; h.compare_by_identity; h.compare_by_identity?");
+    }
+
+    #[test]
+    fn values_at() {
+        run_test(r#"h = {a: 1, b: 2, c: 3}; h.values_at(:a, :c)"#);
+        run_test(r#"h = {a: 1, b: 2}; h.values_at(:a, :x, :b)"#);
+    }
+
+    #[test]
+    fn dig() {
+        run_test(r#"h = {a: {b: {c: 1}}}; h.dig(:a, :b, :c)"#);
+        run_test(r#"h = {a: {b: 1}}; h.dig(:a, :x)"#);
+        run_test(r#"h = {a: 1}; h.dig(:a)"#);
+    }
+
+    #[test]
+    fn to_h2() {
+        run_test("h = {a: 1, b: 2}; h.to_h == h");
+    }
 }
