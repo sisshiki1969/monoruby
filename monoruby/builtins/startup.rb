@@ -151,6 +151,15 @@ class File
   PATH_SEPARATOR = ":"
 end
 
+class Fiber
+  @@main_fiber = nil
+  def self.current
+    # Return the main fiber (monoruby is single-threaded and doesn't track
+    # the current fiber across resume/yield).
+    @@main_fiber ||= Fiber.new {}
+  end
+end
+
 class Signal
   def self.trap(signal, command = nil, &block)
     # No-op for now.
@@ -216,6 +225,10 @@ class Thread
   def thread_variable_get(key)
     @thread_local ||= {}
     @thread_local[key]
+  end
+
+  def self.pass
+    # No-op: monoruby is single-threaded
   end
 
   def self.each_caller_location

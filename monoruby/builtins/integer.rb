@@ -176,13 +176,21 @@ class Integer
     1
   end
 
-  #def to_r
-  #  Rational(self, 1)
-  #end
+  def to_r
+    if defined?(Rational)
+      Rational(self, 1)
+    else
+      self
+    end
+  end
 
-  #def rationalize(eps = nil)
-  #  Rational(self, 1)
-  #end
+  def rationalize(eps = nil)
+    if defined?(Rational)
+      Rational(self, 1)
+    else
+      self
+    end
+  end
 
   def self.sqrt(n)
     n = n.to_int

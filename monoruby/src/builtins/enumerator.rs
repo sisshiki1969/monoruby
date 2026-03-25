@@ -264,6 +264,7 @@ fn yielder_yield(
 }
 
 ///
+///
 /// ### Generator.new
 ///
 /// - new() {|y| ... } -> Enumerator
@@ -606,4 +607,5 @@ mod tests {
         "##,
         );
     }
+
 }

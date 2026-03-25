@@ -199,4 +199,14 @@ mod tests {
         "##,
         );
     }
+
+    #[test]
+    fn fiber_current() {
+        run_test_once("Fiber.current.is_a?(Fiber)");
+    }
+
+    #[test]
+    fn thread_pass() {
+        run_test_once("Thread.pass.nil?");
+    }
 }

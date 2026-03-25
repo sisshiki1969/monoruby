@@ -175,6 +175,29 @@ pub(super) fn init(globals: &mut Globals) {
             .unwrap();
         globals.set_constant_by_str(enc.id(), name, val);
     }
+
+    // Encoding class methods
+    globals.define_builtin_class_func(enc.id(), "default_external", enc_default_external, 0);
+    globals.define_builtin_class_func(
+        enc.id(),
+        "default_external=",
+        enc_set_default_external,
+        1,
+    );
+    globals.define_builtin_class_func(enc.id(), "default_internal", enc_default_internal, 0);
+    globals.define_builtin_class_func(
+        enc.id(),
+        "default_internal=",
+        enc_set_default_internal,
+        1,
+    );
+    globals.define_builtin_class_func(enc.id(), "list", enc_list, 0);
+    globals.define_builtin_class_func(enc.id(), "find", enc_find, 1);
+    globals.define_builtin_class_func(enc.id(), "aliases", enc_aliases, 0);
+    globals.define_builtin_class_func(enc.id(), "compatible?", enc_compatible, 2);
+    globals.define_builtin_func(enc.id(), "to_s", enc_to_s, 0);
+    globals.define_builtin_func(enc.id(), "inspect", enc_inspect, 0);
+    globals.define_builtin_func(enc.id(), "name", enc_to_s, 0);
 }
 
 fn encoding_class(globals: &Globals) -> ClassId {
@@ -3310,6 +3333,226 @@ fn ascii_only(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     Ok(Value::bool(lfp.self_val().as_rstring_inner().is_ascii()))
 }
 
+// -------------------------------------------------------
+// Encoding class methods
+// -------------------------------------------------------
+
+///
+/// ### Encoding.default_external
+/// - default_external -> Encoding
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/default_external.html]
+#[monoruby_builtin]
+fn enc_default_external(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let enc_class = encoding_class(globals);
+    let utf8 = globals
+        .store
+        .get_constant_noautoload(enc_class, IdentId::get_id("UTF_8"))
+        .unwrap_or(Value::nil());
+    Ok(utf8)
+}
+
+///
+/// ### Encoding.default_external=
+/// - default_external = enc -> enc
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/default_external=3d.html]
+#[monoruby_builtin]
+fn enc_set_default_external(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    // Stub: accept the argument but do nothing
+    Ok(lfp.arg(0))
+}
+
+///
+/// ### Encoding.default_internal
+/// - default_internal -> Encoding | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/default_internal.html]
+#[monoruby_builtin]
+fn enc_default_internal(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::nil())
+}
+
+///
+/// ### Encoding.default_internal=
+/// - default_internal = enc -> enc
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/default_internal=3d.html]
+#[monoruby_builtin]
+fn enc_set_default_internal(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    // Stub: accept the argument but do nothing
+    Ok(lfp.arg(0))
+}
+
+///
+/// ### Encoding.list
+/// - list -> [Encoding]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/list.html]
+#[monoruby_builtin]
+fn enc_list(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let enc_class = encoding_class(globals);
+    let utf8 = globals
+        .store
+        .get_constant_noautoload(enc_class, IdentId::get_id("UTF_8"))
+        .unwrap_or(Value::nil());
+    let ascii = globals
+        .store
+        .get_constant_noautoload(enc_class, IdentId::ASCII_8BIT)
+        .unwrap_or(Value::nil());
+    Ok(Value::array2(utf8, ascii))
+}
+
+///
+/// ### Encoding.find
+/// - find(name) -> Encoding
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/find.html]
+#[monoruby_builtin]
+fn enc_find(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let name = lfp.arg(0).expect_string(globals)?;
+    let enc_class = encoding_class(globals);
+    let result = match name.to_uppercase().replace('-', "_").as_str() {
+        "UTF_8" | "UTF8" => globals
+            .store
+            .get_constant_noautoload(enc_class, IdentId::get_id("UTF_8")),
+        "ASCII_8BIT" | "BINARY" | "ASCII" => globals
+            .store
+            .get_constant_noautoload(enc_class, IdentId::ASCII_8BIT),
+        "US_ASCII" => globals
+            .store
+            .get_constant_noautoload(enc_class, IdentId::ASCII_8BIT),
+        other => {
+            // Try to find as a constant name
+            let id = IdentId::get_id(other);
+            globals.store.get_constant_noautoload(enc_class, id)
+        }
+    };
+    match result {
+        Some(v) => Ok(v),
+        None => Err(MonorubyErr::argumenterr(format!(
+            "unknown encoding name - {}",
+            name
+        ))),
+    }
+}
+
+///
+/// ### Encoding.aliases
+/// - aliases -> Hash
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/aliases.html]
+#[monoruby_builtin]
+fn enc_aliases(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut map = RubyMap::default();
+    let aliases: &[(&str, &str)] = &[
+        ("BINARY", "ASCII-8BIT"),
+        ("US-ASCII", "ASCII-8BIT"),
+    ];
+    for (alias, name) in aliases {
+        map.insert(
+            Value::string_from_str(alias),
+            Value::string_from_str(name),
+            vm,
+            globals,
+        )?;
+    }
+    Ok(Value::hash(map))
+}
+
+///
+/// ### Encoding.compatible?
+/// - compatible?(obj1, obj2) -> Encoding | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/compatible=3f.html]
+#[monoruby_builtin]
+fn enc_compatible(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    // Stub: always return UTF-8 encoding for compatibility
+    let enc_class = encoding_class(globals);
+    let utf8 = globals
+        .store
+        .get_constant_noautoload(enc_class, IdentId::get_id("UTF_8"))
+        .unwrap_or(Value::nil());
+    Ok(utf8)
+}
+
+///
+/// ### Encoding#to_s / Encoding#name
+/// - to_s -> String
+/// - name -> String
+///
+#[monoruby_builtin]
+fn enc_to_s(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    match globals.store.get_ivar(self_, IdentId::_ENCODING) {
+        Some(v) => Ok(v),
+        None => Ok(Value::string_from_str("UTF-8")),
+    }
+}
+
+///
+/// ### Encoding#inspect
+/// - inspect -> String
+///
+#[monoruby_builtin]
+fn enc_inspect(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    match globals.store.get_ivar(self_, IdentId::_NAME) {
+        Some(v) => Ok(v),
+        None => Ok(Value::string_from_str("#<Encoding:UTF-8>")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -4612,5 +4855,53 @@ mod tests {
     fn string_split_invalid_utf8() {
         run_test_error(r#""\xDF".force_encoding("UTF-8").split"#);
         run_test_error(r#""\xDF".force_encoding("UTF-8").split(":")"#);
+    }
+
+    #[test]
+    fn encoding_default_external() {
+        run_test_no_result_check(
+            r#"
+            enc = Encoding.default_external
+            raise "should be Encoding" unless enc.is_a?(Encoding)
+            "#,
+        );
+    }
+
+    #[test]
+    fn encoding_default_internal() {
+        run_test(r#"Encoding.default_internal"#);
+    }
+
+    #[test]
+    fn encoding_list() {
+        run_test_once(
+            r#"
+            list = Encoding.list
+            list.is_a?(Array)
+            "#,
+        );
+    }
+
+    #[test]
+    fn encoding_find() {
+        run_test(r#"Encoding.find("UTF-8").name"#);
+    }
+
+    #[test]
+    fn encoding_aliases() {
+        run_test_once(
+            r#"
+            Encoding.aliases.is_a?(Hash)
+            "#,
+        );
+    }
+
+    #[test]
+    fn encoding_compatible() {
+        run_test_once(
+            r#"
+            Encoding.compatible?("a", "b").nil?.!
+            "#,
+        );
     }
 }

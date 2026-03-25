@@ -103,6 +103,7 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func_rest(MODULE_CLASS, "private_class_method", private_class_method);
+    globals.define_builtin_func_rest(MODULE_CLASS, "public_class_method", public_class_method);
     globals.define_builtin_func(MODULE_CLASS, "class_variable_set", class_variable_set, 2);
     globals.define_builtin_func(MODULE_CLASS, "class_variable_get", class_variable_get, 1);
     globals.define_builtin_func(MODULE_CLASS, "class_variables", class_variables, 0);
@@ -878,6 +879,32 @@ fn private_class_method(
     Ok(lfp.self_val())
 }
 
+///
+/// ### Module#public_class_method
+///
+/// - public_class_method(*name) -> self
+///
+/// Makes the named class methods public.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public_class_method.html]
+#[monoruby_builtin]
+fn public_class_method(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let singleton = globals.store.get_singleton(lfp.self_val())?;
+    let arg = lfp.arg(0).as_array();
+    let (_, names) = extract_names(globals, arg)?;
+    globals.change_method_visibility_for_class(singleton.id(), &names, Visibility::Public)?;
+    Ok(lfp.self_val())
+}
+
+///
+/// ### Module#const_source_location
+///
+/// - const_source_location(name, inherit = true) -> [String, Integer] | nil
 ///
 /// ### Module#to_s
 /// - to_s -> String
@@ -2603,4 +2630,19 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn public_class_method() {
+        run_test(
+            r#"
+            module Foo
+                def self.bar; 42; end
+                private_class_method :bar
+                public_class_method :bar
+            end
+            Foo.bar
+            "#,
+        );
+    }
+
 }

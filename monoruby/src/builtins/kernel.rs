@@ -81,6 +81,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_with(kernel_class, "sleep", sleep, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "abort", abort, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "exit", exit, 0, 1, false);
+    globals.define_builtin_module_func_with(kernel_class, "exit!", exit_bang, 0, 1, false);
     globals.define_builtin_module_func_with_kw(
         kernel_class,
         "warn",
@@ -1100,6 +1101,31 @@ fn exit(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         MonorubyErrKind::SystemExit(status),
         "exit",
     ))
+}
+
+///
+/// Kernel.#exit!
+///
+/// - exit!(status = false) -> ()
+///
+/// Exits the process immediately. No at_exit handlers are run.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/exit=21.html]
+#[monoruby_builtin]
+fn exit_bang(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let status = if let Some(arg0) = lfp.try_arg(0) {
+        if let Some(i) = arg0.try_fixnum() {
+            i as i32
+        } else {
+            match arg0.as_bool() {
+                true => 0,
+                false => 1,
+            }
+        }
+    } else {
+        1
+    };
+    std::process::exit(status);
 }
 
 ///
@@ -3109,5 +3135,13 @@ mod tests {
             $called
             "#,
         );
+    }
+
+    #[test]
+    fn exit_bang() {
+        // exit! is defined and callable (we test via respond_to? since actually
+        // calling it would terminate the process immediately)
+        run_test("respond_to?(:exit!)");
+        run_test("Process.respond_to?(:exit!)");
     }
 }
