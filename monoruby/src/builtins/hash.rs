@@ -1860,4 +1860,15 @@ mod tests {
         );
         run_test(r#"a = [1, 2, 3]; [*a]"#);
     }
+
+    #[test]
+    fn dig_errors() {
+        // no arguments
+        run_test_error("h = {a: 1}; h.dig");
+    }
+
+    #[test]
+    fn to_h_with_block() {
+        run_test("{a: 1, b: 2}.to_h {|k, v| [k, v.to_s] }");
+    }
 }
