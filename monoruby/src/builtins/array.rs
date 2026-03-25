@@ -1785,7 +1785,17 @@ fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             }
             res
         }
-        _ => unimplemented!(),
+        Some(bh) => {
+            let bh = vm.get_block_data(globals, bh)?;
+            let mut res = vec![];
+            for v in lfp.self_val().as_array().iter() {
+                if cmp_teq_values_bool(vm, globals, lfp.arg(0), *v)? {
+                    let mapped = vm.invoke_block(globals, &bh, &[*v])?;
+                    res.push(mapped);
+                }
+            }
+            res
+        }
     };
     Ok(Value::array_from_vec(ary))
 }
