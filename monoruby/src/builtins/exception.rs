@@ -336,4 +336,17 @@ mod tests {
         "#,
         );
     }
+
+    #[test]
+    fn cause() {
+        run_test(
+            r#"
+            begin
+              raise "original"
+            rescue => e
+              e.cause
+            end
+            "#,
+        );
+    }
 }
