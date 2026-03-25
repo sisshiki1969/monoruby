@@ -11,12 +11,18 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(METHOD_CLASS, "arity", arity, 0);
     globals.define_builtin_func(METHOD_CLASS, "to_proc", to_proc, 0);
     globals.define_builtin_func(METHOD_CLASS, "source_location", source_location, 0);
+    globals.define_builtin_func(METHOD_CLASS, "name", name, 0);
+    globals.define_builtin_func(METHOD_CLASS, "receiver", receiver, 0);
+    globals.define_builtin_func(METHOD_CLASS, "owner", owner, 0);
+    globals.define_builtin_func(METHOD_CLASS, "unbind", unbind, 0);
 
     globals.define_builtin_class_under_obj("UnboundMethod", UMETHOD_CLASS, ObjTy::METHOD);
     globals.define_builtin_class_func(UMETHOD_CLASS, "allocate", super::class::undef_allocate, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "arity", uarity, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "bind", bind, 1);
     globals.define_builtin_func(UMETHOD_CLASS, "source_location", usource_location, 0);
+    globals.define_builtin_func(UMETHOD_CLASS, "name", uname, 0);
+    globals.define_builtin_func(UMETHOD_CLASS, "owner", uowner, 0);
 }
 
 ///
@@ -161,6 +167,88 @@ fn usource_location(
     } else {
         Ok(Value::nil())
     }
+}
+
+///
+/// ### Method#name
+///
+/// - name -> Symbol
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Method/i/name.html]
+#[monoruby_builtin]
+fn name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_method();
+    let func_id = method.func_id();
+    let id = globals[func_id].name().unwrap();
+    Ok(Value::symbol(id))
+}
+
+///
+/// ### Method#receiver
+///
+/// - receiver -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Method/i/receiver.html]
+#[monoruby_builtin]
+fn receiver(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_method();
+    Ok(method.receiver())
+}
+
+///
+/// ### Method#owner
+///
+/// - owner -> Class | Module
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Method/i/owner.html]
+#[monoruby_builtin]
+fn owner(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_method();
+    Ok(globals.store[method.owner()].get_module().get())
+}
+
+///
+/// ### Method#unbind
+///
+/// - unbind -> UnboundMethod
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Method/i/unbind.html]
+#[monoruby_builtin]
+fn unbind(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_method();
+    Ok(Value::new_unbound_method(method.func_id(), method.owner()))
+}
+
+///
+/// ### UnboundMethod#name
+///
+/// - name -> Symbol
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/name.html]
+#[monoruby_builtin]
+fn uname(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_umethod();
+    let func_id = method.func_id();
+    let id = globals[func_id].name().unwrap();
+    Ok(Value::symbol(id))
+}
+
+///
+/// ### UnboundMethod#owner
+///
+/// - owner -> Class | Module
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/owner.html]
+#[monoruby_builtin]
+fn uowner(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_umethod();
+    Ok(globals.store[method.owner()].get_module().get())
 }
 
 #[cfg(test)]
