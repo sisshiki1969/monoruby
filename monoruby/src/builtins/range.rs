@@ -602,11 +602,15 @@ fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 "cannot get the minimum of beginless range",
             ));
         }
+        // Check for empty range first
+        let cmp = vm.compare_values_inner(globals, start, end)?;
+        match cmp {
+            Some(std::cmp::Ordering::Greater) => return Ok(Value::nil()),
+            Some(std::cmp::Ordering::Equal) if range.exclude_end() => return Ok(Value::nil()),
+            _ => {}
+        }
         // Iterate the range and find min using the block
         if let Some((s, e)) = range.try_fixnum() {
-            if e <= s {
-                return Ok(Value::nil());
-            }
             let data = vm.get_block_data(globals, bh)?;
             let mut min_val = Value::integer(s);
             for i in (s + 1)..e {
@@ -674,10 +678,14 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 "cannot get the maximum of beginless range",
             ));
         }
+        // Check for empty range first
+        let cmp = vm.compare_values_inner(globals, start, end)?;
+        match cmp {
+            Some(std::cmp::Ordering::Greater) => return Ok(Value::nil()),
+            Some(std::cmp::Ordering::Equal) if range.exclude_end() => return Ok(Value::nil()),
+            _ => {}
+        }
         if let Some((s, e)) = range.try_fixnum() {
-            if e <= s {
-                return Ok(Value::nil());
-            }
             let data = vm.get_block_data(globals, bh)?;
             let mut max_val = Value::integer(s);
             for i in (s + 1)..e {
@@ -719,15 +727,31 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         }
 
         if range.exclude_end() {
-            // For exclusive ranges, need integer end
+            // For exclusive ranges, need integer end or string end
             if let Some(i) = end.try_fixnum() {
+                // For beginless exclusive integer ranges, raise TypeError
                 if start.is_nil() {
-                    // beginless exclusive: check if end is integer
-                    return Ok(Value::integer(i - 1));
+                    return Err(MonorubyErr::typeerr(
+                        "cannot exclude end value with non Integer begin value",
+                    ));
                 }
                 return Ok(Value::integer(i - 1));
             } else if let RV::BigInt(b) = end.unpack() {
                 return Ok(Value::bigint(b - 1));
+            } else if let Some(end_str) = end.is_str() {
+                // For exclusive string ranges, iterate to find the predecessor
+                if let Some(start_str) = start.is_str() {
+                    let mut current = start_str.to_string();
+                    let mut prev = current.clone();
+                    while current != end_str {
+                        prev = current.clone();
+                        current = builtins::string::str_next(&current);
+                    }
+                    return Ok(Value::string_from_str(&prev));
+                }
+                return Err(MonorubyErr::typeerr(
+                    "cannot exclude non Integer end value",
+                ));
             } else {
                 return Err(MonorubyErr::typeerr(
                     "cannot exclude non Integer end value",
@@ -823,13 +847,17 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             for i in (s + 1)..e {
                 let val = Value::integer(i);
                 let cmp_min = vm.invoke_block(globals, &data, &[val, min_val])?;
-                let ord = vm.compare_values(globals, cmp_min, Value::integer(0))?;
-                if ord == std::cmp::Ordering::Less {
+                let is_less = vm
+                    .invoke_method_inner(globals, IdentId::_LT, cmp_min, &[Value::integer(0)], None, None)?
+                    .as_bool();
+                if is_less {
                     min_val = val;
                 }
                 let cmp_max = vm.invoke_block(globals, &data, &[val, max_val])?;
-                let ord = vm.compare_values(globals, cmp_max, Value::integer(0))?;
-                if ord == std::cmp::Ordering::Greater {
+                let is_greater = vm
+                    .invoke_method_inner(globals, IdentId::_GT, cmp_max, &[Value::integer(0)], None, None)?
+                    .as_bool();
+                if is_greater {
                     max_val = val;
                 }
             }
@@ -860,6 +888,20 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 Value::integer(i - 1)
             } else if let RV::BigInt(b) = end.unpack() {
                 Value::bigint(b - 1)
+            } else if let Some(end_str) = end.is_str() {
+                if let Some(start_str) = start.is_str() {
+                    let mut current = start_str.to_string();
+                    let mut prev = current.clone();
+                    while current != end_str {
+                        prev = current.clone();
+                        current = builtins::string::str_next(&current);
+                    }
+                    Value::string_from_str(&prev)
+                } else {
+                    return Err(MonorubyErr::typeerr(
+                        "cannot exclude non Integer end value",
+                    ));
+                }
             } else {
                 return Err(MonorubyErr::typeerr(
                     "cannot exclude non Integer end value",
