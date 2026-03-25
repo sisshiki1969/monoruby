@@ -1242,4 +1242,54 @@ mod tests {
     fn minmax_with_block() {
         run_test("(1..5).minmax {|a, b| b <=> a }");
     }
+
+    #[test]
+    fn min_errors() {
+        // beginless range
+        run_test_error("(..5).min");
+        // beginless range with block
+        run_test_error("(..5).min {|a, b| a <=> b }");
+        // endless range with block
+        run_test_error("(1..).min {|a, b| a <=> b }");
+    }
+
+    #[test]
+    fn min_endless() {
+        // endless range without block returns start
+        run_test("(1..).min");
+    }
+
+    #[test]
+    fn max_errors() {
+        // endless range
+        run_test_error("(1..).max");
+        // beginless range with block
+        run_test_error("(..5).max {|a, b| a <=> b }");
+        // exclusive range with non-integer end
+        run_test_error("(1.0...3.0).max");
+    }
+
+    #[test]
+    fn max_beginless() {
+        // beginless range without block returns end
+        run_test("(..5).max");
+    }
+
+    #[test]
+    fn count_endless() {
+        // endless/beginless ranges return Float::INFINITY
+        // CRuby would hang on these, so we just verify no crash
+        run_test_no_result_check("(1..).count");
+        run_test_no_result_check("(..5).count");
+    }
+
+    #[test]
+    fn minmax_errors() {
+        // beginless range
+        run_test_error("(..5).minmax");
+        // endless range
+        run_test_error("(1..).minmax");
+        // exclusive range with non-integer end
+        run_test_error("(1.0...3.0).minmax");
+    }
 }
