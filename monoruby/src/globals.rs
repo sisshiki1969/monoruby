@@ -272,7 +272,7 @@ impl Globals {
         let mut executor = Executor::init(self, &program_name)?;
         executor.init_stack_limit(self);
         let res = executor.exec_script(self, code, path);
-        self.flush_stdout();
+        let _ = self.flush_stdout();
         #[cfg(any(feature = "profile", feature = "jit-log"))]
         self.show_stats();
         #[cfg(feature = "gc-log")]
@@ -384,22 +384,26 @@ impl Globals {
         })
     }
 
-    pub fn flush_stdout(&mut self) {
-        self.stdout.flush().unwrap();
+    pub fn flush_stdout(&mut self) -> Result<()> {
+        self.stdout
+            .flush()
+            .map_err(|e| MonorubyErr::runtimeerr(format!("flush: {}", e)))
     }
 
-    pub fn write_stdout(&mut self, bytes: &[u8]) {
-        self.stdout.write_all(bytes).unwrap();
+    pub fn write_stdout(&mut self, bytes: &[u8]) -> Result<()> {
+        self.stdout
+            .write_all(bytes)
+            .map_err(|e| MonorubyErr::runtimeerr(format!("write: {}", e)))
     }
 
-    pub fn print_value(&mut self, val: Value) {
+    pub fn print_value(&mut self, val: Value) -> Result<()> {
         if let Some(s) = val.is_rstring() {
             self.stdout.write_all(&s)
         } else {
             let v = val.to_s(&self.store).into_bytes();
             self.stdout.write_all(&v)
         }
-        .unwrap();
+        .map_err(|e| MonorubyErr::runtimeerr(format!("write: {}", e)))
     }
 
     // Handling global variable
