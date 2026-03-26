@@ -302,7 +302,14 @@ impl Globals {
     ) -> Result<FuncId> {
         let line_offset = lineno - 1;
         let outer_fid = caller_cfp.lfp().func_id();
-        let outer = self.store[outer_fid].as_iseq();
+        let outer = match self.store[outer_fid].is_iseq() {
+            Some(iseq) => iseq,
+            None => {
+                return Err(MonorubyErr::runtimeerr(
+                    "eval requires a Ruby method context",
+                ));
+            }
+        };
         let external_context = self.store.scoped_locals(outer);
 
         match Parser::parse_program_eval(code, path.into(), Some(&external_context), line_offset) {
