@@ -5021,4 +5021,86 @@ mod tests {
         run_test(r#""hello".insert(0, "X")"#);
         run_test(r#""hello".insert(2, "X")"#);
     }
+
+    #[test]
+    fn pack_unpack_a() {
+        // pack 'a' — null padded
+        run_test(r#"["abc"].pack("a")"#);
+        run_test(r#"["abc"].pack("a3")"#);
+        run_test(r#"["abc"].pack("a5")"#);
+        run_test(r#"["abc"].pack("a*")"#);
+        run_test(r#"["a", "b"].pack("a3a3")"#);
+        // unpack 'a' — raw bytes
+        run_test(r#""abc\0\0".unpack("a3")"#);
+        run_test(r#""abc\0\0".unpack("a*")"#);
+        run_test(r#""abc\0\0".unpack("a5")"#);
+        run_test(r#""abc".unpack("a")"#);
+        run_test(r#""abcdef".unpack("a3a3")"#);
+    }
+
+    #[test]
+    fn pack_unpack_a_upper() {
+        // pack 'A' — space padded
+        run_test(r#"["abc"].pack("A")"#);
+        run_test(r#"["abc"].pack("A3")"#);
+        run_test(r#"["abc"].pack("A5")"#);
+        run_test(r#"["abc"].pack("A*")"#);
+        // unpack 'A' — strips trailing spaces and nulls
+        run_test(r#""abc  ".unpack("A5")"#);
+        run_test(r#""abc\0\0".unpack("A5")"#);
+        run_test(r#""abc  ".unpack("A*")"#);
+        run_test(r#""abc".unpack("A")"#);
+    }
+
+    #[test]
+    fn pack_unpack_z() {
+        // pack 'Z' — null-terminated
+        run_test(r#"["abc"].pack("Z")"#);
+        run_test(r#"["abc"].pack("Z5")"#);
+        run_test(r#"["abc"].pack("Z*")"#);
+        // unpack 'Z' — stops at null
+        run_test(r#""abc\0def".unpack("Z*")"#);
+        run_test(r#""abc\0def".unpack("Z3")"#);
+        run_test(r#""abc\0def".unpack("Z5")"#);
+    }
+
+    #[test]
+    fn pack_unpack_m() {
+        // Base64
+        run_test(r#"["hello"].pack("m")"#);
+        run_test(r#"["hello"].pack("m0")"#);
+        run_test(r#"["hello"].pack("m").unpack("m")"#);
+        run_test(r#"[""].pack("m")"#);
+        run_test(r#"["a"].pack("m")"#);
+        run_test(r#"["ab"].pack("m")"#);
+        run_test(r#"["abc"].pack("m")"#);
+    }
+
+    #[test]
+    fn pack_unpack_big_m() {
+        // MIME quoted-printable
+        run_test(r#"["hello"].pack("M")"#);
+        run_test(r#"["hello=world"].pack("M")"#);
+        run_test(r#"["hello"].pack("M").unpack("M")"#);
+    }
+
+    #[test]
+    fn pack_unpack_u() {
+        // UU encoding
+        run_test(r#"["hello"].pack("u")"#);
+        run_test(r#"["hello"].pack("u").unpack("u")"#);
+        run_test(r#"["abc"].pack("u")"#);
+    }
+
+    #[test]
+    fn pack_unpack_w() {
+        // BER compressed integer
+        run_test(r#"[0].pack("w")"#);
+        run_test(r#"[127].pack("w")"#);
+        run_test(r#"[128].pack("w")"#);
+        run_test(r#"[16384].pack("w")"#);
+        run_test(r#"[0, 127, 128, 16384].pack("w*")"#);
+        run_test(r#"[0, 127, 128, 16384].pack("w*").unpack("w*")"#);
+        run_test(r#""\x00\x7f\x81\x00\x81\x80\x00".unpack("w*")"#);
+    }
 }
