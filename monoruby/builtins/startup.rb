@@ -764,10 +764,10 @@ module Kernel
   end
 
   def printf(fmt = nil, *args)
-    if fmt.is_a?(IO)
-      fmt.printf(*args)
+    if fmt.respond_to?(:write)
+      fmt.write(format(*args))
     elsif fmt
-      $stdout.print(format(fmt, *args))
+      $stdout.write(format(fmt, *args))
     end
     nil
   end

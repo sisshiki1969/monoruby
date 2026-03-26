@@ -105,6 +105,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "each_char", each_char, 0);
     globals.define_builtin_func_with(STRING_CLASS, "center", center, 1, 2, false);
     globals.define_builtin_funcs(STRING_CLASS, "next", &["succ"], next, 0);
+    globals.define_builtin_funcs(STRING_CLASS, "next!", &["succ!"], next_mut, 0);
     globals.define_builtin_func(STRING_CLASS, "encoding", encoding, 0);
     globals.define_builtin_func(STRING_CLASS, "b", b, 0);
     globals.define_builtin_func_with_kw(
@@ -3183,6 +3184,22 @@ fn next(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let recv = self_.expect_str(globals)?;
     let res = Value::string(str_next(recv));
     Ok(res)
+}
+
+///
+/// ### String#next!
+///
+/// - next! -> self
+/// - succ! -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/next=21.html]
+#[monoruby_builtin]
+fn next_mut(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let recv = self_.expect_str(globals)?;
+    let new_str = str_next(recv);
+    self_.replace_string(new_str);
+    Ok(self_)
 }
 
 ///

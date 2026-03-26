@@ -30,6 +30,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(file, "path", path, 1);
     globals.define_builtin_class_func_with(file, "realpath", realpath, 1, 2, false);
     globals.define_builtin_class_func_with(file, "open", open, 1, 3, false);
+    globals.define_builtin_class_func_with(file, "new", open, 1, 3, false);
 
     globals.define_builtin_class_func(file, "directory?", directory_, 1);
     globals.define_builtin_module_func(file_test, "directory?", directory_, 1);
