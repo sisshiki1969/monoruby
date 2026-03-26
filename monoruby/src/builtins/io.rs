@@ -28,6 +28,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(IO_CLASS, "pipe", io_pipe, 0);
     globals.define_builtin_class_func_rest(IO_CLASS, "popen", io_popen);
     globals.define_builtin_func(IO_CLASS, "pid", io_pid, 0);
+    globals.define_builtin_func(IO_CLASS, "fileno", io_fileno, 0);
+    globals.define_builtin_func_with(IO_CLASS, "write", io_write_method, 0, 0, true);
+    globals.define_builtin_func_with(IO_CLASS, "syswrite", io_syswrite, 1, 1, false);
+    globals.define_builtin_class_func_with(IO_CLASS, "select", io_select, 1, 4, false);
 
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
@@ -454,6 +458,265 @@ fn io_pid(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     }
 }
 
+/// ### IO#fileno
+///
+/// - fileno -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/fileno.html]
+#[monoruby_builtin]
+fn io_fileno(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let fd = self_.as_io_inner().fileno()?;
+    Ok(Value::integer(fd as i64))
+}
+
+/// ### IO#write
+///
+/// - write(*str) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/write.html]
+#[monoruby_builtin]
+fn io_write_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    let args = lfp.arg(0).as_array();
+    let mut total = 0i64;
+    for v in args.iter().cloned() {
+        let bytes = if let Some(b) = v.try_bytes() {
+            b.to_vec()
+        } else {
+            let s = vm.to_s(globals, v)?;
+            s.into_bytes()
+        };
+        total += bytes.len() as i64;
+        io.write(&bytes)?;
+    }
+    Ok(Value::integer(total))
+}
+
+/// ### IO#syswrite
+///
+/// - syswrite(string) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/syswrite.html]
+#[monoruby_builtin]
+fn io_syswrite(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    let bytes = if let Some(b) = lfp.arg(0).try_bytes() {
+        b.to_vec()
+    } else {
+        let s = vm.to_s(globals, lfp.arg(0))?;
+        s.into_bytes()
+    };
+    let fd = io.fileno()?;
+    // SAFETY: fd is a valid file descriptor, bytes is a valid buffer.
+    let written = unsafe { libc::write(fd, bytes.as_ptr() as *const libc::c_void, bytes.len()) };
+    if written < 0 {
+        return Err(MonorubyErr::runtimeerr("syswrite failed"));
+    }
+    Ok(Value::integer(written as i64))
+}
+
+/// Helper: extract raw fd from a Value that is an IO (or responds to to_io).
+fn value_to_fd(globals: &Globals, v: Value) -> Result<i32> {
+    if let Some(rv) = v.try_rvalue() {
+        if rv.ty() == ObjTy::IO {
+            return v.as_io_inner().fileno();
+        }
+    }
+    Err(MonorubyErr::typeerr(format!(
+        "no implicit conversion of {} into IO",
+        globals.get_class_name(v.class())
+    )))
+}
+
+/// ### IO.select
+///
+/// - IO.select(read_array [, write_array [, error_array [, timeout]]]) -> array or nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/select.html]
+#[monoruby_builtin]
+fn io_select(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let read_arg = lfp.arg(0);
+    let write_arg = lfp.try_arg(1).unwrap_or(Value::nil());
+    let error_arg = lfp.try_arg(2).unwrap_or(Value::nil());
+    let timeout_arg = lfp.try_arg(3).unwrap_or(Value::nil());
+
+    // Parse timeout
+    let timeout = if timeout_arg.is_nil() {
+        None // block forever
+    } else {
+        let f = timeout_arg.coerce_to_f64(&globals.store)?;
+        if f.is_nan() {
+            return Err(MonorubyErr::rangeerr("NaN out of Time range"));
+        }
+        if f < 0.0 {
+            return Err(MonorubyErr::argumenterr(
+                "time interval must not be negative",
+            ));
+        }
+        let secs = f.floor() as libc::time_t;
+        let usecs = ((f - f.floor()) * 1_000_000.0) as libc::suseconds_t;
+        Some(libc::timeval {
+            tv_sec: secs,
+            tv_usec: usecs,
+        })
+    };
+
+    // Collect IO values and their fds
+    let read_ios: Vec<Value> = if read_arg.is_nil() {
+        vec![]
+    } else {
+        let ary = read_arg.try_array_ty().ok_or_else(|| {
+            MonorubyErr::typeerr("no implicit conversion of Object into Array")
+        })?;
+        ary.to_vec()
+    };
+
+    let write_ios: Vec<Value> = if write_arg.is_nil() {
+        vec![]
+    } else {
+        let ary = write_arg.try_array_ty().ok_or_else(|| {
+            MonorubyErr::typeerr("no implicit conversion of Object into Array")
+        })?;
+        ary.to_vec()
+    };
+
+    let error_ios: Vec<Value> = if error_arg.is_nil() {
+        vec![]
+    } else {
+        let ary = error_arg.try_array_ty().ok_or_else(|| {
+            MonorubyErr::typeerr("no implicit conversion of Object into Array")
+        })?;
+        ary.to_vec()
+    };
+
+    // Get fds
+    let read_fds: Vec<i32> = read_ios
+        .iter()
+        .map(|v| value_to_fd(globals, *v))
+        .collect::<Result<Vec<_>>>()?;
+    let write_fds: Vec<i32> = write_ios
+        .iter()
+        .map(|v| value_to_fd(globals, *v))
+        .collect::<Result<Vec<_>>>()?;
+    let error_fds: Vec<i32> = error_ios
+        .iter()
+        .map(|v| value_to_fd(globals, *v))
+        .collect::<Result<Vec<_>>>()?;
+
+    // If all arrays are empty with no timeout, return nil immediately.
+    // In CRuby this would block forever, but monoruby is single-threaded
+    // so nothing could ever wake us up.
+    if read_ios.is_empty() && write_ios.is_empty() && error_ios.is_empty() && timeout.is_none() {
+        return Ok(Value::nil());
+    }
+
+    // Find max fd
+    let nfds = read_fds
+        .iter()
+        .chain(write_fds.iter())
+        .chain(error_fds.iter())
+        .copied()
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0);
+
+    // SAFETY: libc fd_set operations are standard POSIX.
+    unsafe {
+        let mut readfds: libc::fd_set = std::mem::zeroed();
+        let mut writefds: libc::fd_set = std::mem::zeroed();
+        let mut errorfds: libc::fd_set = std::mem::zeroed();
+
+        libc::FD_ZERO(&mut readfds);
+        libc::FD_ZERO(&mut writefds);
+        libc::FD_ZERO(&mut errorfds);
+
+        for &fd in &read_fds {
+            libc::FD_SET(fd, &mut readfds);
+        }
+        for &fd in &write_fds {
+            libc::FD_SET(fd, &mut writefds);
+        }
+        for &fd in &error_fds {
+            libc::FD_SET(fd, &mut errorfds);
+        }
+
+        let mut tv_storage = timeout.unwrap_or(libc::timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+        });
+        let timeout_ptr = if timeout.is_some() {
+            &mut tv_storage as *mut libc::timeval
+        } else {
+            std::ptr::null_mut()
+        };
+
+        let ret = libc::select(
+            nfds,
+            if read_fds.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                &mut readfds
+            },
+            if write_fds.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                &mut writefds
+            },
+            if error_fds.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                &mut errorfds
+            },
+            timeout_ptr,
+        );
+
+        if ret < 0 {
+            let err = *libc::__errno_location();
+            return Err(MonorubyErr::runtimeerr(format!(
+                "select(2) failed: errno {}",
+                err
+            )));
+        }
+
+        if ret == 0 {
+            return Ok(Value::nil());
+        }
+
+        // Build result arrays
+        let mut ready_read = vec![];
+        for (i, &fd) in read_fds.iter().enumerate() {
+            if libc::FD_ISSET(fd, &readfds) {
+                ready_read.push(read_ios[i]);
+            }
+        }
+        let mut ready_write = vec![];
+        for (i, &fd) in write_fds.iter().enumerate() {
+            if libc::FD_ISSET(fd, &writefds) {
+                ready_write.push(write_ios[i]);
+            }
+        }
+        let mut ready_error = vec![];
+        for (i, &fd) in error_fds.iter().enumerate() {
+            if libc::FD_ISSET(fd, &errorfds) {
+                ready_error.push(error_ios[i]);
+            }
+        }
+
+        let r = Value::array_from_vec(ready_read);
+        let w = Value::array_from_vec(ready_write);
+        let e = Value::array_from_vec(ready_error);
+        Ok(Value::array_from_vec(vec![r, w, e]))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -629,6 +892,72 @@ mod tests {
             n = sio.write("", "hello", "")
             [sio.string, n]
         "#,
+        );
+    }
+
+    #[test]
+    fn io_select() {
+        // select with readable pipe
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            w.write("hello")
+            result = IO.select([r], nil, nil, 0)
+            result[0].size
+            "#,
+        );
+        // select with timeout (no data available)
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            result = IO.select([r], nil, nil, 0)
+            result.nil?
+            "#,
+        );
+        // select with writable pipe
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            result = IO.select(nil, [w], nil, 0)
+            result[1].size
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_fileno() {
+        run_test_once("$stdin.fileno == 0");
+        run_test_once("$stdout.fileno == 1");
+        run_test_once("$stderr.fileno == 2");
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            [r.fileno.is_a?(Integer), w.fileno.is_a?(Integer)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_write_variadic() {
+        run_test_no_result_check(
+            r#"
+            r, w = IO.pipe
+            n = w.write("hello", " ", "world")
+            w.close
+            [r.read, n]
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_syswrite() {
+        run_test_no_result_check(
+            r#"
+            r, w = IO.pipe
+            n = w.syswrite("hello")
+            w.close
+            [r.read, n]
+            "#,
         );
     }
 }
