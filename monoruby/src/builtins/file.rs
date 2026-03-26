@@ -141,12 +141,12 @@ fn file_read(
 fn binread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let filename = to_path(vm, globals, lfp.arg(0))?;
     let length = if let Some(arg1) = lfp.try_arg(1) {
-        Some(arg1.coerce_to_i64(globals)?)
+        Some(arg1.coerce_to_int(vm, globals)?)
     } else {
         None
     };
     let offset = if let Some(arg2) = lfp.try_arg(2) {
-        Some(arg2.coerce_to_i64(globals)?)
+        Some(arg2.coerce_to_int(vm, globals)?)
     } else {
         None
     };
@@ -571,9 +571,9 @@ fn resolve_feature_path(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/umask.html]
 #[monoruby_builtin]
-fn umask(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn umask(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
-        let mask = arg0.coerce_to_i64(globals)? as u32;
+        let mask = arg0.coerce_to_int(vm, globals)? as u32;
         // SAFETY: umask is a POSIX system call that is safe to call.
         let old = unsafe { libc::umask(mask as libc::mode_t) };
         Ok(Value::integer(old as i64))
@@ -594,7 +594,7 @@ fn umask(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/fnmatch.html]
 #[monoruby_builtin]
 fn fnmatch(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -602,7 +602,7 @@ fn fnmatch(
     let pattern = lfp.arg(0).expect_string(globals)?;
     let path_str = lfp.arg(1).expect_string(globals)?;
     let flags = if let Some(arg2) = lfp.try_arg(2) {
-        arg2.coerce_to_i64(globals)? as u32
+        arg2.coerce_to_int(vm, globals)? as u32
     } else {
         0
     };

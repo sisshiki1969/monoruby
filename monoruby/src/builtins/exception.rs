@@ -249,11 +249,11 @@ fn system_exit_status(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: By
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/SystemExit/s/new.html]
 #[monoruby_builtin]
-fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn system_exit_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().expect_class(globals)?.id();
     let name = class_id.get_name(&globals.store);
     let (status, msg) = if let Some(arg0) = lfp.try_arg(0) {
-        let status = arg0.expect_integer(globals)?;
+        let status = arg0.coerce_to_int(vm, globals)?;
         if let Some(arg1) = lfp.try_arg(1) {
             (status, arg1.expect_string(globals)?)
         } else {
@@ -345,6 +345,28 @@ mod tests {
               raise "original"
             rescue => e
               e.cause
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn full_message() {
+        run_test(
+            r#"
+            begin
+              raise "test error"
+            rescue => e
+              e.full_message(order: :top).include?("test error")
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            begin
+              raise "test error"
+            rescue => e
+              e.full_message(order: :top).include?("RuntimeError")
             end
             "#,
         );

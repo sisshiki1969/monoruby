@@ -149,7 +149,7 @@ fn process_exit_bang(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/clock_gettime.html]
 #[monoruby_builtin]
-fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn clock_gettime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let unit = if let Some(arg1) = lfp.try_arg(1) {
         match arg1.try_symbol() {
             Some(id) => id,
@@ -164,7 +164,7 @@ fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         IdentId::FLOAT_SECOND
     };
     let mut tp = TimeSpec::default();
-    let clk_id = lfp.arg(0).coerce_to_i64(globals)? as i32;
+    let clk_id = lfp.arg(0).coerce_to_int(vm, globals)? as i32;
     if let Err(errno) = clock_gettime::clock_gettime(clk_id, &mut tp) {
         return Err(MonorubyErr::runtimeerr(format!(
             "clock_gettime failed: errno {}",

@@ -258,13 +258,13 @@ fn assign_sync(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/read.html
 #[monoruby_builtin]
-fn read(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let length = match lfp.try_arg(0) {
         Some(v) => {
             if v.is_nil() {
                 None
             } else {
-                let length = v.expect_integer(globals)?;
+                let length = v.coerce_to_int(vm, globals)?;
                 if length < 0 {
                     return Err(MonorubyErr::argumenterr("negative length"));
                 }
