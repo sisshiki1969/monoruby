@@ -10,7 +10,7 @@ use std::ops::{BitAnd, BitOr, BitXor};
 pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_class("Integer", INTEGER_CLASS, numeric, OBJECT_CLASS, None);
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "succ", succ, Box::new(integer_succ), 0);
+    //globals.define_builtin_inline_func(INTEGER_CLASS, "succ", succ, Box::new(integer_succ), 0);
     //globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
     //globals.define_builtin_func_with(INTEGER_CLASS, "step", step, 1, 2, false);
     globals.define_builtin_func(INTEGER_CLASS, "upto", upto, 1);
@@ -223,6 +223,10 @@ fn chr(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     ))
 }
 
+// Integer#succ is defined in Ruby (integer.rb).
+// The Rust implementation and JIT inline specialization are commented out
+// because the Ruby definition takes precedence at runtime.
+/*
 #[monoruby_builtin]
 fn succ(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(match lfp.self_val().unpack() {
@@ -269,6 +273,7 @@ fn integer_succ(
     }
     true
 }
+*/
 
 #[monoruby_builtin]
 fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
@@ -1132,5 +1137,15 @@ mod tests {
     fn integer_to_r() {
         run_test_once("3.respond_to?(:to_r)");
         run_test_once("3.respond_to?(:rationalize)");
+    }
+
+    #[test]
+    fn bitwise_type_error() {
+        // Non-integer arguments raise TypeError
+        run_test_error("5 | 'a'");
+        run_test_error("5 & 'a'");
+        run_test_error("5 ^ 'a'");
+        run_test_error("5 | 1.5");
+        run_test_error("5 & nil");
     }
 }

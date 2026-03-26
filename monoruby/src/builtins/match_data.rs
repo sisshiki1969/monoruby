@@ -201,4 +201,13 @@ mod tests {
     fn match_data_named_captures() {
         run_test(r##"/(?<a>foo)(?<b>bar)/.match("foobar").named_captures"##);
     }
+
+    #[test]
+    fn match_data_begin_end_out_of_range() {
+        // Index out of range -> IndexError
+        run_test_error(r##"/(foo)(bar)/.match("foobar").begin(5)"##);
+        run_test_error(r##"/(foo)(bar)/.match("foobar").end(5)"##);
+        run_test_error(r##"/(foo)(bar)/.match("foobar").begin(-1)"##);
+        run_test_error(r##"/(foo)(bar)/.match("foobar").end(-1)"##);
+    }
 }
