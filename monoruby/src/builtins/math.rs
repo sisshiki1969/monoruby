@@ -66,7 +66,10 @@ fn coerce_to_f64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f
         RV::Fixnum(i) => Ok(i as f64),
         RV::BigInt(b) => Ok(b.to_f64().unwrap()),
         _ => {
-            if let Some(fid) = globals.check_method(v, IdentId::TO_F) {
+            // Only try to_f for non-String types (CRuby only calls to_f on Numeric subclasses)
+            if v.is_str().is_none()
+                && let Some(fid) = globals.check_method(v, IdentId::TO_F)
+            {
                 let result = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
                 match result.unpack() {
                     RV::Float(f) => Ok(f),

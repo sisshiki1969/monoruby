@@ -508,7 +508,9 @@ module Enumerable
 end
 
 class Enumerator
-  class Lazy < Enumerator
+  class Lazy
+    include Enumerable
+
     def initialize(obj, &block)
       @obj = obj
       @block = block

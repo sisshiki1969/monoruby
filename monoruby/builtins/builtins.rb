@@ -334,7 +334,7 @@ class Numeric
   def step(limit = nil, step = nil, by: nil, to: nil)
     limit = to if to
     step = by if by
-    step ||= (limit && limit < self) ? -1 : 1
+    step ||= 1
     raise ArgumentError, "step can't be 0" if step == 0
     return to_enum(:step, limit, step) unless block_given?
     i = self
@@ -357,20 +357,20 @@ class Proc
   def curry(arity = nil)
     arity ||= self.arity
     arity = -arity - 1 if arity < 0
-    if arity == 0
-      return self
-    end
-    make_curry = lambda do |collected_args|
+    return self if arity == 0
+    orig = self
+    curried = nil
+    curried = lambda do |collected_args|
       lambda do |*args|
         new_args = collected_args + args
         if new_args.size >= arity
-          self.call(*new_args)
+          orig.call(*new_args)
         else
-          make_curry.call(new_args)
+          curried.call(new_args)
         end
       end
     end
-    make_curry.call([])
+    curried.call([])
   end
 end
 
