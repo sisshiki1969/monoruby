@@ -662,15 +662,12 @@ fn unshift(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/concat.html]
 #[monoruby_builtin]
-fn concat(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn concat(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ary = lfp.self_val().as_array();
     let mut ary: Array = Array::new_empty();
     for a in lfp.arg(0).as_array().iter().cloned() {
-        if let Some(a) = a.try_array_ty() {
-            ary.extend_from_slice(&a);
-        } else {
-            return Err(MonorubyErr::no_implicit_conversion(globals, a, ARRAY_CLASS));
-        }
+        let converted = a.coerce_to_array(vm, globals)?;
+        ary.extend_from_slice(&converted);
     }
     self_ary.extend_from_slice(&ary);
     Ok(self_ary.into())
@@ -811,8 +808,16 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 #[monoruby_builtin]
 fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
-    let rhs = if let Some(rhs) = lfp.arg(0).try_array_ty() {
+    let arg = lfp.arg(0);
+    let rhs = if let Some(rhs) = arg.try_array_ty() {
         rhs
+    } else if let Some(fid) = globals.check_method(arg, IdentId::TO_ARY) {
+        let v = vm.invoke_func_inner(globals, fid, arg, &[], None, None)?;
+        if let Some(ary) = v.try_array_ty() {
+            ary
+        } else {
+            return Ok(Value::nil());
+        }
     } else {
         return Ok(Value::nil());
     };
@@ -859,7 +864,7 @@ fn index(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d=3d.html]
 #[monoruby_builtin]
 fn index_assign(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -888,14 +893,12 @@ fn index_assign(
                 Ok(val)
             }
         } else {
-            Err(MonorubyErr::runtimeerr(format!(
-                "index {:?} is not supported yet.",
-                i.inspect(&globals.store)
-            )))
+            let idx = i.coerce_to_int(vm, globals)?;
+            ary.set_index(idx, val)
         }
     } else {
-        let mut i = lfp.arg(0).coerce_to_i64(globals)?;
-        let l = lfp.arg(1).coerce_to_i64(globals)?;
+        let mut i = lfp.arg(0).coerce_to_int(vm, globals)?;
+        let l = lfp.arg(1).coerce_to_int(vm, globals)?;
         if l < 0 {
             return Err(MonorubyErr::indexerr(format!("negative length ({})", l)));
         }
@@ -903,7 +906,7 @@ fn index_assign(
             i += ary.len() as i64;
             if i < 0 {
                 return Err(MonorubyErr::index_too_small(
-                    lfp.arg(0).coerce_to_i64(globals)?,
+                    lfp.arg(0).coerce_to_int(vm, globals)?,
                     0,
                 ));
             }
@@ -979,9 +982,9 @@ fn fill(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/drop.html]
 #[monoruby_builtin]
-fn drop(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn drop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    let num = lfp.arg(0).coerce_to_i64(globals)?;
+    let num = lfp.arg(0).coerce_to_int(vm, globals)?;
     if num < 0 {
         return Err(MonorubyErr::argumenterr(format!(
             "Attempt to drop negative size. {}",
@@ -1112,12 +1115,12 @@ fn array_join(store: &Store, ary: Array, sep: &str) -> String {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/first.html]
 #[monoruby_builtin]
-fn first(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if lfp.try_arg(0).is_none() {
         Ok(ary.first().cloned().unwrap_or_default())
     } else {
-        let n = lfp.arg(0).coerce_to_i64(globals)?;
+        let n = lfp.arg(0).coerce_to_int(vm, globals)?;
         if n < 0 {
             return Err(MonorubyErr::argumenterr("must be positive."));
         }
@@ -1167,7 +1170,7 @@ fn last(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    let index = lfp.arg(0).coerce_to_i64(globals)?;
+    let index = lfp.arg(0).coerce_to_int(vm, globals)?;
     let resolved = ary.get_array_index(index);
     if let Some(idx) = resolved {
         if let Some(val) = ary.get(idx) {
@@ -2169,7 +2172,27 @@ fn pack(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     rvalue::pack(globals, &ary, lfp.arg(0).expect_str(globals)?)
 }
 
+fn try_convert_to_array(
+    v: &Value,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Option<Array> {
+    if let Some(ary) = v.try_array_ty() {
+        return Some(ary);
+    }
+    if let Some(fid) = globals.check_method(*v, IdentId::TO_ARY) {
+        if let Ok(result) = vm.invoke_func_inner(globals, fid, *v, &[], None, None) {
+            if let Some(ary) = result.try_array_ty() {
+                return Some(ary);
+            }
+        }
+    }
+    None
+}
+
 fn flatten_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
     ary: &Array,
     res: &mut Vec<Value>,
     lv: Option<usize>,
@@ -2182,17 +2205,17 @@ fn flatten_inner(
     }
     seen.push(id);
     for v in ary.iter() {
-        if let Some(inner) = v.try_array_ty() {
+        if let Some(inner) = try_convert_to_array(v, vm, globals) {
             if let Some(lv) = lv {
                 if lv == 0 {
                     res.push(*v);
                 } else {
                     *changed = true;
-                    flatten_inner(&inner, res, Some(lv - 1), changed, seen)?;
+                    flatten_inner(vm, globals, &inner, res, Some(lv - 1), changed, seen)?;
                 }
             } else {
                 *changed = true;
-                flatten_inner(&inner, res, None, changed, seen)?;
+                flatten_inner(vm, globals, &inner, res, None, changed, seen)?;
             }
         } else {
             res.push(*v);
@@ -2209,13 +2232,13 @@ fn flatten_inner(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/flatten.html]
 #[monoruby_builtin]
-fn flatten(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn flatten(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     let lv = if let Some(arg0) = lfp.try_arg(0) {
         if arg0.is_nil() {
             None
         } else {
-            match arg0.expect_integer(globals)? {
+            match arg0.coerce_to_int(vm, globals)? {
                 i if i >= 0 => Some(i as usize),
                 _ => None,
             }
@@ -2226,7 +2249,7 @@ fn flatten(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let mut res = vec![];
     let mut changed = false;
     let mut seen = vec![];
-    flatten_inner(&ary, &mut res, lv, &mut changed, &mut seen)?;
+    flatten_inner(vm, globals, &ary, &mut res, lv, &mut changed, &mut seen)?;
     Ok(Value::array_from_vec(res))
 }
 
@@ -2237,13 +2260,13 @@ fn flatten(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/flatten.html]
 #[monoruby_builtin]
-fn flatten_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     let lv = if let Some(arg0) = lfp.try_arg(0) {
         if arg0.is_nil() {
             None
         } else {
-            match arg0.expect_integer(globals)? {
+            match arg0.coerce_to_int(vm, globals)? {
                 i if i >= 0 => Some(i as usize),
                 _ => None,
             }
@@ -2254,7 +2277,7 @@ fn flatten_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let mut res = vec![];
     let mut changed = false;
     let mut seen = vec![];
-    flatten_inner(&ary, &mut res, lv, &mut changed, &mut seen)?;
+    flatten_inner(vm, globals, &ary, &mut res, lv, &mut changed, &mut seen)?;
     ary.replace(res);
     Ok(if changed { ary.into() } else { Value::nil() })
 }
@@ -2325,9 +2348,9 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/delete_at.html]
 #[monoruby_builtin]
-fn delete_at(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn delete_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
-    let pos = lfp.arg(0).coerce_to_i64(globals)?;
+    let pos = lfp.arg(0).coerce_to_int(vm, globals)?;
     let pos = if pos < 0 {
         let pos = pos + ary.len() as i64;
         if pos < 0 {
@@ -2393,13 +2416,13 @@ fn find_index(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/insert.html]
 #[monoruby_builtin]
-fn insert(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn insert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let val = lfp.arg(1).as_array();
     if val.len() == 0 {
         return Ok(lfp.self_val());
     }
     let mut ary = lfp.self_val().as_array();
-    let nth = lfp.arg(0).expect_integer(globals)?;
+    let nth = lfp.arg(0).coerce_to_int(vm, globals)?;
     let nth = if nth < 0 {
         let nth = nth + ary.len() as i64 + 1;
         if nth < 0 {
@@ -3683,5 +3706,58 @@ mod tests {
         run_test("[1,2,3,4,5].bsearch_index { |x| x >= 3 }");
         run_test("[1,2,3,4,5].bsearch_index { |x| x >= 6 }");
         run_test("[1,3,5,7,9].bsearch_index { |x| x <=> 5 }");
+    }
+
+    #[test]
+    fn implicit_type_conversions() {
+        // to_int conversions
+        run_test_with_prelude(
+            "[1,2,3,4,5].first(n)",
+            "class MyNum; def to_int; 3; end; end\nn = MyNum.new",
+        );
+        run_test_with_prelude(
+            "[1,2,3,4,5].drop(n)",
+            "class MyNum; def to_int; 2; end; end\nn = MyNum.new",
+        );
+        run_test_with_prelude(
+            "[1,2,3,4,5].fetch(n)",
+            "class MyNum; def to_int; 2; end; end\nn = MyNum.new",
+        );
+        run_test_with_prelude(
+            "[1,2,3,4,5].delete_at(n)",
+            "class MyNum; def to_int; 2; end; end\nn = MyNum.new",
+        );
+        run_test_with_prelude(
+            "[[1,[2]],3].flatten(n)",
+            "class MyNum; def to_int; 1; end; end\nn = MyNum.new",
+        );
+        run_test_with_prelude(
+            "a = [1,2,3]; a.insert(n, 99); a",
+            "class MyNum; def to_int; 1; end; end\nn = MyNum.new",
+        );
+        // to_ary conversions
+        run_test_with_prelude(
+            "([1,2,3] <=> obj)",
+            "class MyAry; def to_ary; [1,2,3]; end; end\nobj = MyAry.new",
+        );
+        run_test_with_prelude(
+            "a = [1]; a.concat(obj); a",
+            "class MyAry; def to_ary; [4,5]; end; end\nobj = MyAry.new",
+        );
+        // to_int in []=
+        run_test_with_prelude(
+            "a = [1,2,3,4,5]; a[n] = 99; a",
+            "class MyNum; def to_int; 2; end; end\nn = MyNum.new",
+        );
+        // cycle with to_int
+        run_test_with_prelude(
+            "res = []; [1,2].cycle(n) { |x| res << x }; res",
+            "class MyNum; def to_int; 2; end; end\nn = MyNum.new",
+        );
+        // combination with to_int
+        run_test_with_prelude(
+            "res = []; [1,2,3].combination(n) { |c| res << c }; res",
+            "class MyNum; def to_int; 2; end; end\nn = MyNum.new",
+        );
     }
 }

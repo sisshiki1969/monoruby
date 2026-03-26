@@ -310,6 +310,26 @@ class Numeric
     self < 0 ? -self : self
   end
   alias magnitude abs
+
+  def to_int
+    to_i
+  end
+
+  def ceil(ndigits = 0)
+    to_f.ceil(ndigits)
+  end
+
+  def floor(ndigits = 0)
+    to_f.floor(ndigits)
+  end
+
+  def round(ndigits = 0)
+    to_f.round(ndigits)
+  end
+
+  def truncate(ndigits = 0)
+    to_f.truncate(ndigits)
+  end
 end
 
 class Symbol

@@ -166,7 +166,7 @@ class Array
         each { |x| yield x }
       end
     else
-      n = n.to_i
+      n = n.to_int
       n.times do
         each { |x| yield x }
       end
@@ -176,7 +176,7 @@ class Array
 
   def combination(n)
     return to_enum(:combination, n) unless block_given?
-    n = n.to_i
+    n = n.to_int
     len = self.size
     if n == 0
       yield []

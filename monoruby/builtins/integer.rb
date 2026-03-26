@@ -143,14 +143,17 @@ class Integer
   end
 
   def allbits?(mask)
+    mask = mask.to_int
     (self & mask) == mask
   end
 
   def anybits?(mask)
+    mask = mask.to_int
     (self & mask) != 0
   end
 
   def nobits?(mask)
+    mask = mask.to_int
     (self & mask) == 0
   end
 

@@ -321,10 +321,10 @@ fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 // Bitwise operations.
 
 macro_rules! binop {
-    ($op:ident) => {
+    ($op:ident, $op_str:expr) => {
         paste! {
             #[monoruby_builtin]
-            fn $op(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+            fn $op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
                 let lhs = lfp.self_val();
                 let rhs = lfp.arg(0);
                 match (lhs.unpack(), rhs.unpack()) {
@@ -333,6 +333,17 @@ macro_rules! binop {
                     (RV::BigInt(lhs), RV::Fixnum(rhs)) => Ok(Value::bigint(lhs.$op(BigInt::from(rhs)))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(lhs.$op(rhs))),
                     _ => {
+                        // Try coerce protocol
+                        let coerce_id = IdentId::get_id("coerce");
+                        if let Some(result) = vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None)? {
+                            if let Some(ary) = result.try_array_ty() {
+                                if ary.len() == 2 {
+                                    let op_id = IdentId::get_id($op_str);
+                                    return vm.invoke_method_inner(globals, op_id, ary[0], &[ary[1]], None, None);
+                                }
+                            }
+                            return Err(MonorubyErr::typeerr("coerce must return [x, y]".to_string()));
+                        }
                         lfp.arg(0).coerce_to_i64(globals)?;
                         unreachable!();
                     }
@@ -340,13 +351,16 @@ macro_rules! binop {
             }
         }
     };
-    ($op1:ident, $($op2:ident),+) => {
-        binop!($op1);
-        binop!($($op2),+);
+    (($op1:ident, $op_str1:expr), $(($op2:ident, $op_str2:expr)),+) => {
+        binop!($op1, $op_str1);
+        binop!($(($op2, $op_str2)),+);
+    };
+    (($op1:ident, $op_str1:expr)) => {
+        binop!($op1, $op_str1);
     };
 }
 
-binop!(bitand, bitor, bitxor);
+binop!((bitand, "&"), (bitor, "|"), (bitxor, "^"));
 
 // Compare operations.
 

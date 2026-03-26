@@ -154,26 +154,26 @@ fn hash_bracket(
                 Ok(Value::hash_from_inner(inner))
             } else if let Some(ary) = arg.try_array_ty() {
                 // Single array argument: try to convert [[k,v], ...] to hash
-                let mut map = RubyMap::default();
-                for elem in ary.iter() {
-                    if let Some(pair) = elem.try_array_ty() {
-                        if pair.len() == 2 {
-                            map.insert(pair[0], pair[1], vm, globals)?;
-                        } else {
-                            return Err(MonorubyErr::argumenterr(format!(
-                                "invalid number of elements ({} for 1..2)",
-                                pair.len()
-                            )));
-                        }
-                    } else {
-                        return Err(MonorubyErr::argumenterr(
-                            "wrong number of arguments (odd number of arguments for Hash)"
-                                .to_string(),
-                        ));
+                hash_from_array_pairs(ary.iter().copied(), vm, globals)
+            } else {
+                // Try to_hash first
+                let to_hash_id = IdentId::get_id("to_hash");
+                if let Some(result) =
+                    vm.invoke_method_if_exists(globals, to_hash_id, arg, &[], None, None)?
+                {
+                    if result.try_hash_ty().is_some() {
+                        let inner = result.as_hashmap_inner().clone();
+                        return Ok(Value::hash_from_inner(inner));
                     }
                 }
-                Ok(Value::hash(map))
-            } else {
+                // Try to_ary
+                if let Some(result) =
+                    vm.invoke_method_if_exists(globals, IdentId::TO_ARY, arg, &[], None, None)?
+                {
+                    if let Some(ary) = result.try_array_ty() {
+                        return hash_from_array_pairs(ary.iter().copied(), vm, globals);
+                    }
+                }
                 Err(MonorubyErr::argumenterr(
                     "odd number of arguments for Hash".to_string(),
                 ))
@@ -192,6 +192,56 @@ fn hash_bracket(
             Ok(Value::hash(map))
         }
     }
+}
+
+/// Try to use a value as a Hash, calling `to_hash` if it doesn't have hash type.
+fn coerce_to_hash(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<Value> {
+    if arg.try_hash_ty().is_some() {
+        return Ok(arg);
+    }
+    let to_hash_id = IdentId::get_id("to_hash");
+    if let Some(result) = vm.invoke_method_if_exists(globals, to_hash_id, arg, &[], None, None)? {
+        if result.try_hash_ty().is_some() {
+            return Ok(result);
+        }
+        return Err(MonorubyErr::typeerr(format!(
+            "can't convert {} to Hash ({}#to_hash gives {})",
+            arg.get_real_class_name(globals),
+            arg.get_real_class_name(globals),
+            result.get_real_class_name(globals),
+        )));
+    }
+    Err(MonorubyErr::no_implicit_conversion(
+        &globals.store,
+        arg,
+        HASH_CLASS,
+    ))
+}
+
+/// Helper to convert an iterator of values (expected to be [k,v] pairs) into a Hash.
+fn hash_from_array_pairs(
+    iter: impl Iterator<Item = Value>,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<Value> {
+    let mut map = RubyMap::default();
+    for elem in iter {
+        if let Some(pair) = elem.try_array_ty() {
+            if pair.len() == 2 {
+                map.insert(pair[0], pair[1], vm, globals)?;
+            } else {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "invalid number of elements ({} for 1..2)",
+                    pair.len()
+                )));
+            }
+        } else {
+            return Err(MonorubyErr::argumenterr(
+                "wrong number of arguments (odd number of arguments for Hash)".to_string(),
+            ));
+        }
+    }
+    Ok(Value::hash(map))
 }
 
 ///
@@ -533,16 +583,9 @@ fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/replace.html]
 #[monoruby_builtin]
-fn replace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
-    let arg = lfp.arg(0);
-    if arg.try_hash_ty().is_none() {
-        return Err(MonorubyErr::no_implicit_conversion(
-            &globals.store,
-            arg,
-            HASH_CLASS,
-        ));
-    }
+    let arg = coerce_to_hash(vm, globals, lfp.arg(0))?;
     let h = self_.as_hashmap_inner_mut();
     *h = arg.as_hashmap_inner().clone();
 
@@ -1024,7 +1067,8 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     lfp.expect_no_block()?;
     let mut h = lfp.self_val().dup().expect_hash_ty(globals)?;
     for arg in lfp.arg(0).as_array().iter() {
-        let other = arg.expect_hash_ty(globals)?;
+        let other_val = coerce_to_hash(vm, globals, *arg)?;
+        let other = other_val.expect_hash_ty(globals)?;
         for (k, v) in other.iter() {
             h.insert(k, v, vm, globals)?;
         }
@@ -1048,7 +1092,8 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if let Some(block) = lfp.block() {
         let data = vm.get_block_data(globals, block)?;
         for arg in lfp.arg(0).as_array().iter() {
-            let other = arg.expect_hash_ty(globals)?;
+            let other_val = coerce_to_hash(vm, globals, *arg)?;
+            let other = other_val.expect_hash_ty(globals)?;
             for (k, other_v) in other.iter() {
                 if let Some(self_v) = h.get(k, vm, globals)? {
                     let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
@@ -1060,7 +1105,8 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         }
     } else {
         for arg in lfp.arg(0).as_array().iter() {
-            let other = arg.expect_hash_ty(globals)?;
+            let other_val = coerce_to_hash(vm, globals, *arg)?;
+            let other = other_val.expect_hash_ty(globals)?;
             for (k, v) in other.iter() {
                 h.insert(k, v, vm, globals)?;
             }
