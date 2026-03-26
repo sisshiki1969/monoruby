@@ -282,8 +282,8 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2a.html]
 #[monoruby_builtin]
-fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let count = match lfp.arg(0).coerce_to_i64(globals)? {
+fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let count = match lfp.arg(0).coerce_to_int(vm, globals)? {
         i if i < 0 => return Err(MonorubyErr::negative_argument()),
         i => i as usize,
     };
@@ -597,7 +597,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             None => return Ok(Value::nil()),
         };
         if let Some(arg1) = lfp.try_arg(1) {
-            let len = match arg1.coerce_to_i64(globals)? {
+            let len = match arg1.coerce_to_int(vm, globals)? {
                 0 => return Ok(Value::string_from_str("")),
                 i if i < 0 => return Ok(Value::nil()),
                 i => i as usize,
@@ -618,8 +618,8 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
     } else if let Some(info) = lfp.arg(0).is_range() {
         let (start, end) = (
-            info.start().expect_integer(globals)?,
-            info.end().expect_integer(globals)? - info.exclude_end() as i64,
+            info.start().coerce_to_int(vm, globals)?,
+            info.end().coerce_to_int(vm, globals)? - info.exclude_end() as i64,
         );
         let (start, len) = match (lhs.conv_char_index(start)?, lhs.conv_char_index(end)?) {
             (Some(start), Some(end)) => {
@@ -637,7 +637,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         )))
     } else if let Some(re) = lfp.arg(0).is_regex() {
         let nth = if let Some(i) = lfp.try_arg(1) {
-            i.coerce_to_i64(globals)?
+            i.coerce_to_int(vm, globals)?
         } else {
             0
         };
@@ -688,7 +688,7 @@ fn string_match_index(
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=5b=5d=3d.html]
 #[monoruby_builtin]
 fn index_assign(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -712,7 +712,7 @@ fn index_assign(
         };
         let len = if let Some(arg1) = arg1 {
             // self[nth, len] = val
-            match arg1.expect_integer(globals)? {
+            match arg1.coerce_to_int(vm, globals)? {
                 i if i < 0 => return Err(MonorubyErr::indexerr("negative length.")),
                 i => i as usize,
             }
@@ -999,7 +999,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
     let lim = if let Some(arg1) = lfp.try_arg(1) {
-        arg1.coerce_to_i64(globals)?
+        arg1.coerce_to_int(vm, globals)?
     } else {
         0
     };
@@ -1153,7 +1153,7 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             None => return Ok(Value::nil()),
         };
         if let Some(arg1) = lfp.try_arg(1) {
-            let len = match arg1.coerce_to_i64(globals)? {
+            let len = match arg1.coerce_to_int(vm, globals)? {
                 i if i < 0 => return Ok(Value::nil()),
                 i => i as usize,
             };
@@ -1170,8 +1170,8 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     } else if let Some(info) = lfp.arg(0).is_range() {
         let len = lhs.chars().count();
         let (start, end) = (
-            info.start().expect_integer(globals)?,
-            info.end().expect_integer(globals)? - info.exclude_end() as i64,
+            info.start().coerce_to_int(vm, globals)?,
+            info.end().coerce_to_int(vm, globals)? - info.exclude_end() as i64,
         );
         let (start, len) = match (
             conv_index(start, len),
@@ -1198,7 +1198,7 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         let nth = if lfp.try_arg(1).is_none() {
             0
         } else {
-            lfp.arg(1).coerce_to_i64(globals)?
+            lfp.arg(1).coerce_to_int(vm, globals)?
         };
         match info.captures(&lhs, vm)? {
             None => Ok(Value::nil()),
@@ -1596,7 +1596,7 @@ fn string_match(
     _: BytecodePtr,
 ) -> Result<Value> {
     let pos = if let Some(arg1) = lfp.try_arg(1) {
-        match arg1.coerce_to_i64(globals)? {
+        match arg1.coerce_to_int(vm, globals)? {
             pos if pos >= 0 => pos as usize,
             _ => return Ok(Value::nil()),
         }
@@ -1624,7 +1624,7 @@ fn string_match_(
     _: BytecodePtr,
 ) -> Result<Value> {
     let pos = if let Some(arg1) = lfp.try_arg(1) {
-        match arg1.coerce_to_i64(globals)? {
+        match arg1.coerce_to_int(vm, globals)? {
             pos if pos >= 0 => pos as usize,
             _ => return Ok(Value::nil()),
         }
@@ -1653,7 +1653,7 @@ fn string_index(
     _: BytecodePtr,
 ) -> Result<Value> {
     let char_pos = if let Some(arg1) = lfp.try_arg(1) {
-        arg1.coerce_to_i64(globals)?
+        arg1.coerce_to_int(vm, globals)?
     } else {
         0
     };
@@ -1709,7 +1709,7 @@ fn string_rindex(
     let char_len = s.chars().count();
 
     let max_char_pos = if let Some(arg1) = lfp.try_arg(1) {
-        let pos = arg1.coerce_to_i64(globals)?;
+        let pos = arg1.coerce_to_int(vm, globals)?;
         match given.conv_char_index2(pos)? {
             Some(pos) => pos,
             None => return Ok(Value::nil()),
@@ -1866,7 +1866,7 @@ fn gen_pad(padding: &str, len: usize) -> String {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/ljust.html]
 #[monoruby_builtin]
-fn ljust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn ljust(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg1 = lfp.try_arg(1);
     let padding = if let Some(arg1) = &arg1 {
         arg1.expect_str(globals)?
@@ -1878,7 +1878,7 @@ fn ljust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     };
     let self_ = lfp.self_val();
     let lhs = self_.as_str();
-    let width = lfp.arg(0).coerce_to_i64(globals)?;
+    let width = lfp.arg(0).coerce_to_int(vm, globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
         return Ok(Value::string(lhs.to_string()));
@@ -1894,7 +1894,7 @@ fn ljust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/rjust.html]
 #[monoruby_builtin]
-fn rjust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn rjust(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg1 = lfp.try_arg(1);
     let padding = if let Some(arg1) = &arg1 {
         arg1.expect_str(globals)?
@@ -1906,7 +1906,7 @@ fn rjust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     };
     let self_ = lfp.self_val();
     let lhs = self_.as_str();
-    let width = lfp.arg(0).coerce_to_i64(globals)?;
+    let width = lfp.arg(0).coerce_to_int(vm, globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
         return Ok(Value::string(lhs.to_string()));

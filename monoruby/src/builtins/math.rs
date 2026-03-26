@@ -552,7 +552,7 @@ mod tests {
     fn implicit_to_f() {
         run_test(
             r#"
-            class MyNum
+            class MyNum < Numeric
               def to_f
                 2.0
               end
@@ -562,22 +562,22 @@ mod tests {
         );
         run_test(
             r#"
-            class MyNum
+            class MyNum2 < Numeric
               def to_f
                 1.0
               end
             end
-            Math.sin(MyNum.new)
+            Math.sin(MyNum2.new)
             "#,
         );
         run_test(
             r#"
-            class MyNum
+            class MyNum3 < Numeric
               def to_f
                 0.5
               end
             end
-            Math.cos(MyNum.new)
+            Math.cos(MyNum3.new)
             "#,
         );
     }
