@@ -3760,4 +3760,58 @@ mod tests {
             "class MyNum; def to_int; 2; end; end\nn = MyNum.new",
         );
     }
+
+    #[test]
+    fn permutation() {
+        run_test(
+            r##"
+            res = []
+            [1,2,3].permutation(2) { |p| res << p }
+            res
+            "##,
+        );
+        run_test(
+            r##"
+            res = []
+            [1,2,3].permutation { |p| res << p }
+            res
+            "##,
+        );
+        run_test(
+            r##"
+            res = []
+            [1,2,3].permutation(0) { |p| res << p }
+            res
+            "##,
+        );
+        run_test(
+            r##"
+            res = []
+            [1,2,3].permutation(1) { |p| res << p }
+            res
+            "##,
+        );
+        run_test("[1,2,3].permutation(4).to_a");
+        run_test("[1,2,3].permutation(-1).to_a");
+    }
+
+    #[test]
+    fn repeated_combination() {
+        run_test(
+            r##"
+            res = []
+            [1,2,3].repeated_combination(2) { |c| res << c }
+            res
+            "##,
+        );
+        run_test(
+            r##"
+            res = []
+            [1,2].repeated_combination(3) { |c| res << c }
+            res
+            "##,
+        );
+        run_test("[1,2,3].repeated_combination(0).to_a");
+        run_test("[1,2,3].repeated_combination(1).to_a");
+    }
 }

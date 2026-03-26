@@ -397,4 +397,13 @@ mod tests {
         run_test("0.0.abs");
         run_test("1.0.magnitude");
     }
+
+    #[test]
+    fn numeric_step() {
+        run_test("res = []; 1.step(10, 2) {|i| res << i}; res");
+        run_test("res = []; 1.step(to: 5, by: 2) {|i| res << i}; res");
+        run_test("res = []; 1.0.step(2.0, 0.5) {|i| res << i}; res");
+        run_test("res = []; 5.step(1, -1) {|i| res << i}; res");
+        run_test("res = []; 1.step(5) {|i| res << i}; res");
+    }
 }
