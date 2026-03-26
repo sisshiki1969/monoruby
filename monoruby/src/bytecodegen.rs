@@ -628,7 +628,8 @@ impl<'a> BytecodeGen<'a> {
         }
 
         let ast = info.ast;
-        let is_const = if self.ir.len() == 1
+        let is_const = if !self.is_block()
+            && self.ir.len() == 1
             && let NodeKind::Return(box ret) = &ast.kind
         {
             match &ret.kind {
