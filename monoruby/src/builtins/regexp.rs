@@ -56,9 +56,9 @@ fn allocate(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/compile.html]
 #[monoruby_builtin]
-fn regexp_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.arg(0);
-    let string = arg0.expect_string(globals)?;
+    let string = arg0.coerce_to_string(vm, globals)?;
     let option = if let Some(option) = lfp.try_arg(1) {
         if let Some(option) = option.try_fixnum() {
             option as i32 as u32
@@ -89,10 +89,10 @@ fn regexp_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/escape.html]
 #[monoruby_builtin]
-fn regexp_escape(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn regexp_escape(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.arg(0);
-    let string = arg0.expect_str(globals)?;
-    let val = Value::string(RegexpInner::escape(string));
+    let string = arg0.coerce_to_str(vm, globals)?;
+    let val = Value::string(RegexpInner::escape(&string));
     Ok(val)
 }
 
@@ -137,7 +137,7 @@ fn regexp_union(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
 #[monoruby_builtin]
 fn regexp_last_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
-        let nth = arg0.coerce_to_i64(globals)?;
+        let nth = arg0.coerce_to_int(vm, globals)?;
         Ok(vm.get_special_matches(nth))
     } else {
         Ok(vm.get_last_matchdata())
@@ -236,7 +236,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let given_val = lfp.arg(0);
     let given = given_val.expect_str(globals)?;
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
-        match conv_index(pos.expect_integer(globals)?, given.chars().count()) {
+        match conv_index(pos.coerce_to_int(vm, globals)?, given.chars().count()) {
             Some(pos) => pos,
             None => return Ok(Value::bool(false)),
         }
@@ -265,7 +265,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let heystack_val = lfp.arg(0);
     let heystack = heystack_val.expect_str(globals)?;
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
-        match conv_index(pos.expect_integer(globals)?, heystack.chars().count()) {
+        match conv_index(pos.coerce_to_int(vm, globals)?, heystack.chars().count()) {
             Some(pos) => pos,
             None => return Ok(Value::bool(false)),
         }

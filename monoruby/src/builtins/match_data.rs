@@ -89,10 +89,10 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/begin.html]
 #[monoruby_builtin]
-fn match_begin(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn match_begin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
-    let idx = lfp.arg(0).coerce_to_i64(globals)? as usize;
+    let idx = lfp.arg(0).coerce_to_int(vm, globals)? as usize;
     if idx >= m.len() {
         return Err(MonorubyErr::indexerr(format!(
             "index {idx} out of matches"
@@ -116,10 +116,10 @@ fn match_begin(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/end.html]
 #[monoruby_builtin]
-fn match_end(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn match_end(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
-    let idx = lfp.arg(0).coerce_to_i64(globals)? as usize;
+    let idx = lfp.arg(0).coerce_to_int(vm, globals)? as usize;
     if idx >= m.len() {
         return Err(MonorubyErr::indexerr(format!(
             "index {idx} out of matches"
