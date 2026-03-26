@@ -894,4 +894,70 @@ mod tests {
         "#,
         );
     }
+
+    #[test]
+    fn io_select() {
+        // select with readable pipe
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            w.write("hello")
+            result = IO.select([r], nil, nil, 0)
+            result[0].size
+            "#,
+        );
+        // select with timeout (no data available)
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            result = IO.select([r], nil, nil, 0)
+            result.nil?
+            "#,
+        );
+        // select with writable pipe
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            result = IO.select(nil, [w], nil, 0)
+            result[1].size
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_fileno() {
+        run_test_once("$stdin.fileno == 0");
+        run_test_once("$stdout.fileno == 1");
+        run_test_once("$stderr.fileno == 2");
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            [r.fileno.is_a?(Integer), w.fileno.is_a?(Integer)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_write_variadic() {
+        run_test_no_result_check(
+            r#"
+            r, w = IO.pipe
+            n = w.write("hello", " ", "world")
+            w.close
+            [r.read, n]
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_syswrite() {
+        run_test_no_result_check(
+            r#"
+            r, w = IO.pipe
+            n = w.syswrite("hello")
+            w.close
+            [r.read, n]
+            "#,
+        );
+    }
 }
