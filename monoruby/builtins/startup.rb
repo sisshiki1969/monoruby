@@ -740,6 +740,38 @@ end
 
 module Kernel
   module_function
+
+  def puts(*args)
+    $stdout.puts(*args)
+    nil
+  end
+
+  def print(*args)
+    $stdout.print(*args)
+    nil
+  end
+
+  def p(*args)
+    if args.size == 1
+      $stdout.puts(args[0].inspect)
+      args[0]
+    elsif args.empty?
+      nil
+    else
+      args.each { |a| $stdout.puts(a.inspect) }
+      args
+    end
+  end
+
+  def printf(fmt = nil, *args)
+    if fmt.is_a?(IO)
+      fmt.printf(*args)
+    elsif fmt
+      $stdout.print(format(fmt, *args))
+    end
+    nil
+  end
+
   def at_exit(&block)
   end
 
