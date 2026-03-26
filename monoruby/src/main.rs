@@ -6,6 +6,13 @@ fn handle_error(err: MonorubyErr, globals: &Globals) -> ! {
     if let MonorubyErrKind::SystemExit(status) = err.kind {
         std::process::exit(status as i32);
     }
+    if let MonorubyErrKind::MethodReturn(..) = err.kind {
+        // MethodReturn that reached top-level means a return from a block
+        // whose target method has already returned — this is a LocalJumpError.
+        let err = MonorubyErr::localjumperr("unexpected return");
+        err.show_error_message_and_all_loc(&globals.store);
+        std::process::exit(1);
+    }
     err.show_error_message_and_all_loc(&globals.store);
     std::process::exit(1);
 }

@@ -1293,7 +1293,16 @@ impl Executor {
             args.len(),
             None,
         )
-        .ok_or_else(|| self.take_error())
+        .ok_or_else(|| {
+            let err = self.take_error();
+            // MethodReturn that escapes a Proc#call means the target method
+            // has already returned — convert to LocalJumpError.
+            if let MonorubyErrKind::MethodReturn(val, _) = err.kind() {
+                MonorubyErr::localjumperr_with_val("unexpected return", *val)
+            } else {
+                err
+            }
+        })
     }
 
     pub(crate) fn invoke_method_if_exists(

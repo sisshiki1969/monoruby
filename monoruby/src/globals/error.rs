@@ -592,6 +592,15 @@ impl MonorubyErr {
     pub(crate) fn float_out_of_range_of_integer(f: f64) -> MonorubyErr {
         MonorubyErr::rangeerr(format!("float {:?} out of range of integer", f))
     }
+
+    pub fn localjumperr(msg: impl ToString) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::LocalJump, msg)
+    }
+
+    pub(crate) fn localjumperr_with_val(msg: impl ToString, _val: Value) -> MonorubyErr {
+        // TODO: store val as exit_value on the LocalJumpError exception object
+        MonorubyErr::new(MonorubyErrKind::LocalJump, msg)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
