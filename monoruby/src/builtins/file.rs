@@ -30,6 +30,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(file, "path", path, 1);
     globals.define_builtin_class_func_with(file, "realpath", realpath, 1, 2, false);
     globals.define_builtin_class_func_with(file, "open", open, 1, 3, false);
+    globals.define_builtin_class_func_with(file, "new", open, 1, 3, false);
 
     globals.define_builtin_class_func(file, "directory?", directory_, 1);
     globals.define_builtin_module_func(file_test, "directory?", directory_, 1);
@@ -1046,5 +1047,33 @@ mod tests {
         run_test(r##"File.split("/home/user/file.txt")"##);
         run_test(r##"File.split("file.txt")"##);
         run_test(r##"File.split("/home/user/")"##);
+    }
+
+    #[test]
+    fn file_new() {
+        run_test_once(
+            r#"
+            f = File.new("Cargo.toml", "r")
+            result = f.read(10).is_a?(String)
+            f.close
+            result
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_stat() {
+        run_test_no_result_check(
+            r#"
+            stat = File.stat("Cargo.toml")
+            [stat.file?, stat.directory?]
+            "#,
+        );
+        run_test_no_result_check(
+            r#"
+            stat = File.stat("src")
+            [stat.file?, stat.directory?]
+            "#,
+        );
     }
 }

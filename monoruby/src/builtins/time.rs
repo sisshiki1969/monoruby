@@ -335,14 +335,20 @@ fn sub(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let self_ = lfp.self_val();
     let lhs = self_.as_time().clone();
     let rhs_rv = lfp.arg(0);
-    let rhs = match rhs_rv.try_rvalue().unwrap().ty() {
-        ObjTy::TIME => rhs_rv.as_time().clone(),
-        _ => {
-            return Err(MonorubyErr::method_not_found(globals, IdentId::_SUB, self_));
-        }
-    };
-    let res = ((lhs - rhs).num_nanoseconds().unwrap() as f64) / 1000.0 / 1000.0 / 1000.0;
-    Ok(Value::float(res))
+    if let Some(rv) = rhs_rv.try_rvalue()
+        && rv.ty() == ObjTy::TIME
+    {
+        let rhs = rhs_rv.as_time().clone();
+        let res = ((lhs - rhs).num_nanoseconds().unwrap() as f64) / 1_000_000_000.0;
+        Ok(Value::float(res))
+    } else {
+        // Time - numeric (seconds)
+        let secs = rhs_rv.coerce_to_f64(&globals.store)?;
+        let nanos = (secs * 1_000_000_000.0) as i64;
+        let duration = chrono::Duration::nanoseconds(nanos);
+        let result = lhs - duration;
+        Ok(Value::new_time(result))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -359,6 +365,26 @@ impl std::ops::Sub<Self> for TimeInner {
             (TimeInner::Local(t), TimeInner::Utc(rhs)) => t.with_timezone(&Utc) - rhs,
             (TimeInner::Utc(t), TimeInner::Local(rhs)) => t - rhs.with_timezone(&Utc),
             (TimeInner::Utc(t), TimeInner::Utc(rhs)) => t - rhs,
+        }
+    }
+}
+
+impl std::ops::Sub<Duration> for TimeInner {
+    type Output = TimeInner;
+    fn sub(self, rhs: Duration) -> Self::Output {
+        match self {
+            TimeInner::Local(t) => TimeInner::Local(t - rhs),
+            TimeInner::Utc(t) => TimeInner::Utc(t - rhs),
+        }
+    }
+}
+
+impl std::ops::Add<Duration> for TimeInner {
+    type Output = TimeInner;
+    fn add(self, rhs: Duration) -> Self::Output {
+        match self {
+            TimeInner::Local(t) => TimeInner::Local(t + rhs),
+            TimeInner::Utc(t) => TimeInner::Utc(t + rhs),
         }
     }
 }
@@ -473,6 +499,25 @@ mod tests {
             r#"
             t = Time.at(1000000000, 500000)
             t.utc.to_s
+            "#,
+        );
+    }
+
+    #[test]
+    fn time_sub() {
+        // Time - Time => Float (seconds)
+        run_test_once(
+            r#"
+            t1 = Time.at(1000)
+            t2 = Time.at(900)
+            (t1 - t2).class
+            "#,
+        );
+        // Time - numeric => Time
+        run_test_once(
+            r#"
+            t = Time.at(1000)
+            (t - 100).is_a?(Time)
             "#,
         );
     }

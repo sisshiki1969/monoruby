@@ -1,4 +1,9 @@
+use std::collections::HashSet;
+
 use super::*;
+
+// SET_CLASS = ClassId(50), mirrors globals/store/class.rs
+const SET_CLASS: ClassId = ClassId::new(50);
 use num::BigInt;
 use onigmo_regex::Captures;
 use rubymap::RubyEql;
@@ -462,7 +467,11 @@ impl RValue {
                 ObjTy::OBJECT => self.object_tos(store),
                 ObjTy::RANGE => self.as_range().to_s(store),
                 ObjTy::PROC => self.proc_tos(),
-                ObjTy::HASH => self.as_hashmap().to_s(store, self.id()),
+                ObjTy::HASH => {
+                    let mut set = HashSet::new();
+                    set.insert(self.id());
+                    self.hash_inspect(store, &mut set)
+                }
                 ObjTy::METHOD => self.as_method().to_s(store),
                 ObjTy::ENUMERATOR => self.enumerator_tos(store),
                 ObjTy::GENERATOR => self.object_tos(store),
@@ -486,8 +495,32 @@ impl RValue {
                 }
                 ObjTy::REGEXP => self.as_regex().inspect(),
                 ObjTy::MATCHDATA => self.as_match_data().inspect(),
+                ObjTy::HASH => self.hash_inspect(store, set),
                 _ => self.to_s(store),
             }
+        }
+    }
+
+    fn hash_inspect(&self, store: &Store, set: &mut HashSet<u64>) -> String {
+        // SAFETY: ty() == HASH is verified by the caller.
+        // SAFETY: caller verified ty() == HASH
+        let inner = unsafe { self.as_hashmap() };
+        if self.class() == SET_CLASS {
+            // Set inspect: "Set[elem, ...]"
+            let mut s = String::from("Set[");
+            let mut first = true;
+            for (k, _) in inner.iter() {
+                if !first {
+                    s.push_str(", ");
+                }
+                s.push_str(&k.inspect_inner(store, set));
+                first = false;
+            }
+            s.push(']');
+            s
+        } else {
+            // Hash inspect: delegates to existing implementation
+            inner.inspect_inner(store, set)
         }
     }
 

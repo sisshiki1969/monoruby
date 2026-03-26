@@ -855,9 +855,11 @@ impl Executor {
             DefinitionContext::Receiver(receiver) => globals.store.get_singleton(receiver)?.id(),
         };
         Codegen::check_bop_redefine(self.cfp());
-        self.add_method(globals, class_id, name, func, cref.visibility)?;
         if cref.module_function {
+            self.add_method(globals, class_id, name, func, Visibility::Private)?;
             self.add_singleton_method(globals, class_id, name, func, cref.visibility)?;
+        } else {
+            self.add_method(globals, class_id, name, func, cref.visibility)?;
         }
         Ok(Value::nil())
     }
