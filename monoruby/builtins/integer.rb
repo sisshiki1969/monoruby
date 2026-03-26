@@ -143,14 +143,17 @@ class Integer
   end
 
   def allbits?(mask)
+    mask = mask.to_int
     (self & mask) == mask
   end
 
   def anybits?(mask)
+    mask = mask.to_int
     (self & mask) != 0
   end
 
   def nobits?(mask)
+    mask = mask.to_int
     (self & mask) == 0
   end
 
@@ -161,6 +164,8 @@ class Integer
       [other, self]
     elsif other.is_a?(Float)
       [other, self.to_f]
+    elsif defined?(Rational) && other.is_a?(Rational)
+      [other, Rational(self, 1)]
     elsif other.respond_to?(:to_f)
       [other.to_f, self.to_f]
     else

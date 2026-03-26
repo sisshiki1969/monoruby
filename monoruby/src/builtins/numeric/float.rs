@@ -131,7 +131,7 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/=3c=3d=3e.html]
 #[monoruby_builtin]
-fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
     let ord = match (lhs.try_float(), rhs.unpack()) {
@@ -139,7 +139,24 @@ fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         (Some(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&(rhs as f64)),
         (Some(lhs), RV::BigInt(rhs)) => lhs.partial_cmp(&rhs.to_f64().unwrap()),
         (Some(lhs), RV::Float(rhs)) => lhs.partial_cmp(&rhs),
-        _ => None,
+        _ => {
+            // Try coerce protocol for non-numeric types
+            let coerce_id = IdentId::get_id("coerce");
+            if let Some(result) =
+                vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None)?
+            {
+                if let Some(ary) = result.try_array_ty() {
+                    if ary.len() == 2 {
+                        let cmp_id = IdentId::get_id("<=>");
+                        let res = vm.invoke_method_inner(
+                            globals, cmp_id, ary[0], &[ary[1]], None, None,
+                        )?;
+                        return Ok(res);
+                    }
+                }
+            }
+            None
+        }
     };
     Ok(match ord {
         Some(ord) => Value::from_ord(ord),
