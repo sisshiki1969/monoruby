@@ -552,4 +552,21 @@ mod tests {
         run_test_once("1.5.respond_to?(:to_r)");
         run_test_once("1.5.respond_to?(:rationalize)");
     }
+
+    #[test]
+    fn float_cmp_coerce() {
+        // Object with coerce method (use run_test_once to avoid JIT deopt issues)
+        run_test_once(
+            r#"
+            class MyNum
+              def initialize(n); @n = n; end
+              def coerce(other); [other, @n.to_f]; end
+            end
+            obj = MyNum.new(2)
+            1.5 <=> obj
+            "#,
+        );
+        // Object without coerce -> nil
+        run_test("1.5 <=> 'a'");
+    }
 }
