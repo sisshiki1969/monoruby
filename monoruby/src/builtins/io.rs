@@ -91,7 +91,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/puts.html]
 #[monoruby_builtin]
-fn puts(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     fn decompose(collector: &mut Vec<Value>, val: Value, seen: &mut Vec<u64>) {
         match val.try_array_ty() {
             Some(ary) => {
@@ -109,16 +109,38 @@ fn puts(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     }
     let mut collector = Vec::new();
     let mut seen = Vec::new();
-    for v in lfp.arg(0).as_array().iter().cloned() {
+    let args = lfp.arg(0).as_array();
+    for v in args.iter().cloned() {
         decompose(&mut collector, v, &mut seen);
     }
 
-    let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
-    for v in collector {
-        io_writeline(globals, io, v)?;
+    let self_val = lfp.self_val();
+    let write_id = IdentId::get_id("write");
+    if collector.is_empty() {
+        // puts with no args writes a newline
+        let newline = Value::string_from_str("\n");
+        vm.invoke_method_inner(globals, write_id, self_val, &[newline], None, None)?;
+    } else {
+        for v in collector {
+            let s = if v.is_nil() {
+                String::new()
+            } else if let Some(rs) = v.is_rstring() {
+                String::from_utf8_lossy(rs.as_bytes()).into_owned()
+            } else {
+                v.to_s(globals)
+            };
+            let needs_newline = !s.ends_with('\n');
+            let write_str = if needs_newline {
+                Value::string(s + "\n")
+            } else {
+                Value::string(s)
+            };
+            vm.invoke_method_inner(globals, write_id, self_val, &[write_str], None, None)?;
+        }
     }
-    io.flush()?;
+    // Flush after all writes
+    let mut self_ = lfp.self_val();
+    self_.as_io_inner_mut().flush()?;
     Ok(Value::nil())
 }
 
@@ -129,11 +151,17 @@ fn puts(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/print.html]
 #[monoruby_builtin]
-fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
+fn print(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let write_id = IdentId::get_id("write");
     for v in lfp.arg(0).as_array().iter().cloned() {
-        io_write(globals, io, v)?;
+        let str_val = if v.is_rstring().is_some() {
+            v
+        } else {
+            let s = vm.to_s(globals, v)?;
+            Value::string(s)
+        };
+        vm.invoke_method_inner(globals, write_id, self_val, &[str_val], None, None)?;
     }
     Ok(Value::nil())
 }
@@ -157,30 +185,6 @@ fn printf(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(Value::nil())
 }
 
-fn io_writeline(globals: &Globals, io: &mut IoInner, v: Value) -> Result<()> {
-    if let Some(s) = v.is_rstring() {
-        io.write(&s)?;
-        if s.last() != Some(&b'\n') {
-            io.write(b"\n")?;
-        }
-    } else {
-        let v = v.to_s(globals).into_bytes();
-        io.write(&v)?;
-        if v.last() != Some(&b'\n') {
-            io.write(b"\n")?;
-        }
-    }
-    Ok(())
-}
-
-fn io_write(globals: &Globals, io: &mut IoInner, v: Value) -> Result<()> {
-    if let Some(s) = v.is_rstring() {
-        io.write(&s)
-    } else {
-        let v = v.to_s(globals).into_bytes();
-        io.write(&v)
-    }
-}
 
 ///
 /// ### IO#flush
@@ -967,6 +971,42 @@ mod tests {
             n = w.syswrite("hello")
             w.close
             [r.read, n]
+            "#,
+        );
+    }
+
+    #[test]
+    fn puts_delegates_to_write() {
+        // IO#puts should call the Ruby-level write method, not bypass it.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            $test_written = []
+            def w.write(s)
+              $test_written << s
+              super(s)
+            end
+            w.puts("hello")
+            w.close
+            [$test_written.join, r.read]
+            "#,
+        );
+    }
+
+    #[test]
+    fn print_delegates_to_write() {
+        // IO#print should call the Ruby-level write method, not bypass it.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            $test_written = []
+            def w.write(s)
+              $test_written << s
+              super(s)
+            end
+            w.print("hello", "world")
+            w.close
+            [$test_written.join, r.read]
             "#,
         );
     }
