@@ -13,9 +13,9 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     let kernel_class = klass.id();
     globals.define_builtin_inline_func(kernel_class, "nil?", nil, Box::new(kernel_nil), 0);
     globals.define_builtin_func(kernel_class, "!~", not_match, 1);
-    globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
+    //globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
     globals.define_builtin_module_func(kernel_class, "gets", gets, 0);
-    globals.define_builtin_module_func_rest(kernel_class, "print", print);
+    //globals.define_builtin_module_func_rest(kernel_class, "print", print);
     globals.define_builtin_module_func_with_effect(
         kernel_class,
         "proc",
@@ -53,7 +53,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         Box::new(kernel_block_given),
         0,
     );
-    globals.define_builtin_module_func_rest(kernel_class, "p", p);
+    //globals.define_builtin_module_func_rest(kernel_class, "p", p);
     globals.define_builtin_module_func_rest(kernel_class, "format", format);
     globals.define_builtin_module_func_rest(kernel_class, "sprintf", format);
     globals.define_builtin_module_func_with(kernel_class, "rand", rand, 0, 1, false);
