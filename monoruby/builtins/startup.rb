@@ -167,48 +167,42 @@ class Signal
 end
 
 class Thread
+  # monoruby is single-threaded. Thread.new does NOT execute blocks
+  # concurrently. Only Thread.current (the main thread) is meaningful.
+  # Methods that require actual concurrency raise NoMethodError.
+
   def self.current
     @@current
   end
 
+  @@pass_count = 0
   def self.pass
-    # no-op in single-threaded monoruby
+    # monoruby is single-threaded. Thread.pass is a no-op, but if called
+    # repeatedly (e.g., `Thread.pass until condition`), the condition will
+    # never change. Raise after a safety limit to prevent infinite loops.
+    @@pass_count += 1
+    if @@pass_count > 1000
+      @@pass_count = 0
+      raise ThreadError, "Thread.pass called too many times (monoruby is single-threaded)"
+    end
   end
 
   def initialize(*args, &block)
     @value = nil
     @exception = nil
-    @alive = true
-    @sleeping = false
-    if block
-      # Mark the "main" thread as sleeping while this thread's block runs,
-      # so that code like `Thread.pass until main.status == "sleep"` works.
-      main = @@current
-      main.__set_sleeping(true) if main
-      begin
-        @value = block.call(*args)
-      rescue Exception => e
-        @exception = e
-      ensure
-        main.__set_sleeping(false) if main
-      end
-      @alive = false
-    end
+    @alive = false
+    @keys = {}
+    @thread_local = {}
   end
 
   @@current = Thread.new
-
-  def __set_sleeping(val)
-    @sleeping = val
-  end
+  @@current.instance_variable_set(:@alive, true)
 
   def value
-    raise @exception if @exception
     @value
   end
 
   def join(limit = nil)
-    raise @exception if @exception
     self
   end
 
@@ -221,40 +215,31 @@ class Thread
   end
 
   def stop?
-    @sleeping || !@alive
+    !@alive
   end
 
   def status
-    if @exception
-      nil
-    elsif !@alive
-      false
-    elsif @sleeping
-      "sleep"
-    else
+    if @alive
       "run"
+    else
+      false
     end
   end
 
   def [](key)
-    @keys ||= {}
     @keys[key]
   end
+
   def []=(key, value)
-    @keys ||= {}
     @keys[key] = value
   end
+
   def thread_variable_set(key, value)
-    @thread_local ||= {}
     @thread_local[key] = value
   end
-  def thread_variable_get(key)
-    @thread_local ||= {}
-    @thread_local[key]
-  end
 
-  def self.pass
-    # No-op: monoruby is single-threaded
+  def thread_variable_get(key)
+    @thread_local[key]
   end
 
   def self.each_caller_location

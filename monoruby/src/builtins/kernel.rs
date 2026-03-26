@@ -1040,8 +1040,9 @@ fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         }
         std::thread::sleep(std::time::Duration::from_secs_f64(sec));
     } else {
-        // TODO: we must sleep forever
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        // monoruby is single-threaded; sleep without argument would block
+        // forever with no way to be interrupted. Return immediately.
+        return Ok(Value::integer(0));
     }
     let elapsed = now.elapsed().as_secs();
     Ok(Value::integer(elapsed as i64))
