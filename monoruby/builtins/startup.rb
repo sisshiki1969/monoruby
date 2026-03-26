@@ -167,23 +167,39 @@ class Signal
 end
 
 class Thread
-  @@current = Thread.new
   def self.current
     @@current
+  end
+
+  def self.pass
+    # no-op in single-threaded monoruby
   end
 
   def initialize(*args, &block)
     @value = nil
     @exception = nil
     @alive = true
+    @sleeping = false
     if block
+      # Mark the "main" thread as sleeping while this thread's block runs,
+      # so that code like `Thread.pass until main.status == "sleep"` works.
+      main = @@current
+      main.__set_sleeping(true) if main
       begin
         @value = block.call(*args)
       rescue Exception => e
         @exception = e
+      ensure
+        main.__set_sleeping(false) if main
       end
       @alive = false
     end
+  end
+
+  @@current = Thread.new
+
+  def __set_sleeping(val)
+    @sleeping = val
   end
 
   def value
@@ -196,17 +212,27 @@ class Thread
     self
   end
 
+  def kill
+    self
+  end
+
   def alive?
     @alive
+  end
+
+  def stop?
+    @sleeping || !@alive
   end
 
   def status
     if @exception
       nil
-    elsif @alive
-      "run"
-    else
+    elsif !@alive
       false
+    elsif @sleeping
+      "sleep"
+    else
+      "run"
     end
   end
 

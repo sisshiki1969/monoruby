@@ -1,6 +1,6 @@
 use std::{
     io::{BufRead, IsTerminal, Read, Write},
-    os::fd::FromRawFd,
+    os::fd::{AsRawFd, FromRawFd},
     rc::Rc,
 };
 
@@ -261,6 +261,25 @@ impl IoInner {
                 }
                 Ok(Some(buf))
             }
+        }
+    }
+
+    pub fn fileno(&self) -> Result<i32> {
+        match self {
+            Self::Stdin => Ok(0),
+            Self::Stdout => Ok(1),
+            Self::Stderr => Ok(2),
+            Self::File(file) => Ok(file.reader.get_ref().as_raw_fd()),
+            Self::Popen(popen) => {
+                if let Some(ref stdout) = popen.child.stdout {
+                    Ok(stdout.as_raw_fd())
+                } else if let Some(ref reader) = popen.reader {
+                    Ok(reader.get_ref().as_raw_fd())
+                } else {
+                    Err(MonorubyErr::runtimeerr("closed stream"))
+                }
+            }
+            Self::Closed => Err(MonorubyErr::runtimeerr("closed stream")),
         }
     }
 
