@@ -378,10 +378,10 @@ mod tests {
         [loc[0].is_a?(String), loc[1].is_a?(Integer)]
         "##,
         );
-        // built-in methods return nil
+        // built-in methods (Rust-defined) return nil
         run_test(
             r##"
-        m = method(:puts)
+        m = method(:gets)
         m.source_location
         "##,
         );
