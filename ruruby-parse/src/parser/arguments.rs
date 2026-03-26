@@ -113,37 +113,10 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                         as_hash_splat.push((node, value));
                     }
                 } else {
-                    if let Some(id) = match &node.kind {
-                        NodeKind::Ident(id, ..) | NodeKind::LocalVar(_, id) => {
-                            if self.consume_punct_no_term(Punct::Colon)? {
-                                // keyword args
-                                Some(id.to_string())
-                            } else {
-                                None
-                            }
-                        }
-                        NodeKind::Const {
-                            toplevel: false,
-                            parent: None,
-                            prefix,
-                            name: id,
-                        } => {
-                            if prefix.is_empty() && self.consume_punct_no_term(Punct::Colon)? {
-                                Some(id.to_string())
-                            } else {
-                                None
-                            }
-                        }
-                        NodeKind::String(id) => {
-                            if self.consume_punct_no_term(Punct::Colon)? {
-                                // keyword args
-                                Some(id.to_string())
-                            } else {
-                                None
-                            }
-                        }
-                        _ => None,
-                    } {
+                    if let Some(id) = node.kind.is_identifier()
+                        && self.consume_punct_no_term(Punct::Colon)?
+                    {
+                        // keyword args
                         // Check for value-omitted keyword argument shorthand (Ruby 3.1+)
                         // e.g., foo(x:) is equivalent to foo(x: x)
                         let next_kind = self.peek_no_term()?.kind;
@@ -156,10 +129,9 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                             self.parse_arg(false)?
                         };
                         if as_hash_splat.is_empty() {
-                            kw_args.push((id, value));
+                            kw_args.push((id.to_string(), value));
                         } else {
-                            as_hash_splat
-                                .push((Node::new_symbol(id, node.loc), value));
+                            as_hash_splat.push((Node::new_symbol(id.to_string(), node.loc), value));
                         }
                     } else {
                         arglist.args.push(node);
