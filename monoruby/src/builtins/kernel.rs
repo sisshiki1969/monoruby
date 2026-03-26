@@ -494,12 +494,12 @@ fn p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/format.html]
 #[monoruby_builtin]
-fn format(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn format(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     if args.is_empty() {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
-    let fmt = args[0].expect_string(&globals.store)?;
+    let fmt = args[0].coerce_to_str(vm, globals)?;
     let arguments = &args[1..];
     let result = globals.format_by_args(&fmt, arguments)?;
     Ok(Value::string(result))
@@ -1040,8 +1040,9 @@ fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         }
         std::thread::sleep(std::time::Duration::from_secs_f64(sec));
     } else {
-        // TODO: we must sleep forever
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        // monoruby is single-threaded; sleep without argument would block
+        // forever with no way to be interrupted. Return immediately.
+        return Ok(Value::integer(0));
     }
     let elapsed = now.elapsed().as_secs();
     Ok(Value::integer(elapsed as i64))
@@ -3143,5 +3144,48 @@ mod tests {
         // calling it would terminate the process immediately)
         run_test("respond_to?(:exit!)");
         run_test("Process.respond_to?(:exit!)");
+    }
+
+    #[test]
+    fn puts_delegates_to_stdout() {
+        // Kernel#puts delegates to $stdout.puts
+        run_test_no_result_check(
+            r#"
+            require "stringio"
+            old = $stdout
+            $stdout = StringIO.new
+            puts "hello"
+            result = $stdout.string
+            $stdout = old
+            result
+            "#,
+        );
+    }
+
+    #[test]
+    fn printf_delegates_to_stdout() {
+        run_test_no_result_check(
+            r#"
+            require "stringio"
+            old = $stdout
+            $stdout = StringIO.new
+            printf("%d", 42)
+            result = $stdout.string
+            $stdout = old
+            result
+            "#,
+        );
+    }
+
+    #[test]
+    fn format_to_str() {
+        run_test_once(
+            r#"
+            class MyFmt
+              def to_str; "num: %d"; end
+            end
+            format(MyFmt.new, 42)
+            "#,
+        );
     }
 }

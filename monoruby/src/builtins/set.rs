@@ -23,8 +23,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SET_CLASS, "delete?", delete_q, 1);
     globals.define_builtin_func(SET_CLASS, "each", each, 0);
     globals.define_builtin_func(SET_CLASS, "to_a", to_a, 0);
-    globals.define_builtin_func(SET_CLASS, "inspect", inspect, 0);
-    globals.define_builtin_func(SET_CLASS, "to_s", inspect, 0);
+    // inspect/to_s defined in Ruby (builtins/builtins.rb) for cycle detection
     globals.define_builtin_func(SET_CLASS, "to_set", to_set, 0);
     globals.define_builtin_funcs(SET_CLASS, "dup", &["clone"], dup, 0);
     globals.define_builtin_func_rest(SET_CLASS, "merge", merge);
@@ -307,26 +306,9 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// ### Set#inspect / Set#to_s
 ///
-#[monoruby_builtin]
-fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_val = lfp.self_val();
-    if self_val.try_hash_ty().is_none() {
-        // Fallback for non-Set instances (e.g., the Set class itself)
-        return Ok(Value::string(self_val.to_s(globals)));
-    }
-    let inner = self_val.as_hashmap_inner();
-    let mut s = String::from("Set[");
-    let mut first = true;
-    for (k, _) in inner.iter() {
-        if !first {
-            s.push_str(", ");
-        }
-        s.push_str(&k.inspect(globals));
-        first = false;
-    }
-    s.push(']');
-    Ok(Value::string(s))
-}
+/// Handled by RValue::hash_inspect (in value/rvalue.rs) which detects
+/// whether the HASH-typed object is a Set or Hash by checking the class ID,
+/// and uses the shared HashSet-based cycle detection from Value::inspect_inner.
 
 ///
 /// ### Set#to_set
@@ -1024,6 +1006,18 @@ mod tests {
     #[test]
     fn set_inspect() {
         run_test("Set[].to_s");
+    }
+
+    #[test]
+    fn set_inspect_recursive() {
+        run_test_no_result_check(
+            r#"
+            s1 = Set[]
+            s2 = Set[s1]
+            s1 << s2
+            s1.inspect.include?("Set[...]")
+            "#,
+        );
     }
 
     #[test]

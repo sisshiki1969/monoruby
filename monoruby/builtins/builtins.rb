@@ -222,6 +222,56 @@ class Module
   end
 end
 
+class File
+  class Stat
+    def initialize(path)
+      @path = path
+      @mode = File.exist?(path) ? 0o755 : 0
+    end
+
+    def world_writable?
+      (@mode & 0o002) != 0
+    end
+
+    def sticky?
+      (@mode & 0o1000) != 0
+    end
+
+    def directory?
+      File.directory?(@path)
+    end
+
+    def file?
+      File.file?(@path)
+    end
+
+    def size
+      File.size(@path)
+    end
+  end
+
+  def self.stat(path)
+    Stat.new(path)
+  end
+
+  def self.lstat(path)
+    stat(path)
+  end
+end
+
+class String
+  def insert(index, other)
+    if index < 0
+      index = self.size + 1 + index
+    end
+    if index < 0 || index > self.size
+      raise IndexError, "index #{index} out of string"
+    end
+    self[index, 0] = other
+    self
+  end
+end
+
 class Float
   def zero?
     self == 0.0

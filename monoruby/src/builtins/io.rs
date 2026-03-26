@@ -92,17 +92,25 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/puts.html]
 #[monoruby_builtin]
 fn puts(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    fn decompose(collector: &mut Vec<Value>, val: Value) {
+    fn decompose(collector: &mut Vec<Value>, val: Value, seen: &mut Vec<u64>) {
         match val.try_array_ty() {
             Some(ary) => {
-                ary.iter().for_each(|v| decompose(collector, *v));
+                let id = val.id();
+                if seen.contains(&id) {
+                    collector.push(Value::string("[...]".to_string()));
+                } else {
+                    seen.push(id);
+                    ary.iter().for_each(|v| decompose(collector, *v, seen));
+                    seen.pop();
+                }
             }
             None => collector.push(val),
         }
     }
     let mut collector = Vec::new();
+    let mut seen = Vec::new();
     for v in lfp.arg(0).as_array().iter().cloned() {
-        decompose(&mut collector, v);
+        decompose(&mut collector, v, &mut seen);
     }
 
     let mut self_ = lfp.self_val();
@@ -329,7 +337,9 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             vm.invoke_block(globals, &p, &[Value::string(s)])?;
         }
     } else {
-        unimplemented!()
+        return Err(MonorubyErr::runtimeerr(
+            "IO#each_line without block is not yet supported",
+        ));
     };
     Ok(lfp.self_val())
 }

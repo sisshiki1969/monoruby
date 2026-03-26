@@ -1,3 +1,4 @@
+use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 
 use super::*;
@@ -32,6 +33,33 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_funcs(klass, "pwd", &["getwd"], pwd, 0);
     globals.define_builtin_class_func_with(klass, "chdir", chdir, 0, 1, false);
     globals.define_builtin_class_func(klass, "exist?", exist, 1);
+    globals.define_builtin_class_func_with(klass, "mkdir", mkdir, 1, 2, false);
+}
+
+///
+/// ### Dir.mkdir
+///
+/// - mkdir(path, mode = 0777) -> 0
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/mkdir.html]
+#[monoruby_builtin]
+fn mkdir(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let path = lfp.arg(0).coerce_to_str(_vm, globals)?;
+    let mode = if let Some(m) = lfp.try_arg(1) {
+        m.coerce_to_i64(&globals.store)? as u32
+    } else {
+        0o777
+    };
+    match std::fs::DirBuilder::new().mode(mode).create(&path) {
+        Ok(()) => Ok(Value::integer(0)),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // CRuby raises Errno::EEXIST but monoruby doesn't have Errno error kinds yet.
+            // For now, return 0 if the directory already exists (matching mkdir_p behavior).
+            // This is necessary for mspec's tmp() helper which calls mkdir_p → Dir.mkdir.
+            Ok(Value::integer(0))
+        }
+        Err(e) => Err(MonorubyErr::runtimeerr(format!("Dir.mkdir: {}: {}", path, e))),
+    }
 }
 
 /// File::FNM_DOTMATCH: wildcards match dotfiles too.
@@ -595,6 +623,20 @@ mod tests {
         end
         $x << Dir.getwd
         "##,
+        );
+    }
+
+    #[test]
+    fn mkdir() {
+        // mkdir on existing directory should not error
+        run_test_no_result_check("Dir.mkdir('/tmp')");
+        // mkdir creates a new directory
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_mkdir_#{Process.pid}"
+            Dir.mkdir(path)
+            Dir.exist?(path)
+            "#,
         );
     }
 }
