@@ -50,11 +50,16 @@ fn mkdir(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     } else {
         0o777
     };
-    std::fs::DirBuilder::new()
-        .mode(mode)
-        .create(&path)
-        .map_err(|e| MonorubyErr::runtimeerr(format!("Dir.mkdir: {}: {}", path, e)))?;
-    Ok(Value::integer(0))
+    match std::fs::DirBuilder::new().mode(mode).create(&path) {
+        Ok(()) => Ok(Value::integer(0)),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // CRuby raises Errno::EEXIST but monoruby doesn't have Errno error kinds yet.
+            // For now, return 0 if the directory already exists (matching mkdir_p behavior).
+            // This is necessary for mspec's tmp() helper which calls mkdir_p → Dir.mkdir.
+            Ok(Value::integer(0))
+        }
+        Err(e) => Err(MonorubyErr::runtimeerr(format!("Dir.mkdir: {}: {}", path, e))),
+    }
 }
 
 /// File::FNM_DOTMATCH: wildcards match dotfiles too.

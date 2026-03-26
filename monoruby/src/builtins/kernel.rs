@@ -494,12 +494,12 @@ fn p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/format.html]
 #[monoruby_builtin]
-fn format(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn format(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     if args.is_empty() {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
-    let fmt = args[0].expect_string(&globals.store)?;
+    let fmt = args[0].coerce_to_str(vm, globals)?;
     let arguments = &args[1..];
     let result = globals.format_by_args(&fmt, arguments)?;
     Ok(Value::string(result))
