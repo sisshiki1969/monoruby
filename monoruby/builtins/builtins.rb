@@ -2,22 +2,6 @@ class Enumerator
   include Enumerable
 end
 
-class Set
-  def inspect
-    ids = (Thread.current[:__set_inspect_ids] ||= [])
-    if ids.include?(object_id)
-      return "Set[...]"
-    end
-    ids << object_id
-    begin
-      "Set[" + to_a.map { |e| e.inspect }.join(", ") + "]"
-    ensure
-      ids.pop
-    end
-  end
-  alias to_s inspect
-end
-
 class CallerLocation
   def initialize(path, lineno, label)
     @path = path

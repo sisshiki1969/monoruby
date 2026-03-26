@@ -306,9 +306,9 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// ### Set#inspect / Set#to_s
 ///
-/// Defined in Ruby (builtins/builtins.rb) for proper cycle detection.
-/// The Ruby implementation uses Thread.current to track recursive inspect
-/// calls, matching CRuby's behavior for cyclic Set references.
+/// Handled by RValue::hash_inspect (in value/rvalue.rs) which detects
+/// whether the HASH-typed object is a Set or Hash by checking the class ID,
+/// and uses the shared HashSet-based cycle detection from Value::inspect_inner.
 
 ///
 /// ### Set#to_set
