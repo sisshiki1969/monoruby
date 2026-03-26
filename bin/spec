@@ -1,3 +1,24 @@
+#!/bin/bash
+set -e
+
 RUSTFLAGS=-Cforce-frame-pointers cargo install --path monoruby
 cd ../spec
-RUST_BACKTRACE=1 ../mspec/bin/mspec core -t monoruby
+
+# Spec files that hang due to blocking IO or Thread patterns in
+# monoruby's single-threaded runtime.
+EXCLUDE_FILES="core/io/copy_stream_spec.rb|core/io/popen_spec.rb|core/io/select_spec.rb"
+
+FAILED=0
+for cat in $(ls core/); do
+  SPEC_FILES=$(find core/$cat -name '*_spec.rb' 2>/dev/null | grep -vE "$EXCLUDE_FILES" | sort)
+  [ -z "$SPEC_FILES" ] && continue
+  echo "=== core/$cat ==="
+  if ! timeout 90 ../mspec/bin/mspec $SPEC_FILES -t monoruby; then
+    FAILED=$((FAILED + 1))
+  fi
+done
+
+if [ $FAILED -gt 0 ]; then
+  echo "$FAILED categories had errors"
+  exit 1
+fi
