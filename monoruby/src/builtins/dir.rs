@@ -34,6 +34,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with(klass, "chdir", chdir, 0, 1, false);
     globals.define_builtin_class_func(klass, "exist?", exist, 1);
     globals.define_builtin_class_func_with(klass, "mkdir", mkdir, 1, 2, false);
+    globals.define_builtin_class_func(klass, "entries", entries, 1);
 }
 
 ///
@@ -548,6 +549,33 @@ fn exist(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(Value::bool(path.is_dir()))
 }
 
+///
+/// ### Dir.entries
+///
+/// - entries(path) -> [String]
+///
+/// Returns an array containing all of the filenames in the given directory.
+/// Includes "." and ".." entries.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/entries.html]
+#[monoruby_builtin]
+fn entries(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let path = lfp.arg(0).coerce_to_str(vm, globals)?;
+    let mut result = vec![
+        Value::string(".".to_string()),
+        Value::string("..".to_string()),
+    ];
+    for entry in std::fs::read_dir(&path)
+        .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?
+    {
+        let entry = entry.map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+        result.push(Value::string(
+            entry.file_name().to_string_lossy().to_string(),
+        ));
+    }
+    Ok(Value::array_from_vec(result))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -636,6 +664,19 @@ mod tests {
             path = "/tmp/monoruby_test_mkdir_#{Process.pid}"
             Dir.mkdir(path)
             Dir.exist?(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn dir_entries() {
+        run_test_no_result_check(
+            r#"
+            entries = Dir.entries(".")
+            raise "should include ." unless entries.include?(".")
+            raise "should include .." unless entries.include?("..")
+            raise "should be array" unless entries.is_a?(Array)
+            raise "should have entries" unless entries.length > 2
             "#,
         );
     }

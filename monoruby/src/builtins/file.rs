@@ -54,6 +54,11 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with(file, "absolute_path", absolute_path, 1, 2, false);
     globals.define_builtin_class_func(file, "absolute_path?", absolute_path_, 1);
     globals.define_builtin_class_func(file, "split", file_split, 1);
+    globals.define_builtin_class_func_rest(file, "delete", delete);
+    globals.define_builtin_class_func_rest(file, "unlink", delete);
+    globals.define_builtin_class_func_rest(file, "chmod", chmod);
+    globals.define_builtin_class_func(file, "symlink", file_symlink, 2);
+    globals.define_builtin_class_func(file, "readlines", readlines, 1);
 
     globals.define_builtin_singleton_func(
         globals.get_load_path(),
@@ -890,6 +895,98 @@ fn conv_pathbuf(dir: &std::path::PathBuf) -> String {
         .replace('\\', "/")
 }
 
+///
+/// ### File.delete / File.unlink
+///
+/// - delete(*filename) -> Integer
+/// - unlink(*filename) -> Integer
+///
+/// Deletes the named files, returning the number of names passed as arguments.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/delete.html]
+#[monoruby_builtin]
+fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    let mut count = 0i64;
+    for arg in args.iter() {
+        let path = arg.coerce_to_str(vm, globals)?;
+        std::fs::remove_file(&path)
+            .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
+        count += 1;
+    }
+    Ok(Value::integer(count))
+}
+
+///
+/// ### File.chmod
+///
+/// - chmod(mode, *filename) -> Integer
+///
+/// Changes permission bits on the named files to the bit pattern represented by `mode`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/chmod.html]
+#[monoruby_builtin]
+fn chmod(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    let mode = args[0].coerce_to_i64(&globals.store)? as u32;
+    let mut count = 0i64;
+    for arg in args[1..].iter() {
+        let path = arg.coerce_to_str(_vm, globals)?;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+            .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
+        count += 1;
+    }
+    Ok(Value::integer(count))
+}
+
+///
+/// ### File.symlink
+///
+/// - symlink(old, new) -> 0
+///
+/// Creates a symbolic link called `new` for the existing file `old`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/symlink.html]
+#[monoruby_builtin]
+fn file_symlink(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let old = lfp.arg(0).coerce_to_str(vm, globals)?;
+    let new = lfp.arg(1).coerce_to_str(vm, globals)?;
+    std::os::unix::fs::symlink(&old, &new)
+        .map_err(|e| MonorubyErr::runtimeerr(format!("symlink: {}", e)))?;
+    Ok(Value::integer(0))
+}
+
+///
+/// ### File.readlines
+///
+/// - readlines(path) -> [String]
+///
+/// Reads the entire file and returns an array of lines.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/readlines.html]
+#[monoruby_builtin]
+fn readlines(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let path = lfp.arg(0).coerce_to_str(vm, globals)?;
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
+    let lines: Vec<Value> = content
+        .lines()
+        .map(|l| Value::string(format!("{}\n", l)))
+        .collect();
+    Ok(Value::array_from_vec(lines))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -1073,6 +1170,80 @@ mod tests {
             r#"
             stat = File.stat("src")
             [stat.file?, stat.directory?]
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_delete() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_delete_#{Process.pid}"
+            File.write(path, "hello")
+            n = File.delete(path)
+            raise "expected 1" unless n == 1
+            raise "file should not exist" if File.exist?(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_unlink() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_unlink_#{Process.pid}"
+            File.write(path, "hello")
+            n = File.unlink(path)
+            raise "expected 1" unless n == 1
+            raise "file should not exist" if File.exist?(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_chmod_test() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_chmod_#{Process.pid}"
+            File.write(path, "hello")
+            n = File.chmod(0644, path)
+            raise "expected 1" unless n == 1
+            File.delete(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_symlink_test() {
+        run_test_no_result_check(
+            r#"
+            target = "/tmp/monoruby_test_symlink_target_#{Process.pid}"
+            link = "/tmp/monoruby_test_symlink_link_#{Process.pid}"
+            File.delete(link) if File.exist?(link)
+            File.delete(target) if File.exist?(target)
+            File.write(target, "hello")
+            result = File.symlink(target, link)
+            raise "expected 0" unless result == 0
+            raise "link should exist" unless File.exist?(link)
+            raise "content mismatch" unless File.read(link) == "hello"
+            File.delete(link)
+            File.delete(target)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_readlines_test() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_readlines_#{Process.pid}"
+            File.write(path, "line1\nline2\nline3\n")
+            lines = File.readlines(path)
+            raise "expected 3 lines" unless lines.length == 3
+            raise "expected line1" unless lines[0] == "line1\n"
+            raise "expected line2" unless lines[1] == "line2\n"
+            raise "expected line3" unless lines[2] == "line3\n"
+            File.delete(path)
             "#,
         );
     }
