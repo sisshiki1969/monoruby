@@ -2,8 +2,6 @@ use std::collections::HashSet;
 
 use super::*;
 
-// SET_CLASS = ClassId(50), mirrors globals/store/class.rs
-const SET_CLASS: ClassId = ClassId::new(50);
 use num::BigInt;
 use onigmo_regex::Captures;
 use rubymap::RubyEql;
