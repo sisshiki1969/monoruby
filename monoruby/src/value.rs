@@ -13,8 +13,6 @@ use crate::{
     alloc::{Allocator, GC},
     builtins::TimeInner,
 };
-// SET_CLASS = ClassId(50), mirrors globals/store/class.rs
-const SET_CLASS: ClassId = ClassId::new(50);
 use num::{BigInt, FromPrimitive};
 use ruruby_parse::{Node, NodeKind};
 

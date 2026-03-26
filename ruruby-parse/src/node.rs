@@ -123,6 +123,27 @@ impl std::default::Default for NodeKind {
     }
 }
 
+impl NodeKind {
+    pub fn is_identifier(&self) -> Option<&str> {
+        match self {
+            NodeKind::Ident(s) => Some(s),
+            NodeKind::LocalVar(_, s) => Some(s),
+            NodeKind::Const {
+                toplevel: false,
+                parent: None,
+                prefix,
+                name,
+            } if prefix.is_empty() => Some(name),
+            NodeKind::String(s) => Some(s),
+            NodeKind::SelfValue => Some("self"),
+            NodeKind::Bool(true) => Some("true"),
+            NodeKind::Bool(false) => Some("false"),
+            NodeKind::Nil => Some("nil"),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockInfo {
     pub params: Vec<FormalParam>,

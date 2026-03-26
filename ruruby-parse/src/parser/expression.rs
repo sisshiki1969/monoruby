@@ -233,14 +233,12 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
 
     pub(super) fn parse_arg(&mut self, allow_braceless_hash: bool) -> Result<Node, LexerErr> {
         let next = self.peek()?;
-        if matches!(next.kind, TokenKind::Reserved(_)) && self.lexer.has_trailing_colon(&next) {
+        if let TokenKind::Reserved(reserved) = next.kind
+            && self.lexer.has_trailing_colon(&next)
+        {
             let next = self.get()?;
-            if let TokenKind::Reserved(reserved) = next.kind {
-                let name = reserved.as_str().to_string();
-                return Ok(Node::new_identifier(name, next.loc));
-            } else {
-                unreachable!()
-            }
+            let name = reserved.as_str().to_string();
+            return Ok(Node::new_identifier(name, next.loc));
         }
         if self.lexer.has_trailing_space(&next) && self.consume_reserved(Reserved::Defined)? {
             self.defined_mode = true;
@@ -295,8 +293,12 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             } else {
                 Node::new_array(mrhs, rhs_loc)
             };
-            let wrapped =
-                Node::new_begin(rhs_body, vec![RescueEntry::new_postfix(rescue_val)], None, None);
+            let wrapped = Node::new_begin(
+                rhs_body,
+                vec![RescueEntry::new_postfix(rescue_val)],
+                None,
+                None,
+            );
             Ok(vec![wrapped])
         } else {
             Ok(mrhs)
