@@ -518,7 +518,7 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let mut cfp = vm.cfp();
     let mut v = Vec::new();
     let level = if let Some(arg0) = lfp.try_arg(0) {
-        arg0.coerce_to_i64(globals)? as usize + 1
+        arg0.coerce_to_int(vm, globals)? as usize + 1
     } else {
         2
     };
@@ -599,13 +599,13 @@ fn instance_ty(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/rand.html]
 #[monoruby_builtin]
-fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let i = if let Some(arg0) = lfp.try_arg(0) {
         if let Some(range) = arg0.is_range() {
             let start = range.start();
             let end = range.end();
-            let start = start.expect_integer(globals)?;
-            let end = end.expect_integer(globals)?;
+            let start = start.coerce_to_int(vm, globals)?;
+            let end = end.coerce_to_int(vm, globals)?;
             if start > end {
                 return Ok(Value::nil());
             }
@@ -613,7 +613,7 @@ fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 (rand::random::<f64>() * (end - start) as f64 + start as f64) as i64,
             ));
         }
-        arg0.coerce_to_i64(globals)?
+        arg0.coerce_to_int(vm, globals)?
     } else {
         0i64
     };
@@ -1195,7 +1195,7 @@ fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // see: https://github.com/ruby/fiddle/blob/2b3747e919df5d044c835cbbb27ebf9e27df74f9/ext/fiddle/handle.c#L136
     let arg0 = lfp.arg(0);
     let flags = if let Some(arg1) = lfp.try_arg(1) {
-        match i32::try_from(arg1.expect_integer(globals)?) {
+        match i32::try_from(arg1.coerce_to_int(vm, globals)?) {
             Ok(f) => f,
             Err(_) => return Err(MonorubyErr::argumenterr("Illegale flag value.")),
         }

@@ -282,8 +282,8 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2a.html]
 #[monoruby_builtin]
-fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let count = match lfp.arg(0).coerce_to_i64(globals)? {
+fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let count = match lfp.arg(0).coerce_to_int(vm, globals)? {
         i if i < 0 => return Err(MonorubyErr::negative_argument()),
         i => i as usize,
     };
@@ -597,7 +597,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             None => return Ok(Value::nil()),
         };
         if let Some(arg1) = lfp.try_arg(1) {
-            let len = match arg1.coerce_to_i64(globals)? {
+            let len = match arg1.coerce_to_int(vm, globals)? {
                 0 => return Ok(Value::string_from_str("")),
                 i if i < 0 => return Ok(Value::nil()),
                 i => i as usize,
@@ -618,8 +618,8 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
     } else if let Some(info) = lfp.arg(0).is_range() {
         let (start, end) = (
-            info.start().expect_integer(globals)?,
-            info.end().expect_integer(globals)? - info.exclude_end() as i64,
+            info.start().coerce_to_int(vm, globals)?,
+            info.end().coerce_to_int(vm, globals)? - info.exclude_end() as i64,
         );
         let (start, len) = match (lhs.conv_char_index(start)?, lhs.conv_char_index(end)?) {
             (Some(start), Some(end)) => {
@@ -637,7 +637,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         )))
     } else if let Some(re) = lfp.arg(0).is_regex() {
         let nth = if let Some(i) = lfp.try_arg(1) {
-            i.coerce_to_i64(globals)?
+            i.coerce_to_int(vm, globals)?
         } else {
             0
         };
@@ -688,7 +688,7 @@ fn string_match_index(
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=5b=5d=3d.html]
 #[monoruby_builtin]
 fn index_assign(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -712,7 +712,7 @@ fn index_assign(
         };
         let len = if let Some(arg1) = arg1 {
             // self[nth, len] = val
-            match arg1.expect_integer(globals)? {
+            match arg1.coerce_to_int(vm, globals)? {
                 i if i < 0 => return Err(MonorubyErr::indexerr("negative length.")),
                 i => i as usize,
             }
@@ -886,7 +886,7 @@ pub fn str_next(self_: &str) -> String {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/start_with=3f.html]
 #[monoruby_builtin]
 fn start_with(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -894,8 +894,9 @@ fn start_with(
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
     let arg0 = lfp.arg(0).as_array();
-    for a in arg0.iter().map(|v| v.expect_str(globals)) {
-        if string.starts_with(a?) {
+    for v in arg0.iter() {
+        let a = v.coerce_to_str(vm, globals)?;
+        if string.starts_with(a.as_str()) {
             return Ok(Value::bool(true));
         }
     }
@@ -909,11 +910,11 @@ fn start_with(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/include=3f.html]
 #[monoruby_builtin]
-fn include_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn include_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
-    let substr = lfp.arg(0);
-    let b = string.contains(substr.expect_str(globals)?);
+    let substr_s = lfp.arg(0).coerce_to_str(vm, globals)?;
+    let b = string.contains(substr_s.as_str());
     Ok(Value::bool(b))
 }
 
@@ -925,16 +926,15 @@ fn include_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/delete_prefix=21.html]
 #[monoruby_builtin]
 fn delete_prefix_(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
-    let arg0 = lfp.arg(0);
-    let arg = arg0.expect_str(globals)?;
-    if let Some(stripped) = string.strip_prefix(arg) {
+    let arg = lfp.arg(0).coerce_to_str(vm, globals)?;
+    if let Some(stripped) = string.strip_prefix(arg.as_str()) {
         lfp.self_val().replace_str(stripped);
         Ok(lfp.self_val())
     } else {
@@ -950,16 +950,15 @@ fn delete_prefix_(
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/delete_prefix.html]
 #[monoruby_builtin]
 fn delete_prefix(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
-    let arg0 = lfp.arg(0);
-    let arg = arg0.expect_str(globals)?;
-    if let Some(stripped) = string.strip_prefix(arg) {
+    let arg = lfp.arg(0).coerce_to_str(vm, globals)?;
+    if let Some(stripped) = string.strip_prefix(arg.as_str()) {
         Ok(Value::string_from_str(stripped))
     } else {
         Ok(Value::string_from_str(string))
@@ -973,12 +972,13 @@ fn delete_prefix(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/end_with=3f.html]
 #[monoruby_builtin]
-fn end_with(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn end_with(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
     let arg0 = lfp.arg(0).as_array();
-    for a in arg0.iter().map(|v| v.expect_str(globals)) {
-        if string.ends_with(a?) {
+    for v in arg0.iter() {
+        let a = v.coerce_to_str(vm, globals)?;
+        if string.ends_with(a.as_str()) {
             return Ok(Value::bool(true));
         }
     }
@@ -999,7 +999,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
     let lim = if let Some(arg1) = lfp.try_arg(1) {
-        arg1.coerce_to_i64(globals)?
+        arg1.coerce_to_int(vm, globals)?
     } else {
         0
     };
@@ -1153,7 +1153,7 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             None => return Ok(Value::nil()),
         };
         if let Some(arg1) = lfp.try_arg(1) {
-            let len = match arg1.coerce_to_i64(globals)? {
+            let len = match arg1.coerce_to_int(vm, globals)? {
                 i if i < 0 => return Ok(Value::nil()),
                 i => i as usize,
             };
@@ -1170,8 +1170,8 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     } else if let Some(info) = lfp.arg(0).is_range() {
         let len = lhs.chars().count();
         let (start, end) = (
-            info.start().expect_integer(globals)?,
-            info.end().expect_integer(globals)? - info.exclude_end() as i64,
+            info.start().coerce_to_int(vm, globals)?,
+            info.end().coerce_to_int(vm, globals)? - info.exclude_end() as i64,
         );
         let (start, len) = match (
             conv_index(start, len),
@@ -1198,7 +1198,7 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         let nth = if lfp.try_arg(1).is_none() {
             0
         } else {
-            lfp.arg(1).coerce_to_i64(globals)?
+            lfp.arg(1).coerce_to_int(vm, globals)?
         };
         match info.captures(&lhs, vm)? {
             None => Ok(Value::nil()),
@@ -1439,8 +1439,8 @@ fn sub_main(
             eprintln!("warning: default value argument supersedes block");
         }
         let given = self_val.expect_str(globals)?;
-        let replace = arg1.expect_str(globals)?;
-        RegexpInner::replace_one(vm, lfp.arg(0), given, replace)
+        let replace = arg1.coerce_to_str(vm, globals)?;
+        RegexpInner::replace_one(vm, lfp.arg(0), given, &replace)
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
@@ -1494,8 +1494,8 @@ fn gsub_main(
             eprintln!("warning: default value argument supersedes block");
         }
         let given = self_val.expect_str(globals)?;
-        let replace = arg1.expect_str(globals)?;
-        RegexpInner::replace_all(vm, lfp.arg(0), given, replace)
+        let replace = arg1.coerce_to_str(vm, globals)?;
+        RegexpInner::replace_all(vm, lfp.arg(0), given, &replace)
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
@@ -1596,7 +1596,7 @@ fn string_match(
     _: BytecodePtr,
 ) -> Result<Value> {
     let pos = if let Some(arg1) = lfp.try_arg(1) {
-        match arg1.coerce_to_i64(globals)? {
+        match arg1.coerce_to_int(vm, globals)? {
             pos if pos >= 0 => pos as usize,
             _ => return Ok(Value::nil()),
         }
@@ -1624,7 +1624,7 @@ fn string_match_(
     _: BytecodePtr,
 ) -> Result<Value> {
     let pos = if let Some(arg1) = lfp.try_arg(1) {
-        match arg1.coerce_to_i64(globals)? {
+        match arg1.coerce_to_int(vm, globals)? {
             pos if pos >= 0 => pos as usize,
             _ => return Ok(Value::nil()),
         }
@@ -1653,7 +1653,7 @@ fn string_index(
     _: BytecodePtr,
 ) -> Result<Value> {
     let char_pos = if let Some(arg1) = lfp.try_arg(1) {
-        arg1.coerce_to_i64(globals)?
+        arg1.coerce_to_int(vm, globals)?
     } else {
         0
     };
@@ -1709,7 +1709,7 @@ fn string_rindex(
     let char_len = s.chars().count();
 
     let max_char_pos = if let Some(arg1) = lfp.try_arg(1) {
-        let pos = arg1.coerce_to_i64(globals)?;
+        let pos = arg1.coerce_to_int(vm, globals)?;
         match given.conv_char_index2(pos)? {
             Some(pos) => pos,
             None => return Ok(Value::nil()),
@@ -1866,7 +1866,7 @@ fn gen_pad(padding: &str, len: usize) -> String {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/ljust.html]
 #[monoruby_builtin]
-fn ljust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn ljust(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg1 = lfp.try_arg(1);
     let padding = if let Some(arg1) = &arg1 {
         arg1.expect_str(globals)?
@@ -1878,7 +1878,7 @@ fn ljust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     };
     let self_ = lfp.self_val();
     let lhs = self_.as_str();
-    let width = lfp.arg(0).coerce_to_i64(globals)?;
+    let width = lfp.arg(0).coerce_to_int(vm, globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
         return Ok(Value::string(lhs.to_string()));
@@ -1894,7 +1894,7 @@ fn ljust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/rjust.html]
 #[monoruby_builtin]
-fn rjust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn rjust(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg1 = lfp.try_arg(1);
     let padding = if let Some(arg1) = &arg1 {
         arg1.expect_str(globals)?
@@ -1906,7 +1906,7 @@ fn rjust(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     };
     let self_ = lfp.self_val();
     let lhs = self_.as_str();
-    let width = lfp.arg(0).coerce_to_i64(globals)?;
+    let width = lfp.arg(0).coerce_to_int(vm, globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
         return Ok(Value::string(lhs.to_string()));
@@ -1962,11 +1962,11 @@ fn bytes(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/getbyte.html]
 #[monoruby_builtin]
-fn getbyte(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn getbyte(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let receiver = lfp.self_val();
     let s = receiver.as_rstring_inner();
     let len = s.len() as i64;
-    let mut idx = lfp.arg(0).expect_integer(globals)?;
+    let mut idx = lfp.arg(0).coerce_to_int(vm, globals)?;
     if idx < 0 {
         idx += len;
     }
@@ -1984,19 +1984,19 @@ fn getbyte(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/setbyte.html]
 #[monoruby_builtin]
-fn setbyte(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn setbyte(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
-    let byte_val = lfp.arg(1).expect_integer(globals)?;
+    let byte_val = lfp.arg(1).coerce_to_int(vm, globals)?;
     let s = self_.as_rstring_inner();
     let len = s.len() as i64;
-    let mut idx = lfp.arg(0).expect_integer(globals)?;
+    let mut idx = lfp.arg(0).coerce_to_int(vm, globals)?;
     if idx < 0 {
         idx += len;
     }
     if idx < 0 || idx >= len {
         return Err(MonorubyErr::indexerr(format!(
             "index {} out of string",
-            lfp.arg(0).expect_integer(globals)?
+            lfp.arg(0).coerce_to_int(vm, globals)?
         )));
     }
     self_
@@ -2014,7 +2014,7 @@ fn setbyte(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/byteslice.html]
 #[monoruby_builtin]
-fn byteslice(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn byteslice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let s = self_.as_rstring_inner();
     let byte_len = s.len();
@@ -2034,8 +2034,8 @@ fn byteslice(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     };
 
     if let Some(range) = lfp.arg(0).is_range() {
-        let start = range.start().expect_integer(globals)?;
-        let end = range.end().expect_integer(globals)?;
+        let start = range.start().coerce_to_int(vm, globals)?;
+        let end = range.end().coerce_to_int(vm, globals)?;
         let start = match {
             if start >= 0 {
                 if (start as usize) <= byte_len {
@@ -2081,10 +2081,10 @@ fn byteslice(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             enc,
         )))
     } else {
-        let i = lfp.arg(0).expect_integer(globals)?;
+        let i = lfp.arg(0).coerce_to_int(vm, globals)?;
         if let Some(arg1) = lfp.try_arg(1) {
             // byteslice(nth, len)
-            let len = arg1.coerce_to_i64(globals)?;
+            let len = arg1.coerce_to_int(vm, globals)?;
             if len < 0 {
                 return Ok(Value::nil());
             }
@@ -2132,7 +2132,7 @@ fn byteslice(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/bytesplice.html]
 #[monoruby_builtin]
 fn bytesplice(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -2158,8 +2158,8 @@ fn bytesplice(
 
     // Parse target range (index, length) from the first args
     let (start, splice_len) = if let Some(range) = lfp.arg(0).is_range() {
-        let rstart = range.start().expect_integer(globals)?;
-        let rend = range.end().expect_integer(globals)?;
+        let rstart = range.start().coerce_to_int(vm, globals)?;
+        let rend = range.end().coerce_to_int(vm, globals)?;
         let start = conv_byte_index_for_splice(rstart, byte_len)?;
         let end = if rend >= 0 {
             let e = if range.exclude_end() {
@@ -2191,8 +2191,8 @@ fn bytesplice(
                 "wrong argument type Integer (expected Range)",
             ));
         }
-        let idx = lfp.arg(0).expect_integer(globals)?;
-        let len = lfp.arg(1).expect_integer(globals)?;
+        let idx = lfp.arg(0).coerce_to_int(vm, globals)?;
+        let len = lfp.arg(1).coerce_to_int(vm, globals)?;
         if len < 0 {
             return Err(MonorubyErr::indexerr(format!("negative length {}", len)));
         }
@@ -2222,8 +2222,8 @@ fn bytesplice(
             let src_range = src_range.is_range().ok_or_else(|| {
                 MonorubyErr::typeerr("wrong argument type Integer (expected Range)")
             })?;
-            let src_start = src_range.start().expect_integer(globals)?;
-            let src_end = src_range.end().expect_integer(globals)?;
+            let src_start = src_range.start().coerce_to_int(vm, globals)?;
+            let src_end = src_range.end().coerce_to_int(vm, globals)?;
             let src_start = conv_byte_index_for_splice(src_start, str_byte_len)?;
             let src_end_val = if src_end >= 0 {
                 let e = if src_range.exclude_end() {
@@ -2252,8 +2252,8 @@ fn bytesplice(
             }
         } else {
             // bytesplice(idx, len, str, str_idx, str_len)
-            let src_idx = lfp.arg(str_arg_idx + 1).expect_integer(globals)?;
-            let src_len = lfp.arg(str_arg_idx + 2).expect_integer(globals)?;
+            let src_idx = lfp.arg(str_arg_idx + 1).coerce_to_int(vm, globals)?;
+            let src_len = lfp.arg(str_arg_idx + 2).coerce_to_int(vm, globals)?;
             if src_len < 0 {
                 return Err(MonorubyErr::indexerr(format!(
                     "negative length {}",
@@ -2428,11 +2428,11 @@ fn to_f(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_i.html]
 #[monoruby_builtin]
-fn to_i(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn to_i(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let s = self_.expect_str(globals)?;
     let radix = if let Some(arg0) = lfp.try_arg(0) {
-        match arg0.expect_integer(globals)? {
+        match arg0.coerce_to_int(vm, globals)? {
             n if !(2..=36).contains(&n) => {
                 return Err(MonorubyErr::argumenterr(format!("invalid radix {n}")));
             }
@@ -3070,9 +3070,9 @@ fn count(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/sum.html]
 #[monoruby_builtin]
-fn sum(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let bits = if let Some(arg0) = lfp.try_arg(0) {
-        arg0.coerce_to_i64(globals)?
+        arg0.coerce_to_int(vm, globals)?
     } else {
         16
     };
@@ -3144,7 +3144,7 @@ fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/center.html]
 #[monoruby_builtin]
-fn center(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn center(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg1 = lfp.try_arg(1);
     let padding = if let Some(arg) = &arg1 {
         arg.expect_str(globals)?
@@ -3155,7 +3155,7 @@ fn center(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         return Err(MonorubyErr::argumenterr("Zero width padding."));
     };
     let lhs = lfp.self_val();
-    let width = lfp.arg(0).coerce_to_i64(globals)?;
+    let width = lfp.arg(0).coerce_to_int(vm, globals)?;
     let str_len = lhs.as_str().chars().count();
     if width <= 0 || width as usize <= str_len {
         return Ok(lhs.dup());
@@ -3229,9 +3229,9 @@ fn b(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/unpack.html]
 #[monoruby_builtin]
-fn unpack(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn unpack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let offset = unpack_offset(globals, lfp, self_.as_rstring_inner().len())?;
+    let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
     rvalue::unpack(
         &self_.as_rstring_inner()[offset..],
         lfp.arg(0).expect_str(globals)?,
@@ -3247,9 +3247,9 @@ fn unpack(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/unpack1.html]
 #[monoruby_builtin]
-fn unpack1(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn unpack1(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let offset = unpack_offset(globals, lfp, self_.as_rstring_inner().len())?;
+    let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
     rvalue::unpack(
         &self_.as_rstring_inner()[offset..],
         lfp.arg(0).expect_str(globals)?,
@@ -3257,10 +3257,10 @@ fn unpack1(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     )
 }
 
-fn unpack_offset(globals: &Globals, lfp: Lfp, len: usize) -> Result<usize> {
+fn unpack_offset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, len: usize) -> Result<usize> {
     match lfp.try_arg(1) {
         Some(v) => {
-            let offset = v.expect_integer(globals)?;
+            let offset = v.coerce_to_int(vm, globals)?;
             if offset < 0 || offset as usize > len {
                 Err(MonorubyErr::argumenterr("offset outside of string"))
             } else {
@@ -4901,6 +4901,92 @@ mod tests {
         run_test_once(
             r#"
             Encoding.compatible?("a", "b").nil?.!
+            "#,
+        );
+    }
+
+    #[test]
+    fn implicit_to_str_include() {
+        run_test(
+            r#"
+            class MyStr
+              def to_str
+                "world"
+              end
+            end
+            "hello world".include?(MyStr.new)
+            "#,
+        );
+    }
+
+    #[test]
+    fn implicit_to_str_start_with() {
+        run_test(
+            r#"
+            class MyStr
+              def to_str
+                "hel"
+              end
+            end
+            "hello".start_with?(MyStr.new)
+            "#,
+        );
+    }
+
+    #[test]
+    fn implicit_to_str_end_with() {
+        run_test(
+            r#"
+            class MyStr
+              def to_str
+                "llo"
+              end
+            end
+            "hello".end_with?(MyStr.new)
+            "#,
+        );
+    }
+
+    #[test]
+    fn to_int_conversion() {
+        run_test(
+            r#"
+            class MyInt
+              def to_int
+                3
+              end
+            end
+            "abc" * MyInt.new
+            "#,
+        );
+        run_test(
+            r#"
+            class MyInt
+              def to_int
+                10
+              end
+            end
+            "hello".ljust(MyInt.new, ".")
+            "#,
+        );
+        run_test(
+            r#"
+            class MyInt
+              def to_int
+                10
+              end
+            end
+            "hello".center(MyInt.new, ".")
+            "#,
+        );
+        run_test(
+            r#"
+            class MyInt
+              def to_int
+                1
+              end
+            end
+            "hello".getbyte(MyInt.new)
             "#,
         );
     }

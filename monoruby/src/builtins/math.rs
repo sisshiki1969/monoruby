@@ -59,13 +59,27 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(klass, "frexp", frexp, 1);
 }
 
-/// Convert a Value to f64, raising an error if not numeric.
-fn coerce_to_f64(globals: &mut Globals, v: Value) -> Result<f64> {
+/// Convert a Value to f64, trying `to_f` if the value is not directly numeric.
+fn coerce_to_f64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f64> {
     match v.unpack() {
         RV::Float(f) => Ok(f),
         RV::Fixnum(i) => Ok(i as f64),
         RV::BigInt(b) => Ok(b.to_f64().unwrap()),
-        _ => Err(MonorubyErr::cant_convert_into_float(globals, v)),
+        _ => {
+            // Only try to_f for non-String types (CRuby only calls to_f on Numeric subclasses)
+            if v.is_str().is_none()
+                && let Some(fid) = globals.check_method(v, IdentId::TO_F)
+            {
+                let result = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
+                match result.unpack() {
+                    RV::Float(f) => Ok(f),
+                    RV::Fixnum(i) => Ok(i as f64),
+                    _ => Err(MonorubyErr::cant_convert_into_float(globals, v)),
+                }
+            } else {
+                Err(MonorubyErr::cant_convert_into_float(globals, v))
+            }
+        }
     }
 }
 
@@ -74,8 +88,8 @@ fn coerce_to_f64(globals: &mut Globals, v: Value) -> Result<f64> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/sqrt.html]
 #[monoruby_builtin]
-fn sqrt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn sqrt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     Ok(Value::float(f.sqrt()))
 }
 
@@ -84,8 +98,8 @@ fn sqrt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/sin.html]
 #[monoruby_builtin]
-fn sin(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn sin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     Ok(Value::float(f.sin()))
 }
 
@@ -94,8 +108,8 @@ fn sin(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/cos.html]
 #[monoruby_builtin]
-fn cos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn cos(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     Ok(Value::float(f.cos()))
 }
 
@@ -104,8 +118,8 @@ fn cos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/tan.html]
 #[monoruby_builtin]
-fn tan(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn tan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     Ok(Value::float(f.tan()))
 }
 
@@ -115,15 +129,15 @@ fn tan(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/log.html]
 #[monoruby_builtin]
-fn log(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn log(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     if f.is_sign_negative() {
         return Err(MonorubyErr::rangeerr(
             "Numerical argument is out of domain - \"log\"",
         ));
     }
     let result = if let Some(base) = lfp.try_arg(1) {
-        let b = coerce_to_f64(globals, base)?;
+        let b = coerce_to_f64(vm, globals, base)?;
         f.log(b)
     } else {
         f.ln()
@@ -136,8 +150,8 @@ fn log(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/log2.html]
 #[monoruby_builtin]
-fn log2(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn log2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     if f.is_sign_negative() {
         return Err(MonorubyErr::rangeerr(
             "Numerical argument is out of domain - \"log2\"",
@@ -151,8 +165,8 @@ fn log2(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/log10.html]
 #[monoruby_builtin]
-fn log10(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn log10(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     if f.is_sign_negative() {
         return Err(MonorubyErr::rangeerr(
             "Numerical argument is out of domain - log10",
@@ -166,8 +180,8 @@ fn log10(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/exp.html]
 #[monoruby_builtin]
-fn exp(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn exp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     Ok(Value::float(f.exp()))
 }
 
@@ -176,8 +190,8 @@ fn exp(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/asin.html]
 #[monoruby_builtin]
-fn asin(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn asin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     if f < -1.0 || f > 1.0 {
         return Err(MonorubyErr::rangeerr(
             "Numerical argument is out of domain - \"asin\"",
@@ -191,8 +205,8 @@ fn asin(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/acos.html]
 #[monoruby_builtin]
-fn acos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn acos(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     if f < -1.0 || f > 1.0 {
         return Err(MonorubyErr::rangeerr(
             "Numerical argument is out of domain - \"acos\"",
@@ -206,8 +220,8 @@ fn acos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/atan.html]
 #[monoruby_builtin]
-fn atan(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn atan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     Ok(Value::float(f.atan()))
 }
 
@@ -216,9 +230,9 @@ fn atan(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/atan2.html]
 #[monoruby_builtin]
-fn atan2(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let y = coerce_to_f64(globals, lfp.arg(0))?;
-    let x = coerce_to_f64(globals, lfp.arg(1))?;
+fn atan2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let y = coerce_to_f64(vm, globals, lfp.arg(0))?;
+    let x = coerce_to_f64(vm, globals, lfp.arg(1))?;
     Ok(Value::float(y.atan2(x)))
 }
 
@@ -227,8 +241,8 @@ fn atan2(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/sinh.html]
 #[monoruby_builtin]
-fn sinh(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn sinh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     Ok(Value::float(f.sinh()))
 }
 
@@ -237,8 +251,8 @@ fn sinh(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/cosh.html]
 #[monoruby_builtin]
-fn cosh(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn cosh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     Ok(Value::float(f.cosh()))
 }
 
@@ -247,8 +261,8 @@ fn cosh(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/tanh.html]
 #[monoruby_builtin]
-fn tanh(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn tanh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     Ok(Value::float(f.tanh()))
 }
 
@@ -257,8 +271,8 @@ fn tanh(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/asinh.html]
 #[monoruby_builtin]
-fn asinh(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn asinh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     Ok(Value::float(f.asinh()))
 }
 
@@ -267,8 +281,8 @@ fn asinh(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/acosh.html]
 #[monoruby_builtin]
-fn acosh(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn acosh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     if f < 1.0 {
         return Err(MonorubyErr::rangeerr(
             "Numerical argument is out of domain - \"acosh\"",
@@ -282,8 +296,8 @@ fn acosh(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/atanh.html]
 #[monoruby_builtin]
-fn atanh(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn atanh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     if f <= -1.0 || f >= 1.0 {
         if f == -1.0 || f == 1.0 {
             // Returns -Infinity or Infinity
@@ -303,8 +317,8 @@ fn atanh(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/erf.html]
 #[monoruby_builtin]
-fn erf(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn erf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     // SAFETY: erf is a standard C math function with no safety concerns.
     Ok(Value::float(unsafe { c_erf(f) }))
 }
@@ -314,8 +328,8 @@ fn erf(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/erfc.html]
 #[monoruby_builtin]
-fn erfc(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn erfc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     // SAFETY: erfc is a standard C math function with no safety concerns.
     Ok(Value::float(unsafe { c_erfc(f) }))
 }
@@ -325,8 +339,8 @@ fn erfc(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/gamma.html]
 #[monoruby_builtin]
-fn gamma(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn gamma(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     if f < 0.0 && f == f.floor() {
         return Err(MonorubyErr::rangeerr(
             "Numerical argument is out of domain - \"tgamma\"",
@@ -341,8 +355,8 @@ fn gamma(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/lgamma.html]
 #[monoruby_builtin]
-fn lgamma(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn lgamma(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     // SAFETY: lgamma_r is a standard C math function; sign is a valid pointer to a local variable.
     let mut sign: c_int = 0;
     let result = unsafe { c_lgamma_r(f, &mut sign) };
@@ -357,8 +371,8 @@ fn lgamma(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/cbrt.html]
 #[monoruby_builtin]
-fn cbrt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn cbrt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     Ok(Value::float(f.cbrt()))
 }
 
@@ -367,9 +381,9 @@ fn cbrt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/hypot.html]
 #[monoruby_builtin]
-fn hypot(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let x = coerce_to_f64(globals, lfp.arg(0))?;
-    let y = coerce_to_f64(globals, lfp.arg(1))?;
+fn hypot(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let x = coerce_to_f64(vm, globals, lfp.arg(0))?;
+    let y = coerce_to_f64(vm, globals, lfp.arg(1))?;
     Ok(Value::float(x.hypot(y)))
 }
 
@@ -378,8 +392,8 @@ fn hypot(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/ldexp.html]
 #[monoruby_builtin]
-fn ldexp(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let x = coerce_to_f64(globals, lfp.arg(0))?;
+fn ldexp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let x = coerce_to_f64(vm, globals, lfp.arg(0))?;
     let exp = match lfp.arg(1).unpack() {
         RV::Fixnum(i) => i as i32,
         RV::Float(f) => f as i32,
@@ -397,8 +411,8 @@ fn ldexp(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/frexp.html]
 #[monoruby_builtin]
-fn frexp(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(globals, lfp.arg(0))?;
+fn frexp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
     // SAFETY: frexp is a standard C math function; exp_val is a valid pointer to a local variable.
     let mut exp_val: c_int = 0;
     let frac = unsafe { c_frexp(f, &mut exp_val) };
@@ -534,6 +548,40 @@ mod tests {
         end
         C.new.f
         "#,
+        );
+    }
+
+    #[test]
+    fn implicit_to_f() {
+        run_test(
+            r#"
+            class MyNum < Numeric
+              def to_f
+                2.0
+              end
+            end
+            Math.sqrt(MyNum.new)
+            "#,
+        );
+        run_test(
+            r#"
+            class MyNum2 < Numeric
+              def to_f
+                1.0
+              end
+            end
+            Math.sin(MyNum2.new)
+            "#,
+        );
+        run_test(
+            r#"
+            class MyNum3 < Numeric
+              def to_f
+                0.5
+              end
+            end
+            Math.cos(MyNum3.new)
+            "#,
         );
     }
 }

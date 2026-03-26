@@ -56,18 +56,18 @@ fn time_now(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePt
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/at.html]
 #[monoruby_builtin]
-fn time_at(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let secs_val = lfp.arg(0);
     let (secs, nsecs) = if let Some(f) = secs_val.try_float() {
         let s = f.floor() as i64;
         let ns = ((f - f.floor()) * 1_000_000_000.0) as u32;
         (s, ns)
     } else {
-        let s = secs_val.coerce_to_i64(globals)?;
+        let s = secs_val.coerce_to_int(vm, globals)?;
         (s, 0u32)
     };
     let usec_ns = if let Some(arg1) = lfp.try_arg(1) {
-        let u = arg1.coerce_to_i64(globals)?;
+        let u = arg1.coerce_to_int(vm, globals)?;
         (u * 1000) as u32
     } else {
         0
