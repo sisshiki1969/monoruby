@@ -197,6 +197,27 @@ fn block_return_ensure() {
 }
 
 #[test]
+fn eval_return_ensure() {
+    run_test_with_prelude(
+        r#"
+            $x = []
+            $x << foo
+            $x
+            "#,
+        r#"
+            def foo
+              begin
+                eval("return 42")
+                $x << "after eval"
+              ensure
+                $x << "ensure"
+              end
+            end
+            "#,
+    );
+}
+
+#[test]
 fn retry1() {
     run_test(
         r#"

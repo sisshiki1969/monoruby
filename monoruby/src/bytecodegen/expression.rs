@@ -447,9 +447,13 @@ impl<'a> BytecodeGen<'a> {
                         },
                         loc,
                     );
-                } else {
-                    assert_eq!(Some(lvar), self.outer_block_param_name(outer));
+                } else if Some(lvar) == self.outer_block_param_name(outer) {
                     self.emit(BytecodeInst::BlockArg(ret, outer), loc);
+                } else {
+                    return Err(MonorubyErr::runtimeerr(format!(
+                        "can't access local variable '{}' in outer block",
+                        lvar.get_name()
+                    )));
                 }
             }
 
