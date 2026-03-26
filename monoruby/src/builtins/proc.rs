@@ -429,4 +429,13 @@ mod tests {
         run_test("lambda {|x| x}.arity");
         run_test("->(x, y) { x }.arity");
     }
+
+    #[test]
+    fn proc_curry() {
+        run_test("proc {|a,b,c| a+b+c}.curry[1][2][3]");
+        run_test("proc {|a,b,c| a+b+c}.curry[1,2][3]");
+        run_test("proc {|a,b,c| a+b+c}.curry[1,2,3]");
+        run_test("->(a,b) { a + b }.curry[1][2]");
+        run_test("proc {|a,b,c| [a,b,c]}.curry(3)[1][2][3]");
+    }
 }

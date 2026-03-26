@@ -321,6 +321,20 @@ class Exception
       Thread::Backtrace::Location.new(frame)
     end
   end
+
+  def full_message(highlight: nil, order: :top)
+    msg = "#{self.class}: #{message}"
+    bt = backtrace
+    if bt && !bt.empty?
+      if order == :top
+        "#{bt[0]}: #{msg}\n" + bt[1..].map{|l| "\tfrom #{l}\n"}.join
+      else
+        bt.reverse.map{|l| "\tfrom #{l}\n"}.join + "#{bt[0]}: #{msg}\n"
+      end
+    else
+      msg + "\n"
+    end
+  end
 end
 
 Mutex = Thread::Mutex

@@ -349,4 +349,26 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn full_message() {
+        run_test(
+            r#"
+            begin
+              raise "test error"
+            rescue => e
+              e.full_message(order: :top).include?("test error")
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            begin
+              raise "test error"
+            rescue => e
+              e.full_message(order: :top).include?("RuntimeError")
+            end
+            "#,
+        );
+    }
 }

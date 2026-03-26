@@ -608,4 +608,9 @@ mod tests {
         );
     }
 
+    // Note: Enumerator::Lazy is defined in Ruby (enumerable.rb) but
+    // monoruby has a block variable capture limitation that prevents
+    // nested block forwarding from working correctly. Tests are
+    // disabled until the underlying issue is fixed.
+
 }

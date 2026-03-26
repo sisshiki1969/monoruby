@@ -330,6 +330,48 @@ class Numeric
   def truncate(ndigits = 0)
     to_f.truncate(ndigits)
   end
+
+  def step(limit = nil, step = nil, by: nil, to: nil)
+    limit = to if to
+    step = by if by
+    step ||= 1
+    raise ArgumentError, "step can't be 0" if step == 0
+    return to_enum(:step, limit, step) unless block_given?
+    i = self
+    if step > 0
+      while limit.nil? || i <= limit
+        yield i
+        i += step
+      end
+    else
+      while limit.nil? || i >= limit
+        yield i
+        i += step
+      end
+    end
+    self
+  end
+end
+
+class Proc
+  def curry(arity = nil)
+    arity ||= self.arity
+    arity = -arity - 1 if arity < 0
+    return self if arity == 0
+    orig = self
+    curried = nil
+    curried = lambda do |collected_args|
+      lambda do |*args|
+        new_args = collected_args + args
+        if new_args.size >= arity
+          orig.call(*new_args)
+        else
+          curried.call(new_args)
+        end
+      end
+    end
+    curried.call([])
+  end
 end
 
 class Symbol
