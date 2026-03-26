@@ -625,4 +625,18 @@ mod tests {
         "##,
         );
     }
+
+    #[test]
+    fn mkdir() {
+        // mkdir on existing directory should not error
+        run_test_no_result_check("Dir.mkdir('/tmp')");
+        // mkdir creates a new directory
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_mkdir_#{Process.pid}"
+            Dir.mkdir(path)
+            Dir.exist?(path)
+            "#,
+        );
+    }
 }

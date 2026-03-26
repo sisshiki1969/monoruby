@@ -5007,4 +5007,18 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn succ_bang() {
+        run_test(r#"s = "a"; s.succ!; s"#);
+        run_test(r#"s = "az"; s.succ!; s"#);
+        run_test(r#"s = "zz"; s.succ!; s"#);
+        run_test(r#"s = "9"; s.succ!; s"#);
+    }
+
+    #[test]
+    fn insert() {
+        run_test(r#""hello".insert(0, "X")"#);
+        run_test(r#""hello".insert(2, "X")"#);
+    }
 }

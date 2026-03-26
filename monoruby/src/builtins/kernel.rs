@@ -3144,4 +3144,47 @@ mod tests {
         run_test("respond_to?(:exit!)");
         run_test("Process.respond_to?(:exit!)");
     }
+
+    #[test]
+    fn puts_delegates_to_stdout() {
+        // Kernel#puts delegates to $stdout.puts
+        run_test_no_result_check(
+            r#"
+            require "stringio"
+            old = $stdout
+            $stdout = StringIO.new
+            puts "hello"
+            result = $stdout.string
+            $stdout = old
+            result
+            "#,
+        );
+    }
+
+    #[test]
+    fn printf_delegates_to_stdout() {
+        run_test_no_result_check(
+            r#"
+            require "stringio"
+            old = $stdout
+            $stdout = StringIO.new
+            printf("%d", 42)
+            result = $stdout.string
+            $stdout = old
+            result
+            "#,
+        );
+    }
+
+    #[test]
+    fn format_to_str() {
+        run_test_once(
+            r#"
+            class MyFmt
+              def to_str; "num: %d"; end
+            end
+            format(MyFmt.new, 42)
+            "#,
+        );
+    }
 }

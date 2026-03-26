@@ -1048,4 +1048,32 @@ mod tests {
         run_test(r##"File.split("file.txt")"##);
         run_test(r##"File.split("/home/user/")"##);
     }
+
+    #[test]
+    fn file_new() {
+        run_test_once(
+            r#"
+            f = File.new("Cargo.toml", "r")
+            result = f.read(10).is_a?(String)
+            f.close
+            result
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_stat() {
+        run_test_no_result_check(
+            r#"
+            stat = File.stat("Cargo.toml")
+            [stat.file?, stat.directory?]
+            "#,
+        );
+        run_test_no_result_check(
+            r#"
+            stat = File.stat("src")
+            [stat.file?, stat.directory?]
+            "#,
+        );
+    }
 }

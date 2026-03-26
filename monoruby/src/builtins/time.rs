@@ -502,4 +502,23 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn time_sub() {
+        // Time - Time => Float (seconds)
+        run_test_once(
+            r#"
+            t1 = Time.at(1000)
+            t2 = Time.at(900)
+            (t1 - t2).class
+            "#,
+        );
+        // Time - numeric => Time
+        run_test_once(
+            r#"
+            t = Time.at(1000)
+            (t - 100).is_a?(Time)
+            "#,
+        );
+    }
 }
