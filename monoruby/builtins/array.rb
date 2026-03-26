@@ -237,4 +237,95 @@ class Array
     end
     mode == :find_min ? low < size ? low : nil : nil
   end
+
+  def permutation(n = self.size)
+    return to_enum(:permutation, n) unless block_given?
+    n = n.to_int
+    if n == 0
+      yield []
+      return self
+    end
+    return self if n < 0 || n > size
+    if n == size
+      # Generate all permutations
+      pool = self.dup
+      indices = (0...n).to_a
+      yield indices.map { |i| pool[i] }
+      cycles = (size.downto(size - n + 1)).to_a
+      loop do
+        found = false
+        (n - 1).downto(0) do |i|
+          cycles[i] -= 1
+          if cycles[i] == 0
+            # Move index at i to end
+            tmp = indices[i]
+            (i...n - 1).each { |j| indices[j] = indices[j + 1] }
+            indices[n - 1] = tmp
+            cycles[i] = size - i
+          else
+            j = -cycles[i]
+            indices[i], indices[j] = indices[j], indices[i]
+            yield indices[0, n].map { |idx| pool[idx] }
+            found = true
+            break
+          end
+        end
+        return self unless found
+      end
+    else
+      pool = self.dup
+      indices = (0...size).to_a
+      cycles = (size.downto(size - n + 1)).to_a
+      yield indices[0, n].map { |i| pool[i] }
+      loop do
+        found = false
+        (n - 1).downto(0) do |i|
+          cycles[i] -= 1
+          if cycles[i] == 0
+            tmp = indices[i]
+            (i...size - 1).each { |j| indices[j] = indices[j + 1] }
+            indices[size - 1] = tmp
+            cycles[i] = size - i
+          else
+            j = -cycles[i]
+            indices[i], indices[j] = indices[j], indices[i]
+            yield indices[0, n].map { |idx| pool[idx] }
+            found = true
+            break
+          end
+        end
+        return self unless found
+      end
+    end
+    self
+  end
+
+  def repeated_combination(n)
+    return to_enum(:repeated_combination, n) unless block_given?
+    n = n.to_int
+    len = self.size
+    if n == 0
+      yield []
+    elsif n == 1
+      each { |x| yield [x] }
+    elsif len > 0 && n > 0
+      indices = [0] * n
+      loop do
+        yield indices.map { |i| self[i] }
+        # Increment
+        i = n - 1
+        while i >= 0
+          indices[i] += 1
+          if indices[i] < len
+            # Fill all subsequent indices with the same value
+            ((i + 1)...n).each { |j| indices[j] = indices[i] }
+            break
+          end
+          i -= 1
+        end
+        break if i < 0
+      end
+    end
+    self
+  end
 end

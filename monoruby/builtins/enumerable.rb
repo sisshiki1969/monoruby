@@ -502,4 +502,141 @@ module Enumerable
     res
   end
 
+  def lazy
+    Enumerator::Lazy.new(self)
+  end
+end
+
+class Enumerator
+  class Lazy
+    include Enumerable
+
+    def initialize(obj, &block)
+      @obj = obj
+      @block = block
+    end
+
+    def each(&blk)
+      @obj.each do |*args|
+        if @block
+          @block.call(blk, *args)
+        else
+          if args.size == 1
+            blk.call(args[0])
+          else
+            blk.call(args)
+          end
+        end
+      end
+      self
+    end
+
+    def map(&block)
+      Lazy.new(self) {|yielder, val| yielder.call(block.call(val)) }
+    end
+    alias collect map
+
+    def select(&block)
+      Lazy.new(self) {|yielder, val| yielder.call(val) if block.call(val) }
+    end
+    alias filter select
+    alias find_all select
+
+    def reject(&block)
+      Lazy.new(self) {|yielder, val| yielder.call(val) unless block.call(val) }
+    end
+
+    def take(n)
+      taken = 0
+      Lazy.new(self) {|yielder, val|
+        if taken < n
+          yielder.call(val)
+          taken += 1
+        end
+      }
+    end
+
+    def first(n = nil)
+      if n
+        take(n).to_a
+      else
+        each {|v| return v }
+        nil
+      end
+    end
+
+    def to_a
+      result = []
+      each {|v| result << v }
+      result
+    end
+    alias force to_a
+    alias entries to_a
+
+    def flat_map(&block)
+      Lazy.new(self) {|yielder, val|
+        result = block.call(val)
+        if result.respond_to?(:each)
+          result.each {|v| yielder.call(v) }
+        else
+          yielder.call(result)
+        end
+      }
+    end
+    alias collect_concat flat_map
+
+    def zip(*others)
+      others_arrays = others.map { |o| o.respond_to?(:to_a) ? o.to_a : o }
+      idx = 0
+      Lazy.new(self) {|yielder, val|
+        entry = [val]
+        others_arrays.each {|oa| entry << (oa.is_a?(Array) ? oa[idx] : nil) }
+        idx += 1
+        yielder.call(entry)
+      }
+    end
+
+    def take_while(&block)
+      Lazy.new(self) {|yielder, val|
+        if block.call(val)
+          yielder.call(val)
+        else
+          raise StopIteration
+        end
+      }
+    end
+
+    def drop(n)
+      dropped = 0
+      Lazy.new(self) {|yielder, val|
+        if dropped < n
+          dropped += 1
+        else
+          yielder.call(val)
+        end
+      }
+    end
+
+    def drop_while(&block)
+      dropping = true
+      Lazy.new(self) {|yielder, val|
+        if dropping
+          unless block.call(val)
+            dropping = false
+            yielder.call(val)
+          end
+        else
+          yielder.call(val)
+        end
+      }
+    end
+
+    def lazy
+      self
+    end
+
+    def inspect
+      "#<Enumerator::Lazy: #{@obj.inspect}>"
+    end
+  end
 end

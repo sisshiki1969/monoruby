@@ -1292,4 +1292,17 @@ mod tests {
         // exclusive range with non-integer end
         run_test_error("(1.0...3.0).minmax");
     }
+
+    #[test]
+    fn cover() {
+        run_test("(1..10).cover?(5)");
+        run_test("(1..10).cover?(0)");
+        run_test("(1..10).cover?(11)");
+        run_test("(1...10).cover?(10)");
+        run_test("(1...10).cover?(9)");
+        run_test("(1..10).cover?(1..5)");
+        run_test("(1..10).cover?(0..5)");
+        run_test("(1..10).cover?(5..15)");
+        run_test("('a'..'z').cover?('m')");
+    }
 }
