@@ -78,19 +78,10 @@ impl Codegen {
     /// #### destroy
     /// - rsi (only on frozen path)
     ///
-    pub(super) fn guard_frozen(&mut self, error: &DestLabel) {
-        let not_frozen = self.jit.label();
+    pub(super) fn guard_frozen(&mut self, deopt: &DestLabel) {
         monoasm! { &mut self.jit,
             testb [rdi + (RVALUE_OFFSET_FLAG as i32)], (0b10);
-            jz   not_frozen;
-            // rdi already holds self Value (heap pointer)
-            movq rdx, rdi; // val: Value
-            movq rdi, rbx; // &mut Executor
-            movq rsi, r12; // &mut Globals
-            movq rax, (frozen_error);
-            call rax;
-            jmp  error;
-        not_frozen:
+            jnz  deopt;
         }
     }
 
@@ -223,10 +214,6 @@ impl Codegen {
 
 extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
     base.set_ivar_by_ivarid(id, val)
-}
-
-extern "C" fn frozen_error(vm: &mut Executor, globals: &mut Globals, val: Value) {
-    vm.err_cant_modify_frozen(&globals.store, val);
 }
 
 impl Codegen {
