@@ -66,6 +66,35 @@ impl Codegen {
 
 impl Codegen {
     ///
+    /// Guard that the object in *rdi* is not frozen.
+    ///
+    /// Check bit 1 of the flag field at RVALUE_OFFSET_FLAG.
+    /// If the object is frozen, call the runtime to set a FrozenError
+    /// and jump to the error side exit.
+    ///
+    /// #### in
+    /// - rdi: &RValue (also the Value, since lower bits are 0 for heap objects)
+    ///
+    /// #### destroy
+    /// - rsi (only on frozen path)
+    ///
+    pub(super) fn guard_frozen(&mut self, error: &DestLabel) {
+        let not_frozen = self.jit.label();
+        monoasm! { &mut self.jit,
+            testb [rdi + (RVALUE_OFFSET_FLAG as i32)], (0b10);
+            jz   not_frozen;
+            // rdi already holds self Value (heap pointer)
+            movq rdx, rdi; // val: Value
+            movq rdi, rbx; // &mut Executor
+            movq rsi, r12; // &mut Globals
+            movq rax, (frozen_error);
+            call rax;
+            jmp  error;
+        not_frozen:
+        }
+    }
+
+    ///
     /// Store *src* in ivar embedded to RValue `rdi`. (only for object type)
     ///
     /// #### in
@@ -194,6 +223,10 @@ impl Codegen {
 
 extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
     base.set_ivar_by_ivarid(id, val)
+}
+
+extern "C" fn frozen_error(vm: &mut Executor, globals: &mut Globals, val: Value) {
+    vm.err_cant_modify_frozen(&globals.store, val);
 }
 
 impl Codegen {

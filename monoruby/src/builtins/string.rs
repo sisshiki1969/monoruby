@@ -473,6 +473,7 @@ fn gt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3c=3c.html]
 #[monoruby_builtin]
 fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_ = lfp.self_val();
     if let Some(other) = lfp.arg(0).is_rstring() {
         self_.as_rstring_inner_mut().extend(&other)?;
@@ -694,6 +695,7 @@ fn index_assign(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let (arg1, subst) = if let Some(arg2) = lfp.try_arg(2) {
         (Some(lfp.arg(1)), arg2.coerce_to_string(vm, globals)?)
     } else {
@@ -932,6 +934,7 @@ fn delete_prefix_(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
     let arg = lfp.arg(0).coerce_to_str(vm, globals)?;
@@ -1140,6 +1143,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/slice=21.html]
 #[monoruby_builtin]
 fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     fn slice_sub(lfp: Lfp, mut lhs: String, r: std::ops::Range<usize>) -> Value {
         let res = Value::string_from_str(&lhs[r.clone()]);
         lhs.replace_range(r, "");
@@ -1283,6 +1287,7 @@ fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/chomp.html]
 #[monoruby_builtin]
 fn chomp_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let arg0 = lfp.try_arg(0);
     let rs_owned;
     let rs = if let Some(arg0) = &arg0 {
@@ -1332,6 +1337,7 @@ fn strip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/strip=21.html]
 #[monoruby_builtin]
 fn strip_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let self_val = lfp.self_val();
     let orig = self_val.expect_str(globals)?;
     let self_ = orig.trim_end_matches(STRIP).trim_start_matches(STRIP);
@@ -1363,6 +1369,7 @@ fn rstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/rstrip=21.html]
 #[monoruby_builtin]
 fn rstrip_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let self_val = lfp.self_val();
     let orig = self_val.expect_str(globals)?;
     let self_ = orig.trim_end_matches(STRIP);
@@ -1394,6 +1401,7 @@ fn lstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/lstrip=21.html]
 #[monoruby_builtin]
 fn lstrip_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let self_val = lfp.self_val();
     let orig = self_val.expect_str(globals)?;
     let self_ = orig.trim_start_matches(STRIP);
