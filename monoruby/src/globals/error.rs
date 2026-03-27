@@ -141,6 +141,7 @@ impl MonorubyErr {
             MonorubyErrKind::IO => "IOError",
             MonorubyErrKind::Key => "KeyError",
             MonorubyErrKind::Fiber => "FiberError",
+            MonorubyErrKind::Thread => "ThreadError",
             MonorubyErrKind::StopIteration => "StopIteration",
             MonorubyErrKind::SystemExit(..) => "SystemExit",
             MonorubyErrKind::Other(class_id) => return class_id.get_name(store),
@@ -171,6 +172,7 @@ impl MonorubyErr {
             MonorubyErrKind::IO => IO_ERROR_CLASS,
             MonorubyErrKind::Key => KEY_ERROR_CLASS,
             MonorubyErrKind::Fiber => FIBER_ERROR_CLASS,
+            MonorubyErrKind::Thread => THREAD_ERROR_CLASS,
             MonorubyErrKind::StopIteration => STOP_ITERATION_CLASS,
             MonorubyErrKind::SystemExit(..) => SYSTEM_EXIT_ERROR_CLASS,
             MonorubyErrKind::Other(class_id) => *class_id,
@@ -385,6 +387,10 @@ impl MonorubyErr {
 
     pub(crate) fn fibererr(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Fiber, msg)
+    }
+
+    pub(crate) fn threaderror(msg: impl ToString) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Thread, msg)
     }
 
     pub(crate) fn char_out_of_range(store: &Store, val: Value) -> MonorubyErr {
@@ -629,6 +635,7 @@ pub enum MonorubyErrKind {
     IO,
     Key,
     Fiber,
+    Thread,
     StopIteration,
     SystemExit(u8),
     Other(ClassId),
@@ -658,6 +665,7 @@ impl MonorubyErrKind {
             IO_ERROR_CLASS => MonorubyErrKind::IO,
             KEY_ERROR_CLASS => MonorubyErrKind::Key,
             FIBER_ERROR_CLASS => MonorubyErrKind::Fiber,
+            THREAD_ERROR_CLASS => MonorubyErrKind::Thread,
             STOP_ITERATION_CLASS => MonorubyErrKind::StopIteration,
             SYSTEM_EXIT_ERROR_CLASS => MonorubyErrKind::SystemExit(0),
             _ => MonorubyErrKind::Other(class_id),

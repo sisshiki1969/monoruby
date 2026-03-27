@@ -33,6 +33,7 @@ mod set;
 mod string;
 mod struct_class;
 mod symbol;
+mod thread;
 mod time;
 mod true_class;
 
@@ -88,6 +89,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     dir::init(globals);
     match_data::init(globals);
     set::init(globals);
+    thread::init(globals);
     main_object::init(globals);
     globals.object_class().include_module(kernel).unwrap();
 }

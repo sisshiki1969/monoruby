@@ -47,6 +47,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_exception_class("ArgumentError", ARGUMENTS_ERROR_CLASS, standarderr);
     globals.define_class("EncodingError", standarderr, OBJECT_CLASS);
     globals.define_builtin_exception_class("FiberError", FIBER_ERROR_CLASS, standarderr);
+    globals.define_builtin_exception_class("ThreadError", THREAD_ERROR_CLASS, standarderr);
     let ioerr =
         globals.define_builtin_exception_class("IOError", IO_ERROR_CLASS, standarderr);
     globals.define_class("EOFError", ioerr, OBJECT_CLASS);

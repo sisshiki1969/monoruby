@@ -267,12 +267,14 @@ impl Globals {
     }
 
     pub fn run(&mut self, code: impl Into<String>, path: &std::path::Path) -> Result<Value> {
+        gvl_acquire();
         let code = code.into();
         let program_name = path.to_string_lossy().to_string();
         let mut executor = Executor::init(self, &program_name)?;
         executor.init_stack_limit(self);
         let res = executor.exec_script(self, code, path);
         let _ = self.flush_stdout();
+        gvl_release();
         #[cfg(any(feature = "profile", feature = "jit-log"))]
         self.show_stats();
         #[cfg(feature = "gc-log")]

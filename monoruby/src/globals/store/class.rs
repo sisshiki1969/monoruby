@@ -59,6 +59,9 @@ pub const IO_ERROR_CLASS: ClassId = ClassId::new(49);
 
 pub const MATCHDATA_CLASS: ClassId = ClassId::new(50);
 pub const SET_CLASS: ClassId = ClassId::new(51);
+pub const THREAD_CLASS: ClassId = ClassId::new(52);
+pub const THREAD_ERROR_CLASS: ClassId = ClassId::new(53);
+pub const MUTEX_CLASS: ClassId = ClassId::new(54);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
@@ -120,6 +123,9 @@ impl std::fmt::Debug for ClassId {
 
             50 => write!(f, "MATCHDATA"),
             51 => write!(f, "SET"),
+            52 => write!(f, "THREAD"),
+            53 => write!(f, "THREAD_ERROR"),
+            54 => write!(f, "MUTEX"),
             n => write!(f, "ClassId({n})"),
         }
     }

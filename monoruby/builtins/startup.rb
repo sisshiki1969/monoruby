@@ -205,94 +205,11 @@ class Signal
 end
 
 class Thread
-  # monoruby is single-threaded. Thread.new does NOT execute blocks
-  # concurrently. Only Thread.current (the main thread) is meaningful.
-  # Methods that require actual concurrency raise NoMethodError.
-
-  def self.current
-    @@current
-  end
-
-  @@pass_count = 0
-  def self.pass
-    # monoruby is single-threaded. Thread.pass is a no-op, but if called
-    # repeatedly (e.g., `Thread.pass until condition`), the condition will
-    # never change. Raise after a safety limit to prevent infinite loops.
-    @@pass_count += 1
-    if @@pass_count > 1000
-      @@pass_count = 0
-      raise ThreadError, "Thread.pass called too many times (monoruby is single-threaded)"
-    end
-  end
-
-  def initialize(*args, &block)
-    @value = nil
-    @exception = nil
-    @alive = false
-    @keys = {}
-    @thread_local = {}
-  end
-
-  @@current = Thread.new
-  @@current.instance_variable_set(:@alive, true)
-
-  def value
-    @value
-  end
-
-  def join(limit = nil)
-    self
-  end
-
-  def kill
-    self
-  end
-
-  def alive?
-    @alive
-  end
-
-  def stop?
-    !@alive
-  end
-
-  def status
-    if @alive
-      "run"
-    else
-      false
-    end
-  end
-
-  def [](key)
-    @keys[key]
-  end
-
-  def []=(key, value)
-    @keys[key] = value
-  end
-
-  def thread_variable_set(key, value)
-    @thread_local[key] = value
-  end
-
-  def thread_variable_get(key)
-    @thread_local[key]
-  end
+  # Ruby-side methods that complement the Rust-implemented Thread class.
 
   def self.each_caller_location
     caller_locations(1).each do |loc|
       yield loc
-    end
-  end
-
-  class Mutex
-    def synchronize
-      yield
-    end
-    
-    def owned?
-      false
     end
   end
 
@@ -311,7 +228,6 @@ class Thread
     def pop(non_block = false, timeout: nil)
       if @items.empty?
         raise ThreadError, "queue empty" if non_block
-        # With timeout, return nil (no threading in monoruby)
         return nil
       end
       @items.shift
@@ -360,8 +276,6 @@ class Thread
   end
 end
 
-# Top-level aliases (CRuby compatibility)
-class ThreadError < StandardError; end unless defined?(::ThreadError)
 Queue = Thread::Queue
 
 class Exception

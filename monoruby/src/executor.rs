@@ -2,10 +2,12 @@ use super::*;
 
 mod constants;
 pub mod frame;
+pub mod gvl;
 pub mod inline;
 pub mod op;
 pub use codegen::*;
 pub use frame::*;
+pub use gvl::*;
 pub use op::*;
 use ruruby_parse::{Loc, SourceInfoRef};
 
