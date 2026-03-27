@@ -53,6 +53,9 @@ pub(super) fn init(globals: &mut Globals) {
         &[],
         true,
     );
+    globals.define_builtin_func(OBJECT_CLASS, "freeze", freeze, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "frozen?", frozen, 0);
+
     globals.define_private_builtin_func_rest(
         BASIC_OBJECT_CLASS,
         "method_missing",
@@ -91,6 +94,34 @@ fn bo_initialize(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn bo_noop_hook(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::nil())
+}
+
+///
+/// ### Object#freeze
+///
+/// - freeze -> self
+///
+/// Freezes the object, preventing further modification.
+///
+#[monoruby_builtin]
+fn freeze(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    if !self_val.is_packed_value() {
+        self_val.set_frozen();
+    }
+    Ok(self_val)
+}
+
+///
+/// ### Object#frozen?
+///
+/// - frozen? -> bool
+///
+/// Returns true if the object is frozen.
+///
+#[monoruby_builtin]
+fn frozen(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().is_frozen()))
 }
 
 ///

@@ -290,6 +290,38 @@ impl Value {
         self.try_rvalue().map(|rv| rv.ty())
     }
 
+    ///
+    /// Returns true if `self` is frozen.
+    ///
+    /// Packed values (Fixnum, Symbol, true, false, nil) are always frozen.
+    ///
+    pub(crate) fn is_frozen(&self) -> bool {
+        match self.try_rvalue() {
+            Some(rv) => rv.is_frozen(),
+            None => true, // packed values are always frozen
+        }
+    }
+
+    ///
+    /// Set the frozen flag on `self`.
+    ///
+    /// Panics if `self` is a packed value (they are always frozen).
+    ///
+    pub(crate) fn set_frozen(&mut self) {
+        self.rvalue_mut().set_frozen()
+    }
+
+    ///
+    /// Ensure `self` is not frozen. Returns FrozenError if it is.
+    ///
+    pub(crate) fn ensure_not_frozen(&self, store: &Store) -> Result<()> {
+        if self.is_frozen() {
+            Err(MonorubyErr::cant_modify_frozen(store, *self))
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) fn change_class(&mut self, new_class_id: ClassId) {
         if let Some(rv) = self.try_rvalue_mut() {
             rv.change_class(new_class_id);

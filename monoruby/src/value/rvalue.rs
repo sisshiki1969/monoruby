@@ -45,6 +45,7 @@ mod regexp;
 mod string;
 
 pub const OBJECT_INLINE_IVAR: usize = 6;
+pub const RVALUE_OFFSET_FLAG: usize = std::mem::offset_of!(RValue, header.meta.flag);
 pub const RVALUE_OFFSET_TY: usize = std::mem::offset_of!(RValue, header.meta.ty);
 pub const RVALUE_OFFSET_CLASS: usize = std::mem::offset_of!(RValue, header.meta.class);
 pub const RVALUE_OFFSET_VAR: usize = std::mem::offset_of!(RValue, var_table);
@@ -717,6 +718,14 @@ impl RValue {
         self.header.ty()
     }
 
+    pub(crate) fn is_frozen(&self) -> bool {
+        self.header.is_frozen()
+    }
+
+    pub(crate) fn set_frozen(&mut self) {
+        self.header.set_frozen()
+    }
+
     pub(crate) unsafe fn try_ty(&self) -> Option<ObjTy> {
         unsafe { self.header.meta.ty }
     }
@@ -888,8 +897,11 @@ impl RValue {
     }
 
     pub(super) fn dup(&self) -> Self {
+        let mut header = self.header;
+        // dup does not copy the frozen flag (clone does).
+        unsafe { header.meta.flag &= !0b10 };
         RValue {
-            header: self.header,
+            header,
             var_table: self.var_table.clone(),
             kind: unsafe {
                 if let Some(ty) = self.try_ty() {
@@ -1651,6 +1663,14 @@ impl Header {
 
     fn is_live(&self) -> bool {
         unsafe { self.meta.flag & 0b1 == 1 && self.meta.ty.is_some() }
+    }
+
+    fn is_frozen(&self) -> bool {
+        unsafe { self.meta.flag & 0b10 != 0 }
+    }
+
+    fn set_frozen(&mut self) {
+        unsafe { self.meta.flag |= 0b10 }
     }
 
     fn class(&self) -> ClassId {

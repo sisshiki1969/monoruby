@@ -531,14 +531,6 @@ class String
     self
   end
 
-  def freeze
-    self
-  end
-
-  def frozen?
-    true
-  end
-
   def encode(*args, **opts)
     if opts[:xml] == :attr
       s = gsub("&", "&amp;")
