@@ -1434,6 +1434,7 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/sub=21.html]
 #[monoruby_builtin]
 fn sub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_ = lfp.self_val();
     let (res, changed) = sub_main(vm, globals, self_, lfp)?;
     self_.replace_string(res);
@@ -1489,6 +1490,7 @@ fn gsub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/gsub=21.html]
 #[monoruby_builtin]
 fn gsub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_ = lfp.self_val();
     let (res, changed) = gsub_main(vm, globals, self_, lfp)?;
     self_.replace_string(res);
@@ -2002,6 +2004,7 @@ fn getbyte(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/setbyte.html]
 #[monoruby_builtin]
 fn setbyte(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_ = lfp.self_val();
     let byte_val = lfp.arg(1).coerce_to_int(vm, globals)?;
     let s = self_.as_rstring_inner();
@@ -2154,6 +2157,7 @@ fn bytesplice(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let arg_count = if lfp.try_arg(4).is_some() {
         5
     } else if lfp.try_arg(3).is_some() {
@@ -2667,6 +2671,7 @@ fn upcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase=21.html]
 #[monoruby_builtin]
 fn upcase_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?.to_uppercase();
     let changed = &s != self_val.expect_str(globals)?;
@@ -2705,6 +2710,7 @@ fn downcase_(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?.to_lowercase();
     let changed = &s != self_val.expect_str(globals)?;
@@ -2762,6 +2768,7 @@ fn capitalize_(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
     let mut result = String::with_capacity(s.len());
@@ -2832,6 +2839,7 @@ fn swapcase_(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
     let mut result = String::with_capacity(s.len());
@@ -3114,6 +3122,7 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/replace.html]
 #[monoruby_builtin]
 fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let s = lfp.arg(0).coerce_to_string(vm, globals)?;
     lfp.self_val().replace_str(&s);
     Ok(lfp.self_val())
@@ -3218,6 +3227,7 @@ fn next(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/next=21.html]
 #[monoruby_builtin]
 fn next_mut(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_ = lfp.self_val();
     let recv = self_.expect_str(globals)?;
     let new_str = str_next(recv);
@@ -3340,6 +3350,7 @@ fn force_encoding(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let arg0 = lfp.arg(0);
     let enc = if let Some(s) = arg0.is_str() {
         Encoding::try_from_str(s)?
