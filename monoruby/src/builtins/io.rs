@@ -174,10 +174,10 @@ fn print(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/printf.html]
 #[monoruby_builtin]
-fn printf(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let format_str = lfp.arg(0).coerce_to_string(vm, globals)?;
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
-    let format_str = lfp.arg(0).expect_string(globals)?;
     let args = lfp.arg(1).as_array();
 
     let buf = globals.format_by_args(&format_str, &args)?;
@@ -367,12 +367,12 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/read.html]
 #[monoruby_builtin]
 fn io_class_read(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let filename = lfp.arg(0).expect_string(globals)?;
+    let filename = lfp.arg(0).coerce_to_string(vm, globals)?;
     let mut file = match File::open(&filename) {
         Ok(file) => file,
         Err(_) => {

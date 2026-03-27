@@ -760,7 +760,7 @@ fn kernel_array(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require.html]
 #[monoruby_builtin]
 fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let feature = lfp.arg(0).expect_string(globals)?;
+    let feature = lfp.arg(0).coerce_to_string(vm, globals)?;
     let file_name = std::path::PathBuf::from(feature);
     let b = vm.require(globals, &file_name, false)?;
     Ok(Value::bool(b))
@@ -781,7 +781,7 @@ fn require_relative(
 ) -> Result<Value> {
     let mut file_name: std::path::PathBuf = globals.current_source_path(vm).into();
     file_name.pop();
-    let feature = std::path::PathBuf::from(lfp.arg(0).expect_string(globals)?);
+    let feature = std::path::PathBuf::from(lfp.arg(0).coerce_to_string(vm, globals)?);
     file_name.extend(&feature);
     file_name.set_extension("rb");
     let b = vm.require(globals, &file_name, true)?;
@@ -796,7 +796,7 @@ fn require_relative(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/load.html]
 #[monoruby_builtin]
 fn load_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let file_name = std::path::PathBuf::from(lfp.arg(0).expect_string(globals)?);
+    let file_name = std::path::PathBuf::from(lfp.arg(0).coerce_to_string(vm, globals)?);
     let wrap = lfp.try_arg(1).map(|v| v.as_bool()).unwrap_or(false);
     vm.load(globals, &file_name, wrap)?;
     Ok(Value::bool(true))
@@ -827,7 +827,7 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/eval.html]
 #[monoruby_builtin]
 fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let expr = lfp.arg(0).expect_string(globals)?;
+    let expr = lfp.arg(0).coerce_to_string(vm, globals)?;
     let cfp = vm.cfp();
     let caller_cfp = cfp.prev().unwrap();
     let fname = if let Some(f) = lfp.try_arg(2) {
@@ -886,13 +886,13 @@ fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/system.html]
 #[monoruby_builtin]
-fn system(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::process::Command;
     let arg0 = lfp.arg(0);
     let (program, mut args) = prepare_command_arg(arg0.as_str());
     if let Some(arg1) = lfp.try_arg(1) {
         for v in arg1.as_array().iter() {
-            args.push(v.expect_string(globals)?);
+            args.push(v.coerce_to_string(vm, globals)?);
         }
     }
     Ok(match Command::new(program).args(&args).status() {
@@ -908,14 +908,14 @@ fn system(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/exec.html]
 #[monoruby_builtin]
-fn exec(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn exec(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::ffi::CString;
     let args = lfp.arg(0).as_array();
     // Filter out trailing Hash arguments (keyword args like close_others:)
     let str_args: Vec<String> = args
         .iter()
         .filter(|v| v.try_hash_ty().is_none())
-        .map(|v| v.expect_string(globals))
+        .map(|v| v.coerce_to_string(vm, globals))
         .collect::<Result<Vec<_>>>()?;
     if str_args.is_empty() {
         return Err(MonorubyErr::argumenterr(

@@ -147,11 +147,11 @@ fn exception_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/s/exception.html]
 #[monoruby_builtin]
-fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let class_id = self_.real_class(&globals.store).id();
     let message = if let Some(msg) = lfp.try_arg(0) {
-        msg.expect_string(globals)?
+        msg.coerce_to_string(vm, globals)?
     } else {
         globals.store.get_class_name(class_id)
     };

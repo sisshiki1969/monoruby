@@ -76,14 +76,13 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/write.html]
 #[monoruby_builtin]
 fn file_write(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let self_ = lfp.arg(0);
-    let name = self_.expect_str(globals)?;
-    let mut file = match File::create(name) {
+    let name = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let mut file = match File::create(&name) {
         Ok(file) => file,
         Err(err) => return Err(MonorubyErr::runtimeerr(format!("{}: {:?}", name, err))),
     };
@@ -310,7 +309,7 @@ fn dirname(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn basename(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let filename = lfp.arg(0).coerce_to_path_rstring(vm, globals)?;
     let suffix = if let Some(arg1) = lfp.try_arg(1) {
-        let s = arg1.expect_str(globals)?;
+        let s = arg1.coerce_to_string(vm, globals)?;
         if s.is_empty() {
             None
         } else {
@@ -445,15 +444,16 @@ fn path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/realpath.html]
 #[monoruby_builtin]
-fn realpath(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn realpath(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut pathname = if let Some(arg1) = lfp.try_arg(1) {
-        let path = std::path::PathBuf::from(arg1.expect_string(globals)?);
+        let path_str = arg1.coerce_to_string(vm, globals)?;
+        let path = std::path::PathBuf::from(&path_str);
         match path.canonicalize() {
             Ok(path) => path,
             Err(err) => {
                 return Err(MonorubyErr::argumenterr(format!(
                     "{}:{}",
-                    arg1.as_str(),
+                    path_str,
                     err
                 )));
             }
@@ -466,7 +466,7 @@ fn realpath(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             }
         }
     };
-    pathname.push(std::path::PathBuf::from(lfp.arg(0).expect_string(globals)?));
+    pathname.push(std::path::PathBuf::from(lfp.arg(0).coerce_to_string(vm, globals)?));
     match pathname.canonicalize() {
         Ok(file) => Ok(Value::string(file.to_string_lossy().to_string())),
         Err(err) => Err(MonorubyErr::argumenterr(format!(
@@ -487,7 +487,7 @@ fn realpath(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mode = if let Some(arg1) = lfp.try_arg(1) {
-        arg1.expect_string(globals)?
+        arg1.coerce_to_string(vm, globals)?
     } else {
         "r".to_string()
     };
@@ -605,8 +605,8 @@ fn fnmatch(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let pattern = lfp.arg(0).expect_string(globals)?;
-    let path_str = lfp.arg(1).expect_string(globals)?;
+    let pattern = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let path_str = lfp.arg(1).coerce_to_string(vm, globals)?;
     let flags = if let Some(arg2) = lfp.try_arg(2) {
         arg2.coerce_to_int(vm, globals)? as u32
     } else {
@@ -770,12 +770,12 @@ fn absolute_path(
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/absolute_path=3f.html]
 #[monoruby_builtin]
 fn absolute_path_(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let file_name = lfp.arg(0).expect_string(globals)?;
+    let file_name = lfp.arg(0).coerce_to_string(vm, globals)?;
     Ok(Value::bool(file_name.starts_with('/')))
 }
 
