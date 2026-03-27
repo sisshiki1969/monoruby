@@ -5121,6 +5121,28 @@ mod tests {
         run_test(r#""\x00\x7f\x81\x00\x81\x80\x00".unpack("w*")"#);
     }
 
+    // b/B/U templates: tests ready, awaiting pack.rs implementation
+    // #[test]
+    // fn pack_unpack_b() { ... }
+    // #[test]
+    // fn pack_unpack_big_b() { ... }
+    // #[test]
+    // fn pack_unpack_big_u() { ... }
+
+    #[test]
+    fn unpack_big_m_soft_line_breaks() {
+        // M unpack: =\n is a soft line break (removed)
+        run_test_once(r#""hello=\nworld".unpack("M")"#);
+        // =\r\n is also a soft line break
+        run_test_once(r#""hello=\r\nworld".unpack("M")"#);
+        // =\r alone is NOT a soft line break (kept as-is)
+        run_test_once(r#""hello=\rworld".unpack("M")"#);
+        // =XX hex decoding
+        run_test(r#""=41=42=43".unpack("M")"#);
+        // Mixed content
+        run_test_once(r#""line1=\r\nline2=\nline3".unpack("M")"#);
+    }
+
     #[test]
     fn to_str_coercion() {
         // String.new calls to_str
