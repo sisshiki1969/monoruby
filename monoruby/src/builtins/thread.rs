@@ -15,10 +15,23 @@ enum ThreadResult {
     Err(MonorubyErrKind, String),
 }
 
+/// Runtime status of a thread (for Thread#status).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ThreadRunState {
+    Run,
+    Sleep,
+}
+
 /// Thread handle state shared between the spawning thread and the spawned thread.
 struct ThreadState {
     result: Mutex<ThreadResult>,
     done: Condvar,
+    /// Flag to request the thread to terminate. Protected by `killed` mutex.
+    killed: Mutex<bool>,
+    /// Notified when `killed` is set to true, to wake up sleeping threads.
+    kill_notify: Condvar,
+    /// Current runtime state (run/sleep). Accessed atomically via Mutex.
+    run_state: Mutex<ThreadRunState>,
 }
 
 // SAFETY: ThreadResult stores a u64 (Value bits) or a cloneable error.
@@ -59,6 +72,33 @@ thread_local! {
     /// The current thread's Thread object, stored as raw u64 bits.
     /// 0 means not set (use the main thread from global variable).
     static CURRENT_THREAD: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The current thread's ThreadState, for checking kill flag during sleep.
+    static CURRENT_THREAD_STATE: std::cell::RefCell<Option<Arc<ThreadState>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Perform an interruptible sleep. Returns true if killed during sleep.
+pub(crate) fn thread_sleep(dur: std::time::Duration) {
+    let state = CURRENT_THREAD_STATE.with(|s| s.borrow().clone());
+    if let Some(state) = state {
+        // Mark the thread as sleeping.
+        *state.run_state.lock().unwrap() = ThreadRunState::Sleep;
+        // Use condvar wait with timeout so the thread can be woken by kill.
+        let killed = state.killed.lock().unwrap();
+        if !*killed {
+            let _guard = state.kill_notify.wait_timeout(killed, dur).unwrap().0;
+            drop(_guard);
+        }
+        // Mark the thread as running again.
+        *state.run_state.lock().unwrap() = ThreadRunState::Run;
+    } else {
+        // Main thread: just sleep normally.
+        std::thread::sleep(dur);
+    }
+}
+
+fn set_current_thread_state(state: Arc<ThreadState>) {
+    CURRENT_THREAD_STATE.with(|s| *s.borrow_mut() = Some(state));
 }
 
 fn set_current_thread(val: Value) {
@@ -93,6 +133,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(THREAD_CLASS, "pass", thread_pass, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "main", thread_main, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "list", thread_list, 0);
+    globals.define_builtin_class_func(THREAD_CLASS, "stop", thread_stop_class, 0);
 
     globals.define_builtin_func(THREAD_CLASS, "join", thread_join, 0);
     globals.define_builtin_func(THREAD_CLASS, "value", thread_value, 0);
@@ -100,8 +141,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(THREAD_CLASS, "stop?", thread_stop, 0);
     globals.define_builtin_func(THREAD_CLASS, "status", thread_status, 0);
     globals.define_builtin_func(THREAD_CLASS, "kill", thread_kill, 0);
+    globals.define_builtin_func(THREAD_CLASS, "exit", thread_kill, 0);
+    globals.define_builtin_func(THREAD_CLASS, "terminate", thread_kill, 0);
+    globals.define_builtin_class_func(THREAD_CLASS, "kill", thread_kill_class, 1);
     globals.define_builtin_func(THREAD_CLASS, "[]", thread_aref, 1);
     globals.define_builtin_func(THREAD_CLASS, "[]=", thread_aset, 2);
+    globals.define_builtin_func(THREAD_CLASS, "wakeup", thread_wakeup, 0);
+    globals.define_builtin_func(THREAD_CLASS, "run", thread_wakeup, 0);
+    globals.define_builtin_func(THREAD_CLASS, "report_on_exception=", thread_report_on_exception_set, 1);
     globals.define_builtin_func(THREAD_CLASS, "thread_variable_get", thread_variable_get, 1);
     globals.define_builtin_func(THREAD_CLASS, "thread_variable_set", thread_variable_set, 2);
 
@@ -135,6 +182,9 @@ fn create_main_thread(globals: &mut Globals) -> Value {
     let state = Arc::new(ThreadState {
         result: Mutex::new(ThreadResult::Running),
         done: Condvar::new(),
+        killed: Mutex::new(false),
+        kill_notify: Condvar::new(),
+        run_state: Mutex::new(ThreadRunState::Run),
     });
     THREAD_TABLE.lock().unwrap().insert(thread_id, state);
 
@@ -195,6 +245,9 @@ fn thread_new(
     let state = Arc::new(ThreadState {
         result: Mutex::new(ThreadResult::Running),
         done: Condvar::new(),
+        killed: Mutex::new(false),
+        kill_notify: Condvar::new(),
+        run_state: Mutex::new(ThreadRunState::Run),
     });
     THREAD_TABLE.lock().unwrap().insert(thread_id, state.clone());
 
@@ -224,14 +277,18 @@ fn thread_new(
     let proc_data_ptr = Box::into_raw(proc_data) as usize;
     let thread_val_bits = thread_val.id();
 
+    let state_for_tls = state.clone();
     std::thread::spawn(move || {
         // Mark this as a spawned thread (disables JIT compilation).
         crate::codegen::set_spawned_thread();
+        // Set the thread state for interruptible sleep.
+        set_current_thread_state(state_for_tls);
 
         gvl_acquire();
 
         // Set the current thread object for Thread.current.
         set_current_thread(Value::from_u64(thread_val_bits));
+        set_current_tid(thread_id);
 
         // SAFETY: We hold the GVL, so we have exclusive access to Globals.
         let globals = unsafe { &mut *(globals_ptr as *mut Globals) };
@@ -253,13 +310,16 @@ fn thread_new(
         );
 
         let mut res = state.result.lock().unwrap();
-        match result {
-            Some(val) => {
-                *res = ThreadResult::Ok(val.id());
-            }
-            None => {
-                let err = executor.take_error();
-                *res = ThreadResult::Err(err.kind.clone(), err.message.clone());
+        // Only set the result if it hasn't been set by kill.
+        if matches!(*res, ThreadResult::Running) {
+            match result {
+                Some(val) => {
+                    *res = ThreadResult::Ok(val.id());
+                }
+                None => {
+                    let err = executor.take_error();
+                    *res = ThreadResult::Err(err.kind.clone(), err.message.clone());
+                }
             }
         }
         drop(res);
@@ -425,7 +485,13 @@ fn thread_status(
     if let Some(state) = table.get(&thread_id) {
         let result = state.result.lock().unwrap();
         match &*result {
-            ThreadResult::Running => Ok(Value::string_from_str("run")),
+            ThreadResult::Running => {
+                let run_state = *state.run_state.lock().unwrap();
+                match run_state {
+                    ThreadRunState::Run => Ok(Value::string_from_str("run")),
+                    ThreadRunState::Sleep => Ok(Value::string_from_str("sleep")),
+                }
+            }
             ThreadResult::Ok(_) => Ok(Value::bool(false)),
             ThreadResult::Err(..) => Ok(Value::nil()),
         }
@@ -434,14 +500,164 @@ fn thread_status(
     }
 }
 
+/// Helper to kill a thread by its ID. Sets the result to Ok(nil) if still running,
+/// and wakes the thread if it is sleeping.
+fn do_kill_thread(thread_id: u64) {
+    let table = THREAD_TABLE.lock().unwrap();
+    if let Some(state) = table.get(&thread_id) {
+        // Set the killed flag and notify to wake sleeping threads.
+        {
+            let mut killed = state.killed.lock().unwrap();
+            *killed = true;
+        }
+        state.kill_notify.notify_all();
+
+        // Set the result to nil (thread was killed).
+        let mut result = state.result.lock().unwrap();
+        if matches!(*result, ThreadResult::Running) {
+            *result = ThreadResult::Ok(Value::nil().id());
+        }
+        drop(result);
+        state.done.notify_all();
+    }
+}
+
+/// Check if the current thread has been killed.
+fn is_current_thread_killed() -> bool {
+    CURRENT_THREAD_STATE.with(|s| {
+        if let Some(state) = s.borrow().as_ref() {
+            *state.killed.lock().unwrap()
+        } else {
+            false
+        }
+    })
+}
+
+/// Get the current thread's ID from thread-local storage.
+fn current_thread_id() -> u64 {
+    let bits = CURRENT_THREAD.with(|c| c.get());
+    // 0 means main thread
+    if bits == 0 {
+        0
+    } else {
+        // We can't call get_thread_id without globals, so we use the thread-local ID.
+        // Store it in a separate thread-local for simplicity.
+        CURRENT_TID.with(|c| c.get())
+    }
+}
+
+thread_local! {
+    static CURRENT_TID: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn set_current_tid(id: u64) {
+    CURRENT_TID.with(|c| c.set(id));
+}
+
 #[monoruby_builtin]
 fn thread_kill(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let thread_id = get_thread_id(globals, self_val);
+
+    if thread_id == 0 {
+        // Killing the main thread exits the process.
+        std::process::exit(0);
+    }
+
+    do_kill_thread(thread_id);
+
+    // If killing the current thread (self-kill), abort execution.
+    if thread_id == current_thread_id() {
+        return Err(MonorubyErr::runtimeerr("thread killed"));
+    }
+
+    Ok(self_val)
+}
+
+///
+/// ### Thread.kill(thread)
+///
+#[monoruby_builtin]
+fn thread_kill_class(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let thread_val = lfp.arg(0);
+    let thread_id = get_thread_id(globals, thread_val);
+
+    if thread_id == 0 {
+        std::process::exit(0);
+    }
+
+    do_kill_thread(thread_id);
+    Ok(thread_val)
+}
+
+///
+/// ### Thread.stop
+///
+/// Suspends the current thread until woken by Thread#wakeup or Thread#run.
+///
+#[monoruby_builtin]
+fn thread_stop_class(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    crate::executor::gvl::without_gvl(|| {
+        thread_sleep(std::time::Duration::from_secs(u64::MAX));
+    });
+    Ok(Value::nil())
+}
+
+///
+/// ### Thread#wakeup / Thread#run
+///
+/// Wakes a sleeping thread.
+///
+#[monoruby_builtin]
+fn thread_wakeup(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let thread_id = get_thread_id(globals, self_val);
+
+    let table = THREAD_TABLE.lock().unwrap();
+    if let Some(state) = table.get(&thread_id) {
+        let result = state.result.lock().unwrap();
+        if !matches!(*result, ThreadResult::Running) {
+            return Err(MonorubyErr::threaderror("killed thread"));
+        }
+        drop(result);
+        // Wake the thread from sleep.
+        state.kill_notify.notify_all();
+    } else {
+        return Err(MonorubyErr::threaderror("killed thread"));
+    }
+
+    Ok(self_val)
+}
+
+/// Thread#report_on_exception= (no-op stub)
+#[monoruby_builtin]
+fn thread_report_on_exception_set(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(lfp.self_val())
+    Ok(lfp.arg(0))
 }
 
 #[monoruby_builtin]

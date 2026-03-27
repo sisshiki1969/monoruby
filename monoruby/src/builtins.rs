@@ -33,7 +33,7 @@ mod set;
 mod string;
 mod struct_class;
 mod symbol;
-mod thread;
+pub(crate) mod thread;
 mod time;
 mod true_class;
 

@@ -1039,12 +1039,11 @@ fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             ));
         }
         let dur = std::time::Duration::from_secs_f64(sec);
-        crate::executor::gvl::without_gvl(|| std::thread::sleep(dur));
+        crate::executor::gvl::without_gvl(|| crate::builtins::thread::thread_sleep(dur));
     } else {
-        // sleep without argument: block until interrupted.
-        // Release GVL so other threads can run.
+        // sleep without argument: block until interrupted (or killed).
         crate::executor::gvl::without_gvl(|| {
-            std::thread::sleep(std::time::Duration::from_secs(u64::MAX));
+            crate::builtins::thread::thread_sleep(std::time::Duration::from_secs(u64::MAX));
         });
     }
     let elapsed = now.elapsed().as_secs();
