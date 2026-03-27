@@ -62,7 +62,7 @@ impl IoInner {
             Self::Stderr => std::io::stderr().flush(),
             Self::File(file) => file.reader.get_ref().flush(),
             Self::Popen(_) => return Ok(()),
-            Self::Closed => return Err(MonorubyErr::runtimeerr("closed stream")),
+            Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
         };
         res.map_err(|err| MonorubyErr::runtimeerr(err.to_string()))
     }
@@ -74,7 +74,7 @@ impl IoInner {
     /// Close the IO. Returns (exit_status, pid) for Popen, None for others.
     pub fn close(&mut self) -> Result<Option<(i32, u32)>> {
         if self.is_closed() {
-            return Err(MonorubyErr::runtimeerr("closed stream"));
+            return Err(MonorubyErr::ioerr("closed stream"));
         }
         let popen_result = if let Self::Popen(popen) = self {
             let popen = Rc::get_mut(popen).unwrap();
@@ -132,7 +132,7 @@ impl IoInner {
 
     pub fn write(&mut self, data: &[u8]) -> Result<()> {
         match self {
-            Self::Closed => return Err(MonorubyErr::runtimeerr("closed stream")),
+            Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdin => Err(MonorubyErr::argumenterr("can't write to $stdin")),
             Self::Stdout => match std::io::stdout().write(data) {
                 Ok(_) => Ok(()),
@@ -167,7 +167,7 @@ impl IoInner {
 
     pub fn read(&mut self, length: Option<usize>) -> Result<Vec<u8>> {
         match self {
-            Self::Closed => return Err(MonorubyErr::runtimeerr("closed stream")),
+            Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdin => {
                 if let Some(length) = length {
                     let buf = match std::io::stdin().bytes().take(length).collect() {
@@ -225,7 +225,7 @@ impl IoInner {
 
     pub fn read_line(&mut self) -> Result<Option<String>> {
         match self {
-            Self::Closed => return Err(MonorubyErr::runtimeerr("closed stream")),
+            Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdin => {
                 let mut buf = String::new();
                 std::io::stdin()
@@ -276,10 +276,10 @@ impl IoInner {
                 } else if let Some(ref reader) = popen.reader {
                     Ok(reader.get_ref().as_raw_fd())
                 } else {
-                    Err(MonorubyErr::runtimeerr("closed stream"))
+                    Err(MonorubyErr::ioerr("closed stream"))
                 }
             }
-            Self::Closed => Err(MonorubyErr::runtimeerr("closed stream")),
+            Self::Closed => Err(MonorubyErr::ioerr("closed stream")),
         }
     }
 
