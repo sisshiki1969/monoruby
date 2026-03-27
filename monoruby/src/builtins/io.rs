@@ -1,6 +1,7 @@
 use super::*;
 use std::fs::File;
 use std::process::{Command, Stdio};
+use std::rc::Rc;
 
 //
 // IO class
@@ -18,6 +19,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "gets", gets, 0);
     globals.define_builtin_funcs(IO_CLASS, "isatty", &["tty?"], isatty, 0);
     globals.define_builtin_func(IO_CLASS, "close", close, 0);
+    globals.define_builtin_func(IO_CLASS, "close_write", close_write, 0);
+    globals.define_builtin_func(IO_CLASS, "close_read", close_read, 0);
     globals.define_builtin_func(IO_CLASS, "closed?", closed_, 0);
     globals.define_builtin_func(IO_CLASS, "sync", sync, 0);
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
@@ -253,6 +256,38 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// ### IO#closed?
 ///
+/// ### IO#close_write
+#[monoruby_builtin]
+fn close_write(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    match io {
+        IoInner::Popen(popen) => {
+            let popen = Rc::get_mut(popen).unwrap();
+            popen.writer = None;
+            Ok(Value::nil())
+        }
+        IoInner::Closed => Err(MonorubyErr::ioerr("closed stream")),
+        _ => Err(MonorubyErr::ioerr("closing non-duplex IO for writing")),
+    }
+}
+
+/// ### IO#close_read
+#[monoruby_builtin]
+fn close_read(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    match io {
+        IoInner::Popen(popen) => {
+            let popen = Rc::get_mut(popen).unwrap();
+            popen.reader = None;
+            Ok(Value::nil())
+        }
+        IoInner::Closed => Err(MonorubyErr::ioerr("closed stream")),
+        _ => Err(MonorubyErr::ioerr("closing non-duplex IO for reading")),
+    }
+}
+
 /// - closed? -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/closed=3f.html]
@@ -488,8 +523,25 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         cmd
     };
 
-    command.stdin(Stdio::null());
-    command.stdout(Stdio::piped());
+    // Parse mode: "r" (default), "w", "r+", "w+"
+    let mode = if args.len() > 1 {
+        args[1].coerce_to_str(vm, globals)?
+    } else {
+        "r".to_string()
+    };
+    let readable = mode.contains('r') || mode.contains('+');
+    let writable = mode.contains('w') || mode.contains('+');
+
+    if writable {
+        command.stdin(Stdio::piped());
+    } else {
+        command.stdin(Stdio::null());
+    }
+    if readable {
+        command.stdout(Stdio::piped());
+    } else {
+        command.stdout(Stdio::inherit());
+    }
     command.stderr(Stdio::inherit());
 
     let child = command
@@ -1094,6 +1146,30 @@ mod tests {
             fd = IO.sysopen("Cargo.toml", "r")
             raise "should be integer" unless fd.is_a?(Integer)
             raise "should be positive" unless fd > 0
+            "#,
+        );
+    }
+
+    #[test]
+    fn popen_rw_mode() {
+        run_test_once(
+            r#"
+            IO.popen("cat", "r+") do |io|
+              io.write("hello")
+              io.close_write
+              io.read
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn popen_write_mode() {
+        run_test_no_result_check(
+            r#"
+            IO.popen("cat > /dev/null", "w") do |io|
+              io.write("hello")
+            end
             "#,
         );
     }
