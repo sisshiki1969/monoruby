@@ -635,6 +635,10 @@ impl Codegen {
                 is_object_ty,
             } => self.store_self_ivar_heap(src, ivarid, is_object_ty),
             AsmInst::StoreIVarInline { src, ivarid } => self.store_ivar_object_inline(src, ivarid),
+            AsmInst::GuardFrozen { deopt } => {
+                let deopt = &labels[deopt];
+                self.guard_frozen(deopt);
+            }
 
             AsmInst::LoadCVar { name, using_xmm } => {
                 self.load_cvar(name, using_xmm);

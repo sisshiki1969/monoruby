@@ -38,6 +38,8 @@ impl<'a> JitContext<'a> {
         assert!(!self_class.is_always_frozen());
         let src = state.load_or_reg(ir, src, GP::Rax);
         ir.self2reg(GP::Rdi);
+        let deopt = ir.new_deopt(state);
+        ir.guard_frozen(deopt);
         let is_object_ty = self.self_ty() == Some(ObjTy::OBJECT);
         if is_object_ty && ivarid.is_inline() {
             ir.push(AsmInst::StoreIVarInline { src, ivarid });

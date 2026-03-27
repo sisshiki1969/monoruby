@@ -120,7 +120,8 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "class", class, 0);
     globals.define_builtin_func(kernel_class, "hash", hash, 0);
     globals.define_builtin_func(kernel_class, "eql?", eql_, 1);
-    globals.define_builtin_funcs(kernel_class, "dup", &["clone"], dup, 0);
+    globals.define_builtin_func(kernel_class, "dup", dup, 0);
+    globals.define_builtin_func(kernel_class, "clone", clone_val, 0);
     globals.define_private_builtin_func(kernel_class, "initialize_copy", initialize_copy, 1);
     globals.define_private_builtin_func(kernel_class, "initialize_clone", initialize_clone, 1);
     globals.define_private_builtin_func(kernel_class, "initialize_dup", initialize_clone, 1);
@@ -1671,6 +1672,22 @@ fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 #[monoruby_builtin]
 fn dup(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val().dup())
+}
+
+///
+/// ### Kernel#clone
+///
+/// - clone -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/clone.html]
+#[monoruby_builtin]
+fn clone_val(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(lfp.self_val().clone_value())
 }
 
 /// ### Kernel#define_singleton_method
