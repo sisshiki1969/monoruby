@@ -23,14 +23,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(klass, "euid", euid, 0);
     globals.define_builtin_module_func(klass, "last_status", last_status, 0);
 
-    // Process::Status class (minimal)
-    let status_class = globals.define_class("Status", object_class, klass).id();
-    globals.define_builtin_func(status_class, "exitstatus", status_exitstatus, 0);
-    globals.define_builtin_func(status_class, "success?", status_success, 0);
-    globals.define_builtin_func(status_class, "exited?", status_exited, 0);
-    globals.define_builtin_func(status_class, "signaled?", status_signaled, 0);
-    globals.define_builtin_func(status_class, "pid", status_pid, 0);
-    globals.define_builtin_func(status_class, "to_i", status_to_i, 0);
+    // Process::Status class — methods defined in Ruby (startup.rb)
+    globals.define_class("Status", object_class, klass);
 
     // Signal module
     let signal = globals.define_toplevel_module("Signal").id();
@@ -233,92 +227,6 @@ fn last_status(
 ) -> Result<Value> {
     let val = globals.get_gvar(IdentId::get_id("$?"));
     Ok(val.unwrap_or_default())
-}
-
-/// ### Process::Status#exitstatus
-#[monoruby_builtin]
-fn status_exitstatus(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let self_ = lfp.self_val();
-    Ok(globals
-        .store
-        .get_ivar(self_, IdentId::get_id("@exitstatus"))
-        .unwrap_or_default())
-}
-
-/// ### Process::Status#success?
-#[monoruby_builtin]
-fn status_success(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let status = globals
-        .store
-        .get_ivar(self_, IdentId::get_id("@exitstatus"))
-        .unwrap_or_default();
-    Ok(Value::bool(status.try_fixnum() == Some(0)))
-}
-
-/// ### Process::Status#exited?
-#[monoruby_builtin]
-fn status_exited(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    Ok(Value::bool(true))
-}
-
-/// ### Process::Status#signaled?
-#[monoruby_builtin]
-fn status_signaled(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    Ok(Value::bool(false))
-}
-
-/// ### Process::Status#pid
-#[monoruby_builtin]
-fn status_pid(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let self_ = lfp.self_val();
-    Ok(globals
-        .store
-        .get_ivar(self_, IdentId::get_id("@pid"))
-        .unwrap_or_default())
-}
-
-/// ### Process::Status#to_i
-#[monoruby_builtin]
-fn status_to_i(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let status = globals
-        .store
-        .get_ivar(self_, IdentId::get_id("@exitstatus"))
-        .unwrap_or_default();
-    let code = status.try_fixnum().unwrap_or(0);
-    // CRuby: to_i returns status << 8
-    Ok(Value::integer(code << 8))
 }
 
 /// - list -> Hash
