@@ -138,6 +138,7 @@ impl MonorubyErr {
             MonorubyErrKind::Load(_) => "LoadError",
             MonorubyErrKind::Regex => "RegexpError",
             MonorubyErrKind::Runtime => "RuntimeError",
+            MonorubyErrKind::IO => "IOError",
             MonorubyErrKind::Key => "KeyError",
             MonorubyErrKind::Fiber => "FiberError",
             MonorubyErrKind::StopIteration => "StopIteration",
@@ -167,6 +168,7 @@ impl MonorubyErr {
             MonorubyErrKind::Load(_) => LOAD_ERROR_CLASS,
             MonorubyErrKind::Regex => REGEX_ERROR_CLASS,
             MonorubyErrKind::Runtime => RUNTIME_ERROR_CLASS,
+            MonorubyErrKind::IO => IO_ERROR_CLASS,
             MonorubyErrKind::Key => KEY_ERROR_CLASS,
             MonorubyErrKind::Fiber => FIBER_ERROR_CLASS,
             MonorubyErrKind::StopIteration => STOP_ITERATION_CLASS,
@@ -585,6 +587,10 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Runtime, msg)
     }
 
+    pub(crate) fn ioerr(msg: impl ToString) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::IO, msg)
+    }
+
     pub(crate) fn rangeerr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Range, msg)
     }
@@ -620,6 +626,7 @@ pub enum MonorubyErrKind {
     Load(PathBuf),
     Regex,
     Runtime,
+    IO,
     Key,
     Fiber,
     StopIteration,
@@ -648,6 +655,7 @@ impl MonorubyErrKind {
             LOAD_ERROR_CLASS => MonorubyErrKind::Load(PathBuf::new()),
             REGEX_ERROR_CLASS => MonorubyErrKind::Regex,
             RUNTIME_ERROR_CLASS => MonorubyErrKind::Runtime,
+            IO_ERROR_CLASS => MonorubyErrKind::IO,
             KEY_ERROR_CLASS => MonorubyErrKind::Key,
             FIBER_ERROR_CLASS => MonorubyErrKind::Fiber,
             STOP_ITERATION_CLASS => MonorubyErrKind::StopIteration,
@@ -660,6 +668,21 @@ impl MonorubyErrKind {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn io_closed_error() {
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            w.close
+            begin
+                w.write("test")
+            rescue IOError => e
+                e.message
+            end
+        "#,
+        );
+    }
 
     #[test]
     fn error() {
