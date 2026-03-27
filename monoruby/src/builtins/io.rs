@@ -1062,4 +1062,15 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn io_sysopen() {
+        run_test_no_result_check(
+            r#"
+            fd = IO.sysopen("Cargo.toml", "r")
+            raise "should be integer" unless fd.is_a?(Integer)
+            raise "should be positive" unless fd > 0
+            "#,
+        );
+    }
 }
