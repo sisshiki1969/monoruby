@@ -16,10 +16,6 @@ class BasicObject
 end
 
 class Object
-  def freeze
-    self
-  end
-
   def initialize(...)
   end
 
@@ -31,7 +27,7 @@ class Object
   def itself
     self
   end
-  
+
   def then
     yield self
   end
@@ -43,10 +39,6 @@ class Object
 
   def <=>(other)
     0 if equal?(other)
-  end
-
-  def frozen?
-    false
   end
 end
 

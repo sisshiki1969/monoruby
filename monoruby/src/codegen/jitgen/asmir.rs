@@ -479,6 +479,13 @@ impl AsmIr {
     pub(crate) fn handle_error(&mut self, error: AsmError) {
         self.push(AsmInst::HandleError(error));
     }
+
+    ///
+    /// Guard that the object in *rdi* is not frozen.
+    ///
+    pub(crate) fn guard_frozen(&mut self, deopt: AsmDeopt) {
+        self.push(AsmInst::GuardFrozen { deopt });
+    }
 }
 
 //
@@ -1363,6 +1370,16 @@ pub(super) enum AsmInst {
     StoreIVarInline {
         src: GP,
         ivarid: IvarId,
+    },
+    ///
+    /// Guard that the object in *rdi* is not frozen.
+    /// If frozen, deoptimize to interpreter (which will raise FrozenError).
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    ///
+    GuardFrozen {
+        deopt: AsmDeopt,
     },
 
     /// rax = DynVar(src)
