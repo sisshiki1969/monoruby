@@ -66,13 +66,17 @@ fn mkdir(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     };
     match std::fs::DirBuilder::new().mode(mode).create(&path) {
         Ok(()) => Ok(Value::integer(0)),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            // CRuby raises Errno::EEXIST but monoruby doesn't have Errno error kinds yet.
-            // For now, return 0 if the directory already exists (matching mkdir_p behavior).
-            // This is necessary for mspec's tmp() helper which calls mkdir_p → Dir.mkdir.
-            Ok(Value::integer(0))
-        }
-        Err(e) => Err(MonorubyErr::runtimeerr(format!("Dir.mkdir: {}: {}", path, e))),
+        //Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+        //    // CRuby raises Errno::EEXIST but monoruby doesn't have Errno error kinds yet.
+        //    // For now, return 0 if the directory already exists (matching mkdir_p behavior).
+        //    // This is necessary for mspec's tmp() helper which calls mkdir_p → Dir.mkdir.
+        //    Ok(Value::integer(0))
+        //}
+        Err(e) => Err(MonorubyErr::runtimeerr(format!(
+            "{} @ dir_s_mkdir - {}",
+            e.to_string(),
+            path
+        ))),
     }
 }
 
@@ -579,8 +583,8 @@ fn entries(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         Value::string(".".to_string()),
         Value::string("..".to_string()),
     ];
-    for entry in std::fs::read_dir(&path)
-        .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?
+    for entry in
+        std::fs::read_dir(&path).map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?
     {
         let entry = entry.map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
         result.push(Value::string(
@@ -596,11 +600,11 @@ mod tests {
 
     #[test]
     fn exist() {
-        run_test(r#"Dir.exist?(".")"#);
-        run_test(r#"Dir.exist?("..")"#);
-        run_test(r#"Dir.exist?("src")"#);
-        run_test(r#"Dir.exist?("nonexistent_dir_xyz")"#);
-        run_test(r#"Dir.exist?("Cargo.toml")"#);
+        run_test_once(r#"Dir.exist?(".")"#);
+        run_test_once(r#"Dir.exist?("..")"#);
+        run_test_once(r#"Dir.exist?("src")"#);
+        run_test_once(r#"Dir.exist?("nonexistent_dir_xyz")"#);
+        run_test_once(r#"Dir.exist?("Cargo.toml")"#);
     }
 
     #[test]
@@ -635,7 +639,7 @@ mod tests {
     #[test]
     fn glob_extensions() {
         // sort: false — just verify it runs without error.
-        run_test_no_result_check(r#"Dir.glob("b*", sort: false)"#);
+        run_test_once(r#"Dir.glob("b*", sort: false).sort"#);
         // block form — verify it does not raise.
         run_test_once(r#"res = []; Dir.glob("b*") { |f| res << f.upcase }; res"#);
         // ** matches zero directories (direct child).
@@ -648,14 +652,14 @@ mod tests {
 
     #[test]
     fn home() {
-        run_test(r#"Dir.home"#);
+        run_test_once(r#"Dir.home"#);
     }
 
     #[test]
     fn pwd() {
-        run_test(r#"Dir.pwd"#);
-        run_test(r#"Dir.getwd"#);
-        run_test(
+        run_test_once(r#"Dir.pwd"#);
+        run_test_once(r#"Dir.getwd"#);
+        run_test_once(
             r##"
         $x = []
         $x << Dir.getwd
@@ -664,45 +668,34 @@ mod tests {
             $x << Dir.getwd
         end
         $x << Dir.getwd
+        $x
         "##,
         );
     }
 
     #[test]
     fn mkdir() {
-        // mkdir on existing directory should not error
-        run_test_no_result_check("Dir.mkdir('/tmp')");
+        // if the directory exists, CRuby raise Errno::EEXIST.
+        run_test_error("Dir.mkdir('/tmp')");
         // mkdir creates a new directory
-        run_test_no_result_check(
+        run_test_once(
             r#"
+            $x = []
             path = "/tmp/monoruby_test_mkdir_#{Process.pid}"
             Dir.mkdir(path)
-            Dir.exist?(path)
+            $x << Dir.exist?(path)
+            Dir.rmdir(path)
+            $x << Dir.exist?(path)
+            $x
             "#,
         );
     }
 
     #[test]
     fn dir_entries() {
-        run_test_no_result_check(
+        run_test_once(
             r#"
-            entries = Dir.entries(".")
-            raise "should include ." unless entries.include?(".")
-            raise "should include .." unless entries.include?("..")
-            raise "should be array" unless entries.is_a?(Array)
-            raise "should have entries" unless entries.length > 2
-            "#,
-        );
-    }
-
-    #[test]
-    fn rmdir() {
-        run_test_no_result_check(
-            r#"
-            path = "/tmp/monoruby_test_rmdir_#{Process.pid}"
-            Dir.mkdir(path)
-            Dir.rmdir(path)
-            Dir.exist?(path) == false
+            Dir.entries(".").sort
             "#,
         );
     }

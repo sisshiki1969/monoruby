@@ -159,7 +159,12 @@ fn process_exit_bang(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/clock_gettime.html]
 #[monoruby_builtin]
-fn clock_gettime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn clock_gettime(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let unit = if let Some(arg1) = lfp.try_arg(1) {
         match arg1.try_symbol() {
             Some(id) => id,
@@ -167,7 +172,7 @@ fn clock_gettime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
                 return Err(MonorubyErr::argumenterr(format!(
                     "unexpected unit: {}",
                     arg1.to_s(&globals.store)
-                )))
+                )));
             }
         }
     } else {
@@ -193,7 +198,7 @@ fn clock_gettime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
             return Err(MonorubyErr::argumenterr(format!(
                 "unexpected unit: {}",
                 lfp.arg(1).to_s(&globals.store)
-            )))
+            )));
         }
     })
 }
@@ -220,50 +225,97 @@ fn euid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/last_status.html]
 #[monoruby_builtin]
-fn last_status(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn last_status(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let val = globals.get_gvar(IdentId::get_id("$?"));
     Ok(val.unwrap_or_default())
 }
 
 /// ### Process::Status#exitstatus
 #[monoruby_builtin]
-fn status_exitstatus(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn status_exitstatus(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
-    Ok(globals.store.get_ivar(self_, IdentId::get_id("@exitstatus")).unwrap_or_default())
+    Ok(globals
+        .store
+        .get_ivar(self_, IdentId::get_id("@exitstatus"))
+        .unwrap_or_default())
 }
 
 /// ### Process::Status#success?
 #[monoruby_builtin]
-fn status_success(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn status_success(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
-    let status = globals.store.get_ivar(self_, IdentId::get_id("@exitstatus")).unwrap_or_default();
+    let status = globals
+        .store
+        .get_ivar(self_, IdentId::get_id("@exitstatus"))
+        .unwrap_or_default();
     Ok(Value::bool(status.try_fixnum() == Some(0)))
 }
 
 /// ### Process::Status#exited?
 #[monoruby_builtin]
-fn status_exited(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn status_exited(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(Value::bool(true))
 }
 
 /// ### Process::Status#signaled?
 #[monoruby_builtin]
-fn status_signaled(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn status_signaled(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(Value::bool(false))
 }
 
 /// ### Process::Status#pid
 #[monoruby_builtin]
-fn status_pid(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn status_pid(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
-    Ok(globals.store.get_ivar(self_, IdentId::get_id("@pid")).unwrap_or_default())
+    Ok(globals
+        .store
+        .get_ivar(self_, IdentId::get_id("@pid"))
+        .unwrap_or_default())
 }
 
 /// ### Process::Status#to_i
 #[monoruby_builtin]
-fn status_to_i(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn status_to_i(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
-    let status = globals.store.get_ivar(self_, IdentId::get_id("@exitstatus")).unwrap_or_default();
+    let status = globals
+        .store
+        .get_ivar(self_, IdentId::get_id("@exitstatus"))
+        .unwrap_or_default();
     let code = status.try_fixnum().unwrap_or(0);
     // CRuby: to_i returns status << 8
     Ok(Value::integer(code << 8))
@@ -356,7 +408,7 @@ mod tests {
 
     #[test]
     fn process_euid() {
-        run_test("Process.euid");
+        run_test_once("Process.euid");
     }
 
     #[test]

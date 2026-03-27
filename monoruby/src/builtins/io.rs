@@ -55,12 +55,7 @@ fn io_new(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr)
 
 /// ### IO.allocate
 #[monoruby_builtin]
-fn allocate(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     Ok(Value::new_io_with_class(IoInner::Closed, class_id))
 }
@@ -186,7 +181,6 @@ fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     Ok(Value::nil())
 }
 
-
 ///
 /// ### IO#flush
 ///
@@ -244,9 +238,17 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let status_class = vm
             .get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?
             .as_class();
-        let mut status_obj = Value::object(status_class.id());
-        globals.store.set_ivar(status_obj, IdentId::get_id("@exitstatus"), Value::integer(exit_status as i64));
-        globals.store.set_ivar(status_obj, IdentId::get_id("@pid"), Value::integer(pid as i64));
+        let status_obj = Value::object(status_class.id());
+        globals.store.set_ivar(
+            status_obj,
+            IdentId::get_id("@exitstatus"),
+            Value::integer(exit_status as i64),
+        )?;
+        globals.store.set_ivar(
+            status_obj,
+            IdentId::get_id("@pid"),
+            Value::integer(pid as i64),
+        )?;
         globals.set_gvar(IdentId::get_id("$?"), status_obj);
     }
     Ok(Value::nil())
@@ -411,15 +413,30 @@ fn io_sysopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     };
     let mut opts = std::fs::OpenOptions::new();
     match mode_str.as_str() {
-        "r" => { opts.read(true); }
-        "w" => { opts.write(true).create(true).truncate(true); }
-        "a" => { opts.append(true).create(true); }
-        "r+" => { opts.read(true).write(true); }
-        "w+" => { opts.read(true).write(true).create(true).truncate(true); }
-        "a+" => { opts.read(true).append(true).create(true); }
-        _ => { opts.read(true); }
+        "r" => {
+            opts.read(true);
+        }
+        "w" => {
+            opts.write(true).create(true).truncate(true);
+        }
+        "a" => {
+            opts.append(true).create(true);
+        }
+        "r+" => {
+            opts.read(true).write(true);
+        }
+        "w+" => {
+            opts.read(true).write(true).create(true).truncate(true);
+        }
+        "a+" => {
+            opts.read(true).append(true).create(true);
+        }
+        _ => {
+            opts.read(true);
+        }
     }
-    let file = opts.open(&path)
+    let file = opts
+        .open(&path)
         .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
     let fd = file.into_raw_fd();
     Ok(Value::integer(fd as i64))
@@ -459,10 +476,7 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 
     // Build the command from either a String or an Array of strings.
     let mut command = if let Some(ary) = cmd_val.try_array_ty() {
-        let parts: Vec<String> = ary
-            .iter()
-            .map(|v| v.to_s(globals))
-            .collect();
+        let parts: Vec<String> = ary.iter().map(|v| v.to_s(globals)).collect();
         if parts.is_empty() {
             return Err(MonorubyErr::argumenterr("popen: empty command array"));
         }
@@ -498,9 +512,17 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                 .ok()
                 .map(|v| v.as_class());
             if let Some(sc) = status_class {
-                let mut status_obj = Value::object(sc.id());
-                globals.store.set_ivar(status_obj, IdentId::get_id("@exitstatus"), Value::integer(exit_status as i64));
-                globals.store.set_ivar(status_obj, IdentId::get_id("@pid"), Value::integer(pid as i64));
+                let status_obj = Value::object(sc.id());
+                globals.store.set_ivar(
+                    status_obj,
+                    IdentId::get_id("@exitstatus"),
+                    Value::integer(exit_status as i64),
+                )?;
+                globals.store.set_ivar(
+                    status_obj,
+                    IdentId::get_id("@pid"),
+                    Value::integer(pid as i64),
+                )?;
                 globals.set_gvar(IdentId::get_id("$?"), status_obj);
             }
         }
@@ -530,7 +552,12 @@ fn io_pid(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/fileno.html]
 #[monoruby_builtin]
-fn io_fileno(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn io_fileno(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
     let fd = self_.as_io_inner().fileno()?;
     Ok(Value::integer(fd as i64))
@@ -542,7 +569,12 @@ fn io_fileno(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePt
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/write.html]
 #[monoruby_builtin]
-fn io_write_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn io_write_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     let args = lfp.arg(0).as_array();
@@ -566,7 +598,12 @@ fn io_write_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/syswrite.html]
 #[monoruby_builtin]
-fn io_syswrite(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn io_syswrite(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     let bytes = if let Some(b) = lfp.arg(0).try_bytes() {
@@ -603,12 +640,7 @@ fn value_to_fd(globals: &Globals, v: Value) -> Result<i32> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/select.html]
 #[monoruby_builtin]
-fn io_select(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn io_select(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let read_arg = lfp.arg(0);
     let write_arg = lfp.try_arg(1).unwrap_or(Value::nil());
     let error_arg = lfp.try_arg(2).unwrap_or(Value::nil());
@@ -639,27 +671,27 @@ fn io_select(
     let read_ios: Vec<Value> = if read_arg.is_nil() {
         vec![]
     } else {
-        let ary = read_arg.try_array_ty().ok_or_else(|| {
-            MonorubyErr::typeerr("no implicit conversion of Object into Array")
-        })?;
+        let ary = read_arg
+            .try_array_ty()
+            .ok_or_else(|| MonorubyErr::typeerr("no implicit conversion of Object into Array"))?;
         ary.to_vec()
     };
 
     let write_ios: Vec<Value> = if write_arg.is_nil() {
         vec![]
     } else {
-        let ary = write_arg.try_array_ty().ok_or_else(|| {
-            MonorubyErr::typeerr("no implicit conversion of Object into Array")
-        })?;
+        let ary = write_arg
+            .try_array_ty()
+            .ok_or_else(|| MonorubyErr::typeerr("no implicit conversion of Object into Array"))?;
         ary.to_vec()
     };
 
     let error_ios: Vec<Value> = if error_arg.is_nil() {
         vec![]
     } else {
-        let ary = error_arg.try_array_ty().ok_or_else(|| {
-            MonorubyErr::typeerr("no implicit conversion of Object into Array")
-        })?;
+        let ary = error_arg
+            .try_array_ty()
+            .ok_or_else(|| MonorubyErr::typeerr("no implicit conversion of Object into Array"))?;
         ary.to_vec()
     };
 
