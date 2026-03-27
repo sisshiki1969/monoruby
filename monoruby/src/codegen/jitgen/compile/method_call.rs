@@ -384,6 +384,8 @@ impl<'a> JitContext<'a> {
             return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
         };
         state.load(ir, recv, GP::Rdi);
+        let error = ir.new_error(state);
+        ir.guard_frozen(error);
         let src = state.load_or_reg(ir, args, GP::Rax);
         let is_object_ty = self.store[recv_class].is_object_ty_instance();
         let using_xmm = state.get_using_xmm();
