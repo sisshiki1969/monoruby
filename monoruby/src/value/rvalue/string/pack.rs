@@ -6,6 +6,8 @@ struct TemplateNode {
     endian: Endianness,
     /// repeat times. None for repeat until end.
     repeat: Option<usize>,
+    /// whether a count was explicitly given (vs. default of 1)
+    explicit_count: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -28,6 +30,10 @@ enum Template {
     Utf8,
     Null,
     Back,
+    Base64,
+    QuotedPrintable,
+    UuEncoded,
+    BerCompressedInt,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -58,6 +64,21 @@ impl<'a> ByteIter<'a> {
 
     fn is_empty(&self) -> bool {
         self.i >= self.slice.len()
+    }
+
+    fn remaining(&self) -> &'a [u8] {
+        &self.slice[self.i..]
+    }
+
+    fn advance(&mut self, n: usize) {
+        self.i = (self.i + n).min(self.slice.len());
+    }
+
+    fn take(&mut self, n: usize) -> &'a [u8] {
+        let end = (self.i + n).min(self.slice.len());
+        let slice = &self.slice[self.i..end];
+        self.i = end;
+        slice
     }
 
     fn back(&mut self) -> Option<()> {
@@ -244,6 +265,90 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
                     while b.back().is_some() {}
                 }
             }
+            Template::Ascii => {
+                // 'a' — arbitrary binary string (null padded on pack, raw bytes on unpack)
+                if let Some(count) = repeat {
+                    let bytes = b.take(count);
+                    ary.push(Value::bytes(bytes.to_vec()));
+                } else {
+                    let bytes = b.remaining().to_vec();
+                    b.advance(bytes.len());
+                    ary.push(Value::bytes(bytes));
+                }
+            }
+            Template::AsciiTrim => {
+                // 'A' — arbitrary binary string (space padded on pack, trailing spaces/nulls stripped on unpack)
+                if let Some(count) = repeat {
+                    let bytes = b.take(count);
+                    let mut end = bytes.len();
+                    while end > 0 && (bytes[end - 1] == b' ' || bytes[end - 1] == 0) {
+                        end -= 1;
+                    }
+                    ary.push(Value::bytes(bytes[..end].to_vec()));
+                } else {
+                    let bytes = b.remaining();
+                    let mut end = bytes.len();
+                    while end > 0 && (bytes[end - 1] == b' ' || bytes[end - 1] == 0) {
+                        end -= 1;
+                    }
+                    let result = bytes[..end].to_vec();
+                    b.advance(bytes.len());
+                    ary.push(Value::bytes(result));
+                }
+            }
+            Template::CString => {
+                // 'Z' — null-terminated string (on unpack, strips after first null)
+                if let Some(count) = repeat {
+                    let bytes = b.take(count);
+                    let end = bytes.iter().position(|&x| x == 0).unwrap_or(bytes.len());
+                    ary.push(Value::bytes(bytes[..end].to_vec()));
+                } else {
+                    // Z* — read to end, strip after first null
+                    let bytes = b.remaining();
+                    let end = bytes.iter().position(|&x| x == 0).unwrap_or(bytes.len());
+                    let result = bytes[..end].to_vec();
+                    b.advance(bytes.len());
+                    ary.push(Value::bytes(result));
+                }
+            }
+            Template::Base64 => {
+                // 'm' — Base64 decode
+                let data = b.remaining().to_vec();
+                b.advance(data.len());
+                let decoded = base64_decode(&data);
+                ary.push(Value::bytes(decoded));
+            }
+            Template::QuotedPrintable => {
+                // 'M' — MIME quoted-printable decode
+                let data = b.remaining().to_vec();
+                b.advance(data.len());
+                let decoded = qp_decode(&data);
+                ary.push(Value::bytes(decoded));
+            }
+            Template::UuEncoded => {
+                // 'u' — UU decode
+                let data = b.remaining().to_vec();
+                b.advance(data.len());
+                let decoded = uu_decode(&data);
+                ary.push(Value::bytes(decoded));
+            }
+            Template::BerCompressedInt => {
+                // 'w' — BER compressed integer
+                if let Some(count) = repeat {
+                    for _ in 0..count {
+                        if b.is_empty() {
+                            break;
+                        }
+                        let val = ber_decode(&mut b)?;
+                        ary.push(val);
+                    }
+                } else {
+                    while !b.is_empty() {
+                        let val = ber_decode(&mut b)?;
+                        ary.push(val);
+                    }
+                }
+            }
             _ => {
                 return Err(MonorubyErr::argumenterr(
                     "Currently, the template character is not supported.",
@@ -382,6 +487,146 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                     return Err(MonorubyErr::argumenterr("X outside of string"));
                 }
             }
+            Template::Ascii => {
+                // 'a' — arbitrary binary string (null padded)
+                if let Some(value) = iter.next() {
+                    let s = get_pack_string(store, *value)?;
+                    if let Some(count) = repeat {
+                        if s.len() >= count {
+                            packed.extend_from_slice(&s[..count]);
+                        } else {
+                            packed.extend_from_slice(&s);
+                            packed.resize(packed.len() + count - s.len(), 0);
+                        }
+                    } else {
+                        // a* — pack entire string
+                        packed.extend_from_slice(&s);
+                    }
+                } else {
+                    if let Some(count) = repeat {
+                        packed.resize(packed.len() + count, 0);
+                    }
+                }
+            }
+            Template::AsciiTrim => {
+                // 'A' — arbitrary binary string (space padded)
+                if let Some(value) = iter.next() {
+                    let s = get_pack_string(store, *value)?;
+                    if let Some(count) = repeat {
+                        if s.len() >= count {
+                            packed.extend_from_slice(&s[..count]);
+                        } else {
+                            packed.extend_from_slice(&s);
+                            packed.resize(packed.len() + count - s.len(), b' ');
+                        }
+                    } else {
+                        // A* — pack entire string
+                        packed.extend_from_slice(&s);
+                    }
+                } else {
+                    if let Some(count) = repeat {
+                        packed.resize(packed.len() + count, b' ');
+                    }
+                }
+            }
+            Template::CString => {
+                // 'Z' — null-terminated string
+                if let Some(value) = iter.next() {
+                    let s = get_pack_string(store, *value)?;
+                    if let Some(count) = repeat {
+                        // Zn — like 'a' but null-padded (same as 'a')
+                        if s.len() >= count {
+                            packed.extend_from_slice(&s[..count]);
+                        } else {
+                            packed.extend_from_slice(&s);
+                            packed.resize(packed.len() + count - s.len(), 0);
+                        }
+                    } else {
+                        // Z* — string + null terminator
+                        packed.extend_from_slice(&s);
+                        packed.push(0);
+                    }
+                } else {
+                    if let Some(count) = repeat {
+                        packed.resize(packed.len() + count, 0);
+                    } else {
+                        packed.push(0);
+                    }
+                }
+            }
+            Template::Base64 => {
+                // 'm' — Base64 encode
+                if let Some(value) = iter.next() {
+                    let s = get_pack_string(store, *value)?;
+                    let line_len = if template.explicit_count {
+                        repeat.unwrap_or(45)
+                    } else {
+                        45
+                    };
+                    let encoded = base64_encode(&s, line_len);
+                    packed.extend_from_slice(encoded.as_bytes());
+                } else {
+                    return Err(MonorubyErr::argumenterr("too few arguments"));
+                }
+            }
+            Template::QuotedPrintable => {
+                // 'M' — MIME quoted-printable encode
+                if let Some(value) = iter.next() {
+                    let s = get_pack_string(store, *value)?;
+                    let line_len = if template.explicit_count {
+                        repeat.unwrap_or(72)
+                    } else {
+                        72
+                    };
+                    let encoded = qp_encode(&s, line_len);
+                    packed.extend_from_slice(encoded.as_bytes());
+                } else {
+                    return Err(MonorubyErr::argumenterr("too few arguments"));
+                }
+            }
+            Template::UuEncoded => {
+                // 'u' — UU encode
+                if let Some(value) = iter.next() {
+                    let s = get_pack_string(store, *value)?;
+                    let line_len = if template.explicit_count {
+                        repeat.unwrap_or(45)
+                    } else {
+                        45
+                    };
+                    let encoded = uu_encode(&s, line_len);
+                    packed.extend_from_slice(encoded.as_bytes());
+                } else {
+                    return Err(MonorubyErr::argumenterr("too few arguments"));
+                }
+            }
+            Template::BerCompressedInt => {
+                // 'w' — BER compressed integer
+                if let Some(count) = repeat {
+                    for _ in 0..count {
+                        if let Some(value) = iter.next() {
+                            let i = value.coerce_to_i64(store)?;
+                            if i < 0 {
+                                return Err(MonorubyErr::argumenterr(
+                                    "can't compress negative numbers",
+                                ));
+                            }
+                            ber_encode(&mut packed, i as u64);
+                        } else {
+                            return Err(MonorubyErr::argumenterr("too few arguments"));
+                        }
+                    }
+                } else {
+                    while let Some(value) = iter.next() {
+                        let i = value.coerce_to_i64(store)?;
+                        if i < 0 {
+                            return Err(MonorubyErr::argumenterr(
+                                "can't compress negative numbers",
+                            ));
+                        }
+                        ber_encode(&mut packed, i as u64);
+                    }
+                }
+            }
             _ => {
                 return Err(MonorubyErr::argumenterr(
                     "Currently, the template character is not supported.",
@@ -425,6 +670,10 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
             'U' => (Template::Utf8, Endianness::Little),
             'x' => (Template::Null, Endianness::Little),
             'X' => (Template::Back, Endianness::Little),
+            'm' => (Template::Base64, Endianness::Little),
+            'M' => (Template::QuotedPrintable, Endianness::Little),
+            'u' => (Template::UuEncoded, Endianness::Little),
+            'w' => (Template::BerCompressedInt, Endianness::Little),
             _ => {
                 return Err(MonorubyErr::argumenterr(format!(
                     "String#pack/unpack Unknown template: {template}",
@@ -441,6 +690,7 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
                 template,
                 endian,
                 repeat: None,
+                explicit_count: true,
             });
         } else if let Some(d1) = iter.next_if(|c| c.is_ascii_digit()) {
             let mut count = (d1 as u32 - '0' as u32) as usize;
@@ -451,14 +701,325 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
                 template,
                 endian,
                 repeat: Some(count),
+                explicit_count: true,
             });
         } else {
             temp.push(TemplateNode {
                 template,
                 endian,
                 repeat: Some(1),
+                explicit_count: false,
             });
         }
     }
     Ok(temp)
+}
+
+/// Get bytes from a Value for pack string templates (a/A/Z/m/M/u).
+fn get_pack_string(store: &Store, value: Value) -> Result<Vec<u8>> {
+    if let Some(s) = value.is_rstring_inner() {
+        Ok(s.as_bytes().to_vec())
+    } else {
+        Err(MonorubyErr::no_implicit_conversion(
+            store,
+            value,
+            STRING_CLASS,
+        ))
+    }
+}
+
+// --- Base64 encoding/decoding ---
+
+const BASE64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn base64_encode(data: &[u8], line_len: usize) -> String {
+    let mut result = String::new();
+    let mut col = 0;
+    // line_len is the number of input bytes per line (default 45 -> 60 output chars)
+    let chars_per_line = if line_len == 0 { 0 } else { (line_len / 3) * 4 + if line_len % 3 != 0 { 4 } else { 0 } };
+
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+
+        result.push(BASE64_CHARS[((triple >> 18) & 0x3F) as usize] as char);
+        result.push(BASE64_CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(BASE64_CHARS[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(BASE64_CHARS[(triple & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        col += 4;
+
+        if chars_per_line > 0 && col >= chars_per_line {
+            result.push('\n');
+            col = 0;
+        }
+    }
+
+    // If line_len > 0 and we haven't ended with a newline, add one
+    if chars_per_line > 0 && col > 0 {
+        result.push('\n');
+    }
+    // If data is empty, no output
+
+
+    result
+}
+
+fn base64_decode_char(c: u8) -> Option<u8> {
+    match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    }
+}
+
+fn base64_decode(data: &[u8]) -> Vec<u8> {
+    let mut result = Vec::new();
+    let mut buf = [0u8; 4];
+    let mut buf_len = 0;
+    let mut pad_count = 0;
+
+    for &byte in data {
+        if byte == b'=' {
+            buf[buf_len] = 0;
+            buf_len += 1;
+            pad_count += 1;
+        } else if let Some(val) = base64_decode_char(byte) {
+            buf[buf_len] = val;
+            buf_len += 1;
+            pad_count = 0;
+        } else {
+            // skip whitespace and other chars
+            continue;
+        }
+
+        if buf_len == 4 {
+            let triple = (buf[0] as u32) << 18
+                | (buf[1] as u32) << 12
+                | (buf[2] as u32) << 6
+                | buf[3] as u32;
+            result.push((triple >> 16) as u8);
+            if pad_count < 2 {
+                result.push((triple >> 8) as u8);
+            }
+            if pad_count < 1 {
+                result.push(triple as u8);
+            }
+            buf_len = 0;
+            pad_count = 0;
+        }
+    }
+
+    result
+}
+
+// --- MIME Quoted-Printable encoding/decoding ---
+
+fn qp_encode(data: &[u8], line_len: usize) -> String {
+    let mut result = String::new();
+    let mut col = 0;
+    let max_col = if line_len > 0 { line_len - 1 } else { usize::MAX };
+
+    for &byte in data {
+        let encoded = if byte == b'\t' || byte == b' ' || (byte >= 33 && byte <= 126 && byte != b'=') {
+            format!("{}", byte as char)
+        } else if byte == b'\n' {
+            "\n".to_string()
+        } else {
+            format!("={:02X}", byte)
+        };
+
+        if byte != b'\n' && col + encoded.len() > max_col {
+            result.push('=');
+            result.push('\n');
+            col = 0;
+        }
+
+        result.push_str(&encoded);
+        if byte == b'\n' {
+            col = 0;
+        } else {
+            col += encoded.len();
+        }
+    }
+
+    // Always end with soft line break if not already ending with newline
+    if !result.ends_with('\n') {
+        result.push('=');
+        result.push('\n');
+    }
+
+    result
+}
+
+fn qp_decode(data: &[u8]) -> Vec<u8> {
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i < data.len() {
+        if data[i] == b'=' {
+            if i + 2 < data.len() {
+                if data[i + 1] == b'\n' || (data[i + 1] == b'\r' && i + 2 < data.len() && data[i + 2] == b'\n') {
+                    // soft line break
+                    if data[i + 1] == b'\r' {
+                        i += 3;
+                    } else {
+                        i += 2;
+                    }
+                    continue;
+                }
+                let hi = hex_val(data[i + 1]);
+                let lo = hex_val(data[i + 2]);
+                if let (Some(h), Some(l)) = (hi, lo) {
+                    result.push((h << 4) | l);
+                    i += 3;
+                    continue;
+                }
+            } else if i + 1 < data.len() && data[i + 1] == b'\n' {
+                i += 2;
+                continue;
+            }
+            result.push(data[i]);
+            i += 1;
+        } else {
+            result.push(data[i]);
+            i += 1;
+        }
+    }
+    result
+}
+
+fn hex_val(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        _ => None,
+    }
+}
+
+// --- UU encoding/decoding ---
+
+fn uu_encode(data: &[u8], line_len: usize) -> String {
+    let mut result = String::new();
+    let bytes_per_line = if line_len == 0 { 45 } else { line_len.min(45) };
+
+    for chunk in data.chunks(bytes_per_line) {
+        // length byte
+        result.push((chunk.len() as u8 + 32) as char);
+
+        for triple in chunk.chunks(3) {
+            let b0 = triple[0] as u32;
+            let b1 = if triple.len() > 1 { triple[1] as u32 } else { 0 };
+            let b2 = if triple.len() > 2 { triple[2] as u32 } else { 0 };
+            let val = (b0 << 16) | (b1 << 8) | b2;
+
+            result.push(uu_char((val >> 18) & 0x3F));
+            result.push(uu_char((val >> 12) & 0x3F));
+            result.push(uu_char((val >> 6) & 0x3F));
+            result.push(uu_char(val & 0x3F));
+        }
+
+        result.push('\n');
+    }
+
+    result
+}
+
+fn uu_char(val: u32) -> char {
+    if val == 0 {
+        '`'
+    } else {
+        (val as u8 + 32) as char
+    }
+}
+
+fn uu_decode(data: &[u8]) -> Vec<u8> {
+    let mut result = Vec::new();
+
+    for line in data.split(|&b| b == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let len_byte = line[0];
+        let expected_len = if len_byte >= 32 { (len_byte - 32) as usize } else { continue };
+        if expected_len == 0 {
+            continue;
+        }
+
+        let encoded = &line[1..];
+        let mut decoded_line = Vec::new();
+        let mut i = 0;
+
+        while i + 3 < encoded.len() {
+            let c0 = uu_decode_char(encoded[i]);
+            let c1 = uu_decode_char(encoded[i + 1]);
+            let c2 = uu_decode_char(encoded[i + 2]);
+            let c3 = uu_decode_char(encoded[i + 3]);
+            let val = (c0 << 18) | (c1 << 12) | (c2 << 6) | c3;
+            decoded_line.push((val >> 16) as u8);
+            decoded_line.push((val >> 8) as u8);
+            decoded_line.push(val as u8);
+            i += 4;
+        }
+
+        decoded_line.truncate(expected_len);
+        result.extend_from_slice(&decoded_line);
+    }
+
+    result
+}
+
+fn uu_decode_char(c: u8) -> u32 {
+    if c == b'`' {
+        0
+    } else if c >= 32 {
+        (c - 32) as u32 & 0x3F
+    } else {
+        0
+    }
+}
+
+// --- BER compressed integer encoding/decoding ---
+
+fn ber_encode(buf: &mut Vec<u8>, mut val: u64) {
+    if val == 0 {
+        buf.push(0);
+        return;
+    }
+    // Encode in reverse, then push
+    let mut tmp = Vec::new();
+    tmp.push((val & 0x7F) as u8);
+    val >>= 7;
+    while val > 0 {
+        tmp.push((val & 0x7F) as u8 | 0x80);
+        val >>= 7;
+    }
+    tmp.reverse();
+    buf.extend_from_slice(&tmp);
+}
+
+fn ber_decode(b: &mut ByteIter) -> Result<Value> {
+    let mut val: u64 = 0;
+    loop {
+        if let Some(byte) = b.next() {
+            val = (val << 7) | (byte & 0x7F) as u64;
+            if byte & 0x80 == 0 {
+                return Ok(Value::integer(val as i64));
+            }
+        } else {
+            return Err(MonorubyErr::argumenterr("malformed BER compressed integer"));
+        }
+    }
 }

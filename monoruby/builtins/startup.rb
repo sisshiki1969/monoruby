@@ -117,6 +117,44 @@ class Process
   class Tms
     attr_accessor :utime, :stime, :cutime, :cstime
   end
+
+  class Status
+    attr_reader :exitstatus, :pid
+
+    def initialize(exitstatus, pid)
+      @exitstatus = exitstatus
+      @pid = pid
+    end
+
+    def success?
+      @exitstatus == 0
+    end
+
+    def exited?
+      true
+    end
+
+    def signaled?
+      false
+    end
+
+    def to_i
+      @exitstatus << 8
+    end
+
+    def inspect
+      "#<Process::Status: pid #{@pid} exit #{@exitstatus}>"
+    end
+    alias to_s inspect
+
+    def ==(other)
+      if other.is_a?(Integer)
+        to_i == other
+      else
+        super
+      end
+    end
+  end
 end
 
 module File::Constants

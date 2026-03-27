@@ -21,6 +21,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_with(klass, "clock_gettime", clock_gettime, 1, 2, false);
     globals.define_builtin_module_func_with(klass, "exit!", process_exit_bang, 0, 1, false);
     globals.define_builtin_module_func(klass, "euid", euid, 0);
+    globals.define_builtin_module_func(klass, "last_status", last_status, 0);
+
+    // Process::Status class — methods defined in Ruby (startup.rb)
+    globals.define_class("Status", object_class, klass);
 
     // Signal module
     let signal = globals.define_toplevel_module("Signal").id();
@@ -149,7 +153,12 @@ fn process_exit_bang(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/clock_gettime.html]
 #[monoruby_builtin]
-fn clock_gettime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn clock_gettime(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let unit = if let Some(arg1) = lfp.try_arg(1) {
         match arg1.try_symbol() {
             Some(id) => id,
@@ -157,7 +166,7 @@ fn clock_gettime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
                 return Err(MonorubyErr::argumenterr(format!(
                     "unexpected unit: {}",
                     arg1.to_s(&globals.store)
-                )))
+                )));
             }
         }
     } else {
@@ -183,7 +192,7 @@ fn clock_gettime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
             return Err(MonorubyErr::argumenterr(format!(
                 "unexpected unit: {}",
                 lfp.arg(1).to_s(&globals.store)
-            )))
+            )));
         }
     })
 }
@@ -204,6 +213,22 @@ fn euid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -
 ///
 /// ### Signal.list
 ///
+/// ### Process.last_status
+///
+/// - last_status -> Process::Status | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Process/m/last_status.html]
+#[monoruby_builtin]
+fn last_status(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let val = globals.get_gvar(IdentId::get_id("$?"));
+    Ok(val.unwrap_or_default())
+}
+
 /// - list -> Hash
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Signal/m/list.html]
@@ -291,7 +316,7 @@ mod tests {
 
     #[test]
     fn process_euid() {
-        run_test("Process.euid");
+        run_test_once("Process.euid");
     }
 
     #[test]
@@ -307,5 +332,22 @@ mod tests {
     #[test]
     fn process_exit_bang() {
         run_test("Process.respond_to?(:exit!)");
+    }
+
+    #[test]
+    fn process_last_status() {
+        run_test_no_result_check("Process.last_status");
+        run_test_once(
+            r#"
+            IO.popen("true") { |io| io.read }
+            $?.exitstatus
+            "#,
+        );
+        run_test_once(
+            r#"
+            IO.popen("false") { |io| io.read }
+            $?.exitstatus
+            "#,
+        );
     }
 }

@@ -1007,7 +1007,7 @@ fn class_variables(
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/set_temporary_name.html]
 #[monoruby_builtin]
 fn set_temporary_name(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -1017,7 +1017,7 @@ fn set_temporary_name(
     if name_val.is_nil() {
         globals.store[class_id].clear_name();
     } else {
-        let name = name_val.expect_string(&globals.store)?;
+        let name = name_val.coerce_to_string(vm, globals)?;
         globals.store[class_id].set_name(name);
     }
     Ok(lfp.self_val())
