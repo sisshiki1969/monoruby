@@ -522,10 +522,11 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
         let path = Value::string(path);
         let res = vm.invoke_block(globals, &data, &[path]);
-        std::env::set_current_dir(old_pwd).unwrap();
+        let _ = std::env::set_current_dir(old_pwd);
         res
     } else {
-        std::env::set_current_dir(path).unwrap();
+        std::env::set_current_dir(&path)
+            .map_err(|e| MonorubyErr::runtimeerr(format!("Dir.chdir: {}: {}", path, e)))?;
         Ok(Value::integer(0))
     }
 }

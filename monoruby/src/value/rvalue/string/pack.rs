@@ -913,7 +913,7 @@ fn hex_val(c: u8) -> Option<u8> {
 
 fn uu_encode(data: &[u8], line_len: usize) -> String {
     let mut result = String::new();
-    let bytes_per_line = line_len.min(45);
+    let bytes_per_line = if line_len == 0 { 45 } else { line_len.min(45) };
 
     for chunk in data.chunks(bytes_per_line) {
         // length byte
