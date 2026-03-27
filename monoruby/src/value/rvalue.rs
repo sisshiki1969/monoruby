@@ -966,6 +966,74 @@ impl RValue {
         }
     }
 
+    pub(super) fn clone_value(&self) -> Self {
+        let header = self.header;
+        RValue {
+            header,
+            var_table: self.var_table.clone(),
+            kind: unsafe {
+                if let Some(ty) = self.try_ty() {
+                    match ty {
+                        ObjTy::CLASS | ObjTy::MODULE => ObjKind {
+                            class: self.kind.class.clone(),
+                        },
+                        ObjTy::OBJECT => ObjKind {
+                            object: self.kind.object.clone(),
+                        },
+                        ObjTy::BIGNUM => ObjKind {
+                            bignum: self.kind.bignum.clone(),
+                        },
+                        ObjTy::FLOAT => ObjKind {
+                            float: self.kind.float,
+                        },
+                        ObjTy::COMPLEX => ObjKind {
+                            complex: ManuallyDrop::new(self.kind.complex.dup()),
+                        },
+                        ObjTy::STRING => ObjKind {
+                            string: self.kind.string.clone(),
+                        },
+                        ObjTy::TIME => ObjKind {
+                            time: self.kind.time.clone(),
+                        },
+                        ObjTy::ARRAY => ObjKind {
+                            array: self.kind.array.clone(),
+                        },
+                        ObjTy::RANGE => ObjKind {
+                            range: self.kind.range.clone(),
+                        },
+                        ObjTy::PROC => ObjKind {
+                            proc: self.kind.proc.clone(),
+                        },
+                        ObjTy::HASH => ObjKind {
+                            hash: self.kind.hash.clone(),
+                        },
+                        ObjTy::REGEXP => ObjKind {
+                            regexp: self.kind.regexp.clone(),
+                        },
+                        ObjTy::IO => ObjKind {
+                            io: self.kind.io.clone(),
+                        },
+                        ObjTy::EXCEPTION => ObjKind {
+                            exception: self.kind.exception.clone(),
+                        },
+                        ObjTy::METHOD => ObjKind {
+                            method: self.kind.method.clone(),
+                        },
+                        ObjTy::UMETHOD => ObjKind {
+                            umethod: self.kind.umethod.clone(),
+                        },
+                        ObjTy::MATCHDATA => ObjKind {
+                            matchdata: self.kind.matchdata.clone(),
+                        },
+                        ty => unreachable!("{ty:?}"),
+                    }
+                } else {
+                    unreachable!()
+                }
+            },
+        }
+    }
+
     pub(crate) fn class(&self) -> ClassId {
         if self.header.is_live() {
             self.header.class()

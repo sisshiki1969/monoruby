@@ -396,6 +396,14 @@ impl Value {
         }
     }
 
+    pub(crate) fn clone_value(&self) -> Self {
+        if let Some(rv) = self.try_rvalue() {
+            rv.clone_value().pack()
+        } else {
+            *self
+        }
+    }
+
     pub(crate) fn id(&self) -> u64 {
         self.0.get()
     }
