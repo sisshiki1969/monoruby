@@ -25,6 +25,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "readline", readline, 0);
     globals.define_builtin_funcs(IO_CLASS, "each", &["each_line"], each_line, 0);
     globals.define_builtin_class_func(IO_CLASS, "read", io_class_read, 1);
+    globals.define_builtin_class_func_with(IO_CLASS, "sysopen", io_sysopen, 1, 3, false);
     globals.define_builtin_class_func(IO_CLASS, "pipe", io_pipe, 0);
     globals.define_builtin_class_func_rest(IO_CLASS, "popen", io_popen);
     globals.define_builtin_func(IO_CLASS, "pid", io_pid, 0);
@@ -54,12 +55,7 @@ fn io_new(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr)
 
 /// ### IO.allocate
 #[monoruby_builtin]
-fn allocate(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     Ok(Value::new_io_with_class(IoInner::Closed, class_id))
 }
@@ -91,7 +87,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/puts.html]
 #[monoruby_builtin]
-fn puts(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     fn decompose(collector: &mut Vec<Value>, val: Value, seen: &mut Vec<u64>) {
         match val.try_array_ty() {
             Some(ary) => {
@@ -109,16 +105,38 @@ fn puts(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     }
     let mut collector = Vec::new();
     let mut seen = Vec::new();
-    for v in lfp.arg(0).as_array().iter().cloned() {
+    let args = lfp.arg(0).as_array();
+    for v in args.iter().cloned() {
         decompose(&mut collector, v, &mut seen);
     }
 
-    let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
-    for v in collector {
-        io_writeline(globals, io, v)?;
+    let self_val = lfp.self_val();
+    let write_id = IdentId::get_id("write");
+    if collector.is_empty() {
+        // puts with no args writes a newline
+        let newline = Value::string_from_str("\n");
+        vm.invoke_method_inner(globals, write_id, self_val, &[newline], None, None)?;
+    } else {
+        for v in collector {
+            let s = if v.is_nil() {
+                String::new()
+            } else if let Some(rs) = v.is_rstring() {
+                String::from_utf8_lossy(rs.as_bytes()).into_owned()
+            } else {
+                v.to_s(globals)
+            };
+            let needs_newline = !s.ends_with('\n');
+            let write_str = if needs_newline {
+                Value::string(s + "\n")
+            } else {
+                Value::string(s)
+            };
+            vm.invoke_method_inner(globals, write_id, self_val, &[write_str], None, None)?;
+        }
     }
-    io.flush()?;
+    // Flush after all writes
+    let mut self_ = lfp.self_val();
+    self_.as_io_inner_mut().flush()?;
     Ok(Value::nil())
 }
 
@@ -129,11 +147,17 @@ fn puts(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/print.html]
 #[monoruby_builtin]
-fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
+fn print(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let write_id = IdentId::get_id("write");
     for v in lfp.arg(0).as_array().iter().cloned() {
-        io_write(globals, io, v)?;
+        let str_val = if v.is_rstring().is_some() {
+            v
+        } else {
+            let s = vm.to_s(globals, v)?;
+            Value::string(s)
+        };
+        vm.invoke_method_inner(globals, write_id, self_val, &[str_val], None, None)?;
     }
     Ok(Value::nil())
 }
@@ -145,41 +169,16 @@ fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/printf.html]
 #[monoruby_builtin]
-fn printf(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let format_str = lfp.arg(0).coerce_to_string(vm, globals)?;
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
-    let format_str = lfp.arg(0).expect_string(globals)?;
     let args = lfp.arg(1).as_array();
 
     let buf = globals.format_by_args(&format_str, &args)?;
     io.write(buf.as_bytes())?;
 
     Ok(Value::nil())
-}
-
-fn io_writeline(globals: &Globals, io: &mut IoInner, v: Value) -> Result<()> {
-    if let Some(s) = v.is_rstring() {
-        io.write(&s)?;
-        if s.last() != Some(&b'\n') {
-            io.write(b"\n")?;
-        }
-    } else {
-        let v = v.to_s(globals).into_bytes();
-        io.write(&v)?;
-        if v.last() != Some(&b'\n') {
-            io.write(b"\n")?;
-        }
-    }
-    Ok(())
-}
-
-fn io_write(globals: &Globals, io: &mut IoInner, v: Value) -> Result<()> {
-    if let Some(s) = v.is_rstring() {
-        io.write(&s)
-    } else {
-        let v = v.to_s(globals).into_bytes();
-        io.write(&v)
-    }
 }
 
 ///
@@ -232,8 +231,26 @@ fn isatty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/close.html]
 #[monoruby_builtin]
-fn close(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().as_io_inner_mut().close()?;
+fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let popen_result = lfp.self_val().as_io_inner_mut().close()?;
+    if let Some((exit_status, pid)) = popen_result {
+        // Set $? (Process::Status)
+        let status_class = vm
+            .get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?
+            .as_class();
+        let status_obj = Value::object(status_class.id());
+        globals.store.set_ivar(
+            status_obj,
+            IdentId::get_id("@exitstatus"),
+            Value::integer(exit_status as i64),
+        )?;
+        globals.store.set_ivar(
+            status_obj,
+            IdentId::get_id("@pid"),
+            Value::integer(pid as i64),
+        )?;
+        globals.set_gvar(IdentId::get_id("$?"), status_obj);
+    }
     Ok(Value::nil())
 }
 
@@ -352,12 +369,12 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/read.html]
 #[monoruby_builtin]
 fn io_class_read(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let filename = lfp.arg(0).expect_string(globals)?;
+    let filename = lfp.arg(0).coerce_to_string(vm, globals)?;
     let mut file = match File::open(&filename) {
         Ok(file) => file,
         Err(_) => {
@@ -380,6 +397,51 @@ fn io_class_read(
 ///
 /// ### IO.pipe
 ///
+/// ### IO.sysopen
+///
+/// - sysopen(path, mode_str = "r", perm = 0666) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/sysopen.html]
+#[monoruby_builtin]
+fn io_sysopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::os::unix::io::IntoRawFd;
+    let path = lfp.arg(0).coerce_to_str(vm, globals)?;
+    let mode_str = if let Some(m) = lfp.try_arg(1) {
+        m.coerce_to_str(vm, globals)?
+    } else {
+        "r".to_string()
+    };
+    let mut opts = std::fs::OpenOptions::new();
+    match mode_str.as_str() {
+        "r" => {
+            opts.read(true);
+        }
+        "w" => {
+            opts.write(true).create(true).truncate(true);
+        }
+        "a" => {
+            opts.append(true).create(true);
+        }
+        "r+" => {
+            opts.read(true).write(true);
+        }
+        "w+" => {
+            opts.read(true).write(true).create(true).truncate(true);
+        }
+        "a+" => {
+            opts.read(true).append(true).create(true);
+        }
+        _ => {
+            opts.read(true);
+        }
+    }
+    let file = opts
+        .open(&path)
+        .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
+    let fd = file.into_raw_fd();
+    Ok(Value::integer(fd as i64))
+}
+
 /// - pipe -> [read_io, write_io]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/pipe.html]
@@ -414,10 +476,7 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 
     // Build the command from either a String or an Array of strings.
     let mut command = if let Some(ary) = cmd_val.try_array_ty() {
-        let parts: Vec<String> = ary
-            .iter()
-            .map(|v| v.to_s(globals))
-            .collect();
+        let parts: Vec<String> = ary.iter().map(|v| v.to_s(globals)).collect();
         if parts.is_empty() {
             return Err(MonorubyErr::argumenterr("popen: empty command array"));
         }
@@ -447,7 +506,26 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         let data = vm.get_block_data(globals, bh)?;
         let res = vm.invoke_block(globals, &data, &[io_val]);
         let mut io_close = io_val;
-        let _ = io_close.as_io_inner_mut().close();
+        if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close() {
+            let status_class = vm
+                .get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
+                .ok()
+                .map(|v| v.as_class());
+            if let Some(sc) = status_class {
+                let status_obj = Value::object(sc.id());
+                globals.store.set_ivar(
+                    status_obj,
+                    IdentId::get_id("@exitstatus"),
+                    Value::integer(exit_status as i64),
+                )?;
+                globals.store.set_ivar(
+                    status_obj,
+                    IdentId::get_id("@pid"),
+                    Value::integer(pid as i64),
+                )?;
+                globals.set_gvar(IdentId::get_id("$?"), status_obj);
+            }
+        }
         res
     } else {
         Ok(io_val)
@@ -474,7 +552,12 @@ fn io_pid(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/fileno.html]
 #[monoruby_builtin]
-fn io_fileno(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn io_fileno(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
     let fd = self_.as_io_inner().fileno()?;
     Ok(Value::integer(fd as i64))
@@ -486,7 +569,12 @@ fn io_fileno(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePt
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/write.html]
 #[monoruby_builtin]
-fn io_write_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn io_write_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     let args = lfp.arg(0).as_array();
@@ -510,7 +598,12 @@ fn io_write_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/syswrite.html]
 #[monoruby_builtin]
-fn io_syswrite(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn io_syswrite(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     let bytes = if let Some(b) = lfp.arg(0).try_bytes() {
@@ -547,12 +640,7 @@ fn value_to_fd(globals: &Globals, v: Value) -> Result<i32> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/select.html]
 #[monoruby_builtin]
-fn io_select(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn io_select(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let read_arg = lfp.arg(0);
     let write_arg = lfp.try_arg(1).unwrap_or(Value::nil());
     let error_arg = lfp.try_arg(2).unwrap_or(Value::nil());
@@ -583,27 +671,27 @@ fn io_select(
     let read_ios: Vec<Value> = if read_arg.is_nil() {
         vec![]
     } else {
-        let ary = read_arg.try_array_ty().ok_or_else(|| {
-            MonorubyErr::typeerr("no implicit conversion of Object into Array")
-        })?;
+        let ary = read_arg
+            .try_array_ty()
+            .ok_or_else(|| MonorubyErr::typeerr("no implicit conversion of Object into Array"))?;
         ary.to_vec()
     };
 
     let write_ios: Vec<Value> = if write_arg.is_nil() {
         vec![]
     } else {
-        let ary = write_arg.try_array_ty().ok_or_else(|| {
-            MonorubyErr::typeerr("no implicit conversion of Object into Array")
-        })?;
+        let ary = write_arg
+            .try_array_ty()
+            .ok_or_else(|| MonorubyErr::typeerr("no implicit conversion of Object into Array"))?;
         ary.to_vec()
     };
 
     let error_ios: Vec<Value> = if error_arg.is_nil() {
         vec![]
     } else {
-        let ary = error_arg.try_array_ty().ok_or_else(|| {
-            MonorubyErr::typeerr("no implicit conversion of Object into Array")
-        })?;
+        let ary = error_arg
+            .try_array_ty()
+            .ok_or_else(|| MonorubyErr::typeerr("no implicit conversion of Object into Array"))?;
         ary.to_vec()
     };
 
@@ -967,6 +1055,53 @@ mod tests {
             n = w.syswrite("hello")
             w.close
             [r.read, n]
+            "#,
+        );
+    }
+
+    #[test]
+    fn puts_delegates_to_write() {
+        // IO#puts should call the Ruby-level write method, not bypass it.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            $test_written = []
+            def w.write(s)
+              $test_written << s
+              super(s)
+            end
+            w.puts("hello")
+            w.close
+            [$test_written.join, r.read]
+            "#,
+        );
+    }
+
+    #[test]
+    fn print_delegates_to_write() {
+        // IO#print should call the Ruby-level write method, not bypass it.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            $test_written = []
+            def w.write(s)
+              $test_written << s
+              super(s)
+            end
+            w.print("hello", "world")
+            w.close
+            [$test_written.join, r.read]
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_sysopen() {
+        run_test_no_result_check(
+            r#"
+            fd = IO.sysopen("Cargo.toml", "r")
+            raise "should be integer" unless fd.is_a?(Integer)
+            raise "should be positive" unless fd > 0
             "#,
         );
     }

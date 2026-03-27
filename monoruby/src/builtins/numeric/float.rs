@@ -233,9 +233,9 @@ fn floor(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/ceil.html]
 #[monoruby_builtin]
-fn ceil(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ndigits = if let Some(d) = lfp.try_arg(0) {
-        d.expect_integer(globals)?
+        d.coerce_to_int(vm, globals)?
     } else {
         0
     };
@@ -274,9 +274,9 @@ fn ceil(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/truncate.html]
 #[monoruby_builtin]
-fn truncate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn truncate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ndigits = if let Some(d) = lfp.try_arg(0) {
-        d.expect_integer(globals)?
+        d.coerce_to_int(vm, globals)?
     } else {
         0
     };
@@ -316,9 +316,9 @@ fn truncate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/round.html]
 #[monoruby_builtin]
-fn round(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ndigits = if let Some(d) = lfp.try_arg(0) {
-        d.expect_integer(globals)?
+        d.coerce_to_int(vm, globals)?
     } else {
         0
     };

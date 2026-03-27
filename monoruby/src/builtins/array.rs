@@ -1088,10 +1088,10 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/join.html]
 #[monoruby_builtin]
-fn join(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.try_arg(0);
     let sep = if let Some(sep) = &arg0 {
-        sep.expect_string(globals)?
+        sep.coerce_to_string(vm, globals)?
     } else {
         "".to_string()
     };
@@ -1333,7 +1333,7 @@ fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array
         let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
             let res = vm
                 .invoke_block(globals, &data, &[lhs, rhs])?
-                .expect_integer(globals)?;
+                .coerce_to_int(vm, globals)?;
             Ok(match res {
                 0 => std::cmp::Ordering::Equal,
                 res if res < 0 => std::cmp::Ordering::Less,
@@ -2167,9 +2167,10 @@ fn slice_inner(mut aref: Array, start: usize, len: usize) -> Value {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/pack.html]
 #[monoruby_builtin]
-fn pack(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn pack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let template = lfp.arg(0).coerce_to_string(vm, globals)?;
     let ary = lfp.self_val().as_array();
-    rvalue::pack(globals, &ary, lfp.arg(0).expect_str(globals)?)
+    rvalue::pack(globals, &ary, &template)
 }
 
 fn try_convert_to_array(

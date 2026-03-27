@@ -219,13 +219,13 @@ fn encoding_class(globals: &Globals) -> ClassId {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/s/new.html]
 #[monoruby_builtin]
 fn string_new(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let s = match lfp.try_arg(0) {
-        Some(string) => string.expect_string(globals)?,
+        Some(string) => string.coerce_to_string(vm, globals)?,
         None => "".to_string(),
     };
     Ok(Value::string(s))
@@ -695,9 +695,9 @@ fn index_assign(
     _: BytecodePtr,
 ) -> Result<Value> {
     let (arg1, subst) = if let Some(arg2) = lfp.try_arg(2) {
-        (Some(lfp.arg(1)), arg2.expect_string(globals)?)
+        (Some(lfp.arg(1)), arg2.coerce_to_string(vm, globals)?)
     } else {
-        (None, lfp.arg(1).expect_string(globals)?)
+        (None, lfp.arg(1).coerce_to_string(vm, globals)?)
     };
     let self_ = lfp.self_val();
     let mut lhs = self_.expect_string(globals)?;
@@ -1256,13 +1256,15 @@ fn chomp_sub<'a>(self_: &'a str, rs: &str) -> &'a str {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/chomp.html]
 #[monoruby_builtin]
-fn chomp(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.try_arg(0);
+    let rs_owned;
     let rs = if let Some(arg0) = &arg0 {
         if arg0.is_nil() {
             return Ok(lfp.self_val());
         }
-        arg0.expect_str(globals)?
+        rs_owned = arg0.coerce_to_string(vm, globals)?;
+        rs_owned.as_str()
     } else {
         "\n"
     };
@@ -1280,13 +1282,15 @@ fn chomp(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/chomp.html]
 #[monoruby_builtin]
-fn chomp_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn chomp_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.try_arg(0);
+    let rs_owned;
     let rs = if let Some(arg0) = &arg0 {
         if arg0.is_nil() {
             return Ok(Value::nil());
         }
-        arg0.expect_str(globals)?
+        rs_owned = arg0.coerce_to_string(vm, globals)?;
+        rs_owned.as_str()
     } else {
         "\n"
     };
@@ -1869,8 +1873,10 @@ fn gen_pad(padding: &str, len: usize) -> String {
 #[monoruby_builtin]
 fn ljust(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg1 = lfp.try_arg(1);
+    let padding_owned;
     let padding = if let Some(arg1) = &arg1 {
-        arg1.expect_str(globals)?
+        padding_owned = arg1.coerce_to_string(vm, globals)?;
+        padding_owned.as_str()
     } else {
         " "
     };
@@ -1897,8 +1903,10 @@ fn ljust(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn rjust(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg1 = lfp.try_arg(1);
+    let padding_owned;
     let padding = if let Some(arg1) = &arg1 {
-        arg1.expect_str(globals)?
+        padding_owned = arg1.coerce_to_string(vm, globals)?;
+        padding_owned.as_str()
     } else {
         " "
     };
@@ -3002,7 +3010,7 @@ fn tr_test() {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/delete.html]
 #[monoruby_builtin]
-fn delete(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut res = lfp.self_val().as_str().to_string();
     let args = lfp.arg(0).as_array();
     if args.is_empty() {
@@ -3010,10 +3018,13 @@ fn delete(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             "wrong number of arguments (given 0, expected 1+)",
         ));
     }
-    let pred = args
+    let strs: Vec<String> = args
         .iter()
-        .map(|arg| arg.expect_str(globals))
-        .flat_map(|arg| arg.map(|arg| Tr::from_str(arg)))
+        .map(|arg| arg.coerce_to_string(vm, globals))
+        .collect::<Result<Vec<_>>>()?;
+    let pred = strs
+        .iter()
+        .map(|s| Tr::from_str(s))
         .collect::<Result<Vec<Tr>>>()?;
 
     res.retain(|c| !pred.iter().all(|tr| tr.check(c)));
@@ -3028,15 +3039,13 @@ fn delete(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/tr.html]
 #[monoruby_builtin]
-fn tr(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn tr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // TODO: support tr(1)
     let self_ = lfp.self_val();
-    let arg0 = lfp.arg(0);
-    let arg1 = lfp.arg(1);
+    let from = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let to = lfp.arg(1).coerce_to_string(vm, globals)?;
     let rec = self_.expect_str(globals)?;
-    let from = arg0.expect_str(globals)?;
-    let to = arg1.expect_str(globals)?;
-    let res = rec.replace(from, to);
+    let res = rec.replace(&from, &to);
     Ok(Value::string(res))
 }
 
@@ -3047,14 +3056,17 @@ fn tr(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/count.html]
 #[monoruby_builtin]
-fn count(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
+    let strs: Vec<String> = args
+        .iter()
+        .map(|arg| arg.coerce_to_string(vm, globals))
+        .collect::<Result<Vec<_>>>()?;
     let self_ = lfp.self_val();
     let target = self_.as_str();
     let mut c = 0;
     for ch in target.chars() {
-        for arg in args.iter() {
-            let s = arg.expect_str(globals)?;
+        for s in strs.iter() {
             if s.chars().any(|c2| c2 == ch) {
                 c += 1;
                 break;
@@ -3093,8 +3105,9 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/replace.html]
 #[monoruby_builtin]
-fn replace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().replace_str(lfp.arg(0).expect_str(globals)?);
+fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let s = lfp.arg(0).coerce_to_string(vm, globals)?;
+    lfp.self_val().replace_str(&s);
     Ok(lfp.self_val())
 }
 
@@ -3147,8 +3160,10 @@ fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
 #[monoruby_builtin]
 fn center(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg1 = lfp.try_arg(1);
+    let padding_owned;
     let padding = if let Some(arg) = &arg1 {
-        arg.expect_str(globals)?
+        padding_owned = arg.coerce_to_string(vm, globals)?;
+        padding_owned.as_str()
     } else {
         " "
     };
@@ -3249,9 +3264,10 @@ fn b(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Valu
 fn unpack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
+    let template = lfp.arg(0).coerce_to_string(vm, globals)?;
     rvalue::unpack(
         &self_.as_rstring_inner()[offset..],
-        lfp.arg(0).expect_str(globals)?,
+        &template,
         false,
     )
 }
@@ -3267,9 +3283,10 @@ fn unpack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn unpack1(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
+    let template = lfp.arg(0).coerce_to_string(vm, globals)?;
     rvalue::unpack(
         &self_.as_rstring_inner()[offset..],
-        lfp.arg(0).expect_str(globals)?,
+        &template,
         true,
     )
 }
@@ -3452,12 +3469,12 @@ fn enc_list(
 /// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/find.html]
 #[monoruby_builtin]
 fn enc_find(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let name = lfp.arg(0).expect_string(globals)?;
+    let name = lfp.arg(0).coerce_to_string(vm, globals)?;
     let enc_class = encoding_class(globals);
     let result = match name.to_uppercase().replace('-', "_").as_str() {
         "UTF_8" | "UTF8" => globals
@@ -5020,5 +5037,160 @@ mod tests {
     fn insert() {
         run_test(r#""hello".insert(0, "X")"#);
         run_test(r#""hello".insert(2, "X")"#);
+    }
+
+    #[test]
+    fn pack_unpack_a() {
+        // pack 'a' — null padded
+        run_test(r#"["abc"].pack("a")"#);
+        run_test(r#"["abc"].pack("a3")"#);
+        run_test(r#"["abc"].pack("a5")"#);
+        run_test(r#"["abc"].pack("a*")"#);
+        run_test(r#"["a", "b"].pack("a3a3")"#);
+        // unpack 'a' — raw bytes
+        run_test(r#""abc\0\0".unpack("a3")"#);
+        run_test(r#""abc\0\0".unpack("a*")"#);
+        run_test(r#""abc\0\0".unpack("a5")"#);
+        run_test(r#""abc".unpack("a")"#);
+        run_test(r#""abcdef".unpack("a3a3")"#);
+    }
+
+    #[test]
+    fn pack_unpack_a_upper() {
+        // pack 'A' — space padded
+        run_test(r#"["abc"].pack("A")"#);
+        run_test(r#"["abc"].pack("A3")"#);
+        run_test(r#"["abc"].pack("A5")"#);
+        run_test(r#"["abc"].pack("A*")"#);
+        // unpack 'A' — strips trailing spaces and nulls
+        run_test(r#""abc  ".unpack("A5")"#);
+        run_test(r#""abc\0\0".unpack("A5")"#);
+        run_test(r#""abc  ".unpack("A*")"#);
+        run_test(r#""abc".unpack("A")"#);
+    }
+
+    #[test]
+    fn pack_unpack_z() {
+        // pack 'Z' — null-terminated
+        run_test(r#"["abc"].pack("Z")"#);
+        run_test(r#"["abc"].pack("Z5")"#);
+        run_test(r#"["abc"].pack("Z*")"#);
+        // unpack 'Z' — stops at null
+        run_test(r#""abc\0def".unpack("Z*")"#);
+        run_test(r#""abc\0def".unpack("Z3")"#);
+        run_test(r#""abc\0def".unpack("Z5")"#);
+    }
+
+    #[test]
+    fn pack_unpack_m() {
+        // Base64
+        run_test(r#"["hello"].pack("m")"#);
+        run_test(r#"["hello"].pack("m0")"#);
+        run_test(r#"["hello"].pack("m").unpack("m")"#);
+        run_test(r#"[""].pack("m")"#);
+        run_test(r#"["a"].pack("m")"#);
+        run_test(r#"["ab"].pack("m")"#);
+        run_test(r#"["abc"].pack("m")"#);
+    }
+
+    #[test]
+    fn pack_unpack_big_m() {
+        // MIME quoted-printable
+        run_test(r#"["hello"].pack("M")"#);
+        run_test(r#"["hello=world"].pack("M")"#);
+        run_test(r#"["hello"].pack("M").unpack("M")"#);
+    }
+
+    #[test]
+    fn pack_unpack_u() {
+        // UU encoding
+        run_test(r#"["hello"].pack("u")"#);
+        run_test(r#"["hello"].pack("u").unpack("u")"#);
+        run_test(r#"["abc"].pack("u")"#);
+    }
+
+    #[test]
+    fn pack_unpack_w() {
+        // BER compressed integer
+        run_test(r#"[0].pack("w")"#);
+        run_test(r#"[127].pack("w")"#);
+        run_test(r#"[128].pack("w")"#);
+        run_test(r#"[16384].pack("w")"#);
+        run_test(r#"[0, 127, 128, 16384].pack("w*")"#);
+        run_test(r#"[0, 127, 128, 16384].pack("w*").unpack("w*")"#);
+        run_test(r#""\x00\x7f\x81\x00\x81\x80\x00".unpack("w*")"#);
+    }
+
+    #[test]
+    fn to_str_coercion() {
+        // String.new calls to_str
+        run_test(
+            r#"
+            class Foo; def to_str; "hello"; end; end
+            String.new(Foo.new)
+            "#,
+        );
+        // String#replace calls to_str
+        run_test(
+            r#"
+            class Foo; def to_str; "world"; end; end
+            s = "hello"
+            s.replace(Foo.new)
+            s
+            "#,
+        );
+        // Array#join calls to_str on separator
+        run_test(
+            r#"
+            class Foo; def to_str; "-"; end; end
+            [1, 2, 3].join(Foo.new)
+            "#,
+        );
+        // String#chomp calls to_str on separator
+        run_test(
+            r#"
+            class Foo; def to_str; "lo"; end; end
+            "hello".chomp(Foo.new)
+            "#,
+        );
+        // String#ljust calls to_str on padding
+        run_test(
+            r#"
+            class Foo; def to_str; "*"; end; end
+            "hi".ljust(10, Foo.new)
+            "#,
+        );
+        // String#center calls to_str on padding
+        run_test(
+            r#"
+            class Foo; def to_str; "-"; end; end
+            "hi".center(10, Foo.new)
+            "#,
+        );
+    }
+
+    #[test]
+    fn to_int_coercion() {
+        // Float#ceil calls to_int on ndigits
+        run_test(
+            r#"
+            class Foo; def to_int; 2; end; end
+            3.14159.ceil(Foo.new)
+            "#,
+        );
+        // Float#round calls to_int on ndigits
+        run_test(
+            r#"
+            class Foo; def to_int; 1; end; end
+            3.14159.round(Foo.new)
+            "#,
+        );
+        // Float#truncate calls to_int on ndigits
+        run_test(
+            r#"
+            class Foo; def to_int; 2; end; end
+            3.14159.truncate(Foo.new)
+            "#,
+        );
     }
 }
