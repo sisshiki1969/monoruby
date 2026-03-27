@@ -234,20 +234,16 @@ fn isatty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let popen_result = lfp.self_val().as_io_inner_mut().close()?;
     if let Some((exit_status, pid)) = popen_result {
-        // Set $? (Process::Status)
+        // Set $? (Process::Status) via Process::Status.new(exitstatus, pid)
         let status_class = vm
-            .get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?
-            .as_class();
-        let status_obj = Value::object(status_class.id());
-        globals.store.set_ivar(
-            status_obj,
-            IdentId::get_id("@exitstatus"),
-            Value::integer(exit_status as i64),
-        )?;
-        globals.store.set_ivar(
-            status_obj,
-            IdentId::get_id("@pid"),
-            Value::integer(pid as i64),
+            .get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
+        let status_obj = vm.invoke_method_inner(
+            globals,
+            IdentId::NEW,
+            status_class,
+            &[Value::integer(exit_status as i64), Value::integer(pid as i64)],
+            None,
+            None,
         )?;
         globals.set_gvar(IdentId::get_id("$?"), status_obj);
     }
@@ -507,23 +503,19 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         let res = vm.invoke_block(globals, &data, &[io_val]);
         let mut io_close = io_val;
         if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close() {
-            let status_class = vm
+            if let Ok(status_class) = vm
                 .get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
-                .ok()
-                .map(|v| v.as_class());
-            if let Some(sc) = status_class {
-                let status_obj = Value::object(sc.id());
-                globals.store.set_ivar(
-                    status_obj,
-                    IdentId::get_id("@exitstatus"),
-                    Value::integer(exit_status as i64),
-                )?;
-                globals.store.set_ivar(
-                    status_obj,
-                    IdentId::get_id("@pid"),
-                    Value::integer(pid as i64),
-                )?;
-                globals.set_gvar(IdentId::get_id("$?"), status_obj);
+            {
+                if let Ok(status_obj) = vm.invoke_method_inner(
+                    globals,
+                    IdentId::NEW,
+                    status_class,
+                    &[Value::integer(exit_status as i64), Value::integer(pid as i64)],
+                    None,
+                    None,
+                ) {
+                    globals.set_gvar(IdentId::get_id("$?"), status_obj);
+                }
             }
         }
         res
