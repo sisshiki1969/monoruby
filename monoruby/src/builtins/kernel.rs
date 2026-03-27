@@ -1038,11 +1038,14 @@ fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 "time interval must not be negative or NaN",
             ));
         }
-        std::thread::sleep(std::time::Duration::from_secs_f64(sec));
+        let dur = std::time::Duration::from_secs_f64(sec);
+        crate::executor::gvl::without_gvl(|| std::thread::sleep(dur));
     } else {
-        // monoruby is single-threaded; sleep without argument would block
-        // forever with no way to be interrupted. Return immediately.
-        return Ok(Value::integer(0));
+        // sleep without argument: block until interrupted.
+        // Release GVL so other threads can run.
+        crate::executor::gvl::without_gvl(|| {
+            std::thread::sleep(std::time::Duration::from_secs(u64::MAX));
+        });
     }
     let elapsed = now.elapsed().as_secs();
     Ok(Value::integer(elapsed as i64))

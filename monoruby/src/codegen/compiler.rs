@@ -364,6 +364,9 @@ extern "C" fn jit_recompile_specialized(
     idx: usize,
     reason: RecompileReason,
 ) {
+    if !super::is_main_thread() {
+        return;
+    }
     CODEGEN.with(|codegen| {
         codegen
             .borrow_mut()
@@ -376,6 +379,9 @@ extern "C" fn jit_compile_patch(
     lfp: Lfp,
     entry_patch_point: monoasm::CodePtr,
 ) {
+    if !super::is_main_thread() {
+        return;
+    }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         CODEGEN.with(|codegen| {
             codegen
@@ -390,6 +396,9 @@ extern "C" fn jit_compile_patch(
 }
 
 extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: RecompileReason) {
+    if !super::is_main_thread() {
+        return;
+    }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         CODEGEN.with(|codegen| {
             codegen.borrow_mut().recompile_method(globals, lfp, reason);
@@ -406,6 +415,9 @@ extern "C" fn jit_recompile_method_with_recovery(
     lfp: Lfp,
     reason: RecompileReason,
 ) -> u64 {
+    if !super::is_main_thread() {
+        return 0;
+    }
     if globals.store.update_inline_cache(lfp) {
         return 1;
     };
@@ -427,7 +439,7 @@ extern "C" fn jit_recompile_method_with_recovery(
 /// Compile the loop.
 ///
 extern "C" fn jit_compile_loop(globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) {
-    if globals.no_jit {
+    if globals.no_jit || !super::is_main_thread() {
         return;
     }
     compile_loop(globals, lfp, pc, None);

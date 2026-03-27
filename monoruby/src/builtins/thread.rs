@@ -55,6 +55,25 @@ fn main_thread_value(globals: &mut Globals) -> Value {
         .unwrap_or_default()
 }
 
+thread_local! {
+    /// The current thread's Thread object, stored as raw u64 bits.
+    /// 0 means not set (use the main thread from global variable).
+    static CURRENT_THREAD: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn set_current_thread(val: Value) {
+    CURRENT_THREAD.with(|c| c.set(val.id()));
+}
+
+fn get_current_thread(globals: &mut Globals) -> Value {
+    let bits = CURRENT_THREAD.with(|c| c.get());
+    if bits == 0 {
+        main_thread_value(globals)
+    } else {
+        Value::from_u64(bits)
+    }
+}
+
 fn empty_hash() -> Value {
     Value::hash(RubyMap::default())
 }
@@ -132,6 +151,9 @@ fn create_main_thread(globals: &mut Globals) -> Value {
         .set_ivar(thread_val, ivar_thread_local(), empty_hash())
         .unwrap();
 
+    // Set the main thread's current thread value.
+    set_current_thread(thread_val);
+
     thread_val
 }
 
@@ -200,9 +222,16 @@ fn thread_new(
     // Proc derefs to ProcInner via #[monoruby_object].
     let proc_data = Box::new(ProcData::from_proc(&proc));
     let proc_data_ptr = Box::into_raw(proc_data) as usize;
+    let thread_val_bits = thread_val.id();
 
     std::thread::spawn(move || {
+        // Mark this as a spawned thread (disables JIT compilation).
+        crate::codegen::set_spawned_thread();
+
         gvl_acquire();
+
+        // Set the current thread object for Thread.current.
+        set_current_thread(Value::from_u64(thread_val_bits));
 
         // SAFETY: We hold the GVL, so we have exclusive access to Globals.
         let globals = unsafe { &mut *(globals_ptr as *mut Globals) };
@@ -249,7 +278,7 @@ fn thread_current(
     _lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(main_thread_value(globals))
+    Ok(get_current_thread(globals))
 }
 
 #[monoruby_builtin]

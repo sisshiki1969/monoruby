@@ -65,6 +65,25 @@ thread_local! {
     });
 }
 
+thread_local! {
+    /// Whether this thread is the main (JIT-owning) thread.
+    /// Only the main thread should perform JIT compilation, because the generated
+    /// native code lives in the main thread's CODEGEN memory and uses addresses
+    /// relative to it.
+    static IS_MAIN_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// Mark the current thread as a non-main (spawned) thread.
+/// JIT compilation will be skipped on this thread.
+pub(crate) fn set_spawned_thread() {
+    IS_MAIN_THREAD.with(|c| c.set(false));
+}
+
+/// Returns true if the current thread is the main (JIT-owning) thread.
+pub(crate) fn is_main_thread() -> bool {
+    IS_MAIN_THREAD.with(|c| c.get())
+}
+
 #[cfg(feature = "perf")]
 thread_local! {
     pub static PERF_FILE: std::cell::RefCell<std::fs::File> = std::cell::RefCell::new(
