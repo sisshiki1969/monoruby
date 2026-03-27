@@ -269,9 +269,7 @@ fn thread_pass(
     _lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    gvl_release();
-    std::thread::yield_now();
-    gvl_acquire();
+    without_gvl(|| std::thread::yield_now());
     Ok(Value::nil())
 }
 
@@ -308,14 +306,12 @@ fn thread_join(
         }
     };
 
-    gvl_release();
-    {
+    without_gvl(|| {
         let mut result = state.result.lock().unwrap();
         while matches!(*result, ThreadResult::Running) {
             result = state.done.wait(result).unwrap();
         }
-    }
-    gvl_acquire();
+    });
 
     let result = state.result.lock().unwrap();
     match &*result {
@@ -347,14 +343,12 @@ fn thread_value(
         }
     };
 
-    gvl_release();
-    {
+    without_gvl(|| {
         let mut result = state.result.lock().unwrap();
         while matches!(*result, ThreadResult::Running) {
             result = state.done.wait(result).unwrap();
         }
-    }
-    gvl_acquire();
+    });
 
     let result = state.result.lock().unwrap();
     match &*result {
