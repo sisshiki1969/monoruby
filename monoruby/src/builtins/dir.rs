@@ -35,6 +35,19 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(klass, "exist?", exist, 1);
     globals.define_builtin_class_func_with(klass, "mkdir", mkdir, 1, 2, false);
     globals.define_builtin_class_func(klass, "entries", entries, 1);
+    globals.define_builtin_class_funcs(klass, "rmdir", &["delete", "unlink"], rmdir, 1);
+}
+
+///
+/// ### Dir.rmdir / Dir.delete / Dir.unlink
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/rmdir.html]
+#[monoruby_builtin]
+fn rmdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let path = lfp.arg(0).coerce_to_str(vm, globals)?;
+    std::fs::remove_dir(&path)
+        .map_err(|e| MonorubyErr::runtimeerr(format!("Dir.rmdir: {}: {}", path, e)))?;
+    Ok(Value::integer(0))
 }
 
 ///
@@ -678,6 +691,18 @@ mod tests {
             raise "should include .." unless entries.include?("..")
             raise "should be array" unless entries.is_a?(Array)
             raise "should have entries" unless entries.length > 2
+            "#,
+        );
+    }
+
+    #[test]
+    fn rmdir() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_rmdir_#{Process.pid}"
+            Dir.mkdir(path)
+            Dir.rmdir(path)
+            Dir.exist?(path) == false
             "#,
         );
     }

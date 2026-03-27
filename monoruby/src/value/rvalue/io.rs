@@ -71,23 +71,23 @@ impl IoInner {
         matches!(self, Self::Closed)
     }
 
-    pub fn close(&mut self) -> Result<()> {
+    /// Close the IO. Returns (exit_status, pid) for Popen, None for others.
+    pub fn close(&mut self) -> Result<Option<(i32, u32)>> {
         if self.is_closed() {
             return Err(MonorubyErr::runtimeerr("closed stream"));
         }
-        if let Self::Popen(popen) = self {
+        let popen_result = if let Self::Popen(popen) = self {
             let popen = Rc::get_mut(popen).unwrap();
-            // Drop the stdout reader and take child's stdout to close the
-            // pipe's read end. This causes the child to get SIGPIPE when it
-            // writes, preventing a deadlock where the parent waits on the
-            // child while the child blocks on write.
             popen.reader = None;
             popen.child.stdout.take();
-            let _ = popen.child.wait();
-        }
-        // Replace self with Closed, dropping the File and letting it close the fd naturally.
+            let pid = popen.child.id();
+            let status = popen.child.wait().ok().and_then(|s| s.code()).unwrap_or(0);
+            Some((status, pid))
+        } else {
+            None
+        };
         *self = Self::Closed;
-        Ok(())
+        Ok(popen_result)
     }
 
     pub(super) fn stdin() -> Self {

@@ -25,6 +25,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "readline", readline, 0);
     globals.define_builtin_funcs(IO_CLASS, "each", &["each_line"], each_line, 0);
     globals.define_builtin_class_func(IO_CLASS, "read", io_class_read, 1);
+    globals.define_builtin_class_func_with(IO_CLASS, "sysopen", io_sysopen, 1, 3, false);
     globals.define_builtin_class_func(IO_CLASS, "pipe", io_pipe, 0);
     globals.define_builtin_class_func_rest(IO_CLASS, "popen", io_popen);
     globals.define_builtin_func(IO_CLASS, "pid", io_pid, 0);
@@ -236,8 +237,18 @@ fn isatty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/close.html]
 #[monoruby_builtin]
-fn close(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().as_io_inner_mut().close()?;
+fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let popen_result = lfp.self_val().as_io_inner_mut().close()?;
+    if let Some((exit_status, pid)) = popen_result {
+        // Set $? (Process::Status)
+        let status_class = vm
+            .get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?
+            .as_class();
+        let mut status_obj = Value::object(status_class.id());
+        globals.store.set_ivar(status_obj, IdentId::get_id("@exitstatus"), Value::integer(exit_status as i64));
+        globals.store.set_ivar(status_obj, IdentId::get_id("@pid"), Value::integer(pid as i64));
+        globals.set_gvar(IdentId::get_id("$?"), status_obj);
+    }
     Ok(Value::nil())
 }
 
@@ -384,6 +395,36 @@ fn io_class_read(
 ///
 /// ### IO.pipe
 ///
+/// ### IO.sysopen
+///
+/// - sysopen(path, mode_str = "r", perm = 0666) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/sysopen.html]
+#[monoruby_builtin]
+fn io_sysopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::os::unix::io::IntoRawFd;
+    let path = lfp.arg(0).coerce_to_str(vm, globals)?;
+    let mode_str = if let Some(m) = lfp.try_arg(1) {
+        m.coerce_to_str(vm, globals)?
+    } else {
+        "r".to_string()
+    };
+    let mut opts = std::fs::OpenOptions::new();
+    match mode_str.as_str() {
+        "r" => { opts.read(true); }
+        "w" => { opts.write(true).create(true).truncate(true); }
+        "a" => { opts.append(true).create(true); }
+        "r+" => { opts.read(true).write(true); }
+        "w+" => { opts.read(true).write(true).create(true).truncate(true); }
+        "a+" => { opts.read(true).append(true).create(true); }
+        _ => { opts.read(true); }
+    }
+    let file = opts.open(&path)
+        .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
+    let fd = file.into_raw_fd();
+    Ok(Value::integer(fd as i64))
+}
+
 /// - pipe -> [read_io, write_io]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/pipe.html]
@@ -451,7 +492,18 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         let data = vm.get_block_data(globals, bh)?;
         let res = vm.invoke_block(globals, &data, &[io_val]);
         let mut io_close = io_val;
-        let _ = io_close.as_io_inner_mut().close();
+        if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close() {
+            let status_class = vm
+                .get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
+                .ok()
+                .map(|v| v.as_class());
+            if let Some(sc) = status_class {
+                let mut status_obj = Value::object(sc.id());
+                globals.store.set_ivar(status_obj, IdentId::get_id("@exitstatus"), Value::integer(exit_status as i64));
+                globals.store.set_ivar(status_obj, IdentId::get_id("@pid"), Value::integer(pid as i64));
+                globals.set_gvar(IdentId::get_id("$?"), status_obj);
+            }
+        }
         res
     } else {
         Ok(io_val)
