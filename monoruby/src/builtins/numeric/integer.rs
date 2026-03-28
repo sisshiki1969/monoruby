@@ -349,8 +349,11 @@ macro_rules! binop {
                             }
                             return Err(MonorubyErr::typeerr("coerce must return [x, y]".to_string()));
                         }
-                        lfp.arg(0).coerce_to_i64(globals)?;
-                        unreachable!();
+                        return Err(MonorubyErr::no_implicit_conversion(
+                            globals,
+                            rhs,
+                            INTEGER_CLASS,
+                        ));
                     }
                 }
             }

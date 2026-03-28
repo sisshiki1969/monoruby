@@ -330,15 +330,29 @@ fn equal(lhs: &RStringInner, rhs: Value) -> bool {
     }
 }
 
-fn string_cmp(lfp: Lfp) -> Result<Option<std::cmp::Ordering>> {
+fn string_cmp(
+    lfp: Lfp,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<Option<std::cmp::Ordering>> {
     let self_ = lfp.self_val();
     let lhs = self_.as_rstring_inner();
-    let res = lfp.arg(0).is_rstring().map(|rhs| lhs.cmp(&rhs));
-    Ok(res)
+    if let Some(rhs) = lfp.arg(0).is_rstring() {
+        return Ok(Some(lhs.cmp(&rhs)));
+    }
+    // Try to_str coercion
+    if let Ok(rhs) = lfp.arg(0).coerce_to_rstring(vm, globals) {
+        return Ok(Some(lhs.cmp(&rhs)));
+    }
+    Ok(None)
 }
 
-fn string_cmp2(lfp: Lfp, globals: &Globals) -> Result<std::cmp::Ordering> {
-    match string_cmp(lfp)? {
+fn string_cmp2(
+    lfp: Lfp,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<std::cmp::Ordering> {
+    match string_cmp(lfp, vm, globals)? {
         Some(ord) => Ok(ord),
         None => {
             let other = lfp.arg(0);
@@ -357,8 +371,10 @@ fn string_cmp2(lfp: Lfp, globals: &Globals) -> Result<std::cmp::Ordering> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3c=3d=3e.html]
 #[monoruby_builtin]
-fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(string_cmp(lfp)?.map(Value::from_ord).unwrap_or_default())
+fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(string_cmp(lfp, vm, globals)?
+        .map(Value::from_ord)
+        .unwrap_or_default())
 }
 
 ///
@@ -424,8 +440,8 @@ fn casecmp_p(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3c=3d.html]
 #[monoruby_builtin]
-fn le(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ord = string_cmp2(lfp, globals)?;
+fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ord = string_cmp2(lfp, vm, globals)?;
     Ok(Value::bool(ord != std::cmp::Ordering::Greater))
 }
 
@@ -436,8 +452,8 @@ fn le(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3c.html]
 #[monoruby_builtin]
-fn lt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ord = string_cmp2(lfp, globals)?;
+fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ord = string_cmp2(lfp, vm, globals)?;
     Ok(Value::bool(ord == std::cmp::Ordering::Less))
 }
 
@@ -448,8 +464,8 @@ fn lt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3e=3d.html]
 #[monoruby_builtin]
-fn ge(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ord = string_cmp2(lfp, globals)?;
+fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ord = string_cmp2(lfp, vm, globals)?;
     Ok(Value::bool(ord != std::cmp::Ordering::Less))
 }
 
@@ -460,8 +476,8 @@ fn ge(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3e.html]
 #[monoruby_builtin]
-fn gt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ord = string_cmp2(lfp, globals)?;
+fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ord = string_cmp2(lfp, vm, globals)?;
     Ok(Value::bool(ord == std::cmp::Ordering::Greater))
 }
 
@@ -5232,6 +5248,19 @@ mod tests {
             class Foo; def to_int; 2; end; end
             3.14159.truncate(Foo.new)
             "#,
+        );
+    }
+
+    #[test]
+    fn string_implicit_conversions() {
+        // String#<=> with to_str
+        run_test_with_prelude(
+            r#""hello" <=> o"#,
+            r#"class C; def to_str; "hello"; end; end; o = C.new"#,
+        );
+        run_test_with_prelude(
+            r#""abc" <=> o"#,
+            r#"class C; def to_str; "def"; end; end; o = C.new"#,
         );
     }
 }
