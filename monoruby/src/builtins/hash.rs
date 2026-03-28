@@ -194,29 +194,6 @@ fn hash_bracket(
     }
 }
 
-/// Try to use a value as a Hash, calling `to_hash` if it doesn't have hash type.
-fn coerce_to_hash(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<Value> {
-    if arg.try_hash_ty().is_some() {
-        return Ok(arg);
-    }
-    let to_hash_id = IdentId::get_id("to_hash");
-    if let Some(result) = vm.invoke_method_if_exists(globals, to_hash_id, arg, &[], None, None)? {
-        if result.try_hash_ty().is_some() {
-            return Ok(result);
-        }
-        return Err(MonorubyErr::typeerr(format!(
-            "can't convert {} to Hash ({}#to_hash gives {})",
-            arg.get_real_class_name(globals),
-            arg.get_real_class_name(globals),
-            result.get_real_class_name(globals),
-        )));
-    }
-    Err(MonorubyErr::no_implicit_conversion(
-        &globals.store,
-        arg,
-        HASH_CLASS,
-    ))
-}
 
 /// Helper to convert an iterator of values (expected to be [k,v] pairs) into a Hash.
 fn hash_from_array_pairs(
@@ -436,8 +413,8 @@ fn hash_subset(
 #[monoruby_builtin]
 fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_hash();
-    let rhs_val = coerce_to_hash(vm, globals, lfp.arg(0))?;
-    let rhs = rhs_val.as_hash();
+    let rhs_val = lfp.arg(0).coerce_to_hash(vm, globals)?;
+    let rhs = rhs_val;
     let result = lhs.len() < rhs.len() && hash_subset(lhs, rhs, vm, globals)?;
     Ok(Value::bool(result))
 }
@@ -452,8 +429,8 @@ fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 #[monoruby_builtin]
 fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_hash();
-    let rhs_val = coerce_to_hash(vm, globals, lfp.arg(0))?;
-    let rhs = rhs_val.as_hash();
+    let rhs_val = lfp.arg(0).coerce_to_hash(vm, globals)?;
+    let rhs = rhs_val;
     let result = lhs.len() <= rhs.len() && hash_subset(lhs, rhs, vm, globals)?;
     Ok(Value::bool(result))
 }
@@ -468,8 +445,8 @@ fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 #[monoruby_builtin]
 fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_hash();
-    let rhs_val = coerce_to_hash(vm, globals, lfp.arg(0))?;
-    let rhs = rhs_val.as_hash();
+    let rhs_val = lfp.arg(0).coerce_to_hash(vm, globals)?;
+    let rhs = rhs_val;
     let result = lhs.len() > rhs.len() && hash_subset(rhs, lhs, vm, globals)?;
     Ok(Value::bool(result))
 }
@@ -484,8 +461,8 @@ fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 #[monoruby_builtin]
 fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_hash();
-    let rhs_val = coerce_to_hash(vm, globals, lfp.arg(0))?;
-    let rhs = rhs_val.as_hash();
+    let rhs_val = lfp.arg(0).coerce_to_hash(vm, globals)?;
+    let rhs = rhs_val;
     let result = lhs.len() >= rhs.len() && hash_subset(rhs, lhs, vm, globals)?;
     Ok(Value::bool(result))
 }
@@ -594,9 +571,9 @@ fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_ = lfp.self_val();
-    let arg = coerce_to_hash(vm, globals, lfp.arg(0))?;
+    let arg = lfp.arg(0).coerce_to_hash(vm, globals)?;
     let h = self_.as_hashmap_inner_mut();
-    *h = arg.as_hashmap_inner().clone();
+    *h = arg.inner().clone();
 
     Ok(lfp.self_val())
 }
@@ -1080,8 +1057,8 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     lfp.expect_no_block()?;
     let mut h = lfp.self_val().dup().as_hash();
     for arg in lfp.arg(0).as_array().iter() {
-        let other_val = coerce_to_hash(vm, globals, *arg)?;
-        let other = other_val.as_hash();
+        let other_val = arg.coerce_to_hash(vm, globals)?;
+        let other = other_val;
         for (k, v) in other.iter() {
             h.insert(k, v, vm, globals)?;
         }
@@ -1106,8 +1083,8 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if let Some(block) = lfp.block() {
         let data = vm.get_block_data(globals, block)?;
         for arg in lfp.arg(0).as_array().iter() {
-            let other_val = coerce_to_hash(vm, globals, *arg)?;
-            let other = other_val.as_hash();
+            let other_val = arg.coerce_to_hash(vm, globals)?;
+            let other = other_val;
             for (k, other_v) in other.iter() {
                 if let Some(self_v) = h.get(k, vm, globals)? {
                     let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
@@ -1119,8 +1096,8 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         }
     } else {
         for arg in lfp.arg(0).as_array().iter() {
-            let other_val = coerce_to_hash(vm, globals, *arg)?;
-            let other = other_val.as_hash();
+            let other_val = arg.coerce_to_hash(vm, globals)?;
+            let other = other_val;
             for (k, v) in other.iter() {
                 h.insert(k, v, vm, globals)?;
             }
