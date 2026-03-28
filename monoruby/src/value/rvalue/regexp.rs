@@ -199,6 +199,7 @@ impl RegexpInner {
     /// Replaces the leftmost-first match with `replace`.
     pub(crate) fn replace_one(
         vm: &mut Executor,
+        globals: &mut Globals,
         re_val: Value,
         given: &str,
         replace: &str,
@@ -209,9 +210,10 @@ impl RegexpInner {
         } else if let Some(re) = re_val.is_regex() {
             re.replace_once(vm, given, replace)
         } else {
-            return Err(MonorubyErr::argumenterr(
-                "1st arg must be RegExp or String.",
-            ));
+            // Try to_str coercion
+            let coerced = re_val.coerce_to_str(vm, globals)?;
+            let re = Self::from_escaped(&coerced)?;
+            re.replace_once(vm, given, replace)
         }
         .map(|(s, c)| (s, c.is_some()))
     }
@@ -251,15 +253,17 @@ impl RegexpInner {
         } else if let Some(re) = re_val.is_regex() {
             replace_(vm, globals, &re, given, bh)
         } else {
-            Err(MonorubyErr::argumenterr(
-                "1st arg must be RegExp or String.",
-            ))
+            // Try to_str coercion
+            let coerced = re_val.coerce_to_str(vm, globals)?;
+            let re = Self::from_escaped(&coerced)?;
+            replace_(vm, globals, &re, given, bh)
         }
     }
 
     /// Replaces all non-overlapping matches in `given` string with `replace`.
     pub(crate) fn replace_all(
         vm: &mut Executor,
+        globals: &mut Globals,
         regexp: Value,
         given: &str,
         replace: &str,
@@ -270,9 +274,10 @@ impl RegexpInner {
         } else if let Some(re) = regexp.is_regex() {
             re.replace_repeat(vm, given, replace)
         } else {
-            Err(MonorubyErr::argumenterr(
-                "1st arg must be RegExp or String.",
-            ))
+            // Try to_str coercion
+            let coerced = regexp.coerce_to_str(vm, globals)?;
+            let re = Self::from_escaped(&coerced)?;
+            re.replace_repeat(vm, given, replace)
         }
     }
 
@@ -324,9 +329,10 @@ impl RegexpInner {
         } else if let Some(re) = re_val.is_regex() {
             replace_(vm, globals, &re, given, bh)
         } else {
-            Err(MonorubyErr::argumenterr(
-                "1st arg must be RegExp or String.",
-            ))
+            // Try to_str coercion
+            let coerced = re_val.coerce_to_str(vm, globals)?;
+            let re = Self::from_escaped(&coerced)?;
+            replace_(vm, globals, &re, given, bh)
         }
     }
 

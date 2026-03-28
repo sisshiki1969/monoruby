@@ -547,7 +547,7 @@ fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3c=3c.html]
 #[monoruby_builtin]
-fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_ = lfp.self_val();
     if let Some(other) = lfp.arg(0).is_rstring() {
@@ -573,11 +573,9 @@ fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             }
         }
     } else {
-        return Err(MonorubyErr::no_implicit_conversion(
-            globals,
-            lfp.arg(0),
-            STRING_CLASS,
-        ));
+        // Try to_str coercion
+        let coerced = lfp.arg(0).coerce_to_rstring(vm, globals)?;
+        self_.as_rstring_inner_mut().extend(&coerced)?;
     }
     Ok(self_)
 }
@@ -1529,7 +1527,7 @@ fn sub_main(
         }
         let given = self_val.expect_str(globals)?;
         let replace = arg1.coerce_to_str(vm, globals)?;
-        RegexpInner::replace_one(vm, lfp.arg(0), given, &replace)
+        RegexpInner::replace_one(vm, globals, lfp.arg(0), given, &replace)
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
@@ -1585,7 +1583,7 @@ fn gsub_main(
         }
         let given = self_val.expect_str(globals)?;
         let replace = arg1.coerce_to_str(vm, globals)?;
-        RegexpInner::replace_all(vm, lfp.arg(0), given, &replace)
+        RegexpInner::replace_all(vm, globals, lfp.arg(0), given, &replace)
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
