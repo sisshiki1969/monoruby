@@ -554,6 +554,42 @@ mod tests {
     }
 
     #[test]
+    fn float_inspect_to_s() {
+        // Special values
+        run_test("(1.0/0.0).inspect");
+        run_test("(-1.0/0.0).inspect");
+        run_test("(0.0/0.0).inspect");
+        run_test("(1.0/0.0).to_s");
+        run_test("(-1.0/0.0).to_s");
+        run_test("(0.0/0.0).to_s");
+        // Negative zero
+        run_test("(-0.0).inspect");
+        run_test("(-0.0).to_s");
+        run_test("0.0.inspect");
+        // Simple values
+        run_test("1.0.inspect");
+        run_test("100.0.inspect");
+        run_test("(-1.0).inspect");
+        // Fixed notation boundaries
+        run_test("0.0001.inspect");
+        run_test("0.001.inspect");
+        run_test("100000000000000.0.inspect");
+        // Scientific notation
+        run_test("0.00001.inspect");
+        run_test("(-0.00001).inspect");
+        run_test("1e15.inspect");
+        run_test("(-1e15).inspect");
+        run_test("1e16.inspect");
+        run_test("1e20.inspect");
+        // Shortest round-trip representation
+        run_test("(1.0/7).inspect");
+        run_test("0.21611564636388508.inspect");
+        // String interpolation uses to_s
+        run_test("\"#{1.0/0.0}\"");
+        run_test("\"#{-0.0}\"");
+    }
+
+    #[test]
     fn float_cmp_coerce() {
         // Object with coerce method (use run_test_once to avoid JIT deopt issues)
         run_test_once(

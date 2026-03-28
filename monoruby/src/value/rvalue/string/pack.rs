@@ -332,6 +332,61 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
                 let decoded = uu_decode(&data);
                 ary.push(Value::bytes(decoded));
             }
+            Template::BitString => {
+                // 'b' (little-endian) / 'B' (big-endian) — bit string
+                let big = endian;
+                let mut s = String::new();
+                if let Some(count) = repeat {
+                    let mut bits_left = count;
+                    while bits_left > 0 {
+                        if let Some(byte) = b.next() {
+                            let take = bits_left.min(8);
+                            for bit_i in 0..take {
+                                let bit = if big {
+                                    // MSB first
+                                    (byte >> (7 - bit_i)) & 1
+                                } else {
+                                    // LSB first
+                                    (byte >> bit_i) & 1
+                                };
+                                s.push(if bit == 1 { '1' } else { '0' });
+                            }
+                            bits_left -= take;
+                        } else {
+                            break;
+                        }
+                    }
+                } else {
+                    while let Some(byte) = b.next() {
+                        for bit_i in 0..8 {
+                            let bit = if big {
+                                (byte >> (7 - bit_i)) & 1
+                            } else {
+                                (byte >> bit_i) & 1
+                            };
+                            s.push(if bit == 1 { '1' } else { '0' });
+                        }
+                    }
+                }
+                ary.push(Value::string(s));
+            }
+            Template::Utf8 => {
+                // 'U' — UTF-8 characters to codepoints
+                if let Some(count) = repeat {
+                    for _ in 0..count {
+                        if b.is_empty() {
+                            break;
+                        }
+                        let cp = utf8_decode_one(&mut b)?;
+                        ary.push(Value::integer(cp as i64));
+                    }
+                } else {
+                    while !b.is_empty() {
+                        let cp = utf8_decode_one(&mut b)?;
+                        ary.push(Value::integer(cp as i64));
+                    }
+                }
+            }
             Template::BerCompressedInt => {
                 // 'w' — BER compressed integer
                 if let Some(count) = repeat {
@@ -348,11 +403,6 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
                         ary.push(val);
                     }
                 }
-            }
-            _ => {
-                return Err(MonorubyErr::argumenterr(
-                    "Currently, the template character is not supported.",
-                ));
             }
         };
     }
@@ -487,6 +537,56 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                     return Err(MonorubyErr::argumenterr("X outside of string"));
                 }
             }
+            Template::Hex => {
+                // 'h' (low nibble first) / 'H' (high nibble first) — hex string
+                let high = endianness; // Big = H (high nibble first)
+                if let Some(value) = iter.next() {
+                    let s = get_pack_string(store, *value)?;
+                    let count = if let Some(count) = repeat {
+                        count
+                    } else {
+                        s.len()
+                    };
+                    let mut byte: u8 = 0;
+                    let mut nibble_i = 0;
+                    for i in 0..count {
+                        let nibble = if i < s.len() {
+                            match s[i] {
+                                b'0'..=b'9' => s[i] - b'0',
+                                b'a'..=b'f' => s[i] - b'a' + 10,
+                                b'A'..=b'F' => s[i] - b'A' + 10,
+                                _ => 0,
+                            }
+                        } else {
+                            0
+                        };
+                        if high {
+                            if nibble_i == 0 {
+                                byte = nibble << 4;
+                            } else {
+                                byte |= nibble;
+                            }
+                        } else {
+                            if nibble_i == 0 {
+                                byte = nibble;
+                            } else {
+                                byte |= nibble << 4;
+                            }
+                        }
+                        nibble_i += 1;
+                        if nibble_i == 2 {
+                            packed.push(byte);
+                            byte = 0;
+                            nibble_i = 0;
+                        }
+                    }
+                    if nibble_i > 0 {
+                        packed.push(byte);
+                    }
+                } else {
+                    return Err(MonorubyErr::argumenterr("too few arguments"));
+                }
+            }
             Template::Ascii => {
                 // 'a' — arbitrary binary string (null padded)
                 if let Some(value) = iter.next() {
@@ -599,6 +699,71 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                     return Err(MonorubyErr::argumenterr("too few arguments"));
                 }
             }
+            Template::BitString => {
+                // 'b' (little-endian) / 'B' (big-endian) — bit string
+                let big = endianness;
+                if let Some(value) = iter.next() {
+                    let s = get_pack_string(store, *value)?;
+                    let count = if let Some(count) = repeat {
+                        count
+                    } else {
+                        s.len()
+                    };
+                    let mut byte: u8 = 0;
+                    let mut bit_i = 0;
+                    for i in 0..count {
+                        let bit = if i < s.len() && s[i] == b'1' { 1u8 } else { 0u8 };
+                        if big {
+                            byte |= bit << (7 - bit_i);
+                        } else {
+                            byte |= bit << bit_i;
+                        }
+                        bit_i += 1;
+                        if bit_i == 8 {
+                            packed.push(byte);
+                            byte = 0;
+                            bit_i = 0;
+                        }
+                    }
+                    if bit_i > 0 {
+                        packed.push(byte);
+                    }
+                } else {
+                    return Err(MonorubyErr::argumenterr("too few arguments"));
+                }
+            }
+            Template::Utf8 => {
+                // 'U' — UTF-8 characters from codepoints
+                let do_pack = |iter: &mut std::slice::Iter<Value>, packed: &mut Vec<u8>, count: Option<usize>| -> Result<()> {
+                    if let Some(count) = count {
+                        for _ in 0..count {
+                            if let Some(value) = iter.next() {
+                                let i = value.coerce_to_i64(store)?;
+                                if i < 0 {
+                                    return Err(MonorubyErr::argumenterr(
+                                        "pack(U): value out of range",
+                                    ));
+                                }
+                                utf8_encode_one(packed, i as u32);
+                            } else {
+                                return Err(MonorubyErr::argumenterr("too few arguments"));
+                            }
+                        }
+                    } else {
+                        while let Some(value) = iter.next() {
+                            let i = value.coerce_to_i64(store)?;
+                            if i < 0 {
+                                return Err(MonorubyErr::argumenterr(
+                                    "pack(U): value out of range",
+                                ));
+                            }
+                            utf8_encode_one(packed, i as u32);
+                        }
+                    }
+                    Ok(())
+                };
+                do_pack(&mut iter, &mut packed, repeat)?;
+            }
             Template::BerCompressedInt => {
                 // 'w' — BER compressed integer
                 if let Some(count) = repeat {
@@ -626,11 +791,6 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                         ber_encode(&mut packed, i as u64);
                     }
                 }
-            }
-            _ => {
-                return Err(MonorubyErr::argumenterr(
-                    "Currently, the template character is not supported.",
-                ));
             }
         };
     }
@@ -1008,6 +1168,47 @@ fn ber_encode(buf: &mut Vec<u8>, mut val: u64) {
     }
     tmp.reverse();
     buf.extend_from_slice(&tmp);
+}
+
+// --- UTF-8 encoding/decoding ---
+
+fn utf8_encode_one(buf: &mut Vec<u8>, cp: u32) {
+    if cp <= 0x7F {
+        buf.push(cp as u8);
+    } else if cp <= 0x7FF {
+        buf.push((0xC0 | (cp >> 6)) as u8);
+        buf.push((0x80 | (cp & 0x3F)) as u8);
+    } else if cp <= 0xFFFF {
+        buf.push((0xE0 | (cp >> 12)) as u8);
+        buf.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        buf.push((0x80 | (cp & 0x3F)) as u8);
+    } else if cp <= 0x10FFFF {
+        buf.push((0xF0 | (cp >> 18)) as u8);
+        buf.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+        buf.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        buf.push((0x80 | (cp & 0x3F)) as u8);
+    }
+}
+
+fn utf8_decode_one(b: &mut ByteIter) -> Result<u32> {
+    let first = b.next().ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
+    if first & 0x80 == 0 {
+        Ok(first as u32)
+    } else if first & 0xE0 == 0xC0 {
+        let b1 = b.next().ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
+        Ok(((first as u32 & 0x1F) << 6) | (b1 as u32 & 0x3F))
+    } else if first & 0xF0 == 0xE0 {
+        let b1 = b.next().ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
+        let b2 = b.next().ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
+        Ok(((first as u32 & 0x0F) << 12) | ((b1 as u32 & 0x3F) << 6) | (b2 as u32 & 0x3F))
+    } else if first & 0xF8 == 0xF0 {
+        let b1 = b.next().ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
+        let b2 = b.next().ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
+        let b3 = b.next().ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
+        Ok(((first as u32 & 0x07) << 18) | ((b1 as u32 & 0x3F) << 12) | ((b2 as u32 & 0x3F) << 6) | (b3 as u32 & 0x3F))
+    } else {
+        Err(MonorubyErr::argumenterr("malformed UTF-8 character"))
+    }
 }
 
 fn ber_decode(b: &mut ByteIter) -> Result<Value> {

@@ -436,7 +436,8 @@ fn hash_subset(
 #[monoruby_builtin]
 fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_hash();
-    let rhs = lfp.arg(0).expect_hash_ty(globals)?;
+    let rhs_val = coerce_to_hash(vm, globals, lfp.arg(0))?;
+    let rhs = rhs_val.as_hash();
     let result = lhs.len() < rhs.len() && hash_subset(lhs, rhs, vm, globals)?;
     Ok(Value::bool(result))
 }
@@ -451,7 +452,8 @@ fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 #[monoruby_builtin]
 fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_hash();
-    let rhs = lfp.arg(0).expect_hash_ty(globals)?;
+    let rhs_val = coerce_to_hash(vm, globals, lfp.arg(0))?;
+    let rhs = rhs_val.as_hash();
     let result = lhs.len() <= rhs.len() && hash_subset(lhs, rhs, vm, globals)?;
     Ok(Value::bool(result))
 }
@@ -466,7 +468,8 @@ fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 #[monoruby_builtin]
 fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_hash();
-    let rhs = lfp.arg(0).expect_hash_ty(globals)?;
+    let rhs_val = coerce_to_hash(vm, globals, lfp.arg(0))?;
+    let rhs = rhs_val.as_hash();
     let result = lhs.len() > rhs.len() && hash_subset(rhs, lhs, vm, globals)?;
     Ok(Value::bool(result))
 }
@@ -481,7 +484,8 @@ fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 #[monoruby_builtin]
 fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_hash();
-    let rhs = lfp.arg(0).expect_hash_ty(globals)?;
+    let rhs_val = coerce_to_hash(vm, globals, lfp.arg(0))?;
+    let rhs = rhs_val.as_hash();
     let result = lhs.len() >= rhs.len() && hash_subset(rhs, lhs, vm, globals)?;
     Ok(Value::bool(result))
 }
@@ -1074,10 +1078,10 @@ fn invert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.expect_no_block()?;
-    let mut h = lfp.self_val().dup().expect_hash_ty(globals)?;
+    let mut h = lfp.self_val().dup().as_hash();
     for arg in lfp.arg(0).as_array().iter() {
         let other_val = coerce_to_hash(vm, globals, *arg)?;
-        let other = other_val.expect_hash_ty(globals)?;
+        let other = other_val.as_hash();
         for (k, v) in other.iter() {
             h.insert(k, v, vm, globals)?;
         }
@@ -1103,7 +1107,7 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         let data = vm.get_block_data(globals, block)?;
         for arg in lfp.arg(0).as_array().iter() {
             let other_val = coerce_to_hash(vm, globals, *arg)?;
-            let other = other_val.expect_hash_ty(globals)?;
+            let other = other_val.as_hash();
             for (k, other_v) in other.iter() {
                 if let Some(self_v) = h.get(k, vm, globals)? {
                     let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
@@ -1116,7 +1120,7 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     } else {
         for arg in lfp.arg(0).as_array().iter() {
             let other_val = coerce_to_hash(vm, globals, *arg)?;
-            let other = other_val.expect_hash_ty(globals)?;
+            let other = other_val.as_hash();
             for (k, v) in other.iter() {
                 h.insert(k, v, vm, globals)?;
             }
@@ -1998,5 +2002,19 @@ mod tests {
         run_test("Hash.try_convert({a: 1})");
         run_test("Hash.try_convert(1)");
         run_test("Hash.try_convert(nil)");
+    }
+
+    #[test]
+    fn hash_implicit_conversions() {
+        // Hash#merge with to_hash
+        run_test_with_prelude(
+            "{a: 1}.merge(o)",
+            "class C; def to_hash; {b: 2}; end; end; o = C.new",
+        );
+        // Hash#< with to_hash
+        run_test_with_prelude(
+            "{a: 1} < o",
+            "class C; def to_hash; {a: 1, b: 2}; end; end; o = C.new",
+        );
     }
 }

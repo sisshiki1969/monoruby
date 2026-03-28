@@ -535,7 +535,19 @@ pub(super) extern "C" fn get_index(
     class_slot.idx = index.class();
     match base_classid {
         ARRAY_CLASS => {
-            return match base.as_array().get_elem1(globals, index) {
+            // If the index is not a fixnum or range, try to_int coercion
+            let idx = if index.try_fixnum().is_none() && index.is_range().is_none() {
+                match index.coerce_to_int(vm, globals) {
+                    Ok(i) => Value::integer(i),
+                    Err(err) => {
+                        vm.set_error(err);
+                        return None;
+                    }
+                }
+            } else {
+                index
+            };
+            return match base.as_array().get_elem1(globals, idx) {
                 Ok(val) => Some(val),
                 Err(err) => {
                     vm.set_error(err);
@@ -587,6 +599,10 @@ pub(super) extern "C" fn set_index(
         && let Some(idx) = index.try_fixnum()
     {
         class_slot.idx = INTEGER_CLASS;
+        if base.is_frozen() {
+            vm.set_error(MonorubyErr::cant_modify_frozen(&globals.store, base));
+            return None;
+        }
         return match base.as_array().set_index(idx, src) {
             Ok(val) => Some(val),
             Err(err) => {
