@@ -635,7 +635,7 @@ fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Integer.html]
 #[monoruby_builtin]
 fn kernel_integer(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -657,6 +657,13 @@ fn kernel_integer(
         },
         _ => {}
     };
+    // Try to_int coercion
+    if let Some(func_id) = globals.check_method(arg0, IdentId::TO_INT) {
+        let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+        if let RV::Fixnum(i) = result.unpack() {
+            return Ok(Value::integer(i));
+        }
+    }
     Err(MonorubyErr::no_implicit_conversion(
         globals,
         arg0,
@@ -672,7 +679,7 @@ fn kernel_integer(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Float.html]
 #[monoruby_builtin]
 fn kernel_float(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -694,6 +701,15 @@ fn kernel_float(
         }
         _ => {}
     };
+    // Try to_f coercion
+    if let Some(func_id) = globals.check_method(arg0, IdentId::TO_F) {
+        let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+        match result.unpack() {
+            RV::Float(f) => return Ok(Value::float(f)),
+            RV::Fixnum(i) => return Ok(Value::float(i as f64)),
+            _ => {}
+        }
+    }
     Err(MonorubyErr::no_implicit_conversion(
         globals,
         arg0,
@@ -1030,10 +1046,10 @@ fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/sleep.html]
 #[monoruby_builtin]
-fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let now = std::time::Instant::now();
     if let Some(sec) = lfp.try_arg(0) {
-        let sec = sec.coerce_to_f64(globals)?;
+        let sec = sec.coerce_to_f64_with_to_f(vm, globals)?;
         if sec.is_nan() || sec < 0.0 {
             return Err(MonorubyErr::argumenterr(
                 "time interval must not be negative or NaN",
@@ -2664,6 +2680,24 @@ mod tests {
         run_test_error(r#"Integer([4])"#);
         run_test2(r#"Integer(-2435766756886769978978435)"#);
         run_test2(r#"Integer(2435.4556787)"#);
+    }
+
+    #[test]
+    fn kernel_integer_to_int_coercion() {
+        // Integer() should call to_int on non-numeric arguments
+        run_test_with_prelude(
+            r#"Integer(o)"#,
+            r#"class C; def to_int; 42; end; end; o = C.new"#,
+        );
+    }
+
+    #[test]
+    fn kernel_float_to_f_coercion() {
+        // Float() should call to_f on non-numeric arguments
+        run_test_with_prelude(
+            r#"Float(o)"#,
+            r#"class C; def to_f; 3.14; end; end; o = C.new"#,
+        );
     }
 
     #[test]

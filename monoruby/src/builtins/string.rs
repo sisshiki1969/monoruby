@@ -547,7 +547,7 @@ fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3c=3c.html]
 #[monoruby_builtin]
-fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_ = lfp.self_val();
     if let Some(other) = lfp.arg(0).is_rstring() {
@@ -573,11 +573,9 @@ fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             }
         }
     } else {
-        return Err(MonorubyErr::no_implicit_conversion(
-            globals,
-            lfp.arg(0),
-            STRING_CLASS,
-        ));
+        // Try to_str coercion
+        let coerced = lfp.arg(0).coerce_to_rstring(vm, globals)?;
+        self_.as_rstring_inner_mut().extend(&coerced)?;
     }
     Ok(self_)
 }
@@ -617,7 +615,7 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let given = self_val.expect_str(globals)?;
-    let regex = &lfp.arg(0).expect_regexp_or_string(globals)?;
+    let regex = &lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
     let res = match regex.find_one(vm, given)? {
         Some(r) => Value::integer(r.start as i64),
         None => Value::nil(),
@@ -719,8 +717,62 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             0
         };
         string_match_index(vm, lhs, &re, nth)
+    } else if let Some(s) = lfp.arg(0).is_str() {
+        // String argument: return the string if it's a substring
+        let given = lhs.check_utf8()?;
+        if given.contains(s) {
+            Ok(Value::string_from_str(s))
+        } else {
+            Ok(Value::nil())
+        }
     } else {
-        Err(MonorubyErr::argumenterr("Bad type for index."))
+        // Try to_int coercion first, then to_str
+        let arg0 = lfp.arg(0);
+        if let Some(func_id) = globals.check_method(arg0, IdentId::TO_INT) {
+            let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+            if let RV::Fixnum(i) = result.unpack() {
+                let index = match lhs.conv_char_index(i)? {
+                    Some(i) => i,
+                    None => return Ok(Value::nil()),
+                };
+                if let Some(arg1) = lfp.try_arg(1) {
+                    let len = match arg1.coerce_to_int(vm, globals)? {
+                        0 => return Ok(Value::string_from_str("")),
+                        i if i < 0 => return Ok(Value::nil()),
+                        i => i as usize,
+                    };
+                    let r = lhs.get_range(index, len);
+                    return Ok(Value::string_from_inner(RStringInner::from_encoding(
+                        &lhs[r], enc,
+                    )));
+                } else {
+                    let r = lhs.get_range(index, 1);
+                    if !r.is_empty() {
+                        return Ok(Value::string_from_inner(RStringInner::from_encoding(
+                            &lhs[r], enc,
+                        )));
+                    } else {
+                        return Ok(Value::nil());
+                    }
+                }
+            }
+        }
+        if let Some(func_id) = globals.check_method(arg0, IdentId::TO_STR) {
+            let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+            if let Some(s) = result.is_str() {
+                let given = lhs.check_utf8()?;
+                if given.contains(s) {
+                    return Ok(Value::string_from_str(s));
+                } else {
+                    return Ok(Value::nil());
+                }
+            }
+        }
+        Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            arg0,
+            INTEGER_CLASS,
+        ))
     }
 }
 
@@ -1201,7 +1253,67 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             None => Ok(Value::array_from_iter(iter)),
         }
     } else {
-        Err(MonorubyErr::is_not_regexp_nor_string(globals, arg0))
+        // Try to_str coercion for the separator
+        let coerced = arg0.coerce_to_str(vm, globals)?;
+        let v: Vec<Value> = if coerced == " " {
+            match lim {
+                lim if lim < 0 => {
+                    let end_with = string.ends_with(|c: char| c.is_ascii_whitespace());
+                    let mut v: Vec<_> = string
+                        .split_ascii_whitespace()
+                        .map(Value::string_from_str)
+                        .collect();
+                    if end_with {
+                        v.push(Value::string_from_str(""))
+                    }
+                    v
+                }
+                0 => {
+                    let mut vec: Vec<&str> = string.split_ascii_whitespace().collect();
+                    while let Some(s) = vec.last() {
+                        if s.is_empty() {
+                            vec.pop().unwrap();
+                        } else {
+                            break;
+                        }
+                    }
+                    vec.into_iter().map(Value::string_from_str).collect()
+                }
+                _ => string
+                    .trim_start()
+                    .splitn(lim as usize, |c: char| c.is_ascii_whitespace())
+                    .map(|s| s.trim_start())
+                    .map(Value::string_from_str)
+                    .collect(),
+            }
+        } else if lim < 0 {
+            string.split(&*coerced).map(Value::string_from_str).collect()
+        } else if lim == 0 {
+            let mut vec: Vec<&str> = string.split(&*coerced).collect();
+            while let Some(s) = vec.last() {
+                if s.is_empty() {
+                    vec.pop().unwrap();
+                } else {
+                    break;
+                }
+            }
+            vec.into_iter().map(Value::string_from_str).collect()
+        } else {
+            string
+                .splitn(lim as usize, &*coerced)
+                .map(Value::string_from_str)
+                .collect()
+        };
+        match lfp.block() {
+            Some(bh) => {
+                let ary = Value::array_from_vec(v);
+                vm.temp_push(ary);
+                vm.invoke_block_iter1(globals, bh, ary.as_array().iter().cloned())?;
+                vm.temp_pop();
+                Ok(lfp.self_val())
+            }
+            None => Ok(Value::array_from_vec(v)),
+        }
     }
 }
 
@@ -1529,7 +1641,7 @@ fn sub_main(
         }
         let given = self_val.expect_str(globals)?;
         let replace = arg1.coerce_to_str(vm, globals)?;
-        RegexpInner::replace_one(vm, lfp.arg(0), given, &replace)
+        RegexpInner::replace_one(vm, globals, lfp.arg(0), given, &replace)
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
@@ -1585,7 +1697,7 @@ fn gsub_main(
         }
         let given = self_val.expect_str(globals)?;
         let replace = arg1.coerce_to_str(vm, globals)?;
-        RegexpInner::replace_all(vm, lfp.arg(0), given, &replace)
+        RegexpInner::replace_all(vm, globals, lfp.arg(0), given, &replace)
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
@@ -1610,15 +1722,17 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let given = self_.expect_str(globals)?;
     let arg0 = lfp.arg(0);
     let owned_re;
+    let coerced_re;
     let re: &RegexpInner = if let Some(s) = arg0.is_str() {
         owned_re = RegexpInner::from_escaped(s)?;
         &owned_re
     } else if arg0.is_regex().is_some() {
         arg0.as_regexp_inner()
     } else {
-        return Err(MonorubyErr::argumenterr(
-            "1st arg must be RegExp or String.",
-        ));
+        // Try to_str coercion
+        let coerced = arg0.coerce_to_str(vm, globals)?;
+        coerced_re = RegexpInner::from_escaped(&coerced)?;
+        &coerced_re
     };
     match lfp.block() {
         None => {
@@ -1695,7 +1809,7 @@ fn string_match(
     };
     let self_ = lfp.self_val();
     let given = self_.expect_str(globals)?;
-    let re = lfp.arg(0).expect_regexp_or_string(globals)?;
+    let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
     RegexpInner::match_one(vm, globals, &re, given, lfp.block(), pos)
 }
@@ -1723,7 +1837,7 @@ fn string_match_(
     };
     let self_ = lfp.self_val();
     let given = self_.expect_str(globals)?;
-    let re = lfp.arg(0).expect_regexp_or_string(globals)?;
+    let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
     let res = RegexpInner::match_one(vm, globals, &re, given, lfp.block(), pos)?;
     Ok(Value::bool(!res.is_nil()))
@@ -1749,7 +1863,7 @@ fn string_index(
     };
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
-    let re = lfp.arg(0).expect_regexp_or_string(globals)?;
+    let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
     let char_pos = match given.conv_char_index(char_pos)? {
         Some(pos) => pos,
@@ -1793,7 +1907,7 @@ fn string_rindex(
 ) -> Result<Value> {
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
-    let re = lfp.arg(0).expect_regexp_or_string(globals)?;
+    let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
     let s = given.check_utf8()?;
     let char_len = s.chars().count();
@@ -2478,8 +2592,10 @@ fn is_char_boundary(bytes: &[u8], offset: usize) -> bool {
 #[monoruby_builtin]
 fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.try_arg(0);
-    let rs = if let Some(arg0) = &arg0 {
-        arg0.expect_str(globals)?
+    let rs_owned;
+    let rs: &str = if let Some(arg0) = &arg0 {
+        rs_owned = arg0.coerce_to_str(vm, globals)?;
+        &rs_owned
     } else {
         "\n"
     };
@@ -5320,6 +5436,71 @@ mod tests {
         run_test_with_prelude(
             r#""abc" <=> o"#,
             r#"class C; def to_str; "def"; end; end; o = C.new"#,
+        );
+    }
+
+    #[test]
+    fn string_shl_to_str_coercion() {
+        // String#<< should call to_str on non-String arguments
+        run_test_with_prelude(
+            r#"s = "hello"; s << o; s"#,
+            r#"class C; def to_str; " world"; end; end; o = C.new"#,
+        );
+    }
+
+    #[test]
+    fn string_split_to_str_coercion() {
+        // String#split should call to_str on separator argument
+        run_test_with_prelude(
+            r#""a,b,c".split(o)"#,
+            r#"class C; def to_str; ","; end; end; o = C.new"#,
+        );
+    }
+
+    #[test]
+    fn string_sub_gsub_to_str_coercion() {
+        // String#sub and String#gsub should call to_str on pattern argument
+        run_test_with_prelude(
+            r#""abcde".sub(o, "XX")"#,
+            r#"class C; def to_str; "bc"; end; end; o = C.new"#,
+        );
+        run_test_with_prelude(
+            r#""abcbc".gsub(o, "XX")"#,
+            r#"class C; def to_str; "bc"; end; end; o = C.new"#,
+        );
+    }
+
+    #[test]
+    fn string_index_with_string() {
+        // String#[] with a String argument should return substring or nil
+        run_test(r#""abcde"["bc"]"#);
+        run_test(r#""abcde"["xy"]"#);
+    }
+
+    #[test]
+    fn string_index_to_int_coercion() {
+        // String#[] should call to_int on non-integer arguments
+        run_test_with_prelude(
+            r#""abcde"[o]"#,
+            r#"class C; def to_int; 2; end; end; o = C.new"#,
+        );
+    }
+
+    #[test]
+    fn string_scan_to_str_coercion() {
+        // String#scan should call to_str on pattern argument
+        run_test_with_prelude(
+            r#""abcabc".scan(o)"#,
+            r#"class C; def to_str; "bc"; end; end; o = C.new"#,
+        );
+    }
+
+    #[test]
+    fn string_each_line_to_str_coercion() {
+        // String#each_line should call to_str on separator argument
+        run_test_with_prelude(
+            r#"r = []; "a,b,c".each_line(o) { |l| r << l }; r"#,
+            r#"class C; def to_str; ","; end; end; o = C.new"#,
         );
     }
 }
