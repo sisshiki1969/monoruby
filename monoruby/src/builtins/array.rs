@@ -2989,6 +2989,30 @@ mod tests {
             a.fill(100)
             a"##,
         );
+        run_test(
+            r##"
+            a = [1, 2, 3, 4]
+            a.fill("a", 0..3)
+            a"##,
+        );
+        run_test(
+            r##"
+            a = [1, 2, 3, 4]
+            a.fill("x", 1, 2)
+            a"##,
+        );
+        run_test(
+            r##"
+            a = [1, 2, 3, 4]
+            a.fill { |i| i * 10 }
+            a"##,
+        );
+        run_test(
+            r##"
+            a = [1, 2, 3, 4]
+            a.fill(-2) { |i| i * 10 }
+            a"##,
+        );
     }
 
     #[test]
@@ -3297,6 +3321,9 @@ mod tests {
         run_test(r#"[5, nil, 7].all?"#);
         run_test(r#"[5, -1, false].all?"#);
         run_test(r#"[nil, false].all?"#);
+        run_test(r#"[1, 2, 3].all?(Integer)"#);
+        run_test(r#"[1, "a", 3].all?(Integer)"#);
+        run_test(r#"[].all?(Integer)"#);
 
         run_test(r#"[5,  6, 7].any? {|v| v > 0 }"#);
         run_test(r#"[5, -1, 7].any? {|v| v > 0 }"#);
@@ -3304,6 +3331,27 @@ mod tests {
         run_test(r#"[5, nil, 7].any?"#);
         run_test(r#"[5, -1, false].any?"#);
         run_test(r#"[nil, false].any?"#);
+        run_test(r#"[1, "a", 3].any?(String)"#);
+        run_test(r#"[1, 2, 3].any?(String)"#);
+    }
+
+    #[test]
+    fn pop_with_count() {
+        run_test(
+            r##"
+            a = [1, 2, 3, 4, 5]
+            [a.pop(2), a]"##,
+        );
+        run_test(
+            r##"
+            a = [1, 2, 3]
+            [a.pop(0), a]"##,
+        );
+        run_test(
+            r##"
+            a = [1, 2, 3]
+            [a.pop(10), a]"##,
+        );
     }
 
     #[test]

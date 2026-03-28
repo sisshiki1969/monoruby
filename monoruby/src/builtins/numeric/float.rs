@@ -512,6 +512,10 @@ mod tests {
     fn round() {
         run_test("1.2.floor");
         run_test("(-1.2).floor");
+        run_test("1.2.floor(1)");
+        run_test("(-1.2).floor(1)");
+        run_test("1.567.floor(2)");
+        run_test("1234.567.floor(-2)");
         run_test("11.6.round");
         run_test("11.5.round");
         run_test("11.4.round");

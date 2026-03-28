@@ -45,6 +45,8 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, "zero?", zero_, 0);
     globals.define_builtin_func(INTEGER_CLASS, "size", size, 0);
     globals.define_builtin_func(INTEGER_CLASS, "bit_length", bit_length, 0);
+    globals.define_builtin_func_with(INTEGER_CLASS, "to_s", to_s, 0, 1, false);
+    globals.define_builtin_func_with(INTEGER_CLASS, "inspect", to_s, 0, 1, false);
 }
 
 /*///
@@ -727,6 +729,93 @@ fn bit_length(
     }
 }
 
+///
+/// ### Integer#to_s
+///
+/// - to_s(base = 10) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/to_s.html]
+#[monoruby_builtin]
+fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let base = if let Some(b) = lfp.try_arg(0) {
+        let b = b.coerce_to_int(vm, globals)?;
+        if !(2..=36).contains(&b) {
+            return Err(MonorubyErr::argumenterr(format!(
+                "invalid radix {}",
+                b
+            )));
+        }
+        b as u32
+    } else {
+        10
+    };
+    match lfp.self_val().unpack() {
+        RV::Fixnum(i) => {
+            if base == 10 {
+                Ok(Value::string(format!("{}", i)))
+            } else {
+                let negative = i < 0;
+                let abs = if negative { (i as i128).unsigned_abs() } else { i as u128 };
+                let s = format_integer_base(abs, base);
+                if negative {
+                    Ok(Value::string(format!("-{}", s)))
+                } else {
+                    Ok(Value::string(s))
+                }
+            }
+        }
+        RV::BigInt(b) => {
+            if base == 10 {
+                Ok(Value::string(format!("{}", b)))
+            } else {
+                use num::traits::sign::Signed;
+                let negative = b.is_negative();
+                let abs = if negative { -b } else { b.clone() };
+                let s = format_bigint_base(&abs, base);
+                if negative {
+                    Ok(Value::string(format!("-{}", s)))
+                } else {
+                    Ok(Value::string(s))
+                }
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn format_integer_base(mut n: u128, base: u32) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let base = base as u128;
+    let mut buf = Vec::new();
+    while n > 0 {
+        buf.push(DIGITS[(n % base) as usize]);
+        n /= base;
+    }
+    buf.reverse();
+    String::from_utf8(buf).unwrap()
+}
+
+fn format_bigint_base(n: &BigInt, base: u32) -> String {
+    use num::Zero;
+    if n.is_zero() {
+        return "0".to_string();
+    }
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let base_big = BigInt::from(base);
+    let mut buf = Vec::new();
+    let mut val = n.clone();
+    while !val.is_zero() {
+        let rem = &val % &base_big;
+        buf.push(DIGITS[rem.to_usize().unwrap()]);
+        val /= &base_big;
+    }
+    buf.reverse();
+    String::from_utf8(buf).unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -1196,5 +1285,28 @@ mod tests {
         run_test_error("5 ^ 'a'");
         run_test_error("5 | 1.5");
         run_test_error("5 & nil");
+    }
+
+    #[test]
+    fn to_s_with_base() {
+        run_test("255.to_s(16)");
+        run_test("(-255).to_s(16)");
+        run_test("10.to_s(2)");
+        run_test("0.to_s(16)");
+        run_test("123.to_s");
+        run_test("255.to_s(36)");
+    }
+
+    #[test]
+    fn chr_with_encoding() {
+        run_test("65.chr");
+        run_test("97.chr");
+    }
+
+    #[test]
+    fn index_with_length() {
+        run_test("42[0, 3]");
+        run_test("0b11010[1, 3]");
+        run_test("255[4, 4]");
     }
 }

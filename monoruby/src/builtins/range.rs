@@ -993,6 +993,11 @@ mod tests {
         run_test("(1..5).exclude_end?");
         run_test("(1...5).exclude_end?");
         run_test("(1...5).to_a");
+        run_test("Range.new(1, 5, true).to_a");
+        run_test("(1..10).first(3)");
+        run_test("(1..10).last(3)");
+        run_test("(1..5).first");
+        run_test("(1..5).last");
     }
 
     #[test]
