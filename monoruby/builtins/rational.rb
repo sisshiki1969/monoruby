@@ -137,7 +137,17 @@ class Rational < Numeric
   def to_i
     @numerator / @denominator
   end
-  alias truncate to_i
+
+  def truncate(ndigits = 0)
+    if ndigits == 0
+      to_i
+    elsif ndigits > 0
+      (self * 10**ndigits).to_i.to_r / 10**ndigits
+    else
+      d = 10 ** (-ndigits)
+      (to_i / d) * d
+    end
+  end
 
   def to_f
     @numerator.to_f / @denominator.to_f
