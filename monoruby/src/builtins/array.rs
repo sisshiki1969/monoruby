@@ -1023,7 +1023,7 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
     } else {
         // Non-block form
-        let val = lfp.arg(0);
+        let val = lfp.try_arg(0).unwrap_or(Value::nil());
         if let Some(arg1) = lfp.try_arg(1) {
             if let Some(range) = arg1.is_range() {
                 let (start, end_idx) = fill_range_indices(vm, globals, &ary, range)?;
