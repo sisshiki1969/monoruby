@@ -227,34 +227,28 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             return Ok(self_val.into());
         }
     }
-    if let Some(size) = lfp.arg(0).try_fixnum() {
-        if size < 0 {
-            return Err(MonorubyErr::negative_array_size());
-        }
-        let size = size as usize;
-        if let Some(bh) = lfp.block() {
-            if lfp.try_arg(1).is_some() {
-                eprintln!("warning: block supersedes default value argument");
-            }
-            let iter = (0..size).map(|i| Value::integer(i as i64));
-            let mut res = vm.invoke_block_map1(globals, bh, iter, size)?;
-            RValue::swap_kind(lfp.self_val().rvalue_mut(), res.rvalue_mut());
-        } else {
-            let val = if lfp.try_arg(1).is_none() {
-                Value::nil()
-            } else {
-                lfp.arg(1)
-            };
-            *self_val = ArrayInner::from(smallvec![val; size]);
-        }
-        Ok(self_val.into())
-    } else {
-        Err(MonorubyErr::no_implicit_conversion(
-            globals,
-            lfp.arg(0),
-            INTEGER_CLASS,
-        ))
+    // Use coerce_to_int to call to_int on the size argument
+    let size = lfp.arg(0).coerce_to_int(vm, globals)?;
+    if size < 0 {
+        return Err(MonorubyErr::negative_array_size());
     }
+    let size = size as usize;
+    if let Some(bh) = lfp.block() {
+        if lfp.try_arg(1).is_some() {
+            eprintln!("warning: block supersedes default value argument");
+        }
+        let iter = (0..size).map(|i| Value::integer(i as i64));
+        let mut res = vm.invoke_block_map1(globals, bh, iter, size)?;
+        RValue::swap_kind(lfp.self_val().rvalue_mut(), res.rvalue_mut());
+    } else {
+        let val = if lfp.try_arg(1).is_none() {
+            Value::nil()
+        } else {
+            lfp.arg(1)
+        };
+        *self_val = ArrayInner::from(smallvec![val; size]);
+    }
+    Ok(self_val.into())
 }
 
 ///
@@ -2522,6 +2516,19 @@ mod tests {
         run_test_no_result_check("[].hash");
         run_test_error("Array.new(-5)");
         run_test_error("Array.new(:r, 42)");
+    }
+
+    #[test]
+    fn array_new_to_int_coercion() {
+        // Array.new should call to_int on size argument
+        run_test_with_prelude(
+            r#"Array.new(o)"#,
+            r#"class C; def to_int; 3; end; end; o = C.new"#,
+        );
+        run_test_with_prelude(
+            r#"Array.new(o, "x")"#,
+            r#"class C; def to_int; 2; end; end; o = C.new"#,
+        );
     }
 
     #[test]

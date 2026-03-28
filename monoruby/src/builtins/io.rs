@@ -684,7 +684,7 @@ fn value_to_fd(globals: &Globals, v: Value) -> Result<i32> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/select.html]
 #[monoruby_builtin]
-fn io_select(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let read_arg = lfp.arg(0);
     let write_arg = lfp.try_arg(1).unwrap_or(Value::nil());
     let error_arg = lfp.try_arg(2).unwrap_or(Value::nil());
@@ -694,7 +694,7 @@ fn io_select(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let timeout = if timeout_arg.is_nil() {
         None // block forever
     } else {
-        let f = timeout_arg.coerce_to_f64(&globals.store)?;
+        let f = timeout_arg.coerce_to_f64_with_to_f(vm, globals)?;
         if f.is_nan() {
             return Err(MonorubyErr::rangeerr("NaN out of Time range"));
         }
