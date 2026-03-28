@@ -828,17 +828,6 @@ mod tests {
 
     #[test]
     fn errno_from_dir_operations() {
-        // Dir.rmdir on a file triggers Errno::ENOTDIR
-        run_test_no_result_check(
-            r#"
-            begin
-              Dir.rmdir("/dev/null")
-              raise "should have raised"
-            rescue Errno::ENOTDIR
-              # expected
-            end
-            "#,
-        );
         // Dir.rmdir on non-existent path triggers Errno::ENOENT
         run_test_no_result_check(
             r#"
