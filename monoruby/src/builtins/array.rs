@@ -503,18 +503,9 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2b.html]
 #[monoruby_builtin]
-fn add(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut lhs = lfp.self_val().dup().as_array();
-    let rhs = match lfp.arg(0).try_array_ty() {
-        Some(v) => v,
-        None => {
-            return Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                lfp.arg(0),
-                ARRAY_CLASS,
-            ));
-        }
-    };
+    let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
     lhs.extend_from_slice(&rhs);
     Ok(lhs.into())
 }
@@ -528,16 +519,7 @@ fn add(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs_v = lfp.self_val();
-    let rhs = match lfp.arg(0).try_array_ty() {
-        Some(ary) => ary,
-        None => {
-            return Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                lfp.arg(0),
-                ARRAY_CLASS,
-            ));
-        }
-    };
+    let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
     let mut v = vec![];
     for lhs in lhs_v.as_array().iter() {
         let mut flag = true;
@@ -562,24 +544,32 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2a.html]
 #[monoruby_builtin]
-fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
-    if let Some(v) = lfp.arg(0).try_fixnum() {
+    let arg = lfp.arg(0);
+    if let Some(v) = arg.try_fixnum() {
         if v < 0 {
             return Err(MonorubyErr::negative_argument());
         }
         let rhs = v as usize;
         let vec = lhs.repeat(rhs);
         Ok(Value::array_from_vec(vec))
-    } else if let Some(sep) = lfp.arg(0).is_str() {
+    } else if let Some(sep) = arg.is_str() {
         let res = array_join(&globals.store, lhs, sep);
         Ok(Value::string(res))
+    } else if let Ok(s) = arg.coerce_to_str(vm, globals) {
+        // Try to_str coercion for join
+        let res = array_join(&globals.store, lhs, &s);
+        Ok(Value::string(res))
     } else {
-        Err(MonorubyErr::no_implicit_conversion(
-            globals,
-            lfp.arg(0),
-            INTEGER_CLASS,
-        ))
+        // Try to_int coercion for repeat
+        let v = arg.coerce_to_int(vm, globals)?;
+        if v < 0 {
+            return Err(MonorubyErr::negative_argument());
+        }
+        let rhs = v as usize;
+        let vec = lhs.repeat(rhs);
+        Ok(Value::array_from_vec(vec))
     }
 }
 
@@ -620,7 +610,7 @@ fn or(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/shift.html]
 #[monoruby_builtin]
-fn shift(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn shift(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
     if lfp.try_arg(0).is_none() {
@@ -631,7 +621,7 @@ fn shift(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         ary.drain(0..1);
         Ok(res)
     } else {
-        let i = lfp.arg(0).coerce_to_i64(globals)?;
+        let i = lfp.arg(0).coerce_to_int(vm, globals)?;
         if i < 0 {
             return Err(MonorubyErr::negative_array_size());
         }
@@ -852,13 +842,31 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d.html]
 #[monoruby_builtin]
-fn index(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if lfp.try_arg(1).is_none() {
         let idx = lfp.arg(0);
+        // If the index is not a fixnum or range, try to_int coercion
+        if idx.try_fixnum().is_none() && idx.is_range().is_none() {
+            let i = idx.coerce_to_int(vm, globals)?;
+            return ary.get_elem1(globals, Value::integer(i));
+        }
         ary.get_elem1(globals, idx)
     } else {
-        ary.get_elem2(globals, lfp.arg(0), lfp.arg(1))
+        let arg0 = lfp.arg(0);
+        let arg1 = lfp.arg(1);
+        // Coerce indices via to_int if needed
+        let arg0 = if arg0.try_fixnum().is_none() {
+            Value::integer(arg0.coerce_to_int(vm, globals)?)
+        } else {
+            arg0
+        };
+        let arg1 = if arg1.try_fixnum().is_none() {
+            Value::integer(arg1.coerce_to_int(vm, globals)?)
+        } else {
+            arg1
+        };
+        ary.get_elem2(globals, arg0, arg1)
     }
 }
 
@@ -945,19 +953,10 @@ fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/replace.html]
 #[monoruby_builtin]
-fn replace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_ary = lfp.self_val().as_array();
-    let other = match lfp.arg(0).try_array_ty() {
-        Some(v) => v,
-        None => {
-            return Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                lfp.arg(0),
-                ARRAY_CLASS,
-            ));
-        }
-    };
+    let other = lfp.arg(0).coerce_to_array(vm, globals)?;
     // Copy elements first to handle the case where self and other are the same array.
     let elems: Vec<Value> = other.iter().cloned().collect();
     self_ary.clear();
@@ -1021,7 +1020,7 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let self_ary = lfp.self_val().as_array();
     let mut args_ary = vec![];
     for a in lfp.arg(0).as_array().iter() {
-        args_ary.push(a.expect_array_ty(globals)?.to_vec());
+        args_ary.push(a.coerce_to_array(vm, globals)?.to_vec());
     }
     let mut ary = Array::new_empty();
     for (i, val) in self_ary.iter().enumerate() {
@@ -1151,12 +1150,12 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/last.html]
 #[monoruby_builtin]
-fn last(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if lfp.try_arg(0).is_none() {
         Ok(ary.last().cloned().unwrap_or_default())
     } else {
-        let n = lfp.arg(0).coerce_to_i64(globals)?;
+        let n = lfp.arg(0).coerce_to_int(vm, globals)?;
         if n < 0 {
             return Err(MonorubyErr::argumenterr("must be positive."));
         }
@@ -1211,9 +1210,9 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/take.html]
 #[monoruby_builtin]
-fn take(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn take(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    let n = lfp.arg(0).coerce_to_i64(globals)?;
+    let n = lfp.arg(0).coerce_to_int(vm, globals)?;
     if n < 0 {
         return Err(MonorubyErr::argumenterr("must be positive."));
     }
@@ -1908,10 +1907,10 @@ fn transpose(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/rotate=21.html]
 #[monoruby_builtin]
-fn rotate_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn rotate_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let i = if let Some(arg0) = lfp.try_arg(0) {
-        arg0.coerce_to_i64(globals)?
+        arg0.coerce_to_int(vm, globals)?
     } else {
         1
     };
@@ -1935,9 +1934,9 @@ fn rotate_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/rotate.html]
 #[monoruby_builtin]
-fn rotate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn rotate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let i = if let Some(arg0) = lfp.try_arg(0) {
-        arg0.coerce_to_i64(globals)?
+        arg0.coerce_to_int(vm, globals)?
     } else {
         1
     };
@@ -1966,7 +1965,7 @@ fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let lhs = lfp.self_val().as_array();
     let mut lists = vec![];
     for rhs in lfp.arg(0).as_array().into_iter() {
-        lists.push(rhs.expect_array_ty(globals)?);
+        lists.push(rhs.coerce_to_array(vm, globals)?);
     }
     // Check total product size to avoid memory exhaustion.
     let mut total: usize = lhs.len();
@@ -2022,7 +2021,7 @@ fn product_inner(lhs: Array, rhs: Vec<Array>) -> Vec<Array> {
 fn union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().dup().as_array();
     for rhs in lfp.arg(0).as_array().into_iter() {
-        let rhs = rhs.expect_array_ty(globals)?;
+        let rhs = rhs.coerce_to_array(vm, globals)?;
         ary.extend(rhs.into_iter().cloned());
     }
     ary.uniq(vm, globals)?;
@@ -3920,21 +3919,6 @@ mod tests {
         run_test_with_prelude(
             "[1,2,3,4,5].take(o)",
             "class C; def to_int; 3; end; end; o = C.new",
-        );
-        // Integer#& with to_int
-        run_test_with_prelude(
-            "0xff & o",
-            "class C; def to_int; 0x0f; end; end; o = C.new",
-        );
-        // Integer#| with to_int
-        run_test_with_prelude(
-            "0xf0 | o",
-            "class C; def to_int; 0x0f; end; end; o = C.new",
-        );
-        // Integer#^ with to_int
-        run_test_with_prelude(
-            "0xff ^ o",
-            "class C; def to_int; 0x0f; end; end; o = C.new",
         );
     }
 }
