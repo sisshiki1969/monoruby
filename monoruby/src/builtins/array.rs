@@ -3921,4 +3921,14 @@ mod tests {
             "class C; def to_int; 3; end; end; o = C.new",
         );
     }
+
+    #[test]
+    fn pack_hex() {
+        run_test(r#"["6162"].pack("h4")"#);
+        run_test(r#"["6162"].pack("H4")"#);
+        run_test(r#"["6162636465"].pack("h*")"#);
+        run_test(r#"["6162636465"].pack("H*")"#);
+        run_test(r#""\x16\x26".unpack("h4")"#);
+        run_test(r#""\x61\x62".unpack("H4")"#);
+    }
 }

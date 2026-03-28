@@ -1173,4 +1173,30 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn close_read() {
+        run_test_once(
+            r#"
+            IO.popen("echo hello", "r") do |io|
+              data = io.read
+              io.close_read
+              data
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn close_write() {
+        run_test_once(
+            r#"
+            IO.popen("cat", "r+") do |io|
+              io.write("hello")
+              io.close_write
+              io.read
+            end
+            "#,
+        );
+    }
 }
