@@ -110,6 +110,26 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "b", b, 0);
     globals.define_builtin_func_with_kw(
         STRING_CLASS,
+        "encode",
+        encode,
+        0,
+        2,
+        false,
+        &[],
+        true,
+    );
+    globals.define_builtin_func_with_kw(
+        STRING_CLASS,
+        "encode!",
+        encode_,
+        0,
+        2,
+        false,
+        &[],
+        true,
+    );
+    globals.define_builtin_func_with_kw(
+        STRING_CLASS,
         "unpack1",
         unpack1,
         1,
@@ -3432,6 +3452,75 @@ fn next_mut(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let new_str = str_next(recv);
     self_.replace_string(new_str);
     Ok(self_)
+}
+
+/// Resolve an encoding argument (String or Encoding object) to a validated
+/// constant name via `enc_name_to_const`.  Returns the constant name on
+/// success or an ArgumentError on unknown encoding.
+fn resolve_enc_arg(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg: Value,
+) -> Result<&'static str> {
+    let name = if let Some(s) = arg.is_str() {
+        s.to_string()
+    } else if arg.class() == encoding_class(globals) {
+        let s = globals.store.get_ivar(arg, IdentId::_ENCODING).unwrap();
+        s.as_str().to_string()
+    } else {
+        let s = arg.coerce_to_string(vm, globals)?;
+        s
+    };
+    enc_name_to_const(&name).ok_or_else(|| {
+        MonorubyErr::argumenterr(format!("unknown encoding name - {}", name))
+    })
+}
+
+///
+/// ### String#encode
+///
+/// - encode(encoding, **opts) -> String
+/// - encode(dst_encoding, src_encoding, **opts) -> String
+/// - encode(**opts) -> String
+///
+/// Stub: validates encoding names but does not perform actual byte conversion.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/encode.html]
+#[monoruby_builtin]
+fn encode(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // Validate encoding arguments (so we don't raise on known names)
+    if let Some(arg0) = lfp.try_arg(0) {
+        resolve_enc_arg(vm, globals, arg0)?;
+    }
+    if let Some(arg1) = lfp.try_arg(1) {
+        resolve_enc_arg(vm, globals, arg1)?;
+    }
+    // Return a copy of self (no actual conversion)
+    Ok(lfp.self_val().dup())
+}
+
+///
+/// ### String#encode!
+///
+/// - encode!(encoding, **opts) -> self
+/// - encode!(dst_encoding, src_encoding, **opts) -> self
+/// - encode!(**opts) -> self
+///
+/// Stub: validates encoding names but does not perform actual byte conversion.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/encode=21.html]
+#[monoruby_builtin]
+fn encode_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    // Validate encoding arguments
+    if let Some(arg0) = lfp.try_arg(0) {
+        resolve_enc_arg(vm, globals, arg0)?;
+    }
+    if let Some(arg1) = lfp.try_arg(1) {
+        resolve_enc_arg(vm, globals, arg1)?;
+    }
+    // Return self (no actual conversion)
+    Ok(lfp.self_val())
 }
 
 ///
