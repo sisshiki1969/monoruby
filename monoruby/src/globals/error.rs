@@ -591,6 +591,33 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::IO, msg)
     }
 
+    /// Convert a `std::io::Error` into the appropriate Ruby Errno exception.
+    ///
+    /// Looks up the Errno module and the specific error class (e.g. `Errno::ENOTDIR`)
+    /// using the OS error number. Falls back to `RuntimeError` if the class is not found.
+    pub(crate) fn from_io_err(store: &Store, err: &std::io::Error, msg: String) -> MonorubyErr {
+        if let Some(errno) = err.raw_os_error() {
+            let errno_name = errno_to_name(errno);
+            if let Some(errno_name) = errno_name {
+                // Look up `Errno` module under Object
+                let errno_module =
+                    store.get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Errno"));
+                if let Some(errno_module) = errno_module {
+                    let errno_class_id = errno_module.as_class_id();
+                    // Look up the specific error class (e.g. `ENOTDIR`) under `Errno`
+                    let err_class =
+                        store.get_constant_noautoload(errno_class_id, IdentId::get_id(errno_name));
+                    if let Some(err_class) = err_class {
+                        let class_id = err_class.as_class_id();
+                        return MonorubyErr::new(MonorubyErrKind::Other(class_id), msg);
+                    }
+                }
+            }
+        }
+        // Fallback to RuntimeError
+        MonorubyErr::runtimeerr(msg)
+    }
+
     pub(crate) fn rangeerr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Range, msg)
     }
@@ -662,6 +689,53 @@ impl MonorubyErrKind {
             SYSTEM_EXIT_ERROR_CLASS => MonorubyErrKind::SystemExit(0),
             _ => MonorubyErrKind::Other(class_id),
         }
+    }
+}
+
+/// Map a raw OS errno number to the corresponding Ruby Errno class name.
+///
+/// Returns `None` for unknown errno values.
+fn errno_to_name(errno: i32) -> Option<&'static str> {
+    match errno {
+        1 => Some("EPERM"),
+        2 => Some("ENOENT"),
+        3 => Some("ESRCH"),
+        4 => Some("EINTR"),
+        5 => Some("EIO"),
+        6 => Some("ENXIO"),
+        7 => Some("E2BIG"),
+        8 => Some("ENOEXEC"),
+        9 => Some("EBADF"),
+        10 => Some("ECHILD"),
+        11 => Some("EAGAIN"),
+        12 => Some("ENOMEM"),
+        13 => Some("EACCES"),
+        14 => Some("EFAULT"),
+        16 => Some("EBUSY"),
+        17 => Some("EEXIST"),
+        18 => Some("EXDEV"),
+        19 => Some("ENODEV"),
+        20 => Some("ENOTDIR"),
+        21 => Some("EISDIR"),
+        22 => Some("EINVAL"),
+        23 => Some("ENFILE"),
+        24 => Some("EMFILE"),
+        25 => Some("ENOTTY"),
+        27 => Some("EFBIG"),
+        28 => Some("ENOSPC"),
+        29 => Some("ESPIPE"),
+        30 => Some("EROFS"),
+        31 => Some("EMLINK"),
+        32 => Some("EPIPE"),
+        33 => Some("EDOM"),
+        34 => Some("ERANGE"),
+        35 => Some("EDEADLK"),
+        36 => Some("ENAMETOOLONG"),
+        37 => Some("ENOLCK"),
+        38 => Some("ENOSYS"),
+        39 => Some("ENOTEMPTY"),
+        40 => Some("ELOOP"),
+        _ => None,
     }
 }
 
