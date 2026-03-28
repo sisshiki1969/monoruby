@@ -7,8 +7,17 @@ class Integer
     self > 0
   end
 
-  def floor
-    self
+  def floor(ndigits = 0)
+    if ndigits >= 0
+      self
+    else
+      d = 10 ** (-ndigits)
+      if self >= 0
+        (self / d) * d
+      else
+        ((self - d + 1) / d) * d
+      end
+    end
   end
 
   def times

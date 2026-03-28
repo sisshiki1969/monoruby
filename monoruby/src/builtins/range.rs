@@ -6,17 +6,18 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Range", RANGE_CLASS, ObjTy::RANGE);
-    globals.define_builtin_class_func_with(RANGE_CLASS, "new", range_new, 2, 2, false);
+    globals.define_builtin_class_func_with(RANGE_CLASS, "new", range_new, 2, 3, false);
     globals.define_builtin_class_func(RANGE_CLASS, "allocate", allocate, 0);
-    globals.define_builtin_inline_funcs(
+    globals.define_builtin_inline_func(
         RANGE_CLASS,
         "begin",
-        &["first"],
         begin,
         Box::new(range_begin),
         0,
     );
-    globals.define_builtin_inline_funcs(RANGE_CLASS, "end", &["last"], end, Box::new(range_end), 0);
+    globals.define_builtin_func_with(RANGE_CLASS, "first", first, 0, 1, false);
+    globals.define_builtin_inline_func(RANGE_CLASS, "end", end, Box::new(range_end), 0);
+    globals.define_builtin_func_with(RANGE_CLASS, "last", last, 0, 1, false);
     globals.define_builtin_inline_func(
         RANGE_CLASS,
         "exclude_end?",
@@ -46,7 +47,11 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/s/new.html]
 #[monoruby_builtin]
 fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    globals.generate_range(lfp.arg(0), lfp.arg(1), false)
+    let exclude_end = lfp
+        .try_arg(2)
+        .map(|v| v.as_bool())
+        .unwrap_or(false);
+    globals.generate_range(lfp.arg(0), lfp.arg(1), exclude_end)
 }
 
 /// ### Range.allocate
@@ -146,6 +151,64 @@ fn range_end(
 
     state.def_reg2acc(ir, GP::Rax, dst);
     true
+}
+
+///
+/// ### Range#first
+///
+/// - first -> object
+/// - first(n) -> [object]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Range/i/first.html]
+#[monoruby_builtin]
+fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let range = self_.as_range();
+    if let Some(n_val) = lfp.try_arg(0) {
+        let n = n_val.coerce_to_int(vm, globals)?;
+        if n < 0 {
+            return Err(MonorubyErr::argumenterr("negative array size"));
+        }
+        let n = n as usize;
+        if let Some((start, end)) = range.try_fixnum() {
+            let vec: Vec<Value> = (start..end).take(n).map(Value::integer).collect();
+            Ok(Value::array_from_vec(vec))
+        } else {
+            Err(MonorubyErr::runtimeerr("not supported"))
+        }
+    } else {
+        Ok(range.start())
+    }
+}
+
+///
+/// ### Range#last
+///
+/// - last -> object
+/// - last(n) -> [object]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Range/i/last.html]
+#[monoruby_builtin]
+fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let range = self_.as_range();
+    if let Some(n_val) = lfp.try_arg(0) {
+        let n = n_val.coerce_to_int(vm, globals)?;
+        if n < 0 {
+            return Err(MonorubyErr::argumenterr("negative array size"));
+        }
+        let n = n as usize;
+        if let Some((start, end)) = range.try_fixnum() {
+            let len = (end - start).max(0) as usize;
+            let skip = if n >= len { 0 } else { len - n };
+            let vec: Vec<Value> = (start..end).skip(skip).map(Value::integer).collect();
+            Ok(Value::array_from_vec(vec))
+        } else {
+            Err(MonorubyErr::runtimeerr("not supported"))
+        }
+    } else {
+        Ok(range.end())
+    }
 }
 
 /// Range#exclude_end?
@@ -930,6 +993,11 @@ mod tests {
         run_test("(1..5).exclude_end?");
         run_test("(1...5).exclude_end?");
         run_test("(1...5).to_a");
+        run_test("Range.new(1, 5, true).to_a");
+        run_test("(1..10).first(3)");
+        run_test("(1..10).last(3)");
+        run_test("(1..5).first");
+        run_test("(1..5).last");
     }
 
     #[test]

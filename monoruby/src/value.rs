@@ -1358,6 +1358,47 @@ impl Value {
         }
     }
 
+    /// Try to convert `self` to f64, calling `to_f` if needed.
+    pub(crate) fn coerce_to_f64_with_to_f(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<f64> {
+        match self.unpack() {
+            RV::Fixnum(i) => Ok(i as f64),
+            RV::Float(f) => Ok(f),
+            RV::BigInt(b) => {
+                if let Some(f) = b.to_f64() {
+                    Ok(f)
+                } else {
+                    Err(MonorubyErr::cant_convert_into_float(&globals.store, *self))
+                }
+            }
+            _ => {
+                if self.is_str().is_none()
+                    && let Some(func_id) = globals.check_method(*self, IdentId::TO_F)
+                {
+                    let result =
+                        vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
+                    match result.unpack() {
+                        RV::Float(f) => Ok(f),
+                        RV::Fixnum(i) => Ok(i as f64),
+                        _ => Err(MonorubyErr::cant_convert_into_float(
+                            &globals.store,
+                            *self,
+                        )),
+                    }
+                } else {
+                    Err(MonorubyErr::no_implicit_conversion(
+                        &globals.store,
+                        *self,
+                        FLOAT_CLASS,
+                    ))
+                }
+            }
+        }
+    }
+
     ///
     /// Try to convert `f` to Integer.
     ///
@@ -1681,6 +1722,34 @@ impl Value {
             )))
         } else {
             Err(MonorubyErr::is_not_regexp_nor_string(store, *self))
+        }
+    }
+
+    /// Like `expect_regexp_or_string` but tries `to_str` coercion for
+    /// non-string/non-regexp values.
+    pub(crate) fn coerce_to_regexp_or_string(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Regexp> {
+        if let Some(re) = self.is_regex() {
+            Ok(re)
+        } else if let Some(s) = self.is_str() {
+            Ok(Regexp::new_unchecked(Value::regexp(
+                RegexpInner::with_option(s, 0)?,
+            )))
+        } else {
+            // Try to_str coercion
+            if let Some(func_id) = globals.check_method(*self, IdentId::TO_STR) {
+                let result =
+                    vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
+                if let Some(s) = result.is_str() {
+                    return Ok(Regexp::new_unchecked(Value::regexp(
+                        RegexpInner::with_option(s, 0)?,
+                    )));
+                }
+            }
+            Err(MonorubyErr::is_not_regexp_nor_string(&globals.store, *self))
         }
     }
 
