@@ -10,7 +10,7 @@ use chrono::{
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Time", TIME_CLASS, ObjTy::TIME);
-    globals.define_builtin_class_funcs_with(TIME_CLASS, "new", &["now"], time_now, 0, 0, false);
+    globals.define_builtin_class_funcs_with(TIME_CLASS, "new", &["now"], time_now, 0, 7, false);
     globals.define_builtin_class_funcs_with(
         TIME_CLASS,
         "local",
@@ -28,7 +28,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(TIME_CLASS, "gmtime", &["utc"], gmtime, 0);
     globals.define_builtin_funcs(TIME_CLASS, "gmt?", &["utc?"], gmt_, 0);
     globals.define_builtin_func(TIME_CLASS, "inspect", inspect, 0);
-    globals.define_builtin_func(TIME_CLASS, "localtime", localtime, 0);
+    globals.define_builtin_func_with(TIME_CLASS, "localtime", localtime, 0, 1, false);
     globals.define_builtin_func(TIME_CLASS, "strftime", strftime, 1);
     globals.define_builtin_func(TIME_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(TIME_CLASS, "year", year, 0);

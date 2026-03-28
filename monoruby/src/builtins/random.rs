@@ -7,7 +7,7 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_class_under_obj("Random").id();
     globals.define_builtin_class_func_with(klass, "srand", random_srand, 0, 1, false);
-    globals.define_builtin_class_func(klass, "rand", random_rand, 0);
+    globals.define_builtin_class_func_with(klass, "rand", random_rand, 0, 1, false);
     globals.define_builtin_class_func(klass, "urandom", urandom, 1);
     globals.define_builtin_func_with(klass, "rand", rand, 0, 1, false);
 }

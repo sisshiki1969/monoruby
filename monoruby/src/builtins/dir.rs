@@ -29,7 +29,7 @@ pub(super) fn init(globals: &mut Globals) {
         &["base", "sort"],
         false,
     );
-    globals.define_builtin_class_func(klass, "home", home, 0);
+    globals.define_builtin_class_func_with(klass, "home", home, 0, 1, false);
     globals.define_builtin_class_funcs(klass, "pwd", &["getwd"], pwd, 0);
     globals.define_builtin_class_func_with(klass, "chdir", chdir, 0, 1, false);
     globals.define_builtin_class_func(klass, "exist?", exist, 1);

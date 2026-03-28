@@ -38,7 +38,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func_with(FLOAT_CLASS, "floor", floor, 0, 1, false);
     globals.define_builtin_func_with(FLOAT_CLASS, "ceil", ceil, 0, 1, false);
     globals.define_builtin_func_with(FLOAT_CLASS, "truncate", truncate, 0, 1, false);
-    globals.define_builtin_func_with(FLOAT_CLASS, "round", round, 0, 1, false);
+    globals.define_builtin_func_with(FLOAT_CLASS, "round", round, 0, 2, false);
     globals.define_builtin_func(FLOAT_CLASS, "finite?", finite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "infinite?", infinite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "nan?", nan, 0);
