@@ -162,7 +162,7 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         Some(block) => block,
     };
     let cur = lfp.self_val().expect_integer(globals)?;
-    let limit = lfp.arg(0).coerce_to_i64(globals)?;
+    let limit = lfp.arg(0).coerce_to_int(vm, globals)?;
     if cur > limit {
         return Ok(lfp.self_val());
     }
@@ -193,7 +193,7 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
         Some(block) => block,
     };
     let cur = lfp.self_val().expect_integer(globals)?;
-    let limit = lfp.arg(0).coerce_to_i64(globals)?;
+    let limit = lfp.arg(0).coerce_to_int(vm, globals)?;
     if cur < limit {
         return Ok(lfp.self_val());
     }
@@ -551,12 +551,12 @@ fn integer_shl(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=5b=5d.html]
 #[monoruby_builtin]
-fn index(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     if let Some(len_val) = lfp.try_arg(1) {
         // self[nth, len] form
-        let nth = lfp.arg(0).coerce_to_i64(&globals.store)?;
-        let len = len_val.coerce_to_i64(&globals.store)?;
+        let nth = lfp.arg(0).coerce_to_int(vm, globals)?;
+        let len = len_val.coerce_to_int(vm, globals)?;
         if len < 0 {
             return Ok(Value::nil());
         }
@@ -585,7 +585,19 @@ fn index(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             _ => unreachable!(),
         }
     } else {
-        op::integer_index1(globals, self_val, lfp.arg(0))
+        let arg0 = lfp.arg(0);
+        // Try to_int coercion for non-integer, non-bigint arguments
+        let index = match arg0.unpack() {
+            RV::Fixnum(_) | RV::BigInt(_) => arg0,
+            _ => {
+                if arg0.is_range().is_some() {
+                    arg0
+                } else {
+                    Value::integer(arg0.coerce_to_int(vm, globals)?)
+                }
+            }
+        };
+        op::integer_index1(globals, self_val, index)
     }
 }
 

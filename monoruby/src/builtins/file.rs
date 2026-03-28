@@ -532,14 +532,20 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/write.html]
 #[monoruby_builtin]
-fn write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn write(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let data = lfp.arg(0).as_array();
     let mut self_ = lfp.self_val();
     let mut count = 0i64;
     for s in data.iter() {
-        let s = s.expect_bytes(globals)?;
-        count += s.len() as i64;
-        self_.as_io_inner_mut().write(s)?;
+        if let Some(bytes) = s.is_rstring_inner() {
+            count += bytes.len() as i64;
+            self_.as_io_inner_mut().write(bytes)?;
+        } else {
+            let s_str = vm.invoke_tos(globals, *s)?;
+            let bytes = s_str.expect_bytes(&globals.store)?;
+            count += bytes.len() as i64;
+            self_.as_io_inner_mut().write(bytes)?;
+        }
     }
     Ok(Value::integer(count))
 }

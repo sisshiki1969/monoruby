@@ -102,7 +102,7 @@ fn regexp_escape(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/union.html]
 #[monoruby_builtin]
-fn regexp_union(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn regexp_union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut rest = lfp.arg(0).as_array();
     let mut v = vec![];
     if rest.len() == 1
@@ -116,11 +116,9 @@ fn regexp_union(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
         } else if let Some(re) = arg.is_regex() {
             v.push(re.tos());
         } else {
-            return Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                *arg,
-                STRING_CLASS,
-            ));
+            // Try to_str coercion
+            let s = arg.coerce_to_str(vm, globals)?;
+            v.push(RegexpInner::escape(&s));
         }
     }
     let s = v.join("|");
