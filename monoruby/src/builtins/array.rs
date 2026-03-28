@@ -60,14 +60,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(ARRAY_CLASS, "concat", concat);
     globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, Box::new(array_shl), 1);
     globals.define_builtin_func_with(ARRAY_CLASS, "push", push, 0, 0, true);
-    globals.define_builtin_func(ARRAY_CLASS, "pop", pop, 0);
+    globals.define_builtin_func_with(ARRAY_CLASS, "pop", pop, 0, 1, false);
     globals.define_builtin_funcs(ARRAY_CLASS, "==", &["==="], eq, 1);
     globals.define_builtin_func(ARRAY_CLASS, "eql?", eql, 1);
     globals.define_builtin_func(ARRAY_CLASS, "<=>", cmp, 1);
     globals.define_builtin_funcs_with(ARRAY_CLASS, "[]", &["slice"], index, 1, 2, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "[]=", index_assign, 2, 3, false);
     globals.define_builtin_func(ARRAY_CLASS, "clear", clear, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "fill", fill, 1);
+    globals.define_builtin_func_with(ARRAY_CLASS, "fill", fill, 0, 3, false);
     globals.define_builtin_func(ARRAY_CLASS, "drop", drop, 1);
     globals.define_builtin_func_rest(ARRAY_CLASS, "zip", zip);
     globals.define_builtin_funcs_with(ARRAY_CLASS, "inject", &["reduce"], inject, 0, 2, false);
@@ -95,8 +95,8 @@ pub(super) fn init(globals: &mut Globals) {
     //globals.define_builtin_funcs(ARRAY_CLASS, "map", &["collect"], map, 0);
     //globals.define_builtin_funcs(ARRAY_CLASS, "map!", &["collect!"], map_, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "flat_map", &["collect_concat"], flat_map, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "all?", all_, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "any?", any_, 0);
+    globals.define_builtin_func_with(ARRAY_CLASS, "all?", all_, 0, 1, false);
+    globals.define_builtin_func_with(ARRAY_CLASS, "any?", any_, 0, 1, false);
     globals.define_builtin_funcs(ARRAY_CLASS, "detect", &["find"], detect, 0);
     globals.define_builtin_func(ARRAY_CLASS, "grep", grep, 1);
     globals.define_builtin_func(ARRAY_CLASS, "include?", include_, 1);
@@ -728,15 +728,28 @@ fn push(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// ### Array#pop
 ///
 /// - pop -> object | nil
-/// - [NOT SUPPORTED] pop(n) -> Array
+/// - pop(n) -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/pop.html]
 #[monoruby_builtin]
-fn pop(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn pop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
-    let res = ary.pop().unwrap_or_default();
-    Ok(res)
+    if let Some(n) = lfp.try_arg(0) {
+        let n = n.coerce_to_int(vm, globals)?;
+        if n < 0 {
+            return Err(MonorubyErr::argumenterr("negative array size"));
+        }
+        let n = n as usize;
+        let len = ary.len();
+        let start = if n >= len { 0 } else { len - n };
+        let result = Value::array_from_iter(ary[start..].iter().cloned());
+        ary.truncate(start);
+        Ok(result)
+    } else {
+        let res = ary.pop().unwrap_or_default();
+        Ok(res)
+    }
 }
 
 ///
@@ -962,20 +975,133 @@ fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// ### Array#fill
 ///
 /// - fill(val) -> self
-/// - [NOT SUPPORTED] fill {|index| ... } -> self
-/// - [NOT SUPPORTED] fill(val, start, length = nil) -> self
-/// - [NOT SUPPORTED] fill(val, range) -> self
-/// - [NOT SUPPORTED] fill(start, length = nil) {|index| ... } -> self
-/// - [NOT SUPPORTED] fill(range) {|index| ... } -> self
+/// - fill(val, start, length = nil) -> self
+/// - fill(val, range) -> self
+/// - fill {|index| ... } -> self
+/// - fill(start, length = nil) {|index| ... } -> self
+/// - fill(range) {|index| ... } -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/fill.html]
 #[monoruby_builtin]
-fn fill(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.expect_no_block()?;
+fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
-    ary.fill(lfp.arg(0));
+
+    if let Some(bh) = lfp.block() {
+        // Block form
+        let data = vm.get_block_data(globals, bh)?;
+        let (start, end_idx) = if let Some(arg0) = lfp.try_arg(0) {
+            if let Some(range) = arg0.is_range() {
+                fill_range_indices(vm, globals, &ary, range)?
+            } else {
+                let start = arg0.coerce_to_int(vm, globals)?;
+                let start = if start < 0 {
+                    let s = ary.len() as i64 + start;
+                    if s < 0 { 0i64 } else { s }
+                } else {
+                    start
+                } as usize;
+                if let Some(len_val) = lfp.try_arg(1) {
+                    let len = len_val.coerce_to_int(vm, globals)?;
+                    if len <= 0 {
+                        return Ok(ary.into());
+                    }
+                    (start, start + len as usize)
+                } else {
+                    (start, ary.len())
+                }
+            }
+        } else {
+            (0, ary.len())
+        };
+        if end_idx > ary.len() {
+            ary.resize(end_idx, Value::nil());
+        }
+        for i in start..end_idx {
+            let val = vm.invoke_block(globals, &data, &[Value::integer(i as i64)])?;
+            ary[i] = val;
+        }
+    } else {
+        // Non-block form
+        let val = lfp.arg(0);
+        if let Some(arg1) = lfp.try_arg(1) {
+            if let Some(range) = arg1.is_range() {
+                let (start, end_idx) = fill_range_indices(vm, globals, &ary, range)?;
+                if end_idx > ary.len() {
+                    ary.resize(end_idx, Value::nil());
+                }
+                for i in start..end_idx {
+                    ary[i] = val;
+                }
+            } else {
+                let start = arg1.coerce_to_int(vm, globals)?;
+                let start = if start < 0 {
+                    let s = ary.len() as i64 + start;
+                    if s < 0 { 0i64 } else { s }
+                } else {
+                    start
+                } as usize;
+                if let Some(len_val) = lfp.try_arg(2) {
+                    let len = len_val.coerce_to_int(vm, globals)?;
+                    if len <= 0 {
+                        return Ok(ary.into());
+                    }
+                    let end_idx = start + len as usize;
+                    if end_idx > ary.len() {
+                        ary.resize(end_idx, Value::nil());
+                    }
+                    for i in start..end_idx {
+                        ary[i] = val;
+                    }
+                } else {
+                    if start > ary.len() {
+                        ary.resize(start, Value::nil());
+                    }
+                    let len = ary.len();
+                    for i in start..len {
+                        ary[i] = val;
+                    }
+                }
+            }
+        } else {
+            ary.fill(val);
+        }
+    }
     Ok(ary.into())
+}
+
+/// Helper to compute (start, end) indices from a Range for Array#fill.
+fn fill_range_indices(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    ary: &Array,
+    range: &RangeInner,
+) -> Result<(usize, usize)> {
+    let len = ary.len() as i64;
+    let mut start = range.start().coerce_to_int(vm, globals)?;
+    if start < 0 {
+        start += len;
+        if start < 0 {
+            return Err(MonorubyErr::rangeerr(format!(
+                "{}..{} out of range",
+                range.start().coerce_to_int(vm, globals)?,
+                range.end().coerce_to_int(vm, globals)?
+            )));
+        }
+    }
+    let mut end_val = range.end().coerce_to_int(vm, globals)?;
+    if end_val < 0 {
+        end_val += len;
+    }
+    let end_idx = if range.exclude_end() {
+        end_val
+    } else {
+        end_val + 1
+    };
+    if end_idx < start {
+        return Ok((start as usize, start as usize));
+    }
+    Ok((start as usize, end_idx as usize))
 }
 
 ///
@@ -1713,7 +1839,14 @@ fn all_any_inner(
     is_all: bool,
 ) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    if let Some(bh) = lfp.block() {
+    if let Some(pattern) = lfp.try_arg(0) {
+        // Pattern form: all?(pattern) / any?(pattern)
+        for elem in ary.iter() {
+            if op::cmp_teq_values_bool(vm, globals, pattern, *elem)? != is_all {
+                return Ok(Value::bool(!is_all));
+            };
+        }
+    } else if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
         for elem in ary.iter() {
             if vm.invoke_block(globals, &data, &[*elem])?.as_bool() != is_all {
@@ -1735,7 +1868,7 @@ fn all_any_inner(
 ///
 /// - all? -> bool
 /// - all? {|item| ... } -> bool
-/// - [NOT SUPPORTED] all?(pattern) -> bool
+/// - all?(pattern) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/all=3f.html]
 #[monoruby_builtin]
@@ -1748,7 +1881,7 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// - any? -> bool
 /// - any? {|item| ... } -> bool
-/// - [NOT SUPPORTED] any?(pattern) -> bool
+/// - any?(pattern) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/any=3f.html]
 #[monoruby_builtin]

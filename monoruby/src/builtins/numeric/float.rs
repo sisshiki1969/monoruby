@@ -35,7 +35,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(FLOAT_CLASS, "<", lt, 1);
     globals.define_builtin_func(FLOAT_CLASS, "!=", ne, 1);
     globals.define_builtin_func(FLOAT_CLASS, "<=>", cmp, 1);
-    globals.define_builtin_func(FLOAT_CLASS, "floor", floor, 0);
+    globals.define_builtin_func_with(FLOAT_CLASS, "floor", floor, 0, 1, false);
     globals.define_builtin_func_with(FLOAT_CLASS, "ceil", ceil, 0, 1, false);
     globals.define_builtin_func_with(FLOAT_CLASS, "truncate", truncate, 0, 1, false);
     globals.define_builtin_func_with(FLOAT_CLASS, "round", round, 0, 1, false);
@@ -219,10 +219,38 @@ fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/floor.html]
 #[monoruby_builtin]
-fn floor(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    match lfp.self_val().unpack() {
-        RV::Float(f) => Ok(Value::integer(f.floor() as i64)),
-        _ => unreachable!(),
+fn floor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ndigits = if let Some(d) = lfp.try_arg(0) {
+        d.coerce_to_int(vm, globals)?
+    } else {
+        0
+    };
+    let f = lfp.self_val().try_float().unwrap();
+    if ndigits == 0 {
+        return Ok(Value::integer(f.floor() as i64));
+    }
+    if ndigits > 0 {
+        if let Ok(ndigits) = u32::try_from(ndigits) {
+            let mul = 10f64.powi(ndigits as i32);
+            let f = (f * mul).floor() / mul;
+            Ok(Value::float(f))
+        } else {
+            Err(MonorubyErr::rangeerr("too big to convert to u32"))
+        }
+    } else {
+        if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
+            let mul = 10f64.powi(neg_ndigits as i32);
+            let f = (f / mul).floor() * mul;
+            if let Some(v) = Value::integer_from_f64(f) {
+                Ok(v)
+            } else {
+                Err(MonorubyErr::rangeerr(format!(
+                    "[unreachable] invalid f64: {f}"
+                )))
+            }
+        } else {
+            Err(MonorubyErr::rangeerr("too small to convert to u32"))
+        }
     }
 }
 
