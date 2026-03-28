@@ -3883,4 +3883,58 @@ mod tests {
         run_test("[1,2,3].repeated_combination(0).to_a");
         run_test("[1,2,3].repeated_combination(1).to_a");
     }
+
+    #[test]
+    fn array_implicit_conversions() {
+        // Array#+ calls to_ary
+        run_test_with_prelude(
+            "[1, 2] + o",
+            "class C; def to_ary; [3, 4]; end; end; o = C.new",
+        );
+        // Array#- calls to_ary
+        run_test_with_prelude(
+            "[1, 2, 3] - o",
+            "class C; def to_ary; [2]; end; end; o = C.new",
+        );
+        // Array#* with to_str joins
+        run_test_with_prelude(
+            "[1, 2, 3] * o",
+            r#"class C; def to_str; ","; end; end; o = C.new"#,
+        );
+        // Array#* with to_int repeats
+        run_test_with_prelude(
+            "[1, 2] * o",
+            "class C; def to_int; 3; end; end; o = C.new",
+        );
+        // Array#[] with to_int
+        run_test_with_prelude(
+            "[10, 20, 30][o]",
+            "class C; def to_int; 1; end; end; o = C.new",
+        );
+        // Array#last with to_int
+        run_test_with_prelude(
+            "[1,2,3,4,5].last(o)",
+            "class C; def to_int; 2; end; end; o = C.new",
+        );
+        // Array#take with to_int
+        run_test_with_prelude(
+            "[1,2,3,4,5].take(o)",
+            "class C; def to_int; 3; end; end; o = C.new",
+        );
+        // Integer#& with to_int
+        run_test_with_prelude(
+            "0xff & o",
+            "class C; def to_int; 0x0f; end; end; o = C.new",
+        );
+        // Integer#| with to_int
+        run_test_with_prelude(
+            "0xf0 | o",
+            "class C; def to_int; 0x0f; end; end; o = C.new",
+        );
+        // Integer#^ with to_int
+        run_test_with_prelude(
+            "0xff ^ o",
+            "class C; def to_int; 0x0f; end; end; o = C.new",
+        );
+    }
 }

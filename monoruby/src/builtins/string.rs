@@ -5234,4 +5234,17 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn string_implicit_conversions() {
+        // String#<=> with to_str
+        run_test_with_prelude(
+            r#""hello" <=> o"#,
+            r#"class C; def to_str; "hello"; end; end; o = C.new"#,
+        );
+        run_test_with_prelude(
+            r#""abc" <=> o"#,
+            r#"class C; def to_str; "def"; end; end; o = C.new"#,
+        );
+    }
 }

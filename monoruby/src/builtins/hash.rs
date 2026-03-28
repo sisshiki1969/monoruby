@@ -1999,4 +1999,18 @@ mod tests {
         run_test("Hash.try_convert(1)");
         run_test("Hash.try_convert(nil)");
     }
+
+    #[test]
+    fn hash_implicit_conversions() {
+        // Hash#merge with to_hash
+        run_test_with_prelude(
+            "{a: 1}.merge(o)",
+            "class C; def to_hash; {b: 2}; end; end; o = C.new",
+        );
+        // Hash#< with to_hash
+        run_test_with_prelude(
+            "{a: 1} < o",
+            "class C; def to_hash; {a: 1, b: 2}; end; end; o = C.new",
+        );
+    }
 }
