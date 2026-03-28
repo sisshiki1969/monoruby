@@ -3662,6 +3662,40 @@ mod tests {
     }
 
     #[test]
+    fn pack_native_size() {
+        // l!/L! — native long is 64-bit on x86-64
+        run_test(r#"[0x123456789ABCDEF0].pack("l!").unpack("l!")"#);
+        run_test(r#"[0x123456789ABCDEF0].pack("L!").unpack("L!")"#);
+        // s!/S! — native short is still 16-bit
+        run_test(r#"[0x1234].pack("s!").unpack("s!")"#);
+        run_test(r#"[0x1234].pack("S!").unpack("S!")"#);
+        // i!/I! — native int is still 32-bit
+        run_test(r#"[0x12345678].pack("i!").unpack("i!")"#);
+        run_test(r#"[0x12345678].pack("I!").unpack("I!")"#);
+        // _ modifier is equivalent to !
+        run_test(r#"[0x123456789ABCDEF0].pack("l_").unpack("l_")"#);
+        run_test(r#"[0x123456789ABCDEF0].pack("L_").unpack("L_")"#);
+    }
+
+    #[test]
+    fn pack_pointer_size() {
+        // j/J — pointer-sized integer (64-bit on x86-64)
+        run_test(r#"[42].pack("j").unpack("j")"#);
+        run_test(r#"[42].pack("J").unpack("J")"#);
+        run_test(r#"[-1].pack("j").unpack("j")"#);
+        run_test(r#"[123456789].pack("J").unpack("J")"#);
+    }
+
+    #[test]
+    fn pack_whitespace_and_comments() {
+        // Whitespace between directives should be ignored
+        run_test(r#"[1, 2].pack("C C").unpack("C C")"#);
+        run_test(r#"[1, 2, 3].pack("C  C\tC").unpack("CCC")"#);
+        // Comments should be ignored (# to end of line)
+        run_test(r#"[1, 2].pack("C #comment\nC").unpack("CC")"#);
+    }
+
+    #[test]
     fn pack_bits() {
         run_test(r#"["10110001"].pack("b8").unpack("b8")"#);
         run_test(r#"["10110001"].pack("B8").unpack("B8")"#);

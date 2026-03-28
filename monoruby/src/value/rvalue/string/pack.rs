@@ -899,34 +899,25 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
                 )));
             }
         };
-        // Consume '!' or '_' modifier (native size).
-        // On x86-64 Linux, native sizes are:
-        //   s!/S! = short = 2 bytes (same as default)
-        //   i!/I! = int = 4 bytes (same as default)
-        //   l!/L! = long = 8 bytes (on 64-bit)
-        //   j!/J! = already 8 bytes
-        //   q!/Q! = already 8 bytes
-        let has_native = iter.next_if(|c| *c == '!' || *c == '_').is_some();
-        if has_native {
-            // Upgrade l/L to 64-bit on x86-64 (native long = 8 bytes)
-            match ch {
-                'l' => {
-                    // native long = i64
-                    // template is already set, but we need to override
-                }
-                'L' => {}
-                's' | 'S' | 'i' | 'I' | 'q' | 'Q' | 'j' | 'J' => {
-                    // sizes already correct for native on x86-64
-                }
-                _ => {
-                    return Err(MonorubyErr::argumenterr(format!(
-                        "'{}' allowed only after types sSiIlLqQjJ",
-                        if has_native { '!' } else { '_' }
-                    )));
-                }
+        // Parse modifiers: '!' or '_' (native size), '>' (big-endian), '<' (little-endian).
+        // These can appear in any order before the count.
+        let mut has_native = false;
+        loop {
+            if iter.next_if(|c| *c == '!' || *c == '_').is_some() {
+                has_native = true;
+            } else if iter.next_if(|c| c == &'>').is_some() {
+                endian = Endianness::Big;
+            } else if iter.next_if(|c| c == &'<').is_some() {
+                endian = Endianness::Little;
+            } else {
+                break;
             }
         }
-        // Re-assign template for l!/L! which become 64-bit on x86-64
+        // Apply native size modifier on x86-64 Linux:
+        //   s!/S! = short = 2 bytes (same as default)
+        //   i!/I! = int = 4 bytes (same as default)
+        //   l!/L! = long = 8 bytes (upgrade from 4 to 8)
+        //   q!/Q!/j!/J! = already 8 bytes
         let template = if has_native && ch == 'l' {
             Template::I64
         } else if has_native && ch == 'L' {
@@ -934,11 +925,6 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
         } else {
             template
         };
-        if iter.next_if(|c| c == &'>').is_some() {
-            endian = Endianness::Big;
-        } else if iter.next_if(|c| c == &'<').is_some() {
-            endian = Endianness::Little;
-        }
         if iter.next_if(|c| c == &'*').is_some() {
             temp.push(TemplateNode {
                 template,
