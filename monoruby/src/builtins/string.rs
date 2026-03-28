@@ -161,6 +161,9 @@ pub(super) fn init(globals: &mut Globals) {
         "UTF_16LE",
         "UTF_16BE",
         "UTF_16",
+        "UTF_32LE",
+        "UTF_32BE",
+        "UTF_32",
         "US_ASCII",
         "ISO_8859_1",
         "ISO_8859_2",
@@ -190,6 +193,7 @@ pub(super) fn init(globals: &mut Globals) {
         "Windows_1256",
         "Windows_1257",
         "Windows_1258",
+        "Windows_31J",
         "IBM437",
         "IBM737",
         "IBM775",
@@ -215,6 +219,10 @@ pub(super) fn init(globals: &mut Globals) {
         "EUC_TW",
         "CP949",
         "TIS_620",
+        "MACJAPANESE",
+        "EUCJP_MS",
+        "CP51932",
+        "STATELESS_ISO_2022_JP",
     ] {
         let val = Value::object(enc.id());
         globals
@@ -3686,21 +3694,14 @@ fn enc_find(
 ) -> Result<Value> {
     let name = lfp.arg(0).coerce_to_string(vm, globals)?;
     let enc_class = encoding_class(globals);
-    let result = match name.to_uppercase().replace('-', "_").as_str() {
-        "UTF_8" | "UTF8" => globals
+    // Resolve special names first
+    let const_name = enc_name_to_const(&name);
+    let result = if let Some(c) = const_name {
+        globals
             .store
-            .get_constant_noautoload(enc_class, IdentId::get_id("UTF_8")),
-        "ASCII_8BIT" | "BINARY" | "ASCII" => globals
-            .store
-            .get_constant_noautoload(enc_class, IdentId::ASCII_8BIT),
-        "US_ASCII" => globals
-            .store
-            .get_constant_noautoload(enc_class, IdentId::get_id("US_ASCII")),
-        other => {
-            // Try to find as a constant name
-            let id = IdentId::get_id(other);
-            globals.store.get_constant_noautoload(enc_class, id)
-        }
+            .get_constant_noautoload(enc_class, IdentId::get_id(c))
+    } else {
+        None
     };
     match result {
         Some(v) => Ok(v),
@@ -3708,6 +3709,111 @@ fn enc_find(
             "unknown encoding name - {}",
             name
         ))),
+    }
+}
+
+/// Map an encoding name (as given by the user) to the Encoding constant name.
+/// Returns None if the name is not recognized.
+fn enc_name_to_const(name: &str) -> Option<&'static str> {
+    // Normalize: uppercase, replace '-' with '_'
+    let normalized = name.to_uppercase().replace('-', "_");
+    match normalized.as_str() {
+        // Special pseudo-encoding names
+        "LOCALE" | "EXTERNAL" | "FILESYSTEM" => Some("UTF_8"),
+
+        // UTF-8
+        "UTF_8" | "UTF8" => Some("UTF_8"),
+
+        // ASCII-8BIT / BINARY
+        "ASCII_8BIT" | "BINARY" => Some("ASCII_8BIT"),
+
+        // US-ASCII
+        "US_ASCII" | "ASCII" | "ANSI_X3.4_1968" | "646" => Some("US_ASCII"),
+
+        // UTF-16
+        "UTF_16" => Some("UTF_16"),
+        "UTF_16BE" => Some("UTF_16BE"),
+        "UTF_16LE" => Some("UTF_16LE"),
+
+        // UTF-32
+        "UTF_32" => Some("UTF_32"),
+        "UTF_32BE" => Some("UTF_32BE"),
+        "UTF_32LE" => Some("UTF_32LE"),
+
+        // ISO-8859 family
+        "ISO_8859_1" | "ISO8859_1" | "LATIN1" => Some("ISO_8859_1"),
+        "ISO_8859_2" | "ISO8859_2" | "LATIN2" => Some("ISO_8859_2"),
+        "ISO_8859_3" | "ISO8859_3" | "LATIN3" => Some("ISO_8859_3"),
+        "ISO_8859_4" | "ISO8859_4" | "LATIN4" => Some("ISO_8859_4"),
+        "ISO_8859_5" | "ISO8859_5" => Some("ISO_8859_5"),
+        "ISO_8859_6" | "ISO8859_6" => Some("ISO_8859_6"),
+        "ISO_8859_7" | "ISO8859_7" => Some("ISO_8859_7"),
+        "ISO_8859_8" | "ISO8859_8" => Some("ISO_8859_8"),
+        "ISO_8859_9" | "ISO8859_9" | "LATIN5" => Some("ISO_8859_9"),
+        "ISO_8859_10" | "ISO8859_10" | "LATIN6" => Some("ISO_8859_10"),
+        "ISO_8859_11" | "ISO8859_11" => Some("ISO_8859_11"),
+        "ISO_8859_13" | "ISO8859_13" | "LATIN7" => Some("ISO_8859_13"),
+        "ISO_8859_14" | "ISO8859_14" | "LATIN8" => Some("ISO_8859_14"),
+        "ISO_8859_15" | "ISO8859_15" | "LATIN9" => Some("ISO_8859_15"),
+        "ISO_8859_16" | "ISO8859_16" | "LATIN10" => Some("ISO_8859_16"),
+
+        // Japanese encodings
+        "EUC_JP" | "EUCJP" => Some("EUC_JP"),
+        "SHIFT_JIS" | "SJIS" => Some("Shift_JIS"),
+        "ISO_2022_JP" | "ISO2022_JP" => Some("ISO_2022_JP"),
+        "WINDOWS_31J" | "CP932" | "CSWINDOWS31J" | "WINDOWS31J" => Some("Windows_31J"),
+        "MACJAPANESE" | "MACJAPAN" => Some("MACJAPANESE"),
+        "EUCJP_MS" | "EUCJP_WIN" => Some("EUCJP_MS"),
+        "CP51932" => Some("CP51932"),
+        "STATELESS_ISO_2022_JP" => Some("STATELESS_ISO_2022_JP"),
+
+        // Windows code pages
+        "WINDOWS_1250" | "CP1250" => Some("Windows_1250"),
+        "WINDOWS_1251" | "CP1251" => Some("Windows_1251"),
+        "WINDOWS_1252" | "CP1252" => Some("Windows_1252"),
+        "WINDOWS_1253" | "CP1253" => Some("Windows_1253"),
+        "WINDOWS_1254" | "CP1254" => Some("Windows_1254"),
+        "WINDOWS_1255" | "CP1255" => Some("Windows_1255"),
+        "WINDOWS_1256" | "CP1256" => Some("Windows_1256"),
+        "WINDOWS_1257" | "CP1257" => Some("Windows_1257"),
+        "WINDOWS_1258" | "CP1258" => Some("Windows_1258"),
+
+        // IBM code pages
+        "IBM437" | "CP437" => Some("IBM437"),
+        "IBM737" | "CP737" => Some("IBM737"),
+        "IBM775" | "CP775" => Some("IBM775"),
+        "IBM850" | "CP850" => Some("IBM850"),
+        "IBM852" | "CP852" => Some("IBM852"),
+        "IBM855" | "CP855" => Some("IBM855"),
+        "IBM857" | "CP857" => Some("IBM857"),
+        "IBM860" | "CP860" => Some("IBM860"),
+        "IBM861" | "CP861" => Some("IBM861"),
+        "IBM862" | "CP862" => Some("IBM862"),
+        "IBM863" | "CP863" => Some("IBM863"),
+        "IBM864" | "CP864" => Some("IBM864"),
+        "IBM865" | "CP865" => Some("IBM865"),
+        "IBM866" | "CP866" => Some("IBM866"),
+        "IBM869" | "CP869" => Some("IBM869"),
+
+        // KOI8
+        "KOI8_R" => Some("KOI8_R"),
+        "KOI8_U" => Some("KOI8_U"),
+
+        // Chinese encodings
+        "GB2312" | "EUC_CN" => Some("GB2312"),
+        "GBK" | "CP936" => Some("GBK"),
+        "GB18030" => Some("GB18030"),
+        "BIG5" | "BIG5_HKSCS" => Some("Big5"),
+
+        // Korean encodings
+        "EUC_KR" | "EUCKR" => Some("EUC_KR"),
+        "CP949" => Some("CP949"),
+
+        // Other
+        "EUC_TW" | "EUCTW" => Some("EUC_TW"),
+        "TIS_620" | "TIS620" => Some("TIS_620"),
+
+        _ => None,
     }
 }
 
@@ -3726,7 +3832,33 @@ fn enc_aliases(
     let mut map = RubyMap::default();
     let aliases: &[(&str, &str)] = &[
         ("BINARY", "ASCII-8BIT"),
-        ("US-ASCII", "ASCII-8BIT"),
+        ("ASCII", "US-ASCII"),
+        ("ANSI_X3.4-1968", "US-ASCII"),
+        ("646", "US-ASCII"),
+        ("UTF8", "UTF-8"),
+        ("CP65001", "UTF-8"),
+        ("locale", "UTF-8"),
+        ("external", "UTF-8"),
+        ("filesystem", "UTF-8"),
+        ("CP932", "Windows-31J"),
+        ("csWindows31J", "Windows-31J"),
+        ("SJIS", "Shift_JIS"),
+        ("eucJP", "EUC-JP"),
+        ("CP51932", "CP51932"),
+        ("eucjp-ms", "eucJP-ms"),
+        ("euc-jp-ms", "eucJP-ms"),
+        ("EUC-CN", "GB2312"),
+        ("CP936", "GBK"),
+        ("CP949", "CP949"),
+        ("CP1250", "Windows-1250"),
+        ("CP1251", "Windows-1251"),
+        ("CP1252", "Windows-1252"),
+        ("CP1253", "Windows-1253"),
+        ("CP1254", "Windows-1254"),
+        ("CP1255", "Windows-1255"),
+        ("CP1256", "Windows-1256"),
+        ("CP1257", "Windows-1257"),
+        ("CP1258", "Windows-1258"),
     ];
     for (alias, name) in aliases {
         map.insert(
