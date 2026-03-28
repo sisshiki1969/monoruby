@@ -537,6 +537,56 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                     return Err(MonorubyErr::argumenterr("X outside of string"));
                 }
             }
+            Template::Hex => {
+                // 'h' (low nibble first) / 'H' (high nibble first) — hex string
+                let high = endianness; // Big = H (high nibble first)
+                if let Some(value) = iter.next() {
+                    let s = get_pack_string(store, *value)?;
+                    let count = if let Some(count) = repeat {
+                        count
+                    } else {
+                        s.len()
+                    };
+                    let mut byte: u8 = 0;
+                    let mut nibble_i = 0;
+                    for i in 0..count {
+                        let nibble = if i < s.len() {
+                            match s[i] {
+                                b'0'..=b'9' => s[i] - b'0',
+                                b'a'..=b'f' => s[i] - b'a' + 10,
+                                b'A'..=b'F' => s[i] - b'A' + 10,
+                                _ => 0,
+                            }
+                        } else {
+                            0
+                        };
+                        if high {
+                            if nibble_i == 0 {
+                                byte = nibble << 4;
+                            } else {
+                                byte |= nibble;
+                            }
+                        } else {
+                            if nibble_i == 0 {
+                                byte = nibble;
+                            } else {
+                                byte |= nibble << 4;
+                            }
+                        }
+                        nibble_i += 1;
+                        if nibble_i == 2 {
+                            packed.push(byte);
+                            byte = 0;
+                            nibble_i = 0;
+                        }
+                    }
+                    if nibble_i > 0 {
+                        packed.push(byte);
+                    }
+                } else {
+                    return Err(MonorubyErr::argumenterr("too few arguments"));
+                }
+            }
             Template::Ascii => {
                 // 'a' — arbitrary binary string (null padded)
                 if let Some(value) = iter.next() {
@@ -741,11 +791,6 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                         ber_encode(&mut packed, i as u64);
                     }
                 }
-            }
-            _ => {
-                return Err(MonorubyErr::argumenterr(
-                    "Currently, the template character is not supported.",
-                ));
             }
         };
     }

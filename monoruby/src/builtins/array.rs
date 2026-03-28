@@ -3434,6 +3434,49 @@ mod tests {
     }
 
     #[test]
+    fn pack_count() {
+        run_test(r#"[1,2,3].pack("L3").unpack("L3")"#);
+        run_test(r#"[1,2,3,4,5].pack("L*").unpack("L*")"#);
+        run_test(r#"[1,2,3].pack("S3").unpack("S3")"#);
+        run_test(r#"[1,2,3,4].pack("C4").unpack("C4")"#);
+        run_test(r#"[1,2,3].pack("Q2").unpack("Q2")"#);
+        run_test(r#"[0x1234, 0x5678].pack("n2").unpack("n2")"#);
+        run_test(r#"[0x12345678, 0xdeadbeef].pack("V2").unpack("V2")"#);
+    }
+
+    #[test]
+    fn pack_endian() {
+        run_test(r#"[0x1234].pack("s<").unpack("s<")"#);
+        run_test(r#"[0x1234].pack("s>").unpack("s>")"#);
+        run_test(r#"[0x12345678].pack("l<").unpack("l<")"#);
+        run_test(r#"[0x12345678].pack("l>").unpack("l>")"#);
+        run_test(r#"[0x123456789ABCDEF0].pack("q<").unpack("q<")"#);
+        run_test(r#"[0x123456789ABCDEF0].pack("q>").unpack("q>")"#);
+        run_test(r#"[0x1234].pack("S<").unpack("S<")"#);
+        run_test(r#"[0x1234].pack("S>").unpack("S>")"#);
+        run_test(r#"[0x12345678].pack("L<").unpack("L<")"#);
+        run_test(r#"[0x12345678].pack("L>").unpack("L>")"#);
+    }
+
+    #[test]
+    fn pack_bits() {
+        run_test(r#"["10110001"].pack("b8").unpack("b8")"#);
+        run_test(r#"["10110001"].pack("B8").unpack("B8")"#);
+        run_test(r#"["1011"].pack("b4").unpack("b8")"#);
+        run_test(r#"["1011"].pack("B4").unpack("B8")"#);
+        run_test(r#"["10110001010"].pack("b*").unpack("b*")"#);
+        run_test(r#"["10110001010"].pack("B*").unpack("B*")"#);
+    }
+
+    #[test]
+    fn pack_utf8() {
+        run_test(r#"[65, 66, 67].pack("U3")"#);
+        run_test(r#"[0x3042, 0x3044].pack("U*")"#);
+        run_test(r#"[65, 0x3042, 0x1F600].pack("U*").unpack("U*")"#);
+        run_test(r#""ABC".unpack("U3")"#);
+    }
+
+    #[test]
     fn flatten() {
         run_test(r##"a = [1,2,[3,4,[5,6],7],8]; [a.flatten, a]"##);
         run_test(r##"[1,2,[3,4,[5,6],7],8].flatten(nil)"##);
