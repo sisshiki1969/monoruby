@@ -1199,7 +1199,67 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             None => Ok(Value::array_from_iter(iter)),
         }
     } else {
-        Err(MonorubyErr::is_not_regexp_nor_string(globals, arg0))
+        // Try to_str coercion for the separator
+        let coerced = arg0.coerce_to_str(vm, globals)?;
+        let v: Vec<Value> = if coerced == " " {
+            match lim {
+                lim if lim < 0 => {
+                    let end_with = string.ends_with(|c: char| c.is_ascii_whitespace());
+                    let mut v: Vec<_> = string
+                        .split_ascii_whitespace()
+                        .map(Value::string_from_str)
+                        .collect();
+                    if end_with {
+                        v.push(Value::string_from_str(""))
+                    }
+                    v
+                }
+                0 => {
+                    let mut vec: Vec<&str> = string.split_ascii_whitespace().collect();
+                    while let Some(s) = vec.last() {
+                        if s.is_empty() {
+                            vec.pop().unwrap();
+                        } else {
+                            break;
+                        }
+                    }
+                    vec.into_iter().map(Value::string_from_str).collect()
+                }
+                _ => string
+                    .trim_start()
+                    .splitn(lim as usize, |c: char| c.is_ascii_whitespace())
+                    .map(|s| s.trim_start())
+                    .map(Value::string_from_str)
+                    .collect(),
+            }
+        } else if lim < 0 {
+            string.split(&*coerced).map(Value::string_from_str).collect()
+        } else if lim == 0 {
+            let mut vec: Vec<&str> = string.split(&*coerced).collect();
+            while let Some(s) = vec.last() {
+                if s.is_empty() {
+                    vec.pop().unwrap();
+                } else {
+                    break;
+                }
+            }
+            vec.into_iter().map(Value::string_from_str).collect()
+        } else {
+            string
+                .splitn(lim as usize, &*coerced)
+                .map(Value::string_from_str)
+                .collect()
+        };
+        match lfp.block() {
+            Some(bh) => {
+                let ary = Value::array_from_vec(v);
+                vm.temp_push(ary);
+                vm.invoke_block_iter1(globals, bh, ary.as_array().iter().cloned())?;
+                vm.temp_pop();
+                Ok(lfp.self_val())
+            }
+            None => Ok(Value::array_from_vec(v)),
+        }
     }
 }
 
