@@ -29,6 +29,114 @@ pub const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
 
 pub const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
 
+/// Format an f64 value as a String matching CRuby's `Float#to_s` / `Float#inspect` output.
+///
+/// Uses Rust's `{:?}` formatting (Ryu algorithm, shortest round-trip representation)
+/// and then reformats to match CRuby's conventions:
+/// - Special values: "NaN", "Infinity", "-Infinity"
+/// - Preserves `-0.0`
+/// - Scientific notation when decimal exponent >= 15 or <= -5
+/// - Scientific exponent always includes sign and at least two digits (`e+02`, `e-05`)
+pub fn ruby_float_to_s(f: f64) -> String {
+    if f.is_nan() {
+        return "NaN".to_string();
+    }
+    if f.is_infinite() {
+        return if f > 0.0 {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        };
+    }
+    if f == 0.0 {
+        return if f.is_sign_negative() {
+            "-0.0".to_string()
+        } else {
+            "0.0".to_string()
+        };
+    }
+
+    // Rust's Debug format for f64 uses the Ryu algorithm, producing the shortest
+    // string that round-trips back to the same f64 value — the same property as
+    // CRuby's ruby_dtoa (mode 0).
+    let s = format!("{:?}", f);
+
+    let (negative, rest) = if let Some(r) = s.strip_prefix('-') {
+        (true, r)
+    } else {
+        (false, s.as_str())
+    };
+
+    // Parse mantissa and optional exponent from Rust's output (e.g., "1.23e-10" or "123.456")
+    let (mantissa_str, exp_offset) = if let Some(pos) = rest.find('e') {
+        let exp: i32 = rest[pos + 1..].parse().unwrap();
+        (&rest[..pos], Some(exp))
+    } else {
+        (rest, None)
+    };
+
+    let dot_pos = mantissa_str.find('.').unwrap_or(mantissa_str.len());
+    let all_digits: String = mantissa_str.chars().filter(|&c| c != '.').collect();
+    // Strip trailing zeros to get significant digits only (matching ruby_dtoa output)
+    let digits = all_digits.trim_end_matches('0');
+    let digits = if digits.is_empty() { "0" } else { digits };
+
+    // decpt: position of the decimal point (number of digits before it)
+    let decpt = if let Some(exp) = exp_offset {
+        exp + dot_pos as i32
+    } else {
+        dot_pos as i32
+    };
+
+    let mut result = String::new();
+    if negative {
+        result.push('-');
+    }
+
+    let ndigits = digits.len() as i32;
+
+    if decpt > 0 && decpt <= 15 {
+        // Fixed notation: decimal point is within range
+        if decpt >= ndigits {
+            // All significant digits before decimal point, pad with zeros
+            result.push_str(digits);
+            for _ in 0..(decpt - ndigits) {
+                result.push('0');
+            }
+            result.push_str(".0");
+        } else {
+            // Decimal point falls within the digits
+            result.push_str(&digits[..decpt as usize]);
+            result.push('.');
+            result.push_str(&digits[decpt as usize..]);
+        }
+    } else if decpt <= 0 && decpt > -4 {
+        // Fixed notation with leading zeros: 0.000...digits
+        result.push_str("0.");
+        for _ in 0..(-decpt) {
+            result.push('0');
+        }
+        result.push_str(digits);
+    } else {
+        // Scientific notation: d.dddde+dd
+        result.push_str(&digits[..1]);
+        result.push('.');
+        if ndigits > 1 {
+            result.push_str(&digits[1..]);
+        } else {
+            result.push('0');
+        }
+        let exp = decpt - 1;
+        if exp >= 0 {
+            result.push_str(&format!("e+{:02}", exp));
+        } else {
+            result.push_str(&format!("e-{:02}", -exp));
+        }
+    }
+
+    result
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Value(std::num::NonZeroU64);
@@ -787,7 +895,7 @@ impl Value {
             RV::Bool(b) => format!("{:?}", b),
             RV::Fixnum(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
-            RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
+            RV::Float(f) => ruby_float_to_s(f),
             RV::Complex(_) => self.as_complex().debug(store),
             RV::Symbol(id) => format!(":{id}"),
             RV::String(s) => format!(r#""{}""#, s.inspect()),
@@ -802,7 +910,7 @@ impl Value {
             RV::Bool(b) => format!("{:?}", b),
             RV::Fixnum(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
-            RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
+            RV::Float(f) => ruby_float_to_s(f),
             RV::Complex(_) => self.as_complex().debug(store),
             RV::Symbol(id) => format!(":{id}"),
             RV::String(s) => format!(r#""{}""#, s.inspect()),
@@ -1956,6 +2064,11 @@ impl Immediate {
 
     pub fn flonum(num: f64) -> Option<Self> {
         if num == 0.0 {
+            // -0.0 == 0.0 in IEEE 754, but Ruby distinguishes them.
+            // Store -0.0 as a heap float to preserve the sign bit.
+            if num.is_sign_negative() {
+                return None;
+            }
             return Some(unsafe { Self::from_u64_unchecked(FLOAT_ZERO) });
         }
         let unum = f64::to_bits(num);
@@ -2088,7 +2201,7 @@ impl<'a> std::fmt::Debug for RV<'a> {
             RV::Bool(b) => write!(f, "{b:?}"),
             RV::Fixnum(n) => write!(f, "{n}"),
             RV::BigInt(n) => write!(f, "Bignum({n})"),
-            RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
+            RV::Float(n) => write!(f, "{}", ruby_float_to_s(*n)),
             RV::Complex(c) => write!(f, "{:?}", c),
             RV::Symbol(id) => write!(f, ":{}", id),
             RV::String(s) => write!(f, "\"{}\"", String::from_utf8_lossy(s.as_bytes())),
@@ -2105,7 +2218,7 @@ impl<'a> std::fmt::Display for RV<'a> {
             RV::Bool(b) => write!(f, "{b:?}"),
             RV::Fixnum(n) => write!(f, "{n}"),
             RV::BigInt(n) => write!(f, "{n}"),
-            RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
+            RV::Float(n) => write!(f, "{}", ruby_float_to_s(*n)),
             RV::Complex(c) => write!(f, "{}", c),
             RV::Symbol(id) => write!(f, ":{}", id),
             RV::String(s) => write!(f, "\"{}\"", String::from_utf8_lossy(s.as_bytes())),
