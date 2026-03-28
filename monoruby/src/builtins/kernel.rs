@@ -44,7 +44,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         Effect::CAPTURE | Effect::BINDING,
     );
     globals.define_builtin_module_func(kernel_class, "loop", loop_, 0);
-    globals.define_builtin_module_func_with(kernel_class, "raise", raise, 0, 2, false);
+    globals.define_builtin_module_func_with(kernel_class, "raise", raise, 0, 3, false);
     globals.define_builtin_module_func_with(kernel_class, "fail", raise, 0, 2, false);
     globals.define_builtin_module_inline_func(
         kernel_class,
@@ -57,7 +57,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_rest(kernel_class, "format", format);
     globals.define_builtin_module_func_rest(kernel_class, "sprintf", format);
     globals.define_builtin_module_func_with(kernel_class, "rand", rand, 0, 1, false);
-    globals.define_builtin_module_func(kernel_class, "Integer", kernel_integer, 1);
+    globals.define_builtin_module_func_with(kernel_class, "Integer", kernel_integer, 1, 2, false);
     globals.define_builtin_module_func(kernel_class, "Float", kernel_float, 1);
     globals.define_builtin_module_func_with(kernel_class, "Complex", kernel_complex, 1, 2, false);
     globals.define_builtin_module_func_with(kernel_class, "Array", kernel_array, 1, 1, false);
@@ -121,7 +121,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "hash", hash, 0);
     globals.define_builtin_func(kernel_class, "eql?", eql_, 1);
     globals.define_builtin_func(kernel_class, "dup", dup, 0);
-    globals.define_builtin_func(kernel_class, "clone", clone_val, 0);
+    globals.define_builtin_func_with(kernel_class, "clone", clone_val, 0, 1, false);
     globals.define_private_builtin_func(kernel_class, "initialize_copy", initialize_copy, 1);
     globals.define_private_builtin_func(kernel_class, "initialize_clone", initialize_clone, 1);
     globals.define_private_builtin_func(kernel_class, "initialize_dup", initialize_clone, 1);

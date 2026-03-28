@@ -103,16 +103,33 @@ class Hash
     h
   end
 
-  def transform_keys(&block)
-    return to_enum(:transform_keys) unless block
+  def transform_keys(hash = nil, &block)
+    return to_enum(:transform_keys) unless block || hash
     h = {}
-    each { |k, v| h[block.call(k)] = v }
+    if hash
+      each do |k, v|
+        new_k = hash.key?(k) ? hash[k] : (block ? block.call(k) : k)
+        h[new_k] = v
+      end
+    else
+      each { |k, v| h[block.call(k)] = v }
+    end
     h
   end
 
-  def transform_keys!(&block)
-    return to_enum(:transform_keys!) unless block
-    keys.each { |k| self[block.call(k)] = delete(k) }
+  def transform_keys!(hash = nil, &block)
+    return to_enum(:transform_keys!) unless block || hash
+    if hash
+      keys.each do |k|
+        if hash.key?(k)
+          self[hash[k]] = delete(k)
+        elsif block
+          self[block.call(k)] = delete(k)
+        end
+      end
+    else
+      keys.each { |k| self[block.call(k)] = delete(k) }
+    end
     self
   end
 
@@ -154,18 +171,24 @@ class Hash
     obj
   end
 
-  def any?
+  def any?(*pattern)
     if block_given?
       each { |k, v| return true if yield([k, v]) }
+    elsif pattern.size == 1
+      pat = pattern[0]
+      each { |k, v| return true if pat === [k, v] }
     else
       return !empty?
     end
     false
   end
 
-  def all?
+  def all?(*pattern)
     if block_given?
       each { |k, v| return false unless yield([k, v]) }
+    elsif pattern.size == 1
+      pat = pattern[0]
+      each { |k, v| return false unless pat === [k, v] }
     else
       each { |k, v| return false unless v }
     end

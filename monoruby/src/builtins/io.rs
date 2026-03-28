@@ -9,14 +9,14 @@ use std::rc::Rc;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("IO", IO_CLASS, ObjTy::IO);
-    globals.define_builtin_class_func(IO_CLASS, "new", io_new, 0);
+    globals.define_builtin_class_func_with(IO_CLASS, "new", io_new, 0, 3, false);
     globals.define_builtin_class_func(IO_CLASS, "allocate", allocate, 0);
     globals.define_builtin_func(IO_CLASS, "<<", shl, 1);
     globals.define_builtin_func_with(IO_CLASS, "puts", puts, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "print", print, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "printf", printf, 1, 1, true);
     globals.define_builtin_func(IO_CLASS, "flush", flush, 0);
-    globals.define_builtin_func(IO_CLASS, "gets", gets, 0);
+    globals.define_builtin_func_with(IO_CLASS, "gets", gets, 0, 2, false);
     globals.define_builtin_funcs(IO_CLASS, "isatty", &["tty?"], isatty, 0);
     globals.define_builtin_func(IO_CLASS, "close", close, 0);
     globals.define_builtin_func(IO_CLASS, "close_write", close_write, 0);
@@ -24,12 +24,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "closed?", closed_, 0);
     globals.define_builtin_func(IO_CLASS, "sync", sync, 0);
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
-    globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 1, false);
-    globals.define_builtin_func(IO_CLASS, "readline", readline, 0);
+    globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 2, false);
+    globals.define_builtin_func_with(IO_CLASS, "readline", readline, 0, 2, false);
     globals.define_builtin_funcs(IO_CLASS, "each", &["each_line"], each_line, 0);
-    globals.define_builtin_class_func(IO_CLASS, "read", io_class_read, 1);
+    globals.define_builtin_class_func_with(IO_CLASS, "read", io_class_read, 1, 4, false);
     globals.define_builtin_class_func_with(IO_CLASS, "sysopen", io_sysopen, 1, 3, false);
-    globals.define_builtin_class_func(IO_CLASS, "pipe", io_pipe, 0);
+    globals.define_builtin_class_func_with(IO_CLASS, "pipe", io_pipe, 0, 3, false);
     globals.define_builtin_class_func_rest(IO_CLASS, "popen", io_popen);
     globals.define_builtin_func(IO_CLASS, "pid", io_pid, 0);
     globals.define_builtin_func(IO_CLASS, "fileno", io_fileno, 0);

@@ -16,12 +16,12 @@ pub(super) fn init(globals: &mut Globals) {
         "new",
         enumerator_new,
         0,
-        0,
+        1,
         Effect::CAPTURE,
     );
     globals.define_builtin_func(ENUMERATOR_CLASS, "next", next, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "next_values", next_values, 0);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "each", each, 0);
+    globals.define_builtin_func_rest(ENUMERATOR_CLASS, "each", each);
     globals.define_builtin_func_with(ENUMERATOR_CLASS, "with_index", with_index, 0, 1, false);
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind, 0);
@@ -48,7 +48,7 @@ pub(super) fn init(globals: &mut Globals) {
         0,
         Effect::CAPTURE,
     );
-    globals.define_builtin_func(GENERATOR_CLASS, "each", generator_each, 0);
+    globals.define_builtin_func_rest(GENERATOR_CLASS, "each", generator_each);
 }
 
 ///

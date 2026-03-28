@@ -6,7 +6,7 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS, ObjTy::HASH);
-    globals.define_builtin_class_func_with_effect(HASH_CLASS, "new", new, 0, 1, Effect::CAPTURE);
+    globals.define_builtin_class_func_with_effect(HASH_CLASS, "new", new, 0, 2, Effect::CAPTURE);
     globals.define_builtin_class_func(HASH_CLASS, "allocate", allocate, 0);
     globals.define_builtin_class_func_rest(HASH_CLASS, "[]", hash_bracket);
     globals.define_builtin_class_func(HASH_CLASS, "try_convert", try_convert, 1);
@@ -58,7 +58,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "key", key, 1);
     globals.define_builtin_func(HASH_CLASS, "keep_if", keep_if, 0);
     globals.define_builtin_func(HASH_CLASS, "values", values, 0);
-    globals.define_builtin_funcs(HASH_CLASS, "clone", &["dup"], clone, 0);
+    globals.define_builtin_funcs_with_kw(HASH_CLASS, "clone", &["dup"], clone, 0, 1, false, &[], false);
     globals.define_builtin_func(HASH_CLASS, "compare_by_identity?", compare_by_identity_, 0);
     globals.define_builtin_func_rest(HASH_CLASS, "values_at", values_at);
     globals.define_builtin_func_rest(HASH_CLASS, "dig", dig);

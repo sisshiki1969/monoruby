@@ -57,7 +57,7 @@ class Integer
     end
   end
 
-  def round(ndigits = 0)
+  def round(ndigits = 0, **kw)
     return self if ndigits >= 0
     d = 10 ** (-ndigits)
     if self >= 0

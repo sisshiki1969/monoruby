@@ -37,8 +37,8 @@ module Enumerable
     self
   end
   
-  def each_with_index
-    return self.to_enum(:each_with_index) unless block_given?
+  def each_with_index(*args)
+    return self.to_enum(:each_with_index, *args) unless block_given?
     i = 0
     self.each do |x|
       yield x, i
@@ -111,10 +111,15 @@ module Enumerable
     res
   end
 
-  def any?
+  def any?(*pattern)
     if block_given?
       self.each do |x|
         return true if yield(x)
+      end
+    elsif pattern.size == 1
+      pat = pattern[0]
+      self.each do |x|
+        return true if pat === x
       end
     else
       self.each do |x|
@@ -174,7 +179,7 @@ module Enumerable
     n == 1
   end
 
-  def min_by
+  def min_by(n = nil)
     return self.to_enum(:min_by) unless block_given?
     elem = nil
     res = nil
@@ -208,8 +213,8 @@ module Enumerable
   end
   alias collect_concat flat_map
 
-  def tally
-    h = {}
+  def tally(hash = nil)
+    h = hash || {}
     self.each do |x|
       h[x] = (h[x] || 0) + 1
     end
@@ -321,7 +326,7 @@ module Enumerable
     map { |x| [yield(x), x] }.sort { |a, b| a[0] <=> b[0] }.map { |x| x[1] }
   end
 
-  def max_by
+  def max_by(n = nil)
     return self.to_enum(:max_by) unless block_given?
     elem = nil
     res = nil
@@ -440,7 +445,7 @@ module Enumerable
     nil
   end
 
-  def min
+  def min(n = nil)
     m = nil
     if block_given?
       self.each do |x|
@@ -458,7 +463,7 @@ module Enumerable
     m
   end
 
-  def max
+  def max(n = nil)
     m = nil
     if block_given?
       self.each do |x|

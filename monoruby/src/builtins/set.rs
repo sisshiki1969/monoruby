@@ -25,7 +25,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SET_CLASS, "to_a", to_a, 0);
     // inspect/to_s defined in Ruby (builtins/builtins.rb) for cycle detection
     globals.define_builtin_func(SET_CLASS, "to_set", to_set, 0);
-    globals.define_builtin_funcs(SET_CLASS, "dup", &["clone"], dup, 0);
+    globals.define_builtin_funcs_with_kw(SET_CLASS, "dup", &["clone"], dup, 0, 1, false, &[], false);
     globals.define_builtin_func_rest(SET_CLASS, "merge", merge);
     globals.define_builtin_func(SET_CLASS, "subtract", subtract, 1);
     globals.define_builtin_func(SET_CLASS, "replace", replace, 1);

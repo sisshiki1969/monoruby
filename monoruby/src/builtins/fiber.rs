@@ -11,7 +11,7 @@ pub(super) fn init(globals: &mut Globals) {
         "new",
         fiber_new,
         0,
-        0,
+        1,
         Effect::CAPTURE,
     );
     globals.define_builtin_class_inline_func_rest(

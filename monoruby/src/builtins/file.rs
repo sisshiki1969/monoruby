@@ -20,17 +20,17 @@ pub(super) fn init(globals: &mut Globals) {
         .id();
     let file_test = globals.define_toplevel_module("FileTest").id();
     globals.define_builtin_class_func(file, "write", file_write, 2);
-    globals.define_builtin_class_func(file, "read", file_read, 1);
+    globals.define_builtin_class_func_with(file, "read", file_read, 1, 4, false);
     globals.define_builtin_class_func_with(file, "binread", binread, 1, 3, false);
     globals.define_builtin_class_func_rest(file, "join", join);
     globals.define_builtin_class_func_with(file, "expand_path", expand_path, 1, 2, false);
-    globals.define_builtin_class_func(file, "dirname", dirname, 1);
+    globals.define_builtin_class_func_with(file, "dirname", dirname, 1, 2, false);
     globals.define_builtin_class_func_with(file, "basename", basename, 1, 2, false);
     globals.define_builtin_class_func(file, "extname", extname, 1);
     globals.define_builtin_class_func(file, "path", path, 1);
     globals.define_builtin_class_func_with(file, "realpath", realpath, 1, 2, false);
-    globals.define_builtin_class_func_with(file, "open", open, 1, 3, false);
-    globals.define_builtin_class_func_with(file, "new", open, 1, 3, false);
+    globals.define_builtin_class_func_with(file, "open", open, 1, 4, false);
+    globals.define_builtin_class_func_with(file, "new", open, 1, 4, false);
 
     globals.define_builtin_class_func(file, "directory?", directory_, 1);
     globals.define_builtin_module_func(file_test, "directory?", directory_, 1);

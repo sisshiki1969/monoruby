@@ -8,10 +8,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("MatchData", MATCHDATA_CLASS, ObjTy::MATCHDATA);
     globals.define_builtin_class_func(MATCHDATA_CLASS, "allocate", super::class::undef_allocate, 0);
     globals.define_builtin_func(MATCHDATA_CLASS, "captures", captures, 0);
-    globals.define_builtin_func(MATCHDATA_CLASS, "[]", index, 1);
+    globals.define_builtin_func_with(MATCHDATA_CLASS, "[]", index, 1, 2, false);
     globals.define_builtin_func(MATCHDATA_CLASS, "begin", match_begin, 1);
     globals.define_builtin_func(MATCHDATA_CLASS, "end", match_end, 1);
-    globals.define_builtin_func(MATCHDATA_CLASS, "named_captures", named_captures, 0);
+    globals.define_builtin_func_with(MATCHDATA_CLASS, "named_captures", named_captures, 0, 1, false);
 }
 
 ///

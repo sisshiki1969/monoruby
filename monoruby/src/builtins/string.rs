@@ -74,7 +74,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "ord", ord, 0);
     globals.define_builtin_func_with(STRING_CLASS, "ljust", ljust, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "rjust", rjust, 1, 2, false);
-    globals.define_builtin_func(STRING_CLASS, "lines", lines, 0);
+    globals.define_builtin_func_with(STRING_CLASS, "lines", lines, 0, 2, false);
     globals.define_builtin_func(STRING_CLASS, "bytes", bytes, 0);
     globals.define_builtin_func(STRING_CLASS, "getbyte", getbyte, 1);
     globals.define_builtin_func_with(STRING_CLASS, "byteslice", byteslice, 1, 2, false);
@@ -90,10 +90,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(STRING_CLASS, "to_sym", &["intern"], to_sym, 0);
     globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
     globals.define_builtin_func(STRING_CLASS, "upcase!", upcase_, 0);
-    globals.define_builtin_func(STRING_CLASS, "downcase", downcase, 0);
-    globals.define_builtin_func(STRING_CLASS, "downcase!", downcase_, 0);
-    globals.define_builtin_func(STRING_CLASS, "capitalize", capitalize, 0);
-    globals.define_builtin_func(STRING_CLASS, "capitalize!", capitalize_, 0);
+    globals.define_builtin_func_rest(STRING_CLASS, "downcase", downcase);
+    globals.define_builtin_func_rest(STRING_CLASS, "downcase!", downcase_);
+    globals.define_builtin_func_rest(STRING_CLASS, "capitalize", capitalize);
+    globals.define_builtin_func_rest(STRING_CLASS, "capitalize!", capitalize_);
     globals.define_builtin_func(STRING_CLASS, "swapcase", swapcase, 0);
     globals.define_builtin_func(STRING_CLASS, "swapcase!", swapcase_, 0);
     globals.define_builtin_func_with(STRING_CLASS, "delete", delete, 0, 0, true);
