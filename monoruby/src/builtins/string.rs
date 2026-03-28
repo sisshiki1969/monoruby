@@ -156,7 +156,66 @@ pub(super) fn init(globals: &mut Globals) {
     // Add UTF-16 encoding constants (placeholder objects for compatibility).
     // monoruby does not actually support UTF-16, but these constants must exist
     // so that code like `str.encoding == Encoding::UTF_16LE` can evaluate to false.
-    for name in ["UTF_8", "UTF_16LE", "UTF_16BE", "UTF_16"] {
+    for name in [
+        "UTF_8",
+        "UTF_16LE",
+        "UTF_16BE",
+        "UTF_16",
+        "US_ASCII",
+        "ISO_8859_1",
+        "ISO_8859_2",
+        "ISO_8859_3",
+        "ISO_8859_4",
+        "ISO_8859_5",
+        "ISO_8859_6",
+        "ISO_8859_7",
+        "ISO_8859_8",
+        "ISO_8859_9",
+        "ISO_8859_10",
+        "ISO_8859_11",
+        "ISO_8859_13",
+        "ISO_8859_14",
+        "ISO_8859_15",
+        "ISO_8859_16",
+        "Shift_JIS",
+        "SHIFT_JIS",
+        "EUC_JP",
+        "ISO_2022_JP",
+        "Windows_1250",
+        "Windows_1251",
+        "Windows_1252",
+        "Windows_1253",
+        "Windows_1254",
+        "Windows_1255",
+        "Windows_1256",
+        "Windows_1257",
+        "Windows_1258",
+        "IBM437",
+        "IBM737",
+        "IBM775",
+        "IBM850",
+        "IBM852",
+        "IBM855",
+        "IBM857",
+        "IBM860",
+        "IBM861",
+        "IBM862",
+        "IBM863",
+        "IBM864",
+        "IBM865",
+        "IBM866",
+        "IBM869",
+        "KOI8_R",
+        "KOI8_U",
+        "GB2312",
+        "GBK",
+        "GB18030",
+        "Big5",
+        "EUC_KR",
+        "EUC_TW",
+        "CP949",
+        "TIS_620",
+    ] {
         let val = Value::object(enc.id());
         globals
             .store
@@ -3520,7 +3579,7 @@ fn enc_find(
             .get_constant_noautoload(enc_class, IdentId::ASCII_8BIT),
         "US_ASCII" => globals
             .store
-            .get_constant_noautoload(enc_class, IdentId::ASCII_8BIT),
+            .get_constant_noautoload(enc_class, IdentId::get_id("US_ASCII")),
         other => {
             // Try to find as a constant name
             let id = IdentId::get_id(other);
