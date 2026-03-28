@@ -431,7 +431,7 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     if let Some(ex) = lfp.arg(0).is_exception() {
         let mut err = MonorubyErr::new_from_exception(ex);
         if let Some(arg1) = lfp.try_arg(1) {
-            err.set_msg(arg1.expect_string(globals)?);
+            err.set_msg(arg1.coerce_to_str(vm, globals)?);
         }
         return Err(err);
     } else if let Some(klass) = lfp.arg(0).is_class() {
@@ -442,7 +442,7 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &[], None, None)?;
             let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
             if let Some(arg1) = lfp.try_arg(1) {
-                err.set_msg(arg1.expect_string(globals)?);
+                err.set_msg(arg1.coerce_to_str(vm, globals)?);
             }
             return Err(err);
         }
@@ -660,15 +660,40 @@ fn kernel_integer(
     // Try to_int coercion
     if let Some(func_id) = globals.check_method(arg0, IdentId::TO_INT) {
         let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
-        if let RV::Fixnum(i) = result.unpack() {
-            return Ok(Value::integer(i));
+        match result.unpack() {
+            RV::Fixnum(i) => return Ok(Value::integer(i)),
+            RV::BigInt(b) => return Ok(Value::bigint(b.clone())),
+            _ => {
+                return Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} to Integer ({}#to_int gives {})",
+                    arg0.get_real_class_name(globals),
+                    arg0.get_real_class_name(globals),
+                    result.get_real_class_name(globals),
+                )));
+            }
         }
     }
-    Err(MonorubyErr::no_implicit_conversion(
-        globals,
-        arg0,
-        INTEGER_CLASS,
-    ))
+    // Try to_i coercion as a fallback
+    let to_i_id = IdentId::get_id("to_i");
+    if let Some(func_id) = globals.check_method(arg0, to_i_id) {
+        let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+        match result.unpack() {
+            RV::Fixnum(i) => return Ok(Value::integer(i)),
+            RV::BigInt(b) => return Ok(Value::bigint(b.clone())),
+            _ => {
+                return Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} to Integer ({}#to_i gives {})",
+                    arg0.get_real_class_name(globals),
+                    arg0.get_real_class_name(globals),
+                    result.get_real_class_name(globals),
+                )));
+            }
+        }
+    }
+    Err(MonorubyErr::typeerr(format!(
+        "can't convert {} into Integer",
+        arg0.get_real_class_name(globals),
+    )))
 }
 
 ///
@@ -707,14 +732,20 @@ fn kernel_float(
         match result.unpack() {
             RV::Float(f) => return Ok(Value::float(f)),
             RV::Fixnum(i) => return Ok(Value::float(i as f64)),
-            _ => {}
+            _ => {
+                return Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} to Float ({}#to_f gives {})",
+                    arg0.get_real_class_name(globals),
+                    arg0.get_real_class_name(globals),
+                    result.get_real_class_name(globals),
+                )));
+            }
         }
     }
-    Err(MonorubyErr::no_implicit_conversion(
-        globals,
-        arg0,
-        FLOAT_CLASS,
-    ))
+    Err(MonorubyErr::typeerr(format!(
+        "can't convert {} into Float",
+        arg0.get_real_class_name(globals),
+    )))
 }
 
 ///
@@ -758,9 +789,27 @@ fn kernel_array(
         return Ok(arg);
     }
     if let Some(func_id) = globals.check_method(arg, IdentId::TO_ARY) {
-        return vm.invoke_func_inner(globals, func_id, arg, &[], None, None);
+        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+        if result.is_array_ty() {
+            return Ok(result);
+        }
+        return Err(MonorubyErr::typeerr(format!(
+            "can't convert {} to Array ({}#to_ary gives {})",
+            arg.get_real_class_name(globals),
+            arg.get_real_class_name(globals),
+            result.get_real_class_name(globals),
+        )));
     } else if let Some(func_id) = globals.check_method(arg, IdentId::TO_A) {
-        return vm.invoke_func_inner(globals, func_id, arg, &[], None, None);
+        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+        if result.is_array_ty() {
+            return Ok(result);
+        }
+        return Err(MonorubyErr::typeerr(format!(
+            "can't convert {} to Array ({}#to_a gives {})",
+            arg.get_real_class_name(globals),
+            arg.get_real_class_name(globals),
+            result.get_real_class_name(globals),
+        )));
     };
     if arg.is_nil() {
         Ok(Value::array_empty())
@@ -1073,22 +1122,11 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.html]
 #[monoruby_builtin]
-fn abort(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn abort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let msg = if let Some(arg0) = lfp.try_arg(0) {
-        match arg0.is_str() {
-            Some(s) => {
-                let s = s.to_string();
-                eprintln!("{}", s);
-                s
-            }
-            None => {
-                return Err(MonorubyErr::no_implicit_conversion(
-                    globals,
-                    arg0,
-                    STRING_CLASS,
-                ));
-            }
-        }
+        let s = arg0.coerce_to_str(vm, globals)?;
+        eprintln!("{}", s);
+        s
     } else {
         "abort".to_string()
     };

@@ -565,7 +565,24 @@ pub(super) extern "C" fn get_index(
             };
         }
         INTEGER_CLASS => {
-            return match op::integer_index1(globals, base, index) {
+            // Try to_int coercion for non-integer index
+            let idx = match index.unpack() {
+                RV::Fixnum(_) | RV::BigInt(_) => index,
+                _ => {
+                    if index.is_range().is_some() {
+                        index
+                    } else {
+                        match index.coerce_to_int(vm, globals) {
+                            Ok(i) => Value::integer(i),
+                            Err(err) => {
+                                vm.set_error(err);
+                                return None;
+                            }
+                        }
+                    }
+                }
+            };
+            return match op::integer_index1(globals, base, idx) {
                 Ok(val) => Some(val),
                 Err(err) => {
                     vm.set_error(err);

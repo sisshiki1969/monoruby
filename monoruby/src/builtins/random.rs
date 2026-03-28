@@ -111,17 +111,13 @@ fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// - urandom(size) -> String
 #[monoruby_builtin]
-fn urandom(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn urandom(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let size = if let Some(size) = lfp.arg(0).try_fixnum() {
         size
     } else if let Some(size) = lfp.arg(0).try_float() {
         size.round() as i64
     } else {
-        return Err(MonorubyErr::no_implicit_conversion(
-            globals,
-            lfp.arg(0),
-            INTEGER_CLASS,
-        ));
+        lfp.arg(0).coerce_to_int(vm, globals)?
     };
     if size == 0 {
         return Ok(Value::bytes(vec![]));

@@ -990,11 +990,11 @@ fn coerce_to_rstring_inner(
                 return Ok(s);
             }
             return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} into String",
+                "can't convert {} to String ({}#{} gives {})",
                 recv.get_real_class_name(&globals.store),
-                //recv.get_real_class_name(&globals.store),
-                //method,
-                //result.get_real_class_name(&globals.store),
+                recv.get_real_class_name(&globals.store),
+                method.get_name(),
+                result.get_real_class_name(&globals.store),
             )));
         }
     }
@@ -1262,6 +1262,12 @@ impl Value {
             if let Some(ary) = v.try_array_ty() {
                 return Ok(ary);
             }
+            return Err(MonorubyErr::typeerr(format!(
+                "can't convert {} to Array ({}#to_ary gives {})",
+                self.get_real_class_name(&globals.store),
+                self.get_real_class_name(&globals.store),
+                v.get_real_class_name(&globals.store),
+            )));
         }
         Err(MonorubyErr::no_implicit_conversion(
             globals,
@@ -1312,19 +1318,33 @@ impl Value {
 
     /// Convert `self` to i64 via `to_int` if needed.
     pub(crate) fn coerce_to_int(&self, vm: &mut Executor, globals: &mut Globals) -> Result<i64> {
-        if let RV::Fixnum(i) = self.unpack() {
-            return Ok(i);
+        match self.unpack() {
+            RV::Fixnum(i) => return Ok(i),
+            RV::BigInt(b) => {
+                use num::ToPrimitive;
+                return b.to_i64().ok_or_else(|| {
+                    MonorubyErr::rangeerr("bignum too big to convert into `long'")
+                });
+            }
+            _ => {}
         }
         if let Some(func_id) = globals.check_method(*self, IdentId::TO_INT) {
             let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
-            if let RV::Fixnum(i) = result.unpack() {
-                return Ok(i);
+            match result.unpack() {
+                RV::Fixnum(i) => return Ok(i),
+                RV::BigInt(b) => {
+                    use num::ToPrimitive;
+                    return b.to_i64().ok_or_else(|| {
+                        MonorubyErr::rangeerr("bignum too big to convert into `long'")
+                    });
+                }
+                _ => {}
             }
             return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} into Integer",
+                "can't convert {} to Integer ({}#to_int gives {})",
                 self.get_real_class_name(&globals.store),
-                //self.get_real_class_name(&globals.store),
-                //result.get_real_class_name(&globals.store),
+                self.get_real_class_name(&globals.store),
+                result.get_real_class_name(&globals.store),
             )));
         }
         Err(MonorubyErr::typeerr(format!(

@@ -36,6 +36,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(IO_CLASS, "write", io_write_method, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "syswrite", io_syswrite, 1, 1, false);
     globals.define_builtin_class_func_with(IO_CLASS, "select", io_select, 1, 4, false);
+    globals.define_builtin_func_with(IO_CLASS, "set_encoding", set_encoding, 1, 3, false);
+    globals.define_builtin_func(IO_CLASS, "external_encoding", external_encoding, 0);
+    globals.define_builtin_func(IO_CLASS, "internal_encoding", internal_encoding, 0);
 
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
@@ -859,6 +862,70 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     }
 }
 
+///
+/// ### IO#set_encoding
+///
+/// - set_encoding(ext_enc) -> self
+/// - set_encoding(ext_enc, int_enc) -> self
+/// - set_encoding(ext_enc, int_enc, opt) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/set_encoding.html]
+///
+/// Stub: accepts arguments but does not actually change encoding.
+#[monoruby_builtin]
+fn set_encoding(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let _ = lfp.arg(0);
+    Ok(lfp.self_val())
+}
+
+///
+/// ### IO#external_encoding
+///
+/// - external_encoding -> Encoding
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/external_encoding.html]
+///
+/// Stub: always returns Encoding::UTF_8.
+#[monoruby_builtin]
+fn external_encoding(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let enc_class = globals
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::ENCODING)
+        .unwrap()
+        .as_class_id();
+    let utf8 = globals
+        .get_constant_noautoload(enc_class, IdentId::UTF_8)
+        .unwrap();
+    Ok(utf8)
+}
+
+///
+/// ### IO#internal_encoding
+///
+/// - internal_encoding -> Encoding | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/internal_encoding.html]
+///
+/// Stub: always returns nil (no transcoding).
+#[monoruby_builtin]
+fn internal_encoding(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::nil())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -1196,6 +1263,46 @@ mod tests {
               io.close_write
               io.read
             end
+            "#,
+        );
+    }
+
+    #[test]
+    fn external_encoding() {
+        run_test_no_result_check(
+            r#"
+            enc = $stdout.external_encoding
+            raise "should be Encoding" unless enc.is_a?(Encoding)
+            enc.name
+            "#,
+        );
+    }
+
+    #[test]
+    fn internal_encoding() {
+        run_test_no_result_check(
+            r#"
+            $stdout.internal_encoding
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_encoding_test() {
+        run_test_no_result_check(
+            r#"
+            r, w = IO.pipe
+            w.set_encoding("UTF-8")
+            w.close
+            r.close
+            "#,
+        );
+        run_test_no_result_check(
+            r#"
+            r, w = IO.pipe
+            w.set_encoding("UTF-8", "UTF-8")
+            w.close
+            r.close
             "#,
         );
     }

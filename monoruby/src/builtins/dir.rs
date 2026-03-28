@@ -169,10 +169,10 @@ fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         pat_val
             .as_array_inner()
             .iter()
-            .map(|v| v.expect_str(globals).map(|s| s.to_string()))
+            .map(|v| v.coerce_to_str(vm, globals))
             .collect::<Result<_>>()?
     } else {
-        vec![pat_val.expect_str(globals)?.to_string()]
+        vec![pat_val.coerce_to_str(vm, globals)?]
     };
 
     let all_matches = glob_impl(patterns, flags, base, sort)?;
@@ -218,7 +218,7 @@ fn glob2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // Accept a single String pattern or an Array of String patterns.
     let patterns: Vec<String> = pat_val
         .iter()
-        .map(|v| v.expect_str(globals).map(|s| s.to_string()))
+        .map(|v| v.coerce_to_str(vm, globals))
         .collect::<Result<_>>()?;
 
     let all_matches: Vec<RStringInner> = glob_impl(patterns, flags, base, sort)?;
@@ -712,5 +712,17 @@ mod tests {
             Dir.entries(".").sort
             "#,
         );
+    }
+
+    #[test]
+    fn rmdir_non_directory() {
+        // Dir.rmdir on a regular file should raise Errno::ENOTDIR
+        run_test_error("Dir.rmdir('Cargo.toml')");
+    }
+
+    #[test]
+    fn mkdir_existing() {
+        // Dir.mkdir on an existing directory should raise Errno::EEXIST
+        run_test_error("Dir.mkdir('/tmp')");
     }
 }

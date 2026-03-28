@@ -110,6 +110,26 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "b", b, 0);
     globals.define_builtin_func_with_kw(
         STRING_CLASS,
+        "encode",
+        encode,
+        0,
+        2,
+        false,
+        &[],
+        true,
+    );
+    globals.define_builtin_func_with_kw(
+        STRING_CLASS,
+        "encode!",
+        encode_,
+        0,
+        2,
+        false,
+        &[],
+        true,
+    );
+    globals.define_builtin_func_with_kw(
+        STRING_CLASS,
         "unpack1",
         unpack1,
         1,
@@ -3434,6 +3454,75 @@ fn next_mut(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     Ok(self_)
 }
 
+/// Resolve an encoding argument (String or Encoding object) to a validated
+/// constant name via `enc_name_to_const`.  Returns the constant name on
+/// success or an ArgumentError on unknown encoding.
+fn resolve_enc_arg(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg: Value,
+) -> Result<&'static str> {
+    let name = if let Some(s) = arg.is_str() {
+        s.to_string()
+    } else if arg.class() == encoding_class(globals) {
+        let s = globals.store.get_ivar(arg, IdentId::_ENCODING).unwrap();
+        s.as_str().to_string()
+    } else {
+        let s = arg.coerce_to_string(vm, globals)?;
+        s
+    };
+    enc_name_to_const(&name).ok_or_else(|| {
+        MonorubyErr::argumenterr(format!("unknown encoding name - {}", name))
+    })
+}
+
+///
+/// ### String#encode
+///
+/// - encode(encoding, **opts) -> String
+/// - encode(dst_encoding, src_encoding, **opts) -> String
+/// - encode(**opts) -> String
+///
+/// Stub: validates encoding names but does not perform actual byte conversion.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/encode.html]
+#[monoruby_builtin]
+fn encode(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // Validate encoding arguments (so we don't raise on known names)
+    if let Some(arg0) = lfp.try_arg(0) {
+        resolve_enc_arg(vm, globals, arg0)?;
+    }
+    if let Some(arg1) = lfp.try_arg(1) {
+        resolve_enc_arg(vm, globals, arg1)?;
+    }
+    // Return a copy of self (no actual conversion)
+    Ok(lfp.self_val().dup())
+}
+
+///
+/// ### String#encode!
+///
+/// - encode!(encoding, **opts) -> self
+/// - encode!(dst_encoding, src_encoding, **opts) -> self
+/// - encode!(**opts) -> self
+///
+/// Stub: validates encoding names but does not perform actual byte conversion.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/encode=21.html]
+#[monoruby_builtin]
+fn encode_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    // Validate encoding arguments
+    if let Some(arg0) = lfp.try_arg(0) {
+        resolve_enc_arg(vm, globals, arg0)?;
+    }
+    if let Some(arg1) = lfp.try_arg(1) {
+        resolve_enc_arg(vm, globals, arg1)?;
+    }
+    // Return self (no actual conversion)
+    Ok(lfp.self_val())
+}
+
 ///
 /// ### String#encoding
 ///
@@ -4184,6 +4273,122 @@ mod tests {
         run_test2(r###""%15.1e" % 12785.34578e-127"###);
         run_test2(r###""%15.1E" % 12785.34578e-127"###);
         run_test2(r###""%c %c %c" % [46, 52.0, "r"]"###);
+    }
+
+    #[test]
+    fn string_format_g() {
+        // %g and %G: shortest representation
+        run_test2(r###""%g" % 100.0"###);
+        run_test2(r###""%g" % 0.0001"###);
+        run_test2(r###""%g" % 123456.789"###);
+        run_test2(r###""%g" % 1.0e-5"###);
+        run_test2(r###""%G" % 100.0"###);
+        run_test2(r###""%G" % 1.0e-5"###);
+        run_test2(r###""%g" % 0.0"###);
+        run_test2(r###""%g" % 1.0"###);
+        run_test2(r###""%20.10g" % 1.23456789"###);
+    }
+
+    #[test]
+    fn string_format_b_upper() {
+        // %B: binary uppercase
+        run_test2(r###""%B" % 10"###);
+        run_test2(r###""%#B" % 10"###);
+        run_test2(r###""%B" % 0"###);
+    }
+
+    #[test]
+    fn string_format_u() {
+        // %u: unsigned decimal
+        run_test2(r###""%u" % 42"###);
+        run_test2(r###""%u" % 0"###);
+        run_test2(r###""%10u" % 42"###);
+    }
+
+    #[test]
+    fn string_format_p() {
+        // %p: inspect
+        run_test2(r###""%p" % "hello""###);
+        run_test2(r###""%p" % 42"###);
+        run_test2(r###""%p" % nil"###);
+        run_test2(r###""%20p" % "hello""###);
+    }
+
+    #[test]
+    fn string_format_o() {
+        // %o: octal
+        run_test2(r###""%o" % 255"###);
+        run_test2(r###""%o" % 8"###);
+        run_test2(r###""%o" % 0"###);
+        run_test2(r###""%#o" % 255"###);
+        run_test2(r###""%#o" % 0"###);
+    }
+
+    #[test]
+    fn string_format_alternate() {
+        // # flag (alternate form)
+        run_test2(r###""%#x" % 255"###);
+        run_test2(r###""%#X" % 255"###);
+        run_test2(r###""%#o" % 255"###);
+        run_test2(r###""%#b" % 10"###);
+        run_test2(r###""%#B" % 10"###);
+        // # flag on zero should not add prefix
+        run_test2(r###""%#x" % 0"###);
+        run_test2(r###""%#b" % 0"###);
+    }
+
+    #[test]
+    fn string_format_space_flag() {
+        // space flag
+        run_test2(r###""% d" % 42"###);
+        run_test2(r###""% d" % -42"###);
+    }
+
+    #[test]
+    fn string_format_plus_flag() {
+        // plus flag
+        run_test2(r###""%+d" % 42"###);
+        run_test2(r###""%+d" % -42"###);
+        run_test2(r###""%+d" % 0"###);
+    }
+
+    #[test]
+    fn string_format_minus_flag() {
+        // left-align
+        run_test2(r###""%-10d" % 42"###);
+        run_test2(r###""%-10s" % "hi""###);
+    }
+
+    #[test]
+    fn string_format_dynamic_width() {
+        // * dynamic width
+        run_test2(r###""%*d" % [10, 42]"###);
+        run_test2(r###""%*d" % [-10, 42]"###);
+    }
+
+    #[test]
+    fn string_format_neg_twos_complement() {
+        // Negative numbers with %b, %o, %x (two's complement)
+        run_test2(r###""%b" % -1"###);
+        run_test2(r###""%o" % -1"###);
+        run_test2(r###""%x" % -1"###);
+        run_test2(r###""%b" % -10"###);
+        run_test2(r###""%o" % -10"###);
+        run_test2(r###""%x" % -10"###);
+        run_test2(r###""%X" % -10"###);
+    }
+
+    #[test]
+    fn string_format_scientific() {
+        // Scientific notation %e/%E
+        run_test2(r###""%e" % 1234.5"###);
+        run_test2(r###""%E" % 1234.5"###);
+        run_test2(r###""%.2e" % 1234.5"###);
+        run_test2(r###""%e" % 0.0"###);
+        run_test2(r###""%e" % -1234.5"###);
+        run_test2(r###""%+e" % 1234.5"###);
+        run_test2(r###""% e" % 1234.5"###);
+        run_test2(r###""%015.3e" % 1234.5"###);
     }
 
     #[test]
@@ -5260,7 +5465,19 @@ mod tests {
 
     #[test]
     fn encoding_find() {
-        run_test(r#"Encoding.find("UTF-8").name"#);
+        run_test_no_result_check(
+            r#"
+            raise unless Encoding.find("UTF-8").is_a?(Encoding)
+            raise unless Encoding.find("ASCII-8BIT").is_a?(Encoding)
+            raise unless Encoding.find("US-ASCII").is_a?(Encoding)
+            raise unless Encoding.find("BINARY").is_a?(Encoding)
+            raise unless Encoding.find("ASCII").is_a?(Encoding)
+            raise unless Encoding.find("locale").is_a?(Encoding)
+            raise unless Encoding.find("Shift_JIS").is_a?(Encoding)
+            raise unless Encoding.find("ISO-8859-1").is_a?(Encoding)
+            raise unless Encoding.find("EUC-JP").is_a?(Encoding)
+            "#,
+        );
     }
 
     #[test]
@@ -5270,6 +5487,18 @@ mod tests {
             Encoding.aliases.is_a?(Hash)
             "#,
         );
+    }
+
+    #[test]
+    fn string_encode() {
+        run_test(r#""hello".encode("UTF-8")"#);
+        run_test(r#""hello".encode("US-ASCII")"#);
+        run_test(r#""hello".encode("UTF-8").encoding.name"#);
+    }
+
+    #[test]
+    fn string_encode_bang() {
+        run_test(r#"s = "hello"; s.encode!("UTF-8"); s.encoding.name"#);
     }
 
     #[test]
@@ -5461,6 +5690,45 @@ mod tests {
         run_test(r#"[0, 127, 128, 16384].pack("w*")"#);
         run_test(r#"[0, 127, 128, 16384].pack("w*").unpack("w*")"#);
         run_test(r#""\x00\x7f\x81\x00\x81\x80\x00".unpack("w*")"#);
+    }
+
+    #[test]
+    fn pack_unpack_at_pos() {
+        // @ template (AtPos) in pack and unpack
+        run_test_no_result_check(
+            r#"
+            packed = [65].pack("C@3")
+            raise "expected 3 bytes" unless packed.bytesize == 3
+            raise "expected 65 at pos 0" unless packed.bytes[0] == 65
+            "#,
+        );
+    }
+
+    #[test]
+    fn pack_template_comments() {
+        // # starts a comment until end of line
+        run_test(r#"[65, 66].pack("C # first byte\nC")"#);
+    }
+
+    #[test]
+    fn pack_template_whitespace() {
+        // Whitespace in templates is ignored
+        run_test(r#"[65, 66].pack("C C")"#);
+    }
+
+    #[test]
+    fn pack_pointer_error() {
+        // p/P should raise an error
+        run_test_error(r#"[1].pack("p")"#);
+        run_test_error(r#"[1].pack("P")"#);
+    }
+
+    #[test]
+    fn pack_unpack_j() {
+        // j/J templates (intptr_t / uintptr_t, same as q/Q on x86-64)
+        run_test(r#"[42].pack("j").unpack1("j")"#);
+        run_test(r#"[42].pack("J").unpack1("J")"#);
+        run_test(r#"[-1].pack("j").unpack1("j")"#);
     }
 
     // b/B/U templates: tests ready, awaiting pack.rs implementation

@@ -1193,13 +1193,12 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn env_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let key = lfp.arg(0);
-    if key.is_str().is_none() {
-        return Err(MonorubyErr::no_implicit_conversion(
-            globals,
-            key,
-            STRING_CLASS,
-        ));
-    }
+    let key = if key.is_str().is_some() {
+        key
+    } else {
+        let s = key.coerce_to_str(vm, globals)?;
+        Value::string(s)
+    };
     let val = lfp
         .self_val()
         .as_hash()

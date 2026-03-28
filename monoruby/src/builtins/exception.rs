@@ -256,7 +256,7 @@ fn system_exit_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
     let (status, msg) = if let Some(arg0) = lfp.try_arg(0) {
         let status = arg0.coerce_to_int(vm, globals)?;
         if let Some(arg1) = lfp.try_arg(1) {
-            (status, arg1.expect_string(globals)?)
+            (status, arg1.coerce_to_str(vm, globals)?)
         } else {
             (status, name.clone())
         }

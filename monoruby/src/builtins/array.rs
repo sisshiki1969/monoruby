@@ -2263,26 +2263,26 @@ fn uniq_inner(
 ///
 /// https://docs.ruby-lang.org/ja/latest/method/Array/i/slice=21.html
 #[monoruby_builtin]
-fn slice_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let ary = lfp.self_val().as_array();
     if let Some(arg1) = lfp.try_arg(1) {
-        let start = match ary.get_array_index(lfp.arg(0).coerce_to_i64(globals)?) {
+        let start = match ary.get_array_index(lfp.arg(0).coerce_to_int(vm, globals)?) {
             Some(i) => i,
             None => return Ok(Value::nil()),
         };
-        let len = arg1.coerce_to_i64(globals)?;
+        let len = arg1.coerce_to_int(vm, globals)?;
         if len < 0 {
             return Ok(Value::nil());
         };
         let len = len as usize;
         Ok(slice_inner(ary, start, len))
     } else if let Some(range) = lfp.arg(0).is_range() {
-        let start = match ary.get_array_index(range.start().coerce_to_i64(globals)?) {
+        let start = match ary.get_array_index(range.start().coerce_to_int(vm, globals)?) {
             Some(i) => i,
             None => return Ok(Value::nil()),
         };
-        let end = match ary.get_array_index(range.end().coerce_to_i64(globals)?) {
+        let end = match ary.get_array_index(range.end().coerce_to_int(vm, globals)?) {
             Some(i) => i,
             None => return Ok(Value::array_empty()),
         };
@@ -2292,7 +2292,7 @@ fn slice_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let len = end - start + if range.exclude_end() { 0 } else { 1 };
         Ok(slice_inner(ary, start, len))
     } else {
-        let index = lfp.arg(0).coerce_to_i64(globals)?;
+        let index = lfp.arg(0).coerce_to_int(vm, globals)?;
         let index = match ary.get_array_index(index) {
             Some(i) if i < ary.len() => i,
             _ => return Ok(Value::nil()),
@@ -3029,6 +3029,42 @@ mod tests {
             a.fill(-2) { |i| i * 10 }
             a"##,
         );
+        // fill with no arguments fills with nil
+        run_test_no_result_check(
+            r#"
+            a = [1, 2, 3]
+            a.fill
+            raise unless a == [nil, nil, nil]
+            "#,
+        );
+        // fill with range (non-block form)
+        run_test(
+            r##"
+            a = [1, 2, 3, 4, 5]
+            a.fill("z", 1..3)
+            a"##,
+        );
+        // fill with block and range
+        run_test(
+            r##"
+            a = [1, 2, 3, 4]
+            a.fill(0..2) { |i| i * 100 }
+            a"##,
+        );
+        // fill extending the array
+        run_test(
+            r##"
+            a = [1, 2]
+            a.fill("x", 0, 5)
+            a"##,
+        );
+        // fill with negative start
+        run_test(
+            r##"
+            a = [1, 2, 3, 4]
+            a.fill("y", -3, 2)
+            a"##,
+        );
     }
 
     #[test]
@@ -3659,6 +3695,40 @@ mod tests {
         run_test(r#"[0x1234].pack("S>").unpack("S>")"#);
         run_test(r#"[0x12345678].pack("L<").unpack("L<")"#);
         run_test(r#"[0x12345678].pack("L>").unpack("L>")"#);
+    }
+
+    #[test]
+    fn pack_native_size() {
+        // l!/L! — native long is 64-bit on x86-64
+        run_test(r#"[0x123456789ABCDEF0].pack("l!").unpack("l!")"#);
+        run_test(r#"[0x123456789ABCDEF0].pack("L!").unpack("L!")"#);
+        // s!/S! — native short is still 16-bit
+        run_test(r#"[0x1234].pack("s!").unpack("s!")"#);
+        run_test(r#"[0x1234].pack("S!").unpack("S!")"#);
+        // i!/I! — native int is still 32-bit
+        run_test(r#"[0x12345678].pack("i!").unpack("i!")"#);
+        run_test(r#"[0x12345678].pack("I!").unpack("I!")"#);
+        // _ modifier is equivalent to !
+        run_test(r#"[0x123456789ABCDEF0].pack("l_").unpack("l_")"#);
+        run_test(r#"[0x123456789ABCDEF0].pack("L_").unpack("L_")"#);
+    }
+
+    #[test]
+    fn pack_pointer_size() {
+        // j/J — pointer-sized integer (64-bit on x86-64)
+        run_test(r#"[42].pack("j").unpack("j")"#);
+        run_test(r#"[42].pack("J").unpack("J")"#);
+        run_test(r#"[-1].pack("j").unpack("j")"#);
+        run_test(r#"[123456789].pack("J").unpack("J")"#);
+    }
+
+    #[test]
+    fn pack_whitespace_and_comments() {
+        // Whitespace between directives should be ignored
+        run_test(r#"[1, 2].pack("C C").unpack("C C")"#);
+        run_test(r#"[1, 2, 3].pack("C  C\tC").unpack("CCC")"#);
+        // Comments should be ignored (# to end of line)
+        run_test(r#"[1, 2].pack("C #comment\nC").unpack("CC")"#);
     }
 
     #[test]
