@@ -1339,7 +1339,9 @@ impl Value {
     /// - if `self` is a Fixnum or a Bignum, convert it to f64.
     /// - if `self` is a Float, return it as f64.
     ///
-    pub fn coerce_to_f64(&self, store: &Store) -> Result<f64> {
+    /// Convert to f64 from numeric types only (Fixnum/Float/BigInt).
+    /// Does NOT call to_f. Use coerce_to_f64() for the full version.
+    pub fn coerce_to_f64_no_convert(&self, store: &Store) -> Result<f64> {
         match self.unpack() {
             RV::Fixnum(i) => Ok(i as f64),
             RV::Float(f) => Ok(f),
@@ -1358,8 +1360,9 @@ impl Value {
         }
     }
 
-    /// Try to convert `self` to f64, calling `to_f` if needed.
-    pub(crate) fn coerce_to_f64_with_to_f(
+    /// Convert to f64, calling `to_f` if the value is not a numeric type.
+    /// This is the standard coercion method matching CRuby behavior.
+    pub(crate) fn coerce_to_f64(
         &self,
         vm: &mut Executor,
         globals: &mut Globals,

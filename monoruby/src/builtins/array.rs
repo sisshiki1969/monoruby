@@ -1006,7 +1006,10 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     if len <= 0 {
                         return Ok(ary.into());
                     }
-                    (start, start + len as usize)
+                    let end_idx = start.checked_add(len as usize).ok_or_else(|| {
+                        MonorubyErr::argumenterr("argument too big")
+                    })?;
+                    (start, end_idx)
                 } else {
                     (start, ary.len())
                 }
@@ -1015,7 +1018,7 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             (0, ary.len())
         };
         if end_idx > ary.len() {
-            ary.resize(end_idx, Value::nil());
+            fill_resize(&mut ary, end_idx)?;
         }
         for i in start..end_idx {
             let val = vm.invoke_block(globals, &data, &[Value::integer(i as i64)])?;
@@ -1023,12 +1026,12 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
     } else {
         // Non-block form
-        let val = lfp.arg(0);
+        let val = lfp.try_arg(0).unwrap_or(Value::nil());
         if let Some(arg1) = lfp.try_arg(1) {
             if let Some(range) = arg1.is_range() {
                 let (start, end_idx) = fill_range_indices(vm, globals, &ary, range)?;
                 if end_idx > ary.len() {
-                    ary.resize(end_idx, Value::nil());
+                    fill_resize(&mut ary, end_idx)?;
                 }
                 for i in start..end_idx {
                     ary[i] = val;
@@ -1046,16 +1049,18 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     if len <= 0 {
                         return Ok(ary.into());
                     }
-                    let end_idx = start + len as usize;
+                    let end_idx = start.checked_add(len as usize).ok_or_else(|| {
+                        MonorubyErr::argumenterr("argument too big")
+                    })?;
                     if end_idx > ary.len() {
-                        ary.resize(end_idx, Value::nil());
+                        fill_resize(&mut ary, end_idx)?;
                     }
                     for i in start..end_idx {
                         ary[i] = val;
                     }
                 } else {
                     if start > ary.len() {
-                        ary.resize(start, Value::nil());
+                        fill_resize(&mut ary, start)?;
                     }
                     let len = ary.len();
                     for i in start..len {
@@ -1068,6 +1073,17 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
     }
     Ok(ary.into())
+}
+
+/// Helper to resize array for fill, raising ArgumentError if too large.
+fn fill_resize(ary: &mut Array, new_len: usize) -> Result<()> {
+    // Limit to prevent capacity overflow panics. CRuby also refuses huge sizes.
+    const MAX_FILL_SIZE: usize = 1 << 30; // ~1 billion elements
+    if new_len > MAX_FILL_SIZE {
+        return Err(MonorubyErr::argumenterr("argument too big"));
+    }
+    ary.resize(new_len, Value::nil());
+    Ok(())
 }
 
 /// Helper to compute (start, end) indices from a Range for Array#fill.

@@ -694,7 +694,7 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let timeout = if timeout_arg.is_nil() {
         None // block forever
     } else {
-        let f = timeout_arg.coerce_to_f64_with_to_f(vm, globals)?;
+        let f = timeout_arg.coerce_to_f64(vm, globals)?;
         if f.is_nan() {
             return Err(MonorubyErr::rangeerr("NaN out of Time range"));
         }

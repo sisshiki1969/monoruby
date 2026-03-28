@@ -466,7 +466,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                     if let Some(repeat) = repeat {
                         for _ in 0..repeat {
                             if let Some(value) = iter.next() {
-                                let f = value.coerce_to_f64(store)?;
+                                let f = value.coerce_to_f64_no_convert(store)?;
                                 let bytes = if endianness {
                                     f64::to_be_bytes(f)
                                 } else {
@@ -479,7 +479,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                         }
                     } else {
                         while let Some(value) = iter.next() {
-                            let f = value.coerce_to_f64(store)?;
+                            let f = value.coerce_to_f64_no_convert(store)?;
                             let bytes = if endianness {
                                 f64::to_be_bytes(f)
                             } else {
@@ -497,7 +497,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                     if let Some(repeat) = repeat {
                         for _ in 0..repeat {
                             if let Some(value) = iter.next() {
-                                let f = value.coerce_to_f64(store)? as f32;
+                                let f = value.coerce_to_f64_no_convert(store)? as f32;
                                 let bytes = if endianness {
                                     f32::to_be_bytes(f)
                                 } else {
@@ -510,7 +510,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                         }
                     } else {
                         while let Some(value) = iter.next() {
-                            let f = value.coerce_to_f64(store)? as f32;
+                            let f = value.coerce_to_f64_no_convert(store)? as f32;
                             let bytes = if endianness {
                                 f32::to_be_bytes(f)
                             } else {

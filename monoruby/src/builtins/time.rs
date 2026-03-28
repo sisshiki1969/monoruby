@@ -331,7 +331,7 @@ fn day(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/=2d.html]
 #[monoruby_builtin]
-fn sub(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs = self_.as_time().clone();
     let rhs_rv = lfp.arg(0);
@@ -343,7 +343,7 @@ fn sub(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         Ok(Value::float(res))
     } else {
         // Time - numeric (seconds)
-        let secs = rhs_rv.coerce_to_f64(&globals.store)?;
+        let secs = rhs_rv.coerce_to_f64(vm, globals)?;
         let nanos = (secs * 1_000_000_000.0) as i64;
         let duration = chrono::Duration::nanoseconds(nanos);
         let result = lhs - duration;

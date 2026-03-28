@@ -148,11 +148,11 @@ fn value_to_carg(globals: &mut Globals, val: Value, ty: i64) -> Result<CArg> {
             }
         }
         TYPE_FLOAT => {
-            let f = val.coerce_to_f64(globals)? as f32;
+            let f = val.coerce_to_f64_no_convert(globals)? as f32;
             Ok(CArg::F32(f))
         }
         TYPE_DOUBLE => {
-            let f = val.coerce_to_f64(globals)?;
+            let f = val.coerce_to_f64_no_convert(globals)?;
             Ok(CArg::F64(f))
         }
         _ => Err(MonorubyErr::runtimeerr(format!(
@@ -351,8 +351,8 @@ fn fiddle_write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
             TYPE_VOIDP | TYPE_ULONG | TYPE_ULONG_LONG | TYPE_UINTPTR_T | TYPE_SIZE_T => {
                 *(ptr as *mut u64) = val.expect_integer(globals)? as u64;
             }
-            TYPE_FLOAT => *(ptr as *mut f32) = val.coerce_to_f64(globals)? as f32,
-            TYPE_DOUBLE => *(ptr as *mut f64) = val.coerce_to_f64(globals)?,
+            TYPE_FLOAT => *(ptr as *mut f32) = val.coerce_to_f64_no_convert(globals)? as f32,
+            TYPE_DOUBLE => *(ptr as *mut f64) = val.coerce_to_f64_no_convert(globals)?,
             _ => {
                 return Err(MonorubyErr::runtimeerr(format!(
                     "Fiddle.___write: unsupported type code {}",
