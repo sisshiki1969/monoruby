@@ -1421,6 +1421,36 @@ impl Value {
         unsafe { self.rvalue_mut().as_hashmap_mut() }
     }
 
+    /// Coerce the value to a Hashmap by trying to_hash if necessary.
+    pub(crate) fn coerce_to_hash(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Hashmap> {
+        if let Some(h) = self.try_hash_ty() {
+            return Ok(h);
+        }
+        let to_hash_id = IdentId::get_id("to_hash");
+        if let Some(result) =
+            vm.invoke_method_if_exists(globals, to_hash_id, *self, &[], None, None)?
+        {
+            if let Some(h) = result.try_hash_ty() {
+                return Ok(h);
+            }
+            return Err(MonorubyErr::typeerr(format!(
+                "can't convert {} to Hash ({}#to_hash gives {})",
+                self.get_real_class_name(globals),
+                self.get_real_class_name(globals),
+                result.get_real_class_name(globals),
+            )));
+        }
+        Err(MonorubyErr::no_implicit_conversion(
+            &globals.store,
+            *self,
+            HASH_CLASS,
+        ))
+    }
+
     pub(crate) fn as_regexp_inner(&self) -> &RegexpInner {
         assert_eq!(ObjTy::REGEXP, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue contains a regexp.
