@@ -404,11 +404,6 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
                     }
                 }
             }
-            _ => {
-                return Err(MonorubyErr::argumenterr(
-                    "Currently, the template character is not supported.",
-                ));
-            }
         };
     }
 
