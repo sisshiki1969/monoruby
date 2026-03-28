@@ -216,16 +216,8 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 fn chr(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let _encoding = lfp.try_arg(0); // accept optional encoding argument
     if let Some(i) = lfp.self_val().try_fixnum() {
-        if i < 0 {
-            return Err(MonorubyErr::rangeerr(format!(
-                "{} out of char range",
-                i
-            )));
-        }
-        if let Some(c) = char::from_u32(i as u32) {
-            let mut buf = [0u8; 4];
-            let s = c.encode_utf8(&mut buf);
-            return Ok(Value::bytes_from_slice(s.as_bytes()));
+        if let Ok(b) = u8::try_from(i) {
+            return Ok(Value::bytes_from_slice(&[b]));
         }
     };
     Err(MonorubyErr::char_out_of_range(
@@ -578,11 +570,7 @@ fn index(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 } else {
                     base >> nth
                 };
-                let mask = if len >= 64 {
-                    -1i64
-                } else {
-                    (1i64 << len) - 1
-                };
+                let mask = if len >= 64 { -1i64 } else { (1i64 << len) - 1 };
                 Ok(Value::integer(shifted & mask))
             }
             RV::BigInt(base) => {
@@ -640,12 +628,7 @@ fn odd_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/nonzero=3f.html]
 #[monoruby_builtin]
-fn nonzero_(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn nonzero_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if match lfp.self_val().unpack() {
         RV::Fixnum(i) => i == 0,
         RV::BigInt(b) => b.is_zero(),
@@ -740,10 +723,7 @@ fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let base = if let Some(b) = lfp.try_arg(0) {
         let b = b.coerce_to_int(vm, globals)?;
         if !(2..=36).contains(&b) {
-            return Err(MonorubyErr::argumenterr(format!(
-                "invalid radix {}",
-                b
-            )));
+            return Err(MonorubyErr::argumenterr(format!("invalid radix {}", b)));
         }
         b as u32
     } else {
@@ -755,7 +735,11 @@ fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 Ok(Value::string(format!("{}", i)))
             } else {
                 let negative = i < 0;
-                let abs = if negative { (i as i128).unsigned_abs() } else { i as u128 };
+                let abs = if negative {
+                    (i as i128).unsigned_abs()
+                } else {
+                    i as u128
+                };
                 let s = format_integer_base(abs, base);
                 if negative {
                     Ok(Value::string(format!("-{}", s)))
