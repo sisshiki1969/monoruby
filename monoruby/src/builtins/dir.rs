@@ -3,6 +3,21 @@ use std::path::PathBuf;
 
 use super::*;
 
+/// Return a human-readable description for an `std::io::Error`, matching CRuby's Errno messages.
+fn errno_description(err: &std::io::Error) -> &'static str {
+    match err.raw_os_error() {
+        Some(1) => "Operation not permitted",
+        Some(2) => "No such file or directory",
+        Some(13) => "Permission denied",
+        Some(17) => "File exists",
+        Some(20) => "Not a directory",
+        Some(21) => "Is a directory",
+        Some(22) => "Invalid argument",
+        Some(39) => "Directory not empty",
+        _ => "Unknown error",
+    }
+}
+
 //
 // Dir class
 //
@@ -45,8 +60,10 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn rmdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let path = lfp.arg(0).coerce_to_str(vm, globals)?;
-    std::fs::remove_dir(&path)
-        .map_err(|e| MonorubyErr::runtimeerr(format!("Dir.rmdir: {}: {}", path, e)))?;
+    std::fs::remove_dir(&path).map_err(|e| {
+        let desc = errno_description(&e);
+        MonorubyErr::from_io_err(globals, &e, format!("{} @ dir_s_rmdir - {}", desc, path))
+    })?;
     Ok(Value::integer(0))
 }
 
@@ -66,17 +83,14 @@ fn mkdir(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     };
     match std::fs::DirBuilder::new().mode(mode).create(&path) {
         Ok(()) => Ok(Value::integer(0)),
-        //Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-        //    // CRuby raises Errno::EEXIST but monoruby doesn't have Errno error kinds yet.
-        //    // For now, return 0 if the directory already exists (matching mkdir_p behavior).
-        //    // This is necessary for mspec's tmp() helper which calls mkdir_p → Dir.mkdir.
-        //    Ok(Value::integer(0))
-        //}
-        Err(e) => Err(MonorubyErr::runtimeerr(format!(
-            "{} @ dir_s_mkdir - {}",
-            e.to_string(),
-            path
-        ))),
+        Err(e) => {
+            let desc = errno_description(&e);
+            Err(MonorubyErr::from_io_err(
+                globals,
+                &e,
+                format!("{} @ dir_s_mkdir - {}", desc, path),
+            ))
+        }
     }
 }
 
