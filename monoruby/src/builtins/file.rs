@@ -60,6 +60,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(file, "symlink", file_symlink, 2);
     globals.define_builtin_class_func(file, "readlines", readlines, 1);
 
+    globals.define_builtin_class_func(file, "size", file_size, 1);
+    globals.define_builtin_module_func(file_test, "size", file_size, 1);
+
+    globals.define_builtin_class_func(file, "size?", file_size_, 1);
+    globals.define_builtin_module_func(file_test, "size?", file_size_, 1);
+
     globals.define_builtin_singleton_func(
         globals.get_load_path(),
         "resolve_feature_path",
@@ -987,6 +993,44 @@ fn readlines(
     Ok(Value::array_from_vec(lines))
 }
 
+///
+/// ### File.size
+/// - size(path) -> Integer
+///
+/// Returns the size of the file in bytes.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/size.html]
+#[monoruby_builtin]
+fn file_size(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let path = to_path(vm, globals, lfp.arg(0))?;
+    let metadata = std::fs::metadata(&path)
+        .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path.display(), e)))?;
+    Ok(Value::integer(metadata.len() as i64))
+}
+
+///
+/// ### File.size?
+/// - size?(path) -> Integer | nil
+///
+/// Returns the size of the file if it exists and has non-zero size, nil otherwise.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/size=3f.html]
+#[monoruby_builtin]
+fn file_size_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let path = to_path(vm, globals, lfp.arg(0))?;
+    match std::fs::metadata(&path) {
+        Ok(metadata) => {
+            let size = metadata.len();
+            if size == 0 {
+                Ok(Value::nil())
+            } else {
+                Ok(Value::integer(size as i64))
+            }
+        }
+        Err(_) => Ok(Value::nil()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -1228,6 +1272,37 @@ mod tests {
             raise "content mismatch" unless File.read(link) == "hello"
             File.delete(link)
             File.delete(target)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_size() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_size_#{Process.pid}"
+            File.write(path, "hello")
+            s = File.size(path)
+            raise "expected 5" unless s == 5
+            File.delete(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_size_() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_size_q_#{Process.pid}"
+            File.write(path, "hello")
+            s = File.size?(path)
+            raise "expected 5" unless s == 5
+            File.write(path, "")
+            s = File.size?(path)
+            raise "expected nil for empty" unless s.nil?
+            s = File.size?("/tmp/monoruby_nonexistent_file_xyz")
+            raise "expected nil for nonexistent" unless s.nil?
+            File.delete(path)
             "#,
         );
     }
