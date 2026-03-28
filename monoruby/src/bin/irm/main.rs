@@ -13,8 +13,8 @@ struct CommandLineArgs {
     #[arg(long)]
     no_jit: bool,
     /// switch loading gems.
-    #[arg(long)]
-    no_gems: bool,
+    #[arg(long, default_value = "false")]
+    disable_gems: bool,
     #[arg(short = 'I')]
     import: Vec<String>,
     #[arg(short = 'W', default_value = "1")]
@@ -29,7 +29,7 @@ fn main() {
     let args = CommandLineArgs::parse();
 
     let mut rl = DefaultEditor::new().unwrap();
-    let mut globals = Globals::new(args.warning, args.no_jit, args.no_gems);
+    let mut globals = Globals::new(args.warning, args.no_jit, args.disable_gems);
 
     let mut cont_mode = false;
     let mut buf = String::new();
