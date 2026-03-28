@@ -1049,7 +1049,7 @@ fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let now = std::time::Instant::now();
     if let Some(sec) = lfp.try_arg(0) {
-        let sec = sec.coerce_to_f64_with_to_f(vm, globals)?;
+        let sec = sec.coerce_to_f64(vm, globals)?;
         if sec.is_nan() || sec < 0.0 {
             return Err(MonorubyErr::argumenterr(
                 "time interval must not be negative or NaN",
@@ -1484,9 +1484,9 @@ fn read_memory(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// - ____max(f1:Float, f2:Float) -> Float
 ///
 #[monoruby_builtin]
-fn max(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f1 = lfp.arg(0).coerce_to_f64(globals)?;
-    let f2 = lfp.arg(1).coerce_to_f64(globals)?;
+fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f1 = lfp.arg(0).coerce_to_f64(vm, globals)?;
+    let f2 = lfp.arg(1).coerce_to_f64(vm, globals)?;
     Ok(Value::float(f64::max(f1, f2)))
 }
 
@@ -1494,9 +1494,9 @@ fn max(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// - ____min(f1:Float, f2:Float) -> Float
 ///
 #[monoruby_builtin]
-fn min(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f1 = lfp.arg(0).coerce_to_f64(globals)?;
-    let f2 = lfp.arg(1).coerce_to_f64(globals)?;
+fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f1 = lfp.arg(0).coerce_to_f64(vm, globals)?;
+    let f2 = lfp.arg(1).coerce_to_f64(vm, globals)?;
     Ok(Value::float(f64::min(f1, f2)))
 }
 
