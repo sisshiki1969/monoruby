@@ -599,6 +599,10 @@ pub(super) extern "C" fn set_index(
         && let Some(idx) = index.try_fixnum()
     {
         class_slot.idx = INTEGER_CLASS;
+        if base.is_frozen() {
+            vm.set_error(MonorubyErr::cant_modify_frozen(&globals.store, base));
+            return None;
+        }
         return match base.as_array().set_index(idx, src) {
             Ok(val) => Some(val),
             Err(err) => {
