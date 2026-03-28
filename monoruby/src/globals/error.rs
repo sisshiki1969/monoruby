@@ -825,4 +825,69 @@ mod tests {
         "##,
         );
     }
+
+    #[test]
+    fn errno_from_dir_operations() {
+        // Dir.rmdir on a file triggers Errno::ENOTDIR
+        run_test_no_result_check(
+            r#"
+            begin
+              Dir.rmdir("/dev/null")
+              raise "should have raised"
+            rescue Errno::ENOTDIR
+              # expected
+            end
+            "#,
+        );
+        // Dir.rmdir on non-existent path triggers Errno::ENOENT
+        run_test_no_result_check(
+            r#"
+            begin
+              Dir.rmdir("/nonexistent_dir_xyz_123")
+              raise "should have raised"
+            rescue Errno::ENOENT
+              # expected
+            end
+            "#,
+        );
+        // Dir.mkdir on existing directory triggers Errno::EEXIST
+        run_test_no_result_check(
+            r#"
+            begin
+              Dir.mkdir("/tmp")
+              raise "should have raised"
+            rescue Errno::EEXIST
+              # expected
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_enotdir() {
+        // Dir.rmdir on a non-directory triggers Errno::ENOTDIR
+        run_test_once(
+            r#"
+            begin
+              Dir.rmdir("Cargo.toml")
+            rescue Errno::ENOTDIR => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_eexist() {
+        // Dir.mkdir on existing directory triggers Errno::EEXIST
+        run_test_once(
+            r#"
+            begin
+              Dir.mkdir("/tmp")
+            rescue Errno::EEXIST => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
 }

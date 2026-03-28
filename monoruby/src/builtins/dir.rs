@@ -713,4 +713,16 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn rmdir_non_directory() {
+        // Dir.rmdir on a regular file should raise Errno::ENOTDIR
+        run_test_error("Dir.rmdir('Cargo.toml')");
+    }
+
+    #[test]
+    fn mkdir_existing() {
+        // Dir.mkdir on an existing directory should raise Errno::EEXIST
+        run_test_error("Dir.mkdir('/tmp')");
+    }
 }

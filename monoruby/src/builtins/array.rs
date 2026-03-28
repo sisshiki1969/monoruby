@@ -3029,6 +3029,42 @@ mod tests {
             a.fill(-2) { |i| i * 10 }
             a"##,
         );
+        // fill with no arguments fills with nil
+        run_test_no_result_check(
+            r#"
+            a = [1, 2, 3]
+            a.fill
+            raise unless a == [nil, nil, nil]
+            "#,
+        );
+        // fill with range (non-block form)
+        run_test(
+            r##"
+            a = [1, 2, 3, 4, 5]
+            a.fill("z", 1..3)
+            a"##,
+        );
+        // fill with block and range
+        run_test(
+            r##"
+            a = [1, 2, 3, 4]
+            a.fill(0..2) { |i| i * 100 }
+            a"##,
+        );
+        // fill extending the array
+        run_test(
+            r##"
+            a = [1, 2]
+            a.fill("x", 0, 5)
+            a"##,
+        );
+        // fill with negative start
+        run_test(
+            r##"
+            a = [1, 2, 3, 4]
+            a.fill("y", -3, 2)
+            a"##,
+        );
     }
 
     #[test]

@@ -1266,4 +1266,44 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn external_encoding() {
+        run_test_no_result_check(
+            r#"
+            enc = $stdout.external_encoding
+            raise "should be Encoding" unless enc.is_a?(Encoding)
+            enc.name
+            "#,
+        );
+    }
+
+    #[test]
+    fn internal_encoding() {
+        run_test_no_result_check(
+            r#"
+            $stdout.internal_encoding
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_encoding_test() {
+        run_test_no_result_check(
+            r#"
+            r, w = IO.pipe
+            w.set_encoding("UTF-8")
+            w.close
+            r.close
+            "#,
+        );
+        run_test_no_result_check(
+            r#"
+            r, w = IO.pipe
+            w.set_encoding("UTF-8", "UTF-8")
+            w.close
+            r.close
+            "#,
+        );
+    }
 }
