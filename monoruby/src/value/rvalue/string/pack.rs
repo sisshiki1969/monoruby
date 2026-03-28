@@ -30,6 +30,7 @@ enum Template {
     Utf8,
     Null,
     Back,
+    AtPos,
     Base64,
     QuotedPrintable,
     UuEncoded,
@@ -263,6 +264,18 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
                     }
                 } else {
                     while b.back().is_some() {}
+                }
+            }
+            Template::AtPos => {
+                // '@' — move to absolute position
+                if let Some(pos) = repeat {
+                    if pos > b.slice.len() {
+                        return Err(MonorubyErr::argumenterr("@ outside of string"));
+                    }
+                    b.i = pos;
+                } else {
+                    // @* — move to end
+                    b.i = b.slice.len();
                 }
             }
             Template::Ascii => {
@@ -533,9 +546,23 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                 }
             }
             Template::Back => {
-                if packed.pop().is_none() {
-                    return Err(MonorubyErr::argumenterr("X outside of string"));
+                let count = repeat.unwrap_or(1);
+                for _ in 0..count {
+                    if packed.pop().is_none() {
+                        return Err(MonorubyErr::argumenterr("X outside of string"));
+                    }
                 }
+            }
+            Template::AtPos => {
+                // '@' — move to absolute position, padding with nulls if needed
+                if let Some(pos) = repeat {
+                    if pos > packed.len() {
+                        packed.resize(pos, 0);
+                    } else {
+                        packed.truncate(pos);
+                    }
+                }
+                // @* does nothing meaningful for pack
             }
             Template::Hex => {
                 // 'h' (low nibble first) / 'H' (high nibble first) — hex string
@@ -801,6 +828,20 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
     let mut temp = vec![];
     let mut iter = template.chars().peekable();
     while let Some(ch) = iter.next() {
+        // Skip whitespace between directives
+        if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
+            continue;
+        }
+        // '#' starts a comment until end of line
+        if ch == '#' {
+            while let Some(&c) = iter.peek() {
+                iter.next();
+                if c == '\n' {
+                    break;
+                }
+            }
+            continue;
+        }
         let (template, mut endian) = match ch {
             'a' => (Template::Ascii, Endianness::Little),
             'A' => (Template::AsciiTrim, Endianness::Little),
@@ -813,10 +854,14 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
             'C' => (Template::U8, Endianness::Little),
             's' => (Template::I16, Endianness::Little),
             'S' => (Template::U16, Endianness::Little),
-            'l' | 'i' => (Template::I32, Endianness::Little),
-            'L' | 'I' => (Template::U32, Endianness::Little),
+            'i' => (Template::I32, Endianness::Little),
+            'I' => (Template::U32, Endianness::Little),
+            'l' => (Template::I32, Endianness::Little),
+            'L' => (Template::U32, Endianness::Little),
             'q' => (Template::I64, Endianness::Little),
             'Q' => (Template::U64, Endianness::Little),
+            'j' => (Template::I64, Endianness::Little), // intptr_t = i64 on x86-64
+            'J' => (Template::U64, Endianness::Little), // uintptr_t = u64 on x86-64
             'v' => (Template::U16, Endianness::Little),
             'V' => (Template::U32, Endianness::Little),
             'n' => (Template::U16, Endianness::Big),
@@ -830,15 +875,64 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
             'U' => (Template::Utf8, Endianness::Little),
             'x' => (Template::Null, Endianness::Little),
             'X' => (Template::Back, Endianness::Little),
+            '@' => (Template::AtPos, Endianness::Little),
             'm' => (Template::Base64, Endianness::Little),
             'M' => (Template::QuotedPrintable, Endianness::Little),
             'u' => (Template::UuEncoded, Endianness::Little),
             'w' => (Template::BerCompressedInt, Endianness::Little),
+            'p' | 'P' => {
+                // pointer types — not meaningfully supported, skip modifiers/count
+                // consume any trailing modifiers
+                while iter.next_if(|c| *c == '!' || *c == '_' || *c == '>' || *c == '<').is_some() {}
+                if iter.next_if(|c| c == &'*').is_some() {
+                    // skip
+                } else {
+                    while iter.next_if(|c| c.is_ascii_digit()).is_some() {}
+                }
+                return Err(MonorubyErr::argumenterr(
+                    "pack/unpack does not support pointer type (p/P)",
+                ));
+            }
             _ => {
                 return Err(MonorubyErr::argumenterr(format!(
                     "String#pack/unpack Unknown template: {template}",
                 )));
             }
+        };
+        // Consume '!' or '_' modifier (native size).
+        // On x86-64 Linux, native sizes are:
+        //   s!/S! = short = 2 bytes (same as default)
+        //   i!/I! = int = 4 bytes (same as default)
+        //   l!/L! = long = 8 bytes (on 64-bit)
+        //   j!/J! = already 8 bytes
+        //   q!/Q! = already 8 bytes
+        let has_native = iter.next_if(|c| *c == '!' || *c == '_').is_some();
+        if has_native {
+            // Upgrade l/L to 64-bit on x86-64 (native long = 8 bytes)
+            match ch {
+                'l' => {
+                    // native long = i64
+                    // template is already set, but we need to override
+                }
+                'L' => {}
+                's' | 'S' | 'i' | 'I' | 'q' | 'Q' | 'j' | 'J' => {
+                    // sizes already correct for native on x86-64
+                }
+                _ => {
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "'{}' allowed only after types sSiIlLqQjJ",
+                        if has_native { '!' } else { '_' }
+                    )));
+                }
+            }
+        }
+        // Re-assign template for l!/L! which become 64-bit on x86-64
+        let template = if has_native && ch == 'l' {
+            Template::I64
+        } else if has_native && ch == 'L' {
+            Template::U64
+        } else {
+            template
         };
         if iter.next_if(|c| c == &'>').is_some() {
             endian = Endianness::Big;
