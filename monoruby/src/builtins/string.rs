@@ -432,7 +432,7 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/casecmp.html]
 #[monoruby_builtin]
-fn casecmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn casecmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
     let rhs_inner = if let Some(inner) = rhs.is_rstring_inner() {
