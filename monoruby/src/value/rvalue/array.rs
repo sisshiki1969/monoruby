@@ -333,19 +333,30 @@ impl ArrayInner {
         }
     }
 
-    pub(crate) fn get_array_index_checked(&self, store: &Store, index: Value) -> Result<usize> {
-        let index = index.coerce_to_i64(store)?;
+    pub(crate) fn get_array_index_checked(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        index: Value,
+    ) -> Result<usize> {
+        let index = index.coerce_to_int(vm, globals)?;
         match self.get_array_index(index) {
             Some(i) => Ok(i),
             None => Err(MonorubyErr::index_too_small(index, -(self.len() as i64))),
         }
     }
 
-    pub(crate) fn get_elem2(&self, store: &Store, arg0: Value, arg1: Value) -> Result<Value> {
-        let index = arg0.coerce_to_i64(store)?;
+    pub(crate) fn get_elem2(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        arg0: Value,
+        arg1: Value,
+    ) -> Result<Value> {
+        let index = arg0.coerce_to_int(vm, globals)?;
         let self_len = self.len();
         let index = self.get_array_index(index).unwrap_or(self_len);
-        let len = arg1.coerce_to_i64(store)?;
+        let len = arg1.coerce_to_int(vm, globals)?;
         let val = if len < 0 || index > self_len {
             Value::nil()
         } else if index == self_len {
@@ -359,10 +370,15 @@ impl ArrayInner {
         Ok(val)
     }
 
-    pub(crate) fn get_elem1(&self, store: &Store, idx: Value) -> Result<Value> {
+    pub(crate) fn get_elem1(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        idx: Value,
+    ) -> Result<Value> {
         if let Some(range) = idx.is_range() {
             let len = self.len() as i64;
-            let i_start = match range.start().coerce_to_i64(store)? {
+            let i_start = match range.start().coerce_to_int(vm, globals)? {
                 i if i < 0 => len + i,
                 i => i,
             };
@@ -375,7 +391,7 @@ impl ArrayInner {
                 _ => i_start as usize,
             };
 
-            let i_end = range.end().coerce_to_i64(store)?;
+            let i_end = range.end().coerce_to_int(vm, globals)?;
             let end = if i_end >= 0 {
                 let end = i_end as usize + if range.exclude_end() { 0 } else { 1 };
                 if self.len() < end { self.len() } else { end }
@@ -391,7 +407,7 @@ impl ArrayInner {
             }
             Ok(Value::array_from_iter(self[start..end].iter().cloned()))
         } else {
-            let index = idx.coerce_to_i64(store)?;
+            let index = idx.coerce_to_int(vm, globals)?;
             let self_len = self.len();
             let index = self.get_array_index(index).unwrap_or(self_len);
             let val = self.get(index).cloned().unwrap_or_default();

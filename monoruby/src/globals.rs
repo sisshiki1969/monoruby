@@ -769,6 +769,153 @@ fn format_float_with_flags(
     }
 }
 
+/// Format a float in hexadecimal floating-point notation (%a/%A).
+/// The format is: 0x1.<hex-mantissa>p<sign><decimal-exponent>
+/// `f` should be the absolute value; sign is handled by the caller.
+fn format_hex_float(f: f64, precision: Option<usize>, uppercase: bool) -> String {
+    if f.is_nan() {
+        return "NaN".to_string();
+    }
+    if f.is_infinite() {
+        return "Inf".to_string();
+    }
+
+    let (prefix, p_char) = if uppercase {
+        ("0X", 'P')
+    } else {
+        ("0x", 'p')
+    };
+
+    if f == 0.0 {
+        return match precision {
+            Some(0) => format!("{}0{}+0", prefix, p_char),
+            Some(prec) => format!("{}0.{:0>w$}{}+0", prefix, "", p_char, w = prec),
+            None => format!("{}0{}+0", prefix, p_char),
+        };
+    }
+
+    let bits = f.to_bits();
+    let raw_exp = ((bits >> 52) & 0x7ff) as i64;
+    let mantissa_bits = bits & 0x000f_ffff_ffff_ffff;
+
+    let (leading, exp, mantissa) = if raw_exp == 0 {
+        // Denormalized number
+        if mantissa_bits == 0 {
+            ('0', 0i64, 0u64)
+        } else {
+            let shift = mantissa_bits.leading_zeros() as i64 - 12; // 12 = 64 - 52
+            let normalized = mantissa_bits << (shift + 1);
+            let new_mantissa = normalized & 0x000f_ffff_ffff_ffff;
+            let exp = -1022 - shift - 1;
+            ('1', exp, new_mantissa)
+        }
+    } else {
+        let exp = raw_exp - 1023;
+        ('1', exp, mantissa_bits)
+    };
+
+    let exp_sign = if exp >= 0 { "+" } else { "-" };
+    let exp_abs = exp.unsigned_abs();
+
+    // Full mantissa hex: 13 hex digits (52 bits / 4 = 13)
+    let full_hex = if uppercase {
+        format!("{:013X}", mantissa)
+    } else {
+        format!("{:013x}", mantissa)
+    };
+
+    match precision {
+        Some(0) => {
+            // Round: check if mantissa >= 0x8_0000_0000_0000 (half)
+            let rounded_leading = if mantissa >= 0x8_0000_0000_0000 {
+                '2'
+            } else {
+                leading
+            };
+            format!(
+                "{}{}{}{}{}",
+                prefix, rounded_leading, p_char, exp_sign, exp_abs
+            )
+        }
+        Some(prec) => {
+            if prec >= 13 {
+                let padded = format!("{:0<w$}", full_hex, w = prec);
+                format!(
+                    "{}{}.{}{}{}{}",
+                    prefix, leading, padded, p_char, exp_sign, exp_abs
+                )
+            } else {
+                let rounded = round_hex_mantissa(&full_hex, prec, uppercase);
+                format!(
+                    "{}{}.{}{}{}{}",
+                    prefix, leading, rounded, p_char, exp_sign, exp_abs
+                )
+            }
+        }
+        None => {
+            let trimmed = full_hex.trim_end_matches('0');
+            if trimmed.is_empty() {
+                format!(
+                    "{}{}{}{}{}",
+                    prefix, leading, p_char, exp_sign, exp_abs
+                )
+            } else {
+                format!(
+                    "{}{}.{}{}{}{}",
+                    prefix, leading, trimmed, p_char, exp_sign, exp_abs
+                )
+            }
+        }
+    }
+}
+
+/// Round a hex mantissa string to the given number of hex digits.
+fn round_hex_mantissa(hex: &str, prec: usize, uppercase: bool) -> String {
+    let hex_bytes: Vec<u8> = hex.bytes().collect();
+    if prec >= hex_bytes.len() {
+        return hex.to_string();
+    }
+    let round_digit = hex_digit_val(hex_bytes[prec]);
+    let mut digits: Vec<u8> = hex_bytes[..prec]
+        .iter()
+        .map(|&b| hex_digit_val(b))
+        .collect();
+    if round_digit >= 8 {
+        let mut carry = true;
+        for d in digits.iter_mut().rev() {
+            if carry {
+                *d += 1;
+                if *d >= 16 {
+                    *d = 0;
+                } else {
+                    carry = false;
+                }
+            }
+        }
+    }
+    digits
+        .iter()
+        .map(|&d| {
+            if d < 10 {
+                (b'0' + d) as char
+            } else if uppercase {
+                (b'A' + d - 10) as char
+            } else {
+                (b'a' + d - 10) as char
+            }
+        })
+        .collect()
+}
+
+fn hex_digit_val(b: u8) -> u8 {
+    match b {
+        b'0'..=b'9' => b - b'0',
+        b'a'..=b'f' => b - b'a' + 10,
+        b'A'..=b'F' => b - b'A' + 10,
+        _ => 0,
+    }
+}
+
 /// Format a float using %g/%G rules:
 /// Use scientific notation if exponent < -4 or >= precision, otherwise fixed.
 /// Strip trailing zeros after decimal point (and the point itself if no digits remain).
@@ -1252,6 +1399,13 @@ impl Globals {
                     let prec = if prec == 0 { 1 } else { prec };
                     let s = format_g(f.abs(), prec, ch == 'G');
                     let s = normalize_sci_exponent(&s);
+                    format_float_with_flags(
+                        &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
+                    )
+                }
+                'a' | 'A' => {
+                    let f = coerce_to_float(self, val)?;
+                    let s = format_hex_float(f.abs(), precision, ch == 'A');
                     format_float_with_flags(
                         &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
                     )

@@ -35,6 +35,10 @@ enum Template {
     QuotedPrintable,
     UuEncoded,
     BerCompressedInt,
+    /// 'p' — pointer to null-terminated string
+    Pointer,
+    /// 'P' — pointer to fixed-length string
+    PointerFixed,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -414,6 +418,41 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
                     while !b.is_empty() {
                         let val = ber_decode(&mut b)?;
                         ary.push(val);
+                    }
+                }
+            }
+            Template::Pointer => {
+                // 'p' — read a pointer (8 bytes on x86-64), dereference as null-terminated string
+                let count = repeat.unwrap_or(1);
+                for _ in 0..count {
+                    if let Some(chunk) = b.next_chunk::<8>() {
+                        let ptr = usize::from_ne_bytes(chunk.clone());
+                        if ptr == 0 {
+                            ary.push(Value::nil());
+                        } else {
+                            // SAFETY: We trust that the pointer was produced by a prior pack("p")
+                            // call in this process, pointing to a valid null-terminated string.
+                            let cstr = unsafe { std::ffi::CStr::from_ptr(ptr as *const i8) };
+                            ary.push(Value::bytes(cstr.to_bytes().to_vec()));
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+            Template::PointerFixed => {
+                // 'P' — read a pointer (8 bytes on x86-64), return string of specified length
+                let length = repeat.unwrap_or(1);
+                if let Some(chunk) = b.next_chunk::<8>() {
+                    let ptr = usize::from_ne_bytes(chunk.clone());
+                    if ptr == 0 {
+                        ary.push(Value::nil());
+                    } else {
+                        // SAFETY: We trust that the pointer was produced by a prior pack("P")
+                        // call in this process, pointing to a valid buffer of at least `length` bytes.
+                        let slice =
+                            unsafe { std::slice::from_raw_parts(ptr as *const u8, length) };
+                        ary.push(Value::bytes(slice.to_vec()));
                     }
                 }
             }
@@ -820,6 +859,47 @@ pub(crate) fn pack(
                     }
                 }
             }
+            Template::Pointer => {
+                // 'p' — store a pointer to a null-terminated copy of the string
+                let count = repeat.unwrap_or(1);
+                for _ in 0..count {
+                    if let Some(value) = iter.next() {
+                        if value.is_nil() {
+                            packed.extend_from_slice(&0u64.to_ne_bytes());
+                        } else {
+                            let s = get_pack_string(&globals.store, *value)?;
+                            // Allocate a null-terminated copy using CString.
+                            // We leak the memory so the pointer remains valid.
+                            let cstring = std::ffi::CString::new(s).map_err(|_| {
+                                MonorubyErr::argumenterr(
+                                    "string contains null byte for pack('p')",
+                                )
+                            })?;
+                            let ptr = cstring.into_raw() as u64;
+                            packed.extend_from_slice(&ptr.to_ne_bytes());
+                        }
+                    } else {
+                        return Err(MonorubyErr::argumenterr("too few arguments"));
+                    }
+                }
+            }
+            Template::PointerFixed => {
+                // 'P' — store a pointer to the string data
+                // The count specifies the length of data pointed to, not the repeat count.
+                if let Some(value) = iter.next() {
+                    if value.is_nil() {
+                        packed.extend_from_slice(&0u64.to_ne_bytes());
+                    } else {
+                        let s = get_pack_string(&globals.store, *value)?;
+                        // Leak a copy of the bytes so the pointer stays valid.
+                        let boxed: Box<[u8]> = s.into_boxed_slice();
+                        let ptr = Box::into_raw(boxed) as *const u8 as u64;
+                        packed.extend_from_slice(&ptr.to_ne_bytes());
+                    }
+                } else {
+                    return Err(MonorubyErr::argumenterr("too few arguments"));
+                }
+            }
         };
     }
     Ok(Value::bytes(packed))
@@ -881,19 +961,8 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
             'M' => (Template::QuotedPrintable, Endianness::Little),
             'u' => (Template::UuEncoded, Endianness::Little),
             'w' => (Template::BerCompressedInt, Endianness::Little),
-            'p' | 'P' => {
-                // pointer types — not meaningfully supported, skip modifiers/count
-                // consume any trailing modifiers
-                while iter.next_if(|c| *c == '!' || *c == '_' || *c == '>' || *c == '<').is_some() {}
-                if iter.next_if(|c| c == &'*').is_some() {
-                    // skip
-                } else {
-                    while iter.next_if(|c| c.is_ascii_digit()).is_some() {}
-                }
-                return Err(MonorubyErr::argumenterr(
-                    "pack/unpack does not support pointer type (p/P)",
-                ));
-            }
+            'p' => (Template::Pointer, Endianness::Little),
+            'P' => (Template::PointerFixed, Endianness::Little),
             _ => {
                 return Err(MonorubyErr::argumenterr(format!(
                     "unknown pack directive '{ch}' in '{template}'",

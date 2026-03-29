@@ -496,11 +496,16 @@ pub(crate) extern "C" fn bitnot_value(
     Some(v)
 }
 
-pub(crate) fn integer_index1(store: &Store, base: Value, index: Value) -> Result<Value> {
+pub(crate) fn integer_index1(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    base: Value,
+    index: Value,
+) -> Result<Value> {
     // Handle Integer#[Range]
     if let Some(range) = index.is_range() {
-        let start = range.start().coerce_to_i64(store)?;
-        let end = range.end().coerce_to_i64(store)?;
+        let start = range.start().coerce_to_int(vm, globals)?;
+        let end = range.end().coerce_to_int(vm, globals)?;
         let exclude_end = range.exclude_end();
         let end = if exclude_end { end } else { end + 1 };
         let width = end - start;
@@ -561,7 +566,7 @@ pub(crate) fn integer_index1(store: &Store, base: Value, index: Value) -> Result
         }
         (RV::Fixnum(_), RV::BigInt(_)) => Ok(Value::integer(0)),
         (RV::Fixnum(_), _) => Err(MonorubyErr::no_implicit_conversion(
-            store,
+            globals,
             index,
             INTEGER_CLASS,
         )),
@@ -575,7 +580,7 @@ pub(crate) fn integer_index1(store: &Store, base: Value, index: Value) -> Result
         }
         (RV::BigInt(_), RV::BigInt(_)) => Ok(Value::integer(0)),
         (RV::BigInt(_), _) => Err(MonorubyErr::no_implicit_conversion(
-            store,
+            globals,
             index,
             INTEGER_CLASS,
         )),

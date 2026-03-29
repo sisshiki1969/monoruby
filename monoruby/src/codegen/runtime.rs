@@ -547,7 +547,7 @@ pub(super) extern "C" fn get_index(
             } else {
                 index
             };
-            return match base.as_array().get_elem1(globals, idx) {
+            return match base.as_array().get_elem1(vm, globals, idx) {
                 Ok(val) => Some(val),
                 Err(err) => {
                     vm.set_error(err);
@@ -582,7 +582,7 @@ pub(super) extern "C" fn get_index(
                     }
                 }
             };
-            return match op::integer_index1(globals, base, idx) {
+            return match op::integer_index1(vm, globals, base, idx) {
                 Ok(val) => Some(val),
                 Err(err) => {
                     vm.set_error(err);

@@ -11,6 +11,66 @@ impl Globals {
         file_name: &std::path::Path,
         is_relative: bool,
     ) -> Result<Option<(String, std::path::PathBuf)>> {
+        let path_str = file_name.to_string_lossy();
+
+        // Absolute path: try to load directly.
+        if path_str.starts_with('/') {
+            // Check if already loaded (with .rb or .so extension variants).
+            let mut file = PathBuf::from(file_name);
+            if file.extension().is_none() {
+                file.set_extension("rb");
+                if self.loaded_canonicalized_files.get(&file).is_some() {
+                    return Ok(None);
+                }
+                file.set_extension("so");
+                if self.loaded_canonicalized_files.get(&file).is_some() {
+                    return Ok(None);
+                }
+            } else if self.loaded_canonicalized_files.get(&file).is_some() {
+                return Ok(None);
+            }
+            // Try the file with its given extension first.
+            if file_name.is_file() {
+                return self.require_lib_file(file_name.into());
+            }
+            // Try appending .rb extension if none given.
+            if file_name.extension().is_none() {
+                let mut with_rb = PathBuf::from(file_name);
+                with_rb.set_extension("rb");
+                if with_rb.is_file() {
+                    return self.require_lib_file(with_rb);
+                }
+                let mut with_so = PathBuf::from(file_name);
+                with_so.set_extension("so");
+                if with_so.is_file() {
+                    return self.require_lib_file(with_so);
+                }
+            }
+            return Err(MonorubyErr::cant_load(None, file_name));
+        }
+
+        // Relative path (starts with ./ or ../): resolve from CWD.
+        if is_relative || path_str.starts_with("./") || path_str.starts_with("../") {
+            let resolved = if let Ok(cwd) = std::env::current_dir() {
+                cwd.join(file_name)
+            } else {
+                file_name.into()
+            };
+            if resolved.is_file() {
+                return self.require_lib_file(resolved);
+            }
+            // Try with .rb extension.
+            if resolved.extension().is_none() {
+                let mut with_rb = resolved.clone();
+                with_rb.set_extension("rb");
+                if with_rb.is_file() {
+                    return self.require_lib_file(with_rb);
+                }
+            }
+            return Err(MonorubyErr::cant_load(None, file_name));
+        }
+
+        // Bare path: check loaded_canonicalized_files, then search $LOAD_PATH.
         if !is_relative {
             let mut file = PathBuf::from(file_name);
             file.set_extension("rb");
@@ -25,8 +85,6 @@ impl Globals {
             if let Some(file) = self.search_lib(file_name) {
                 return self.require_lib_file(file);
             }
-        } else if file_name.exists() {
-            return self.require_lib_file(file_name.into());
         }
         Err(MonorubyErr::cant_load(None, file_name))
     }
@@ -78,10 +136,7 @@ impl Globals {
         &mut self,
         path: std::path::PathBuf,
     ) -> Result<Option<(String, std::path::PathBuf)>> {
-        let canonicalized_path = match path.canonicalize() {
-            Ok(path) => path,
-            Err(err) => return Err(MonorubyErr::cant_load(Some(err), &path)),
-        };
+        let canonicalized_path = path.canonicalize().unwrap_or_else(|_| path.clone());
         if self
             .loaded_canonicalized_files
             .get(&canonicalized_path)
@@ -149,13 +204,14 @@ impl Globals {
 
 pub fn load_file(path: &std::path::Path) -> Result<(String, std::path::PathBuf)> {
     fn inner(path: &std::path::Path) -> std::io::Result<(String, std::path::PathBuf)> {
-        let canonicalized_path = path.canonicalize()?;
+        // Read the file first; this gives a clear error if the file doesn't exist.
         let mut file_body = String::new();
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .open(&canonicalized_path)?;
+        let mut file = std::fs::OpenOptions::new().read(true).open(path)?;
         file.read_to_string(&mut file_body)?;
-        Ok((file_body, canonicalized_path))
+        // Try to canonicalize the path for dedup tracking;
+        // fall back to the original path if canonicalize fails.
+        let resolved_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        Ok((file_body, resolved_path))
     }
 
     match inner(path) {

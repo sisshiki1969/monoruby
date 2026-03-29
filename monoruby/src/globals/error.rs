@@ -570,10 +570,11 @@ impl MonorubyErr {
     }
 
     pub(crate) fn cant_load(err: Option<std::io::Error>, path: &std::path::Path) -> MonorubyErr {
+        let display = path.display();
         MonorubyErr::loaderr(
             match err {
-                Some(err) => format!("can't load {path:?}. {err}"),
-                None => format!("can't load {path:?}"),
+                Some(err) => format!("cannot load such file -- {display} ({err})"),
+                None => format!("cannot load such file -- {display}"),
             },
             path.into(),
         )
