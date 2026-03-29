@@ -427,17 +427,22 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
     })
 }
 
-pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value> {
+pub(crate) fn pack(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    ary: &[Value],
+    template: &str,
+) -> Result<Value> {
     let mut packed = Vec::new();
     let template = parse_template(template)?;
     let mut iter = ary.iter();
 
     macro_rules! pack {
-        ($store:expr, $size: expr, $type: ident, $repeat: expr, $big_endian: expr) => {
+        ($size: expr, $type: ident, $repeat: expr, $big_endian: expr) => {
             if let Some(repeat) = $repeat {
                 for _ in 0..repeat {
                     if let Some(value) = iter.next() {
-                        let i = value.coerce_to_i64($store)?;
+                        let i = value.coerce_to_int(vm, globals)?;
                         let bytes = if $big_endian {
                             $type::to_be_bytes(i as $type)
                         } else {
@@ -450,7 +455,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                 }
             } else {
                 while let Some(value) = iter.next() {
-                    let i = value.coerce_to_i64($store)?;
+                    let i = value.coerce_to_int(vm, globals)?;
                     let bytes = if $big_endian {
                         $type::to_be_bytes(i as $type)
                     } else {
@@ -466,20 +471,20 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
         let endianness = matches!(template.endian, Endianness::Big);
         let repeat = template.repeat;
         match template.template {
-            Template::I64 => pack!(store, 8, i64, repeat, endianness),
-            Template::U64 => pack!(store, 8, u64, repeat, endianness),
-            Template::I32 => pack!(store, 4, i32, repeat, endianness),
-            Template::U32 => pack!(store, 4, u32, repeat, endianness),
-            Template::I16 => pack!(store, 2, i16, repeat, endianness),
-            Template::U16 => pack!(store, 2, u16, repeat, endianness),
-            Template::I8 => pack!(store, 1, i8, repeat, endianness),
-            Template::U8 => pack!(store, 1, u8, repeat, endianness),
+            Template::I64 => pack!(8, i64, repeat, endianness),
+            Template::U64 => pack!(8, u64, repeat, endianness),
+            Template::I32 => pack!(4, i32, repeat, endianness),
+            Template::U32 => pack!(4, u32, repeat, endianness),
+            Template::I16 => pack!(2, i16, repeat, endianness),
+            Template::U16 => pack!(2, u16, repeat, endianness),
+            Template::I8 => pack!(1, i8, repeat, endianness),
+            Template::U8 => pack!(1, u8, repeat, endianness),
             Template::F64 => {
                 let mut process = |repeat: Option<usize>| -> Result<()> {
                     if let Some(repeat) = repeat {
                         for _ in 0..repeat {
                             if let Some(value) = iter.next() {
-                                let f = value.coerce_to_f64_no_convert(store)?;
+                                let f = value.coerce_to_f64_no_convert(&globals.store)?;
                                 let bytes = if endianness {
                                     f64::to_be_bytes(f)
                                 } else {
@@ -492,7 +497,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                         }
                     } else {
                         while let Some(value) = iter.next() {
-                            let f = value.coerce_to_f64_no_convert(store)?;
+                            let f = value.coerce_to_f64_no_convert(&globals.store)?;
                             let bytes = if endianness {
                                 f64::to_be_bytes(f)
                             } else {
@@ -510,7 +515,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                     if let Some(repeat) = repeat {
                         for _ in 0..repeat {
                             if let Some(value) = iter.next() {
-                                let f = value.coerce_to_f64_no_convert(store)? as f32;
+                                let f = value.coerce_to_f64_no_convert(&globals.store)? as f32;
                                 let bytes = if endianness {
                                     f32::to_be_bytes(f)
                                 } else {
@@ -523,7 +528,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                         }
                     } else {
                         while let Some(value) = iter.next() {
-                            let f = value.coerce_to_f64_no_convert(store)? as f32;
+                            let f = value.coerce_to_f64_no_convert(&globals.store)? as f32;
                             let bytes = if endianness {
                                 f32::to_be_bytes(f)
                             } else {
@@ -568,7 +573,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                 // 'h' (low nibble first) / 'H' (high nibble first) — hex string
                 let high = endianness; // Big = H (high nibble first)
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(store, *value)?;
+                    let s = get_pack_string(&globals.store,*value)?;
                     let count = if let Some(count) = repeat {
                         count
                     } else {
@@ -617,7 +622,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
             Template::Ascii => {
                 // 'a' — arbitrary binary string (null padded)
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(store, *value)?;
+                    let s = get_pack_string(&globals.store,*value)?;
                     if let Some(count) = repeat {
                         if s.len() >= count {
                             packed.extend_from_slice(&s[..count]);
@@ -638,7 +643,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
             Template::AsciiTrim => {
                 // 'A' — arbitrary binary string (space padded)
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(store, *value)?;
+                    let s = get_pack_string(&globals.store,*value)?;
                     if let Some(count) = repeat {
                         if s.len() >= count {
                             packed.extend_from_slice(&s[..count]);
@@ -659,7 +664,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
             Template::CString => {
                 // 'Z' — null-terminated string
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(store, *value)?;
+                    let s = get_pack_string(&globals.store,*value)?;
                     if let Some(count) = repeat {
                         // Zn — like 'a' but null-padded (same as 'a')
                         if s.len() >= count {
@@ -684,7 +689,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
             Template::Base64 => {
                 // 'm' — Base64 encode
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(store, *value)?;
+                    let s = get_pack_string(&globals.store,*value)?;
                     let line_len = if template.explicit_count {
                         repeat.unwrap_or(45)
                     } else {
@@ -699,7 +704,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
             Template::QuotedPrintable => {
                 // 'M' — MIME quoted-printable encode
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(store, *value)?;
+                    let s = get_pack_string(&globals.store,*value)?;
                     let line_len = if template.explicit_count {
                         repeat.unwrap_or(72)
                     } else {
@@ -714,7 +719,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
             Template::UuEncoded => {
                 // 'u' — UU encode
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(store, *value)?;
+                    let s = get_pack_string(&globals.store,*value)?;
                     let line_len = if template.explicit_count {
                         repeat.unwrap_or(45)
                     } else {
@@ -730,7 +735,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                 // 'b' (little-endian) / 'B' (big-endian) — bit string
                 let big = endianness;
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(store, *value)?;
+                    let s = get_pack_string(&globals.store,*value)?;
                     let count = if let Some(count) = repeat {
                         count
                     } else {
@@ -761,42 +766,38 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
             }
             Template::Utf8 => {
                 // 'U' — UTF-8 characters from codepoints
-                let do_pack = |iter: &mut std::slice::Iter<Value>, packed: &mut Vec<u8>, count: Option<usize>| -> Result<()> {
-                    if let Some(count) = count {
-                        for _ in 0..count {
-                            if let Some(value) = iter.next() {
-                                let i = value.coerce_to_i64(store)?;
-                                if i < 0 {
-                                    return Err(MonorubyErr::argumenterr(
-                                        "pack(U): value out of range",
-                                    ));
-                                }
-                                utf8_encode_one(packed, i as u32);
-                            } else {
-                                return Err(MonorubyErr::argumenterr("too few arguments"));
-                            }
-                        }
-                    } else {
-                        while let Some(value) = iter.next() {
-                            let i = value.coerce_to_i64(store)?;
+                if let Some(count) = repeat {
+                    for _ in 0..count {
+                        if let Some(value) = iter.next() {
+                            let i = value.coerce_to_int(vm, globals)?;
                             if i < 0 {
                                 return Err(MonorubyErr::argumenterr(
                                     "pack(U): value out of range",
                                 ));
                             }
-                            utf8_encode_one(packed, i as u32);
+                            utf8_encode_one(&mut packed, i as u32);
+                        } else {
+                            return Err(MonorubyErr::argumenterr("too few arguments"));
                         }
                     }
-                    Ok(())
-                };
-                do_pack(&mut iter, &mut packed, repeat)?;
+                } else {
+                    while let Some(value) = iter.next() {
+                        let i = value.coerce_to_int(vm, globals)?;
+                        if i < 0 {
+                            return Err(MonorubyErr::argumenterr(
+                                "pack(U): value out of range",
+                            ));
+                        }
+                        utf8_encode_one(&mut packed, i as u32);
+                    }
+                }
             }
             Template::BerCompressedInt => {
                 // 'w' — BER compressed integer
                 if let Some(count) = repeat {
                     for _ in 0..count {
                         if let Some(value) = iter.next() {
-                            let i = value.coerce_to_i64(store)?;
+                            let i = value.coerce_to_int(vm, globals)?;
                             if i < 0 {
                                 return Err(MonorubyErr::argumenterr(
                                     "can't compress negative numbers",
@@ -809,7 +810,7 @@ pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value
                     }
                 } else {
                     while let Some(value) = iter.next() {
-                        let i = value.coerce_to_i64(store)?;
+                        let i = value.coerce_to_int(vm, globals)?;
                         if i < 0 {
                             return Err(MonorubyErr::argumenterr(
                                 "can't compress negative numbers",
@@ -828,8 +829,8 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
     let mut temp = vec![];
     let mut iter = template.chars().peekable();
     while let Some(ch) = iter.next() {
-        // Skip whitespace between directives
-        if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
+        // Skip whitespace between directives (space, tab, newline, vertical tab, form feed, carriage return)
+        if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\x0B' || ch == '\x0C' || ch == '\r' {
             continue;
         }
         // '#' starts a comment until end of line
@@ -895,7 +896,7 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
             }
             _ => {
                 return Err(MonorubyErr::argumenterr(format!(
-                    "String#pack/unpack Unknown template: {template}",
+                    "unknown pack directive '{ch}' in '{template}'",
                 )));
             }
         };

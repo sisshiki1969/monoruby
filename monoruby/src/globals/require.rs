@@ -110,14 +110,28 @@ impl Globals {
     /// Unlike `require_lib`, this function:
     /// - Does NOT check or update `loaded_canonicalized_files`.
     /// - Does NOT add `.rb` / `.so` extensions automatically.
-    /// - Resolves relative paths against `$LOAD_PATH` (or the cwd for
-    ///   paths that start with `./` / `../`).
+    /// - Absolute paths are loaded directly.
+    /// - Paths starting with `./` or `../` are resolved relative to CWD.
+    /// - Bare filenames are searched in `$LOAD_PATH`, then tried relative
+    ///   to CWD as a fallback.
     ///
     pub(crate) fn find_for_load(
         &mut self,
         file_name: &std::path::Path,
     ) -> Result<(String, std::path::PathBuf)> {
-        //eprintln!("{:?}", std::env::current_dir());
+        let path_str = file_name.to_string_lossy();
+
+        // Absolute path: load directly.
+        if path_str.starts_with('/') {
+            return load_file(file_name);
+        }
+
+        // Relative to CWD (starts with ./ or ../): load directly.
+        if path_str.starts_with("./") || path_str.starts_with("../") {
+            return load_file(file_name);
+        }
+
+        // Bare filename: search $LOAD_PATH.
         for lib in self.load_path.as_array().iter() {
             let lib = match lib.is_str() {
                 Some(s) => s,
@@ -128,6 +142,7 @@ impl Globals {
                 return Ok(res);
             }
         }
+        // Fallback: try relative to CWD.
         load_file(file_name)
     }
 }
