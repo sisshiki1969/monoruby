@@ -945,7 +945,7 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/set_encoding.html]
 ///
-/// Stub: accepts arguments but does not actually change encoding.
+/// Stub: validates encoding arguments but does not actually change encoding.
 #[monoruby_builtin]
 fn set_encoding(
     _vm: &mut Executor,
@@ -953,7 +953,20 @@ fn set_encoding(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let _ = lfp.arg(0);
+    use crate::Encoding;
+    let arg0 = lfp.arg(0);
+    // Validate the encoding name if it's a string
+    if let Some(s) = arg0.is_str() {
+        // Handle "enc1:enc2" format (e.g. "UTF-8:UTF-8")
+        let ext = s.split(':').next().unwrap_or(s);
+        Encoding::try_from_str(ext)?;
+    }
+    // Validate optional second argument
+    if let Some(arg1) = lfp.try_arg(1) {
+        if let Some(s) = arg1.is_str() {
+            Encoding::try_from_str(s)?;
+        }
+    }
     Ok(lfp.self_val())
 }
 

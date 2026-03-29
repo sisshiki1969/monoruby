@@ -17,11 +17,70 @@ pub enum Encoding {
 
 impl Encoding {
     pub fn try_from_str(s: &str) -> Result<Self> {
-        match s.to_uppercase().as_str() {
-            "ASCII-8BIT" => Ok(Encoding::Ascii8),
-            "UTF-8" => Ok(Encoding::Utf8),
+        // Normalize: uppercase, replace '-' with '_'
+        let normalized = s.to_uppercase().replace('-', "_");
+        match normalized.as_str() {
+            // UTF-8
+            "UTF_8" | "UTF8" | "CP65001" => Ok(Encoding::Utf8),
+
+            // ASCII-8BIT / BINARY
+            "ASCII_8BIT" | "BINARY" => Ok(Encoding::Ascii8),
+
+            // US-ASCII (map to UTF-8 since monoruby doesn't have a separate US-ASCII type)
+            "US_ASCII" | "ASCII" | "ANSI_X3.4_1968" | "646" => Ok(Encoding::Utf8),
+
+            // Special pseudo-encoding names
+            "LOCALE" | "EXTERNAL" | "FILESYSTEM" => Ok(Encoding::Utf8),
+
+            // UTF-16/32 variants (accept but map to UTF-8 internally)
+            "UTF_16" | "UTF_16BE" | "UTF_16LE" | "UTF_32" | "UTF_32BE" | "UTF_32LE" => {
+                Ok(Encoding::Utf8)
+            }
+
+            // ISO-8859 family (map to ASCII-8BIT as they are byte-oriented)
+            "ISO_8859_1" | "ISO8859_1" | "LATIN1" | "ISO_8859_2" | "ISO8859_2" | "LATIN2"
+            | "ISO_8859_3" | "ISO8859_3" | "LATIN3" | "ISO_8859_4" | "ISO8859_4" | "LATIN4"
+            | "ISO_8859_5" | "ISO8859_5" | "ISO_8859_6" | "ISO8859_6" | "ISO_8859_7"
+            | "ISO8859_7" | "ISO_8859_8" | "ISO8859_8" | "ISO_8859_9" | "ISO8859_9"
+            | "LATIN5" | "ISO_8859_10" | "ISO8859_10" | "LATIN6" | "ISO_8859_11"
+            | "ISO8859_11" | "ISO_8859_13" | "ISO8859_13" | "LATIN7" | "ISO_8859_14"
+            | "ISO8859_14" | "LATIN8" | "ISO_8859_15" | "ISO8859_15" | "LATIN9"
+            | "ISO_8859_16" | "ISO8859_16" | "LATIN10" => Ok(Encoding::Ascii8),
+
+            // Japanese encodings
+            "EUC_JP" | "EUCJP" | "SHIFT_JIS" | "SJIS" | "ISO_2022_JP" | "ISO2022_JP"
+            | "WINDOWS_31J" | "CP932" | "CSWINDOWS31J" | "WINDOWS31J" | "MACJAPANESE"
+            | "MACJAPAN" | "EUCJP_MS" | "EUCJP_WIN" | "CP51932"
+            | "STATELESS_ISO_2022_JP" => Ok(Encoding::Ascii8),
+
+            // Windows code pages
+            "WINDOWS_1250" | "CP1250" | "WINDOWS_1251" | "CP1251" | "WINDOWS_1252" | "CP1252"
+            | "WINDOWS_1253" | "CP1253" | "WINDOWS_1254" | "CP1254" | "WINDOWS_1255"
+            | "CP1255" | "WINDOWS_1256" | "CP1256" | "WINDOWS_1257" | "CP1257"
+            | "WINDOWS_1258" | "CP1258" => Ok(Encoding::Ascii8),
+
+            // IBM code pages
+            "IBM437" | "CP437" | "IBM737" | "CP737" | "IBM775" | "CP775" | "IBM850" | "CP850"
+            | "IBM852" | "CP852" | "IBM855" | "CP855" | "IBM857" | "CP857" | "IBM860"
+            | "CP860" | "IBM861" | "CP861" | "IBM862" | "CP862" | "IBM863" | "CP863"
+            | "IBM864" | "CP864" | "IBM865" | "CP865" | "IBM866" | "CP866" | "IBM869"
+            | "CP869" => Ok(Encoding::Ascii8),
+
+            // KOI8
+            "KOI8_R" | "KOI8_U" => Ok(Encoding::Ascii8),
+
+            // Chinese encodings
+            "GB2312" | "EUC_CN" | "GBK" | "CP936" | "GB18030" | "BIG5"
+            | "BIG5_HKSCS" => Ok(Encoding::Ascii8),
+
+            // Korean encodings
+            "EUC_KR" | "EUCKR" | "CP949" => Ok(Encoding::Ascii8),
+
+            // Other
+            "EUC_TW" | "EUCTW" | "TIS_620" | "TIS620" => Ok(Encoding::Ascii8),
+
             _ => Err(MonorubyErr::argumenterr(format!(
-                "Unknown encoding name - {s}"
+                "unknown encoding name - {s}"
             ))),
         }
     }
