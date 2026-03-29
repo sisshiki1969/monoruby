@@ -1407,10 +1407,12 @@ impl Value {
                     match result.unpack() {
                         RV::Float(f) => Ok(f),
                         RV::Fixnum(i) => Ok(i as f64),
-                        _ => Err(MonorubyErr::cant_convert_into_float(
-                            &globals.store,
-                            *self,
-                        )),
+                        _ => Err(MonorubyErr::typeerr(format!(
+                            "can't convert {} to Float ({}#to_f gives {})",
+                            self.get_real_class_name(&globals.store),
+                            self.get_real_class_name(&globals.store),
+                            result.get_real_class_name(&globals.store),
+                        ))),
                     }
                 } else {
                     Err(MonorubyErr::no_implicit_conversion(

@@ -15,6 +15,40 @@ class BasicObject
   end
 end
 
+module Kernel
+  private
+
+  # Internal helper: coerce value to Integer via to_int.
+  # Raises TypeError with CRuby-compatible message if conversion fails.
+  def __to_int(val)
+    return val if val.is_a?(Integer)
+    if val.respond_to?(:to_int)
+      result = val.to_int
+      unless result.is_a?(Integer)
+        raise TypeError, "can't convert #{val.class} to Integer (#{val.class}#to_int gives #{result.class})"
+      end
+      result
+    else
+      raise TypeError, "no implicit conversion of #{val.class} into Integer"
+    end
+  end
+
+  # Internal helper: coerce value to String via to_str.
+  # Raises TypeError with CRuby-compatible message if conversion fails.
+  def __to_str(val)
+    return val if val.is_a?(String)
+    if val.respond_to?(:to_str)
+      result = val.to_str
+      unless result.is_a?(String)
+        raise TypeError, "can't convert #{val.class} to String (#{val.class}#to_str gives #{result.class})"
+      end
+      result
+    else
+      raise TypeError, "no implicit conversion of #{val.class} into String"
+    end
+  end
+end
+
 class Object
   def initialize(...)
   end

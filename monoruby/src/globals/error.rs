@@ -489,12 +489,12 @@ impl MonorubyErr {
     ///
     pub(crate) fn cant_coerced_into(
         store: &Store,
-        op: IdentId,
+        _op: IdentId,
         val: Value,
         msg: &'static str,
     ) -> MonorubyErr {
         MonorubyErr::typeerr(format!(
-            "{op}: {} can't be coerced into {msg}",
+            "{} can't be coerced into {msg}",
             val.get_real_class_name(store)
         ))
     }
