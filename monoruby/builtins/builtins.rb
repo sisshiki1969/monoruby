@@ -447,12 +447,12 @@ class String
     return to_enum(:upto, max, exclusive) unless block
     current = self
     if exclusive
-      while current < max
+      while current < max && current.length <= max.length
         block.call(current)
         current = current.succ
       end
     else
-      while current <= max
+      while (current <=> max) <= 0 && current.length <= max.length
         block.call(current)
         current = current.succ
       end
