@@ -124,9 +124,9 @@ fn step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         Some(block) => block,
     };
     let cur = lfp.self_val().expect_integer(globals)?;
-    let limit = lfp.arg(0).coerce_to_i64(globals)?;
+    let limit = lfp.arg(0).coerce_to_int(vm, globals)?;
     let step = if let Some(arg1) = lfp.try_arg(1) {
-        let step = arg1.coerce_to_i64(globals)?;
+        let step = arg1.coerce_to_int(vm, globals)?;
         if step == 0 {
             return Err(MonorubyErr::argumenterr("Step can not be 0."));
         }
@@ -597,7 +597,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 }
             }
         };
-        op::integer_index1(globals, self_val, index)
+        op::integer_index1(vm, globals, self_val, index)
     }
 }
 

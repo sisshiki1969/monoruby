@@ -934,7 +934,7 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn chmod(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
-    let mode = args[0].coerce_to_i64(&globals.store)? as u32;
+    let mode = args[0].coerce_to_int(_vm, globals)? as u32;
     let mut count = 0i64;
     for arg in args[1..].iter() {
         let path = arg.coerce_to_str(_vm, globals)?;

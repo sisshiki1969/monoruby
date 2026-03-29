@@ -62,7 +62,7 @@ fn rmdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn mkdir(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let path = lfp.arg(0).coerce_to_str(_vm, globals)?;
     let mode = if let Some(m) = lfp.try_arg(1) {
-        m.coerce_to_i64(&globals.store)? as u32
+        m.coerce_to_int(_vm, globals)? as u32
     } else {
         0o777
     };

@@ -856,9 +856,9 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         // If the index is not a fixnum or range, try to_int coercion
         if idx.try_fixnum().is_none() && idx.is_range().is_none() {
             let i = idx.coerce_to_int(vm, globals)?;
-            return ary.get_elem1(globals, Value::integer(i));
+            return ary.get_elem1(vm, globals, Value::integer(i));
         }
-        ary.get_elem1(globals, idx)
+        ary.get_elem1(vm, globals, idx)
     } else {
         let arg0 = lfp.arg(0);
         let arg1 = lfp.arg(1);
@@ -873,7 +873,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         } else {
             arg1
         };
-        ary.get_elem2(globals, arg0, arg1)
+        ary.get_elem2(vm, globals, arg0, arg1)
     }
 }
 
@@ -898,8 +898,8 @@ fn index_assign(
         if let Some(idx) = i.try_fixnum() {
             ary.set_index(idx, val)
         } else if let Some(range) = i.is_range() {
-            let start = ary.get_array_index_checked(globals, range.start())?;
-            let end = ary.get_array_index_checked(globals, range.end())?;
+            let start = ary.get_array_index_checked(vm, globals, range.start())?;
+            let end = ary.get_array_index_checked(vm, globals, range.end())?;
             let len = if range.exclude_end() {
                 end.checked_sub(start)
             } else {
