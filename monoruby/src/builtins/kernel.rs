@@ -502,7 +502,7 @@ fn format(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
     let fmt = args[0].coerce_to_str(vm, globals)?;
     let arguments = &args[1..];
-    let result = globals.format_by_args(&fmt, arguments)?;
+    let result = globals.format_by_args(vm, &fmt, arguments)?;
     Ok(Value::string(result))
 }
 
@@ -3274,6 +3274,88 @@ mod tests {
               def to_str; "num: %d"; end
             end
             format(MyFmt.new, 42)
+            "#,
+        );
+    }
+
+    #[test]
+    fn sprintf_coercion() {
+        // %d calls to_int (preferred) then to_i as fallback
+        run_test(
+            r#"
+            class HasToInt; def to_int; 42; end; end
+            sprintf("%d", HasToInt.new)
+            "#,
+        );
+        run_test(
+            r#"
+            class HasToI; def to_i; 99; end; end
+            sprintf("%d", HasToI.new)
+            "#,
+        );
+        run_test(
+            r#"
+            class HasBoth; def to_int; 10; end; def to_i; 20; end; end
+            sprintf("%d", HasBoth.new)
+            "#,
+        );
+        // %x, %o, %b also call to_int/to_i
+        run_test(
+            r#"
+            class HasToInt; def to_int; 255; end; end
+            sprintf("%x", HasToInt.new)
+            "#,
+        );
+        run_test(
+            r#"
+            class HasToInt; def to_int; 255; end; end
+            sprintf("%o", HasToInt.new)
+            "#,
+        );
+        run_test(
+            r#"
+            class HasToInt; def to_int; 10; end; end
+            sprintf("%b", HasToInt.new)
+            "#,
+        );
+        // %f calls to_f
+        run_test(
+            r#"
+            class HasToF; def to_f; 3.14; end; end
+            sprintf("%f", HasToF.new)
+            "#,
+        );
+        // %e calls to_f
+        run_test(
+            r#"
+            class HasToF; def to_f; 2.5; end; end
+            sprintf("%.1e", HasToF.new)
+            "#,
+        );
+        // %s calls to_s (not to_str)
+        run_test(
+            r#"
+            class HasToS; def to_s; "hello"; end; end
+            sprintf("%s", HasToS.new)
+            "#,
+        );
+        // TypeError when no conversion method
+        run_test(
+            r#"
+            begin
+              sprintf("%d", Object.new)
+            rescue TypeError => e
+              e.message
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            begin
+              sprintf("%f", Object.new)
+            rescue TypeError => e
+              e.message
+            end
             "#,
         );
     }

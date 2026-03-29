@@ -182,7 +182,7 @@ fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let io = self_.as_io_inner_mut();
     let args = lfp.arg(1).as_array();
 
-    let buf = globals.format_by_args(&format_str, &args)?;
+    let buf = globals.format_by_args(vm, &format_str, &args)?;
     io.write(buf.as_bytes())?;
 
     Ok(Value::nil())
