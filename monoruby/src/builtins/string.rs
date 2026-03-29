@@ -342,7 +342,13 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     };
 
     let self_ = lfp.self_val();
-    let res = Value::string_from_inner(self_.as_rstring_inner().repeat(count));
+    let inner = self_.as_rstring_inner();
+    let byte_len = inner.as_bytes().len();
+    // Guard against overflow / OOM for huge counts
+    if byte_len > 0 && count > (isize::MAX as usize) / byte_len {
+        return Err(MonorubyErr::argumenterr("argument too big"));
+    }
+    let res = Value::string_from_inner(inner.repeat(count));
     Ok(res)
 }
 
@@ -1426,8 +1432,37 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 }
             }
         }
+    } else if let Some(s) = lfp.arg(0).is_str() {
+        // String argument: return the string if it's a substring
+        if let Some(pos) = lhs.find(s) {
+            let end = pos + s.len();
+            Ok(slice_sub(lfp, lhs, pos..end))
+        } else {
+            Ok(Value::nil())
+        }
     } else {
-        Err(MonorubyErr::argumenterr("Bad type for index."))
+        // Try to_int coercion
+        let arg0 = lfp.arg(0);
+        let i = arg0.coerce_to_int(vm, globals)?;
+        let index = match conv_index(i, lhs.chars().count()) {
+            Some(i) => i,
+            None => return Ok(Value::nil()),
+        };
+        if let Some(arg1) = lfp.try_arg(1) {
+            let len = match arg1.coerce_to_int(vm, globals)? {
+                i if i < 0 => return Ok(Value::nil()),
+                i => i as usize,
+            };
+            let r = get_range(&lhs, index, len);
+            Ok(slice_sub(lfp, lhs, r))
+        } else {
+            let r = get_range(&lhs, index, 1);
+            if !r.is_empty() {
+                Ok(slice_sub(lfp, lhs, r))
+            } else {
+                Ok(Value::nil())
+            }
+        }
     }
 }
 
