@@ -36,6 +36,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(IO_CLASS, "write", io_write_method, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "syswrite", io_syswrite, 1, 1, false);
     globals.define_builtin_class_func_with(IO_CLASS, "select", io_select, 1, 4, false);
+    globals.define_builtin_class_func_with(IO_CLASS, "foreach", io_foreach, 1, 2, false);
     globals.define_builtin_func_with(IO_CLASS, "set_encoding", set_encoding, 1, 3, false);
     globals.define_builtin_func(IO_CLASS, "external_encoding", external_encoding, 0);
     globals.define_builtin_func(IO_CLASS, "internal_encoding", internal_encoding, 0);
@@ -426,6 +427,79 @@ fn io_class_read(
         }
     };
     Ok(Value::bytes(contents))
+}
+
+///
+/// ### IO.foreach
+///
+/// - foreach(path, sep = "\n") {|line| ... } -> nil
+/// - foreach(path, sep = "\n") -> Enumerator
+///
+/// Opens the file at `path`, reads each line separated by `sep`,
+/// and yields each line to the block. Without a block, returns an Enumerator.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/foreach.html]
+#[monoruby_builtin]
+fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let path = lfp.arg(0).coerce_to_str(vm, globals)?;
+    let bh = match lfp.block() {
+        Some(bh) => bh,
+        None => {
+            return Err(MonorubyErr::runtimeerr(
+                "IO.foreach without block is not yet supported",
+            ));
+        }
+    };
+    let p = vm.get_block_data(globals, bh)?;
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
+    let sep = if let Some(sep_val) = lfp.try_arg(1) {
+        if sep_val.is_nil() {
+            None
+        } else {
+            Some(sep_val.coerce_to_str(vm, globals)?)
+        }
+    } else {
+        Some("\n".to_string())
+    };
+    match sep {
+        None => {
+            // When sep is nil, yield the entire content as one string
+            vm.invoke_block(globals, &p, &[Value::string(content)])?;
+        }
+        Some(sep) => {
+            let mut start = 0;
+            let content_bytes = content.as_bytes();
+            let sep_bytes = sep.as_bytes();
+            if sep_bytes.is_empty() {
+                // Paragraph mode: split on double newlines
+                let parts: Vec<&str> = content.split("\n\n").collect();
+                for part in parts {
+                    let trimmed = part.trim_start_matches('\n');
+                    if !trimmed.is_empty() {
+                        let mut line = trimmed.to_string();
+                        line.push('\n');
+                        vm.invoke_block(globals, &p, &[Value::string(line)])?;
+                    }
+                }
+            } else {
+                while start < content_bytes.len() {
+                    if let Some(pos) = content[start..].find(&sep) {
+                        let end = start + pos + sep.len();
+                        let line = &content[start..end];
+                        vm.invoke_block(globals, &p, &[Value::string(line.to_string())])?;
+                        start = end;
+                    } else {
+                        // Last line without separator
+                        let line = &content[start..];
+                        vm.invoke_block(globals, &p, &[Value::string(line.to_string())])?;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Ok(Value::nil())
 }
 
 ///
@@ -1303,6 +1377,34 @@ mod tests {
             w.set_encoding("UTF-8", "UTF-8")
             w.close
             r.close
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_foreach_test() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_foreach_#{Process.pid}"
+            File.write(path, "hello\nworld\nfoo\n")
+            res = []
+            IO.foreach(path) { |line| res << line }
+            File.delete(path)
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_foreach_test() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_file_foreach_#{Process.pid}"
+            File.write(path, "aaa\nbbb\n")
+            res = []
+            File.foreach(path) { |line| res << line }
+            File.delete(path)
+            res
             "#,
         );
     }
