@@ -829,8 +829,8 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
     let mut temp = vec![];
     let mut iter = template.chars().peekable();
     while let Some(ch) = iter.next() {
-        // Skip whitespace between directives
-        if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
+        // Skip whitespace between directives (space, tab, newline, vertical tab, form feed, carriage return)
+        if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\x0B' || ch == '\x0C' || ch == '\r' {
             continue;
         }
         // '#' starts a comment until end of line
@@ -896,7 +896,7 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
             }
             _ => {
                 return Err(MonorubyErr::argumenterr(format!(
-                    "String#pack/unpack Unknown template: {template}",
+                    "unknown pack directive '{ch}' in '{template}'",
                 )));
             }
         };
