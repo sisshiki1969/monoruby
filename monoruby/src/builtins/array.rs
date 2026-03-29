@@ -2331,7 +2331,7 @@ fn slice_inner(mut aref: Array, start: usize, len: usize) -> Value {
 fn pack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let template = lfp.arg(0).coerce_to_string(vm, globals)?;
     let ary = lfp.self_val().as_array();
-    rvalue::pack(globals, &ary, &template)
+    rvalue::pack(vm, globals, &ary, &template)
 }
 
 fn try_convert_to_array(

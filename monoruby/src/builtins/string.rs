@@ -472,24 +472,27 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/casecmp.html]
 #[monoruby_builtin]
 fn casecmp(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
-    if let Some(rhs_inner) = rhs.is_rstring_inner() {
-        let lhs_inner = lhs.as_rstring_inner();
-        // ASCII case-insensitive byte comparison (matches CRuby behavior)
-        let ord = lhs_inner
-            .iter()
-            .map(|b| b.to_ascii_lowercase())
-            .cmp(rhs_inner.iter().map(|b| b.to_ascii_lowercase()));
-        Ok(Value::from_ord(ord))
+    let rhs_inner = if let Some(inner) = rhs.is_rstring_inner() {
+        inner.as_bytes().to_vec()
+    } else if let Ok(s) = rhs.coerce_to_rstring(vm, globals) {
+        s.as_bytes().to_vec()
     } else {
-        Ok(Value::nil())
-    }
+        return Ok(Value::nil());
+    };
+    let lhs_inner = lhs.as_rstring_inner();
+    // ASCII case-insensitive byte comparison (matches CRuby behavior)
+    let ord = lhs_inner
+        .iter()
+        .map(|b| b.to_ascii_lowercase())
+        .cmp(rhs_inner.iter().map(|b| b.to_ascii_lowercase()));
+    Ok(Value::from_ord(ord))
 }
 
 ///
@@ -500,24 +503,26 @@ fn casecmp(
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/casecmp=3f.html]
 #[monoruby_builtin]
 fn casecmp_p(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
-    if let Some(rhs_inner) = rhs.is_rstring_inner() {
-        let lhs_inner = lhs.as_rstring_inner();
-        // CRuby's casecmp? does Unicode case folding; raises on invalid UTF-8
-        let lhs_str = lhs_inner.check_utf8()?;
-        let rhs_str = rhs_inner.check_utf8()?;
-        let lhs_lower = lhs_str.to_lowercase();
-        let rhs_lower = rhs_str.to_lowercase();
-        Ok(Value::bool(lhs_lower == rhs_lower))
+    let rhs_str = if let Some(rhs_inner) = rhs.is_rstring_inner() {
+        rhs_inner.check_utf8()?.to_string()
+    } else if let Ok(s) = rhs.coerce_to_string(vm, globals) {
+        s
     } else {
-        Ok(Value::nil())
-    }
+        return Ok(Value::nil());
+    };
+    let lhs_inner = lhs.as_rstring_inner();
+    // CRuby's casecmp? does Unicode case folding; raises on invalid UTF-8
+    let lhs_str = lhs_inner.check_utf8()?;
+    let lhs_lower = lhs_str.to_lowercase();
+    let rhs_lower = rhs_str.to_lowercase();
+    Ok(Value::bool(lhs_lower == rhs_lower))
 }
 
 ///
@@ -859,7 +864,8 @@ fn index_assign(
     let self_ = lfp.self_val();
     let mut lhs = self_.expect_string(globals)?;
     let len = lhs.chars().count();
-    if let Some(arg0) = lfp.arg(0).try_fixnum() {
+    let arg0_val = lfp.arg(0);
+    if let Some(arg0) = arg0_val.try_fixnum() {
         let start = match conv_index(arg0, len) {
             Some(i) => i,
             None => return Err(MonorubyErr::indexerr("index out of range.")),
@@ -887,7 +893,32 @@ fn index_assign(
         *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
         Ok(lfp.self_val())
     } else {
-        Err(MonorubyErr::argumenterr("Bad type for index."))
+        // Try to_int coercion on the index argument
+        let idx = arg0_val.coerce_to_int(vm, globals)?;
+        let start = match conv_index(idx, len) {
+            Some(i) => i,
+            None => return Err(MonorubyErr::indexerr("index out of range.")),
+        };
+        let start = match lhs.char_indices().nth(start) {
+            Some((i, _)) => i,
+            None => return Err(MonorubyErr::indexerr("index out of range.")),
+        };
+        let len = if let Some(arg1) = arg1 {
+            match arg1.coerce_to_int(vm, globals)? {
+                i if i < 0 => return Err(MonorubyErr::indexerr("negative length.")),
+                i => i as usize,
+            }
+        } else {
+            1
+        };
+        let end = if let Some((i, _)) = lhs.char_indices().nth(start + len) {
+            i
+        } else {
+            lhs.len()
+        };
+        lhs.replace_range(start..end, &subst);
+        *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
+        Ok(lfp.self_val())
     }
 }
 
@@ -3633,7 +3664,7 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/force_encoding.html]
 #[monoruby_builtin]
 fn force_encoding(
-    _: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -3646,7 +3677,9 @@ fn force_encoding(
         let s = globals.store.get_ivar(arg0, IdentId::_ENCODING).unwrap();
         Encoding::try_from_str(s.as_str())?
     } else {
-        return Err(MonorubyErr::argumenterr("1st arg must be String."));
+        // Try to_str coercion
+        let s = arg0.coerce_to_string(vm, globals)?;
+        Encoding::try_from_str(&s)?
     };
     lfp.self_val().as_rstring_inner_mut().set_encoding(enc);
     Ok(lfp.self_val())

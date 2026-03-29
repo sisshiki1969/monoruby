@@ -396,7 +396,9 @@ fn extname(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/exist=3f.html]
 #[monoruby_builtin]
 fn exist(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let b = to_canonicalized_path(vm, globals, lfp.arg(0), "1st arg").is_ok();
+    // Validate the argument type first (raises TypeError for non-string)
+    let path = to_path(vm, globals, lfp.arg(0))?;
+    let b = path.canonicalize().is_ok();
     Ok(Value::bool(b))
 }
 
@@ -407,7 +409,9 @@ fn exist(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/file=3f.html]
 #[monoruby_builtin]
 fn file_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    match to_canonicalized_path(vm, globals, lfp.arg(0), "1st arg") {
+    // Validate the argument type first (raises TypeError for non-string)
+    let path = to_path(vm, globals, lfp.arg(0))?;
+    match path.canonicalize() {
         Ok(path) => Ok(Value::bool(path.is_file())),
         Err(_) => Ok(Value::bool(false)),
     }

@@ -100,6 +100,9 @@ class Integer
   end
 
   def gcd(other)
+    unless other.is_a?(Integer)
+      raise TypeError, "#{other.class} is not an integer"
+    end
     a = self.abs
     b = other.abs
     while b != 0
@@ -109,11 +112,17 @@ class Integer
   end
 
   def lcm(other)
+    unless other.is_a?(Integer)
+      raise TypeError, "#{other.class} is not an integer"
+    end
     return 0 if self == 0 || other == 0
     (self / self.gcd(other) * other).abs
   end
 
   def gcdlcm(other)
+    unless other.is_a?(Integer)
+      raise TypeError, "#{other.class} is not an integer"
+    end
     [gcd(other), lcm(other)]
   end
 
