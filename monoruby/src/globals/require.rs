@@ -30,19 +30,19 @@ impl Globals {
                 return Ok(None);
             }
             // Try the file with its given extension first.
-            if file_name.exists() {
+            if file_name.is_file() {
                 return self.require_lib_file(file_name.into());
             }
             // Try appending .rb extension if none given.
             if file_name.extension().is_none() {
                 let mut with_rb = PathBuf::from(file_name);
                 with_rb.set_extension("rb");
-                if with_rb.exists() {
+                if with_rb.is_file() {
                     return self.require_lib_file(with_rb);
                 }
                 let mut with_so = PathBuf::from(file_name);
                 with_so.set_extension("so");
-                if with_so.exists() {
+                if with_so.is_file() {
                     return self.require_lib_file(with_so);
                 }
             }
@@ -56,14 +56,14 @@ impl Globals {
             } else {
                 file_name.into()
             };
-            if resolved.exists() {
+            if resolved.is_file() {
                 return self.require_lib_file(resolved);
             }
             // Try with .rb extension.
             if resolved.extension().is_none() {
                 let mut with_rb = resolved.clone();
                 with_rb.set_extension("rb");
-                if with_rb.exists() {
+                if with_rb.is_file() {
                     return self.require_lib_file(with_rb);
                 }
             }
