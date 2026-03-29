@@ -924,6 +924,7 @@ impl Value {
             RV::Nil => "".to_string(),
             RV::Symbol(id) => id.to_string(),
             RV::String(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            RV::Complex(_) => self.as_complex().to_s_str(store),
             _ => self.debug(store),
         };
         s
@@ -1322,9 +1323,9 @@ impl Value {
             RV::Fixnum(i) => return Ok(i),
             RV::BigInt(b) => {
                 use num::ToPrimitive;
-                return b.to_i64().ok_or_else(|| {
-                    MonorubyErr::rangeerr("bignum too big to convert into `long'")
-                });
+                return b
+                    .to_i64()
+                    .ok_or_else(|| MonorubyErr::rangeerr("bignum too big to convert into `long'"));
             }
             _ => {}
         }
@@ -1382,11 +1383,7 @@ impl Value {
 
     /// Convert to f64, calling `to_f` if the value is not a numeric type.
     /// This is the standard coercion method matching CRuby behavior.
-    pub(crate) fn coerce_to_f64(
-        &self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<f64> {
+    pub(crate) fn coerce_to_f64(&self, vm: &mut Executor, globals: &mut Globals) -> Result<f64> {
         match self.unpack() {
             RV::Fixnum(i) => Ok(i as f64),
             RV::Float(f) => Ok(f),
@@ -1401,15 +1398,16 @@ impl Value {
                 if self.is_str().is_none()
                     && let Some(func_id) = globals.check_method(*self, IdentId::TO_F)
                 {
-                    let result =
-                        vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
+                    let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
                     match result.unpack() {
                         RV::Float(f) => Ok(f),
                         RV::Fixnum(i) => Ok(i as f64),
-                        _ => Err(MonorubyErr::cant_convert_into_float(
-                            &globals.store,
-                            *self,
-                        )),
+                        _ => Err(MonorubyErr::typeerr(format!(
+                            "can't convert {} to Float ({}#to_f gives {})",
+                            self.get_real_class_name(&globals.store),
+                            self.get_real_class_name(&globals.store),
+                            result.get_real_class_name(&globals.store),
+                        ))),
                     }
                 } else {
                     Err(MonorubyErr::no_implicit_conversion(
@@ -1736,18 +1734,6 @@ impl Value {
         coerce_to_rstring_inner(vm, globals, *self, &[IdentId::TO_STR, IdentId::TO_PATH])
     }
 
-    pub(crate) fn expect_regexp_or_string(&self, store: &Store) -> Result<Regexp> {
-        if let Some(re) = self.is_regex() {
-            Ok(re)
-        } else if let Some(s) = self.is_str() {
-            Ok(Regexp::new_unchecked(Value::regexp(
-                RegexpInner::with_option(s, 0)?,
-            )))
-        } else {
-            Err(MonorubyErr::is_not_regexp_nor_string(store, *self))
-        }
-    }
-
     /// Like `expect_regexp_or_string` but tries `to_str` coercion for
     /// non-string/non-regexp values.
     pub(crate) fn coerce_to_regexp_or_string(
@@ -1764,8 +1750,7 @@ impl Value {
         } else {
             // Try to_str coercion
             if let Some(func_id) = globals.check_method(*self, IdentId::TO_STR) {
-                let result =
-                    vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
+                let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
                 if let Some(s) = result.is_str() {
                     return Ok(Regexp::new_unchecked(Value::regexp(
                         RegexpInner::with_option(s, 0)?,

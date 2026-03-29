@@ -204,6 +204,7 @@ fn run_ruby(globals: &mut Globals, code: &str) -> Value {
     tmpfile.write_all(code.as_bytes()).unwrap();
 
     let res = match std::process::Command::new(&*RUBY)
+        .arg("--disable-gem")
         .arg(tmpfile.path())
         .output()
     {

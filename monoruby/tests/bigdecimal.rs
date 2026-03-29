@@ -3,13 +3,20 @@ use monoruby::tests::*;
 
 #[test]
 fn bigdecimal_require() {
-    run_test_once(r#"require "bigdecimal"; BigDecimal("3.14").to_s"#);
+    run_test_once(
+        r#"
+        require "rubygems"
+        require "bigdecimal"
+        BigDecimal("3.14").to_s
+        "#,
+    );
 }
 
 #[test]
 fn bigdecimal_construct() {
     run_test_once(
         r#"
+        require "rubygems"
         require "bigdecimal"
         res = []
         res << BigDecimal("3.14").to_s
@@ -33,6 +40,7 @@ fn bigdecimal_construct() {
 fn bigdecimal_predicates() {
     run_test_once(
         r#"
+        require "rubygems"
         require "bigdecimal"
         res = []
         res << BigDecimal("NaN").nan?
@@ -58,6 +66,7 @@ fn bigdecimal_predicates() {
 fn bigdecimal_sign_exponent() {
     run_test_once(
         r#"
+        require "rubygems"
         require "bigdecimal"
         res = []
         res << BigDecimal("3.14").sign
@@ -83,6 +92,7 @@ fn bigdecimal_sign_exponent() {
 fn bigdecimal_arithmetic() {
     run_test_once(
         r#"
+        require "rubygems"
         require "bigdecimal"
         a = BigDecimal("3.14")
         b = BigDecimal("2.0")
@@ -102,6 +112,7 @@ fn bigdecimal_arithmetic() {
 fn bigdecimal_div() {
     run_test_once(
         r#"
+        require "rubygems"
         require "bigdecimal"
         res = []
         res << BigDecimal("10").div(BigDecimal("3"), 5).to_s
@@ -116,6 +127,7 @@ fn bigdecimal_div() {
 fn bigdecimal_mult_add_sub_with_prec() {
     run_test_once(
         r#"
+        require "rubygems"
         require "bigdecimal"
         res = []
         res << BigDecimal("3.14159").mult(BigDecimal("2.71828"), 5).to_s
@@ -130,6 +142,7 @@ fn bigdecimal_mult_add_sub_with_prec() {
 fn bigdecimal_comparison() {
     run_test_once(
         r#"
+        require "rubygems"
         require "bigdecimal"
         res = []
         res << (BigDecimal("1.0") == BigDecimal("1.0"))
@@ -151,6 +164,7 @@ fn bigdecimal_comparison() {
 fn bigdecimal_fix_frac() {
     run_test_once(
         r#"
+        require "rubygems"
         require "bigdecimal"
         res = []
         res << BigDecimal("123.456").fix.to_s
@@ -168,6 +182,7 @@ fn bigdecimal_fix_frac() {
 fn bigdecimal_round() {
     run_test_once(
         r#"
+        require "rubygems"
         require "bigdecimal"
         res = []
         res << BigDecimal("1.23456789").round(3).to_s
@@ -183,6 +198,7 @@ fn bigdecimal_round() {
 fn bigdecimal_power() {
     run_test_once(
         r#"
+        require "rubygems"
         require "bigdecimal"
         res = []
         res << (BigDecimal("2") ** 0).to_s
@@ -198,6 +214,7 @@ fn bigdecimal_power() {
 fn bigdecimal_decimal_shift() {
     run_test_once(
         r#"
+        require "rubygems"
         require "bigdecimal"
         res = []
         res << BigDecimal("1.5")._decimal_shift(2).to_s
@@ -212,6 +229,7 @@ fn bigdecimal_decimal_shift() {
 fn bigdecimal_to_f_to_i() {
     run_test_once(
         r#"
+        require "rubygems"
         require "bigdecimal"
         res = []
         res << BigDecimal("3.14").to_f
@@ -229,6 +247,7 @@ fn bigdecimal_to_f_to_i() {
 fn bigdecimal_special_arithmetic() {
     run_test_once(
         r#"
+        require "rubygems"
         require "bigdecimal"
         res = []
         res << (BigDecimal("Infinity") + BigDecimal("1")).to_s
@@ -248,6 +267,7 @@ fn bigdecimal_special_arithmetic() {
 fn bigdecimal_constants() {
     run_test_once(
         r#"
+        require "rubygems"
         require "bigdecimal"
         res = []
         res << BigDecimal::SIGN_NaN
@@ -275,6 +295,7 @@ fn bigdecimal_constants() {
 fn bigdecimal_limit_and_mode() {
     run_test_once(
         r#"
+        require "rubygems"
         require "bigdecimal"
         res = []
         res << BigDecimal.limit

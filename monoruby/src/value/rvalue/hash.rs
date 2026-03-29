@@ -17,11 +17,6 @@ impl Hashmap {
         self.0.as_hashmap_inner()
     }
 
-    /// Get a mutable reference to the inner HashmapInner.
-    pub(crate) fn inner_mut(&mut self) -> &mut HashmapInner {
-        unsafe { self.0.rvalue_mut().as_hashmap_mut() }
-    }
-
     pub fn index(&self, vm: &mut Executor, globals: &mut Globals, key: Value) -> Result<Value> {
         if let Some(v) = self.get(key, vm, globals)? {
             Ok(v)
@@ -500,12 +495,12 @@ impl HashContent {
             return Ok(None);
         }
         match self {
-            HashContent::Map(box map) => {
-                map.shift_remove_index(0, vm, globals).map(|opt| opt.map(|(k, v)| (k, v)))
-            }
-            HashContent::IdentMap(box map) => {
-                map.shift_remove_index(0, vm, globals).map(|opt| opt.map(|(k, v)| (k.0, v)))
-            }
+            HashContent::Map(box map) => map
+                .shift_remove_index(0, vm, globals)
+                .map(|opt| opt.map(|(k, v)| (k, v))),
+            HashContent::IdentMap(box map) => map
+                .shift_remove_index(0, vm, globals)
+                .map(|opt| opt.map(|(k, v)| (k.0, v))),
         }
     }
 
