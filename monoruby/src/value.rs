@@ -137,6 +137,12 @@ pub fn ruby_float_to_s(f: f64) -> String {
     result
 }
 
+/// Integer representation for sprintf (supports both Fixnum and BigInt).
+pub(crate) enum IntegerBase {
+    Fixnum(i64),
+    BigInt(num::BigInt),
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Value(std::num::NonZeroU64);
@@ -1354,6 +1360,88 @@ impl Value {
         )))
     }
 
+    /// Convert `self` to Integer (Fixnum or BigInt) for sprintf.
+    ///
+    /// Tries direct conversion first, then to_int, then to_i as fallback.
+    /// Accepts Float (truncated), String (parsed).
+    /// Raises TypeError if no conversion is possible.
+    pub(crate) fn coerce_to_integer(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<IntegerBase> {
+        match self.unpack() {
+            RV::Fixnum(i) => return Ok(IntegerBase::Fixnum(i)),
+            RV::BigInt(b) => return Ok(IntegerBase::BigInt(b.clone())),
+            RV::Float(f) => {
+                let t = f.trunc();
+                return if i64::MIN as f64 <= t && t <= i64::MAX as f64 {
+                    Ok(IntegerBase::Fixnum(t as i64))
+                } else {
+                    use num::FromPrimitive;
+                    Ok(IntegerBase::BigInt(
+                        num::BigInt::from_f64(t).expect("float is not NaN or infinite"),
+                    ))
+                };
+            }
+            RV::String(s) => {
+                let s = s.check_utf8()?;
+                if let Ok(i) = s.parse::<i64>() {
+                    return Ok(IntegerBase::Fixnum(i));
+                } else if let Ok(b) = s.parse::<num::BigInt>() {
+                    return Ok(IntegerBase::BigInt(b));
+                }
+            }
+            _ => {}
+        };
+        // Try to_int first, then to_i as fallback (matching CRuby sprintf behavior).
+        if let Ok(i) = self.coerce_to_int(vm, globals) {
+            return Ok(IntegerBase::Fixnum(i));
+        }
+        if let Some(func_id) = globals.check_method(*self, IdentId::get_id("to_i")) {
+            let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
+            match result.unpack() {
+                RV::Fixnum(i) => return Ok(IntegerBase::Fixnum(i)),
+                RV::BigInt(b) => return Ok(IntegerBase::BigInt(b.clone())),
+                _ => {}
+            }
+        }
+        Err(MonorubyErr::typeerr(format!(
+            "can't convert {} into Integer",
+            self.get_real_class_name(&globals.store)
+        )))
+    }
+
+    /// Convert `self` to f64 for sprintf.
+    ///
+    /// Tries direct conversion first, then to_f.
+    /// Accepts Fixnum, Float, String (parsed).
+    /// Raises TypeError if no conversion is possible.
+    pub(crate) fn coerce_to_float(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<f64> {
+        match self.unpack() {
+            RV::Fixnum(i) => return Ok(i as f64),
+            RV::Float(f) => return Ok(f),
+            RV::String(s) => {
+                let s = s.check_utf8()?;
+                return s.parse::<f64>().map_err(|_| {
+                    MonorubyErr::argumenterr(format!("invalid value for Float(): \"{}\"", s))
+                });
+            }
+            _ => {}
+        };
+        if let Ok(f) = self.coerce_to_f64(vm, globals) {
+            return Ok(f);
+        }
+        Err(MonorubyErr::typeerr(format!(
+            "can't convert {} into Float",
+            self.get_real_class_name(&globals.store)
+        )))
+    }
+
     ///
     /// Try to convert `self` to i64.
     ///
@@ -1724,6 +1812,25 @@ impl Value {
 
     pub(crate) fn coerce_to_str(&self, vm: &mut Executor, globals: &mut Globals) -> Result<String> {
         self.coerce_to_string(vm, globals)
+    }
+
+    /// Call Ruby-level `to_s` (explicit conversion) on the value.
+    /// This is used by sprintf %s to match CRuby behavior.
+    pub(crate) fn coerce_to_s(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<String> {
+        if let Some(s) = self.is_str() {
+            return Ok(s.to_string());
+        }
+        if let Some(func_id) = globals.check_method(*self, IdentId::TO_S) {
+            let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
+            if let Some(s) = result.is_str() {
+                return Ok(s.to_string());
+            }
+        }
+        Ok(self.to_s(&globals.store))
     }
 
     pub(crate) fn coerce_to_path_rstring(

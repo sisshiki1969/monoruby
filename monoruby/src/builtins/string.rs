@@ -588,7 +588,7 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             Some(ary) => ary.to_vec(),
             None => vec![arg],
         };
-        let format_str = globals.format_by_args(self_.as_str(), &arguments)?;
+        let format_str = globals.format_by_args(vm, self_.as_str(), &arguments)?;
         let res = Value::string(format_str);
         Ok(res)
     }

@@ -614,55 +614,7 @@ fn expect_char(chars: &mut std::str::Chars) -> Result<char> {
     Ok(ch)
 }
 
-enum Integer {
-    Fixnum(i64),
-    BigInt(num::BigInt),
-}
-
-fn coerce_to_integer(globals: &mut Globals, val: Value) -> Result<Integer> {
-    match val.unpack() {
-        RV::Fixnum(i) => return Ok(Integer::Fixnum(i)),
-        RV::Float(f) => {
-            let t = f.trunc();
-            return if i64::MIN as f64 <= t && t <= i64::MAX as f64 {
-                Ok(Integer::Fixnum(t as i64))
-            } else {
-                use num::FromPrimitive;
-                Ok(Integer::BigInt(
-                    num::BigInt::from_f64(t).expect("float is not NaN or infinite"),
-                ))
-            };
-        }
-        RV::String(s) => {
-            let s = s.check_utf8()?;
-            if let Ok(i) = s.parse::<i64>() {
-                return Ok(Integer::Fixnum(i));
-            } else if let Ok(b) = s.parse::<num::BigInt>() {
-                return Ok(Integer::BigInt(b));
-            }
-        }
-        _ => {}
-    };
-    let s = val.to_s(&globals.store);
-    Err(MonorubyErr::argumenterr(format!(
-        "invalid value for Integer(): {}",
-        s
-    )))
-}
-
-fn coerce_to_float(globals: &mut Globals, val: Value) -> Result<f64> {
-    match val.unpack() {
-        RV::Fixnum(i) => Ok(i as f64),
-        RV::Float(f) => Ok(f),
-        _ => {
-            let s = val.to_s(&globals.store);
-            Err(MonorubyErr::argumenterr(format!(
-                "invalid value for Float(): {}",
-                s
-            )))
-        }
-    }
-}
+use crate::value::IntegerBase;
 
 fn coerce_to_char(val: Value) -> Result<char> {
     match val.unpack() {
@@ -1117,6 +1069,7 @@ impl Globals {
 
     pub(crate) fn format_by_args(
         &mut self,
+        vm: &mut Executor,
         self_str: &str,
         arguments: &[Value],
     ) -> Result<String> {
@@ -1177,10 +1130,10 @@ impl Globals {
                 if arguments.len() <= arg_no {
                     return Err(MonorubyErr::argumenterr("too few arguments"));
                 }
-                let w = coerce_to_integer(self, arguments[arg_no])?;
+                let w = arguments[arg_no].coerce_to_integer(vm, self)?;
                 arg_no += 1;
                 match w {
-                    Integer::Fixnum(v) => {
+                    IntegerBase::Fixnum(v) => {
                         if v < 0 {
                             minus_flag = true;
                             zero_flag = false;
@@ -1189,7 +1142,7 @@ impl Globals {
                             width = v as usize;
                         }
                     }
-                    Integer::BigInt(_) => {
+                    IntegerBase::BigInt(_) => {
                         return Err(MonorubyErr::argumenterr("width too big"));
                     }
                 }
@@ -1209,15 +1162,15 @@ impl Globals {
                     if arguments.len() <= arg_no {
                         return Err(MonorubyErr::argumenterr("too few arguments"));
                     }
-                    let p = coerce_to_integer(self, arguments[arg_no])?;
+                    let p = arguments[arg_no].coerce_to_integer(vm, self)?;
                     arg_no += 1;
                     match p {
-                        Integer::Fixnum(v) => {
+                        IntegerBase::Fixnum(v) => {
                             if v >= 0 {
                                 prec = v as usize;
                             }
                         }
-                        Integer::BigInt(_) => {
+                        IntegerBase::BigInt(_) => {
                             return Err(MonorubyErr::argumenterr("precision too big"));
                         }
                     }
@@ -1243,7 +1196,7 @@ impl Globals {
                     apply_width(&s, width, minus_flag, ' ')
                 }
                 's' => {
-                    let mut s = val.to_s(&self.store);
+                    let mut s = val.coerce_to_s(vm, self)?;
                     if let Some(prec) = precision {
                         if s.len() > prec {
                             s.truncate(prec);
@@ -1256,29 +1209,29 @@ impl Globals {
                     apply_width(&s, width, minus_flag, ' ')
                 }
                 'd' | 'i' => {
-                    let ival = coerce_to_integer(self, val)?;
+                    let ival = val.coerce_to_integer(vm, self)?;
                     let s = match ival {
-                        Integer::Fixnum(v) => format!("{}", v),
-                        Integer::BigInt(v) => format!("{}", v),
+                        IntegerBase::Fixnum(v) => format!("{}", v),
+                        IntegerBase::BigInt(v) => format!("{}", v),
                     };
                     format_integer_with_flags(
                         &s, width, zero_flag, minus_flag, plus_flag, space_flag,
                     )
                 }
                 'u' => {
-                    let ival = coerce_to_integer(self, val)?;
+                    let ival = val.coerce_to_integer(vm, self)?;
                     let s = match ival {
-                        Integer::Fixnum(v) => format!("{}", v),
-                        Integer::BigInt(v) => format!("{}", v),
+                        IntegerBase::Fixnum(v) => format!("{}", v),
+                        IntegerBase::BigInt(v) => format!("{}", v),
                     };
                     format_integer_with_flags(
                         &s, width, zero_flag, minus_flag, plus_flag, space_flag,
                     )
                 }
                 'b' | 'B' => {
-                    let ival = coerce_to_integer(self, val)?;
+                    let ival = val.coerce_to_integer(vm, self)?;
                     match ival {
-                        Integer::Fixnum(v) if v < 0 => {
+                        IntegerBase::Fixnum(v) if v < 0 => {
                             let tc = format_neg_twos_complement(v, 2, ch == 'B');
                             let prefix = if hash_flag {
                                 if ch == 'B' { "0B" } else { "0b" }
@@ -1290,8 +1243,8 @@ impl Globals {
                         }
                         _ => {
                             let digits = match ival {
-                                Integer::Fixnum(v) => format!("{:b}", v),
-                                Integer::BigInt(v) => format!("{:b}", v),
+                                IntegerBase::Fixnum(v) => format!("{:b}", v),
+                                IntegerBase::BigInt(v) => format!("{:b}", v),
                             };
                             let is_zero = digits == "0";
                             let prefix = if hash_flag && !is_zero {
@@ -1307,16 +1260,16 @@ impl Globals {
                     }
                 }
                 'o' => {
-                    let ival = coerce_to_integer(self, val)?;
+                    let ival = val.coerce_to_integer(vm, self)?;
                     match ival {
-                        Integer::Fixnum(v) if v < 0 => {
+                        IntegerBase::Fixnum(v) if v < 0 => {
                             let tc = format_neg_twos_complement(v, 8, false);
                             apply_width(&tc, width, minus_flag, ' ')
                         }
                         _ => {
                             let digits = match ival {
-                                Integer::Fixnum(v) => format!("{:o}", v),
-                                Integer::BigInt(v) => format!("{:o}", v),
+                                IntegerBase::Fixnum(v) => format!("{:o}", v),
+                                IntegerBase::BigInt(v) => format!("{:o}", v),
                             };
                             let prefix = if hash_flag {
                                 if digits.starts_with('0') { "" } else { "0" }
@@ -1331,9 +1284,9 @@ impl Globals {
                     }
                 }
                 'x' | 'X' => {
-                    let ival = coerce_to_integer(self, val)?;
+                    let ival = val.coerce_to_integer(vm, self)?;
                     match ival {
-                        Integer::Fixnum(v) if v < 0 => {
+                        IntegerBase::Fixnum(v) if v < 0 => {
                             let tc = format_neg_twos_complement(v, 16, ch == 'X');
                             let prefix = if hash_flag {
                                 if ch == 'X' { "0X" } else { "0x" }
@@ -1345,14 +1298,14 @@ impl Globals {
                         }
                         _ => {
                             let digits = match ival {
-                                Integer::Fixnum(v) => {
+                                IntegerBase::Fixnum(v) => {
                                     if ch == 'X' {
                                         format!("{:X}", v)
                                     } else {
                                         format!("{:x}", v)
                                     }
                                 }
-                                Integer::BigInt(v) => {
+                                IntegerBase::BigInt(v) => {
                                     if ch == 'X' {
                                         format!("{:X}", v)
                                     } else {
@@ -1374,7 +1327,7 @@ impl Globals {
                     }
                 }
                 'f' => {
-                    let f = coerce_to_float(self, val)?;
+                    let f = val.coerce_to_float(vm, self)?;
                     let prec = precision.unwrap_or(6);
                     let s = format!("{:.p$}", f.abs(), p = prec);
                     format_float_with_flags(
@@ -1382,7 +1335,7 @@ impl Globals {
                     )
                 }
                 'e' | 'E' => {
-                    let f = coerce_to_float(self, val)?;
+                    let f = val.coerce_to_float(vm, self)?;
                     let prec = precision.unwrap_or(6);
                     let s = if ch == 'E' {
                         normalize_sci_exponent(&format!("{:.p$E}", f.abs(), p = prec))
@@ -1394,7 +1347,7 @@ impl Globals {
                     )
                 }
                 'g' | 'G' => {
-                    let f = coerce_to_float(self, val)?;
+                    let f = val.coerce_to_float(vm, self)?;
                     let prec = precision.unwrap_or(6);
                     let prec = if prec == 0 { 1 } else { prec };
                     let s = format_g(f.abs(), prec, ch == 'G');
@@ -1404,7 +1357,7 @@ impl Globals {
                     )
                 }
                 'a' | 'A' => {
-                    let f = coerce_to_float(self, val)?;
+                    let f = val.coerce_to_float(vm, self)?;
                     let s = format_hex_float(f.abs(), precision, ch == 'A');
                     format_float_with_flags(
                         &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
