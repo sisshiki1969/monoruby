@@ -148,6 +148,9 @@ pub(super) fn init(globals: &mut Globals) {
         &["offset"],
         false,
     );
+    globals.define_builtin_func_with(STRING_CLASS, "byteindex", byteindex, 1, 2, false);
+    globals.define_builtin_func(STRING_CLASS, "to_c", to_c, 0);
+    globals.define_builtin_func(STRING_CLASS, "to_r", to_r, 0);
     globals.define_builtin_func(STRING_CLASS, "dump", dump, 0);
     globals.define_builtin_func(STRING_CLASS, "force_encoding", force_encoding, 1);
     globals.define_builtin_func(STRING_CLASS, "valid_encoding?", valid_encoding, 0);
@@ -1921,6 +1924,57 @@ fn string_index(
 }
 
 ///
+/// ### String#byteindex
+///
+/// - byteindex(pattern, offset = 0) -> Integer | nil
+///
+/// Returns the byte-based index of the first occurrence of +pattern+ in the string.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/byteindex.html]
+#[monoruby_builtin]
+fn byteindex(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let byte_offset = if let Some(arg1) = lfp.try_arg(1) {
+        let offset = arg1.coerce_to_int(vm, globals)?;
+        if offset < 0 {
+            let self_ = lfp.self_val();
+            let given = self_.is_rstring().unwrap();
+            let len = given.as_bytes().len() as i64;
+            let pos = len + offset;
+            if pos < 0 {
+                return Ok(Value::nil());
+            }
+            pos as usize
+        } else {
+            offset as usize
+        }
+    } else {
+        0
+    };
+    let self_ = lfp.self_val();
+    let given = self_.is_rstring().unwrap();
+    let haystack = given.as_bytes();
+    if byte_offset > haystack.len() {
+        return Ok(Value::nil());
+    }
+    let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
+    let s = std::str::from_utf8(haystack)
+        .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+
+    match re.captures_from_pos(s, byte_offset, vm)? {
+        None => Ok(Value::nil()),
+        Some(captures) => {
+            let start = captures.get(0).unwrap().start();
+            Ok(Value::integer(start as i64))
+        }
+    }
+}
+
+///
 /// ### String#rindex
 ///
 /// - rindex(pattern, pos = self.size) -> Integer | nil
@@ -2659,6 +2713,207 @@ fn to_f(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let s = self_.expect_str(globals)?;
     let f = parse_f64(s).0;
     Ok(Value::float(f))
+}
+
+///
+/// ### String#to_c
+///
+/// - to_c -> Complex
+///
+/// Returns a complex number parsed from the string.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_c.html]
+#[monoruby_builtin]
+fn to_c(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let s = self_.expect_str(globals)?;
+    let (re, im) = parse_complex(s);
+    Ok(Value::complex(parse_real(re), parse_real(im)))
+}
+
+/// Parse a numeric string to a Real -- integer if possible, float otherwise.
+fn parse_real(s: f64) -> Real {
+    if s == (s as i64) as f64 && s.is_finite() {
+        Real::from(s as i64)
+    } else {
+        Real::from(s)
+    }
+}
+
+///
+/// ### String#to_r
+///
+/// - to_r -> Rational
+///
+/// Returns a rational number parsed from the string.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_r.html]
+#[monoruby_builtin]
+fn to_r(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let s = self_.expect_str(globals)?;
+    let (num, den) = parse_rational(s);
+    // Call Kernel#Rational to create the Rational object
+    let rational_id = IdentId::get_id("Rational");
+    let main_obj = globals.main_object;
+    let func_id = globals
+        .check_method(main_obj, rational_id)
+        .ok_or_else(|| MonorubyErr::runtimeerr("Rational method not found"))?;
+    vm.invoke_func_inner(
+        globals,
+        func_id,
+        main_obj,
+        &[Value::integer(num), Value::integer(den)],
+        None,
+        None,
+    )
+}
+
+/// Parse a string as a complex number, returning (real, imaginary) as f64.
+fn parse_complex(s: &str) -> (f64, f64) {
+    let s = s.trim();
+    if s.is_empty() {
+        return (0.0, 0.0);
+    }
+
+    // Handle pure imaginary: "3i", "-2i", "+5i", "i", "-i", "+i"
+    if let Some(rest) = s.strip_suffix('i') {
+        if rest.is_empty() {
+            return (0.0, 1.0);
+        }
+        if rest == "+" {
+            return (0.0, 1.0);
+        }
+        if rest == "-" {
+            return (0.0, -1.0);
+        }
+        // Try "a+bi" or "a-bi" pattern
+        // Find the last '+' or '-' that is not at the start and not part of an exponent
+        if let Some(pos) = find_complex_split(rest) {
+            let real_part = &rest[..pos];
+            let imag_part = &rest[pos..];
+            let re = parse_f64_simple(real_part);
+            let im = if imag_part == "+" {
+                1.0
+            } else if imag_part == "-" {
+                -1.0
+            } else {
+                parse_f64_simple(imag_part)
+            };
+            return (re, im);
+        }
+        // Pure imaginary
+        let im = parse_f64_simple(rest);
+        return (0.0, im);
+    }
+
+    // Pure real
+    let re = parse_f64_simple(s);
+    (re, 0.0)
+}
+
+/// Find the split point between real and imaginary parts in a complex string.
+/// Returns the position of the '+' or '-' that separates them.
+fn find_complex_split(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 {
+        i -= 1;
+        if (bytes[i] == b'+' || bytes[i] == b'-') && i > 0 {
+            // Make sure this isn't part of a scientific notation exponent
+            if i >= 2 && (bytes[i - 1] == b'e' || bytes[i - 1] == b'E') {
+                continue;
+            }
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Simple f64 parser that returns 0.0 for invalid input.
+fn parse_f64_simple(s: &str) -> f64 {
+    let s = s.trim();
+    if s.is_empty() {
+        return 0.0;
+    }
+    s.parse::<f64>().unwrap_or(0.0)
+}
+
+/// Parse a string as a rational number, returning (numerator, denominator).
+fn parse_rational(s: &str) -> (i64, i64) {
+    let s = s.trim();
+    if s.is_empty() {
+        return (0, 1);
+    }
+
+    // Try "a/b" format
+    if let Some(pos) = s.find('/') {
+        let num_str = &s[..pos];
+        let den_str = &s[pos + 1..];
+        let num = parse_rational_int(num_str);
+        let den = parse_rational_int(den_str);
+        if den == 0 {
+            return (0, 1);
+        }
+        return (num, den);
+    }
+
+    // Try decimal format "0.5" -> 1/2
+    if let Some(pos) = s.find('.') {
+        let int_part = &s[..pos];
+        let frac_part = &s[pos + 1..];
+        // Count decimal digits (stop at first non-digit)
+        let frac_digits: String = frac_part.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let dec_places = frac_digits.len();
+        if dec_places == 0 {
+            let num = parse_rational_int(int_part);
+            return (num, 1);
+        }
+        let int_val = parse_rational_int(int_part);
+        let frac_val: i64 = frac_digits.parse().unwrap_or(0);
+        let den = 10i64.pow(dec_places as u32);
+        let negative = s.starts_with('-');
+        let num = if negative {
+            int_val * den - frac_val
+        } else {
+            int_val * den + frac_val
+        };
+        // Simplify
+        let g = gcd_u64(num.unsigned_abs(), den as u64) as i64;
+        return (num / g, den / g);
+    }
+
+    // Plain integer
+    let num = parse_rational_int(s);
+    (num, 1)
+}
+
+fn parse_rational_int(s: &str) -> i64 {
+    let s = s.trim();
+    if s.is_empty() {
+        return 0;
+    }
+    // Parse leading integer, stop at first non-digit (after optional sign)
+    let mut chars = s.chars().peekable();
+    let negative = if chars.peek() == Some(&'-') {
+        chars.next();
+        true
+    } else if chars.peek() == Some(&'+') {
+        chars.next();
+        false
+    } else {
+        false
+    };
+    let digits: String = chars.take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return 0;
+    }
+    let val: i64 = digits.parse().unwrap_or(0);
+    if negative { -val } else { val }
+}
+
+fn gcd_u64(a: u64, b: u64) -> u64 {
+    if b == 0 { a } else { gcd_u64(b, a % b) }
 }
 
 ///
@@ -5902,5 +6157,32 @@ mod tests {
             r#"r = []; "a,b,c".each_line(o) { |l| r << l }; r"#,
             r#"class C; def to_str; ","; end; end; o = C.new"#,
         );
+    }
+
+    #[test]
+    fn string_byteindex() {
+        run_test(r#""hello".byteindex("ll")"#);
+        run_test(r#""hello".byteindex("ll", 3)"#);
+        run_test(r#""hello".byteindex("o")"#);
+        run_test(r#""hello".byteindex("h")"#);
+        run_test(r#""hello".byteindex("x")"#);
+        run_test(r#""hello".byteindex("lo", -3)"#);
+    }
+
+    #[test]
+    fn string_to_c() {
+        run_test(r#""1+2i".to_c.inspect"#);
+        run_test(r#""3".to_c.inspect"#);
+        run_test(r#""i".to_c.inspect"#);
+        run_test(r#""".to_c.inspect"#);
+        run_test(r#""-3+4i".to_c.inspect"#);
+    }
+
+    #[test]
+    fn string_to_r() {
+        run_test(r#""1/3".to_r.inspect"#);
+        run_test(r#""0.5".to_r.inspect"#);
+        run_test(r#""1".to_r.inspect"#);
+        run_test(r#""".to_r.inspect"#);
     }
 }

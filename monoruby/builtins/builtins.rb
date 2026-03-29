@@ -388,6 +388,14 @@ class Numeric
     to_i
   end
 
+  def to_c
+    Complex(self, 0)
+  end
+
+  def to_r
+    Rational(self)
+  end
+
   def ceil(ndigits = 0)
     to_f.ceil(ndigits)
   end

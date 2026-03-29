@@ -411,6 +411,10 @@ class NilClass
   def to_c
     Complex(0, 0)
   end
+
+  def to_r
+    Rational(0)
+  end
 end
 
 class Marshal

@@ -924,6 +924,7 @@ impl Value {
             RV::Nil => "".to_string(),
             RV::Symbol(id) => id.to_string(),
             RV::String(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            RV::Complex(_) => self.as_complex().to_s_str(store),
             _ => self.debug(store),
         };
         s

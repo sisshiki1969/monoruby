@@ -48,6 +48,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(file_test, "executable?", executable_, 1);
 
     globals.define_builtin_func_rest(file, "write", write);
+    globals.define_builtin_func(file, "size", file_instance_size, 0);
 
     globals.define_builtin_class_func_with(file, "umask", umask, 0, 1, false);
     globals.define_builtin_class_funcs_with(file, "fnmatch", &["fnmatch?"], fnmatch, 2, 3, false);
@@ -1027,6 +1028,32 @@ fn file_size_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     }
 }
 
+///
+/// ### File#size (instance method)
+/// - size -> Integer
+///
+/// Returns the size of the file in bytes.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/i/size.html]
+#[monoruby_builtin]
+fn file_instance_size(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let io = self_.as_io_inner();
+    match io.name() {
+        Some(name) => {
+            let metadata = std::fs::metadata(name)
+                .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", name, e)))?;
+            Ok(Value::integer(metadata.len() as i64))
+        }
+        None => Err(MonorubyErr::runtimeerr("size not available for this IO")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -1314,6 +1341,21 @@ mod tests {
             raise "expected line1" unless lines[0] == "line1\n"
             raise "expected line2" unless lines[1] == "line2\n"
             raise "expected line3" unless lines[2] == "line3\n"
+            File.delete(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_instance_size() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_inst_size_#{Process.pid}"
+            File.write(path, "hello world")
+            f = File.open(path)
+            s = f.size
+            raise "expected 11 but got #{s}" unless s == 11
+            f.close
             File.delete(path)
             "#,
         );
