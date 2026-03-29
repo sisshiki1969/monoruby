@@ -502,7 +502,7 @@ fn format(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
     let fmt = args[0].coerce_to_str(vm, globals)?;
     let arguments = &args[1..];
-    let result = globals.format_by_args(vm, &fmt, arguments)?;
+    let result = vm.format_by_args(globals, &fmt, arguments)?;
     Ok(Value::string(result))
 }
 
@@ -1168,7 +1168,12 @@ fn exit(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/exit=21.html]
 #[monoruby_builtin]
-fn exit_bang(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn exit_bang(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let status = if let Some(arg0) = lfp.try_arg(0) {
         if let Some(i) = arg0.try_fixnum() {
             i as i32

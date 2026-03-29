@@ -182,7 +182,7 @@ fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let io = self_.as_io_inner_mut();
     let args = lfp.arg(1).as_array();
 
-    let buf = globals.format_by_args(vm, &format_str, &args)?;
+    let buf = vm.format_by_args(globals, &format_str, &args)?;
     io.write(buf.as_bytes())?;
 
     Ok(Value::nil())
@@ -242,13 +242,16 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let popen_result = lfp.self_val().as_io_inner_mut().close()?;
     if let Some((exit_status, pid)) = popen_result {
         // Set $? (Process::Status) via Process::Status.new(exitstatus, pid)
-        let status_class = vm
-            .get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
+        let status_class =
+            vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
         let status_obj = vm.invoke_method_inner(
             globals,
             IdentId::NEW,
             status_class,
-            &[Value::integer(exit_status as i64), Value::integer(pid as i64)],
+            &[
+                Value::integer(exit_status as i64),
+                Value::integer(pid as i64),
+            ],
             None,
             None,
         )?;
@@ -262,7 +265,12 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// ### IO#close_write
 #[monoruby_builtin]
-fn close_write(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn close_write(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     match io {
@@ -278,7 +286,12 @@ fn close_write(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: Bytecode
 
 /// ### IO#close_read
 #[monoruby_builtin]
-fn close_read(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn close_read(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     match io {
@@ -413,14 +426,24 @@ fn io_class_read(
     let mut file = match File::open(&filename) {
         Ok(file) => file,
         Err(err) => {
-            return Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_sysopen", &filename));
+            return Err(MonorubyErr::errno_with_path(
+                &globals.store,
+                &err,
+                "rb_sysopen",
+                &filename,
+            ));
         }
     };
     let mut contents = Vec::new();
     match std::io::Read::read_to_end(&mut file, &mut contents) {
         Ok(_) => {}
         Err(err) => {
-            return Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_read", &filename));
+            return Err(MonorubyErr::errno_with_path(
+                &globals.store,
+                &err,
+                "rb_io_read",
+                &filename,
+            ));
         }
     };
     Ok(Value::bytes(contents))
@@ -557,7 +580,11 @@ fn io_pipe(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr
     let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
     if ret == -1 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::errno_with_msg(&_globals.store, &err, "pipe(2)"));
+        return Err(MonorubyErr::errno_with_msg(
+            &_globals.store,
+            &err,
+            "pipe(2)",
+        ));
     }
     let read_io = Value::new_io(IoInner::from_raw_fd(fds[0], "pipe".to_string()));
     let write_io = Value::new_io(IoInner::from_raw_fd(fds[1], "pipe".to_string()));
@@ -631,14 +658,17 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         let res = vm.invoke_block(globals, &data, &[io_val]);
         let mut io_close = io_val;
         if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close() {
-            if let Ok(status_class) = vm
-                .get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
+            if let Ok(status_class) =
+                vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
             {
                 if let Ok(status_obj) = vm.invoke_method_inner(
                     globals,
                     IdentId::NEW,
                     status_class,
-                    &[Value::integer(exit_status as i64), Value::integer(pid as i64)],
+                    &[
+                        Value::integer(exit_status as i64),
+                        Value::integer(pid as i64),
+                    ],
                     None,
                     None,
                 ) {
@@ -737,7 +767,11 @@ fn io_syswrite(
     let written = unsafe { libc::write(fd, bytes.as_ptr() as *const libc::c_void, bytes.len()) };
     if written < 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "syswrite"));
+        return Err(MonorubyErr::errno_with_msg(
+            &globals.store,
+            &err,
+            "syswrite",
+        ));
     }
     Ok(Value::integer(written as i64))
 }
@@ -899,7 +933,11 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 
         if ret < 0 {
             let err = std::io::Error::last_os_error();
-            return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "select(2)"));
+            return Err(MonorubyErr::errno_with_msg(
+                &globals.store,
+                &err,
+                "select(2)",
+            ));
         }
 
         if ret == 0 {

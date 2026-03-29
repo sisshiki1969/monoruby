@@ -458,12 +458,7 @@ fn casecmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/casecmp=3f.html]
 #[monoruby_builtin]
-fn casecmp_p(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn casecmp_p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
     let rhs_str = if let Some(rhs_inner) = rhs.is_rstring_inner() {
@@ -580,7 +575,7 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let arg = lfp.arg(0);
     let self_ = lfp.self_val();
     if let Some(hash) = arg.try_hash_ty() {
-        let format_str = globals.format_by_hash(vm, self_.as_str(), hash)?;
+        let format_str = vm.format_by_hash(globals, self_.as_str(), hash)?;
         let res = Value::string(format_str);
         Ok(res)
     } else {
@@ -588,7 +583,7 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             Some(ary) => ary.to_vec(),
             None => vec![arg],
         };
-        let format_str = globals.format_by_args(vm, self_.as_str(), &arguments)?;
+        let format_str = vm.format_by_args(globals, self_.as_str(), &arguments)?;
         let res = Value::string(format_str);
         Ok(res)
     }
