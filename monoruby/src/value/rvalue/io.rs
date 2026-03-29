@@ -303,4 +303,12 @@ impl IoInner {
             Self::File(_) | Self::Popen(_) | Self::Closed => false,
         }
     }
+
+    /// Returns the file name/path if this is a File IO, None otherwise.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::File(file) => Some(&file.name),
+            _ => None,
+        }
+    }
 }

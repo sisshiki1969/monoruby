@@ -48,6 +48,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(file_test, "executable?", executable_, 1);
 
     globals.define_builtin_func_rest(file, "write", write);
+    globals.define_builtin_func(file, "size", file_instance_size, 0);
 
     globals.define_builtin_class_func_with(file, "umask", umask, 0, 1, false);
     globals.define_builtin_class_funcs_with(file, "fnmatch", &["fnmatch?"], fnmatch, 2, 3, false);
@@ -90,18 +91,18 @@ fn file_write(
     let name = lfp.arg(0).coerce_to_string(vm, globals)?;
     let mut file = match File::create(&name) {
         Ok(file) => file,
-        Err(err) => return Err(MonorubyErr::runtimeerr(format!("{}: {:?}", name, err))),
+        Err(err) => return Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_sysopen", &name)),
     };
     let val = lfp.arg(1);
     let len = if let Some(s) = val.is_rstring() {
         if let Err(err) = file.write_all(&s) {
-            return Err(MonorubyErr::runtimeerr(err));
+            return Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_write", &name));
         };
         s.len()
     } else {
         let v = val.to_s(&globals.store).into_bytes();
         if let Err(err) = file.write_all(&v) {
-            return Err(MonorubyErr::runtimeerr(err));
+            return Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_write", &name));
         };
         v.len()
     };
@@ -123,20 +124,18 @@ fn file_read(
     _: BytecodePtr,
 ) -> Result<Value> {
     let filename = to_path(vm, globals, lfp.arg(0))?;
+    let filename_str = filename.to_string_lossy();
     let mut file = match File::open(&filename) {
         Ok(file) => file,
-        Err(_) => {
-            return Err(MonorubyErr::runtimeerr(format!(
-                "Can not open file. {:?}",
-                &filename
-            )));
+        Err(err) => {
+            return Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_sysopen", &filename_str));
         }
     };
     let mut contents = vec![];
     match std::io::Read::read_to_end(&mut file, &mut contents) {
         Ok(_) => {}
-        Err(_) => {
-            return Err(MonorubyErr::runtimeerr("Could not read the file."));
+        Err(err) => {
+            return Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_read", &filename_str));
         }
     };
     Ok(Value::string_from_vec(contents))
@@ -161,31 +160,29 @@ fn binread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     } else {
         None
     };
+    let filename_str = filename.to_string_lossy().to_string();
     let mut file = match File::open(&filename) {
         Ok(file) => file,
-        Err(_) => {
-            return Err(MonorubyErr::runtimeerr(format!(
-                "Can not open file. {:?}",
-                &filename
-            )));
+        Err(err) => {
+            return Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_sysopen", &filename_str));
         }
     };
     if let Some(offset) = offset {
         match file.seek(SeekFrom::Start(offset as _)) {
             Ok(_) => {}
-            Err(err) => return Err(MonorubyErr::cant_load(Some(err), &filename)),
+            Err(err) => return Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_seek", &filename_str)),
         };
     }
     if let Some(length) = length {
         let mut contents = vec![0; length as usize];
-        if std::io::Read::read_exact(&mut file, &mut contents).is_err() {
-            return Err(MonorubyErr::runtimeerr("Could not read the file."));
+        if let Err(err) = std::io::Read::read_exact(&mut file, &mut contents) {
+            return Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_read", &filename_str));
         };
         Ok(Value::bytes(contents))
     } else {
         let mut contents = vec![];
-        if std::io::Read::read_to_end(&mut file, &mut contents).is_err() {
-            return Err(MonorubyErr::runtimeerr("Could not read the file."));
+        if let Err(err) = std::io::Read::read_to_end(&mut file, &mut contents) {
+            return Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_read", &filename_str));
         };
         Ok(Value::bytes(contents))
     }
@@ -259,7 +256,7 @@ fn expand_path(
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(err) => {
-            return Err(MonorubyErr::runtimeerr(err));
+            return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "."));
         }
     };
     let arg0 = to_path(vm, globals, lfp.arg(0))?;
@@ -457,29 +454,22 @@ fn realpath(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         match path.canonicalize() {
             Ok(path) => path,
             Err(err) => {
-                return Err(MonorubyErr::argumenterr(format!(
-                    "{}:{}",
-                    path_str,
-                    err
-                )));
+                return Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_file_s_realpath", &path_str));
             }
         }
     } else {
         match std::env::current_dir() {
             Ok(path) => path,
-            Err(_) => {
-                return Err(MonorubyErr::runtimeerr("Failed to get current directory."));
+            Err(err) => {
+                return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "."));
             }
         }
     };
     pathname.push(std::path::PathBuf::from(lfp.arg(0).coerce_to_string(vm, globals)?));
+    let pathname_str = pathname.to_string_lossy().to_string();
     match pathname.canonicalize() {
         Ok(file) => Ok(Value::string(file.to_string_lossy().to_string())),
-        Err(err) => Err(MonorubyErr::argumenterr(format!(
-            "{}:{}",
-            pathname.to_string_lossy(),
-            err
-        ))),
+        Err(err) => Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_file_s_realpath", &pathname_str)),
     }
 }
 
@@ -516,7 +506,7 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let file = match opt.open(&path) {
         Ok(file) => file,
         Err(err) => {
-            return Err(MonorubyErr::runtimeerr(format!("{}: {:?}", path, err)));
+            return Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_sysopen", &path));
         }
     };
     let res = Value::new_file(file, path);
@@ -767,7 +757,7 @@ fn absolute_path(
     } else {
         match std::env::current_dir() {
             Ok(dir) => dir,
-            Err(err) => return Err(MonorubyErr::runtimeerr(err)),
+            Err(err) => return Err(MonorubyErr::errno_with_msg(&globals.store, &err, ".")),
         }
     };
     let mut result = base;
@@ -923,7 +913,7 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     for arg in args.iter() {
         let path = arg.coerce_to_str(vm, globals)?;
         std::fs::remove_file(&path)
-            .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
+            .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
         count += 1;
     }
     Ok(Value::integer(count))
@@ -946,7 +936,7 @@ fn chmod(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         let path = arg.coerce_to_str(_vm, globals)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
-            .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
+            .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_chmod", &path))?;
         count += 1;
     }
     Ok(Value::integer(count))
@@ -970,7 +960,7 @@ fn file_symlink(
     let old = lfp.arg(0).coerce_to_str(vm, globals)?;
     let new = lfp.arg(1).coerce_to_str(vm, globals)?;
     std::os::unix::fs::symlink(&old, &new)
-        .map_err(|e| MonorubyErr::runtimeerr(format!("symlink: {}", e)))?;
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_symlink", &new))?;
     Ok(Value::integer(0))
 }
 
@@ -991,7 +981,7 @@ fn readlines(
 ) -> Result<Value> {
     let path = lfp.arg(0).coerce_to_str(vm, globals)?;
     let content = std::fs::read_to_string(&path)
-        .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
     let lines: Vec<Value> = content
         .lines()
         .map(|l| Value::string(format!("{}\n", l)))
@@ -1009,8 +999,9 @@ fn readlines(
 #[monoruby_builtin]
 fn file_size(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let path = to_path(vm, globals, lfp.arg(0))?;
+    let path_str = path.to_string_lossy();
     let metadata = std::fs::metadata(&path)
-        .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path.display(), e)))?;
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_size", &path_str))?;
     Ok(Value::integer(metadata.len() as i64))
 }
 
@@ -1034,6 +1025,32 @@ fn file_size_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             }
         }
         Err(_) => Ok(Value::nil()),
+    }
+}
+
+///
+/// ### File#size (instance method)
+/// - size -> Integer
+///
+/// Returns the size of the file in bytes.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/i/size.html]
+#[monoruby_builtin]
+fn file_instance_size(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let io = self_.as_io_inner();
+    match io.name() {
+        Some(name) => {
+            let metadata = std::fs::metadata(name)
+                .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", name, e)))?;
+            Ok(Value::integer(metadata.len() as i64))
+        }
+        None => Err(MonorubyErr::runtimeerr("size not available for this IO")),
     }
 }
 
@@ -1324,6 +1341,21 @@ mod tests {
             raise "expected line1" unless lines[0] == "line1\n"
             raise "expected line2" unless lines[1] == "line2\n"
             raise "expected line3" unless lines[2] == "line3\n"
+            File.delete(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_instance_size() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_inst_size_#{Process.pid}"
+            File.write(path, "hello world")
+            f = File.open(path)
+            s = f.size
+            raise "expected 11 but got #{s}" unless s == 11
+            f.close
             File.delete(path)
             "#,
         );

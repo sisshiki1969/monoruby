@@ -33,7 +33,20 @@ macro_rules! cmp_values {
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.$op(&rhs),
                     (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().$op(&rhs),
                     (RV::Fixnum(_)| RV::BigInt(_) , _) => {
-                        let err = MonorubyErr::cant_coerced_into(globals, $op_str, rhs, "Integer");
+                        // Try coerce protocol for comparison
+                        let coerce_id = IdentId::get_id("coerce");
+                        if let Ok(Some(result)) = vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None) {
+                            if let Some(ary) = result.try_array_ty() {
+                                if ary.len() == 2 {
+                                    return vm.invoke_method_simple(globals, $op_str, ary[0], &[ary[1]]);
+                                }
+                            }
+                        }
+                        let err = MonorubyErr::argumenterr(format!(
+                            "comparison of {} with {} failed",
+                            lhs.get_real_class_name(globals),
+                            rhs.get_real_class_name(globals),
+                        ));
                         vm.set_error(err);
                         return None;
                     }
@@ -42,7 +55,20 @@ macro_rules! cmp_values {
                     (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
                     (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
                     (RV::Float(_) , _) => {
-                        let err = MonorubyErr::cant_coerced_into(globals, $op_str, rhs, "Float");
+                        // Try coerce protocol for comparison
+                        let coerce_id = IdentId::get_id("coerce");
+                        if let Ok(Some(result)) = vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None) {
+                            if let Some(ary) = result.try_array_ty() {
+                                if ary.len() == 2 {
+                                    return vm.invoke_method_simple(globals, $op_str, ary[0], &[ary[1]]);
+                                }
+                            }
+                        }
+                        let err = MonorubyErr::argumenterr(format!(
+                            "comparison of {} with {} failed",
+                            lhs.get_real_class_name(globals),
+                            rhs.get_real_class_name(globals),
+                        ));
                         vm.set_error(err);
                         return None;
                     }

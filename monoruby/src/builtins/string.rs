@@ -108,26 +108,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(STRING_CLASS, "next!", &["succ!"], next_mut, 0);
     globals.define_builtin_func(STRING_CLASS, "encoding", encoding, 0);
     globals.define_builtin_func(STRING_CLASS, "b", b, 0);
-    globals.define_builtin_func_with_kw(
-        STRING_CLASS,
-        "encode",
-        encode,
-        0,
-        2,
-        false,
-        &[],
-        true,
-    );
-    globals.define_builtin_func_with_kw(
-        STRING_CLASS,
-        "encode!",
-        encode_,
-        0,
-        2,
-        false,
-        &[],
-        true,
-    );
+    globals.define_builtin_func_with_kw(STRING_CLASS, "encode", encode, 0, 2, false, &[], true);
+    globals.define_builtin_func_with_kw(STRING_CLASS, "encode!", encode_, 0, 2, false, &[], true);
     globals.define_builtin_func_with_kw(
         STRING_CLASS,
         "unpack1",
@@ -148,6 +130,9 @@ pub(super) fn init(globals: &mut Globals) {
         &["offset"],
         false,
     );
+    globals.define_builtin_func_with(STRING_CLASS, "byteindex", byteindex, 1, 2, false);
+    globals.define_builtin_func(STRING_CLASS, "to_c", to_c, 0);
+    globals.define_builtin_func(STRING_CLASS, "to_r", to_r, 0);
     globals.define_builtin_func(STRING_CLASS, "dump", dump, 0);
     globals.define_builtin_func(STRING_CLASS, "force_encoding", force_encoding, 1);
     globals.define_builtin_func(STRING_CLASS, "valid_encoding?", valid_encoding, 0);
@@ -266,19 +251,9 @@ pub(super) fn init(globals: &mut Globals) {
 
     // Encoding class methods
     globals.define_builtin_class_func(enc.id(), "default_external", enc_default_external, 0);
-    globals.define_builtin_class_func(
-        enc.id(),
-        "default_external=",
-        enc_set_default_external,
-        1,
-    );
+    globals.define_builtin_class_func(enc.id(), "default_external=", enc_set_default_external, 1);
     globals.define_builtin_class_func(enc.id(), "default_internal", enc_default_internal, 0);
-    globals.define_builtin_class_func(
-        enc.id(),
-        "default_internal=",
-        enc_set_default_internal,
-        1,
-    );
+    globals.define_builtin_class_func(enc.id(), "default_internal=", enc_set_default_internal, 1);
     globals.define_builtin_class_func(enc.id(), "list", enc_list, 0);
     globals.define_builtin_class_func(enc.id(), "find", enc_find, 1);
     globals.define_builtin_class_func(enc.id(), "aliases", enc_aliases, 0);
@@ -305,12 +280,7 @@ fn encoding_class(globals: &Globals) -> ClassId {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/s/new.html]
 #[monoruby_builtin]
-fn string_new(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn string_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let s = match lfp.try_arg(0) {
         Some(string) => string.coerce_to_string(vm, globals)?,
         None => "".to_string(),
@@ -320,12 +290,7 @@ fn string_new(
 
 /// ### String.allocate
 #[monoruby_builtin]
-fn allocate(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     Ok(Value::string_with_class("", class_id))
 }
@@ -434,11 +399,7 @@ fn string_cmp(
     Ok(None)
 }
 
-fn string_cmp2(
-    lfp: Lfp,
-    vm: &mut Executor,
-    globals: &mut Globals,
-) -> Result<std::cmp::Ordering> {
+fn string_cmp2(lfp: Lfp, vm: &mut Executor, globals: &mut Globals) -> Result<std::cmp::Ordering> {
     match string_cmp(lfp, vm, globals)? {
         Some(ord) => Ok(ord),
         None => {
@@ -471,12 +432,7 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/casecmp.html]
 #[monoruby_builtin]
-fn casecmp(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn casecmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
     if let Some(rhs_inner) = rhs.is_rstring_inner() {
@@ -1043,12 +999,7 @@ pub fn str_next(self_: &str) -> String {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/start_with=3f.html]
 #[monoruby_builtin]
-fn start_with(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn start_with(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str(globals)?;
     let arg0 = lfp.arg(0).as_array();
@@ -1315,7 +1266,10 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     .collect(),
             }
         } else if lim < 0 {
-            string.split(&*coerced).map(Value::string_from_str).collect()
+            string
+                .split(&*coerced)
+                .map(Value::string_from_str)
+                .collect()
         } else if lim == 0 {
             let mut vec: Vec<&str> = string.split(&*coerced).collect();
             while let Some(s) = vec.last() {
@@ -1921,6 +1875,51 @@ fn string_index(
 }
 
 ///
+/// ### String#byteindex
+///
+/// - byteindex(pattern, offset = 0) -> Integer | nil
+///
+/// Returns the byte-based index of the first occurrence of +pattern+ in the string.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/byteindex.html]
+#[monoruby_builtin]
+fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let byte_offset = if let Some(arg1) = lfp.try_arg(1) {
+        let offset = arg1.coerce_to_int(vm, globals)?;
+        if offset < 0 {
+            let self_ = lfp.self_val();
+            let given = self_.is_rstring().unwrap();
+            let len = given.as_bytes().len() as i64;
+            let pos = len + offset;
+            if pos < 0 {
+                return Ok(Value::nil());
+            }
+            pos as usize
+        } else {
+            offset as usize
+        }
+    } else {
+        0
+    };
+    let self_ = lfp.self_val();
+    let given = self_.is_rstring().unwrap();
+    let haystack = given.as_bytes();
+    if byte_offset > haystack.len() {
+        return Ok(Value::nil());
+    }
+    let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
+    let s = std::str::from_utf8(haystack).map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+
+    match re.captures_from_pos(s, byte_offset, vm)? {
+        None => Ok(Value::nil()),
+        Some(captures) => {
+            let start = captures.get(0).unwrap().start();
+            Ok(Value::integer(start as i64))
+        }
+    }
+}
+
+///
 /// ### String#rindex
 ///
 /// - rindex(pattern, pos = self.size) -> Integer | nil
@@ -2368,12 +2367,7 @@ fn byteslice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/bytesplice.html]
 #[monoruby_builtin]
-fn bytesplice(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let arg_count = if lfp.try_arg(4).is_some() {
         5
@@ -2662,6 +2656,210 @@ fn to_f(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 }
 
 ///
+/// ### String#to_c
+///
+/// - to_c -> Complex
+///
+/// Returns a complex number parsed from the string.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_c.html]
+#[monoruby_builtin]
+fn to_c(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let s = self_.expect_str(globals)?;
+    let (re, im) = parse_complex(s);
+    Ok(Value::complex(parse_real(re), parse_real(im)))
+}
+
+/// Parse a numeric string to a Real -- integer if possible, float otherwise.
+fn parse_real(s: f64) -> Real {
+    if s == (s as i64) as f64 && s.is_finite() {
+        Real::from(s as i64)
+    } else {
+        Real::from(s)
+    }
+}
+
+///
+/// ### String#to_r
+///
+/// - to_r -> Rational
+///
+/// Returns a rational number parsed from the string.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_r.html]
+#[monoruby_builtin]
+fn to_r(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let s = self_.expect_str(globals)?;
+    let (num, den) = parse_rational(s);
+    // Call Kernel#Rational to create the Rational object
+    let rational_id = IdentId::get_id("Rational");
+    let main_obj = globals.main_object;
+    let func_id = globals
+        .check_method(main_obj, rational_id)
+        .ok_or_else(|| MonorubyErr::runtimeerr("Rational method not found"))?;
+    vm.invoke_func_inner(
+        globals,
+        func_id,
+        main_obj,
+        &[Value::integer(num), Value::integer(den)],
+        None,
+        None,
+    )
+}
+
+/// Parse a string as a complex number, returning (real, imaginary) as f64.
+fn parse_complex(s: &str) -> (f64, f64) {
+    let s = s.trim();
+    if s.is_empty() {
+        return (0.0, 0.0);
+    }
+
+    // Handle pure imaginary: "3i", "-2i", "+5i", "i", "-i", "+i"
+    if let Some(rest) = s.strip_suffix('i') {
+        if rest.is_empty() {
+            return (0.0, 1.0);
+        }
+        if rest == "+" {
+            return (0.0, 1.0);
+        }
+        if rest == "-" {
+            return (0.0, -1.0);
+        }
+        // Try "a+bi" or "a-bi" pattern
+        // Find the last '+' or '-' that is not at the start and not part of an exponent
+        if let Some(pos) = find_complex_split(rest) {
+            let real_part = &rest[..pos];
+            let imag_part = &rest[pos..];
+            let re = parse_f64_simple(real_part);
+            let im = if imag_part == "+" {
+                1.0
+            } else if imag_part == "-" {
+                -1.0
+            } else {
+                parse_f64_simple(imag_part)
+            };
+            return (re, im);
+        }
+        // Pure imaginary
+        let im = parse_f64_simple(rest);
+        return (0.0, im);
+    }
+
+    // Pure real
+    let re = parse_f64_simple(s);
+    (re, 0.0)
+}
+
+/// Find the split point between real and imaginary parts in a complex string.
+/// Returns the position of the '+' or '-' that separates them.
+fn find_complex_split(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 {
+        i -= 1;
+        if (bytes[i] == b'+' || bytes[i] == b'-') && i > 0 {
+            // Make sure this isn't part of a scientific notation exponent
+            if i >= 2 && (bytes[i - 1] == b'e' || bytes[i - 1] == b'E') {
+                continue;
+            }
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Simple f64 parser that returns 0.0 for invalid input.
+fn parse_f64_simple(s: &str) -> f64 {
+    let s = s.trim();
+    if s.is_empty() {
+        return 0.0;
+    }
+    s.parse::<f64>().unwrap_or(0.0)
+}
+
+/// Parse a string as a rational number, returning (numerator, denominator).
+fn parse_rational(s: &str) -> (i64, i64) {
+    let s = s.trim();
+    if s.is_empty() {
+        return (0, 1);
+    }
+
+    // Try "a/b" format
+    if let Some(pos) = s.find('/') {
+        let num_str = &s[..pos];
+        let den_str = &s[pos + 1..];
+        let num = parse_rational_int(num_str);
+        let den = parse_rational_int(den_str);
+        if den == 0 {
+            return (0, 1);
+        }
+        return (num, den);
+    }
+
+    // Try decimal format "0.5" -> 1/2
+    if let Some(pos) = s.find('.') {
+        let int_part = &s[..pos];
+        let frac_part = &s[pos + 1..];
+        // Count decimal digits (stop at first non-digit)
+        let frac_digits: String = frac_part
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        let dec_places = frac_digits.len();
+        if dec_places == 0 {
+            let num = parse_rational_int(int_part);
+            return (num, 1);
+        }
+        let int_val = parse_rational_int(int_part);
+        let frac_val: i64 = frac_digits.parse().unwrap_or(0);
+        let den = 10i64.pow(dec_places as u32);
+        let negative = s.starts_with('-');
+        let num = if negative {
+            int_val * den - frac_val
+        } else {
+            int_val * den + frac_val
+        };
+        // Simplify
+        let g = gcd_u64(num.unsigned_abs(), den as u64) as i64;
+        return (num / g, den / g);
+    }
+
+    // Plain integer
+    let num = parse_rational_int(s);
+    (num, 1)
+}
+
+fn parse_rational_int(s: &str) -> i64 {
+    let s = s.trim();
+    if s.is_empty() {
+        return 0;
+    }
+    // Parse leading integer, stop at first non-digit (after optional sign)
+    let mut chars = s.chars().peekable();
+    let negative = if chars.peek() == Some(&'-') {
+        chars.next();
+        true
+    } else if chars.peek() == Some(&'+') {
+        chars.next();
+        false
+    } else {
+        false
+    };
+    let digits: String = chars.take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return 0;
+    }
+    let val: i64 = digits.parse().unwrap_or(0);
+    if negative { -val } else { val }
+}
+
+fn gcd_u64(a: u64, b: u64) -> u64 {
+    if b == 0 { a } else { gcd_u64(b, a % b) }
+}
+
+///
 /// ### String#to_i
 ///
 /// - to_i(base = 10) -> Integer
@@ -2923,12 +3121,7 @@ fn downcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/downcase=21.html]
 #[monoruby_builtin]
-fn downcase_(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn downcase_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?.to_lowercase();
@@ -3020,12 +3213,7 @@ fn capitalize_(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/swapcase.html]
 #[monoruby_builtin]
-fn swapcase(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn swapcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
     let mut result = String::with_capacity(s.len());
@@ -3052,12 +3240,7 @@ fn swapcase(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/swapcase=21.html]
 #[monoruby_builtin]
-fn swapcase_(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn swapcase_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
@@ -3457,11 +3640,7 @@ fn next_mut(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// Resolve an encoding argument (String or Encoding object) to a validated
 /// constant name via `enc_name_to_const`.  Returns the constant name on
 /// success or an ArgumentError on unknown encoding.
-fn resolve_enc_arg(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    arg: Value,
-) -> Result<&'static str> {
+fn resolve_enc_arg(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<&'static str> {
     let name = if let Some(s) = arg.is_str() {
         s.to_string()
     } else if arg.class() == encoding_class(globals) {
@@ -3471,9 +3650,8 @@ fn resolve_enc_arg(
         let s = arg.coerce_to_string(vm, globals)?;
         s
     };
-    enc_name_to_const(&name).ok_or_else(|| {
-        MonorubyErr::argumenterr(format!("unknown encoding name - {}", name))
-    })
+    enc_name_to_const(&name)
+        .ok_or_else(|| MonorubyErr::argumenterr(format!("unknown encoding name - {}", name)))
 }
 
 ///
@@ -3571,11 +3749,7 @@ fn unpack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let self_ = lfp.self_val();
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
     let template = lfp.arg(0).coerce_to_string(vm, globals)?;
-    rvalue::unpack(
-        &self_.as_rstring_inner()[offset..],
-        &template,
-        false,
-    )
+    rvalue::unpack(&self_.as_rstring_inner()[offset..], &template, false)
 }
 
 ///
@@ -3590,11 +3764,7 @@ fn unpack1(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let self_ = lfp.self_val();
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
     let template = lfp.arg(0).coerce_to_string(vm, globals)?;
-    rvalue::unpack(
-        &self_.as_rstring_inner()[offset..],
-        &template,
-        true,
-    )
+    rvalue::unpack(&self_.as_rstring_inner()[offset..], &template, true)
 }
 
 fn unpack_offset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, len: usize) -> Result<usize> {
@@ -3751,12 +3921,7 @@ fn enc_set_default_internal(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/list.html]
 #[monoruby_builtin]
-fn enc_list(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn enc_list(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let enc_class = encoding_class(globals);
     let utf8 = globals
         .store
@@ -3775,12 +3940,7 @@ fn enc_list(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/find.html]
 #[monoruby_builtin]
-fn enc_find(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let name = lfp.arg(0).coerce_to_string(vm, globals)?;
     let enc_class = encoding_class(globals);
     // Resolve special names first
@@ -3987,12 +4147,7 @@ fn enc_compatible(
 /// - name -> String
 ///
 #[monoruby_builtin]
-fn enc_to_s(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn enc_to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     match globals.store.get_ivar(self_, IdentId::_ENCODING) {
         Some(v) => Ok(v),
@@ -5177,82 +5332,82 @@ mod tests {
 
     #[test]
     fn pack_unpack() {
-        run_test(r#""\x00\x01\x02\x03\x04\x05\x06\x07\x08".unpack('csl')"#);
+        run_test(
+            r#"
+        [
+            "\x00\x01\x02\x03\x04\x05\x06\x07\x08".unpack('csl'),
+            "\x00\x01\x02\x03\x04\x05\x06".unpack1('q'),
+            "\x00\x01\x02\x03\x04\x05\x06".unpack1('Q'),
+            "\x00\x01\x02\x03\x04\x05\x06\x07".unpack1('q'),
+            "\x00\x01\x02\x03\x04\x05\x06\x07".unpack1('Q'),
+            "\x00\x01\x02\x03\x04\x05\x06\x07\x08".unpack1('q'),
+            "\x00\x01\x02\x03\x04\x05\x06\x07\x08".unpack1('Q'),
+            "\x00\x01\x02".unpack1('l'),
+            "\x00\x01\x02".unpack1('L'),
+            "\x00\x01\x02\x03".unpack1('l'),
+            "\x00\x01\x02\x03".unpack1('L'),
+            "\x00\x01\x02\x03\x04".unpack1('l'),
+            "\x00\x01\x02\x03\x04".unpack1('L'),
+            "\x00".unpack1('s'),
+            "\x00".unpack1('S'),
+            "\x00\x01".unpack1('s'),
+            "\x00\x01".unpack1('S'),
+            "\x00\x01\x02".unpack1('s'),
+            "\x00\x01\x02".unpack1('S'),
+            "\x00".unpack1('c'),
+            "\x00".unpack1('C'),
+            "\x00\x01".unpack1('c'),
+            "\x00\x01".unpack1('C'),
+            "\x01\xFE".unpack1("c*"),
+            "Ruby".unpack("c*"),
+            "Ruby".unpack1("c*"),
+            "戦闘妖精雪風".unpack("c*"),
+            "戦闘妖精雪風".unpack1("c*"),
+            "\x01\xFE".unpack1("C*"),
+            "Ruby".unpack("C*"),
+            "Ruby".unpack1("C*")
+        ]"#,
+        );
 
-        run_test(r#""\x00\x01\x02\x03\x04\x05\x06".unpack1('q')"#);
-        run_test(r#""\x00\x01\x02\x03\x04\x05\x06".unpack1('Q')"#);
-        run_test(r#""\x00\x01\x02\x03\x04\x05\x06\x07".unpack1('q')"#);
-        run_test(r#""\x00\x01\x02\x03\x04\x05\x06\x07".unpack1('Q')"#);
-        run_test(r#""\x00\x01\x02\x03\x04\x05\x06\x07\x08".unpack1('q')"#);
-        run_test(r#""\x00\x01\x02\x03\x04\x05\x06\x07\x08".unpack1('Q')"#);
+        run_test(
+            r#"
+        [
+            "\x01\xFE".unpack("c*"),
+            [1, -2].pack("c*"),
+            [1, 254].pack("c*"),
+            "\x01\xFE".unpack("C*"),
+            [1, -2].pack("C*"),
+            [1, 254].pack("C*"),
+            "\x01\x02\xFE\xFD".unpack("s*"),
+            [513, 65022].pack("s*"),
+            [513, -514].pack("s*"),
+            "\x01\x02\xFE\xFD".unpack("s*"),
+            [258, 65277].pack("s*"),
+            [258, -259].pack("s*"),
+            [0,1,-1,32767,-32768,65535].pack("n*"),
+            "\x00\x00\x00\x01\xFF\xFF\x7F\xFF\x80\x00\xFF\xFF".unpack("n*"),
+            [0,1,-1].pack("N*"),
+            "\x00\x00\x00\x00\x00\x00\x00\x01\xFF\xFF\xFF\xFF".unpack("N*"),
+            [97, 98].pack("CxC"),
+            [97, 98].pack("Cx3C"),
+            [97, 98].pack("Cx*C"),
+            "abc".unpack("CxC"),
+            [97, 98, 99].pack("CCXC"),
+            "abcdef".unpack("x*XC"),
+            "\x01\xFE".unpack("h*"),
+            "\x01\xFE".unpack("h3"),
+            "\x01\xFE".unpack("H*"),
+            "\x01\xFE".unpack("H3"),
+            [0,1,65535].pack("v*"),
+            "\x01\x00\xFF\x7F\x00\x80".unpack("v*"),
+            [0,1,4294967295].pack("V*"),
+            "\x01\x00\x00\x00\xFF\xFF\xFF\x7F\x00\x00\x00\x80".unpack("V*"),
+            [0x1234].pack("v"),
+            [0x12345678].pack("V")
+        ]"#,
+        );
 
-        run_test(r#""\x00\x01\x02".unpack1('l')"#);
-        run_test(r#""\x00\x01\x02".unpack1('L')"#);
-        run_test(r#""\x00\x01\x02\x03".unpack1('l')"#);
-        run_test(r#""\x00\x01\x02\x03".unpack1('L')"#);
-        run_test(r#""\x00\x01\x02\x03\x04".unpack1('l')"#);
-        run_test(r#""\x00\x01\x02\x03\x04".unpack1('L')"#);
-
-        run_test(r#""\x00".unpack1('s')"#);
-        run_test(r#""\x00".unpack1('S')"#);
-        run_test(r#""\x00\x01".unpack1('s')"#);
-        run_test(r#""\x00\x01".unpack1('S')"#);
-        run_test(r#""\x00\x01\x02".unpack1('s')"#);
-        run_test(r#""\x00\x01\x02".unpack1('S')"#);
-
-        run_test(r#""\x00".unpack1('c')"#);
-        run_test(r#""\x00".unpack1('C')"#);
-        run_test(r#""\x00\x01".unpack1('c')"#);
-        run_test(r#""\x00\x01".unpack1('C')"#);
-
-        run_test(r#""\x01\xFE".unpack1("c*")"#);
-        run_test(r#""Ruby".unpack("c*")"#);
-        run_test(r#""Ruby".unpack1("c*")"#);
-        run_test(r#""戦闘妖精雪風".unpack("c*")"#);
-        run_test(r#""戦闘妖精雪風".unpack1("c*")"#);
-        run_test(r#""\x01\xFE".unpack1("C*")"#);
-        run_test(r#""Ruby".unpack("C*")"#);
-        run_test(r#""Ruby".unpack1("C*")"#);
-
-        run_test(r#""\x01\xFE".unpack("c*")"#);
-        run_test(r#"[1, -2].pack("c*")"#);
-        run_test(r#"[1, 254].pack("c*")"#);
-        run_test(r#""\x01\xFE".unpack("C*")"#);
-        run_test(r#"[1, -2].pack("C*")"#);
-        run_test(r#"[1, 254].pack("C*")"#);
-
-        run_test(r#""\x01\x02\xFE\xFD".unpack("s*")"#);
-        run_test(r#"[513, 65022].pack("s*")"#);
-        run_test(r#"[513, -514].pack("s*")"#);
-        run_test(r#""\x01\x02\xFE\xFD".unpack("s*")"#);
-        run_test(r#"[258, 65277].pack("s*")"#);
-        run_test(r#"[258, -259].pack("s*")"#);
-
-        run_test(r#"[0,1,-1,32767,-32768,65535].pack("n*")"#);
-        run_test(r#""\x00\x00\x00\x01\xFF\xFF\x7F\xFF\x80\x00\xFF\xFF".unpack("n*")"#);
-
-        run_test(r#"[0,1,-1].pack("N*")"#);
-        run_test(r#""\x00\x00\x00\x00\x00\x00\x00\x01\xFF\xFF\xFF\xFF".unpack("N*")"#);
-
-        run_test(r#"[97, 98].pack("CxC")"#);
-        run_test(r#"[97, 98].pack("Cx3C")"#);
-        run_test(r#"[97, 98].pack("Cx*C")"#);
-        run_test(r#""abc".unpack("CxC")"#);
         run_test_error(r#""abc".unpack("Cx3C")"#);
-        run_test(r#"[97, 98, 99].pack("CCXC")"#);
-        run_test(r#""abcdef".unpack("x*XC")"#);
-
-        run_test(r#""\x01\xFE".unpack("h*")"#);
-        run_test(r#""\x01\xFE".unpack("h3")"#);
-        run_test(r#""\x01\xFE".unpack("H*")"#);
-        run_test(r#""\x01\xFE".unpack("H3")"#);
-
-        run_test(r#"[0,1,65535].pack("v*")"#);
-        run_test(r#""\x01\x00\xFF\x7F\x00\x80".unpack("v*")"#);
-        run_test(r#"[0,1,4294967295].pack("V*")"#);
-        run_test(r#""\x01\x00\x00\x00\xFF\xFF\xFF\x7F\x00\x00\x00\x80".unpack("V*")"#);
-        run_test(r#"[0x1234].pack("v")"#);
-        run_test(r#"[0x12345678].pack("V")"#);
     }
 
     #[test]
@@ -5731,14 +5886,6 @@ mod tests {
         run_test(r#"[-1].pack("j").unpack1("j")"#);
     }
 
-    // b/B/U templates: tests ready, awaiting pack.rs implementation
-    // #[test]
-    // fn pack_unpack_b() { ... }
-    // #[test]
-    // fn pack_unpack_big_b() { ... }
-    // #[test]
-    // fn pack_unpack_big_u() { ... }
-
     #[test]
     fn unpack_big_m_soft_line_breaks() {
         // M unpack: =\n is a soft line break (removed)
@@ -5902,5 +6049,32 @@ mod tests {
             r#"r = []; "a,b,c".each_line(o) { |l| r << l }; r"#,
             r#"class C; def to_str; ","; end; end; o = C.new"#,
         );
+    }
+
+    #[test]
+    fn string_byteindex() {
+        run_test(r#""hello".byteindex("ll")"#);
+        run_test(r#""hello".byteindex("ll", 3)"#);
+        run_test(r#""hello".byteindex("o")"#);
+        run_test(r#""hello".byteindex("h")"#);
+        run_test(r#""hello".byteindex("x")"#);
+        run_test(r#""hello".byteindex("lo", -3)"#);
+    }
+
+    #[test]
+    fn string_to_c() {
+        run_test(r#""1+2i".to_c.inspect"#);
+        run_test(r#""3".to_c.inspect"#);
+        run_test(r#""i".to_c.inspect"#);
+        run_test(r#""".to_c.inspect"#);
+        run_test(r#""-3+4i".to_c.inspect"#);
+    }
+
+    #[test]
+    fn string_to_r() {
+        run_test(r#""1/3".to_r.inspect"#);
+        run_test(r#""0.5".to_r.inspect"#);
+        run_test(r#""1".to_r.inspect"#);
+        run_test(r#""".to_r.inspect"#);
     }
 }

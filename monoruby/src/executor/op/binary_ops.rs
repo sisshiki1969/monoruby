@@ -8,6 +8,43 @@ use num::{BigInt, ToPrimitive, Zero};
 use paste::paste;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Rem, Shl, Shr, Sub};
 
+/// Try the `coerce` protocol: call `rhs.coerce(lhs)` and if it returns
+/// a 2-element array, call `ary[0].op(ary[1])`.  Returns `None` if
+/// `coerce` is not defined on `rhs`.
+pub(crate) fn try_coerce_and_apply(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    op: IdentId,
+    lhs: Value,
+    rhs: Value,
+    type_name: &'static str,
+) -> Option<Value> {
+    let coerce_id = IdentId::get_id("coerce");
+    match vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None) {
+        Ok(Some(result)) => {
+            if let Some(ary) = result.try_array_ty() {
+                if ary.len() == 2 {
+                    return vm.invoke_method_simple(globals, op, ary[0], &[ary[1]]);
+                }
+            }
+            let err = MonorubyErr::typeerr("coerce must return [x, y]".to_string());
+            vm.set_error(err);
+            None
+        }
+        Ok(None) => {
+            // coerce method not defined
+            let err = MonorubyErr::cant_coerced_into(globals, op, rhs, type_name);
+            vm.set_error(err);
+            None
+        }
+        Err(err) => {
+            // coerce raised an error — propagate it (CRuby behavior)
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
 macro_rules! binop_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
@@ -31,9 +68,7 @@ macro_rules! binop_values {
                         Value::complex_from(lhs.$op(rhs))
                     }
                     (RV::Fixnum(_) | RV::BigInt(_), _) => {
-                        let err = MonorubyErr::cant_coerced_into(globals, $op_str, rhs, "Integer");
-                        vm.set_error(err);
-                        return None;
+                        return try_coerce_and_apply(vm, globals, $op_str, lhs, rhs, "Integer");
                     }
 
                     (RV::Float(lhs), RV::Complex(rhs)) => {
@@ -41,9 +76,7 @@ macro_rules! binop_values {
                         Value::complex_from(lhs.$op(rhs))
                     }
                     (RV::Float(_), _) => {
-                        let err = MonorubyErr::cant_coerced_into(globals, $op_str, rhs, "Float");
-                        vm.set_error(err);
-                        return None;
+                        return try_coerce_and_apply(vm, globals, $op_str, lhs, rhs, "Float");
                     }
                     (RV::Complex(lhs), RV::Fixnum(rhs)) => {
                         let rhs = num::complex::Complex::from(Real::from(rhs));
@@ -61,9 +94,7 @@ macro_rules! binop_values {
                         Value::complex_from(lhs.$op(rhs))
                     }
                     (RV::Complex(_), _) => {
-                        let err = MonorubyErr::cant_coerced_into(globals, $op_str, rhs, "Complex");
-                        vm.set_error(err);
-                        return None;
+                        return try_coerce_and_apply(vm, globals, $op_str, lhs, rhs, "Complex");
                     }
                     _ => {
                         return vm.invoke_method_simple(globals, $op_str, lhs, &[rhs]);
@@ -147,9 +178,7 @@ pub(crate) extern "C" fn div_values(
             Value::complex_from(lhs.div(rhs))
         }
         (RV::Float(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_DIV, rhs, "Float");
-            vm.set_error(err);
-            return None;
+            return try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Float");
         }
         (RV::Complex(lhs), RV::Fixnum(rhs)) => {
             if rhs.is_zero() {
@@ -179,9 +208,7 @@ pub(crate) extern "C" fn div_values(
             Value::complex_from(lhs.div(rhs))
         }
         (RV::Complex(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_DIV, rhs, "Complex");
-            vm.set_error(err);
-            return None;
+            return try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Complex");
         }
         _ => {
             return vm.invoke_method_simple(globals, IdentId::_DIV, lhs, &[rhs]);
@@ -213,9 +240,7 @@ pub(crate) extern "C" fn rem_values(
             Value::complex_from(lhs.rem(rhs))
         }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_REM, rhs, "Integer");
-            vm.set_error(err);
-            return None;
+            return try_coerce_and_apply(vm, globals, IdentId::_REM, lhs, rhs, "Integer");
         }
 
         (RV::Float(lhs), RV::Complex(rhs)) => {
@@ -223,9 +248,7 @@ pub(crate) extern "C" fn rem_values(
             Value::complex_from(lhs.rem(rhs))
         }
         (RV::Float(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_REM, rhs, "Float");
-            vm.set_error(err);
-            return None;
+            return try_coerce_and_apply(vm, globals, IdentId::_REM, lhs, rhs, "Float");
         }
         (RV::Complex(lhs), RV::Fixnum(rhs)) => {
             let rhs = num::complex::Complex::from(Real::from(rhs));
@@ -241,9 +264,7 @@ pub(crate) extern "C" fn rem_values(
         }
         (RV::Complex(lhs), RV::Complex(rhs)) => Value::complex_from(lhs.rem(rhs)),
         (RV::Complex(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_REM, rhs, "Complex");
-            vm.set_error(err);
-            return None;
+            return try_coerce_and_apply(vm, globals, IdentId::_REM, lhs, rhs, "Complex");
         }
         _ => {
             return vm.invoke_method_simple(globals, IdentId::_REM, lhs, &[rhs]);
@@ -345,9 +366,7 @@ pub(crate) extern "C" fn pow_values(
         }
         (RV::BigInt(lhs), RV::Float(rhs)) => pow_ff(lhs.to_f64().unwrap(), rhs),
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_POW, rhs, "Integer");
-            vm.set_error(err);
-            return None;
+            return try_coerce_and_apply(vm, globals, IdentId::_POW, lhs, rhs, "Integer");
         }
 
         (RV::Float(lhs), RV::Fixnum(rhs)) => {
@@ -360,9 +379,7 @@ pub(crate) extern "C" fn pow_values(
         (RV::Float(lhs), RV::BigInt(rhs)) => pow_ff(lhs, rhs.to_f64().unwrap()),
         (RV::Float(lhs), RV::Float(rhs)) => pow_ff(lhs, rhs),
         (RV::Float(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_POW, rhs, "Float");
-            vm.set_error(err);
-            return None;
+            return try_coerce_and_apply(vm, globals, IdentId::_POW, lhs, rhs, "Float");
         }
         _ => {
             return vm.invoke_method_simple(globals, IdentId::_POW, lhs, &[rhs]);
@@ -386,9 +403,7 @@ macro_rules! int_binop_values {
                     (RV::BigInt(lhs), RV::Fixnum(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
                     (RV::Fixnum(_) | RV::BigInt(_), _) => {
-                        let err = MonorubyErr::cant_coerced_into(globals, $op_str, rhs, "Integer");
-                        vm.set_error(err);
-                        return None;
+                        return try_coerce_and_apply(vm, globals, $op_str, lhs, rhs, "Integer");
                     }
                     _ => {
                         return vm.invoke_method_simple(globals, $op_str, lhs, &[rhs]);
@@ -432,9 +447,7 @@ pub(crate) extern "C" fn shr_values(
             }
         }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_SHR, rhs, "Integer");
-            vm.set_error(err);
-            return None;
+            return try_coerce_and_apply(vm, globals, IdentId::_SHR, lhs, rhs, "Integer");
         }
         _ => {
             return vm.invoke_method_simple(globals, IdentId::_SHR, lhs, &[rhs]);
@@ -465,9 +478,7 @@ pub(crate) extern "C" fn shl_values(
             }
         }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_SHL, rhs, "Integer");
-            vm.set_error(err);
-            return None;
+            return try_coerce_and_apply(vm, globals, IdentId::_SHL, lhs, rhs, "Integer");
         }
         _ => {
             return vm.invoke_method_simple(globals, IdentId::_SHL, lhs, &[rhs]);
