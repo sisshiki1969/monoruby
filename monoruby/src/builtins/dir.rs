@@ -3,21 +3,6 @@ use std::path::PathBuf;
 
 use super::*;
 
-/// Return a human-readable description for an `std::io::Error`, matching CRuby's Errno messages.
-fn errno_description(err: &std::io::Error) -> &'static str {
-    match err.raw_os_error() {
-        Some(1) => "Operation not permitted",
-        Some(2) => "No such file or directory",
-        Some(13) => "Permission denied",
-        Some(17) => "File exists",
-        Some(20) => "Not a directory",
-        Some(21) => "Is a directory",
-        Some(22) => "Invalid argument",
-        Some(39) => "Directory not empty",
-        _ => "Unknown error",
-    }
-}
-
 //
 // Dir class
 //
@@ -548,7 +533,7 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         match std::env::set_current_dir(&path) {
             Ok(_) => {}
             Err(err) => {
-                return Err(MonorubyErr::runtimeerr(err.to_string()));
+                return Err(MonorubyErr::errno_with_msg(&globals.store, &err, &path));
             }
         }
         let path = Value::string(path);
@@ -557,7 +542,7 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         res
     } else {
         std::env::set_current_dir(&path)
-            .map_err(|e| MonorubyErr::runtimeerr(format!("Dir.chdir: {}: {}", path, e)))?;
+            .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
         Ok(Value::integer(0))
     }
 }
@@ -598,9 +583,9 @@ fn entries(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         Value::string("..".to_string()),
     ];
     for entry in
-        std::fs::read_dir(&path).map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?
+        std::fs::read_dir(&path).map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?
     {
-        let entry = entry.map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+        let entry = entry.map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
         result.push(Value::string(
             entry.file_name().to_string_lossy().to_string(),
         ));

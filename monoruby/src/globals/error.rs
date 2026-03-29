@@ -618,6 +618,35 @@ impl MonorubyErr {
         MonorubyErr::runtimeerr(msg)
     }
 
+    /// Create an Errno exception from a `std::io::Error` with a syscall name and path.
+    ///
+    /// Formats the message to match CRuby: `"<description> @ <syscall> - <path>"`
+    /// For example: `"No such file or directory @ rb_sysopen - /path/to/file"`
+    pub(crate) fn errno_with_path(
+        store: &Store,
+        err: &std::io::Error,
+        syscall: &str,
+        path: &str,
+    ) -> MonorubyErr {
+        let desc = errno_description(err);
+        let msg = format!("{} @ {} - {}", desc, syscall, path);
+        Self::from_io_err(store, err, msg)
+    }
+
+    /// Create an Errno exception from a `std::io::Error` with just a path (no syscall name).
+    ///
+    /// Formats the message to match CRuby: `"<description> - <path>"`
+    /// For example: `"No such file or directory - /path/to/file"`
+    pub(crate) fn errno_with_msg(
+        store: &Store,
+        err: &std::io::Error,
+        path: &str,
+    ) -> MonorubyErr {
+        let desc = errno_description(err);
+        let msg = format!("{} - {}", desc, path);
+        Self::from_io_err(store, err, msg)
+    }
+
     pub(crate) fn rangeerr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Range, msg)
     }
@@ -689,6 +718,28 @@ impl MonorubyErrKind {
             SYSTEM_EXIT_ERROR_CLASS => MonorubyErrKind::SystemExit(0),
             _ => MonorubyErrKind::Other(class_id),
         }
+    }
+}
+
+/// Return a human-readable description for an `std::io::Error`, matching CRuby's Errno messages.
+pub(crate) fn errno_description(err: &std::io::Error) -> &'static str {
+    match err.raw_os_error() {
+        Some(1) => "Operation not permitted",
+        Some(2) => "No such file or directory",
+        Some(5) => "Input/output error",
+        Some(9) => "Bad file descriptor",
+        Some(12) => "Cannot allocate memory",
+        Some(13) => "Permission denied",
+        Some(17) => "File exists",
+        Some(20) => "Not a directory",
+        Some(21) => "Is a directory",
+        Some(22) => "Invalid argument",
+        Some(28) => "No space left on device",
+        Some(30) => "Read-only file system",
+        Some(32) => "Broken pipe",
+        Some(36) => "File name too long",
+        Some(39) => "Directory not empty",
+        _ => "Unknown error",
     }
 }
 
@@ -874,6 +925,146 @@ mod tests {
             begin
               Dir.mkdir("/tmp")
             rescue Errno::EEXIST => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_file_open_enoent() {
+        // File.open on a non-existent file raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              File.open("/nonexistent_file_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_file_read_enoent() {
+        // File.read on a non-existent file raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              File.read("/nonexistent_file_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_file_delete_enoent() {
+        // File.delete on a non-existent file raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              File.delete("/nonexistent_file_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_file_readlines_enoent() {
+        // File.readlines on a non-existent file raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              File.readlines("/nonexistent_file_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_file_size_enoent() {
+        // File.size on a non-existent file raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              File.size("/nonexistent_file_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_file_write_eisdir() {
+        // File.write to a directory raises Errno::EISDIR
+        run_test_once(
+            r#"
+            begin
+              File.write("/tmp", "test")
+            rescue Errno::EISDIR => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_io_read_enoent() {
+        // IO.read on a non-existent file raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              IO.read("/nonexistent_file_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_io_sysopen_enoent() {
+        // IO.sysopen on a non-existent file raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              IO.sysopen("/nonexistent_file_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_dir_chdir_enoent() {
+        // Dir.chdir to a non-existent directory raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              Dir.chdir("/nonexistent_dir_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_dir_entries_enoent() {
+        // Dir.entries on a non-existent directory raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              Dir.entries("/nonexistent_dir_xyz_123")
+            rescue Errno::ENOENT => e
               e.is_a?(SystemCallError)
             end
             "#,

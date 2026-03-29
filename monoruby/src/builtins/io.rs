@@ -411,18 +411,15 @@ fn io_class_read(
     let filename = lfp.arg(0).coerce_to_string(vm, globals)?;
     let mut file = match File::open(&filename) {
         Ok(file) => file,
-        Err(_) => {
-            return Err(MonorubyErr::runtimeerr(format!(
-                "No such file or directory @ rb_sysopen - {}",
-                filename
-            )));
+        Err(err) => {
+            return Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_sysopen", &filename));
         }
     };
     let mut contents = Vec::new();
     match std::io::Read::read_to_end(&mut file, &mut contents) {
         Ok(_) => {}
-        Err(_) => {
-            return Err(MonorubyErr::runtimeerr("Could not read the file."));
+        Err(err) => {
+            return Err(MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_read", &filename));
         }
     };
     Ok(Value::bytes(contents))
@@ -471,7 +468,7 @@ fn io_sysopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     }
     let file = opts
         .open(&path)
-        .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
     let fd = file.into_raw_fd();
     Ok(Value::integer(fd as i64))
 }
@@ -485,7 +482,8 @@ fn io_pipe(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr
     // SAFETY: fds is a valid pointer to a 2-element array of c_int.
     let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
     if ret == -1 {
-        return Err(MonorubyErr::runtimeerr("pipe(2) failed"));
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_msg(&_globals.store, &err, "pipe(2)"));
     }
     let read_io = Value::new_io(IoInner::from_raw_fd(fds[0], "pipe".to_string()));
     let write_io = Value::new_io(IoInner::from_raw_fd(fds[1], "pipe".to_string()));
@@ -509,21 +507,22 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let cmd_val = args[0];
 
     // Build the command from either a String or an Array of strings.
-    let mut command = if let Some(ary) = cmd_val.try_array_ty() {
+    let (mut command, cmd_name) = if let Some(ary) = cmd_val.try_array_ty() {
         let parts: Vec<String> = ary.iter().map(|v| v.to_s(globals)).collect();
         if parts.is_empty() {
             return Err(MonorubyErr::argumenterr("popen: empty command array"));
         }
+        let name = parts[0].clone();
         let mut cmd = Command::new(&parts[0]);
         for part in &parts[1..] {
             cmd.arg(part);
         }
-        cmd
+        (cmd, name)
     } else {
         let cmd_str = cmd_val.coerce_to_str(vm, globals)?;
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(cmd_str.to_string());
-        cmd
+        (cmd, cmd_str)
     };
 
     // Parse mode: "r" (default), "w", "r+", "w+"
@@ -549,7 +548,7 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 
     let child = command
         .spawn()
-        .map_err(|e| MonorubyErr::runtimeerr(format!("popen: {}", e)))?;
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_f_spawn", &cmd_name))?;
 
     let io_val = Value::new_io(IoInner::popen(child));
 
@@ -663,7 +662,8 @@ fn io_syswrite(
     // SAFETY: fd is a valid file descriptor, bytes is a valid buffer.
     let written = unsafe { libc::write(fd, bytes.as_ptr() as *const libc::c_void, bytes.len()) };
     if written < 0 {
-        return Err(MonorubyErr::runtimeerr("syswrite failed"));
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "syswrite"));
     }
     Ok(Value::integer(written as i64))
 }
@@ -824,11 +824,8 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         );
 
         if ret < 0 {
-            let err = *libc::__errno_location();
-            return Err(MonorubyErr::runtimeerr(format!(
-                "select(2) failed: errno {}",
-                err
-            )));
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "select(2)"));
         }
 
         if ret == 0 {
