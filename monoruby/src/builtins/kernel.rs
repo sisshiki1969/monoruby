@@ -3364,4 +3364,32 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn sprintf_positional() {
+        run_test(r#"sprintf("%1$d %2$d %1$d", 10, 20)"#);
+        run_test(r#"sprintf("%1$s %2$s %1$s", "a", "b")"#);
+        run_test(r#"sprintf("%2$d", 10, 20)"#);
+        run_test(r#"sprintf("%1$05d", 42)"#);
+        run_test(r#"sprintf("%1$x", 255)"#);
+        run_test(r#"sprintf("%1$o", 8)"#);
+        run_test(r#"sprintf("%1$f", 3.14)"#);
+    }
+
+    #[test]
+    fn sprintf_named() {
+        run_test(r#"sprintf("%{foo}", foo: "hello")"#);
+        run_test(r#"sprintf("%{foo} %{bar}", foo: 1, bar: 2)"#);
+        run_test(r#"sprintf("%{foo} %{foo}", foo: "x")"#);
+    }
+
+    #[test]
+    fn sprintf_named_format() {
+        run_test(r#"sprintf("%<foo>d", foo: 42)"#);
+        run_test(r#"sprintf("%<foo>05d", foo: 42)"#);
+        run_test(r#"sprintf("%<foo>10d", foo: 42)"#);
+        run_test(r#"sprintf("%<foo>x", foo: 255)"#);
+        run_test(r#"sprintf("%<foo>f", foo: 3.14)"#);
+        run_test(r#"sprintf("%<foo>s", foo: "hello")"#);
+    }
 }
