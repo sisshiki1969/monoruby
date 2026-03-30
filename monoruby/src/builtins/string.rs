@@ -88,14 +88,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "hex", hex, 0);
     globals.define_builtin_func(STRING_CLASS, "oct", oct, 0);
     globals.define_builtin_funcs(STRING_CLASS, "to_sym", &["intern"], to_sym, 0);
-    globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
-    globals.define_builtin_func(STRING_CLASS, "upcase!", upcase_, 0);
+    globals.define_builtin_func_rest(STRING_CLASS, "upcase", upcase);
+    globals.define_builtin_func_rest(STRING_CLASS, "upcase!", upcase_);
     globals.define_builtin_func_rest(STRING_CLASS, "downcase", downcase);
     globals.define_builtin_func_rest(STRING_CLASS, "downcase!", downcase_);
     globals.define_builtin_func_rest(STRING_CLASS, "capitalize", capitalize);
     globals.define_builtin_func_rest(STRING_CLASS, "capitalize!", capitalize_);
-    globals.define_builtin_func(STRING_CLASS, "swapcase", swapcase, 0);
-    globals.define_builtin_func(STRING_CLASS, "swapcase!", swapcase_, 0);
+    globals.define_builtin_func_rest(STRING_CLASS, "swapcase", swapcase);
+    globals.define_builtin_func_rest(STRING_CLASS, "swapcase!", swapcase_);
     globals.define_builtin_func_with(STRING_CLASS, "delete", delete, 0, 0, true);
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
     globals.define_builtin_func_rest(STRING_CLASS, "count", count);
