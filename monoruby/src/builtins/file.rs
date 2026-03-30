@@ -1379,4 +1379,70 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn file_open_with_fd() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_fd_#{Process.pid}"
+            File.write(path, "hello fd")
+            fd = IO.sysopen(path)
+            f = File.open(fd)
+            content = f.read
+            f.close
+            raise "expected 'hello fd' but got '#{content}'" unless content == "hello fd"
+            File.delete(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_open_mode_binary() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_mode_#{Process.pid}"
+            f = File.open(path, "wb")
+            f.write("binary")
+            f.close
+            f = File.open(path, "rb")
+            content = f.read
+            f.close
+            raise "expected 'binary'" unless content == "binary"
+            File.delete(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_open_mode_with_encoding() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_enc_#{Process.pid}"
+            f = File.open(path, "w:UTF-8")
+            f.write("encoded")
+            f.close
+            f = File.open(path, "r:UTF-8")
+            content = f.read
+            f.close
+            raise "expected 'encoded'" unless content == "encoded"
+            File.delete(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_open_mode_rplus_b() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_rpb_#{Process.pid}"
+            File.write(path, "abcdef")
+            f = File.open(path, "r+b")
+            f.write("XY")
+            f.close
+            content = File.read(path)
+            raise "expected 'XYcdef' but got '#{content}'" unless content == "XYcdef"
+            File.delete(path)
+            "#,
+        );
+    }
 }

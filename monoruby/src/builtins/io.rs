@@ -1426,4 +1426,20 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn io_new_with_fd() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_ionew_#{Process.pid}"
+            File.write(path, "io new fd")
+            fd = IO.sysopen(path)
+            io = IO.new(fd)
+            content = io.read
+            io.close
+            raise "expected 'io new fd'" unless content == "io new fd"
+            File.delete(path)
+            "#,
+        );
+    }
 }

@@ -6145,4 +6145,37 @@ mod tests {
         run_test(r#""1".to_r.inspect"#);
         run_test(r#""".to_r.inspect"#);
     }
+
+    #[test]
+    fn slice_bang_with_string() {
+        run_test(r#"s = "hello world"; s.slice!("world"); s"#);
+        run_test(r#"s = "hello"; s.slice!("xyz")"#);
+        run_test(r#"s = "abcabc"; s.slice!("bc"); s"#);
+    }
+
+    #[test]
+    fn slice_bang_with_to_int() {
+        run_test(
+            r#"
+            class MyIdx; def to_int; 1; end; end
+            s = "hello"
+            s.slice!(MyIdx.new)
+            "#,
+        );
+    }
+
+    #[test]
+    fn string_mul_overflow() {
+        run_test_no_result_check(
+            r#"
+            begin
+              "abc" * (2**62)
+            rescue ArgumentError => e
+              raise "wrong error" unless e.message.include?("too big")
+            end
+            "#,
+        );
+        run_test(r#""" * 1000000"#);
+        run_test(r#""ab" * 3"#);
+    }
 }
