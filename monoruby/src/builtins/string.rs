@@ -88,14 +88,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "hex", hex, 0);
     globals.define_builtin_func(STRING_CLASS, "oct", oct, 0);
     globals.define_builtin_funcs(STRING_CLASS, "to_sym", &["intern"], to_sym, 0);
-    globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
-    globals.define_builtin_func(STRING_CLASS, "upcase!", upcase_, 0);
+    globals.define_builtin_func_rest(STRING_CLASS, "upcase", upcase);
+    globals.define_builtin_func_rest(STRING_CLASS, "upcase!", upcase_);
     globals.define_builtin_func_rest(STRING_CLASS, "downcase", downcase);
     globals.define_builtin_func_rest(STRING_CLASS, "downcase!", downcase_);
     globals.define_builtin_func_rest(STRING_CLASS, "capitalize", capitalize);
     globals.define_builtin_func_rest(STRING_CLASS, "capitalize!", capitalize_);
-    globals.define_builtin_func(STRING_CLASS, "swapcase", swapcase, 0);
-    globals.define_builtin_func(STRING_CLASS, "swapcase!", swapcase_, 0);
+    globals.define_builtin_func_rest(STRING_CLASS, "swapcase", swapcase);
+    globals.define_builtin_func_rest(STRING_CLASS, "swapcase!", swapcase_);
     globals.define_builtin_func_with(STRING_CLASS, "delete", delete, 0, 0, true);
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
     globals.define_builtin_func_rest(STRING_CLASS, "count", count);
@@ -1683,8 +1683,12 @@ fn sub_main(
             eprintln!("warning: default value argument supersedes block");
         }
         let given = self_val.expect_str(globals)?;
-        let replace = arg1.coerce_to_str(vm, globals)?;
-        RegexpInner::replace_one(vm, globals, lfp.arg(0), given, &replace)
+        if arg1.try_hash_ty().is_some() {
+            RegexpInner::replace_one_hash(vm, globals, lfp.arg(0), given, arg1)
+        } else {
+            let replace = arg1.coerce_to_str(vm, globals)?;
+            RegexpInner::replace_one(vm, globals, lfp.arg(0), given, &replace)
+        }
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
@@ -1739,8 +1743,12 @@ fn gsub_main(
             eprintln!("warning: default value argument supersedes block");
         }
         let given = self_val.expect_str(globals)?;
-        let replace = arg1.coerce_to_str(vm, globals)?;
-        RegexpInner::replace_all(vm, globals, lfp.arg(0), given, &replace)
+        if arg1.try_hash_ty().is_some() {
+            RegexpInner::replace_all_hash(vm, globals, lfp.arg(0), given, arg1)
+        } else {
+            let replace = arg1.coerce_to_str(vm, globals)?;
+            RegexpInner::replace_all(vm, globals, lfp.arg(0), given, &replace)
+        }
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),

@@ -431,19 +431,24 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     if let Some(ex) = lfp.arg(0).is_exception() {
         let mut err = MonorubyErr::new_from_exception(ex);
         if let Some(arg1) = lfp.try_arg(1) {
-            err.set_msg(arg1.coerce_to_str(vm, globals)?);
+            if arg1.try_hash_ty().is_none() {
+                err.set_msg(arg1.coerce_to_str(vm, globals)?);
+            }
         }
         return Err(err);
     } else if let Some(klass) = lfp.arg(0).is_class() {
         if klass.id() == STOP_ITERATION_CLASS {
             return Err(MonorubyErr::stopiterationerr("".to_string()));
         } else if klass.is_exception() {
-            let ex =
-                vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &[], None, None)?;
-            let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
+            let mut args = vec![];
             if let Some(arg1) = lfp.try_arg(1) {
-                err.set_msg(arg1.coerce_to_str(vm, globals)?);
+                if arg1.try_hash_ty().is_none() {
+                    args.push(arg1);
+                }
             }
+            let ex =
+                vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &args, None, None)?;
+            let err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
             return Err(err);
         }
     } else if let Some(message) = lfp.arg(0).is_rstring() {
@@ -451,6 +456,7 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     Err(MonorubyErr::typeerr("exception class/object expected"))
 }
+
 
 ///
 /// ### Kernel.#block_given?
@@ -3363,5 +3369,33 @@ mod tests {
             end
             "#,
         );
+    }
+
+    #[test]
+    fn sprintf_positional() {
+        run_test(r#"sprintf("%1$d %2$d %1$d", 10, 20)"#);
+        run_test(r#"sprintf("%1$s %2$s %1$s", "a", "b")"#);
+        run_test(r#"sprintf("%2$d", 10, 20)"#);
+        run_test(r#"sprintf("%1$05d", 42)"#);
+        run_test(r#"sprintf("%1$x", 255)"#);
+        run_test(r#"sprintf("%1$o", 8)"#);
+        run_test(r#"sprintf("%1$f", 3.14)"#);
+    }
+
+    #[test]
+    fn sprintf_named() {
+        run_test(r#"sprintf("%{foo}", foo: "hello")"#);
+        run_test(r#"sprintf("%{foo} %{bar}", foo: 1, bar: 2)"#);
+        run_test(r#"sprintf("%{foo} %{foo}", foo: "x")"#);
+    }
+
+    #[test]
+    fn sprintf_named_format() {
+        run_test(r#"sprintf("%<foo>d", foo: 42)"#);
+        run_test(r#"sprintf("%<foo>05d", foo: 42)"#);
+        run_test(r#"sprintf("%<foo>10d", foo: 42)"#);
+        run_test(r#"sprintf("%<foo>x", foo: 255)"#);
+        run_test(r#"sprintf("%<foo>f", foo: 3.14)"#);
+        run_test(r#"sprintf("%<foo>s", foo: "hello")"#);
     }
 }

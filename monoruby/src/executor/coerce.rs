@@ -1,26 +1,6 @@
 use super::*;
 use crate::value::IntegerBase;
 
-macro_rules! next_char {
-    ($ch:ident, $chars:ident) => {
-        $ch = match $chars.next() {
-            Some(c) => c,
-            None => break,
-        };
-    };
-}
-
-fn expect_char(chars: &mut std::str::Chars) -> Result<char> {
-    let ch = match chars.next() {
-        Some(ch) => ch,
-        None => {
-            return Err(MonorubyErr::argumenterr(
-                "Invalid termination of format string",
-            ));
-        }
-    };
-    Ok(ch)
-}
 
 /// Apply width padding to a string, with left or right alignment.
 fn apply_width(s: &str, width: usize, left_align: bool, pad: char) -> String {
@@ -452,30 +432,124 @@ impl Executor {
     ) -> Result<String> {
         let mut arg_no = 0;
         let mut format_str = String::new();
-        let mut chars = self_str.chars();
-        let mut ch = match chars.next() {
-            Some(ch) => ch,
-            None => return Ok(String::new()),
-        };
-        loop {
-            if ch != '%' {
-                format_str.push(ch);
-                next_char!(ch, chars);
+        let fchars: Vec<char> = self_str.chars().collect();
+        let flen = fchars.len();
+        let mut i = 0;
+
+        // Lazily cached hash from last argument for named references.
+        let mut named_hash_cache: Option<Option<Hashmap>> = None;
+        let get_named_hash =
+            |arguments: &[Value], cache: &mut Option<Option<Hashmap>>| -> Option<Hashmap> {
+                if cache.is_none() {
+                    let h = arguments.last().and_then(|v| v.try_hash_ty());
+                    *cache = Some(h);
+                }
+                cache.unwrap()
+            };
+
+        while i < flen {
+            if fchars[i] != '%' {
+                format_str.push(fchars[i]);
+                i += 1;
                 continue;
             }
-            match chars.next() {
-                Some('%') => {
-                    format_str.push('%');
-                    next_char!(ch, chars);
-                    continue;
+            i += 1; // skip '%'
+            if i >= flen {
+                return Err(MonorubyErr::argumenterr(
+                    "incomplete format specifier; use %% (double %) instead",
+                ));
+            }
+            // %%
+            if fchars[i] == '%' {
+                format_str.push('%');
+                i += 1;
+                continue;
+            }
+
+            // Check for %{name} — named reference (to_s only, no format specifier)
+            if fchars[i] == '{' {
+                i += 1; // skip '{'
+                let mut key = String::new();
+                while i < flen && fchars[i] != '}' {
+                    key.push(fchars[i]);
+                    i += 1;
                 }
-                Some(c) => ch = c,
-                None => {
+                if i >= flen {
                     return Err(MonorubyErr::argumenterr(
-                        "incomplete format specifier; use %% (double %) instead",
+                        "malformed format string - missing '}'",
                     ));
                 }
+                i += 1; // skip '}'
+                let hash = get_named_hash(arguments, &mut named_hash_cache).ok_or_else(|| {
+                    MonorubyErr::argumenterr("one hash required")
+                })?;
+                let key_val = Value::symbol_from_str(&key);
+                let val = hash.get(key_val, self, globals)?.unwrap_or(Value::nil());
+                format_str += &val.coerce_to_s(self, globals)?;
+                continue;
+            }
+
+            // Check for %<name>spec — named reference with format specifier
+            let named_val = if fchars[i] == '<' {
+                i += 1; // skip '<'
+                let mut key = String::new();
+                while i < flen && fchars[i] != '>' {
+                    key.push(fchars[i]);
+                    i += 1;
+                }
+                if i >= flen {
+                    return Err(MonorubyErr::argumenterr(
+                        "malformed format string - missing '>'",
+                    ));
+                }
+                i += 1; // skip '>'
+                let hash = get_named_hash(arguments, &mut named_hash_cache).ok_or_else(|| {
+                    MonorubyErr::argumenterr("one hash required")
+                })?;
+                let key_val = Value::symbol_from_str(&key);
+                let val = hash.get(key_val, self, globals)?.unwrap_or(Value::nil());
+                Some(val)
+            } else {
+                None
             };
+
+            // Check for positional argument: non-zero digit(s) followed by '$'
+            let positional_arg = if named_val.is_none()
+                && i < flen
+                && fchars[i].is_ascii_digit()
+                && fchars[i] != '0'
+            {
+                // Look ahead: collect digits then check for '$'
+                let mut j = i;
+                while j < flen && fchars[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j < flen && fchars[j] == '$' {
+                    // Parse the number
+                    let mut num = 0usize;
+                    for k in i..j {
+                        num = num * 10 + (fchars[k] as usize) - ('0' as usize);
+                    }
+                    i = j + 1; // skip past '$'
+                    if num == 0 || num > arguments.len() {
+                        return Err(MonorubyErr::argumenterr("too few arguments"));
+                    }
+                    Some(arguments[num - 1])
+                } else {
+                    // Not positional — digits are part of width, don't advance i
+                    None
+                }
+            } else {
+                None
+            };
+
+            if i >= flen {
+                return Err(MonorubyErr::argumenterr(
+                    "Invalid termination of format string",
+                ));
+            }
+            let mut ch = fchars[i];
+
             // Parse flags
             let mut zero_flag = false;
             let mut minus_flag = false;
@@ -491,7 +565,13 @@ impl Executor {
                     '#' => hash_flag = true,
                     _ => break,
                 }
-                ch = expect_char(&mut chars)?;
+                i += 1;
+                if i >= flen {
+                    return Err(MonorubyErr::argumenterr(
+                        "Invalid termination of format string",
+                    ));
+                }
+                ch = fchars[i];
             }
             // Left-align overrides zero-fill
             if minus_flag {
@@ -523,17 +603,35 @@ impl Executor {
                         return Err(MonorubyErr::argumenterr("width too big"));
                     }
                 }
-                ch = expect_char(&mut chars)?;
+                i += 1;
+                if i >= flen {
+                    return Err(MonorubyErr::argumenterr(
+                        "Invalid termination of format string",
+                    ));
+                }
+                ch = fchars[i];
             } else {
                 while ch.is_ascii_digit() {
                     width = width * 10 + ch as usize - '0' as usize;
-                    ch = expect_char(&mut chars)?;
+                    i += 1;
+                    if i >= flen {
+                        return Err(MonorubyErr::argumenterr(
+                            "Invalid termination of format string",
+                        ));
+                    }
+                    ch = fchars[i];
                 }
             }
             // Precision
             let mut precision = None;
             if ch == '.' {
-                ch = expect_char(&mut chars)?;
+                i += 1;
+                if i >= flen {
+                    return Err(MonorubyErr::argumenterr(
+                        "Invalid termination of format string",
+                    ));
+                }
+                ch = fchars[i];
                 let mut prec = 0usize;
                 if ch == '*' {
                     if arguments.len() <= arg_no {
@@ -551,21 +649,42 @@ impl Executor {
                             return Err(MonorubyErr::argumenterr("precision too big"));
                         }
                     }
-                    ch = expect_char(&mut chars)?;
+                    i += 1;
+                    if i >= flen {
+                        return Err(MonorubyErr::argumenterr(
+                            "Invalid termination of format string",
+                        ));
+                    }
+                    ch = fchars[i];
                 } else {
                     while ch.is_ascii_digit() {
                         prec = prec * 10 + ch as usize - '0' as usize;
-                        ch = expect_char(&mut chars)?;
+                        i += 1;
+                        if i >= flen {
+                            return Err(MonorubyErr::argumenterr(
+                                "Invalid termination of format string",
+                            ));
+                        }
+                        ch = fchars[i];
                     }
                 }
                 precision = Some(prec);
             }
-            if arguments.len() <= arg_no {
-                return Err(MonorubyErr::argumenterr("too few arguments"));
+            // Determine val: positional, named, or sequential
+            let val = if let Some(v) = positional_arg {
+                v
+            } else if let Some(v) = named_val {
+                v
+            } else {
+                if arguments.len() <= arg_no {
+                    return Err(MonorubyErr::argumenterr("too few arguments"));
+                }
+                let v = arguments[arg_no];
+                arg_no += 1;
+                v
             };
+            i += 1; // consume the specifier character
             // Specifier
-            let val = arguments[arg_no];
-            arg_no += 1;
             let format = match ch {
                 'c' => {
                     let c = coerce_to_char(val)?;
@@ -748,7 +867,6 @@ impl Executor {
                 }
             };
             format_str += &format;
-            next_char!(ch, chars);
         }
 
         Ok(format_str)

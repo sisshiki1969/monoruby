@@ -1,5 +1,6 @@
 use super::*;
 use std::fs::File;
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 
@@ -634,9 +635,25 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         (cmd, cmd_str)
     };
 
-    // Parse mode: "r" (default), "w", "r+", "w+"
+    // Parse mode and options.
+    // IO.popen accepts:
+    //   IO.popen(cmd)
+    //   IO.popen(cmd, mode)
+    //   IO.popen(cmd, mode, opts)
+    //   IO.popen(cmd, opts)   -- Hash as second arg means spawn options
+    let mut opts_hash = None;
     let mode = if args.len() > 1 {
-        args[1].coerce_to_str(vm, globals)?
+        if args[1].try_hash_ty().is_some() {
+            // Second arg is options hash, mode defaults to "r"
+            opts_hash = Some(args[1]);
+            "r".to_string()
+        } else {
+            let m = args[1].coerce_to_str(vm, globals)?;
+            if args.len() > 2 && args[2].try_hash_ty().is_some() {
+                opts_hash = Some(args[2]);
+            }
+            m
+        }
     } else {
         "r".to_string()
     };
@@ -653,7 +670,36 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     } else {
         command.stdout(Stdio::inherit());
     }
-    command.stderr(Stdio::inherit());
+
+    // Handle err: [:child, :out] option to redirect stderr to stdout
+    let mut stderr_to_stdout = false;
+    if let Some(opts) = opts_hash {
+        let err_key = Value::symbol_from_str("err");
+        if let Ok(Some(err_val)) = opts.as_hash().get(err_key, vm, globals) {
+            if let Some(ary) = err_val.try_array_ty() {
+                if ary.len() == 2
+                    && ary[0].try_symbol_or_string() == Some(IdentId::get_id("child"))
+                    && ary[1].try_symbol_or_string() == Some(IdentId::get_id("out"))
+                {
+                    stderr_to_stdout = true;
+                }
+            }
+        }
+    }
+    if stderr_to_stdout {
+        // Redirect stderr to stdout via OS-level dup2
+        // SAFETY: dup2(1, 2) duplicates stdout fd to stderr fd, which is safe
+        // for child processes about to exec.
+        unsafe {
+            command.pre_exec(|| {
+                libc::dup2(1, 2);
+                Ok(())
+            });
+        }
+        command.stderr(Stdio::inherit());
+    } else {
+        command.stderr(Stdio::inherit());
+    }
 
     let child = command
         .spawn()

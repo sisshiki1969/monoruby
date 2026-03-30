@@ -365,10 +365,8 @@ fn directory_(
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/symlink=3f.html]
 #[monoruby_builtin]
 fn symlink_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    match to_canonicalized_path(vm, globals, lfp.arg(0), "1st arg") {
-        Ok(path) => Ok(Value::bool(path.is_symlink())),
-        Err(_) => Ok(Value::bool(false)),
-    }
+    let path = to_path(vm, globals, lfp.arg(0))?;
+    Ok(Value::bool(path.is_symlink()))
 }
 
 ///
