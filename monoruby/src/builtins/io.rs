@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("IO", IO_CLASS, ObjTy::IO);
-    globals.define_builtin_class_func_with(IO_CLASS, "new", io_new, 0, 3, false);
+    globals.define_builtin_class_func_with(IO_CLASS, "new", io_new, 1, 3, false);
     globals.define_builtin_class_func(IO_CLASS, "allocate", allocate, 0);
     globals.define_builtin_func(IO_CLASS, "<<", shl, 1);
     globals.define_builtin_func_with(IO_CLASS, "puts", puts, 0, 0, true);
@@ -56,8 +56,14 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 #[monoruby_builtin]
-fn io_new(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Err(MonorubyErr::argumenterr("IO.new is not supported"))
+fn io_new(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // IO.new(fd [, mode [, opt]]) -> creates an IO object from an integer file descriptor.
+    if let Some(fd) = lfp.arg(0).try_fixnum() {
+        let name = format!("fd {}", fd);
+        let io_inner = IoInner::from_raw_fd(fd as i32, name);
+        return Ok(Value::new_io(io_inner));
+    }
+    Err(MonorubyErr::argumenterr("IO.new requires an integer file descriptor"))
 }
 
 /// ### IO.allocate
@@ -517,7 +523,9 @@ fn io_sysopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         "r".to_string()
     };
     let mut opts = std::fs::OpenOptions::new();
-    match mode_str.as_str() {
+    // Strip encoding suffix (e.g. ":UTF-8") and remove 'b' (binary) flag.
+    let mode_base = mode_str.split(':').next().unwrap().replace('b', "");
+    match mode_base.as_str() {
         "r" => {
             opts.read(true);
         }
@@ -527,13 +535,13 @@ fn io_sysopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         "a" => {
             opts.append(true).create(true);
         }
-        "r+" => {
+        "r+" | "+r" => {
             opts.read(true).write(true);
         }
-        "w+" => {
+        "w+" | "+w" => {
             opts.read(true).write(true).create(true).truncate(true);
         }
-        "a+" => {
+        "a+" | "+a" => {
             opts.read(true).append(true).create(true);
         }
         _ => {
@@ -1415,6 +1423,22 @@ mod tests {
             File.foreach(path) { |line| res << line }
             File.delete(path)
             res
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_new_with_fd() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_ionew_#{Process.pid}"
+            File.write(path, "io new fd")
+            fd = IO.sysopen(path)
+            io = IO.new(fd)
+            content = io.read
+            io.close
+            raise "expected 'io new fd'" unless content == "io new fd"
+            File.delete(path)
             "#,
         );
     }

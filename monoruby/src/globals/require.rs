@@ -59,12 +59,17 @@ impl Globals {
             if resolved.is_file() {
                 return self.require_lib_file(resolved);
             }
-            // Try with .rb extension.
+            // Try with .rb and .so extensions.
             if resolved.extension().is_none() {
                 let mut with_rb = resolved.clone();
                 with_rb.set_extension("rb");
                 if with_rb.is_file() {
                     return self.require_lib_file(with_rb);
+                }
+                let mut with_so = resolved.clone();
+                with_so.set_extension("so");
+                if with_so.is_file() {
+                    return self.require_lib_file(with_so);
                 }
             }
             return Err(MonorubyErr::cant_load(None, file_name));
@@ -181,9 +186,14 @@ impl Globals {
             return load_file(file_name);
         }
 
-        // Relative to CWD (starts with ./ or ../): load directly.
+        // Relative to CWD (starts with ./ or ../): resolve against CWD first.
         if path_str.starts_with("./") || path_str.starts_with("../") {
-            return load_file(file_name);
+            let resolved = if let Ok(cwd) = std::env::current_dir() {
+                cwd.join(file_name)
+            } else {
+                file_name.into()
+            };
+            return load_file(&resolved);
         }
 
         // Bare filename: search $LOAD_PATH.
@@ -198,6 +208,12 @@ impl Globals {
             }
         }
         // Fallback: try relative to CWD.
+        if let Ok(cwd) = std::env::current_dir() {
+            let resolved = cwd.join(file_name);
+            if resolved.is_file() {
+                return load_file(&resolved);
+            }
+        }
         load_file(file_name)
     }
 }

@@ -55,11 +55,11 @@ fn main() {
     let args = CommandLineArgs::parse();
     let mut globals = Globals::new(args.warning, args.no_jit, args.disable_gems);
     Globals::gc_enable(!args.no_gc);
-    let lib = args.directory.iter().filter_map(|s| {
+    let lib = args.directory.iter().map(|s| {
         std::path::Path::new(s)
             .canonicalize()
             .map(|p| p.to_string_lossy().to_string())
-            .ok()
+            .unwrap_or_else(|_| s.clone())
     });
     globals.extend_load_path(lib);
 

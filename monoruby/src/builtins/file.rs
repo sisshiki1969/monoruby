@@ -486,19 +486,34 @@ fn realpath(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/new.html]
 #[monoruby_builtin]
 fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // If the first argument is an Integer, treat it as a file descriptor.
+    if let Some(fd) = lfp.arg(0).try_fixnum() {
+        let name = format!("fd {}", fd);
+        // SAFETY: fd is a valid file descriptor provided by the user (e.g. from IO.sysopen).
+        let io_inner = IoInner::from_raw_fd(fd as i32, name);
+        let res = Value::new_io_with_class(io_inner, FILE_CLASS);
+        if let Some(bh) = lfp.block() {
+            return vm.invoke_block_once(globals, bh, &[res]);
+        }
+        return Ok(res);
+    }
+
     let mode = if let Some(arg1) = lfp.try_arg(1) {
         arg1.coerce_to_string(vm, globals)?
     } else {
         "r".to_string()
     };
     let mut opt = File::options();
-    let opt = match mode.split(':').next().unwrap() {
-        "r" | "rb" => opt.read(true),
-        "w" | "wb" => opt.write(true).create(true).truncate(true),
-        "a" | "ab" => opt.write(true).create(true).append(true),
-        "r+" | "r+b" => opt.read(true).write(true),
-        "w+" | "w+b" => opt.read(true).write(true).create(true).truncate(true),
-        "a+" | "a+b" => opt.read(true).write(true).create(true).append(true),
+    // Strip encoding suffix (e.g. ":UTF-8") and normalize the mode string:
+    // remove 'b' (binary) flag since it has no effect on Unix.
+    let mode_base = mode.split(':').next().unwrap().replace('b', "");
+    let opt = match mode_base.as_str() {
+        "r" => opt.read(true),
+        "w" => opt.write(true).create(true).truncate(true),
+        "a" => opt.write(true).create(true).append(true),
+        "r+" | "+r" => opt.read(true).write(true),
+        "w+" | "+w" => opt.read(true).write(true).create(true).truncate(true),
+        "a+" | "+a" => opt.read(true).write(true).create(true).append(true),
         _ => {
             return Err(MonorubyErr::argumenterr(format!(
                 "Invalid access mode {}",
@@ -1360,6 +1375,72 @@ mod tests {
             s = f.size
             raise "expected 11 but got #{s}" unless s == 11
             f.close
+            File.delete(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_open_with_fd() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_fd_#{Process.pid}"
+            File.write(path, "hello fd")
+            fd = IO.sysopen(path)
+            f = File.open(fd)
+            content = f.read
+            f.close
+            raise "expected 'hello fd' but got '#{content}'" unless content == "hello fd"
+            File.delete(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_open_mode_binary() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_mode_#{Process.pid}"
+            f = File.open(path, "wb")
+            f.write("binary")
+            f.close
+            f = File.open(path, "rb")
+            content = f.read
+            f.close
+            raise "expected 'binary'" unless content == "binary"
+            File.delete(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_open_mode_with_encoding() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_enc_#{Process.pid}"
+            f = File.open(path, "w:UTF-8")
+            f.write("encoded")
+            f.close
+            f = File.open(path, "r:UTF-8")
+            content = f.read
+            f.close
+            raise "expected 'encoded'" unless content == "encoded"
+            File.delete(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_open_mode_rplus_b() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_rpb_#{Process.pid}"
+            File.write(path, "abcdef")
+            f = File.open(path, "r+b")
+            f.write("XY")
+            f.close
+            content = File.read(path)
+            raise "expected 'XYcdef' but got '#{content}'" unless content == "XYcdef"
             File.delete(path)
             "#,
         );
