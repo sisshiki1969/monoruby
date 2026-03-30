@@ -1,5 +1,6 @@
 use super::*;
 
+pub mod coerce;
 mod constants;
 pub mod frame;
 pub mod inline;
