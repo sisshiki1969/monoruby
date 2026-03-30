@@ -336,6 +336,112 @@ impl RegexpInner {
         }
     }
 
+    /// Replaces the first match in `given` string using hash lookup.
+    /// For each match, the matched text is looked up as a key in the hash.
+    /// If found, the corresponding value (converted to string) is used as replacement.
+    /// If not found, the match is removed (replaced with empty string).
+    pub(crate) fn replace_one_hash(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        re_val: Value,
+        given: &str,
+        hash_val: Value,
+    ) -> Result<(String, bool)> {
+        fn replace_(
+            vm: &mut Executor,
+            globals: &mut Globals,
+            re: &RegexpInner,
+            given: &str,
+            hash_val: Value,
+        ) -> Result<(String, bool)> {
+            match re.captures(given, vm)? {
+                None => Ok((given.to_string(), false)),
+                Some(captures) => {
+                    let m = captures.get(0).unwrap();
+                    let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
+                    let mut res = given.to_string();
+                    let key = Value::string_from_str(matched_str);
+                    let hash = hash_val.as_hash();
+                    let replacement = if let Some(v) = hash.get(key, vm, globals)? {
+                        v.to_s(&globals.store)
+                    } else {
+                        String::new()
+                    };
+                    res.replace_range(start..end, &replacement);
+                    Ok((res, true))
+                }
+            }
+        }
+
+        if let Some(s) = re_val.is_str() {
+            let re = Self::from_escaped(s)?;
+            replace_(vm, globals, &re, given, hash_val)
+        } else if let Some(re) = re_val.is_regex() {
+            replace_(vm, globals, &re, given, hash_val)
+        } else {
+            let coerced = re_val.coerce_to_str(vm, globals)?;
+            let re = Self::from_escaped(&coerced)?;
+            replace_(vm, globals, &re, given, hash_val)
+        }
+    }
+
+    /// Replaces all non-overlapping matches in `given` string using hash lookup.
+    pub(crate) fn replace_all_hash(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        re_val: Value,
+        given: &str,
+        hash_val: Value,
+    ) -> Result<(String, bool)> {
+        fn replace_(
+            vm: &mut Executor,
+            globals: &mut Globals,
+            re: &RegexpInner,
+            given: &str,
+            hash_val: Value,
+        ) -> Result<(String, bool)> {
+            let mut range = vec![];
+            let hash = hash_val.as_hash();
+
+            vm.clear_capture_special_variables();
+            for cap in re.captures_iter(given) {
+                let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
+                let m = cap.get(0).unwrap();
+
+                let matched_str = m.as_str();
+                let key = Value::string_from_str(matched_str);
+                vm.save_capture_special_variables(&cap);
+                let replacement = if let Some(v) = hash.get(key, vm, globals)? {
+                    v.to_s(&globals.store)
+                } else {
+                    String::new()
+                };
+
+                range.push((m.range(), replacement));
+            }
+
+            let mut res = given.to_string();
+            let is_empty = range.is_empty();
+
+            for (range, replace) in range.into_iter().rev() {
+                res.replace_range(range, &replace);
+            }
+
+            Ok((res, !is_empty))
+        }
+
+        if let Some(s) = re_val.is_str() {
+            let re = Self::from_escaped(s)?;
+            replace_(vm, globals, &re, given, hash_val)
+        } else if let Some(re) = re_val.is_regex() {
+            replace_(vm, globals, &re, given, hash_val)
+        } else {
+            let coerced = re_val.coerce_to_str(vm, globals)?;
+            let re = Self::from_escaped(&coerced)?;
+            replace_(vm, globals, &re, given, hash_val)
+        }
+    }
+
     pub(crate) fn match_one(
         vm: &mut Executor,
         globals: &mut Globals,
