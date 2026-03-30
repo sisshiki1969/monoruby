@@ -25,6 +25,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ENUMERATOR_CLASS, "with_index", with_index, 0, 1, false);
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind, 0);
+    globals.define_builtin_funcs(ENUMERATOR_CLASS, "size", &["length"], enumerator_size, 0);
 
     let array_class = globals[ARRAY_CLASS].get_module();
     let yielder = globals.define_class("Yielder", array_class, ENUMERATOR_CLASS);
@@ -49,6 +50,22 @@ pub(super) fn init(globals: &mut Globals) {
         Effect::CAPTURE,
     );
     globals.define_builtin_func_rest(GENERATOR_CLASS, "each", generator_each);
+}
+
+///
+/// ### Enumerator#size
+///
+/// - size -> Integer or Float::INFINITY or nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/size.html]
+#[monoruby_builtin]
+fn enumerator_size(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::nil())
 }
 
 ///
@@ -597,6 +614,17 @@ mod tests {
             res << a.min_by { |x| x.length }   # => "dog"
             # res << a.min_by(2)                 # => #<Enumerator: ["albatross", "dog", "horse"]:min_by(2)>
             # res << a.min_by(2) {|x| x.length } # => ["dog", "horse"]
+            res
+        "##,
+        );
+    }
+
+    #[test]
+    fn enumerator_size() {
+        run_test(
+            r##"
+            res = []
+            res << Enumerator.new { |y| y << 1 }.size
             res
         "##,
         );
