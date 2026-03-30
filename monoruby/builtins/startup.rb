@@ -502,6 +502,21 @@ module Kernel
   module_function :no_warning_require
 end
 
+module Kernel
+  module_function
+
+  def open(name, *args, &block)
+    if name.respond_to?(:to_open)
+      name.to_open(*args, &block)
+    else
+      name = name.to_path if name.respond_to?(:to_path)
+      name = name.to_str if name.respond_to?(:to_str)
+      raise TypeError, "no implicit conversion of #{name.class} into String" unless name.is_a?(String)
+      File.open(name, *args, &block)
+    end
+  end
+end
+
 class GC
   def self.auto_compact=(x)
   end

@@ -766,3 +766,107 @@ class String
     end
   end
 end
+
+class Dir
+  include Enumerable
+
+  def self.open(path, encoding: nil, &block)
+    dir = new(path)
+    if block
+      begin
+        result = block.call(dir)
+      ensure
+        dir.close
+      end
+      result
+    else
+      dir
+    end
+  end
+
+  def initialize(path)
+    path = path.to_path if path.respond_to?(:to_path)
+    path = path.to_str if path.respond_to?(:to_str)
+    raise TypeError, "no implicit conversion of #{path.class} into String" unless path.is_a?(String)
+    raise Errno::ENOENT, "No such file or directory @ dir_initialize - #{path}" unless File.directory?(path)
+    @path = path
+    @entries = Dir.entries(path)
+    @pos = 0
+    @closed = false
+  end
+
+  def read
+    raise IOError, "closed directory" if @closed
+    return nil if @pos >= @entries.length
+    entry = @entries[@pos]
+    @pos += 1
+    entry
+  end
+
+  def each(&block)
+    raise IOError, "closed directory" if @closed
+    return to_enum(:each) unless block
+    @entries.each { |e| block.call(e) }
+    self
+  end
+
+  def children
+    raise IOError, "closed directory" if @closed
+    @entries.reject { |e| e == "." || e == ".." }
+  end
+
+  def each_child(&block)
+    raise IOError, "closed directory" if @closed
+    return to_enum(:each_child) unless block
+    children.each { |e| block.call(e) }
+    self
+  end
+
+  def rewind
+    raise IOError, "closed directory" if @closed
+    @pos = 0
+    self
+  end
+
+  def pos
+    raise IOError, "closed directory" if @closed
+    @pos
+  end
+
+  alias tell pos
+
+  def pos=(newpos)
+    raise IOError, "closed directory" if @closed
+    @pos = newpos
+  end
+
+  alias seek pos=
+
+  def close
+    @closed = true
+    nil
+  end
+
+  def path
+    @path
+  end
+
+  alias to_path path
+
+  def inspect
+    "#<Dir:#{@path}>"
+  end
+
+  def self.children(path)
+    entries(path).reject { |e| e == "." || e == ".." }
+  end
+
+  def self.each_child(path, &block)
+    return to_enum(:each_child, path) unless block
+    children(path).each { |e| block.call(e) }
+  end
+
+  def self.empty?(path)
+    children(path).empty?
+  end
+end
