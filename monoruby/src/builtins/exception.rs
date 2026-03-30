@@ -53,7 +53,9 @@ pub(super) fn init(globals: &mut Globals) {
 
     let indexerr =
         globals.define_builtin_exception_class("IndexError", INDEX_ERROR_CLASS, standarderr);
-    globals.define_builtin_exception_class("KeyError", KEY_ERROR_CLASS, indexerr);
+    let keyerr = globals.define_builtin_exception_class("KeyError", KEY_ERROR_CLASS, indexerr);
+    globals.define_builtin_func(keyerr.id(), "receiver", keyerror_receiver, 0);
+    globals.define_builtin_func(keyerr.id(), "key", keyerror_key, 0);
     globals.define_builtin_exception_class("StopIteration", STOP_ITERATION_CLASS, indexerr);
 
     globals.define_builtin_exception_class("LocalJumpError", LOCAL_JUMP_ERROR_CLASS, standarderr);
@@ -77,7 +79,7 @@ pub(super) fn init(globals: &mut Globals) {
         standarderr,
     );
 
-    globals.define_builtin_func_with(EXCEPTION_CLASS, "initialize", initialize, 0, 1, false);
+    globals.define_builtin_func_with(EXCEPTION_CLASS, "initialize", initialize, 0, 2, false);
     globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "set_backtrace", set_backtrace, 1);
@@ -152,12 +154,47 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let mut self_ = lfp.self_val();
     let class_id = self_.real_class(&globals.store).id();
     let message = if let Some(msg) = lfp.try_arg(0) {
-        msg.coerce_to_string(vm, globals)?
+        if msg.try_hash_ty().is_some() {
+            // Keyword arguments hash passed as positional arg; use default message.
+            store_exception_kwargs(vm, globals, self_, msg)?;
+            globals.store.get_class_name(class_id)
+        } else {
+            // Check if there's a keyword hash as second arg
+            if let Some(kwargs) = lfp.try_arg(1) {
+                if kwargs.try_hash_ty().is_some() {
+                    store_exception_kwargs(vm, globals, self_, kwargs)?;
+                }
+            }
+            msg.coerce_to_string(vm, globals)?
+        }
     } else {
         globals.store.get_class_name(class_id)
     };
     self_.is_exception_mut().unwrap().set_message(message);
     Ok(Value::nil())
+}
+
+/// Store keyword arguments (receiver:, key:) from a Hash into exception ivars.
+fn store_exception_kwargs(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_: Value,
+    kwargs: Value,
+) -> Result<()> {
+    let hash = kwargs.as_hash();
+    let recv_key = Value::symbol_from_str("receiver");
+    if let Ok(Some(v)) = hash.get(recv_key, vm, globals) {
+        globals
+            .store
+            .set_ivar(self_, IdentId::get_id("/receiver"), v)?;
+    }
+    let key_key = Value::symbol_from_str("key");
+    if let Ok(Some(v)) = hash.get(key_key, vm, globals) {
+        globals
+            .store
+            .set_ivar(self_, IdentId::get_id("/key"), v)?;
+    }
+    Ok(())
 }
 
 ///
@@ -211,6 +248,38 @@ fn set_backtrace(
     } else {
         Ok(arg)
     }
+}
+
+/// ### KeyError#receiver
+#[monoruby_builtin]
+fn keyerror_receiver(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let v = globals
+        .store
+        .get_ivar(self_val, IdentId::get_id("/receiver"))
+        .unwrap_or_default();
+    Ok(v)
+}
+
+/// ### KeyError#key
+#[monoruby_builtin]
+fn keyerror_key(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let v = globals
+        .store
+        .get_ivar(self_val, IdentId::get_id("/key"))
+        .unwrap_or_default();
+    Ok(v)
 }
 
 ///

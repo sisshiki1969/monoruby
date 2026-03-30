@@ -1683,8 +1683,12 @@ fn sub_main(
             eprintln!("warning: default value argument supersedes block");
         }
         let given = self_val.expect_str(globals)?;
-        let replace = arg1.coerce_to_str(vm, globals)?;
-        RegexpInner::replace_one(vm, globals, lfp.arg(0), given, &replace)
+        if arg1.try_hash_ty().is_some() {
+            RegexpInner::replace_one_hash(vm, globals, lfp.arg(0), given, arg1)
+        } else {
+            let replace = arg1.coerce_to_str(vm, globals)?;
+            RegexpInner::replace_one(vm, globals, lfp.arg(0), given, &replace)
+        }
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
@@ -1739,8 +1743,12 @@ fn gsub_main(
             eprintln!("warning: default value argument supersedes block");
         }
         let given = self_val.expect_str(globals)?;
-        let replace = arg1.coerce_to_str(vm, globals)?;
-        RegexpInner::replace_all(vm, globals, lfp.arg(0), given, &replace)
+        if arg1.try_hash_ty().is_some() {
+            RegexpInner::replace_all_hash(vm, globals, lfp.arg(0), given, arg1)
+        } else {
+            let replace = arg1.coerce_to_str(vm, globals)?;
+            RegexpInner::replace_all(vm, globals, lfp.arg(0), given, &replace)
+        }
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
