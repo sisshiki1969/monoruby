@@ -57,11 +57,21 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 #[monoruby_builtin]
-fn io_new(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn io_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // IO.new(fd [, mode [, opt]]) -> creates an IO object from an integer file descriptor.
     if let Some(fd) = lfp.arg(0).try_fixnum() {
+        let fd_i32 = fd as i32;
+        if fd_i32 < 0 || unsafe { libc::fcntl(fd_i32, libc::F_GETFD) } == -1 {
+            let err = std::io::Error::from_raw_os_error(9); // EBADF
+            return Err(MonorubyErr::errno_with_path(
+                &globals.store,
+                &err,
+                "rb_sysopen",
+                &format!("fd {}", fd),
+            ));
+        }
         let name = format!("fd {}", fd);
-        let io_inner = IoInner::from_raw_fd(fd as i32, name);
+        let io_inner = IoInner::from_raw_fd(fd_i32, name);
         return Ok(Value::new_io(io_inner));
     }
     Err(MonorubyErr::argumenterr("IO.new requires an integer file descriptor"))
@@ -1525,5 +1535,11 @@ mod tests {
             File.delete(path)
             "#,
         );
+    }
+
+    #[test]
+    fn io_new_invalid_fd() {
+        run_test_error(r#"IO.new(-1)"#);
+        run_test_error(r#"IO.new(9999)"#);
     }
 }
