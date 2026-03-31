@@ -674,6 +674,7 @@ impl alloc::GCBox for RValue {
                 ObjTy::ENUMERATOR => ManuallyDrop::drop(&mut self.kind.enumerator),
                 ObjTy::GENERATOR => ManuallyDrop::drop(&mut self.kind.generator),
                 ObjTy::BINDING => ManuallyDrop::drop(&mut self.kind.binding),
+                ObjTy::IO => ManuallyDrop::drop(&mut self.kind.io),
                 _ => {}
             }
             self.set_next_none();
