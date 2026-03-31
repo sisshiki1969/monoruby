@@ -1979,6 +1979,14 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
     let s = std::str::from_utf8(haystack).map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
 
+    // Ensure byte_offset falls on a valid UTF-8 character boundary.
+    if !s.is_char_boundary(byte_offset) {
+        return Err(MonorubyErr::argumenterr(format!(
+            "invalid byte offset {}",
+            byte_offset
+        )));
+    }
+
     match re.captures_from_pos(s, byte_offset, vm)? {
         None => Ok(Value::nil()),
         Some(captures) => {

@@ -233,6 +233,14 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         return Err(MonorubyErr::negative_array_size());
     }
     let size = size as usize;
+    // Guard against unreasonably large sizes that would cause capacity overflow.
+    // CRuby also limits array size; we use a practical limit here.
+    const MAX_ARRAY_SIZE: usize = 1 << 30; // ~1 billion elements
+    if size > MAX_ARRAY_SIZE {
+        return Err(MonorubyErr::argumenterr(format!(
+            "array size too big"
+        )));
+    }
     if let Some(bh) = lfp.block() {
         if lfp.try_arg(1).is_some() {
             eprintln!("warning: block supersedes default value argument");

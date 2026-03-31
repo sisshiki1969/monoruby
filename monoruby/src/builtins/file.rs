@@ -486,9 +486,21 @@ fn realpath(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // If the first argument is an Integer, treat it as a file descriptor.
     if let Some(fd) = lfp.arg(0).try_fixnum() {
+        let fd_i32 = fd as i32;
+        // Validate the file descriptor before using it.
+        // Use fcntl(fd, F_GETFD) to check if the fd is valid.
+        if fd_i32 < 0 || unsafe { libc::fcntl(fd_i32, libc::F_GETFD) } == -1 {
+            let err = std::io::Error::from_raw_os_error(9); // EBADF
+            return Err(MonorubyErr::errno_with_path(
+                &globals.store,
+                &err,
+                "rb_sysopen",
+                &format!("fd {}", fd),
+            ));
+        }
         let name = format!("fd {}", fd);
-        // SAFETY: fd is a valid file descriptor provided by the user (e.g. from IO.sysopen).
-        let io_inner = IoInner::from_raw_fd(fd as i32, name);
+        // SAFETY: fd has been validated as a valid file descriptor above.
+        let io_inner = IoInner::from_raw_fd(fd_i32, name);
         let res = Value::new_io_with_class(io_inner, FILE_CLASS);
         if let Some(bh) = lfp.block() {
             return vm.invoke_block_once(globals, bh, &[res]);
