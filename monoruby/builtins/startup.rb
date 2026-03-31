@@ -379,6 +379,39 @@ class Thread
     end
   end
 
+  class SizedQueue < Queue
+    def initialize(max = nil)
+      super()
+      @max = max
+    end
+
+    def max
+      @max
+    end
+
+    def max=(new_max)
+      @max = new_max
+    end
+  end
+
+  class ConditionVariable
+    def initialize
+      @waiters = []
+    end
+
+    def wait(mutex, timeout = nil)
+      self
+    end
+
+    def signal
+      self
+    end
+
+    def broadcast
+      self
+    end
+  end
+
   class Backtrace
     class Location
       def initialize(frame)
@@ -395,6 +428,8 @@ end
 # Top-level aliases (CRuby compatibility)
 class ThreadError < StandardError; end unless defined?(::ThreadError)
 Queue = Thread::Queue
+SizedQueue = Thread::SizedQueue
+ConditionVariable = Thread::ConditionVariable
 
 class Exception
   def backtrace_locations
@@ -538,6 +573,10 @@ class IO
   SEEK_SET = 0
   SEEK_CUR = 1
   SEEK_END = 2
+
+  def self.for_fd(fd, mode = nil, **opts)
+    new(fd, mode, **opts)
+  end
 end
 
 class FloatDomainError < RangeError; end
