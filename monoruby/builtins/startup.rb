@@ -185,14 +185,20 @@ end
 
 module File::Constants
   FNM_SYSCASE = 0
+  FNM_NOESCAPE = 1
+  FNM_PATHNAME = 2
   FNM_CASEFOLD = 8
+  FNM_EXTGLOB = 16
 end
 
 class File
   include File::Constants
   FNM_SYSCASE = 0
+  FNM_NOESCAPE = 1
+  FNM_PATHNAME = 2
   FNM_DOTMATCH = 4
   FNM_CASEFOLD = 8
+  FNM_EXTGLOB = 16
   NULL = "/dev/null"
   BINARY = 0
 
@@ -523,7 +529,27 @@ class GC
 
   def self.start(**opts)
   end
+
+  module Profiler
+  end
 end
+
+class IO
+  SEEK_SET = 0
+  SEEK_CUR = 1
+  SEEK_END = 2
+end
+
+class FloatDomainError < RangeError; end
+
+class Encoding
+  class CompatibilityError < EncodingError; end
+  class InvalidByteSequenceError < EncodingError; end
+  class UndefinedConversionError < EncodingError; end
+  class Converter; end
+end
+
+TOPLEVEL_BINDING = binding
 
 require_relative 'comparable'
 require_relative 'enumerable'
