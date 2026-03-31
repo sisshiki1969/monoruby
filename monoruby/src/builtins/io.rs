@@ -1,5 +1,6 @@
 use super::*;
 use std::fs::File;
+use std::os::fd::FromRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::rc::Rc;
@@ -38,6 +39,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(IO_CLASS, "syswrite", io_syswrite, 1, 1, false);
     globals.define_builtin_class_func_with(IO_CLASS, "select", io_select, 1, 4, false);
     globals.define_builtin_class_func_with(IO_CLASS, "foreach", io_foreach, 1, 2, false);
+    globals.define_builtin_class_func_with(IO_CLASS, "copy_stream", io_copy_stream, 2, 4, false);
     globals.define_builtin_func_with(IO_CLASS, "set_encoding", set_encoding, 1, 3, false);
     globals.define_builtin_func(IO_CLASS, "external_encoding", external_encoding, 0);
     globals.define_builtin_func(IO_CLASS, "internal_encoding", internal_encoding, 0);
@@ -1112,6 +1114,103 @@ fn internal_encoding(
     Ok(Value::nil())
 }
 
+///
+/// ### IO.copy_stream
+///
+/// - IO.copy_stream(src, dst) -> Integer
+/// - IO.copy_stream(src, dst, copy_length) -> Integer
+/// - IO.copy_stream(src, dst, copy_length, src_offset) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/copy_stream.html]
+#[monoruby_builtin]
+fn io_copy_stream(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let copy_length: Option<i64> = lfp
+        .try_arg(2)
+        .and_then(|v| if v.is_nil() { None } else { Some(v) })
+        .map(|v| v.coerce_to_int(vm, globals))
+        .transpose()?;
+    let src_offset: Option<i64> = lfp
+        .try_arg(3)
+        .and_then(|v| if v.is_nil() { None } else { Some(v) })
+        .map(|v| v.coerce_to_int(vm, globals))
+        .transpose()?;
+
+    // Helper: duplicate an fd from an IO Value for use as a std::fs::File.
+    fn dup_fd_from_io(io_val: Value, globals: &Globals) -> Result<File> {
+        let mut v = io_val;
+        if v.try_rvalue().map_or(true, |rv| rv.ty() != ObjTy::IO) {
+            return Err(MonorubyErr::typeerr(format!(
+                "no implicit conversion of {} into IO",
+                v.get_real_class_name(&globals.store)
+            )));
+        }
+        let fd = v.as_io_inner_mut().fileno()?;
+        // SAFETY: dup the fd so that the original IO still owns its fd.
+        let new_fd = unsafe { libc::dup(fd) };
+        if new_fd == -1 {
+            return Err(MonorubyErr::runtimeerr("dup failed"));
+        }
+        // SAFETY: new_fd is a valid, newly duplicated file descriptor.
+        Ok(unsafe { File::from_raw_fd(new_fd) })
+    }
+
+    // Open source
+    let src_val = lfp.arg(0);
+    let mut src_owned: File;
+    let src_is_path = src_val.try_bytes().is_some();
+    if src_is_path {
+        let path = src_val.coerce_to_string(vm, globals)?;
+        src_owned = File::open(&path).map_err(|e| {
+            MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path)
+        })?;
+        if let Some(offset) = src_offset {
+            use std::io::Seek;
+            src_owned
+                .seek(std::io::SeekFrom::Start(offset as u64))
+                .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+        }
+    } else {
+        src_owned = dup_fd_from_io(src_val, globals)?;
+        if let Some(offset) = src_offset {
+            use std::io::Seek;
+            src_owned
+                .seek(std::io::SeekFrom::Start(offset as u64))
+                .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+        }
+    }
+
+    // Open destination
+    let dst_val = lfp.arg(1);
+    let dst_is_path = dst_val.try_bytes().is_some();
+    let mut dst_owned: File;
+    if dst_is_path {
+        let path = dst_val.coerce_to_string(vm, globals)?;
+        dst_owned = File::create(&path).map_err(|e| {
+            MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path)
+        })?;
+    } else {
+        dst_owned = dup_fd_from_io(dst_val, globals)?;
+    }
+
+    // Copy
+    use std::io::Read;
+    let copied = if let Some(length) = copy_length {
+        let mut limited = (&mut src_owned).take(length as u64);
+        std::io::copy(&mut limited, &mut dst_owned)
+            .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?
+    } else {
+        std::io::copy(&mut src_owned, &mut dst_owned)
+            .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?
+    };
+
+    Ok(Value::integer(copied as i64))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -1541,5 +1640,27 @@ mod tests {
     fn io_new_invalid_fd() {
         run_test_error(r#"IO.new(-1)"#);
         run_test_error(r#"IO.new(9999)"#);
+    }
+
+    #[test]
+    fn io_copy_stream() {
+        run_test_once(
+            r#"
+            path_src = "/tmp/monoruby_test_cs_src_#{Process.pid}"
+            path_dst = "/tmp/monoruby_test_cs_dst_#{Process.pid}"
+            File.write(path_src, "hello world")
+            n = IO.copy_stream(path_src, path_dst)
+            raise "expected 11 but got #{n}" unless n == 11
+            raise unless File.read(path_dst) == "hello world"
+            n = IO.copy_stream(path_src, path_dst, 5)
+            raise "expected 5 but got #{n}" unless n == 5
+            raise unless File.read(path_dst) == "hello"
+            n = IO.copy_stream(path_src, path_dst, 5, 6)
+            raise "expected 5 but got #{n}" unless n == 5
+            raise unless File.read(path_dst) == "world"
+            File.delete(path_src)
+            File.delete(path_dst)
+            "#,
+        );
     }
 }
