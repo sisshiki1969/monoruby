@@ -549,8 +549,14 @@ pub(crate) fn integer_index1(
             RV::BigInt(base) => base.clone(),
             _ => unreachable!(),
         };
-        let mask = (BigInt::from(1) << width as usize) - 1;
-        let val = shifted(&base_bigint) & mask;
+        let shifted_val = shifted(&base_bigint);
+        let bits = shifted_val.bits() as i64;
+        let val = if width > bits + 1 && shifted_val >= BigInt::ZERO {
+            shifted_val
+        } else {
+            let mask = (BigInt::from(1) << width as usize) - 1;
+            shifted_val & mask
+        };
         return Ok(Value::bigint(val));
     }
     match (base.unpack(), index.unpack()) {
