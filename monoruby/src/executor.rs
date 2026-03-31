@@ -1449,10 +1449,18 @@ impl Executor {
 
 impl Executor {
     pub(crate) fn generate_proc(&self, bh: BlockHandler, pc: BytecodePtr) -> Result<Proc> {
+        self.generate_proc_inner(self.cfp(), bh, pc)
+    }
+
+    pub(crate) fn generate_proc_inner(
+        &self,
+        mut cfp: Cfp,
+        bh: BlockHandler,
+        pc: BytecodePtr,
+    ) -> Result<Proc> {
         if let Some((fid, outer)) = bh.try_proxy() {
             // Walk back through the call frame chain to the block's outer scope,
             // using the proxy's depth index.
-            let mut cfp = self.cfp();
             let mut vm = self;
             for _ in 0..outer {
                 (vm, cfp) = Self::prev_cfp(vm, cfp);

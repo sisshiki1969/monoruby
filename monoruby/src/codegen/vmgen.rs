@@ -964,22 +964,12 @@ impl Codegen {
     //
     fn vm_block_arg(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let loop_ = self.jit.label();
-        let loop_exit = self.jit.label();
         let raise = self.entry_raise();
         self.fetch2();
         monoasm! { &mut self.jit,
-            movq  rax, r14;
-            testq rdi, rdi;
-            jz   loop_exit;
-        loop_:
-            movq rax, [rax];
-            subl rdi, 1;
-            jnz  loop_;
-        loop_exit:
-            movq rdx, [rax - (LFP_BLOCK)];
             movq rdi, rbx;
             movq rsi, r12;
+            movq rdx, r14;
             lea  rcx, [r13 - 16];
             movq rax, (runtime::block_arg);
             call rax;

@@ -121,10 +121,14 @@ pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals
 pub(super) extern "C" fn block_arg(
     vm: &mut Executor,
     _: &mut Globals,
-    block_handler: Option<BlockHandler>,
+    mut lfp: Lfp,
     pc: BytecodePtr,
 ) -> Option<Value> {
-    let bh = match block_handler {
+    let outer = pc.op1() as u32;
+    for _ in 0..outer {
+        lfp = lfp.outer().unwrap();
+    }
+    let bh = match lfp.block() {
         Some(bh) => bh,
         None => {
             return Some(Value::nil());
@@ -133,7 +137,11 @@ pub(super) extern "C" fn block_arg(
     if bh.get().is_nil() {
         return Some(Value::nil());
     }
-    match vm.generate_proc(bh, pc) {
+    let mut cfp = vm.cfp();
+    while cfp.lfp() != lfp {
+        cfp = Executor::prev_cfp(vm, cfp).1;
+    }
+    match vm.generate_proc_inner(cfp, bh, pc) {
         Ok(val) => Some(val.into()),
         Err(err) => {
             vm.set_error(err);

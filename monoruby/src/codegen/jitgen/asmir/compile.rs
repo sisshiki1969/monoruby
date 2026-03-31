@@ -597,12 +597,11 @@ impl Codegen {
             }
             AsmInst::BlockArg {
                 ret,
-                outer,
+                outer: _,
                 using_xmm,
                 error,
                 call_site_bc_ptr,
             } => {
-                self.get_method_lfp(outer);
                 self.block_arg(using_xmm, call_site_bc_ptr);
                 self.handle_error(&labels[error]);
                 self.store_rax(ret);
@@ -1060,7 +1059,7 @@ impl Codegen {
         let call_site_ptr_val = call_site_bc_ptr.as_ptr() as u64;
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
-            movq rdx, [rax - (LFP_BLOCK)];
+            movq rdx, r14;
             movq rdi, rbx;
             movq rsi, r12;
             movq rcx, (call_site_ptr_val);
