@@ -460,6 +460,16 @@ class String
     self
   end
 
+  def codepoints
+    each_codepoint.to_a
+  end
+
+  def each_codepoint(&block)
+    return enum_for(:each_codepoint) unless block
+    each_char { |c| block.call(c.ord) }
+    self
+  end
+
 end
 
 class Float
@@ -868,5 +878,37 @@ class Dir
 
   def self.empty?(path)
     children(path).empty?
+  end
+end
+
+class Array
+  def values_at(*selectors)
+    result = []
+    selectors.each do |s|
+      if s.is_a?(Range)
+        r = self[s]
+        if r
+          result.concat(r)
+        else
+          result << nil
+        end
+      else
+        result << self[s]
+      end
+    end
+    result
+  end
+end
+
+class File
+  def self.zero?(path)
+    s = File.size(path) rescue return false
+    s == 0
+  end
+end
+
+module FileTest
+  def self.zero?(path)
+    File.zero?(path)
   end
 end
