@@ -6138,6 +6138,10 @@ mod tests {
         run_test(r#""hello".byteindex("h")"#);
         run_test(r#""hello".byteindex("x")"#);
         run_test(r#""hello".byteindex("lo", -3)"#);
+        // Multibyte: offset on char boundary should work
+        run_test(r#""わたし".byteindex("た")"#);
+        // Multibyte: offset inside a multibyte char should raise ArgumentError
+        run_test_error(r#""わたし".byteindex(/た/, 1)"#);
     }
 
     #[test]

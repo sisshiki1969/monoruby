@@ -4205,6 +4205,12 @@ mod tests {
     }
 
     #[test]
+    fn array_new_huge_size() {
+        run_test_error(r##"Array.new(2**62)"##);
+        run_test_error(r##"Array.new(1 << 31)"##);
+    }
+
+    #[test]
     fn pack_hex() {
         run_test(r#"["6162"].pack("h4")"#);
         run_test(r#"["6162"].pack("H4")"#);

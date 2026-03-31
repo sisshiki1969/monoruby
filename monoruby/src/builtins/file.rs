@@ -1455,4 +1455,10 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn file_open_invalid_fd() {
+        run_test_error(r#"File.open(-1)"#);
+        run_test_error(r#"File.open(9999)"#);
+    }
 }
