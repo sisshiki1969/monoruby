@@ -579,8 +579,22 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 } else {
                     base << (-nth) as usize
                 };
-                let mask = (BigInt::from(1) << len as usize) - 1;
-                Ok(Value::bigint(shifted & mask))
+                // Limit mask size to avoid OOM on huge len values.
+                // If len exceeds the bit length of shifted, masking is a no-op for non-negative values.
+                let bits = shifted.bits() as i64;
+                if len > bits + 1 {
+                    // For non-negative shifted, all bits fit within len, so no masking needed.
+                    // For negative shifted, extracting len bits gives the two's complement representation.
+                    if shifted >= BigInt::ZERO {
+                        Ok(Value::bigint(shifted))
+                    } else {
+                        let mask = (BigInt::from(1) << len as usize) - 1;
+                        Ok(Value::bigint(shifted & mask))
+                    }
+                } else {
+                    let mask = (BigInt::from(1) << len as usize) - 1;
+                    Ok(Value::bigint(shifted & mask))
+                }
             }
             _ => unreachable!(),
         }
