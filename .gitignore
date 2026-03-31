@@ -12,4 +12,4 @@ perf.data
 .ruby-version
 out.*
 lcov.info
-/.*
+/.*rubyspec_temp/
