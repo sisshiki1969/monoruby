@@ -48,6 +48,8 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func_with(INTEGER_CLASS, "to_s", to_s, 0, 1, false);
     globals.define_builtin_func_with(INTEGER_CLASS, "inspect", to_s, 0, 1, false);
     globals.define_builtin_func(INTEGER_CLASS, "eql?", eql_, 1);
+    globals.define_builtin_func(INTEGER_CLASS, "abs", abs, 0);
+    globals.define_builtin_func(INTEGER_CLASS, "magnitude", abs, 0);
 }
 
 /*///
@@ -210,21 +212,85 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 
 /// ### Integer#chr
 /// - chr -> String
-/// - [NOT SUPPORTED] chr(encoding) -> String
+/// - chr(encoding) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/chr.html]
 #[monoruby_builtin]
-fn chr(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let _encoding = lfp.try_arg(0); // accept optional encoding argument
-    if let Some(i) = lfp.self_val().try_fixnum() {
-        if let Ok(b) = u8::try_from(i) {
-            return Ok(Value::bytes_from_slice(&[b]));
+fn chr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use crate::value::rvalue::Encoding;
+    let encoding_arg = lfp.try_arg(0);
+
+    // Parse encoding if provided
+    let encoding = if let Some(enc_val) = encoding_arg {
+        if let Some(s) = enc_val.is_str() {
+            Some(Encoding::try_from_str(s)?)
+        } else {
+            // Check if it's an Encoding object
+            let enc_class_id = globals
+                .store
+                .get_constant_noautoload(OBJECT_CLASS, IdentId::ENCODING)
+                .map(|v| v.as_class_id());
+            if enc_class_id == Some(enc_val.class()) {
+                let s = globals.store.get_ivar(enc_val, IdentId::_ENCODING).unwrap();
+                Some(Encoding::try_from_str(s.as_str())?)
+            } else {
+                // Try to_str coercion
+                let s = enc_val.coerce_to_string(vm, globals)?;
+                Some(Encoding::try_from_str(&s)?)
+            }
         }
+    } else {
+        None
     };
-    Err(MonorubyErr::char_out_of_range(
-        &globals.store,
-        lfp.self_val(),
-    ))
+
+    // Handle BigInt case - always out of range
+    if lfp.self_val().try_fixnum().is_none() {
+        return Err(MonorubyErr::rangeerr("bignum out of char range"));
+    }
+
+    let i = lfp.self_val().try_fixnum().unwrap();
+
+    match encoding {
+        Some(Encoding::Utf8) => {
+            // UTF-8 encoding: support full Unicode codepoint range
+            if i < 0 || i > 0x10FFFF {
+                return Err(MonorubyErr::rangeerr(format!(
+                    "{} out of char range",
+                    i
+                )));
+            }
+            match char::from_u32(i as u32) {
+                Some(c) => {
+                    let mut buf = [0u8; 4];
+                    let s = c.encode_utf8(&mut buf);
+                    Ok(Value::string_from_str(s))
+                }
+                None => {
+                    // Invalid codepoint (e.g., surrogates 0xD800-0xDFFF)
+                    Err(MonorubyErr::rangeerr(format!(
+                        "invalid codepoint 0x{:X} in UTF-8",
+                        i
+                    )))
+                }
+            }
+        }
+        Some(Encoding::Ascii8) | None => {
+            // ASCII-8BIT/BINARY encoding or no encoding specified: 0-255 only
+            if let Ok(b) = u8::try_from(i) {
+                if encoding.is_none() && b <= 0x7f {
+                    // No encoding specified, 0-127: return US-ASCII (mapped to UTF-8)
+                    return Ok(Value::string_from_str(
+                        std::str::from_utf8(&[b]).unwrap(),
+                    ));
+                }
+                return Ok(Value::bytes_from_slice(&[b]));
+            }
+            Err(MonorubyErr::char_out_of_range(
+                &globals.store,
+                lfp.self_val(),
+            ))
+        }
+    }
 }
 
 // Integer#succ is defined in Ruby (integer.rb).
@@ -596,12 +662,41 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let nth = lfp.arg(0).coerce_to_int(vm, globals)?;
         let len = len_val.coerce_to_int(vm, globals)?;
         if len < 0 {
-            return Ok(Value::nil());
+            // Negative length: ignore length, extract all bits from nth onward
+            // Equivalent to n >> nth (or n << |nth| for negative nth)
+            return match self_val.unpack() {
+                RV::Fixnum(base) => {
+                    if nth >= 0 {
+                        if nth >= 64 {
+                            Ok(Value::integer(if base < 0 { -1 } else { 0 }))
+                        } else {
+                            Ok(Value::integer(base >> nth))
+                        }
+                    } else {
+                        Ok(Value::bigint(BigInt::from(base) << (-nth) as usize))
+                    }
+                }
+                RV::BigInt(base) => {
+                    if nth >= 0 {
+                        Ok(Value::bigint(base >> nth as usize))
+                    } else {
+                        Ok(Value::bigint(base << (-nth) as usize))
+                    }
+                }
+                _ => unreachable!(),
+            };
         }
         match self_val.unpack() {
             RV::Fixnum(base) => {
                 if nth < 0 {
-                    return Ok(Value::integer(0));
+                    // Negative nth: shift left by |nth|, then mask
+                    let shifted = BigInt::from(base) << (-nth) as usize;
+                    let mask = if len >= 64 {
+                        (BigInt::from(1) << len as usize) - 1
+                    } else {
+                        BigInt::from((1i64 << len) - 1)
+                    };
+                    return Ok(Value::bigint(shifted & mask));
                 }
                 let shifted = if nth >= 64 {
                     if base < 0 { -1i64 } else { 0i64 }
@@ -645,7 +740,31 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 if arg0.is_range().is_some() {
                     arg0
                 } else {
-                    Value::integer(arg0.coerce_to_int(vm, globals)?)
+                    // Coerce to Integer via to_int; allow BigInt results
+                    if let Some(func_id) =
+                        globals.check_method(arg0, IdentId::TO_INT)
+                    {
+                        let result = vm.invoke_func_inner(
+                            globals, func_id, arg0, &[], None, None,
+                        )?;
+                        match result.unpack() {
+                            RV::Fixnum(_) | RV::BigInt(_) => result,
+                            _ => {
+                                return Err(MonorubyErr::typeerr(format!(
+                                    "can't convert {} to Integer ({}#to_int gives {})",
+                                    arg0.get_real_class_name(&globals.store),
+                                    arg0.get_real_class_name(&globals.store),
+                                    result.get_real_class_name(&globals.store),
+                                )));
+                            }
+                        }
+                    } else {
+                        return Err(MonorubyErr::no_implicit_conversion(
+                            globals,
+                            arg0,
+                            INTEGER_CLASS,
+                        ));
+                    }
                 }
             }
         };
@@ -718,6 +837,33 @@ fn zero_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         _ => unreachable!(),
     };
     Ok(Value::bool(b))
+}
+
+///
+/// ### Integer#abs
+///
+/// - abs -> Integer
+///
+/// Returns the absolute value of the integer.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/abs.html]
+#[monoruby_builtin]
+fn abs(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(match lfp.self_val().unpack() {
+        RV::Fixnum(i) => match i.checked_neg() {
+            Some(neg) if i < 0 => Value::integer(neg),
+            None if i < 0 => Value::bigint(-BigInt::from(i)),
+            _ => lfp.self_val(),
+        },
+        RV::BigInt(b) => {
+            if b < &BigInt::ZERO {
+                Value::bigint(-b)
+            } else {
+                lfp.self_val()
+            }
+        }
+        _ => unreachable!(),
+    })
 }
 
 ///
