@@ -1342,4 +1342,57 @@ mod tests {
         run_test("0b11010[1, 3]");
         run_test("255[4, 4]");
     }
+
+    #[test]
+    fn integer_eql() {
+        run_test("(2**64).eql?(2**64)");
+        run_test("1.eql?(1)");
+        run_test("1.eql?(1.0)");
+        run_test("(2**64).eql?(2**64 + 1)");
+    }
+
+    #[test]
+    fn pow_bignum_exponent() {
+        run_test("1 ** (2**100)");
+        run_test("(-1) ** (2**100)");
+        run_test("(-1) ** (2**100 + 1)");
+        run_test_error("2 ** (2**100)");
+    }
+
+    #[test]
+    fn shift_to_int() {
+        run_test_once(r#"
+            class Foo; def to_int; 2; end; end
+            [8 << Foo.new, 8 >> Foo.new]
+        "#);
+    }
+
+    #[test]
+    fn bitwise_float_typeerror() {
+        run_test_error("1 & 3.0");
+        run_test_error("1 | 3.0");
+        run_test_error("1 ^ 3.0");
+    }
+
+    #[test]
+    fn fdiv_fixnum() {
+        run_test("100.fdiv(3)");
+        run_test("10.fdiv(2)");
+    }
+
+    #[test]
+    fn divmod_nan() {
+        run_test_error("1.divmod(Float::NAN)");
+    }
+
+    #[test]
+    fn div_coerce() {
+        run_test("10 / 3.0");
+        run_test("10 / 2.5");
+    }
+
+    #[test]
+    fn modulo_float_zero() {
+        run_test_error("10 % 0.0");
+    }
 }
