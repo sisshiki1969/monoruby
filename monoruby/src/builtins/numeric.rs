@@ -62,6 +62,17 @@ fn divmod(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 
     let (div, modulo) = match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
         (Some(lhs), Some(rhs)) => {
+            // NaN raises FloatDomainError
+            if let RealKind::Float(f) = rhs {
+                if f.is_nan() {
+                    return Err(MonorubyErr::rangeerr("NaN"));
+                }
+            }
+            if let RealKind::Float(f) = lhs {
+                if f.is_nan() {
+                    return Err(MonorubyErr::rangeerr("NaN"));
+                }
+            }
             // For divmod, both integer zero and float zero raise ZeroDivisionError
             if rhs.check_zero_div() || rhs.is_float_zero() {
                 return Err(MonorubyErr::divide_by_zero());
