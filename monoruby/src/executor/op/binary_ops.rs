@@ -4,7 +4,7 @@
 
 use super::*;
 
-use num::{BigInt, ToPrimitive, Zero};
+use num::{BigInt, Signed, ToPrimitive, Zero};
 use paste::paste;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Rem, Shl, Shr, Sub};
 
@@ -210,6 +210,9 @@ pub(crate) extern "C" fn div_values(
         (RV::Complex(_), _) => {
             return try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Complex");
         }
+        (RV::Fixnum(_) | RV::BigInt(_), _) => {
+            return try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Integer");
+        }
         _ => {
             return vm.invoke_method_simple(globals, IdentId::_DIV, lhs, &[rhs]);
         }
@@ -225,7 +228,8 @@ pub(crate) extern "C" fn rem_values(
 ) -> Option<Value> {
     match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
         (Some(lhs), Some(rhs)) => {
-            if rhs.check_zero_div() {
+            // For modulo, both integer zero and float zero raise ZeroDivisionError
+            if rhs.check_zero_div() || rhs.is_float_zero() {
                 vm.err_divide_by_zero();
                 return None;
             } else {
@@ -336,9 +340,18 @@ pub(crate) extern "C" fn pow_values(
 ) -> Option<Value> {
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => pow_ii(lhs, rhs, vm)?,
-        (RV::Fixnum(_), RV::BigInt(_)) => {
-            vm.set_error(MonorubyErr::exponent_is_too_large());
-            return None;
+        (RV::Fixnum(lhs), RV::BigInt(rhs)) => {
+            // Special cases: 1**n == 1, (-1)**n == 1 or -1
+            if lhs == 1 {
+                Value::integer(1)
+            } else if lhs == -1 {
+                Value::integer(if rhs.bit(0) { -1 } else { 1 })
+            } else if lhs == 0 {
+                if rhs.is_positive() { Value::integer(0) } else { vm.set_error(MonorubyErr::divide_by_zero()); return None; }
+            } else {
+                vm.set_error(MonorubyErr::exponent_is_too_large());
+                return None;
+            }
         }
         (RV::Fixnum(lhs), RV::Float(rhs)) => pow_ff(lhs as f64, rhs),
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => {
@@ -359,10 +372,17 @@ pub(crate) extern "C" fn pow_values(
                 }
             }
         }
-        (RV::BigInt(_), RV::BigInt(_)) => {
-            // If exponent is a BigInt, it's always too large (matches CRuby behavior).
-            vm.set_error(MonorubyErr::exponent_is_too_large());
-            return None;
+        (RV::BigInt(lhs), RV::BigInt(rhs)) => {
+            if (*lhs == BigInt::from(1)) {
+                Value::integer(1)
+            } else if *lhs == BigInt::from(-1) {
+                Value::integer(if rhs.bit(0) { -1 } else { 1 })
+            } else if lhs.is_zero() {
+                if rhs.is_positive() { Value::integer(0) } else { vm.set_error(MonorubyErr::divide_by_zero()); return None; }
+            } else {
+                vm.set_error(MonorubyErr::exponent_is_too_large());
+                return None;
+            }
         }
         (RV::BigInt(lhs), RV::Float(rhs)) => pow_ff(lhs.to_f64().unwrap(), rhs),
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
@@ -446,8 +466,40 @@ pub(crate) extern "C" fn shr_values(
                 bigint_shl(lhs, -rhs as u64 as u32)
             }
         }
+        // n >> bignum: if bignum > 0, shift right by huge amount => 0 or -1;
+        // if bignum < 0, shift left by huge amount => RangeError (too large)
+        (RV::Fixnum(lhs), RV::BigInt(rhs)) => {
+            if rhs.is_positive() {
+                Value::integer(if lhs >= 0 { 0 } else { -1 })
+            } else if lhs == 0 {
+                Value::integer(0)
+            } else {
+                vm.set_error(MonorubyErr::rangeerr("shift width too big"));
+                return None;
+            }
+        }
+        (RV::BigInt(lhs), RV::BigInt(rhs)) => {
+            if rhs.is_positive() {
+                Value::integer(if lhs.is_negative() { -1 } else { 0 })
+            } else if lhs.is_zero() {
+                Value::integer(0)
+            } else {
+                vm.set_error(MonorubyErr::rangeerr("shift width too big"));
+                return None;
+            }
+        }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            return try_coerce_and_apply(vm, globals, IdentId::_SHR, lhs, rhs, "Integer");
+            // >> requires to_int conversion, not coerce
+            match rhs.coerce_to_int(vm, globals) {
+                Ok(rhs_int) => return shr_values(vm, globals, lhs, Value::integer(rhs_int)).into(),
+                Err(_) => {
+                    vm.set_error(MonorubyErr::typeerr(format!(
+                        "{} can't be coerced into Integer",
+                        rhs.get_real_class_name(&globals.store),
+                    )));
+                    return None;
+                }
+            }
         }
         _ => {
             return vm.invoke_method_simple(globals, IdentId::_SHR, lhs, &[rhs]);
@@ -477,8 +529,44 @@ pub(crate) extern "C" fn shl_values(
                 bigint_shr(lhs, -rhs as u64 as u32)
             }
         }
+        // n << bignum: if bignum > 0, shift left by huge amount => RangeError (or 0 if n==0);
+        // if bignum < 0, shift right by huge amount => 0 or -1
+        (RV::Fixnum(lhs), RV::BigInt(rhs)) => {
+            if rhs.is_positive() {
+                if lhs == 0 {
+                    Value::integer(0)
+                } else {
+                    vm.set_error(MonorubyErr::rangeerr("shift width too big"));
+                    return None;
+                }
+            } else {
+                Value::integer(if lhs >= 0 { 0 } else { -1 })
+            }
+        }
+        (RV::BigInt(lhs), RV::BigInt(rhs)) => {
+            if rhs.is_positive() {
+                if lhs.is_zero() {
+                    Value::integer(0)
+                } else {
+                    vm.set_error(MonorubyErr::rangeerr("shift width too big"));
+                    return None;
+                }
+            } else {
+                Value::integer(if lhs.is_negative() { -1 } else { 0 })
+            }
+        }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            return try_coerce_and_apply(vm, globals, IdentId::_SHL, lhs, rhs, "Integer");
+            // << requires to_int conversion, not coerce
+            match rhs.coerce_to_int(vm, globals) {
+                Ok(rhs_int) => return shl_values(vm, globals, lhs, Value::integer(rhs_int)).into(),
+                Err(_) => {
+                    vm.set_error(MonorubyErr::typeerr(format!(
+                        "{} can't be coerced into Integer",
+                        rhs.get_real_class_name(&globals.store),
+                    )));
+                    return None;
+                }
+            }
         }
         _ => {
             return vm.invoke_method_simple(globals, IdentId::_SHL, lhs, &[rhs]);
