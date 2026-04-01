@@ -165,7 +165,7 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         Some(block) => block,
     };
     let cur = lfp.self_val().expect_integer(globals)?;
-    let limit = lfp.arg(0).coerce_to_int(vm, globals)?;
+    let limit = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     if cur > limit {
         return Ok(lfp.self_val());
     }
@@ -196,7 +196,7 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
         Some(block) => block,
     };
     let cur = lfp.self_val().expect_integer(globals)?;
-    let limit = lfp.arg(0).coerce_to_int(vm, globals)?;
+    let limit = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     if cur < limit {
         return Ok(lfp.self_val());
     }
@@ -243,21 +243,19 @@ fn chr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         None
     };
 
-    // Handle BigInt case - always out of range
-    if lfp.self_val().try_fixnum().is_none() {
-        return Err(MonorubyErr::rangeerr("bignum out of char range"));
-    }
-
-    let i = lfp.self_val().try_fixnum().unwrap();
+    let i = match lfp.self_val().try_fixnum() {
+        Some(i) => i,
+        None => {
+            // Handle BigInt case - always out of range
+            return Err(MonorubyErr::rangeerr("bignum out of char range"));
+        }
+    };
 
     match encoding {
         Some(Encoding::Utf8) => {
             // UTF-8 encoding: support full Unicode codepoint range
             if i < 0 || i > 0x10FFFF {
-                return Err(MonorubyErr::rangeerr(format!(
-                    "{} out of char range",
-                    i
-                )));
+                return Err(MonorubyErr::rangeerr(format!("{} out of char range", i)));
             }
             match char::from_u32(i as u32) {
                 Some(c) => {
@@ -279,9 +277,7 @@ fn chr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             if let Ok(b) = u8::try_from(i) {
                 if encoding.is_none() && b <= 0x7f {
                     // No encoding specified, 0-127: return US-ASCII (mapped to UTF-8)
-                    return Ok(Value::string_from_str(
-                        std::str::from_utf8(&[b]).unwrap(),
-                    ));
+                    return Ok(Value::string_from_str(std::str::from_utf8(&[b]).unwrap()));
                 }
                 return Ok(Value::bytes_from_slice(&[b]));
             }
@@ -437,7 +433,7 @@ macro_rules! binop {
                     }
                     _ => {
                         // Try to_int conversion for non-Float, non-Integer
-                        let rhs_int = rhs.coerce_to_int(vm, globals)?;
+                        let rhs_int = rhs.coerce_to_int_i64(vm, globals)?;
                         let rhs_val = Value::integer(rhs_int);
                         match (lhs.unpack(), rhs_val.unpack()) {
                             (RV::Fixnum(l), RV::Fixnum(r)) => return Ok(Value::integer(l.$op(r))),
@@ -659,8 +655,8 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let self_val = lfp.self_val();
     if let Some(len_val) = lfp.try_arg(1) {
         // self[nth, len] form
-        let nth = lfp.arg(0).coerce_to_int(vm, globals)?;
-        let len = len_val.coerce_to_int(vm, globals)?;
+        let nth = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+        let len = len_val.coerce_to_int_i64(vm, globals)?;
         if len < 0 {
             // Negative length: ignore length, extract all bits from nth onward
             // Equivalent to n >> nth (or n << |nth| for negative nth)
@@ -741,30 +737,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     arg0
                 } else {
                     // Coerce to Integer via to_int; allow BigInt results
-                    if let Some(func_id) =
-                        globals.check_method(arg0, IdentId::TO_INT)
-                    {
-                        let result = vm.invoke_func_inner(
-                            globals, func_id, arg0, &[], None, None,
-                        )?;
-                        match result.unpack() {
-                            RV::Fixnum(_) | RV::BigInt(_) => result,
-                            _ => {
-                                return Err(MonorubyErr::typeerr(format!(
-                                    "can't convert {} to Integer ({}#to_int gives {})",
-                                    arg0.get_real_class_name(&globals.store),
-                                    arg0.get_real_class_name(&globals.store),
-                                    result.get_real_class_name(&globals.store),
-                                )));
-                            }
-                        }
-                    } else {
-                        return Err(MonorubyErr::no_implicit_conversion(
-                            globals,
-                            arg0,
-                            INTEGER_CLASS,
-                        ));
-                    }
+                    arg0.coerce_to_int(vm, globals)?
                 }
             }
         };
@@ -931,7 +904,7 @@ fn bit_length(
 #[monoruby_builtin]
 fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let base = if let Some(b) = lfp.try_arg(0) {
-        let b = b.coerce_to_int(vm, globals)?;
+        let b = b.coerce_to_int_i64(vm, globals)?;
         if !(2..=36).contains(&b) {
             return Err(MonorubyErr::argumenterr(format!("invalid radix {}", b)));
         }
@@ -1522,10 +1495,12 @@ mod tests {
 
     #[test]
     fn shift_to_int() {
-        run_test_once(r#"
+        run_test_once(
+            r#"
             class Foo; def to_int; 2; end; end
             [8 << Foo.new, 8 >> Foo.new]
-        "#);
+        "#,
+        );
     }
 
     #[test]
@@ -1611,10 +1586,12 @@ mod tests {
     #[test]
     fn integer_coerce_extended() {
         run_test_error(r#"1.coerce("")"#);
-        run_test_once(r#"
+        run_test_once(
+            r#"
             class Foo; def to_f; 99.5; end; end
             1.coerce(Foo.new)
-        "#);
+        "#,
+        );
     }
 
     #[test]

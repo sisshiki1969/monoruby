@@ -551,7 +551,7 @@ pub(crate) fn integer_index1(
 
         // Handle beginless range (..i)
         if is_beginless {
-            let end = end_val.coerce_to_int(vm, globals)?;
+            let end = end_val.coerce_to_int_i64(vm, globals)?;
             let end = if exclude_end { end } else { end + 1 };
             // Extract bits 0..end from base
             let extracted = match base.unpack() {
@@ -587,7 +587,7 @@ pub(crate) fn integer_index1(
 
         // Handle endless range (i..)
         if is_endless {
-            let start = start_val.coerce_to_int(vm, globals)?;
+            let start = start_val.coerce_to_int_i64(vm, globals)?;
             return match base.unpack() {
                 RV::Fixnum(b) => {
                     if start >= 0 {
@@ -612,8 +612,8 @@ pub(crate) fn integer_index1(
             };
         }
 
-        let start = start_val.coerce_to_int(vm, globals)?;
-        let end_raw = end_val.coerce_to_int(vm, globals)?;
+        let start = start_val.coerce_to_int_i64(vm, globals)?;
+        let end_raw = end_val.coerce_to_int_i64(vm, globals)?;
         let end = if exclude_end { end_raw } else { end_raw + 1 };
         let width = end - start;
         // Check if range is "reversed": for inclusive a..b where b < a, or

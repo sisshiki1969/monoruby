@@ -360,7 +360,7 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             if v.is_nil() {
                 None
             } else {
-                let length = v.coerce_to_int(vm, globals)?;
+                let length = v.coerce_to_int_i64(vm, globals)?;
                 if length < 0 {
                     return Err(MonorubyErr::argumenterr("negative length"));
                 }
@@ -1132,12 +1132,12 @@ fn io_copy_stream(
     let copy_length: Option<i64> = lfp
         .try_arg(2)
         .and_then(|v| if v.is_nil() { None } else { Some(v) })
-        .map(|v| v.coerce_to_int(vm, globals))
+        .map(|v| v.coerce_to_int_i64(vm, globals))
         .transpose()?;
     let src_offset: Option<i64> = lfp
         .try_arg(3)
         .and_then(|v| if v.is_nil() { None } else { Some(v) })
-        .map(|v| v.coerce_to_int(vm, globals))
+        .map(|v| v.coerce_to_int_i64(vm, globals))
         .transpose()?;
 
     // Helper: duplicate an fd from an IO Value for use as a std::fs::File.

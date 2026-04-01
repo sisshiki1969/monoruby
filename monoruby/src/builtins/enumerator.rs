@@ -198,7 +198,7 @@ fn with_index(
         match lfp.arg(0).unpack() {
             RV::Fixnum(_) | RV::BigInt(_) => lfp.arg(0),
             RV::Float(f) => Value::integer(f as i64),
-            _ => Value::integer(lfp.arg(0).coerce_to_int(vm, globals)?),
+            _ => Value::integer(lfp.arg(0).coerce_to_int_i64(vm, globals)?),
         }
     };
     let self_val = Enumerator::new(lfp.self_val());

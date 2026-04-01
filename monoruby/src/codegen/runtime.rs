@@ -545,7 +545,7 @@ pub(super) extern "C" fn get_index(
         ARRAY_CLASS => {
             // If the index is not a fixnum or range, try to_int coercion
             let idx = if index.try_fixnum().is_none() && index.is_range().is_none() {
-                match index.coerce_to_int(vm, globals) {
+                match index.coerce_to_int_i64(vm, globals) {
                     Ok(i) => Value::integer(i),
                     Err(err) => {
                         vm.set_error(err);
@@ -579,36 +579,14 @@ pub(super) extern "C" fn get_index(
                 _ => {
                     if index.is_range().is_some() {
                         index
-                    } else if let Some(func_id) =
-                        globals.check_method(index, IdentId::TO_INT)
-                    {
-                        match vm.invoke_func_inner(
-                            globals, func_id, index, &[], None, None,
-                        ) {
-                            Ok(result) => match result.unpack() {
-                                RV::Fixnum(_) | RV::BigInt(_) => result,
-                                _ => {
-                                    vm.set_error(MonorubyErr::typeerr(format!(
-                                        "can't convert {} to Integer ({}#to_int gives {})",
-                                        index.get_real_class_name(&globals.store),
-                                        index.get_real_class_name(&globals.store),
-                                        result.get_real_class_name(&globals.store),
-                                    )));
-                                    return None;
-                                }
-                            },
+                    } else {
+                        match index.coerce_to_int(vm, globals) {
+                            Ok(i) => i,
                             Err(err) => {
                                 vm.set_error(err);
                                 return None;
                             }
                         }
-                    } else {
-                        vm.set_error(MonorubyErr::no_implicit_conversion(
-                            globals,
-                            index,
-                            INTEGER_CLASS,
-                        ));
-                        return None;
                     }
                 }
             };
