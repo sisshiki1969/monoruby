@@ -1420,4 +1420,45 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn integer_dup() {
+        run_test("42.dup");
+        run_test("42.dup.equal?(42)");
+        run_test_once("a = 2**100; a.dup.equal?(a)");
+    }
+
+    #[test]
+    fn integer_round_errors() {
+        run_test_error("42.round(Float::INFINITY)");
+        run_test_error("42.round(Float::NAN)");
+        run_test_error("42.round('string')");
+    }
+
+    #[test]
+    fn integer_floor_errors() {
+        run_test_error("42.floor(Float::INFINITY)");
+        run_test_error("42.floor(Float::NAN)");
+        run_test_error("42.floor('string')");
+    }
+
+    #[test]
+    fn integer_ceil_errors() {
+        run_test_error("42.ceil(Float::INFINITY)");
+        run_test_error("42.ceil(Float::NAN)");
+        run_test_error("42.ceil('string')");
+    }
+
+    #[test]
+    fn integer_truncate_errors() {
+        run_test_error("42.truncate(Float::INFINITY)");
+        run_test_error("42.truncate(Float::NAN)");
+        run_test_error("42.truncate('string')");
+    }
+
+    #[test]
+    fn integer_round_float_ndigits() {
+        run_test("42.round(1.5)");
+        run_test("42.round(-1.5)");
+    }
 }
