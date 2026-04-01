@@ -407,7 +407,22 @@ binop!((bitand, "&"), (bitor, "|"), (bitxor, "^"));
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3d=3d.html]
 #[monoruby_builtin]
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let b = vm.eq_values_bool(globals, lfp.self_val(), lfp.arg(0))?;
+    let lhs = lfp.self_val();
+    let rhs = lfp.arg(0);
+    let b = match (lhs.unpack(), rhs.unpack()) {
+        (RV::Fixnum(l), RV::Fixnum(r)) => l == r,
+        (RV::Fixnum(l), RV::BigInt(r)) => BigInt::from(l) == *r,
+        (RV::Fixnum(l), RV::Float(r)) => (l as f64) == r,
+        (RV::BigInt(l), RV::Fixnum(r)) => *l == BigInt::from(r),
+        (RV::BigInt(l), RV::BigInt(r)) => l == r,
+        (RV::BigInt(l), RV::Float(r)) => l.to_f64().unwrap() == r,
+        _ => {
+            // Reverse dispatch: try rhs == lhs
+            let eq_id = IdentId::get_id("==");
+            let result = vm.invoke_method_inner(globals, eq_id, rhs, &[lhs], None, None)?;
+            return Ok(Value::bool(result.as_bool()));
+        }
+    };
     Ok(Value::bool(b))
 }
 
@@ -1394,5 +1409,15 @@ mod tests {
     #[test]
     fn modulo_float_zero() {
         run_test_error("10 % 0.0");
+    }
+
+    #[test]
+    fn eq_reverse_dispatch() {
+        run_test_once(
+            r#"
+            class Foo; def ==(other); other == 42; end; end
+            [42 == Foo.new, 42 === Foo.new, (2**64) == Foo.new, 42 == 99]
+            "#,
+        );
     }
 }
