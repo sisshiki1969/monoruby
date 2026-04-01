@@ -1607,4 +1607,60 @@ mod tests {
         run_test("42.round(1.5)");
         run_test("42.round(-1.5)");
     }
+
+    #[test]
+    fn integer_coerce_extended() {
+        run_test_error(r#"1.coerce("")"#);
+        run_test_once(r#"
+            class Foo; def to_f; 99.5; end; end
+            1.coerce(Foo.new)
+        "#);
+    }
+
+    #[test]
+    fn integer_chr_utf8() {
+        run_test(r#"256.chr("UTF-8")"#);
+        run_test(r#"900.chr("UTF-8").bytes"#);
+        run_test(r#"128.chr("UTF-8").bytes"#);
+        run_test_error(r#"(-1).chr"#);
+    }
+
+    #[test]
+    fn integer_index_negative() {
+        run_test("0b11010[-2, 3]");
+        run_test("0b11010[1, 3]");
+    }
+
+    #[test]
+    fn integer_index_endless_range() {
+        run_test("0b11010[1..]");
+        run_test("255[4..]");
+    }
+
+    #[test]
+    fn integer_round_half() {
+        run_test("25.round(-1, half: :up)");
+        run_test("25.round(-1, half: :down)");
+        run_test("25.round(-1, half: :even)");
+        run_test("15.round(-1, half: :even)");
+    }
+
+    #[test]
+    fn integer_allbits_typeerror() {
+        run_test_error(r#"42.allbits?("foo")"#);
+        run_test_error(r#"42.anybits?("foo")"#);
+        run_test_error(r#"42.nobits?("foo")"#);
+    }
+
+    #[test]
+    fn integer_abs_bigint() {
+        run_test("(-(2**64)).abs");
+        run_test("(2**64).abs");
+        run_test("(-42).abs");
+    }
+
+    #[test]
+    fn integer_neg_boundary() {
+        run_test("-(2**62)");
+    }
 }
