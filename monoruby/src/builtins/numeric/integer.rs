@@ -47,6 +47,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, "bit_length", bit_length, 0);
     globals.define_builtin_func_with(INTEGER_CLASS, "to_s", to_s, 0, 1, false);
     globals.define_builtin_func_with(INTEGER_CLASS, "inspect", to_s, 0, 1, false);
+    globals.define_builtin_func(INTEGER_CLASS, "eql?", eql_, 1);
 }
 
 /*///
@@ -326,6 +327,27 @@ fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     Ok(lfp.self_val())
 }
 
+/// ### Integer#eql?
+///
+/// - eql?(other) -> bool
+///
+/// Returns true if other is an Integer with the same value.
+#[monoruby_builtin]
+fn eql_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let lhs = lfp.self_val();
+    let rhs = lfp.arg(0);
+    if lhs.id() == rhs.id() {
+        return Ok(Value::bool(true));
+    }
+    let res = match (lhs.unpack(), rhs.unpack()) {
+        (RV::Fixnum(a), RV::Fixnum(b)) => a == b,
+        (RV::BigInt(a), RV::BigInt(b)) => a == b,
+        (RV::Fixnum(_), RV::BigInt(_)) | (RV::BigInt(_), RV::Fixnum(_)) => false,
+        _ => false,
+    };
+    Ok(Value::bool(res))
+}
+
 // Bitwise operations.
 
 macro_rules! binop {
@@ -340,23 +362,24 @@ macro_rules! binop {
                     (RV::Fixnum(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(BigInt::from(lhs).$op(rhs))),
                     (RV::BigInt(lhs), RV::Fixnum(rhs)) => Ok(Value::bigint(lhs.$op(BigInt::from(rhs)))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(lhs.$op(rhs))),
+                    (_, RV::Float(_)) => {
+                        // Bitwise ops don't accept Float
+                        return Err(MonorubyErr::typeerr(format!(
+                            "{} can't be coerced into Integer",
+                            rhs.inspect(&globals.store),
+                        )));
+                    }
                     _ => {
-                        // Try coerce protocol
-                        let coerce_id = IdentId::get_id("coerce");
-                        if let Some(result) = vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None)? {
-                            if let Some(ary) = result.try_array_ty() {
-                                if ary.len() == 2 {
-                                    let op_id = IdentId::get_id($op_str);
-                                    return vm.invoke_method_inner(globals, op_id, ary[0], &[ary[1]], None, None);
-                                }
-                            }
-                            return Err(MonorubyErr::typeerr("coerce must return [x, y]".to_string()));
+                        // Try to_int conversion for non-Float, non-Integer
+                        let rhs_int = rhs.coerce_to_int(vm, globals)?;
+                        let rhs_val = Value::integer(rhs_int);
+                        match (lhs.unpack(), rhs_val.unpack()) {
+                            (RV::Fixnum(l), RV::Fixnum(r)) => return Ok(Value::integer(l.$op(r))),
+                            (RV::Fixnum(l), RV::BigInt(r)) => return Ok(Value::bigint(BigInt::from(l).$op(r))),
+                            (RV::BigInt(l), RV::Fixnum(r)) => return Ok(Value::bigint(l.$op(BigInt::from(r)))),
+                            (RV::BigInt(l), RV::BigInt(r)) => return Ok(Value::bigint(l.$op(r))),
+                            _ => unreachable!(),
                         }
-                        return Err(MonorubyErr::no_implicit_conversion(
-                            globals,
-                            rhs,
-                            INTEGER_CLASS,
-                        ));
                     }
                 }
             }
@@ -384,7 +407,22 @@ binop!((bitand, "&"), (bitor, "|"), (bitxor, "^"));
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3d=3d.html]
 #[monoruby_builtin]
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let b = vm.eq_values_bool(globals, lfp.self_val(), lfp.arg(0))?;
+    let lhs = lfp.self_val();
+    let rhs = lfp.arg(0);
+    let b = match (lhs.unpack(), rhs.unpack()) {
+        (RV::Fixnum(l), RV::Fixnum(r)) => l == r,
+        (RV::Fixnum(l), RV::BigInt(r)) => BigInt::from(l) == *r,
+        (RV::Fixnum(l), RV::Float(r)) => (l as f64) == r,
+        (RV::BigInt(l), RV::Fixnum(r)) => *l == BigInt::from(r),
+        (RV::BigInt(l), RV::BigInt(r)) => l == r,
+        (RV::BigInt(l), RV::Float(r)) => l.to_f64().unwrap() == r,
+        _ => {
+            // Reverse dispatch: try rhs == lhs
+            let eq_id = IdentId::get_id("==");
+            let result = vm.invoke_method_inner(globals, eq_id, rhs, &[lhs], None, None)?;
+            return Ok(Value::bool(result.as_bool()));
+        }
+    };
     Ok(Value::bool(b))
 }
 
@@ -1318,5 +1356,109 @@ mod tests {
         run_test("42[0, 3]");
         run_test("0b11010[1, 3]");
         run_test("255[4, 4]");
+    }
+
+    #[test]
+    fn integer_eql() {
+        run_test("(2**64).eql?(2**64)");
+        run_test("1.eql?(1)");
+        run_test("1.eql?(1.0)");
+        run_test("(2**64).eql?(2**64 + 1)");
+    }
+
+    #[test]
+    fn pow_bignum_exponent() {
+        run_test("1 ** (2**100)");
+        run_test("(-1) ** (2**100)");
+        run_test("(-1) ** (2**100 + 1)");
+        run_test_error("2 ** (2**100)");
+    }
+
+    #[test]
+    fn shift_to_int() {
+        run_test_once(r#"
+            class Foo; def to_int; 2; end; end
+            [8 << Foo.new, 8 >> Foo.new]
+        "#);
+    }
+
+    #[test]
+    fn bitwise_float_typeerror() {
+        run_test_error("1 & 3.0");
+        run_test_error("1 | 3.0");
+        run_test_error("1 ^ 3.0");
+    }
+
+    #[test]
+    fn fdiv_fixnum() {
+        run_test("100.fdiv(3)");
+        run_test("10.fdiv(2)");
+    }
+
+    #[test]
+    fn divmod_nan() {
+        run_test_error("1.divmod(Float::NAN)");
+    }
+
+    #[test]
+    fn div_coerce() {
+        run_test("10 / 3.0");
+        run_test("10 / 2.5");
+    }
+
+    #[test]
+    fn modulo_float_zero() {
+        run_test_error("10 % 0.0");
+    }
+
+    #[test]
+    fn eq_reverse_dispatch() {
+        run_test_once(
+            r#"
+            class Foo; def ==(other); other == 42; end; end
+            [42 == Foo.new, 42 === Foo.new, (2**64) == Foo.new, 42 == 99]
+            "#,
+        );
+    }
+
+    #[test]
+    fn integer_dup() {
+        run_test("42.dup");
+        run_test("42.dup.equal?(42)");
+        run_test_once("a = 2**100; a.dup.equal?(a)");
+    }
+
+    #[test]
+    fn integer_round_errors() {
+        run_test_error("42.round(Float::INFINITY)");
+        run_test_error("42.round(Float::NAN)");
+        run_test_error("42.round('string')");
+    }
+
+    #[test]
+    fn integer_floor_errors() {
+        run_test_error("42.floor(Float::INFINITY)");
+        run_test_error("42.floor(Float::NAN)");
+        run_test_error("42.floor('string')");
+    }
+
+    #[test]
+    fn integer_ceil_errors() {
+        run_test_error("42.ceil(Float::INFINITY)");
+        run_test_error("42.ceil(Float::NAN)");
+        run_test_error("42.ceil('string')");
+    }
+
+    #[test]
+    fn integer_truncate_errors() {
+        run_test_error("42.truncate(Float::INFINITY)");
+        run_test_error("42.truncate(Float::NAN)");
+        run_test_error("42.truncate('string')");
+    }
+
+    #[test]
+    fn integer_round_float_ndigits() {
+        run_test("42.round(1.5)");
+        run_test("42.round(-1.5)");
     }
 }

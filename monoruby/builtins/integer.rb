@@ -3,11 +3,16 @@ class Integer
   #  self + 1
   #end
 
+  def dup
+    self
+  end
+
   def positive?
     self > 0
   end
 
   def floor(ndigits = 0)
+    ndigits = __coerce_ndigits(ndigits)
     if ndigits >= 0
       self
     else
@@ -48,6 +53,7 @@ class Integer
   end
 
   def ceil(ndigits = 0)
+    ndigits = __coerce_ndigits(ndigits)
     return self if ndigits >= 0
     d = 10 ** (-ndigits)
     if self >= 0
@@ -58,6 +64,7 @@ class Integer
   end
 
   def round(ndigits = 0, **kw)
+    ndigits = __coerce_ndigits(ndigits)
     return self if ndigits >= 0
     d = 10 ** (-ndigits)
     if self >= 0
@@ -68,6 +75,7 @@ class Integer
   end
 
   def truncate(ndigits = 0)
+    ndigits = __coerce_ndigits(ndigits)
     return self if ndigits >= 0
     d = 10 ** (-ndigits)
     if self >= 0
@@ -96,7 +104,18 @@ class Integer
   end
 
   def fdiv(other)
-    self.to_f / other.to_f
+    sf = self.to_f
+    of = other.to_f
+    # If both convert to Infinity (very large BigInts), compute via bit shifting
+    if sf.infinite? && of.infinite?
+      # Use BigInt division with extra precision bits
+      shift = 1024
+      (self << shift).to_f / (other << shift).to_f
+    elsif sf.infinite? && of == 0.0
+      sf / of
+    else
+      sf / of
+    end
   end
 
   def gcd(other)
@@ -219,6 +238,31 @@ class Integer
       nil
     end
   end
+
+  private
+
+  def __coerce_ndigits(ndigits)
+    if ndigits.is_a?(Float)
+      if ndigits.infinite?
+        raise RangeError, "float #{ndigits > 0 ? 'Inf' : '-Inf'} out of range of integer"
+      end
+      if ndigits.nan?
+        raise RangeError, "float NaN out of range of integer"
+      end
+      ndigits = ndigits.to_int
+    elsif ndigits.respond_to?(:to_int)
+      result = ndigits.to_int
+      if result.nil?
+        raise TypeError, "no implicit conversion of #{ndigits.class} into Integer"
+      end
+      ndigits = result
+    else
+      raise TypeError, "no implicit conversion of #{ndigits.class} into Integer"
+    end
+    ndigits
+  end
+
+  public
 
   def digits(base = 10)
     base = base.to_int
