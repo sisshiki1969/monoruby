@@ -47,7 +47,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
 
 /// Rational.__allocate(num, den) — internal constructor from Ruby
 #[monoruby_builtin]
-fn allocate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn allocate(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let num_val = lfp.arg(0);
     let den_val = lfp.arg(1);
     let num = match num_val.unpack() {
@@ -60,7 +60,7 @@ fn allocate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         RV::BigInt(b) => b.clone(),
         _ => return Err(MonorubyErr::typeerr("not an integer")),
     };
-    Ok(Value::rational_from_inner(RationalInner::new_bigint(num, den)))
+    Ok(Value::rational_from_bigint(num, den))
 }
 
 /// Helper: extract RationalInner from self
@@ -70,7 +70,7 @@ fn self_rat<'a>(lfp: Lfp) -> &'a RationalInner {
 }
 
 /// Helper: convert Value to RationalInner for arithmetic
-fn val_to_rat(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<RationalInner> {
+fn val_to_rat(_: &mut Executor, globals: &mut Globals, v: Value) -> Result<RationalInner> {
     if let Some(r) = v.try_rational() {
         return Ok(r.clone());
     }
@@ -125,17 +125,16 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
         return Ok(Value::bool(lhs.eq(r)));
     }
     match rhs.unpack() {
-        RV::Fixnum(i) => {
-            Ok(Value::bool(lhs.den() == &BigInt::from(1) && lhs.num() == &BigInt::from(i)))
-        }
-        RV::BigInt(b) => {
-            Ok(Value::bool(lhs.den() == &BigInt::from(1) && lhs.num() == b))
-        }
+        RV::Fixnum(i) => Ok(Value::bool(
+            lhs.den() == &BigInt::from(1) && lhs.num() == &BigInt::from(i),
+        )),
+        RV::BigInt(b) => Ok(Value::bool(lhs.den() == &BigInt::from(1) && lhs.num() == b)),
         RV::Float(f) => Ok(Value::bool(lhs.to_f() == f)),
         _ => {
             // Reverse dispatch
             let eq_id = IdentId::get_id("==");
-            let result = vm.invoke_method_inner(globals, eq_id, rhs, &[lfp.self_val()], None, None)?;
+            let result =
+                vm.invoke_method_inner(globals, eq_id, rhs, &[lfp.self_val()], None, None)?;
             Ok(Value::bool(result.as_bool()))
         }
     }
@@ -149,9 +148,9 @@ fn ne(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         return Ok(Value::bool(!lhs.eq(r)));
     }
     match rhs.unpack() {
-        RV::Fixnum(i) => {
-            Ok(Value::bool(!(lhs.den() == &BigInt::from(1) && lhs.num() == &BigInt::from(i))))
-        }
+        RV::Fixnum(i) => Ok(Value::bool(
+            !(lhs.den() == &BigInt::from(1) && lhs.num() == &BigInt::from(i)),
+        )),
         RV::Float(f) => Ok(Value::bool(lhs.to_f() != f)),
         _ => Ok(Value::bool(true)),
     }
@@ -177,16 +176,14 @@ fn cmp(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Va
                 std::cmp::Ordering::Greater => 1,
             }))
         }
-        RV::Float(f) => {
-            match lhs.to_f().partial_cmp(&f) {
-                Some(ord) => Ok(Value::integer(match ord {
-                    std::cmp::Ordering::Less => -1,
-                    std::cmp::Ordering::Equal => 0,
-                    std::cmp::Ordering::Greater => 1,
-                })),
-                None => Ok(Value::nil()),
-            }
-        }
+        RV::Float(f) => match lhs.to_f().partial_cmp(&f) {
+            Some(ord) => Ok(Value::integer(match ord {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            })),
+            None => Ok(Value::nil()),
+        },
         _ => Ok(Value::nil()),
     }
 }
@@ -206,7 +203,8 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         RV::Float(f) => Ok(Value::float(lhs.to_f() + f)),
         _ => {
             let coerce_id = IdentId::get_id("coerce");
-            let result = vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
+            let result =
+                vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
             if let Some(ary) = result.try_array_ty() {
                 if ary.len() == 2 {
                     let add_id = IdentId::get_id("+");
@@ -236,7 +234,8 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         RV::Float(f) => Ok(Value::float(lhs.to_f() - f)),
         _ => {
             let coerce_id = IdentId::get_id("coerce");
-            let result = vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
+            let result =
+                vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
             if let Some(ary) = result.try_array_ty() {
                 if ary.len() == 2 {
                     let sub_id = IdentId::get_id("-");
@@ -266,7 +265,8 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         RV::Float(f) => Ok(Value::float(lhs.to_f() * f)),
         _ => {
             let coerce_id = IdentId::get_id("coerce");
-            let result = vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
+            let result =
+                vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
             if let Some(ary) = result.try_array_ty() {
                 if ary.len() == 2 {
                     let mul_id = IdentId::get_id("*");
@@ -301,7 +301,8 @@ fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         }
         _ => {
             let coerce_id = IdentId::get_id("coerce");
-            let result = vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
+            let result =
+                vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
             if let Some(ary) = result.try_array_ty() {
                 if ary.len() == 2 {
                     let div_id = IdentId::get_id("/");
@@ -326,12 +327,12 @@ fn pow(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Va
                 let exp = exp as u32;
                 let n = lhs.num().pow(exp);
                 let d = lhs.den().pow(exp);
-                Ok(Value::rational_from_inner(RationalInner::new_bigint(n, d)))
+                Ok(Value::rational_from_bigint(n, d))
             } else {
                 let exp = (-exp) as u32;
                 let n = lhs.den().pow(exp);
                 let d = lhs.num().pow(exp);
-                Ok(Value::rational_from_inner(RationalInner::new_bigint(n, d)))
+                Ok(Value::rational_from_bigint(n, d))
             }
         }
         RV::Float(f) => Ok(Value::float(lhs.to_f().powf(f))),
@@ -361,7 +362,9 @@ fn zero_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<
 
 #[monoruby_builtin]
 fn positive_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(!self_rat(lfp).is_negative() && !self_rat(lfp).is_zero()))
+    Ok(Value::bool(
+        !self_rat(lfp).is_negative() && !self_rat(lfp).is_zero(),
+    ))
 }
 
 #[monoruby_builtin]

@@ -1494,6 +1494,7 @@ impl RValue {
             match (lhs.ty(), rhs.ty()) {
                 (ObjTy::BIGNUM, ObjTy::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
                 (ObjTy::FLOAT, ObjTy::FLOAT) => lhs.as_float() == rhs.as_float(),
+                (ObjTy::RATIONAL, ObjTy::RATIONAL) => lhs.as_rational() == rhs.as_rational(),
                 (ObjTy::COMPLEX, ObjTy::COMPLEX) => {
                     lhs.as_complex().re() == rhs.as_complex().re()
                         && lhs.as_complex().im() == rhs.as_complex().im()

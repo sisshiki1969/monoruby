@@ -1,6 +1,6 @@
 use num::bigint::BigInt;
 use num::traits::{One, Zero};
-use num::ToPrimitive;
+use num::{Signed, ToPrimitive};
 
 use super::*;
 
@@ -70,8 +70,16 @@ impl RationalInner {
     }
 
     pub fn to_f(&self) -> f64 {
-        let n = self.num.to_f64().unwrap_or(f64::INFINITY);
-        let d = self.den.to_f64().unwrap_or(f64::INFINITY);
+        let n = self.num.to_f64().unwrap_or(if self.num.is_positive() {
+            f64::INFINITY
+        } else {
+            f64::NEG_INFINITY
+        });
+        let d = self.den.to_f64().unwrap_or(if self.den.is_positive() {
+            f64::INFINITY
+        } else {
+            f64::NEG_INFINITY
+        });
         n / d
     }
 
@@ -96,7 +104,11 @@ impl RationalInner {
 
     pub fn abs(&self) -> Self {
         Self {
-            num: if self.num < BigInt::ZERO { -self.num.clone() } else { self.num.clone() },
+            num: if self.num < BigInt::ZERO {
+                -self.num.clone()
+            } else {
+                self.num.clone()
+            },
             den: self.den.clone(),
         }
     }
@@ -144,4 +156,3 @@ impl RationalInner {
         format!("({}/{})", self.num, self.den)
     }
 }
-

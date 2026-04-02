@@ -347,7 +347,12 @@ pub(crate) extern "C" fn pow_values(
             } else if lhs == -1 {
                 Value::integer(if rhs.bit(0) { -1 } else { 1 })
             } else if lhs == 0 {
-                if rhs.is_positive() { Value::integer(0) } else { vm.set_error(MonorubyErr::divide_by_zero()); return None; }
+                if rhs.is_positive() {
+                    Value::integer(0)
+                } else {
+                    vm.set_error(MonorubyErr::divide_by_zero());
+                    return None;
+                }
             } else {
                 vm.set_error(MonorubyErr::exponent_is_too_large());
                 return None;
@@ -373,12 +378,17 @@ pub(crate) extern "C" fn pow_values(
             }
         }
         (RV::BigInt(lhs), RV::BigInt(rhs)) => {
-            if (*lhs == BigInt::from(1)) {
+            if *lhs == BigInt::from(1) {
                 Value::integer(1)
             } else if *lhs == BigInt::from(-1) {
                 Value::integer(if rhs.bit(0) { -1 } else { 1 })
             } else if lhs.is_zero() {
-                if rhs.is_positive() { Value::integer(0) } else { vm.set_error(MonorubyErr::divide_by_zero()); return None; }
+                if rhs.is_positive() {
+                    Value::integer(0)
+                } else {
+                    vm.set_error(MonorubyErr::divide_by_zero());
+                    return None;
+                }
             } else {
                 vm.set_error(MonorubyErr::exponent_is_too_large());
                 return None;

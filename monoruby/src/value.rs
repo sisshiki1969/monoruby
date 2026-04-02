@@ -1,3 +1,4 @@
+use core::f64;
 use num::ToPrimitive;
 use onigmo_regex::Captures;
 use rubymap::RubyEql;
@@ -636,6 +637,10 @@ impl Value {
 
     pub fn rational(num: i64, den: i64) -> Self {
         RValue::new_rational(RationalInner::new(num, den)).pack()
+    }
+
+    pub fn rational_from_bigint(n: BigInt, d: BigInt) -> Self {
+        RValue::new_rational(RationalInner::new_bigint(n, d)).pack()
     }
 
     pub fn rational_from_inner(inner: RationalInner) -> Self {
@@ -1443,11 +1448,7 @@ impl Value {
     /// Tries direct conversion first, then to_f.
     /// Accepts Fixnum, Float, String (parsed).
     /// Raises TypeError if no conversion is possible.
-    pub(crate) fn coerce_to_float(
-        &self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<f64> {
+    pub(crate) fn coerce_to_float(&self, vm: &mut Executor, globals: &mut Globals) -> Result<f64> {
         match self.unpack() {
             RV::Fixnum(i) => return Ok(i as f64),
             RV::Float(f) => return Ok(f),
@@ -1842,11 +1843,7 @@ impl Value {
 
     /// Call Ruby-level `to_s` (explicit conversion) on the value.
     /// This is used by sprintf %s to match CRuby behavior.
-    pub(crate) fn coerce_to_s(
-        &self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<String> {
+    pub(crate) fn coerce_to_s(&self, vm: &mut Executor, globals: &mut Globals) -> Result<String> {
         if let Some(s) = self.is_str() {
             return Ok(s.to_string());
         }
@@ -2114,15 +2111,11 @@ impl Value {
                 NReal::Integer(i) => Value::complex(0, *i),
                 NReal::Bignum(b) => Value::complex(0, b.clone()),
             },
-            NodeKind::Rational(r) => crate::bytecodegen::nreal_to_rational(r),
-            NodeKind::RImaginary(r) => {
-                let f = match r {
-                    NReal::Integer(i) => *i as f64,
-                    NReal::Float(f) => *f,
-                    NReal::Bignum(b) => num::ToPrimitive::to_f64(b).unwrap_or(f64::INFINITY),
-                };
+            NodeKind::Rational(n, d) => Value::rational_from_bigint(n.clone(), d.clone()),
+            NodeKind::RImaginary(n, d) => {
+                let f = n.to_f64().unwrap_or(f64::INFINITY) / d.to_f64().unwrap_or(f64::INFINITY);
                 Value::complex(0, f)
-            },
+            }
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
@@ -2192,6 +2185,20 @@ impl Value {
                 }
                 Value::hash(map)
             }
+            NodeKind::BinOp(ruruby_parse::BinOp::Div, box lhs, box rhs) => {
+                // CRuby's `p` outputs rationals as `(num/den)`, which parses as BinOp(Div).
+                match (&lhs.kind, &rhs.kind) {
+                    (NodeKind::Integer(n), NodeKind::Integer(d)) => Value::rational(*n, *d),
+                    (NodeKind::UnOp(ruruby_parse::UnOp::Neg, box inner), NodeKind::Integer(d)) => {
+                        if let NodeKind::Integer(n) = &inner.kind {
+                            Value::rational(-n, *d)
+                        } else {
+                            unreachable!("{:?}", node.kind)
+                        }
+                    }
+                    _ => unreachable!("{:?}", node.kind),
+                }
+            }
             NodeKind::BinOp(ruruby_parse::BinOp::Add, box lhs, box rhs) => {
                 let lhs = Self::from_ast_inner(lhs, vm, globals);
                 if let NodeKind::Imaginary(im) = &rhs.kind {
@@ -2226,15 +2233,11 @@ impl Value {
                 NReal::Integer(i) => Value::complex(0, *i),
                 NReal::Bignum(b) => Value::complex(0, b.clone()),
             },
-            NodeKind::Rational(r) => crate::bytecodegen::nreal_to_rational(r),
-            NodeKind::RImaginary(r) => {
-                let f = match r {
-                    NReal::Integer(i) => *i as f64,
-                    NReal::Float(f) => *f,
-                    NReal::Bignum(b) => num::ToPrimitive::to_f64(b).unwrap_or(f64::INFINITY),
-                };
+            NodeKind::Rational(n, d) => Value::rational_from_bigint(n.clone(), d.clone()),
+            NodeKind::RImaginary(n, d) => {
+                let f = n.to_f64().unwrap_or(f64::INFINITY) / d.to_f64().unwrap_or(f64::INFINITY);
                 Value::complex(0, f)
-            },
+            }
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
