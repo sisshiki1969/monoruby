@@ -264,6 +264,8 @@ fn defined_str(node: &Node) -> &'static str {
         | NodeKind::Bignum(_)
         | NodeKind::Float(_)
         | NodeKind::Imaginary(_)
+        | NodeKind::Rational(_)
+        | NodeKind::RImaginary(_)
         | NodeKind::Symbol(_)
         | NodeKind::String(_)
         | NodeKind::Bytes(_)

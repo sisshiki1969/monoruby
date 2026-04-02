@@ -49,6 +49,8 @@ pub(crate) enum TokenKind {
     BignumLit(BigInt),
     FloatLit(f64),
     ImaginaryLit(NReal),
+    RationalLit(NReal),
+    RImaginaryLit(NReal),
     StringLit(RubyString),
     Regex { body: String, postfix: String },
     CommandLit(String),
@@ -240,6 +242,14 @@ impl Token {
 
     pub(crate) fn new_imaginarylit(num: NReal, loc: Loc) -> Self {
         Annot::new(TokenKind::ImaginaryLit(num), loc)
+    }
+
+    pub(crate) fn new_rationallit(num: NReal, loc: Loc) -> Self {
+        Annot::new(TokenKind::RationalLit(num), loc)
+    }
+
+    pub(crate) fn new_rimaginarylit(num: NReal, loc: Loc) -> Self {
+        Annot::new(TokenKind::RImaginaryLit(num), loc)
     }
 
     pub(crate) fn new_stringlit(string: RubyString, loc: Loc) -> Self {

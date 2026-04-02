@@ -735,7 +735,13 @@ impl<'a> Lexer<'a> {
                 None => return Err(Self::error_parse("Invalid number literal.", self.pos)),
             }
         };
-        if self.consume('i') {
+        if self.consume('r') {
+            if self.consume('i') {
+                Ok(self.new_rimaginarylit(number))
+            } else {
+                Ok(self.new_rationallit(number))
+            }
+        } else if self.consume('i') {
             Ok(self.new_imaginarylit(number))
         } else {
             match number {
@@ -1677,6 +1683,14 @@ impl<'a> Lexer<'a> {
 
     fn new_imaginarylit(&self, num: NReal) -> Token {
         Token::new_imaginarylit(num, self.cur_loc())
+    }
+
+    fn new_rationallit(&self, num: NReal) -> Token {
+        Token::new_rationallit(num, self.cur_loc())
+    }
+
+    fn new_rimaginarylit(&self, num: NReal) -> Token {
+        Token::new_rimaginarylit(num, self.cur_loc())
     }
 
     fn new_stringlit(&self, string: impl Into<RubyString>) -> Token {

@@ -2114,6 +2114,15 @@ impl Value {
                 NReal::Integer(i) => Value::complex(0, *i),
                 NReal::Bignum(b) => Value::complex(0, b.clone()),
             },
+            NodeKind::Rational(r) => crate::bytecodegen::nreal_to_rational(r),
+            NodeKind::RImaginary(r) => {
+                let f = match r {
+                    NReal::Integer(i) => *i as f64,
+                    NReal::Float(f) => *f,
+                    NReal::Bignum(b) => num::ToPrimitive::to_f64(b).unwrap_or(f64::INFINITY),
+                };
+                Value::complex(0, f)
+            },
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
@@ -2216,6 +2225,15 @@ impl Value {
                 NReal::Float(f) => Value::complex(0, *f),
                 NReal::Integer(i) => Value::complex(0, *i),
                 NReal::Bignum(b) => Value::complex(0, b.clone()),
+            },
+            NodeKind::Rational(r) => crate::bytecodegen::nreal_to_rational(r),
+            NodeKind::RImaginary(r) => {
+                let f = match r {
+                    NReal::Integer(i) => *i as f64,
+                    NReal::Float(f) => *f,
+                    NReal::Bignum(b) => num::ToPrimitive::to_f64(b).unwrap_or(f64::INFINITY),
+                };
+                Value::complex(0, f)
             },
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),

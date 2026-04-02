@@ -1,7 +1,7 @@
 use super::*;
 use num::BigInt;
 use ruruby_parse::{
-    ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, LvarCollector, Node, NodeKind,
+    ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, LvarCollector, NReal, Node, NodeKind,
     ParseResult, RescueEntry, SourceInfoRef, UnOp,
 };
 
@@ -1047,6 +1047,28 @@ impl<'a> BytecodeGen<'a> {
         self.emit_literal(dst, Value::complex(0, r));
     }
 
+    fn emit_rational(&mut self, dst: BcReg, r: &NReal) {
+        let val = nreal_to_rational(r);
+        self.emit_literal(dst, val);
+    }
+
+    fn emit_neg_rational(&mut self, dst: BcReg, r: &NReal) {
+        let inner = nreal_to_rational_inner(r);
+        self.emit_literal(dst, Value::rational_from_inner(inner.neg()));
+    }
+
+    fn emit_rimaginary(&mut self, dst: BcReg, r: &NReal) {
+        // ri literal: rational imaginary, e.g. 42ri = Complex(0, Rational(42, 1))
+        // In CRuby, 42ri creates Complex(0, Rational(42, 1))
+        // For now, convert to float complex since our Complex uses Real (not Rational)
+        let f = match r {
+            NReal::Integer(i) => *i as f64,
+            NReal::Float(f) => *f,
+            NReal::Bignum(b) => num::ToPrimitive::to_f64(b).unwrap_or(f64::INFINITY),
+        };
+        self.emit_literal(dst, Value::complex(0, f));
+    }
+
     fn emit_string(&mut self, dst: BcReg, s: String) {
         self.emit_literal(dst, Value::string(s));
     }
@@ -1673,4 +1695,38 @@ impl UnOpK {
     //        UnOpK::Neg => neg_value,
     //    }
     //}
+}
+
+use crate::value::rvalue::RationalInner;
+
+fn nreal_to_rational_inner(r: &NReal) -> RationalInner {
+    match r {
+        NReal::Integer(i) => RationalInner::new(*i, 1),
+        NReal::Bignum(b) => RationalInner::new_bigint(b.clone(), BigInt::from(1)),
+        NReal::Float(f) => {
+            // Convert float to rational: find n, d such that f = n/d
+            if *f == 0.0 {
+                return RationalInner::new(0, 1);
+            }
+            let neg = *f < 0.0;
+            let f_abs = if neg { -f } else { *f };
+            let mut n = 0u64;
+            let mut x = f_abs;
+            while x != x.floor() && n < 1074 {
+                x *= 2.0;
+                n += 1;
+            }
+            let num = BigInt::from(x as u64);
+            let den = BigInt::from(1u64) << n;
+            if neg {
+                RationalInner::new_bigint(-num, den)
+            } else {
+                RationalInner::new_bigint(num, den)
+            }
+        }
+    }
+}
+
+pub(crate) fn nreal_to_rational(r: &NReal) -> Value {
+    Value::rational_from_inner(nreal_to_rational_inner(r))
 }

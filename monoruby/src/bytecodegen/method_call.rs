@@ -266,6 +266,8 @@ impl<'a> BytecodeGen<'a> {
             | NodeKind::Bignum(_)
             | NodeKind::Float(_)
             | NodeKind::Imaginary(_)
+            | NodeKind::Rational(_)
+            | NodeKind::RImaginary(_)
             | NodeKind::Bool(_)
             | NodeKind::String(_)
             | NodeKind::Bytes(_)
