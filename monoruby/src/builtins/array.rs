@@ -237,9 +237,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // CRuby also limits array size; we use a practical limit here.
     const MAX_ARRAY_SIZE: usize = 1 << 30; // ~1 billion elements
     if size > MAX_ARRAY_SIZE {
-        return Err(MonorubyErr::argumenterr(format!(
-            "array size too big"
-        )));
+        return Err(MonorubyErr::argumenterr(format!("array size too big")));
     }
     if let Some(bh) = lfp.block() {
         if lfp.try_arg(1).is_some() {
@@ -951,7 +949,7 @@ fn index_assign(
 ///
 /// - clear -> self
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/fill.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/clear.html]
 #[monoruby_builtin]
 fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.expect_no_block()?;
@@ -997,11 +995,16 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 
     if let Some(bh) = lfp.block() {
         // Block form
+        // fill {|index| ... } -> self
+        // fill(start, length = nil) {|index| ... } -> self
+        // fill(range) {|index| ... } -> self
         let data = vm.get_block_data(globals, bh)?;
         let (start, end_idx) = if let Some(arg0) = lfp.try_arg(0) {
             if let Some(range) = arg0.is_range() {
+                // fill(range) {|index| ... } -> self
                 fill_range_indices(vm, globals, &ary, range)?
             } else {
+                // fill(start, length = nil) {|index| ... } -> self
                 let start = arg0.coerce_to_int_i64(vm, globals)?;
                 let start = if start < 0 {
                     let s = ary.len() as i64 + start;
@@ -1014,11 +1017,12 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     if len <= 0 {
                         return Ok(ary.into());
                     }
-                    let end_idx = start.checked_add(len as usize).ok_or_else(|| {
-                        MonorubyErr::argumenterr("argument too big")
-                    })?;
+                    let end_idx = start
+                        .checked_add(len as usize)
+                        .ok_or_else(|| MonorubyErr::argumenterr("argument too big"))?;
                     (start, end_idx)
                 } else {
+                    // fill {|index| ... } -> self
                     (start, ary.len())
                 }
             }
@@ -1034,9 +1038,14 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
     } else {
         // Non-block form
-        let val = lfp.try_arg(0).unwrap_or(Value::nil());
+        let val = if let Some(v) = lfp.try_arg(0) {
+            v
+        } else {
+            return Err(MonorubyErr::wrong_number_of_arg_range(0, 1..=3));
+        };
         if let Some(arg1) = lfp.try_arg(1) {
             if let Some(range) = arg1.is_range() {
+                // fill(val, range) -> self
                 let (start, end_idx) = fill_range_indices(vm, globals, &ary, range)?;
                 if end_idx > ary.len() {
                     fill_resize(&mut ary, end_idx)?;
@@ -1045,6 +1054,7 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     ary[i] = val;
                 }
             } else {
+                // fill(val, start, length = nil) -> self
                 let start = arg1.coerce_to_int_i64(vm, globals)?;
                 let start = if start < 0 {
                     let s = ary.len() as i64 + start;
@@ -1057,9 +1067,9 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     if len <= 0 {
                         return Ok(ary.into());
                     }
-                    let end_idx = start.checked_add(len as usize).ok_or_else(|| {
-                        MonorubyErr::argumenterr("argument too big")
-                    })?;
+                    let end_idx = start
+                        .checked_add(len as usize)
+                        .ok_or_else(|| MonorubyErr::argumenterr("argument too big"))?;
                     if end_idx > ary.len() {
                         fill_resize(&mut ary, end_idx)?;
                     }
@@ -1077,6 +1087,7 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 }
             }
         } else {
+            // fill(val) -> self
             ary.fill(val);
         }
     }
@@ -2342,11 +2353,7 @@ fn pack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     rvalue::pack(vm, globals, &ary, &template)
 }
 
-fn try_convert_to_array(
-    v: &Value,
-    vm: &mut Executor,
-    globals: &mut Globals,
-) -> Option<Array> {
+fn try_convert_to_array(v: &Value, vm: &mut Executor, globals: &mut Globals) -> Option<Array> {
     if let Some(ary) = v.try_array_ty() {
         return Some(ary);
     }
@@ -3038,11 +3045,11 @@ mod tests {
             a"##,
         );
         // fill with no arguments fills with nil
-        run_test_no_result_check(
+        run_test_error(
             r#"
             a = [1, 2, 3]
             a.fill
-            raise unless a == [nil, nil, nil]
+            a
             "#,
         );
         // fill with range (non-block form)
@@ -4183,10 +4190,7 @@ mod tests {
             r#"class C; def to_str; ","; end; end; o = C.new"#,
         );
         // Array#* with to_int repeats
-        run_test_with_prelude(
-            "[1, 2] * o",
-            "class C; def to_int; 3; end; end; o = C.new",
-        );
+        run_test_with_prelude("[1, 2] * o", "class C; def to_int; 3; end; end; o = C.new");
         // Array#[] with to_int
         run_test_with_prelude(
             "[10, 20, 30][o]",

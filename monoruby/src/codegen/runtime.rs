@@ -572,7 +572,7 @@ pub(super) extern "C" fn get_index(
                 }
             };
         }
-        INTEGER_CLASS => {
+        /*INTEGER_CLASS => {
             // Try to_int coercion for non-integer index
             let idx = match index.unpack() {
                 RV::Fixnum(_) | RV::BigInt(_) => index,
@@ -597,7 +597,7 @@ pub(super) extern "C" fn get_index(
                     None
                 }
             };
-        }
+        }*/
         METHOD_CLASS => {
             let method = base.as_method();
             let func_id = method.func_id();

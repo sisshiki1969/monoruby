@@ -1612,6 +1612,20 @@ mod tests {
     fn integer_index_endless_range() {
         run_test("0b11010[1..]");
         run_test("255[4..]");
+        run_test("255[70..]");
+        run_test("255[-2..]");
+        run_test("123456789123456789123456789123456789123456789[70..]");
+        run_test("123456789123456789123456789123456789123456789[-3..]");
+
+        run_test_error("255[Float::NAN..]");
+        run_test_error("255[Float::INFINITY..]");
+        run_test_error("255[Float::-INFINITY..]");
+
+        run_test_error("255[..4]");
+        run_test_error("255[..70]");
+        run_test("255[..-2]");
+        run_test_error("123456789123456789123456789123456789123456789[..70]");
+        run_test("123456789123456789123456789123456789123456789[..-3]");
     }
 
     #[test]
