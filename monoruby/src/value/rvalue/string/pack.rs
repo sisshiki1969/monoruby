@@ -450,8 +450,7 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
                     } else {
                         // SAFETY: We trust that the pointer was produced by a prior pack("P")
                         // call in this process, pointing to a valid buffer of at least `length` bytes.
-                        let slice =
-                            unsafe { std::slice::from_raw_parts(ptr as *const u8, length) };
+                        let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, length) };
                         ary.push(Value::bytes(slice.to_vec()));
                     }
                 }
@@ -481,7 +480,7 @@ pub(crate) fn pack(
             if let Some(repeat) = $repeat {
                 for _ in 0..repeat {
                     if let Some(value) = iter.next() {
-                        let i = value.coerce_to_int(vm, globals)?;
+                        let i = value.coerce_to_int_i64(vm, globals)?;
                         let bytes = if $big_endian {
                             $type::to_be_bytes(i as $type)
                         } else {
@@ -494,7 +493,7 @@ pub(crate) fn pack(
                 }
             } else {
                 while let Some(value) = iter.next() {
-                    let i = value.coerce_to_int(vm, globals)?;
+                    let i = value.coerce_to_int_i64(vm, globals)?;
                     let bytes = if $big_endian {
                         $type::to_be_bytes(i as $type)
                     } else {
@@ -612,7 +611,7 @@ pub(crate) fn pack(
                 // 'h' (low nibble first) / 'H' (high nibble first) — hex string
                 let high = endianness; // Big = H (high nibble first)
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store,*value)?;
+                    let s = get_pack_string(&globals.store, *value)?;
                     let count = if let Some(count) = repeat {
                         count
                     } else {
@@ -661,7 +660,7 @@ pub(crate) fn pack(
             Template::Ascii => {
                 // 'a' — arbitrary binary string (null padded)
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store,*value)?;
+                    let s = get_pack_string(&globals.store, *value)?;
                     if let Some(count) = repeat {
                         if s.len() >= count {
                             packed.extend_from_slice(&s[..count]);
@@ -682,7 +681,7 @@ pub(crate) fn pack(
             Template::AsciiTrim => {
                 // 'A' — arbitrary binary string (space padded)
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store,*value)?;
+                    let s = get_pack_string(&globals.store, *value)?;
                     if let Some(count) = repeat {
                         if s.len() >= count {
                             packed.extend_from_slice(&s[..count]);
@@ -703,7 +702,7 @@ pub(crate) fn pack(
             Template::CString => {
                 // 'Z' — null-terminated string
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store,*value)?;
+                    let s = get_pack_string(&globals.store, *value)?;
                     if let Some(count) = repeat {
                         // Zn — like 'a' but null-padded (same as 'a')
                         if s.len() >= count {
@@ -728,7 +727,7 @@ pub(crate) fn pack(
             Template::Base64 => {
                 // 'm' — Base64 encode
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store,*value)?;
+                    let s = get_pack_string(&globals.store, *value)?;
                     let line_len = if template.explicit_count {
                         repeat.unwrap_or(45)
                     } else {
@@ -743,7 +742,7 @@ pub(crate) fn pack(
             Template::QuotedPrintable => {
                 // 'M' — MIME quoted-printable encode
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store,*value)?;
+                    let s = get_pack_string(&globals.store, *value)?;
                     let line_len = if template.explicit_count {
                         repeat.unwrap_or(72)
                     } else {
@@ -758,7 +757,7 @@ pub(crate) fn pack(
             Template::UuEncoded => {
                 // 'u' — UU encode
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store,*value)?;
+                    let s = get_pack_string(&globals.store, *value)?;
                     let line_len = if template.explicit_count {
                         repeat.unwrap_or(45)
                     } else {
@@ -774,7 +773,7 @@ pub(crate) fn pack(
                 // 'b' (little-endian) / 'B' (big-endian) — bit string
                 let big = endianness;
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store,*value)?;
+                    let s = get_pack_string(&globals.store, *value)?;
                     let count = if let Some(count) = repeat {
                         count
                     } else {
@@ -783,7 +782,11 @@ pub(crate) fn pack(
                     let mut byte: u8 = 0;
                     let mut bit_i = 0;
                     for i in 0..count {
-                        let bit = if i < s.len() && s[i] == b'1' { 1u8 } else { 0u8 };
+                        let bit = if i < s.len() && s[i] == b'1' {
+                            1u8
+                        } else {
+                            0u8
+                        };
                         if big {
                             byte |= bit << (7 - bit_i);
                         } else {
@@ -808,7 +811,7 @@ pub(crate) fn pack(
                 if let Some(count) = repeat {
                     for _ in 0..count {
                         if let Some(value) = iter.next() {
-                            let i = value.coerce_to_int(vm, globals)?;
+                            let i = value.coerce_to_int_i64(vm, globals)?;
                             if i < 0 {
                                 return Err(MonorubyErr::argumenterr(
                                     "pack(U): value out of range",
@@ -821,11 +824,9 @@ pub(crate) fn pack(
                     }
                 } else {
                     while let Some(value) = iter.next() {
-                        let i = value.coerce_to_int(vm, globals)?;
+                        let i = value.coerce_to_int_i64(vm, globals)?;
                         if i < 0 {
-                            return Err(MonorubyErr::argumenterr(
-                                "pack(U): value out of range",
-                            ));
+                            return Err(MonorubyErr::argumenterr("pack(U): value out of range"));
                         }
                         utf8_encode_one(&mut packed, i as u32);
                     }
@@ -836,7 +837,7 @@ pub(crate) fn pack(
                 if let Some(count) = repeat {
                     for _ in 0..count {
                         if let Some(value) = iter.next() {
-                            let i = value.coerce_to_int(vm, globals)?;
+                            let i = value.coerce_to_int_i64(vm, globals)?;
                             if i < 0 {
                                 return Err(MonorubyErr::argumenterr(
                                     "can't compress negative numbers",
@@ -849,7 +850,7 @@ pub(crate) fn pack(
                     }
                 } else {
                     while let Some(value) = iter.next() {
-                        let i = value.coerce_to_int(vm, globals)?;
+                        let i = value.coerce_to_int_i64(vm, globals)?;
                         if i < 0 {
                             return Err(MonorubyErr::argumenterr(
                                 "can't compress negative numbers",
@@ -871,9 +872,7 @@ pub(crate) fn pack(
                             // Allocate a null-terminated copy using CString.
                             // We leak the memory so the pointer remains valid.
                             let cstring = std::ffi::CString::new(s).map_err(|_| {
-                                MonorubyErr::argumenterr(
-                                    "string contains null byte for pack('p')",
-                                )
+                                MonorubyErr::argumenterr("string contains null byte for pack('p')")
                             })?;
                             let ptr = cstring.into_raw() as u64;
                             packed.extend_from_slice(&ptr.to_ne_bytes());
@@ -1046,7 +1045,11 @@ fn base64_encode(data: &[u8], line_len: usize) -> String {
     let mut result = String::new();
     let mut col = 0;
     // line_len is the number of input bytes per line (default 45 -> 60 output chars)
-    let chars_per_line = if line_len == 0 { 0 } else { (line_len / 3) * 4 + if line_len % 3 != 0 { 4 } else { 0 } };
+    let chars_per_line = if line_len == 0 {
+        0
+    } else {
+        (line_len / 3) * 4 + if line_len % 3 != 0 { 4 } else { 0 }
+    };
 
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -1079,7 +1082,6 @@ fn base64_encode(data: &[u8], line_len: usize) -> String {
         result.push('\n');
     }
     // If data is empty, no output
-
 
     result
 }
@@ -1140,16 +1142,21 @@ fn base64_decode(data: &[u8]) -> Vec<u8> {
 fn qp_encode(data: &[u8], line_len: usize) -> String {
     let mut result = String::new();
     let mut col = 0;
-    let max_col = if line_len > 0 { line_len - 1 } else { usize::MAX };
+    let max_col = if line_len > 0 {
+        line_len - 1
+    } else {
+        usize::MAX
+    };
 
     for &byte in data {
-        let encoded = if byte == b'\t' || byte == b' ' || (byte >= 33 && byte <= 126 && byte != b'=') {
-            format!("{}", byte as char)
-        } else if byte == b'\n' {
-            "\n".to_string()
-        } else {
-            format!("={:02X}", byte)
-        };
+        let encoded =
+            if byte == b'\t' || byte == b' ' || (byte >= 33 && byte <= 126 && byte != b'=') {
+                format!("{}", byte as char)
+            } else if byte == b'\n' {
+                "\n".to_string()
+            } else {
+                format!("={:02X}", byte)
+            };
 
         if byte != b'\n' && col + encoded.len() > max_col {
             result.push('=');
@@ -1180,7 +1187,9 @@ fn qp_decode(data: &[u8]) -> Vec<u8> {
     while i < data.len() {
         if data[i] == b'=' {
             if i + 2 < data.len() {
-                if data[i + 1] == b'\n' || (data[i + 1] == b'\r' && i + 2 < data.len() && data[i + 2] == b'\n') {
+                if data[i + 1] == b'\n'
+                    || (data[i + 1] == b'\r' && i + 2 < data.len() && data[i + 2] == b'\n')
+                {
                     // soft line break
                     if data[i + 1] == b'\r' {
                         i += 3;
@@ -1231,8 +1240,16 @@ fn uu_encode(data: &[u8], line_len: usize) -> String {
 
         for triple in chunk.chunks(3) {
             let b0 = triple[0] as u32;
-            let b1 = if triple.len() > 1 { triple[1] as u32 } else { 0 };
-            let b2 = if triple.len() > 2 { triple[2] as u32 } else { 0 };
+            let b1 = if triple.len() > 1 {
+                triple[1] as u32
+            } else {
+                0
+            };
+            let b2 = if triple.len() > 2 {
+                triple[2] as u32
+            } else {
+                0
+            };
             let val = (b0 << 16) | (b1 << 8) | b2;
 
             result.push(uu_char((val >> 18) & 0x3F));
@@ -1263,7 +1280,11 @@ fn uu_decode(data: &[u8]) -> Vec<u8> {
             continue;
         }
         let len_byte = line[0];
-        let expected_len = if len_byte >= 32 { (len_byte - 32) as usize } else { continue };
+        let expected_len = if len_byte >= 32 {
+            (len_byte - 32) as usize
+        } else {
+            continue;
+        };
         if expected_len == 0 {
             continue;
         }
@@ -1341,21 +1362,38 @@ fn utf8_encode_one(buf: &mut Vec<u8>, cp: u32) {
 }
 
 fn utf8_decode_one(b: &mut ByteIter) -> Result<u32> {
-    let first = b.next().ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
+    let first = b
+        .next()
+        .ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
     if first & 0x80 == 0 {
         Ok(first as u32)
     } else if first & 0xE0 == 0xC0 {
-        let b1 = b.next().ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
+        let b1 = b
+            .next()
+            .ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
         Ok(((first as u32 & 0x1F) << 6) | (b1 as u32 & 0x3F))
     } else if first & 0xF0 == 0xE0 {
-        let b1 = b.next().ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
-        let b2 = b.next().ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
+        let b1 = b
+            .next()
+            .ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
+        let b2 = b
+            .next()
+            .ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
         Ok(((first as u32 & 0x0F) << 12) | ((b1 as u32 & 0x3F) << 6) | (b2 as u32 & 0x3F))
     } else if first & 0xF8 == 0xF0 {
-        let b1 = b.next().ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
-        let b2 = b.next().ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
-        let b3 = b.next().ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
-        Ok(((first as u32 & 0x07) << 18) | ((b1 as u32 & 0x3F) << 12) | ((b2 as u32 & 0x3F) << 6) | (b3 as u32 & 0x3F))
+        let b1 = b
+            .next()
+            .ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
+        let b2 = b
+            .next()
+            .ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
+        let b3 = b
+            .next()
+            .ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
+        Ok(((first as u32 & 0x07) << 18)
+            | ((b1 as u32 & 0x3F) << 12)
+            | ((b2 as u32 & 0x3F) << 6)
+            | (b3 as u32 & 0x3F))
     } else {
         Err(MonorubyErr::argumenterr("malformed UTF-8 character"))
     }

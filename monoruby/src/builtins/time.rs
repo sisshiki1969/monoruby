@@ -63,11 +63,11 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         let ns = ((f - f.floor()) * 1_000_000_000.0) as u32;
         (s, ns)
     } else {
-        let s = secs_val.coerce_to_int(vm, globals)?;
+        let s = secs_val.coerce_to_int_i64(vm, globals)?;
         (s, 0u32)
     };
     let usec_ns = if let Some(arg1) = lfp.try_arg(1) {
-        let u = arg1.coerce_to_int(vm, globals)?;
+        let u = arg1.coerce_to_int_i64(vm, globals)?;
         (u * 1000) as u32
     } else {
         0
@@ -120,13 +120,13 @@ fn time_gm(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 }
 
 fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Option<NaiveDateTime>> {
-    let year = if let Ok(i) = i32::try_from(lfp.arg(0).coerce_to_int(vm, globals)?) {
+    let year = if let Ok(i) = i32::try_from(lfp.arg(0).coerce_to_int_i64(vm, globals)?) {
         i
     } else {
         return Ok(None);
     };
     let mon = if let Some(mon) = lfp.try_arg(1) {
-        let i = mon.coerce_to_int(vm, globals)?;
+        let i = mon.coerce_to_int_i64(vm, globals)?;
         if let Ok(i) = u32::try_from(i) {
             i
         } else {
@@ -136,7 +136,7 @@ fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Optio
         1
     };
     let day = if let Some(day) = lfp.try_arg(2) {
-        let i = day.coerce_to_int(vm, globals)?;
+        let i = day.coerce_to_int_i64(vm, globals)?;
         if let Ok(i) = u32::try_from(i) {
             i
         } else {
@@ -146,7 +146,7 @@ fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Optio
         1
     };
     let hour = if let Some(hour) = lfp.try_arg(3) {
-        let i = hour.coerce_to_int(vm, globals)?;
+        let i = hour.coerce_to_int_i64(vm, globals)?;
         if let Ok(i) = u32::try_from(i) {
             i
         } else {
@@ -156,7 +156,7 @@ fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Optio
         0
     };
     let min = if let Some(min) = lfp.try_arg(4) {
-        let i = min.coerce_to_int(vm, globals)?;
+        let i = min.coerce_to_int_i64(vm, globals)?;
         if let Ok(i) = u32::try_from(i) {
             i
         } else {
@@ -166,7 +166,7 @@ fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Optio
         0
     };
     let sec = if let Some(sec) = lfp.try_arg(5) {
-        let i = sec.coerce_to_int(vm, globals)?;
+        let i = sec.coerce_to_int_i64(vm, globals)?;
         if let Ok(i) = u32::try_from(i) {
             i
         } else {
@@ -176,7 +176,7 @@ fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Optio
         0
     };
     let usec = if let Some(usec) = lfp.try_arg(6) {
-        let i = usec.coerce_to_int(vm, globals)?;
+        let i = usec.coerce_to_int_i64(vm, globals)?;
         if let Ok(i) = u32::try_from(i) {
             i
         } else {

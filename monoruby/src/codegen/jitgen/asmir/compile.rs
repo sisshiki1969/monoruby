@@ -459,7 +459,8 @@ impl Codegen {
                     sarq  R(r), 1;
                     negq  R(r);
                     jo    deopt;
-                    salq  R(r), 1;
+                    addq  R(r), R(r);
+                    jo    deopt;
                     orq   R(r), 1;
                 }
             }

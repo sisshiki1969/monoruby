@@ -92,7 +92,7 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn match_begin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
-    let idx = lfp.arg(0).coerce_to_int(vm, globals)? as usize;
+    let idx = lfp.arg(0).coerce_to_int_i64(vm, globals)? as usize;
     if idx >= m.len() {
         return Err(MonorubyErr::indexerr(format!(
             "index {idx} out of matches"
@@ -119,7 +119,7 @@ fn match_begin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
 fn match_end(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
-    let idx = lfp.arg(0).coerce_to_int(vm, globals)? as usize;
+    let idx = lfp.arg(0).coerce_to_int_i64(vm, globals)? as usize;
     if idx >= m.len() {
         return Err(MonorubyErr::indexerr(format!(
             "index {idx} out of matches"

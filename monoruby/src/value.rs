@@ -1323,9 +1323,24 @@ impl Value {
         }
     }
 
-    /// Convert `self` to i64 via `to_int` if needed.
-    pub(crate) fn coerce_to_int(&self, vm: &mut Executor, globals: &mut Globals) -> Result<i64> {
-        match self.unpack() {
+    ///
+    /// Try conversion from `self` to i64 using `to_int`.
+    ///
+    /// - if `self` is a Fixnum, return it as i64.
+    /// - if `self` is a Bignum, return it as i64 if it fits, otherwise return RangeError.
+    /// - if `self` responds to `to_int`, call it and try conversion on the result.
+    /// - otherwise, return TypeError.
+    ///
+    pub(crate) fn coerce_to_int_i64(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<i64> {
+        let res = match self.unpack() {
+            RV::Fixnum(_) | RV::BigInt(_) => *self,
+            _ => self.coerce_to_int(vm, globals)?,
+        };
+        match res.unpack() {
             RV::Fixnum(i) => return Ok(i),
             RV::BigInt(b) => {
                 use num::ToPrimitive;
@@ -1333,31 +1348,29 @@ impl Value {
                     .to_i64()
                     .ok_or_else(|| MonorubyErr::rangeerr("bignum too big to convert into `long'"));
             }
-            _ => {}
-        }
+            _ => unreachable!(),
+        };
+    }
+
+    pub(crate) fn coerce_to_int(&self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         if let Some(func_id) = globals.check_method(*self, IdentId::TO_INT) {
             let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
             match result.unpack() {
-                RV::Fixnum(i) => return Ok(i),
-                RV::BigInt(b) => {
-                    use num::ToPrimitive;
-                    return b.to_i64().ok_or_else(|| {
-                        MonorubyErr::rangeerr("bignum too big to convert into `long'")
-                    });
-                }
-                _ => {}
+                RV::Fixnum(_) | RV::BigInt(_) => Ok(result),
+                _ => Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} to Integer ({}#to_int gives {})",
+                    self.get_real_class_name(&globals.store),
+                    self.get_real_class_name(&globals.store),
+                    result.get_real_class_name(&globals.store),
+                ))),
             }
-            return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} to Integer ({}#to_int gives {})",
-                self.get_real_class_name(&globals.store),
-                self.get_real_class_name(&globals.store),
-                result.get_real_class_name(&globals.store),
-            )));
+        } else {
+            Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                *self,
+                INTEGER_CLASS,
+            ))
         }
-        Err(MonorubyErr::typeerr(format!(
-            "no implicit conversion of {} into Integer",
-            self.get_real_class_name(&globals.store)
-        )))
     }
 
     /// Convert `self` to Integer (Fixnum or BigInt) for sprintf.
@@ -1395,7 +1408,7 @@ impl Value {
             _ => {}
         };
         // Try to_int first, then to_i as fallback (matching CRuby sprintf behavior).
-        if let Ok(i) = self.coerce_to_int(vm, globals) {
+        if let Ok(i) = self.coerce_to_int_i64(vm, globals) {
             return Ok(IntegerBase::Fixnum(i));
         }
         if let Some(func_id) = globals.check_method(*self, IdentId::get_id("to_i")) {
@@ -1417,11 +1430,7 @@ impl Value {
     /// Tries direct conversion first, then to_f.
     /// Accepts Fixnum, Float, String (parsed).
     /// Raises TypeError if no conversion is possible.
-    pub(crate) fn coerce_to_float(
-        &self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<f64> {
+    pub(crate) fn coerce_to_float(&self, vm: &mut Executor, globals: &mut Globals) -> Result<f64> {
         match self.unpack() {
             RV::Fixnum(i) => return Ok(i as f64),
             RV::Float(f) => return Ok(f),
@@ -1816,11 +1825,7 @@ impl Value {
 
     /// Call Ruby-level `to_s` (explicit conversion) on the value.
     /// This is used by sprintf %s to match CRuby behavior.
-    pub(crate) fn coerce_to_s(
-        &self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<String> {
+    pub(crate) fn coerce_to_s(&self, vm: &mut Executor, globals: &mut Globals) -> Result<String> {
         if let Some(s) = self.is_str() {
             return Ok(s.to_string());
         }

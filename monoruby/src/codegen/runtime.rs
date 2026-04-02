@@ -545,7 +545,7 @@ pub(super) extern "C" fn get_index(
         ARRAY_CLASS => {
             // If the index is not a fixnum or range, try to_int coercion
             let idx = if index.try_fixnum().is_none() && index.is_range().is_none() {
-                match index.coerce_to_int(vm, globals) {
+                match index.coerce_to_int_i64(vm, globals) {
                     Ok(i) => Value::integer(i),
                     Err(err) => {
                         vm.set_error(err);
@@ -572,7 +572,7 @@ pub(super) extern "C" fn get_index(
                 }
             };
         }
-        INTEGER_CLASS => {
+        /*INTEGER_CLASS => {
             // Try to_int coercion for non-integer index
             let idx = match index.unpack() {
                 RV::Fixnum(_) | RV::BigInt(_) => index,
@@ -581,7 +581,7 @@ pub(super) extern "C" fn get_index(
                         index
                     } else {
                         match index.coerce_to_int(vm, globals) {
-                            Ok(i) => Value::integer(i),
+                            Ok(i) => i,
                             Err(err) => {
                                 vm.set_error(err);
                                 return None;
@@ -597,7 +597,7 @@ pub(super) extern "C" fn get_index(
                     None
                 }
             };
-        }
+        }*/
         METHOD_CLASS => {
             let method = base.as_method();
             let func_id = method.func_id();

@@ -135,7 +135,7 @@ fn regexp_union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
 #[monoruby_builtin]
 fn regexp_last_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
-        let nth = arg0.coerce_to_int(vm, globals)?;
+        let nth = arg0.coerce_to_int_i64(vm, globals)?;
         Ok(vm.get_special_matches(nth))
     } else {
         Ok(vm.get_last_matchdata())
@@ -233,7 +233,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let regex = self_.is_regex().unwrap();
     let given = lfp.arg(0).coerce_to_string(vm, globals)?;
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
-        match conv_index(pos.coerce_to_int(vm, globals)?, given.chars().count()) {
+        match conv_index(pos.coerce_to_int_i64(vm, globals)?, given.chars().count()) {
             Some(pos) => pos,
             None => return Ok(Value::bool(false)),
         }
@@ -261,7 +261,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let regex = lfp.self_val().as_regexp();
     let heystack = lfp.arg(0).coerce_to_string(vm, globals)?;
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
-        match conv_index(pos.coerce_to_int(vm, globals)?, heystack.chars().count()) {
+        match conv_index(pos.coerce_to_int_i64(vm, globals)?, heystack.chars().count()) {
             Some(pos) => pos,
             None => return Ok(Value::bool(false)),
         }

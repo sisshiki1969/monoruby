@@ -151,12 +151,12 @@ fn file_read(
 fn binread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let filename = to_path(vm, globals, lfp.arg(0))?;
     let length = if let Some(arg1) = lfp.try_arg(1) {
-        Some(arg1.coerce_to_int(vm, globals)?)
+        Some(arg1.coerce_to_int_i64(vm, globals)?)
     } else {
         None
     };
     let offset = if let Some(arg2) = lfp.try_arg(2) {
-        Some(arg2.coerce_to_int(vm, globals)?)
+        Some(arg2.coerce_to_int_i64(vm, globals)?)
     } else {
         None
     };
@@ -610,7 +610,7 @@ fn resolve_feature_path(
 #[monoruby_builtin]
 fn umask(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
-        let mask = arg0.coerce_to_int(vm, globals)? as u32;
+        let mask = arg0.coerce_to_int_i64(vm, globals)? as u32;
         // SAFETY: umask is a POSIX system call that is safe to call.
         let old = unsafe { libc::umask(mask as libc::mode_t) };
         Ok(Value::integer(old as i64))
@@ -639,7 +639,7 @@ fn fnmatch(
     let pattern = lfp.arg(0).coerce_to_string(vm, globals)?;
     let path_str = lfp.arg(1).coerce_to_string(vm, globals)?;
     let flags = if let Some(arg2) = lfp.try_arg(2) {
-        arg2.coerce_to_int(vm, globals)? as u32
+        arg2.coerce_to_int_i64(vm, globals)? as u32
     } else {
         0
     };
@@ -959,7 +959,7 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn chmod(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
-    let mode = args[0].coerce_to_int(_vm, globals)? as u32;
+    let mode = args[0].coerce_to_int_i64(_vm, globals)? as u32;
     let mut count = 0i64;
     for arg in args[1..].iter() {
         let path = arg.coerce_to_str(_vm, globals)?;

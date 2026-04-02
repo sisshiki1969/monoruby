@@ -47,8 +47,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_exception_class("ArgumentError", ARGUMENTS_ERROR_CLASS, standarderr);
     globals.define_class("EncodingError", standarderr, OBJECT_CLASS);
     globals.define_builtin_exception_class("FiberError", FIBER_ERROR_CLASS, standarderr);
-    let ioerr =
-        globals.define_builtin_exception_class("IOError", IO_ERROR_CLASS, standarderr);
+    let ioerr = globals.define_builtin_exception_class("IOError", IO_ERROR_CLASS, standarderr);
     globals.define_class("EOFError", ioerr, OBJECT_CLASS);
 
     let indexerr =
@@ -104,18 +103,11 @@ fn nomethoderr_receiver(
 
 /// ### Exception.allocate
 #[monoruby_builtin]
-fn allocate(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn allocate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let name = class_id.get_name(globals);
     Ok(Value::new_exception_from_with_class(
-        name,
-        class_id,
-        class_id,
+        name, class_id, class_id,
     ))
 }
 
@@ -127,7 +119,12 @@ fn allocate(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/s/exception.html]
 #[monoruby_builtin]
-fn exception_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn exception_new(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let class_id = lfp.self_val().expect_class(globals)?.id();
     let obj = Value::new_exception_from("".to_string(), class_id);
 
@@ -190,9 +187,7 @@ fn store_exception_kwargs(
     }
     let key_key = Value::symbol_from_str("key");
     if let Ok(Some(v)) = hash.get(key_key, vm, globals) {
-        globals
-            .store
-            .set_ivar(self_, IdentId::get_id("/key"), v)?;
+        globals.store.set_ivar(self_, IdentId::get_id("/key"), v)?;
     }
     Ok(())
 }
@@ -289,7 +284,12 @@ fn keyerror_key(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/LoadError/i/path.html]
 #[monoruby_builtin]
-fn loaderror_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn loaderror_path(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
     Ok(globals
         .store
@@ -304,7 +304,12 @@ fn loaderror_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/SystemExit/i/status.html]
 #[monoruby_builtin]
-fn system_exit_status(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn system_exit_status(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
     Ok(globals
         .store
@@ -319,11 +324,16 @@ fn system_exit_status(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: By
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/SystemExit/s/new.html]
 #[monoruby_builtin]
-fn system_exit_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn system_exit_new(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let class_id = lfp.self_val().expect_class(globals)?.id();
     let name = class_id.get_name(&globals.store);
     let (status, msg) = if let Some(arg0) = lfp.try_arg(0) {
-        let status = arg0.coerce_to_int(vm, globals)?;
+        let status = arg0.coerce_to_int_i64(vm, globals)?;
         if let Some(arg1) = lfp.try_arg(1) {
             (status, arg1.coerce_to_str(vm, globals)?)
         } else {
@@ -345,7 +355,10 @@ fn system_exit_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
 #[monoruby_builtin]
 fn cause(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    Ok(globals.store.get_ivar(self_, IdentId::get_id("/cause")).unwrap_or_default())
+    Ok(globals
+        .store
+        .get_ivar(self_, IdentId::get_id("/cause"))
+        .unwrap_or_default())
 }
 
 #[cfg(test)]

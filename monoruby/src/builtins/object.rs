@@ -79,7 +79,6 @@ pub(super) fn init(globals: &mut Globals) {
         bo_noop_hook,
         1,
     );
-
 }
 
 ///
@@ -212,7 +211,12 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/object_id.html]
 #[monoruby_builtin]
-pub(super) fn object_id(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn object_id(
+    _: &mut Executor,
+    _: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(Value::integer(lfp.self_val().id() as i64))
 }
 
@@ -333,11 +337,12 @@ fn instance_eval_inner(
             format!("(eval at {})", caller_loc)
         };
         let lineno: i64 = if argc >= 3 {
-            args[2].coerce_to_int(vm, globals)?
+            args[2].coerce_to_int_i64(vm, globals)?
         } else {
             1
         };
-        let fid = globals.compile_script_eval(expr, path, caller_cfp, Some(self_val.class()), lineno)?;
+        let fid =
+            globals.compile_script_eval(expr, path, caller_cfp, Some(self_val.class()), lineno)?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block_with_self(globals, &proc, self_val, &[])
     } else {
@@ -421,9 +426,7 @@ mod tests {
         // instance_eval with filename and lineno
         run_test(r#"instance_eval("__LINE__", "test.rb", 42)"#);
         run_test(r#"instance_eval("__FILE__", "test.rb", 42)"#);
-        run_test(
-            r#"instance_eval("__LINE__\n__LINE__", "test.rb", 10)"#,
-        );
+        run_test(r#"instance_eval("__LINE__\n__LINE__", "test.rb", 10)"#);
     }
 
     #[test]

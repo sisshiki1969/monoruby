@@ -516,11 +516,109 @@ pub(crate) fn integer_index1(
 ) -> Result<Value> {
     // Handle Integer#[Range]
     if let Some(range) = index.is_range() {
-        let start = range.start().coerce_to_int(vm, globals)?;
-        let end = range.end().coerce_to_int(vm, globals)?;
+        let start_val = range.start();
+        let end_val = range.end();
         let exclude_end = range.exclude_end();
-        let end = if exclude_end { end } else { end + 1 };
+
+        // Check for Float::INFINITY in range boundaries
+        fn check_float_domain(val: Value, globals: &Globals) -> Result<()> {
+            if let Some(f) = val.try_float() {
+                if f.is_infinite() || f.is_nan() {
+                    let msg = if f.is_nan() {
+                        "NaN".to_string()
+                    } else if f > 0.0 {
+                        "Infinity".to_string()
+                    } else {
+                        "-Infinity".to_string()
+                    };
+                    let class_id = globals
+                        .store
+                        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("FloatDomainError"))
+                        .map(|v| v.as_class_id());
+                    return Err(match class_id {
+                        Some(cid) => MonorubyErr::new(MonorubyErrKind::Other(cid), msg),
+                        None => MonorubyErr::rangeerr(msg),
+                    });
+                }
+            }
+            Ok(())
+        }
+        check_float_domain(start_val, globals)?;
+        check_float_domain(end_val, globals)?;
+
+        let is_beginless = start_val.is_nil();
+        let is_endless = end_val.is_nil();
+
+        // Handle beginless range (..i)
+        if is_beginless {
+            let end = end_val.coerce_to_int_i64(vm, globals)?;
+            let end = if exclude_end { end } else { end + 1 };
+            // Extract bits 0..end from base
+            let extracted = match base.unpack() {
+                RV::Fixnum(b) => {
+                    if end <= 0 {
+                        0i64
+                    } else if end >= 64 {
+                        b
+                    } else {
+                        b & ((1i64 << end) - 1)
+                    }
+                }
+                RV::BigInt(b) => {
+                    if end <= 0 {
+                        0i64
+                    } else {
+                        let mask = (BigInt::from(1) << end as usize) - 1;
+                        let result: BigInt = b & mask;
+                        // Convert to i64 if possible
+                        use num::ToPrimitive;
+                        result.to_i64().unwrap_or(1) // non-zero means raise
+                    }
+                }
+                _ => unreachable!(),
+            };
+            if extracted != 0 {
+                return Err(MonorubyErr::argumenterr(
+                    "The beginless range for Integer#[] results in infinity",
+                ));
+            }
+            return Ok(Value::integer(0));
+        }
+
+        // Handle endless range (i..)
+        if is_endless {
+            let start = start_val.coerce_to_int_i64(vm, globals)?;
+            return match base.unpack() {
+                RV::Fixnum(b) => {
+                    if start >= 0 {
+                        if start >= 64 {
+                            Ok(Value::integer(if b < 0 { -1 } else { 0 }))
+                        } else {
+                            Ok(Value::integer(b >> start))
+                        }
+                    } else {
+                        // Negative start in endless range: shift left
+                        Ok(Value::bigint(BigInt::from(b) << (-start) as usize))
+                    }
+                }
+                RV::BigInt(b) => {
+                    if start >= 0 {
+                        Ok(Value::bigint(b >> start as usize))
+                    } else {
+                        Ok(Value::bigint(b << (-start) as usize))
+                    }
+                }
+                _ => unreachable!(),
+            };
+        }
+
+        let start = start_val.coerce_to_int_i64(vm, globals)?;
+        let end_raw = end_val.coerce_to_int_i64(vm, globals)?;
+        let end = if exclude_end { end_raw } else { end_raw + 1 };
         let width = end - start;
+        // Check if range is "reversed": for inclusive a..b where b < a, or
+        // exclusive a...b where b < a (but NOT a...a which is 0-width)
+        let is_reversed = if exclude_end { end_raw < start } else { end_raw < start };
         let shifted = |base: &BigInt| -> BigInt {
             if start >= 0 {
                 base >> start
@@ -528,16 +626,19 @@ pub(crate) fn integer_index1(
                 base << (-start) as usize
             }
         };
-        // When width < 0, extract all bits from start (no masking)
-        if width < 0 {
+        // When reversed, extract all bits from start (no masking)
+        if is_reversed {
             return match base.unpack() {
                 RV::Fixnum(base) => {
-                    let val = if start >= 0 {
-                        base >> start
+                    if start >= 0 {
+                        if start >= 64 {
+                            Ok(Value::integer(if base < 0 { -1 } else { 0 }))
+                        } else {
+                            Ok(Value::integer(base >> start))
+                        }
                     } else {
-                        base << -start
-                    };
-                    Ok(Value::integer(val))
+                        Ok(Value::bigint(BigInt::from(base) << (-start) as usize))
+                    }
                 }
                 RV::BigInt(base) => Ok(Value::bigint(shifted(base))),
                 _ => unreachable!(),
