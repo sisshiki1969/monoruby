@@ -358,6 +358,7 @@ fn integer_tof(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -576,6 +577,7 @@ fn integer_shr(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -614,6 +616,7 @@ fn integer_shl(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {

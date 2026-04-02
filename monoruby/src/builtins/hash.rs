@@ -58,7 +58,17 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "key", key, 1);
     globals.define_builtin_func(HASH_CLASS, "keep_if", keep_if, 0);
     globals.define_builtin_func(HASH_CLASS, "values", values, 0);
-    globals.define_builtin_funcs_with_kw(HASH_CLASS, "clone", &["dup"], clone, 0, 1, false, &[], false);
+    globals.define_builtin_funcs_with_kw(
+        HASH_CLASS,
+        "clone",
+        &["dup"],
+        clone,
+        0,
+        1,
+        false,
+        &[],
+        false,
+    );
     globals.define_builtin_func(HASH_CLASS, "compare_by_identity?", compare_by_identity_, 0);
     globals.define_builtin_func_rest(HASH_CLASS, "values_at", values_at);
     globals.define_builtin_func_rest(HASH_CLASS, "dig", dig);
@@ -193,7 +203,6 @@ fn hash_bracket(
         }
     }
 }
-
 
 /// Helper to convert an iterator of values (expected to be [k,v] pairs) into a Hash.
 fn hash_from_array_pairs(
@@ -332,7 +341,12 @@ fn default_proc_assign(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/default=3d.html]
 #[monoruby_builtin]
-fn default_assign(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn default_assign(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let default = lfp.arg(0);
     lfp.self_val().as_hash().set_defalut_value(default);
@@ -508,6 +522,7 @@ fn hash_index(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -1127,9 +1142,16 @@ fn compare_by_identity(
 
 /// ### Hash#compare_by_identity?
 #[monoruby_builtin]
-fn compare_by_identity_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn compare_by_identity_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     lfp.expect_no_block()?;
-    Ok(Value::bool(lfp.self_val().as_hash().is_compare_by_identity()))
+    Ok(Value::bool(
+        lfp.self_val().as_hash().is_compare_by_identity(),
+    ))
 }
 
 /// ### Hash#values_at
@@ -1150,14 +1172,23 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 fn dig(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     if args.is_empty() {
-        return Err(MonorubyErr::argumenterr("wrong number of arguments (given 0, expected 1+)"));
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 0, expected 1+)",
+        ));
     }
     let hash = lfp.self_val().as_hash();
     let first_key = args[0];
-    let mut val = if let Some(v) = hash.get(first_key, vm, globals)? { v } else { return Ok(Value::nil()); };
+    let mut val = if let Some(v) = hash.get(first_key, vm, globals)? {
+        v
+    } else {
+        return Ok(Value::nil());
+    };
     for i in 1..args.len() {
-        if val.is_nil() { return Ok(Value::nil()); }
-        val = vm.invoke_method_inner(globals, IdentId::get_id("dig"), val, &[args[i]], None, None)?;
+        if val.is_nil() {
+            return Ok(Value::nil());
+        }
+        val =
+            vm.invoke_method_inner(globals, IdentId::get_id("dig"), val, &[args[i]], None, None)?;
     }
     Ok(val)
 }
@@ -1174,7 +1205,9 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             let result = vm.invoke_block(globals, &data, &[k, v])?;
             let arr = result.expect_array_ty(globals)?;
             if arr.len() != 2 {
-                return Err(MonorubyErr::typeerr("wrong element type (expected array with 2 elements)"));
+                return Err(MonorubyErr::typeerr(
+                    "wrong element type (expected array with 2 elements)",
+                ));
             }
             new_map.insert(arr[0], arr[1], vm, globals)?;
         }

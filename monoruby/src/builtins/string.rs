@@ -2127,6 +2127,7 @@ fn string_bytesize(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {

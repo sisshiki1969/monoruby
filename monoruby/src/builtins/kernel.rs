@@ -206,6 +206,7 @@ fn kernel_nil(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -255,6 +256,7 @@ fn kernel_block_given(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -456,7 +458,6 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     Err(MonorubyErr::typeerr("exception class/object expected"))
 }
-
 
 ///
 /// ### Kernel.#block_given?
@@ -1650,6 +1651,7 @@ pub fn object_send(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     let no_splat = !callsite.object_send_single_splat();
@@ -1893,6 +1895,7 @@ fn object_respond_to(
     store: &Store,
     callid: CallSiteId,
     recv_class: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {

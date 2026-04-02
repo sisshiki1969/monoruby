@@ -30,7 +30,12 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/s/new.html]
 #[monoruby_builtin]
-fn fiber_new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+fn fiber_new(
+    vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let proc = vm.generate_proc(bh, pc)?;
     Ok(Value::new_fiber(proc))
@@ -43,7 +48,12 @@ fn fiber_new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, pc: BytecodePt
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/s/yield.html]
 #[monoruby_builtin]
-fn fiber_yield(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn fiber_yield(
+    vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     if vm.parent_fiber().is_none() {
         return Err(MonorubyErr::fibererr(
             "attempt to yield on a not resumed fiber".to_string(),
@@ -67,6 +77,7 @@ fn fiber_yield_inline(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {

@@ -42,12 +42,7 @@ pub(super) fn init(globals: &mut Globals) {
 
 /// No-op hook for Class#inherited.
 #[monoruby_builtin]
-fn class_noop_hook(
-    _: &mut Executor,
-    _: &mut Globals,
-    _lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn class_noop_hook(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::nil())
 }
 
@@ -187,13 +182,22 @@ pub(super) fn undef_allocate(
 
 pub(super) fn gen_class_new(
     f: extern "C" fn(Value) -> Value,
-) -> impl Fn(&mut AbstractState, &mut AsmIr, &JitContext, &Store, CallSiteId, ClassId) -> bool {
+) -> impl Fn(
+    &mut AbstractState,
+    &mut AsmIr,
+    &JitContext,
+    &Store,
+    CallSiteId,
+    ClassId,
+    Option<ClassId>,
+) -> bool {
     move |state: &mut AbstractState,
           ir: &mut AsmIr,
           _: &JitContext,
           store: &Store,
           callid: CallSiteId,
-          _: ClassId| {
+          _: ClassId,
+          _: Option<ClassId>| {
         let callsite = &store[callid];
         if !callsite.is_simple() {
             return false;
@@ -276,6 +280,7 @@ fn inline_allocate(
     store: &Store,
     callid: CallSiteId,
     self_class: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {

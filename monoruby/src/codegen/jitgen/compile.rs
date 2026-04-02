@@ -294,7 +294,8 @@ impl<'a> JitContext<'a> {
                 match class {
                     _ if kind == UnOpK::Not => {
                         if let Some(recv_class) = class {
-                            return self.call_unary_method(state, ir, src, recv_class, kind, bc_pos);
+                            return self
+                                .call_unary_method(state, ir, src, recv_class, kind, bc_pos);
                         } else {
                             return Ok(CompileResult::Recompile(RecompileReason::NotCached));
                         }
@@ -740,7 +741,7 @@ impl<'a> JitContext<'a> {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, recv);
             assert_eq!(self.store[callid].pos_num, 0);
-            self.compile_method_call(state, ir, recv_class, func_id, callid)
+            self.compile_method_call(state, ir, recv_class, None, func_id, callid)
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }
@@ -753,6 +754,7 @@ impl<'a> JitContext<'a> {
         lhs: SlotId,
         rhs: SlotId,
         lhs_class: ClassId,
+        rhs_class: Option<ClassId>,
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
@@ -761,7 +763,7 @@ impl<'a> JitContext<'a> {
             assert_eq!(self.store[callid].recv, lhs);
             assert_eq!(self.store[callid].args, rhs);
             assert_eq!(self.store[callid].pos_num, 1);
-            self.compile_method_call(state, ir, lhs_class, fid, callid)
+            self.compile_method_call(state, ir, lhs_class, rhs_class, fid, callid)
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }
@@ -774,6 +776,7 @@ impl<'a> JitContext<'a> {
         recv: SlotId,
         idx: SlotId,
         recv_class: ClassId,
+        idx_class: Option<ClassId>,
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
@@ -782,7 +785,7 @@ impl<'a> JitContext<'a> {
             assert_eq!(self.store[callid].recv, recv);
             assert_eq!(self.store[callid].args, idx);
             assert_eq!(self.store[callid].pos_num, 2);
-            self.compile_method_call(state, ir, recv_class, fid, callid)
+            self.compile_method_call(state, ir, recv_class, idx_class, fid, callid)
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }
@@ -862,7 +865,7 @@ impl<'a> JitContext<'a> {
 enum BinaryOpType {
     Integer(OpMode),
     Float(FBinOpInfo),
-    Other(Option<ClassId>),
+    Other(Option<ClassId>, Option<ClassId>),
 }
 
 impl AbstractState {
@@ -915,6 +918,6 @@ impl AbstractState {
                 _ => {}
             }
         }
-        BinaryOpType::Other(lhs_class)
+        BinaryOpType::Other(lhs_class, rhs_class)
     }
 }

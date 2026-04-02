@@ -30,6 +30,7 @@ impl<'a> JitContext<'a> {
                             lhs,
                             rhs,
                             info.lhs_class.into(),
+                            Some(info.rhs_class.into()),
                             kind,
                             bc_pos,
                         );
@@ -39,10 +40,12 @@ impl<'a> JitContext<'a> {
                 state.binop_float(ir, kind, dst, info);
                 Ok(CompileResult::Continue)
             }
-            BinaryOpType::Other(Some(lhs_class)) => {
-                self.call_binary_method(state, ir, lhs, rhs, lhs_class, kind, bc_pos)
+            BinaryOpType::Other(None, _) => {
+                Ok(CompileResult::Recompile(RecompileReason::NotCached))
             }
-            BinaryOpType::Other(None) => Ok(CompileResult::Recompile(RecompileReason::NotCached)),
+            BinaryOpType::Other(Some(lhs_class), rhs_class) => {
+                self.call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos)
+            }
         }
     }
 
@@ -66,10 +69,12 @@ impl<'a> JitContext<'a> {
                 state.gen_cmp_float(ir, dst, info, kind);
                 Ok(CompileResult::Continue)
             }
-            BinaryOpType::Other(Some(lhs_class)) => {
-                self.call_binary_method(state, ir, lhs, rhs, lhs_class, kind, bc_pos)
+            BinaryOpType::Other(None, _) => {
+                Ok(CompileResult::Recompile(RecompileReason::NotCached))
             }
-            BinaryOpType::Other(None) => Ok(CompileResult::Recompile(RecompileReason::NotCached)),
+            BinaryOpType::Other(Some(lhs_class), rhs_class) => {
+                self.call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos)
+            }
         }
     }
 
@@ -109,8 +114,12 @@ impl<'a> JitContext<'a> {
                 self.new_side_branch(src_idx, dest_bb, state.clone(), dest);
                 Ok(CompileResult::Continue)
             }
-            BinaryOpType::Other(Some(lhs_class)) => {
-                let res = self.call_binary_method(state, ir, lhs, rhs, lhs_class, kind, bc_pos)?;
+            BinaryOpType::Other(None, _) => {
+                Ok(CompileResult::Recompile(RecompileReason::NotCached))
+            }
+            BinaryOpType::Other(Some(lhs_class), rhs_class) => {
+                let res = self
+                    .call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos)?;
                 if let CompileResult::Continue = res {
                     let src_idx = bc_pos + 1;
                     state.unset_class_version_guard();
@@ -118,7 +127,6 @@ impl<'a> JitContext<'a> {
                 }
                 Ok(res)
             }
-            BinaryOpType::Other(None) => Ok(CompileResult::Recompile(RecompileReason::NotCached)),
         }
     }
 }
