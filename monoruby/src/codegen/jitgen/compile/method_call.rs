@@ -46,7 +46,7 @@ impl<'a> JitContext<'a> {
                 return Ok(CompileResult::Recompile(RecompileReason::NotCached));
             }
         };
-        self.compile_method_call(state, ir, recv_class, func_id, callid)
+        self.compile_method_call(state, ir, recv_class, None, func_id, callid)
     }
 
     ///
@@ -57,6 +57,7 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         ir: &mut AsmIr,
         recv_class: ClassId,
+        arg_class: Option<ClassId>,
         func_id: FuncId,
         callid: CallSiteId,
     ) -> JitResult<CompileResult> {
@@ -88,7 +89,7 @@ impl<'a> JitContext<'a> {
         {
             match info {
                 InlineFuncInfo::InlineGen(f) => {
-                    if self.inline_asm(state, ir, f, callid, recv_class) {
+                    if self.inline_asm(state, ir, f, callid, recv_class, arg_class) {
                         state.unset_side_effect_guard();
                         return Ok(CompileResult::Continue);
                     }
@@ -543,13 +544,22 @@ impl<'a> JitContext<'a> {
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
-        f: impl Fn(&mut AbstractState, &mut AsmIr, &JitContext, &Store, CallSiteId, ClassId) -> bool,
+        f: impl Fn(
+            &mut AbstractState,
+            &mut AsmIr,
+            &JitContext,
+            &Store,
+            CallSiteId,
+            ClassId,
+            Option<ClassId>,
+        ) -> bool,
         callid: CallSiteId,
         recv_class: ClassId,
+        arg_class: Option<ClassId>,
     ) -> bool {
         let state_save = state.clone();
         let ir_save = ir.save();
-        if f(state, ir, self, &self.store, callid, recv_class) {
+        if f(state, ir, self, &self.store, callid, recv_class, arg_class) {
             true
         } else {
             *state = state_save;

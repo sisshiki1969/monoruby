@@ -25,6 +25,7 @@ impl<'a> JitContext<'a> {
                 base,
                 idx,
                 lhs_class,
+                idx_class,
                 IdentId::_INDEX,
                 bc_pos,
             );
@@ -56,6 +57,7 @@ impl<'a> JitContext<'a> {
                 base,
                 idx,
                 recv_class,
+                idx_class,
                 IdentId::_INDEX_ASSIGN,
                 bc_pos,
             );

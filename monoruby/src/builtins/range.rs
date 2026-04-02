@@ -8,13 +8,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Range", RANGE_CLASS, ObjTy::RANGE);
     globals.define_builtin_class_func_with(RANGE_CLASS, "new", range_new, 2, 3, false);
     globals.define_builtin_class_func(RANGE_CLASS, "allocate", allocate, 0);
-    globals.define_builtin_inline_func(
-        RANGE_CLASS,
-        "begin",
-        begin,
-        Box::new(range_begin),
-        0,
-    );
+    globals.define_builtin_inline_func(RANGE_CLASS, "begin", begin, Box::new(range_begin), 0);
     globals.define_builtin_func_with(RANGE_CLASS, "first", first, 0, 1, false);
     globals.define_builtin_inline_func(RANGE_CLASS, "end", end, Box::new(range_end), 0);
     globals.define_builtin_func_with(RANGE_CLASS, "last", last, 0, 1, false);
@@ -47,21 +41,13 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/s/new.html]
 #[monoruby_builtin]
 fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let exclude_end = lfp
-        .try_arg(2)
-        .map(|v| v.as_bool())
-        .unwrap_or(false);
+    let exclude_end = lfp.try_arg(2).map(|v| v.as_bool()).unwrap_or(false);
     globals.generate_range(lfp.arg(0), lfp.arg(1), exclude_end)
 }
 
 /// ### Range.allocate
 #[monoruby_builtin]
-fn allocate(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     Ok(Value::range_with_class(
         Value::nil(),
@@ -89,6 +75,7 @@ fn range_begin(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -130,6 +117,7 @@ fn range_end(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -165,7 +153,7 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if let Some(n_val) = lfp.try_arg(0) {
-        let n = n_val.coerce_to_int(vm, globals)?;
+        let n = n_val.coerce_to_int_i64(vm, globals)?;
         if n < 0 {
             return Err(MonorubyErr::argumenterr("negative array size"));
         }
@@ -193,7 +181,7 @@ fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if let Some(n_val) = lfp.try_arg(0) {
-        let n = n_val.coerce_to_int(vm, globals)?;
+        let n = n_val.coerce_to_int_i64(vm, globals)?;
         if n < 0 {
             return Err(MonorubyErr::argumenterr("negative array size"));
         }
@@ -216,7 +204,12 @@ fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/exclude_end=3f.html]
 #[monoruby_builtin]
-fn exclude_end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn exclude_end(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_range().exclude_end()))
 }
 
@@ -227,6 +220,7 @@ fn range_exclude_end(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -681,7 +675,14 @@ fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 let cmp = vm.invoke_block(globals, &data, &[val, min_val])?;
                 // CRuby calls < on the block result
                 let is_less = vm
-                    .invoke_method_inner(globals, IdentId::_LT, cmp, &[Value::integer(0)], None, None)?
+                    .invoke_method_inner(
+                        globals,
+                        IdentId::_LT,
+                        cmp,
+                        &[Value::integer(0)],
+                        None,
+                        None,
+                    )?
                     .as_bool();
                 if is_less {
                     min_val = val;
@@ -756,7 +757,14 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 let cmp = vm.invoke_block(globals, &data, &[val, max_val])?;
                 // CRuby calls > on the block result
                 let is_greater = vm
-                    .invoke_method_inner(globals, IdentId::_GT, cmp, &[Value::integer(0)], None, None)?
+                    .invoke_method_inner(
+                        globals,
+                        IdentId::_GT,
+                        cmp,
+                        &[Value::integer(0)],
+                        None,
+                        None,
+                    )?
                     .as_bool();
                 if is_greater {
                     max_val = val;
@@ -812,13 +820,9 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                     }
                     return Ok(Value::string_from_str(&prev));
                 }
-                return Err(MonorubyErr::typeerr(
-                    "cannot exclude non Integer end value",
-                ));
+                return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
             } else {
-                return Err(MonorubyErr::typeerr(
-                    "cannot exclude non Integer end value",
-                ));
+                return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
             }
         }
 
@@ -911,14 +915,28 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 let val = Value::integer(i);
                 let cmp_min = vm.invoke_block(globals, &data, &[val, min_val])?;
                 let is_less = vm
-                    .invoke_method_inner(globals, IdentId::_LT, cmp_min, &[Value::integer(0)], None, None)?
+                    .invoke_method_inner(
+                        globals,
+                        IdentId::_LT,
+                        cmp_min,
+                        &[Value::integer(0)],
+                        None,
+                        None,
+                    )?
                     .as_bool();
                 if is_less {
                     min_val = val;
                 }
                 let cmp_max = vm.invoke_block(globals, &data, &[val, max_val])?;
                 let is_greater = vm
-                    .invoke_method_inner(globals, IdentId::_GT, cmp_max, &[Value::integer(0)], None, None)?
+                    .invoke_method_inner(
+                        globals,
+                        IdentId::_GT,
+                        cmp_max,
+                        &[Value::integer(0)],
+                        None,
+                        None,
+                    )?
                     .as_bool();
                 if is_greater {
                     max_val = val;
@@ -961,14 +979,10 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                     }
                     Value::string_from_str(&prev)
                 } else {
-                    return Err(MonorubyErr::typeerr(
-                        "cannot exclude non Integer end value",
-                    ));
+                    return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
                 }
             } else {
-                return Err(MonorubyErr::typeerr(
-                    "cannot exclude non Integer end value",
-                ));
+                return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
             }
         } else {
             end

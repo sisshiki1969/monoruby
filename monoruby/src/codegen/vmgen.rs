@@ -1127,17 +1127,28 @@ impl Codegen {
     fn vm_neg(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let generic = self.jit.label();
+        let overflow = self.jit.label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
         self.guard_rdi_fixnum(&generic);
         monoasm! { &mut self.jit,
+            movq rax, rdi;  // save original tagged value for overflow case
             sarq rdi, 1;
             negq rdi;
-            lea rdi, [rdi + rdi + 1];
+            jo   overflow;  // i64 negation overflow (MIN_I64)
+            // Check if result fits in i63: add rdi to itself and check overflow
+            addq rdi, rdi;
+            jo   overflow;  // value doesn't fit in i63
+            orq  rdi, 1;    // set fixnum tag bit
         };
         self.vm_lhs_integer();
         self.vm_store_r15(GP::Rdi);
         self.fetch_and_dispatch();
+        // Overflow path: restore original tagged value and fall through to generic
+        self.jit.bind_label(overflow);
+        monoasm! { &mut self.jit,
+            movq rdi, rax;
+        };
         self.vm_generic_unop(&generic, neg_value);
         label
     }

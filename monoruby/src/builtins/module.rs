@@ -354,7 +354,7 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
             format!("(eval at {})", caller_loc)
         };
         let lineno: i64 = if let Some(arg2) = lfp.try_arg(2) {
-            arg2.coerce_to_int(vm, globals)?
+            arg2.coerce_to_int_i64(vm, globals)?
         } else {
             1
         };

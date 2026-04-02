@@ -173,7 +173,7 @@ fn clock_gettime(
         IdentId::FLOAT_SECOND
     };
     let mut tp = TimeSpec::default();
-    let clk_id = lfp.arg(0).coerce_to_int(vm, globals)? as i32;
+    let clk_id = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
     if let Err(errno) = clock_gettime::clock_gettime(clk_id, &mut tp) {
         return Err(MonorubyErr::runtimeerr(format!(
             "clock_gettime failed: errno {}",

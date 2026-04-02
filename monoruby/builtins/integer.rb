@@ -39,10 +39,11 @@ class Integer
     self < 0
   end
 
-  def abs
-    self < 0 ? -self : self
-  end
-  alias magnitude abs
+  # abs and magnitude are defined in Rust for correctness with BigInt edge cases
+  # def abs
+  #   self < 0 ? -self : self
+  # end
+  # alias magnitude abs
 
   def integer?
     true
@@ -64,14 +65,41 @@ class Integer
   end
 
   def round(ndigits = 0, **kw)
+    half = kw[:half]
+    if half != nil && half != :up && half != :down && half != :even
+      raise ArgumentError, "invalid rounding mode: #{half}"
+    end
     ndigits = __coerce_ndigits(ndigits)
     return self if ndigits >= 0
     d = 10 ** (-ndigits)
-    if self >= 0
-      (self + d / 2) / d * d
+    abs_val = self < 0 ? -self : self
+    remainder = abs_val % d
+    truncated = abs_val - remainder
+    halfway = d / 2
+    result = if remainder > halfway
+      truncated + d
+    elsif remainder < halfway
+      truncated
     else
-      -((-self + d / 2) / d * d)
+      # Exactly halfway
+      case half
+      when :up
+        truncated + d
+      when :down
+        truncated
+      when :even
+        # Round to nearest even multiple of d
+        if (truncated / d).even?
+          truncated
+        else
+          truncated + d
+        end
+      else
+        # Default: round half up (away from zero)
+        truncated + d
+      end
     end
+    self < 0 ? -result : result
   end
 
   def truncate(ndigits = 0)
@@ -162,16 +190,25 @@ class Integer
   end
 
   def allbits?(mask)
+    unless mask.respond_to?(:to_int)
+      raise TypeError, "no implicit conversion of #{mask.class} into Integer"
+    end
     mask = mask.to_int
     (self & mask) == mask
   end
 
   def anybits?(mask)
+    unless mask.respond_to?(:to_int)
+      raise TypeError, "no implicit conversion of #{mask.class} into Integer"
+    end
     mask = mask.to_int
     (self & mask) != 0
   end
 
   def nobits?(mask)
+    unless mask.respond_to?(:to_int)
+      raise TypeError, "no implicit conversion of #{mask.class} into Integer"
+    end
     mask = mask.to_int
     (self & mask) == 0
   end
@@ -185,8 +222,20 @@ class Integer
       [other, self.to_f]
     elsif defined?(Rational) && other.is_a?(Rational)
       [other, Rational(self, 1)]
+    elsif other.is_a?(String)
+      # CRuby uses Float(other) which raises ArgumentError for non-numeric strings
+      # We need to validate the string is a valid float representation
+      stripped = other.strip
+      if stripped.empty? || stripped !~ /\A[+-]?(\d+\.?\d*|\d*\.?\d+)([eE][+-]?\d+)?\z/
+        raise ArgumentError, "invalid value for Float(): #{other.inspect}"
+      end
+      [Float(other), self.to_f]
     elsif other.respond_to?(:to_f)
-      [other.to_f, self.to_f]
+      result = other.to_f
+      unless result.is_a?(Float)
+        raise TypeError, "can't convert #{other.class} to Float (#{other.class}#to_f gives #{result.class})"
+      end
+      [result, self.to_f]
     else
       raise TypeError, "#{other.class} can't be coerced into Integer"
     end
@@ -242,7 +291,13 @@ class Integer
   private
 
   def __coerce_ndigits(ndigits)
-    if ndigits.is_a?(Float)
+    if ndigits.is_a?(Integer)
+      # Check for BigInt values that are too large for round/floor/ceil/truncate
+      if ndigits > 0x3FFFFFFF || ndigits < -0x40000000
+        raise RangeError, "integer #{ndigits} too big to convert to `int'"
+      end
+      return ndigits
+    elsif ndigits.is_a?(Float)
       if ndigits.infinite?
         raise RangeError, "float #{ndigits > 0 ? 'Inf' : '-Inf'} out of range of integer"
       end
@@ -255,9 +310,16 @@ class Integer
       if result.nil?
         raise TypeError, "no implicit conversion of #{ndigits.class} into Integer"
       end
+      unless result.is_a?(Integer)
+        raise TypeError, "can't convert #{ndigits.class} to Integer (#{ndigits.class}#to_int gives #{result.class})"
+      end
       ndigits = result
     else
       raise TypeError, "no implicit conversion of #{ndigits.class} into Integer"
+    end
+    # Check for large values after conversion
+    if ndigits > 0x3FFFFFFF || ndigits < -0x40000000
+      raise RangeError, "integer #{ndigits} too big to convert to `int'"
     end
     ndigits
   end

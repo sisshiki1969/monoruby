@@ -117,7 +117,7 @@ fn urandom(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     } else if let Some(size) = lfp.arg(0).try_float() {
         size.round() as i64
     } else {
-        lfp.arg(0).coerce_to_int(vm, globals)?
+        lfp.arg(0).coerce_to_int_i64(vm, globals)?
     };
     if size == 0 {
         return Ok(Value::bytes(vec![]));

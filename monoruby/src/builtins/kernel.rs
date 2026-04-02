@@ -206,6 +206,7 @@ fn kernel_nil(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -255,6 +256,7 @@ fn kernel_block_given(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -457,7 +459,6 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Err(MonorubyErr::typeerr("exception class/object expected"))
 }
 
-
 ///
 /// ### Kernel.#block_given?
 ///
@@ -525,7 +526,7 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let mut cfp = vm.cfp();
     let mut v = Vec::new();
     let level = if let Some(arg0) = lfp.try_arg(0) {
-        arg0.coerce_to_int(vm, globals)? as usize + 1
+        arg0.coerce_to_int_i64(vm, globals)? as usize + 1
     } else {
         2
     };
@@ -611,8 +612,8 @@ fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         if let Some(range) = arg0.is_range() {
             let start = range.start();
             let end = range.end();
-            let start = start.coerce_to_int(vm, globals)?;
-            let end = end.coerce_to_int(vm, globals)?;
+            let start = start.coerce_to_int_i64(vm, globals)?;
+            let end = end.coerce_to_int_i64(vm, globals)?;
             if start > end {
                 return Ok(Value::nil());
             }
@@ -620,7 +621,7 @@ fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 (rand::random::<f64>() * (end - start) as f64 + start as f64) as i64,
             ));
         }
-        arg0.coerce_to_int(vm, globals)?
+        arg0.coerce_to_int_i64(vm, globals)?
     } else {
         0i64
     };
@@ -909,7 +910,7 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         format!("(eval at {})", caller_loc)
     };
     let lineno: i64 = if let Some(l) = lfp.try_arg(3) {
-        l.coerce_to_int(vm, globals)?
+        l.coerce_to_int_i64(vm, globals)?
     } else {
         1
     };
@@ -1262,7 +1263,7 @@ fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // see: https://github.com/ruby/fiddle/blob/2b3747e919df5d044c835cbbb27ebf9e27df74f9/ext/fiddle/handle.c#L136
     let arg0 = lfp.arg(0);
     let flags = if let Some(arg1) = lfp.try_arg(1) {
-        match i32::try_from(arg1.coerce_to_int(vm, globals)?) {
+        match i32::try_from(arg1.coerce_to_int_i64(vm, globals)?) {
             Ok(f) => f,
             Err(_) => return Err(MonorubyErr::argumenterr("Illegale flag value.")),
         }
@@ -1650,6 +1651,7 @@ pub fn object_send(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     let no_splat = !callsite.object_send_single_splat();
@@ -1893,6 +1895,7 @@ fn object_respond_to(
     store: &Store,
     callid: CallSiteId,
     recv_class: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {

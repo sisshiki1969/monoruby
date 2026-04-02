@@ -500,7 +500,7 @@ pub(crate) extern "C" fn shr_values(
         }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
             // >> requires to_int conversion, not coerce
-            match rhs.coerce_to_int(vm, globals) {
+            match rhs.coerce_to_int_i64(vm, globals) {
                 Ok(rhs_int) => return shr_values(vm, globals, lhs, Value::integer(rhs_int)).into(),
                 Err(_) => {
                     vm.set_error(MonorubyErr::typeerr(format!(
@@ -567,7 +567,7 @@ pub(crate) extern "C" fn shl_values(
         }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
             // << requires to_int conversion, not coerce
-            match rhs.coerce_to_int(vm, globals) {
+            match rhs.coerce_to_int_i64(vm, globals) {
                 Ok(rhs_int) => return shl_values(vm, globals, lhs, Value::integer(rhs_int)).into(),
                 Err(_) => {
                     vm.set_error(MonorubyErr::typeerr(format!(

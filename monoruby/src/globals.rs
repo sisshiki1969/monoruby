@@ -28,6 +28,7 @@ pub(crate) type InlineGen = dyn Fn(
     &Store,
     CallSiteId,
     ClassId,
+    Option<ClassId>,
 ) -> bool;
 
 pub(crate) const GLOBALS_FUNCINFO: usize =

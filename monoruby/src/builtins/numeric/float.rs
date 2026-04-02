@@ -221,7 +221,7 @@ fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 #[monoruby_builtin]
 fn floor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ndigits = if let Some(d) = lfp.try_arg(0) {
-        d.coerce_to_int(vm, globals)?
+        d.coerce_to_int_i64(vm, globals)?
     } else {
         0
     };
@@ -263,7 +263,7 @@ fn floor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ndigits = if let Some(d) = lfp.try_arg(0) {
-        d.coerce_to_int(vm, globals)?
+        d.coerce_to_int_i64(vm, globals)?
     } else {
         0
     };
@@ -304,7 +304,7 @@ fn ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn truncate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ndigits = if let Some(d) = lfp.try_arg(0) {
-        d.coerce_to_int(vm, globals)?
+        d.coerce_to_int_i64(vm, globals)?
     } else {
         0
     };
@@ -346,7 +346,7 @@ fn truncate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 #[monoruby_builtin]
 fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ndigits = if let Some(d) = lfp.try_arg(0) {
-        d.coerce_to_int(vm, globals)?
+        d.coerce_to_int_i64(vm, globals)?
     } else {
         0
     };
