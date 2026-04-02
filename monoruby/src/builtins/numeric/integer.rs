@@ -1657,4 +1657,23 @@ mod tests {
     fn integer_neg_boundary() {
         run_test("-(2**62)");
     }
+
+    #[test]
+    fn integer_div() {
+        run_test("7.div(3)");
+        run_test("(-7).div(3)");
+        run_test("7.div(-3)");
+        run_test("7.div(3.0)");
+        run_test("5.div(Rational(3))");
+        run_test_error("7.div(0)");
+        run_test_error("7.div(0.0)");
+    }
+
+    #[test]
+    fn integer_ceildiv() {
+        run_test("7.ceildiv(3)");
+        run_test("(-7).ceildiv(3)");
+        run_test("7.ceildiv(-3)");
+        run_test_error("7.ceildiv(0)");
+    }
 }
