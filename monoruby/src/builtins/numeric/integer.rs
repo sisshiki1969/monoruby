@@ -165,7 +165,12 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         Some(block) => block,
     };
     let cur = lfp.self_val().expect_integer(globals)?;
-    let limit = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let limit = match lfp.arg(0).coerce_to_int_i64(vm, globals) {
+        Ok(v) => v,
+        Err(_) => return Err(MonorubyErr::argumenterr(format!(
+            "bad value for range"
+        ))),
+    };
     if cur > limit {
         return Ok(lfp.self_val());
     }
@@ -196,7 +201,12 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
         Some(block) => block,
     };
     let cur = lfp.self_val().expect_integer(globals)?;
-    let limit = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let limit = match lfp.arg(0).coerce_to_int_i64(vm, globals) {
+        Ok(v) => v,
+        Err(_) => return Err(MonorubyErr::argumenterr(format!(
+            "bad value for range"
+        ))),
+    };
     if cur < limit {
         return Ok(lfp.self_val());
     }
@@ -507,7 +517,7 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c=3d=3e.html]
 #[monoruby_builtin]
-fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
     let ord = match (lhs.unpack(), rhs.unpack()) {
@@ -528,7 +538,21 @@ fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             }
         },
         _ => {
-            return Ok(Value::nil());
+            // Try coerce protocol: call rhs.coerce(lhs), propagate exceptions
+            let coerce_id = IdentId::get_id("coerce");
+            match vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None) {
+                Ok(Some(result)) => {
+                    if let Some(ary) = result.try_array_ty() {
+                        if ary.len() == 2 {
+                            let cmp_id = IdentId::get_id("<=>");
+                            return vm.invoke_method_inner(globals, cmp_id, ary[0], &[ary[1]], None, None);
+                        }
+                    }
+                    return Ok(Value::nil());
+                }
+                Ok(None) => return Ok(Value::nil()),
+                Err(e) => return Err(e), // Propagate exception from coerce
+            }
         }
     };
     Ok(Value::from_ord(ord))
@@ -856,10 +880,7 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         RV::Fixnum(_) => Ok(Value::integer(std::mem::size_of::<i64>() as i64)),
         RV::BigInt(b) => {
             let bytes = b.to_signed_bytes_le().len();
-            // Round up to the nearest machine word size
-            let word_size = std::mem::size_of::<i64>();
-            let size = ((bytes + word_size - 1) / word_size) * word_size;
-            Ok(Value::integer(size as i64))
+            Ok(Value::integer(bytes as i64))
         }
         _ => unreachable!(),
     }
@@ -1675,5 +1696,35 @@ mod tests {
         run_test("(-7).ceildiv(3)");
         run_test("7.ceildiv(-3)");
         run_test_error("7.ceildiv(0)");
+    }
+
+    #[test]
+    fn pow_zero_neg() {
+        run_test_error("0 ** -1");
+        run_test_error("0 ** -2");
+    }
+
+    #[test]
+    fn integer_size_bigint() {
+        run_test("(2**64).size");
+        run_test("(2**63).size");
+    }
+
+    #[test]
+    fn integer_cmp_coerce() {
+        run_test_once(r#"
+            class Foo
+              def coerce(other)
+                [other.to_f, 42.0]
+              end
+            end
+            [1 <=> Foo.new, 100 <=> Foo.new]
+        "#);
+    }
+
+    #[test]
+    fn downto_upto_bad_arg() {
+        run_test_error(r#"1.upto("foo") {}"#);
+        run_test_error(r#"1.downto("foo") {}"#);
     }
 }

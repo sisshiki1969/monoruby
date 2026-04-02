@@ -124,6 +124,10 @@ class Integer
 
   def div(other)
     raise ZeroDivisionError, "divided by 0" if other == 0 || (other.is_a?(Float) && other == 0.0)
+    if other.respond_to?(:coerce) && !other.is_a?(Integer) && !other.is_a?(Float) && !other.is_a?(Rational)
+      a, b = other.coerce(self)
+      return a.div(b)
+    end
     (self / other).floor
   end
 
@@ -290,7 +294,7 @@ class Integer
       elsif result.is_a?(Integer)
         result
       else
-        raise TypeError, "can't convert #{obj.class} into Integer"
+        raise TypeError, "can't convert #{obj.class} to Integer (#{obj.class}#to_int gives #{result.class})"
       end
     else
       nil
