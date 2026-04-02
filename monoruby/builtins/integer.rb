@@ -122,6 +122,15 @@ class Integer
     self - 1
   end
 
+  def div(other)
+    raise ZeroDivisionError, "divided by 0" if other == 0 || (other.is_a?(Float) && other == 0.0)
+    (self / other).floor
+  end
+
+  def ceildiv(other)
+    -(-self).div(other)
+  end
+
   def remainder(other)
     r = self % other
     if r != 0 && (self < 0) != (other < 0)
