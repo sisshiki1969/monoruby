@@ -11,6 +11,8 @@ pub enum NodeKind {
     Bignum(BigInt),
     Float(f64),
     Imaginary(NReal),
+    Rational(BigInt, BigInt),
+    RImaginary(BigInt, BigInt),
     Bool(bool),
     String(String),
     Bytes(Vec<u8>),
@@ -443,6 +445,14 @@ impl Node {
 
     pub(crate) fn new_imaginary(num: NReal, loc: Loc) -> Self {
         Node::new(NodeKind::Imaginary(num), loc)
+    }
+
+    pub(crate) fn new_rational(num: BigInt, den: BigInt, loc: Loc) -> Self {
+        Node::new(NodeKind::Rational(num, den), loc)
+    }
+
+    pub(crate) fn new_rimaginary(num: BigInt, den: BigInt, loc: Loc) -> Self {
+        Node::new(NodeKind::RImaginary(num, den), loc)
     }
 
     pub(crate) fn new_string(s: RubyString, loc: Loc) -> Self {

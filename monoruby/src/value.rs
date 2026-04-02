@@ -1,3 +1,4 @@
+use core::f64;
 use num::ToPrimitive;
 use onigmo_regex::Captures;
 use rubymap::RubyEql;
@@ -634,6 +635,18 @@ impl Value {
         RValue::new_complex_from(complex).pack()
     }
 
+    pub fn rational(num: i64, den: i64) -> Self {
+        RValue::new_rational(RationalInner::new(num, den)).pack()
+    }
+
+    pub fn rational_from_bigint(n: BigInt, d: BigInt) -> Self {
+        RValue::new_rational(RationalInner::new_bigint(n, d)).pack()
+    }
+
+    pub fn rational_from_inner(inner: RationalInner) -> Self {
+        RValue::new_rational(inner).pack()
+    }
+
     pub fn bigint(bigint: BigInt) -> Self {
         if let Ok(i) = i64::try_from(&bigint) {
             Value::integer(i)
@@ -903,6 +916,7 @@ impl Value {
             RV::BigInt(n) => format!("{}", n),
             RV::Float(f) => ruby_float_to_s(f),
             RV::Complex(_) => self.as_complex().debug(store),
+            RV::Rational(r) => r.inspect(),
             RV::Symbol(id) => format!(":{id}"),
             RV::String(s) => format!(r#""{}""#, s.inspect()),
             RV::Object(rvalue) => rvalue.debug(store),
@@ -918,6 +932,7 @@ impl Value {
             RV::BigInt(n) => format!("{}", n),
             RV::Float(f) => ruby_float_to_s(f),
             RV::Complex(_) => self.as_complex().debug(store),
+            RV::Rational(r) => r.inspect(),
             RV::Symbol(id) => format!(":{id}"),
             RV::String(s) => format!(r#""{}""#, s.inspect()),
             RV::Object(rvalue) => rvalue.debug(store),
@@ -931,6 +946,7 @@ impl Value {
             RV::Symbol(id) => id.to_string(),
             RV::String(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
             RV::Complex(_) => self.as_complex().to_s_str(store),
+            RV::Rational(r) => r.to_s(),
             _ => self.debug(store),
         };
         s
@@ -1186,6 +1202,21 @@ impl Value {
         assert_eq!(Some(ObjTy::COMPLEX), self.ty());
         // SAFETY: The assert ensures this RValue contains a complex number.
         unsafe { self.rvalue().as_complex() }
+    }
+
+    pub fn try_rational(&self) -> Option<&RationalInner> {
+        if self.ty()? == ObjTy::RATIONAL {
+            // SAFETY: The type check ensures this RValue contains a Rational.
+            Some(unsafe { self.rvalue().as_rational() })
+        } else {
+            None
+        }
+    }
+
+    pub fn as_rational(&self) -> &RationalInner {
+        assert_eq!(Some(ObjTy::RATIONAL), self.ty());
+        // SAFETY: The assert ensures this RValue contains a Rational.
+        unsafe { self.rvalue().as_rational() }
     }
 
     // https://github.com/ruby/ruby/blob/3251792f491bd6f8bff71c6fd3352f66ac635902/range.c#L357
@@ -2093,6 +2124,11 @@ impl Value {
                 NReal::Integer(i) => Value::complex(0, *i),
                 NReal::Bignum(b) => Value::complex(0, b.clone()),
             },
+            NodeKind::Rational(n, d) => Value::rational_from_bigint(n.clone(), d.clone()),
+            NodeKind::RImaginary(n, d) => {
+                let f = n.to_f64().unwrap_or(f64::INFINITY) / d.to_f64().unwrap_or(f64::INFINITY);
+                Value::complex(0, f)
+            }
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
@@ -2162,6 +2198,20 @@ impl Value {
                 }
                 Value::hash(map)
             }
+            NodeKind::BinOp(ruruby_parse::BinOp::Div, box lhs, box rhs) => {
+                // CRuby's `p` outputs rationals as `(num/den)`, which parses as BinOp(Div).
+                match (&lhs.kind, &rhs.kind) {
+                    (NodeKind::Integer(n), NodeKind::Integer(d)) => Value::rational(*n, *d),
+                    (NodeKind::UnOp(ruruby_parse::UnOp::Neg, box inner), NodeKind::Integer(d)) => {
+                        if let NodeKind::Integer(n) = &inner.kind {
+                            Value::rational(-n, *d)
+                        } else {
+                            unreachable!("{:?}", node.kind)
+                        }
+                    }
+                    _ => unreachable!("{:?}", node.kind),
+                }
+            }
             NodeKind::BinOp(ruruby_parse::BinOp::Add, box lhs, box rhs) => {
                 let lhs = Self::from_ast_inner(lhs, vm, globals);
                 if let NodeKind::Imaginary(im) = &rhs.kind {
@@ -2196,6 +2246,11 @@ impl Value {
                 NReal::Integer(i) => Value::complex(0, *i),
                 NReal::Bignum(b) => Value::complex(0, b.clone()),
             },
+            NodeKind::Rational(n, d) => Value::rational_from_bigint(n.clone(), d.clone()),
+            NodeKind::RImaginary(n, d) => {
+                let f = n.to_f64().unwrap_or(f64::INFINITY) / d.to_f64().unwrap_or(f64::INFINITY);
+                Value::complex(0, f)
+            }
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
@@ -2408,6 +2463,7 @@ pub enum RV<'a> {
     Float(f64),
     Symbol(IdentId),
     Complex(&'a num::complex::Complex<Real>),
+    Rational(&'a RationalInner),
     String(&'a RStringInner),
     Object(&'a RValue),
 }
@@ -2422,6 +2478,7 @@ impl<'a> std::fmt::Debug for RV<'a> {
             RV::BigInt(n) => write!(f, "Bignum({n})"),
             RV::Float(n) => write!(f, "{}", ruby_float_to_s(*n)),
             RV::Complex(c) => write!(f, "{:?}", c),
+            RV::Rational(r) => write!(f, "{}", r.inspect()),
             RV::Symbol(id) => write!(f, ":{}", id),
             RV::String(s) => write!(f, "\"{}\"", String::from_utf8_lossy(s.as_bytes())),
             RV::Object(rvalue) => write!(f, "{rvalue:?}"),
@@ -2439,6 +2496,7 @@ impl<'a> std::fmt::Display for RV<'a> {
             RV::BigInt(n) => write!(f, "{n}"),
             RV::Float(n) => write!(f, "{}", ruby_float_to_s(*n)),
             RV::Complex(c) => write!(f, "{}", c),
+            RV::Rational(r) => write!(f, "{}", r.to_s()),
             RV::Symbol(id) => write!(f, ":{}", id),
             RV::String(s) => write!(f, "\"{}\"", String::from_utf8_lossy(s.as_bytes())),
             RV::Object(rvalue) => write!(f, "{rvalue:?}"),

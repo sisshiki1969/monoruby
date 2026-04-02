@@ -96,6 +96,8 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::Bignum(bigint) => self.emit_bigint(dst, bigint),
             NodeKind::Float(f) => self.emit_float(dst, f),
             NodeKind::Imaginary(r) => self.emit_imaginary(dst, r.into()),
+            NodeKind::Rational(n, d) => self.emit_rational(dst, &n, &d),
+            NodeKind::RImaginary(n, d) => self.emit_rimaginary(dst, &n, &d),
             NodeKind::String(s) => self.emit_string(dst, s),
             NodeKind::Bytes(b) => self.emit_bytes(dst, b),
             NodeKind::Array(nodes, false) => self.gen_array(dst, nodes, loc)?,
@@ -140,6 +142,7 @@ impl<'a> BytecodeGen<'a> {
                         NodeKind::Integer(i) => self.emit_integer(dst, -i),
                         NodeKind::Imaginary(r) => self.emit_imaginary(dst, -Real::from(r)),
                         NodeKind::Float(f) => self.emit_float(dst, -f),
+                        NodeKind::Rational(n, d) => self.emit_rational(dst, &-n, &d),
                         _ => self.emit_unary_op(UnOpK::Neg, dst, rhs, loc)?,
                     };
                 }
@@ -148,6 +151,7 @@ impl<'a> BytecodeGen<'a> {
                         NodeKind::Integer(i) => self.emit_integer(dst, i),
                         NodeKind::Imaginary(r) => self.emit_imaginary(dst, r.into()),
                         NodeKind::Float(f) => self.emit_float(dst, f),
+                        NodeKind::Rational(n, d) => self.emit_rational(dst, &n, &d),
                         _ => self.emit_unary_op(UnOpK::Pos, dst, rhs, loc)?,
                     };
                 }
@@ -326,6 +330,8 @@ impl<'a> BytecodeGen<'a> {
                 | NodeKind::Bignum(_)
                 | NodeKind::Float(_)
                 | NodeKind::Imaginary(_)
+                | NodeKind::Rational(..)
+                | NodeKind::RImaginary(..)
                 | NodeKind::String(_) => return Ok(()),
                 _ => {}
             }
@@ -342,6 +348,8 @@ impl<'a> BytecodeGen<'a> {
             | NodeKind::Bignum(_)
             | NodeKind::Float(_)
             | NodeKind::Imaginary(_)
+            | NodeKind::Rational(..)
+            | NodeKind::RImaginary(..)
             | NodeKind::String(_)
             | NodeKind::Bytes(_)
             | NodeKind::Array(..)

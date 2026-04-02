@@ -1,5 +1,5 @@
 use super::*;
-use num::BigInt;
+use num::{BigInt, ToPrimitive};
 use ruruby_parse::{
     ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, LvarCollector, Node, NodeKind,
     ParseResult, RescueEntry, SourceInfoRef, UnOp,
@@ -1047,6 +1047,19 @@ impl<'a> BytecodeGen<'a> {
         self.emit_literal(dst, Value::complex(0, r));
     }
 
+    fn emit_rational(&mut self, dst: BcReg, n: &BigInt, d: &BigInt) {
+        let val = Value::rational_from_bigint(n.clone(), d.clone());
+        self.emit_literal(dst, val);
+    }
+
+    fn emit_rimaginary(&mut self, dst: BcReg, n: &BigInt, d: &BigInt) {
+        // ri literal: rational imaginary, e.g. 42ri = Complex(0, Rational(42, 1))
+        // In CRuby, 42ri creates Complex(0, Rational(42, 1))
+        // For now, convert to float complex since our Complex uses Real (not Rational)
+        let f = n.to_f64().unwrap_or(f64::INFINITY) / d.to_f64().unwrap_or(f64::INFINITY);
+        self.emit_literal(dst, Value::complex(0, f));
+    }
+
     fn emit_string(&mut self, dst: BcReg, s: String) {
         self.emit_literal(dst, Value::string(s));
     }
@@ -1666,11 +1679,4 @@ impl UnOpK {
             _ => unreachable!(),
         }
     }
-
-    //pub(crate) fn generic_func(&self) -> UnaryOpFn {
-    //    match self {
-    //        UnOpK::Pos => pos_value,
-    //        UnOpK::Neg => neg_value,
-    //    }
-    //}
 }

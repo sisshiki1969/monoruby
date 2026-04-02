@@ -4,6 +4,7 @@ use paste::paste;
 mod complex;
 mod float;
 mod integer;
+pub(super) mod rational;
 
 //
 // Numeric class
@@ -14,6 +15,7 @@ pub(super) fn init(globals: &mut Globals) {
     integer::init(globals, numeric);
     float::init(globals, numeric);
     complex::init(globals, numeric);
+    rational::init(globals, numeric);
     globals.define_builtin_func(NUMERIC_CLASS, "+", add, 1);
     globals.define_builtin_func(NUMERIC_CLASS, "-", sub, 1);
     globals.define_builtin_func(NUMERIC_CLASS, "*", mul, 1);

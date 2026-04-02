@@ -59,6 +59,7 @@ pub const IO_ERROR_CLASS: ClassId = ClassId::new(49);
 
 pub const MATCHDATA_CLASS: ClassId = ClassId::new(50);
 pub const SET_CLASS: ClassId = ClassId::new(51);
+pub const RATIONAL_CLASS: ClassId = ClassId::new(52);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
