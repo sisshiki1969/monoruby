@@ -879,8 +879,11 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     match lfp.self_val().unpack() {
         RV::Fixnum(_) => Ok(Value::integer(std::mem::size_of::<i64>() as i64)),
         RV::BigInt(b) => {
-            let bytes = b.to_signed_bytes_le().len();
-            Ok(Value::integer(bytes as i64))
+            // CRuby returns the number of bytes for the unsigned magnitude
+            let bits = b.bits();
+            let bytes = ((bits + 7) / 8) as i64;
+            // Minimum 1 byte for zero
+            Ok(Value::integer(bytes.max(1)))
         }
         _ => unreachable!(),
     }
