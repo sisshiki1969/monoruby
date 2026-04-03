@@ -1,6 +1,6 @@
 use super::*;
 
-mod binary_ops;
+pub(crate) mod binary_ops;
 mod sort;
 
 pub(crate) use binary_ops::*;
