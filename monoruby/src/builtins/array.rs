@@ -64,8 +64,25 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(ARRAY_CLASS, "==", &["==="], eq, 1);
     globals.define_builtin_func(ARRAY_CLASS, "eql?", eql, 1);
     globals.define_builtin_func(ARRAY_CLASS, "<=>", cmp, 1);
-    globals.define_builtin_funcs_with(ARRAY_CLASS, "[]", &["slice"], index, 1, 2, false);
-    globals.define_builtin_func_with(ARRAY_CLASS, "[]=", index_assign, 2, 3, false);
+    globals.define_builtin_inline_funcs_with(
+        ARRAY_CLASS,
+        "[]",
+        &["slice"],
+        index,
+        Box::new(array_index),
+        1,
+        2,
+        false,
+    );
+    globals.define_builtin_inline_func_with(
+        ARRAY_CLASS,
+        "[]=",
+        index_assign,
+        Box::new(array_index_assign),
+        2,
+        3,
+        false,
+    );
     globals.define_builtin_func(ARRAY_CLASS, "clear", clear, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "fill", fill, 0, 3, false);
     globals.define_builtin_func(ARRAY_CLASS, "drop", drop, 1);
@@ -192,12 +209,15 @@ fn array_allocate(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
+    let using_xmm = state.get_using_xmm();
+    ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _| {
         monoasm! { &mut r#gen.jit,
             movq rax, (allocate_array);
             call rax;
         }
     });
+    ir.xmm_restore(using_xmm);
 
     state.def_reg2acc(ir, GP::Rax, dst);
     true
@@ -248,11 +268,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         let mut res = vm.invoke_block_map1(globals, bh, iter, size)?;
         RValue::swap_kind(lfp.self_val().rvalue_mut(), res.rvalue_mut());
     } else {
-        let val = if lfp.try_arg(1).is_none() {
-            Value::nil()
-        } else {
-            lfp.arg(1)
-        };
+        let val = lfp.try_arg(1).unwrap_or_default();
         *self_val = ArrayInner::from(smallvec![val; size]);
     }
     Ok(self_val.into())
@@ -861,17 +877,8 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    if lfp.try_arg(1).is_none() {
-        let idx = lfp.arg(0);
-        // If the index is not a fixnum or range, try to_int coercion
-        if idx.try_fixnum().is_none() && idx.is_range().is_none() {
-            let i = idx.coerce_to_int_i64(vm, globals)?;
-            return ary.get_elem1(vm, globals, Value::integer(i));
-        }
-        ary.get_elem1(vm, globals, idx)
-    } else {
+    if let Some(arg1) = lfp.try_arg(1) {
         let arg0 = lfp.arg(0);
-        let arg1 = lfp.arg(1);
         // Coerce indices via to_int if needed
         let arg0 = if arg0.try_fixnum().is_none() {
             Value::integer(arg0.coerce_to_int_i64(vm, globals)?)
@@ -884,7 +891,40 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             arg1
         };
         ary.get_elem2(vm, globals, arg0, arg1)
+    } else {
+        let idx = lfp.arg(0);
+        // If the index is not a fixnum or range, try to_int coercion
+        if idx.try_fixnum().is_none() && idx.is_range().is_none() {
+            let i = idx.coerce_to_int_i64(vm, globals)?;
+            return ary.get_elem1(vm, globals, Value::integer(i));
+        }
+        ary.get_elem1(vm, globals, idx)
     }
+}
+
+fn array_index(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    idx_class: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 1 || idx_class != Some(INTEGER_CLASS) {
+        return false;
+    }
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
+    let dst = if let Some(dst) = dst {
+        dst
+    } else {
+        return true;
+    };
+    state.array_integer_index(ir, store, dst, recv, args);
+    true
 }
 
 ///
@@ -946,6 +986,27 @@ fn index_assign(
         let val = lfp.arg(2);
         ary.set_index2(i as usize, l as usize, val)
     }
+}
+
+fn array_index_assign(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    idx_class: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 2 || idx_class != Some(INTEGER_CLASS) {
+        return false;
+    }
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
+    assert!(dst.is_none());
+    state.array_integer_index_assign(ir, store, args + 1usize, recv, args);
+    true
 }
 
 ///
