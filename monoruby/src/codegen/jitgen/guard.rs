@@ -156,7 +156,13 @@ impl Codegen {
         //}
     }
 
+    ///
+    /// Class guard used in JIT dispatch stub.
+    ///
+    /// if *reg* is Bignum, always dispatched to VM entry.
+    ///
     pub(crate) fn guard_class2(&mut self, reg: GP, class_id: ClassId, fail: &DestLabel) {
+        let vm_entry = self.vm_entry();
         let fail = if reg != GP::Rdi {
             let label = self.jit.label();
             if self.jit.get_page() == 0 {
@@ -190,6 +196,9 @@ impl Codegen {
                     jnz exit;
                 );
                 self.guard_rvalue(reg, INTEGER_CLASS, &fail);
+                monoasm!( &mut self.jit,
+                    jmp vm_entry;
+                );
                 self.jit.bind_label(exit);
             }
             FLOAT_CLASS => {

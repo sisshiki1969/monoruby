@@ -5380,33 +5380,38 @@ mod tests {
 
     #[test]
     fn succ() {
-        run_test(r#""aa".succ"#);
-        run_test(r#""88".succ.succ"#);
-        run_test(r#""99".succ"#);
-        run_test(r#""９９".succ"#);
-        run_test(r#""z９9".succ"#);
-        run_test(r#""zz".succ"#);
-        run_test(r#""ZZ".succ"#);
-        run_test(r#""ＺＺ".succ"#);
-        run_test(r#""ｚｚ".succ"#);
-        run_test(r#""Ｚｚ".succ"#);
-        run_test(r#""Ｚ＃ｚ".succ"#);
-        run_test(r#""a9".succ"#);
-        run_test(r#""-9".succ"#);
-        run_test(r#""9".succ"#);
-        run_test(r#""09".succ"#);
-        run_test(r#""1.9.9".succ"#);
-        run_test(r#""v9.9.9".succ"#);
-        run_test(r#"".".succ"#);
-        run_test(r#""".succ"#);
-        run_test(r#""AZ".succ"#);
-        run_test(r#""1##9".succ"#);
-        run_test(r#""1&&Z".succ"#);
-        run_test(r#""z&&Z".succ"#);
-        run_test(r#""Ρ".succ"#);
-        run_test(r#""を".succ"#);
-        run_test(r#####""###".succ"#####);
-        run_test(r#""9Zz9".succ"#);
+        run_test(
+            r#####"
+        [
+            "aa".succ,
+            "88".succ.succ,
+            "99".succ,
+            "９９".succ,
+            "z９9".succ,
+            "zz".succ,
+            "ZZ".succ,
+            "ＺＺ".succ,
+            "ｚｚ".succ,
+            "Ｚｚ".succ,
+            "Ｚ＃ｚ".succ,
+            "a9".succ,
+            "-9".succ,
+            "9".succ,
+            "09".succ,
+            "1.9.9".succ,
+            "v9.9.9".succ,
+            ".".succ,
+            "".succ,
+            "AZ".succ,
+            "1##9".succ,
+            "1&&Z".succ,
+            "z&&Z".succ,
+            "Ρ".succ,
+            "を".succ,
+            "9Zz9".succ,
+            "###".succ
+        ]"#####,
+        );
         run_test(r#"12.times.reduce("ン"){|c|c.succ}"#);
     }
 
