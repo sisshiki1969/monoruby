@@ -1,3 +1,5 @@
+require_relative 'monitor'
+
 class Enumerator
   include Enumerable
 end
