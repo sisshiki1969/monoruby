@@ -273,7 +273,7 @@ fn ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     }
     if ndigits > 0 {
         if let Ok(ndigits) = u32::try_from(ndigits) {
-            let mul = 10i32.pow(ndigits) as f64;
+            let mul = 10f64.powi(ndigits as i32);
             let f = (f * mul).ceil() / mul;
             Ok(Value::float(f))
         } else {
@@ -281,7 +281,7 @@ fn ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
     } else {
         if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
-            let mul = 10i32.pow(neg_ndigits) as f64;
+            let mul = 10f64.powi(neg_ndigits as i32);
             let f = (f / mul).ceil() * mul;
             if let Some(v) = Value::integer_from_f64(f) {
                 return Ok(v);
@@ -314,7 +314,7 @@ fn truncate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     }
     if ndigits > 0 {
         if let Ok(ndigits) = u32::try_from(ndigits) {
-            let mul = 10i32.pow(ndigits) as f64;
+            let mul = 10f64.powi(ndigits as i32);
             let f = (f * mul).trunc() / mul;
             Ok(Value::float(f))
         } else {
@@ -322,7 +322,7 @@ fn truncate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         }
     } else {
         if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
-            let mul = 10i32.pow(neg_ndigits) as f64;
+            let mul = 10f64.powi(neg_ndigits as i32);
             let f = (f / mul).trunc() * mul;
             if let Some(v) = Value::integer_from_f64(f) {
                 return Ok(v);
@@ -356,7 +356,7 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     if ndigits > 0 {
         if let Ok(ndigits) = u32::try_from(ndigits) {
-            let mul = 10i32.pow(ndigits) as f64;
+            let mul = 10f64.powi(ndigits as i32);
             let f = (f * mul).round() / mul;
             Ok(Value::float(f))
         } else {
@@ -364,7 +364,7 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
     } else {
         if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
-            let mul = 10i32.pow(neg_ndigits) as f64;
+            let mul = 10f64.powi(neg_ndigits as i32);
             let f = (f / mul).round() * mul;
             if let Some(v) = Value::integer_from_f64(f) {
                 return Ok(v);
@@ -525,6 +525,20 @@ mod tests {
         run_test("(1000 * Math::PI).round(3)");
         run_test("(1000 * Math::PI).round(0)");
         run_test("(1000 * Math::PI).round(-3)");
+    }
+
+    #[test]
+    fn ceil_truncate_round_large_ndigits() {
+        // ndigits > 9 would overflow 10i32.pow() before the fix
+        run_test("1.123456789.ceil(15)");
+        run_test("1.123456789.floor(15)");
+        run_test("1.123456789.truncate(15)");
+        run_test("1.123456789.round(15)");
+        // Large negative ndigits
+        run_test("123456789.0.ceil(-15)");
+        run_test("123456789.0.floor(-15)");
+        run_test("123456789.0.truncate(-15)");
+        run_test("123456789.0.round(-15)");
     }
 
     #[test]
