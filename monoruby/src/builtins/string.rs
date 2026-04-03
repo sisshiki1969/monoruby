@@ -1401,10 +1401,10 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         let r = get_range(&lhs, start, len);
         Ok(slice_sub(lfp, lhs, r))
     } else if let Some(info) = lfp.arg(0).is_regex() {
-        let nth = if lfp.try_arg(1).is_none() {
-            0
+        let nth = if let Some(arg1) = lfp.try_arg(1) {
+            arg1.coerce_to_int_i64(vm, globals)?
         } else {
-            lfp.arg(1).coerce_to_int_i64(vm, globals)?
+            0
         };
         match info.captures(&lhs, vm)? {
             None => Ok(Value::nil()),

@@ -642,7 +642,7 @@ impl AsmIr {
     /// - rdx: result Value
     ///
     /// ### destroy
-    /// - caller save registers
+    /// - caller save registers except xmm's
     ///
     pub(super) fn array_u16_index_assign(&mut self, state: &AbstractFrame, idx: u16) {
         let using_xmm = state.get_using_xmm();
@@ -663,7 +663,7 @@ impl AsmIr {
     /// - rdx: result Value
     ///    
     /// ### destroy
-    /// - caller save registers
+    /// - caller save registers except xmm's
     ///
     pub(super) fn array_index_assign(&mut self, state: &AbstractFrame) {
         let using_xmm = state.get_using_xmm();
@@ -1223,7 +1223,7 @@ pub(super) enum AsmInst {
     /// - rdx: result Value
     ///
     /// ### destroy
-    /// - caller save registers
+    /// - caller save registers except xmm's
     ///
     ArrayU16IndexAssign {
         idx: u16,
@@ -1239,7 +1239,7 @@ pub(super) enum AsmInst {
     /// - rdx: Value
     ///    
     /// ### destroy
-    /// - caller save registers
+    /// - caller save registers except xmm's
     ///
     ArrayIndexAssign {
         using_xmm: UsingXmm,

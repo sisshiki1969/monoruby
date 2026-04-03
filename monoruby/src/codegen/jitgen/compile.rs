@@ -393,11 +393,11 @@ impl<'a> JitContext<'a> {
                 return self.binary_cmp_br(state, ir, kind, lhs, rhs, dest_bb, brkind, ic, bc_pos);
             }
             TraceIr::Index {
-                dst,
+                dst: _,
                 base,
                 idx,
                 class: ic,
-            } => return self.index(state, ir, dst, base, idx, ic, bc_pos),
+            } => return self.index(state, ir, base, idx, ic, bc_pos),
             TraceIr::IndexAssign {
                 base,
                 idx,
@@ -775,6 +775,7 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         recv: SlotId,
         idx: SlotId,
+        src: SlotId,
         recv_class: ClassId,
         idx_class: Option<ClassId>,
         name: impl Into<IdentId>,
@@ -784,6 +785,7 @@ impl<'a> JitContext<'a> {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, recv);
             assert_eq!(self.store[callid].args, idx);
+            assert_eq!(self.store[callid].args + 1usize, src);
             assert_eq!(self.store[callid].pos_num, 2);
             self.compile_method_call(state, ir, recv_class, idx_class, fid, callid)
         } else {

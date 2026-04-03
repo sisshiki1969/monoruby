@@ -533,6 +533,8 @@ fn hash_index(
     }
     state.load(ir, callsite.args, GP::Rcx);
     state.load(ir, callsite.recv, GP::Rdx);
+    let using_xmm = state.get_using_xmm();
+    ir.xmm_save(using_xmm);
     ir.inline(|r#gen, _, _| {
         monoasm! {&mut r#gen.jit,
             movq rdi, rbx;
@@ -541,6 +543,7 @@ fn hash_index(
             call rax;
         }
     });
+    ir.xmm_restore(using_xmm);
     let error = ir.new_error(state);
     ir.handle_error(error);
     state.def_rax2acc(ir, callsite.dst);
@@ -1261,28 +1264,29 @@ fn env_to_hash(
 #[monoruby_builtin]
 fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let hash = lfp.self_val().as_hash();
+    let arg0 = lfp.arg(0);
     let s = if let Some(bh) = lfp.block() {
         if lfp.try_arg(1).is_some() {
             eprintln!("warning: block supersedes default value argument");
         }
-        match hash.get(lfp.arg(0), vm, globals)? {
+        match hash.get(arg0, vm, globals)? {
             Some(v) => v,
-            None => vm.invoke_block_once(globals, bh, &[lfp.arg(0)])?,
+            None => vm.invoke_block_once(globals, bh, &[arg0])?,
         }
-    } else if lfp.try_arg(1).is_none() {
-        match hash.get(lfp.arg(0), vm, globals)? {
+    } else if let Some(arg1) = lfp.try_arg(1) {
+        match hash.get(arg0, vm, globals)? {
+            Some(v) => v,
+            None => arg1,
+        }
+    } else {
+        match hash.get(arg0, vm, globals)? {
             Some(v) => v,
             None => {
                 return Err(MonorubyErr::keyerr(format!(
                     "key not found: {}",
-                    lfp.arg(0).to_s(&globals.store)
+                    arg0.to_s(&globals.store)
                 )));
             }
-        }
-    } else {
-        match hash.get(lfp.arg(0), vm, globals)? {
-            Some(v) => v,
-            None => lfp.arg(1),
         }
     };
     Ok(s)
