@@ -4072,6 +4072,19 @@ mod tests {
     }
 
     #[test]
+    fn index_assign_self() {
+        // Self-assignment: b[start, length] = b
+        run_test(r##"b = [1, 2, 3, 4, 5]; b[1, 0] = b; b"##);
+        run_test(r##"b = [1, 2, 3, 4, 5]; b[0, 5] = b; b"##);
+        run_test(r##"b = [1, 2, 3, 4, 5]; b[2, 2] = b; b"##);
+        run_test(r##"b = [1, 2, 3]; b[0, 0] = b; b"##);
+        run_test(r##"b = [1]; b[0, 1] = b; b"##);
+        // Self-assignment via range
+        run_test(r##"b = [1, 2, 3, 4, 5]; b[1..2] = b; b"##);
+        run_test(r##"b = [1, 2, 3]; b[0..0] = b; b"##);
+    }
+
+    #[test]
     fn replace() {
         run_test(r##"a = [1,2,3]; b = [4,5]; a.replace(b); [a, b]"##);
         run_test(r##"a = [1,2,3]; a.replace([]); a"##);

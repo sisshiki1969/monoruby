@@ -43,6 +43,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(RATIONAL_CLASS, "finite?", finite_, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "infinite?", infinite_, 0);
     globals.define_builtin_class_func(RATIONAL_CLASS, "__allocate", allocate, 2);
+    globals.define_builtin_class_func(RATIONAL_CLASS, "allocate", super::super::class::undef_allocate, 0);
 }
 
 /// Rational.__allocate(num, den) — internal constructor from Ruby
@@ -486,5 +487,11 @@ mod tests {
     fn rational_power() {
         run_test_once("(Rational(2, 3) ** 2).to_s");
         run_test_once("(Rational(2, 3) ** -1).to_s");
+    }
+
+    #[test]
+    fn rational_allocate_disabled() {
+        run_test_error("Rational.new(1)");
+        run_test_error("Rational.allocate");
     }
 }

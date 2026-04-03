@@ -612,7 +612,8 @@ impl Executor {
                 ch = fchars[i];
             } else {
                 while ch.is_ascii_digit() {
-                    width = width * 10 + ch as usize - '0' as usize;
+                    width = width.checked_mul(10).and_then(|w| w.checked_add(ch as usize - '0' as usize))
+                        .ok_or_else(|| MonorubyErr::argumenterr("width too big"))?;
                     i += 1;
                     if i >= flen {
                         return Err(MonorubyErr::argumenterr(
@@ -658,7 +659,8 @@ impl Executor {
                     ch = fchars[i];
                 } else {
                     while ch.is_ascii_digit() {
-                        prec = prec * 10 + ch as usize - '0' as usize;
+                        prec = prec.checked_mul(10).and_then(|p| p.checked_add(ch as usize - '0' as usize))
+                            .ok_or_else(|| MonorubyErr::argumenterr("precision too big"))?;
                         i += 1;
                         if i >= flen {
                             return Err(MonorubyErr::argumenterr(

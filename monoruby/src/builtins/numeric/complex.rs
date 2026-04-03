@@ -28,6 +28,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     );
     globals.define_builtin_funcs(COMPLEX_CLASS, "abs", &["magnitude"], abs, 0);
     globals.define_builtin_funcs(COMPLEX_CLASS, "rect", &["rectangular"], rect, 0);
+    globals.define_builtin_class_func(COMPLEX_CLASS, "allocate", super::super::class::undef_allocate, 0);
 }
 
 fn eq_bool(store: &Store, lhs: &ComplexInner, rhs: Value) -> bool {
@@ -166,5 +167,11 @@ mod tests {
     fn rect() {
         run_test("Complex(4, 5).rect");
         run_test("Complex(4.7, 1.5).rect");
+    }
+
+    #[test]
+    fn complex_allocate_disabled() {
+        run_test_error("Complex.new(1)");
+        run_test_error("Complex.allocate");
     }
 }

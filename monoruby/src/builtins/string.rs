@@ -4634,6 +4634,12 @@ mod tests {
     }
 
     #[test]
+    fn string_format_overflow() {
+        run_test_error(r##""%.25555555555555555555555555555555555555s" % "hello""##);
+        run_test_error(r##""%25555555555555555555555555555555555555s" % "hello""##);
+    }
+
+    #[test]
     fn string_encode_xml() {
         run_test_no_result_check(r###""hello".encode(xml: :attr)"###);
         run_test_no_result_check(r###""a&b<c>d".encode(xml: :attr)"###);
