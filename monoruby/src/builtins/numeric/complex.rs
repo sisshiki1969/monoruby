@@ -189,6 +189,26 @@ mod tests {
     }
 
     #[test]
+    fn eql() {
+        // true cases: same type components
+        run_test("Complex(1, 2).eql?(Complex(1, 2))");
+        run_test("Complex(1.0, 2.0).eql?(Complex(1.0, 2.0))");
+        run_test("nil.to_c.eql?(Complex(0, 0))");
+        // false cases: different component values
+        run_test("Complex(1, 2).eql?(Complex(1, 3))");
+        run_test("Complex(1, 2).eql?(Complex(3, 2))");
+        // false cases: different component types (Integer vs Float)
+        run_test("Complex(1, 2).eql?(Complex(1.0, 2.0))");
+        run_test("Complex(1.0, 0.0).eql?(Complex(1, 0))");
+        // false cases: non-Complex argument
+        run_test("Complex(1, 0).eql?(1)");
+        run_test("Complex(1, 0).eql?(1.0)");
+        run_test(r#"Complex(1, 2).eql?("foo")"#);
+        run_test("Complex(1, 2).eql?(nil)");
+        run_test("Complex(1, 2).eql?([1, 2])");
+    }
+
+    #[test]
     fn complex_allocate_disabled() {
         run_test_error("Complex.new(1)");
         run_test_error("Complex.allocate");
