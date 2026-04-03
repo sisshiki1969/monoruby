@@ -1730,4 +1730,44 @@ mod tests {
         run_test_error(r#"1.upto("foo") {}"#);
         run_test_error(r#"1.downto("foo") {}"#);
     }
+
+    #[test]
+    fn fdiv_large_bigint() {
+        run_test_once("(10**200).fdiv(10**199)");
+        run_test_once("(10**200).fdiv(3 * 10**199)");
+    }
+
+    #[test]
+    fn integer_sqrt_newton() {
+        run_test("Integer.sqrt(0)");
+        run_test("Integer.sqrt(1)");
+        run_test("Integer.sqrt(100)");
+        run_test_error("Integer.sqrt(-1)");
+        run_test_error(r#"Integer.sqrt("foo")"#);
+    }
+
+    #[test]
+    fn round_negative_precision() {
+        run_test("249.round(-2)");
+        run_test("(-249).round(-2)");
+        run_test("150.round(-2)");
+    }
+
+    #[test]
+    fn floor_bigint_neg_precision() {
+        run_test("(-130).floor(-1)");
+        run_test("(-131).floor(-1)");
+    }
+
+    #[test]
+    fn module_include_q() {
+        run_test_once("Integer.include?(Comparable)");
+        run_test_once("Integer.include?(Enumerable)");
+    }
+
+    #[test]
+    fn rational_pow_zero_base() {
+        run_test_error("Rational(0, 1) ** -1");
+        run_test_error("Rational(0, 1) ** Rational(-1, 1)");
+    }
 }
