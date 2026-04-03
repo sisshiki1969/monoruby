@@ -528,6 +528,20 @@ mod tests {
     }
 
     #[test]
+    fn ceil_truncate_round_large_ndigits() {
+        // ndigits > 9 would overflow 10i32.pow() before the fix
+        run_test("1.123456789.ceil(15)");
+        run_test("1.123456789.floor(15)");
+        run_test("1.123456789.truncate(15)");
+        run_test("1.123456789.round(15)");
+        // Large negative ndigits
+        run_test("123456789.0.ceil(-15)");
+        run_test("123456789.0.floor(-15)");
+        run_test("123456789.0.truncate(-15)");
+        run_test("123456789.0.round(-15)");
+    }
+
+    #[test]
     fn finite() {
         run_test("(1/0.0).finite?");
         run_test("(-1/0.0).finite?");
