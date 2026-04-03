@@ -672,7 +672,7 @@ fn kernel_integer(
             RV::BigInt(b) => return Ok(Value::bigint(b.clone())),
             _ => {
                 return Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} to Integer ({}#to_int gives {})",
+                    "can't convert {} into Integer ({}#to_int gives {})",
                     arg0.get_real_class_name(globals),
                     arg0.get_real_class_name(globals),
                     result.get_real_class_name(globals),
@@ -689,7 +689,7 @@ fn kernel_integer(
             RV::BigInt(b) => return Ok(Value::bigint(b.clone())),
             _ => {
                 return Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} to Integer ({}#to_i gives {})",
+                    "can't convert {} into Integer ({}#to_i gives {})",
                     arg0.get_real_class_name(globals),
                     arg0.get_real_class_name(globals),
                     result.get_real_class_name(globals),
@@ -741,7 +741,7 @@ fn kernel_float(
             RV::Fixnum(i) => return Ok(Value::float(i as f64)),
             _ => {
                 return Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} to Float ({}#to_f gives {})",
+                    "can't convert {} into Float ({}#to_f gives {})",
                     arg0.get_real_class_name(globals),
                     arg0.get_real_class_name(globals),
                     result.get_real_class_name(globals),
@@ -801,7 +801,7 @@ fn kernel_array(
             return Ok(result);
         }
         return Err(MonorubyErr::typeerr(format!(
-            "can't convert {} to Array ({}#to_ary gives {})",
+            "can't convert {} into Array ({}#to_ary gives {})",
             arg.get_real_class_name(globals),
             arg.get_real_class_name(globals),
             result.get_real_class_name(globals),
@@ -812,7 +812,7 @@ fn kernel_array(
             return Ok(result);
         }
         return Err(MonorubyErr::typeerr(format!(
-            "can't convert {} to Array ({}#to_a gives {})",
+            "can't convert {} into Array ({}#to_a gives {})",
             arg.get_real_class_name(globals),
             arg.get_real_class_name(globals),
             result.get_real_class_name(globals),
