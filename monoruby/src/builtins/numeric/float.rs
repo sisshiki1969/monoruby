@@ -273,7 +273,7 @@ fn ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     }
     if ndigits > 0 {
         if let Ok(ndigits) = u32::try_from(ndigits) {
-            let mul = 10i32.pow(ndigits) as f64;
+            let mul = 10f64.powi(ndigits as i32);
             let f = (f * mul).ceil() / mul;
             Ok(Value::float(f))
         } else {
@@ -281,7 +281,7 @@ fn ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
     } else {
         if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
-            let mul = 10i32.pow(neg_ndigits) as f64;
+            let mul = 10f64.powi(neg_ndigits as i32);
             let f = (f / mul).ceil() * mul;
             if let Some(v) = Value::integer_from_f64(f) {
                 return Ok(v);
@@ -314,7 +314,7 @@ fn truncate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     }
     if ndigits > 0 {
         if let Ok(ndigits) = u32::try_from(ndigits) {
-            let mul = 10i32.pow(ndigits) as f64;
+            let mul = 10f64.powi(ndigits as i32);
             let f = (f * mul).trunc() / mul;
             Ok(Value::float(f))
         } else {
@@ -322,7 +322,7 @@ fn truncate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         }
     } else {
         if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
-            let mul = 10i32.pow(neg_ndigits) as f64;
+            let mul = 10f64.powi(neg_ndigits as i32);
             let f = (f / mul).trunc() * mul;
             if let Some(v) = Value::integer_from_f64(f) {
                 return Ok(v);
@@ -356,7 +356,7 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     if ndigits > 0 {
         if let Ok(ndigits) = u32::try_from(ndigits) {
-            let mul = 10i32.pow(ndigits) as f64;
+            let mul = 10f64.powi(ndigits as i32);
             let f = (f * mul).round() / mul;
             Ok(Value::float(f))
         } else {
@@ -364,7 +364,7 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
     } else {
         if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
-            let mul = 10i32.pow(neg_ndigits) as f64;
+            let mul = 10f64.powi(neg_ndigits as i32);
             let f = (f / mul).round() * mul;
             if let Some(v) = Value::integer_from_f64(f) {
                 return Ok(v);
