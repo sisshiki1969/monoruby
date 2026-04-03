@@ -329,14 +329,30 @@ fn pow(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Va
                 let d = lhs.den().pow(exp);
                 Ok(Value::rational_from_bigint(n, d))
             } else {
+                if lhs.is_zero() {
+                    return Err(MonorubyErr::divide_by_zero());
+                }
                 let exp = (-exp) as u32;
                 let n = lhs.den().pow(exp);
                 let d = lhs.num().pow(exp);
                 Ok(Value::rational_from_bigint(n, d))
             }
         }
-        RV::Float(f) => Ok(Value::float(lhs.to_f().powf(f))),
-        _ => Ok(Value::float(lhs.to_f())),
+        RV::Float(f) => {
+            if lhs.is_zero() && f < 0.0 {
+                return Err(MonorubyErr::divide_by_zero());
+            }
+            Ok(Value::float(lhs.to_f().powf(f)))
+        }
+        _ => {
+            // For Rational exponent or other types, check zero base with negative exponent
+            if let Some(r) = rhs.try_rational() {
+                if lhs.is_zero() && r.is_negative() {
+                    return Err(MonorubyErr::divide_by_zero());
+                }
+            }
+            Ok(Value::float(lhs.to_f()))
+        }
     }
 }
 

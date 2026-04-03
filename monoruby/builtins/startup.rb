@@ -118,6 +118,13 @@ class Module
   def const_missing(name)
     raise NameError, "uninitialized constant #{self}::#{name}"
   end
+
+  def include?(mod)
+    unless mod.is_a?(Module)
+      raise TypeError, "wrong argument type #{mod.class} (expected Module)"
+    end
+    ancestors.include?(mod)
+  end
 end
 
 module Warning
@@ -591,6 +598,11 @@ end
 TOPLEVEL_BINDING = binding
 
 require_relative 'comparable'
+
+class Numeric
+  include Comparable
+end
+
 require_relative 'enumerable'
 require_relative 'integer'
 require_relative 'range'
