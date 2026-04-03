@@ -68,6 +68,35 @@ mod tests {
     }
 
     #[test]
+    fn singleton_method_def() {
+        run_test(
+            r##"
+            def nil.foo; 1; end
+            nil.foo
+            "##,
+        );
+        run_test(
+            r##"
+            def true.bar; 2; end
+            true.bar
+            "##,
+        );
+        run_test(
+            r##"
+            def false.baz; 3; end
+            false.baz
+            "##,
+        );
+        run_test(
+            r##"
+            obj = Object.new
+            def (obj).qux; 4; end
+            obj.qux
+            "##,
+        );
+    }
+
+    #[test]
     fn xor() {
         run_test(r##"nil ^ true"##);
         run_test(r##"nil ^ false"##);
