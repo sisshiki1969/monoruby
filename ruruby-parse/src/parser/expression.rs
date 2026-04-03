@@ -596,9 +596,18 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             let lhs = Node::new_unop(UnOp::Not, self.parse_unary()?, loc);
             Ok(lhs)
         } else if self.consume_punct(Punct::Plus)? {
-            let loc = self.prev_loc();
-            let lhs = Node::new_unop(UnOp::Pos, self.parse_unary()?, loc);
-            Ok(lhs)
+            // When `+` is followed by a numeric literal, fold it away
+            // (CRuby treats `+249.foo` as `(249).foo`, not `+(249.foo)`).
+            match self.peek_no_term()?.kind {
+                TokenKind::IntegerLit(_) | TokenKind::FloatLit(_) | TokenKind::BignumLit(_) => {
+                    self.parse_method_call()
+                }
+                _ => {
+                    let loc = self.prev_loc();
+                    let lhs = Node::new_unop(UnOp::Pos, self.parse_unary()?, loc);
+                    Ok(lhs)
+                }
+            }
         } else {
             self.parse_method_call()
         }

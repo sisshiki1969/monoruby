@@ -17,11 +17,9 @@ class Integer
       self
     else
       d = 10 ** (-ndigits)
-      if self >= 0
-        (self / d) * d
-      else
-        ((self - d + 1) / d) * d
-      end
+      # Ruby's integer division floors toward negative infinity,
+      # so (self / d) * d always rounds toward negative infinity.
+      (self / d) * d
     end
   end
 
@@ -145,17 +143,49 @@ class Integer
   end
 
   def fdiv(other)
-    sf = self.to_f
-    of = other.to_f
-    # If both convert to Infinity (very large BigInts), compute via bit shifting
-    if sf.infinite? && of.infinite?
-      # Use BigInt division with extra precision bits
-      shift = 1024
-      (self << shift).to_f / (other << shift).to_f
-    elsif sf.infinite? && of == 0.0
-      sf / of
+    if other.is_a?(Integer)
+      sf = self.to_f
+      of = other.to_f
+      if self.bit_length > 53 || other.bit_length > 53
+        # When either operand exceeds f64 mantissa precision (53 bits),
+        # use BigInt division to produce the correct IEEE 754 double.
+        # We scale the numerator up so that the integer quotient has
+        # ~54 significant bits, then use Math.ldexp to apply the
+        # 2^(-extra) scaling without overflow.
+        return 0.0 if self == 0
+        if other == 0
+          return sf.infinite? ? sf / 0.0 : 1.0 / 0.0 * (self < 0 ? -1 : 1)
+        end
+        sign = (self < 0) != (other < 0) ? -1 : 1
+        a = self.abs
+        b = other.abs
+        lbits = a.bit_length
+        rbits = b.bit_length
+        # Target ~56 significant bits in quotient (3 extra beyond f64's
+        # 53-bit mantissa) so to_f has guard, round, and sticky bits.
+        extra = 56 - lbits + rbits
+        if extra > 0
+          q, r = (a << extra).divmod(b)
+        elsif extra < 0
+          q, r = a.divmod(b << -extra)
+        else
+          q, r = a.divmod(b)
+        end
+        # Set sticky bit: if remainder is nonzero, ensure LSB is 1
+        # so that to_f rounds correctly (IEEE 754 round-to-nearest-even)
+        q |= 1 if r != 0
+        result = Math.ldexp(q.to_f, -extra)
+        sign < 0 ? -result : result
+      else
+        sf / of
+      end
+    elsif other.is_a?(Float)
+      self.to_f / other
+    elsif other.respond_to?(:coerce)
+      a, b = other.coerce(self)
+      a.fdiv(b)
     else
-      sf / of
+      raise TypeError, "#{other.class} can't be coerced into Integer"
     end
   end
 
@@ -279,9 +309,25 @@ class Integer
   end
 
   def self.sqrt(n)
-    n = n.to_int
+    unless n.is_a?(Integer)
+      if n.respond_to?(:to_int)
+        n = n.to_int
+        unless n.is_a?(Integer)
+          raise TypeError, "can't convert #{n.class} to Integer (#{n.class}#to_int gives #{n.class})"
+        end
+      else
+        raise TypeError, "no implicit conversion of #{n.class} into Integer"
+      end
+    end
     raise Math::DomainError, "out of domain - isqrt" if n < 0
-    Math.sqrt(n).floor
+    return 0 if n == 0
+    # Newton's method for integer square root
+    x = 1 << ((n.bit_length + 1) / 2)
+    loop do
+      y = (x + n / x) / 2
+      break x if y >= x
+      x = y
+    end
   end
 
   def self.try_convert(obj)

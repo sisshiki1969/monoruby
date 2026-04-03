@@ -45,6 +45,60 @@ pub(crate) fn try_coerce_and_apply(
     }
 }
 
+/// CRuby-compatible coerce for bitwise operations (Integer#&, |, ^).
+///
+/// CRuby's rb_num_coerce_bit:
+/// 1. Call rhs.coerce(lhs) → [x, y]
+/// 2. Re-dispatch x.op(y)
+/// 3. If coerced x is not Integer, the re-dispatch will call Integer#op again,
+///    which calls coerce again → CRuby detects this and raises TypeError.
+///
+/// We simplify: after coerce, check that x is Integer. If not, raise TypeError.
+pub(crate) fn try_coerce_and_apply_bit(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    op: IdentId,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    let coerce_id = IdentId::get_id("coerce");
+    match vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None) {
+        Ok(Some(result)) => {
+            if let Some(ary) = result.try_array_ty() {
+                if ary.len() == 2 {
+                    let x = ary[0];
+                    // Check that coerced lhs is Integer — if not, TypeError
+                    match x.unpack() {
+                        RV::Fixnum(_) | RV::BigInt(_) => {
+                            return vm.invoke_method_simple(globals, op, x, &[ary[1]]);
+                        }
+                        _ => {
+                            let err = MonorubyErr::typeerr(format!(
+                                "{} can't be coerced into Integer",
+                                rhs.get_real_class_name(&globals.store),
+                            ));
+                            vm.set_error(err);
+                            return None;
+                        }
+                    }
+                }
+            }
+            let err = MonorubyErr::typeerr("coerce must return [x, y]".to_string());
+            vm.set_error(err);
+            None
+        }
+        Ok(None) => {
+            let err = MonorubyErr::cant_coerced_into(globals, op, rhs, "Integer");
+            vm.set_error(err);
+            None
+        }
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
 macro_rules! binop_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
@@ -436,7 +490,9 @@ macro_rules! int_binop_values {
                     (RV::BigInt(lhs), RV::Fixnum(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
                     (RV::Fixnum(_) | RV::BigInt(_), _) => {
-                        return try_coerce_and_apply(vm, globals, $op_str, lhs, rhs, "Integer");
+                        // CRuby-compatible: call coerce, then re-dispatch.
+                        // If coerced lhs is not Integer, raise TypeError.
+                        return try_coerce_and_apply_bit(vm, globals, $op_str, lhs, rhs);
                     }
                     _ => {
                         return vm.invoke_method_simple(globals, $op_str, lhs, &[rhs]);

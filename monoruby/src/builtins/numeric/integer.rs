@@ -435,23 +435,12 @@ macro_rules! binop {
                     (RV::Fixnum(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(BigInt::from(lhs).$op(rhs))),
                     (RV::BigInt(lhs), RV::Fixnum(rhs)) => Ok(Value::bigint(lhs.$op(BigInt::from(rhs)))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(lhs.$op(rhs))),
-                    (_, RV::Float(_)) => {
-                        // Bitwise ops don't accept Float
-                        return Err(MonorubyErr::typeerr(format!(
-                            "{} can't be coerced into Integer",
-                            rhs.inspect(&globals.store),
-                        )));
-                    }
                     _ => {
-                        // Try to_int conversion for non-Float, non-Integer
-                        let rhs_int = rhs.coerce_to_int_i64(vm, globals)?;
-                        let rhs_val = Value::integer(rhs_int);
-                        match (lhs.unpack(), rhs_val.unpack()) {
-                            (RV::Fixnum(l), RV::Fixnum(r)) => return Ok(Value::integer(l.$op(r))),
-                            (RV::Fixnum(l), RV::BigInt(r)) => return Ok(Value::bigint(BigInt::from(l).$op(r))),
-                            (RV::BigInt(l), RV::Fixnum(r)) => return Ok(Value::bigint(l.$op(BigInt::from(r)))),
-                            (RV::BigInt(l), RV::BigInt(r)) => return Ok(Value::bigint(l.$op(r))),
-                            _ => unreachable!(),
+                        // CRuby-compatible: call coerce, check result is Integer
+                        let op_id = IdentId::get_id($op_str);
+                        match crate::executor::op::binary_ops::try_coerce_and_apply_bit(vm, globals, op_id, lhs, rhs) {
+                            Some(v) => Ok(v),
+                            None => Err(vm.take_error()),
                         }
                     }
                 }
@@ -1729,5 +1718,45 @@ mod tests {
     fn downto_upto_bad_arg() {
         run_test_error(r#"1.upto("foo") {}"#);
         run_test_error(r#"1.downto("foo") {}"#);
+    }
+
+    #[test]
+    fn fdiv_large_bigint() {
+        run_test_once("(10**200).fdiv(10**199)");
+        run_test_once("(10**200).fdiv(3 * 10**199)");
+    }
+
+    #[test]
+    fn integer_sqrt_newton() {
+        run_test("Integer.sqrt(0)");
+        run_test("Integer.sqrt(1)");
+        run_test("Integer.sqrt(100)");
+        run_test_error("Integer.sqrt(-1)");
+        run_test_error(r#"Integer.sqrt("foo")"#);
+    }
+
+    #[test]
+    fn round_negative_precision() {
+        run_test("249.round(-2)");
+        run_test("(-249).round(-2)");
+        run_test("150.round(-2)");
+    }
+
+    #[test]
+    fn floor_bigint_neg_precision() {
+        run_test("(-130).floor(-1)");
+        run_test("(-131).floor(-1)");
+    }
+
+    #[test]
+    fn module_include_q() {
+        run_test_once("Integer.include?(Comparable)");
+        run_test_once("Integer.include?(Enumerable)");
+    }
+
+    #[test]
+    fn rational_pow_zero_base() {
+        run_test_error("Rational(0, 1) ** -1");
+        run_test_error("Rational(0, 1) ** Rational(-1, 1)");
     }
 }
