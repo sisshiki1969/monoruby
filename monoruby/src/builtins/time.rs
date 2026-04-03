@@ -542,4 +542,26 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn time_strftime_nanoseconds() {
+        run_test_once(
+            r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%3N")"#,
+        );
+        run_test_once(
+            r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%6N")"#,
+        );
+        run_test_once(
+            r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%9N")"#,
+        );
+        run_test_once(
+            r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%N")"#,
+        );
+        run_test_once(
+            r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%L")"#,
+        );
+        run_test_once(
+            r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%Y-%m-%d %H:%M:%S.%3N")"#,
+        );
+    }
 }

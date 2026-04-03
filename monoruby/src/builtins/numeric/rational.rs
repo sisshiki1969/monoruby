@@ -488,4 +488,10 @@ mod tests {
         run_test_once("(Rational(2, 3) ** 2).to_s");
         run_test_once("(Rational(2, 3) ** -1).to_s");
     }
+
+    #[test]
+    fn rational_allocate_disabled() {
+        run_test_error("Rational.new(1)");
+        run_test_error("Rational.allocate");
+    }
 }

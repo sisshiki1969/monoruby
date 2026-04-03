@@ -168,4 +168,10 @@ mod tests {
         run_test("Complex(4, 5).rect");
         run_test("Complex(4.7, 1.5).rect");
     }
+
+    #[test]
+    fn complex_allocate_disabled() {
+        run_test_error("Complex.new(1)");
+        run_test_error("Complex.allocate");
+    }
 }
