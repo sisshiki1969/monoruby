@@ -35,9 +35,16 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     }
                     TokenKind::Reserved(r) => (None, self.read_method_ext(r.as_str().to_string())?),
                     TokenKind::Ident(s) => {
-                        if s.as_str() == "self" {
+                        let pseudo = match s.as_str() {
+                            "self" => Some(Node::new_self(loc)),
+                            "nil" => Some(Node::new_nil(loc)),
+                            "true" => Some(Node::new_bool(true, loc)),
+                            "false" => Some(Node::new_bool(false, loc)),
+                            _ => None,
+                        };
+                        if let Some(node) = pseudo {
                             self.consume_punct_no_term(Punct::Dot)?;
-                            (Some(Node::new_self(loc)), self.read_method_name(true)?.0)
+                            (Some(node), self.read_method_name(true)?.0)
                         } else if self.consume_punct_no_term(Punct::Dot)?
                             || self.consume_punct_no_term(Punct::Scope)?
                         {
@@ -64,6 +71,17 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                             )
                         } else {
                             (None, self.read_method_ext(s)?)
+                        }
+                    }
+                    TokenKind::Punct(Punct::LParen) => {
+                        let node = self.parse_expr()?;
+                        self.expect_punct(Punct::RParen)?;
+                        if self.consume_punct_no_term(Punct::Dot)?
+                            || self.consume_punct_no_term(Punct::Scope)?
+                        {
+                            (Some(node), self.read_method_name(true)?.0)
+                        } else {
+                            return Err(error_unexpected(self.loc(), "Expected '.' or '::' after parenthesized expression in method definition."));
                         }
                     }
                     TokenKind::Punct(p) => (None, self.parse_op_definable(&p)?.to_string()),

@@ -463,27 +463,48 @@ end
 Mutex = Thread::Mutex
 
 class TrueClass
-  TRUE_TO_S = "true"
+  class << self
+    undef_method :new
+  end
+  TRUE_TO_S = "true".freeze
   def to_s
     TRUE_TO_S
   end
 end
 
 class FalseClass
-  FALSE_TO_S = "false"
+  class << self
+    undef_method :new
+  end
+  FALSE_TO_S = "false".freeze
   def to_s
     FALSE_TO_S
   end
 end
 
 class NilClass
-  NIL_TO_S = ""
+  class << self
+    undef_method :new
+  end
+  NIL_TO_S = "".freeze
   def to_s
     NIL_TO_S
   end
 
   def to_a
     []
+  end
+
+  def to_i
+    0
+  end
+
+  def to_f
+    0.0
+  end
+
+  def to_h
+    {}
   end
 
   def =~(_other)
@@ -495,6 +516,13 @@ class NilClass
   end
 
   def to_r
+    Rational(0)
+  end
+
+  def rationalize(*args)
+    if args.length > 1
+      raise ArgumentError, "wrong number of arguments (given #{args.length}, expected 0..1)"
+    end
     Rational(0)
   end
 end
