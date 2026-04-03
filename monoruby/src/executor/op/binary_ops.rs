@@ -306,7 +306,10 @@ fn check_pow_limit(base_bits: u64, exp: u64) -> bool {
 pub(crate) extern "C" fn pow_ii(lhs: i64, rhs: i64, vm: &mut Executor) -> Option<Value> {
     if let Ok(rhs) = i32::try_from(rhs) {
         if rhs < 0 {
-            // TODO: support negative exponent for integer base.
+            if lhs == 0 {
+                vm.set_error(MonorubyErr::divide_by_zero());
+                return None;
+            }
             return Some(Value::float((lhs as f64).powf(rhs as f64)));
         }
         let rhs = rhs as u32;
