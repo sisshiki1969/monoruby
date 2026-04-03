@@ -146,29 +146,36 @@ class Integer
     if other.is_a?(Integer)
       sf = self.to_f
       of = other.to_f
-      if sf.infinite? || of.infinite?
-        # When to_f overflows to Infinity, use BigInt division to
-        # produce the correct IEEE 754 double. We scale the numerator
-        # up so that the integer quotient has ~54 significant bits,
-        # then use Math.ldexp to apply the 2^(-extra) scaling without
-        # overflow.
+      if self.bit_length > 53 || other.bit_length > 53
+        # When either operand exceeds f64 mantissa precision (53 bits),
+        # use BigInt division to produce the correct IEEE 754 double.
+        # We scale the numerator up so that the integer quotient has
+        # ~54 significant bits, then use Math.ldexp to apply the
+        # 2^(-extra) scaling without overflow.
         return 0.0 if self == 0
         if other == 0
           return sf.infinite? ? sf / 0.0 : 1.0 / 0.0 * (self < 0 ? -1 : 1)
         end
-        lbits = self.abs.bit_length
-        rbits = other.abs.bit_length
-        # extra: how many bits to shift numerator so quotient ~ 54 bits
-        extra = 54 - lbits + rbits
+        sign = (self < 0) != (other < 0) ? -1 : 1
+        a = self.abs
+        b = other.abs
+        lbits = a.bit_length
+        rbits = b.bit_length
+        # Target ~56 significant bits in quotient (3 extra beyond f64's
+        # 53-bit mantissa) so to_f has guard, round, and sticky bits.
+        extra = 56 - lbits + rbits
         if extra > 0
-          q = (self << extra) / other
-          Math.ldexp(q.to_f, -extra)
+          q, r = (a << extra).divmod(b)
         elsif extra < 0
-          q = self / (other << -extra)
-          Math.ldexp(q.to_f, -extra)
+          q, r = a.divmod(b << -extra)
         else
-          (self / other).to_f
+          q, r = a.divmod(b)
         end
+        # Set sticky bit: if remainder is nonzero, ensure LSB is 1
+        # so that to_f rounds correctly (IEEE 754 round-to-nearest-even)
+        q |= 1 if r != 0
+        result = Math.ldexp(q.to_f, -extra)
+        sign < 0 ? -result : result
       else
         sf / of
       end
