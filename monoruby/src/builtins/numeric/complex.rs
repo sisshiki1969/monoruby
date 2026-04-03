@@ -29,6 +29,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_funcs(COMPLEX_CLASS, "abs", &["magnitude"], abs, 0);
     globals.define_builtin_funcs(COMPLEX_CLASS, "rect", &["rectangular"], rect, 0);
     globals.define_builtin_class_func(COMPLEX_CLASS, "allocate", super::super::class::undef_allocate, 0);
+    globals.define_builtin_func(COMPLEX_CLASS, "eql?", eql_, 1);
 }
 
 fn eq_bool(store: &Store, lhs: &ComplexInner, rhs: Value) -> bool {
@@ -110,6 +111,24 @@ fn complex_rect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
 fn abs(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let abs = lfp.self_val().as_complex().to_complex_f64().norm();
     Ok(Value::float(abs))
+}
+
+///
+/// ### Complex#eql?
+///
+/// - eql?(other) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Complex/i/eql=3f.html]
+#[monoruby_builtin]
+fn eql_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let lhs = self_val.as_complex();
+    let rhs = lfp.arg(0);
+    if let Some(rhs) = rhs.try_complex() {
+        Ok(Value::bool(lhs.eql(rhs, vm, globals)?))
+    } else {
+        Ok(Value::bool(false))
+    }
 }
 
 ///
