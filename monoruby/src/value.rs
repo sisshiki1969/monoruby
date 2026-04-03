@@ -1384,23 +1384,31 @@ impl Value {
     }
 
     pub(crate) fn coerce_to_int(&self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        if let Some(func_id) = globals.check_method(*self, IdentId::TO_INT) {
-            let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
-            match result.unpack() {
-                RV::Fixnum(_) | RV::BigInt(_) => Ok(result),
-                _ => Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} to Integer ({}#to_int gives {})",
-                    self.get_real_class_name(&globals.store),
-                    self.get_real_class_name(&globals.store),
-                    result.get_real_class_name(&globals.store),
-                ))),
-            }
+        // First try direct method lookup (fast path), then fall back to
+        // invoke_method_inner which handles method_missing.
+        let result = if let Some(func_id) = globals.check_method(*self, IdentId::TO_INT) {
+            vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?
         } else {
-            Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                *self,
-                INTEGER_CLASS,
-            ))
+            // Try via method_missing (for Mock objects etc.)
+            match vm.invoke_method_inner(globals, IdentId::TO_INT, *self, &[], None, None) {
+                Ok(result) => result,
+                Err(_) => {
+                    return Err(MonorubyErr::no_implicit_conversion(
+                        globals,
+                        *self,
+                        INTEGER_CLASS,
+                    ));
+                }
+            }
+        };
+        match result.unpack() {
+            RV::Fixnum(_) | RV::BigInt(_) => Ok(result),
+            _ => Err(MonorubyErr::typeerr(format!(
+                "can't convert {} to Integer ({}#to_int gives {})",
+                self.get_real_class_name(&globals.store),
+                self.get_real_class_name(&globals.store),
+                result.get_real_class_name(&globals.store),
+            ))),
         }
     }
 

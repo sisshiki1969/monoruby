@@ -467,16 +467,16 @@ pub(crate) extern "C" fn shr_values(
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
             if rhs >= 0 {
-                int_shr(lhs, rhs as u64 as u32)
+                safe_int_shr(lhs, rhs as u64)
             } else {
-                int_shl(lhs, -rhs as u64 as u32)
+                safe_int_shl(lhs, (-rhs) as u64, vm)?
             }
         }
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => {
             if rhs >= 0 {
-                bigint_shr(lhs, rhs as u64 as u32)
+                safe_bigint_shr(lhs, rhs as u64)
             } else {
-                bigint_shl(lhs, -rhs as u64 as u32)
+                safe_bigint_shl(lhs, (-rhs) as u64, vm)?
             }
         }
         // n >> bignum: if bignum > 0, shift right by huge amount => 0 or -1;
@@ -502,9 +502,9 @@ pub(crate) extern "C" fn shr_values(
             }
         }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            // >> requires to_int conversion, not coerce
-            match rhs.coerce_to_int_i64(vm, globals) {
-                Ok(rhs_int) => return shr_values(vm, globals, lhs, Value::integer(rhs_int)).into(),
+            // >> requires to_int conversion (not coerce), supports BigInt shift amounts
+            match rhs.coerce_to_int(vm, globals) {
+                Ok(rhs_int) => return shr_values(vm, globals, lhs, rhs_int).into(),
                 Err(_) => {
                     vm.set_error(MonorubyErr::typeerr(format!(
                         "{} can't be coerced into Integer",
@@ -530,16 +530,16 @@ pub(crate) extern "C" fn shl_values(
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
             if rhs >= 0 {
-                int_shl(lhs, rhs as u64 as u32)
+                safe_int_shl(lhs, rhs as u64, vm)?
             } else {
-                int_shr(lhs, -rhs as u64 as u32)
+                safe_int_shr(lhs, (-rhs) as u64)
             }
         }
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => {
             if rhs >= 0 {
-                bigint_shl(lhs, rhs as u64 as u32)
+                safe_bigint_shl(lhs, rhs as u64, vm)?
             } else {
-                bigint_shr(lhs, -rhs as u64 as u32)
+                safe_bigint_shr(lhs, (-rhs) as u64)
             }
         }
         // n << bignum: if bignum > 0, shift left by huge amount => RangeError (or 0 if n==0);
@@ -569,9 +569,9 @@ pub(crate) extern "C" fn shl_values(
             }
         }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            // << requires to_int conversion, not coerce
-            match rhs.coerce_to_int_i64(vm, globals) {
-                Ok(rhs_int) => return shl_values(vm, globals, lhs, Value::integer(rhs_int)).into(),
+            // << requires to_int conversion (not coerce), supports BigInt shift amounts
+            match rhs.coerce_to_int(vm, globals) {
+                Ok(rhs_int) => return shl_values(vm, globals, lhs, rhs_int).into(),
                 Err(_) => {
                     vm.set_error(MonorubyErr::typeerr(format!(
                         "{} can't be coerced into Integer",
@@ -586,6 +586,49 @@ pub(crate) extern "C" fn shl_values(
         }
     };
     Some(v)
+}
+
+/// Safe shift helpers that handle shift amounts > 32 bits without truncation.
+fn safe_int_shr(lhs: i64, rhs: u64) -> Value {
+    if rhs >= 64 {
+        Value::integer(if lhs >= 0 { 0 } else { -1 })
+    } else {
+        int_shr(lhs, rhs as u32)
+    }
+}
+
+fn safe_int_shl(lhs: i64, rhs: u64, vm: &mut Executor) -> Option<Value> {
+    if rhs > u32::MAX as u64 {
+        if lhs == 0 {
+            Some(Value::integer(0))
+        } else {
+            vm.set_error(MonorubyErr::rangeerr("shift width too big"));
+            None
+        }
+    } else {
+        Some(int_shl(lhs, rhs as u32))
+    }
+}
+
+fn safe_bigint_shr(lhs: &BigInt, rhs: u64) -> Value {
+    if rhs > u32::MAX as u64 {
+        Value::integer(if lhs.is_negative() { -1 } else { 0 })
+    } else {
+        bigint_shr(lhs, rhs as u32)
+    }
+}
+
+fn safe_bigint_shl(lhs: &BigInt, rhs: u64, vm: &mut Executor) -> Option<Value> {
+    if rhs > u32::MAX as u64 {
+        if lhs.is_zero() {
+            Some(Value::integer(0))
+        } else {
+            vm.set_error(MonorubyErr::rangeerr("shift width too big"));
+            None
+        }
+    } else {
+        Some(bigint_shl(lhs, rhs as u32))
+    }
 }
 
 fn int_shr(lhs: i64, rhs: u32) -> Value {
