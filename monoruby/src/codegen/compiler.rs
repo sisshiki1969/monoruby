@@ -376,29 +376,29 @@ extern "C" fn jit_compile_patch(
     lfp: Lfp,
     entry_patch_point: monoasm::CodePtr,
 ) {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        CODEGEN.with(|codegen| {
-            codegen
-                .borrow_mut()
-                .compile_patch(globals, lfp, entry_patch_point);
-        });
-    }));
-    if result.is_err() {
-        #[cfg(feature = "jit-log")]
-        eprintln!("[JIT] compile_patch panicked, falling back to VM interpreter");
-    }
+    //let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    CODEGEN.with(|codegen| {
+        codegen
+            .borrow_mut()
+            .compile_patch(globals, lfp, entry_patch_point);
+    });
+    //}));
+    //if result.is_err() {
+    //    #[cfg(feature = "jit-log")]
+    //    eprintln!("[JIT] compile_patch panicked, falling back to VM interpreter");
+    //}
 }
 
 extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: RecompileReason) {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        CODEGEN.with(|codegen| {
-            codegen.borrow_mut().recompile_method(globals, lfp, reason);
-        });
-    }));
-    if result.is_err() {
-        #[cfg(feature = "jit-log")]
-        eprintln!("[JIT] recompile_method panicked, falling back to VM interpreter");
-    }
+    //let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    CODEGEN.with(|codegen| {
+        codegen.borrow_mut().recompile_method(globals, lfp, reason);
+    });
+    //}));
+    //if result.is_err() {
+    //    #[cfg(feature = "jit-log")]
+    //    eprintln!("[JIT] recompile_method panicked, falling back to VM interpreter");
+    //}
 }
 
 extern "C" fn jit_recompile_method_with_recovery(
@@ -409,17 +409,15 @@ extern "C" fn jit_recompile_method_with_recovery(
     if globals.store.update_inline_cache(lfp) {
         return 1;
     };
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        CODEGEN.with(|codegen| {
-            codegen.borrow_mut().recompile_method(globals, lfp, reason);
-        });
-    }));
-    if result.is_err() {
-        #[cfg(feature = "jit-log")]
-        eprintln!(
-            "[JIT] recompile_method_with_recovery panicked, falling back to VM interpreter"
-        );
-    }
+    //    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    CODEGEN.with(|codegen| {
+        codegen.borrow_mut().recompile_method(globals, lfp, reason);
+    });
+    //    }));
+    //if result.is_err() {
+    //    #[cfg(feature = "jit-log")]
+    //    eprintln!("[JIT] recompile_method_with_recovery panicked, falling back to VM interpreter");
+    //}
     0
 }
 
