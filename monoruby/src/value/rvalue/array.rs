@@ -281,20 +281,28 @@ impl ArrayInner {
         let len = self.len();
         match val.try_array_ty() {
             Some(ary) => {
-                // if self = ary, something wrong happens..
-                let ary_len = ary.len();
+                let is_self = std::ptr::eq((*ary).as_ptr(), self.as_ptr());
+                let ary_data = if is_self {
+                    ary.to_vec()
+                } else {
+                    Vec::new()
+                };
+                let ary_slice: &[Value] = if is_self {
+                    &ary_data
+                } else {
+                    &ary[..]
+                };
+                let ary_len = ary_slice.len();
                 if index >= len || index + length > len {
                     self.resize(index + ary_len, Value::nil());
                 } else if ary_len > length {
-                    // possibly self == ary
                     self.resize(len + ary_len - length, Value::nil());
                     self.copy_within(index + length..len, index + ary_len);
                 } else {
-                    // self != ary
                     self.copy_within(index + length..len, index + ary_len);
                     self.resize(len + ary_len - length, Value::nil());
                 }
-                self[index..index + ary_len].copy_from_slice(&ary[0..ary_len]);
+                self[index..index + ary_len].copy_from_slice(&ary_slice[0..ary_len]);
             }
             None => {
                 if index >= len {

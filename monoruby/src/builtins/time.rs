@@ -256,12 +256,33 @@ fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/strftime.html]
 #[monoruby_builtin]
 fn strftime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let fmt = lfp.arg(0).coerce_to_str(vm, globals)?.replace("%N", "%f");
+    let fmt_str = lfp.arg(0).coerce_to_str(vm, globals)?;
+
+    // Get nanoseconds from the time value for Ruby-specific format specifiers.
+    let nanos = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => t.timestamp_subsec_nanos(),
+        TimeInner::Utc(t) => t.timestamp_subsec_nanos(),
+    };
+
+    // Replace Ruby-specific nanosecond specifiers that chrono doesn't support.
+    let fmt = fmt_str
+        .replace("%9N", &format!("{:09}", nanos))
+        .replace("%N", &format!("{:09}", nanos))
+        .replace("%6N", &format!("{:06}", nanos / 1_000))
+        .replace("%3N", &format!("{:03}", nanos / 1_000_000))
+        .replace("%L", &format!("{:03}", nanos / 1_000_000));
+
+    use std::fmt::Write;
     let s = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.format(&fmt).to_string(),
+        TimeInner::Local(t) => {
+            let mut result = String::new();
+            let _ = write!(result, "{}", t.format(&fmt));
+            result
+        }
         TimeInner::Utc(t) => {
-            let fmt = fmt + " UTC";
-            t.format(&fmt).to_string()
+            let mut result = String::new();
+            let _ = write!(result, "{}", t.format(&fmt));
+            result
         }
     };
     Ok(Value::string(s))
