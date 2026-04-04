@@ -512,6 +512,20 @@ mod tests {
     }
 
     #[test]
+    fn rational_power_extended() {
+        // Rational ** Rational (integer denominator)
+        run_test_once("(Rational(2, 3) ** Rational(2, 1)).to_s");
+        run_test_once("(Rational(2, 3) ** Rational(-1, 1)).to_s");
+        // Rational ** Float
+        run_test_once("(Rational(4, 1) ** 0.5).class");
+        // Zero base with negative exponent
+        run_test_error("Rational(0, 1) ** -1");
+        run_test_error("Rational(0, 1) ** Rational(-1, 1)");
+        // Type error for unsupported type
+        run_test_error("Rational(1, 2) ** :sym");
+    }
+
+    #[test]
     fn rational_allocate_disabled() {
         run_test_error("Rational.new(1)");
         run_test_error("Rational.allocate");

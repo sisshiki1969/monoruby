@@ -4963,6 +4963,9 @@ mod tests {
         run_test(r##""Ruby".match?(/R.../)"##);
         run_test(r##""Ruby".match?(/R.../, 1)"##);
         run_test(r##""Ruby".match?(/P.../)"##);
+
+        // match with negative position returns nil
+        run_test(r##""hello".match(/ell/, -10)"##);
     }
 
     #[test]

@@ -166,4 +166,24 @@ mod tests {
         "#,
         );
     }
+
+    #[test]
+    fn symbol_to_s_encoding() {
+        run_test(r#":hello.to_s.encoding.to_s"#);
+        run_test(r#":"日本語".to_s.encoding.to_s"#);
+    }
+
+    #[test]
+    fn symbol_match_with_matchdata() {
+        run_test(r#":hello.match(/ell/).class"#);
+        run_test(r#":hello.match(/ell/)[0]"#);
+        run_test(r#":hello.match(/xyz/)"#);
+    }
+
+    #[test]
+    fn symbol_to_proc_public_send() {
+        // to_proc should use public_send and forward blocks
+        run_test(r#"[1, 2, 3].map(&:to_s)"#);
+        run_test(r#"["a", "b", "c"].map(&:upcase)"#);
+    }
 }

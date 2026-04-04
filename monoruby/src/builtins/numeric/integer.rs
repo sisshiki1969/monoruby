@@ -1697,6 +1697,12 @@ mod tests {
     }
 
     #[test]
+    fn pow_negative_base_float_exp() {
+        // (-1) ** 0.5 should return Complex in CRuby
+        run_test("((-1) ** 0.5).class");
+    }
+
+    #[test]
     fn integer_size_bigint() {
         run_test("(2**64).size");
         run_test("(2**63).size");
