@@ -14,22 +14,37 @@ class Rational
   end
 
   def floor(ndigits = 0)
+    ndigits = __coerce_ndigits(ndigits)
     if ndigits == 0
       (numerator / denominator)
+    elsif ndigits > 0
+      d = 10 ** ndigits
+      Rational((self * d).floor, d)
     else
-      to_f.floor(ndigits)
+      d = 10 ** (-ndigits)
+      (to_i / d) * d
     end
   end
 
   def ceil(ndigits = 0)
+    ndigits = __coerce_ndigits(ndigits)
     if ndigits == 0
       -((-numerator) / denominator)
+    elsif ndigits > 0
+      d = 10 ** ndigits
+      Rational((self * d).ceil, d)
     else
-      to_f.ceil(ndigits)
+      d = 10 ** (-ndigits)
+      (to_i.ceil(-ndigits))
     end
   end
 
-  def round(ndigits = 0)
+  def round(ndigits = 0, **kw)
+    half = kw[:half]
+    if half != nil && half != :up && half != :down && half != :even
+      raise ArgumentError, "invalid rounding mode: #{half}"
+    end
+    ndigits = __coerce_ndigits(ndigits)
     if ndigits == 0
       if denominator == 1
         numerator
@@ -41,24 +56,63 @@ class Rational
         elsif doubled < denominator
           q
         else
-          q.even? ? q : q + 1
+          case half
+          when :up
+            q + 1
+          when :down
+            q
+          when :even
+            q.even? ? q : q + 1
+          else
+            # Default: round half up (away from zero for positive, toward zero for negative)
+            q + 1
+          end
         end
       end
+    elsif ndigits > 0
+      d = 10 ** ndigits
+      scaled = self * d
+      rounded = Rational(scaled).round(0, half: half)
+      Rational(rounded, d)
     else
-      to_f.round(ndigits)
+      d = 10 ** (-ndigits)
+      (to_i).round(ndigits, half: half)
     end
   end
 
   def truncate(ndigits = 0)
+    ndigits = __coerce_ndigits(ndigits)
     if ndigits == 0
       to_i
     elsif ndigits > 0
-      (self * 10**ndigits).to_i.to_r / 10**ndigits
+      d = 10 ** ndigits
+      Rational((self * d).truncate, d)
     else
       d = 10 ** (-ndigits)
       (to_i / d) * d
     end
   end
+
+  private
+
+  def __coerce_ndigits(ndigits)
+    if ndigits.is_a?(Integer)
+      return ndigits
+    elsif ndigits.respond_to?(:to_int)
+      result = ndigits.to_int
+      if result.nil?
+        raise TypeError, "no implicit conversion of #{ndigits.class} into Integer"
+      end
+      unless result.is_a?(Integer)
+        raise TypeError, "can't convert #{ndigits.class} to Integer (#{ndigits.class}#to_int gives #{result.class})"
+      end
+      return result
+    else
+      raise TypeError, "no implicit conversion of #{ndigits.class} into Integer"
+    end
+  end
+
+  public
 
   def to_c
     Complex(to_f, 0)
@@ -84,6 +138,10 @@ class Rational
     self - (self / other).truncate * other
   end
 
+  def div(other)
+    (self / other).floor
+  end
+
   def divmod(other)
     q = (self / other).floor
     [q, self - q * other]
@@ -95,7 +153,29 @@ class Rational
   alias modulo %
 
   def rationalize(eps = nil)
-    self
+    return self if eps.nil?
+    eps = eps.abs
+    lo = self - eps
+    hi = self + eps
+    # Stern-Brocot search for simplest rational in [lo, hi]
+    p0, q0 = 0, 1
+    p1, q1 = 1, 0
+    loop do
+      pm = p0 + p1
+      qm = q0 + q1
+      med = Rational(pm, qm)
+      if med < lo
+        k = ((lo * qm - pm) / (p1 - lo * q1)).ceil
+        p0 = p0 + k * p1
+        q0 = q0 + k * q1
+      elsif med > hi
+        k = ((pm - hi * qm) / (hi * q0 - p0)).ceil
+        p1 = p1 + k * p0
+        q1 = q1 + k * q0
+      else
+        return Rational(pm, qm)
+      end
+    end
   end
 
   def gcd(other)
@@ -161,5 +241,32 @@ class Rational
 
     numerator = -numerator if negative
     Rational.__new(numerator, denominator)
+  end
+
+  # Stern-Brocot algorithm to find simplest rational within eps of f
+  def self.__float_find_simplest(f, eps)
+    eps = eps.abs
+    lo = f - eps
+    hi = f + eps
+    # Use mediant-based search (Stern-Brocot tree)
+    p0, q0 = 0, 1
+    p1, q1 = 1, 0
+    loop do
+      # Compute mediant
+      pm = p0 + p1
+      qm = q0 + q1
+      med = Rational(pm, qm)
+      if med < lo
+        k = ((lo * qm - pm) / (p1 - lo * q1)).ceil
+        p0 = p0 + k * p1
+        q0 = q0 + k * q1
+      elsif med > hi
+        k = ((pm - hi * qm) / (hi * q0 - p0)).ceil
+        p1 = p1 + k * p0
+        q1 = q1 + k * q0
+      else
+        return Rational(pm, qm)
+      end
+    end
   end
 end

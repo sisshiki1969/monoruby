@@ -636,10 +636,14 @@ impl RubyMod for f64 {
     type Output = f64;
     #[inline]
     fn ruby_mod(&self, rhs: &f64) -> Self::Output {
-        if *self > 0.0 && *rhs < 0.0 || *self < 0.0 && *rhs > 0.0 {
-            *self % *rhs + *rhs
+        let r = *self % *rhs;
+        if r == 0.0 {
+            // Preserve sign: result is -0.0 when self is negative
+            if self.is_sign_negative() { -0.0 } else { 0.0 }
+        } else if (*self > 0.0 && *rhs < 0.0) || (*self < 0.0 && *rhs > 0.0) {
+            r + *rhs
         } else {
-            *self % *rhs
+            r
         }
     }
 }

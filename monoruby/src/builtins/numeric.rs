@@ -62,17 +62,31 @@ fn divmod(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
 
+    // Helper for FloatDomainError
+    let float_domain_err = |msg: &str| -> MonorubyErr {
+        let class_id = globals
+            .store
+            .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("FloatDomainError"))
+            .map(|v| v.as_class_id());
+        match class_id {
+            Some(cid) => MonorubyErr::new(MonorubyErrKind::Other(cid), msg),
+            None => MonorubyErr::rangeerr(msg),
+        }
+    };
     let (div, modulo) = match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
         (Some(lhs), Some(rhs)) => {
             // NaN raises FloatDomainError
             if let RealKind::Float(f) = rhs {
                 if f.is_nan() {
-                    return Err(MonorubyErr::rangeerr("NaN"));
+                    return Err(float_domain_err("NaN"));
                 }
             }
             if let RealKind::Float(f) = lhs {
                 if f.is_nan() {
-                    return Err(MonorubyErr::rangeerr("NaN"));
+                    return Err(float_domain_err("NaN"));
+                }
+                if f.is_infinite() {
+                    return Err(float_domain_err(if f > 0.0 { "Infinity" } else { "-Infinity" }));
                 }
             }
             // For divmod, both integer zero and float zero raise ZeroDivisionError

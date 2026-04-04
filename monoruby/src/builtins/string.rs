@@ -1036,6 +1036,17 @@ fn start_with(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let string = self_.expect_str(globals)?;
     let arg0 = lfp.arg(0).as_array();
     for v in arg0.iter() {
+        if let Some(re) = v.is_regex() {
+            // Match Regexp - check if it matches at beginning of string
+            if let Some(mat) = re.captures(string, vm)? {
+                if let Some(m) = mat.get(0) {
+                    if m.start() == 0 {
+                        return Ok(Value::bool(true));
+                    }
+                }
+            }
+            continue;
+        }
         let a = v.coerce_to_str(vm, globals)?;
         if string.starts_with(a.as_str()) {
             return Ok(Value::bool(true));
@@ -5031,6 +5042,9 @@ mod tests {
         run_test(r##""string".start_with?("ing")"##);
         run_test(r##""string".start_with?("jng", "hng", "ing")"##);
         run_test_error(r##""string".start_with?("jng", 3, "ing")"##);
+        // Regexp argument
+        run_test(r##""string".start_with?(/str/)"##);
+        run_test(r##""string".start_with?(/ing/)"##);
         run_test(r##""hello".delete_prefix("hel")"##);
         run_test(r##""hello".delete_prefix("her")"##);
         run_test(r##"s = "hello"; [s.delete_prefix!("hel"), s]"##);
