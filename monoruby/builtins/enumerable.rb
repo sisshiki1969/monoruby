@@ -321,6 +321,10 @@ module Enumerable
     h
   end
 
+  def sort(&block)
+    self.to_a.sort(&block)
+  end
+
   def sort_by
     return self.to_enum(:sort_by) unless block_given?
     map { |x| [yield(x), x] }.sort { |a, b| a[0] <=> b[0] }.map { |x| x[1] }

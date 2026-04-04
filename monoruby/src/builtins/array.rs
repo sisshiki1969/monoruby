@@ -61,7 +61,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs_rest(ARRAY_CLASS, "unshift", &["prepend"], unshift);
     globals.define_builtin_func_rest(ARRAY_CLASS, "concat", concat);
     globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, Box::new(array_shl), 1);
-    globals.define_builtin_func_with(ARRAY_CLASS, "push", push, 0, 0, true);
+    globals.define_builtin_funcs_with(ARRAY_CLASS, "push", &["append"], push, 0, 0, true);
     globals.define_builtin_func_with(ARRAY_CLASS, "pop", pop, 0, 1, false);
     globals.define_builtin_funcs(ARRAY_CLASS, "==", &["==="], eq, 1);
     globals.define_builtin_func(ARRAY_CLASS, "eql?", eql, 1);
@@ -101,6 +101,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "partition", partition, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "filter", &["select", "find_all"], filter, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "filter!", &["select!"], filter_, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "keep_if", keep_if, 0);
     globals.define_builtin_func(ARRAY_CLASS, "reject!", reject_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "delete_if", delete_if, 0);
     globals.define_builtin_func(ARRAY_CLASS, "reject", reject, 0);
@@ -1008,12 +1009,17 @@ fn index_assign(
         if let Some(idx) = i.try_fixnum() {
             ary.set_index(idx, val)
         } else if let Some(range) = i.is_range() {
-            let start = ary.get_array_index_checked(vm, globals, range.start())?;
-            let end = ary.get_array_index_checked(vm, globals, range.end())?;
-            let len = if range.exclude_end() {
-                end.checked_sub(start)
+            let start = ary.get_array_index_nil_or(vm, globals, range.start(), 0)?;
+            let len = if range.end().is_nil() {
+                // endless range: length is from start to end of array
+                ary.len().checked_sub(start)
             } else {
-                (end + 1).checked_sub(start)
+                let end = ary.get_array_index_nil_or(vm, globals, range.end(), ary.len())?;
+                if range.exclude_end() {
+                    end.checked_sub(start)
+                } else {
+                    (end + 1).checked_sub(start)
+                }
             };
             if let Some(len) = len {
                 ary.set_index2(start as usize, len as usize, val)
@@ -1238,25 +1244,39 @@ fn fill_range_indices(
     range: &RangeInner,
 ) -> Result<(usize, usize)> {
     let len = ary.len() as i64;
-    let mut start = range.start().coerce_to_int_i64(vm, globals)?;
+    // nil begin means 0 (beginless range)
+    let mut start = if range.start().is_nil() {
+        0i64
+    } else {
+        range.start().coerce_to_int_i64(vm, globals)?
+    };
     if start < 0 {
         start += len;
         if start < 0 {
             return Err(MonorubyErr::rangeerr(format!(
                 "{}..{} out of range",
                 range.start().coerce_to_int_i64(vm, globals)?,
-                range.end().coerce_to_int_i64(vm, globals)?
+                if range.end().is_nil() {
+                    String::new()
+                } else {
+                    range.end().coerce_to_int_i64(vm, globals)?.to_string()
+                }
             )));
         }
     }
-    let mut end_val = range.end().coerce_to_int_i64(vm, globals)?;
-    if end_val < 0 {
-        end_val += len;
-    }
-    let end_idx = if range.exclude_end() {
-        end_val
+    // nil end means array length (endless range)
+    let end_idx = if range.end().is_nil() {
+        len
     } else {
-        end_val + 1
+        let mut end_val = range.end().coerce_to_int_i64(vm, globals)?;
+        if end_val < 0 {
+            end_val += len;
+        }
+        if range.exclude_end() {
+            end_val
+        } else {
+            end_val + 1
+        }
     };
     if end_idx < start {
         return Ok((start as usize, start as usize));
@@ -1809,6 +1829,29 @@ fn filter_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         })
     } else {
         vm.generate_enumerator(IdentId::get_id("filter!"), lfp.self_val(), vec![], pc)
+    }
+}
+
+///
+/// ### Array#keep_if
+///
+/// - keep_if {|item| block } -> self
+/// - keep_if -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/keep_if.html]
+#[monoruby_builtin]
+fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    let mut ary = lfp.self_val().as_array();
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        ary.retain(|v| {
+            vm.invoke_block(globals, &data, &[*v])
+                .map(|res| res.as_bool())
+        })?;
+        Ok(lfp.self_val())
+    } else {
+        vm.generate_enumerator(IdentId::get_id("keep_if"), lfp.self_val(), vec![], pc)
     }
 }
 
@@ -2521,18 +2564,32 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         let len = len as usize;
         Ok(slice_inner(ary, start, len))
     } else if let Some(range) = lfp.arg(0).is_range() {
-        let start = match ary.get_array_index(range.start().coerce_to_int_i64(vm, globals)?) {
-            Some(i) => i,
-            None => return Ok(Value::nil()),
+        // nil begin means 0 (beginless range)
+        let start = if range.start().is_nil() {
+            0
+        } else {
+            match ary.get_array_index(range.start().coerce_to_int_i64(vm, globals)?) {
+                Some(i) => i,
+                None => return Ok(Value::nil()),
+            }
         };
-        let end = match ary.get_array_index(range.end().coerce_to_int_i64(vm, globals)?) {
-            Some(i) => i,
-            None => return Ok(Value::array_empty()),
+        // nil end means array length (endless range)
+        let end = if range.end().is_nil() {
+            ary.len().saturating_sub(1)
+        } else {
+            match ary.get_array_index(range.end().coerce_to_int_i64(vm, globals)?) {
+                Some(i) => i,
+                None => return Ok(Value::array_empty()),
+            }
         };
         if end < start {
             return Ok(Value::array_empty());
         }
-        let len = end - start + if range.exclude_end() { 0 } else { 1 };
+        let len = if range.end().is_nil() {
+            ary.len() - start
+        } else {
+            end - start + if range.exclude_end() { 0 } else { 1 }
+        };
         Ok(slice_inner(ary, start, len))
     } else {
         let index = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
@@ -3237,6 +3294,50 @@ mod tests {
     }
 
     #[test]
+    fn index_nil_range() {
+        // Array#[] with beginless range (nil..n)
+        run_test(r##"[1,2,3,4,5][nil..2]"##);
+        run_test(r##"[1,2,3,4,5][nil...2]"##);
+        // Array#[] with endless range (n..nil)
+        run_test(r##"[1,2,3,4,5][2..nil]"##);
+        run_test(r##"[1,2,3,4,5][2...nil]"##);
+        // Array#[] with nil..nil
+        run_test(r##"[1,2,3,4,5][nil..nil]"##);
+        // Array#[] with beginless/endless using .. syntax
+        run_test(r##"[1,2,3,4,5][..2]"##);
+        run_test(r##"[1,2,3,4,5][...2]"##);
+        run_test(r##"[1,2,3,4,5][2..]"##);
+        // Array#[]= with beginless range
+        run_test(
+            r##"
+        a = [1,2,3,4,5]
+        a[nil..2] = [10,20]
+        a
+        "##,
+        );
+        // Array#[]= with endless range
+        run_test(
+            r##"
+        a = [1,2,3,4,5]
+        a[2..nil] = [10,20]
+        a
+        "##,
+        );
+        // Array#[]= with nil..nil
+        run_test(
+            r##"
+        a = [1,2,3,4,5]
+        a[nil..nil] = [10,20]
+        a
+        "##,
+        );
+        // values_at with beginless/endless ranges
+        run_test(r##"[1,2,3,4,5].values_at(..2)"##);
+        run_test(r##"[1,2,3,4,5].values_at(2..)"##);
+        run_test(r##"[1,2,3,4,5].values_at(nil..nil)"##);
+    }
+
+    #[test]
     fn fill() {
         run_test(
             r##"
@@ -3302,6 +3403,34 @@ mod tests {
             r##"
             a = [1, 2, 3, 4]
             a.fill("y", -3, 2)
+            a"##,
+        );
+        // fill with beginless range
+        run_test(
+            r##"
+            a = [1, 2, 3, 4, 5]
+            a.fill("x", ..2)
+            a"##,
+        );
+        // fill with endless range
+        run_test(
+            r##"
+            a = [1, 2, 3, 4, 5]
+            a.fill("x", 2..)
+            a"##,
+        );
+        // fill with nil..nil range
+        run_test(
+            r##"
+            a = [1, 2, 3, 4, 5]
+            a.fill("x", nil..nil)
+            a"##,
+        );
+        // fill with block and beginless range
+        run_test(
+            r##"
+            a = [1, 2, 3, 4, 5]
+            a.fill(..2) { |i| i * 10 }
             a"##,
         );
     }
@@ -3503,6 +3632,11 @@ mod tests {
         ary2
         "##,
         );
+        // Enumerable#sort (delegates to to_a.sort)
+        run_test("[1,2,3].permutation(2).to_a.sort");
+        run_test("[1,2].repeated_combination(2).to_a.sort");
+        run_test("[1,2].repeated_permutation(2).to_a.sort");
+        run_test("[3,1,2].each.sort { |a,b| b <=> a }");
     }
 
     #[test]
@@ -3899,6 +4033,30 @@ mod tests {
             r#"
         a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
         b = a.slice!(-100..-30)
+        [a, b]
+        "#,
+        );
+        // slice! with beginless range
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e" ]
+        b = a.slice!(..2)
+        [a, b]
+        "#,
+        );
+        // slice! with endless range
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e" ]
+        b = a.slice!(2..)
+        [a, b]
+        "#,
+        );
+        // slice! with nil..nil
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e" ]
+        b = a.slice!(nil..nil)
         [a, b]
         "#,
         );
@@ -4652,5 +4810,67 @@ mod tests {
         // ignores non-array elements
         run_test(r#"["foo", [1, 2], [3, 4]].rassoc(4)"#);
         run_test(r#"["foo", [1, 2], [3, 4]].rassoc(99)"#);
+    }
+
+    #[test]
+    fn keep_if() {
+        run_test(
+            r#"
+            a = [1, 2, 3, 4, 5]
+            a.keep_if { |x| x > 2 }
+            a
+            "#,
+        );
+        // returns self even when no changes
+        run_test(
+            r#"
+            a = [1, 2, 3]
+            a.keep_if { |x| true }.equal?(a)
+            "#,
+        );
+        run_test("[1, 2, 3].keep_if { |x| x.odd? }");
+    }
+
+    #[test]
+    fn append_method() {
+        run_test("[1, 2].append(3, 4)");
+        run_test("[].append(1)");
+        run_test(
+            r#"
+            a = [1]
+            a.append(2, 3)
+            a
+            "#,
+        );
+    }
+
+    #[test]
+    fn drop_while() {
+        run_test("[1, 2, 3, 4, 5].drop_while { |x| x < 3 }");
+        run_test("[1, 2, 3].drop_while { |x| true }");
+        run_test("[1, 2, 3].drop_while { |x| false }");
+        run_test("[].drop_while { |x| true }");
+    }
+
+    #[test]
+    fn to_ary() {
+        run_test("[1, 2, 3].to_ary");
+        run_test(
+            r#"
+            a = [1, 2]
+            a.to_ary.equal?(a)
+            "#,
+        );
+    }
+
+    #[test]
+    fn deconstruct() {
+        run_test("[1, 2, 3].deconstruct");
+        run_test(
+            r#"
+            a = [1, 2]
+            a.deconstruct.equal?(a)
+            "#,
+        );
     }
 }

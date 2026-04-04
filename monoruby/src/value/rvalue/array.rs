@@ -341,6 +341,8 @@ impl ArrayInner {
         }
     }
 
+    /// Convert a Value to an array index, treating nil as a given default.
+    /// Used for Range begin/end in Array#[]=.
     pub(crate) fn get_array_index_checked(
         &self,
         vm: &mut Executor,
@@ -352,6 +354,20 @@ impl ArrayInner {
             Some(i) => Ok(i),
             None => Err(MonorubyErr::index_too_small(index, -(self.len() as i64))),
         }
+    }
+
+    /// Like get_array_index_checked, but treats nil as `default`.
+    pub(crate) fn get_array_index_nil_or(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        index: Value,
+        default: usize,
+    ) -> Result<usize> {
+        if index.is_nil() {
+            return Ok(default);
+        }
+        self.get_array_index_checked(vm, globals, index)
     }
 
     pub(crate) fn get_elem2(
@@ -386,9 +402,14 @@ impl ArrayInner {
     ) -> Result<Value> {
         if let Some(range) = idx.is_range() {
             let len = self.len() as i64;
-            let i_start = match range.start().coerce_to_int_i64(vm, globals)? {
-                i if i < 0 => len + i,
-                i => i,
+            // nil begin means 0 (beginless range)
+            let i_start = if range.start().is_nil() {
+                0
+            } else {
+                match range.start().coerce_to_int_i64(vm, globals)? {
+                    i if i < 0 => len + i,
+                    i => i,
+                }
             };
             if i_start < 0 {
                 return Ok(Value::nil());
@@ -399,16 +420,21 @@ impl ArrayInner {
                 _ => i_start as usize,
             };
 
-            let i_end = range.end().coerce_to_int_i64(vm, globals)?;
-            let end = if i_end >= 0 {
-                let end = i_end as usize + if range.exclude_end() { 0 } else { 1 };
-                if self.len() < end { self.len() } else { end }
+            // nil end means array length (endless range)
+            let end = if range.end().is_nil() {
+                self.len()
             } else {
-                let e = len + i_end + if range.exclude_end() { 0 } else { 1 };
-                if e < 0 {
-                    return Ok(Value::array_empty());
+                let i_end = range.end().coerce_to_int_i64(vm, globals)?;
+                if i_end >= 0 {
+                    let end = i_end as usize + if range.exclude_end() { 0 } else { 1 };
+                    if self.len() < end { self.len() } else { end }
+                } else {
+                    let e = len + i_end + if range.exclude_end() { 0 } else { 1 };
+                    if e < 0 {
+                        return Ok(Value::array_empty());
+                    }
+                    e as usize
                 }
-                e as usize
             };
             if start >= end {
                 return Ok(Value::array_empty());

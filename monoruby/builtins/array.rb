@@ -351,6 +351,24 @@ class Array
     self[index]
   end
 
+  def to_ary
+    self
+  end
+
+  def deconstruct
+    self
+  end
+
+  def drop_while
+    return to_enum(:drop_while) unless block_given?
+    i = 0
+    while i < size
+      break unless yield(self[i])
+      i += 1
+    end
+    self[i, size - i]
+  end
+
   def fetch_values(*indexes)
     result = []
     if block_given?
