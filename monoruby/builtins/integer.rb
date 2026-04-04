@@ -267,6 +267,8 @@ class Integer
       [other, Rational(self, 1)]
     elsif other.is_a?(Complex)
       [other, Complex(self)]
+    elsif other.nil? || other.equal?(true) || other.equal?(false) || other.is_a?(Symbol)
+      raise TypeError, "#{other.class} can't be coerced into Integer"
     elsif other.is_a?(String)
       stripped = other.strip
       if stripped.empty? || stripped !~ /\A[+-]?(\d+\.?\d*|\d*\.?\d+)([eE][+-]?\d+)?\z/
