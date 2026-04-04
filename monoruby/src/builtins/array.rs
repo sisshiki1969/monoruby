@@ -4430,4 +4430,102 @@ mod tests {
         run_test(r#""\x16\x26".unpack("h4")"#);
         run_test(r#""\x61\x62".unpack("H4")"#);
     }
+
+    // ===== Tests for new methods =====
+
+    #[test]
+    fn array_class_bracket() {
+        run_test("Array[1, 2, 3]");
+        run_test("Array[]");
+        run_test("Array[42]");
+        // Subclass support
+        run_test_with_prelude(
+            "A[1, 2, 3]",
+            "class A < Array; end",
+        );
+        run_test_with_prelude(
+            "A[1, 2, 3].class",
+            "class A < Array; end",
+        );
+    }
+
+    #[test]
+    fn array_try_convert() {
+        run_test("Array.try_convert([1, 2])");
+        run_test("Array.try_convert(nil)");
+        run_test(r#"Array.try_convert("string")"#);
+        // Object with to_ary
+        run_test_with_prelude(
+            "Array.try_convert(C.new)",
+            "class C; def to_ary; [1, 2]; end; end",
+        );
+        // Object without to_ary returns nil
+        run_test_with_prelude(
+            "Array.try_convert(C.new)",
+            "class C; end",
+        );
+        // to_ary returns non-Array raises TypeError
+        run_test_error(
+            "class C; def to_ary; 'not array'; end; end; Array.try_convert(C.new)",
+        );
+    }
+
+    #[test]
+    fn array_at() {
+        run_test("[1, 2, 3].at(0)");
+        run_test("[1, 2, 3].at(1)");
+        run_test("[1, 2, 3].at(-1)");
+        run_test("[1, 2, 3].at(5)");
+    }
+
+    #[test]
+    fn array_rindex() {
+        // With value argument
+        run_test("[1, 2, 3, 2, 1].rindex(2)");
+        run_test("[1, 2, 3].rindex(4)");
+        // With block
+        run_test("[1, 2, 3, 4].rindex {|x| x > 2}");
+        run_test("[1, 2, 3].rindex {|x| x > 10}");
+    }
+
+    #[test]
+    fn array_each_index() {
+        run_test("res = []; [10, 20, 30].each_index {|i| res << i}; res");
+        run_test("[].each_index {|i| i}");
+    }
+
+    #[test]
+    fn array_difference() {
+        run_test("[1, 2, 3, 4, 5].difference([2, 4])");
+        run_test("[1, 2, 3].difference([1], [3])");
+        run_test("[1, 2, 3].difference([])");
+        run_test("[1, 2, 3].difference()");
+        // Duplicates preserved from self
+        run_test("[1, 1, 2, 2, 3].difference([1])");
+    }
+
+    #[test]
+    fn array_intersection() {
+        run_test("[1, 2, 3, 4].intersection([2, 3, 5])");
+        run_test("[1, 2, 3].intersection([2, 3], [3, 4])");
+        run_test("[1, 2, 3].intersection([])");
+        // Duplicates removed
+        run_test("[1, 1, 2, 2].intersection([1, 2])");
+    }
+
+    #[test]
+    fn array_repeated_permutation() {
+        run_test("[1, 2].repeated_permutation(2).to_a.sort");
+        run_test("[1, 2, 3].repeated_permutation(0).to_a");
+        run_test("[1, 2].repeated_permutation(1).to_a.sort");
+        run_test("[].repeated_permutation(2).to_a");
+    }
+
+    #[test]
+    fn array_join_nil_separator() {
+        run_test("[1, 2, 3].join(nil)");
+        run_test("[1, 2, 3].join");
+        run_test(r#"[1, 2, 3].join("-")"#);
+        run_test("[].join(nil)");
+    }
 }
