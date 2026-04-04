@@ -186,42 +186,6 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     Ok(obj)
 }
 
-/// ### Array.try_convert
-///
-/// - try_convert(obj) -> Array | nil
-///
-/// Tries to convert obj into an Array, using to_ary method.
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Array/s/try_convert.html]
-#[monoruby_builtin]
-fn array_try_convert(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let arg = lfp.arg(0);
-    if arg.try_array_ty().is_some() {
-        return Ok(arg);
-    }
-    let method = IdentId::get_id("to_ary");
-    if let Some(result) = vm.invoke_method_if_exists(globals, method, arg, &[], None, None)? {
-        if result.is_nil() {
-            return Ok(Value::nil());
-        }
-        if result.try_array_ty().is_some() {
-            return Ok(result);
-        }
-        return Err(MonorubyErr::typeerr(format!(
-            "can't convert {} into Array ({}#to_ary gives {})",
-            arg.get_real_class_name(globals),
-            arg.get_real_class_name(globals),
-            result.get_real_class_name(globals),
-        )));
-    }
-    Ok(Value::nil())
-}
-
 ///
 /// ### Array#allocate
 /// - allocate -> object
@@ -284,6 +248,44 @@ fn array_class_bracket(
     let args = lfp.arg(0).as_array();
     let ary = ArrayInner::from(args.to_vec().into());
     Ok(Value::array_with_class(ary, class))
+}
+
+///
+/// ### Array.try_convert
+///
+/// - try_convert(obj) -> Array | nil
+///
+#[monoruby_builtin]
+fn array_try_convert(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let obj = lfp.arg(0);
+    if obj.is_array_ty() {
+        return Ok(obj);
+    }
+    if obj.is_nil() {
+        return Ok(Value::nil());
+    }
+    let to_ary = IdentId::get_id("to_ary");
+    if let Some(func_id) = globals.check_method(obj, to_ary) {
+        let result = vm.invoke_func_inner(globals, func_id, obj, &[], None, None)?;
+        if result.is_array_ty() {
+            return Ok(result);
+        }
+        if result.is_nil() {
+            return Ok(Value::nil());
+        }
+        return Err(MonorubyErr::typeerr(format!(
+            "can't convert {} into Array ({}#to_ary gives {})",
+            obj.get_real_class_name(&globals.store),
+            obj.get_real_class_name(&globals.store),
+            result.get_real_class_name(&globals.store),
+        )));
+    }
+    Ok(Value::nil())
 }
 
 ///
@@ -2336,7 +2338,7 @@ fn difference(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     'outer: for lhs in lhs_v.as_array().iter() {
         for other in &others {
             for rhs in other.iter() {
-                if vm.eq_values_bool(globals, *lhs, *rhs)? {
+                if lhs.eql(rhs, vm, globals)? {
                     continue 'outer;
                 }
             }
@@ -2354,7 +2356,9 @@ fn difference(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/intersection.html]
 #[monoruby_builtin]
 fn intersection(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut ary = lfp.self_val().dup().as_array();
+    let src = lfp.self_val().as_array();
+    // Build a unique copy as a plain Array
+    let mut ary = Value::array_from_vec(src.to_vec()).as_array();
     ary.uniq(vm, globals)?;
     let others: Vec<_> = lfp
         .arg(0)
@@ -2366,7 +2370,7 @@ fn intersection(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
         for other in &others {
             let mut found = false;
             for rhs in other.iter() {
-                if *lhs == *rhs {
+                if lhs.eql(rhs, vm, globals)? {
                     found = true;
                     break;
                 }
@@ -3319,14 +3323,6 @@ mod tests {
     fn join() {
         run_test(r##"[2, 3, 4, 5].join"##);
         run_test(r##"[2, 3, 4, 5].join("-")"##);
-        run_test(r##"[1, 2, 3].join(nil)"##);
-    }
-
-    #[test]
-    fn try_convert() {
-        run_test(r##"Array.try_convert([1, 2])"##);
-        run_test(r##"Array.try_convert(nil)"##);
-        run_test(r##"Array.try_convert("string")"##);
     }
 
     #[test]

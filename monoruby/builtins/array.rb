@@ -305,18 +305,26 @@ class Array
   end
 
   def rindex(val = (no_val = true; nil))
-    if block_given?
+    unless no_val
       i = self.size - 1
       while i >= 0
-        return i if yield(self[i])
+        if i >= self.size
+          i = self.size - 1
+          next
+        end
+        return i if self[i] == val
         i -= 1
       end
       return nil
     end
-    unless no_val
+    if block_given?
       i = self.size - 1
       while i >= 0
-        return i if self[i] == val
+        if i >= self.size
+          i = self.size - 1
+          next
+        end
+        return i if yield(self[i])
         i -= 1
       end
       return nil
@@ -337,7 +345,8 @@ class Array
   def repeated_permutation(n)
     return to_enum(:repeated_permutation, n) unless block_given?
     n = n.to_int
-    len = self.size
+    copy = self.dup
+    len = copy.size
     if n == 0
       yield []
     elsif len == 0
@@ -345,7 +354,7 @@ class Array
     elsif n > 0
       indices = [0] * n
       loop do
-        yield indices.map { |i| self[i] }
+        yield indices.map { |i| copy[i] }
         # Increment from the rightmost
         i = n - 1
         while i >= 0
