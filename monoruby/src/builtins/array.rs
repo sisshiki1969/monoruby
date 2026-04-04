@@ -1547,50 +1547,80 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// ### Array#min
 ///
 /// - min -> object | nil
+/// - min {|a, b| ... } -> object | nil
 /// - [NOT SUPPORTED] min(n) -> Array
-/// - [NOT SUPPORTED] min {|a, b| ... } -> object | nil
 /// - [NOT SUPPORTED] min(n) {|a, b| ... } -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/min.html]
 #[monoruby_builtin]
 fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.expect_no_block()?;
     let ary = lfp.self_val().as_array();
     if ary.len() == 0 {
         return Ok(Value::nil());
     }
-    let mut min = ary[0];
-    for v in &ary[1..] {
-        if vm.compare_values(globals, min, *v)? == std::cmp::Ordering::Greater {
-            min = *v;
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let mut min = ary[0];
+        for v in &ary[1..] {
+            let block_res = vm.invoke_block(globals, &data, &[*v, min])?;
+            if block_res.is_nil() {
+                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
+            }
+            let res = block_res.coerce_to_int_i64(vm, globals)?;
+            if res < 0 {
+                min = *v;
+            }
         }
+        Ok(min)
+    } else {
+        let mut min = ary[0];
+        for v in &ary[1..] {
+            if vm.compare_values(globals, min, *v)? == std::cmp::Ordering::Greater {
+                min = *v;
+            }
+        }
+        Ok(min)
     }
-    Ok(min)
 }
 
 ///
 /// ### Array#max
 ///
 /// - max -> object | nil
+/// - max {|a, b| ... } -> object | nil
 /// - [NOT SUPPORTED] max(n) -> Array
-/// - [NOT SUPPORTED] max {|a, b| ... } -> object | nil
 /// - [NOT SUPPORTED] max(n) {|a, b| ... } -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/max.html]
 #[monoruby_builtin]
 fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.expect_no_block()?;
     let ary = lfp.self_val().as_array();
     if ary.len() == 0 {
         return Ok(Value::nil());
     }
-    let mut max = ary[0];
-    for v in &ary[1..] {
-        if vm.compare_values(globals, max, *v)? == std::cmp::Ordering::Less {
-            max = *v;
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let mut max = ary[0];
+        for v in &ary[1..] {
+            let block_res = vm.invoke_block(globals, &data, &[*v, max])?;
+            if block_res.is_nil() {
+                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
+            }
+            let res = block_res.coerce_to_int_i64(vm, globals)?;
+            if res > 0 {
+                max = *v;
+            }
         }
+        Ok(max)
+    } else {
+        let mut max = ary[0];
+        for v in &ary[1..] {
+            if vm.compare_values(globals, max, *v)? == std::cmp::Ordering::Less {
+                max = *v;
+            }
+        }
+        Ok(max)
     }
-    Ok(max)
 }
 
 ///
