@@ -487,7 +487,10 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         || {
             let ary = self_val.as_array();
             if ary.len() == 0 {
-                return Ok(Value::string("[]".to_string()));
+                return Ok(Value::string_from_inner(RStringInner::from_encoding(
+                    b"[]",
+                    Encoding::UsAscii,
+                )));
             }
             let mut s = String::from("[");
             for (i, elem) in ary.iter().enumerate() {
@@ -496,7 +499,34 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                 }
                 let inspected =
                     vm.invoke_method_inner(globals, IdentId::INSPECT, *elem, &[], None, None)?;
-                s.push_str(&inspected.to_s(&globals.store));
+                // If #inspect returned a String, use it directly.
+                // Otherwise, call Ruby #to_s on the result.
+                if let Some(str_inner) = inspected.is_rstring_inner() {
+                    let bytes = str_inner.as_bytes();
+                    match std::str::from_utf8(bytes) {
+                        Ok(utf8) => s.push_str(utf8),
+                        Err(_) => s.push_str(&inspected.to_s(&globals.store)),
+                    }
+                } else {
+                    let to_s_result = vm.invoke_method_inner(
+                        globals,
+                        IdentId::TO_S,
+                        inspected,
+                        &[],
+                        None,
+                        None,
+                    )?;
+                    if let Some(str_inner) = to_s_result.is_rstring_inner() {
+                        let bytes = str_inner.as_bytes();
+                        match std::str::from_utf8(bytes) {
+                            Ok(utf8) => s.push_str(utf8),
+                            Err(_) => s.push_str(&to_s_result.to_s(&globals.store)),
+                        }
+                    } else {
+                        // If #to_s also doesn't return a String, use default representation
+                        s.push_str(&to_s_result.to_s(&globals.store));
+                    }
+                }
             }
             s.push(']');
             Ok(Value::string(s))
@@ -635,11 +665,15 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let vec = lhs.repeat(rhs);
         Ok(Value::array_from_vec(vec))
     } else if let Some(sep) = arg.is_str() {
-        let res = array_join(&globals.store, lhs, sep);
+        let mut visited: HashSet<u64> = HashSet::default();
+        visited.insert(lhs.id());
+        let res = array_join(vm, globals, lhs, sep, &mut visited)?;
         Ok(Value::string(res))
     } else if let Ok(s) = arg.coerce_to_str(vm, globals) {
         // Try to_str coercion for join
-        let res = array_join(&globals.store, lhs, &s);
+        let mut visited: HashSet<u64> = HashSet::default();
+        visited.insert(lhs.id());
+        let res = array_join(vm, globals, lhs, &s, &mut visited)?;
         Ok(Value::string(res))
     } else {
         // Try to_int coercion for repeat
@@ -1393,7 +1427,6 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// ### Array#join
 ///
 /// - join(sep = $,) -> String
-/// TODO: support recursive join for Array class arguments.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/join.html]
 #[monoruby_builtin]
@@ -1401,23 +1434,107 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let arg0 = lfp.try_arg(0);
     let sep = if let Some(sep) = &arg0 {
         if sep.is_nil() {
-            "".to_string()
+            // When nil is passed explicitly, use $, as default separator
+            get_output_field_separator(globals)
         } else {
-            sep.coerce_to_string(vm, globals)?
+            // Coerce separator via to_str
+            Some(sep.coerce_to_string(vm, globals)?)
         }
     } else {
-        "".to_string()
+        // No argument: use $, as default separator
+        get_output_field_separator(globals)
     };
+    let sep_str = sep.as_deref().unwrap_or("");
     let ary = lfp.self_val().as_array();
-    let res = array_join(&globals.store, ary, &sep);
+    let mut visited: HashSet<u64> = HashSet::default();
+    visited.insert(ary.id());
+    let res = array_join(vm, globals, ary, sep_str, &mut visited)?;
     Ok(Value::string(res))
 }
 
-fn array_join(store: &Store, ary: Array, sep: &str) -> String {
-    ary.iter()
-        .map(|v| v.to_s(store))
-        .collect::<Vec<_>>()
-        .join(sep)
+/// Get the value of $, (output field separator) as a String.
+fn get_output_field_separator(globals: &mut Globals) -> Option<String> {
+    let gvar_id = IdentId::get_id("$,");
+    match globals.get_gvar(gvar_id) {
+        Some(v) if !v.is_nil() => Some(v.to_s(&globals.store)),
+        _ => None,
+    }
+}
+
+fn array_join(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    ary: Array,
+    sep: &str,
+    visited: &mut HashSet<u64>,
+) -> Result<String> {
+    let mut result = String::new();
+    for (i, v) in ary.iter().enumerate() {
+        if i > 0 {
+            result.push_str(sep);
+        }
+        // If element is already a string, use it directly
+        if let Some(s) = v.is_str() {
+            result.push_str(s);
+            continue;
+        }
+        // If element is an array, recursively join
+        if let Some(inner_ary) = v.try_array_ty() {
+            if !visited.insert(inner_ary.id()) {
+                return Err(MonorubyErr::argumenterr(
+                    "recursive array join",
+                ));
+            }
+            let s = array_join(vm, globals, inner_ary, sep, visited)?;
+            visited.remove(&inner_ary.id());
+            result.push_str(&s);
+            continue;
+        }
+        // Conversion order: to_str -> to_ary -> to_s
+        // Try to_str first
+        if let Some(fid) = globals.check_method(*v, IdentId::TO_STR) {
+            let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
+            if let Some(s) = ret.is_str() {
+                result.push_str(s);
+                continue;
+            }
+            // to_str returned non-nil non-string: fall through
+            if !ret.is_nil() {
+                result.push_str(&ret.to_s(&globals.store));
+                continue;
+            }
+        }
+        // Try to_ary second
+        if let Some(fid) = globals.check_method(*v, IdentId::TO_ARY) {
+            let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
+            if let Some(inner_ary) = ret.try_array_ty() {
+                if !visited.insert(inner_ary.id()) {
+                    return Err(MonorubyErr::argumenterr(
+                        "recursive array join",
+                    ));
+                }
+                let s = array_join(vm, globals, inner_ary, sep, visited)?;
+                visited.remove(&inner_ary.id());
+                result.push_str(&s);
+                continue;
+            }
+            if !ret.is_nil() {
+                result.push_str(&ret.to_s(&globals.store));
+                continue;
+            }
+        }
+        // Try to_s third
+        if let Some(fid) = globals.check_method(*v, IdentId::TO_S) {
+            let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
+            if let Some(s) = ret.is_str() {
+                result.push_str(s);
+                continue;
+            }
+        }
+        // Fallback: use Rust-level to_s
+        result.push_str(&v.to_s(&globals.store));
+    }
+    Ok(result)
 }
 
 ///
@@ -1727,25 +1844,28 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// ### Array#sort_by!
 ///
 /// - sort_by! {|item| ... } -> self
-/// - [NOT SUPPORTED] sort_by! -> Enumerator
+/// - sort_by! -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort_by=21.html]
 #[monoruby_builtin]
-fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let bh = lfp.expect_block()?;
-    let data = vm.get_block_data(globals, bh)?;
-    let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
-        let lhs = vm.invoke_block(globals, &data, &[lhs])?;
-        let rhs = vm.invoke_block(globals, &data, &[rhs])?;
-        Executor::compare_values(vm, globals, lhs, rhs)
-    };
-    let mut ary = lfp.self_val().as_array();
-    let gc_enabled = Globals::gc_enable(false);
-    let res = executor::op::sort_by(&mut ary, f);
-    Globals::gc_enable(gc_enabled);
-    res?;
-    Ok(ary.into())
+fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    if let Some(bh) = lfp.block() {
+        lfp.self_val().ensure_not_frozen(&globals.store)?;
+        let data = vm.get_block_data(globals, bh)?;
+        let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
+            let lhs = vm.invoke_block(globals, &data, &[lhs])?;
+            let rhs = vm.invoke_block(globals, &data, &[rhs])?;
+            Executor::compare_values(vm, globals, lhs, rhs)
+        };
+        let mut ary = lfp.self_val().as_array();
+        let gc_enabled = Globals::gc_enable(false);
+        let res = executor::op::sort_by(&mut ary, f);
+        Globals::gc_enable(gc_enabled);
+        res?;
+        Ok(ary.into())
+    } else {
+        vm.generate_enumerator(IdentId::get_id("sort_by!"), lfp.self_val(), vec![], pc)
+    }
 }
 
 ///
@@ -1812,9 +1932,9 @@ fn filter(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/filter=21.html]
 #[monoruby_builtin]
 fn filter_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let mut ary = lfp.self_val().as_array();
     if let Some(bh) = lfp.block() {
+        lfp.self_val().ensure_not_frozen(&globals.store)?;
+        let mut ary = lfp.self_val().as_array();
         let data = vm.get_block_data(globals, bh)?;
         let changed = ary
             .retain(|v| {
@@ -1841,9 +1961,9 @@ fn filter_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/keep_if.html]
 #[monoruby_builtin]
 fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let mut ary = lfp.self_val().as_array();
     if let Some(bh) = lfp.block() {
+        lfp.self_val().ensure_not_frozen(&globals.store)?;
+        let mut ary = lfp.self_val().as_array();
         let data = vm.get_block_data(globals, bh)?;
         ary.retain(|v| {
             vm.invoke_block(globals, &data, &[*v])
@@ -1888,9 +2008,9 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/delete_if.html]
 #[monoruby_builtin]
 fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let mut ary = lfp.self_val().as_array();
     if let Some(bh) = lfp.block() {
+        lfp.self_val().ensure_not_frozen(&globals.store)?;
+        let mut ary = lfp.self_val().as_array();
         let data = vm.get_block_data(globals, bh)?;
         let changed = ary
             .retain(|v| {
@@ -1917,9 +2037,9 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/delete_if.html]
 #[monoruby_builtin]
 fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let mut ary = lfp.self_val().as_array();
     if let Some(bh) = lfp.block() {
+        lfp.self_val().ensure_not_frozen(&globals.store)?;
+        let mut ary = lfp.self_val().as_array();
         let data = vm.get_block_data(globals, bh)?;
         ary.retain(|v| {
             vm.invoke_block(globals, &data, &[*v])
@@ -2077,7 +2197,10 @@ fn all_any_inner(
 ) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if let Some(pattern) = lfp.try_arg(0) {
-        // Pattern form: all?(pattern) / any?(pattern)
+        // Pattern form: all?(pattern) / any?(pattern) — block is ignored
+        if lfp.block().is_some() {
+            eprintln!("warning: given block not used");
+        }
         for elem in ary.iter() {
             if op::cmp_teq_values_bool(vm, globals, pattern, *elem)? != is_all {
                 return Ok(Value::bool(!is_all));
@@ -2346,12 +2469,11 @@ fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         .map(|a| Value::array_from_iter(a.into_iter().cloned()))
         .collect();
     if let Some(bh) = lfp.block() {
-        let len = v.len();
         let ary = Array::new_from_vec(v);
         vm.temp_push(ary.into());
-        let res = vm.invoke_block_map1(globals, bh, ary.into_iter().cloned(), len);
+        vm.invoke_block_iter1(globals, bh, ary.into_iter().cloned())?;
         vm.temp_pop();
-        res
+        Ok(lfp.self_val())
     } else {
         Ok(Value::array_from_vec(v))
     }
@@ -4872,5 +4994,30 @@ mod tests {
             a.deconstruct.equal?(a)
             "#,
         );
+    }
+
+    #[test]
+    fn frozen_returns_enumerator_without_block() {
+        // filter!/select! on frozen array without block should return Enumerator
+        run_test(r#"[1,2,3].freeze.select!.class"#);
+        run_test(r#"[1,2,3].freeze.filter!.class"#);
+        // keep_if on frozen array without block should return Enumerator
+        run_test(r#"[1,2,3].freeze.keep_if.class"#);
+        // reject! on frozen array without block should return Enumerator
+        run_test(r#"[1,2,3].freeze.reject!.class"#);
+        // delete_if on frozen array without block should return Enumerator
+        run_test(r#"[1,2,3].freeze.delete_if.class"#);
+        // sort_by! on frozen array without block should return Enumerator
+        run_test(r#"[1,2,3].freeze.sort_by!.class"#);
+    }
+
+    #[test]
+    fn all_any_ignore_block_with_pattern() {
+        // When pattern argument is given, block should be ignored
+        run_test(r#"[1, 2, 3].all?(Integer) { |x| false }"#);
+        run_test(r#"[1, 2, 3].any?(String) { |x| true }"#);
+        run_test(r#"[1, 2, 3].none?(String) { |x| true }"#);
+        run_test(r#"[1, 2, 3].one?(Integer) { |x| false }"#);
+        run_test(r#"[1, 2, 3].count(2) { |x| true }"#);
     }
 }
