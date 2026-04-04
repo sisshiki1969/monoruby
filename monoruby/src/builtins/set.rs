@@ -1310,4 +1310,30 @@ mod tests {
     fn set_flatten_bang_recursive() {
         run_test_error("s = Set.new; s << s; s.flatten!");
     }
+
+    #[test]
+    fn set_case_equality() {
+        run_test("Set[1, 2, 3] === 2");
+        run_test("Set[1, 2, 3] === 4");
+    }
+
+    #[test]
+    fn set_join() {
+        run_test("Set[1, 2, 3].join(', ')");
+    }
+
+    #[test]
+    fn set_classify() {
+        run_test("Set[1,2,3,4,5].classify {|x| x % 2}.map {|k,v| [k, v.to_a.sort]}.sort");
+    }
+
+    #[test]
+    fn set_divide_arity1() {
+        run_test("Set[1,2,3,4,5].divide {|x| x % 2}.map {|s| s.to_a.sort}.sort");
+    }
+
+    #[test]
+    fn set_reset() {
+        run_test("s = Set[1, 2, 3]; s.reset.to_a.sort");
+    }
 }

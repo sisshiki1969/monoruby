@@ -551,4 +551,29 @@ mod tests {
         run_test_error("Rational.new(1)");
         run_test_error("Rational.allocate");
     }
+
+    #[test]
+    fn rational_floor_ceil_round_ndigits() {
+        run_test_once("Rational(7, 3).floor.to_s");
+        run_test_once("Rational(7, 3).ceil.to_s");
+        run_test_once("Rational(7, 3).truncate.to_s");
+        run_test_once("Rational(7, 3).round.to_s");
+        // ndigits > 0 returns Rational
+        run_test_once("Rational(7, 3).floor(1).class");
+        run_test_once("Rational(7, 3).ceil(1).class");
+        run_test_once("Rational(7, 3).round(1).class");
+    }
+
+    #[test]
+    fn rational_cmp_coerce() {
+        run_test_once("Rational(1, 2) <=> 0.5");
+        run_test_once("Rational(1, 2) <=> 1");
+        run_test_once("Rational(1, 2) <=> 'a'");
+    }
+
+    #[test]
+    fn rational_div_float_zero() {
+        run_test_once("(Rational(1, 2) / 0.0).to_s");
+        run_test_once("(Rational(-1, 2) / 0.0).to_s");
+    }
 }

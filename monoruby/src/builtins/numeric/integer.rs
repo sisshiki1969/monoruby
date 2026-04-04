@@ -1795,4 +1795,31 @@ mod tests {
         run_test_error("Rational(0, 1) ** -1");
         run_test_error("Rational(0, 1) ** Rational(-1, 1)");
     }
+
+    #[test]
+    fn integer_coerce_reject_types() {
+        run_test_error("1.coerce(nil)");
+        run_test_error("1.coerce(true)");
+        run_test_error("1.coerce(false)");
+        run_test_error("1.coerce(:sym)");
+    }
+
+    #[test]
+    fn integer_upto_float_endpoint() {
+        run_test("res = []; 1.upto(3.5) {|i| res << i}; res");
+        run_test("res = []; 5.downto(2.5) {|i| res << i}; res");
+    }
+
+    #[test]
+    fn integer_to_s_encoding() {
+        run_test("42.to_s.encoding.to_s");
+        run_test("255.to_s(16).encoding.to_s");
+    }
+
+    #[test]
+    fn integer_chr_ascii() {
+        run_test("65.chr");
+        run_test(r#"65.chr("US-ASCII")"#);
+        run_test_error(r#"128.chr("US-ASCII")"#);
+    }
 }

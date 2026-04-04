@@ -778,4 +778,35 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn math_domain_error() {
+        run_test_error("Math.sqrt(-1)");
+        run_test_error("Math.log(-1)");
+        run_test_error("Math.asin(2)");
+        run_test_error("Math.acos(2)");
+        // NaN passthrough
+        run_test("Math.sqrt(Float::NAN).nan?");
+        run_test("Math.log(Float::NAN).nan?");
+    }
+
+    #[test]
+    fn math_nil_typeerror() {
+        run_test_error("Math.sqrt(nil)");
+        run_test_error("Math.sin(nil)");
+    }
+
+    #[test]
+    fn math_gamma_exact() {
+        run_test("Math.gamma(1)");
+        run_test("Math.gamma(5)");
+        run_test("Math.gamma(10)");
+        run_test_error("Math.gamma(-Float::INFINITY)");
+    }
+
+    #[test]
+    fn math_expm1_log1p() {
+        run_test("Math.expm1(0)");
+        run_test("Math.log1p(0)");
+    }
 }

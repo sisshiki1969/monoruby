@@ -5042,6 +5042,9 @@ mod tests {
         run_test(r##""string".start_with?("ing")"##);
         run_test(r##""string".start_with?("jng", "hng", "ing")"##);
         run_test_error(r##""string".start_with?("jng", 3, "ing")"##);
+        // Regexp argument
+        run_test(r##""string".start_with?(/str/)"##);
+        run_test(r##""string".start_with?(/ing/)"##);
         run_test(r##""hello".delete_prefix("hel")"##);
         run_test(r##""hello".delete_prefix("her")"##);
         run_test(r##"s = "hello"; [s.delete_prefix!("hel"), s]"##);

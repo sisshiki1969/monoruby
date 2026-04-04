@@ -680,4 +680,10 @@ mod tests {
     // nested block forwarding from working correctly. Tests are
     // disabled until the underlying issue is fixed.
 
+    #[test]
+    fn enumerator_size_upto_downto() {
+        run_test("1.upto(5).size");
+        run_test("5.downto(1).size");
+        run_test("3.times.size");
+    }
 }

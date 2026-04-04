@@ -842,4 +842,39 @@ mod tests {
         // Object without coerce -> nil
         run_test("1.5 <=> 'a'");
     }
+
+    #[test]
+    fn float_domain_errors() {
+        // to_i/to_int raise FloatDomainError for NaN/Infinity
+        run_test_error("Float::NAN.to_i");
+        run_test_error("Float::INFINITY.to_i");
+        run_test_error("(-Float::INFINITY).to_i");
+        // floor/ceil/truncate raise for NaN/Infinity with ndigits=0
+        run_test_error("Float::NAN.floor");
+        run_test_error("Float::INFINITY.ceil");
+    }
+
+    // Note: Float#round half: keyword requires define_builtin_func_with_kw
+    // registration which may not be fully working yet. Tested via ruby/spec instead.
+
+    #[test]
+    fn float_quo() {
+        run_test("6.0.quo(2)");
+        run_test("6.0.quo(2.0)");
+    }
+
+    #[test]
+    fn float_eql() {
+        run_test("1.0.eql?(1.0)");
+        run_test("1.0.eql?(1)");
+        run_test("1.0.eql?(1.1)");
+    }
+
+    #[test]
+    fn float_constants() {
+        run_test("Float::MIN");
+        run_test("Float::DIG");
+        run_test("Float::MANT_DIG");
+        run_test("Float::RADIX");
+    }
 }
