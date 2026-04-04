@@ -11,6 +11,8 @@ use std::cmp::Ordering;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Array", ARRAY_CLASS, ObjTy::ARRAY);
     globals.define_builtin_class_func_with(ARRAY_CLASS, "new", new, 0, 0, true);
+    globals.define_builtin_class_func_rest(ARRAY_CLASS, "[]", array_class_bracket);
+    globals.define_builtin_class_func(ARRAY_CLASS, "try_convert", array_try_convert, 1);
     //globals.define_builtin_class_inline_func_with(
     //    ARRAY_CLASS,
     //    "new",
@@ -125,6 +127,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(ARRAY_CLASS, "product", product);
 
     globals.define_builtin_func_rest(ARRAY_CLASS, "union", union);
+    globals.define_builtin_func_rest(ARRAY_CLASS, "difference", difference);
+    globals.define_builtin_func_rest(ARRAY_CLASS, "intersection", intersection);
     globals.define_builtin_func(ARRAY_CLASS, "intersect?", intersect_, 1);
     globals.define_builtin_func(ARRAY_CLASS, "uniq", uniq, 0);
     globals.define_builtin_func(ARRAY_CLASS, "uniq!", uniq_, 0);
@@ -226,6 +230,62 @@ fn array_allocate(
 extern "C" fn allocate_array(class_val: Value) -> Value {
     let class_id = class_val.as_class_id();
     Value::array_empty_with_class(class_id)
+}
+
+///
+/// ### Array.[]
+///
+/// Array[*args] -> Array
+///
+#[monoruby_builtin]
+fn array_class_bracket(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class = lfp.self_val().as_class_id();
+    let args = lfp.arg(0).as_array();
+    let ary = ArrayInner::from(args.to_vec().into());
+    Ok(Value::array_with_class(ary, class))
+}
+
+///
+/// ### Array.try_convert
+///
+/// - try_convert(obj) -> Array | nil
+///
+#[monoruby_builtin]
+fn array_try_convert(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let obj = lfp.arg(0);
+    if obj.is_array_ty() {
+        return Ok(obj);
+    }
+    if obj.is_nil() {
+        return Ok(Value::nil());
+    }
+    let to_ary = IdentId::get_id("to_ary");
+    if let Some(func_id) = globals.check_method(obj, to_ary) {
+        let result = vm.invoke_func_inner(globals, func_id, obj, &[], None, None)?;
+        if result.is_array_ty() {
+            return Ok(result);
+        }
+        if result.is_nil() {
+            return Ok(Value::nil());
+        }
+        return Err(MonorubyErr::typeerr(format!(
+            "can't convert {} into Array ({}#to_ary gives {})",
+            obj.get_real_class_name(&globals.store),
+            obj.get_real_class_name(&globals.store),
+            result.get_real_class_name(&globals.store),
+        )));
+    }
+    Ok(Value::nil())
 }
 
 ///
@@ -1320,7 +1380,11 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.try_arg(0);
     let sep = if let Some(sep) = &arg0 {
-        sep.coerce_to_string(vm, globals)?
+        if sep.is_nil() {
+            "".to_string()
+        } else {
+            sep.coerce_to_string(vm, globals)?
+        }
     } else {
         "".to_string()
     };
@@ -2253,6 +2317,71 @@ fn union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     ary.uniq(vm, globals)?;
     Ok(ary.into())
+}
+
+///
+/// ### Array#difference
+///
+/// - difference(*other_arrays) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/difference.html]
+#[monoruby_builtin]
+fn difference(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let lhs_v = lfp.self_val();
+    let others: Vec<_> = lfp
+        .arg(0)
+        .as_array()
+        .iter()
+        .map(|v| v.coerce_to_array(vm, globals))
+        .collect::<Result<Vec<_>>>()?;
+    let mut v = vec![];
+    'outer: for lhs in lhs_v.as_array().iter() {
+        for other in &others {
+            for rhs in other.iter() {
+                if lhs.eql(rhs, vm, globals)? {
+                    continue 'outer;
+                }
+            }
+        }
+        v.push(*lhs);
+    }
+    Ok(Value::array_from_vec(v))
+}
+
+///
+/// ### Array#intersection
+///
+/// - intersection(*other_arrays) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/intersection.html]
+#[monoruby_builtin]
+fn intersection(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let src = lfp.self_val().as_array();
+    // Build a unique copy as a plain Array
+    let mut ary = Value::array_from_vec(src.to_vec()).as_array();
+    ary.uniq(vm, globals)?;
+    let others: Vec<_> = lfp
+        .arg(0)
+        .as_array()
+        .iter()
+        .map(|v| v.coerce_to_array(vm, globals))
+        .collect::<Result<Vec<_>>>()?;
+    ary.retain(|lhs| {
+        for other in &others {
+            let mut found = false;
+            for rhs in other.iter() {
+                if lhs.eql(rhs, vm, globals)? {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    })?;
+    Ok(ary.as_val())
 }
 
 ///
@@ -4300,5 +4429,103 @@ mod tests {
         run_test(r#"["6162636465"].pack("H*")"#);
         run_test(r#""\x16\x26".unpack("h4")"#);
         run_test(r#""\x61\x62".unpack("H4")"#);
+    }
+
+    // ===== Tests for new methods =====
+
+    #[test]
+    fn array_class_bracket() {
+        run_test("Array[1, 2, 3]");
+        run_test("Array[]");
+        run_test("Array[42]");
+        // Subclass support
+        run_test_with_prelude(
+            "A[1, 2, 3]",
+            "class A < Array; end",
+        );
+        run_test_with_prelude(
+            "A[1, 2, 3].class",
+            "class A < Array; end",
+        );
+    }
+
+    #[test]
+    fn array_try_convert() {
+        run_test("Array.try_convert([1, 2])");
+        run_test("Array.try_convert(nil)");
+        run_test(r#"Array.try_convert("string")"#);
+        // Object with to_ary
+        run_test_with_prelude(
+            "Array.try_convert(C.new)",
+            "class C; def to_ary; [1, 2]; end; end",
+        );
+        // Object without to_ary returns nil
+        run_test_with_prelude(
+            "Array.try_convert(C.new)",
+            "class C; end",
+        );
+        // to_ary returns non-Array raises TypeError
+        run_test_error(
+            "class C; def to_ary; 'not array'; end; end; Array.try_convert(C.new)",
+        );
+    }
+
+    #[test]
+    fn array_at() {
+        run_test("[1, 2, 3].at(0)");
+        run_test("[1, 2, 3].at(1)");
+        run_test("[1, 2, 3].at(-1)");
+        run_test("[1, 2, 3].at(5)");
+    }
+
+    #[test]
+    fn array_rindex() {
+        // With value argument
+        run_test("[1, 2, 3, 2, 1].rindex(2)");
+        run_test("[1, 2, 3].rindex(4)");
+        // With block
+        run_test("[1, 2, 3, 4].rindex {|x| x > 2}");
+        run_test("[1, 2, 3].rindex {|x| x > 10}");
+    }
+
+    #[test]
+    fn array_each_index() {
+        run_test("res = []; [10, 20, 30].each_index {|i| res << i}; res");
+        run_test("[].each_index {|i| i}");
+    }
+
+    #[test]
+    fn array_difference() {
+        run_test("[1, 2, 3, 4, 5].difference([2, 4])");
+        run_test("[1, 2, 3].difference([1], [3])");
+        run_test("[1, 2, 3].difference([])");
+        run_test("[1, 2, 3].difference()");
+        // Duplicates preserved from self
+        run_test("[1, 1, 2, 2, 3].difference([1])");
+    }
+
+    #[test]
+    fn array_intersection() {
+        run_test("[1, 2, 3, 4].intersection([2, 3, 5])");
+        run_test("[1, 2, 3].intersection([2, 3], [3, 4])");
+        run_test("[1, 2, 3].intersection([])");
+        // Duplicates removed
+        run_test("[1, 1, 2, 2].intersection([1, 2])");
+    }
+
+    #[test]
+    fn array_repeated_permutation() {
+        run_test("[1, 2].repeated_permutation(2).to_a.sort");
+        run_test("[1, 2, 3].repeated_permutation(0).to_a");
+        run_test("[1, 2].repeated_permutation(1).to_a.sort");
+        run_test("[].repeated_permutation(2).to_a");
+    }
+
+    #[test]
+    fn array_join_nil_separator() {
+        run_test("[1, 2, 3].join(nil)");
+        run_test("[1, 2, 3].join");
+        run_test(r#"[1, 2, 3].join("-")"#);
+        run_test("[].join(nil)");
     }
 }

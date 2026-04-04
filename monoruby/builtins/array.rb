@@ -300,6 +300,77 @@ class Array
     self
   end
 
+  def at(index)
+    self[index]
+  end
+
+  def rindex(val = (no_val = true; nil))
+    unless no_val
+      i = self.size - 1
+      while i >= 0
+        if i >= self.size
+          i = self.size - 1
+          next
+        end
+        return i if self[i] == val
+        i -= 1
+      end
+      return nil
+    end
+    if block_given?
+      i = self.size - 1
+      while i >= 0
+        if i >= self.size
+          i = self.size - 1
+          next
+        end
+        return i if yield(self[i])
+        i -= 1
+      end
+      return nil
+    end
+    return self.to_enum(:rindex)
+  end
+
+  def each_index
+    return self.to_enum(:each_index) unless block_given?
+    i = 0
+    while i < self.size
+      yield i
+      i += 1
+    end
+    self
+  end
+
+  def repeated_permutation(n)
+    return to_enum(:repeated_permutation, n) unless block_given?
+    n = n.to_int
+    copy = self.dup
+    len = copy.size
+    if n == 0
+      yield []
+    elsif len == 0
+      # nothing
+    elsif n > 0
+      indices = [0] * n
+      loop do
+        yield indices.map { |i| copy[i] }
+        # Increment from the rightmost
+        i = n - 1
+        while i >= 0
+          indices[i] += 1
+          if indices[i] < len
+            break
+          end
+          indices[i] = 0
+          i -= 1
+        end
+        break if i < 0
+      end
+    end
+    self
+  end
+
   def repeated_combination(n)
     return to_enum(:repeated_combination, n) unless block_given?
     n = n.to_int
