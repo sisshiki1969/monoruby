@@ -61,7 +61,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs_rest(ARRAY_CLASS, "unshift", &["prepend"], unshift);
     globals.define_builtin_func_rest(ARRAY_CLASS, "concat", concat);
     globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, Box::new(array_shl), 1);
-    globals.define_builtin_func_with(ARRAY_CLASS, "push", push, 0, 0, true);
+    globals.define_builtin_funcs_with(ARRAY_CLASS, "push", &["append"], push, 0, 0, true);
     globals.define_builtin_func_with(ARRAY_CLASS, "pop", pop, 0, 1, false);
     globals.define_builtin_funcs(ARRAY_CLASS, "==", &["==="], eq, 1);
     globals.define_builtin_func(ARRAY_CLASS, "eql?", eql, 1);
@@ -101,6 +101,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "partition", partition, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "filter", &["select", "find_all"], filter, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "filter!", &["select!"], filter_, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "keep_if", keep_if, 0);
     globals.define_builtin_func(ARRAY_CLASS, "reject!", reject_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "delete_if", delete_if, 0);
     globals.define_builtin_func(ARRAY_CLASS, "reject", reject, 0);
@@ -1809,6 +1810,29 @@ fn filter_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         })
     } else {
         vm.generate_enumerator(IdentId::get_id("filter!"), lfp.self_val(), vec![], pc)
+    }
+}
+
+///
+/// ### Array#keep_if
+///
+/// - keep_if {|item| block } -> self
+/// - keep_if -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/keep_if.html]
+#[monoruby_builtin]
+fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    let mut ary = lfp.self_val().as_array();
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        ary.retain(|v| {
+            vm.invoke_block(globals, &data, &[*v])
+                .map(|res| res.as_bool())
+        })?;
+        Ok(lfp.self_val())
+    } else {
+        vm.generate_enumerator(IdentId::get_id("keep_if"), lfp.self_val(), vec![], pc)
     }
 }
 
@@ -4652,5 +4676,67 @@ mod tests {
         // ignores non-array elements
         run_test(r#"["foo", [1, 2], [3, 4]].rassoc(4)"#);
         run_test(r#"["foo", [1, 2], [3, 4]].rassoc(99)"#);
+    }
+
+    #[test]
+    fn keep_if() {
+        run_test(
+            r#"
+            a = [1, 2, 3, 4, 5]
+            a.keep_if { |x| x > 2 }
+            a
+            "#,
+        );
+        // returns self even when no changes
+        run_test(
+            r#"
+            a = [1, 2, 3]
+            a.keep_if { |x| true }.equal?(a)
+            "#,
+        );
+        run_test("[1, 2, 3].keep_if { |x| x.odd? }");
+    }
+
+    #[test]
+    fn append_method() {
+        run_test("[1, 2].append(3, 4)");
+        run_test("[].append(1)");
+        run_test(
+            r#"
+            a = [1]
+            a.append(2, 3)
+            a
+            "#,
+        );
+    }
+
+    #[test]
+    fn drop_while() {
+        run_test("[1, 2, 3, 4, 5].drop_while { |x| x < 3 }");
+        run_test("[1, 2, 3].drop_while { |x| true }");
+        run_test("[1, 2, 3].drop_while { |x| false }");
+        run_test("[].drop_while { |x| true }");
+    }
+
+    #[test]
+    fn to_ary() {
+        run_test("[1, 2, 3].to_ary");
+        run_test(
+            r#"
+            a = [1, 2]
+            a.to_ary.equal?(a)
+            "#,
+        );
+    }
+
+    #[test]
+    fn deconstruct() {
+        run_test("[1, 2, 3].deconstruct");
+        run_test(
+            r#"
+            a = [1, 2]
+            a.deconstruct.equal?(a)
+            "#,
+        );
     }
 }
