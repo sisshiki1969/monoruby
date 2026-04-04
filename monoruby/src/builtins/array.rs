@@ -1547,50 +1547,80 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// ### Array#min
 ///
 /// - min -> object | nil
+/// - min {|a, b| ... } -> object | nil
 /// - [NOT SUPPORTED] min(n) -> Array
-/// - [NOT SUPPORTED] min {|a, b| ... } -> object | nil
 /// - [NOT SUPPORTED] min(n) {|a, b| ... } -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/min.html]
 #[monoruby_builtin]
 fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.expect_no_block()?;
     let ary = lfp.self_val().as_array();
     if ary.len() == 0 {
         return Ok(Value::nil());
     }
-    let mut min = ary[0];
-    for v in &ary[1..] {
-        if vm.compare_values(globals, min, *v)? == std::cmp::Ordering::Greater {
-            min = *v;
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let mut min = ary[0];
+        for v in &ary[1..] {
+            let block_res = vm.invoke_block(globals, &data, &[*v, min])?;
+            if block_res.is_nil() {
+                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
+            }
+            let res = block_res.coerce_to_int_i64(vm, globals)?;
+            if res < 0 {
+                min = *v;
+            }
         }
+        Ok(min)
+    } else {
+        let mut min = ary[0];
+        for v in &ary[1..] {
+            if vm.compare_values(globals, min, *v)? == std::cmp::Ordering::Greater {
+                min = *v;
+            }
+        }
+        Ok(min)
     }
-    Ok(min)
 }
 
 ///
 /// ### Array#max
 ///
 /// - max -> object | nil
+/// - max {|a, b| ... } -> object | nil
 /// - [NOT SUPPORTED] max(n) -> Array
-/// - [NOT SUPPORTED] max {|a, b| ... } -> object | nil
 /// - [NOT SUPPORTED] max(n) {|a, b| ... } -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/max.html]
 #[monoruby_builtin]
 fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.expect_no_block()?;
     let ary = lfp.self_val().as_array();
     if ary.len() == 0 {
         return Ok(Value::nil());
     }
-    let mut max = ary[0];
-    for v in &ary[1..] {
-        if vm.compare_values(globals, max, *v)? == std::cmp::Ordering::Less {
-            max = *v;
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let mut max = ary[0];
+        for v in &ary[1..] {
+            let block_res = vm.invoke_block(globals, &data, &[*v, max])?;
+            if block_res.is_nil() {
+                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
+            }
+            let res = block_res.coerce_to_int_i64(vm, globals)?;
+            if res > 0 {
+                max = *v;
+            }
         }
+        Ok(max)
+    } else {
+        let mut max = ary[0];
+        for v in &ary[1..] {
+            if vm.compare_values(globals, max, *v)? == std::cmp::Ordering::Less {
+                max = *v;
+            }
+        }
+        Ok(max)
     }
-    Ok(max)
 }
 
 ///
@@ -4527,5 +4557,100 @@ mod tests {
         run_test("[1, 2, 3].join");
         run_test(r#"[1, 2, 3].join("-")"#);
         run_test("[].join(nil)");
+    }
+
+    #[test]
+    fn sample() {
+        // sample without arguments returns a single element
+        run_test("[1].sample");
+        run_test("[].sample");
+        // sample(n) returns an array of n elements
+        run_test("[1, 2, 3, 4, 5].sample(0)");
+        run_test("[1, 2, 3].sample(1).size");
+        run_test("[1, 2, 3].sample(5).sort");
+        run_test_no_result_check("[1, 2, 3, 4, 5].sample(3).size");
+        // sample with negative n raises error
+        run_test_error("[1, 2, 3].sample(-1)");
+    }
+
+    #[test]
+    fn shuffle_nondestructive() {
+        // shuffle returns a new array with the same elements
+        run_test_no_result_check("[1, 2, 3].shuffle.sort");
+        run_test(
+            r#"
+            a = [1, 2, 3]
+            a.shuffle
+            a
+            "#,
+        );
+        // shuffle returns Array, not subclass
+        run_test_with_prelude(
+            r#"
+            a = C.new([1, 2, 3])
+            a.shuffle.class
+            "#,
+            "class C < Array; end",
+        );
+    }
+
+    #[test]
+    fn fetch_values() {
+        run_test("[10, 20, 30].fetch_values(0, 2)");
+        run_test("[10, 20, 30].fetch_values(0, -1)");
+        run_test("[10, 20, 30].fetch_values");
+        // with block for missing indices
+        run_test("[10, 20, 30].fetch_values(0, 5) { |i| i * 100 }");
+        // error for out-of-range without block
+        run_test_error("[10, 20, 30].fetch_values(0, 5)");
+    }
+
+    #[test]
+    fn min_max_with_block() {
+        // min with block
+        run_test("[2, 33, 4, 11].min {|a, b| a <=> b}");
+        run_test(r#"["2","33","4","11"].min {|a,b| a.length <=> b.length}"#);
+        run_test("[2, 33, 4, 11].min {|a, b| b <=> a}");
+        // max with block
+        run_test("[2, 33, 4, 11].max {|a, b| a <=> b}");
+        run_test(r#"["2","33","4","11"].max {|a,b| a.length <=> b.length}"#);
+        run_test("[2, 33, 4, 11].max {|a, b| b <=> a}");
+        // block returning constant
+        run_test("[1, 2, 3, 4].min {|a,b| 15}");
+        run_test("[1, 2, 3, 4].max {|a,b| 15}");
+        // nil block result raises ArgumentError
+        run_test_error("[11, 12, 22, 33].min {|a, b| nil}");
+        run_test_error("[11, 12, 22, 33].max {|a, b| nil}");
+        // empty array
+        run_test("[].min {|a,b| a <=> b}");
+        run_test("[].max {|a,b| a <=> b}");
+    }
+
+    #[test]
+    fn assoc() {
+        run_test(
+            r#"
+            s1 = [1, 2]
+            s2 = [2, 3]
+            a = [s1, s2]
+            [a.assoc(1), a.assoc(2), a.assoc(42)]
+            "#,
+        );
+        // ignores non-array elements
+        run_test(r#"["foo", [1, 2], [3, 4]].assoc(3)"#);
+        run_test(r#"["foo", [1, 2], [3, 4]].assoc("bar")"#);
+    }
+
+    #[test]
+    fn rassoc() {
+        run_test(
+            r#"
+            a = [[1, "one"], [2, "two"], [3, "three"]]
+            [a.rassoc("two"), a.rassoc("four")]
+            "#,
+        );
+        // ignores non-array elements
+        run_test(r#"["foo", [1, 2], [3, 4]].rassoc(4)"#);
+        run_test(r#"["foo", [1, 2], [3, 4]].rassoc(99)"#);
     }
 }
