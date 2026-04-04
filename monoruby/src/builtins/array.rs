@@ -3632,6 +3632,11 @@ mod tests {
         ary2
         "##,
         );
+        // Enumerable#sort (delegates to to_a.sort)
+        run_test("[1,2,3].permutation(2).to_a.sort");
+        run_test("[1,2].repeated_combination(2).to_a.sort");
+        run_test("[1,2].repeated_permutation(2).to_a.sort");
+        run_test("[3,1,2].each.sort { |a,b| b <=> a }");
     }
 
     #[test]
