@@ -520,12 +520,23 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         },
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.cmp(&BigInt::from(rhs)),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.cmp(rhs),
-        (RV::BigInt(lhs), RV::Float(rhs)) => match lhs.to_f64().unwrap().partial_cmp(&rhs) {
-            Some(ord) => ord,
-            None => {
+        (RV::BigInt(lhs), RV::Float(rhs)) => {
+            if rhs.is_nan() {
                 return Ok(Value::nil());
             }
-        },
+            if rhs.is_infinite() {
+                if rhs > 0.0 {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                }
+            } else {
+                match lhs.to_f64().unwrap_or(f64::INFINITY).partial_cmp(&rhs) {
+                    Some(ord) => ord,
+                    None => return Ok(Value::nil()),
+                }
+            }
+        }
         _ => {
             // Try coerce protocol: call rhs.coerce(lhs), propagate exceptions
             let coerce_id = IdentId::get_id("coerce");

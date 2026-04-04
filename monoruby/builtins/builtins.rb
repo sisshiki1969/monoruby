@@ -513,6 +513,7 @@ class Float
   end
 
   def numerator
+    return self if nan? || infinite?
     if defined?(Rational)
       to_r.numerator
     else
@@ -521,6 +522,8 @@ class Float
   end
 
   def denominator
+    return 0 if nan?
+    return 1 if infinite?
     if defined?(Rational)
       to_r.denominator
     else
@@ -529,16 +532,23 @@ class Float
   end
 
   def to_r
+    raise FloatDomainError, "NaN" if nan?
+    raise FloatDomainError, (self > 0 ? "Infinity" : "-Infinity") if infinite?
     if defined?(Rational)
-      Rational(self)
+      Rational.__float_to_rational(self)
     else
       self
     end
   end
 
   def rationalize(eps = nil)
+    raise FloatDomainError, "NaN" if nan?
+    raise FloatDomainError, (self > 0 ? "Infinity" : "-Infinity") if infinite?
+    if eps
+      return Rational.__float_find_simplest(self, eps)
+    end
     if defined?(Rational)
-      Rational(self)
+      Rational.__float_to_rational(self)
     else
       self
     end

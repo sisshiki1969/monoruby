@@ -1,4 +1,4 @@
-use num::ToPrimitive;
+use num::{FromPrimitive, ToPrimitive};
 
 use super::*;
 
@@ -11,10 +11,15 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.set_constant_by_str(FLOAT_CLASS, "NAN", Value::float(f64::NAN));
     globals.set_constant_by_str(FLOAT_CLASS, "INFINITY", Value::float(f64::INFINITY));
     globals.set_constant_by_str(FLOAT_CLASS, "MAX", Value::float(f64::MAX));
-    globals.set_constant_by_str(FLOAT_CLASS, "MIN", Value::float(f64::MIN));
+    globals.set_constant_by_str(FLOAT_CLASS, "MIN", Value::float(f64::MIN_POSITIVE));
     globals.set_constant_by_str(FLOAT_CLASS, "MAX_10_EXP", Value::i32(f64::MAX_10_EXP));
     globals.set_constant_by_str(FLOAT_CLASS, "MAX_EXP", Value::i32(f64::MAX_EXP));
+    globals.set_constant_by_str(FLOAT_CLASS, "MIN_10_EXP", Value::i32(f64::MIN_10_EXP));
+    globals.set_constant_by_str(FLOAT_CLASS, "MIN_EXP", Value::i32(f64::MIN_EXP));
     globals.set_constant_by_str(FLOAT_CLASS, "EPSILON", Value::float(f64::EPSILON));
+    globals.set_constant_by_str(FLOAT_CLASS, "DIG", Value::integer(f64::DIGITS as i64));
+    globals.set_constant_by_str(FLOAT_CLASS, "MANT_DIG", Value::integer(f64::MANTISSA_DIGITS as i64));
+    globals.set_constant_by_str(FLOAT_CLASS, "RADIX", Value::integer(f64::RADIX as i64));
     globals.define_builtin_funcs(FLOAT_CLASS, "to_i", &["to_int"], toi, 0);
     globals.define_builtin_func(FLOAT_CLASS, "to_f", tof, 0);
 
@@ -46,6 +51,20 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_funcs(FLOAT_CLASS, "angle", &["arg", "phase"], angle, 0);
     globals.define_builtin_func(FLOAT_CLASS, "next_float", next_float, 0);
     globals.define_builtin_func(FLOAT_CLASS, "prev_float", prev_float, 0);
+    globals.define_builtin_func(FLOAT_CLASS, "quo", quo, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "eql?", float_eql, 0 + 1);
+}
+
+/// Helper to raise FloatDomainError
+fn float_domain_error(globals: &Globals, msg: &str) -> MonorubyErr {
+    let class_id = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("FloatDomainError"))
+        .map(|v| v.as_class_id());
+    match class_id {
+        Some(cid) => MonorubyErr::new(MonorubyErrKind::Other(cid), msg),
+        None => MonorubyErr::rangeerr(msg),
+    }
 }
 
 extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
@@ -79,9 +98,24 @@ fn tof(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/to_i.html]
 #[monoruby_builtin]
-fn toi(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn toi(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     match lfp.self_val().unpack() {
-        RV::Float(f) => Ok(Value::integer(f.trunc() as i64)),
+        RV::Float(f) => {
+            if f.is_nan() {
+                return Err(float_domain_error(globals, "NaN"));
+            }
+            if f.is_infinite() {
+                return Err(float_domain_error(globals, if f > 0.0 { "Infinity" } else { "-Infinity" }));
+            }
+            let truncated = f.trunc();
+            if (i64::MIN as f64) < truncated && truncated < (i64::MAX as f64) {
+                Ok(Value::integer(truncated as i64))
+            } else if let Some(b) = num::BigInt::from_f64(truncated) {
+                Ok(Value::bigint(b))
+            } else {
+                Err(float_domain_error(globals, "float out of range of integer"))
+            }
+        }
         _ => unreachable!(),
     }
 }
@@ -95,7 +129,16 @@ fn toi(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn div_floor(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().try_float().unwrap();
+    if lhs.is_nan() {
+        return Err(float_domain_error(globals, "NaN"));
+    }
+    if lhs.is_infinite() {
+        return Err(float_domain_error(globals, if lhs > 0.0 { "Infinity" } else { "-Infinity" }));
+    }
     let rhs = RealKind::expect(globals, lfp.arg(0))?.to_f64();
+    if rhs == 0.0 {
+        return Err(MonorubyErr::divide_by_zero());
+    }
     let div_floor = (lhs / rhs).floor();
     Value::coerce_f64_to_int(div_floor)
 }
@@ -137,7 +180,15 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let ord = match (lhs.try_float(), rhs.unpack()) {
         (None, _) => unreachable!(),
         (Some(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&(rhs as f64)),
-        (Some(lhs), RV::BigInt(rhs)) => lhs.partial_cmp(&rhs.to_f64().unwrap()),
+        (Some(lhs), RV::BigInt(rhs)) => {
+            if lhs.is_nan() {
+                None
+            } else if lhs.is_infinite() {
+                if lhs > 0.0 { Some(std::cmp::Ordering::Greater) } else { Some(std::cmp::Ordering::Less) }
+            } else {
+                lhs.partial_cmp(&rhs.to_f64().unwrap_or(f64::INFINITY))
+            }
+        }
         (Some(lhs), RV::Float(rhs)) => lhs.partial_cmp(&rhs),
         _ => {
             // Try coerce protocol for non-numeric types
@@ -226,8 +277,18 @@ fn floor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         0
     };
     let f = lfp.self_val().try_float().unwrap();
+    if f.is_nan() || f.is_infinite() {
+        if ndigits > 0 {
+            return Ok(lfp.self_val());
+        }
+        if f.is_nan() {
+            return Err(float_domain_error(globals, "NaN"));
+        } else {
+            return Err(float_domain_error(globals, if f > 0.0 { "Infinity" } else { "-Infinity" }));
+        }
+    }
     if ndigits == 0 {
-        return Ok(Value::integer(f.floor() as i64));
+        return Value::coerce_f64_to_int(f.floor());
     }
     if ndigits > 0 {
         if let Ok(ndigits) = u32::try_from(ndigits) {
@@ -268,8 +329,18 @@ fn ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         0
     };
     let f = lfp.self_val().try_float().unwrap();
+    if f.is_nan() || f.is_infinite() {
+        if ndigits > 0 {
+            return Ok(lfp.self_val());
+        }
+        if f.is_nan() {
+            return Err(float_domain_error(globals, "NaN"));
+        } else {
+            return Err(float_domain_error(globals, if f > 0.0 { "Infinity" } else { "-Infinity" }));
+        }
+    }
     if ndigits == 0 {
-        return Ok(Value::integer(f.ceil() as i64));
+        return Value::coerce_f64_to_int(f.ceil());
     }
     if ndigits > 0 {
         if let Ok(ndigits) = u32::try_from(ndigits) {
@@ -309,8 +380,18 @@ fn truncate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         0
     };
     let f = lfp.self_val().try_float().unwrap();
+    if f.is_nan() || f.is_infinite() {
+        if ndigits > 0 {
+            return Ok(lfp.self_val());
+        }
+        if f.is_nan() {
+            return Err(float_domain_error(globals, "NaN"));
+        } else {
+            return Err(float_domain_error(globals, if f > 0.0 { "Infinity" } else { "-Infinity" }));
+        }
+    }
     if ndigits == 0 {
-        return Ok(Value::integer(f.trunc() as i64));
+        return Value::coerce_f64_to_int(f.trunc());
     }
     if ndigits > 0 {
         if let Ok(ndigits) = u32::try_from(ndigits) {
@@ -350,14 +431,56 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         0
     };
+    // Parse half: keyword from second arg (hash)
+    let half = if let Some(kw_val) = lfp.try_arg(1) {
+        if !kw_val.is_nil() {
+            if let Some(h) = kw_val.try_hash_ty() {
+                let half_key = Value::symbol(IdentId::get_id("half"));
+                if let Some(v) = h.inner().get(half_key, vm, globals)? {
+                    if v.is_nil() {
+                        None
+                    } else if let Some(sym) = v.try_symbol() {
+                        let name = sym.get_name();
+                        match name.as_str() {
+                            "up" => Some(0),
+                            "down" => Some(1),
+                            "even" => Some(2),
+                            _ => return Err(MonorubyErr::argumenterr(format!("invalid rounding mode: {}", name))),
+                        }
+                    } else {
+                        return Err(MonorubyErr::argumenterr("invalid rounding mode"));
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let f = lfp.self_val().try_float().unwrap();
+    if f.is_nan() || f.is_infinite() {
+        if ndigits > 0 {
+            return Ok(lfp.self_val());
+        }
+        if f.is_nan() {
+            return Err(float_domain_error(globals, "NaN"));
+        } else {
+            return Err(float_domain_error(globals, if f > 0.0 { "Infinity" } else { "-Infinity" }));
+        }
+    }
     if ndigits == 0 {
-        return Ok(Value::integer(f.round() as i64));
+        let rounded = round_half(f, half);
+        return Value::coerce_f64_to_int(rounded);
     }
     if ndigits > 0 {
         if let Ok(ndigits) = u32::try_from(ndigits) {
             let mul = 10f64.powi(ndigits as i32);
-            let f = (f * mul).round() / mul;
+            let f = round_half(f * mul, half) / mul;
             Ok(Value::float(f))
         } else {
             Err(MonorubyErr::rangeerr("too big to convert to u32"))
@@ -365,7 +488,7 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
             let mul = 10f64.powi(neg_ndigits as i32);
-            let f = (f / mul).round() * mul;
+            let f = round_half(f / mul, half) * mul;
             if let Some(v) = Value::integer_from_f64(f) {
                 return Ok(v);
             } else {
@@ -375,6 +498,31 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             }
         }
         Err(MonorubyErr::rangeerr("too small to convert to u32"))
+    }
+}
+
+/// Round a float value with half-way rounding mode.
+/// half: None = :up (Ruby default for Float), 0 = :up, 1 = :down, 2 = :even
+fn round_half(f: f64, half: Option<i32>) -> f64 {
+    let floor = f.floor();
+    let frac = f - floor;
+    if frac.abs() < 0.5 || frac.abs() > 0.5 {
+        return f.round();
+    }
+    // Exactly halfway
+    match half {
+        Some(1) => {
+            // :down - round toward zero
+            if f > 0.0 { floor } else { floor + 1.0 }
+        }
+        Some(2) => {
+            // :even - round to nearest even
+            if floor as i64 % 2 == 0 { floor } else { floor + 1.0 }
+        }
+        _ => {
+            // :up (default) - round away from zero
+            if f > 0.0 { floor + 1.0 } else { floor }
+        }
     }
 }
 
@@ -471,6 +619,49 @@ fn prev_float(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodeP
     let bits = f.to_bits();
     let prev_bits = if f == 0.0 { (1u64 << 63) | 1u64 } else if f > 0.0 { bits - 1 } else { bits + 1 };
     Ok(Value::float(f64::from_bits(prev_bits)))
+}
+
+/// ### Float#quo
+/// - quo(other) -> Float
+///
+/// Returns the quotient of self / other as a Float.
+#[monoruby_builtin]
+fn quo(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let lhs = lfp.self_val().try_float().unwrap();
+    let rhs = lfp.arg(0);
+    let rhs_f = match rhs.unpack() {
+        RV::Float(f) => f,
+        RV::Fixnum(i) => i as f64,
+        RV::BigInt(b) => b.to_f64().unwrap_or(f64::INFINITY),
+        _ => {
+            let coerce_id = IdentId::get_id("coerce");
+            if let Some(result) = vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lfp.self_val()], None, None)? {
+                if let Some(ary) = result.try_array_ty() {
+                    if ary.len() == 2 {
+                        let div_id = IdentId::get_id("/");
+                        return vm.invoke_method_inner(globals, div_id, ary[0], &[ary[1]], None, None);
+                    }
+                }
+            }
+            return Err(MonorubyErr::cant_convert_into_float(globals, rhs));
+        }
+    };
+    Ok(Value::float(lhs / rhs_f))
+}
+
+/// ### Float#eql?
+/// - eql?(other) -> bool
+///
+/// Returns true only if other is a Float with the same value.
+#[monoruby_builtin]
+fn float_eql(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let lhs = lfp.self_val().try_float().unwrap();
+    let rhs = lfp.arg(0);
+    let result = match rhs.unpack() {
+        RV::Float(r) => lhs == r,
+        _ => false,
+    };
+    Ok(Value::bool(result))
 }
 
 #[cfg(test)]
