@@ -134,7 +134,6 @@ class Array
     return to_enum(:bsearch) unless block_given?
     low = 0
     high = size
-    # 判定モードを最初の呼び出しで決定
     mode = nil
     while low < high
       mid = (low + high) / 2
@@ -142,12 +141,12 @@ class Array
       res = yield(val)
 
       if mode.nil?
-        if res == true || res == false
+        if res == true || res == false || res.nil?
           mode = :find_min
         elsif res.is_a?(Numeric)
           mode = :find_exact
         else
-          raise TypeError, "unexpected block result #{res.inspect}"
+          raise TypeError, "wrong argument type #{res.class} (must be numeric, true, false or nil)"
         end
       end
 
@@ -159,7 +158,9 @@ class Array
           low = mid + 1
         end
       when :find_exact
-        if res < 0
+        if res.nil?
+          low = mid + 1
+        elsif res < 0
           low = mid + 1
         elsif res > 0
           high = mid
@@ -205,15 +206,24 @@ class Array
     res
   end
 
-  def cycle(n = nil)
-    return to_enum(:cycle, n) unless block_given?
+  def cycle(n = (no_n = true; nil))
+    unless block_given?
+      unless no_n || n.nil? || n.is_a?(Integer)
+        raise TypeError, "no implicit conversion of #{n.class} into Integer" unless n.respond_to?(:to_int)
+        n = n.to_int
+      end
+      return to_enum(:cycle, *(no_n ? [] : [n]))
+    end
     return nil if empty?
     if n.nil?
-      loop do
+      while true
         each { |x| yield x }
       end
     else
-      n = n.to_int
+      unless n.is_a?(Integer)
+        raise TypeError, "no implicit conversion of #{n.class} into Integer" unless n.respond_to?(:to_int)
+        n = n.to_int
+      end
       n.times do
         each { |x| yield x }
       end
@@ -256,12 +266,12 @@ class Array
       res = yield(val)
 
       if mode.nil?
-        if res == true || res == false
+        if res == true || res == false || res.nil?
           mode = :find_min
         elsif res.is_a?(Numeric)
           mode = :find_exact
         else
-          raise TypeError, "unexpected block result #{res.inspect}"
+          raise TypeError, "wrong argument type #{res.class} (must be numeric, true, false or nil)"
         end
       end
 
@@ -273,7 +283,9 @@ class Array
           low = mid + 1
         end
       when :find_exact
-        if res < 0
+        if res.nil?
+          low = mid + 1
+        elsif res < 0
           low = mid + 1
         elsif res > 0
           high = mid

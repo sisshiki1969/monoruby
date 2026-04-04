@@ -109,6 +109,35 @@ fn enumerator_size(
                 Ok(Value::nil())
             }
         }
+        "cycle" => {
+            let obj_len = if let Some(ary) = inner.obj.try_array_ty() {
+                ary.len() as i64
+            } else {
+                return Ok(Value::nil());
+            };
+            if inner.args.is_empty() {
+                // cycle with no count => infinite if non-empty, 0 if empty
+                if obj_len == 0 {
+                    Ok(Value::integer(0))
+                } else {
+                    Ok(Value::float(f64::INFINITY))
+                }
+            } else if inner.args[0].is_nil() {
+                if obj_len == 0 {
+                    Ok(Value::integer(0))
+                } else {
+                    Ok(Value::float(f64::INFINITY))
+                }
+            } else if let Some(n) = inner.args[0].try_fixnum() {
+                if n < 0 || obj_len == 0 {
+                    Ok(Value::integer(0))
+                } else {
+                    Ok(Value::integer(obj_len * n))
+                }
+            } else {
+                Ok(Value::nil())
+            }
+        }
         _ => Ok(Value::nil()),
     }
 }
