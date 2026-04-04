@@ -11,6 +11,7 @@ use std::cmp::Ordering;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Array", ARRAY_CLASS, ObjTy::ARRAY);
     globals.define_builtin_class_func_with(ARRAY_CLASS, "new", new, 0, 0, true);
+    globals.define_builtin_class_func_rest(ARRAY_CLASS, "[]", array_class_bracket);
     //globals.define_builtin_class_inline_func_with(
     //    ARRAY_CLASS,
     //    "new",
@@ -125,6 +126,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(ARRAY_CLASS, "product", product);
 
     globals.define_builtin_func_rest(ARRAY_CLASS, "union", union);
+    globals.define_builtin_func_rest(ARRAY_CLASS, "difference", difference);
+    globals.define_builtin_func_rest(ARRAY_CLASS, "intersection", intersection);
     globals.define_builtin_func(ARRAY_CLASS, "intersect?", intersect_, 1);
     globals.define_builtin_func(ARRAY_CLASS, "uniq", uniq, 0);
     globals.define_builtin_func(ARRAY_CLASS, "uniq!", uniq_, 0);
@@ -226,6 +229,24 @@ fn array_allocate(
 extern "C" fn allocate_array(class_val: Value) -> Value {
     let class_id = class_val.as_class_id();
     Value::array_empty_with_class(class_id)
+}
+
+///
+/// ### Array.[]
+///
+/// Array[*args] -> Array
+///
+#[monoruby_builtin]
+fn array_class_bracket(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class = lfp.self_val().as_class_id();
+    let args = lfp.arg(0).as_array();
+    let ary = ArrayInner::from(args.to_vec().into());
+    Ok(Value::array_with_class(ary, class))
 }
 
 ///
@@ -2253,6 +2274,69 @@ fn union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     ary.uniq(vm, globals)?;
     Ok(ary.into())
+}
+
+///
+/// ### Array#difference
+///
+/// - difference(*other_arrays) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/difference.html]
+#[monoruby_builtin]
+fn difference(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let lhs_v = lfp.self_val();
+    let others: Vec<_> = lfp
+        .arg(0)
+        .as_array()
+        .iter()
+        .map(|v| v.coerce_to_array(vm, globals))
+        .collect::<Result<Vec<_>>>()?;
+    let mut v = vec![];
+    'outer: for lhs in lhs_v.as_array().iter() {
+        for other in &others {
+            for rhs in other.iter() {
+                if vm.eq_values_bool(globals, *lhs, *rhs)? {
+                    continue 'outer;
+                }
+            }
+        }
+        v.push(*lhs);
+    }
+    Ok(Value::array_from_vec(v))
+}
+
+///
+/// ### Array#intersection
+///
+/// - intersection(*other_arrays) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/intersection.html]
+#[monoruby_builtin]
+fn intersection(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut ary = lfp.self_val().dup().as_array();
+    ary.uniq(vm, globals)?;
+    let others: Vec<_> = lfp
+        .arg(0)
+        .as_array()
+        .iter()
+        .map(|v| v.coerce_to_array(vm, globals))
+        .collect::<Result<Vec<_>>>()?;
+    ary.retain(|lhs| {
+        for other in &others {
+            let mut found = false;
+            for rhs in other.iter() {
+                if *lhs == *rhs {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    })?;
+    Ok(ary.as_val())
 }
 
 ///
