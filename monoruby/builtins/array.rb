@@ -352,18 +352,22 @@ class Array
   end
 
   def fetch_values(*indexes)
-    indexes.map do |i|
-      if block_given?
+    result = []
+    if block_given?
+      indexes.each do |i|
         idx = i.to_int
         if idx < -size || idx >= size
-          yield i
+          result << yield(i)
         else
-          self[idx]
+          result << self[idx]
         end
-      else
-        fetch(i)
+      end
+    else
+      indexes.each do |i|
+        result << fetch(i)
       end
     end
+    result
   end
 
   def rindex(val = (no_val = true; nil))
