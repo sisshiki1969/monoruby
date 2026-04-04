@@ -201,11 +201,18 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
         Some(block) => block,
     };
     let cur = lfp.self_val().expect_integer(globals)?;
-    let limit = match lfp.arg(0).coerce_to_int_i64(vm, globals) {
-        Ok(v) => v,
-        Err(_) => return Err(MonorubyErr::argumenterr(format!(
-            "bad value for range"
-        ))),
+    let limit = if let Some(f) = lfp.arg(0).try_float() {
+        if f.is_nan() {
+            return Ok(lfp.self_val());
+        }
+        f.ceil() as i64
+    } else {
+        match lfp.arg(0).coerce_to_int_i64(vm, globals) {
+            Ok(v) => v,
+            Err(_) => return Err(MonorubyErr::argumenterr(format!(
+                "bad value for range"
+            ))),
+        }
     };
     if cur < limit {
         return Ok(lfp.self_val());
@@ -227,7 +234,7 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/chr.html]
 #[monoruby_builtin]
 fn chr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    use crate::value::rvalue::Encoding;
+    use crate::value::rvalue::{Encoding, RStringInner};
     let encoding_arg = lfp.try_arg(0);
 
     // Parse encoding if provided
@@ -262,7 +269,16 @@ fn chr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     };
 
     match encoding {
-        Some(Encoding::Utf8) | Some(Encoding::UsAscii) => {
+        Some(Encoding::UsAscii) => {
+            // US-ASCII encoding: only 0-127
+            if i < 0 || i > 0x7F {
+                return Err(MonorubyErr::rangeerr(format!("{} out of char range", i)));
+            }
+            let b = i as u8;
+            let inner = RStringInner::from_encoding(&[b], Encoding::UsAscii);
+            Ok(Value::string_from_inner(inner))
+        }
+        Some(Encoding::Utf8) => {
             // UTF-8 encoding: support full Unicode codepoint range
             if i < 0 || i > 0x10FFFF {
                 return Err(MonorubyErr::rangeerr(format!("{} out of char range", i)));
@@ -286,8 +302,9 @@ fn chr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             // ASCII-8BIT/BINARY encoding or no encoding specified: 0-255 only
             if let Ok(b) = u8::try_from(i) {
                 if encoding.is_none() && b <= 0x7f {
-                    // No encoding specified, 0-127: return US-ASCII (mapped to UTF-8)
-                    return Ok(Value::string_from_str(std::str::from_utf8(&[b]).unwrap()));
+                    // No encoding specified, 0-127: return US-ASCII
+                    let inner = RStringInner::from_encoding(&[b], Encoding::UsAscii);
+                    return Ok(Value::string_from_inner(inner));
                 }
                 return Ok(Value::bytes_from_slice(&[b]));
             }
@@ -939,10 +956,10 @@ fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     } else {
         10
     };
-    match lfp.self_val().unpack() {
+    let s = match lfp.self_val().unpack() {
         RV::Fixnum(i) => {
             if base == 10 {
-                Ok(Value::string(format!("{}", i)))
+                format!("{}", i)
             } else {
                 let negative = i < 0;
                 let abs = if negative {
@@ -952,29 +969,31 @@ fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 };
                 let s = format_integer_base(abs, base);
                 if negative {
-                    Ok(Value::string(format!("-{}", s)))
+                    format!("-{}", s)
                 } else {
-                    Ok(Value::string(s))
+                    s
                 }
             }
         }
         RV::BigInt(b) => {
             if base == 10 {
-                Ok(Value::string(format!("{}", b)))
+                format!("{}", b)
             } else {
                 use num::traits::sign::Signed;
                 let negative = b.is_negative();
                 let abs = if negative { -b } else { b.clone() };
                 let s = format_bigint_base(&abs, base);
                 if negative {
-                    Ok(Value::string(format!("-{}", s)))
+                    format!("-{}", s)
                 } else {
-                    Ok(Value::string(s))
+                    s
                 }
             }
         }
         _ => unreachable!(),
-    }
+    };
+    use crate::value::rvalue::{Encoding, RStringInner};
+    Ok(Value::string_from_inner(RStringInner::from_encoding(s.as_bytes(), Encoding::UsAscii)))
 }
 
 fn format_integer_base(mut n: u128, base: u32) -> String {

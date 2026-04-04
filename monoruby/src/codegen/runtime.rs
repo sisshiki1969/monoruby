@@ -71,6 +71,10 @@ impl ProcData {
         }
     }
 
+    pub(crate) fn func_id(&self) -> Option<FuncId> {
+        self.func_id
+    }
+
     pub(crate) fn from_proc(proc: &ProcInner) -> Self {
         Self {
             outer: Some(proc.outer_lfp()),

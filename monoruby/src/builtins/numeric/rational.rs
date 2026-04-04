@@ -158,7 +158,7 @@ fn ne(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 }
 
 #[monoruby_builtin]
-fn cmp(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = self_rat(lfp);
     let rhs = lfp.arg(0);
     if let Some(r) = rhs.try_rational() {
@@ -177,6 +177,14 @@ fn cmp(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Va
                 std::cmp::Ordering::Greater => 1,
             }))
         }
+        RV::BigInt(b) => {
+            let other = RationalInner::new_bigint(b.clone(), BigInt::from(1));
+            Ok(Value::integer(match lhs.cmp(&other) {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            }))
+        }
         RV::Float(f) => match lhs.to_f().partial_cmp(&f) {
             Some(ord) => Ok(Value::integer(match ord {
                 std::cmp::Ordering::Less => -1,
@@ -185,7 +193,23 @@ fn cmp(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Va
             })),
             None => Ok(Value::nil()),
         },
-        _ => Ok(Value::nil()),
+        _ => {
+            // Try coerce protocol
+            let coerce_id = IdentId::get_id("coerce");
+            match vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lfp.self_val()], None, None) {
+                Ok(Some(result)) => {
+                    if let Some(ary) = result.try_array_ty() {
+                        if ary.len() == 2 {
+                            let cmp_id = IdentId::get_id("<=>");
+                            return vm.invoke_method_inner(globals, cmp_id, ary[0], &[ary[1]], None, None);
+                        }
+                    }
+                    Ok(Value::nil())
+                }
+                Ok(None) => Ok(Value::nil()),
+                Err(e) => Err(e),
+            }
+        }
     }
 }
 
@@ -295,9 +319,6 @@ fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             Ok(Value::rational_from_inner(lhs.div(&r)?))
         }
         RV::Float(f) => {
-            if f == 0.0 {
-                return Err(MonorubyErr::divide_by_zero());
-            }
             Ok(Value::float(lhs.to_f() / f))
         }
         _ => {

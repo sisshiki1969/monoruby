@@ -62,10 +62,55 @@ pub(super) fn init(globals: &mut Globals) {
 fn enumerator_size(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    _lfp: Lfp,
+    lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(Value::nil())
+    let e = lfp.self_val();
+    if e.ty() != Some(ObjTy::ENUMERATOR) {
+        return Ok(Value::nil());
+    }
+    let inner = e.as_enumerator_inner();
+    let method_name = inner.method.get_name();
+    match method_name.as_str() {
+        "upto" => {
+            if let (Some(start), Some(stop_val)) = (inner.obj.try_fixnum(), inner.args.first()) {
+                let stop = if let Some(i) = stop_val.try_fixnum() {
+                    i
+                } else if let Some(f) = stop_val.try_float() {
+                    f.floor() as i64
+                } else {
+                    return Ok(Value::nil());
+                };
+                let size = if stop >= start { stop - start + 1 } else { 0 };
+                Ok(Value::integer(size))
+            } else {
+                Ok(Value::nil())
+            }
+        }
+        "downto" => {
+            if let (Some(start), Some(stop_val)) = (inner.obj.try_fixnum(), inner.args.first()) {
+                let stop = if let Some(i) = stop_val.try_fixnum() {
+                    i
+                } else if let Some(f) = stop_val.try_float() {
+                    f.ceil() as i64
+                } else {
+                    return Ok(Value::nil());
+                };
+                let size = if start >= stop { start - stop + 1 } else { 0 };
+                Ok(Value::integer(size))
+            } else {
+                Ok(Value::nil())
+            }
+        }
+        "times" => {
+            if let Some(n) = inner.obj.try_fixnum() {
+                Ok(Value::integer(if n > 0 { n } else { 0 }))
+            } else {
+                Ok(Value::nil())
+            }
+        }
+        _ => Ok(Value::nil()),
+    }
 }
 
 ///

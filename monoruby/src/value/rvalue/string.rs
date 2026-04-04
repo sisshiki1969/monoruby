@@ -33,7 +33,7 @@ impl Encoding {
             "ASCII_8BIT" | "BINARY" => Ok(Encoding::Ascii8),
 
             // US-ASCII
-            "US_ASCII" | "ASCII" | "ANSI_X3.4_1968" | "646" => Ok(Encoding::Utf8),
+            "US_ASCII" | "ASCII" | "ANSI_X3.4_1968" | "646" => Ok(Encoding::UsAscii),
 
             // Special pseudo-encoding names
             "LOCALE" | "EXTERNAL" | "FILESYSTEM" => Ok(Encoding::Utf8),

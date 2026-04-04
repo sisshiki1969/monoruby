@@ -648,6 +648,7 @@ class Symbol
   def [](*args)
     to_s.[](*args)
   end
+  alias slice []
 
   def size
     to_s.size
