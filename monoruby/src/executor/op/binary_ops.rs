@@ -385,7 +385,16 @@ pub(crate) extern "C" fn pow_ii(lhs: i64, rhs: i64, vm: &mut Executor) -> Option
 }
 
 fn pow_ff(lhs: f64, rhs: f64) -> Value {
-    Value::float(lhs.powf(rhs))
+    let result = lhs.powf(rhs);
+    if result.is_nan() && lhs < 0.0 {
+        let abs_result = (-lhs).powf(rhs);
+        let theta = rhs * std::f64::consts::PI;
+        let re = abs_result * theta.cos();
+        let im = abs_result * theta.sin();
+        Value::complex(re, im)
+    } else {
+        Value::float(result)
+    }
 }
 
 // TODO: support rhs < 0.

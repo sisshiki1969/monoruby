@@ -265,9 +265,9 @@ class Integer
       [other, self.to_f]
     elsif defined?(Rational) && other.is_a?(Rational)
       [other, Rational(self, 1)]
+    elsif other.is_a?(Complex)
+      [other, Complex(self)]
     elsif other.is_a?(String)
-      # CRuby uses Float(other) which raises ArgumentError for non-numeric strings
-      # We need to validate the string is a valid float representation
       stripped = other.strip
       if stripped.empty? || stripped !~ /\A[+-]?(\d+\.?\d*|\d*\.?\d+)([eE][+-]?\d+)?\z/
         raise ArgumentError, "invalid value for Float(): #{other.inspect}"
@@ -276,7 +276,7 @@ class Integer
     elsif other.respond_to?(:to_f)
       result = other.to_f
       unless result.is_a?(Float)
-        raise TypeError, "can't convert #{other.class} to Float (#{other.class}#to_f gives #{result.class})"
+        raise TypeError, "can't convert #{other.class} into Float (#{other.class}#to_f gives #{result.class})"
       end
       [result, self.to_f]
     else
@@ -340,7 +340,7 @@ class Integer
       elsif result.is_a?(Integer)
         result
       else
-        raise TypeError, "can't convert #{obj.class} to Integer (#{obj.class}#to_int gives #{result.class})"
+        raise TypeError, "can't convert #{obj.class} into Integer (#{obj.class}#to_int gives #{result.class})"
       end
     else
       nil

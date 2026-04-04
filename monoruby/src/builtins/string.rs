@@ -548,7 +548,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             Err(_) => return Err(MonorubyErr::char_out_of_range(&globals.store, lfp.arg(0))),
         };
         let bytes = self_.as_rstring_inner_mut();
-        if bytes.encoding() == Encoding::Utf8 {
+        if bytes.encoding().is_utf8_compatible() {
             let c = char::from_u32(ch)
                 .ok_or_else(|| MonorubyErr::char_out_of_range(&globals.store, lfp.arg(0)))?;
             let mut buf = [0u8; 4];
@@ -1862,7 +1862,7 @@ fn string_match(
     let given = self_.expect_str(globals)?;
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
-    RegexpInner::match_one(vm, globals, &re, given, lfp.block(), pos)
+    RegexpInner::match_one(vm, globals, re, given, lfp.block(), pos)
 }
 
 ///
@@ -1890,8 +1890,8 @@ fn string_match_(
     let given = self_.expect_str(globals)?;
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
-    let res = RegexpInner::match_one(vm, globals, &re, given, lfp.block(), pos)?;
-    Ok(Value::bool(!res.is_nil()))
+    let res = RegexpInner::match_pred(&re, given, pos)?;
+    Ok(Value::bool(res))
 }
 
 ///
@@ -2580,7 +2580,7 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 
     // Check character boundary for UTF-8 strings
     let self_enc = self_.as_rstring_inner().encoding();
-    if self_enc == Encoding::Utf8 {
+    if self_enc.is_utf8_compatible() {
         let self_bytes = self_.as_rstring_inner().as_bytes();
         if !is_char_boundary(self_bytes, start) {
             return Err(MonorubyErr::indexerr(format!(
@@ -2599,7 +2599,7 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 
     // Check character boundary for UTF-8 source string
     let str_enc = str_inner.encoding();
-    if str_enc == Encoding::Utf8 && has_src_range {
+    if str_enc.is_utf8_compatible() && has_src_range {
         // replacement slice was already extracted from str_bytes,
         // but we need to verify the offsets used were on char boundaries.
         // The offsets are relative to str_bytes, so we check using the
@@ -2627,14 +2627,14 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 
     // Check encoding compatibility
     match (self_enc, str_enc) {
-        (Encoding::Utf8, Encoding::Ascii8) => {
+        (Encoding::Utf8 | Encoding::UsAscii, Encoding::Ascii8) => {
             if !replacement.is_ascii() && !self_.as_rstring_inner().as_bytes().is_ascii() {
                 return Err(MonorubyErr::runtimeerr(
                     "incompatible character encodings: UTF-8 and ASCII-8BIT",
                 ));
             }
         }
-        (Encoding::Ascii8, Encoding::Utf8) => {
+        (Encoding::Ascii8, Encoding::Utf8 | Encoding::UsAscii) => {
             // OK
         }
         _ => {}
@@ -3798,6 +3798,9 @@ fn encoding(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
             vm.get_constant_checked(globals, enc_class, IdentId::get_id("ASCII_8BIT"))?
         }
         Encoding::Utf8 => vm.get_constant_checked(globals, enc_class, IdentId::get_id("UTF_8"))?,
+        Encoding::UsAscii => {
+            vm.get_constant_checked(globals, enc_class, IdentId::get_id("US_ASCII"))?
+        }
     };
     Ok(res)
 }
@@ -4960,6 +4963,9 @@ mod tests {
         run_test(r##""Ruby".match?(/R.../)"##);
         run_test(r##""Ruby".match?(/R.../, 1)"##);
         run_test(r##""Ruby".match?(/P.../)"##);
+
+        // match with negative position returns nil
+        run_test(r##""hello".match(/ell/, -10)"##);
     }
 
     #[test]

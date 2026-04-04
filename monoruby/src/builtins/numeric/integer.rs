@@ -262,7 +262,7 @@ fn chr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     };
 
     match encoding {
-        Some(Encoding::Utf8) => {
+        Some(Encoding::Utf8) | Some(Encoding::UsAscii) => {
             // UTF-8 encoding: support full Unicode codepoint range
             if i < 0 || i > 0x10FFFF {
                 return Err(MonorubyErr::rangeerr(format!("{} out of char range", i)));
@@ -1694,6 +1694,12 @@ mod tests {
     fn pow_zero_neg() {
         run_test_error("0 ** -1");
         run_test_error("0 ** -2");
+    }
+
+    #[test]
+    fn pow_negative_base_float_exp() {
+        // (-1) ** 0.5 should return Complex in CRuby
+        run_test("((-1) ** 0.5).class");
     }
 
     #[test]

@@ -445,7 +445,7 @@ impl RegexpInner {
     pub(crate) fn match_one(
         vm: &mut Executor,
         globals: &mut Globals,
-        re: &RegexpInner,
+        re: Regexp,
         given: &str,
         block: Option<BlockHandler>,
         char_pos: usize,
@@ -457,20 +457,29 @@ impl RegexpInner {
         match re.captures_from_pos(given, byte_pos, vm)? {
             None => Ok(Value::nil()),
             Some(captures) => {
+                let match_data = Value::new_matchdata(captures, given, re);
                 if let Some(bh) = block {
-                    let matched = Value::string_from_str(captures.get(0).unwrap().as_str());
-                    vm.invoke_block_once(globals, bh, &[matched])
+                    vm.invoke_block_once(globals, bh, &[match_data])
                 } else {
-                    let mut ary = Array::new_empty();
-                    for i in 0..captures.len() {
-                        match captures.get(i) {
-                            Some(m) => ary.push(Value::string_from_str(m.as_str())),
-                            None => ary.push(Value::nil()),
-                        }
-                    }
-                    Ok(ary.into())
+                    Ok(match_data)
                 }
             }
+        }
+    }
+
+    /// Like `match_one` but returns only a boolean and does NOT set `$~`.
+    pub(crate) fn match_pred(
+        re: &RegexpInner,
+        given: &str,
+        char_pos: usize,
+    ) -> Result<bool> {
+        let byte_pos = match given.char_indices().nth(char_pos) {
+            Some((pos, _)) => pos,
+            None => return Ok(false),
+        };
+        match re.regex.captures_from_pos(given, byte_pos) {
+            Ok(res) => Ok(res.is_some()),
+            Err(err) => Err(MonorubyErr::regexerr(format!("Capture failed. {:?}", err))),
         }
     }
 

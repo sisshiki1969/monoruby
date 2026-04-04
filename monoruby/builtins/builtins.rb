@@ -714,21 +714,18 @@ class Symbol
     to_s.casecmp?(other.to_s)
   end
 
-  def match(other)
-    self.to_s.match(other)
+  def match(other, *args, &block)
+    self.to_s.match(other, *args, &block)
   end
 
-  def match?(other)
-    self.to_s.match?(other)
+  def match?(other, pos = 0)
+    self.to_s.match?(other, pos)
   end
 
   def to_proc
-    Proc.new do |*args|
-      if args.size == 0
-        raise ArgumentError, "no receiver given"
-      end
-      slf, *args = args
-      slf.send(self, *args)
+    m = self
+    lambda do |recv, *args, &blk|
+      recv.public_send(m, *args, &blk)
     end
   end
 end

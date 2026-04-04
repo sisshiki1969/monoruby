@@ -12,6 +12,29 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SYMBOL_CLASS, "===", eq, 1);
     globals.define_builtin_func(SYMBOL_CLASS, "==", eq, 1);
     globals.define_builtin_func(SYMBOL_CLASS, "!=", ne, 1);
+    globals.define_builtin_func(SYMBOL_CLASS, "to_s", sym_to_s, 0);
+}
+
+///
+/// ### Symbol#to_s
+///
+/// - to_s -> String
+///
+/// Returns the name of the symbol as a string.
+/// ASCII-only symbols return a US-ASCII encoded string.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/to_s.html]
+#[monoruby_builtin]
+fn sym_to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let sym = lfp.self_val().as_symbol();
+    let name = sym.get_name();
+    let enc = if name.is_ascii() {
+        Encoding::UsAscii
+    } else {
+        Encoding::Utf8
+    };
+    let inner = RStringInner::from_encoding(name.as_bytes(), enc);
+    Ok(Value::string_from_inner(inner))
 }
 
 ///
@@ -142,5 +165,25 @@ mod tests {
         (1..3).collect(&:to_s)
         "#,
         );
+    }
+
+    #[test]
+    fn symbol_to_s_encoding() {
+        run_test(r#":hello.to_s.encoding.to_s"#);
+        run_test(r#":"日本語".to_s.encoding.to_s"#);
+    }
+
+    #[test]
+    fn symbol_match_with_matchdata() {
+        run_test(r#":hello.match(/ell/).class"#);
+        run_test(r#":hello.match(/ell/)[0]"#);
+        run_test(r#":hello.match(/xyz/)"#);
+    }
+
+    #[test]
+    fn symbol_to_proc_public_send() {
+        // to_proc should use public_send and forward blocks
+        run_test(r#"[1, 2, 3].map(&:to_s)"#);
+        run_test(r#"["a", "b", "c"].map(&:upcase)"#);
     }
 }

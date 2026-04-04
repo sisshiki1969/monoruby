@@ -282,7 +282,7 @@ impl<'a> MarshalReader<'a> {
         let len = self.read_fixnum()? as usize;
         let bytes = self.read_bytes(len)?;
         let val = match encoding {
-            Encoding::Utf8 => Value::string_from_inner(RStringInner::from_encoding(bytes, Encoding::Utf8)),
+            Encoding::Utf8 | Encoding::UsAscii => Value::string_from_inner(RStringInner::from_encoding(bytes, Encoding::Utf8)),
             Encoding::Ascii8 => Value::bytes_from_slice(bytes),
         };
         self.objects.push(val);
@@ -695,7 +695,7 @@ fn marshal_write_string(buf: &mut Vec<u8>, s: &RStringInner, symbols: &mut Vec<I
             marshal_write_symbol(buf, IdentId::get_id("E"), symbols);
             buf.push(b'T'); // true
         }
-        Encoding::Ascii8 => {
+        Encoding::UsAscii | Encoding::Ascii8 => {
             buf.push(b'"');
             marshal_write_fixnum(buf, bytes.len() as i32);
             buf.extend_from_slice(bytes);
