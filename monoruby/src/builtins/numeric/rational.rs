@@ -319,7 +319,7 @@ fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 }
 
 #[monoruby_builtin]
-fn pow(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn pow(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = self_rat(lfp);
     let rhs = lfp.arg(0);
     match rhs.unpack() {
@@ -346,13 +346,35 @@ fn pow(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Va
             Ok(Value::float(lhs.to_f().powf(f)))
         }
         _ => {
-            // For Rational exponent or other types, check zero base with negative exponent
             if let Some(r) = rhs.try_rational() {
                 if lhs.is_zero() && r.is_negative() {
                     return Err(MonorubyErr::divide_by_zero());
                 }
+                if *r.den() == BigInt::from(1) {
+                    use num::ToPrimitive;
+                    if let Some(exp) = r.num().to_i64() {
+                        if exp >= 0 {
+                            let exp = exp as u32;
+                            let n = lhs.num().pow(exp);
+                            let d = lhs.den().pow(exp);
+                            return Ok(Value::rational_from_bigint(n, d));
+                        } else {
+                            if lhs.is_zero() {
+                                return Err(MonorubyErr::divide_by_zero());
+                            }
+                            let exp = (-exp) as u32;
+                            let n = lhs.den().pow(exp);
+                            let d = lhs.num().pow(exp);
+                            return Ok(Value::rational_from_bigint(n, d));
+                        }
+                    }
+                }
+                return Ok(Value::float(lhs.to_f().powf(r.to_f())));
             }
-            Ok(Value::float(lhs.to_f()))
+            Err(MonorubyErr::typeerr(format!(
+                "{} can't be coerced into Rational",
+                rhs.get_real_class_name(&globals.store),
+            )))
         }
     }
 }

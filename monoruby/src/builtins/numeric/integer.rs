@@ -262,7 +262,7 @@ fn chr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     };
 
     match encoding {
-        Some(Encoding::Utf8) => {
+        Some(Encoding::Utf8) | Some(Encoding::UsAscii) => {
             // UTF-8 encoding: support full Unicode codepoint range
             if i < 0 || i > 0x10FFFF {
                 return Err(MonorubyErr::rangeerr(format!("{} out of char range", i)));

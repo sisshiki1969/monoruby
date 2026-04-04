@@ -13,9 +13,15 @@ pub struct RString(Value);
 pub enum Encoding {
     Ascii8,
     Utf8,
+    UsAscii,
 }
 
 impl Encoding {
+    /// Returns true if the encoding is UTF-8 compatible (UTF-8 or US-ASCII).
+    pub fn is_utf8_compatible(self) -> bool {
+        matches!(self, Encoding::Utf8 | Encoding::UsAscii)
+    }
+
     pub fn try_from_str(s: &str) -> Result<Self> {
         // Normalize: uppercase, replace '-' with '_'
         let normalized = s.to_uppercase().replace('-', "_");
@@ -26,7 +32,7 @@ impl Encoding {
             // ASCII-8BIT / BINARY
             "ASCII_8BIT" | "BINARY" => Ok(Encoding::Ascii8),
 
-            // US-ASCII (map to UTF-8 since monoruby doesn't have a separate US-ASCII type)
+            // US-ASCII
             "US_ASCII" | "ASCII" | "ANSI_X3.4_1968" | "646" => Ok(Encoding::Utf8),
 
             // Special pseudo-encoding names
@@ -166,7 +172,7 @@ impl RStringInner {
                 }
                 Ok(std::borrow::Cow::Owned(res))
             }
-            Encoding::Utf8 => match std::str::from_utf8(self) {
+            Encoding::Utf8 | Encoding::UsAscii => match std::str::from_utf8(self) {
                 Ok(s) => Ok(std::borrow::Cow::Borrowed(s)),
                 Err(err) => Err(MonorubyErr::runtimeerr(format!(
                     "invalid byte sequence: {} {}",
@@ -186,7 +192,7 @@ impl RStringInner {
                 }
                 res
             }
-            Encoding::Utf8 => {
+            Encoding::Utf8 | Encoding::UsAscii => {
                 let mut res = String::with_capacity(self.len());
                 utf8_escape_bytes(&mut res, self.as_bytes(), utf8_escape);
                 res
@@ -203,7 +209,7 @@ impl RStringInner {
                 }
                 res
             }
-            Encoding::Utf8 => {
+            Encoding::Utf8 | Encoding::UsAscii => {
                 let mut res = String::with_capacity(self.len());
                 utf8_escape_bytes(&mut res, self.as_bytes(), utf8_inspect);
                 res
@@ -214,7 +220,7 @@ impl RStringInner {
     pub fn valid(&self) -> bool {
         match self.ty {
             Encoding::Ascii8 => true,
-            Encoding::Utf8 => std::str::from_utf8(self).is_ok(),
+            Encoding::Utf8 | Encoding::UsAscii => std::str::from_utf8(self).is_ok(),
         }
     }
 }
@@ -362,7 +368,7 @@ impl RStringInner {
     pub fn char_length(&self) -> Result<usize> {
         let len = match self.ty {
             Encoding::Ascii8 => self.content.len(),
-            Encoding::Utf8 => self.check_utf8()?.chars().count(),
+            Encoding::Utf8 | Encoding::UsAscii => self.check_utf8()?.chars().count(),
         };
         Ok(len)
     }
@@ -438,7 +444,7 @@ impl RStringInner {
                     index..index + len
                 }
             }
-            Encoding::Utf8 => match std::str::from_utf8(self) {
+            Encoding::Utf8 | Encoding::UsAscii => match std::str::from_utf8(self) {
                 Ok(s) => {
                     let mut start = 0;
                     let mut end = 0;
@@ -475,7 +481,7 @@ impl RStringInner {
         let self_ascii_only = self.content.is_ascii();
         let other_ascii_only = other.content.is_ascii();
         match (self.ty, other.ty) {
-            (Encoding::Utf8, Encoding::Ascii8) => {
+            (Encoding::Utf8 | Encoding::UsAscii, Encoding::Ascii8) => {
                 if other_ascii_only {
                     // ASCII-8BIT with only ASCII bytes is compatible with UTF-8
                 } else if self_ascii_only {
@@ -488,7 +494,7 @@ impl RStringInner {
                     ));
                 }
             }
-            (Encoding::Ascii8, Encoding::Utf8) => {
+            (Encoding::Ascii8, Encoding::Utf8 | Encoding::UsAscii) => {
                 if self_ascii_only && !other_ascii_only {
                     // self is binary but ASCII-only, other has non-ASCII UTF-8 => upgrade
                     self.ty = Encoding::Utf8;
@@ -502,7 +508,7 @@ impl RStringInner {
     }
 
     pub fn extend_from_slice_checked(&mut self, slice: &[u8]) -> Result<()> {
-        if self.ty == Encoding::Utf8 && std::str::from_utf8(slice).is_err() {
+        if self.ty.is_utf8_compatible() && std::str::from_utf8(slice).is_err() {
             return Err(MonorubyErr::runtimeerr(format!(
                 "invalid byte sequence: {:?}",
                 slice
@@ -539,7 +545,7 @@ impl RStringInner {
         // Copy replacement in
         self.content[start..start + replacement.len()].copy_from_slice(replacement);
         // Re-check encoding
-        if self.ty == Encoding::Utf8 {
+        if self.ty.is_utf8_compatible() {
             if std::str::from_utf8(&self.content).is_err() {
                 self.ty = Encoding::Ascii8;
             }
@@ -554,7 +560,7 @@ impl RStringInner {
         }
         let ord = match self.ty {
             Encoding::Ascii8 => self.as_bytes()[0] as u32,
-            Encoding::Utf8 => self.check_utf8()?.chars().next().unwrap() as u32,
+            Encoding::Utf8 | Encoding::UsAscii => self.check_utf8()?.chars().next().unwrap() as u32,
         };
         Ok(ord)
     }
