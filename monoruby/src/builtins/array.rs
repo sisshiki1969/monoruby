@@ -543,7 +543,13 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_a.html]
 #[monoruby_builtin]
 fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(lfp.self_val())
+    let self_val = lfp.self_val();
+    if self_val.class() != ARRAY_CLASS {
+        let ary = self_val.as_array();
+        Ok(Value::array_from_vec(ary.to_vec()))
+    } else {
+        Ok(self_val)
+    }
 }
 
 ///
@@ -614,10 +620,11 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2b.html]
 #[monoruby_builtin]
 fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut lhs = lfp.self_val().dup().as_array();
+    let lhs = lfp.self_val().as_array();
     let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
-    lhs.extend_from_slice(&rhs);
-    Ok(lhs.into())
+    let mut v = lhs.to_vec();
+    v.extend_from_slice(&rhs);
+    Ok(Value::array_from_vec(v))
 }
 
 ///
@@ -695,7 +702,7 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=26.html]
 #[monoruby_builtin]
 fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut lhs = lfp.self_val().dup().as_array();
+    let mut lhs = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
     lhs.uniq(vm, globals)?;
     lhs.retain(|v| Ok(rhs.contains(v)))?;
@@ -710,7 +717,7 @@ fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=7c.html]
 #[monoruby_builtin]
 fn or(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut lhs = lfp.self_val().dup().as_array();
+    let mut lhs = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
     lhs.extend(rhs.iter().cloned());
     lhs.uniq(vm, globals)?;
@@ -1833,7 +1840,7 @@ fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
 #[monoruby_builtin]
 fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ary = lfp.self_val().dup().as_array();
+    let ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     let gc_enabled = Globals::gc_enable(false);
     let res = sort_inner(vm, globals, lfp, ary);
     Globals::gc_enable(gc_enabled);
@@ -1884,7 +1891,7 @@ fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
             let rhs = vm.invoke_block(globals, &data, &[rhs])?;
             Executor::compare_values(vm, globals, lhs, rhs)
         };
-        let mut ary = lfp.self_val().dup().as_array();
+        let mut ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
         let gc_enabled = Globals::gc_enable(false);
         let res = executor::op::sort_by(&mut ary, f);
         Globals::gc_enable(gc_enabled);
@@ -2427,7 +2434,7 @@ fn rotate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     } else {
         1
     };
-    let mut ary: Array = lfp.self_val().dup().as_array();
+    let mut ary: Array = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     let ary_len = ary.len() as i64;
     if ary_len == 0 {
     } else if i > 0 {
@@ -2505,7 +2512,7 @@ fn product_inner(lhs: Array, rhs: Vec<Array>) -> Vec<Array> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/union.html]
 #[monoruby_builtin]
 fn union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut ary = lfp.self_val().dup().as_array();
+    let mut ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     for rhs in lfp.arg(0).as_array().into_iter() {
         let rhs = rhs.coerce_to_array(vm, globals)?;
         ary.extend(rhs.into_iter().cloned());
@@ -2609,7 +2616,7 @@ fn intersect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/uniq.html]
 #[monoruby_builtin]
 fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut ary = lfp.self_val().dup().as_array();
+    let mut ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     match lfp.block() {
         None => ary.uniq(vm, globals)?,
         Some(bh) => uniq_block(vm, globals, ary, bh)?,
@@ -2872,7 +2879,7 @@ fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/compact.html]
 #[monoruby_builtin]
 fn compact(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut ary = lfp.self_val().dup().as_array();
+    let mut ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     ary.retain(|v| Ok(!v.is_nil()))?;
     Ok(ary.into())
 }
@@ -4837,6 +4844,85 @@ mod tests {
         run_test("[1, 2, 3].join");
         run_test(r#"[1, 2, 3].join("-")"#);
         run_test("[].join(nil)");
+        // nested arrays use same separator
+        run_test(r#"[[1, [2]], 3].join("-")"#);
+        // * with string acts like join
+        run_test(r#"[1, 2, 3] * ",""#);
+        run_test(r#"[[1, 2], [3, 4]] * "-""#);
+    }
+
+    #[test]
+    fn join_conversion_order() {
+        // to_str is tried first
+        run_test_with_prelude(
+            r#"[C.new].join"#,
+            r#"class C; def to_s; "s"; end; def to_str; "str"; end; end"#,
+        );
+        // to_ary causes recursive join
+        run_test_with_prelude(
+            r#"[C.new].join("-")"#,
+            r#"class C; def to_ary; [1, 2]; end; end"#,
+        );
+    }
+
+    #[test]
+    fn bsearch_nil_result() {
+        // nil block result treated as find-minimum (false)
+        run_test("[1, 2, 3].bsearch { nil }");
+        run_test("[1, 2, 3].bsearch_index { nil }");
+        // empty block => nil
+        run_test("[1, 2, 3, 4].bsearch { |x| nil }");
+    }
+
+    #[test]
+    fn values_at_range_padding() {
+        run_test("[1, 2, 3].values_at(1..5)");
+        run_test("[].values_at(0..2)");
+        run_test("[1, 2, 3, 4, 5].values_at(1..3)");
+        run_test("[1, 2, 3].values_at(0...5)");
+    }
+
+    #[test]
+    fn cycle_to_int_and_size() {
+        run_test("[1, 2, 3].cycle(2).to_a");
+        run_test("[1, 2, 3].cycle(0).to_a");
+        run_test("[].cycle(5).to_a");
+        // Enumerator size
+        run_test("[1, 2, 3].cycle(2).size");
+        run_test("[1, 2, 3].cycle(0).size");
+        run_test("[].cycle(2).size");
+        run_test_no_result_check("[1, 2].cycle.size");
+    }
+
+    #[test]
+    fn subclass_return_types() {
+        run_test_with_prelude("C[1,2,3].sort.class", "class C < Array; end");
+        run_test_with_prelude("(C[1,2] + [3]).class", "class C < Array; end");
+        run_test_with_prelude("(C[1,2,2] & [2,3]).class", "class C < Array; end");
+        run_test_with_prelude("(C[1,2] | [3]).class", "class C < Array; end");
+        run_test_with_prelude("C[1,2,2].uniq.class", "class C < Array; end");
+        run_test_with_prelude("C[1,nil,2].compact.class", "class C < Array; end");
+        run_test_with_prelude("C[3,1,2].rotate.class", "class C < Array; end");
+        run_test_with_prelude("C[1,2].union([3]).class", "class C < Array; end");
+        run_test_with_prelude("C[1,2,3].to_a.class", "class C < Array; end");
+        run_test_with_prelude("C[1,2,3].map { |x| x }.class", "class C < Array; end");
+    }
+
+    #[test]
+    fn pattern_arg_ignores_block() {
+        run_test("[1, 2, 3].all?(Integer) { |x| false }");
+        run_test("[1, 2, 3].any?(String) { |x| true }");
+        run_test("[1, 2, 3].count(1) { |x| true }");
+        run_test("[1, 2, 3].none?(String) { |x| true }");
+        run_test("[1, 2, 3].one?(1) { |x| false }");
+    }
+
+    #[test]
+    fn minmax_with_block() {
+        run_test("[1, 3, 2].minmax");
+        run_test("[1, 3, 2].minmax { |a, b| b <=> a }");
+        run_test("[].minmax");
+        run_test("[5].minmax");
     }
 
     #[test]

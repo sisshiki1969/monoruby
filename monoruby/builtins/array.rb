@@ -106,7 +106,7 @@ class Array
 
   def map
     return self.to_enum(:map) unless block_given?
-    res = self.dup
+    res = Array.new(self.size)
     i = 0
     while i < self.size
       res[i] = yield(self[i])
