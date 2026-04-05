@@ -1181,10 +1181,7 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let mut ary = lfp.self_val().as_array();
 
     if let Some(bh) = lfp.block() {
-        // Block form
-        // fill {|index| ... } -> self
-        // fill(start, length = nil) {|index| ... } -> self
-        // fill(range) {|index| ... } -> self
+        // Block form: fill {}, fill(start) {}, fill(start, length) {}, fill(range) {}
         let data = vm.get_block_data(globals, bh)?;
         let (start, end_idx) = if let Some(arg0) = lfp.try_arg(0) {
             if let Some(range) = arg0.is_range() {
@@ -1200,14 +1197,19 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     start
                 } as usize;
                 if let Some(len_val) = lfp.try_arg(1) {
-                    let len = len_val.coerce_to_int_i64(vm, globals)?;
-                    if len <= 0 {
-                        return Ok(ary.into());
+                    if len_val.is_nil() {
+                        // nil length means fill to end
+                        (start, ary.len())
+                    } else {
+                        let len = len_val.coerce_to_int_i64(vm, globals)?;
+                        if len <= 0 {
+                            return Ok(ary.into());
+                        }
+                        let end_idx = start
+                            .checked_add(len as usize)
+                            .ok_or_else(|| MonorubyErr::argumenterr("argument too big"))?;
+                        (start, end_idx)
                     }
-                    let end_idx = start
-                        .checked_add(len as usize)
-                        .ok_or_else(|| MonorubyErr::argumenterr("argument too big"))?;
-                    (start, end_idx)
                 } else {
                     // fill {|index| ... } -> self
                     (start, ary.len())
@@ -1224,7 +1226,7 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             ary[i] = val;
         }
     } else {
-        // Non-block form
+        // Non-block form: fill(val), fill(val, start), fill(val, start, length), fill(val, range)
         let val = if let Some(v) = lfp.try_arg(0) {
             v
         } else {
@@ -1250,18 +1252,29 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     start
                 } as usize;
                 if let Some(len_val) = lfp.try_arg(2) {
-                    let len = len_val.coerce_to_int_i64(vm, globals)?;
-                    if len <= 0 {
-                        return Ok(ary.into());
-                    }
-                    let end_idx = start
-                        .checked_add(len as usize)
-                        .ok_or_else(|| MonorubyErr::argumenterr("argument too big"))?;
-                    if end_idx > ary.len() {
-                        fill_resize(&mut ary, end_idx)?;
-                    }
-                    for i in start..end_idx {
-                        ary[i] = val;
+                    if len_val.is_nil() {
+                        // nil length means fill to end
+                        if start > ary.len() {
+                            fill_resize(&mut ary, start)?;
+                        }
+                        let len = ary.len();
+                        for i in start..len {
+                            ary[i] = val;
+                        }
+                    } else {
+                        let len = len_val.coerce_to_int_i64(vm, globals)?;
+                        if len <= 0 {
+                            return Ok(ary.into());
+                        }
+                        let end_idx = start
+                            .checked_add(len as usize)
+                            .ok_or_else(|| MonorubyErr::argumenterr("argument too big"))?;
+                        if end_idx > ary.len() {
+                            fill_resize(&mut ary, end_idx)?;
+                        }
+                        for i in start..end_idx {
+                            ary[i] = val;
+                        }
                     }
                 } else {
                     if start > ary.len() {
@@ -1375,8 +1388,28 @@ fn drop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ary = lfp.self_val().as_array();
     let mut args_ary = vec![];
+    let each_id = IdentId::get_id("each");
     for a in lfp.arg(0).as_array().iter() {
-        args_ary.push(a.coerce_to_array(vm, globals)?.to_vec());
+        // Try to_ary first, then fall back to collecting via #each
+        if let Ok(ary) = a.coerce_to_array(vm, globals) {
+            args_ary.push(ary.to_vec());
+        } else if globals.check_method(*a, each_id).is_some() {
+            let to_a_id = IdentId::get_id("to_a");
+            let result = vm.invoke_method_inner(globals, to_a_id, *a, &[], None, None)?;
+            if let Some(ary) = result.try_array_ty() {
+                args_ary.push(ary.to_vec());
+            } else {
+                return Err(MonorubyErr::typeerr(format!(
+                    "no implicit conversion of {} into Array",
+                    a.get_real_class_name(&globals.store),
+                )));
+            }
+        } else {
+            return Err(MonorubyErr::typeerr(format!(
+                "no implicit conversion of {} into Array",
+                a.get_real_class_name(&globals.store),
+            )));
+        }
     }
     let mut ary = Array::new_empty();
     for (i, val) in self_ary.iter().enumerate() {
@@ -3583,6 +3616,18 @@ mod tests {
     }
 
     #[test]
+    fn index_negative_count_nil() {
+        // Negative index beyond array size with count returns nil
+        run_test("[1, 2, 3][-10, 2]");
+        // Negative index within range works normally
+        run_test("[1, 2, 3][-2, 2]");
+        // Positive index beyond array size with count returns nil
+        run_test("[1, 2, 3][4, 2]");
+        // At end returns empty
+        run_test("[1, 2, 3][3, 2]");
+    }
+
+    #[test]
     fn fill() {
         run_test(
             r##"
@@ -3678,6 +3723,20 @@ mod tests {
             a.fill(..2) { |i| i * 10 }
             a"##,
         );
+        // fill(val, start, nil) means fill to end
+        run_test(
+            r##"
+            a = [0, 1, 2, 3, 4]
+            a.fill(:a, 1, nil)
+            a"##,
+        );
+        // fill with block(start, nil) means fill to end
+        run_test(
+            r##"
+            a = [0, 1, 2, 3, 4]
+            a.fill(1, nil) { |i| i * 10 }
+            a"##,
+        );
     }
 
     #[test]
@@ -3702,6 +3761,8 @@ mod tests {
             a
         "##,
         );
+        // zip with enumerator / non-array enumerable (uses #each fallback)
+        run_test("[1, 2, 3].zip((4..6))");
     }
 
     #[test]
