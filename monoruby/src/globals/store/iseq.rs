@@ -61,6 +61,21 @@ pub struct JitInfo {
 }
 
 ///
+/// Hint for ISeq optimization.
+/// When an ISeq is detected as a trivial method during bytecode compilation,
+/// the interpreter and JIT can skip method frame creation.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ISeqHint {
+    /// Normal method, no optimization hint.
+    Normal,
+    /// Always returns the same constant value (e.g. `def nil?; false; end`).
+    ConstReturn(Immediate),
+    /// Always returns self (e.g. `def to_s; self; end`).
+    SelfReturn,
+}
+
+///
 /// Information of instruction sequences.
 ///
 #[derive(Clone)]
@@ -142,6 +157,10 @@ pub struct ISeqInfo {
     /// Map for BcIndex to CallsiteId.
     ///
     pub(super) callsite_map: HashMap<BcIndex, CallSiteId>,
+    ///
+    /// Optimization hint detected during bytecode compilation.
+    ///
+    pub(crate) hint: ISeqHint,
 }
 
 impl std::fmt::Debug for ISeqInfo {
@@ -196,6 +215,7 @@ impl ISeqInfo {
             jit_invalidated: false,
             bb_info: BasicBlockInfo::default(),
             callsite_map: HashMap::default(),
+            hint: ISeqHint::Normal,
         }
     }
 

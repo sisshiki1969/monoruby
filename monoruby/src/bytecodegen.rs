@@ -628,22 +628,35 @@ impl<'a> BytecodeGen<'a> {
         }
 
         let ast = info.ast;
-        let is_const = if !self.is_block()
-            && self.ir.len() == 1
-            && let NodeKind::Return(box ret) = &ast.kind
-        {
-            match &ret.kind {
-                NodeKind::Nil => Some(Immediate::nil()),
-                NodeKind::Bool(b) => Some(Immediate::bool(*b)),
-                NodeKind::Integer(i) => Immediate::check_fixnum(*i),
+        // Detect trivial methods: no params, no blocks, single-expression body.
+        let hint = if !self.is_block() && self.ir.len() == 1 {
+            // Extract the effective return expression (explicit return or implicit body)
+            let ret_node = match &ast.kind {
+                NodeKind::Return(box ret) => Some(&ret.kind),
+                NodeKind::Begin {
+                    body,
+                    rescue,
+                    else_,
+                    ensure,
+                } if rescue.is_empty() && else_.is_none() && ensure.is_none() => {
+                    Some(&body.kind)
+                }
+                kind => Some(kind),
+            };
+            ret_node.and_then(|kind| match kind {
+                NodeKind::Nil => Some(ISeqHint::ConstReturn(Immediate::nil())),
+                NodeKind::Bool(b) => Some(ISeqHint::ConstReturn(Immediate::bool(*b))),
+                NodeKind::Integer(i) => {
+                    Immediate::check_fixnum(*i).map(ISeqHint::ConstReturn)
+                }
+                NodeKind::SelfValue => Some(ISeqHint::SelfReturn),
                 _ => None,
-            }
+            })
         } else {
             None
         };
-        if let Some(imm) = is_const {
-            self.store[self.func_id].kind = FuncKind::Const(imm);
-            return Ok(());
+        if let Some(hint) = hint {
+            self.store[self.iseq_id].hint = hint;
         }
         self.apply_label(self.redo_label);
         self.gen_expr(ast, UseMode2::Ret)?;

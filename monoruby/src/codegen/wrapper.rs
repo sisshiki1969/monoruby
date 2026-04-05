@@ -6,15 +6,31 @@ impl Codegen {
         let entry = self.jit.label();
         self.jit.bind_label(entry.clone());
         match &globals.store[fid].kind {
-            FuncKind::ISeq(_) => {
-                if !no_jit && !cfg!(feature = "no-jit") {
-                    self.gen_jit_stub();
-                } else {
-                    self.gen_vm_stub()
+            FuncKind::ISeq(iseq) => {
+                match globals.store[*iseq].hint {
+                    ISeqHint::ConstReturn(imm) => {
+                        // Trivial method: return constant immediately without
+                        // frame creation or bytecode execution.
+                        monoasm!( &mut self.jit,
+                            movq rax, (imm.id());
+                            ret;
+                        );
+                    }
+                    ISeqHint::SelfReturn => {
+                        // Trivial method: return self (LFP_SELF) immediately.
+                        monoasm!( &mut self.jit,
+                            movq rax, [r14 - (LFP_SELF)];
+                            ret;
+                        );
+                    }
+                    ISeqHint::Normal => {
+                        if !no_jit && !cfg!(feature = "no-jit") {
+                            self.gen_jit_stub();
+                        } else {
+                            self.gen_vm_stub()
+                        }
+                    }
                 }
-            }
-            FuncKind::Const(imm) => {
-                self.gen_const_fn(*imm);
             }
             FuncKind::Proc(proc) => {
                 //self.vm_execute_gc();
@@ -116,16 +132,6 @@ impl Codegen {
             call rax;   // CALL_SITE
 
             leave;
-            ret;
-        );
-    }
-
-    ///
-    /// Generate a function that always returns the constant value.
-    ///
-    fn gen_const_fn(&mut self, imm: Immediate) {
-        monoasm!( &mut self.jit,
-            movq rax, (imm.id());
             ret;
         );
     }
