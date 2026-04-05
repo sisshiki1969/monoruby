@@ -215,16 +215,18 @@ impl Codegen {
                 );
                 #[cfg(feature = "jit-log")]
                 {
-                    eprintln!(
-                        "{} {} {position:?} ({} bytes, {} bytes) {elapsed:?}",
-                        globals
-                            .store
-                            .func_description(globals.store[iseq_id].func_id()),
-                        globals.store.debug_class_name(self_class),
-                        span.0.1,
-                        span.1.1
-                    );
-                    eprintln!("{}", specialized_info.format(&globals.store));
+                    if self.startup_flag {
+                        eprintln!(
+                            "{} {} {position:?} ({} bytes, {} bytes) {elapsed:?}",
+                            globals
+                                .store
+                                .func_description(globals.store[iseq_id].func_id()),
+                            globals.store.debug_class_name(self_class),
+                            span.0.1,
+                            span.1.1
+                        );
+                        eprintln!("{}", specialized_info.format(&globals.store));
+                    }
                 }
                 self.add_compilation_unit(
                     iseq_id,

@@ -628,34 +628,7 @@ impl<'a> BytecodeGen<'a> {
         }
 
         let ast = info.ast;
-        // Detect trivial methods: no params, no blocks, single-expression body.
-        let hint = if !self.is_block() && self.ir.len() == 1 {
-            // Extract the effective return expression (explicit return or implicit body)
-            let ret_node = match &ast.kind {
-                NodeKind::Return(box ret) => Some(&ret.kind),
-                NodeKind::Begin {
-                    body,
-                    rescue,
-                    else_,
-                    ensure,
-                } if rescue.is_empty() && else_.is_none() && ensure.is_none() => {
-                    Some(&body.kind)
-                }
-                kind => Some(kind),
-            };
-            ret_node.and_then(|kind| match kind {
-                NodeKind::Nil => Some(ISeqHint::ConstReturn(Immediate::nil())),
-                NodeKind::Bool(b) => Some(ISeqHint::ConstReturn(Immediate::bool(*b))),
-                NodeKind::Integer(i) => {
-                    Immediate::check_fixnum(*i).map(ISeqHint::ConstReturn)
-                }
-                NodeKind::SelfValue => Some(ISeqHint::SelfReturn),
-                _ => None,
-            })
-        } else {
-            None
-        };
-        if let Some(hint) = hint {
+        if let Some(hint) = self.hint(&ast) {
             self.store[self.iseq_id].hint = hint;
         }
         self.apply_label(self.redo_label);
@@ -663,6 +636,39 @@ impl<'a> BytecodeGen<'a> {
         self.replace_init(&info.params);
         self.iseq_mut().loc = info.loc;
         self.into_bytecode()
+    }
+
+    fn hint(&self, ast: &Node) -> Option<ISeqHint> {
+        // Detect trivial methods: no params, no blocks, single-expression body.
+        if let NodeKind::Begin {
+            body,
+            rescue,
+            else_: None,
+            ensure: None,
+        } = &ast.kind
+            && rescue.is_empty()
+        {
+            let kind = match &body.kind {
+                NodeKind::CompStmt(nodes) if nodes.len() == 0 => {
+                    // def foo; end
+                    return Some(ISeqHint::ConstReturn(Immediate::nil()));
+                }
+                NodeKind::Return(box ret) => {
+                    // def foo; return expr; end
+                    &ret.kind
+                }
+                kind => kind,
+            };
+            match kind {
+                NodeKind::Nil => Some(ISeqHint::ConstReturn(Immediate::nil())),
+                NodeKind::Bool(b) => Some(ISeqHint::ConstReturn(Immediate::bool(*b))),
+                NodeKind::Integer(i) => Immediate::check_fixnum(*i).map(ISeqHint::ConstReturn),
+                NodeKind::SelfValue => Some(ISeqHint::SelfReturn),
+                _ => None,
+            }
+        } else {
+            None
+        }
     }
 
     fn is_block(&self) -> bool {

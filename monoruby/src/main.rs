@@ -118,8 +118,9 @@ fn main() {
         (code, std::path::PathBuf::from("-"))
     };
     if args.ast {
-        if let Err(err) = ruruby_parse::Parser::parse_program(code, path) {
-            handle_error(MonorubyErr::parse(err), &globals);
+        match ruruby_parse::Parser::parse_program(code, path) {
+            Ok(res) => eprintln!("{:#?}", res.node),
+            Err(err) => handle_error(MonorubyErr::parse(err), &globals),
         }
     } else if let Err(err) = globals.run(code, &path) {
         handle_error(err, &globals);
