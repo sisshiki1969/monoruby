@@ -176,12 +176,22 @@ impl<'a> JitContext<'a> {
                 return Ok(self.attr_writer(state, ir, callid, recv_class, ivar_name));
             }
             FuncKind::Builtin { .. } => (func_id, None),
-            FuncKind::Const(v) => {
-                state.def_C(dst, v);
-                return Ok(CompileResult::Continue);
-            }
             FuncKind::Proc(proc) => (proc.func_id(), Some(proc.outer_lfp())),
             FuncKind::ISeq(iseq) => {
+                // Check ISeq hint for trivial methods
+                match self.store[iseq].hint {
+                    ISeqHint::ConstReturn(v) => {
+                        state.def_C(dst, v);
+                        return Ok(CompileResult::Continue);
+                    }
+                    ISeqHint::SelfReturn => {
+                        if let Some(dst) = dst {
+                            state.copy_slot(ir, callsite.recv, dst);
+                        }
+                        return Ok(CompileResult::Continue);
+                    }
+                    ISeqHint::Normal => {}
+                }
                 let specializable = self.store.is_simple_call(func_id, callid)
                     && (state.is_C(callsite.recv)
                         || (pos_num != 0 && (args..args + pos_num).any(|i| state.is_C(i))));
