@@ -376,8 +376,9 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/length.html]
 #[monoruby_builtin]
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
     let rhs_v = lfp.arg(0);
-    let lhs = lfp.self_val().as_hash();
+    let lhs = self_val.as_hash();
     let rhs = if let Some(rhs) = rhs_v.try_hash_ty() {
         rhs
     } else {
@@ -386,16 +387,18 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     if lhs.len() != rhs.len() {
         return Ok(Value::bool(false));
     }
-    for (k, lhs_value) in lhs.iter() {
-        if let Some(rhs_value) = rhs.get(k, vm, globals)?
-            && vm.eq_values_bool(globals, lhs_value, rhs_value)?
-        {
-            continue;
-        } else {
-            return Ok(Value::bool(false));
+    crate::value::exec_recursive_paired(self_val.id(), rhs_v.id(), || {
+        for (k, lhs_value) in lhs.iter() {
+            if let Some(rhs_value) = rhs.get(k, vm, globals)?
+                && vm.eq_values_bool(globals, lhs_value, rhs_value)?
+            {
+                continue;
+            } else {
+                return Ok(Value::bool(false));
+            }
         }
-    }
-    Ok(Value::bool(true))
+        Ok(Value::bool(true))
+    }, Value::bool(true))
 }
 
 /// Check if all key-value pairs in `sub` exist in `sup`.
@@ -1439,6 +1442,14 @@ mod tests {
         run_test(r##"{a:4} == {a:5}"##);
         run_test(r##"{a:4} == {a:5, b:7}"##);
         run_test(r##"{a:4} == :a"##);
+    }
+
+    #[test]
+    fn eq_recursive() {
+        // Self-referencing hash: h == h should return true, not stack overflow
+        run_test("h = {}; h[:a] = h; h == h");
+        // Two distinct recursive hashes with same structure
+        run_test("a = {}; a[:x] = a; b = {}; b[:x] = b; a == b");
     }
 
     #[test]

@@ -198,6 +198,7 @@ impl GC<RValue> for Value {
 thread_local! {
     static HASH_RECURSION_GUARD: std::cell::RefCell<HashSet<u64>> = std::cell::RefCell::new(HashSet::new());
     static INSPECT_RECURSION_GUARD: std::cell::RefCell<HashSet<u64>> = std::cell::RefCell::new(HashSet::new());
+    static COMPARE_RECURSION_GUARD: std::cell::RefCell<HashSet<(u64, u64)>> = std::cell::RefCell::new(HashSet::new());
 }
 
 /// Execute `f` with recursion protection for inspect/to_s.
@@ -212,6 +213,32 @@ where
     }
     let result = f();
     INSPECT_RECURSION_GUARD.with(|guard| guard.borrow_mut().remove(&id));
+    result
+}
+
+/// Execute `f` with recursion protection for paired operations (==, <=>, eql?).
+///
+/// Uses a `(lhs_id, rhs_id)` pair to detect when the same pair of containers
+/// is being compared recursively. Works for Array, Hash, Set, and any
+/// container type.
+///
+/// If the pair is already being compared, returns `on_recursive` immediately.
+pub(crate) fn exec_recursive_paired<F>(
+    lhs_id: u64,
+    rhs_id: u64,
+    f: F,
+    on_recursive: Value,
+) -> Result<Value>
+where
+    F: FnOnce() -> Result<Value>,
+{
+    let pair = (lhs_id, rhs_id);
+    let is_recursive = COMPARE_RECURSION_GUARD.with(|guard| !guard.borrow_mut().insert(pair));
+    if is_recursive {
+        return Ok(on_recursive);
+    }
+    let result = f();
+    COMPARE_RECURSION_GUARD.with(|guard| guard.borrow_mut().remove(&pair));
     result
 }
 
