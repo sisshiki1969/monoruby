@@ -379,7 +379,10 @@ impl ArrayInner {
     ) -> Result<Value> {
         let index = arg0.coerce_to_int_i64(vm, globals)?;
         let self_len = self.len();
-        let index = self.get_array_index(index).unwrap_or(self_len);
+        let index = match self.get_array_index(index) {
+            Some(i) => i,
+            None => return Ok(Value::nil()), // negative index beyond array size
+        };
         let len = arg1.coerce_to_int_i64(vm, globals)?;
         let val = if len < 0 || index > self_len {
             Value::nil()
