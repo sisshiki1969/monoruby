@@ -1798,9 +1798,31 @@ fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
         let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
-            let res = vm
-                .invoke_block(globals, &data, &[lhs, rhs])?
-                .coerce_to_int_i64(vm, globals)?;
+            let block_res = vm.invoke_block(globals, &data, &[lhs, rhs])?;
+            if block_res.is_nil() {
+                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
+            }
+            // Try to use <=> with 0 for non-Integer results
+            let res = match block_res.try_fixnum() {
+                Some(i) => i,
+                None => {
+                    // Try coercing via <=> with 0
+                    let cmp = vm.invoke_method_inner(
+                        globals,
+                        IdentId::_CMP,
+                        block_res,
+                        &[Value::integer(0)],
+                        None,
+                        None,
+                    )?;
+                    if cmp.is_nil() {
+                        return Err(MonorubyErr::argumenterr(
+                            "comparison of elements failed",
+                        ));
+                    }
+                    cmp.coerce_to_int_i64(vm, globals)?
+                }
+            };
             Ok(match res {
                 0 => std::cmp::Ordering::Equal,
                 res if res < 0 => std::cmp::Ordering::Less,
@@ -2364,8 +2386,8 @@ fn reverse_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reverse.html]
 #[monoruby_builtin]
 fn transpose(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
@@ -2373,17 +2395,13 @@ fn transpose(
     if ary.len() == 0 {
         return Ok(Value::array_empty());
     }
-    let len = ary[0]
-        .try_array_ty()
-        .ok_or_else(|| MonorubyErr::argumenterr("Each element of receiver must be an array."))?
-        .len();
+    let first = coerce_to_array_for_transpose(vm, globals, ary[0])?;
+    let len = first.len();
     let mut trans = Array::new_empty();
     for i in 0..len {
         let mut temp = Array::new_empty();
         for v in ary.iter() {
-            let a = v.try_array_ty().ok_or_else(|| {
-                MonorubyErr::argumenterr("Each element of receiver must be an array.")
-            })?;
+            let a = coerce_to_array_for_transpose(vm, globals, *v)?;
             if a.len() != len {
                 return Err(MonorubyErr::indexerr("Element size differs."));
             }
@@ -2392,6 +2410,27 @@ fn transpose(
         trans.push(temp.into());
     }
     Ok(trans.into())
+}
+
+fn coerce_to_array_for_transpose(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+) -> Result<Array> {
+    if let Some(ary) = val.try_array_ty() {
+        return Ok(ary);
+    }
+    // Try to_ary
+    if let Some(fid) = globals.check_method(val, IdentId::TO_ARY) {
+        let ret = vm.invoke_func_inner(globals, fid, val, &[], None, None)?;
+        if let Some(ary) = ret.try_array_ty() {
+            return Ok(ary);
+        }
+    }
+    Err(MonorubyErr::typeerr(format!(
+        "no implicit conversion of {} into Array",
+        val.get_real_class_name(globals)
+    )))
 }
 
 ///
@@ -2976,21 +3015,24 @@ fn find_index(
     pc: BytecodePtr,
 ) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, bh)?;
-        for (i, v) in ary.iter().enumerate() {
-            if vm.invoke_block(globals, &data, &[*v])?.as_bool() {
-                return Ok(Value::integer(i as i64));
-            }
+    if let Some(arg0) = lfp.try_arg(0) {
+        if lfp.block().is_some() {
+            eprintln!("warning: given block not used");
         }
-        Ok(Value::nil())
-    } else if let Some(arg0) = lfp.try_arg(0) {
         let func_id = vm.find_method(globals, arg0, IdentId::_EQ, false)?;
         for (i, v) in ary.iter().enumerate() {
             if vm
                 .invoke_func_inner(globals, func_id, arg0, &[*v], None, None)?
                 .as_bool()
             {
+                return Ok(Value::integer(i as i64));
+            }
+        }
+        Ok(Value::nil())
+    } else if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        for (i, v) in ary.iter().enumerate() {
+            if vm.invoke_block(globals, &data, &[*v])?.as_bool() {
                 return Ok(Value::integer(i as i64));
             }
         }
@@ -4875,10 +4917,42 @@ mod tests {
     }
 
     #[test]
+    fn sort_block_nil_and_cmp() {
+        // block returning nil raises ArgumentError
+        run_test_error("[1, 2].sort {}");
+        // block with <=> comparison
+        run_test("[1, 2, 5, 10, 7, -4, 12].sort { |n, m| n - m }");
+    }
+
+    #[test]
+    fn transpose_to_ary() {
+        run_test("[[1, 2], [3, 4]].transpose");
+        run_test_with_prelude(
+            "[[1, 2], C.new].transpose",
+            "class C; def to_ary; [3, 4]; end; end",
+        );
+    }
+
+    #[test]
+    fn index_ignores_block_with_arg() {
+        run_test("[1, 2, 3].index(2) { |x| false }");
+        run_test("[1, 2, 3].rindex(2) { |x| false }");
+    }
+
+    #[test]
+    fn map_bang_frozen() {
+        run_test_error("[1, 2, 3].freeze.map! { |x| x }");
+        run_test_error("[].freeze.map! { |x| x }");
+    }
+
+    #[test]
     fn values_at_range_padding() {
         run_test("[1, 2, 3].values_at(1..5)");
         run_test("[].values_at(0..2)");
         run_test("[1, 2, 3, 4, 5].values_at(1..3)");
+        // endless range
+        run_test("[1, 2, 3, 4].values_at(1..)");
+        run_test("[1, 2, 3, 4].values_at(3...)");
         run_test("[1, 2, 3].values_at(0...5)");
     }
 

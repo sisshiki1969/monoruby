@@ -56,4 +56,15 @@ ruby --yjit ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/La
 diff -s monoruby.log ruby.log
 rm *.log
 
+# Run ruby/spec if ../spec and ../mspec exist (for coverage)
+if [ -d "../spec" ] && [ -d "../mspec" ]; then
+  echo "Running ruby/spec for coverage..."
+  cd ../spec
+  for cat in basicobject true false nil; do
+    echo "=== core/$cat ==="
+    ../mspec/bin/mspec core/$cat -t $OLDPWD/target/debug/monoruby
+  done
+  cd $OLDPWD
+fi
+
 cargo llvm-cov report --lcov --output-path lcov.info
