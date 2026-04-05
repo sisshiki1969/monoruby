@@ -130,28 +130,42 @@ module Enumerable
   end
 
   def none?(*pattern)
-    if block_given?
-      self.each do |x|
-        return false if yield(x)
+    if !pattern.empty?
+      if pattern.size != 1
+        raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
       end
-    elsif pattern.empty?
-      self.each do |x|
-        return false if x
-      end
-    elsif pattern.size == 1
+      warn "warning: given block not used" if block_given?
       pat = pattern[0]
       self.each do |x|
         return false if pat === x
       end
+    elsif block_given?
+      self.each do |x|
+        return false if yield(x)
+      end
     else
-      raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
+      self.each do |x|
+        return false if x
+      end
     end
     true
   end
 
   def one?(*pattern)
     n = 0
-    if block_given?
+    if !pattern.empty?
+      if pattern.size != 1
+        raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
+      end
+      warn "warning: given block not used" if block_given?
+      pat = pattern[0]
+      self.each do |x|
+        if pat === x
+          n += 1
+          return false if n > 1
+        end
+      end
+    elsif block_given?
       self.each do |x|
         if yield(x)
           n += 1
@@ -161,14 +175,6 @@ module Enumerable
     elsif pattern.empty?
       self.each do |x|
         if x
-          n += 1
-          return false if n > 1
-        end
-      end
-    elsif pattern.size == 1
-      pat = pattern[0]
-      self.each do |x|
-        if pat === x
           n += 1
           return false if n > 1
         end
@@ -485,8 +491,23 @@ module Enumerable
     m
   end
 
-  def minmax
-    [min, max]
+  def minmax(&block)
+    if block
+      mn = nil
+      mx = nil
+      self.each do |x|
+        if mn.nil?
+          mn = x
+          mx = x
+        else
+          mn = x if block.call(x, mn) < 0
+          mx = x if block.call(x, mx) > 0
+        end
+      end
+      [mn, mx]
+    else
+      [min, max]
+    end
   end
 
   def uniq

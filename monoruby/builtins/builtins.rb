@@ -896,11 +896,18 @@ class Array
     result = []
     selectors.each do |s|
       if s.is_a?(Range)
-        r = self[s]
-        if r
-          result.concat(r)
-        else
-          result << nil
+        b = s.begin
+        e = s.end
+        b = b.nil? ? 0 : b.to_int
+        e = e.nil? ? size - 1 : e.to_int
+        b += size if b < 0
+        e += size if e < 0
+        e -= 1 if s.exclude_end?
+        next if b < 0
+        i = b
+        while i <= e
+          result << self[i]
+          i += 1
         end
       else
         result << self[s]
