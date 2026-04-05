@@ -3,6 +3,11 @@ class Integer
   #  self + 1
   #end
 
+  def to_i
+    self
+  end
+  alias to_int to_i
+
   def dup
     self
   end

@@ -23,7 +23,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(NUMERIC_CLASS, "%", &["module"], rem, 1);
     globals.define_builtin_func(NUMERIC_CLASS, "**", pow, 1);
     globals.define_builtin_func(NUMERIC_CLASS, "-@", neg, 0);
-    globals.define_builtin_func(NUMERIC_CLASS, "+@", pos, 0);
     globals.define_builtin_func(NUMERIC_CLASS, "~", bitnot, 0);
     globals.define_builtin_funcs(NUMERIC_CLASS, "angle", &["arg", "phase"], angle, 0);
 }
@@ -123,17 +122,6 @@ macro_rules! unop {
 }
 
 unop!(neg, bitnot);
-
-///
-/// ### Integer#+@
-///
-/// - + self -> Integer
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/=2b=40.html]
-#[monoruby_builtin]
-fn pos(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(lfp.self_val())
-}
 
 ///
 /// ### Numeric#angle

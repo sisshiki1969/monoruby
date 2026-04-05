@@ -85,6 +85,10 @@ end
 
 class Set
   include Enumerable
+
+  def to_set
+    self
+  end
 end
 
 class Hash
@@ -245,6 +249,10 @@ class Module
   def ruby2_keywords(*)
     # no-op for compatibility
   end
+
+  def deprecate_constant(*)
+    self
+  end
 end
 
 class File
@@ -285,6 +293,11 @@ class File
 end
 
 class String
+  def to_s
+    self
+  end
+  alias to_str to_s
+
   def insert(index, other)
     index = index.is_a?(Integer) ? index : __to_int(index)
     if index < 0
@@ -475,6 +488,10 @@ class String
 end
 
 class Float
+  def to_f
+    self
+  end
+
   def zero?
     self == 0.0
   end

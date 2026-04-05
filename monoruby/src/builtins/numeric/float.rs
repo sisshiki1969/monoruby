@@ -21,8 +21,6 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.set_constant_by_str(FLOAT_CLASS, "MANT_DIG", Value::integer(f64::MANTISSA_DIGITS as i64));
     globals.set_constant_by_str(FLOAT_CLASS, "RADIX", Value::integer(f64::RADIX as i64));
     globals.define_builtin_funcs(FLOAT_CLASS, "to_i", &["to_int"], toi, 0);
-    globals.define_builtin_func(FLOAT_CLASS, "to_f", tof, 0);
-
     globals.define_basic_op(FLOAT_CLASS, "+", add, 1);
     globals.define_basic_op(FLOAT_CLASS, "-", sub, 1);
     globals.define_basic_op(FLOAT_CLASS, "*", mul, 1);
@@ -77,17 +75,6 @@ extern "C" fn div_ff_f(lhs: f64, rhs: f64) -> f64 {
 
 extern "C" fn rem_ff_f(lhs: f64, rhs: f64) -> f64 {
     lhs.ruby_mod(&rhs)
-}
-
-///
-/// ### Float#to_f
-///
-/// - to_f -> self
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/to_f.html]
-#[monoruby_builtin]
-fn tof(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(lfp.self_val())
 }
 
 ///

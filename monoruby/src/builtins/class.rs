@@ -36,11 +36,11 @@ pub(super) fn init(globals: &mut Globals) {
         true,
     );
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
-    // hook method (no-op by default)
+    // hook method (no-op by default, overridden by startup.rb)
     globals.define_private_builtin_func(CLASS_CLASS, "inherited", class_noop_hook, 1);
 }
 
-/// No-op hook for Class#inherited.
+/// No-op hook for Class#inherited (overridden by startup.rb).
 #[monoruby_builtin]
 fn class_noop_hook(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::nil())

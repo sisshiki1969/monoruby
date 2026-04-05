@@ -44,7 +44,6 @@ pub(super) fn init(globals: &mut Globals) {
         false,
         Effect::CAPTURE,
     );
-    globals.define_builtin_func_rest(MODULE_CLASS, "deprecate_constant", deprecate_constant);
     globals.define_builtin_func_with(
         MODULE_CLASS,
         "instance_methods",
@@ -115,7 +114,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_private_builtin_func_rest(MODULE_CLASS, "private", private);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "protected", protected);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "public", public);
-    // hook methods (no-op by default)
+    // hook methods (no-op by default, overridden by startup.rb)
     globals.define_private_builtin_func(MODULE_CLASS, "method_added", module_noop_hook, 1);
     globals.define_private_builtin_func(MODULE_CLASS, "method_removed", module_noop_hook, 1);
     globals.define_private_builtin_func(MODULE_CLASS, "method_undefined", module_noop_hook, 1);
@@ -126,6 +125,7 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 /// No-op hook for method_added/removed/undefined, included/prepended/extended, const_added.
+/// Required during bootstrap before startup.rb overrides them.
 #[monoruby_builtin]
 fn module_noop_hook(
     _: &mut Executor,
@@ -520,24 +520,6 @@ fn define_method(
     };
     vm.add_public_method(globals, class_id, name, func_id)?;
     Ok(Value::symbol(name))
-}
-
-///
-/// Module#deprecate_constant
-///
-/// - deprecate_constant(*name) -> self
-///
-/// TODO: implement
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/deprecate_constant.html]
-#[monoruby_builtin]
-fn deprecate_constant(
-    _: &mut Executor,
-    _: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    Ok(lfp.self_val())
 }
 
 ///

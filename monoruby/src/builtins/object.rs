@@ -61,6 +61,7 @@ pub(super) fn init(globals: &mut Globals) {
         "method_missing",
         bo_method_missing,
     );
+    // hook methods (no-op by default, overridden by startup.rb)
     globals.define_private_builtin_func(
         BASIC_OBJECT_CLASS,
         "singleton_method_added",
@@ -89,7 +90,7 @@ fn bo_initialize(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -
     Ok(Value::nil())
 }
 
-/// No-op hook for singleton_method_added/removed/undefined on BasicObject.
+/// No-op hook for singleton_method_added/removed/undefined (overridden by startup.rb).
 #[monoruby_builtin]
 fn bo_noop_hook(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::nil())

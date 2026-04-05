@@ -24,7 +24,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "close_write", close_write, 0);
     globals.define_builtin_func(IO_CLASS, "close_read", close_read, 0);
     globals.define_builtin_func(IO_CLASS, "closed?", closed_, 0);
-    globals.define_builtin_func(IO_CLASS, "sync", sync, 0);
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
     globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 2, false);
     globals.define_builtin_func_with(IO_CLASS, "readline", readline, 0, 2, false);
@@ -42,8 +41,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with(IO_CLASS, "copy_stream", io_copy_stream, 2, 4, false);
     globals.define_builtin_func_with(IO_CLASS, "set_encoding", set_encoding, 1, 3, false);
     globals.define_builtin_func(IO_CLASS, "external_encoding", external_encoding, 0);
-    globals.define_builtin_func(IO_CLASS, "internal_encoding", internal_encoding, 0);
-
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
     globals.set_gvar(IdentId::get_id("$stdin"), stdin);
@@ -330,11 +327,6 @@ fn close_read(
 #[monoruby_builtin]
 fn closed_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_io_inner().is_closed()))
-}
-
-#[monoruby_builtin]
-fn sync(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(false))
 }
 
 #[monoruby_builtin]
@@ -1097,22 +1089,6 @@ fn external_encoding(
 }
 
 ///
-/// ### IO#internal_encoding
-///
-/// - internal_encoding -> Encoding | nil
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/internal_encoding.html]
-///
-/// Stub: always returns nil (no transcoding).
-#[monoruby_builtin]
-fn internal_encoding(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    Ok(Value::nil())
-}
 
 ///
 /// ### IO.copy_stream

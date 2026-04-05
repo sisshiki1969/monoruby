@@ -16,9 +16,6 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, "upto", upto, 1);
     globals.define_builtin_func(INTEGER_CLASS, "downto", downto, 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "to_f", to_f, Box::new(integer_tof), 0);
-    globals.define_builtin_func(INTEGER_CLASS, "to_i", to_i, 0);
-    globals.define_builtin_func(INTEGER_CLASS, "to_int", to_i, 0);
-
     globals.define_basic_op(INTEGER_CLASS, "+", add, 1);
     globals.define_basic_op(INTEGER_CLASS, "-", sub, 1);
     globals.define_basic_op(INTEGER_CLASS, "*", mul, 1);
@@ -407,16 +404,6 @@ fn integer_tof(
 
 ///
 /// ### Integer#to_i
-///
-/// - to_i -> self
-/// - to_int -> self
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/to_i.html]
-#[monoruby_builtin]
-fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(lfp.self_val())
-}
-
 /// ### Integer#eql?
 ///
 /// - eql?(other) -> bool

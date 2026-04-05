@@ -5,6 +5,34 @@
 class Rational
   include Comparable
 
+  def to_r
+    self
+  end
+
+  def +@
+    self
+  end
+
+  def freeze
+    self
+  end
+
+  def frozen?
+    true
+  end
+
+  def finite?
+    true
+  end
+
+  def infinite?
+    nil
+  end
+
+  def integer?
+    false
+  end
+
   def dup
     self
   end

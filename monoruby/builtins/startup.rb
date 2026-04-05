@@ -597,6 +597,10 @@ class GC
   def self.auto_compact=(x)
   end
 
+  def self.count
+    0
+  end
+
   def self.start(**opts)
   end
 
@@ -608,6 +612,14 @@ class IO
   SEEK_SET = 0
   SEEK_CUR = 1
   SEEK_END = 2
+
+  def sync
+    false
+  end
+
+  def internal_encoding
+    nil
+  end
 
   def self.for_fd(fd, mode = nil, **opts)
     new(fd, mode, **opts)
@@ -621,6 +633,10 @@ class Encoding
   class InvalidByteSequenceError < EncodingError; end
   class UndefinedConversionError < EncodingError; end
   class Converter; end
+
+  def self.default_internal
+    nil
+  end
 end
 
 TOPLEVEL_BINDING = binding
@@ -629,6 +645,10 @@ require_relative 'comparable'
 
 class Numeric
   include Comparable
+
+  def +@
+    self
+  end
 end
 
 require_relative 'enumerable'

@@ -7,10 +7,8 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_toplevel_module("GC").id();
     globals.define_builtin_module_func_with(klass, "stat", stat, 0, 1, false);
-    globals.define_builtin_module_func(klass, "count", count, 0);
     globals.define_builtin_module_func(klass, "enable", enable, 0);
     globals.define_builtin_module_func(klass, "disable", disable, 0);
-    globals.define_builtin_module_func(klass, "start", start, 0);
 }
 
 ///
@@ -73,17 +71,6 @@ fn stat(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 }
 
 ///
-/// ### GC.count
-///
-/// - count -> Integer
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/GC/s/count.html]
-#[monoruby_builtin]
-fn count(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::integer(0))
-}
-
-///
 /// ### GC.enable
 ///
 /// - enable -> bool
@@ -110,17 +97,6 @@ fn disable(
 ) -> Result<Value> {
     let was_disabled = !Globals::gc_enable(false);
     Ok(Value::bool(was_disabled))
-}
-
-///
-/// ### GC.start
-///
-/// - start -> nil
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/GC/s/start.html]
-#[monoruby_builtin]
-fn start(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::nil())
 }
 
 #[cfg(test)]

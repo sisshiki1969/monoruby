@@ -18,7 +18,6 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(RATIONAL_CLASS, "denominator", denominator, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "to_f", to_f, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "to_i", to_i, 0);
-    globals.define_builtin_func(RATIONAL_CLASS, "to_r", to_r, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "==", eq, 1);
@@ -30,18 +29,12 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_funcs(RATIONAL_CLASS, "/", &["quo"], div, 1);
     globals.define_builtin_func(RATIONAL_CLASS, "**", pow, 1);
     globals.define_builtin_func(RATIONAL_CLASS, "-@", neg, 0);
-    globals.define_builtin_func(RATIONAL_CLASS, "+@", pos, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "abs", abs, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "zero?", zero_, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "positive?", positive_, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "negative?", negative_, 0);
-    globals.define_builtin_func(RATIONAL_CLASS, "integer?", integer_, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "hash", hash, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "eql?", eql_, 1);
-    globals.define_builtin_func(RATIONAL_CLASS, "freeze", freeze, 0);
-    globals.define_builtin_func(RATIONAL_CLASS, "frozen?", frozen_, 0);
-    globals.define_builtin_func(RATIONAL_CLASS, "finite?", finite_, 0);
-    globals.define_builtin_func(RATIONAL_CLASS, "infinite?", infinite_, 0);
     globals.define_builtin_class_func(RATIONAL_CLASS, "__allocate", allocate, 2);
     globals.define_builtin_class_func(RATIONAL_CLASS, "allocate", super::super::class::undef_allocate, 0);
 }
@@ -101,11 +94,6 @@ fn to_f(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 fn to_i(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let i = self_rat(lfp).to_i();
     Ok(Value::bigint(i))
-}
-
-#[monoruby_builtin]
-fn to_r(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(lfp.self_val())
 }
 
 #[monoruby_builtin]
@@ -406,11 +394,6 @@ fn neg(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Va
 }
 
 #[monoruby_builtin]
-fn pos(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(lfp.self_val())
-}
-
-#[monoruby_builtin]
 fn abs(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::rational_from_inner(self_rat(lfp).abs()))
 }
@@ -433,11 +416,6 @@ fn negative_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 }
 
 #[monoruby_builtin]
-fn integer_(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(false))
-}
-
-#[monoruby_builtin]
 fn hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::hash::{Hash, Hasher};
     let r = self_rat(lfp);
@@ -456,26 +434,6 @@ fn eql_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     } else {
         Ok(Value::bool(false))
     }
-}
-
-#[monoruby_builtin]
-fn freeze(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(lfp.self_val())
-}
-
-#[monoruby_builtin]
-fn frozen_(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(true))
-}
-
-#[monoruby_builtin]
-fn finite_(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(true))
-}
-
-#[monoruby_builtin]
-fn infinite_(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::nil())
 }
 
 #[cfg(test)]

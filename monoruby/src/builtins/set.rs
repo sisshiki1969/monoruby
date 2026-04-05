@@ -24,7 +24,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SET_CLASS, "each", each, 0);
     globals.define_builtin_func(SET_CLASS, "to_a", to_a, 0);
     // inspect/to_s defined in Ruby (builtins/builtins.rb) for cycle detection
-    globals.define_builtin_func(SET_CLASS, "to_set", to_set, 0);
     globals.define_builtin_funcs_with_kw(SET_CLASS, "dup", &["clone"], dup, 0, 1, false, &[], false);
     globals.define_builtin_func_rest(SET_CLASS, "merge", merge);
     globals.define_builtin_func(SET_CLASS, "subtract", subtract, 1);
@@ -321,14 +320,6 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// Handled by RValue::hash_inspect (in value/rvalue.rs) which detects
 /// whether the HASH-typed object is a Set or Hash by checking the class ID,
 /// and uses the shared HashSet-based cycle detection from Value::inspect_inner.
-
-///
-/// ### Set#to_set
-///
-#[monoruby_builtin]
-fn to_set(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(lfp.self_val())
-}
 
 ///
 /// ### Set#dup / Set#clone
