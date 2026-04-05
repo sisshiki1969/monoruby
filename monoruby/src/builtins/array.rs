@@ -963,9 +963,12 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         || {
             for (i, lhs) in lhs.iter().enumerate() {
                 if let Some(rhs) = rhs.get(i) {
-                    let res = vm.compare_values(globals, *lhs, *rhs)?;
-                    if res != Ordering::Equal {
-                        return Ok(Value::integer(res as i64));
+                    match vm.compare_values_inner(globals, *lhs, *rhs)? {
+                        Some(res) if res != Ordering::Equal => {
+                            return Ok(Value::integer(res as i64));
+                        }
+                        Some(_) => {} // Equal, continue
+                        None => return Ok(Value::nil()),
                     }
                 } else {
                     return Ok(Value::integer(Ordering::Greater as i64));
@@ -3390,6 +3393,16 @@ mod tests {
         run_test("a = [1]; a << a; (a <=> a)");
         // Cross-recursive same structure
         run_test("a = [1]; b = [1]; a << b; b << a; (a <=> b)");
+        // Different lengths with recursive element — returns nil, not ArgumentError
+        run_test("a = [1]; a << a; b = [1, 2]; b << b; (a <=> b)");
+        run_test("a = [1, 2]; a << a; b = [1]; b << b; (b <=> a)");
+    }
+
+    #[test]
+    fn cmp_incomparable_elements() {
+        // Incomparable elements return nil instead of ArgumentError
+        run_test("[1, :a] <=> [1, 2]");
+        run_test("[1, 2] <=> [1, :a]");
     }
 
     #[test]
