@@ -1870,7 +1870,7 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
 #[monoruby_builtin]
 fn respond_to(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -1881,11 +1881,28 @@ fn respond_to(
     } else {
         false
     };
-    Ok(Value::bool(if include_all {
+    let found = if include_all {
         globals.check_method(lfp.self_val(), name).is_some()
     } else {
         globals.check_public_method(lfp.self_val(), name).is_some()
-    }))
+    };
+    if found {
+        return Ok(Value::bool(true));
+    }
+    // Call respond_to_missing?(name, include_all) as CRuby does.
+    let respond_to_missing = IdentId::get_id("respond_to_missing?");
+    if let Some(fid) = globals.check_method(lfp.self_val(), respond_to_missing) {
+        let result = vm.invoke_func_inner(
+            globals,
+            fid,
+            lfp.self_val(),
+            &[Value::symbol(name), Value::bool(include_all)],
+            None,
+            None,
+        )?;
+        return Ok(Value::bool(result.as_bool()));
+    }
+    Ok(Value::bool(false))
 }
 
 fn object_respond_to(
@@ -1925,15 +1942,17 @@ fn object_respond_to(
     } else {
         return false;
     };
-    let b = if let Some(entry) =
+    if let Some(entry) =
         store.check_method_for_class_with_version(recv_class, method_name, ctx.class_version())
     {
-        include_all || entry.is_public()
-    } else {
-        false
-    };
-    state.def_C(dst, Immediate::bool(b));
-    true
+        if include_all || entry.is_public() {
+            state.def_C(dst, Immediate::bool(true));
+            return true;
+        }
+    }
+    // Method not found directly. Cannot JIT-inline because respond_to_missing?
+    // may be overridden and needs to be called at runtime.
+    false
 }
 
 ///

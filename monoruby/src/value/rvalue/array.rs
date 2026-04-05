@@ -196,21 +196,21 @@ impl ArrayInner {
     where
         F: FnMut(&Value) -> Result<bool>,
     {
-        let len = self.len();
+        let mut i = 0;
         let mut del = 0;
         let mut removed = None;
-        {
-            let v = &mut **self;
-            for i in 0..len {
-                if !f(&v[i])? {
-                    removed = Some(v[i]);
-                    del += 1;
-                } else if del > 0 {
-                    v.swap(i - del, i);
-                }
+        while i < self.len() {
+            let val = self[i];
+            if !f(&val)? {
+                removed = Some(val);
+                del += 1;
+            } else if del > 0 {
+                self.0.swap(i - del, i);
             }
+            i += 1;
         }
         if del > 0 {
+            let len = self.len();
             self.truncate(len - del);
         }
         Ok(removed)

@@ -3,7 +3,7 @@ class Array
 
   def self.new(...)
     o = allocate
-    o.initialize(...)
+    o.__send__(:initialize, ...)
     o
   end
 

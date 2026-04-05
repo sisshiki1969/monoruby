@@ -29,7 +29,7 @@ pub(super) fn init(globals: &mut Globals) {
         Box::new(array_allocate),
         0,
     );
-    globals.define_builtin_func_with(ARRAY_CLASS, "initialize", initialize, 0, 2, false);
+    globals.define_private_builtin_func_with(ARRAY_CLASS, "initialize", initialize, 0, 2, false);
     globals.define_builtin_inline_funcs(
         ARRAY_CLASS,
         "size",
@@ -299,14 +299,34 @@ fn array_try_convert(
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/s/new.html]
 #[monoruby_builtin]
 fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_val = lfp.self_val().as_array();
     if lfp.try_arg(0).is_none() {
+        self_val.clear();
         return Ok(self_val.into());
     }
-    if lfp.try_arg(1).is_none() {
-        if let Some(ary) = lfp.arg(0).try_array_ty() {
-            *self_val = (*ary).clone();
+    if lfp.try_arg(1).is_none() && lfp.block().is_none() {
+        // Try to_ary conversion first
+        let arg = lfp.arg(0);
+        if arg.is_array_ty() {
+            *self_val = (*arg.as_array()).clone();
             return Ok(self_val.into());
+        }
+        let to_ary = IdentId::get_id("to_ary");
+        if let Some(func_id) = globals.check_method(arg, to_ary) {
+            let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+            if result.is_array_ty() {
+                *self_val = (*result.as_array()).clone();
+                return Ok(self_val.into());
+            }
+            if !result.is_nil() {
+                return Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} into Array ({}#to_ary gives {})",
+                    arg.get_real_class_name(&globals.store),
+                    arg.get_real_class_name(&globals.store),
+                    result.get_real_class_name(&globals.store),
+                )));
+            }
         }
     }
     // Use coerce_to_int to call to_int on the size argument
@@ -439,19 +459,27 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             eprintln!("warning: given block not used");
         }
         let mut count = 0;
-        for elem in lfp.self_val().as_array().iter() {
-            if vm.invoke_eq(globals, arg0, *elem)? {
+        let ary = lfp.self_val();
+        let mut i = 0;
+        while i < ary.as_array().len() {
+            let elem = ary.as_array()[i];
+            if vm.invoke_eq(globals, arg0, elem)? {
                 count += 1;
             }
+            i += 1;
         }
         Ok(Value::integer(count))
     } else if let Some(bh) = lfp.block() {
         let mut count = 0;
         let bh = vm.get_block_data(globals, bh)?;
-        for elem in lfp.self_val().as_array().iter() {
-            if vm.invoke_block(globals, &bh, &[*elem])?.as_bool() {
+        let ary = lfp.self_val();
+        let mut i = 0;
+        while i < ary.as_array().len() {
+            let elem = ary.as_array()[i];
+            if vm.invoke_block(globals, &bh, &[elem])?.as_bool() {
                 count += 1;
             }
+            i += 1;
         }
         Ok(Value::integer(count))
     } else {
@@ -562,16 +590,18 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     fn inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<()> {
-        let self_ = lfp.self_val().as_array();
+        let self_val = lfp.self_val();
         let block = match lfp.block() {
             Some(bh) => Some(vm.get_block_data(globals, bh)?),
             None => None,
         };
-        for (i, elem) in self_.iter().enumerate() {
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let orig_elem = self_val.as_array()[i];
             let elem = if let Some(p) = &block {
-                vm.invoke_block(globals, p, &[*elem])?
+                vm.invoke_block(globals, p, &[orig_elem])?
             } else {
-                *elem
+                orig_elem
             };
             let elem = match elem.try_array_ty() {
                 Some(a) => a,
@@ -589,6 +619,7 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 )));
             }
             vm.temp_hash_insert(globals, elem[0], elem[1])?;
+            i += 1;
         }
         Ok(())
     }
@@ -1822,16 +1853,20 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let aref = lfp.self_val().expect_array_ty(globals)?;
+    let self_val = lfp.self_val();
+    self_val.expect_array_ty(globals)?;
     let mut res_true = vec![];
     let mut res_false = vec![];
     let p = vm.get_block_data(globals, bh)?;
-    for elem in aref.iter().cloned() {
+    let mut i = 0;
+    while i < self_val.as_array().len() {
+        let elem = self_val.as_array()[i];
         if vm.invoke_block(globals, &p, &[elem])?.as_bool() {
             res_true.push(elem);
         } else {
             res_false.push(elem);
         };
+        i += 1;
     }
     Ok(Value::array2(
         Value::array_from_vec(res_true),
@@ -1980,14 +2015,17 @@ fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/filter.html]
 #[monoruby_builtin]
 fn filter(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
         let mut res = vec![];
-        for elem in ary.iter() {
-            if vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
-                res.push(*elem);
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
+            if vm.invoke_block(globals, &data, &[elem])?.as_bool() {
+                res.push(elem);
             };
+            i += 1;
         }
         Ok(Value::array_from_vec(res))
     } else {
@@ -2058,14 +2096,17 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reject.html]
 #[monoruby_builtin]
 fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
         let mut res = vec![];
-        for elem in ary.iter() {
-            if !vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
-                res.push(*elem);
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
+            if !vm.invoke_block(globals, &data, &[elem])?.as_bool() {
+                res.push(elem);
             };
+            i += 1;
         }
         Ok(Value::array_from_vec(res))
     } else {
@@ -2138,23 +2179,26 @@ fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
         vm: &mut Executor,
         globals: &mut Globals,
         data: &ProcData,
-        ary: Array,
+        self_val: Value,
         map: &mut RubyMap<Value, Value>,
     ) -> Result<()> {
-        for elem in ary.iter() {
-            let key = vm.invoke_block(globals, &data, &[*elem])?;
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
+            let key = vm.invoke_block(globals, &data, &[elem])?;
             map.entry(key, vm, globals)?
-                .and_modify(|v: &mut Value| v.as_array().push(*elem))
-                .or_insert(Value::array1(*elem));
+                .and_modify(|v: &mut Value| v.as_array().push(elem))
+                .or_insert(Value::array1(elem));
+            i += 1;
         }
         Ok(())
     }
-    let ary = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
         let mut map = RubyMap::default();
         let gc_enabled = Globals::gc_enable(false);
-        let res = inner(vm, globals, &data, ary, &mut map);
+        let res = inner(vm, globals, &data, self_val, &mut map);
         Globals::gc_enable(gc_enabled);
         res?;
         /*for elem in ary.iter() {
@@ -2269,29 +2313,38 @@ fn all_any_inner(
     lfp: Lfp,
     is_all: bool,
 ) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     if let Some(pattern) = lfp.try_arg(0) {
         // Pattern form: all?(pattern) / any?(pattern) — block is ignored
         if lfp.block().is_some() {
             eprintln!("warning: given block not used");
         }
-        for elem in ary.iter() {
-            if op::cmp_teq_values_bool(vm, globals, pattern, *elem)? != is_all {
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
+            if op::cmp_teq_values_bool(vm, globals, pattern, elem)? != is_all {
                 return Ok(Value::bool(!is_all));
             };
+            i += 1;
         }
     } else if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
-        for elem in ary.iter() {
-            if vm.invoke_block(globals, &data, &[*elem])?.as_bool() != is_all {
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
+            if vm.invoke_block(globals, &data, &[elem])?.as_bool() != is_all {
                 return Ok(Value::bool(!is_all));
             };
+            i += 1;
         }
     } else {
-        for elem in ary.iter() {
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
             if elem.as_bool() != is_all {
                 return Ok(Value::bool(!is_all));
             };
+            i += 1;
         }
     }
     Ok(Value::bool(is_all))
@@ -2332,13 +2385,16 @@ fn any_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/detect.html]
 #[monoruby_builtin]
 fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     let bh = lfp.expect_block()?;
     let data = vm.get_block_data(globals, bh)?;
-    for elem in ary.iter() {
-        if vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
-            return Ok(*elem);
+    let mut i = 0;
+    while i < self_val.as_array().len() {
+        let elem = self_val.as_array()[i];
+        if vm.invoke_block(globals, &data, &[elem])?.as_bool() {
+            return Ok(elem);
         };
+        i += 1;
     }
     Ok(Value::nil())
 }
@@ -2352,25 +2408,31 @@ fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/grep.html]
 #[monoruby_builtin]
 fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     let ary: Vec<_> = match lfp.block() {
         None => {
             let mut res = vec![];
-            for v in ary.iter() {
-                if cmp_teq_values_bool(vm, globals, lfp.arg(0), *v)? {
-                    res.push(*v)
+            let mut i = 0;
+            while i < self_val.as_array().len() {
+                let v = self_val.as_array()[i];
+                if cmp_teq_values_bool(vm, globals, lfp.arg(0), v)? {
+                    res.push(v)
                 }
+                i += 1;
             }
             res
         }
         Some(bh) => {
             let bh = vm.get_block_data(globals, bh)?;
             let mut res = vec![];
-            for v in lfp.self_val().as_array().iter() {
-                if cmp_teq_values_bool(vm, globals, lfp.arg(0), *v)? {
-                    let mapped = vm.invoke_block(globals, &bh, &[*v])?;
+            let mut i = 0;
+            while i < self_val.as_array().len() {
+                let v = self_val.as_array()[i];
+                if cmp_teq_values_bool(vm, globals, lfp.arg(0), v)? {
+                    let mapped = vm.invoke_block(globals, &bh, &[v])?;
                     res.push(mapped);
                 }
+                i += 1;
             }
             res
         }
@@ -2386,12 +2448,15 @@ fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/include=3f.html]
 #[monoruby_builtin]
 fn include_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     let rhs = lfp.arg(0);
-    for lhs in ary.iter().cloned() {
+    let mut i = 0;
+    while i < self_val.as_array().len() {
+        let lhs = self_val.as_array()[i];
         if vm.eq_values_bool(globals, lhs, rhs)? {
             return Ok(Value::bool(true));
         };
+        i += 1;
     }
     Ok(Value::bool(false))
 }
@@ -2843,22 +2908,50 @@ fn slice_inner(mut aref: Array, start: usize, len: usize) -> Value {
 #[monoruby_builtin]
 fn pack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let template = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let buffer = lfp.try_arg(1);
     let ary = lfp.self_val().as_array();
-    rvalue::pack(vm, globals, &ary, &template)
+    rvalue::pack(vm, globals, &ary, &template, buffer)
 }
 
-fn try_convert_to_array(v: &Value, vm: &mut Executor, globals: &mut Globals) -> Option<Array> {
+fn try_convert_to_array(
+    v: &Value,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<Option<Array>> {
     if let Some(ary) = v.try_array_ty() {
-        return Some(ary);
+        return Ok(Some(ary));
     }
-    if let Some(fid) = globals.check_method(*v, IdentId::TO_ARY) {
-        if let Ok(result) = vm.invoke_func_inner(globals, fid, *v, &[], None, None) {
-            if let Some(ary) = result.try_array_ty() {
-                return Some(ary);
-            }
-        }
+    // Check respond_to?(:to_ary, true) to respect respond_to_missing? protocol.
+    let respond_to = IdentId::get_id("respond_to?");
+    let responds = match vm.invoke_method_inner(
+        globals,
+        respond_to,
+        *v,
+        &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
+        None,
+        None,
+    ) {
+        Ok(val) => val.as_bool(),
+        // BasicObject without respond_to? and without method_missing
+        Err(_) => return Ok(None),
+    };
+    if !responds {
+        return Ok(None);
     }
-    None
+    // Call to_ary via invoke_method_inner to support method_missing.
+    let result = vm.invoke_method_inner(globals, IdentId::TO_ARY, *v, &[], None, None)?;
+    if let Some(ary) = result.try_array_ty() {
+        return Ok(Some(ary));
+    }
+    if result.is_nil() {
+        return Ok(None);
+    }
+    Err(MonorubyErr::typeerr(format!(
+        "can't convert {} into Array ({}#to_ary gives {})",
+        v.get_real_class_name(&globals.store),
+        v.get_real_class_name(&globals.store),
+        result.get_real_class_name(&globals.store),
+    )))
 }
 
 fn flatten_inner(
@@ -2876,16 +2969,16 @@ fn flatten_inner(
     }
     seen.push(id);
     for v in ary.iter() {
-        if let Some(inner) = try_convert_to_array(v, vm, globals) {
+        // At level 0, no flattening occurs — do not call to_ary.
+        if let Some(0) = lv {
+            res.push(*v);
+            continue;
+        }
+        if let Some(inner) = try_convert_to_array(v, vm, globals)? {
+            *changed = true;
             if let Some(lv) = lv {
-                if lv == 0 {
-                    res.push(*v);
-                } else {
-                    *changed = true;
-                    flatten_inner(vm, globals, &inner, res, Some(lv - 1), changed, seen)?;
-                }
+                flatten_inner(vm, globals, &inner, res, Some(lv - 1), changed, seen)?;
             } else {
-                *changed = true;
                 flatten_inner(vm, globals, &inner, res, None, changed, seen)?;
             }
         } else {
@@ -3059,27 +3152,33 @@ fn find_index(
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     if let Some(arg0) = lfp.try_arg(0) {
         if lfp.block().is_some() {
             eprintln!("warning: given block not used");
         }
         let func_id = vm.find_method(globals, arg0, IdentId::_EQ, false)?;
-        for (i, v) in ary.iter().enumerate() {
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let v = self_val.as_array()[i];
             if vm
-                .invoke_func_inner(globals, func_id, arg0, &[*v], None, None)?
+                .invoke_func_inner(globals, func_id, arg0, &[v], None, None)?
                 .as_bool()
             {
                 return Ok(Value::integer(i as i64));
             }
+            i += 1;
         }
         Ok(Value::nil())
     } else if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
-        for (i, v) in ary.iter().enumerate() {
-            if vm.invoke_block(globals, &data, &[*v])?.as_bool() {
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let v = self_val.as_array()[i];
+            if vm.invoke_block(globals, &data, &[v])?.as_bool() {
                 return Ok(Value::integer(i as i64));
             }
+            i += 1;
         }
         Ok(Value::nil())
     } else {

@@ -200,6 +200,10 @@ impl MonorubyErr {
     pub fn is_unexpected_eof(&self) -> bool {
         self.kind == MonorubyErrKind::Syntax && self.message == "unexpected end-of-file."
     }
+
+    pub fn is_no_method_error(&self) -> bool {
+        matches!(self.kind, MonorubyErrKind::NotMethod(_))
+    }
 }
 
 // Bytecodegen level errors.
