@@ -95,6 +95,7 @@ class Array
 
   def map!
     return self.to_enum(:map!) unless block_given?
+    raise FrozenError, "can't modify frozen #{self.class}: #{self.inspect}" if frozen?
     i = 0
     while i < self.size
       self[i] = yield(self[i])
@@ -402,6 +403,7 @@ class Array
 
   def rindex(val = (no_val = true; nil))
     unless no_val
+      warn "warning: given block not used" if block_given?
       i = self.size - 1
       while i >= 0
         if i >= self.size
