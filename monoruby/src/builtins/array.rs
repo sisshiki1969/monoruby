@@ -1079,12 +1079,9 @@ fn index_assign(
             };
             if let Some(len) = len {
                 ary.set_index2(start as usize, len as usize, val)
-            } else if let Some(a) = val.try_array_ty() {
-                ary.insert_many(start, a.iter().cloned());
-                Ok(val)
             } else {
-                ary.insert(start, val);
-                Ok(val)
+                // end < start: treat as zero-length replacement at start
+                ary.set_index2(start as usize, 0, val)
             }
         } else {
             let idx = i.coerce_to_int_i64(vm, globals)?;
@@ -4644,6 +4641,15 @@ mod tests {
         // Self-assignment via range
         run_test(r##"b = [1, 2, 3, 4, 5]; b[1..2] = b; b"##);
         run_test(r##"b = [1, 2, 3]; b[0..0] = b; b"##);
+    }
+
+    #[test]
+    fn index_assign_range_end_less_than_start() {
+        // end < start with range: treated as zero-length insert at start
+        run_test(r##"a = [1, 2, 3, 4, 5]; a[3..1] = [:a, :b]; a"##);
+        // start beyond array size: fills with nil then inserts
+        run_test(r##"a = [1, 2, 3]; a[5..2] = [99]; a"##);
+        run_test(r##"a = [1, 2, 3]; a[5..2] = 42; a"##);
     }
 
     #[test]
