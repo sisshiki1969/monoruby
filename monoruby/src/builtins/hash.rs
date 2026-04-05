@@ -1450,6 +1450,12 @@ mod tests {
         run_test("h = {}; h[:a] = h; h == h");
         // Two distinct recursive hashes with same structure
         run_test("a = {}; a[:x] = a; b = {}; b[:x] = b; a == b");
+        // Cross-recursive hashes: a contains b, b contains a
+        run_test("a = {}; b = {}; a[:x] = b; b[:x] = a; a == b");
+        // Recursive hash with non-matching values
+        run_test("a = {x: 1}; a[:y] = a; b = {x: 2}; b[:y] = b; a == b");
+        // Nested: array inside hash, hash inside array
+        run_test("h = {}; a = [h]; h[:a] = a; h == h");
     }
 
     #[test]

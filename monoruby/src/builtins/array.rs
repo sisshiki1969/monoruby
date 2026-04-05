@@ -3373,6 +3373,14 @@ mod tests {
         run_test("a = [1]; a << a; a == a");
         // Two distinct recursive arrays with same structure
         run_test("a = [1]; a << a; b = [1]; b << b; a == b");
+        // Cross-recursive: a contains b, b contains a
+        run_test("a = [1]; b = [1]; a << b; b << a; a == b");
+        // Different lengths: recursive but not equal
+        run_test("a = [1]; a << a; b = [1, 2]; b << b; a == b");
+        // Non-recursive element differs
+        run_test("a = [1]; a << a; b = [2]; b << b; a == b");
+        // Empty self-referencing
+        run_test("a = []; a << a; b = []; b << b; a == b");
     }
 
     #[test]
@@ -3380,6 +3388,31 @@ mod tests {
         // Self-referencing array: a <=> a should return 0, not stack overflow
         run_test("a = []; a << a; (a <=> a)");
         run_test("a = [1]; a << a; (a <=> a)");
+        // Cross-recursive same structure
+        run_test("a = [1]; b = [1]; a << b; b << a; (a <=> b)");
+    }
+
+    #[test]
+    fn recursive_guard_cleanup() {
+        // Guard must be cleaned up after use: non-recursive comparison after recursive
+        run_test(
+            r#"
+            a = [1]; a << a
+            r1 = a == a
+            r2 = [1, 2] == [1, 2]
+            [r1, r2]
+            "#,
+        );
+        // Multiple recursive operations in sequence
+        run_test(
+            r#"
+            a = []; a << a
+            r1 = a == a
+            r2 = (a <=> a)
+            r3 = a == a
+            [r1, r2, r3]
+            "#,
+        );
     }
 
     #[test]

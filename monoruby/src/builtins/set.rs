@@ -518,12 +518,14 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     if self_inner.len() != other_inner.len() {
         return Ok(Value::bool(false));
     }
-    for (k, _) in self_inner.iter() {
-        if !other_inner.contains_key(k, vm, globals)? {
-            return Ok(Value::bool(false));
+    crate::value::exec_recursive_paired(self_val.id(), other.id(), || {
+        for (k, _) in self_inner.iter() {
+            if !other_inner.contains_key(k, vm, globals)? {
+                return Ok(Value::bool(false));
+            }
         }
-    }
-    Ok(Value::bool(true))
+        Ok(Value::bool(true))
+    }, Value::bool(true))
 }
 
 ///
@@ -1335,5 +1337,13 @@ mod tests {
     #[test]
     fn set_reset() {
         run_test("s = Set[1, 2, 3]; s.reset.to_a.sort");
+    }
+
+    #[test]
+    fn set_eq_recursive() {
+        // Two sets with same elements
+        run_test("Set[1, 2] == Set[1, 2]");
+        run_test("Set[1, 2] == Set[2, 1]");
+        run_test("Set[1, 2] == Set[1, 3]");
     }
 }
