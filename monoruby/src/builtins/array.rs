@@ -913,8 +913,10 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=3d=3d.html]
 #[monoruby_builtin]
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs = lfp.self_val().as_array();
-    let rhs = if let Some(rhs) = lfp.arg(0).try_array_ty() {
+    let self_val = lfp.self_val();
+    let arg = lfp.arg(0);
+    let lhs = self_val.as_array();
+    let rhs = if let Some(rhs) = arg.try_array_ty() {
         rhs
     } else {
         return Ok(Value::bool(false));
@@ -922,12 +924,14 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     if lhs.len() != rhs.len() {
         return Ok(Value::bool(false));
     }
-    for i in 0..lhs.len() {
-        if vm.ne_values_bool(globals, lhs[i], rhs[i])? {
-            return Ok(Value::bool(false));
+    crate::value::exec_recursive_paired(self_val.id(), arg.id(), || {
+        for i in 0..lhs.len() {
+            if vm.ne_values_bool(globals, lhs[i], rhs[i])? {
+                return Ok(Value::bool(false));
+            }
         }
-    }
-    Ok(Value::bool(true))
+        Ok(Value::bool(true))
+    }, Value::bool(true))
 }
 
 ///
@@ -938,8 +942,9 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 /// [https://docs.ruby-lang.org/ja/3.2/method/Array/i/=3c=3d=3e.html]
 #[monoruby_builtin]
 fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     let arg = lfp.arg(0);
+    let lhs = self_val.as_array();
     let rhs = if let Some(rhs) = arg.try_array_ty() {
         rhs
     } else if let Some(fid) = globals.check_method(arg, IdentId::TO_ARY) {
@@ -952,20 +957,30 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     } else {
         return Ok(Value::nil());
     };
-    for (i, lhs) in lhs.iter().enumerate() {
-        if let Some(rhs) = rhs.get(i) {
-            let res = vm.compare_values(globals, *lhs, *rhs)?;
-            if res != Ordering::Equal {
-                return Ok(Value::integer(res as i64));
+    crate::value::exec_recursive_paired(
+        self_val.id(),
+        arg.id(),
+        || {
+            for (i, lhs) in lhs.iter().enumerate() {
+                if let Some(rhs) = rhs.get(i) {
+                    match vm.compare_values_inner(globals, *lhs, *rhs)? {
+                        Some(res) if res != Ordering::Equal => {
+                            return Ok(Value::integer(res as i64));
+                        }
+                        Some(_) => {} // Equal, continue
+                        None => return Ok(Value::nil()),
+                    }
+                } else {
+                    return Ok(Value::integer(Ordering::Greater as i64));
+                }
             }
-        } else {
-            return Ok(Value::integer(Ordering::Greater as i64));
-        }
-    }
-    if rhs.len() > lhs.len() {
-        return Ok(Value::integer(Ordering::Less as i64));
-    }
-    Ok(Value::integer(Ordering::Equal as i64))
+            if rhs.len() > lhs.len() {
+                return Ok(Value::integer(Ordering::Less as i64));
+            }
+            Ok(Value::integer(Ordering::Equal as i64))
+        },
+        Value::integer(Ordering::Equal as i64),
+    )
 }
 
 ///
@@ -3352,6 +3367,65 @@ mod tests {
         run_test(r##"[ 1, 2, 3 ] <=> [ 1, 2, 3 ] "##);
         run_test(r##"[ 1, 2, 3 ] <=> [ 1, 2 ] "##);
         run_test(r##"[ 1, 2 ] <=> [ 1, 2, 3 ] "##);
+    }
+
+    #[test]
+    fn eq_recursive() {
+        // Self-referencing array: a == a should return true, not stack overflow
+        run_test("a = []; a << a; a == a");
+        run_test("a = [1]; a << a; a == a");
+        // Two distinct recursive arrays with same structure
+        run_test("a = [1]; a << a; b = [1]; b << b; a == b");
+        // Cross-recursive: a contains b, b contains a
+        run_test("a = [1]; b = [1]; a << b; b << a; a == b");
+        // Different lengths: recursive but not equal
+        run_test("a = [1]; a << a; b = [1, 2]; b << b; a == b");
+        // Non-recursive element differs
+        run_test("a = [1]; a << a; b = [2]; b << b; a == b");
+        // Empty self-referencing
+        run_test("a = []; a << a; b = []; b << b; a == b");
+    }
+
+    #[test]
+    fn cmp_recursive() {
+        // Self-referencing array: a <=> a should return 0, not stack overflow
+        run_test("a = []; a << a; (a <=> a)");
+        run_test("a = [1]; a << a; (a <=> a)");
+        // Cross-recursive same structure
+        run_test("a = [1]; b = [1]; a << b; b << a; (a <=> b)");
+        // Different lengths with recursive element — returns nil, not ArgumentError
+        run_test("a = [1]; a << a; b = [1, 2]; b << b; (a <=> b)");
+        run_test("a = [1, 2]; a << a; b = [1]; b << b; (b <=> a)");
+    }
+
+    #[test]
+    fn cmp_incomparable_elements() {
+        // Incomparable elements return nil instead of ArgumentError
+        run_test("[1, :a] <=> [1, 2]");
+        run_test("[1, 2] <=> [1, :a]");
+    }
+
+    #[test]
+    fn recursive_guard_cleanup() {
+        // Guard must be cleaned up after use: non-recursive comparison after recursive
+        run_test(
+            r#"
+            a = [1]; a << a
+            r1 = a == a
+            r2 = [1, 2] == [1, 2]
+            [r1, r2]
+            "#,
+        );
+        // Multiple recursive operations in sequence
+        run_test(
+            r#"
+            a = []; a << a
+            r1 = a == a
+            r2 = (a <=> a)
+            r3 = a == a
+            [r1, r2, r3]
+            "#,
+        );
     }
 
     #[test]
