@@ -1037,7 +1037,13 @@ impl Store {
             self.invalidate_jit_code();
             let vm_entry = codegen.vm_entry();
             for func in self.functions.functions() {
-                if func.is_iseq().is_some() {
+                if let Some(iseq) = func.is_iseq() {
+                    // Skip trivial methods (ConstReturn/SelfReturn) — their
+                    // wrappers don't execute bytecode and contain no BOP usage,
+                    // so patching them to vm_entry would break execution.
+                    if self[iseq].hint != ISeqHint::Normal {
+                        continue;
+                    }
                     let entry = codegen.jit.get_label_address(&func.entry_label());
                     codegen.jit.apply_jmp_patch_address(entry, &vm_entry);
                 }
