@@ -470,9 +470,22 @@ pub(crate) fn pack(
     globals: &mut Globals,
     ary: &[Value],
     template: &str,
+    buffer: Option<Value>,
 ) -> Result<Value> {
-    let mut packed = Vec::new();
     let template = parse_template(template)?;
+    // Validate buffer: keyword if provided.
+    if let Some(buf_val) = buffer {
+        buf_val.ensure_not_frozen(&globals.store)?;
+        if buf_val.is_rstring_inner().is_none() {
+            return Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                buf_val,
+                STRING_CLASS,
+            ));
+        }
+    }
+    let mut packed = Vec::new();
+    let template_is_empty = template.is_empty();
     let mut iter = ary.iter();
 
     macro_rules! pack {
@@ -611,7 +624,7 @@ pub(crate) fn pack(
                 // 'h' (low nibble first) / 'H' (high nibble first) — hex string
                 let high = endianness; // Big = H (high nibble first)
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store, *value)?;
+                    let s = get_pack_string(vm, globals, *value)?;
                     let count = if let Some(count) = repeat {
                         count
                     } else {
@@ -660,7 +673,7 @@ pub(crate) fn pack(
             Template::Ascii => {
                 // 'a' — arbitrary binary string (null padded)
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store, *value)?;
+                    let s = get_pack_string(vm, globals, *value)?;
                     if let Some(count) = repeat {
                         if s.len() >= count {
                             packed.extend_from_slice(&s[..count]);
@@ -681,7 +694,7 @@ pub(crate) fn pack(
             Template::AsciiTrim => {
                 // 'A' — arbitrary binary string (space padded)
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store, *value)?;
+                    let s = get_pack_string(vm, globals, *value)?;
                     if let Some(count) = repeat {
                         if s.len() >= count {
                             packed.extend_from_slice(&s[..count]);
@@ -702,7 +715,7 @@ pub(crate) fn pack(
             Template::CString => {
                 // 'Z' — null-terminated string
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store, *value)?;
+                    let s = get_pack_string(vm, globals, *value)?;
                     if let Some(count) = repeat {
                         // Zn — like 'a' but null-padded (same as 'a')
                         if s.len() >= count {
@@ -727,7 +740,7 @@ pub(crate) fn pack(
             Template::Base64 => {
                 // 'm' — Base64 encode
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store, *value)?;
+                    let s = get_pack_string(vm, globals, *value)?;
                     let line_len = if template.explicit_count {
                         repeat.unwrap_or(45)
                     } else {
@@ -742,7 +755,7 @@ pub(crate) fn pack(
             Template::QuotedPrintable => {
                 // 'M' — MIME quoted-printable encode
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store, *value)?;
+                    let s = get_pack_string(vm, globals, *value)?;
                     let line_len = if template.explicit_count {
                         repeat.unwrap_or(72)
                     } else {
@@ -757,7 +770,7 @@ pub(crate) fn pack(
             Template::UuEncoded => {
                 // 'u' — UU encode
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store, *value)?;
+                    let s = get_pack_string(vm, globals, *value)?;
                     let line_len = if template.explicit_count {
                         repeat.unwrap_or(45)
                     } else {
@@ -773,7 +786,7 @@ pub(crate) fn pack(
                 // 'b' (little-endian) / 'B' (big-endian) — bit string
                 let big = endianness;
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(&globals.store, *value)?;
+                    let s = get_pack_string(vm, globals, *value)?;
                     let count = if let Some(count) = repeat {
                         count
                     } else {
@@ -868,7 +881,7 @@ pub(crate) fn pack(
                         if value.is_nil() {
                             packed.extend_from_slice(&0u64.to_ne_bytes());
                         } else {
-                            let s = get_pack_string(&globals.store, *value)?;
+                            let s = get_pack_string(vm, globals, *value)?;
                             // Allocate a null-terminated copy using CString.
                             // We leak the memory so the pointer remains valid.
                             let cstring = std::ffi::CString::new(s).map_err(|_| {
@@ -889,7 +902,7 @@ pub(crate) fn pack(
                     if value.is_nil() {
                         packed.extend_from_slice(&0u64.to_ne_bytes());
                     } else {
-                        let s = get_pack_string(&globals.store, *value)?;
+                        let s = get_pack_string(vm, globals, *value)?;
                         // Leak a copy of the bytes so the pointer stays valid.
                         let boxed: Box<[u8]> = s.into_boxed_slice();
                         let ptr = Box::into_raw(boxed) as *const u8 as u64;
@@ -901,7 +914,20 @@ pub(crate) fn pack(
             }
         };
     }
-    Ok(Value::bytes(packed))
+    if let Some(mut buf_val) = buffer {
+        // Write the packed data into the provided buffer string.
+        let rstr = buf_val.as_rstring_inner_mut();
+        *rstr = RStringInner::bytes_from_vec(packed);
+        Ok(buf_val)
+    } else if template_is_empty && packed.is_empty() {
+        // Empty format string produces US-ASCII encoded empty string.
+        Ok(Value::string_from_inner(RStringInner::from_encoding(
+            b"",
+            Encoding::UsAscii,
+        )))
+    } else {
+        Ok(Value::bytes(packed))
+    }
 }
 
 fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
@@ -970,16 +996,52 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
         };
         // Parse modifiers: '!' or '_' (native size), '>' (big-endian), '<' (little-endian).
         // These can appear in any order before the count.
-        let mut has_native = false;
+        let mut native_modifier = None;
+        let mut endian_modifier = None;
         loop {
-            if iter.next_if(|c| *c == '!' || *c == '_').is_some() {
-                has_native = true;
-            } else if iter.next_if(|c| c == &'>').is_some() {
-                endian = Endianness::Big;
-            } else if iter.next_if(|c| c == &'<').is_some() {
-                endian = Endianness::Little;
+            if let Some(&c) = iter.peek() {
+                if c == '!' || c == '_' {
+                    if native_modifier.is_none() {
+                        native_modifier = Some(c);
+                    }
+                    iter.next();
+                } else if c == '>' {
+                    endian = Endianness::Big;
+                    endian_modifier = Some(c);
+                    iter.next();
+                } else if c == '<' {
+                    endian = Endianness::Little;
+                    endian_modifier = Some(c);
+                    iter.next();
+                } else {
+                    break;
+                }
             } else {
                 break;
+            }
+        }
+        let has_native = native_modifier.is_some();
+        // '!' and '_' modifiers are only valid for s/S/i/I/l/L/q/Q/j/J
+        if let Some(modifier) = native_modifier {
+            match ch {
+                's' | 'S' | 'i' | 'I' | 'l' | 'L' | 'q' | 'Q' | 'j' | 'J' => {}
+                _ => {
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "'{modifier}' allowed only after types sSiIlLqQjJ"
+                    )));
+                }
+            }
+        }
+        // '<' and '>' endian modifiers are only valid for integer/float formats.
+        if let Some(modifier) = endian_modifier {
+            match ch {
+                's' | 'S' | 'i' | 'I' | 'l' | 'L' | 'q' | 'Q' | 'j' | 'J' | 'n' | 'N'
+                | 'v' | 'V' | 'd' | 'D' | 'e' | 'E' | 'f' | 'F' | 'g' | 'G' => {}
+                _ => {
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "'{modifier}' allowed only after types sSiIlLqQjJ"
+                    )));
+                }
             }
         }
         // Apply native size modifier on x86-64 Linux:
@@ -1025,15 +1087,17 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
 }
 
 /// Get bytes from a Value for pack string templates (a/A/Z/m/M/u).
-fn get_pack_string(store: &Store, value: Value) -> Result<Vec<u8>> {
+/// Calls `#to_str` if the value is not already a String.
+fn get_pack_string(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    value: Value,
+) -> Result<Vec<u8>> {
     if let Some(s) = value.is_rstring_inner() {
         Ok(s.as_bytes().to_vec())
     } else {
-        Err(MonorubyErr::no_implicit_conversion(
-            store,
-            value,
-            STRING_CLASS,
-        ))
+        let rstr = value.coerce_to_rstring(vm, globals)?;
+        Ok(rstr.as_bytes().to_vec())
     }
 }
 

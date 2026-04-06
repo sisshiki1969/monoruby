@@ -334,6 +334,28 @@ impl Globals {
         )
     }
 
+    pub(crate) fn define_private_builtin_func_with(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
+        self.new_builtin_fn(
+            class_id,
+            name,
+            address,
+            Visibility::Private,
+            min,
+            max,
+            rest,
+            &[],
+            false,
+        )
+    }
+
     pub(crate) fn define_private_builtin_func_rest(
         &mut self,
         class_id: ClassId,
