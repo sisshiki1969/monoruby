@@ -523,6 +523,17 @@ mod tests {
     }
 
     #[test]
+    fn rational_round_large_ndigits() {
+        // Absurdly large ndigits should not hang
+        run_test_once("Rational(3, 2).round(2_097_171)");
+        run_test_once("Rational(3, 2).floor(2_097_171)");
+        run_test_once("Rational(3, 2).ceil(2_097_171)");
+        run_test_once("Rational(3, 2).truncate(2_097_171)");
+        // Denominator=1 (integer rational)
+        run_test_once("Rational(6, 1).round(1000000)");
+    }
+
+    #[test]
     fn rational_cmp_coerce() {
         run_test_once("Rational(1, 2) <=> 0.5");
         run_test_once("Rational(1, 2) <=> 1");
