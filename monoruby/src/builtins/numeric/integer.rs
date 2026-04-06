@@ -2061,32 +2061,6 @@ mod tests {
     }
 
     #[test]
-    fn upto_with_float() {
-        run_test("res = []; 9.upto(13) {|i| res << i}; res");
-        run_test("res = []; (-5).upto(-1.3) {|i| res << i}; res");
-        run_test("res = []; 1.upto(3.9) {|i| res << i}; res");
-        run_test("res = []; 1.upto(3.0) {|i| res << i}; res");
-    }
-
-    #[test]
-    fn round_range_error() {
-        run_test_error("42.round(1 << 31)");
-        run_test_error("42.round(-(1 << 31) - 1)");
-    }
-
-    #[test]
-    fn try_convert_error_message() {
-        run_test_error(
-            r#"
-            class Foo
-              def to_int; "not_int"; end
-            end
-            Integer.try_convert(Foo.new)
-            "#,
-        );
-    }
-
-    #[test]
     fn try_convert_error_message() {
         run_test_error(
             r#"class C; def to_int; "str"; end; end; Integer.try_convert(C.new)"#,
