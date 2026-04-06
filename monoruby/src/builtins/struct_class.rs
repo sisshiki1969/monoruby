@@ -10,7 +10,7 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRUCT_CLASS, "to_s", inspect, 0);
     globals.define_builtin_func(STRUCT_CLASS, "members", members, 0);
     globals.define_builtin_funcs(STRUCT_CLASS, "==", &["eql?"], eq, 1);
-    globals.define_basic_op(STRUCT_CLASS, "!=", ne, 1);
+    globals.define_builtin_func(STRUCT_CLASS, "!=", ne, 1);
 }
 
 /// Struct.allocate raises "allocator undefined" for the base Struct class,
@@ -90,7 +90,7 @@ fn struct_initialize(
     globals.define_builtin_class_func(class_id, "members", struct_members, 0);
     globals.define_builtin_func_rest(class_id, "initialize", initialize);
     globals.define_builtin_funcs(class_id, "==", &["eql?"], eq, 1);
-    globals.define_basic_op(class_id, "!=", ne, 1);
+    globals.define_builtin_func(class_id, "!=", ne, 1);
 
     let members = ArrayInner::from_iter(args.iter().cloned());
 

@@ -11,7 +11,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SYMBOL_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func(SYMBOL_CLASS, "===", eq, 1);
     globals.define_builtin_func(SYMBOL_CLASS, "==", eq, 1);
-    globals.define_basic_op(SYMBOL_CLASS, "!=", ne, 1);
+    globals.define_builtin_func(SYMBOL_CLASS, "!=", ne, 1);
     globals.define_builtin_func(SYMBOL_CLASS, "to_s", sym_to_s, 0);
 }
 
