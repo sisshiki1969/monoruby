@@ -284,51 +284,39 @@ mod tests {
 
     #[test]
     fn divmod() {
-        run_test("(11).divmod(3)");
-        run_test("(11).divmod(-3)");
-        run_test("(11).divmod(-3)");
-        run_test("(-11).divmod(3)");
-
-        run_test("(11).divmod(3.5)");
-        run_test("(11).divmod(-3.5)");
-        run_test("(11).divmod(-3.5)");
-        run_test("(-11).divmod(3.5)");
-
-        run_test("(11.5).divmod(3)");
-        run_test("(11.5).divmod(-3)");
-        run_test("(11.5).divmod(-3)");
-        run_test("(-11.5).divmod(3)");
-
-        run_test("(11.5).divmod(3.5)");
-        run_test("(11.5).divmod(-3.5)");
-        run_test("(11.5).divmod(-3.5)");
-        run_test("(-11.5).divmod(3.5)");
+        run_tests(
+            &[
+                "(11).divmod(3)", "(11).divmod(-3)", "(-11).divmod(3)",
+                "(11).divmod(3.5)", "(11).divmod(-3.5)", "(-11).divmod(3.5)",
+                "(11.5).divmod(3)", "(11.5).divmod(-3)", "(-11.5).divmod(3)",
+                "(11.5).divmod(3.5)", "(11.5).divmod(-3.5)", "(-11.5).divmod(3.5)",
+            ]
+            .map(|s| s.to_string()),
+        );
     }
 
     #[test]
     fn bitnot() {
-        run_test("~1");
-        run_test("~0");
-        run_test("~(-1)");
-        run_test("~(-2)");
-        run_test("~(0x12345678)");
-        run_test("~(0x123456789abcdef0)");
+        run_tests(
+            &["~1", "~0", "~(-1)", "~(-2)", "~(0x12345678)", "~(0x123456789abcdef0)"]
+                .map(|s| s.to_string()),
+        );
     }
 
     #[test]
     fn neg() {
-        run_test("-1");
-        run_test("-0");
-        run_test("-(0x12345678)");
-        run_test("-(0x123456789abcdef0)");
+        run_tests(
+            &["-1", "-0", "-(0x12345678)", "-(0x123456789abcdef0)"]
+                .map(|s| s.to_string()),
+        );
     }
 
     #[test]
     fn pos() {
-        run_test("+1");
-        run_test("+0");
-        run_test("+(0x12345678)");
-        run_test("+(0x123456789abcdef0)");
+        run_tests(
+            &["+1", "+0", "+(0x12345678)", "+(0x123456789abcdef0)"]
+                .map(|s| s.to_string()),
+        );
     }
 
     #[test]
@@ -381,81 +369,84 @@ mod tests {
 
     #[test]
     fn float_truncate() {
-        run_test("1.5.truncate");
-        run_test("(-1.5).truncate");
-        run_test("1.567.truncate(2)");
-        run_test("(-1.567).truncate(2)");
+        run_tests(
+            &["1.5.truncate", "(-1.5).truncate", "1.567.truncate(2)", "(-1.567).truncate(2)"]
+                .map(|s| s.to_string()),
+        );
     }
 
     #[test]
     fn float_ceil() {
-        run_test("1.1.ceil");
-        run_test("(-1.1).ceil");
-        run_test("1.0.ceil");
-        run_test("1.123.ceil(2)");
-        // Large negative ndigits — BigInt precision
-        run_test_once("1e50.ceil(-50)");
-        run_test_once("(-1e50).ceil(-50)");
-        run_test_once("1.23e20.ceil(-18)");
+        run_tests(
+            &[
+                "1.1.ceil", "(-1.1).ceil", "1.0.ceil", "1.123.ceil(2)",
+                "1e50.ceil(-50)", "(-1e50).ceil(-50)", "1.23e20.ceil(-18)",
+            ]
+            .map(|s| s.to_string()),
+        );
     }
 
     #[test]
     fn float_floor_neg_ndigits() {
-        run_test("120.0.floor(-1)");
-        run_test_once("(-1e50).floor(-50)");
-        run_test_once("1e50.floor(-50)");
-        run_test_once("1.23e20.floor(-18)");
+        run_tests(
+            &["120.0.floor(-1)", "(-1e50).floor(-50)", "1e50.floor(-50)", "1.23e20.floor(-18)"]
+                .map(|s| s.to_string()),
+        );
     }
 
     #[test]
     fn float_positive_negative() {
-        run_test("1.0.positive?");
-        run_test("(-1.0).positive?");
-        run_test("0.0.positive?");
-        run_test("1.0.negative?");
-        run_test("(-1.0).negative?");
-        run_test("0.0.negative?");
+        run_tests(
+            &[
+                "1.0.positive?", "(-1.0).positive?", "0.0.positive?",
+                "1.0.negative?", "(-1.0).negative?", "0.0.negative?",
+            ]
+            .map(|s| s.to_string()),
+        );
     }
 
     #[test]
     fn float_integer() {
-        run_test("1.0.integer?");
-        run_test("1.5.integer?");
+        run_tests(&["1.0.integer?", "1.5.integer?"].map(|s| s.to_string()));
     }
 
     #[test]
     fn float_coerce() {
-        run_test("1.0.coerce(2)");
-        run_test("1.0.coerce(2.5)");
+        run_tests(&["1.0.coerce(2)", "1.0.coerce(2.5)"].map(|s| s.to_string()));
     }
 
     #[test]
     fn float_remainder() {
-        run_test("5.0.remainder(3.0)");
-        run_test("(-5.0).remainder(3.0)");
-        run_test("5.0.remainder(-3.0)");
+        run_tests(
+            &["5.0.remainder(3.0)", "(-5.0).remainder(3.0)", "5.0.remainder(-3.0)"]
+                .map(|s| s.to_string()),
+        );
     }
 
     #[test]
     fn float_fdiv() {
-        run_test("1.0.fdiv(2)");
-        run_test("1.0.fdiv(2.0)");
+        run_tests(&["1.0.fdiv(2)", "1.0.fdiv(2.0)"].map(|s| s.to_string()));
     }
 
     #[test]
     fn numeric_abs() {
-        run_test("1.0.abs");
-        run_test("(-1.0).abs");
-        run_test("0.0.abs");
-        run_test("1.0.magnitude");
+        run_tests(
+            &["1.0.abs", "(-1.0).abs", "0.0.abs", "1.0.magnitude"]
+                .map(|s| s.to_string()),
+        );
     }
 
     #[test]
     fn numeric_step() {
-        run_test("res = []; 1.step(10, 2) {|i| res << i}; res");
-        run_test("res = []; 1.step(to: 5, by: 2) {|i| res << i}; res");
-        run_test("res = []; 1.0.step(2.0, 0.5) {|i| res << i}; res");
-        run_test("res = []; 5.step(1, -1) {|i| res << i}; res");
-        run_test("res = []; 1.step(5) {|i| res << i}; res");
+        run_tests(
+            &[
+                "res = []; 1.step(10, 2) {|i| res << i}; res",
+                "res = []; 1.step(to: 5, by: 2) {|i| res << i}; res",
+                "res = []; 1.0.step(2.0, 0.5) {|i| res << i}; res",
+                "res = []; 5.step(1, -1) {|i| res << i}; res",
+                "res = []; 1.step(5) {|i| res << i}; res",
+            ]
+            .map(|s| s.to_string()),
+        );
     }
 }

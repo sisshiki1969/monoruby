@@ -1467,19 +1467,17 @@ mod tests {
 
     #[test]
     fn cmp() {
-        run_test("100.send(:==, 100)");
-        run_test("100.send(:!=, 100)");
-        run_test("100.send(:>=, 100)");
-        run_test("100.send(:<=, 100)");
-
-        run_test("100.==(100)");
-        run_test("100.==(50)");
-        run_test("100.==(100.0)");
-        run_test(r#"100.==("100")"#);
-        run_test("100.!=(100)");
-        run_test("100.!=(50)");
-        run_test("100.!=(100.0)");
-        run_test(r#"100.!=("100")"#);
+        run_tests(
+            &[
+                "100.send(:==, 100)", "100.send(:!=, 100)",
+                "100.send(:>=, 100)", "100.send(:<=, 100)",
+                "100.==(100)", "100.==(50)", "100.==(100.0)",
+                r#"100.==("100")"#,
+                "100.!=(100)", "100.!=(50)", "100.!=(100.0)",
+                r#"100.!=("100")"#,
+            ]
+            .map(|s| s.to_string()),
+        );
     }
 
     #[test]
@@ -2050,38 +2048,29 @@ mod tests {
 
     #[test]
     fn integer_floor_ceil_truncate_round() {
-        // ndigits >= 0 returns self
-        run_test("15.floor");
-        run_test("15.ceil");
-        run_test("15.truncate");
-        run_test("15.round");
-        run_test("15.floor(2)");
-        run_test("15.ceil(2)");
-        // negative ndigits
-        run_test("15.floor(-1)");
-        run_test("(-15).floor(-1)");
-        run_test("15.ceil(-1)");
-        run_test("(-15).ceil(-1)");
-        run_test("15.truncate(-1)");
-        run_test("(-15).truncate(-1)");
-        run_test("15.round(-1)");
-        run_test("(-15).round(-1)");
-        // round with half: keyword
-        run_test("25.round(-1, half: :up)");
-        run_test("25.round(-1, half: :down)");
-        run_test("25.round(-1, half: :even)");
-        run_test("35.round(-1, half: :even)");
-        run_test("(-25).round(-1, half: :up)");
-        run_test("(-25).round(-1, half: :down)");
-        run_test("(-25).round(-1, half: :even)");
-        // larger ndigits
-        run_test("1234567.floor(-3)");
-        run_test("1234567.ceil(-3)");
-        run_test("1234567.truncate(-3)");
-        run_test("1234567.round(-3)");
-        // bignum
-        run_test_once("(10**20 + 555).round(-1)");
-        run_test_once("(10**20 + 555).floor(-1)");
+        run_tests(
+            &[
+                // ndigits >= 0 returns self
+                "15.floor", "15.ceil", "15.truncate", "15.round",
+                "15.floor(2)", "15.ceil(2)",
+                // negative ndigits
+                "15.floor(-1)", "(-15).floor(-1)",
+                "15.ceil(-1)", "(-15).ceil(-1)",
+                "15.truncate(-1)", "(-15).truncate(-1)",
+                "15.round(-1)", "(-15).round(-1)",
+                // round with half: keyword
+                "25.round(-1, half: :up)", "25.round(-1, half: :down)",
+                "25.round(-1, half: :even)", "35.round(-1, half: :even)",
+                "(-25).round(-1, half: :up)", "(-25).round(-1, half: :down)",
+                "(-25).round(-1, half: :even)",
+                // larger ndigits
+                "1234567.floor(-3)", "1234567.ceil(-3)",
+                "1234567.truncate(-3)", "1234567.round(-3)",
+                // bignum
+                "(10**20 + 555).round(-1)", "(10**20 + 555).floor(-1)",
+            ]
+            .map(|s| s.to_string()),
+        );
     }
 
     #[test]

@@ -969,23 +969,18 @@ mod tests {
     // Fix 1: Float#round accepts half: keyword argument
     #[test]
     fn round_half_keyword() {
-        run_test("2.5.round(half: :up)");
-        run_test("2.5.round(half: :down)");
-        run_test("2.5.round(half: :even)");
-        run_test("3.5.round(half: :up)");
-        run_test("3.5.round(half: :down)");
-        run_test("3.5.round(half: :even)");
-        run_test("(-2.5).round(half: :up)");
-        run_test("(-2.5).round(half: :down)");
-        run_test("(-2.5).round(half: :even)");
-        run_test("2.5.round(half: nil)");
-        // half: with ndigits
-        run_test("5.55.round(1, half: :up)");
-        run_test("5.55.round(1, half: :down)");
-        run_test("5.55.round(1, half: :even)");
-        run_test("(-5.55).round(1, half: :up)");
-        run_test("(-5.55).round(1, half: :down)");
-        run_test("(-5.55).round(1, half: :even)");
+        run_tests(
+            &[
+                "2.5.round(half: :up)", "2.5.round(half: :down)", "2.5.round(half: :even)",
+                "3.5.round(half: :up)", "3.5.round(half: :down)", "3.5.round(half: :even)",
+                "(-2.5).round(half: :up)", "(-2.5).round(half: :down)", "(-2.5).round(half: :even)",
+                "2.5.round(half: nil)",
+                // half: with ndigits
+                "5.55.round(1, half: :up)", "5.55.round(1, half: :down)", "5.55.round(1, half: :even)",
+                "(-5.55).round(1, half: :up)", "(-5.55).round(1, half: :down)", "(-5.55).round(1, half: :even)",
+            ]
+            .map(|s| s.to_string()),
+        );
     }
 
     // Fix 1: Float#round half: with invalid mode raises ArgumentError
@@ -997,24 +992,18 @@ mod tests {
     // Fix 2: Float#round algorithm edge cases
     #[test]
     fn round_edge_cases() {
-        // Near the limit: -0.49999999999999994 should round to 0, not -1
-        run_test("(-0.49999999999999994).round");
-        // Large ndigits: should not overflow to Infinity
-        run_test("42.0.round(308)");
-        run_test("1.0e307.round(2)");
-        // Very large ndigits: rounding is a no-op
-        run_test_once("0.42.round(2.0**30)");
-        run_test_once("0.42.round(2.0**23)");
-        // Negative ndigits with big values (BigInt precision)
-        run_test_once("(2.5e200).round(-200)");
-        run_test_once("(-2.5e200).round(-200)");
-        run_test_once("(2.4e200).round(-200)");
-        run_test_once("(-2.4e200).round(-200)");
-        // Negative ndigits for normal values
-        run_test("120.0.round(-1)");
-        run_test("123456.78.round(-2)");
-        // Precision loss test
-        run_test("767573.1875850001.round(5)");
+        run_tests(
+            &[
+                "(-0.49999999999999994).round",
+                "42.0.round(308)", "1.0e307.round(2)",
+                "0.42.round(2.0**30)", "0.42.round(2.0**23)",
+                "(2.5e200).round(-200)", "(-2.5e200).round(-200)",
+                "(2.4e200).round(-200)", "(-2.4e200).round(-200)",
+                "120.0.round(-1)", "123456.78.round(-2)",
+                "767573.1875850001.round(5)",
+            ]
+            .map(|s| s.to_string()),
+        );
     }
 
     // Fix 5: Float#<=> with infinite? objects
@@ -1084,11 +1073,14 @@ mod tests {
     // Fix 6: Float#to_s returns US-ASCII encoding
     #[test]
     fn float_to_s_encoding() {
-        run_test("1.0.to_s.encoding.to_s");
-        run_test("(-0.0).to_s.encoding.to_s");
-        run_test("Float::NAN.to_s.encoding.to_s");
-        run_test("Float::INFINITY.to_s.encoding.to_s");
-        run_test("1.0.inspect.encoding.to_s");
+        run_tests(
+            &[
+                "1.0.to_s.encoding.to_s", "(-0.0).to_s.encoding.to_s",
+                "Float::NAN.to_s.encoding.to_s", "Float::INFINITY.to_s.encoding.to_s",
+                "1.0.inspect.encoding.to_s",
+            ]
+            .map(|s| s.to_string()),
+        );
     }
 
     #[test]
@@ -1099,17 +1091,18 @@ mod tests {
 
     #[test]
     fn float_eql() {
-        run_test("1.0.eql?(1.0)");
-        run_test("1.0.eql?(1)");
-        run_test("1.0.eql?(1.1)");
+        run_tests(
+            &["1.0.eql?(1.0)", "1.0.eql?(1)", "1.0.eql?(1.1)"]
+                .map(|s| s.to_string()),
+        );
     }
 
     #[test]
     fn float_constants() {
-        run_test("Float::MIN");
-        run_test("Float::DIG");
-        run_test("Float::MANT_DIG");
-        run_test("Float::RADIX");
+        run_tests(
+            &["Float::MIN", "Float::DIG", "Float::MANT_DIG", "Float::RADIX"]
+                .map(|s| s.to_string()),
+        );
     }
 
     #[test]
@@ -1126,18 +1119,21 @@ mod tests {
 
     #[test]
     fn float_denominator_special() {
-        run_test("Float::NAN.denominator");
-        run_test("Float::INFINITY.denominator");
-        run_test("(-Float::INFINITY).denominator");
-        run_test("1.5.denominator");
+        run_tests(
+            &[
+                "Float::NAN.denominator", "Float::INFINITY.denominator",
+                "(-Float::INFINITY).denominator", "1.5.denominator",
+            ]
+            .map(|s| s.to_string()),
+        );
     }
 
     #[test]
     fn float_divmod_quotient_type() {
-        run_test("3.8.divmod(1)");
-        run_test("(-3.8).divmod(1)");
-        run_test("3.8.divmod(0.5)");
-        run_test("11.5.divmod(3)");
+        run_tests(
+            &["3.8.divmod(1)", "(-3.8).divmod(1)", "3.8.divmod(0.5)", "11.5.divmod(3)"]
+                .map(|s| s.to_string()),
+        );
     }
 
     #[test]
@@ -1170,29 +1166,34 @@ mod tests {
 
     #[test]
     fn float_rationalize() {
-        run_test("3382729202.92822.rationalize");
-        run_test("0.3.rationalize(Rational(1,10))");
-        run_test("0.3.rationalize(0.05)");
-        run_test("0.3.rationalize(0.001)");
-        run_test("(-0.3).rationalize(Rational(1,10))");
-        run_test("(-0.3).rationalize(0.05)");
-        run_test("(-0.3).rationalize(0.001)");
-        run_test("0.0.rationalize");
+        run_tests(
+            &[
+                "3382729202.92822.rationalize",
+                "0.3.rationalize(Rational(1,10))", "0.3.rationalize(0.05)", "0.3.rationalize(0.001)",
+                "(-0.3).rationalize(Rational(1,10))", "(-0.3).rationalize(0.05)", "(-0.3).rationalize(0.001)",
+                "0.0.rationalize",
+            ]
+            .map(|s| s.to_string()),
+        );
         run_test_error("Float::NAN.rationalize");
         run_test_error("Float::INFINITY.rationalize");
     }
 
     #[test]
     fn float_round_precision() {
-        run_test("767573.1875850001.round(5)");
-        run_test("767573.1875850001.round(5, half: :up)");
-        run_test("767573.1875850001.round(5, half: :down)");
-        run_test("767573.1875850001.round(5, half: :even)");
-        run_test("(-767573.1875850001).round(5, half: :down)");
-        run_test("(-767573.1875850001).round(5, half: :even)");
-        // Truly at half — half modes should apply
-        run_test("767573.187585.round(5, half: :up)");
-        run_test("767573.187585.round(5, half: :down)");
-        run_test("767573.187585.round(5, half: :even)");
+        run_tests(
+            &[
+                "767573.1875850001.round(5)",
+                "767573.1875850001.round(5, half: :up)",
+                "767573.1875850001.round(5, half: :down)",
+                "767573.1875850001.round(5, half: :even)",
+                "(-767573.1875850001).round(5, half: :down)",
+                "(-767573.1875850001).round(5, half: :even)",
+                "767573.187585.round(5, half: :up)",
+                "767573.187585.round(5, half: :down)",
+                "767573.187585.round(5, half: :even)",
+            ]
+            .map(|s| s.to_string()),
+        );
     }
 }
