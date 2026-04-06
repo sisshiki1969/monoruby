@@ -1,4 +1,4 @@
-use num::{FromPrimitive, ToPrimitive};
+use num::{BigInt, FromPrimitive, ToPrimitive};
 
 use super::*;
 
@@ -41,7 +41,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func_with(FLOAT_CLASS, "floor", floor, 0, 1, false);
     globals.define_builtin_func_with(FLOAT_CLASS, "ceil", ceil, 0, 1, false);
     globals.define_builtin_func_with(FLOAT_CLASS, "truncate", truncate, 0, 1, false);
-    globals.define_builtin_func_with(FLOAT_CLASS, "round", round, 0, 2, false);
+    globals.define_builtin_func_with_kw(FLOAT_CLASS, "round", round, 0, 1, false, &["half"], false);
     globals.define_builtin_func(FLOAT_CLASS, "finite?", finite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "infinite?", infinite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "nan?", nan, 0);
@@ -51,6 +51,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(FLOAT_CLASS, "prev_float", prev_float, 0);
     globals.define_builtin_func(FLOAT_CLASS, "quo", quo, 1);
     globals.define_builtin_func(FLOAT_CLASS, "eql?", float_eql, 0 + 1);
+    globals.define_builtin_funcs(FLOAT_CLASS, "to_s", &["inspect"], float_to_s, 0);
 }
 
 /// Helper to raise FloatDomainError
@@ -177,7 +178,7 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             }
         }
         (Some(lhs), RV::Float(rhs)) => lhs.partial_cmp(&rhs),
-        _ => {
+        (Some(lhs_f), _) => {
             // Try coerce protocol for non-numeric types
             let coerce_id = IdentId::get_id("coerce");
             if let Some(result) =
@@ -190,6 +191,23 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                             globals, cmp_id, ary[0], &[ary[1]], None, None,
                         )?;
                         return Ok(res);
+                    }
+                }
+                // coerce returned something other than a 2-element array
+                return Err(MonorubyErr::typeerr("coerce must return [x, y]"));
+            }
+            // If self is infinite, check if other responds to infinite?
+            if lhs_f.is_infinite() {
+                let inf_id = IdentId::get_id("infinite?");
+                if let Some(other_inf) =
+                    vm.invoke_method_if_exists(globals, inf_id, rhs, &[], None, None)?
+                {
+                    let self_inf = if lhs_f > 0.0 { 1i64 } else { -1i64 };
+                    if let Some(other_inf_i) = other_inf.try_fixnum() {
+                        return Ok(Value::from_ord(self_inf.cmp(&other_inf_i)));
+                    } else if other_inf.is_nil() {
+                        // other is finite — Infinity > finite, -Infinity < finite
+                        return Ok(Value::from_ord(self_inf.cmp(&0)));
                     }
                 }
             }
@@ -408,7 +426,7 @@ fn truncate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// ### Float#round
 ///
 /// - round(ndigits = 0) -> Integer | Float
-/// - round(ndigits = 0, [NOT SUPPORTED]half: :up) -> Integer | Float
+/// - round(ndigits = 0, half: :up) -> Integer | Float
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/round.html]
 #[monoruby_builtin]
@@ -418,34 +436,9 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         0
     };
-    // Parse half: keyword from second arg (hash)
+    // Parse half: keyword (arg(1) after kw processing)
     let half = if let Some(kw_val) = lfp.try_arg(1) {
-        if !kw_val.is_nil() {
-            if let Some(h) = kw_val.try_hash_ty() {
-                let half_key = Value::symbol(IdentId::get_id("half"));
-                if let Some(v) = h.inner().get(half_key, vm, globals)? {
-                    if v.is_nil() {
-                        None
-                    } else if let Some(sym) = v.try_symbol() {
-                        let name = sym.get_name();
-                        match name.as_str() {
-                            "up" => Some(0),
-                            "down" => Some(1),
-                            "even" => Some(2),
-                            _ => return Err(MonorubyErr::argumenterr(format!("invalid rounding mode: {}", name))),
-                        }
-                    } else {
-                        return Err(MonorubyErr::argumenterr("invalid rounding mode"));
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        parse_half_mode(kw_val)?
     } else {
         None
     };
@@ -465,50 +458,126 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         return Value::coerce_f64_to_int(rounded);
     }
     if ndigits > 0 {
-        if let Ok(ndigits) = u32::try_from(ndigits) {
-            let mul = 10f64.powi(ndigits as i32);
-            let f = round_half(f * mul, half) / mul;
-            Ok(Value::float(f))
-        } else {
-            Err(MonorubyErr::rangeerr("too big to convert to u32"))
+        // For very large ndigits, 10^ndigits overflows to infinity.
+        // In that case, rounding is a no-op — return self.
+        if ndigits > 292 {
+            return Ok(Value::float(f));
         }
+        let ndigits = ndigits as u32;
+        let mul = 10f64.powi(ndigits as i32);
+        if mul.is_infinite() {
+            return Ok(Value::float(f));
+        }
+        let scaled = f * mul;
+        if scaled.is_infinite() || scaled.is_nan() {
+            // f * 10^ndigits overflows — rounding is a no-op
+            return Ok(Value::float(f));
+        }
+        let f = round_half(scaled, half) / mul;
+        Ok(Value::float(f))
     } else {
-        if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
-            let mul = 10f64.powi(neg_ndigits as i32);
-            let f = round_half(f / mul, half) * mul;
-            if let Some(v) = Value::integer_from_f64(f) {
-                return Ok(v);
-            } else {
-                return Err(MonorubyErr::rangeerr(format!(
-                    "[unreachable] invalid f64: {f}"
-                )));
-            }
+        let neg_ndigits = (-ndigits) as u32;
+        if neg_ndigits > 308 {
+            return Ok(Value::integer(0));
         }
-        Err(MonorubyErr::rangeerr("too small to convert to u32"))
+        // Convert float to BigInt, then do integer-level rounding
+        // to avoid precision loss from float division.
+        let int_val = match BigInt::from_f64(f.trunc()) {
+            Some(v) => v,
+            None => return Ok(Value::integer(0)),
+        };
+        let mul_big = BigInt::from(10u64).pow(neg_ndigits);
+        let (quot, rem) = num::integer::div_rem(int_val, mul_big.clone());
+        // Determine rounding based on remainder
+        let half_mul = &mul_big / 2;
+        let abs_rem = if rem < BigInt::ZERO { -&rem } else { rem.clone() };
+        let rounded_quot = if abs_rem > half_mul {
+            // Not halfway — round away from zero
+            if f >= 0.0 { &quot + 1 } else { &quot - 1 }
+        } else if abs_rem == half_mul {
+            // Exactly halfway — apply half mode, but also check
+            // the fractional part of the float
+            let frac_part = f - f.trunc();
+            if frac_part != 0.0 {
+                // There's a fractional part beyond the integer truncation;
+                // if positive frac, round up; if negative frac, round down
+                if f >= 0.0 { &quot + 1 } else { &quot - 1 }
+            } else {
+                match half {
+                    Some(RoundHalf::Down) => quot.clone(),
+                    Some(RoundHalf::Even) => {
+                        if &quot % 2 == BigInt::ZERO { quot.clone() } else {
+                            if f >= 0.0 { &quot + 1 } else { &quot - 1 }
+                        }
+                    }
+                    _ => {
+                        // :up (default) — round away from zero
+                        if f >= 0.0 { &quot + 1 } else { &quot - 1 }
+                    }
+                }
+            }
+        } else {
+            quot.clone()
+        };
+        let result = rounded_quot * mul_big;
+        return Ok(Value::bigint(result));
     }
 }
 
+/// Parse the `half:` keyword argument for rounding mode.
+fn parse_half_mode(v: Value) -> Result<Option<RoundHalf>> {
+    if v.is_nil() {
+        return Ok(None);
+    }
+    if let Some(sym) = v.try_symbol() {
+        let name = sym.get_name();
+        match name.as_str() {
+            "up" => Ok(Some(RoundHalf::Up)),
+            "down" => Ok(Some(RoundHalf::Down)),
+            "even" => Ok(Some(RoundHalf::Even)),
+            _ => Err(MonorubyErr::argumenterr(format!(
+                "invalid rounding mode: {}",
+                name
+            ))),
+        }
+    } else {
+        Err(MonorubyErr::argumenterr("invalid rounding mode"))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum RoundHalf {
+    Up,
+    Down,
+    Even,
+}
+
 /// Round a float value with half-way rounding mode.
-/// half: None = :up (Ruby default for Float), 0 = :up, 1 = :down, 2 = :even
-fn round_half(f: f64, half: Option<i32>) -> f64 {
+/// Carefully detects the exact halfway case to avoid floating-point errors.
+fn round_half(f: f64, half: Option<RoundHalf>) -> f64 {
+    // Check if f is exactly at a halfway point (N + 0.5 or N - 0.5).
+    // Use integer comparison to avoid floating-point subtraction errors.
     let floor = f.floor();
-    let frac = f - floor;
-    if frac.abs() < 0.5 || frac.abs() > 0.5 {
+    let ceil = f.ceil();
+    let half_val = floor + 0.5;
+    if f != half_val {
+        // Not exactly at halfway — use standard rounding (ties away from zero).
         return f.round();
     }
-    // Exactly halfway
+    // Exactly halfway (f == floor + 0.5)
     match half {
-        Some(1) => {
+        Some(RoundHalf::Down) => {
             // :down - round toward zero
-            if f > 0.0 { floor } else { floor + 1.0 }
+            if f > 0.0 { floor } else { ceil }
         }
-        Some(2) => {
+        Some(RoundHalf::Even) => {
             // :even - round to nearest even
-            if floor as i64 % 2 == 0 { floor } else { floor + 1.0 }
+            let f_floor = floor as i64;
+            if f_floor % 2 == 0 { floor } else { ceil }
         }
         _ => {
             // :up (default) - round away from zero
-            if f > 0.0 { floor + 1.0 } else { floor }
+            if f > 0.0 { ceil } else { floor }
         }
     }
 }
@@ -649,6 +718,28 @@ fn float_eql(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePt
         _ => false,
     };
     Ok(Value::bool(result))
+}
+
+/// ### Float#to_s / Float#inspect
+///
+/// - to_s -> String
+/// - inspect -> String
+///
+/// Returns the string representation of self with US-ASCII encoding.
+#[monoruby_builtin]
+fn float_to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    if let Some(f) = lfp.self_val().try_float() {
+        let s = crate::ruby_float_to_s(f);
+        use crate::value::rvalue::{Encoding, RStringInner};
+        Ok(Value::string_from_inner(RStringInner::from_encoding(
+            s.as_bytes(),
+            Encoding::UsAscii,
+        )))
+    } else {
+        // Fallback for non-float self (e.g., Float.allocate)
+        let s = lfp.self_val().to_s(&globals.store);
+        Ok(Value::string(s))
+    }
 }
 
 #[cfg(test)]
@@ -841,8 +932,130 @@ mod tests {
         run_test_error("Float::INFINITY.ceil");
     }
 
-    // Note: Float#round half: keyword requires define_builtin_func_with_kw
-    // registration which may not be fully working yet. Tested via ruby/spec instead.
+    // Fix 1: Float#round accepts half: keyword argument
+    #[test]
+    fn round_half_keyword() {
+        run_test("2.5.round(half: :up)");
+        run_test("2.5.round(half: :down)");
+        run_test("2.5.round(half: :even)");
+        run_test("3.5.round(half: :up)");
+        run_test("3.5.round(half: :down)");
+        run_test("3.5.round(half: :even)");
+        run_test("(-2.5).round(half: :up)");
+        run_test("(-2.5).round(half: :down)");
+        run_test("(-2.5).round(half: :even)");
+        run_test("2.5.round(half: nil)");
+        // half: with ndigits
+        run_test("5.55.round(1, half: :up)");
+        run_test("5.55.round(1, half: :down)");
+        run_test("5.55.round(1, half: :even)");
+        run_test("(-5.55).round(1, half: :up)");
+        run_test("(-5.55).round(1, half: :down)");
+        run_test("(-5.55).round(1, half: :even)");
+    }
+
+    // Fix 1: Float#round half: with invalid mode raises ArgumentError
+    #[test]
+    fn round_half_invalid() {
+        run_test_error("2.5.round(half: :invalid)");
+    }
+
+    // Fix 2: Float#round algorithm edge cases
+    #[test]
+    fn round_edge_cases() {
+        // Near the limit: -0.49999999999999994 should round to 0, not -1
+        run_test("(-0.49999999999999994).round");
+        // Large ndigits: should not overflow to Infinity
+        run_test("42.0.round(308)");
+        run_test("1.0e307.round(2)");
+        // Very large ndigits: rounding is a no-op
+        run_test_once("0.42.round(2.0**30)");
+        run_test_once("0.42.round(2.0**23)");
+        // Negative ndigits with big values (BigInt precision)
+        run_test_once("(2.5e200).round(-200)");
+        run_test_once("(-2.5e200).round(-200)");
+        run_test_once("(2.4e200).round(-200)");
+        run_test_once("(-2.4e200).round(-200)");
+        // Negative ndigits for normal values
+        run_test("120.0.round(-1)");
+        run_test("123456.78.round(-2)");
+        // Precision loss test
+        run_test("767573.1875850001.round(5)");
+    }
+
+    // Fix 5: Float#<=> with infinite? objects
+    #[test]
+    fn float_cmp_infinite() {
+        run_test_once(
+            r#"
+            obj = Object.new
+            def obj.infinite?; 1; end
+            Float::INFINITY <=> obj
+            "#,
+        );
+        run_test_once(
+            r#"
+            obj = Object.new
+            def obj.infinite?; -1; end
+            Float::INFINITY <=> obj
+            "#,
+        );
+        run_test_once(
+            r#"
+            obj = Object.new
+            def obj.infinite?; nil; end
+            Float::INFINITY <=> obj
+            "#,
+        );
+    }
+
+    // Fix 4: Float#<=> raises TypeError when coerce misbehaves
+    #[test]
+    fn float_cmp_coerce_typeerror() {
+        run_test_error(
+            r#"
+            class BadCoerce
+              def coerce(other); :not_an_array; end
+            end
+            1.0 <=> BadCoerce.new
+            "#,
+        );
+    }
+
+    // Fix 4: Float comparison operators propagate exceptions from coerce
+    #[test]
+    fn float_cmp_coerce_exception_propagation() {
+        run_test_error(
+            r#"
+            class RaiseInCoerce
+              def coerce(other)
+                raise "coerce error"
+              end
+            end
+            1.0 > RaiseInCoerce.new
+            "#,
+        );
+        run_test_error(
+            r#"
+            class RaiseInCoerce
+              def coerce(other)
+                raise "coerce error"
+              end
+            end
+            1.0 < RaiseInCoerce.new
+            "#,
+        );
+    }
+
+    // Fix 6: Float#to_s returns US-ASCII encoding
+    #[test]
+    fn float_to_s_encoding() {
+        run_test("1.0.to_s.encoding.to_s");
+        run_test("(-0.0).to_s.encoding.to_s");
+        run_test("Float::NAN.to_s.encoding.to_s");
+        run_test("Float::INFINITY.to_s.encoding.to_s");
+        run_test("1.0.inspect.encoding.to_s");
+    }
 
     #[test]
     fn float_quo() {
