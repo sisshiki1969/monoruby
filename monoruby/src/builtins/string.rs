@@ -227,6 +227,7 @@ pub(super) fn init(globals: &mut Globals) {
         "EUCJP_MS",
         "CP51932",
         "STATELESS_ISO_2022_JP",
+        "CESU_8",
     ] {
         let val = Value::object(enc.id());
         globals
@@ -3785,6 +3786,11 @@ fn encode_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn encoding(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
+    // Check for overridden encoding label (set by Integer#chr for mock encodings)
+    let enc_override_id = IdentId::get_id("/encoding_override");
+    if let Some(enc_obj) = globals.store.get_ivar(self_, enc_override_id) {
+        return Ok(enc_obj);
+    }
     let enc = self_.as_rstring_inner().encoding();
     let enc_class = vm
         .get_constant_checked(globals, OBJECT_CLASS, IdentId::get_id("Encoding"))?
@@ -3972,13 +3978,24 @@ fn enc_set_default_external(
 /// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/default_internal=3d.html]
 #[monoruby_builtin]
 fn enc_set_default_internal(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    // Stub: accept the argument but do nothing
-    Ok(lfp.arg(0))
+    let val = lfp.arg(0);
+    // If a string is given, convert to an Encoding object via Encoding.find
+    let enc_val = if val.is_nil() {
+        Value::nil()
+    } else if val.is_str().is_some() {
+        let find_id = IdentId::get_id("find");
+        let enc_class_val = lfp.self_val(); // Encoding class object
+        vm.invoke_method_inner(globals, find_id, enc_class_val, &[val], None, None)?
+    } else {
+        val
+    };
+    globals.set_gvar(IdentId::get_id("$DEFAULT_INTERNAL"), enc_val);
+    Ok(enc_val)
 }
 
 ///
