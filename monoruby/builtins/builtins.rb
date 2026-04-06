@@ -574,7 +574,13 @@ class Float
   end
 
   def fdiv(other)
-    self / other.to_f
+    if other.is_a?(Complex)
+      Complex(self, 0) / other
+    elsif other.respond_to?(:to_f)
+      self / other.to_f
+    else
+      raise TypeError, "#{other.class} can't be coerced into Float"
+    end
   end
 end
 

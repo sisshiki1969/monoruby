@@ -169,9 +169,16 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         Some(block) => block,
     };
     let cur = lfp.self_val().expect_integer(globals)?;
-    let limit = match lfp.arg(0).coerce_to_int_i64(vm, globals) {
-        Ok(v) => v,
-        Err(_) => return Err(MonorubyErr::argumenterr(format!("bad value for range"))),
+    let arg = lfp.arg(0);
+    let limit = if let Some(f) = arg.try_float() {
+        f.floor() as i64
+    } else {
+        match arg.coerce_to_int_i64(vm, globals) {
+            Ok(v) => v,
+            Err(_) => {
+                return Err(MonorubyErr::argumenterr(format!("bad value for range")))
+            }
+        }
     };
     if cur > limit {
         return Ok(lfp.self_val());
@@ -1050,6 +1057,12 @@ fn int_round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     } else {
         return Ok(lfp.self_val());
     };
+    if ndigits > 0x3FFFFFFF || ndigits < -0x40000000 {
+        return Err(MonorubyErr::rangeerr(format!(
+            "integer {} too big to convert to `int'",
+            ndigits
+        )));
+    }
     let half = if let Some(kw_val) = lfp.try_arg(1) {
         super::float::parse_half_mode(kw_val)?
     } else {

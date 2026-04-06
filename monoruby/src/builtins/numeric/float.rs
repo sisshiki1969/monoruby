@@ -686,6 +686,12 @@ fn prev_float(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodeP
 fn quo(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().try_float().unwrap();
     let rhs = lfp.arg(0);
+    // Complex: delegate to Complex division
+    if let Some(_) = rhs.try_complex() {
+        let div_id = IdentId::get_id("/");
+        let complex_self = Value::complex(lhs, 0.0);
+        return vm.invoke_method_inner(globals, div_id, complex_self, &[rhs], None, None);
+    }
     let rhs_f = match rhs.unpack() {
         RV::Float(f) => f,
         RV::Fixnum(i) => i as f64,

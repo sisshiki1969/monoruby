@@ -79,7 +79,10 @@ fn enumerator_size(
                 } else if let Some(f) = stop_val.try_float() {
                     f.floor() as i64
                 } else {
-                    return Ok(Value::nil());
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "comparison of Integer with {} failed: coercion was not possible",
+                        stop_val.get_real_class_name(&_globals.store)
+                    )));
                 };
                 let size = if stop >= start { stop - start + 1 } else { 0 };
                 Ok(Value::integer(size))
@@ -94,7 +97,10 @@ fn enumerator_size(
                 } else if let Some(f) = stop_val.try_float() {
                     f.ceil() as i64
                 } else {
-                    return Ok(Value::nil());
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "comparison of Integer with {} failed: coercion was not possible",
+                        stop_val.get_real_class_name(&_globals.store)
+                    )));
                 };
                 let size = if start >= stop { start - stop + 1 } else { 0 };
                 Ok(Value::integer(size))
