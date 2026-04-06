@@ -46,6 +46,7 @@ class Rational
     if ndigits == 0
       (numerator / denominator)
     elsif ndigits > 0
+      return self if __ndigits_sufficient?(ndigits)
       d = 10 ** ndigits
       Rational((self * d).floor, d)
     else
@@ -59,6 +60,7 @@ class Rational
     if ndigits == 0
       -((-numerator) / denominator)
     elsif ndigits > 0
+      return self if __ndigits_sufficient?(ndigits)
       d = 10 ** ndigits
       Rational((self * d).ceil, d)
     else
@@ -98,6 +100,7 @@ class Rational
         end
       end
     elsif ndigits > 0
+      return self if __ndigits_sufficient?(ndigits)
       d = 10 ** ndigits
       scaled = self * d
       rounded = Rational(scaled).round(0, half: half)
@@ -113,6 +116,7 @@ class Rational
     if ndigits == 0
       to_i
     elsif ndigits > 0
+      return self if __ndigits_sufficient?(ndigits)
       d = 10 ** ndigits
       Rational((self * d).truncate, d)
     else
@@ -122,6 +126,22 @@ class Rational
   end
 
   private
+
+  # Check if ndigits is sufficient to represent this Rational exactly
+  # in decimal. Returns true if rounding at ndigits would not change the value.
+  def __ndigits_sufficient?(ndigits)
+    return true if denominator == 1
+    t = denominator
+    while t % 2 == 0; t /= 2; end
+    while t % 5 == 0; t /= 5; end
+    return false unless t == 1
+    # Terminating decimal: count factors of 2 and 5 in denominator
+    d2, d5 = 0, 0
+    t = denominator
+    while t % 2 == 0; t /= 2; d2 += 1; end
+    while t % 5 == 0; t /= 5; d5 += 1; end
+    ndigits >= (d2 > d5 ? d2 : d5)
+  end
 
   def __coerce_ndigits(ndigits)
     if ndigits.is_a?(Integer)

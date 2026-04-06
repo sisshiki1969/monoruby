@@ -47,6 +47,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, "eql?", eql_, 1);
     globals.define_builtin_func(INTEGER_CLASS, "abs", abs, 0);
     globals.define_builtin_func(INTEGER_CLASS, "magnitude", abs, 0);
+    globals.define_builtin_func_with(INTEGER_CLASS, "pow", pow, 1, 2, false);
 }
 
 /*///
@@ -164,9 +165,7 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     let cur = lfp.self_val().expect_integer(globals)?;
     let limit = match lfp.arg(0).coerce_to_int_i64(vm, globals) {
         Ok(v) => v,
-        Err(_) => return Err(MonorubyErr::argumenterr(format!(
-            "bad value for range"
-        ))),
+        Err(_) => return Err(MonorubyErr::argumenterr(format!("bad value for range"))),
     };
     if cur > limit {
         return Ok(lfp.self_val());
@@ -206,9 +205,7 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     } else {
         match lfp.arg(0).coerce_to_int_i64(vm, globals) {
             Ok(v) => v,
-            Err(_) => return Err(MonorubyErr::argumenterr(format!(
-                "bad value for range"
-            ))),
+            Err(_) => return Err(MonorubyErr::argumenterr(format!("bad value for range"))),
         }
     };
     if cur < limit {
@@ -549,7 +546,14 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                     if let Some(ary) = result.try_array_ty() {
                         if ary.len() == 2 {
                             let cmp_id = IdentId::get_id("<=>");
-                            return vm.invoke_method_inner(globals, cmp_id, ary[0], &[ary[1]], None, None);
+                            return vm.invoke_method_inner(
+                                globals,
+                                cmp_id,
+                                ary[0],
+                                &[ary[1]],
+                                None,
+                                None,
+                            );
                         }
                     }
                     return Ok(Value::nil());
@@ -871,6 +875,67 @@ fn abs(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 }
 
 ///
+/// ### Integer#pow
+///
+/// - pow(other) -> Numeric
+/// - pow(other, mod) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/pow.html]
+#[monoruby_builtin]
+fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let exp = lfp.arg(0);
+    if let Some(mod_val) = lfp.try_arg(1) {
+        // 3-argument form: pow(exp, mod)
+        if !exp.is_integer() {
+            return Err(MonorubyErr::typeerr(
+                "Integer#pow() 2nd argument not allowed unless a 1st argument is integer",
+            ));
+        }
+        if !mod_val.is_integer() {
+            return Err(MonorubyErr::typeerr(
+                "Integer#pow() 2nd argument not allowed unless all arguments are integers",
+            ));
+        }
+        let exp_i = exp.coerce_to_int_i64(vm, globals)?;
+        if exp_i < 0 {
+            return Err(MonorubyErr::rangeerr(
+                "Integer#pow() 1st argument cannot be negative when 2nd argument specified",
+            ));
+        }
+        let mod_i = mod_val.coerce_to_int_i64(vm, globals)?;
+        if mod_i == 0 {
+            return Err(MonorubyErr::divide_by_zero());
+        }
+        // Modular exponentiation: self**exp % mod
+        let base_big = match lfp.self_val().unpack() {
+            RV::Fixnum(i) => BigInt::from(i),
+            RV::BigInt(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        let mod_big = BigInt::from(mod_i);
+        let mut base = base_big % &mod_big;
+        let mut result = BigInt::from(1);
+        let mut e = exp_i as u64;
+        while e > 0 {
+            if e & 1 == 1 {
+                result = result * &base % &mod_big;
+            }
+            base = &base * &base % &mod_big;
+            e >>= 1;
+        }
+        // Normalize result to match Ruby semantics (always non-negative when mod > 0)
+        if result < BigInt::ZERO {
+            result += &mod_big;
+        }
+        Ok(Value::bigint(result))
+    } else {
+        // 2-argument form: pow(exp) — delegate to ** operator
+        let lhs = lfp.self_val();
+        vm.invoke_method_inner(globals, IdentId::_POW, lhs, &[exp], None, None)
+    }
+}
+
+///
 /// ### Integer#size
 ///
 /// - size -> Integer
@@ -955,11 +1020,7 @@ fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     i as u128
                 };
                 let s = format_integer_base(abs, base);
-                if negative {
-                    format!("-{}", s)
-                } else {
-                    s
-                }
+                if negative { format!("-{}", s) } else { s }
             }
         }
         RV::BigInt(b) => {
@@ -970,17 +1031,16 @@ fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 let negative = b.is_negative();
                 let abs = if negative { -b } else { b.clone() };
                 let s = format_bigint_base(&abs, base);
-                if negative {
-                    format!("-{}", s)
-                } else {
-                    s
-                }
+                if negative { format!("-{}", s) } else { s }
             }
         }
         _ => unreachable!(),
     };
     use crate::value::rvalue::{Encoding, RStringInner};
-    Ok(Value::string_from_inner(RStringInner::from_encoding(s.as_bytes(), Encoding::UsAscii)))
+    Ok(Value::string_from_inner(RStringInner::from_encoding(
+        s.as_bytes(),
+        Encoding::UsAscii,
+    )))
 }
 
 fn format_integer_base(mut n: u128, base: u32) -> String {
@@ -1727,14 +1787,16 @@ mod tests {
 
     #[test]
     fn integer_cmp_coerce() {
-        run_test_once(r#"
+        run_test_once(
+            r#"
             class Foo
               def coerce(other)
                 [other.to_f, 42.0]
               end
             end
             [1 <=> Foo.new, 100 <=> Foo.new]
-        "#);
+        "#,
+        );
     }
 
     #[test]

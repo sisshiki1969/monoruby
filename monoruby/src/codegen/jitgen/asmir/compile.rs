@@ -484,9 +484,9 @@ impl Codegen {
                 let deopt = &labels[deopt];
                 self.integer_binop(lhs, rhs, &mode, kind, deopt);
             }
-            AsmInst::IntegerExp { using_xmm, deopt } => {
-                let deopt = &labels[deopt];
-                self.integer_exp(using_xmm, deopt);
+            AsmInst::IntegerExp { using_xmm, error } => {
+                let error = &labels[error];
+                self.integer_exp(using_xmm, error);
             }
 
             AsmInst::IntegerCmp {

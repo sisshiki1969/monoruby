@@ -919,8 +919,10 @@ fn pop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/eql=3f.html]
 #[monoruby_builtin]
 fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs = lfp.self_val().as_array();
-    let rhs = if let Some(rhs) = lfp.arg(0).try_array_ty() {
+    let self_val = lfp.self_val();
+    let arg = lfp.arg(0);
+    let lhs = self_val.as_array();
+    let rhs = if let Some(rhs) = arg.try_array_ty() {
         rhs
     } else {
         return Ok(Value::bool(false));
@@ -928,12 +930,14 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     if lhs.len() != rhs.len() {
         return Ok(Value::bool(false));
     }
-    for i in 0..lhs.len() {
-        if !lhs[i].eql(&rhs[i], vm, globals)? {
-            return Ok(Value::bool(false));
+    crate::value::exec_recursive_paired(self_val.id(), arg.id(), || {
+        for i in 0..lhs.len() {
+            if !lhs[i].eql(&rhs[i], vm, globals)? {
+                return Ok(Value::bool(false));
+            }
         }
-    }
-    Ok(Value::bool(true))
+        Ok(Value::bool(true))
+    }, Value::bool(true))
 }
 
 ///
@@ -3562,6 +3566,22 @@ mod tests {
         run_test(r##"["a", "b", "c"].eql? ["a", "b", "c"]"##);
         run_test(r##"["a", "b", "c"].eql? ["a", "c", "b"]"##);
         run_test(r##"["a", "b", 1].eql? ["a", "b", 1.0]"##);
+    }
+
+    #[test]
+    fn eql_recursive() {
+        // Self-referencing array eql?
+        run_test("a = []; a << a; a.eql?(a)");
+        run_test("a = [1]; a << a; b = [1]; b << b; a.eql?(b)");
+        // Cross-recursive via hash
+        run_test(
+            r#"
+            x, y, z = [], [], []
+            a = {foo: x, bar: 42}; b = {foo: y, bar: 42}; c = {foo: z, bar: 42}
+            x << a; y << c; z << b
+            y.eql?(z)
+            "#,
+        );
     }
 
     #[test]
