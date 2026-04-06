@@ -5706,6 +5706,24 @@ mod tests {
     #[test]
     fn encoding_default_internal() {
         run_test(r#"Encoding.default_internal"#);
+        // setter and getter round-trip
+        run_test_once(r#"
+            Encoding.default_internal = Encoding::UTF_8
+            res = Encoding.default_internal == Encoding::UTF_8
+            Encoding.default_internal = nil
+            res
+        "#);
+        run_test_once(r#"
+            Encoding.default_internal = nil
+            Encoding.default_internal
+        "#);
+        // string argument to setter
+        run_test_once(r#"
+            Encoding.default_internal = "UTF-8"
+            res = Encoding.default_internal == Encoding::UTF_8
+            Encoding.default_internal = nil
+            res
+        "#);
     }
 
     #[test]

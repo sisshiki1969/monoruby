@@ -1983,10 +1983,21 @@ mod tests {
 
     #[test]
     fn integer_chr_utf8() {
-        run_test(r#"256.chr("UTF-8")"#);
-        run_test(r#"900.chr("UTF-8").bytes"#);
-        run_test(r#"128.chr("UTF-8").bytes"#);
+        run_tests(&[
+            r#"256.chr("UTF-8")"#,
+            r#"900.chr("UTF-8").bytes"#,
+            r#"128.chr("UTF-8").bytes"#,
+            r#"0x0100.chr(Encoding::UTF_8).bytes.to_a"#,
+            r#"0x3000.chr(Encoding::UTF_8).bytes.to_a"#,
+            r#"0x0080.chr(Encoding::UTF_8).bytes.to_a"#,
+            r#"0x00FF.chr(Encoding::UTF_8).bytes.to_a"#,
+            r#"0x0100.chr(Encoding::UTF_8).encoding.to_s"#,
+        ]);
         run_test_error(r#"(-1).chr"#);
+        // Surrogates should raise RangeError
+        run_test_error(r#"0xD800.chr("UTF-8")"#);
+        run_test_error(r#"0xDFFF.chr("UTF-8")"#);
+        run_test_error(r#"2206368128.chr(Encoding::UTF_8)"#);
     }
 
     #[test]
@@ -2161,9 +2172,72 @@ mod tests {
 
     #[test]
     fn integer_chr_ascii() {
-        run_test("65.chr");
-        run_test(r#"65.chr("US-ASCII")"#);
+        run_tests(&[
+            "65.chr", r#"65.chr("US-ASCII")"#,
+            "65.chr.encoding.to_s",
+            "200.chr.encoding.to_s",
+            r#"0.chr(Encoding::BINARY).encoding.to_s"#,
+            r#"255.chr(Encoding::BINARY).bytes.to_a"#,
+        ]);
         run_test_error(r#"128.chr("US-ASCII")"#);
+        run_test_error(r#"256.chr(Encoding::BINARY)"#);
+        run_test_error(r#"256.chr"#);
+        run_test_error("(-1).chr(Encoding::US_ASCII)");
+    }
+
+    #[test]
+    fn integer_chr_encoding_arg() {
+        // String encoding argument
+        run_tests(&[
+            r#"0x0045.chr("utf-8").bytes.to_a"#,
+            r#"0x0045.chr("UTF-8").bytes.to_a"#,
+            r#"0x0045.chr("Utf-8").bytes.to_a"#,
+            r#"0x0045.chr("utf-8").encoding.to_s"#,
+        ]);
+        // Shift_JIS mock encoding
+        run_tests(&[
+            r#"0x0000.chr(Encoding::SHIFT_JIS).bytes.to_a"#,
+            r#"0x007F.chr(Encoding::SHIFT_JIS).bytes.to_a"#,
+            r#"0x00A1.chr(Encoding::SHIFT_JIS).bytes.to_a"#,
+            r#"0x00DF.chr(Encoding::SHIFT_JIS).bytes.to_a"#,
+            r#"0x8140.chr(Encoding::SHIFT_JIS).bytes.to_a"#,
+            r#"0xFC4B.chr(Encoding::SHIFT_JIS).bytes.to_a"#,
+            // Encoding name comparison skipped — monoruby uses "SHIFT-JIS" vs CRuby "Shift_JIS"
+        ]);
+        // Invalid codepoints
+        run_test_error(r#"0x80.chr("US-ASCII")"#);
+        run_test_error(r#"0x0100.chr("BINARY")"#);
+        run_test_error(r#"0x80.chr("SHIFT_JIS")"#);
+        run_test_error(r#"0xE0.chr("SHIFT_JIS")"#);
+        // Bignum always out of range
+        run_test_error("(2**100).chr");
+    }
+
+    #[test]
+    fn integer_chr_default_internal() {
+        // default_internal = nil: >255 should raise
+        run_test("Encoding.default_internal");
+        run_test_error("256.chr");
+        // default_internal = UTF-8: >255 uses UTF-8
+        run_test_once(r#"
+            Encoding.default_internal = Encoding::UTF_8
+            res = 0x3000.chr.bytes.to_a
+            Encoding.default_internal = nil
+            res
+        "#);
+        run_test_once(r#"
+            Encoding.default_internal = Encoding::UTF_8
+            res = 0x3000.chr.encoding.to_s
+            Encoding.default_internal = nil
+            res
+        "#);
+        // 0-127 always US-ASCII regardless of default_internal
+        run_test_once(r#"
+            Encoding.default_internal = Encoding::UTF_8
+            res = 65.chr.encoding.to_s
+            Encoding.default_internal = nil
+            res
+        "#);
     }
 
     #[test]
