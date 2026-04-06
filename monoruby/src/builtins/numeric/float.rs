@@ -52,6 +52,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(FLOAT_CLASS, "quo", quo, 1);
     globals.define_builtin_func(FLOAT_CLASS, "eql?", float_eql, 0 + 1);
     globals.define_builtin_funcs(FLOAT_CLASS, "to_s", &["inspect"], float_to_s, 0);
+    globals.define_builtin_class_func(FLOAT_CLASS, "allocate", super::super::class::undef_allocate, 0);
 }
 
 /// Helper to raise FloatDomainError
@@ -525,7 +526,7 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 }
 
 /// Parse the `half:` keyword argument for rounding mode.
-fn parse_half_mode(v: Value) -> Result<Option<RoundHalf>> {
+pub(super) fn parse_half_mode(v: Value) -> Result<Option<RoundHalf>> {
     if v.is_nil() {
         return Ok(None);
     }
@@ -546,7 +547,7 @@ fn parse_half_mode(v: Value) -> Result<Option<RoundHalf>> {
 }
 
 #[derive(Clone, Copy)]
-enum RoundHalf {
+pub(super) enum RoundHalf {
     Up,
     Down,
     Even,
@@ -645,7 +646,7 @@ fn abs(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn angle(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let f = lfp.self_val().try_float().unwrap();
     if f.is_nan() {
-        Ok(Value::float(f64::NAN))
+        Ok(lfp.self_val())
     } else if f.is_sign_negative() {
         Ok(Value::float(std::f64::consts::PI))
     } else {
@@ -758,6 +759,10 @@ mod tests {
         run_test("(-1.0).arg");
         run_test("1.0.phase");
         run_test("(-1.0).phase");
+        // NaN returns self (object identity)
+        run_test_once("n = Float::NAN; n.angle.equal?(n)");
+        run_test_once("n = Float::NAN; n.arg.equal?(n)");
+        run_test_once("n = Float::NAN; n.phase.equal?(n)");
         run_test("1.angle");
         run_test("(-1).angle");
         run_test("0.angle");
@@ -1076,5 +1081,53 @@ mod tests {
         run_test("Float::DIG");
         run_test("Float::MANT_DIG");
         run_test("Float::RADIX");
+    }
+
+    #[test]
+    fn float_coerce_string() {
+        run_test_once(r#"1.0.coerce("2.5").inspect"#);
+        run_test_error(r#"1.0.coerce("not_a_number")"#);
+    }
+
+    #[test]
+    fn float_allocate_disabled() {
+        run_test_error("Float.allocate");
+        run_test_error("Float.new");
+    }
+
+    #[test]
+    fn float_denominator_special() {
+        run_test("Float::NAN.denominator");
+        run_test("Float::INFINITY.denominator");
+        run_test("(-Float::INFINITY).denominator");
+        run_test("1.5.denominator");
+    }
+
+    #[test]
+    fn float_divmod_quotient_type() {
+        run_test("3.8.divmod(1)");
+        run_test("(-3.8).divmod(1)");
+        run_test("3.8.divmod(0.5)");
+        run_test("11.5.divmod(3)");
+    }
+
+    #[test]
+    fn float_eq_coerce_fallback() {
+        run_test_once(
+            r#"
+            class Coercible
+              def ==(other); true; end
+            end
+            1.0 == Coercible.new
+            "#,
+        );
+        run_test_once(
+            r#"
+            class Coercible
+              def ==(other); true; end
+            end
+            1.0 === Coercible.new
+            "#,
+        );
     }
 }

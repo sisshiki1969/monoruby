@@ -147,7 +147,10 @@ impl Executor {
             (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
             (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
             (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
-            (RV::Float(_), _) => false,
+            (RV::Float(_), _) => {
+                // Reverse dispatch: try rhs == lhs
+                return self.invoke_eq(globals, rhs, lhs);
+            }
             (RV::Bool(lhs), RV::Bool(rhs)) => lhs.eq(&rhs),
             (RV::Bool(_), _) => false,
             (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs.eq(&rhs),
@@ -304,7 +307,10 @@ pub(crate) extern "C" fn cmp_teq_values(
         (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
         (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
         (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
-        (RV::Float(_), _) => false,
+        (RV::Float(_), _) => {
+            // Reverse dispatch for Float === non-numeric
+            return vm.invoke_method_simple(globals, IdentId::_EQ, rhs, &[lhs]);
+        }
         _ => {
             return vm.invoke_method_simple(globals, IdentId::_TEQ, lhs, &[rhs]);
         }
@@ -337,15 +343,24 @@ pub(crate) fn cmp_teq_values_bool(
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
         (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
         (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
-        (RV::Fixnum(_), _) => false,
+        (RV::Fixnum(_), _) => {
+            // Reverse dispatch: try rhs == lhs
+            return vm.invoke_eq(globals, rhs, lhs);
+        }
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
         (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
-        (RV::BigInt(_), _) => false,
+        (RV::BigInt(_), _) => {
+            // Reverse dispatch: try rhs == lhs
+            return vm.invoke_eq(globals, rhs, lhs);
+        }
         (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
         (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
         (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
-        (RV::Float(_), _) => false,
+        (RV::Float(_), _) => {
+            // Reverse dispatch: try rhs == lhs
+            return vm.invoke_eq(globals, rhs, lhs);
+        }
         _ => {
             return vm
                 .invoke_method_inner(globals, IdentId::_TEQ, lhs, &[rhs], None, None)

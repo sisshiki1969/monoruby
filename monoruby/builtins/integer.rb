@@ -16,17 +16,7 @@ class Integer
     self > 0
   end
 
-  def floor(ndigits = 0)
-    ndigits = __coerce_ndigits(ndigits)
-    if ndigits >= 0
-      self
-    else
-      d = 10 ** (-ndigits)
-      # Ruby's integer division floors toward negative infinity,
-      # so (self / d) * d always rounds toward negative infinity.
-      (self / d) * d
-    end
-  end
+  # floor, ceil, round, truncate are implemented in Rust (integer.rs)
 
   def times
     return self.to_enum(:times) unless block_given?
@@ -56,65 +46,6 @@ class Integer
     self
   end
 
-  def ceil(ndigits = 0)
-    ndigits = __coerce_ndigits(ndigits)
-    return self if ndigits >= 0
-    d = 10 ** (-ndigits)
-    if self >= 0
-      ((self + d - 1) / d) * d
-    else
-      -((-self) / d) * d
-    end
-  end
-
-  def round(ndigits = 0, **kw)
-    half = kw[:half]
-    if half != nil && half != :up && half != :down && half != :even
-      raise ArgumentError, "invalid rounding mode: #{half}"
-    end
-    ndigits = __coerce_ndigits(ndigits)
-    return self if ndigits >= 0
-    d = 10 ** (-ndigits)
-    abs_val = self < 0 ? -self : self
-    remainder = abs_val % d
-    truncated = abs_val - remainder
-    halfway = d / 2
-    result = if remainder > halfway
-      truncated + d
-    elsif remainder < halfway
-      truncated
-    else
-      # Exactly halfway
-      case half
-      when :up
-        truncated + d
-      when :down
-        truncated
-      when :even
-        # Round to nearest even multiple of d
-        if (truncated / d).even?
-          truncated
-        else
-          truncated + d
-        end
-      else
-        # Default: round half up (away from zero)
-        truncated + d
-      end
-    end
-    self < 0 ? -result : result
-  end
-
-  def truncate(ndigits = 0)
-    ndigits = __coerce_ndigits(ndigits)
-    return self if ndigits >= 0
-    d = 10 ** (-ndigits)
-    if self >= 0
-      (self / d) * d
-    else
-      -((-self) / d) * d
-    end
-  end
 
   def next
     self + 1
@@ -332,7 +263,7 @@ class Integer
       elsif result.is_a?(Integer)
         result
       else
-        raise TypeError, "can't convert #{obj.class} into Integer (#{obj.class}#to_int gives #{result.class})"
+        raise TypeError, "can't convert #{obj.class} to Integer (#{obj.class}#to_int gives #{result.class})"
       end
     else
       nil
