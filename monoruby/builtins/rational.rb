@@ -292,10 +292,20 @@ class Rational
   end
 
   # Stern-Brocot algorithm to find simplest rational within eps of f
+  # Works for both Float and Rational values of f
   def self.__float_find_simplest(f, eps)
     eps = eps.abs
+    # Handle negative values: negate, find simplest, negate back
+    if f < 0
+      return -__float_find_simplest(-f, eps)
+    end
     lo = f - eps
     hi = f + eps
+    # If range includes zero or negative, return 0
+    if hi < 0
+      return Rational(0)
+    end
+    lo = Rational(0) if lo < 0
     # Use mediant-based search (Stern-Brocot tree)
     p0, q0 = 0, 1
     p1, q1 = 1, 0
