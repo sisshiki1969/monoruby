@@ -63,13 +63,21 @@ macro_rules! cmp_values {
                     (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
                     (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
                     (RV::Float(_) , _) => {
-                        // Try coerce protocol for comparison
+                        // Try coerce protocol for comparison, propagate exceptions
                         let coerce_id = IdentId::get_id("coerce");
-                        if let Ok(Some(result)) = vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None) {
-                            if let Some(ary) = result.try_array_ty() {
-                                if ary.len() == 2 {
-                                    return vm.invoke_method_simple(globals, $op_str, ary[0], &[ary[1]]);
+                        match vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None) {
+                            Ok(Some(result)) => {
+                                if let Some(ary) = result.try_array_ty() {
+                                    if ary.len() == 2 {
+                                        return vm.invoke_method_simple(globals, $op_str, ary[0], &[ary[1]]);
+                                    }
                                 }
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                // Propagate exception from coerce
+                                vm.set_error(e);
+                                return None;
                             }
                         }
                         let err = MonorubyErr::argumenterr(format!(

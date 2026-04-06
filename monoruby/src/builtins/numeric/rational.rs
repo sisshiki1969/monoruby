@@ -352,7 +352,16 @@ fn pow(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
             if lhs.is_zero() && f < 0.0 {
                 return Err(MonorubyErr::divide_by_zero());
             }
-            Ok(Value::float(lhs.to_f().powf(f)))
+            let base = lhs.to_f();
+            let result = base.powf(f);
+            if result.is_nan() && base < 0.0 {
+                // Negative base with fractional exponent: return Complex
+                let abs_result = (-base).powf(f);
+                let theta = f * std::f64::consts::PI;
+                Ok(Value::complex(abs_result * theta.cos(), abs_result * theta.sin()))
+            } else {
+                Ok(Value::float(result))
+            }
         }
         _ => {
             if let Some(r) = rhs.try_rational() {
@@ -378,7 +387,15 @@ fn pow(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
                         }
                     }
                 }
-                return Ok(Value::float(lhs.to_f().powf(r.to_f())));
+                let base = lhs.to_f();
+                let exp = r.to_f();
+                let result = base.powf(exp);
+                if result.is_nan() && base < 0.0 {
+                    let abs_result = (-base).powf(exp);
+                    let theta = exp * std::f64::consts::PI;
+                    return Ok(Value::complex(abs_result * theta.cos(), abs_result * theta.sin()));
+                }
+                return Ok(Value::float(result));
             }
             Err(MonorubyErr::typeerr(format!(
                 "{} can't be coerced into Rational",
@@ -502,6 +519,17 @@ mod tests {
         run_test_error("Rational(0, 1) ** Rational(-1, 1)");
         // Type error for unsupported type
         run_test_error("Rational(1, 2) ** :sym");
+    }
+
+    // Fix 3: Negative Rational ** fractional exponent returns Complex
+    #[test]
+    fn rational_pow_negative_base_complex() {
+        // Rational(-8,1) ** Rational(1,3) should return Complex
+        run_test_once("(Rational(-8, 1) ** Rational(1, 3)).class");
+        // Rational(-8,1) ** 0.333... should return Complex
+        run_test_once("(Rational(-8, 1) ** (1.0/3)).class");
+        // Integer ** Rational also goes through coerce to Rational **
+        run_test_once("((-8) ** Rational(1, 3)).class");
     }
 
     #[test]
