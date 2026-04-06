@@ -4,9 +4,47 @@ pub(crate) mod binary_ops;
 mod sort;
 
 pub(crate) use binary_ops::*;
-use num::{BigInt, ToPrimitive};
+use num::{BigInt, FromPrimitive};
 use paste::paste;
 pub(crate) use sort::*;
+
+/// Compare BigInt with f64 precisely without losing precision.
+/// Returns Ordering (Less, Equal, Greater) of bigint relative to float.
+/// Returns None if the float is NaN.
+pub(crate) fn bigint_cmp_float(bigint: &BigInt, f: f64) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    if f.is_nan() {
+        return None;
+    }
+    if f.is_infinite() {
+        return if f > 0.0 {
+            Some(Ordering::Less)
+        } else {
+            Some(Ordering::Greater)
+        };
+    }
+    // Convert float to its exact BigInt truncation
+    let f_trunc = f.trunc();
+    let f_bigint = match BigInt::from_f64(f_trunc) {
+        Some(v) => v,
+        None => return Some(Ordering::Less), // shouldn't happen for finite f
+    };
+    match bigint.cmp(&f_bigint) {
+        Ordering::Greater => Some(Ordering::Greater),
+        Ordering::Less => Some(Ordering::Less),
+        Ordering::Equal => {
+            // BigInt == trunc(f), so compare with fractional part
+            let frac = f - f_trunc;
+            if frac > 0.0 {
+                Some(Ordering::Less) // bigint < bigint + positive_frac
+            } else if frac < 0.0 {
+                Some(Ordering::Greater) // bigint > bigint + negative_frac
+            } else {
+                Some(Ordering::Equal)
+            }
+        }
+    }
+}
 
 //
 // Generic operations.
@@ -31,7 +69,12 @@ macro_rules! cmp_values {
                     (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).$op(&rhs),
                     (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.$op(&BigInt::from(rhs)),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.$op(&rhs),
-                    (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().$op(&rhs),
+                    (RV::BigInt(lhs), RV::Float(rhs)) => {
+                        match bigint_cmp_float(&lhs, rhs) {
+                            Some(ord) => ord.$op(&std::cmp::Ordering::Equal),
+                            None => false, // NaN comparisons are always false
+                        }
+                    }
                     (RV::Fixnum(_)| RV::BigInt(_) , _) => {
                         // Try coerce protocol for comparison, propagate exceptions
                         let coerce_id = IdentId::get_id("coerce");
@@ -60,7 +103,12 @@ macro_rules! cmp_values {
                     }
 
                     (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.$op(&(rhs as f64)),
-                    (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
+                    (RV::Float(lhs), RV::BigInt(rhs)) => {
+                        match bigint_cmp_float(&rhs, lhs) {
+                            Some(ord) => ord.reverse().$op(&std::cmp::Ordering::Equal),
+                            None => false, // NaN comparisons are always false
+                        }
+                    }
                     (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
                     (RV::Float(_) , _) => {
                         // Try coerce protocol for comparison, propagate exceptions
@@ -139,13 +187,17 @@ impl Executor {
             }
             (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
             (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
-            (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
+            (RV::BigInt(lhs), RV::Float(rhs)) => {
+                bigint_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
+            }
             (RV::BigInt(_), _) => {
                 // Reverse dispatch: try rhs == lhs
                 return self.invoke_eq(globals, rhs, lhs);
             }
             (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
-            (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
+            (RV::Float(lhs), RV::BigInt(rhs)) => {
+                bigint_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
+            }
             (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
             (RV::Float(_), _) => {
                 // Reverse dispatch: try rhs == lhs
@@ -299,13 +351,17 @@ pub(crate) extern "C" fn cmp_teq_values(
         }
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
-        (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
+        (RV::BigInt(lhs), RV::Float(rhs)) => {
+            bigint_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
+        }
         (RV::BigInt(_), _) => {
             // Reverse dispatch for Integer === non-numeric
             return vm.invoke_method_simple(globals, IdentId::_EQ, rhs, &[lhs]);
         }
         (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
-        (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
+        (RV::Float(lhs), RV::BigInt(rhs)) => {
+            bigint_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
+        }
         (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
         (RV::Float(_), _) => {
             // Reverse dispatch for Float === non-numeric
@@ -349,13 +405,17 @@ pub(crate) fn cmp_teq_values_bool(
         }
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
-        (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
+        (RV::BigInt(lhs), RV::Float(rhs)) => {
+            bigint_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
+        }
         (RV::BigInt(_), _) => {
             // Reverse dispatch: try rhs == lhs
             return vm.invoke_eq(globals, rhs, lhs);
         }
         (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
-        (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
+        (RV::Float(lhs), RV::BigInt(rhs)) => {
+            bigint_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
+        }
         (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
         (RV::Float(_), _) => {
             // Reverse dispatch: try rhs == lhs
@@ -416,10 +476,12 @@ impl Executor {
             (RV::Fixnum(_), _) => None,
             (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&BigInt::from(rhs)),
             (RV::BigInt(lhs), RV::BigInt(rhs)) => Some(lhs.cmp(rhs)),
-            (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().partial_cmp(&rhs),
+            (RV::BigInt(lhs), RV::Float(rhs)) => bigint_cmp_float(lhs, rhs),
             (RV::BigInt(_), _) => None,
             (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&(rhs as f64)),
-            (RV::Float(lhs), RV::BigInt(rhs)) => lhs.partial_cmp(&(rhs.to_f64().unwrap())),
+            (RV::Float(lhs), RV::BigInt(rhs)) => {
+                bigint_cmp_float(rhs, lhs).map(|ord| ord.reverse())
+            }
             (RV::Float(lhs), RV::Float(rhs)) => lhs.partial_cmp(&rhs),
             (RV::Float(_), _) => None,
             _ => {

@@ -264,6 +264,25 @@ mod tests {
     }
 
     #[test]
+    fn bigint_float_cmp_precision() {
+        // BigInt vs near-float comparison (precision-sensitive)
+        run_test_once("(0x8000_0000_0000_0000 + 39) <= (0x8000_0000_0000_0000 + 39 + 0.0)");
+        run_test_once("(0x8000_0000_0000_0000 + 39) == (0x8000_0000_0000_0000 + 39 + 0.0)");
+        run_test_once("(0x8000_0000_0000_0000 + 39) <=> (0x8000_0000_0000_0000 + 39 + 0.0)");
+        run_test_once("(0x8000_0000_0000_0000 + 39) > (0x8000_0000_0000_0000 + 39 + 0.0)");
+        // Float vs BigInt (reversed operands)
+        run_test_once("(0x8000_0000_0000_0000 + 39 + 0.0) >= (0x8000_0000_0000_0000 + 39)");
+        run_test_once("(0x8000_0000_0000_0000 + 39 + 0.0) == (0x8000_0000_0000_0000 + 39)");
+        // BigInt exactly equal to float
+        run_test_once("(1 << 53) == (1 << 53).to_f");
+        run_test_once("(1 << 53) <=> (1 << 53).to_f");
+        // NaN comparison
+        run_test_once("(1 << 100) == Float::NAN");
+        run_test_once("(1 << 100) < Float::NAN");
+        run_test_once("Float::NAN > (1 << 100)");
+    }
+
+    #[test]
     fn divmod() {
         run_test("(11).divmod(3)");
         run_test("(11).divmod(-3)");

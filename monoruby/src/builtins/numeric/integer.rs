@@ -169,15 +169,15 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         Some(block) => block,
     };
     let cur = lfp.self_val().expect_integer(globals)?;
-    let arg = lfp.arg(0);
-    let limit = if let Some(f) = arg.try_float() {
+    let limit = if let Some(f) = lfp.arg(0).try_float() {
+        if f.is_nan() {
+            return Ok(lfp.self_val());
+        }
         f.floor() as i64
     } else {
-        match arg.coerce_to_int_i64(vm, globals) {
+        match lfp.arg(0).coerce_to_int_i64(vm, globals) {
             Ok(v) => v,
-            Err(_) => {
-                return Err(MonorubyErr::argumenterr(format!("bad value for range")))
-            }
+            Err(_) => return Err(MonorubyErr::argumenterr(format!("bad value for range"))),
         }
     };
     if cur > limit {
@@ -491,7 +491,9 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
         (RV::Fixnum(l), RV::Float(r)) => (l as f64) == r,
         (RV::BigInt(l), RV::Fixnum(r)) => *l == BigInt::from(r),
         (RV::BigInt(l), RV::BigInt(r)) => l == r,
-        (RV::BigInt(l), RV::Float(r)) => l.to_f64().unwrap() == r,
+        (RV::BigInt(l), RV::Float(r)) => {
+            super::super::op::bigint_cmp_float(l, r) == Some(std::cmp::Ordering::Equal)
+        }
         _ => {
             // Reverse dispatch: try rhs == lhs
             let eq_id = IdentId::get_id("==");
@@ -535,20 +537,9 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.cmp(&BigInt::from(rhs)),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.cmp(rhs),
         (RV::BigInt(lhs), RV::Float(rhs)) => {
-            if rhs.is_nan() {
-                return Ok(Value::nil());
-            }
-            if rhs.is_infinite() {
-                if rhs > 0.0 {
-                    std::cmp::Ordering::Less
-                } else {
-                    std::cmp::Ordering::Greater
-                }
-            } else {
-                match lhs.to_f64().unwrap_or(f64::INFINITY).partial_cmp(&rhs) {
-                    Some(ord) => ord,
-                    None => return Ok(Value::nil()),
-                }
+            match super::super::op::bigint_cmp_float(lhs, rhs) {
+                Some(ord) => ord,
+                None => return Ok(Value::nil()),
             }
         }
         _ => {
@@ -1068,6 +1059,12 @@ fn int_round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     } else {
         None
     };
+    if ndigits > (i32::MAX as i64) || ndigits < -(i32::MAX as i64) {
+        return Err(MonorubyErr::rangeerr(format!(
+            "integer {} too big to convert to `int'",
+            ndigits
+        )));
+    }
     if ndigits >= 0 {
         return Ok(lfp.self_val());
     }
@@ -2095,28 +2092,32 @@ mod tests {
 
     #[test]
     fn try_convert_error_message() {
-        // to_int returning non-Integer should raise TypeError with "into"
         run_test_error(
             r#"class C; def to_int; "str"; end; end; Integer.try_convert(C.new)"#,
         );
     }
 
     #[test]
-    fn upto_float_boundary_negative() {
-        // -5.upto(-1.3) should stop at -2, not -1
-        run_test("(-5).upto(-1.3).to_a");
+    fn upto_with_float() {
+        run_tests(
+            &[
+                "res = []; 9.upto(13) {|i| res << i}; res",
+                "res = []; (-5).upto(-1.3) {|i| res << i}; res",
+                "res = []; 1.upto(3.9) {|i| res << i}; res",
+                "res = []; 1.upto(3.0) {|i| res << i}; res",
+                "(-5).upto(-1.3).to_a",
+            ],
+        );
     }
 
     #[test]
     fn upto_downto_non_numeric_size() {
-        // Enumerator#size should raise ArgumentError for non-numeric
         run_test_error(r#"1.upto("a").size"#);
         run_test_error(r#"1.downto("a").size"#);
     }
 
     #[test]
-    fn round_huge_ndigits_rangeerror() {
-        // ndigits beyond signed int range should raise RangeError
+    fn round_range_error() {
         run_test_error("42.round(1 << 31)");
         run_test_error("42.round(-(1 << 31) - 1)");
     }

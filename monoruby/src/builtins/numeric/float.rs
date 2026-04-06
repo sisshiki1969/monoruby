@@ -1,6 +1,7 @@
 use num::{BigInt, FromPrimitive, ToPrimitive};
 
 use super::*;
+use crate::executor::Visibility;
 
 //
 // Float class
@@ -53,6 +54,9 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(FLOAT_CLASS, "eql?", float_eql, 0 + 1);
     globals.define_builtin_funcs(FLOAT_CLASS, "to_s", &["inspect"], float_to_s, 0);
     globals.define_builtin_class_func(FLOAT_CLASS, "allocate", super::super::class::undef_allocate, 0);
+    // Float.new should raise NoMethodError (not TypeError from allocate)
+    let float_meta = globals.store.get_metaclass(FLOAT_CLASS).id();
+    globals.add_empty_method(float_meta, IdentId::get_id("new"), Visibility::Undefined);
 }
 
 /// Helper to raise FloatDomainError
@@ -170,13 +174,7 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         (None, _) => unreachable!(),
         (Some(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&(rhs as f64)),
         (Some(lhs), RV::BigInt(rhs)) => {
-            if lhs.is_nan() {
-                None
-            } else if lhs.is_infinite() {
-                if lhs > 0.0 { Some(std::cmp::Ordering::Greater) } else { Some(std::cmp::Ordering::Less) }
-            } else {
-                lhs.partial_cmp(&rhs.to_f64().unwrap_or(f64::INFINITY))
-            }
+            super::super::op::bigint_cmp_float(rhs, lhs).map(|ord| ord.reverse())
         }
         (Some(lhs), RV::Float(rhs)) => lhs.partial_cmp(&rhs),
         (Some(lhs_f), _) => {
@@ -474,7 +472,23 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             // f * 10^ndigits overflows — rounding is a no-op
             return Ok(Value::float(f));
         }
-        let f = round_half(scaled, half) / mul;
+        // Check if the scaled value appears to be exactly at a halfway point.
+        // If so, verify whether the original f is truly at half by comparing
+        // f with the exact halfway value reconstructed from the scaled floor.
+        // This avoids precision loss from the f*mul multiplication.
+        let effective_half = if scaled == scaled.floor() + 0.5 {
+            let half_reconstructed = (scaled.floor() + 0.5) / mul;
+            if f != half_reconstructed {
+                // f is not truly at the halfway point — scaling introduced
+                // the apparent half. Use standard rounding (no half mode).
+                None
+            } else {
+                half // truly at half — use the requested mode
+            }
+        } else {
+            half
+        };
+        let f = round_half(scaled, effective_half) / mul;
         Ok(Value::float(f))
     } else {
         let neg_ndigits = (-ndigits) as u32;
@@ -1146,5 +1160,44 @@ mod tests {
     #[test]
     fn float_quo_complex() {
         run_test("8.0.quo(Complex(2, 1)).class");
+    }
+
+    #[test]
+    fn float_fdiv() {
+        run_tests(
+            &["1.0.fdiv(2)", "1.0.fdiv(2.0)", "1.0.fdiv(0.5)"],
+        );
+        run_test_error("1.0.fdiv(:foo)");
+    }
+
+    #[test]
+    fn float_rationalize() {
+        run_tests(
+            &[
+                "3382729202.92822.rationalize",
+                "0.3.rationalize(Rational(1,10))", "0.3.rationalize(0.05)", "0.3.rationalize(0.001)",
+                "(-0.3).rationalize(Rational(1,10))", "(-0.3).rationalize(0.05)", "(-0.3).rationalize(0.001)",
+                "0.0.rationalize",
+            ],
+        );
+        run_test_error("Float::NAN.rationalize");
+        run_test_error("Float::INFINITY.rationalize");
+    }
+
+    #[test]
+    fn float_round_precision() {
+        run_tests(
+            &[
+                "767573.1875850001.round(5)",
+                "767573.1875850001.round(5, half: :up)",
+                "767573.1875850001.round(5, half: :down)",
+                "767573.1875850001.round(5, half: :even)",
+                "(-767573.1875850001).round(5, half: :down)",
+                "(-767573.1875850001).round(5, half: :even)",
+                "767573.187585.round(5, half: :up)",
+                "767573.187585.round(5, half: :down)",
+                "767573.187585.round(5, half: :even)",
+            ],
+        );
     }
 }
