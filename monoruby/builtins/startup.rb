@@ -635,7 +635,7 @@ class Encoding
   class Converter; end
 
   def self.default_internal
-    nil
+    $DEFAULT_INTERNAL
   end
 end
 

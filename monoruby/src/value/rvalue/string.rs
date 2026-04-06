@@ -83,7 +83,9 @@ impl Encoding {
             "EUC_KR" | "EUCKR" | "CP949" => Ok(Encoding::Ascii8),
 
             // Other
-            "EUC_TW" | "EUCTW" | "TIS_620" | "TIS620" => Ok(Encoding::Ascii8),
+            "EUC_TW" | "EUCTW" | "TIS_620" | "TIS620" | "CESU_8" | "CESU8" => {
+                Ok(Encoding::Ascii8)
+            }
 
             _ => Err(MonorubyErr::argumenterr(format!(
                 "unknown encoding name - {s}"
