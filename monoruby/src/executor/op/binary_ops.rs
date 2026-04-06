@@ -364,7 +364,16 @@ pub(crate) extern "C" fn pow_ii(lhs: i64, rhs: i64, vm: &mut Executor) -> Option
                 vm.set_error(MonorubyErr::divide_by_zero());
                 return None;
             }
-            return Some(Value::float((lhs as f64).powf(rhs as f64)));
+            if lhs == 1 {
+                return Some(Value::integer(1));
+            }
+            if lhs == -1 {
+                return Some(Value::integer(if (-rhs) & 1 == 1 { -1 } else { 1 }));
+            }
+            // a ** -n = Rational(1, a**n) for |a| > 1
+            let neg_rhs = (-rhs) as u32;
+            let denom = BigInt::from(lhs).pow(neg_rhs);
+            return Some(Value::rational_from_bigint(BigInt::from(1), denom));
         }
         let rhs = rhs as u32;
         match lhs.checked_pow(rhs) {
@@ -427,8 +436,19 @@ pub(crate) extern "C" fn pow_values(
         (RV::Fixnum(lhs), RV::Float(rhs)) => pow_ff(lhs as f64, rhs),
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => {
             if rhs < 0 {
-                // TODO: support negative exponent for bigint base.
-                Value::float(f64::INFINITY)
+                if lhs.is_zero() {
+                    vm.set_error(MonorubyErr::divide_by_zero());
+                    return None;
+                }
+                if *lhs == BigInt::from(1) {
+                    Value::integer(1)
+                } else if *lhs == BigInt::from(-1) {
+                    Value::integer(if (-rhs) & 1 == 1 { -1 } else { 1 })
+                } else {
+                    let neg_rhs = (-rhs) as u32;
+                    let denom = lhs.pow(neg_rhs);
+                    Value::rational_from_bigint(BigInt::from(1), denom)
+                }
             } else {
                 let base_bits = lhs.bits();
                 if !check_pow_limit(base_bits, rhs as u64) {

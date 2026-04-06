@@ -221,21 +221,6 @@ class Integer
     [gcd(other), lcm(other)]
   end
 
-  def pow(exp, mod = nil)
-    if mod
-      base = self % mod
-      result = 1
-      e = exp
-      while e > 0
-        result = result * base % mod if e.odd?
-        base = base * base % mod
-        e >>= 1
-      end
-      result
-    else
-      self ** exp
-    end
-  end
 
   def allbits?(mask)
     unless mask.respond_to?(:to_int)

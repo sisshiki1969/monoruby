@@ -47,6 +47,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, "eql?", eql_, 1);
     globals.define_builtin_func(INTEGER_CLASS, "abs", abs, 0);
     globals.define_builtin_func(INTEGER_CLASS, "magnitude", abs, 0);
+    globals.define_builtin_func_with(INTEGER_CLASS, "pow", pow, 1, 2, false);
 }
 
 /*///
@@ -868,6 +869,67 @@ fn abs(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
         _ => unreachable!(),
     })
+}
+
+///
+/// ### Integer#pow
+///
+/// - pow(other) -> Numeric
+/// - pow(other, mod) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/pow.html]
+#[monoruby_builtin]
+fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let exp = lfp.arg(0);
+    if let Some(mod_val) = lfp.try_arg(1) {
+        // 3-argument form: pow(exp, mod)
+        if exp.try_fixnum().is_none() && !matches!(exp.unpack(), RV::BigInt(_)) {
+            return Err(MonorubyErr::typeerr(
+                "Integer#pow() 2nd argument not allowed unless a 1st argument is integer",
+            ));
+        }
+        if mod_val.try_fixnum().is_none() && !matches!(mod_val.unpack(), RV::BigInt(_)) {
+            return Err(MonorubyErr::typeerr(
+                "Integer#pow() 2nd argument not allowed unless all arguments are integers",
+            ));
+        }
+        let exp_i = exp.coerce_to_int_i64(vm, globals)?;
+        if exp_i < 0 {
+            return Err(MonorubyErr::rangeerr(
+                "Integer#pow() 1st argument cannot be negative when 2nd argument specified",
+            ));
+        }
+        let mod_i = mod_val.coerce_to_int_i64(vm, globals)?;
+        if mod_i == 0 {
+            return Err(MonorubyErr::divide_by_zero());
+        }
+        // Modular exponentiation: self**exp % mod
+        let base_big = match lfp.self_val().unpack() {
+            RV::Fixnum(i) => BigInt::from(i),
+            RV::BigInt(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        let mod_big = BigInt::from(mod_i);
+        let mut base = base_big % &mod_big;
+        let mut result = BigInt::from(1);
+        let mut e = exp_i as u64;
+        while e > 0 {
+            if e & 1 == 1 {
+                result = result * &base % &mod_big;
+            }
+            base = &base * &base % &mod_big;
+            e >>= 1;
+        }
+        // Normalize result to match Ruby semantics (always non-negative when mod > 0)
+        if result < BigInt::ZERO {
+            result += &mod_big;
+        }
+        Ok(Value::bigint(result))
+    } else {
+        // 2-argument form: pow(exp) — delegate to ** operator
+        let lhs = lfp.self_val();
+        vm.invoke_method_inner(globals, IdentId::_POW, lhs, &[exp], None, None)
+    }
 }
 
 ///

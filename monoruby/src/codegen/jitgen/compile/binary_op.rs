@@ -305,8 +305,8 @@ impl AbstractFrame {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
                 self.fetch_fixnum_binary(ir, lhs, rhs, mode);
-                let deopt = ir.new_deopt(self);
-                ir.integer_exp(self, deopt);
+                let error = ir.new_error(self);
+                ir.integer_exp(self, error);
                 self.def_reg2acc(ir, GP::Rax, dst);
             }
             BinOpK::Div => {
