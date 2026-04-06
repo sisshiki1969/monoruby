@@ -33,7 +33,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, ">", gt, 1);
     globals.define_builtin_func(INTEGER_CLASS, "<=", le, 1);
     globals.define_builtin_func(INTEGER_CLASS, "<", lt, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "!=", ne, 1);
+    globals.define_basic_op(INTEGER_CLASS, "!=", ne, 1);
     globals.define_builtin_func(INTEGER_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func_with(INTEGER_CLASS, "[]", index, 1, 2, false);
     globals.define_builtin_func(INTEGER_CLASS, "even?", even_, 0);

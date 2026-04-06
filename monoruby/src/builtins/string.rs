@@ -28,7 +28,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func(STRING_CLASS, "casecmp", casecmp, 1);
     globals.define_builtin_func(STRING_CLASS, "casecmp?", casecmp_p, 1);
-    globals.define_builtin_func(STRING_CLASS, "!=", ne, 1);
+    globals.define_basic_op(STRING_CLASS, "!=", ne, 1);
     globals.define_builtin_func(STRING_CLASS, ">=", ge, 1);
     globals.define_builtin_func(STRING_CLASS, ">", gt, 1);
     globals.define_builtin_func(STRING_CLASS, "<=", le, 1);

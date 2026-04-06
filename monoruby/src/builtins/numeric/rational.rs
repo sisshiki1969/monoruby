@@ -21,7 +21,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(RATIONAL_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "==", eq, 1);
-    globals.define_builtin_func(RATIONAL_CLASS, "!=", ne, 1);
+    globals.define_basic_op(RATIONAL_CLASS, "!=", ne, 1);
     globals.define_builtin_func(RATIONAL_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func(RATIONAL_CLASS, "+", add, 1);
     globals.define_builtin_func(RATIONAL_CLASS, "-", sub, 1);

@@ -229,6 +229,17 @@ impl Executor {
         lhs: Value,
         rhs: Value,
     ) -> Result<bool> {
+        // Check if the receiver has a custom != method (not the default basic op).
+        // If so, dispatch to it directly instead of negating ==.
+        let class_id = lhs.class();
+        if let Some(entry) = globals.check_method_for_class(class_id, IdentId::_NEQ) {
+            if !entry.is_basic_op() {
+                if let Some(func_id) = entry.func_id() {
+                    let b = self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)?;
+                    return Ok(b.as_bool());
+                }
+            }
+        }
         Ok(!self.eq_values_bool(globals, lhs, rhs)?)
     }
 
@@ -238,7 +249,9 @@ impl Executor {
         lhs: Value,
         rhs: Value,
     ) -> Result<bool> {
-        Ok(!self.invoke_eq(globals, lhs, rhs)?)
+        let func_id = self.find_method(globals, lhs, IdentId::_NEQ, true)?;
+        let b = self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)?;
+        Ok(b.as_bool())
     }
 }
 

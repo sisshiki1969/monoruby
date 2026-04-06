@@ -19,7 +19,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(BASIC_OBJECT_CLASS, "==", eq, 1);
     globals.define_builtin_func(BASIC_OBJECT_CLASS, "equal?", eq, 1);
     globals.define_builtin_inline_func(BASIC_OBJECT_CLASS, "!", not_, Box::new(object_not), 0);
-    globals.define_builtin_func(BASIC_OBJECT_CLASS, "!=", ne, 1);
+    globals.define_basic_op(BASIC_OBJECT_CLASS, "!=", ne, 1);
     globals.define_builtin_funcs_with_effect(
         BASIC_OBJECT_CLASS,
         "instance_eval",

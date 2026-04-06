@@ -15,7 +15,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         ObjTy::COMPLEX,
     );
     globals.define_builtin_func(COMPLEX_CLASS, "==", eq, 1);
-    globals.define_builtin_func(COMPLEX_CLASS, "!=", ne, 1);
+    globals.define_basic_op(COMPLEX_CLASS, "!=", ne, 1);
     globals.define_builtin_class_func_with(COMPLEX_CLASS, "polar", complex_polar, 1, 2, false);
     globals.define_builtin_class_funcs_with(
         COMPLEX_CLASS,
