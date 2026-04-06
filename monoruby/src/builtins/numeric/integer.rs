@@ -165,9 +165,7 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     let cur = lfp.self_val().expect_integer(globals)?;
     let limit = match lfp.arg(0).coerce_to_int_i64(vm, globals) {
         Ok(v) => v,
-        Err(_) => return Err(MonorubyErr::argumenterr(format!(
-            "bad value for range"
-        ))),
+        Err(_) => return Err(MonorubyErr::argumenterr(format!("bad value for range"))),
     };
     if cur > limit {
         return Ok(lfp.self_val());
@@ -207,9 +205,7 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     } else {
         match lfp.arg(0).coerce_to_int_i64(vm, globals) {
             Ok(v) => v,
-            Err(_) => return Err(MonorubyErr::argumenterr(format!(
-                "bad value for range"
-            ))),
+            Err(_) => return Err(MonorubyErr::argumenterr(format!("bad value for range"))),
         }
     };
     if cur < limit {
@@ -550,7 +546,14 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                     if let Some(ary) = result.try_array_ty() {
                         if ary.len() == 2 {
                             let cmp_id = IdentId::get_id("<=>");
-                            return vm.invoke_method_inner(globals, cmp_id, ary[0], &[ary[1]], None, None);
+                            return vm.invoke_method_inner(
+                                globals,
+                                cmp_id,
+                                ary[0],
+                                &[ary[1]],
+                                None,
+                                None,
+                            );
                         }
                     }
                     return Ok(Value::nil());
@@ -883,12 +886,12 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let exp = lfp.arg(0);
     if let Some(mod_val) = lfp.try_arg(1) {
         // 3-argument form: pow(exp, mod)
-        if exp.try_fixnum().is_none() && !matches!(exp.unpack(), RV::BigInt(_)) {
+        if !exp.is_integer() {
             return Err(MonorubyErr::typeerr(
                 "Integer#pow() 2nd argument not allowed unless a 1st argument is integer",
             ));
         }
-        if mod_val.try_fixnum().is_none() && !matches!(mod_val.unpack(), RV::BigInt(_)) {
+        if !mod_val.is_integer() {
             return Err(MonorubyErr::typeerr(
                 "Integer#pow() 2nd argument not allowed unless all arguments are integers",
             ));
@@ -1017,11 +1020,7 @@ fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     i as u128
                 };
                 let s = format_integer_base(abs, base);
-                if negative {
-                    format!("-{}", s)
-                } else {
-                    s
-                }
+                if negative { format!("-{}", s) } else { s }
             }
         }
         RV::BigInt(b) => {
@@ -1032,17 +1031,16 @@ fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 let negative = b.is_negative();
                 let abs = if negative { -b } else { b.clone() };
                 let s = format_bigint_base(&abs, base);
-                if negative {
-                    format!("-{}", s)
-                } else {
-                    s
-                }
+                if negative { format!("-{}", s) } else { s }
             }
         }
         _ => unreachable!(),
     };
     use crate::value::rvalue::{Encoding, RStringInner};
-    Ok(Value::string_from_inner(RStringInner::from_encoding(s.as_bytes(), Encoding::UsAscii)))
+    Ok(Value::string_from_inner(RStringInner::from_encoding(
+        s.as_bytes(),
+        Encoding::UsAscii,
+    )))
 }
 
 fn format_integer_base(mut n: u128, base: u32) -> String {
@@ -1789,14 +1787,16 @@ mod tests {
 
     #[test]
     fn integer_cmp_coerce() {
-        run_test_once(r#"
+        run_test_once(
+            r#"
             class Foo
               def coerce(other)
                 [other.to_f, 42.0]
               end
             end
             [1 <=> Foo.new, 100 <=> Foo.new]
-        "#);
+        "#,
+        );
     }
 
     #[test]

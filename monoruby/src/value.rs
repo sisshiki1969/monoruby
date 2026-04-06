@@ -312,16 +312,22 @@ impl RubyEql<Executor, Globals, MonorubyErr> for Value {
                             if lhs_ary.len() != rhs_ary.len() {
                                 return Ok(false);
                             }
-                            let lhs_id = self.id();
-                            let rhs_id = other.id();
-                            return exec_recursive_paired(lhs_id, rhs_id, || {
-                                for (a1, a2) in lhs_ary.iter().zip(rhs_ary.iter()) {
-                                    if !a1.eql(a2, vm, globals)? {
-                                        return Ok(Value::bool(false));
+                            let l = self.id();
+                            let r = other.id();
+                            return exec_recursive_paired(
+                                l,
+                                r,
+                                || {
+                                    for (a1, a2) in lhs_ary.iter().zip(rhs_ary.iter()) {
+                                        if !a1.eql(a2, vm, globals)? {
+                                            return Ok(Value::bool(false));
+                                        }
                                     }
-                                }
-                                Ok(Value::bool(true))
-                            }, Value::bool(true)).map(|v| v == Value::bool(true));
+                                    Ok(Value::bool(true))
+                                },
+                                Value::bool(true),
+                            )
+                            .map(|v| v == Value::bool(true));
                         }
                         (ObjTy::RANGE, ObjTy::RANGE) => {
                             lhs.as_range().eql(rhs.as_range(), vm, globals)?
@@ -329,10 +335,16 @@ impl RubyEql<Executor, Globals, MonorubyErr> for Value {
                         (ObjTy::HASH, ObjTy::HASH) => {
                             let lhs_id = self.id();
                             let rhs_id = other.id();
-                            return exec_recursive_paired(lhs_id, rhs_id, || {
-                                let r = lhs.as_hashmap().eql(rhs.as_hashmap(), vm, globals)?;
-                                Ok(Value::bool(r))
-                            }, Value::bool(true)).map(|v| v == Value::bool(true));
+                            return exec_recursive_paired(
+                                lhs_id,
+                                rhs_id,
+                                || {
+                                    let r = lhs.as_hashmap().eql(rhs.as_hashmap(), vm, globals)?;
+                                    Ok(Value::bool(r))
+                                },
+                                Value::bool(true),
+                            )
+                            .map(|v| v == Value::bool(true));
                         }
                         //(ObjTy::METHOD, ObjTy::METHOD) => *self.method() == *other.method(),
                         //(ObjTy::UNBOUND_METHOD, ObjTy::UNBOUND_METHOD) => *self.method() == *other.method(),
@@ -1155,6 +1167,13 @@ impl Value {
             Some((self.0.get() as i64) >> 1)
         } else {
             None
+        }
+    }
+
+    pub fn is_integer(&self) -> bool {
+        match self.unpack() {
+            RV::Fixnum(_) | RV::BigInt(_) => true,
+            _ => false,
         }
     }
 
