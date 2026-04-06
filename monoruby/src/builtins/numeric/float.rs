@@ -303,19 +303,26 @@ fn floor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             Err(MonorubyErr::rangeerr("too big to convert to u32"))
         }
     } else {
-        if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
-            let mul = 10f64.powi(neg_ndigits as i32);
-            let f = (f / mul).floor() * mul;
-            if let Some(v) = Value::integer_from_f64(f) {
-                Ok(v)
-            } else {
-                Err(MonorubyErr::rangeerr(format!(
-                    "[unreachable] invalid f64: {f}"
-                )))
-            }
-        } else {
-            Err(MonorubyErr::rangeerr("too small to convert to u32"))
+        let neg_ndigits = (-ndigits) as u32;
+        if neg_ndigits > 308 {
+            return Ok(Value::integer(0));
         }
+        // Use BigInt to avoid precision loss from float division.
+        let int_val = match BigInt::from_f64(f.trunc()) {
+            Some(v) => v,
+            None => return Ok(Value::integer(0)),
+        };
+        let mul_big = BigInt::from(10u64).pow(neg_ndigits);
+        let frac_part = f - f.trunc();
+        let (quot, rem) = num::integer::div_rem(int_val, mul_big.clone());
+        // floor: round toward negative infinity
+        let rounded_quot = if rem < BigInt::ZERO || (rem == BigInt::ZERO && frac_part < 0.0) {
+            &quot - 1
+        } else {
+            quot.clone()
+        };
+        let result = rounded_quot * mul_big;
+        Ok(Value::bigint(result))
     }
 }
 
@@ -355,18 +362,26 @@ fn ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             Err(MonorubyErr::rangeerr("too big to convert to u32"))
         }
     } else {
-        if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
-            let mul = 10f64.powi(neg_ndigits as i32);
-            let f = (f / mul).ceil() * mul;
-            if let Some(v) = Value::integer_from_f64(f) {
-                return Ok(v);
-            } else {
-                return Err(MonorubyErr::rangeerr(format!(
-                    "[unreachable] invalid f64: {f}"
-                )));
-            }
+        let neg_ndigits = (-ndigits) as u32;
+        if neg_ndigits > 308 {
+            return Ok(Value::integer(0));
         }
-        Err(MonorubyErr::rangeerr("too small to convert to u32"))
+        // Use BigInt to avoid precision loss from float division.
+        let int_val = match BigInt::from_f64(f.trunc()) {
+            Some(v) => v,
+            None => return Ok(Value::integer(0)),
+        };
+        let mul_big = BigInt::from(10u64).pow(neg_ndigits);
+        let frac_part = f - f.trunc();
+        let (quot, rem) = num::integer::div_rem(int_val, mul_big.clone());
+        // ceil: round toward positive infinity
+        let rounded_quot = if rem > BigInt::ZERO || (rem == BigInt::ZERO && frac_part > 0.0) {
+            &quot + 1
+        } else {
+            quot.clone()
+        };
+        let result = rounded_quot * mul_big;
+        Ok(Value::bigint(result))
     }
 }
 
@@ -960,23 +975,18 @@ mod tests {
     // Fix 1: Float#round accepts half: keyword argument
     #[test]
     fn round_half_keyword() {
-        run_test("2.5.round(half: :up)");
-        run_test("2.5.round(half: :down)");
-        run_test("2.5.round(half: :even)");
-        run_test("3.5.round(half: :up)");
-        run_test("3.5.round(half: :down)");
-        run_test("3.5.round(half: :even)");
-        run_test("(-2.5).round(half: :up)");
-        run_test("(-2.5).round(half: :down)");
-        run_test("(-2.5).round(half: :even)");
-        run_test("2.5.round(half: nil)");
-        // half: with ndigits
-        run_test("5.55.round(1, half: :up)");
-        run_test("5.55.round(1, half: :down)");
-        run_test("5.55.round(1, half: :even)");
-        run_test("(-5.55).round(1, half: :up)");
-        run_test("(-5.55).round(1, half: :down)");
-        run_test("(-5.55).round(1, half: :even)");
+        run_tests(
+            &[
+                "2.5.round(half: :up)", "2.5.round(half: :down)", "2.5.round(half: :even)",
+                "3.5.round(half: :up)", "3.5.round(half: :down)", "3.5.round(half: :even)",
+                "(-2.5).round(half: :up)", "(-2.5).round(half: :down)", "(-2.5).round(half: :even)",
+                "2.5.round(half: nil)",
+                // half: with ndigits
+                "5.55.round(1, half: :up)", "5.55.round(1, half: :down)", "5.55.round(1, half: :even)",
+                "(-5.55).round(1, half: :up)", "(-5.55).round(1, half: :down)", "(-5.55).round(1, half: :even)",
+            ]
+            ,
+        );
     }
 
     // Fix 1: Float#round half: with invalid mode raises ArgumentError
@@ -988,24 +998,18 @@ mod tests {
     // Fix 2: Float#round algorithm edge cases
     #[test]
     fn round_edge_cases() {
-        // Near the limit: -0.49999999999999994 should round to 0, not -1
-        run_test("(-0.49999999999999994).round");
-        // Large ndigits: should not overflow to Infinity
-        run_test("42.0.round(308)");
-        run_test("1.0e307.round(2)");
-        // Very large ndigits: rounding is a no-op
-        run_test_once("0.42.round(2.0**30)");
-        run_test_once("0.42.round(2.0**23)");
-        // Negative ndigits with big values (BigInt precision)
-        run_test_once("(2.5e200).round(-200)");
-        run_test_once("(-2.5e200).round(-200)");
-        run_test_once("(2.4e200).round(-200)");
-        run_test_once("(-2.4e200).round(-200)");
-        // Negative ndigits for normal values
-        run_test("120.0.round(-1)");
-        run_test("123456.78.round(-2)");
-        // Precision loss test
-        run_test("767573.1875850001.round(5)");
+        run_tests(
+            &[
+                "(-0.49999999999999994).round",
+                "42.0.round(308)", "1.0e307.round(2)",
+                "0.42.round(2.0**30)", "0.42.round(2.0**23)",
+                "(2.5e200).round(-200)", "(-2.5e200).round(-200)",
+                "(2.4e200).round(-200)", "(-2.4e200).round(-200)",
+                "120.0.round(-1)", "123456.78.round(-2)",
+                "767573.1875850001.round(5)",
+            ]
+            ,
+        );
     }
 
     // Fix 5: Float#<=> with infinite? objects
@@ -1075,11 +1079,14 @@ mod tests {
     // Fix 6: Float#to_s returns US-ASCII encoding
     #[test]
     fn float_to_s_encoding() {
-        run_test("1.0.to_s.encoding.to_s");
-        run_test("(-0.0).to_s.encoding.to_s");
-        run_test("Float::NAN.to_s.encoding.to_s");
-        run_test("Float::INFINITY.to_s.encoding.to_s");
-        run_test("1.0.inspect.encoding.to_s");
+        run_tests(
+            &[
+                "1.0.to_s.encoding.to_s", "(-0.0).to_s.encoding.to_s",
+                "Float::NAN.to_s.encoding.to_s", "Float::INFINITY.to_s.encoding.to_s",
+                "1.0.inspect.encoding.to_s",
+            ]
+            ,
+        );
     }
 
     #[test]
@@ -1090,17 +1097,18 @@ mod tests {
 
     #[test]
     fn float_eql() {
-        run_test("1.0.eql?(1.0)");
-        run_test("1.0.eql?(1)");
-        run_test("1.0.eql?(1.1)");
+        run_tests(
+            &["1.0.eql?(1.0)", "1.0.eql?(1)", "1.0.eql?(1.1)"]
+                ,
+        );
     }
 
     #[test]
     fn float_constants() {
-        run_test("Float::MIN");
-        run_test("Float::DIG");
-        run_test("Float::MANT_DIG");
-        run_test("Float::RADIX");
+        run_tests(
+            &["Float::MIN", "Float::DIG", "Float::MANT_DIG", "Float::RADIX"]
+                ,
+        );
     }
 
     #[test]
@@ -1117,18 +1125,21 @@ mod tests {
 
     #[test]
     fn float_denominator_special() {
-        run_test("Float::NAN.denominator");
-        run_test("Float::INFINITY.denominator");
-        run_test("(-Float::INFINITY).denominator");
-        run_test("1.5.denominator");
+        run_tests(
+            &[
+                "Float::NAN.denominator", "Float::INFINITY.denominator",
+                "(-Float::INFINITY).denominator", "1.5.denominator",
+            ]
+            ,
+        );
     }
 
     #[test]
     fn float_divmod_quotient_type() {
-        run_test("3.8.divmod(1)");
-        run_test("(-3.8).divmod(1)");
-        run_test("3.8.divmod(0.5)");
-        run_test("11.5.divmod(3)");
+        run_tests(
+            &["3.8.divmod(1)", "(-3.8).divmod(1)", "3.8.divmod(0.5)", "11.5.divmod(3)"]
+                ,
+        );
     }
 
     #[test]
@@ -1152,6 +1163,12 @@ mod tests {
     }
 
     #[test]
+<<<<<<< claude/fix-float-spec-remaining
+    fn float_fdiv() {
+        run_test("1.0.fdiv(2)");
+        run_test("1.0.fdiv(2.0)");
+        run_test("1.0.fdiv(0.5)");
+=======
     fn float_fdiv_complex() {
         run_test("8.0.fdiv(Complex(2, 1)).class");
         run_test_error("8.0.fdiv(Object.new)");
@@ -1167,6 +1184,7 @@ mod tests {
         run_tests(
             &["1.0.fdiv(2)", "1.0.fdiv(2.0)", "1.0.fdiv(0.5)"],
         );
+>>>>>>> master
         run_test_error("1.0.fdiv(:foo)");
     }
 
@@ -1178,7 +1196,12 @@ mod tests {
                 "0.3.rationalize(Rational(1,10))", "0.3.rationalize(0.05)", "0.3.rationalize(0.001)",
                 "(-0.3).rationalize(Rational(1,10))", "(-0.3).rationalize(0.05)", "(-0.3).rationalize(0.001)",
                 "0.0.rationalize",
+<<<<<<< claude/fix-float-spec-remaining
+            ]
+            ,
+=======
             ],
+>>>>>>> master
         );
         run_test_error("Float::NAN.rationalize");
         run_test_error("Float::INFINITY.rationalize");
@@ -1197,7 +1220,12 @@ mod tests {
                 "767573.187585.round(5, half: :up)",
                 "767573.187585.round(5, half: :down)",
                 "767573.187585.round(5, half: :even)",
+<<<<<<< claude/fix-float-spec-remaining
+            ]
+            ,
+=======
             ],
+>>>>>>> master
         );
     }
 }

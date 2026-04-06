@@ -30,6 +30,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_funcs(COMPLEX_CLASS, "rect", &["rectangular"], rect, 0);
     globals.define_builtin_class_func(COMPLEX_CLASS, "allocate", super::super::class::undef_allocate, 0);
     globals.define_builtin_func(COMPLEX_CLASS, "eql?", eql_, 1);
+    globals.define_builtin_func(COMPLEX_CLASS, "coerce", coerce, 1);
 }
 
 fn eq_bool(store: &Store, lhs: &ComplexInner, rhs: Value) -> bool {
@@ -146,6 +147,36 @@ fn rect(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     Ok(Value::array2(r.get(), i.get()))
 }
 
+///
+/// ### Complex#coerce
+///
+/// - coerce(other) -> [Complex, Complex]
+///
+/// Returns [Complex(other, 0), self].
+#[monoruby_builtin]
+fn coerce(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let other = lfp.arg(0);
+    match other.unpack() {
+        RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_) => {}
+        _ => {
+            if other.try_complex().is_none() {
+                return Err(MonorubyErr::typeerr(format!(
+                    "{} can't be coerced into Complex",
+                    other.get_real_class_name(globals)
+                )));
+            }
+        }
+    }
+    let other_complex = if let Some(_) = other.try_complex() {
+        other
+    } else {
+        let re = Real::try_from(globals, other)?;
+        Value::complex(re, Real::from(0))
+    };
+    Ok(Value::array2(other_complex, self_val))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -212,5 +243,19 @@ mod tests {
     fn complex_allocate_disabled() {
         run_test_error("Complex.new(1)");
         run_test_error("Complex.allocate");
+    }
+
+    #[test]
+    fn complex_coerce() {
+        run_test("Complex(8,2).coerce(1.0)");
+        run_test("Complex(8,2).coerce(3)");
+        run_test("Complex(1,2).coerce(Complex(3,4))");
+        run_test_error("Complex(1,2).coerce(:foo)");
+    }
+
+    #[test]
+    fn float_quo_complex() {
+        run_test("74620.09.quo(Complex(8,2))");
+        run_test("1.0.fdiv(Complex(8,2))");
     }
 }
