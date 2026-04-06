@@ -715,6 +715,12 @@ fn prev_float(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodeP
 fn quo(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().try_float().unwrap();
     let rhs = lfp.arg(0);
+    // Complex: delegate to Complex division
+    if let Some(_) = rhs.try_complex() {
+        let div_id = IdentId::get_id("/");
+        let complex_self = Value::complex(lhs, 0.0);
+        return vm.invoke_method_inner(globals, div_id, complex_self, &[rhs], None, None);
+    }
     let rhs_f = match rhs.unpack() {
         RV::Float(f) => f,
         RV::Fixnum(i) => i as f64,
@@ -1157,10 +1163,28 @@ mod tests {
     }
 
     #[test]
+<<<<<<< claude/fix-float-spec-remaining
     fn float_fdiv() {
         run_test("1.0.fdiv(2)");
         run_test("1.0.fdiv(2.0)");
         run_test("1.0.fdiv(0.5)");
+=======
+    fn float_fdiv_complex() {
+        run_test("8.0.fdiv(Complex(2, 1)).class");
+        run_test_error("8.0.fdiv(Object.new)");
+    }
+
+    #[test]
+    fn float_quo_complex() {
+        run_test("8.0.quo(Complex(2, 1)).class");
+    }
+
+    #[test]
+    fn float_fdiv() {
+        run_tests(
+            &["1.0.fdiv(2)", "1.0.fdiv(2.0)", "1.0.fdiv(0.5)"],
+        );
+>>>>>>> master
         run_test_error("1.0.fdiv(:foo)");
     }
 
@@ -1172,8 +1196,12 @@ mod tests {
                 "0.3.rationalize(Rational(1,10))", "0.3.rationalize(0.05)", "0.3.rationalize(0.001)",
                 "(-0.3).rationalize(Rational(1,10))", "(-0.3).rationalize(0.05)", "(-0.3).rationalize(0.001)",
                 "0.0.rationalize",
+<<<<<<< claude/fix-float-spec-remaining
             ]
             ,
+=======
+            ],
+>>>>>>> master
         );
         run_test_error("Float::NAN.rationalize");
         run_test_error("Float::INFINITY.rationalize");
@@ -1192,8 +1220,12 @@ mod tests {
                 "767573.187585.round(5, half: :up)",
                 "767573.187585.round(5, half: :down)",
                 "767573.187585.round(5, half: :even)",
+<<<<<<< claude/fix-float-spec-remaining
             ]
             ,
+=======
+            ],
+>>>>>>> master
         );
     }
 }

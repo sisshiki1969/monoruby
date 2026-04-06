@@ -1048,6 +1048,12 @@ fn int_round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     } else {
         return Ok(lfp.self_val());
     };
+    if ndigits > 0x3FFFFFFF || ndigits < -0x40000000 {
+        return Err(MonorubyErr::rangeerr(format!(
+            "integer {} too big to convert to `int'",
+            ndigits
+        )));
+    }
     let half = if let Some(kw_val) = lfp.try_arg(1) {
         super::float::parse_half_mode(kw_val)?
     } else {
@@ -2078,5 +2084,37 @@ mod tests {
             Integer.try_convert(Foo.new)
             "#,
         );
+    }
+
+    #[test]
+    fn try_convert_error_message() {
+        run_test_error(
+            r#"class C; def to_int; "str"; end; end; Integer.try_convert(C.new)"#,
+        );
+    }
+
+    #[test]
+    fn upto_with_float() {
+        run_tests(
+            &[
+                "res = []; 9.upto(13) {|i| res << i}; res",
+                "res = []; (-5).upto(-1.3) {|i| res << i}; res",
+                "res = []; 1.upto(3.9) {|i| res << i}; res",
+                "res = []; 1.upto(3.0) {|i| res << i}; res",
+                "(-5).upto(-1.3).to_a",
+            ],
+        );
+    }
+
+    #[test]
+    fn upto_downto_non_numeric_size() {
+        run_test_error(r#"1.upto("a").size"#);
+        run_test_error(r#"1.downto("a").size"#);
+    }
+
+    #[test]
+    fn round_range_error() {
+        run_test_error("42.round(1 << 31)");
+        run_test_error("42.round(-(1 << 31) - 1)");
     }
 }
