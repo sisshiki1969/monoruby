@@ -515,6 +515,8 @@ class Float
       [other.to_f, self]
     elsif other.is_a?(Float)
       [other, self]
+    elsif other.is_a?(String)
+      [Float(other), self]
     else
       raise TypeError, "#{other.class} can't be coerced into Float"
     end
@@ -539,7 +541,7 @@ class Float
   end
 
   def denominator
-    return 0 if nan?
+    return 1 if nan?
     return 1 if infinite?
     if defined?(Rational)
       to_r.denominator

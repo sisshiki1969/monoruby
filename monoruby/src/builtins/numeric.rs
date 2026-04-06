@@ -93,7 +93,12 @@ fn divmod(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 return Err(MonorubyErr::divide_by_zero());
             }
             let (div, modulo) = lhs.ruby_div_mod(&rhs);
-            (div.into(), modulo.into())
+            // Ruby's divmod always returns an Integer quotient
+            let div = match div {
+                RealKind::Float(f) => Value::coerce_f64_to_int(f)?,
+                _ => div.into(),
+            };
+            (div, modulo.into())
         }
         _ => return Err(MonorubyErr::cant_convert_into_float(globals, lfp.arg(0))),
     };

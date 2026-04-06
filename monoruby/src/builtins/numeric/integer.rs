@@ -48,6 +48,12 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, "abs", abs, 0);
     globals.define_builtin_func(INTEGER_CLASS, "magnitude", abs, 0);
     globals.define_builtin_func_with(INTEGER_CLASS, "pow", pow, 1, 2, false);
+    globals.define_builtin_func_with(INTEGER_CLASS, "floor", int_floor, 0, 1, false);
+    globals.define_builtin_func_with(INTEGER_CLASS, "ceil", int_ceil, 0, 1, false);
+    globals.define_builtin_func_with(INTEGER_CLASS, "truncate", int_truncate, 0, 1, false);
+    globals.define_builtin_func_with_kw(
+        INTEGER_CLASS, "round", int_round, 0, 1, false, &["half"], false,
+    );
 }
 
 /*///
@@ -912,7 +918,7 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             RV::BigInt(b) => b.clone(),
             _ => unreachable!(),
         };
-        let mod_big = BigInt::from(mod_i);
+        let mod_big = BigInt::from(mod_i.abs());
         let mut base = base_big % &mod_big;
         let mut result = BigInt::from(1);
         let mut e = exp_i as u64;
@@ -923,9 +929,13 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             base = &base * &base % &mod_big;
             e >>= 1;
         }
-        // Normalize result to match Ruby semantics (always non-negative when mod > 0)
+        // Normalize result to match Ruby semantics:
+        // the result has the same sign as mod.
         if result < BigInt::ZERO {
             result += &mod_big;
+        }
+        if mod_i < 0 && result > BigInt::ZERO {
+            result -= &mod_big;
         }
         Ok(Value::bigint(result))
     } else {
@@ -933,6 +943,152 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let lhs = lfp.self_val();
         vm.invoke_method_inner(globals, IdentId::_POW, lhs, &[exp], None, None)
     }
+}
+
+// ---- Integer#floor, ceil, truncate, round ----
+
+/// Convert self to BigInt.
+fn self_to_bigint(lfp: Lfp) -> BigInt {
+    match lfp.self_val().unpack() {
+        RV::Fixnum(i) => BigInt::from(i),
+        RV::BigInt(b) => b.clone(),
+        _ => unreachable!(),
+    }
+}
+
+/// Compute 10^n as BigInt.
+fn pow10(n: u32) -> BigInt {
+    BigInt::from(10u64).pow(n)
+}
+
+///
+/// ### Integer#floor
+///
+/// - floor(ndigits = 0) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/floor.html]
+#[monoruby_builtin]
+fn int_floor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ndigits = if let Some(d) = lfp.try_arg(0) {
+        d.coerce_to_int_i64(vm, globals)?
+    } else {
+        return Ok(lfp.self_val());
+    };
+    if ndigits >= 0 {
+        return Ok(lfp.self_val());
+    }
+    let neg = (-ndigits) as u32;
+    let d = pow10(neg);
+    let val = self_to_bigint(lfp);
+    // Ruby integer division floors toward negative infinity.
+    let quot = num::integer::div_floor(val, d.clone());
+    Ok(Value::bigint(quot * d))
+}
+
+///
+/// ### Integer#ceil
+///
+/// - ceil(ndigits = 0) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/ceil.html]
+#[monoruby_builtin]
+fn int_ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ndigits = if let Some(d) = lfp.try_arg(0) {
+        d.coerce_to_int_i64(vm, globals)?
+    } else {
+        return Ok(lfp.self_val());
+    };
+    if ndigits >= 0 {
+        return Ok(lfp.self_val());
+    }
+    let neg = (-ndigits) as u32;
+    let d = pow10(neg);
+    let val = self_to_bigint(lfp);
+    let quot = num::integer::div_ceil(val, d.clone());
+    Ok(Value::bigint(quot * d))
+}
+
+///
+/// ### Integer#truncate
+///
+/// - truncate(ndigits = 0) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/truncate.html]
+#[monoruby_builtin]
+fn int_truncate(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let ndigits = if let Some(d) = lfp.try_arg(0) {
+        d.coerce_to_int_i64(vm, globals)?
+    } else {
+        return Ok(lfp.self_val());
+    };
+    if ndigits >= 0 {
+        return Ok(lfp.self_val());
+    }
+    let neg = (-ndigits) as u32;
+    let d = pow10(neg);
+    let val = self_to_bigint(lfp);
+    // Truncate toward zero.
+    let (quot, _) = num::integer::div_rem(val, d.clone());
+    Ok(Value::bigint(quot * d))
+}
+
+///
+/// ### Integer#round
+///
+/// - round(ndigits = 0, half: :up) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/round.html]
+#[monoruby_builtin]
+fn int_round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ndigits = if let Some(d) = lfp.try_arg(0) {
+        d.coerce_to_int_i64(vm, globals)?
+    } else {
+        return Ok(lfp.self_val());
+    };
+    let half = if let Some(kw_val) = lfp.try_arg(1) {
+        super::float::parse_half_mode(kw_val)?
+    } else {
+        None
+    };
+    if ndigits >= 0 {
+        return Ok(lfp.self_val());
+    }
+    let neg = (-ndigits) as u32;
+    let d = pow10(neg);
+    let val = self_to_bigint(lfp);
+    let is_neg = val < BigInt::ZERO;
+    let abs_val = if is_neg { -&val } else { val };
+    let (quot, rem) = num::integer::div_rem(abs_val, d.clone());
+    let half_d = &d / 2;
+    let rounded_quot = if rem > half_d {
+        &quot + 1
+    } else if rem < half_d {
+        quot.clone()
+    } else {
+        // Exactly halfway
+        use super::float::RoundHalf;
+        match half {
+            Some(RoundHalf::Down) => quot.clone(),
+            Some(RoundHalf::Even) => {
+                if &quot % 2 == BigInt::ZERO {
+                    quot.clone()
+                } else {
+                    &quot + 1
+                }
+            }
+            _ => {
+                // :up (default) — round away from zero
+                &quot + 1
+            }
+        }
+    };
+    let result = rounded_quot * d;
+    Ok(Value::bigint(if is_neg { -result } else { result }))
 }
 
 ///
@@ -1870,5 +2026,57 @@ mod tests {
         run_test("65.chr");
         run_test(r#"65.chr("US-ASCII")"#);
         run_test_error(r#"128.chr("US-ASCII")"#);
+    }
+
+    #[test]
+    fn pow_modular_sign() {
+        run_test("(-2).pow(3, 12)");
+        run_test("2.pow(3, 12)");
+        run_test("2.pow(3, -12)");
+        run_test("(-2).pow(3, -12)");
+        run_test("(-7).pow(3, 19)");
+    }
+
+    #[test]
+    fn try_convert() {
+        run_test("Integer.try_convert(1)");
+        run_test("Integer.try_convert(1.0)");
+        run_test("Integer.try_convert(nil)");
+    }
+
+    #[test]
+    fn integer_floor_ceil_truncate_round() {
+        // ndigits >= 0 returns self
+        run_test("15.floor");
+        run_test("15.ceil");
+        run_test("15.truncate");
+        run_test("15.round");
+        run_test("15.floor(2)");
+        run_test("15.ceil(2)");
+        // negative ndigits
+        run_test("15.floor(-1)");
+        run_test("(-15).floor(-1)");
+        run_test("15.ceil(-1)");
+        run_test("(-15).ceil(-1)");
+        run_test("15.truncate(-1)");
+        run_test("(-15).truncate(-1)");
+        run_test("15.round(-1)");
+        run_test("(-15).round(-1)");
+        // round with half: keyword
+        run_test("25.round(-1, half: :up)");
+        run_test("25.round(-1, half: :down)");
+        run_test("25.round(-1, half: :even)");
+        run_test("35.round(-1, half: :even)");
+        run_test("(-25).round(-1, half: :up)");
+        run_test("(-25).round(-1, half: :down)");
+        run_test("(-25).round(-1, half: :even)");
+        // larger ndigits
+        run_test("1234567.floor(-3)");
+        run_test("1234567.ceil(-3)");
+        run_test("1234567.truncate(-3)");
+        run_test("1234567.round(-3)");
+        // bignum
+        run_test_once("(10**20 + 555).round(-1)");
+        run_test_once("(10**20 + 555).floor(-1)");
     }
 }
