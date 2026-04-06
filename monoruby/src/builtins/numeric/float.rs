@@ -303,19 +303,26 @@ fn floor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             Err(MonorubyErr::rangeerr("too big to convert to u32"))
         }
     } else {
-        if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
-            let mul = 10f64.powi(neg_ndigits as i32);
-            let f = (f / mul).floor() * mul;
-            if let Some(v) = Value::integer_from_f64(f) {
-                Ok(v)
-            } else {
-                Err(MonorubyErr::rangeerr(format!(
-                    "[unreachable] invalid f64: {f}"
-                )))
-            }
-        } else {
-            Err(MonorubyErr::rangeerr("too small to convert to u32"))
+        let neg_ndigits = (-ndigits) as u32;
+        if neg_ndigits > 308 {
+            return Ok(Value::integer(0));
         }
+        // Use BigInt to avoid precision loss from float division.
+        let int_val = match BigInt::from_f64(f.trunc()) {
+            Some(v) => v,
+            None => return Ok(Value::integer(0)),
+        };
+        let mul_big = BigInt::from(10u64).pow(neg_ndigits);
+        let frac_part = f - f.trunc();
+        let (quot, rem) = num::integer::div_rem(int_val, mul_big.clone());
+        // floor: round toward negative infinity
+        let rounded_quot = if rem < BigInt::ZERO || (rem == BigInt::ZERO && frac_part < 0.0) {
+            &quot - 1
+        } else {
+            quot.clone()
+        };
+        let result = rounded_quot * mul_big;
+        Ok(Value::bigint(result))
     }
 }
 
@@ -355,18 +362,26 @@ fn ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             Err(MonorubyErr::rangeerr("too big to convert to u32"))
         }
     } else {
-        if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
-            let mul = 10f64.powi(neg_ndigits as i32);
-            let f = (f / mul).ceil() * mul;
-            if let Some(v) = Value::integer_from_f64(f) {
-                return Ok(v);
-            } else {
-                return Err(MonorubyErr::rangeerr(format!(
-                    "[unreachable] invalid f64: {f}"
-                )));
-            }
+        let neg_ndigits = (-ndigits) as u32;
+        if neg_ndigits > 308 {
+            return Ok(Value::integer(0));
         }
-        Err(MonorubyErr::rangeerr("too small to convert to u32"))
+        // Use BigInt to avoid precision loss from float division.
+        let int_val = match BigInt::from_f64(f.trunc()) {
+            Some(v) => v,
+            None => return Ok(Value::integer(0)),
+        };
+        let mul_big = BigInt::from(10u64).pow(neg_ndigits);
+        let frac_part = f - f.trunc();
+        let (quot, rem) = num::integer::div_rem(int_val, mul_big.clone());
+        // ceil: round toward positive infinity
+        let rounded_quot = if rem > BigInt::ZERO || (rem == BigInt::ZERO && frac_part > 0.0) {
+            &quot + 1
+        } else {
+            quot.clone()
+        };
+        let result = rounded_quot * mul_big;
+        Ok(Value::bigint(result))
     }
 }
 

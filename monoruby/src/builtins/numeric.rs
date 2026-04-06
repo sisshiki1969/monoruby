@@ -393,6 +393,18 @@ mod tests {
         run_test("(-1.1).ceil");
         run_test("1.0.ceil");
         run_test("1.123.ceil(2)");
+        // Large negative ndigits — BigInt precision
+        run_test_once("1e50.ceil(-50)");
+        run_test_once("(-1e50).ceil(-50)");
+        run_test_once("1.23e20.ceil(-18)");
+    }
+
+    #[test]
+    fn float_floor_neg_ndigits() {
+        run_test("120.0.floor(-1)");
+        run_test_once("(-1e50).floor(-50)");
+        run_test_once("1e50.floor(-50)");
+        run_test_once("1.23e20.floor(-18)");
     }
 
     #[test]
