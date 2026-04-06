@@ -2092,4 +2092,32 @@ mod tests {
         run_test_once("(10**20 + 555).round(-1)");
         run_test_once("(10**20 + 555).floor(-1)");
     }
+
+    #[test]
+    fn try_convert_error_message() {
+        // to_int returning non-Integer should raise TypeError with "into"
+        run_test_error(
+            r#"class C; def to_int; "str"; end; end; Integer.try_convert(C.new)"#,
+        );
+    }
+
+    #[test]
+    fn upto_float_boundary_negative() {
+        // -5.upto(-1.3) should stop at -2, not -1
+        run_test("(-5).upto(-1.3).to_a");
+    }
+
+    #[test]
+    fn upto_downto_non_numeric_size() {
+        // Enumerator#size should raise ArgumentError for non-numeric
+        run_test_error(r#"1.upto("a").size"#);
+        run_test_error(r#"1.downto("a").size"#);
+    }
+
+    #[test]
+    fn round_huge_ndigits_rangeerror() {
+        // ndigits beyond signed int range should raise RangeError
+        run_test_error("42.round(1 << 31)");
+        run_test_error("42.round(-(1 << 31) - 1)");
+    }
 }

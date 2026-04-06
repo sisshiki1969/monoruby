@@ -1136,4 +1136,15 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn float_fdiv_complex() {
+        run_test("8.0.fdiv(Complex(2, 1)).class");
+        run_test_error("8.0.fdiv(Object.new)");
+    }
+
+    #[test]
+    fn float_quo_complex() {
+        run_test("8.0.quo(Complex(2, 1)).class");
+    }
 }
