@@ -291,7 +291,7 @@ mod tests {
                 "(11.5).divmod(3)", "(11.5).divmod(-3)", "(-11.5).divmod(3)",
                 "(11.5).divmod(3.5)", "(11.5).divmod(-3.5)", "(-11.5).divmod(3.5)",
             ]
-            .map(|s| s.to_string()),
+            ,
         );
     }
 
@@ -299,7 +299,7 @@ mod tests {
     fn bitnot() {
         run_tests(
             &["~1", "~0", "~(-1)", "~(-2)", "~(0x12345678)", "~(0x123456789abcdef0)"]
-                .map(|s| s.to_string()),
+                ,
         );
     }
 
@@ -307,7 +307,7 @@ mod tests {
     fn neg() {
         run_tests(
             &["-1", "-0", "-(0x12345678)", "-(0x123456789abcdef0)"]
-                .map(|s| s.to_string()),
+                ,
         );
     }
 
@@ -315,7 +315,7 @@ mod tests {
     fn pos() {
         run_tests(
             &["+1", "+0", "+(0x12345678)", "+(0x123456789abcdef0)"]
-                .map(|s| s.to_string()),
+                ,
         );
     }
 
@@ -371,7 +371,7 @@ mod tests {
     fn float_truncate() {
         run_tests(
             &["1.5.truncate", "(-1.5).truncate", "1.567.truncate(2)", "(-1.567).truncate(2)"]
-                .map(|s| s.to_string()),
+                ,
         );
     }
 
@@ -382,7 +382,7 @@ mod tests {
                 "1.1.ceil", "(-1.1).ceil", "1.0.ceil", "1.123.ceil(2)",
                 "1e50.ceil(-50)", "(-1e50).ceil(-50)", "1.23e20.ceil(-18)",
             ]
-            .map(|s| s.to_string()),
+            ,
         );
     }
 
@@ -390,7 +390,7 @@ mod tests {
     fn float_floor_neg_ndigits() {
         run_tests(
             &["120.0.floor(-1)", "(-1e50).floor(-50)", "1e50.floor(-50)", "1.23e20.floor(-18)"]
-                .map(|s| s.to_string()),
+                ,
         );
     }
 
@@ -401,38 +401,38 @@ mod tests {
                 "1.0.positive?", "(-1.0).positive?", "0.0.positive?",
                 "1.0.negative?", "(-1.0).negative?", "0.0.negative?",
             ]
-            .map(|s| s.to_string()),
+            ,
         );
     }
 
     #[test]
     fn float_integer() {
-        run_tests(&["1.0.integer?", "1.5.integer?"].map(|s| s.to_string()));
+        run_tests(&["1.0.integer?", "1.5.integer?"]);
     }
 
     #[test]
     fn float_coerce() {
-        run_tests(&["1.0.coerce(2)", "1.0.coerce(2.5)"].map(|s| s.to_string()));
+        run_tests(&["1.0.coerce(2)", "1.0.coerce(2.5)"]);
     }
 
     #[test]
     fn float_remainder() {
         run_tests(
             &["5.0.remainder(3.0)", "(-5.0).remainder(3.0)", "5.0.remainder(-3.0)"]
-                .map(|s| s.to_string()),
+                ,
         );
     }
 
     #[test]
     fn float_fdiv() {
-        run_tests(&["1.0.fdiv(2)", "1.0.fdiv(2.0)"].map(|s| s.to_string()));
+        run_tests(&["1.0.fdiv(2)", "1.0.fdiv(2.0)"]);
     }
 
     #[test]
     fn numeric_abs() {
         run_tests(
             &["1.0.abs", "(-1.0).abs", "0.0.abs", "1.0.magnitude"]
-                .map(|s| s.to_string()),
+                ,
         );
     }
 
@@ -446,7 +446,7 @@ mod tests {
                 "res = []; 5.step(1, -1) {|i| res << i}; res",
                 "res = []; 1.step(5) {|i| res << i}; res",
             ]
-            .map(|s| s.to_string()),
+            ,
         );
     }
 }

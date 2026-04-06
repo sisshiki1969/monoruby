@@ -979,7 +979,7 @@ mod tests {
                 "5.55.round(1, half: :up)", "5.55.round(1, half: :down)", "5.55.round(1, half: :even)",
                 "(-5.55).round(1, half: :up)", "(-5.55).round(1, half: :down)", "(-5.55).round(1, half: :even)",
             ]
-            .map(|s| s.to_string()),
+            ,
         );
     }
 
@@ -1002,7 +1002,7 @@ mod tests {
                 "120.0.round(-1)", "123456.78.round(-2)",
                 "767573.1875850001.round(5)",
             ]
-            .map(|s| s.to_string()),
+            ,
         );
     }
 
@@ -1079,7 +1079,7 @@ mod tests {
                 "Float::NAN.to_s.encoding.to_s", "Float::INFINITY.to_s.encoding.to_s",
                 "1.0.inspect.encoding.to_s",
             ]
-            .map(|s| s.to_string()),
+            ,
         );
     }
 
@@ -1093,7 +1093,7 @@ mod tests {
     fn float_eql() {
         run_tests(
             &["1.0.eql?(1.0)", "1.0.eql?(1)", "1.0.eql?(1.1)"]
-                .map(|s| s.to_string()),
+                ,
         );
     }
 
@@ -1101,7 +1101,7 @@ mod tests {
     fn float_constants() {
         run_tests(
             &["Float::MIN", "Float::DIG", "Float::MANT_DIG", "Float::RADIX"]
-                .map(|s| s.to_string()),
+                ,
         );
     }
 
@@ -1124,7 +1124,7 @@ mod tests {
                 "Float::NAN.denominator", "Float::INFINITY.denominator",
                 "(-Float::INFINITY).denominator", "1.5.denominator",
             ]
-            .map(|s| s.to_string()),
+            ,
         );
     }
 
@@ -1132,7 +1132,7 @@ mod tests {
     fn float_divmod_quotient_type() {
         run_tests(
             &["3.8.divmod(1)", "(-3.8).divmod(1)", "3.8.divmod(0.5)", "11.5.divmod(3)"]
-                .map(|s| s.to_string()),
+                ,
         );
     }
 
@@ -1173,7 +1173,7 @@ mod tests {
                 "(-0.3).rationalize(Rational(1,10))", "(-0.3).rationalize(0.05)", "(-0.3).rationalize(0.001)",
                 "0.0.rationalize",
             ]
-            .map(|s| s.to_string()),
+            ,
         );
         run_test_error("Float::NAN.rationalize");
         run_test_error("Float::INFINITY.rationalize");
@@ -1193,7 +1193,7 @@ mod tests {
                 "767573.187585.round(5, half: :down)",
                 "767573.187585.round(5, half: :even)",
             ]
-            .map(|s| s.to_string()),
+            ,
         );
     }
 }
