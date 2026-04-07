@@ -1055,7 +1055,7 @@ fn coerce_to_rstring_inner(
                 return Ok(s);
             }
             return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} into String ({}#{} gives {})",
+                "can't convert {} to String ({}#{} gives {})",
                 recv.get_real_class_name(&globals.store),
                 recv.get_real_class_name(&globals.store),
                 method.get_name(),
@@ -1350,7 +1350,7 @@ impl Value {
                 return Ok(ary);
             }
             return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} into Array ({}#to_ary gives {})",
+                "can't convert {} to Array ({}#to_ary gives {})",
                 self.get_real_class_name(&globals.store),
                 self.get_real_class_name(&globals.store),
                 v.get_real_class_name(&globals.store),
@@ -1453,7 +1453,7 @@ impl Value {
         match result.unpack() {
             RV::Fixnum(_) | RV::BigInt(_) => Ok(result),
             _ => Err(MonorubyErr::typeerr(format!(
-                "can't convert {} into Integer ({}#to_int gives {})",
+                "can't convert {} to Integer ({}#to_int gives {})",
                 self.get_real_class_name(&globals.store),
                 self.get_real_class_name(&globals.store),
                 result.get_real_class_name(&globals.store),
@@ -1588,7 +1588,7 @@ impl Value {
                         RV::Float(f) => Ok(f),
                         RV::Fixnum(i) => Ok(i as f64),
                         _ => Err(MonorubyErr::typeerr(format!(
-                            "can't convert {} into Float ({}#to_f gives {})",
+                            "can't convert {} to Float ({}#to_f gives {})",
                             self.get_real_class_name(&globals.store),
                             self.get_real_class_name(&globals.store),
                             result.get_real_class_name(&globals.store),
@@ -1685,7 +1685,7 @@ impl Value {
                 return Ok(h);
             }
             return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} into Hash ({}#to_hash gives {})",
+                "can't convert {} to Hash ({}#to_hash gives {})",
                 self.get_real_class_name(globals),
                 self.get_real_class_name(globals),
                 result.get_real_class_name(globals),

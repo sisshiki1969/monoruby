@@ -99,7 +99,7 @@ fn coerce_to_f64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f
                     RV::Float(f) => Ok(f),
                     RV::Fixnum(i) => Ok(i as f64),
                     _ => Err(MonorubyErr::typeerr(format!(
-                        "can't convert {} into Float ({}#to_f gives {})",
+                        "can't convert {} to Float ({}#to_f gives {})",
                         v.get_real_class_name(&globals.store),
                         v.get_real_class_name(&globals.store),
                         result.get_real_class_name(&globals.store),
