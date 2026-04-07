@@ -456,7 +456,7 @@ extern "C" fn array_dup(val: Value) -> Value {
 fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
         if lfp.block().is_some() {
-            eprintln!("warning: given block not used");
+            vm.ruby_warn(globals, "warning: given block not used")?;
         }
         let mut count = 0;
         let ary = lfp.self_val();
@@ -1419,53 +1419,66 @@ fn drop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ary = lfp.self_val().as_array();
-    let mut args_ary = vec![];
+    let self_len = self_ary.len();
     let each_id = IdentId::get_id("each");
+
+    // Phase 1: Convert each argument to an Array or collect elements via #each.
+    // For arguments responding to #each but not #to_ary, we collect only up to
+    // self.len() elements to handle infinite enumerators correctly.
+    let mut args_list: Vec<Vec<Value>> = vec![];
+
     for a in lfp.arg(0).as_array().iter() {
-        // Try to_ary first, then fall back to collecting via #each
         if let Ok(ary) = a.coerce_to_array(vm, globals) {
-            args_ary.push(ary.to_vec());
+            args_list.push(ary.to_vec());
         } else if globals.check_method(*a, each_id).is_some() {
-            let to_a_id = IdentId::get_id("to_a");
-            let result = vm.invoke_method_inner(globals, to_a_id, *a, &[], None, None)?;
-            if let Some(ary) = result.try_array_ty() {
-                args_ary.push(ary.to_vec());
-            } else {
-                return Err(MonorubyErr::typeerr(format!(
-                    "no implicit conversion of {} into Array",
-                    a.get_real_class_name(&globals.store),
-                )));
+            let to_enum_id = IdentId::get_id("to_enum");
+            let enum_val = vm.invoke_method_inner(globals, to_enum_id, *a, &[], None, None)?;
+            let next_id = IdentId::get_id("next");
+            let mut collected = Vec::with_capacity(self_len);
+            for _ in 0..self_len {
+                match vm.invoke_method_inner(globals, next_id, enum_val, &[], None, None) {
+                    Ok(val) => collected.push(val),
+                    Err(_) => break, // StopIteration — enumerator exhausted
+                }
             }
+            args_list.push(collected);
         } else {
             return Err(MonorubyErr::typeerr(format!(
-                "no implicit conversion of {} into Array",
+                "wrong argument type {} (must respond to :each)",
                 a.get_real_class_name(&globals.store),
             )));
         }
     }
-    let mut ary = Array::new_empty();
-    for (i, val) in self_ary.iter().enumerate() {
-        let mut vec = Array::new_empty();
-        vec.push(*val);
-        for args in &args_ary {
-            if i < args.len() {
-                vec.push(args[i]);
+
+    // Phase 2: Build result
+    // Helper to build a single row for index i
+    let build_row = |i: usize, val: Value, args: &[Vec<Value>]| -> Array {
+        let mut row = Array::new_empty();
+        row.push(val);
+        for arg in args {
+            row.push(if i < arg.len() {
+                arg[i]
             } else {
-                vec.push(Value::nil());
-            }
+                Value::nil()
+            });
         }
-        ary.push(vec.as_val());
-    }
-    match lfp.block() {
-        None => Ok(ary.as_val()),
-        Some(block) => {
-            let size_hint = ary.len();
-            vm.temp_push(ary.as_val());
-            let res = vm.invoke_block_map1(globals, block, ary.iter().cloned(), size_hint);
-            vm.temp_pop();
-            res?;
-            Ok(Value::nil())
+        row
+    };
+
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        for (i, val) in self_ary.iter().enumerate() {
+            let row = build_row(i, *val, &args_list);
+            vm.invoke_block(globals, &data, &[row.as_val()])?;
         }
+        Ok(Value::nil())
+    } else {
+        let mut result_ary = Array::new_empty();
+        for (i, val) in self_ary.iter().enumerate() {
+            let row = build_row(i, *val, &args_list);
+            result_ary.push(row.as_val());
+        }
+        Ok(result_ary.as_val())
     }
 }
 
@@ -2321,7 +2334,7 @@ fn all_any_inner(
     if let Some(pattern) = lfp.try_arg(0) {
         // Pattern form: all?(pattern) / any?(pattern) — block is ignored
         if lfp.block().is_some() {
-            eprintln!("warning: given block not used");
+            vm.ruby_warn(globals, "warning: given block not used")?;
         }
         let mut i = 0;
         while i < self_val.as_array().len() {
@@ -3159,7 +3172,7 @@ fn find_index(
     let self_val = lfp.self_val();
     if let Some(arg0) = lfp.try_arg(0) {
         if lfp.block().is_some() {
-            eprintln!("warning: given block not used");
+            vm.ruby_warn(globals, "warning: given block not used")?;
         }
         let func_id = vm.find_method(globals, arg0, IdentId::_EQ, false)?;
         let mut i = 0;
@@ -3879,6 +3892,16 @@ mod tests {
         );
         // zip with enumerator / non-array enumerable (uses #each fallback)
         run_test("[1, 2, 3].zip((4..6))");
+        // zip with infinite enumerator (must not hang)
+        run_test("[1, 2].zip(10.upto(Float::INFINITY))");
+        // zip with shorter #each-based enumerable fills nil
+        run_test(r##"
+            o = Object.new
+            def o.each; yield 10; end
+            [1, 2].zip(o)
+        "##);
+        // zip raises TypeError for non-enumerable
+        run_test_error(r##"[1, 2].zip(42)"##);
     }
 
     #[test]

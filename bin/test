@@ -69,3 +69,4 @@ if [ -d "../spec" ] && [ -d "../mspec" ]; then
 fi
 
 cargo llvm-cov report --lcov --output-path lcov.info
+rm *.profraw

@@ -1203,21 +1203,31 @@ fn exit_bang(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/warn.html]
 #[monoruby_builtin]
-fn warn(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn warn(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let message = lfp.arg(0);
     // uplevel and category keyword arguments are accepted but ignored for now.
+    let stderr_id = IdentId::get_id("$stderr");
+    let stderr = globals.get_gvar(stderr_id).unwrap_or(Value::nil());
+    let write_id = IdentId::get_id("write");
+
+    let mut messages = vec![];
     if let Some(ary) = message.try_array_ty() {
         for m in ary.iter() {
             if let Some(s) = m.is_str() {
-                eprintln!("{}", s);
+                messages.push(format!("{}\n", s));
             } else {
-                eprintln!("{}", m.to_s(&globals.store));
+                messages.push(format!("{}\n", m.to_s(&globals.store)));
             }
         }
     } else if let Some(s) = message.is_str() {
-        eprintln!("{}", s);
+        messages.push(format!("{}\n", s));
     } else {
-        eprintln!("{}", message.to_s(&globals.store));
+        messages.push(format!("{}\n", message.to_s(&globals.store)));
+    }
+
+    for msg in messages {
+        let msg_val = Value::string(msg);
+        vm.invoke_method_inner(globals, write_id, stderr, &[msg_val], None, None)?;
     }
 
     Ok(Value::nil())
@@ -2366,6 +2376,16 @@ mod tests {
         run_test(r#"warn(100, uplevel:1)"#);
         run_test(r#"warn(100, category: :experimental)"#);
         run_test_error(r#"raise "Woo""#);
+        // warn writes to $stderr (not directly to OS stderr)
+        run_test(
+            r##"
+            class MyIO; def initialize; @s = ""; end; def write(s); @s += s.to_s; end; def to_s; @s; end; end
+            old = $stderr; io = MyIO.new; $stderr = io
+            warn "hello"
+            $stderr = old
+            io.to_s
+            "##,
+        );
     }
 
     #[test]

@@ -455,6 +455,16 @@ pub(crate) fn cmp_teq_values_bool_no_opt(
 }
 
 impl Executor {
+    /// Emit a Ruby warning by writing to `$stderr`.
+    pub(crate) fn ruby_warn(&mut self, globals: &mut Globals, msg: &str) -> Result<()> {
+        let stderr_id = IdentId::get_id("$stderr");
+        let stderr = globals.get_gvar(stderr_id).unwrap_or(Value::nil());
+        let write_id = IdentId::get_id("write");
+        let msg_val = Value::string(format!("{}\n", msg));
+        self.invoke_method_inner(globals, write_id, stderr, &[msg_val], None, None)?;
+        Ok(())
+    }
+
     pub(crate) fn compare_values(
         &mut self,
         globals: &mut Globals,

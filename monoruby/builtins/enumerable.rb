@@ -112,14 +112,18 @@ module Enumerable
   end
 
   def any?(*pattern)
-    if block_given?
-      self.each do |x|
-        return true if yield(x)
+    if !pattern.empty?
+      if pattern.size != 1
+        raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
       end
-    elsif pattern.size == 1
+      warn "warning: given block not used" if block_given?
       pat = pattern[0]
       self.each do |x|
         return true if pat === x
+      end
+    elsif block_given?
+      self.each do |x|
+        return true if yield(x)
       end
     else
       self.each do |x|
@@ -430,15 +434,17 @@ module Enumerable
   end
 
   def all?(*pattern)
-    if block_given?
-      self.each { |x| return false unless yield(x) }
-    elsif pattern.empty?
-      self.each { |x| return false unless x }
-    elsif pattern.size == 1
+    if !pattern.empty?
+      if pattern.size != 1
+        raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
+      end
+      warn "warning: given block not used" if block_given?
       pat = pattern[0]
       self.each { |x| return false unless pat === x }
+    elsif block_given?
+      self.each { |x| return false unless yield(x) }
     else
-      raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
+      self.each { |x| return false unless x }
     end
     true
   end
