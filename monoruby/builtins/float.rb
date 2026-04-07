@@ -44,31 +44,19 @@ class Float
 
   def numerator
     return self if nan? || infinite?
-    if defined?(Rational)
-      to_r.numerator
-    else
-      raise TypeError, "can't convert Float into Rational"
-    end
+    to_r.numerator
   end
 
   def denominator
     return 1 if nan?
     return 1 if infinite?
-    if defined?(Rational)
-      to_r.denominator
-    else
-      raise TypeError, "can't convert Float into Rational"
-    end
+    to_r.denominator
   end
 
   def to_r
     raise FloatDomainError, "NaN" if nan?
     raise FloatDomainError, (self > 0 ? "Infinity" : "-Infinity") if infinite?
-    if defined?(Rational)
-      Rational.__float_to_rational(self)
-    else
-      self
-    end
+    Rational.__float_to_rational(self)
   end
 
   def rationalize(eps = nil)

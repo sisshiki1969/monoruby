@@ -52,7 +52,14 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func_with(INTEGER_CLASS, "ceil", int_ceil, 0, 1, false);
     globals.define_builtin_func_with(INTEGER_CLASS, "truncate", int_truncate, 0, 1, false);
     globals.define_builtin_func_with_kw(
-        INTEGER_CLASS, "round", int_round, 0, 1, false, &["half"], false,
+        INTEGER_CLASS,
+        "round",
+        int_round,
+        0,
+        1,
+        false,
+        &["half"],
+        false,
     );
 }
 
@@ -241,8 +248,6 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/chr.html]
 #[monoruby_builtin]
 fn chr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    use crate::value::rvalue::{Encoding, RStringInner};
-
     let i = match lfp.self_val().try_fixnum() {
         Some(i) => i,
         None => {
@@ -256,7 +261,8 @@ fn chr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     } else {
         // No argument: check Encoding.default_internal for codepoints > 255
         if i > 255 {
-            let di = globals.get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
+            let di = globals
+                .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
                 .unwrap_or(Value::nil());
             if !di.is_nil() {
                 if let Some(name) = globals.store.get_ivar(di, IdentId::_ENCODING) {
@@ -295,11 +301,7 @@ fn chr_resolve_encoding_name(
 }
 
 /// Produce a chr String for codepoint `i` with optional encoding name.
-fn chr_with_encoding(
-    globals: &mut Globals,
-    i: i64,
-    enc_name: Option<&str>,
-) -> Result<Value> {
+fn chr_with_encoding(globals: &mut Globals, i: i64, enc_name: Option<&str>) -> Result<Value> {
     use crate::value::rvalue::{Encoding, RStringInner};
 
     let normalized = enc_name.map(|s| s.to_uppercase().replace('-', "_"));
@@ -417,8 +419,8 @@ fn chr_with_encoding(
 /// Validate whether a codepoint is valid for a mock (non-UTF-8/ASCII/Binary) encoding.
 fn chr_valid_mock_codepoint(normalized_enc: &str, cp: u64) -> bool {
     match normalized_enc {
-        "SHIFT_JIS" | "SJIS" | "WINDOWS_31J" | "CP932" | "CSWINDOWS31J"
-        | "MACJAPANESE" | "MACJAPAN" => {
+        "SHIFT_JIS" | "SJIS" | "WINDOWS_31J" | "CP932" | "CSWINDOWS31J" | "MACJAPANESE"
+        | "MACJAPAN" => {
             if cp <= 0x7F {
                 return true;
             }
@@ -463,8 +465,9 @@ fn chr_set_encoding_label(globals: &mut Globals, val: Value, enc_name: &str) {
         .map(|v| v.as_class_id());
     if let Some(class_id) = enc_class_id {
         let const_name = enc_name.replace('-', "_");
-        if let Some(enc_obj) =
-            globals.store.get_constant_noautoload(class_id, IdentId::get_id(&const_name))
+        if let Some(enc_obj) = globals
+            .store
+            .get_constant_noautoload(class_id, IdentId::get_id(&const_name))
         {
             let override_id = IdentId::get_id("/encoding_override");
             globals.store.set_ivar(val, override_id, enc_obj).ok();
@@ -685,12 +688,10 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         },
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.cmp(&BigInt::from(rhs)),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.cmp(rhs),
-        (RV::BigInt(lhs), RV::Float(rhs)) => {
-            match super::super::op::bigint_cmp_float(lhs, rhs) {
-                Some(ord) => ord,
-                None => return Ok(Value::nil()),
-            }
-        }
+        (RV::BigInt(lhs), RV::Float(rhs)) => match super::super::op::bigint_cmp_float(lhs, rhs) {
+            Some(ord) => ord,
+            None => return Ok(Value::nil()),
+        },
         _ => {
             // Try coerce protocol: call rhs.coerce(lhs), propagate exceptions
             let coerce_id = IdentId::get_id("coerce");
@@ -1533,52 +1534,73 @@ mod tests {
 
     #[test]
     fn index() {
-        run_tests(
-            &[
-                "999999999999999999999999999999999[-100]",
-                "999999999999999999999999999999999[0]",
-                "999999999999999999999999999999999[47]",
-                "999999999999999999999999999999999[48]",
-                "999999999999999999999999999999999[82]",
-                "999999999999999999999999999999999[85]",
-                "999999999999999999999999999999999[86]",
-                "999999999999999999999999999999999[999999999999999999999999999999999]",
-                "27[-2]", "27[0]", "27[2]", "27[200]",
-                "27[2000000000000000000000000000000000000000000]",
-                // Integer#[Range]
-                "0b11110000[4..6]", "0b11110000[4...7]",
-                "0b11110000[-4..6]", "0b11110000[-4..-6]", "0b11110000[4..-6]",
-                "0b11110000[6..4]", "0b11110000[7...4]",
-                "0b11110000[6..-4]", "0b11110000[-6..-4]", "0b11110000[-6..4]",
-                "0xFF[0..3]", "0xFF[4..7]", "255[0..7]", "0b11110000[0..3]",
-                "123[0..0]", "123[0...0]",
-                "999999999999999999999999999999999[0..31]",
-                "999999999999999999999999999999999[-10..31]",
-                "999999999999999999999999999999999[-10..-31]",
-                "999999999999999999999999999999999[0..-31]",
-                "999999999999999999999999999999999[32..63]",
-                "999999999999999999999999999999999[63..32]",
-                "999999999999999999999999999999999[63..-32]",
-                "999999999999999999999999999999999[-63..-32]",
-                "999999999999999999999999999999999[-63..32]",
-                "999999999999999999999999999999999[64..95]",
-                // Negative self (Fixnum)
-                "-1[0..7]", "-1[0..63]", "-1[0...64]",
-                "-1[4..7]", "-1[-4..7]", "-1[-4..-6]", "-1[4..-6]",
-                "-256[0..7]", "-256[8..15]", "-256[-4..11]",
-                "-127[0..7]", "-127[4..11]", "-127[0..0]", "-127[0...0]",
-                "-2[0..63]", "-2[63..32]",
-                // Negative self (BigInt)
-                "-999999999999999999999999999999999[0..31]",
-                "-999999999999999999999999999999999[32..63]",
-                "-999999999999999999999999999999999[64..95]",
-                "-999999999999999999999999999999999[-10..31]",
-                "-999999999999999999999999999999999[-10..-31]",
-                "-999999999999999999999999999999999[63..32]",
-                "-999999999999999999999999999999999[-63..32]",
-            ]
-            ,
-        );
+        run_tests(&[
+            "999999999999999999999999999999999[-100]",
+            "999999999999999999999999999999999[0]",
+            "999999999999999999999999999999999[47]",
+            "999999999999999999999999999999999[48]",
+            "999999999999999999999999999999999[82]",
+            "999999999999999999999999999999999[85]",
+            "999999999999999999999999999999999[86]",
+            "999999999999999999999999999999999[999999999999999999999999999999999]",
+            "27[-2]",
+            "27[0]",
+            "27[2]",
+            "27[200]",
+            "27[2000000000000000000000000000000000000000000]",
+            // Integer#[Range]
+            "0b11110000[4..6]",
+            "0b11110000[4...7]",
+            "0b11110000[-4..6]",
+            "0b11110000[-4..-6]",
+            "0b11110000[4..-6]",
+            "0b11110000[6..4]",
+            "0b11110000[7...4]",
+            "0b11110000[6..-4]",
+            "0b11110000[-6..-4]",
+            "0b11110000[-6..4]",
+            "0xFF[0..3]",
+            "0xFF[4..7]",
+            "255[0..7]",
+            "0b11110000[0..3]",
+            "123[0..0]",
+            "123[0...0]",
+            "999999999999999999999999999999999[0..31]",
+            "999999999999999999999999999999999[-10..31]",
+            "999999999999999999999999999999999[-10..-31]",
+            "999999999999999999999999999999999[0..-31]",
+            "999999999999999999999999999999999[32..63]",
+            "999999999999999999999999999999999[63..32]",
+            "999999999999999999999999999999999[63..-32]",
+            "999999999999999999999999999999999[-63..-32]",
+            "999999999999999999999999999999999[-63..32]",
+            "999999999999999999999999999999999[64..95]",
+            // Negative self (Fixnum)
+            "-1[0..7]",
+            "-1[0..63]",
+            "-1[0...64]",
+            "-1[4..7]",
+            "-1[-4..7]",
+            "-1[-4..-6]",
+            "-1[4..-6]",
+            "-256[0..7]",
+            "-256[8..15]",
+            "-256[-4..11]",
+            "-127[0..7]",
+            "-127[4..11]",
+            "-127[0..0]",
+            "-127[0...0]",
+            "-2[0..63]",
+            "-2[63..32]",
+            // Negative self (BigInt)
+            "-999999999999999999999999999999999[0..31]",
+            "-999999999999999999999999999999999[32..63]",
+            "-999999999999999999999999999999999[64..95]",
+            "-999999999999999999999999999999999[-10..31]",
+            "-999999999999999999999999999999999[-10..-31]",
+            "-999999999999999999999999999999999[63..32]",
+            "-999999999999999999999999999999999[-63..32]",
+        ]);
     }
 
     #[test]
@@ -1603,17 +1625,20 @@ mod tests {
 
     #[test]
     fn cmp() {
-        run_tests(
-            &[
-                "100.send(:==, 100)", "100.send(:!=, 100)",
-                "100.send(:>=, 100)", "100.send(:<=, 100)",
-                "100.==(100)", "100.==(50)", "100.==(100.0)",
-                r#"100.==("100")"#,
-                "100.!=(100)", "100.!=(50)", "100.!=(100.0)",
-                r#"100.!=("100")"#,
-            ]
-            ,
-        );
+        run_tests(&[
+            "100.send(:==, 100)",
+            "100.send(:!=, 100)",
+            "100.send(:>=, 100)",
+            "100.send(:<=, 100)",
+            "100.==(100)",
+            "100.==(50)",
+            "100.==(100.0)",
+            r#"100.==("100")"#,
+            "100.!=(100)",
+            "100.!=(50)",
+            "100.!=(100.0)",
+            r#"100.!=("100")"#,
+        ]);
     }
 
     #[test]
@@ -2173,7 +2198,8 @@ mod tests {
     #[test]
     fn integer_chr_ascii() {
         run_tests(&[
-            "65.chr", r#"65.chr("US-ASCII")"#,
+            "65.chr",
+            r#"65.chr("US-ASCII")"#,
             "65.chr.encoding.to_s",
             "200.chr.encoding.to_s",
             r#"0.chr(Encoding::BINARY).encoding.to_s"#,
@@ -2219,25 +2245,31 @@ mod tests {
         run_test("Encoding.default_internal");
         run_test_error("256.chr");
         // default_internal = UTF-8: >255 uses UTF-8
-        run_test_once(r#"
+        run_test_once(
+            r#"
             Encoding.default_internal = Encoding::UTF_8
             res = 0x3000.chr.bytes.to_a
             Encoding.default_internal = nil
             res
-        "#);
-        run_test_once(r#"
+        "#,
+        );
+        run_test_once(
+            r#"
             Encoding.default_internal = Encoding::UTF_8
             res = 0x3000.chr.encoding.to_s
             Encoding.default_internal = nil
             res
-        "#);
+        "#,
+        );
         // 0-127 always US-ASCII regardless of default_internal
-        run_test_once(r#"
+        run_test_once(
+            r#"
             Encoding.default_internal = Encoding::UTF_8
             res = 65.chr.encoding.to_s
             Encoding.default_internal = nil
             res
-        "#);
+        "#,
+        );
     }
 
     #[test]
@@ -2258,49 +2290,56 @@ mod tests {
 
     #[test]
     fn integer_floor_ceil_truncate_round() {
-        run_tests(
-            &[
-                // ndigits >= 0 returns self
-                "15.floor", "15.ceil", "15.truncate", "15.round",
-                "15.floor(2)", "15.ceil(2)",
-                // negative ndigits
-                "15.floor(-1)", "(-15).floor(-1)",
-                "15.ceil(-1)", "(-15).ceil(-1)",
-                "15.truncate(-1)", "(-15).truncate(-1)",
-                "15.round(-1)", "(-15).round(-1)",
-                // round with half: keyword
-                "25.round(-1, half: :up)", "25.round(-1, half: :down)",
-                "25.round(-1, half: :even)", "35.round(-1, half: :even)",
-                "(-25).round(-1, half: :up)", "(-25).round(-1, half: :down)",
-                "(-25).round(-1, half: :even)",
-                // larger ndigits
-                "1234567.floor(-3)", "1234567.ceil(-3)",
-                "1234567.truncate(-3)", "1234567.round(-3)",
-                // bignum
-                "(10**20 + 555).round(-1)", "(10**20 + 555).floor(-1)",
-            ]
-            ,
-        );
+        run_tests(&[
+            // ndigits >= 0 returns self
+            "15.floor",
+            "15.ceil",
+            "15.truncate",
+            "15.round",
+            "15.floor(2)",
+            "15.ceil(2)",
+            // negative ndigits
+            "15.floor(-1)",
+            "(-15).floor(-1)",
+            "15.ceil(-1)",
+            "(-15).ceil(-1)",
+            "15.truncate(-1)",
+            "(-15).truncate(-1)",
+            "15.round(-1)",
+            "(-15).round(-1)",
+            // round with half: keyword
+            "25.round(-1, half: :up)",
+            "25.round(-1, half: :down)",
+            "25.round(-1, half: :even)",
+            "35.round(-1, half: :even)",
+            "(-25).round(-1, half: :up)",
+            "(-25).round(-1, half: :down)",
+            "(-25).round(-1, half: :even)",
+            // larger ndigits
+            "1234567.floor(-3)",
+            "1234567.ceil(-3)",
+            "1234567.truncate(-3)",
+            "1234567.round(-3)",
+            // bignum
+            "(10**20 + 555).round(-1)",
+            "(10**20 + 555).floor(-1)",
+        ]);
     }
 
     #[test]
     fn try_convert_error_message() {
-        run_test_error(
-            r#"class C; def to_int; "str"; end; end; Integer.try_convert(C.new)"#,
-        );
+        run_test_error(r#"class C; def to_int; "str"; end; end; Integer.try_convert(C.new)"#);
     }
 
     #[test]
     fn upto_with_float() {
-        run_tests(
-            &[
-                "res = []; 9.upto(13) {|i| res << i}; res",
-                "res = []; (-5).upto(-1.3) {|i| res << i}; res",
-                "res = []; 1.upto(3.9) {|i| res << i}; res",
-                "res = []; 1.upto(3.0) {|i| res << i}; res",
-                "(-5).upto(-1.3).to_a",
-            ],
-        );
+        run_tests(&[
+            "res = []; 9.upto(13) {|i| res << i}; res",
+            "res = []; (-5).upto(-1.3) {|i| res << i}; res",
+            "res = []; 1.upto(3.9) {|i| res << i}; res",
+            "res = []; 1.upto(3.0) {|i| res << i}; res",
+            "(-5).upto(-1.3).to_a",
+        ]);
     }
 
     #[test]

@@ -25,7 +25,7 @@ module Kernel
     if val.respond_to?(:to_int)
       result = val.to_int
       unless result.is_a?(Integer)
-        raise TypeError, "can't convert #{val.class} to Integer (#{val.class}#to_int gives #{result.class})"
+        raise TypeError, "can't convert #{val.class} into Integer (#{val.class}#to_int gives #{result.class})"
       end
       result
     else
@@ -40,7 +40,7 @@ module Kernel
     if val.respond_to?(:to_str)
       result = val.to_str
       unless result.is_a?(String)
-        raise TypeError, "can't convert #{val.class} to String (#{val.class}#to_str gives #{result.class})"
+        raise TypeError, "can't convert #{val.class} into String (#{val.class}#to_str gives #{result.class})"
       end
       result
     else

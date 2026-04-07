@@ -79,8 +79,11 @@ module Comparable
         raise ArgumentError, "cannot clamp with an exclusive range"
       end
     end
-    if min_val && max_val && (min_val <=> max_val) > 0
-      raise ArgumentError, "min argument must be less than or equal to max argument"
+    if min_val && max_val
+      cmp = min_val <=> max_val
+      if cmp.nil? || cmp > 0
+        raise ArgumentError, "min argument must be less than or equal to max argument"
+      end
     end
     if min_val && (self <=> min_val) < 0
       min_val

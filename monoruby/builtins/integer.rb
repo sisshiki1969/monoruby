@@ -184,7 +184,7 @@ class Integer
       [other, self]
     elsif other.is_a?(Float)
       [other, self.to_f]
-    elsif defined?(Rational) && other.is_a?(Rational)
+    elsif other.is_a?(Rational)
       [other, Rational(self, 1)]
     elsif other.is_a?(Complex)
       [other, Complex(self)]
@@ -216,19 +216,11 @@ class Integer
   end
 
   def to_r
-    if defined?(Rational)
-      Rational(self, 1)
-    else
-      self
-    end
+    Rational(self, 1)
   end
 
   def rationalize(eps = nil)
-    if defined?(Rational)
-      Rational(self, 1)
-    else
-      self
-    end
+    Rational(self, 1)
   end
 
   def self.sqrt(n)
@@ -236,7 +228,7 @@ class Integer
       if n.respond_to?(:to_int)
         n = n.to_int
         unless n.is_a?(Integer)
-          raise TypeError, "can't convert #{n.class} to Integer (#{n.class}#to_int gives #{n.class})"
+          raise TypeError, "can't convert #{n.class} into Integer (#{n.class}#to_int gives #{n.class})"
         end
       else
         raise TypeError, "no implicit conversion of #{n.class} into Integer"
@@ -293,7 +285,7 @@ class Integer
         raise TypeError, "no implicit conversion of #{ndigits.class} into Integer"
       end
       unless result.is_a?(Integer)
-        raise TypeError, "can't convert #{ndigits.class} to Integer (#{ndigits.class}#to_int gives #{result.class})"
+        raise TypeError, "can't convert #{ndigits.class} into Integer (#{ndigits.class}#to_int gives #{result.class})"
       end
       ndigits = result
     else
