@@ -4,12 +4,15 @@ set -e
 cargo llvm-cov clean --workspace
 cargo llvm-cov nextest --no-report
 
-cargo build --features emit-asm --features deopt --features perf --features gc-debug --features jit-debug --features emit-cfg 
+# Set up coverage environment for subsequent cargo build/run commands
+eval "$(cargo llvm-cov show-env --export-prefix)"
+
+cargo build --features emit-asm --features deopt --features perf --features gc-debug --features jit-debug --features emit-cfg
 target/debug/monoruby benchmark/app_fib.rb > monoruby.log
 ruby --yjit benchmark/app_fib.rb > ruby.log
 diff -s monoruby.log ruby.log
 
-cargo build 
+cargo build
 target/debug/monoruby benchmark/tarai.rb > monoruby.log
 ruby --yjit benchmark/tarai.rb > ruby.log
 diff -s monoruby.log ruby.log
