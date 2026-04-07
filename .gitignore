@@ -14,3 +14,4 @@ out.*
 lcov.info
 rubyspec_temp/
 .claude/
+coverage_html

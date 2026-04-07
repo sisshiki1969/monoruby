@@ -1,73 +1,69 @@
 #!/bin/bash
 set -e
-
-cargo llvm-cov clean --workspace
-cargo llvm-cov nextest --no-report
-
-# Set up coverage environment for subsequent cargo build/run commands
-eval "$(cargo llvm-cov show-env --export-prefix)"
-
 cargo build --features emit-asm --features deopt --features perf --features gc-debug --features jit-debug --features emit-cfg
 target/debug/monoruby benchmark/app_fib.rb > monoruby.log
 ruby --yjit benchmark/app_fib.rb > ruby.log
 diff -s monoruby.log ruby.log
 
-cargo build
-target/debug/monoruby benchmark/tarai.rb > monoruby.log
+cargo llvm-cov clean --workspace
+cargo llvm-cov nextest --no-report
+
+# Build instrumented binary via cargo llvm-cov run
+cargo llvm-cov run --no-report -- --version > /dev/null
+MONORUBY="$PWD/target/llvm-cov-target/debug/monoruby"
+
+$MONORUBY benchmark/tarai.rb > monoruby.log
 ruby --yjit benchmark/tarai.rb > ruby.log
 diff -s monoruby.log ruby.log
-#target/debug/monoruby benchmark/quick_sort.rb 2> benchmark/quick_sort.disas > monoruby.log
-#ruby benchmark/quick_sort.rb > ruby.log
-#diff -s monoruby.log ruby.log
-target/debug/monoruby benchmark/so_nbody.rb > monoruby.log
+$MONORUBY benchmark/so_nbody.rb > monoruby.log
 ruby --yjit benchmark/so_nbody.rb > ruby.log
 diff -s monoruby.log ruby.log
-target/debug/monoruby benchmark/bf.rb > monoruby.log
+$MONORUBY benchmark/bf.rb > monoruby.log
 ruby --yjit benchmark/bf.rb > ruby.log
 diff -s monoruby.log ruby.log
 
 echo "checking plb2.."
-target/debug/monoruby benchmark/plb2/nqueen.rb > monoruby.log
+$MONORUBY benchmark/plb2/nqueen.rb > monoruby.log
 ruby --yjit benchmark/plb2/nqueen.rb > ruby.log
 diff -s monoruby.log ruby.log
-target/debug/monoruby benchmark/plb2/sudoku.rb > monoruby.log
+$MONORUBY benchmark/plb2/sudoku.rb > monoruby.log
 ruby --yjit benchmark/plb2/sudoku.rb > ruby.log
 diff -s monoruby.log ruby.log
-target/debug/monoruby benchmark/plb2/matmul.rb > monoruby.log
+$MONORUBY benchmark/plb2/matmul.rb > monoruby.log
 ruby --yjit benchmark/plb2/matmul.rb > ruby.log
 diff -s monoruby.log ruby.log
-target/debug/monoruby benchmark/plb2/bedcov.rb > monoruby.log
+$MONORUBY benchmark/plb2/bedcov.rb > monoruby.log
 ruby --yjit benchmark/plb2/bedcov.rb > ruby.log
 diff -s monoruby.log ruby.log
 
-target/debug/monoruby benchmark/app_aobench.rb > benchmark/monoruby.ppm && convert benchmark/monoruby.ppm benchmark/monoruby.jpg
+$MONORUBY benchmark/app_aobench.rb > benchmark/monoruby.ppm && convert benchmark/monoruby.ppm benchmark/monoruby.jpg
 ruby --yjit  benchmark/app_aobench.rb > benchmark/ruby.ppm && convert benchmark/ruby.ppm benchmark/ruby.jpg
 
-target/debug/monoruby benchmark/so_mandelbrot.rb > benchmark/mandel1.ppm
-target/debug/monoruby --no-jit benchmark/so_mandelbrot.rb > benchmark/mandel2.ppm
+$MONORUBY benchmark/so_mandelbrot.rb > benchmark/mandel1.ppm
+$MONORUBY --no-jit benchmark/so_mandelbrot.rb > benchmark/mandel2.ppm
 ruby --yjit benchmark/so_mandelbrot.rb > benchmark/mandel.ppm
 diff -s benchmark/mandel.ppm benchmark/mandel1.ppm
 diff -s benchmark/mandel.ppm benchmark/mandel2.ppm
 rm benchmark/*.ppm
 
-target/debug/monoruby ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > monoruby.log
+$MONORUBY ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > monoruby.log
 ruby --yjit ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > ruby.log
 diff -s monoruby.log ruby.log
 
-target/debug/monoruby ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > monoruby.log
+$MONORUBY ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > monoruby.log
 ruby --yjit ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > ruby.log
 diff -s monoruby.log ruby.log
 rm *.log
 
-# Run ruby/spec if ../spec and ../mspec exist (for coverage)
+# Run ruby/spec with instrumented binary for coverage
 if [ -d "../spec" ] && [ -d "../mspec" ]; then
   echo "Running ruby/spec for coverage..."
   cd ../spec
   for cat in basicobject true false nil integer float comparable; do
     echo "=== core/$cat ==="
-    ../mspec/bin/mspec core/$cat -t $OLDPWD/target/debug/monoruby
+    ../mspec/bin/mspec core/$cat -t "$MONORUBY"
   done
-  cd $OLDPWD
+  cd "$OLDPWD"
 fi
 
 cargo llvm-cov report --lcov --output-path lcov.info
