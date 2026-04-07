@@ -2353,4 +2353,103 @@ mod tests {
         run_test_error("42.round(1 << 31)");
         run_test_error("42.round(-(1 << 31) - 1)");
     }
+
+    #[test]
+    fn integer_shr() {
+        run_tests(&[
+            "8 >> 1",
+            "-8 >> 1",
+            "256 >> 4",
+            "1 >> 100",
+            // BigInt
+            "(10**20) >> 10",
+            "(10**20) >> 0",
+        ]);
+    }
+
+    #[test]
+    fn integer_shl_extended() {
+        run_tests(&[
+            "1 << 10",
+            "-1 << 10",
+            // BigInt shift
+            "(10**20) << 10",
+        ]);
+    }
+
+    #[test]
+    fn integer_to_s_with_base() {
+        run_tests(&[
+            "255.to_s(16)",
+            "255.to_s(2)",
+            "255.to_s(8)",
+            "-255.to_s(16)",
+            // BigInt
+            "(10**20).to_s",
+            "(10**20).to_s(16)",
+            "(10**20).to_s(2)",
+        ]);
+    }
+
+    #[test]
+    fn integer_bit_length_extended() {
+        run_tests(&[
+            "0.bit_length",
+            "1.bit_length",
+            "255.bit_length",
+            "-1.bit_length",
+            "-128.bit_length",
+            // BigInt
+            "(10**20).bit_length",
+            "(-(10**20)).bit_length",
+        ]);
+    }
+
+    #[test]
+    fn integer_pow_modular() {
+        run_tests(&[
+            "2.pow(10, 1000)",
+            "2.pow(100, 97)",
+            // BigInt
+            "(10**20).pow(2, 97)",
+        ]);
+    }
+
+    #[test]
+    fn integer_size() {
+        run_tests(&[
+            "1.size",
+            "(-1).size",
+            "(10**20).size",
+        ]);
+    }
+
+    #[test]
+    fn integer_abs_bigint_extended() {
+        run_tests(&[
+            "(10**20).abs",
+            "(-(10**20)).abs",
+        ]);
+    }
+
+    #[test]
+    fn integer_zero_nonzero_bigint() {
+        run_tests(&[
+            "(10**20).zero?",
+            "(10**20).nonzero?",
+            "0.zero?",
+            "0.nonzero?",
+        ]);
+    }
+
+    #[test]
+    fn integer_eql_extended() {
+        run_tests(&[
+            "1.eql?(1)",
+            "1.eql?(1.0)",
+            "1.eql?(2)",
+            "(10**20).eql?(10**20)",
+            "(10**20).eql?(1)",
+        ]);
+    }
 }

@@ -809,4 +809,64 @@ mod tests {
         run_test("Math.expm1(0)");
         run_test("Math.log1p(0)");
     }
+
+    #[test]
+    fn math_log_bigint() {
+        run_test("Math.log(10**20)");
+        run_test("Math.log2(10**20)");
+        run_test("Math.log10(10**20)");
+    }
+
+    #[test]
+    fn math_gamma_extended() {
+        run_test("Math.gamma(5)");
+        run_test("Math.gamma(0.5)");
+    }
+
+    #[test]
+    fn math_lgamma_extended() {
+        run_test("Math.lgamma(1)");
+        run_test("Math.lgamma(0.5)");
+    }
+
+    #[test]
+    fn math_atanh_extended() {
+        run_test("Math.atanh(0)");
+        run_test("Math.atanh(0.5)");
+    }
+
+    #[test]
+    fn math_acosh_domain() {
+        run_test("Math.acosh(1)");
+        run_test_error("Math.acosh(0)");
+        run_test_once("Math.acosh(Float::NAN).nan?");
+    }
+
+    #[test]
+    fn math_asin_acos_nan() {
+        run_test_once("Math.asin(Float::NAN).nan?");
+        run_test_once("Math.acos(Float::NAN).nan?");
+    }
+
+    #[test]
+    fn math_ldexp() {
+        run_tests(&[
+            "Math.ldexp(0.5, 2)",
+            "Math.ldexp(1.0, 10)",
+            "Math.ldexp(0.5, -1)",
+        ]);
+    }
+
+    #[test]
+    fn math_log1p_domain() {
+        run_test_error("Math.log1p(-2)");
+        run_test_once("Math.log1p(Float::NAN).nan?");
+    }
+
+    #[test]
+    fn math_log_domain() {
+        run_test_error("Math.log(-1)");
+        run_test_error("Math.log2(-1)");
+        run_test_error("Math.log10(-1)");
+    }
 }
