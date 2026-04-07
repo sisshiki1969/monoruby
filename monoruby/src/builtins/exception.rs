@@ -434,6 +434,32 @@ mod tests {
     }
 
     #[test]
+    fn nomethoderror_receiver() {
+        run_test(
+            r#"
+            begin
+              nil.foo
+            rescue NoMethodError => e
+              e.receiver
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn nomethoderror_class() {
+        run_test(
+            r#"
+            begin
+              nil.foo
+            rescue => e
+              e.class
+            end
+            "#,
+        );
+    }
+
+    #[test]
     fn full_message() {
         run_test(
             r#"

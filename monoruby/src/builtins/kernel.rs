@@ -3420,4 +3420,79 @@ mod tests {
         run_test(r#"sprintf("%<foo>f", foo: 3.14)"#);
         run_test(r#"sprintf("%<foo>s", foo: "hello")"#);
     }
+
+    #[test]
+    fn kernel_clone() {
+        run_tests(&[
+            "[1,2,3].clone",
+            r#""hello".clone"#,
+            "{a: 1}.clone",
+        ]);
+    }
+
+    #[test]
+    fn kernel_hash_method() {
+        run_tests(&[
+            "1.hash.is_a?(Integer)",
+            r#""hello".hash.is_a?(Integer)"#,
+            ":foo.hash.is_a?(Integer)",
+        ]);
+    }
+
+    #[test]
+    fn kernel_eql() {
+        run_tests(&[
+            "1.eql?(1)",
+            "1.eql?(1.0)",
+            ":foo.eql?(:foo)",
+            ":foo.eql?(:bar)",
+        ]);
+    }
+
+    #[test]
+    fn kernel_loop_stop_iteration() {
+        run_test(
+            r#"
+            x = 0
+            loop do
+              x += 1
+              raise StopIteration if x == 5
+            end
+            x
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_caller() {
+        run_test(
+            r#"
+            def foo
+              caller
+            end
+            foo.is_a?(Array)
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_proc_lambda() {
+        run_tests(&[
+            "proc { 1 }.call",
+            "lambda { 1 }.call",
+            "proc { |x| x }.call(42)",
+            "lambda { |x| x }.call(42)",
+        ]);
+    }
+
+    #[test]
+    fn kernel_raise_class() {
+        run_test_error("raise ArgumentError");
+        run_test_error(r#"raise TypeError, "custom""#);
+    }
+
+    #[test]
+    fn kernel_format_error() {
+        run_test_error("sprintf()");
+    }
 }

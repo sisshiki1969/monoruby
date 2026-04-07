@@ -573,4 +573,61 @@ mod tests {
         run_test_once("(Rational(1, 2) / 0.0).to_s");
         run_test_once("(Rational(-1, 2) / 0.0).to_s");
     }
+
+    #[test]
+    fn rational_ne() {
+        run_tests(&[
+            "Rational(1, 2) != Rational(1, 2)",
+            "Rational(1, 2) != Rational(1, 3)",
+            "Rational(1, 2) != 0.5",
+            "Rational(1, 2) != 0.3",
+            "Rational(2, 1) != 2",
+            "Rational(2, 1) != 3",
+            "Rational(1, 2) != :foo",
+        ]);
+    }
+
+    #[test]
+    fn rational_eq_extended() {
+        run_tests(&[
+            // BigInt comparison
+            "Rational(10**20, 1) == 10**20",
+            "Rational(10**20, 1) == 10**19",
+            // Coerce path (unknown type)
+            "Rational(1, 2) == :foo",
+        ]);
+    }
+
+    #[test]
+    fn rational_cmp_extended() {
+        run_tests(&[
+            // BigInt comparison
+            "(Rational(10**20, 1) <=> 10**20)",
+            "(Rational(1, 2) <=> 10**20)",
+            // nil return for non-comparable
+            "(Rational(1, 2) <=> :foo)",
+        ]);
+    }
+
+    #[test]
+    fn rational_arithmetic_with_int_and_float() {
+        run_tests(&[
+            // Rational + Integer
+            "(Rational(1, 2) + 1).to_s",
+            // Rational + Float
+            "(Rational(1, 2) + 0.5).class",
+            // Rational - Integer
+            "(Rational(1, 2) - 1).to_s",
+            // Rational - Float
+            "(Rational(1, 2) - 0.5).class",
+            // Rational * Integer
+            "(Rational(1, 2) * 3).to_s",
+            // Rational * Float
+            "(Rational(1, 2) * 0.5).class",
+            // Rational / Integer
+            "(Rational(1, 2) / 3).to_s",
+            // Rational / Float
+            "(Rational(1, 2) / 0.5).class",
+        ]);
+    }
 }
