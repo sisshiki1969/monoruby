@@ -1054,7 +1054,7 @@ pub(super) enum AsmInst {
     Inline(InlineProcedure),
     #[allow(non_camel_case_types)]
     CFunc_F_F {
-        f: extern "C" fn(f64) -> f64,
+        f: unsafe extern "C" fn(f64) -> f64,
         src: Xmm,
         dst: Xmm,
         using_xmm: UsingXmm,

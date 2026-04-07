@@ -97,7 +97,7 @@ impl<'a> JitContext<'a> {
                 InlineFuncInfo::CFunc_F_F(f) => {
                     let CallSiteInfo { args, dst, .. } = *callsite;
                     if let Some(args) = state.coerce_C_f64(args) {
-                        let res = f(args);
+                        let res = unsafe { f(args) };
                         if match dst {
                             Some(dst) => state.def_C_float(dst, res),
                             None => true,

@@ -776,7 +776,7 @@ impl Globals {
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
-        f: extern "C" fn(f64) -> f64,
+        f: unsafe extern "C" fn(f64) -> f64,
         arg_num: usize,
     ) -> FuncId {
         let fid = self.define_builtin_module_func(class_id, name, address, arg_num);

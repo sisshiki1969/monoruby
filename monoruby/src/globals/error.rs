@@ -356,11 +356,15 @@ impl MonorubyErr {
         given: usize,
         range: std::ops::RangeInclusive<usize>,
     ) -> MonorubyErr {
-        Self::argumenterr(format!(
-            "wrong number of arguments (given {given}, expected {}..{})",
-            range.start(),
-            range.end()
-        ))
+        if range.start() == range.end() {
+            Self::wrong_number_of_arg(*range.start(), given)
+        } else {
+            Self::argumenterr(format!(
+                "wrong number of arguments (given {given}, expected {}..{})",
+                range.start(),
+                range.end()
+            ))
+        }
     }
 
     pub(crate) fn wrong_number_of_arg_min(given: usize, min: usize) -> MonorubyErr {
