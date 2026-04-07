@@ -258,7 +258,7 @@ fn try_convert(
             return Ok(result);
         }
         return Err(MonorubyErr::typeerr(format!(
-            "can't convert {} to Hash ({}#to_hash gives {})",
+            "can't convert {} into Hash ({}#to_hash gives {})",
             arg.get_real_class_name(globals),
             arg.get_real_class_name(globals),
             result.get_real_class_name(globals),

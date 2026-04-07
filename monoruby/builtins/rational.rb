@@ -152,7 +152,7 @@ class Rational
         raise TypeError, "no implicit conversion of #{ndigits.class} into Integer"
       end
       unless result.is_a?(Integer)
-        raise TypeError, "can't convert #{ndigits.class} to Integer (#{ndigits.class}#to_int gives #{result.class})"
+        raise TypeError, "can't convert #{ndigits.class} into Integer (#{ndigits.class}#to_int gives #{result.class})"
       end
       return result
     else

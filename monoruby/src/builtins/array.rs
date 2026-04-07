@@ -280,7 +280,7 @@ fn array_try_convert(
             return Ok(Value::nil());
         }
         return Err(MonorubyErr::typeerr(format!(
-            "can't convert {} to Array ({}#to_ary gives {})",
+            "can't convert {} into Array ({}#to_ary gives {})",
             obj.get_real_class_name(&globals.store),
             obj.get_real_class_name(&globals.store),
             result.get_real_class_name(&globals.store),
@@ -321,7 +321,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             }
             if !result.is_nil() {
                 return Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} to Array ({}#to_ary gives {})",
+                    "can't convert {} into Array ({}#to_ary gives {})",
                     arg.get_real_class_name(&globals.store),
                     arg.get_real_class_name(&globals.store),
                     result.get_real_class_name(&globals.store),
@@ -2951,7 +2951,7 @@ fn try_convert_to_array(
         return Ok(None);
     }
     Err(MonorubyErr::typeerr(format!(
-        "can't convert {} to Array ({}#to_ary gives {})",
+        "can't convert {} into Array ({}#to_ary gives {})",
         v.get_real_class_name(&globals.store),
         v.get_real_class_name(&globals.store),
         result.get_real_class_name(&globals.store),

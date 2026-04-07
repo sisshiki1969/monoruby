@@ -199,7 +199,7 @@ class Integer
     elsif other.respond_to?(:to_f)
       result = other.to_f
       unless result.is_a?(Float)
-        raise TypeError, "can't convert #{other.class} to Float (#{other.class}#to_f gives #{result.class})"
+        raise TypeError, "can't convert #{other.class} into Float (#{other.class}#to_f gives #{result.class})"
       end
       [result, self.to_f]
     else
@@ -228,7 +228,7 @@ class Integer
       if n.respond_to?(:to_int)
         n = n.to_int
         unless n.is_a?(Integer)
-          raise TypeError, "can't convert #{n.class} to Integer (#{n.class}#to_int gives #{n.class})"
+          raise TypeError, "can't convert #{n.class} into Integer (#{n.class}#to_int gives #{n.class})"
         end
       else
         raise TypeError, "no implicit conversion of #{n.class} into Integer"
@@ -255,7 +255,7 @@ class Integer
       elsif result.is_a?(Integer)
         result
       else
-        raise TypeError, "can't convert #{obj.class} to Integer (#{obj.class}#to_int gives #{result.class})"
+        raise TypeError, "can't convert #{obj.class} into Integer (#{obj.class}#to_int gives #{result.class})"
       end
     else
       nil
@@ -285,7 +285,7 @@ class Integer
         raise TypeError, "no implicit conversion of #{ndigits.class} into Integer"
       end
       unless result.is_a?(Integer)
-        raise TypeError, "can't convert #{ndigits.class} to Integer (#{ndigits.class}#to_int gives #{result.class})"
+        raise TypeError, "can't convert #{ndigits.class} into Integer (#{ndigits.class}#to_int gives #{result.class})"
       end
       ndigits = result
     else
