@@ -535,7 +535,7 @@ pub(crate) fn pack(
                     if let Some(repeat) = repeat {
                         for _ in 0..repeat {
                             if let Some(value) = iter.next() {
-                                let f = value.coerce_to_f64_no_convert(&globals.store)?;
+                                let f = coerce_to_pack_f64(vm, globals, value)?;
                                 let bytes = if endianness {
                                     f64::to_be_bytes(f)
                                 } else {
@@ -548,7 +548,7 @@ pub(crate) fn pack(
                         }
                     } else {
                         while let Some(value) = iter.next() {
-                            let f = value.coerce_to_f64_no_convert(&globals.store)?;
+                            let f = coerce_to_pack_f64(vm, globals, value)?;
                             let bytes = if endianness {
                                 f64::to_be_bytes(f)
                             } else {
@@ -566,7 +566,7 @@ pub(crate) fn pack(
                     if let Some(repeat) = repeat {
                         for _ in 0..repeat {
                             if let Some(value) = iter.next() {
-                                let f = value.coerce_to_f64_no_convert(&globals.store)? as f32;
+                                let f = coerce_to_pack_f64(vm, globals, value)? as f32;
                                 let bytes = if endianness {
                                     f32::to_be_bytes(f)
                                 } else {
@@ -579,7 +579,7 @@ pub(crate) fn pack(
                         }
                     } else {
                         while let Some(value) = iter.next() {
-                            let f = value.coerce_to_f64_no_convert(&globals.store)? as f32;
+                            let f = coerce_to_pack_f64(vm, globals, value)? as f32;
                             let bytes = if endianness {
                                 f32::to_be_bytes(f)
                             } else {
@@ -686,9 +686,7 @@ pub(crate) fn pack(
                         packed.extend_from_slice(&s);
                     }
                 } else {
-                    if let Some(count) = repeat {
-                        packed.resize(packed.len() + count, 0);
-                    }
+                    return Err(MonorubyErr::argumenterr("too few arguments"));
                 }
             }
             Template::AsciiTrim => {
@@ -707,9 +705,7 @@ pub(crate) fn pack(
                         packed.extend_from_slice(&s);
                     }
                 } else {
-                    if let Some(count) = repeat {
-                        packed.resize(packed.len() + count, b' ');
-                    }
+                    return Err(MonorubyErr::argumenterr("too few arguments"));
                 }
             }
             Template::CString => {
@@ -730,11 +726,7 @@ pub(crate) fn pack(
                         packed.push(0);
                     }
                 } else {
-                    if let Some(count) = repeat {
-                        packed.resize(packed.len() + count, 0);
-                    } else {
-                        packed.push(0);
-                    }
+                    return Err(MonorubyErr::argumenterr("too few arguments"));
                 }
             }
             Template::Base64 => {
@@ -754,8 +746,9 @@ pub(crate) fn pack(
             }
             Template::QuotedPrintable => {
                 // 'M' — MIME quoted-printable encode
+                // M uses #to_s (not #to_str) for conversion.
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(vm, globals, *value)?;
+                    let s = get_pack_string_for_m(vm, globals, *value)?;
                     let line_len = if template.explicit_count {
                         repeat.unwrap_or(72)
                     } else {
@@ -795,8 +788,8 @@ pub(crate) fn pack(
                     let mut byte: u8 = 0;
                     let mut bit_i = 0;
                     for i in 0..count {
-                        let bit = if i < s.len() && s[i] == b'1' {
-                            1u8
+                        let bit = if i < s.len() {
+                            s[i] & 1
                         } else {
                             0u8
                         };
@@ -1088,16 +1081,92 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
 
 /// Get bytes from a Value for pack string templates (a/A/Z/m/M/u).
 /// Calls `#to_str` if the value is not already a String.
+/// Convert a value to f64 for pack float formats (D/d/E/e/F/f/G/g).
+/// Rejects nil, String, and non-Numeric objects with TypeError.
+/// Calls #to_f for Numeric objects that aren't directly Float/Fixnum/BigInt.
+fn coerce_to_pack_f64(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    value: &Value,
+) -> Result<f64> {
+    match value.unpack() {
+        RV::Fixnum(i) => Ok(i as f64),
+        RV::Float(f) => Ok(f),
+        RV::BigInt(b) => b
+            .to_f64()
+            .ok_or_else(|| MonorubyErr::rangeerr("bignum too big to convert into Float")),
+        _ => {
+            // Reject nil, true, false, String, Symbol, and non-Numeric types.
+            if value.is_nil()
+                || value.is_packed_value()
+                || value.is_str().is_some()
+            {
+                return Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} into Float",
+                    value.get_real_class_name(&globals.store),
+                )));
+            }
+            // Try #to_f for Numeric subclasses (Rational, Complex, etc.)
+            if let Some(func_id) = globals.check_method(*value, IdentId::TO_F) {
+                let result = vm.invoke_func_inner(globals, func_id, *value, &[], None, None)?;
+                match result.unpack() {
+                    RV::Float(f) => Ok(f),
+                    RV::Fixnum(i) => Ok(i as f64),
+                    _ => Err(MonorubyErr::typeerr(format!(
+                        "can't convert {} into Float ({}#to_f gives {})",
+                        value.get_real_class_name(&globals.store),
+                        value.get_real_class_name(&globals.store),
+                        result.get_real_class_name(&globals.store),
+                    ))),
+                }
+            } else {
+                Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} into Float",
+                    value.get_real_class_name(&globals.store),
+                )))
+            }
+        }
+    }
+}
+
 fn get_pack_string(
     vm: &mut Executor,
     globals: &mut Globals,
     value: Value,
 ) -> Result<Vec<u8>> {
+    if value.is_nil() {
+        return Ok(Vec::new());
+    }
     if let Some(s) = value.is_rstring_inner() {
         Ok(s.as_bytes().to_vec())
     } else {
         let rstr = value.coerce_to_rstring(vm, globals)?;
         Ok(rstr.as_bytes().to_vec())
+    }
+}
+
+/// Get string for 'M' (quoted-printable) format.
+/// M uses #to_s (not #to_str) and converts nil, Symbol, Integer, Float, etc.
+fn get_pack_string_for_m(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    value: Value,
+) -> Result<Vec<u8>> {
+    if value.is_nil() {
+        return Ok(Vec::new());
+    }
+    if let Some(s) = value.is_rstring_inner() {
+        return Ok(s.as_bytes().to_vec());
+    }
+    // Call #to_s on the value.
+    let to_s_id = IdentId::TO_S;
+    let result = vm.invoke_method_inner(globals, to_s_id, value, &[], None, None)?;
+    if let Some(s) = result.is_rstring_inner() {
+        Ok(s.as_bytes().to_vec())
+    } else {
+        // If #to_s doesn't return a String, use default string representation.
+        let s = value.to_s(&globals.store);
+        Ok(s.into_bytes())
     }
 }
 
@@ -1204,39 +1273,52 @@ fn base64_decode(data: &[u8]) -> Vec<u8> {
 // --- MIME Quoted-Printable encoding/decoding ---
 
 fn qp_encode(data: &[u8], line_len: usize) -> String {
+    if data.is_empty() {
+        return String::new();
+    }
+
     let mut result = String::new();
-    let mut col = 0;
-    let max_col = if line_len > 0 {
-        line_len - 1
-    } else {
-        usize::MAX
-    };
+    let mut col: usize = 0;
+    // CRuby: soft break when col > line_len (before adding next char).
+    // For line_len <= 1, use default 72.
+    let limit = if line_len > 1 { line_len } else { 72 };
 
-    for &byte in data {
-        let encoded =
-            if byte == b'\t' || byte == b' ' || (byte >= 33 && byte <= 126 && byte != b'=') {
-                format!("{}", byte as char)
-            } else if byte == b'\n' {
-                "\n".to_string()
-            } else {
-                format!("={:02X}", byte)
-            };
+    for &byte in data.iter() {
+        if byte == b'\n' {
+            // If the previous character on this line was tab or space,
+            // insert a soft break before the hard newline.
+            if col > 0 {
+                let prev = result.as_bytes()[result.len() - 1];
+                if prev == b'\t' || prev == b' ' {
+                    result.push('=');
+                    result.push('\n');
+                }
+            }
+            result.push('\n');
+            col = 0;
+            continue;
+        }
 
-        if byte != b'\n' && col + encoded.len() > max_col {
+        // Check if we should emit a soft break before adding this character.
+        if col > limit {
             result.push('=');
             result.push('\n');
             col = 0;
         }
 
-        result.push_str(&encoded);
-        if byte == b'\n' {
-            col = 0;
+        if byte == b'\t'
+            || byte == b' '
+            || (byte >= 33 && byte <= 126 && byte != b'=')
+        {
+            result.push(byte as char);
+            col += 1;
         } else {
-            col += encoded.len();
+            result.push_str(&format!("={:02X}", byte));
+            col += 3;
         }
     }
 
-    // Always end with soft line break if not already ending with newline
+    // Always end with soft line break if not already ending with newline.
     if !result.ends_with('\n') {
         result.push('=');
         result.push('\n');
