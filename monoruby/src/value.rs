@@ -1054,13 +1054,9 @@ fn coerce_to_rstring_inner(
             if let Some(s) = result.is_rstring() {
                 return Ok(s);
             }
-            return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} into String ({}#{} gives {})",
-                recv.get_real_class_name(&globals.store),
-                recv.get_real_class_name(&globals.store),
-                method.get_name(),
-                result.get_real_class_name(&globals.store),
-            )));
+            return Err(MonorubyErr::cant_convert_error(
+                globals, recv, result, "String", method,
+            ));
         }
     }
     Err(MonorubyErr::typeerr(format!(
@@ -1345,16 +1341,11 @@ impl Value {
         if let Some(ary) = self.try_array_ty() {
             return Ok(ary);
         } else if let Some(fid) = globals.check_method(*self, IdentId::TO_ARY) {
-            let v = vm.invoke_func_inner(globals, fid, *self, &[], None, None)?;
-            if let Some(ary) = v.try_array_ty() {
+            let result = vm.invoke_func_inner(globals, fid, *self, &[], None, None)?;
+            if let Some(ary) = result.try_array_ty() {
                 return Ok(ary);
             }
-            return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} into Array ({}#to_ary gives {})",
-                self.get_real_class_name(&globals.store),
-                self.get_real_class_name(&globals.store),
-                v.get_real_class_name(&globals.store),
-            )));
+            return Err(MonorubyErr::cant_convert_error_ary(globals, *self, result));
         }
         Err(MonorubyErr::no_implicit_conversion(
             globals,
@@ -1484,12 +1475,7 @@ impl Value {
         };
         match result.unpack() {
             RV::Fixnum(_) | RV::BigInt(_) => Ok(result),
-            _ => Err(MonorubyErr::typeerr(format!(
-                "can't convert {} into Integer ({}#to_int gives {})",
-                self.get_real_class_name(&globals.store),
-                self.get_real_class_name(&globals.store),
-                result.get_real_class_name(&globals.store),
-            ))),
+            _ => Err(MonorubyErr::cant_convert_error_int(globals, *self, result)),
         }
     }
 
@@ -1565,10 +1551,7 @@ impl Value {
         if let Ok(f) = self.coerce_to_f64(vm, globals) {
             return Ok(f);
         }
-        Err(MonorubyErr::typeerr(format!(
-            "can't convert {} into Float",
-            self.get_real_class_name(&globals.store)
-        )))
+        Err(MonorubyErr::cant_convert_into_float(globals, *self))
     }
 
     ///
@@ -1619,12 +1602,7 @@ impl Value {
                     match result.unpack() {
                         RV::Float(f) => Ok(f),
                         RV::Fixnum(i) => Ok(i as f64),
-                        _ => Err(MonorubyErr::typeerr(format!(
-                            "can't convert {} into Float ({}#to_f gives {})",
-                            self.get_real_class_name(&globals.store),
-                            self.get_real_class_name(&globals.store),
-                            result.get_real_class_name(&globals.store),
-                        ))),
+                        _ => Err(MonorubyErr::cant_convert_error_f(globals, *self, result)),
                     }
                 } else {
                     Err(MonorubyErr::no_implicit_conversion(

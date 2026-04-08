@@ -671,12 +671,7 @@ fn kernel_integer(
             RV::Fixnum(i) => return Ok(Value::integer(i)),
             RV::BigInt(b) => return Ok(Value::bigint(b.clone())),
             _ => {
-                return Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} into Integer ({}#to_int gives {})",
-                    arg0.get_real_class_name(globals),
-                    arg0.get_real_class_name(globals),
-                    result.get_real_class_name(globals),
-                )));
+                return Err(MonorubyErr::cant_convert_error_int(globals, arg0, result));
             }
         }
     }
@@ -740,19 +735,11 @@ fn kernel_float(
             RV::Float(f) => return Ok(Value::float(f)),
             RV::Fixnum(i) => return Ok(Value::float(i as f64)),
             _ => {
-                return Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} into Float ({}#to_f gives {})",
-                    arg0.get_real_class_name(globals),
-                    arg0.get_real_class_name(globals),
-                    result.get_real_class_name(globals),
-                )));
+                return Err(MonorubyErr::cant_convert_error_f(globals, arg0, result));
             }
         }
     }
-    Err(MonorubyErr::typeerr(format!(
-        "can't convert {} into Float",
-        arg0.get_real_class_name(globals),
-    )))
+    Err(MonorubyErr::cant_convert_into_float(globals, arg0))
 }
 
 ///
@@ -800,12 +787,7 @@ fn kernel_array(
         if result.is_array_ty() {
             return Ok(result);
         }
-        return Err(MonorubyErr::typeerr(format!(
-            "can't convert {} into Array ({}#to_ary gives {})",
-            arg.get_real_class_name(globals),
-            arg.get_real_class_name(globals),
-            result.get_real_class_name(globals),
-        )));
+        return Err(MonorubyErr::cant_convert_error_ary(globals, arg, result));
     } else if let Some(func_id) = globals.check_method(arg, IdentId::TO_A) {
         let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
         if result.is_array_ty() {
@@ -1879,12 +1861,7 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
 #[monoruby_builtin]
-fn respond_to(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let include_all = if let Some(arg1) = lfp.try_arg(1) {
         arg1.as_bool()
@@ -3443,11 +3420,7 @@ mod tests {
 
     #[test]
     fn kernel_clone() {
-        run_tests(&[
-            "[1,2,3].clone",
-            r#""hello".clone"#,
-            "{a: 1}.clone",
-        ]);
+        run_tests(&["[1,2,3].clone", r#""hello".clone"#, "{a: 1}.clone"]);
     }
 
     #[test]

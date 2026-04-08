@@ -270,8 +270,7 @@ fn array_try_convert(
     if obj.is_nil() {
         return Ok(Value::nil());
     }
-    let to_ary = IdentId::get_id("to_ary");
-    if let Some(func_id) = globals.check_method(obj, to_ary) {
+    if let Some(func_id) = globals.check_method(obj, IdentId::TO_ARY) {
         let result = vm.invoke_func_inner(globals, func_id, obj, &[], None, None)?;
         if result.is_array_ty() {
             return Ok(result);
@@ -279,12 +278,7 @@ fn array_try_convert(
         if result.is_nil() {
             return Ok(Value::nil());
         }
-        return Err(MonorubyErr::typeerr(format!(
-            "can't convert {} into Array ({}#to_ary gives {})",
-            obj.get_real_class_name(&globals.store),
-            obj.get_real_class_name(&globals.store),
-            result.get_real_class_name(&globals.store),
-        )));
+        return Err(MonorubyErr::cant_convert_error_ary(globals, obj, result));
     }
     Ok(Value::nil())
 }
@@ -320,12 +314,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
                 return Ok(self_val.into());
             }
             if !result.is_nil() {
-                return Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} into Array ({}#to_ary gives {})",
-                    arg.get_real_class_name(&globals.store),
-                    arg.get_real_class_name(&globals.store),
-                    result.get_real_class_name(&globals.store),
-                )));
+                return Err(MonorubyErr::cant_convert_error_ary(globals, arg, result));
             }
         }
     }
@@ -536,14 +525,8 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                         Err(_) => s.push_str(&inspected.to_s(&globals.store)),
                     }
                 } else {
-                    let to_s_result = vm.invoke_method_inner(
-                        globals,
-                        IdentId::TO_S,
-                        inspected,
-                        &[],
-                        None,
-                        None,
-                    )?;
+                    let to_s_result =
+                        vm.invoke_method_inner(globals, IdentId::TO_S, inspected, &[], None, None)?;
                     if let Some(str_inner) = to_s_result.is_rstring_inner() {
                         let bytes = str_inner.as_bytes();
                         match std::str::from_utf8(bytes) {
@@ -946,14 +929,19 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     if lhs.len() != rhs.len() {
         return Ok(Value::bool(false));
     }
-    crate::value::exec_recursive_paired(self_val.id(), arg.id(), || {
-        for i in 0..lhs.len() {
-            if !lhs[i].eql(&rhs[i], vm, globals)? {
-                return Ok(Value::bool(false));
+    crate::value::exec_recursive_paired(
+        self_val.id(),
+        arg.id(),
+        || {
+            for i in 0..lhs.len() {
+                if !lhs[i].eql(&rhs[i], vm, globals)? {
+                    return Ok(Value::bool(false));
+                }
             }
-        }
-        Ok(Value::bool(true))
-    }, Value::bool(true))
+            Ok(Value::bool(true))
+        },
+        Value::bool(true),
+    )
 }
 
 ///
@@ -990,19 +978,24 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     if lhs.len() != rhs.len() {
         return Ok(Value::bool(false));
     }
-    crate::value::exec_recursive_paired(self_val.id(), arg.id(), || {
-        for i in 0..lhs.len() {
-            // CRuby first checks #equal? (identity), which makes
-            // [NaN] == [NaN] true since NaN.equal?(NaN) is true.
-            if lhs[i].id() == rhs[i].id() {
-                continue;
+    crate::value::exec_recursive_paired(
+        self_val.id(),
+        arg.id(),
+        || {
+            for i in 0..lhs.len() {
+                // CRuby first checks #equal? (identity), which makes
+                // [NaN] == [NaN] true since NaN.equal?(NaN) is true.
+                if lhs[i].id() == rhs[i].id() {
+                    continue;
+                }
+                if vm.ne_values_bool(globals, lhs[i], rhs[i])? {
+                    return Ok(Value::bool(false));
+                }
             }
-            if vm.ne_values_bool(globals, lhs[i], rhs[i])? {
-                return Ok(Value::bool(false));
-            }
-        }
-        Ok(Value::bool(true))
-    }, Value::bool(true))
+            Ok(Value::bool(true))
+        },
+        Value::bool(true),
+    )
 }
 
 ///
@@ -1500,11 +1493,7 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let mut row = Array::new_empty();
         row.push(val);
         for arg in args {
-            row.push(if i < arg.len() {
-                arg[i]
-            } else {
-                Value::nil()
-            });
+            row.push(if i < arg.len() { arg[i] } else { Value::nil() });
         }
         row
     };
@@ -1625,9 +1614,7 @@ fn array_join(
         // If element is an array, recursively join
         if let Some(inner_ary) = v.try_array_ty() {
             if !visited.insert(inner_ary.id()) {
-                return Err(MonorubyErr::argumenterr(
-                    "recursive array join",
-                ));
+                return Err(MonorubyErr::argumenterr("recursive array join"));
             }
             let s = array_join(vm, globals, inner_ary, sep, visited)?;
             visited.remove(&inner_ary.id());
@@ -1653,9 +1640,7 @@ fn array_join(
             let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
             if let Some(inner_ary) = ret.try_array_ty() {
                 if !visited.insert(inner_ary.id()) {
-                    return Err(MonorubyErr::argumenterr(
-                        "recursive array join",
-                    ));
+                    return Err(MonorubyErr::argumenterr("recursive array join"));
                 }
                 let s = array_join(vm, globals, inner_ary, sep, visited)?;
                 visited.remove(&inner_ary.id());
@@ -1957,9 +1942,7 @@ fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array
                         None,
                     )?;
                     if cmp.is_nil() {
-                        return Err(MonorubyErr::argumenterr(
-                            "comparison of elements failed",
-                        ));
+                        return Err(MonorubyErr::argumenterr("comparison of elements failed"));
                     }
                     cmp.coerce_to_int_i64(vm, globals)?
                 }
@@ -2149,7 +2132,11 @@ fn retain_with_block(
         let val = ary[i];
         match vm.invoke_block(globals, data, &[val]) {
             Ok(res) => {
-                let keep = if negate { !res.as_bool() } else { res.as_bool() };
+                let keep = if negate {
+                    !res.as_bool()
+                } else {
+                    res.as_bool()
+                };
                 if keep {
                     if del > 0 {
                         // Re-read ary in case the block mutated it.
@@ -2630,12 +2617,7 @@ fn reverse_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reverse.html]
 #[monoruby_builtin]
-fn transpose(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn transpose(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if ary.len() == 0 {
         return Ok(Value::array_empty());
@@ -2841,7 +2823,12 @@ fn difference(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/intersection.html]
 #[monoruby_builtin]
-fn intersection(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn intersection(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let src = lfp.self_val().as_array();
     // Build a unique copy as a plain Array
     let mut ary = Value::array_from_vec(src.to_vec()).as_array();
@@ -2973,8 +2960,6 @@ fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
-
-
 ///
 /// ### Array#slice!
 ///
@@ -3103,12 +3088,7 @@ fn try_convert_to_array(
     if result.is_nil() {
         return Ok(None);
     }
-    Err(MonorubyErr::typeerr(format!(
-        "can't convert {} into Array ({}#to_ary gives {})",
-        v.get_real_class_name(&globals.store),
-        v.get_real_class_name(&globals.store),
-        result.get_real_class_name(&globals.store),
-    )))
+    Err(MonorubyErr::cant_convert_error_ary(globals, *v, result))
 }
 
 fn flatten_inner(
@@ -4035,11 +4015,13 @@ mod tests {
         // zip with infinite enumerator (must not hang)
         run_test("[1, 2].zip(10.upto(Float::INFINITY))");
         // zip with shorter #each-based enumerable fills nil
-        run_test(r##"
+        run_test(
+            r##"
             o = Object.new
             def o.each; yield 10; end
             [1, 2].zip(o)
-        "##);
+        "##,
+        );
         // zip raises TypeError for non-enumerable
         run_test_error(r##"[1, 2].zip(42)"##);
     }
@@ -5221,14 +5203,8 @@ mod tests {
         run_test("Array[]");
         run_test("Array[42]");
         // Subclass support
-        run_test_with_prelude(
-            "A[1, 2, 3]",
-            "class A < Array; end",
-        );
-        run_test_with_prelude(
-            "A[1, 2, 3].class",
-            "class A < Array; end",
-        );
+        run_test_with_prelude("A[1, 2, 3]", "class A < Array; end");
+        run_test_with_prelude("A[1, 2, 3].class", "class A < Array; end");
     }
 
     #[test]
@@ -5242,14 +5218,9 @@ mod tests {
             "class C; def to_ary; [1, 2]; end; end",
         );
         // Object without to_ary returns nil
-        run_test_with_prelude(
-            "Array.try_convert(C.new)",
-            "class C; end",
-        );
+        run_test_with_prelude("Array.try_convert(C.new)", "class C; end");
         // to_ary returns non-Array raises TypeError
-        run_test_error(
-            "class C; def to_ary; 'not array'; end; end; Array.try_convert(C.new)",
-        );
+        run_test_error("class C; def to_ary; 'not array'; end; end; Array.try_convert(C.new)");
     }
 
     #[test]

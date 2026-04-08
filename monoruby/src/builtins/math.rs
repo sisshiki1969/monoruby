@@ -129,12 +129,7 @@ fn coerce_to_f64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f
                 match result.unpack() {
                     RV::Float(f) => Ok(f),
                     RV::Fixnum(i) => Ok(i as f64),
-                    _ => Err(MonorubyErr::typeerr(format!(
-                        "can't convert {} into Float ({}#to_f gives {})",
-                        v.get_real_class_name(&globals.store),
-                        v.get_real_class_name(&globals.store),
-                        result.get_real_class_name(&globals.store),
-                    ))),
+                    _ => Err(MonorubyErr::cant_convert_error_f(globals, v, result)),
                 }
             } else {
                 Err(MonorubyErr::cant_convert_into_float(globals, v))
@@ -656,10 +651,7 @@ fn ldexp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     match result.unpack() {
                         RV::Fixnum(i) => i as i32,
                         _ => {
-                            return Err(MonorubyErr::typeerr(format!(
-                                "can't convert {} into Integer",
-                                exp_val.get_real_class_name(&globals.store),
-                            )));
+                            return Err(MonorubyErr::cant_convert_into_float(globals, exp_val));
                         }
                     }
                 } else {

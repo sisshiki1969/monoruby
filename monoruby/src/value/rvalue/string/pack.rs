@@ -788,11 +788,7 @@ pub(crate) fn pack(
                     let mut byte: u8 = 0;
                     let mut bit_i = 0;
                     for i in 0..count {
-                        let bit = if i < s.len() {
-                            s[i] & 1
-                        } else {
-                            0u8
-                        };
+                        let bit = if i < s.len() { s[i] & 1 } else { 0u8 };
                         if big {
                             byte |= bit << (7 - bit_i);
                         } else {
@@ -1028,8 +1024,8 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
         // '<' and '>' endian modifiers are only valid for integer/float formats.
         if let Some(modifier) = endian_modifier {
             match ch {
-                's' | 'S' | 'i' | 'I' | 'l' | 'L' | 'q' | 'Q' | 'j' | 'J' | 'n' | 'N'
-                | 'v' | 'V' | 'd' | 'D' | 'e' | 'E' | 'f' | 'F' | 'g' | 'G' => {}
+                's' | 'S' | 'i' | 'I' | 'l' | 'L' | 'q' | 'Q' | 'j' | 'J' | 'n' | 'N' | 'v'
+                | 'V' | 'd' | 'D' | 'e' | 'E' | 'f' | 'F' | 'g' | 'G' => {}
                 _ => {
                     return Err(MonorubyErr::argumenterr(format!(
                         "'{modifier}' allowed only after types sSiIlLqQjJ"
@@ -1084,11 +1080,7 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
 /// Convert a value to f64 for pack float formats (D/d/E/e/F/f/G/g).
 /// Rejects nil, String, and non-Numeric objects with TypeError.
 /// Calls #to_f for Numeric objects that aren't directly Float/Fixnum/BigInt.
-fn coerce_to_pack_f64(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    value: &Value,
-) -> Result<f64> {
+fn coerce_to_pack_f64(vm: &mut Executor, globals: &mut Globals, value: &Value) -> Result<f64> {
     match value.unpack() {
         RV::Fixnum(i) => Ok(i as f64),
         RV::Float(f) => Ok(f),
@@ -1097,14 +1089,8 @@ fn coerce_to_pack_f64(
             .ok_or_else(|| MonorubyErr::rangeerr("bignum too big to convert into Float")),
         _ => {
             // Reject nil, true, false, String, Symbol, and non-Numeric types.
-            if value.is_nil()
-                || value.is_packed_value()
-                || value.is_str().is_some()
-            {
-                return Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} into Float",
-                    value.get_real_class_name(&globals.store),
-                )));
+            if value.is_nil() || value.is_packed_value() || value.is_str().is_some() {
+                return Err(MonorubyErr::cant_convert_into_float(globals, *value));
             }
             // Try #to_f for Numeric subclasses (Rational, Complex, etc.)
             if let Some(func_id) = globals.check_method(*value, IdentId::TO_F) {
@@ -1112,28 +1098,16 @@ fn coerce_to_pack_f64(
                 match result.unpack() {
                     RV::Float(f) => Ok(f),
                     RV::Fixnum(i) => Ok(i as f64),
-                    _ => Err(MonorubyErr::typeerr(format!(
-                        "can't convert {} into Float ({}#to_f gives {})",
-                        value.get_real_class_name(&globals.store),
-                        value.get_real_class_name(&globals.store),
-                        result.get_real_class_name(&globals.store),
-                    ))),
+                    _ => Err(MonorubyErr::cant_convert_error_f(globals, *value, result)),
                 }
             } else {
-                Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} into Float",
-                    value.get_real_class_name(&globals.store),
-                )))
+                Err(MonorubyErr::cant_convert_into_float(globals, *value))
             }
         }
     }
 }
 
-fn get_pack_string(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    value: Value,
-) -> Result<Vec<u8>> {
+fn get_pack_string(vm: &mut Executor, globals: &mut Globals, value: Value) -> Result<Vec<u8>> {
     if value.is_nil() {
         return Ok(Vec::new());
     }
@@ -1306,10 +1280,7 @@ fn qp_encode(data: &[u8], line_len: usize) -> String {
             col = 0;
         }
 
-        if byte == b'\t'
-            || byte == b' '
-            || (byte >= 33 && byte <= 126 && byte != b'=')
-        {
+        if byte == b'\t' || byte == b' ' || (byte >= 33 && byte <= 126 && byte != b'=') {
             result.push(byte as char);
             col += 1;
         } else {

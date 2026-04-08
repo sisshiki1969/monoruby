@@ -299,10 +299,7 @@ impl MonorubyErr {
     pub(crate) fn method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::NotMethod(Some(obj.id())),
-            format!(
-                "undefined method `{name}' for {}",
-                obj.to_s(store)
-            ),
+            format!("undefined method `{name}' for {}", obj.to_s(store)),
         )
     }
 
@@ -331,11 +328,7 @@ impl MonorubyErr {
         )
     }
 
-    pub(crate) fn protected_method_called(
-        store: &Store,
-        name: IdentId,
-        obj: Value,
-    ) -> MonorubyErr {
+    pub(crate) fn protected_method_called(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::NotMethod(Some(obj.id())),
             format!(
@@ -480,6 +473,32 @@ impl MonorubyErr {
     ///
     pub(crate) fn is_not_regexp_nor_string(store: &Store, val: Value) -> MonorubyErr {
         MonorubyErr::typeerr(format!("{} is not a regexp nor a string", val.to_s(store)))
+    }
+
+    pub fn cant_convert_error_ary(store: &Store, v: Value, result: Value) -> MonorubyErr {
+        Self::cant_convert_error(store, v, result, "Array", IdentId::TO_ARY)
+    }
+
+    pub fn cant_convert_error_int(store: &Store, v: Value, result: Value) -> MonorubyErr {
+        Self::cant_convert_error(store, v, result, "Integer", IdentId::TO_INT)
+    }
+
+    pub fn cant_convert_error_f(store: &Store, v: Value, result: Value) -> MonorubyErr {
+        Self::cant_convert_error(store, v, result, "Float", IdentId::TO_F)
+    }
+
+    pub fn cant_convert_error(
+        store: &Store,
+        v: Value,
+        result: Value,
+        target: &str,
+        method: IdentId,
+    ) -> MonorubyErr {
+        let class = v.get_real_class_name(store);
+        MonorubyErr::typeerr(format!(
+            "can't convert {class} into {target} ({class}#{method} gives {})",
+            result.get_real_class_name(store),
+        ))
     }
 
     ///
@@ -646,11 +665,7 @@ impl MonorubyErr {
     ///
     /// Formats the message to match CRuby: `"<description> - <path>"`
     /// For example: `"No such file or directory - /path/to/file"`
-    pub(crate) fn errno_with_msg(
-        store: &Store,
-        err: &std::io::Error,
-        path: &str,
-    ) -> MonorubyErr {
+    pub(crate) fn errno_with_msg(store: &Store, err: &std::io::Error, path: &str) -> MonorubyErr {
         let desc = errno_description(err);
         let msg = format!("{} - {}", desc, path);
         Self::from_io_err(store, err, msg)
