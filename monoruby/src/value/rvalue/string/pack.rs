@@ -493,11 +493,11 @@ pub(crate) fn pack(
             if let Some(repeat) = $repeat {
                 for _ in 0..repeat {
                     if let Some(value) = iter.next() {
-                        let i = value.coerce_to_int_i64(vm, globals)?;
+                        let i = value.coerce_to_pack_u64(vm, globals)?;
                         let bytes = if $big_endian {
                             $type::to_be_bytes(i as $type)
                         } else {
-                            $type::to_ne_bytes(i as $type)
+                            $type::to_le_bytes(i as $type)
                         };
                         packed.extend_from_slice(&bytes);
                     } else {
@@ -506,11 +506,11 @@ pub(crate) fn pack(
                 }
             } else {
                 while let Some(value) = iter.next() {
-                    let i = value.coerce_to_int_i64(vm, globals)?;
+                    let i = value.coerce_to_pack_u64(vm, globals)?;
                     let bytes = if $big_endian {
                         $type::to_be_bytes(i as $type)
                     } else {
-                        $type::to_ne_bytes(i as $type)
+                        $type::to_le_bytes(i as $type)
                     };
                     packed.extend_from_slice(&bytes);
                 }
