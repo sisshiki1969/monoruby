@@ -603,14 +603,23 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             } else {
                 orig_elem
             };
-            let elem = match elem.try_array_ty() {
-                Some(a) => a,
-                None => {
+            let elem = if let Some(a) = elem.try_array_ty() {
+                a
+            } else if let Some(fid) = globals.check_method(elem, IdentId::TO_ARY) {
+                let ret = vm.invoke_func_inner(globals, fid, elem, &[], None, None)?;
+                if let Some(a) = ret.try_array_ty() {
+                    a
+                } else {
                     return Err(MonorubyErr::typeerr(format!(
                         "wrong element type {} at {i} (expected array)",
                         elem.get_real_class_name(&globals.store)
                     )));
                 }
+            } else {
+                return Err(MonorubyErr::typeerr(format!(
+                    "wrong element type {} at {i} (expected array)",
+                    elem.get_real_class_name(&globals.store)
+                )));
             };
             if elem.len() != 2 {
                 return Err(MonorubyErr::argumenterr(format!(
@@ -672,7 +681,7 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     for lhs in lhs_v.as_array().iter() {
         let mut flag = true;
         for rhs in rhs.iter() {
-            if vm.eq_values_bool(globals, *lhs, *rhs)? {
+            if lhs.eql(rhs, vm, globals)? {
                 flag = false;
                 break;
             }
@@ -736,7 +745,14 @@ fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let mut lhs = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
     lhs.uniq(vm, globals)?;
-    lhs.retain(|v| Ok(rhs.contains(v)))?;
+    lhs.retain(|v| {
+        for rhs_elem in rhs.iter() {
+            if v.eql(rhs_elem, vm, globals)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })?;
     Ok(lhs.as_val())
 }
 
@@ -954,6 +970,21 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     let rhs = if let Some(rhs) = arg.try_array_ty() {
         rhs
     } else {
+        // If the other object responds to #to_ary, delegate to other == self.
+        let respond_to = IdentId::get_id("respond_to?");
+        let respond = vm.invoke_method_inner(
+            globals,
+            respond_to,
+            arg,
+            &[Value::symbol(IdentId::TO_ARY)],
+            None,
+            None,
+        );
+        if respond.is_ok_and(|v| v.as_bool()) {
+            return vm
+                .invoke_method_inner(globals, IdentId::_EQ, arg, &[self_val], None, None)
+                .map(|v| Value::bool(v.as_bool()));
+        }
         return Ok(Value::bool(false));
     };
     if lhs.len() != rhs.len() {
@@ -961,6 +992,11 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     }
     crate::value::exec_recursive_paired(self_val.id(), arg.id(), || {
         for i in 0..lhs.len() {
+            // CRuby first checks #equal? (identity), which makes
+            // [NaN] == [NaN] true since NaN.equal?(NaN) is true.
+            if lhs[i].id() == rhs[i].id() {
+                continue;
+            }
             if vm.ne_values_bool(globals, lhs[i], rhs[i])? {
                 return Ok(Value::bool(false));
             }
@@ -1138,6 +1174,14 @@ fn index_assign(
             }
         }
         let val = lfp.arg(2);
+        // Try #to_ary conversion for multi-element assignment.
+        let val = if val.try_array_ty().is_some() {
+            val
+        } else if let Some(fid) = globals.check_method(val, IdentId::TO_ARY) {
+            vm.invoke_func_inner(globals, fid, val, &[], None, None)?
+        } else {
+            val
+        };
         ary.set_index2(i as usize, l as usize, val)
     }
 }
@@ -1978,16 +2022,45 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
     if let Some(bh) = lfp.block() {
         lfp.self_val().ensure_not_frozen(&globals.store)?;
         let data = vm.get_block_data(globals, bh)?;
-        let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
-            let lhs = vm.invoke_block(globals, &data, &[lhs])?;
-            let rhs = vm.invoke_block(globals, &data, &[rhs])?;
-            Executor::compare_values(vm, globals, lhs, rhs)
-        };
-        let mut ary = lfp.self_val().as_array();
+        // Collect (key, value) pairs. Re-read array each iteration to
+        // tolerate mutations during block execution.
+        let mut pairs: Vec<(Value, Value)> = vec![];
+        let mut i = 0;
+        loop {
+            let ary = lfp.self_val().as_array();
+            if i >= ary.len() {
+                break;
+            }
+            let elem = ary[i];
+            let key = vm.invoke_block(globals, &data, &[elem])?;
+            pairs.push((key, elem));
+            i += 1;
+        }
+        // Sort the collected pairs by key.
         let gc_enabled = Globals::gc_enable(false);
-        let res = executor::op::sort_by(&mut ary, f);
+        let mut err = None;
+        pairs.sort_by(|a, b| {
+            if err.is_some() {
+                return std::cmp::Ordering::Equal;
+            }
+            match Executor::compare_values(vm, globals, a.0, b.0) {
+                Ok(o) => o,
+                Err(e) => {
+                    err = Some(e);
+                    std::cmp::Ordering::Equal
+                }
+            }
+        });
         Globals::gc_enable(gc_enabled);
-        res?;
+        if let Some(e) = err {
+            return Err(e);
+        }
+        // Write sorted values back to the array.
+        let mut ary = lfp.self_val().as_array();
+        ary.truncate(0);
+        for (_, val) in pairs {
+            ary.push(val);
+        }
         Ok(ary.into())
     } else {
         vm.generate_enumerator(IdentId::get_id("sort_by!"), lfp.self_val(), vec![], pc)
@@ -2050,6 +2123,71 @@ fn filter(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     }
 }
 
+/// Helper for delete_if, keep_if, filter!, reject! that properly tolerates
+/// array mutation during iteration and handles errors gracefully.
+///
+/// When `negate` is true, elements for which the block returns true are removed
+/// (delete_if/reject! semantics). When false, elements for which the block
+/// returns false are removed (filter!/select!/keep_if semantics).
+///
+/// Returns true if any elements were removed.
+fn retain_with_block(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    data: &ProcData,
+    negate: bool,
+) -> Result<bool> {
+    let mut i = 0;
+    let mut del = 0;
+    loop {
+        // Re-read array each iteration to see mutations from the block.
+        let ary = self_val.as_array();
+        if i >= ary.len() {
+            break;
+        }
+        let val = ary[i];
+        match vm.invoke_block(globals, data, &[val]) {
+            Ok(res) => {
+                let keep = if negate { !res.as_bool() } else { res.as_bool() };
+                if keep {
+                    if del > 0 {
+                        // Re-read ary in case the block mutated it.
+                        let mut ary = self_val.as_array();
+                        let val = ary[i];
+                        ary[i - del] = val;
+                    }
+                } else {
+                    del += 1;
+                }
+                i += 1;
+            }
+            Err(e) => {
+                // On error: compact elements processed so far, then re-raise.
+                if del > 0 {
+                    let mut ary = self_val.as_array();
+                    let len = ary.len();
+                    // Shift remaining unprocessed elements left by `del`.
+                    for j in i..len {
+                        let v = ary[j];
+                        ary[j - del] = v;
+                    }
+                    ary.truncate(len - del);
+                }
+                return Err(e);
+            }
+        }
+    }
+    if del > 0 {
+        let mut ary = self_val.as_array();
+        let new_len = ary.len() - del;
+        ary.truncate(new_len);
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 ///
 /// ### Array#filter!
 ///
@@ -2063,14 +2201,8 @@ fn filter(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 fn filter_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         lfp.self_val().ensure_not_frozen(&globals.store)?;
-        let mut ary = lfp.self_val().as_array();
         let data = vm.get_block_data(globals, bh)?;
-        let changed = ary
-            .retain(|v| {
-                vm.invoke_block(globals, &data, &[*v])
-                    .map(|res| res.as_bool())
-            })?
-            .is_some();
+        let changed = retain_with_block(vm, globals, lfp.self_val(), &data, false)?;
         Ok(if changed {
             lfp.self_val()
         } else {
@@ -2092,12 +2224,8 @@ fn filter_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         lfp.self_val().ensure_not_frozen(&globals.store)?;
-        let mut ary = lfp.self_val().as_array();
         let data = vm.get_block_data(globals, bh)?;
-        ary.retain(|v| {
-            vm.invoke_block(globals, &data, &[*v])
-                .map(|res| res.as_bool())
-        })?;
+        retain_with_block(vm, globals, lfp.self_val(), &data, false)?;
         Ok(lfp.self_val())
     } else {
         vm.generate_enumerator(IdentId::get_id("keep_if"), lfp.self_val(), vec![], pc)
@@ -2142,14 +2270,8 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         lfp.self_val().ensure_not_frozen(&globals.store)?;
-        let mut ary = lfp.self_val().as_array();
         let data = vm.get_block_data(globals, bh)?;
-        let changed = ary
-            .retain(|v| {
-                vm.invoke_block(globals, &data, &[*v])
-                    .map(|res| !res.as_bool())
-            })?
-            .is_some();
+        let changed = retain_with_block(vm, globals, lfp.self_val(), &data, true)?;
         Ok(if changed {
             lfp.self_val()
         } else {
@@ -2171,12 +2293,8 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         lfp.self_val().ensure_not_frozen(&globals.store)?;
-        let mut ary = lfp.self_val().as_array();
         let data = vm.get_block_data(globals, bh)?;
-        ary.retain(|v| {
-            vm.invoke_block(globals, &data, &[*v])
-                .map(|res| !res.as_bool())
-        })?;
+        retain_with_block(vm, globals, lfp.self_val(), &data, true)?;
         Ok(lfp.self_val())
     } else {
         vm.generate_enumerator(IdentId::get_id("delete_if"), lfp.self_val(), vec![], pc)
@@ -2782,21 +2900,71 @@ fn intersect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/uniq.html]
 #[monoruby_builtin]
 fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     match lfp.block() {
-        None => ary.uniq(vm, globals)?,
-        Some(bh) => uniq_block(vm, globals, ary, bh)?,
-    };
-    Ok(ary.into())
+        None => {
+            let mut ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
+            ary.uniq(vm, globals)?;
+            Ok(ary.into())
+        }
+        Some(bh) => {
+            let data = vm.get_block_data(globals, bh)?;
+            let mut h = RubySet::default();
+            let mut result = vec![];
+            let mut i = 0;
+            loop {
+                let ary = lfp.self_val().as_array();
+                if i >= ary.len() {
+                    break;
+                }
+                let elem = ary[i];
+                let key = vm.invoke_block(globals, &data, &[elem])?;
+                if h.insert(key, vm, globals)? {
+                    result.push(elem);
+                }
+                i += 1;
+            }
+            Ok(Value::array_from_vec(result))
+        }
+    }
 }
 
 #[monoruby_builtin]
 fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let mut ary = lfp.self_val().as_array();
     let deleted = match lfp.block() {
-        None => ary.uniq(vm, globals)?,
-        Some(bh) => uniq_block(vm, globals, ary, bh)?,
+        None => {
+            let mut ary = lfp.self_val().as_array();
+            ary.uniq(vm, globals)?
+        }
+        Some(bh) => {
+            let data = vm.get_block_data(globals, bh)?;
+            let mut h = RubySet::default();
+            let mut i = 0;
+            let mut del = 0;
+            loop {
+                let ary = lfp.self_val().as_array();
+                if i >= ary.len() {
+                    break;
+                }
+                let elem = ary[i];
+                let key = vm.invoke_block(globals, &data, &[elem])?;
+                if h.insert(key, vm, globals)? {
+                    if del > 0 {
+                        let mut ary = lfp.self_val().as_array();
+                        ary[i - del] = elem;
+                    }
+                } else {
+                    del += 1;
+                }
+                i += 1;
+            }
+            if del > 0 {
+                let mut ary = lfp.self_val().as_array();
+                let new_len = ary.len() - del;
+                ary.truncate(new_len);
+            }
+            del > 0
+        }
     };
     if deleted {
         Ok(lfp.self_val())
@@ -2805,35 +2973,7 @@ fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
-fn uniq_block(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    ary: Array,
-    bh: BlockHandler,
-) -> Result<bool> {
-    vm.temp_push(ary.into());
-    let res = uniq_inner(vm, globals, ary, bh);
-    vm.temp_pop();
-    res
-}
 
-fn uniq_inner(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    mut ary: Array,
-    bh: BlockHandler,
-) -> Result<bool> {
-    let mut h = RubySet::default();
-    let data = vm.get_block_data(globals, bh)?;
-    vm.temp_array_new(Some(ary.len()));
-    let res = ary.retain(|x| {
-        let res = vm.invoke_block(globals, &data, &[*x])?;
-        vm.temp_array_push(res);
-        Ok(h.insert(res, vm, globals)?)
-    });
-    vm.temp_pop();
-    res.map(|removed| removed.is_some())
-}
 
 ///
 /// ### Array#slice!

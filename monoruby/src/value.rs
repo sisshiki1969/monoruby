@@ -1432,6 +1432,38 @@ impl Value {
         };
     }
 
+    /// Coerce to u64 for Array#pack. Extracts the low 64 bits from BigInts
+    /// (matching CRuby's truncation semantics) instead of raising RangeError.
+    pub(crate) fn coerce_to_pack_u64(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<u64> {
+        let res = match self.unpack() {
+            RV::Fixnum(_) | RV::BigInt(_) => *self,
+            RV::Float(f) => {
+                let i = f as i64;
+                return Ok(i as u64);
+            }
+            _ => self.coerce_to_int(vm, globals)?,
+        };
+        match res.unpack() {
+            RV::Fixnum(i) => Ok(i as u64),
+            RV::BigInt(b) => {
+                // Extract low 64 bits from the BigInt's magnitude,
+                // then apply sign (two's complement).
+                let (sign, digits) = b.to_u64_digits();
+                let abs_low = digits.first().copied().unwrap_or(0);
+                Ok(if sign == num::bigint::Sign::Minus {
+                    (abs_low as i64).wrapping_neg() as u64
+                } else {
+                    abs_low
+                })
+            }
+            _ => unreachable!(),
+        }
+    }
+
     pub(crate) fn coerce_to_int(&self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         // First try direct method lookup (fast path), then fall back to
         // invoke_method_inner which handles method_missing.
