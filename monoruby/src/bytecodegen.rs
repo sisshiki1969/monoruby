@@ -176,6 +176,9 @@ enum LvalueKind {
     LocalVar {
         dst: BcReg,
     },
+    SpecialVar {
+        id: u32,
+    },
     Discard,
 }
 
@@ -1323,6 +1326,11 @@ impl<'a> BytecodeGen<'a> {
                 let name = IdentId::get_id(name);
                 LvalueKind::ClassVar(name)
             }
+            NodeKind::GlobalVar(name) if name == "$~" => {
+                LvalueKind::SpecialVar {
+                    id: ruruby_parse::SPECIAL_MATCHDATA,
+                }
+            }
             NodeKind::GlobalVar(name) => {
                 let name = IdentId::get_id(name);
                 LvalueKind::GlobalVar(name)
@@ -1380,9 +1388,6 @@ impl<'a> BytecodeGen<'a> {
                 LvalueKind::Send { recv, method }
             }
             NodeKind::SpecialVar(id) => {
-                // 0 => $&
-                // 1 => $'
-                // 100 + n => $n
                 return Err(self.cant_set_variable(*id, lhs.loc));
             }
             NodeKind::DiscardLhs => LvalueKind::Discard,
@@ -1454,6 +1459,10 @@ impl<'a> BytecodeGen<'a> {
             LvalueKind::LocalVar { dst } => {
                 self.set_temp(old_temp);
                 self.emit_mov(dst, src);
+            }
+            LvalueKind::SpecialVar { id } => {
+                self.set_temp(old_temp);
+                self.emit(BytecodeInst::StoreSvar { val: src, id }, loc);
             }
             LvalueKind::Discard => {
                 self.set_temp(old_temp);

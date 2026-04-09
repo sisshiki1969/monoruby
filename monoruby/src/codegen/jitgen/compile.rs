@@ -266,6 +266,11 @@ impl<'a> JitContext<'a> {
                 ir.load_svar(state, id);
                 state.def_rax2acc(ir, dst);
             }
+            TraceIr::StoreSvar { src, id } => {
+                state.write_back_slots(ir, &[src]);
+                ir.store_svar(state, src, id);
+                state.unset_side_effect_guard();
+            }
             TraceIr::LoadDynVar(dst, src) => {
                 assert!(!dst.is_self());
                 self.load_dynvar(state, ir, src);

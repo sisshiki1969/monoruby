@@ -39,10 +39,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs_with(STRING_CLASS, "[]", &["slice"], index, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "[]=", index_assign, 2, 3, false);
     globals.define_builtin_func_rest(STRING_CLASS, "start_with?", start_with);
+    globals.define_builtin_func_rest(STRING_CLASS, "end_with?", end_with);
     globals.define_builtin_func(STRING_CLASS, "include?", include_, 1);
     globals.define_builtin_func(STRING_CLASS, "delete_prefix!", delete_prefix_, 1);
     globals.define_builtin_func(STRING_CLASS, "delete_prefix", delete_prefix, 1);
-    globals.define_builtin_func_rest(STRING_CLASS, "end_with?", end_with);
     globals.define_builtin_func_with(STRING_CLASS, "split", split, 0, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "slice!", slice_, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "chomp", chomp, 0, 1, false);
@@ -107,8 +107,26 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(STRING_CLASS, "next!", &["succ!"], next_mut, 0);
     globals.define_builtin_func(STRING_CLASS, "encoding", super::encoding::str_encoding, 0);
     globals.define_builtin_func(STRING_CLASS, "b", super::encoding::b, 0);
-    globals.define_builtin_func_with_kw(STRING_CLASS, "encode", super::encoding::encode, 0, 2, false, &[], true);
-    globals.define_builtin_func_with_kw(STRING_CLASS, "encode!", super::encoding::encode_, 0, 2, false, &[], true);
+    globals.define_builtin_func_with_kw(
+        STRING_CLASS,
+        "encode",
+        super::encoding::encode,
+        0,
+        2,
+        false,
+        &[],
+        true,
+    );
+    globals.define_builtin_func_with_kw(
+        STRING_CLASS,
+        "encode!",
+        super::encoding::encode_,
+        0,
+        2,
+        false,
+        &[],
+        true,
+    );
     globals.define_builtin_func_with_kw(
         STRING_CLASS,
         "unpack1",
@@ -133,8 +151,18 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "to_c", to_c, 0);
     globals.define_builtin_func(STRING_CLASS, "to_r", to_r, 0);
     globals.define_builtin_func(STRING_CLASS, "dump", dump, 0);
-    globals.define_builtin_func(STRING_CLASS, "force_encoding", super::encoding::force_encoding, 1);
-    globals.define_builtin_func(STRING_CLASS, "valid_encoding?", super::encoding::valid_encoding, 0);
+    globals.define_builtin_func(
+        STRING_CLASS,
+        "force_encoding",
+        super::encoding::force_encoding,
+        1,
+    );
+    globals.define_builtin_func(
+        STRING_CLASS,
+        "valid_encoding?",
+        super::encoding::valid_encoding,
+        0,
+    );
     globals.define_builtin_func(STRING_CLASS, "ascii_only?", super::encoding::ascii_only, 0);
 
     super::encoding::init_encoding(globals);
@@ -361,9 +389,8 @@ fn casecmp_p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     if lhs_enc.is_utf8_compatible() && rhs_enc.is_utf8_compatible() {
         // UTF-8 compatible: do Unicode case folding.
         let lhs_str = lhs_inner.check_utf8()?;
-        let rhs_str = std::str::from_utf8(&rhs_bytes).map_err(|_| {
-            MonorubyErr::argumenterr("invalid byte sequence in UTF-8".to_string())
-        })?;
+        let rhs_str = std::str::from_utf8(&rhs_bytes)
+            .map_err(|_| MonorubyErr::argumenterr("invalid byte sequence in UTF-8".to_string()))?;
         let lhs_lower = lhs_str.to_lowercase();
         let rhs_lower = rhs_str.to_lowercase();
         Ok(Value::bool(lhs_lower == rhs_lower))
@@ -930,26 +957,116 @@ pub fn str_next(self_: &str) -> String {
 #[monoruby_builtin]
 fn start_with(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let string = self_.expect_str(globals)?;
+    let self_inner = self_.as_rstring_inner();
+    let self_enc = self_inner.encoding();
+    let self_bytes = self_inner.as_bytes();
     let arg0 = lfp.arg(0).as_array();
     for v in arg0.iter() {
         if let Some(re) = v.is_regex() {
-            // Match Regexp - check if it matches at beginning of string
+            let string = self_inner.check_utf8()?;
             if let Some(mat) = re.captures(string, vm)? {
                 if let Some(m) = mat.get(0) {
                     if m.start() == 0 {
                         return Ok(Value::bool(true));
                     }
                 }
+            } else {
+                vm.clear_capture_special_variables();
             }
             continue;
         }
-        let a = v.coerce_to_str(vm, globals)?;
-        if string.starts_with(a.as_str()) {
+        let arg_inner = coerce_to_rstring_inner(v, vm, globals)?;
+        check_encoding_compat(self_enc, self_bytes, &arg_inner, globals)?;
+        let arg_bytes = arg_inner.as_bytes();
+        if self_bytes.starts_with(arg_bytes) {
+            if self_enc.is_utf8_compatible() && arg_bytes.len() < self_bytes.len() {
+                if !is_utf8_char_boundary(self_bytes, arg_bytes.len()) {
+                    continue;
+                }
+            }
             return Ok(Value::bool(true));
         }
     }
     Ok(Value::bool(false))
+}
+
+///
+/// ### String#end_with?
+///
+/// - end_with?(*strs) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/end_with=3f.html]
+#[monoruby_builtin]
+fn end_with(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let self_inner = self_.as_rstring_inner();
+    let self_enc = self_inner.encoding();
+    let self_bytes = self_inner.as_bytes();
+    let arg0 = lfp.arg(0).as_array();
+    for v in arg0.iter() {
+        if v.is_regex().is_some() {
+            return Err(MonorubyErr::typeerr(
+                "no implicit conversion of Regexp into String",
+            ));
+        }
+        let arg_inner = coerce_to_rstring_inner(v, vm, globals)?;
+        check_encoding_compat(self_enc, self_bytes, &arg_inner, globals)?;
+        let arg_bytes = arg_inner.as_bytes();
+        if self_bytes.ends_with(arg_bytes) {
+            if self_enc.is_utf8_compatible() && arg_bytes.len() < self_bytes.len() {
+                let boundary = self_bytes.len() - arg_bytes.len();
+                if !is_utf8_char_boundary(self_bytes, boundary) {
+                    continue;
+                }
+            }
+            return Ok(Value::bool(true));
+        }
+    }
+    Ok(Value::bool(false))
+}
+
+/// Coerce a Value to RStringInner for start_with?/end_with?.
+fn coerce_to_rstring_inner(
+    v: &Value,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<RStringInner> {
+    if let Some(inner) = v.is_rstring_inner() {
+        Ok(inner.clone())
+    } else {
+        let s = v.coerce_to_str(vm, globals)?;
+        Ok(RStringInner::from_str(&s))
+    }
+}
+
+/// Check encoding compatibility between self and argument.
+/// Raises Encoding::CompatibilityError if incompatible.
+fn check_encoding_compat(
+    self_enc: Encoding,
+    self_bytes: &[u8],
+    arg_inner: &RStringInner,
+    globals: &Globals,
+) -> Result<()> {
+    let arg_enc = arg_inner.encoding();
+    if self_enc != arg_enc
+        && !(self_enc.is_utf8_compatible() && arg_enc.is_utf8_compatible())
+        && !(self_bytes.is_ascii() || arg_inner.as_bytes().is_ascii())
+    {
+        let enc_class = super::encoding::encoding_class(globals);
+        let compat_err_class = globals
+            .store
+            .get_constant_noautoload(enc_class, IdentId::get_id("CompatibilityError"))
+            .map(|v| v.as_class_id());
+        let msg = format!(
+            "incompatible character encodings: {:?} and {:?}",
+            self_enc, arg_enc,
+        );
+        return Err(match compat_err_class {
+            Some(cid) => MonorubyErr::new(MonorubyErrKind::Other(cid), msg),
+            None => MonorubyErr::runtimeerr(msg),
+        });
+    }
+    Ok(())
 }
 
 ///
@@ -1015,24 +1132,13 @@ fn delete_prefix(
     }
 }
 
-///
-/// ### String#end_with?
-///
-/// - end_with?(*strs) -> bool
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/String/i/end_with=3f.html]
-#[monoruby_builtin]
-fn end_with(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let string = self_.expect_str(globals)?;
-    let arg0 = lfp.arg(0).as_array();
-    for v in arg0.iter() {
-        let a = v.coerce_to_str(vm, globals)?;
-        if string.ends_with(a.as_str()) {
-            return Ok(Value::bool(true));
-        }
+/// Check if a byte position in a UTF-8 byte slice is at a character boundary.
+fn is_utf8_char_boundary(bytes: &[u8], pos: usize) -> bool {
+    if pos >= bytes.len() {
+        return pos == bytes.len();
     }
-    Ok(Value::bool(false))
+    // A byte is NOT at a character boundary if it's a continuation byte (10xxxxxx)
+    (bytes[pos] & 0xC0) != 0x80
 }
 
 ///
@@ -3616,7 +3722,6 @@ fn next_mut(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     Ok(self_)
 }
 
-
 ///
 /// ### String#unpack
 ///
@@ -3674,7 +3779,6 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
         lfp.self_val().as_rstring_inner().dump()
     )))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -4468,6 +4572,24 @@ mod tests {
         run_test(r##""string".end_with?("ing")"##);
         run_test(r##""string".end_with?("jng", "hng", "ing")"##);
         run_test_error(r##""string".end_with?("jng", 3, "ing")"##);
+        // end_with? UTF-8 character boundary check
+        // monoruby assigns BINARY encoding to \xNN literals (CRuby keeps UTF-8),
+        // so results differ. Use run_test_no_result_check.
+        run_test_no_result_check(r#""\xC3\xA9".end_with?("\xA9")"#);
+        run_test_no_result_check(r#""\xe3\x81\x82".end_with?("\x82")"#);
+        // Explicit UTF-8 string with force_encoding: boundary check works
+        run_test_once(r#""\xC3\xA9".force_encoding("UTF-8").end_with?("\xA9".force_encoding("UTF-8"))"#);
+        // start_with? UTF-8 character boundary check
+        run_test_no_result_check(r#""\xC3\xA9".start_with?("\xC3")"#);
+        run_test_once(r#""\xC3\xA9".force_encoding("UTF-8").start_with?("\xC3".force_encoding("UTF-8"))"#);
+        // start_with? with Regexp sets/clears $~
+        run_test(r#""test-123".start_with?(/test/); $~[0]"#);
+        run_test(r#""test-123".start_with?(/xxx/); $~"#);
+        // end_with? with Regexp raises TypeError
+        run_test_error(r#""hello".end_with?(/lo/)"#);
+        // Binary string start_with?/end_with?
+        run_test_once(r#""\xC3".b.start_with?("\xC3".b)"#);
+        run_test_once(r#""\xC3".b.end_with?("\xC3".b)"#);
         run_test(r##""string".include?("str")"##);
         run_test(r##""string".include?("ing")"##);
         run_test(r##""string".include?("ingi")"##);
@@ -4947,7 +5069,6 @@ mod tests {
         run_test(r#""abc\r\n\f\x80'\b10\\\"魁\u1234".b"#);
     }
 
-
     #[test]
     fn unpack1_offset() {
         run_test(r#""\x01\x02\x03\x04\x05\x06\x07\x08".unpack1("L", offset: 4)"#);
@@ -5116,7 +5237,6 @@ mod tests {
         run_test_error(r#""\xDF".force_encoding("UTF-8").split"#);
         run_test_error(r#""\xDF".force_encoding("UTF-8").split(":")"#);
     }
-
 
     #[test]
     fn implicit_to_str_include() {

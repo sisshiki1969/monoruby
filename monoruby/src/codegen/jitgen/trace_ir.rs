@@ -135,6 +135,10 @@ pub(crate) enum TraceIr {
         dst: SlotId,
         id: u32,
     },
+    StoreSvar {
+        src: SlotId,
+        id: u32,
+    },
     UnOp {
         kind: UnOpK,
         dst: SlotId,
@@ -451,6 +455,10 @@ impl TraceIr {
                 39 => TraceIr::Array {
                     dst: SlotId::new(op1_w),
                     callid: CallSiteId::from(op1_l),
+                },
+                41 => TraceIr::StoreSvar {
+                    src: SlotId::new(op1_w),
+                    id: op1_l,
                 },
                 40 => {
                     let (_, op1_w2, op1_w3) = dec_www(op1);
@@ -924,12 +932,19 @@ impl TraceIr {
                     match id {
                         ruruby_parse::SPECIAL_LASTMATCH => "&".to_string(),
                         ruruby_parse::SPECIAL_POSTMATCH => "'".to_string(),
+                        ruruby_parse::SPECIAL_MATCHDATA => "~".to_string(),
                         ruruby_parse::SPECIAL_LOADPATH => "$LOAD_PATH".to_string(),
                         ruruby_parse::SPECIAL_LOADEDFEATURES => "$LOADED_FEATURES".to_string(),
                         n if n >= 100 => (n - 100).to_string(),
                         _ => unreachable!(),
                     }
                 )
+            }
+            TraceIr::StoreSvar { src, id } => {
+                format!("${} = {:?}", match id {
+                    ruruby_parse::SPECIAL_MATCHDATA => "~".to_string(),
+                    _ => format!("<special:{}>", id),
+                }, src)
             }
             TraceIr::UnOp {
                 kind,

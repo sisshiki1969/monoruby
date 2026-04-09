@@ -410,6 +410,11 @@ impl<'a> BytecodeGen<'a> {
                 let op1 = self.slot_id(&val);
                 Bytecode::from(enc_wl(29, op1.0, name.get()))
             }
+            BytecodeInst::StoreSvar { val, id } => {
+                // 40
+                let op1 = self.slot_id(&val);
+                Bytecode::from(enc_wl(41, op1.0, id))
+            }
             BytecodeInst::MethodCall(box callsite) => {
                 // 30, 31
                 let opcode = if callsite.is_simple() { 30 } else { 31 };

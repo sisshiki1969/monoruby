@@ -263,6 +263,22 @@ mod tests {
     }
 
     #[test]
+    fn symbol_global_var_literal() {
+        // :$name symbol literals
+        run_test(r#":$ruby"#);
+        run_test(r#":$0"#);
+        run_test(r#":$~"#);
+        run_test(r#":$&"#);
+        run_test(r#":$'"#);
+        run_test(r#":$+"#);
+        // :$-w style
+        run_test(r#":$-w"#);
+        // :@name and :@@name
+        run_test(r#":@ruby"#);
+        run_test(r#":@@ruby"#);
+    }
+
+    #[test]
     fn symbol_binary() {
         // Binary (ASCII-8BIT) string can be converted to symbol and back
         run_test(r#""\xC3".b.to_sym.to_s.encoding.to_s"#);

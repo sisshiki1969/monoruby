@@ -329,6 +329,18 @@ impl Codegen {
         };
         self.xmm_restore(using_xmm);
     }
+
+    pub(super) fn store_svar(&mut self, id: u32, src: SlotId, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
+        monoasm! { &mut self.jit,
+            movq rdi, [r14 - (conv(src))];  // val: Value
+            movq rsi, rbx;                   // &mut Executor
+            movl rdx, (id);                  // id: u32
+            movq rax, (runtime::set_special_var);
+            call rax;
+        };
+        self.xmm_restore(using_xmm);
+    }
 }
 
 #[cfg(test)]

@@ -337,6 +337,32 @@ mod tests {
     }
 
     #[test]
+    fn dollar_tilde_read_write() {
+        // $~ reads match data after a regex match
+        run_test(
+            r#"
+          "abc" =~ /(a)(b)/
+          $~[0]
+            "#,
+        );
+        // $~ = nil clears match data
+        run_test(
+            r#"
+          "abc" =~ /(a)/
+          $~ = nil
+          $~
+            "#,
+        );
+        // $~ is nil initially after a failed match
+        run_test(
+            r#"
+          /NOMATCH/ =~ "abc"
+          $~
+            "#,
+        );
+    }
+
+    #[test]
     fn last_match2() {
         run_test(
             r#"

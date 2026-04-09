@@ -15,6 +15,8 @@ pub(crate) use lexer::*;
 pub const SPECIAL_LASTMATCH: u32 = 0;
 /// $'
 pub const SPECIAL_POSTMATCH: u32 = 1;
+/// $~
+pub const SPECIAL_MATCHDATA: u32 = 2;
 /// $LOAD_PATH
 pub const SPECIAL_LOADPATH: u32 = 10;
 /// $LOADED_FEATURES
