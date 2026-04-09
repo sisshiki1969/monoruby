@@ -53,10 +53,109 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(FLOAT_CLASS, "quo", quo, 1);
     globals.define_builtin_func(FLOAT_CLASS, "eql?", float_eql, 0 + 1);
     globals.define_builtin_funcs(FLOAT_CLASS, "to_s", &["inspect"], float_to_s, 0);
+    globals.define_builtin_func(FLOAT_CLASS, "to_r", float_to_r, 0);
+    globals.define_builtin_func_with(FLOAT_CLASS, "rationalize", float_rationalize, 0, 1, false);
     globals.define_builtin_class_func(FLOAT_CLASS, "allocate", super::super::class::undef_allocate, 0);
     // Float.new should raise NoMethodError (not TypeError from allocate)
     let float_meta = globals.store.get_metaclass(FLOAT_CLASS).id();
     globals.add_empty_method(float_meta, IdentId::get_id("new"), Visibility::Undefined);
+}
+
+///
+/// ### Float#to_r
+///
+/// - to_r -> Rational
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/to_r.html]
+#[monoruby_builtin]
+fn float_to_r(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let f = lfp.self_val().try_float().unwrap();
+    if f.is_nan() {
+        return Err(float_domain_error(globals, "NaN"));
+    }
+    if f.is_infinite() {
+        return Err(float_domain_error(
+            globals,
+            if f > 0.0 { "Infinity" } else { "-Infinity" },
+        ));
+    }
+    Ok(Value::rational_from_inner(RationalInner::from_f64(f)))
+}
+
+///
+/// ### Float#rationalize
+///
+/// - rationalize(eps = nil) -> Rational
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/rationalize.html]
+#[monoruby_builtin]
+fn float_rationalize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let f = lfp.self_val().try_float().unwrap();
+    if f.is_nan() {
+        return Err(float_domain_error(globals, "NaN"));
+    }
+    if f.is_infinite() {
+        return Err(float_domain_error(
+            globals,
+            if f > 0.0 { "Infinity" } else { "-Infinity" },
+        ));
+    }
+    if f == 0.0 {
+        return Ok(Value::rational_from_inner(RationalInner::new(0, 1)));
+    }
+    if let Some(eps_val) = lfp.try_arg(0) {
+        // Explicit eps given
+        let eps = if let Some(r) = eps_val.try_rational() {
+            r.abs()
+        } else {
+            match eps_val.unpack() {
+                RV::Float(e) => RationalInner::from_f64(e.abs()),
+                RV::Fixnum(i) => RationalInner::new(i.abs(), 1),
+                _ => {
+                    let e = eps_val.coerce_to_f64(vm, globals)?;
+                    RationalInner::from_f64(e.abs())
+                }
+            }
+        };
+        let value = RationalInner::from_f64(f);
+        Ok(Value::rational_from_inner(RationalInner::find_simplest(
+            &value, &eps,
+        )))
+    } else {
+        // No eps: use float's inherent precision
+        let exact = RationalInner::from_f64(f);
+        // frexp: decompose f = mant * 2^exp where 0.5 <= |mant| < 1
+        // For IEEE 754: biased_exp - 1023 gives the raw exponent (1.xxx * 2^e).
+        // frexp returns exp = raw_exponent + 1 (since mant is in [0.5, 1) not [1, 2)).
+        let exp = {
+            let bits = f.to_bits();
+            let biased_exp = ((bits >> 52) & 0x7FF) as i32;
+            if biased_exp == 0 {
+                // subnormal
+                let normalized = f * (1u64 << 52) as f64;
+                let biased2 = ((normalized.to_bits() >> 52) & 0x7FF) as i32;
+                biased2 - 1022 - 52
+            } else {
+                biased_exp - 1022
+            }
+        };
+        // eps = 1 / 2^(MANTISSA_DIGITS - exp + 1)
+        let shift = (f64::MANTISSA_DIGITS as i32 - exp + 1) as u32;
+        let eps = RationalInner::new_bigint(BigInt::from(1), BigInt::from(1u64) << shift);
+        Ok(Value::rational_from_inner(RationalInner::find_simplest(
+            &exact, &eps,
+        )))
+    }
 }
 
 /// Helper to raise FloatDomainError
@@ -904,8 +1003,14 @@ mod tests {
 
     #[test]
     fn float_to_r() {
-        run_test_once("1.5.respond_to?(:to_r)");
-        run_test_once("1.5.respond_to?(:rationalize)");
+        run_test_once("1.5.to_r");
+        run_test_once("1.5.to_r.class");
+        run_test_once("0.0.to_r");
+        run_test_once("(-2.5).to_r");
+        run_test_once("0.1.to_r");
+        run_test_error("Float::NAN.to_r");
+        run_test_error("Float::INFINITY.to_r");
+        run_test_error("(-Float::INFINITY).to_r");
     }
 
     #[test]

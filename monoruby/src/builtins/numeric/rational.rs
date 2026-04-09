@@ -35,6 +35,12 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(RATIONAL_CLASS, "negative?", negative_, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "hash", hash, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "eql?", eql_, 1);
+    globals.define_builtin_func_with(RATIONAL_CLASS, "floor", rat_floor, 0, 1, false);
+    globals.define_builtin_func_with(RATIONAL_CLASS, "ceil", rat_ceil, 0, 1, false);
+    globals.define_builtin_func_with(RATIONAL_CLASS, "truncate", rat_truncate, 0, 1, false);
+    globals.define_builtin_func_with_kw(
+        RATIONAL_CLASS, "round", rat_round, 0, 1, false, &["half"], false,
+    );
     globals.define_builtin_class_func(RATIONAL_CLASS, "__allocate", allocate, 2);
     globals.define_builtin_class_func(RATIONAL_CLASS, "allocate", super::super::class::undef_allocate, 0);
 }
@@ -405,6 +411,89 @@ fn pow(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     }
 }
 
+/// Coerce ndigits argument to i64 (supports to_int coercion).
+fn coerce_ndigits(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<i64> {
+    match lfp.try_arg(0) {
+        Some(v) => v.coerce_to_int_i64(vm, globals),
+        None => Ok(0),
+    }
+}
+
+/// Convert RationalFloorResult to Value.
+fn floor_result_to_value(r: rvalue::RationalFloorResult) -> Value {
+    match r {
+        rvalue::RationalFloorResult::Integer(i) => Value::bigint(i),
+        rvalue::RationalFloorResult::Rational(r) => Value::rational_from_inner(r),
+    }
+}
+
+///
+/// ### Rational#floor
+///
+/// - floor(ndigits = 0) -> Integer | Rational
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Rational/i/floor.html]
+#[monoruby_builtin]
+fn rat_floor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let r = self_rat(lfp);
+    let ndigits = coerce_ndigits(vm, globals, lfp)?;
+    Ok(floor_result_to_value(r.rational_floor(ndigits)))
+}
+
+///
+/// ### Rational#ceil
+///
+/// - ceil(ndigits = 0) -> Integer | Rational
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Rational/i/ceil.html]
+#[monoruby_builtin]
+fn rat_ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let r = self_rat(lfp);
+    let ndigits = coerce_ndigits(vm, globals, lfp)?;
+    Ok(floor_result_to_value(r.rational_ceil(ndigits)))
+}
+
+///
+/// ### Rational#truncate
+///
+/// - truncate(ndigits = 0) -> Integer | Rational
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Rational/i/truncate.html]
+#[monoruby_builtin]
+fn rat_truncate(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let r = self_rat(lfp);
+    let ndigits = coerce_ndigits(vm, globals, lfp)?;
+    Ok(floor_result_to_value(r.rational_truncate(ndigits)))
+}
+
+///
+/// ### Rational#round
+///
+/// - round(ndigits = 0, half: :up) -> Integer | Rational
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Rational/i/round.html]
+#[monoruby_builtin]
+fn rat_round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let r = self_rat(lfp);
+    let ndigits = coerce_ndigits(vm, globals, lfp)?;
+    let half = if let Some(kw_val) = lfp.try_arg(1) {
+        super::float::parse_half_mode(kw_val)?
+    } else {
+        None
+    };
+    let half_str = half.map(|h| match h {
+        super::float::RoundHalf::Up => "up",
+        super::float::RoundHalf::Down => "down",
+        super::float::RoundHalf::Even => "even",
+    });
+    Ok(floor_result_to_value(r.rational_round(ndigits, half_str)))
+}
+
 #[monoruby_builtin]
 fn neg(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::rational_from_inner(self_rat(lfp).neg()))
@@ -607,6 +696,66 @@ mod tests {
             // nil return for non-comparable
             "(Rational(1, 2) <=> :foo)",
         ]);
+    }
+
+    #[test]
+    fn rational_floor() {
+        // ndigits == 0 (returns Integer)
+        run_test_once("Rational(7, 3).floor");
+        run_test_once("Rational(-7, 3).floor");
+        run_test_once("Rational(6, 3).floor");
+        // ndigits > 0 (returns Rational)
+        run_test_once("Rational(7, 3).floor(1).to_s");
+        run_test_once("Rational(-7, 3).floor(1).to_s");
+        run_test_once("Rational(1, 4).floor(1).to_s");
+        // ndigits < 0 (rounds toward negative infinity at 10s place)
+        run_test_once("Rational(123, 1).floor(-1)");
+        run_test_once("Rational(-123, 1).floor(-1)");
+        // ndigits_sufficient: 1/4 is exact at 2 decimal places
+        run_test_once("Rational(1, 4).floor(2).to_s");
+    }
+
+    #[test]
+    fn rational_ceil() {
+        run_test_once("Rational(7, 3).ceil");
+        run_test_once("Rational(-7, 3).ceil");
+        run_test_once("Rational(6, 3).ceil");
+        run_test_once("Rational(7, 3).ceil(1).to_s");
+        run_test_once("Rational(-7, 3).ceil(1).to_s");
+        run_test_once("Rational(123, 1).ceil(-1)");
+        run_test_once("Rational(-123, 1).ceil(-1)");
+    }
+
+    #[test]
+    fn rational_truncate() {
+        run_test_once("Rational(7, 3).truncate");
+        run_test_once("Rational(-7, 3).truncate");
+        run_test_once("Rational(6, 3).truncate");
+        run_test_once("Rational(7, 3).truncate(1).to_s");
+        run_test_once("Rational(-7, 3).truncate(1).to_s");
+        run_test_once("Rational(123, 1).truncate(-1)");
+    }
+
+    #[test]
+    fn rational_round() {
+        // Basic rounding
+        run_test_once("Rational(7, 3).round");
+        run_test_once("Rational(-7, 3).round");
+        run_test_once("Rational(5, 2).round");
+        run_test_once("Rational(-5, 2).round");
+        // half: modes
+        run_test_once("Rational(5, 2).round(0, half: :up)");
+        run_test_once("Rational(5, 2).round(0, half: :down)");
+        run_test_once("Rational(5, 2).round(0, half: :even)");
+        run_test_once("Rational(7, 2).round(0, half: :even)");
+        // ndigits > 0
+        run_test_once("Rational(7, 3).round(1).to_s");
+        run_test_once("Rational(7, 3).round(2).to_s");
+        // ndigits < 0
+        run_test_once("Rational(155, 1).round(-1)");
+        run_test_once("Rational(145, 1).round(-1)");
+        // invalid half mode
+        run_test_error("Rational(1, 2).round(0, half: :foo)");
     }
 
     #[test]

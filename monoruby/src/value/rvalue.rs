@@ -20,7 +20,7 @@ pub use io::IoInner;
 pub use ivar_table::*;
 pub use match_data::MatchDataInner;
 pub use method::*;
-pub use rational::RationalInner;
+pub use rational::{RationalFloorResult, RationalInner};
 pub use module::{Module, ModuleInner, ModuleType};
 pub use proc::*;
 pub use range::{RANGE_END_OFFSET, RANGE_EXCLUDE_END_OFFSET, RANGE_START_OFFSET, RangeInner};
