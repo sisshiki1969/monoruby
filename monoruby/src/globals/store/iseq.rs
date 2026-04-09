@@ -575,7 +575,7 @@ pub(crate) struct ParamsInfo {
     pub args_names: Vec<Option<IdentId>>,
     pub kw_names: Vec<IdentId>,
     pub kw_rest: Option<SlotId>,
-    block_param: Option<IdentId>,
+    pub block_param: Option<IdentId>,
     forwarding: bool,
 }
 

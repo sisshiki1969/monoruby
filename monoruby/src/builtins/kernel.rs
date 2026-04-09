@@ -157,9 +157,20 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_inline_funcs_with_kw(
         kernel_class,
         "send",
-        &["__send__", "public_send"],
+        &["__send__"],
         crate::builtins::send,
         Box::new(crate::builtins::object_send),
+        0,
+        0,
+        true,
+        &[],
+        true,
+    );
+    globals.define_builtin_funcs_with_kw(
+        kernel_class,
+        "public_send",
+        &[],
+        public_send,
         0,
         0,
         true,
@@ -1608,6 +1619,52 @@ fn inline_min(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/send.html]
 #[monoruby_builtin]
+fn public_send(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let ary = lfp.arg(0).as_array();
+    if ary.len() < 1 {
+        return Err(MonorubyErr::wrong_number_of_arg_min(ary.len(), 1));
+    }
+    let method = ary[0].expect_symbol_or_string(globals)?;
+    let receiver = lfp.self_val();
+    // public_send only allows public methods.
+    // Both private and protected are rejected unconditionally.
+    let class_id = receiver.class();
+    if let Some(entry) = globals.check_method_for_class(class_id, method) {
+        match entry.visibility() {
+            Visibility::Private => {
+                return Err(MonorubyErr::private_method_called(globals, method, receiver));
+            }
+            Visibility::Protected => {
+                return Err(MonorubyErr::protected_method_called(
+                    globals, method, receiver,
+                ));
+            }
+            _ => {}
+        }
+    }
+    vm.invoke_method_inner(
+        globals,
+        method,
+        receiver,
+        &ary[1..],
+        lfp.block(),
+        if let Some(kw) = lfp.try_arg(1)
+            && let Some(kw) = kw.try_hash_ty()
+            && !kw.is_empty()
+        {
+            Some(kw)
+        } else {
+            None
+        },
+    )
+}
+
+#[monoruby_builtin]
 pub(crate) fn send(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -2977,6 +3034,34 @@ mod tests {
           def baz; yield + 1; end
         end
         C.new.public_send(:baz) { 41 }
+        "##,
+        );
+        // private method => NoMethodError
+        run_test_error(
+            r##"
+        class C
+          private def pri; "private"; end
+        end
+        C.new.public_send(:pri)
+        "##,
+        );
+        // protected method => NoMethodError even from same class hierarchy
+        run_test_error(
+            r##"
+        class C
+          protected def pro; "protected"; end
+          def call_pro(other); other.public_send(:pro); end
+        end
+        C.new.call_pro(C.new)
+        "##,
+        );
+        // protected method from outside => NoMethodError
+        run_test_error(
+            r##"
+        class C
+          protected def pro; "protected"; end
+        end
+        C.new.public_send(:pro)
         "##,
         );
     }

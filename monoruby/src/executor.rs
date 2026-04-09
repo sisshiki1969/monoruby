@@ -1564,6 +1564,9 @@ impl Executor {
     }
 
     pub(crate) fn get_last_matchdata(&self) -> Value {
+        if self.sp_matches.is_empty() {
+            return Value::nil();
+        }
         Value::array_from_iter(self.sp_matches.iter().map(|s| {
             if let Some(s) = s {
                 Value::string_from_str(s)
