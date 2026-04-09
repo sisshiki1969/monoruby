@@ -319,6 +319,24 @@ mod tests {
     }
 
     #[test]
+    fn last_match_nil_when_no_match() {
+        // Regexp.last_match returns nil when the last match failed
+        run_test(
+            r#"
+          /NOMATCH/ =~ "abc"
+          Regexp.last_match
+            "#,
+        );
+        // Regexp.last_match returns nil when no match has occurred yet
+        run_test(
+            r#"
+          /DONTMATCH/.match("")
+          Regexp.last_match
+            "#,
+        );
+    }
+
+    #[test]
     fn last_match2() {
         run_test(
             r#"

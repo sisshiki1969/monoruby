@@ -10,6 +10,69 @@ static ID: LazyLock<RwLock<IdentifierTable>> =
     LazyLock::new(|| RwLock::new(IdentifierTable::new()));
 
 ///
+/// Identifier name: either a valid UTF-8 string or raw bytes (binary/ASCII-8BIT).
+///
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum IdentName {
+    Utf8(String),
+    Bytes(Vec<u8>),
+}
+
+impl IdentName {
+    /// Returns the name as &str if UTF-8, or a lossy representation for binary.
+    pub fn to_string_lossy(&self) -> String {
+        match self {
+            IdentName::Utf8(s) => s.clone(),
+            IdentName::Bytes(b) => String::from_utf8_lossy(b).into_owned(),
+        }
+    }
+
+    /// Returns the underlying bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            IdentName::Utf8(s) => s.as_bytes(),
+            IdentName::Bytes(b) => b.as_slice(),
+        }
+    }
+
+    /// Returns &str if UTF-8, None if binary.
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            IdentName::Utf8(s) => Some(s.as_str()),
+            IdentName::Bytes(_) => None,
+        }
+    }
+
+    /// Returns true if this is a valid UTF-8 name.
+    pub fn is_utf8(&self) -> bool {
+        matches!(self, IdentName::Utf8(_))
+    }
+
+    /// Returns true if the name consists of only ASCII characters.
+    pub fn is_ascii(&self) -> bool {
+        self.as_bytes().is_ascii()
+    }
+}
+
+impl std::fmt::Debug for IdentName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IdentName::Utf8(s) => write!(f, "{}", s),
+            IdentName::Bytes(b) => write!(f, "{}", String::from_utf8_lossy(b)),
+        }
+    }
+}
+
+impl std::fmt::Display for IdentName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IdentName::Utf8(s) => write!(f, "{}", s),
+            IdentName::Bytes(b) => write!(f, "{}", String::from_utf8_lossy(b)),
+        }
+    }
+}
+
+///
 /// Wrapper of ID for strings.
 ///
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -202,37 +265,51 @@ impl IdentId {
 
 impl IdentId {
     ///
-    /// Get *IdentId* from &str.
+    /// Get *IdentId* from &str (UTF-8).
     ///
     pub fn get_id(name: &str) -> IdentId {
         ID.write().unwrap().get_id(name)
     }
 
     ///
-    /// Get *IdentId* from String.
+    /// Get *IdentId* from String (UTF-8).
     ///
     pub fn get_id_from_string(name: String) -> IdentId {
         ID.write().unwrap().get_id_from_string(name)
     }
 
     ///
-    /// Get name as String from *self*.
+    /// Get *IdentId* from raw bytes (binary/ASCII-8BIT).
     ///
-    pub fn get_name(&self) -> String {
-        ID.read().unwrap().get_name(*self).to_string()
+    pub fn get_id_from_bytes(bytes: Vec<u8>) -> IdentId {
+        ID.write().unwrap().get_id_from_bytes(bytes)
     }
 
     ///
-    /// Compare *self* to *other*.
+    /// Get name as String from *self* (lossy for binary names).
+    ///
+    pub fn get_name(&self) -> String {
+        ID.read().unwrap().get_ident_name(*self).to_string_lossy()
+    }
+
+    ///
+    /// Get the IdentName from *self*.
+    ///
+    pub fn get_ident_name_clone(&self) -> IdentName {
+        ID.read().unwrap().get_ident_name(*self).clone()
+    }
+
+    ///
+    /// Compare *self* to *other* by raw bytes.
     ///
     pub fn compare(&self, other: &Self) -> std::cmp::Ordering {
         if self == other {
             return std::cmp::Ordering::Equal;
         }
         let id = ID.read().unwrap();
-        let lhs = id.get_name(*self);
-        let rhs = id.get_name(*other);
-        lhs.cmp(rhs)
+        let lhs = id.get_ident_name(*self);
+        let rhs = id.get_ident_name(*other);
+        lhs.as_bytes().cmp(rhs.as_bytes())
     }
 
     ///
@@ -266,15 +343,20 @@ impl IdentId {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IdentifierTable {
+    /// Reverse lookup for UTF-8 names.
     rev_table: HashMap<String, IdentId>,
-    table: Vec<String>,
+    /// Reverse lookup for binary names.
+    rev_table_bytes: HashMap<Vec<u8>, IdentId>,
+    /// Forward table: IdentId -> IdentName.
+    table: Vec<IdentName>,
 }
 
 impl IdentifierTable {
     pub(crate) fn new() -> Self {
         let mut table = IdentifierTable {
             rev_table: HashMap::default(),
-            table: vec![String::new(); 100],
+            rev_table_bytes: HashMap::default(),
+            table: vec![IdentName::Utf8(String::new()); 100],
         };
         table.set_id("initialize", IdentId::INITIALIZE);
         table.set_id("Object", IdentId::OBJECT);
@@ -358,7 +440,7 @@ impl IdentifierTable {
 
     fn set_id(&mut self, name: &str, id: IdentId) {
         self.rev_table.insert(name.to_string(), id);
-        self.table[id.to_usize() - 1] = name.to_string();
+        self.table[id.to_usize() - 1] = IdentName::Utf8(name.to_string());
     }
 
     fn get_id(&mut self, name: &str) -> IdentId {
@@ -367,7 +449,7 @@ impl IdentifierTable {
             None => {
                 let id = IdentId::from(self.table.len() as u32 + 1);
                 self.rev_table.insert(name.to_string(), id);
-                self.table.push(name.to_string());
+                self.table.push(IdentName::Utf8(name.to_string()));
                 id
             }
         }
@@ -379,16 +461,28 @@ impl IdentifierTable {
             None => {
                 let id = IdentId::from(self.table.len() as u32 + 1);
                 self.rev_table.insert(name.clone(), id);
-                self.table.push(name);
+                self.table.push(IdentName::Utf8(name));
+                id
+            }
+        }
+    }
+
+    fn get_id_from_bytes(&mut self, bytes: Vec<u8>) -> IdentId {
+        match self.rev_table_bytes.get(&bytes) {
+            Some(id) => *id,
+            None => {
+                let id = IdentId::from(self.table.len() as u32 + 1);
+                self.rev_table_bytes.insert(bytes.clone(), id);
+                self.table.push(IdentName::Bytes(bytes));
                 id
             }
         }
     }
 
     ///
-    /// Get the name as &str from *self*.
+    /// Get the IdentName from *id*.
     ///
-    fn get_name(&self, id: IdentId) -> &str {
+    fn get_ident_name(&self, id: IdentId) -> &IdentName {
         &self.table[id.to_usize() - 1]
     }
 

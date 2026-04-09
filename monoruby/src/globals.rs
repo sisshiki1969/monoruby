@@ -102,6 +102,8 @@ pub struct Globals {
     random: Box<Prng>,
     /// loaded libraries (canonical path).
     pub(crate) loaded_canonicalized_files: indexmap::IndexSet<PathBuf>,
+    /// cache for Symbol#name (frozen strings keyed by IdentId).
+    pub(crate) symbol_names: HashMap<IdentId, Value>,
     /// address of invokers.
     pub(crate) invokers: Invokers,
     /// stats for deoptimization
@@ -134,6 +136,7 @@ impl alloc::GC<RValue> for Globals {
         self.load_path.mark(alloc);
         self.store.mark(alloc);
         self.global_vars.values().for_each(|v| v.mark(alloc));
+        self.symbol_names.values().for_each(|v| v.mark(alloc));
     }
 }
 
@@ -173,6 +176,7 @@ impl Globals {
             load_path: Value::array_empty(),
             random: Box::new(Prng::new()),
             loaded_canonicalized_files,
+            symbol_names: HashMap::default(),
             invokers,
             #[cfg(feature = "profile")]
             deopt_stats: HashMap::default(),

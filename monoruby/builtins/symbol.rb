@@ -1,4 +1,6 @@
 class Symbol
+  include Comparable
+
   def [](*args)
     to_s.[](*args)
   end
@@ -51,10 +53,6 @@ class Symbol
 
   def id2name
     to_s
-  end
-
-  def name
-    to_s.freeze
   end
 
   def intern

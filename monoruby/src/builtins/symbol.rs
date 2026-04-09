@@ -13,6 +13,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SYMBOL_CLASS, "==", eq, 1);
     globals.define_builtin_func(SYMBOL_CLASS, "!=", ne, 1);
     globals.define_builtin_func(SYMBOL_CLASS, "to_s", sym_to_s, 0);
+    globals.define_builtin_func(SYMBOL_CLASS, "name", sym_name, 0);
+    // Symbol.new is undefined (raises NoMethodError).
+    let meta = globals.store.get_metaclass(SYMBOL_CLASS).id();
+    globals
+        .undef_method_for_class(meta, IdentId::get_id("new"))
+        .unwrap();
 }
 
 ///
@@ -27,14 +33,54 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn sym_to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let sym = lfp.self_val().as_symbol();
-    let name = sym.get_name();
-    let enc = if name.is_ascii() {
-        Encoding::UsAscii
-    } else {
-        Encoding::Utf8
+    let ident_name = sym.get_ident_name_clone();
+    let (bytes, enc) = match &ident_name {
+        IdentName::Utf8(s) => {
+            let enc = if s.is_ascii() {
+                Encoding::UsAscii
+            } else {
+                Encoding::Utf8
+            };
+            (s.as_bytes(), enc)
+        }
+        IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
     };
-    let inner = RStringInner::from_encoding(name.as_bytes(), enc);
+    let inner = RStringInner::from_encoding(bytes, enc);
     Ok(Value::string_from_inner(inner))
+}
+
+///
+/// ### Symbol#name
+///
+/// - name -> String
+///
+/// Returns a frozen string corresponding to the symbol's name.
+/// Returns the same object for the same symbol.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/name.html]
+#[monoruby_builtin]
+fn sym_name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let sym = lfp.self_val().as_symbol();
+    if let Some(&v) = globals.symbol_names.get(&sym) {
+        return Ok(v);
+    }
+    let ident_name = sym.get_ident_name_clone();
+    let (bytes, enc) = match &ident_name {
+        IdentName::Utf8(s) => {
+            let enc = if s.is_ascii() {
+                Encoding::UsAscii
+            } else {
+                Encoding::Utf8
+            };
+            (s.as_bytes(), enc)
+        }
+        IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
+    };
+    let inner = RStringInner::from_encoding(bytes, enc);
+    let mut v = Value::string_from_inner(inner);
+    v.set_frozen();
+    globals.symbol_names.insert(sym, v);
+    Ok(v)
 }
 
 ///
@@ -185,5 +231,44 @@ mod tests {
         // to_proc should use public_send and forward blocks
         run_test(r#"[1, 2, 3].map(&:to_s)"#);
         run_test(r#"["a", "b", "c"].map(&:upcase)"#);
+    }
+
+    #[test]
+    fn symbol_comparable() {
+        // Comparable methods derived from <=>
+        run_test(r#":abc < :abd"#);
+        run_test(r#":abd > :abc"#);
+        run_test(r#":abc >= :abc"#);
+        run_test(r#":abc <= :abc"#);
+        run_test(r#":bbb.between?(:aaa, :ccc)"#);
+        run_test(r#":aaa.between?(:bbb, :ccc)"#);
+        run_test(r#":ddd.clamp(:bbb, :ccc)"#);
+        run_test(r#":aaa.clamp(:bbb, :ccc)"#);
+        run_test(r#":bbb.clamp(:aaa, :ccc)"#);
+    }
+
+    #[test]
+    fn symbol_name_identity() {
+        // Symbol#name returns the same frozen String object each time
+        run_test(r#":hello.name.equal?(:hello.name)"#);
+        run_test(r#":hello.name.frozen?"#);
+        run_test(r#":world.name.equal?(:world.name)"#);
+    }
+
+    #[test]
+    fn symbol_new_error() {
+        // Symbol.new raises NoMethodError, Symbol.allocate raises TypeError
+        run_test_error(r#"Symbol.new"#);
+        run_test_error(r#"Symbol.allocate"#);
+    }
+
+    #[test]
+    fn symbol_binary() {
+        // Binary (ASCII-8BIT) string can be converted to symbol and back
+        run_test(r#""\xC3".b.to_sym.to_s.encoding.to_s"#);
+        run_test(r#""\xC3".b.to_sym.to_s == "\xC3".b"#);
+        run_test(r#""\xC3".b.to_sym == "\xC3".b.to_sym"#);
+        // Binary and UTF-8 symbols with same bytes are distinct
+        run_test_no_result_check(r#""\xC3\xA3".to_sym != "\xC3\xA3".b.to_sym"#);
     }
 }
