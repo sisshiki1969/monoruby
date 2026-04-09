@@ -53,28 +53,6 @@ class Float
     to_r.denominator
   end
 
-  def to_r
-    raise FloatDomainError, "NaN" if nan?
-    raise FloatDomainError, (self > 0 ? "Infinity" : "-Infinity") if infinite?
-    Rational.__float_to_rational(self)
-  end
-
-  def rationalize(eps = nil)
-    raise FloatDomainError, "NaN" if nan?
-    raise FloatDomainError, (self > 0 ? "Infinity" : "-Infinity") if infinite?
-    return Rational(0) if self == 0.0
-    if eps
-      return Rational.__float_find_simplest(self, eps)
-    end
-    # No eps: find simplest rational that rounds back to this float.
-    # Use the float's inherent precision as eps.
-    # eps = 2^(exp - mantissa_bits - 1) where exp is the binary exponent
-    _mant, exp = Math.frexp(self)
-    # Float::MANT_DIG == 53 for IEEE 754 double
-    eps = Rational(1, 2 ** (Float::MANT_DIG - exp + 1))
-    Rational.__float_find_simplest(to_r, eps)
-  end
-
   def fdiv(other)
     self / other
   end

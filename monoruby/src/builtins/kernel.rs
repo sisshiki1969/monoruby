@@ -60,6 +60,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_with(kernel_class, "Integer", kernel_integer, 1, 2, false);
     globals.define_builtin_module_func(kernel_class, "Float", kernel_float, 1);
     globals.define_builtin_module_func_with(kernel_class, "Complex", kernel_complex, 1, 2, false);
+    globals.define_builtin_module_func_with(kernel_class, "Rational", kernel_rational, 1, 2, false);
     globals.define_builtin_module_func_with(kernel_class, "Array", kernel_array, 1, 1, false);
     globals.define_builtin_module_func(kernel_class, "require", require, 1);
     globals.define_builtin_module_func(kernel_class, "require_relative", require_relative, 1);
@@ -774,6 +775,88 @@ fn kernel_complex(
         Real::zero()
     };
     Ok(Value::complex(r, i))
+}
+
+///
+/// ### Kernel.#Rational
+///
+/// - Rational(a, b = 1) -> Rational
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Rational.html]
+#[monoruby_builtin]
+fn kernel_rational(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let a = lfp.arg(0);
+    if let Some(b) = lfp.try_arg(1) {
+        // Two-argument form: Rational(a, b)
+        let ar = val_to_rational(vm, globals, a)?;
+        let br = val_to_rational(vm, globals, b)?;
+        Ok(Value::rational_from_inner(ar.div(&br)?))
+    } else {
+        // One-argument form: Rational(a)
+        if let Some(r) = a.try_rational() {
+            return Ok(Value::rational_from_inner(r.clone()));
+        }
+        match a.unpack() {
+            RV::Fixnum(i) => Ok(Value::rational_from_inner(RationalInner::new(i, 1))),
+            RV::BigInt(b) => Ok(Value::rational_from_inner(RationalInner::new_bigint(
+                b.clone(),
+                num::BigInt::from(1),
+            ))),
+            RV::Float(f) => {
+                if f.is_nan() {
+                    return Err(MonorubyErr::rangeerr("can't convert NaN into Rational"));
+                }
+                if f.is_infinite() {
+                    return Err(MonorubyErr::rangeerr("can't convert Infinity into Rational"));
+                }
+                Ok(Value::rational_from_inner(RationalInner::from_f64(f)))
+            }
+            _ => {
+                // Try to_r coercion
+                let to_r_id = IdentId::get_id("to_r");
+                if let Some(func_id) = globals.check_method(a, to_r_id) {
+                    let result = vm.invoke_func_inner(globals, func_id, a, &[], None, None)?;
+                    if result.try_rational().is_some() {
+                        return Ok(result);
+                    }
+                }
+                Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} into Rational",
+                    a.get_real_class_name(&globals.store)
+                )))
+            }
+        }
+    }
+}
+
+/// Convert a Value to RationalInner for Kernel#Rational two-arg form.
+fn val_to_rational(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<RationalInner> {
+    if let Some(r) = v.try_rational() {
+        return Ok(r.clone());
+    }
+    match v.unpack() {
+        RV::Fixnum(i) => Ok(RationalInner::new(i, 1)),
+        RV::BigInt(b) => Ok(RationalInner::new_bigint(b.clone(), num::BigInt::from(1))),
+        RV::Float(f) => {
+            if f.is_nan() || f.is_infinite() {
+                return Err(MonorubyErr::rangeerr("can't convert Float into Rational"));
+            }
+            Ok(RationalInner::from_f64(f))
+        }
+        _ => Err(MonorubyErr::typeerr(format!(
+            "can't convert {} into Rational",
+            v.get_real_class_name(&globals.store)
+        ))),
+    }
 }
 
 ///
@@ -2823,6 +2906,30 @@ mod tests {
             r#"Float(o)"#,
             r#"class C; def to_f; 3.14; end; end; o = C.new"#,
         );
+    }
+
+    #[test]
+    fn kernel_rational() {
+        // Integer arguments
+        run_test_once("Rational(3, 4).to_s");
+        run_test_once("Rational(6, 4).to_s");
+        // Single integer
+        run_test_once("Rational(5).to_s");
+        // Float argument
+        run_test_once("Rational(1.5).to_s");
+        run_test_once("Rational(0.0).to_s");
+        // Two floats
+        run_test_once("Rational(1.5, 2.0).to_s");
+        // Mixed float/int
+        run_test_once("Rational(1.5, 3).to_s");
+        // Rational passthrough
+        run_test_once("Rational(Rational(3, 4)).to_s");
+        // Rational / Integer
+        run_test_once("Rational(Rational(3, 4), 2).to_s");
+        // Division by zero
+        run_test_error("Rational(1, 0)");
+        // Type error
+        run_test_error("Rational(:foo)");
     }
 
     #[test]
