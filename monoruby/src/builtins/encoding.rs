@@ -126,6 +126,15 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         globals.set_constant_by_str(enc.id(), name, val);
     }
 
+    // Encoding::CompatibilityError < EncodingError < StandardError
+    let enc_error_val = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("EncodingError"))
+        .unwrap();
+    let enc_error_module = enc_error_val.expect_class(globals).unwrap();
+    let compat_error = globals.define_class("CompatibilityError", enc_error_module, OBJECT_CLASS);
+    globals.set_constant_by_str(enc.id(), "CompatibilityError", compat_error.get());
+
     // Encoding class methods
     globals.define_builtin_class_func(enc.id(), "default_external", enc_default_external, 0);
     globals.define_builtin_class_func(enc.id(), "default_external=", enc_set_default_external, 1);
@@ -766,5 +775,30 @@ mod tests {
             Encoding.compatible?("a", "b").nil?.!
             "#,
         );
+    }
+
+    #[test]
+    fn warning_module() {
+        // Warning[] returns category status
+        run_test_once("Warning[:deprecated]");
+        run_test_once("Warning[:experimental]");
+        run_test_once("Warning[:performance]");
+        // Warning[]= sets category
+        run_test_once(r#"
+            old = Warning[:deprecated]
+            Warning[:deprecated] = false
+            res = Warning[:deprecated]
+            Warning[:deprecated] = old
+            res
+        "#);
+        // Invalid category raises ArgumentError
+        run_test_error("Warning[:nonexistent]");
+    }
+
+    #[test]
+    fn compatibility_error_class() {
+        // Encoding::CompatibilityError exists and inherits from EncodingError
+        run_test_once("Encoding::CompatibilityError.is_a?(Class)");
+        run_test_once("Encoding::CompatibilityError < EncodingError");
     }
 }

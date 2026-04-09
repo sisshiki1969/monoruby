@@ -747,14 +747,32 @@ pub(super) extern "C" fn set_global_var(globals: &mut Globals, name: IdentId, va
 ///
 /// id: 0 -> $&
 /// id: 1 -> $'
+/// id: 2 -> $~
 /// id: 100 + n -> $<n> (n >= 1)
 ///
+/// Set special variable.
+/// Currently only $~ (SPECIAL_MATCHDATA) supports assignment.
+/// $~ = nil clears the capture state.
+pub(super) extern "C" fn set_special_var(val: Value, vm: &mut Executor, id: u32) {
+    match id {
+        ruruby_parse::SPECIAL_MATCHDATA => {
+            if val.is_nil() {
+                vm.clear_capture_special_variables();
+            }
+            // non-nil assignment is silently ignored for now
+        }
+        _ => {}
+    }
+}
+
 pub(super) extern "C" fn get_special_var(vm: &Executor, globals: &Globals, id: u32) -> Value {
     match id {
         // $&
         ruruby_parse::SPECIAL_LASTMATCH => vm.sp_last_match(),
         // $'
         ruruby_parse::SPECIAL_POSTMATCH => vm.sp_post_match(),
+        // $~
+        ruruby_parse::SPECIAL_MATCHDATA => vm.get_last_matchdata(),
         // $LOAD_PATH
         ruruby_parse::SPECIAL_LOADPATH => globals.get_load_path(),
         // $LOADED_FEATURES

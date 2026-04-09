@@ -128,11 +128,25 @@ class Module
 end
 
 module Warning
+  @categories = { deprecated: false, experimental: true, performance: false }
+
   def self.warn(*x)
   end
-  
+
   def self.[](category)
-    true
+    category = category.to_sym if category.is_a?(String)
+    unless @categories.key?(category)
+      raise ArgumentError, "unknown category: #{category}"
+    end
+    @categories[category]
+  end
+
+  def self.[]=(category, value)
+    category = category.to_sym if category.is_a?(String)
+    unless @categories.key?(category)
+      raise ArgumentError, "unknown category: #{category}"
+    end
+    @categories[category] = value ? true : false
   end
 end
 

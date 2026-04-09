@@ -215,6 +215,9 @@ impl<'a> BytecodeGen<'a> {
                 let name = IdentId::get_id_from_string(name);
                 self.emit_load_ivar(dst.into(), name, loc);
             }
+            NodeKind::GlobalVar(ref name) if name == "$~" => {
+                self.emit_load_svar(dst.into(), ruruby_parse::SPECIAL_MATCHDATA, loc);
+            }
             NodeKind::GlobalVar(name) => {
                 let name = IdentId::get_id_from_string(name);
                 self.emit_load_gvar(dst.into(), name, loc);

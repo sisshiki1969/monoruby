@@ -454,6 +454,7 @@ impl<'a> Lexer<'a> {
                     match ch {
                         '&' => self.new_special_var(SPECIAL_LASTMATCH),
                         '\'' => self.new_special_var(SPECIAL_POSTMATCH),
+                        '~' => self.new_global_var("$~"),
                         ':' => self.new_special_var(SPECIAL_LOADPATH),
                         '"' => self.new_special_var(SPECIAL_LOADEDFEATURES),
                         _ => self.new_global_var(format!("${}", ch)),
@@ -645,6 +646,31 @@ impl<'a> Lexer<'a> {
                     return Err(self.error_unexpected(self.pos - ch.len_utf8()));
                 }
                 self.consume_ident();
+                Ok(Some((
+                    self.current_slice().to_string(),
+                    Loc(self.token_start_pos, self.pos),
+                )))
+            }
+            '$' => {
+                // Global variable symbol: :$name, :$0, :$&, :$+, etc.
+                self.get()?; // consume '$'
+                match self.peek() {
+                    Some(c) if c.is_ascii_alphanumeric() || c == '_' => {
+                        self.consume_ident();
+                    }
+                    Some(c) if c.is_ascii_punctuation() => {
+                        self.get()?;
+                        // Handle $-x style variables
+                        if c == '-' {
+                            if let Some(c2) = self.peek() {
+                                if c2.is_ascii_alphanumeric() || c2 == '_' {
+                                    self.get()?;
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
                 Ok(Some((
                     self.current_slice().to_string(),
                     Loc(self.token_start_pos, self.pos),

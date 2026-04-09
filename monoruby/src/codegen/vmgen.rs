@@ -255,6 +255,7 @@ impl Codegen {
         self.dispatch[27] = self.vm_load_cvar();
         self.dispatch[28] = self.vm_load_svar();
         self.dispatch[29] = self.vm_store_cvar();
+        self.dispatch[41] = self.vm_store_svar();
         self.dispatch[30] = vm_send_simple;
         self.dispatch[31] = vm_send;
         self.dispatch[32] = vm_send_simple;
