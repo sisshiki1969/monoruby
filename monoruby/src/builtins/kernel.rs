@@ -812,7 +812,9 @@ fn kernel_rational(
                     return Err(MonorubyErr::rangeerr("can't convert NaN into Rational"));
                 }
                 if f.is_infinite() {
-                    return Err(MonorubyErr::rangeerr("can't convert Infinity into Rational"));
+                    return Err(MonorubyErr::rangeerr(
+                        "can't convert Infinity into Rational",
+                    ));
                 }
                 Ok(Value::rational_from_inner(RationalInner::from_f64(f)))
             }
@@ -835,11 +837,7 @@ fn kernel_rational(
 }
 
 /// Convert a Value to RationalInner for Kernel#Rational two-arg form.
-fn val_to_rational(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    v: Value,
-) -> Result<RationalInner> {
+fn val_to_rational(_: &mut Executor, globals: &mut Globals, v: Value) -> Result<RationalInner> {
     if let Some(r) = v.try_rational() {
         return Ok(r.clone());
     }
@@ -1720,7 +1718,9 @@ fn public_send(
     if let Some(entry) = globals.check_method_for_class(class_id, method) {
         match entry.visibility() {
             Visibility::Private => {
-                return Err(MonorubyErr::private_method_called(globals, method, receiver));
+                return Err(MonorubyErr::private_method_called(
+                    globals, method, receiver,
+                ));
             }
             Visibility::Protected => {
                 return Err(MonorubyErr::protected_method_called(
