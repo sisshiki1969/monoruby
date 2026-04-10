@@ -20,7 +20,8 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_basic_op(INTEGER_CLASS, "-", sub, 1);
     globals.define_basic_op(INTEGER_CLASS, "*", mul, 1);
     globals.define_basic_op(INTEGER_CLASS, "/", div, 1);
-    globals.define_basic_op(INTEGER_CLASS, "%", rem, 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "%", int_rem, Box::new(integer_rem), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "**", int_pow, Box::new(integer_pow), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "&", bitand, Box::new(integer_bitand), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "|", bitor, Box::new(integer_bitor), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "^", bitxor, Box::new(integer_bitxor), 1);
@@ -955,6 +956,220 @@ fn integer_shl(
         ir.inline(move |r#gen, _, labels| r#gen.gen_shl(&labels[deopt]));
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+    true
+}
+
+///
+/// ### Integer#%
+///
+/// - self % other -> Numeric
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=25.html]
+#[monoruby_builtin]
+fn int_rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    super::op::rem_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
+}
+
+fn integer_rem(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    rhs_class: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let CallSiteInfo {
+        dst, args, recv, ..
+    } = *callsite;
+
+    match rhs_class {
+        Some(INTEGER_CLASS) => integer_rem_int_rhs(state, ir, dst, recv, args),
+        Some(FLOAT_CLASS) => integer_rem_float_rhs(state, ir, dst, recv, args),
+        _ => false,
+    }
+}
+
+fn integer_rem_int_rhs(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    dst: Option<SlotId>,
+    recv: SlotId,
+    args: SlotId,
+) -> bool {
+    // Constant folding: both operands are concrete fixnums and rhs != 0.
+    // ruby_mod of two i63 values always fits in i63.
+    if let Some(lhs) = state.is_fixnum_literal(recv)
+        && let Some(rhs) = state.is_fixnum_literal(args)
+        && !rhs.get().is_zero()
+    {
+        let result = lhs.get().ruby_mod(&rhs.get());
+        state.def_C(dst, Immediate::check_fixnum(result).unwrap());
+        return true;
+    }
+
+    // Power-of-two RI optimization: lhs % positive_power_of_2
+    // → lhs & mask, where mask = (rhs - 1) << 1 | 1 = rhs * 2 - 1
+    // applied directly on the tagged fixnum (the tag bit is preserved
+    // since both operands have LSB = 1). The bitwise AND matches Ruby's
+    // floor-mod semantics for any sign of lhs as long as the divisor
+    // is a positive power of 2 (two's-complement makes this work).
+    if let Some(rhs) = state.is_fixnum_literal(args) {
+        let rhs_val = rhs.get();
+        if rhs_val > 0 && (rhs_val as u64).is_power_of_two() {
+            state.load_fixnum(ir, recv, GP::Rdi);
+            let mask = rhs_val * 2 - 1;
+            ir.inline(move |r#gen, _, _| {
+                if let Ok(imm32) = i32::try_from(mask) {
+                    let imm = imm32 as i64;
+                    monoasm!( &mut r#gen.jit,
+                        andq rdi, (imm);
+                    );
+                } else {
+                    monoasm!( &mut r#gen.jit,
+                        movq rax, (mask);
+                        andq rdi, rax;
+                    );
+                }
+            });
+            state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+            return true;
+        }
+    }
+
+    state.load_fixnum(ir, recv, GP::Rdi);
+    state.load_fixnum(ir, args, GP::Rsi);
+    let deopt = ir.new_deopt(state);
+    ir.inline(move |r#gen, _, labels| r#gen.gen_int_rem(&labels[deopt]));
+    state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+    true
+}
+
+fn integer_rem_float_rhs(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    dst: Option<SlotId>,
+    recv: SlotId,
+    args: SlotId,
+) -> bool {
+    // Constant folding: both operands are concrete (Integer | Float).
+    // ruby_mod of any two reals where one is float produces a float.
+    if let Some(lhs) = state.coerce_C_f64(recv)
+        && let Some(rhs) = state.coerce_C_f64(args)
+    {
+        let result = lhs.ruby_mod(&rhs);
+        if state.def_C_float(dst, result) {
+            return true;
+        }
+    }
+
+    let lhs_xmm = state.load_xmm_fixnum(ir, recv);
+    let rhs_xmm = state.load_xmm(ir, args);
+    let Some(dst) = dst else {
+        // Result discarded; no work needed (rem_ff is pure).
+        return true;
+    };
+    let dst_xmm = state.def_F(dst);
+    let using_xmm = state.get_using_xmm();
+    ir.inline(move |r#gen, _, _| r#gen.gen_int_rem_if(lhs_xmm, rhs_xmm, dst_xmm, using_xmm));
+    true
+}
+
+///
+/// ### Integer#**
+///
+/// - self ** other -> Numeric
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2a=2a.html]
+#[monoruby_builtin]
+fn int_pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    super::op::pow_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
+}
+
+fn integer_pow(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    rhs_class: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let CallSiteInfo {
+        dst, args, recv, ..
+    } = *callsite;
+
+    match rhs_class {
+        Some(INTEGER_CLASS) => integer_pow_int_rhs(state, ir, dst, recv, args),
+        Some(FLOAT_CLASS) => integer_pow_float_rhs(state, ir, dst, recv, args),
+        _ => false,
+    }
+}
+
+fn integer_pow_int_rhs(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    dst: Option<SlotId>,
+    recv: SlotId,
+    args: SlotId,
+) -> bool {
+    // Constant folding: both operands are concrete fixnums.
+    // Only fold when the result fits in i63 (matches the previous
+    // hardcoded BinOpK::Exp folding).
+    if let Some(lhs) = state.is_fixnum_literal(recv)
+        && let Some(rhs) = state.is_fixnum_literal(args)
+        && let Ok(rhs_u32) = u32::try_from(rhs.get())
+        && let Some(result) = lhs.get().checked_pow(rhs_u32)
+        && let Some(imm) = Immediate::check_fixnum(result)
+    {
+        state.def_C(dst, imm);
+        return true;
+    }
+
+    state.load_fixnum(ir, recv, GP::Rdi);
+    state.load_fixnum(ir, args, GP::Rsi);
+    let using_xmm = state.get_using_xmm();
+    let error = ir.new_error(state);
+    ir.inline(move |r#gen, _, labels| r#gen.gen_int_pow(using_xmm, &labels[error]));
+    state.def_reg2acc(ir, GP::Rax, dst);
+    true
+}
+
+fn integer_pow_float_rhs(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    dst: Option<SlotId>,
+    recv: SlotId,
+    args: SlotId,
+) -> bool {
+    // Constant folding: both operands are concrete (Integer or Float).
+    // The result of (lhs as f64).powf(rhs) is a Float for non-negative
+    // base, and may be Complex (NaN-trigger) for negative base. Only
+    // fold the safe Float case here; let the runtime helper handle
+    // the Complex path.
+    if let Some(lhs) = state.coerce_C_f64(recv)
+        && let Some(rhs) = state.coerce_C_f64(args)
+    {
+        let result = lhs.powf(rhs);
+        if !(result.is_nan() && lhs < 0.0) && state.def_C_float(dst, result) {
+            return true;
+        }
+        // else: fall through to runtime call
+    }
+
+    let lhs_xmm = state.load_xmm_fixnum(ir, recv);
+    let rhs_xmm = state.load_xmm(ir, args);
+    let using_xmm = state.get_using_xmm();
+    ir.inline(move |r#gen, _, _| r#gen.gen_int_pow_if(lhs_xmm, rhs_xmm, using_xmm));
+    state.def_reg2acc(ir, GP::Rax, dst);
     true
 }
 
@@ -2725,49 +2940,59 @@ mod tests {
     #[test]
     fn integer_shift_constant_folding() {
         // Both operands are literals: should be constant-folded at JIT time.
-        // Use expressions inside arithmetic to keep them as bytecode constants
-        // (rather than being folded by the bytecode-level constant folder).
-        run_test("def f; 8 >> 1; end; f");
-        run_test("def f; 8 >> 0; end; f");
-        run_test("def f; -8 >> 2; end; f");
-        run_test("def f; 1 >> 64; end; f");
-        run_test("def f; -1 >> 64; end; f");
-        run_test("def f; 1 >> 100; end; f");
-        run_test("def f; -1 >> 100; end; f");
-        run_test("def f; 1 >> -3; end; f");
-        run_test("def f; 0 >> -100; end; f");
-
-        run_test("def f; 1 << 10; end; f");
-        run_test("def f; -1 << 10; end; f");
-        run_test("def f; 0 << 100; end; f");
-        run_test("def f; 256 << -4; end; f");
-        run_test("def f; -256 << -4; end; f");
-        run_test("def f; 1 << -100; end; f");
-        run_test("def f; -1 << -100; end; f");
-        // These would overflow i63 → folder bails out, falls through to inline
-        // assembly which deopts to BigInt path.
-        run_test("def f; 1 << 62; end; f");
-        run_test("def f; 1 << 100; end; f");
+        // Wrap in a method (via prelude) so the call is JIT'd; defining the
+        // method inside `run_test` would deopt the JIT every iteration.
+        let prelude = "
+            def shr_a; 8 >> 1; end
+            def shr_b; 8 >> 0; end
+            def shr_c; -8 >> 2; end
+            def shr_d; 1 >> 64; end
+            def shr_e; -1 >> 64; end
+            def shr_f; 1 >> 100; end
+            def shr_g; -1 >> 100; end
+            def shr_h; 1 >> -3; end
+            def shr_i; 0 >> -100; end
+            def shl_a; 1 << 10; end
+            def shl_b; -1 << 10; end
+            def shl_c; 0 << 100; end
+            def shl_d; 256 << -4; end
+            def shl_e; -256 << -4; end
+            def shl_f; 1 << -100; end
+            def shl_g; -1 << -100; end
+            def shl_h; 1 << 62; end
+            def shl_i; 1 << 100; end
+        ";
+        run_test_with_prelude(
+            "[shr_a, shr_b, shr_c, shr_d, shr_e, shr_f, shr_g, shr_h, shr_i,
+              shl_a, shl_b, shl_c, shl_d, shl_e, shl_f, shl_g, shl_h, shl_i]",
+            prelude,
+        );
     }
 
     #[test]
     fn integer_bitop_constant_folding() {
         // Both operands are literals: should be constant-folded at JIT time.
-        run_test("def f; 0xFF | 0x0F; end; f");
-        run_test("def f; 0xFF & 0x0F; end; f");
-        run_test("def f; 0xFF ^ 0x0F; end; f");
-        run_test("def f; -1 | 0x0F; end; f");
-        run_test("def f; -1 & 0x0F; end; f");
-        run_test("def f; -1 ^ 0x0F; end; f");
-        run_test("def f; 42 | 0; end; f");
-        run_test("def f; 42 & 0; end; f");
-        run_test("def f; 42 ^ 0; end; f");
-        run_test("def f; 42 & -1; end; f");
-        run_test("def f; 42 ^ -1; end; f");
-        // Large fixnum literals
-        run_test("def f; 0x12345678 | 0xDEAD_BEEF_CAFE; end; f");
-        run_test("def f; 0x12345678 & 0xDEAD_BEEF_CAFE; end; f");
-        run_test("def f; 0x12345678 ^ 0xDEAD_BEEF_CAFE; end; f");
+        let prelude = "
+            def or_a; 0xFF | 0x0F; end
+            def and_a; 0xFF & 0x0F; end
+            def xor_a; 0xFF ^ 0x0F; end
+            def or_b; -1 | 0x0F; end
+            def and_b; -1 & 0x0F; end
+            def xor_b; -1 ^ 0x0F; end
+            def or_c; 42 | 0; end
+            def and_c; 42 & 0; end
+            def xor_c; 42 ^ 0; end
+            def and_d; 42 & -1; end
+            def xor_d; 42 ^ -1; end
+            def or_big; 0x12345678 | 0xDEAD_BEEF_CAFE; end
+            def and_big; 0x12345678 & 0xDEAD_BEEF_CAFE; end
+            def xor_big; 0x12345678 ^ 0xDEAD_BEEF_CAFE; end
+        ";
+        run_test_with_prelude(
+            "[or_a, and_a, xor_a, or_b, and_b, xor_b, or_c, and_c, xor_c, and_d, xor_d,
+              or_big, and_big, xor_big]",
+            prelude,
+        );
     }
 
     #[test]
@@ -2816,6 +3041,201 @@ mod tests {
         run_test("a = 10**20; a | 0xFF");
         run_test("a = 10**20; a & 0xFF");
         run_test("a = 10**20; a ^ 0xFF");
+    }
+
+    #[test]
+    fn integer_pow_jit_edge_cases() {
+        // small fixnum^fixnum that fits in i63
+        run_test("a = 2; a ** 10");
+        run_test("a = 3; a ** 5");
+        run_test("a = 0; a ** 0"); // 0**0 == 1
+        run_test("a = 1; a ** 100");
+        run_test("a = -2; a ** 5");
+        run_test("a = -2; a ** 4");
+        // Result overflows fixnum → BigInt (handled by pow_ii runtime call)
+        run_test("a = 2; a ** 62");
+        run_test("a = 2; a ** 100");
+        run_test("a = 10; a ** 20");
+        // Negative exponent → Rational
+        run_test("a = 2; a ** -3");
+        run_test("a = -2; a ** -3");
+        // 1**n / (-1)**n / 0**n special cases
+        run_test("a = 1; a ** -100");
+        run_test("a = -1; a ** 5");
+        run_test("a = -1; a ** -5");
+        // Float rhs (non-Integer rhs falls back to method dispatch)
+        run_test("a = 2; a ** 3.0");
+        run_test("a = 2; a ** -2.0");
+    }
+
+    #[test]
+    fn integer_pow_constant_folding() {
+        // Both operands are fixnum literals: should fold at JIT time
+        // when result fits in fixnum.
+        let prelude = "
+            def pow_a; 2 ** 10; end
+            def pow_b; 3 ** 5; end
+            def pow_c; 10 ** 5; end
+            def pow_d; 1 ** 100; end
+            def pow_e; (-2) ** 4; end
+            def pow_f; (-2) ** 5; end
+            def pow_g; 0 ** 0; end
+            def pow_h; 0 ** 5; end
+            # Overflow / non-fixnum result: folder bails out, runtime path taken.
+            def pow_overflow; 2 ** 62; end
+            def pow_overflow2; 2 ** 100; end
+            # Negative exponent: folder bails (rhs as u32 fails)
+            def pow_neg; 2 ** -3; end
+        ";
+        run_test_with_prelude(
+            "[pow_a, pow_b, pow_c, pow_d, pow_e, pow_f, pow_g, pow_h,
+              pow_overflow, pow_overflow2, pow_neg]",
+            prelude,
+        );
+    }
+
+    #[test]
+    fn integer_rem_jit_edge_cases() {
+        run_test("a = 17; a % 5");
+        run_test("a = 17; a % -5");
+        run_test("a = -17; a % 5");
+        run_test("a = -17; a % -5");
+        run_test("a = 1000; a % 7");
+        run_test("a = 0; a % 5");
+        // Float rhs (non-Integer rhs falls back to method dispatch)
+        run_test("a = 17; a % 5.0");
+        // BigInt rhs (non-Integer slot type → method dispatch)
+        run_test("a = 17; a % (10**20)");
+        // Division by zero raises ZeroDivisionError
+        run_test_error("a = 17; a % 0");
+    }
+
+    #[test]
+    fn integer_rem_pow2_optimization() {
+        // Power-of-two RI: rhs is a positive power of 2 literal,
+        // mask fits in i32.
+        run_test("a = 100; a % 1");
+        run_test("a = 100; a % 2");
+        run_test("a = 100; a % 4");
+        run_test("a = 100; a % 8");
+        run_test("a = 100; a % 16");
+        run_test("a = 100; a % 1024");
+        // negative lhs (two's-complement bitwise AND matches Ruby's floor-mod)
+        run_test("a = -1; a % 8");
+        run_test("a = -7; a % 8");
+        run_test("a = -8; a % 8");
+        run_test("a = -100; a % 16");
+        run_test("a = -100; a % 1024");
+        // zero lhs
+        run_test("a = 0; a % 8");
+        // lhs is multiple of rhs
+        run_test("a = 1024; a % 8");
+        run_test("a = -1024; a % 8");
+        // rhs near i32 boundary for the mask (mask = rhs*2 - 1)
+        run_test("a = 12345678; a % (1 << 30)"); // mask = 2^31 - 1, fits in i32
+        run_test("a = -12345678; a % (1 << 30)");
+        // rhs needs register-loaded mask (mask exceeds i32)
+        run_test("a = 12345678; a % (1 << 31)");
+        run_test("a = 12345678; a % (1 << 40)");
+        run_test("a = -12345678; a % (1 << 31)");
+        run_test("a = -12345678; a % (1 << 40)");
+        // Non-power-of-two divisor: falls through to generic path
+        run_test("a = 100; a % 6");
+        run_test("a = 100; a % 10");
+        // Negative power-of-two: optimization not applied (rhs > 0 check)
+        run_test("a = 100; a % -8");
+    }
+
+    #[test]
+    fn integer_rem_constant_folding() {
+        let prelude = "
+            def rem_a; 17 % 5; end
+            def rem_b; -17 % 5; end
+            def rem_c; 17 % -5; end
+            def rem_d; -17 % -5; end
+            def rem_e; 100 % 8; end
+            def rem_f; 0 % 5; end
+        ";
+        run_test_with_prelude(
+            "[rem_a, rem_b, rem_c, rem_d, rem_e, rem_f]",
+            prelude,
+        );
+    }
+
+    #[test]
+    fn float_pow_rem_jit() {
+        // Float#** and Float#% go through CFunc_FF_F path (already inline).
+        run_test("a = 2.5; a ** 3");
+        run_test("a = 2.5; a ** 3.0");
+        run_test("a = 2.0; a ** -2");
+        run_test("a = 17.5; a % 5.0");
+        run_test("a = -17.5; a % 5.0");
+        run_test("a = 17.5; a % -5.0");
+    }
+
+    #[test]
+    fn integer_rem_float_rhs() {
+        // Integer % Float: rhs_class = FLOAT_CLASS path.
+        // The inline JIT converts lhs to f64 and calls rem_ff.
+        run_test("a = 17; b = 5.0; a % b");
+        run_test("a = -17; b = 5.0; a % b");
+        run_test("a = 17; b = -5.0; a % b");
+        run_test("a = -17; b = -5.0; a % b");
+        run_test("a = 0; b = 5.0; a % b");
+        run_test("a = 17; b = 2.5; a % b");
+        run_test("a = 17; b = 1.5; a % b");
+        // rhs is a float literal (still through Float-rhs path because the
+        // class cache records rhs_class = FLOAT_CLASS)
+        run_test("a = 17; a % 5.0");
+        run_test("a = -17; a % 5.0");
+    }
+
+    #[test]
+    fn integer_rem_float_constant_folding() {
+        // Both operands literal: should fold at JIT time.
+        let prelude = "
+            def fa; 17 % 5.0; end
+            def fb; -17 % 5.0; end
+            def fc; 17 % -5.0; end
+            def fd; -17 % -5.0; end
+            def fe; 0 % 5.0; end
+            def ff; 17 % 2.5; end
+            def fg; 17 % 1.5; end
+        ";
+        run_test_with_prelude("[fa, fb, fc, fd, fe, ff, fg]", prelude);
+    }
+
+    #[test]
+    fn integer_pow_float_rhs() {
+        // Integer ** Float: rhs_class = FLOAT_CLASS path.
+        // The result is a regular Float for non-negative base or
+        // integer-valued float exponent. (Negative base with non-integer
+        // exponent produces Complex via pow_ff, but the existing helper
+        // has a known precision drift in its trig-based formula, so we
+        // don't test that case here.)
+        run_test("a = 2; b = 3.0; a ** b");
+        run_test("a = 2; b = 0.5; a ** b");
+        run_test("a = 2; b = -3.0; a ** b");
+        run_test("a = 0; b = 3.0; a ** b");
+        run_test("a = 1; b = 100.0; a ** b");
+        // Negative base with integer-valued float: regular Float result
+        run_test("a = -2; b = 3.0; a ** b");
+        run_test("a = -2; b = 4.0; a ** b");
+    }
+
+    #[test]
+    fn integer_pow_float_constant_folding() {
+        // Both operands literal Float-rhs case: folds when result is plain Float.
+        let prelude = "
+            def fa; 2 ** 3.0; end
+            def fb; 2 ** 0.5; end
+            def fc; 2 ** -3.0; end
+            def fd; 0 ** 3.0; end
+            def fe; 1 ** 100.0; end
+            def ff; -(2 ** 3.0); end
+            def fg; (-2) ** 4.0; end
+        ";
+        run_test_with_prelude("[fa, fb, fc, fd, fe, ff, fg]", prelude);
     }
 
     #[test]

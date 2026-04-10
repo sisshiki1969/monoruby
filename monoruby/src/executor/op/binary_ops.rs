@@ -395,7 +395,7 @@ pub(crate) extern "C" fn pow_ii(lhs: i64, rhs: i64, vm: &mut Executor) -> Option
     }
 }
 
-fn pow_ff(lhs: f64, rhs: f64) -> Value {
+pub(crate) extern "C" fn pow_ff(lhs: f64, rhs: f64) -> Value {
     let result = lhs.powf(rhs);
     if result.is_nan() && lhs < 0.0 {
         let abs_result = (-lhs).powf(rhs);
@@ -406,6 +406,14 @@ fn pow_ff(lhs: f64, rhs: f64) -> Value {
     } else {
         Value::float(result)
     }
+}
+
+/// Float modulo with Ruby's floor-mod semantics.
+///
+/// Used by the Integer#% inline JIT helper for the
+/// `Integer % Float` case (result is always Float).
+pub(crate) extern "C" fn rem_ff(lhs: f64, rhs: f64) -> f64 {
+    lhs.ruby_mod(&rhs)
 }
 
 // TODO: support rhs < 0.

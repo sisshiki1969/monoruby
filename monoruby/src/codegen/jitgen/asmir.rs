@@ -206,10 +206,6 @@ impl AsmIr {
         self.push(AsmInst::RegSub(r, i));
     }
 
-    pub(super) fn reg_and(&mut self, r: GP, i: u64) {
-        self.push(AsmInst::RegAnd(r, i));
-    }
-
     /// movq [rsp + (ofs)], R(r);
     pub(super) fn reg2rsp_offset(&mut self, r: GP, ofs: i32) {
         self.push(AsmInst::RegToRSPOffset(r, ofs));
@@ -549,11 +545,6 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn integer_exp(&mut self, state: &AbstractFrame, error: AsmError) {
-        let using_xmm = state.get_using_xmm();
-        self.push(AsmInst::IntegerExp { using_xmm, error });
-    }
-
     ///
     /// Integer comparison
     ///
@@ -742,7 +733,6 @@ pub(super) enum AsmInst {
     RegMove(GP, GP),
     RegAdd(GP, i32),
     RegSub(GP, i32),
-    RegAnd(GP, u64),
     /// movq [rsp + (ofs)], R(r);
     RegToRSPOffset(GP, i32),
     /// movq [rsp + (ofs)], 0;
@@ -1113,11 +1103,6 @@ pub(super) enum AsmInst {
         mode: OpMode,
         deopt: AsmDeopt,
     },
-    IntegerExp {
-        using_xmm: UsingXmm,
-        error: AsmError,
-    },
-
     ///
     /// Integer comparison
     ///

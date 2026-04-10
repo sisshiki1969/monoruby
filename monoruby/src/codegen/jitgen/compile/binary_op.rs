@@ -19,9 +19,16 @@ impl<'a> JitContext<'a> {
         match kind {
             // These ops are always compiled as method calls.
             // The inline function registered on Integer#<< / Integer#>> /
-            // Integer#| / Integer#& / Integer#^ handles code generation
-            // using both-side class info from the BinOp inline cache.
-            BinOpK::Shl | BinOpK::Shr | BinOpK::BitOr | BinOpK::BitAnd | BinOpK::BitXor => {
+            // Integer#| / Integer#& / Integer#^ / Integer#** / Integer#% /
+            // Float#** / Float#% handles code generation using both-side class
+            // info from the BinOp inline cache.
+            BinOpK::Shl
+            | BinOpK::Shr
+            | BinOpK::BitOr
+            | BinOpK::BitAnd
+            | BinOpK::BitXor
+            | BinOpK::Exp
+            | BinOpK::Rem => {
                 let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
                 match lhs_class {
                     None => Ok(CompileResult::Recompile(RecompileReason::NotCached)),
@@ -38,21 +45,6 @@ impl<'a> JitContext<'a> {
                     Ok(CompileResult::Continue)
                 }
                 BinaryOpType::Float(info) => {
-                    match kind {
-                        BinOpK::Exp | BinOpK::Rem => {
-                            return self.call_binary_method(
-                                state,
-                                ir,
-                                lhs,
-                                rhs,
-                                info.lhs_class.into(),
-                                Some(info.rhs_class.into()),
-                                kind,
-                                bc_pos,
-                            );
-                        }
-                        _ => {}
-                    }
                     state.binop_float(ir, kind, dst, info);
                     Ok(CompileResult::Continue)
                 }
@@ -258,22 +250,13 @@ impl AbstractFrame {
                 }
                 return Immediate::check_fixnum(lhs.ruby_div(&rhs));
             }
-            BinOpK::Rem => {
-                if rhs.is_zero() {
-                    return None;
-                }
-                return Immediate::check_fixnum(lhs.ruby_mod(&rhs));
-            }
-            BinOpK::Exp => {
-                if let Ok(rhs) = u32::try_from(rhs)
-                    && let Some(result) = lhs.checked_pow(rhs)
-                {
-                    return Immediate::check_fixnum(result);
-                }
-            }
-            BinOpK::BitOr | BinOpK::BitAnd | BinOpK::BitXor | BinOpK::Shl | BinOpK::Shr => {
-                unreachable!()
-            }
+            BinOpK::Rem
+            | BinOpK::Exp
+            | BinOpK::BitOr
+            | BinOpK::BitAnd
+            | BinOpK::BitXor
+            | BinOpK::Shl
+            | BinOpK::Shr => unreachable!(),
         }
         None
     }
@@ -313,14 +296,6 @@ impl AbstractFrame {
                 ir.integer_binop(kind, lhs, rhs, mode, deopt);
                 self.def_reg2acc_fixnum(ir, lhs, dst);
             }
-            BinOpK::Exp => {
-                let lhs = GP::Rdi;
-                let rhs = GP::Rsi;
-                self.fetch_fixnum_binary(ir, lhs, rhs, mode);
-                let error = ir.new_error(self);
-                ir.integer_exp(self, error);
-                self.def_reg2acc(ir, GP::Rax, dst);
-            }
             BinOpK::Div => {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
@@ -329,24 +304,13 @@ impl AbstractFrame {
                 ir.integer_binop(kind, lhs, rhs, mode, deopt);
                 self.def_reg2acc_fixnum(ir, GP::Rax, dst);
             }
-            BinOpK::Rem => match mode {
-                OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
-                    self.fetch_fixnum_r_nodeopt(ir, lhs, GP::Rax);
-                    ir.reg_and(GP::Rax, (rhs * 2 - 1) as i64 as u64);
-                    self.def_reg2acc_fixnum(ir, GP::Rax, dst);
-                }
-                _ => {
-                    let lhs = GP::Rdi;
-                    let rhs = GP::Rsi;
-                    self.fetch_fixnum_binary(ir, lhs, rhs, mode);
-                    let deopt = ir.new_deopt(self);
-                    ir.integer_binop(kind, lhs, rhs, mode, deopt);
-                    self.def_reg2acc_fixnum(ir, GP::Rax, dst);
-                }
-            },
-            BinOpK::BitOr | BinOpK::BitAnd | BinOpK::BitXor | BinOpK::Shl | BinOpK::Shr => {
-                unreachable!()
-            }
+            BinOpK::Rem
+            | BinOpK::Exp
+            | BinOpK::BitOr
+            | BinOpK::BitAnd
+            | BinOpK::BitXor
+            | BinOpK::Shl
+            | BinOpK::Shr => unreachable!(),
         }
     }
 
@@ -356,8 +320,6 @@ impl AbstractFrame {
             BinOpK::Sub => lhs - rhs,
             BinOpK::Mul => lhs * rhs,
             BinOpK::Div => lhs.ruby_div(&rhs),
-            BinOpK::Rem => lhs.ruby_mod(&rhs),
-            BinOpK::Exp => lhs.powf(rhs),
             _ => return None,
         })
     }

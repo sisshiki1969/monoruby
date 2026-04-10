@@ -136,12 +136,6 @@ impl Codegen {
                     }
                 }
             }
-            AsmInst::RegAnd(r, i) => {
-                let r = r as u64;
-                monoasm! { &mut self.jit,
-                    andq R(r), (i);
-                }
-            }
             AsmInst::RegToRSPOffset(r, ofs) => {
                 let r = r as u64;
                 monoasm!( &mut self.jit,
@@ -484,11 +478,6 @@ impl Codegen {
                 let deopt = &labels[deopt];
                 self.integer_binop(lhs, rhs, &mode, kind, deopt);
             }
-            AsmInst::IntegerExp { using_xmm, error } => {
-                let error = &labels[error];
-                self.integer_exp(using_xmm, error);
-            }
-
             AsmInst::IntegerCmp {
                 mode,
                 kind,
