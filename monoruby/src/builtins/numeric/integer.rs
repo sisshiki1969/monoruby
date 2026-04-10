@@ -756,6 +756,67 @@ fn shr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     super::op::shr_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
+/// Constant-fold `lhs >> rhs` for two i63 fixnums.
+///
+/// Returns `Some(result)` if the result fits in an i63 fixnum and matches
+/// `safe_int_shr` / `safe_int_shl` semantics. Returns `None` if folding
+/// would require BigInt allocation or would error at runtime.
+fn fold_shr(lhs: i64, rhs: i64) -> Option<i64> {
+    if rhs >= 0 {
+        // right shift never grows; always fits in i63.
+        let r = if rhs >= 64 {
+            if lhs >= 0 { 0 } else { -1 }
+        } else {
+            lhs >> rhs
+        };
+        Some(r)
+    } else {
+        // n >> -k == n << k
+        let k = (-rhs) as u64;
+        fold_shl_pos(lhs, k)
+    }
+}
+
+/// Constant-fold `lhs << rhs` for two i63 fixnums.
+///
+/// Returns `Some(result)` if the result fits in an i63 fixnum. Returns
+/// `None` if the result would overflow into a BigInt or if `rhs` is too
+/// large for a runtime-safe shift (matching `safe_int_shl` semantics).
+fn fold_shl(lhs: i64, rhs: i64) -> Option<i64> {
+    if rhs >= 0 {
+        let k = rhs as u64;
+        fold_shl_pos(lhs, k)
+    } else {
+        // n << -k == n >> k; right shift always fits.
+        let k = (-rhs) as u64;
+        let r = if k >= 64 {
+            if lhs >= 0 { 0 } else { -1 }
+        } else {
+            lhs >> k
+        };
+        Some(r)
+    }
+}
+
+/// Helper: fold `lhs << k` (k >= 0). Returns `None` if the result would
+/// overflow i63 (and thus require BigInt) or fail at runtime.
+fn fold_shl_pos(lhs: i64, k: u64) -> Option<i64> {
+    if lhs == 0 {
+        return Some(0);
+    }
+    if k >= 63 {
+        // Would overflow i63 for any non-zero lhs, or be a runtime error
+        // when k > u32::MAX (handled by safe_int_shl as RangeError).
+        return None;
+    }
+    let result = lhs.checked_shl(k as u32)?;
+    if Value::is_i63(result) {
+        Some(result)
+    } else {
+        None
+    }
+}
+
 fn integer_shr(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -775,6 +836,16 @@ fn integer_shr(
     let CallSiteInfo {
         dst, args, recv, ..
     } = *callsite;
+
+    // Constant folding: both operands are concrete fixnums.
+    if let Some(lhs) = state.is_fixnum_literal(recv)
+        && let Some(rhs) = state.is_fixnum_literal(args)
+        && let Some(folded) = fold_shr(lhs.get(), rhs.get())
+    {
+        state.def_C(dst, Immediate::check_fixnum(folded).unwrap());
+        return true;
+    }
+
     state.load(ir, recv, GP::Rdi);
     if let Some(rhs) = state.is_fixnum_literal(args) {
         let rhs = rhs.get();
@@ -842,6 +913,15 @@ fn integer_shl(
         dst, args, recv, ..
     } = *callsite;
 
+    // Constant folding: both operands are concrete fixnums.
+    if let Some(lhs) = state.is_fixnum_literal(recv)
+        && let Some(rhs) = state.is_fixnum_literal(args)
+        && let Some(folded) = fold_shl(lhs.get(), rhs.get())
+    {
+        state.def_C(dst, Immediate::check_fixnum(folded).unwrap());
+        return true;
+    }
+
     state.load(ir, recv, GP::Rdi);
     if let Some(rhs) = state.is_fixnum_literal(args) {
         let rhs = rhs.get();
@@ -886,6 +966,8 @@ fn integer_shl(
 /// Returns false if rhs is not Integer or the call site is not simple,
 /// falling back to the regular method dispatch path.
 ///
+/// `fold` performs the operation on two i64 fixnum values for constant
+/// folding. Bitwise ops on two i63 fixnums always produce an i63 result.
 /// `emit_imm` generates `<op>q rdi, imm` (rdi: tagged fixnum lhs, imm: tagged
 /// fixnum rhs that fits in `i32`).
 /// `emit_rr` generates `<op>q rdi, rsi` (both tagged fixnums in rdi/rsi).
@@ -895,6 +977,7 @@ fn integer_bitop_inline(
     store: &Store,
     callid: CallSiteId,
     rhs_class: Option<ClassId>,
+    fold: impl Fn(i64, i64) -> i64,
     emit_imm: impl Fn(&mut Codegen, i64) + Copy + 'static,
     emit_rr: impl Fn(&mut Codegen) + Copy + 'static,
 ) -> bool {
@@ -909,11 +992,22 @@ fn integer_bitop_inline(
         dst, args, recv, ..
     } = *callsite;
 
-    if let Some(rhs) = state.is_fixnum_literal(args) {
+    let lhs_lit = state.is_fixnum_literal(recv);
+    let rhs_lit = state.is_fixnum_literal(args);
+
+    if let (Some(lhs), Some(rhs)) = (lhs_lit, rhs_lit) {
+        // constant folding: both operands are concrete fixnums.
+        // Bitwise ops on two i63 values always produce an i63 result.
+        let result = fold(lhs.get(), rhs.get());
+        state.def_C(dst, Immediate::check_fixnum(result).unwrap());
+        return true;
+    }
+
+    if let Some(rhs) = rhs_lit {
         // recv op <fixnum literal>
         state.load(ir, recv, GP::Rdi);
         emit_bitop_imm(ir, rhs, emit_imm, emit_rr);
-    } else if let Some(lhs) = state.is_fixnum_literal(recv) {
+    } else if let Some(lhs) = lhs_lit {
         // <fixnum literal> op args (commutative — swap to use immediate form)
         state.load_fixnum(ir, args, GP::Rdi);
         emit_bitop_imm(ir, lhs, emit_imm, emit_rr);
@@ -967,6 +1061,7 @@ fn integer_bitor(
         store,
         callid,
         rhs_class,
+        |a, b| a | b,
         |r#gen, imm| {
             monoasm!( &mut r#gen.jit,
                 orq rdi, (imm);
@@ -995,6 +1090,7 @@ fn integer_bitand(
         store,
         callid,
         rhs_class,
+        |a, b| a & b,
         |r#gen, imm| {
             monoasm!( &mut r#gen.jit,
                 andq rdi, (imm);
@@ -1026,6 +1122,7 @@ fn integer_bitxor(
         store,
         callid,
         rhs_class,
+        |a, b| a ^ b,
         |r#gen, imm| {
             monoasm!( &mut r#gen.jit,
                 xorq rdi, (imm - 1);
@@ -2623,6 +2720,54 @@ mod tests {
         // zero lhs
         run_test("a = 0; a << 10");
         run_test("a = 0; a << -10");
+    }
+
+    #[test]
+    fn integer_shift_constant_folding() {
+        // Both operands are literals: should be constant-folded at JIT time.
+        // Use expressions inside arithmetic to keep them as bytecode constants
+        // (rather than being folded by the bytecode-level constant folder).
+        run_test("def f; 8 >> 1; end; f");
+        run_test("def f; 8 >> 0; end; f");
+        run_test("def f; -8 >> 2; end; f");
+        run_test("def f; 1 >> 64; end; f");
+        run_test("def f; -1 >> 64; end; f");
+        run_test("def f; 1 >> 100; end; f");
+        run_test("def f; -1 >> 100; end; f");
+        run_test("def f; 1 >> -3; end; f");
+        run_test("def f; 0 >> -100; end; f");
+
+        run_test("def f; 1 << 10; end; f");
+        run_test("def f; -1 << 10; end; f");
+        run_test("def f; 0 << 100; end; f");
+        run_test("def f; 256 << -4; end; f");
+        run_test("def f; -256 << -4; end; f");
+        run_test("def f; 1 << -100; end; f");
+        run_test("def f; -1 << -100; end; f");
+        // These would overflow i63 → folder bails out, falls through to inline
+        // assembly which deopts to BigInt path.
+        run_test("def f; 1 << 62; end; f");
+        run_test("def f; 1 << 100; end; f");
+    }
+
+    #[test]
+    fn integer_bitop_constant_folding() {
+        // Both operands are literals: should be constant-folded at JIT time.
+        run_test("def f; 0xFF | 0x0F; end; f");
+        run_test("def f; 0xFF & 0x0F; end; f");
+        run_test("def f; 0xFF ^ 0x0F; end; f");
+        run_test("def f; -1 | 0x0F; end; f");
+        run_test("def f; -1 & 0x0F; end; f");
+        run_test("def f; -1 ^ 0x0F; end; f");
+        run_test("def f; 42 | 0; end; f");
+        run_test("def f; 42 & 0; end; f");
+        run_test("def f; 42 ^ 0; end; f");
+        run_test("def f; 42 & -1; end; f");
+        run_test("def f; 42 ^ -1; end; f");
+        // Large fixnum literals
+        run_test("def f; 0x12345678 | 0xDEAD_BEEF_CAFE; end; f");
+        run_test("def f; 0x12345678 & 0xDEAD_BEEF_CAFE; end; f");
+        run_test("def f; 0x12345678 ^ 0xDEAD_BEEF_CAFE; end; f");
     }
 
     #[test]
