@@ -912,13 +912,11 @@ fn integer_bitop_inline(
     if let Some(rhs) = state.is_fixnum_literal(args) {
         // recv op <fixnum literal>
         state.load(ir, recv, GP::Rdi);
-        let imm = Value::integer(rhs.get()).id() as i64;
-        emit_bitop_imm(ir, imm, emit_imm, emit_rr);
+        emit_bitop_imm(ir, rhs, emit_imm, emit_rr);
     } else if let Some(lhs) = state.is_fixnum_literal(recv) {
         // <fixnum literal> op args (commutative — swap to use immediate form)
         state.load_fixnum(ir, args, GP::Rdi);
-        let imm = Value::integer(lhs.get()).id() as i64;
-        emit_bitop_imm(ir, imm, emit_imm, emit_rr);
+        emit_bitop_imm(ir, lhs, emit_imm, emit_rr);
     } else {
         state.load(ir, recv, GP::Rdi);
         state.load_fixnum(ir, args, GP::Rsi);
@@ -928,23 +926,26 @@ fn integer_bitop_inline(
     true
 }
 
-/// Emit a bitwise op with a literal rhs in `imm` (tagged fixnum form, in rdi).
+/// Emit a bitwise op with a literal `imm` rhs (lhs already in rdi as a tagged
+/// fixnum).
 ///
-/// If `imm` fits in `i32`, emit the immediate form directly. Otherwise load
-/// the full 64-bit immediate into rsi via `movabsq` and emit the register
-/// form.
+/// `imm` is converted to its tagged-fixnum `Value` form. If the tagged
+/// representation fits in `i32`, emit the immediate form directly via
+/// `emit_imm`. Otherwise load the full 64-bit tagged value into rsi and
+/// emit the register form via `emit_rr`.
 fn emit_bitop_imm(
     ir: &mut AsmIr,
-    imm: i64,
+    imm: Fixnum,
     emit_imm: impl Fn(&mut Codegen, i64) + Copy + 'static,
     emit_rr: impl Fn(&mut Codegen) + Copy + 'static,
 ) {
-    if i32::try_from(imm).is_ok() {
-        ir.inline(move |r#gen, _, _| emit_imm(r#gen, imm));
+    let tagged = Value::from(imm).id() as i64;
+    if i32::try_from(tagged).is_ok() {
+        ir.inline(move |r#gen, _, _| emit_imm(r#gen, tagged));
     } else {
         ir.inline(move |r#gen, _, _| {
             monoasm!( &mut r#gen.jit,
-                movq rsi, (imm);
+                movq rsi, (tagged);
             );
             emit_rr(r#gen);
         });
