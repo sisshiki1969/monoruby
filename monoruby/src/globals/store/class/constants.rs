@@ -8,16 +8,20 @@ impl ClassInfoTable {
         file_name: String,
     ) {
         match self[class_id].constants.get_mut(&name) {
-            Some(state) => match state {
-                ConstState::Loaded(_) => {}
-                ConstState::Autoload(path) => {
+            Some(state) => match &mut state.kind {
+                // If the constant is already loaded, autoload is a no-op
+                // (matches CRuby behavior).
+                ConstStateKind::Loaded(_) => {}
+                // Re-registering autoload updates the path; visibility is
+                // preserved.
+                ConstStateKind::Autoload(path) => {
                     *path = file_name.into();
                 }
             },
             None => {
                 self[class_id]
                     .constants
-                    .insert(name, ConstState::Autoload(file_name.into()));
+                    .insert(name, ConstState::autoload(file_name.into()));
             }
         }
     }
@@ -41,8 +45,8 @@ impl ClassInfoTable {
         class_id: ClassId,
         name: IdentId,
     ) -> Option<Value> {
-        match self.get_constant(class_id, name)? {
-            ConstState::Loaded(v) => Some(*v),
+        match &self.get_constant(class_id, name)?.kind {
+            ConstStateKind::Loaded(v) => Some(*v),
             _ => unreachable!(),
         }
     }
@@ -80,9 +84,19 @@ impl ClassInfoTable {
         name: IdentId,
         val: Value,
     ) {
-        if let Some(ConstState::Loaded(_)) = self[class_id]
+        // Preserve the previous visibility if we're overwriting an existing
+        // entry, so that `M::X = 1; private_constant :X; M::X = 2` keeps :X
+        // private. New entries default to public via `ConstState::loaded`.
+        let prev_visibility = self[class_id]
             .constants
-            .insert(name, ConstState::Loaded(val))
+            .get(&name)
+            .map(|s| s.visibility);
+        let mut new_state = ConstState::loaded(val);
+        if let Some(vis) = prev_visibility {
+            new_state.visibility = vis;
+        }
+        let prev = self[class_id].constants.insert(name, new_state);
+        if prev.as_ref().is_some_and(|s| s.is_loaded())
             && WARNING.load(std::sync::atomic::Ordering::Relaxed) >= 1
         {
             eprintln!("warning: already initialized constant {name}")

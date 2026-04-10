@@ -599,6 +599,9 @@ impl Executor {
         } else if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
+            // Lexical access (`Foo` with no qualifier): visibility is not
+            // enforced. Constants are reachable from their own lexical
+            // scope regardless of `private_constant`.
             let v = self.search_constant_checked(globals, name, current_func)?;
             return Ok((v, None));
         } else {
@@ -608,13 +611,22 @@ impl Executor {
                 .id()
         };
         for constant in prefix {
-            parent = self
-                .get_constant_checked(globals, parent, constant)?
-                .expect_class_or_module(&globals.store)?
-                .id();
+            // Each intermediate `Foo::Bar::...::Name` lookup is a qualified
+            // access; enforce visibility for it as well.
+            let (val, defining) = self.get_constant_superclass_with_class(
+                globals,
+                globals[parent].get_module(),
+                constant,
+            )?;
+            check_constant_visibility(globals, defining, constant)?;
+            parent = val.expect_class_or_module(&globals.store)?.id();
         }
-        let v =
-            self.get_constant_superclass_checked(globals, globals[parent].get_module(), name)?;
+        let (v, defining) = self.get_constant_superclass_with_class(
+            globals,
+            globals[parent].get_module(),
+            name,
+        )?;
+        check_constant_visibility(globals, defining, name)?;
         Ok((v, base))
     }
 
@@ -1706,6 +1718,25 @@ impl BlockHandler {
     pub(crate) fn id(&self) -> u64 {
         self.0.id()
     }
+}
+
+/// Raise `NameError` if the named constant defined on `class_id` is marked
+/// private. Used by qualified constant lookups (`Foo::Bar`, `obj::Bar`,
+/// `::Bar`) and by reflection methods that bypass lexical scope (e.g.
+/// `Module#const_get`).
+pub(crate) fn check_constant_visibility(
+    globals: &Globals,
+    class_id: ClassId,
+    name: IdentId,
+) -> Result<()> {
+    if globals.store[class_id].is_constant_private(name) {
+        return Err(MonorubyErr::nameerr(format!(
+            "private constant {}::{} referenced",
+            class_id.get_name(&globals.store),
+            name
+        )));
+    }
+    Ok(())
 }
 
 /// The default definee context for `def`.

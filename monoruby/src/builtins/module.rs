@@ -450,10 +450,10 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         return Err(MonorubyErr::argumenterr("empty file name"));
     }
     let class_id = lfp.self_val().as_class_id();
-    let was_autoload = matches!(
-        globals.store.get_constant(class_id, const_name),
-        None | Some(ConstState::Autoload(_))
-    );
+    let was_autoload = match globals.store.get_constant(class_id, const_name) {
+        None => true,
+        Some(state) => state.is_autoload(),
+    };
     globals
         .store
         .set_constant_autoload(class_id, const_name, feature);
@@ -493,12 +493,13 @@ fn autoload_query(
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
     let mut module = lfp.self_val().as_class();
     loop {
-        match globals.store.get_constant(module.id(), name) {
-            Some(ConstState::Autoload(path)) => {
-                return Ok(Value::string(path.to_string_lossy().into_owned()));
+        if let Some(state) = globals.store.get_constant(module.id(), name) {
+            match &state.kind {
+                ConstStateKind::Autoload(path) => {
+                    return Ok(Value::string(path.to_string_lossy().into_owned()));
+                }
+                ConstStateKind::Loaded(_) => return Ok(Value::nil()),
             }
-            Some(ConstState::Loaded(_)) => return Ok(Value::nil()),
-            None => {}
         }
         if !inherit {
             return Ok(Value::nil());
@@ -642,6 +643,10 @@ fn subclasses(
 ///
 /// - const_defined?(name, inherit = true) -> bool
 ///
+/// Returns true if the named constant is defined on the receiver (or on an
+/// ancestor when `inherit` is true). Visibility is *not* checked: private
+/// constants are still considered defined.
+///
 /// https://docs.ruby-lang.org/ja/latest/method/Module/i/const_defined=3f.html]
 #[monoruby_builtin]
 fn const_defined(
@@ -653,9 +658,14 @@ fn const_defined(
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let module = lfp.self_val().as_class();
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
-    Ok(Value::bool(
-        vm.const_get(globals, module, name, inherit).is_ok(),
-    ))
+    let found = if inherit {
+        vm.get_constant_superclass_with_class(globals, module, name)
+            .is_ok()
+    } else {
+        // Non-inherit: only check the receiver's own table.
+        globals.store[module.id()].has_own_constant(name)
+    };
+    Ok(Value::bool(found))
 }
 
 ///
@@ -726,10 +736,7 @@ fn const_source_location(
                 Value::integer(line as i64),
             ]));
         }
-        if matches!(
-            globals.store.get_constant(module.id(), name),
-            Some(ConstState::Loaded(_)) | Some(ConstState::Autoload(_))
-        ) {
+        if globals.store.get_constant(module.id(), name).is_some() {
             // Constant exists but has no recorded location.
             return Ok(Value::nil());
         }
@@ -1392,16 +1399,18 @@ fn included_modules(
 ///
 /// - public_constant(*name) -> self
 ///
-/// Sets the named constants to public visibility. monoruby does not yet
-/// enforce constant visibility, so this is a no-op that returns self.
+/// Marks each named constant as public. Each name must be a constant defined
+/// directly on the receiver (not inherited); otherwise `NameError` is raised.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public_constant.html]
 #[monoruby_builtin]
 fn public_constant(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(lfp.self_val())
+    set_constants_visibility(globals, lfp, /*private=*/ false)
 }
 
 ///
@@ -1409,15 +1418,48 @@ fn public_constant(
 ///
 /// - private_constant(*name) -> self
 ///
-/// Sets the named constants to private visibility. monoruby does not yet
-/// enforce constant visibility, so this is a no-op that returns self.
+/// Marks each named constant as private so that qualified access
+/// (`Foo::Bar`, `Foo.const_get(:Bar)`) raises `NameError`. Lexical access
+/// from within the defining scope is unaffected. Each name must be a
+/// constant defined directly on the receiver (not inherited); otherwise
+/// `NameError` is raised.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private_constant.html]
 #[monoruby_builtin]
 fn private_constant(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    set_constants_visibility(globals, lfp, /*private=*/ true)
+}
+
+/// Shared body of `Module#private_constant` and `Module#public_constant`.
+fn set_constants_visibility(globals: &mut Globals, lfp: Lfp, make_private: bool) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let args = lfp.arg(0).as_array();
+    // Validate every name first so a partial failure does not leave the
+    // class in an inconsistent state.
+    let mut names = Vec::with_capacity(args.len());
+    for arg in args.iter() {
+        let name = arg.expect_symbol_or_string(globals)?;
+        if !globals.store[class_id].has_own_constant(name) {
+            return Err(MonorubyErr::nameerr(format!(
+                "constant {}::{} not defined",
+                class_id.get_name(&globals.store),
+                name
+            )));
+        }
+        names.push(name);
+    }
+    for name in names {
+        if make_private {
+            globals.store[class_id].set_constant_private(name);
+        } else {
+            globals.store[class_id].set_constant_public(name);
+        }
+    }
     Ok(lfp.self_val())
 }
 

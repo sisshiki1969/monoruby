@@ -100,9 +100,6 @@ class Module
   end
 
   public
-  def private_constant(*x)
-  end
-
   def method_added(name)
   end
 
