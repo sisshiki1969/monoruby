@@ -100,7 +100,7 @@ impl<'a> BytecodeGen<'a> {
         let mut incoming = IncomingBranches::new(ir.len());
         for (idx, (inst, loc)) in ir.iter().enumerate() {
             let idx = BcIndex::from(idx);
-            let op = self.inst_to_bc(&mut incoming, inst.clone(), idx)?;
+            let op = self.inst_to_bc(&mut incoming, inst.clone(), idx, *loc)?;
             ops.push(op);
             self.iseq_mut().sourcemap.push(*loc);
         }
@@ -123,6 +123,7 @@ impl<'a> BytecodeGen<'a> {
         incoming: &mut IncomingBranches,
         inst: BytecodeInst,
         bc_pos: BcIndex,
+        inst_loc: Loc,
     ) -> Result<Bytecode> {
         let bc = match inst {
             BytecodeInst::Br(dst) => {
@@ -292,7 +293,16 @@ impl<'a> BytecodeGen<'a> {
                 // 11
                 let op1 = self.slot_id(&src);
                 let base = parent.map(|base| self.slot_id(&base));
-                let op2 = self.store.new_constsite(base, name, prefix, toplevel);
+                let source_info = self.iseq().sourceinfo.clone();
+                let file = source_info.file_name().into_owned();
+                let line = source_info.get_line(&inst_loc) as u32;
+                let op2 = self.store.new_constsite_with_loc(
+                    base,
+                    name,
+                    prefix,
+                    toplevel,
+                    Some((file, line)),
+                );
                 Bytecode::from(enc_wl(11, op1.0, op2.0))
             }
             BytecodeInst::LoadIvar(reg, name) => {

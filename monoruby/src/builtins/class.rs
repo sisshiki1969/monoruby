@@ -36,6 +36,17 @@ pub(super) fn init(globals: &mut Globals) {
         true,
     );
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
+    globals.define_builtin_func(CLASS_CLASS, "attached_object", attached_object, 0);
+    // Class#initialize is private and raises TypeError for already-initialized classes.
+    // Class.allocate creates an "uninitialized" class (no superclass, no name).
+    globals.define_private_builtin_func_with(
+        CLASS_CLASS,
+        "initialize",
+        class_initialize,
+        0,
+        1,
+        false,
+    );
     // hook method (no-op by default, overridden by startup.rb)
     globals.define_private_builtin_func(CLASS_CLASS, "inherited", class_noop_hook, 1);
 }
@@ -53,10 +64,10 @@ fn class_noop_hook(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/s/new.html]
 #[monoruby_builtin]
 fn class_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let superclass = if lfp.try_arg(0).is_none() {
-        None
+    let superclass = if let Some(arg) = lfp.try_arg(0) {
+        Some(expect_class_for_superclass(arg, globals)?)
     } else {
-        Some(lfp.arg(0).expect_class(globals)?)
+        None
     };
     let superclass_val = superclass
         .unwrap_or_else(|| globals.store.object_class())
@@ -91,6 +102,79 @@ fn class_allocate(
     lfp.expect_no_block()?;
     let obj = globals.store.allocate_uninit_class();
     Ok(obj.as_val())
+}
+
+/// Validate a value used as a superclass for `Class.new`/`Class#initialize`.
+/// Raises TypeError with a CRuby-compatible message when the value is not a
+/// real (non-singleton) Class.
+fn expect_class_for_superclass(val: Value, globals: &Globals) -> Result<Module> {
+    match val.is_class() {
+        Some(class) if class.is_singleton().is_none() => Ok(class),
+        _ => {
+            let name = val.inspect(&globals.store);
+            Err(MonorubyErr::typeerr(format!(
+                "superclass must be an instance of Class (given an instance of {name})"
+            )))
+        }
+    }
+}
+
+/// ### Class#attached_object
+/// - attached_object -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Class/i/attached_object.html]
+#[monoruby_builtin]
+fn attached_object(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class = lfp.self_val().as_class();
+    match class.is_singleton() {
+        Some(attached) => Ok(attached),
+        None => {
+            let name = class.id().get_name(&globals.store);
+            Err(MonorubyErr::typeerr(format!(
+                "`{name}' is not a singleton class"
+            )))
+        }
+    }
+}
+
+/// ### Class#initialize
+/// - initialize(superclass = Object) -> Class
+///
+/// Private. Raises TypeError if the receiver has already been initialized
+/// (e.g. any normal class) or if the requested superclass is `Class` itself.
+/// monoruby treats a class created via `Class.allocate` as uninitialized: such
+/// a class has neither a name nor a superclass set.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Class/i/initialize.html]
+#[monoruby_builtin]
+fn class_initialize(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_module = lfp.self_val().as_class();
+    let class_id = self_module.id();
+    let info = &globals.store[class_id];
+    if info.get_name().is_some() || self_module.superclass().is_some() {
+        return Err(MonorubyErr::typeerr("already initialized class"));
+    }
+    let superclass = if let Some(arg) = lfp.try_arg(0) {
+        let sc = expect_class_for_superclass(arg, globals)?;
+        if sc.id() == CLASS_CLASS {
+            return Err(MonorubyErr::typeerr("can't make subclass of Class"));
+        }
+        sc
+    } else {
+        globals.store.object_class()
+    };
+    self_module.set_superclass(Some(superclass));
+    Ok(lfp.self_val())
 }
 
 /// ### Class#new

@@ -87,17 +87,14 @@ impl ClassInfoTable {
         {
             eprintln!("warning: already initialized constant {name}")
         }
-        if let Some(klass) = val.is_class() {
+        if let Some(klass) = val.is_class_or_module() {
             if self[klass.id()].get_name().is_none() {
                 self[klass.id()].set_parent(class_id);
-                let name = if class_id != OBJECT_CLASS
-                    && let Some(prefix) = self[class_id].get_name()
-                {
-                    format!("{prefix}::{name}")
-                } else {
-                    format!("{name}")
-                };
-                self[klass.id()].set_name(name);
+                // Store the leaf name only; `get_parents` walks the parent
+                // chain at lookup time and joins the segments. Anonymous
+                // ancestors are rendered using their inspect form during the
+                // walk (see `get_parents`).
+                self[klass.id()].set_name(name.to_string());
             }
         }
     }

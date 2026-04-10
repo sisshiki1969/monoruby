@@ -173,7 +173,14 @@ impl ClassId {
         match &store.classes[self].name {
             Some(id) => id.clone(),
             None => match class.is_singleton() {
-                None => format!("#<Class:{:016x}>", class.as_val().id()),
+                None => {
+                    let kind = if class.as_val().ty() == Some(ObjTy::MODULE) {
+                        "Module"
+                    } else {
+                        "Class"
+                    };
+                    format!("#<{kind}:0x{:016x}>", class.as_val().id())
+                }
                 Some(base) => format!("#<Class:{}>", base.to_s(store)),
             },
         }
@@ -194,6 +201,12 @@ pub struct ClassInfo {
     ///
     name: Option<String>,
     ///
+    /// Cached frozen `String` Value of `name`. Lazily populated by
+    /// `Module#name` so that repeated calls return the same identical
+    /// (frozen) string object, matching CRuby's behavior.
+    ///
+    name_value: Option<Value>,
+    ///
     /// the parent class of this class.
     ///
     parent: Option<ClassId>,
@@ -209,6 +222,13 @@ pub struct ClassInfo {
     /// constants table.
     ///
     constants: HashMap<IdentId, ConstState>,
+    ///
+    /// Per-constant source location, recorded when a constant is first
+    /// stored. Used by `Module#const_source_location`. Constants defined in
+    /// the runtime (e.g. via `define_class_inner` from Rust builtins) have
+    /// no entry and `const_source_location` returns `nil` for them.
+    ///
+    constant_locations: HashMap<IdentId, (String, u32)>,
     ///
     /// class variable table.
     ///
@@ -230,6 +250,9 @@ impl alloc::GC<RValue> for ClassInfo {
         if let Some(v) = self.object {
             v.as_val().mark(alloc);
         }
+        if let Some(v) = self.name_value {
+            v.mark(alloc);
+        }
         self.constants.values().for_each(|v| {
             if let ConstState::Loaded(v) = v {
                 v.mark(alloc)
@@ -245,10 +268,12 @@ impl ClassInfo {
     pub(super) fn new() -> Self {
         Self {
             name: None,
+            name_value: None,
             parent: None,
             object: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
+            constant_locations: HashMap::default(),
             class_variables: None,
             ivar_names: indexmap::IndexMap::default(),
             instance_ty: None,
@@ -258,10 +283,12 @@ impl ClassInfo {
     pub(super) fn copy(&self) -> Self {
         Self {
             name: None,
+            name_value: None,
             parent: None,
             object: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
+            constant_locations: HashMap::default(),
             class_variables: None,
             ivar_names: self.ivar_names.clone(),
             instance_ty: self.instance_ty,
@@ -290,14 +317,36 @@ impl ClassInfo {
 
     pub(crate) fn set_name(&mut self, name: String) {
         self.name = Some(name);
+        // Invalidate any cached frozen name Value so the next call to
+        // `Module#name` rebuilds it from the current `name`.
+        self.name_value = None;
     }
 
     pub(crate) fn clear_name(&mut self) {
         self.name = None;
+        self.name_value = None;
     }
 
     pub(crate) fn get_name(&self) -> Option<&str> {
         self.name.as_ref().map(|x| x.as_str())
+    }
+
+    pub(crate) fn cached_name_value(&self) -> Option<Value> {
+        self.name_value
+    }
+
+    pub(crate) fn set_cached_name_value(&mut self, val: Value) {
+        self.name_value = Some(val);
+    }
+
+    pub(crate) fn record_constant_location(&mut self, name: IdentId, file: String, line: u32) {
+        self.constant_locations.insert(name, (file, line));
+    }
+
+    pub(crate) fn get_constant_location(&self, name: IdentId) -> Option<(&str, u32)> {
+        self.constant_locations
+            .get(&name)
+            .map(|(f, l)| (f.as_str(), *l))
     }
 
     pub(crate) fn instance_ty(&self) -> Option<ObjTy> {
@@ -324,6 +373,10 @@ impl ClassInfo {
 
     fn get_cvar(&self, name: IdentId) -> Option<Value> {
         self.class_variables.as_ref()?.get(&name).cloned()
+    }
+
+    pub(crate) fn remove_cvar(&mut self, name: IdentId) -> Option<Value> {
+        self.class_variables.as_mut()?.remove(&name)
     }
 
     fn cvar_names(&self) -> Vec<IdentId> {
@@ -375,7 +428,19 @@ impl ClassInfoTable {
             }
             match self[parent].name.as_ref() {
                 Some(name) => parents.push(name.to_string()),
-                None => break,
+                None => {
+                    // Anonymous ancestor: render its inspect form so the
+                    // child still has a non-nil, qualifying name (e.g.
+                    // `#<Module:0x..>::Inner`).
+                    let parent_obj = self[parent].get_module().as_val();
+                    let kind = if parent_obj.ty() == Some(ObjTy::MODULE) {
+                        "Module"
+                    } else {
+                        "Class"
+                    };
+                    parents.push(format!("#<{kind}:0x{:016x}>", parent_obj.id()));
+                    break;
+                }
             }
             class = parent;
         }
@@ -532,6 +597,38 @@ impl ClassInfoTable {
     ///
     /// Get private method names in the class of *class_id*.
     ///  
+    /// Get the immediate (direct) subclasses of *class_id*.
+    /// Returns only real classes (not iclass entries, not singleton classes,
+    /// not modules) whose direct superclass is *class_id*. The walk skips over
+    /// any intermediate iclass nodes inserted by `include`/`prepend`.
+    pub(crate) fn get_direct_subclasses(&self, class_id: ClassId) -> Vec<Value> {
+        let mut result = Vec::new();
+        for (idx, info) in self.table.iter().enumerate() {
+            let module = match info.object {
+                Some(m) => m,
+                None => continue,
+            };
+            if module.is_singleton().is_some() || module.is_iclass() {
+                continue;
+            }
+            let cid = ClassId::new(idx as u32);
+            if cid == class_id {
+                continue;
+            }
+            // Skip non-class objects (e.g. modules) — only Class entries can
+            // have *class_id* as a parent in the inheritance chain.
+            if module.as_val().ty() != Some(ObjTy::CLASS) {
+                continue;
+            }
+            if let Some(superclass) = module.get_real_superclass() {
+                if superclass.id() == class_id {
+                    result.push(module.as_val());
+                }
+            }
+        }
+        result
+    }
+
     pub(crate) fn get_private_method_names(&self, class_id: ClassId) -> Vec<Value> {
         self[class_id]
             .methods
@@ -584,7 +681,7 @@ impl ClassInfoTable {
     }
 
     ///
-    /// Get public and protected method names in the class of *class_id* and its ancesters.
+    /// Get private method names in the class of *class_id* and its ancestors.
     ///
     pub(crate) fn get_private_method_names_inherit(&self, class_id: ClassId) -> Vec<Value> {
         let mut names = HashSet::default();
@@ -595,6 +692,51 @@ impl ClassInfoTable {
                 if matches!(entry.visibility, Visibility::Undefined) {
                     exclude.insert(*name);
                 } else if entry.is_private() && !exclude.contains(name) {
+                    names.insert(*name);
+                }
+            }
+            match module.superclass() {
+                Some(superclass) => {
+                    if superclass.id() == OBJECT_CLASS {
+                        break;
+                    }
+                    module = superclass;
+                }
+                None => break,
+            }
+        }
+        names.into_iter().map(|sym| Value::symbol(sym)).collect()
+    }
+
+    ///
+    /// Get protected method names in the class of *class_id*.
+    ///
+    pub(crate) fn get_protected_method_names(&self, class_id: ClassId) -> Vec<Value> {
+        self[class_id]
+            .methods
+            .iter()
+            .filter_map(|(name, entry)| {
+                if entry.func_id().is_some() && entry.visibility() == Visibility::Protected {
+                    Some(Value::symbol(*name))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    ///
+    /// Get protected method names in the class of *class_id* and its ancestors.
+    ///
+    pub(crate) fn get_protected_method_names_inherit(&self, class_id: ClassId) -> Vec<Value> {
+        let mut names = HashSet::default();
+        let mut module = self.get_module(class_id);
+        let mut exclude = HashSet::default();
+        loop {
+            for (name, entry) in &self[module.id()].methods {
+                if matches!(entry.visibility, Visibility::Undefined) {
+                    exclude.insert(*name);
+                } else if entry.func_id().is_some() && entry.visibility() == Visibility::Protected && !exclude.contains(name) {
                     names.insert(*name);
                 }
             }
