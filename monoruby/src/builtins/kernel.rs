@@ -793,8 +793,8 @@ fn kernel_rational(
     let a = lfp.arg(0);
     if let Some(b) = lfp.try_arg(1) {
         // Two-argument form: Rational(a, b)
-        let ar = val_to_rational(vm, globals, a)?;
-        let br = val_to_rational(vm, globals, b)?;
+        let ar = val_to_rational(globals, a)?;
+        let br = val_to_rational(globals, b)?;
         Ok(Value::rational_from_inner(ar.div(&br)?))
     } else {
         // One-argument form: Rational(a)
@@ -837,7 +837,7 @@ fn kernel_rational(
 }
 
 /// Convert a Value to RationalInner for Kernel#Rational two-arg form.
-fn val_to_rational(_: &mut Executor, globals: &mut Globals, v: Value) -> Result<RationalInner> {
+fn val_to_rational(globals: &mut Globals, v: Value) -> Result<RationalInner> {
     if let Some(r) = v.try_rational() {
         return Ok(r.clone());
     }
