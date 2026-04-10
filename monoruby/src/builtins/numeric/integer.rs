@@ -1001,10 +1001,35 @@ fn integer_rem(
         return true;
     }
 
-    // Power-of-two RI optimization: lhs % (positive power of 2)
-    // == lhs & ((rhs * 2 + 1) - 2) but tagged-fixnum care needed.
-    // Skip the bitmask shortcut here for simplicity; the generic
-    // gen_int_rem path is fast enough.
+    // Power-of-two RI optimization: lhs % positive_power_of_2
+    // → lhs & mask, where mask = (rhs - 1) << 1 | 1 = rhs * 2 - 1
+    // applied directly on the tagged fixnum (the tag bit is preserved
+    // since both operands have LSB = 1). The bitwise AND matches Ruby's
+    // floor-mod semantics for any sign of lhs as long as the divisor
+    // is a positive power of 2 (two's-complement makes this work).
+    if let Some(rhs) = state.is_fixnum_literal(args) {
+        let rhs_val = rhs.get();
+        if rhs_val > 0 && (rhs_val as u64).is_power_of_two() {
+            state.load_fixnum(ir, recv, GP::Rdi);
+            let mask = rhs_val * 2 - 1;
+            ir.inline(move |r#gen, _, _| {
+                if let Ok(imm32) = i32::try_from(mask) {
+                    let imm = imm32 as i64;
+                    monoasm!( &mut r#gen.jit,
+                        andq rdi, (imm);
+                    );
+                } else {
+                    monoasm!( &mut r#gen.jit,
+                        movq rax, (mask);
+                        andq rdi, rax;
+                    );
+                }
+            });
+            state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+            return true;
+        }
+    }
+
     state.load_fixnum(ir, recv, GP::Rdi);
     state.load_fixnum(ir, args, GP::Rsi);
     let deopt = ir.new_deopt(state);
@@ -2978,15 +3003,48 @@ mod tests {
         run_test("a = -17; a % -5");
         run_test("a = 1000; a % 7");
         run_test("a = 0; a % 5");
-        // power-of-two divisor (no special-case path now; verify generic path)
-        run_test("a = 100; a % 8");
-        run_test("a = -100; a % 8");
         // Float rhs (non-Integer rhs falls back to method dispatch)
         run_test("a = 17; a % 5.0");
         // BigInt rhs (non-Integer slot type → method dispatch)
         run_test("a = 17; a % (10**20)");
         // Division by zero raises ZeroDivisionError
         run_test_error("a = 17; a % 0");
+    }
+
+    #[test]
+    fn integer_rem_pow2_optimization() {
+        // Power-of-two RI: rhs is a positive power of 2 literal,
+        // mask fits in i32.
+        run_test("a = 100; a % 1");
+        run_test("a = 100; a % 2");
+        run_test("a = 100; a % 4");
+        run_test("a = 100; a % 8");
+        run_test("a = 100; a % 16");
+        run_test("a = 100; a % 1024");
+        // negative lhs (two's-complement bitwise AND matches Ruby's floor-mod)
+        run_test("a = -1; a % 8");
+        run_test("a = -7; a % 8");
+        run_test("a = -8; a % 8");
+        run_test("a = -100; a % 16");
+        run_test("a = -100; a % 1024");
+        // zero lhs
+        run_test("a = 0; a % 8");
+        // lhs is multiple of rhs
+        run_test("a = 1024; a % 8");
+        run_test("a = -1024; a % 8");
+        // rhs near i32 boundary for the mask (mask = rhs*2 - 1)
+        run_test("a = 12345678; a % (1 << 30)"); // mask = 2^31 - 1, fits in i32
+        run_test("a = -12345678; a % (1 << 30)");
+        // rhs needs register-loaded mask (mask exceeds i32)
+        run_test("a = 12345678; a % (1 << 31)");
+        run_test("a = 12345678; a % (1 << 40)");
+        run_test("a = -12345678; a % (1 << 31)");
+        run_test("a = -12345678; a % (1 << 40)");
+        // Non-power-of-two divisor: falls through to generic path
+        run_test("a = 100; a % 6");
+        run_test("a = 100; a % 10");
+        // Negative power-of-two: optimization not applied (rhs > 0 check)
+        run_test("a = 100; a % -8");
     }
 
     #[test]
