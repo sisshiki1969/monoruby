@@ -20,7 +20,8 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_basic_op(INTEGER_CLASS, "-", sub, 1);
     globals.define_basic_op(INTEGER_CLASS, "*", mul, 1);
     globals.define_basic_op(INTEGER_CLASS, "/", div, 1);
-    globals.define_basic_op(INTEGER_CLASS, "%", rem, 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "%", int_rem, Box::new(integer_rem), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "**", int_pow, Box::new(integer_pow), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "&", bitand, Box::new(integer_bitand), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "|", bitor, Box::new(integer_bitor), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "^", bitxor, Box::new(integer_bitxor), 1);
@@ -955,6 +956,113 @@ fn integer_shl(
         ir.inline(move |r#gen, _, labels| r#gen.gen_shl(&labels[deopt]));
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+    true
+}
+
+///
+/// ### Integer#%
+///
+/// - self % other -> Numeric
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=25.html]
+#[monoruby_builtin]
+fn int_rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    super::op::rem_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
+}
+
+fn integer_rem(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    rhs_class: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    if rhs_class != Some(INTEGER_CLASS) {
+        return false;
+    }
+    let CallSiteInfo {
+        dst, args, recv, ..
+    } = *callsite;
+
+    // Constant folding: both operands are concrete fixnums and rhs != 0.
+    // ruby_mod of two i63 values always fits in i63.
+    if let Some(lhs) = state.is_fixnum_literal(recv)
+        && let Some(rhs) = state.is_fixnum_literal(args)
+        && !rhs.get().is_zero()
+    {
+        let result = lhs.get().ruby_mod(&rhs.get());
+        state.def_C(dst, Immediate::check_fixnum(result).unwrap());
+        return true;
+    }
+
+    // Power-of-two RI optimization: lhs % (positive power of 2)
+    // == lhs & ((rhs * 2 + 1) - 2) but tagged-fixnum care needed.
+    // Skip the bitmask shortcut here for simplicity; the generic
+    // gen_int_rem path is fast enough.
+    state.load_fixnum(ir, recv, GP::Rdi);
+    state.load_fixnum(ir, args, GP::Rsi);
+    let deopt = ir.new_deopt(state);
+    ir.inline(move |r#gen, _, labels| r#gen.gen_int_rem(&labels[deopt]));
+    state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+    true
+}
+
+///
+/// ### Integer#**
+///
+/// - self ** other -> Numeric
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2a=2a.html]
+#[monoruby_builtin]
+fn int_pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    super::op::pow_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
+}
+
+fn integer_pow(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    rhs_class: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    if rhs_class != Some(INTEGER_CLASS) {
+        return false;
+    }
+    let CallSiteInfo {
+        dst, args, recv, ..
+    } = *callsite;
+
+    // Constant folding: both operands are concrete fixnums.
+    // Only fold when the result fits in i63 (matches the previous
+    // hardcoded BinOpK::Exp folding).
+    if let Some(lhs) = state.is_fixnum_literal(recv)
+        && let Some(rhs) = state.is_fixnum_literal(args)
+        && let Ok(rhs_u32) = u32::try_from(rhs.get())
+        && let Some(result) = lhs.get().checked_pow(rhs_u32)
+        && let Some(imm) = Immediate::check_fixnum(result)
+    {
+        state.def_C(dst, imm);
+        return true;
+    }
+
+    state.load_fixnum(ir, recv, GP::Rdi);
+    state.load_fixnum(ir, args, GP::Rsi);
+    let using_xmm = state.get_using_xmm();
+    let error = ir.new_error(state);
+    ir.inline(move |r#gen, _, labels| r#gen.gen_int_pow(using_xmm, &labels[error]));
+    state.def_reg2acc(ir, GP::Rax, dst);
     true
 }
 
@@ -2816,6 +2924,90 @@ mod tests {
         run_test("a = 10**20; a | 0xFF");
         run_test("a = 10**20; a & 0xFF");
         run_test("a = 10**20; a ^ 0xFF");
+    }
+
+    #[test]
+    fn integer_pow_jit_edge_cases() {
+        // small fixnum^fixnum that fits in i63
+        run_test("a = 2; a ** 10");
+        run_test("a = 3; a ** 5");
+        run_test("a = 0; a ** 0"); // 0**0 == 1
+        run_test("a = 1; a ** 100");
+        run_test("a = -2; a ** 5");
+        run_test("a = -2; a ** 4");
+        // Result overflows fixnum → BigInt (handled by pow_ii runtime call)
+        run_test("a = 2; a ** 62");
+        run_test("a = 2; a ** 100");
+        run_test("a = 10; a ** 20");
+        // Negative exponent → Rational
+        run_test("a = 2; a ** -3");
+        run_test("a = -2; a ** -3");
+        // 1**n / (-1)**n / 0**n special cases
+        run_test("a = 1; a ** -100");
+        run_test("a = -1; a ** 5");
+        run_test("a = -1; a ** -5");
+        // Float rhs (non-Integer rhs falls back to method dispatch)
+        run_test("a = 2; a ** 3.0");
+        run_test("a = 2; a ** -2.0");
+    }
+
+    #[test]
+    fn integer_pow_constant_folding() {
+        // Both operands are fixnum literals: should fold at JIT time
+        // when result fits in fixnum.
+        run_test("def f; 2 ** 10; end; f");
+        run_test("def f; 3 ** 5; end; f");
+        run_test("def f; 10 ** 5; end; f");
+        run_test("def f; 1 ** 100; end; f");
+        run_test("def f; (-2) ** 4; end; f");
+        run_test("def f; (-2) ** 5; end; f");
+        run_test("def f; 0 ** 0; end; f");
+        run_test("def f; 0 ** 5; end; f");
+        // Overflow / non-fixnum result: folder bails out, falls through to runtime
+        run_test("def f; 2 ** 62; end; f");
+        run_test("def f; 2 ** 100; end; f");
+        // Negative exponent: folder bails (rhs as u32 fails)
+        run_test("def f; 2 ** -3; end; f");
+    }
+
+    #[test]
+    fn integer_rem_jit_edge_cases() {
+        run_test("a = 17; a % 5");
+        run_test("a = 17; a % -5");
+        run_test("a = -17; a % 5");
+        run_test("a = -17; a % -5");
+        run_test("a = 1000; a % 7");
+        run_test("a = 0; a % 5");
+        // power-of-two divisor (no special-case path now; verify generic path)
+        run_test("a = 100; a % 8");
+        run_test("a = -100; a % 8");
+        // Float rhs (non-Integer rhs falls back to method dispatch)
+        run_test("a = 17; a % 5.0");
+        // BigInt rhs (non-Integer slot type → method dispatch)
+        run_test("a = 17; a % (10**20)");
+        // Division by zero raises ZeroDivisionError
+        run_test_error("a = 17; a % 0");
+    }
+
+    #[test]
+    fn integer_rem_constant_folding() {
+        run_test("def f; 17 % 5; end; f");
+        run_test("def f; -17 % 5; end; f");
+        run_test("def f; 17 % -5; end; f");
+        run_test("def f; -17 % -5; end; f");
+        run_test("def f; 100 % 8; end; f");
+        run_test("def f; 0 % 5; end; f");
+    }
+
+    #[test]
+    fn float_pow_rem_jit() {
+        // Float#** and Float#% go through CFunc_FF_F path (already inline).
+        run_test("a = 2.5; a ** 3");
+        run_test("a = 2.5; a ** 3.0");
+        run_test("a = 2.0; a ** -2");
+        run_test("a = 17.5; a % 5.0");
+        run_test("a = -17.5; a % 5.0");
+        run_test("a = 17.5; a % -5.0");
     }
 
     #[test]

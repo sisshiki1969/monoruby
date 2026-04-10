@@ -151,53 +151,85 @@ impl Codegen {
                 );
                 self.jit.select_page(0);
             }
-            BinOpK::Rem => {
-                let zero_div = self.jit.label();
-                let exit = self.jit.label();
-                let negative_divisor = self.jit.label();
-                let dec = self.jit.label();
-                monoasm!( &mut self.jit,
-                    sarq R(rhs_r), 1;
-                    testq R(rhs_r), R(rhs_r);
-                    jeq  zero_div;
-                    movq rax, R(lhs_r);
-                    sarq rax, 1;
-                    cqo;
-                    idiv R(rhs_r);
-                    // rdx: remainder
-                    // rax: quotient
-                    // rhs: divisor
-                    testq R(rhs_r), R(rhs_r);
-                    js negative_divisor;
-                    testq rdx, rdx;
-                    js dec;
-                    jmp exit;
-                negative_divisor:
-                    testq rdx, rdx;
-                    jle exit;
-                dec:
-                    addq rdx, R(rhs_r);
-                exit:
-                    movq rax, rdx;
-                    salq rax, 1;
-                    orq  rax, 1;
-                );
-                self.jit.select_page(1);
-                monoasm!( &mut self.jit,
-                zero_div:
-                    movq rdi, (Value::symbol_from_str("_divide_by_zero").id());
-                    jmp deopt;
-                );
-                self.jit.select_page(0);
-            }
-            BinOpK::Exp => unreachable!(),
-            BinOpK::BitOr | BinOpK::BitAnd | BinOpK::BitXor | BinOpK::Shl | BinOpK::Shr => {
-                unreachable!()
-            }
+            BinOpK::Rem
+            | BinOpK::Exp
+            | BinOpK::BitOr
+            | BinOpK::BitAnd
+            | BinOpK::BitXor
+            | BinOpK::Shl
+            | BinOpK::Shr => unreachable!(),
         }
     }
 
-    pub(super) fn integer_exp(&mut self, using_xmm: UsingXmm, error: &DestLabel) {
+    ///
+    /// gen code for Integer#% (rem) of two fixnums.
+    ///
+    /// ### in
+    /// - rdi: lhs:Fixnum (tagged)
+    /// - rsi: rhs:Fixnum (tagged)
+    ///
+    /// ### out
+    /// - rax: result:Fixnum (tagged)
+    ///
+    /// On zero divisor, jumps to `deopt`.
+    ///
+    /// ### destroy
+    /// - rax, rdx, rsi
+    ///
+    pub(crate) fn gen_int_rem(&mut self, deopt: &DestLabel) {
+        let zero_div = self.jit.label();
+        let exit = self.jit.label();
+        let negative_divisor = self.jit.label();
+        let dec = self.jit.label();
+        monoasm!( &mut self.jit,
+            sarq rsi, 1;
+            testq rsi, rsi;
+            jeq  zero_div;
+            movq rax, rdi;
+            sarq rax, 1;
+            cqo;
+            idiv rsi;
+            // rdx: remainder, rax: quotient, rsi: divisor
+            testq rsi, rsi;
+            js negative_divisor;
+            testq rdx, rdx;
+            js dec;
+            jmp exit;
+        negative_divisor:
+            testq rdx, rdx;
+            jle exit;
+        dec:
+            addq rdx, rsi;
+        exit:
+            movq rax, rdx;
+            salq rax, 1;
+            orq  rax, 1;
+        );
+        self.jit.select_page(1);
+        monoasm!( &mut self.jit,
+        zero_div:
+            movq rdi, (Value::symbol_from_str("_divide_by_zero").id());
+            jmp deopt;
+        );
+        self.jit.select_page(0);
+    }
+
+    ///
+    /// gen code for Integer#** (exp) of two fixnums.
+    ///
+    /// ### in
+    /// - rdi: lhs:Fixnum (tagged)
+    /// - rsi: rhs:Fixnum (tagged)
+    ///
+    /// ### out
+    /// - rax: result:Value (or 0 on error)
+    ///
+    /// On error (raised by `pow_ii`), jumps to `error`.
+    ///
+    /// ### destroy
+    /// - caller-save registers
+    ///
+    pub(crate) fn gen_int_pow(&mut self, using_xmm: UsingXmm, error: &DestLabel) {
         self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
             sarq rdi, 1;
