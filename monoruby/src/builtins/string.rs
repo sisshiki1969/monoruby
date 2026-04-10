@@ -168,10 +168,6 @@ pub(super) fn init(globals: &mut Globals) {
     super::encoding::init_encoding(globals);
 }
 
-fn encoding_class(globals: &Globals) -> ClassId {
-    super::encoding::encoding_class(globals)
-}
-
 ///
 /// ### String.new
 ///
@@ -4578,10 +4574,14 @@ mod tests {
         run_test_no_result_check(r#""\xC3\xA9".end_with?("\xA9")"#);
         run_test_no_result_check(r#""\xe3\x81\x82".end_with?("\x82")"#);
         // Explicit UTF-8 string with force_encoding: boundary check works
-        run_test_once(r#""\xC3\xA9".force_encoding("UTF-8").end_with?("\xA9".force_encoding("UTF-8"))"#);
+        run_test_once(
+            r#""\xC3\xA9".force_encoding("UTF-8").end_with?("\xA9".force_encoding("UTF-8"))"#,
+        );
         // start_with? UTF-8 character boundary check
         run_test_no_result_check(r#""\xC3\xA9".start_with?("\xC3")"#);
-        run_test_once(r#""\xC3\xA9".force_encoding("UTF-8").start_with?("\xC3".force_encoding("UTF-8"))"#);
+        run_test_once(
+            r#""\xC3\xA9".force_encoding("UTF-8").start_with?("\xC3".force_encoding("UTF-8"))"#,
+        );
         // start_with? with Regexp sets/clears $~
         run_test(r#""test-123".start_with?(/test/); $~[0]"#);
         run_test(r#""test-123".start_with?(/xxx/); $~"#);

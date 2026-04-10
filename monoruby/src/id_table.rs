@@ -145,6 +145,8 @@ impl From<BinOpK> for IdentId {
             BinOpK::BitXor => IdentId::_BXOR,
             BinOpK::Rem => IdentId::_REM,
             BinOpK::Exp => IdentId::_POW,
+            BinOpK::Shl => IdentId::_SHL,
+            BinOpK::Shr => IdentId::_SHR,
         }
     }
 }

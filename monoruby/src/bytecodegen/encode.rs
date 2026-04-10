@@ -571,7 +571,7 @@ impl<'a> BytecodeGen<'a> {
                 let op3 = self.slot_id(&src);
                 Bytecode::from(enc_www(149, op1.0, op2, op3.0))
             }
-            BytecodeInst::InitMethod(fn_info) => Bytecode::from(enc_www_fn_info(170, &fn_info)),
+            BytecodeInst::InitMethod(fn_info) => Bytecode::from(enc_www_fn_info(172, &fn_info)),
             BytecodeInst::ExpandArray(src, dst, len, rest_pos) => {
                 let op1 = self.slot_id(&src);
                 let op2 = self.slot_id(&dst);
@@ -580,28 +580,28 @@ impl<'a> BytecodeGen<'a> {
                 } else {
                     0
                 };
-                Bytecode::from_u16(enc_www(171, op1.0, op2.0, len), rest)
+                Bytecode::from_u16(enc_www(173, op1.0, op2.0, len), rest)
             }
-            BytecodeInst::UndefMethod { undef } => Bytecode::from(enc_wl(172, 0, undef.get())),
+            BytecodeInst::UndefMethod { undef } => Bytecode::from(enc_wl(174, 0, undef.get())),
             BytecodeInst::AliasMethod { new, old } => {
                 let op1 = self.slot_id(&new);
                 let op2 = self.slot_id(&old);
-                Bytecode::from(enc_ww(173, op1.0, op2.0))
+                Bytecode::from(enc_ww(175, op1.0, op2.0))
             }
             BytecodeInst::Hash { ret, args, len } => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&args);
-                Bytecode::from(enc_www(174, op1.0, op2.0, len))
+                Bytecode::from(enc_www(176, op1.0, op2.0, len))
             }
             BytecodeInst::ToA { dst, src } => {
                 let op1 = self.slot_id(&dst);
                 let op2 = self.slot_id(&src);
-                Bytecode::from(enc_ww(175, op1.0, op2.0))
+                Bytecode::from(enc_ww(177, op1.0, op2.0))
             }
             BytecodeInst::Mov(dst, src) => {
                 let op1 = self.slot_id(&dst);
                 let op2 = self.slot_id(&src);
-                Bytecode::from(enc_ww(176, op1.0, op2.0))
+                Bytecode::from(enc_ww(178, op1.0, op2.0))
             }
             BytecodeInst::Range {
                 ret,
@@ -612,12 +612,12 @@ impl<'a> BytecodeGen<'a> {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&start);
                 let op3 = self.slot_id(&end);
-                Bytecode::from(enc_www(177 + u16::from(exclude_end), op1.0, op2.0, op3.0))
+                Bytecode::from(enc_www(179 + u16::from(exclude_end), op1.0, op2.0, op3.0))
             }
             BytecodeInst::ConcatStr(ret, arg, len) => {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
                 let op2 = self.slot_id(&BcReg::from(arg));
-                Bytecode::from(enc_www(179, op1.0, op2.0, len as u16))
+                Bytecode::from(enc_www(181, op1.0, op2.0, len as u16))
             }
         };
         Ok(bc)
