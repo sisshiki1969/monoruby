@@ -21,9 +21,9 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_basic_op(INTEGER_CLASS, "*", mul, 1);
     globals.define_basic_op(INTEGER_CLASS, "/", div, 1);
     globals.define_basic_op(INTEGER_CLASS, "%", rem, 1);
-    globals.define_basic_op(INTEGER_CLASS, "&", bitand, 1);
-    globals.define_basic_op(INTEGER_CLASS, "|", bitor, 1);
-    globals.define_basic_op(INTEGER_CLASS, "^", bitxor, 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "&", bitand, Box::new(integer_bitand), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "|", bitor, Box::new(integer_bitor), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "^", bitxor, Box::new(integer_bitxor), 1);
     globals.define_builtin_func(INTEGER_CLASS, "divmod", divmod, 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, ">>", shr, Box::new(integer_shr), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "<<", shl, Box::new(integer_shl), 1);
@@ -876,6 +876,143 @@ fn integer_shl(
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
+}
+
+///
+/// Common helper for inline JIT compilation of Integer#| / Integer#& / Integer#^.
+///
+/// Loads operands into registers (or detects literal rhs/lhs for immediate
+/// encoding) and emits the corresponding bitwise instruction. Returns false
+/// if rhs is not Integer or the call site is not simple, falling back to
+/// the regular method dispatch path.
+///
+/// `emit_imm` generates `<op>q rdi, imm` (rdi: tagged fixnum lhs).
+/// `emit_rr` generates `<op>q rdi, rsi` (both tagged fixnums in rdi/rsi).
+fn integer_bitop_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    store: &Store,
+    callid: CallSiteId,
+    rhs_class: Option<ClassId>,
+    emit_imm: impl FnOnce(&mut Codegen, i64) + 'static,
+    emit_rr: impl FnOnce(&mut Codegen) + 'static,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    if rhs_class != Some(INTEGER_CLASS) {
+        return false;
+    }
+    let CallSiteInfo {
+        dst, args, recv, ..
+    } = *callsite;
+
+    if let Some(rhs) = state.is_i16_literal(args) {
+        // recv op <i16 literal>
+        state.load(ir, recv, GP::Rdi);
+        let imm = Value::i32(rhs as i32).id() as i64;
+        ir.inline(move |r#gen, _, _| emit_imm(r#gen, imm));
+    } else if let Some(lhs) = state.is_i16_literal(recv) {
+        // <i16 literal> op args (commutative — swap to use immediate form)
+        state.load_fixnum(ir, args, GP::Rdi);
+        let imm = Value::i32(lhs as i32).id() as i64;
+        ir.inline(move |r#gen, _, _| emit_imm(r#gen, imm));
+    } else {
+        state.load(ir, recv, GP::Rdi);
+        state.load_fixnum(ir, args, GP::Rsi);
+        ir.inline(move |r#gen, _, _| emit_rr(r#gen));
+    }
+    state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+    true
+}
+
+fn integer_bitor(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    rhs_class: Option<ClassId>,
+) -> bool {
+    integer_bitop_inline(
+        state,
+        ir,
+        store,
+        callid,
+        rhs_class,
+        |r#gen, imm| {
+            monoasm!( &mut r#gen.jit,
+                orq rdi, (imm);
+            );
+        },
+        |r#gen| {
+            monoasm!( &mut r#gen.jit,
+                orq rdi, rsi;
+            );
+        },
+    )
+}
+
+fn integer_bitand(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    rhs_class: Option<ClassId>,
+) -> bool {
+    integer_bitop_inline(
+        state,
+        ir,
+        store,
+        callid,
+        rhs_class,
+        |r#gen, imm| {
+            monoasm!( &mut r#gen.jit,
+                andq rdi, (imm);
+            );
+        },
+        |r#gen| {
+            monoasm!( &mut r#gen.jit,
+                andq rdi, rsi;
+            );
+        },
+    )
+}
+
+fn integer_bitxor(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    rhs_class: Option<ClassId>,
+) -> bool {
+    // XOR of two tagged fixnums (both LSB=1) yields LSB=0, so we need to
+    // restore the tag bit. For the immediate path we instead strip the tag
+    // bit from the immediate (`imm - 1`) so the result keeps lhs's tag.
+    integer_bitop_inline(
+        state,
+        ir,
+        store,
+        callid,
+        rhs_class,
+        |r#gen, imm| {
+            monoasm!( &mut r#gen.jit,
+                xorq rdi, (imm - 1);
+            );
+        },
+        |r#gen| {
+            monoasm!( &mut r#gen.jit,
+                xorq rdi, rsi;
+                addq rdi, 1;
+            );
+        },
+    )
 }
 
 ///
@@ -2461,6 +2598,43 @@ mod tests {
         // zero lhs
         run_test("a = 0; a << 10");
         run_test("a = 0; a << -10");
+    }
+
+    #[test]
+    fn integer_bitop_jit_edge_cases() {
+        // immediate rhs
+        run_test("a = 0xFF; a | 0x0F");
+        run_test("a = 0xFF; a & 0x0F");
+        run_test("a = 0xFF; a ^ 0x0F");
+        // immediate lhs (commutative)
+        run_test("a = 0x0F; 0xFF | a");
+        run_test("a = 0x0F; 0xFF & a");
+        run_test("a = 0x0F; 0xFF ^ a");
+        // both register
+        run_test("a = 0xFF; b = 0x0F; a | b");
+        run_test("a = 0xFF; b = 0x0F; a & b");
+        run_test("a = 0xFF; b = 0x0F; a ^ b");
+        // negative values (sign bit interaction with tag)
+        run_test("a = -1; a | 0x0F");
+        run_test("a = -1; a & 0x0F");
+        run_test("a = -1; a ^ 0x0F");
+        run_test("a = -1; b = 5; a | b");
+        run_test("a = -1; b = 5; a & b");
+        run_test("a = -1; b = 5; a ^ b");
+        // identity / zero
+        run_test("a = 42; a | 0");
+        run_test("a = 42; a & 0");
+        run_test("a = 42; a ^ 0");
+        run_test("a = 42; a & -1");
+        run_test("a = 42; a ^ -1");
+        // self
+        run_test("a = 42; a | a");
+        run_test("a = 42; a & a");
+        run_test("a = 42; a ^ a");
+        // BigInt fallback (uses generic method dispatch)
+        run_test("a = 10**20; a | 0xFF");
+        run_test("a = 10**20; a & 0xFF");
+        run_test("a = 10**20; a ^ 0xFF");
     }
 
     #[test]

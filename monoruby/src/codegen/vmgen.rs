@@ -218,9 +218,9 @@ impl Codegen {
 
         let add_rr = self.vm_binops_opt(Self::int_add, add_values);
         let sub_rr = self.vm_binops_opt(Self::int_sub, sub_values);
-        let or_rr = self.vm_binops_opt(Self::int_or, bitor_values);
-        let and_rr = self.vm_binops_opt(Self::int_and, bitand_values);
-        let xor_rr = self.vm_binops_opt(Self::int_xor, bitxor_values);
+        let or_rr = self.vm_binops(bitor_values);
+        let and_rr = self.vm_binops(bitand_values);
+        let xor_rr = self.vm_binops(bitxor_values);
         let div_rr = self.vm_binops(div_values);
         let mul_rr = self.vm_binops(mul_values);
         let rem_rr = self.vm_binops(rem_values);
@@ -1208,28 +1208,6 @@ impl Codegen {
             subq rax, rsi;
             jo generic;
             addb rax, 1;
-        };
-    }
-
-    fn int_or(&mut self, _generic: DestLabel) {
-        monoasm! { &mut self.jit,
-            movq rax, rdi;
-            orq rax, rsi;
-        };
-    }
-
-    fn int_and(&mut self, _generic: DestLabel) {
-        monoasm! { &mut self.jit,
-            movq rax, rdi;
-            andq rax, rsi;
-        };
-    }
-
-    fn int_xor(&mut self, _generic: DestLabel) {
-        monoasm! { &mut self.jit,
-            movq rax, rdi;
-            xorq rax, rsi;
-            orb rax, 1;
         };
     }
 

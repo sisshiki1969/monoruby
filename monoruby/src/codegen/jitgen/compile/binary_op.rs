@@ -17,10 +17,11 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         match kind {
-            // Shl/Shr are always compiled as method calls.
-            // The inline function registered on Integer#<< / Integer#>> handles
-            // code generation using both-side class info from the BinOp inline cache.
-            BinOpK::Shl | BinOpK::Shr => {
+            // These ops are always compiled as method calls.
+            // The inline function registered on Integer#<< / Integer#>> /
+            // Integer#| / Integer#& / Integer#^ handles code generation
+            // using both-side class info from the BinOp inline cache.
+            BinOpK::Shl | BinOpK::Shr | BinOpK::BitOr | BinOpK::BitAnd | BinOpK::BitXor => {
                 let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
                 match lhs_class {
                     None => Ok(CompileResult::Recompile(RecompileReason::NotCached)),
@@ -270,17 +271,9 @@ impl AbstractFrame {
                     return Immediate::check_fixnum(result);
                 }
             }
-            BinOpK::BitOr => {
-                // Bitwise ops on two i63 values always produce i63 results
-                return Immediate::check_fixnum(lhs | rhs);
+            BinOpK::BitOr | BinOpK::BitAnd | BinOpK::BitXor | BinOpK::Shl | BinOpK::Shr => {
+                unreachable!()
             }
-            BinOpK::BitAnd => {
-                return Immediate::check_fixnum(lhs & rhs);
-            }
-            BinOpK::BitXor => {
-                return Immediate::check_fixnum(lhs ^ rhs);
-            }
-            BinOpK::Shl | BinOpK::Shr => unreachable!(),
         }
         None
     }
@@ -304,7 +297,7 @@ impl AbstractFrame {
         };
 
         match kind {
-            BinOpK::Add | BinOpK::Mul | BinOpK::BitOr | BinOpK::BitAnd | BinOpK::BitXor => {
+            BinOpK::Add | BinOpK::Mul => {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
                 self.fetch_fixnum_comm(ir, lhs, rhs, mode);
@@ -351,7 +344,9 @@ impl AbstractFrame {
                     self.def_reg2acc_fixnum(ir, GP::Rax, dst);
                 }
             },
-            BinOpK::Shl | BinOpK::Shr => unreachable!(),
+            BinOpK::BitOr | BinOpK::BitAnd | BinOpK::BitXor | BinOpK::Shl | BinOpK::Shr => {
+                unreachable!()
+            }
         }
     }
 

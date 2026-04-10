@@ -191,44 +191,9 @@ impl Codegen {
                 self.jit.select_page(0);
             }
             BinOpK::Exp => unreachable!(),
-            BinOpK::BitOr => match mode {
-                OpMode::RR(_, _) => {
-                    monoasm!( &mut self.jit,
-                        orq R(lhs as u64), R(rhs as u64);
-                    );
-                }
-                OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                    monoasm!( &mut self.jit,
-                        orq R(lhs as u64), (Value::i32(*i as i32).id());
-                    );
-                }
-            },
-            BinOpK::BitAnd => match mode {
-                OpMode::RR(_, _) => {
-                    monoasm!( &mut self.jit,
-                        andq R(lhs as u64), R(rhs as u64);
-                    );
-                }
-                OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                    monoasm!( &mut self.jit,
-                        andq R(lhs as u64), (Value::i32(*i as i32).id());
-                    );
-                }
-            },
-            BinOpK::BitXor => match mode {
-                OpMode::RR(_, _) => {
-                    monoasm!( &mut self.jit,
-                        xorq R(lhs as u64), R(rhs as u64);
-                        addq R(lhs as u64), 1;
-                    );
-                }
-                OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                    monoasm!( &mut self.jit,
-                        xorq R(lhs as u64), (Value::i32(*i as i32).id() - 1);
-                    );
-                }
-            },
-            BinOpK::Shl | BinOpK::Shr => unreachable!(),
+            BinOpK::BitOr | BinOpK::BitAnd | BinOpK::BitXor | BinOpK::Shl | BinOpK::Shr => {
+                unreachable!()
+            }
         }
     }
 
