@@ -244,6 +244,76 @@ impl Codegen {
             jeq error;
         );
     }
+
+    ///
+    /// gen code for `Integer#%` with a Float rhs.
+    ///
+    /// Calls `rem_ff(lhs, rhs)` and stores the f64 result in `dst_xmm`.
+    ///
+    /// ### in
+    /// - xmm(*lhs_xmm*): lhs as f64 (Integer converted to f64)
+    /// - xmm(*rhs_xmm*): rhs as f64
+    ///
+    /// ### out
+    /// - xmm(*dst_xmm*): result f64
+    ///
+    pub(crate) fn gen_int_rem_if(
+        &mut self,
+        lhs_xmm: Xmm,
+        rhs_xmm: Xmm,
+        dst_xmm: Xmm,
+        using_xmm: UsingXmm,
+    ) {
+        let lhs = lhs_xmm.enc();
+        let rhs = rhs_xmm.enc();
+        let dst = dst_xmm.enc();
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            movq xmm0, xmm(lhs);
+            movq xmm1, xmm(rhs);
+            movq rax, (rem_ff as u64);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+        monoasm!( &mut self.jit,
+            movq xmm(dst), xmm0;
+        );
+    }
+
+    ///
+    /// gen code for `Integer#**` with a Float rhs.
+    ///
+    /// Calls `pow_ff(lhs, rhs)` and returns a `Value` (Float or Complex)
+    /// in `rax`. The result may be Complex when lhs is negative and rhs
+    /// is non-integer, so we cannot store it as a raw f64.
+    ///
+    /// ### in
+    /// - xmm(*lhs_xmm*): lhs as f64
+    /// - xmm(*rhs_xmm*): rhs as f64
+    ///
+    /// ### out
+    /// - rax: result Value
+    ///
+    /// ### destroy
+    /// - caller-save registers
+    ///
+    pub(crate) fn gen_int_pow_if(
+        &mut self,
+        lhs_xmm: Xmm,
+        rhs_xmm: Xmm,
+        using_xmm: UsingXmm,
+    ) {
+        let lhs = lhs_xmm.enc();
+        let rhs = rhs_xmm.enc();
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            movq xmm0, xmm(lhs);
+            movq xmm1, xmm(rhs);
+            movq rax, (pow_ff as u64);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+    }
 }
 
 impl Codegen {
