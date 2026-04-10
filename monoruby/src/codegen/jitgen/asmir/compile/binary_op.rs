@@ -228,6 +228,7 @@ impl Codegen {
                     );
                 }
             },
+            BinOpK::Shl | BinOpK::Shr => unreachable!(),
         }
     }
 

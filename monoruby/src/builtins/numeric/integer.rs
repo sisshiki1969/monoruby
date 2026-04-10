@@ -763,18 +763,45 @@ fn integer_shr(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    _: Option<ClassId>,
+    rhs_class: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
+        return false;
+    }
+    if rhs_class != Some(INTEGER_CLASS) {
         return false;
     }
     let CallSiteInfo {
         dst, args, recv, ..
     } = *callsite;
     state.load(ir, recv, GP::Rdi);
-    if let Some(rhs) = state.is_u8_literal(args) {
-        ir.inline(move |r#gen, _, _| r#gen.gen_shr_imm(rhs));
+    if let Some(rhs) = state.is_fixnum_literal(args) {
+        let rhs = rhs.get();
+        if rhs >= 0 {
+            // n >> k (k >= 0): right shift
+            ir.inline(move |r#gen, _, _| r#gen.gen_shr_imm(rhs.min(64) as u8));
+        } else {
+            // n >> -k: equivalent to n << k
+            let k = (-rhs) as u64;
+            if k < 64 {
+                let deopt = ir.new_deopt(state);
+                ir.inline(move |r#gen, _, labels| {
+                    r#gen.gen_shl_rhs_imm(k as u8, &labels[deopt])
+                });
+            } else {
+                // shift too large for inline, deopt
+                let deopt = ir.new_deopt(state);
+                ir.inline(move |r#gen, _, labels| {
+                    let deopt = &labels[deopt];
+                    monoasm!( &mut r#gen.jit,
+                        cmpq rdi, (Value::i32(0).id());
+                        jne deopt;
+                        movq rdi, (Value::i32(0).id());
+                    );
+                });
+            }
+        }
     } else {
         state.load_fixnum(ir, args, GP::Rcx);
         let deopt = ir.new_deopt(state);
@@ -802,10 +829,13 @@ fn integer_shl(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    _: Option<ClassId>,
+    rhs_class: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
+        return false;
+    }
+    if rhs_class != Some(INTEGER_CLASS) {
         return false;
     }
     let CallSiteInfo {
@@ -813,11 +843,28 @@ fn integer_shl(
     } = *callsite;
 
     state.load(ir, recv, GP::Rdi);
-    if let Some(rhs) = state.is_u8_literal(args)
-        && rhs < 64
-    {
-        let deopt = ir.new_deopt(state);
-        ir.inline(move |r#gen, _, labels| r#gen.gen_shl_rhs_imm(rhs, &labels[deopt]));
+    if let Some(rhs) = state.is_fixnum_literal(args) {
+        let rhs = rhs.get();
+        if rhs >= 0 && rhs < 64 {
+            // n << k (0 <= k < 64): left shift
+            let deopt = ir.new_deopt(state);
+            ir.inline(move |r#gen, _, labels| r#gen.gen_shl_rhs_imm(rhs as u8, &labels[deopt]));
+        } else if rhs < 0 {
+            // n << -k: equivalent to n >> k
+            let k = (-rhs) as u64;
+            ir.inline(move |r#gen, _, _| r#gen.gen_shr_imm(k.min(64) as u8));
+        } else {
+            // rhs >= 64: deopt (overflow for non-zero lhs)
+            let deopt = ir.new_deopt(state);
+            ir.inline(move |r#gen, _, labels| {
+                let deopt = &labels[deopt];
+                monoasm!( &mut r#gen.jit,
+                    cmpq rdi, (Value::i32(0).id());
+                    jne deopt;
+                    movq rdi, (Value::i32(0).id());
+                );
+            });
+        }
     } else if let Some(lhs) = state.is_fixnum_literal(recv) {
         state.load_fixnum(ir, args, GP::Rcx);
         let deopt = ir.new_deopt(state);
@@ -2368,6 +2415,25 @@ mod tests {
     }
 
     #[test]
+    fn integer_shr_jit_edge_cases() {
+        // negative constant rhs (>> -k == << k)
+        run_test("a = 1; a >> -3");
+        run_test("a = 5; a >> -10");
+        run_test("a = -1; a >> -3");
+        // large negative rhs (overflow → deopt to BigInt)
+        run_test("a = 0; a >> -100");
+        run_test("a = 1; a >> -100");
+        // large positive rhs
+        run_test("a = 100; a >> 64");
+        run_test("a = 100; a >> 100");
+        run_test("a = -1; a >> 64");
+        run_test("a = -1; a >> 100");
+        // zero lhs
+        run_test("a = 0; a >> 10");
+        run_test("a = 0; a >> -10");
+    }
+
+    #[test]
     fn integer_shl_extended() {
         run_tests(&[
             "1 << 10",
@@ -2375,6 +2441,26 @@ mod tests {
             // BigInt shift
             "(10**20) << 10",
         ]);
+    }
+
+    #[test]
+    fn integer_shl_jit_edge_cases() {
+        // negative constant rhs (<< -k == >> k)
+        run_test("a = 256; a << -4");
+        run_test("a = -256; a << -4");
+        run_test("a = 1; a << -100");
+        run_test("a = -1; a << -100");
+        // large positive rhs (overflow → deopt to BigInt)
+        run_test("a = 0; a << 100");
+        run_test("a = 1; a << 100");
+        // large negative rhs
+        run_test("a = 100; a << -64");
+        run_test("a = 100; a << -100");
+        run_test("a = -1; a << -64");
+        run_test("a = -1; a << -100");
+        // zero lhs
+        run_test("a = 0; a << 10");
+        run_test("a = 0; a << -10");
     }
 
     #[test]

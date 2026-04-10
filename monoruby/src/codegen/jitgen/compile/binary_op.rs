@@ -16,36 +16,54 @@ impl<'a> JitContext<'a> {
         ic: Option<(ClassId, ClassId)>,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
-        match state.binop_type(lhs, rhs, ic) {
-            BinaryOpType::Integer(mode) => {
-                state.binop_integer(ir, kind, dst, mode);
-                Ok(CompileResult::Continue)
-            }
-            BinaryOpType::Float(info) => {
-                match kind {
-                    BinOpK::Exp | BinOpK::Rem => {
-                        return self.call_binary_method(
-                            state,
-                            ir,
-                            lhs,
-                            rhs,
-                            info.lhs_class.into(),
-                            Some(info.rhs_class.into()),
-                            kind,
-                            bc_pos,
-                        );
+        match kind {
+            // Shl/Shr are always compiled as method calls.
+            // The inline function registered on Integer#<< / Integer#>> handles
+            // code generation using both-side class info from the BinOp inline cache.
+            BinOpK::Shl | BinOpK::Shr => {
+                let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
+                match lhs_class {
+                    None => Ok(CompileResult::Recompile(RecompileReason::NotCached)),
+                    Some(lhs_class) => {
+                        self.call_binary_method(
+                            state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos,
+                        )
                     }
-                    _ => {}
                 }
-                state.binop_float(ir, kind, dst, info);
-                Ok(CompileResult::Continue)
             }
-            BinaryOpType::Other(None, _) => {
-                Ok(CompileResult::Recompile(RecompileReason::NotCached))
-            }
-            BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                self.call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos)
-            }
+            _ => match state.binop_type(lhs, rhs, ic) {
+                BinaryOpType::Integer(mode) => {
+                    state.binop_integer(ir, kind, dst, mode);
+                    Ok(CompileResult::Continue)
+                }
+                BinaryOpType::Float(info) => {
+                    match kind {
+                        BinOpK::Exp | BinOpK::Rem => {
+                            return self.call_binary_method(
+                                state,
+                                ir,
+                                lhs,
+                                rhs,
+                                info.lhs_class.into(),
+                                Some(info.rhs_class.into()),
+                                kind,
+                                bc_pos,
+                            );
+                        }
+                        _ => {}
+                    }
+                    state.binop_float(ir, kind, dst, info);
+                    Ok(CompileResult::Continue)
+                }
+                BinaryOpType::Other(None, _) => {
+                    Ok(CompileResult::Recompile(RecompileReason::NotCached))
+                }
+                BinaryOpType::Other(Some(lhs_class), rhs_class) => {
+                    self.call_binary_method(
+                        state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos,
+                    )
+                }
+            },
         }
     }
 
@@ -262,6 +280,7 @@ impl AbstractFrame {
             BinOpK::BitXor => {
                 return Immediate::check_fixnum(lhs ^ rhs);
             }
+            BinOpK::Shl | BinOpK::Shr => unreachable!(),
         }
         None
     }
@@ -332,6 +351,7 @@ impl AbstractFrame {
                     self.def_reg2acc_fixnum(ir, GP::Rax, dst);
                 }
             },
+            BinOpK::Shl | BinOpK::Shr => unreachable!(),
         }
     }
 

@@ -1624,6 +1624,8 @@ pub(crate) enum BinOpK {
     BitXor = 6,
     Rem = 7,
     Exp = 8,
+    Shl = 9,
+    Shr = 10,
 }
 
 impl std::fmt::Display for BinOpK {
@@ -1638,6 +1640,8 @@ impl std::fmt::Display for BinOpK {
             BinOpK::BitXor => "^",
             BinOpK::Rem => "%",
             BinOpK::Exp => "**",
+            BinOpK::Shl => "<<",
+            BinOpK::Shr => ">>",
         };
         write!(f, "{}", s)
     }
@@ -1655,23 +1659,11 @@ impl BinOpK {
             6 => BinOpK::BitXor,
             7 => BinOpK::Rem,
             8 => BinOpK::Exp,
+            9 => BinOpK::Shl,
+            10 => BinOpK::Shr,
             _ => unreachable!(),
         }
     }
-
-    /*pub(crate) fn generic_func(&self) -> BinaryOpFn {
-        match self {
-            BinOpK::Add => add_values,
-            BinOpK::Sub => sub_values,
-            BinOpK::Mul => mul_values,
-            BinOpK::Div => div_values,
-            BinOpK::BitOr => bitor_values,
-            BinOpK::BitAnd => bitand_values,
-            BinOpK::BitXor => bitxor_values,
-            BinOpK::Rem => rem_values,
-            BinOpK::Exp => pow_values,
-        }
-    }*/
 }
 
 ///

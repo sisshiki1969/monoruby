@@ -340,7 +340,9 @@ binop_values_no_opt!(
     (pow, IdentId::_POW),
     (bitor, IdentId::_BOR),
     (bitand, IdentId::_BAND),
-    (bitxor, IdentId::_BXOR)
+    (bitxor, IdentId::_BXOR),
+    (shl, IdentId::_SHL),
+    (shr, IdentId::_SHR)
 );
 
 /// Maximum result size in bits for integer exponentiation (16 GB on 64-bit).
@@ -678,7 +680,10 @@ fn safe_int_shr(lhs: i64, rhs: u64) -> Value {
     if rhs >= 64 {
         Value::integer(if lhs >= 0 { 0 } else { -1 })
     } else {
-        int_shr(lhs, rhs as u32)
+        Value::integer(
+            lhs.checked_shr(rhs as u32)
+                .unwrap_or(if lhs >= 0 { 0 } else { -1 }),
+        )
     }
 }
 
@@ -691,7 +696,11 @@ fn safe_int_shl(lhs: i64, rhs: u64, vm: &mut Executor) -> Option<Value> {
             None
         }
     } else {
-        Some(int_shl(lhs, rhs as u32))
+        let rhs = rhs as u32;
+        Some(match lhs.checked_shl(rhs) {
+            Some(res) if lhs.is_positive() == res.is_positive() => Value::integer(res),
+            _ => bigint_shl(&BigInt::from(lhs), rhs),
+        })
     }
 }
 
@@ -699,7 +708,7 @@ fn safe_bigint_shr(lhs: &BigInt, rhs: u64) -> Value {
     if rhs > u32::MAX as u64 {
         Value::integer(if lhs.is_negative() { -1 } else { 0 })
     } else {
-        bigint_shr(lhs, rhs as u32)
+        Value::bigint(lhs.shr(rhs as u32))
     }
 }
 
@@ -712,27 +721,8 @@ fn safe_bigint_shl(lhs: &BigInt, rhs: u64, vm: &mut Executor) -> Option<Value> {
             None
         }
     } else {
-        Some(bigint_shl(lhs, rhs as u32))
+        Some(Value::bigint(lhs.shl(rhs as u32)))
     }
-}
-
-fn int_shr(lhs: i64, rhs: u32) -> Value {
-    Value::integer(
-        lhs.checked_shr(rhs)
-            .unwrap_or(if lhs >= 0 { 0 } else { -1 }),
-    )
-}
-
-fn int_shl(lhs: i64, rhs: u32) -> Value {
-    match lhs.checked_shl(rhs) {
-        // Work around
-        Some(res) if lhs.is_positive() == res.is_positive() => Value::integer(res),
-        _ => bigint_shl(&BigInt::from(lhs), rhs),
-    }
-}
-
-fn bigint_shr(lhs: &BigInt, rhs: u32) -> Value {
-    Value::bigint(lhs.shr(rhs))
 }
 
 fn bigint_shl(lhs: &BigInt, rhs: u32) -> Value {

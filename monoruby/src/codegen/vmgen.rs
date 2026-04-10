@@ -225,6 +225,8 @@ impl Codegen {
         let mul_rr = self.vm_binops(mul_values);
         let rem_rr = self.vm_binops(rem_values);
         let pow_rr = self.vm_binops(pow_values);
+        let shl_rr = self.vm_binops(shl_values);
+        let shr_rr = self.vm_binops(shr_values);
         let vm_send_simple = self.vm_send(true);
         let vm_send = self.vm_send(false);
 
@@ -323,17 +325,19 @@ impl Codegen {
         self.dispatch[166] = xor_rr;
         self.dispatch[167] = rem_rr;
         self.dispatch[168] = pow_rr;
+        self.dispatch[169] = shl_rr;
+        self.dispatch[170] = shr_rr;
 
-        self.dispatch[170] = self.vm_init();
-        self.dispatch[171] = self.vm_expand_array();
-        self.dispatch[172] = self.vm_undef_method();
-        self.dispatch[173] = self.vm_alias_method();
-        self.dispatch[174] = self.vm_hash();
-        self.dispatch[175] = toa;
-        self.dispatch[176] = mov;
-        self.dispatch[177] = self.vm_range(false);
-        self.dispatch[178] = self.vm_range(true);
-        self.dispatch[179] = self.vm_concat();
+        self.dispatch[172] = self.vm_init();
+        self.dispatch[173] = self.vm_expand_array();
+        self.dispatch[174] = self.vm_undef_method();
+        self.dispatch[175] = self.vm_alias_method();
+        self.dispatch[176] = self.vm_hash();
+        self.dispatch[177] = toa;
+        self.dispatch[178] = mov;
+        self.dispatch[179] = self.vm_range(false);
+        self.dispatch[180] = self.vm_range(true);
+        self.dispatch[181] = self.vm_concat();
     }
 
     ///
@@ -372,6 +376,8 @@ impl Codegen {
         self.dispatch[166] = self.vm_binops(bitxor_values_no_opt);
         self.dispatch[167] = self.vm_binops(rem_values_no_opt);
         self.dispatch[168] = self.vm_binops(pow_values_no_opt);
+        self.dispatch[169] = self.vm_binops(shl_values_no_opt);
+        self.dispatch[170] = self.vm_binops(shr_values_no_opt);
 
         self.jit.finalize();
     }
