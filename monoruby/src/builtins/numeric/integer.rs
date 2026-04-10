@@ -881,12 +881,13 @@ fn integer_shl(
 ///
 /// Common helper for inline JIT compilation of Integer#| / Integer#& / Integer#^.
 ///
-/// Loads operands into registers (or detects literal rhs/lhs for immediate
-/// encoding) and emits the corresponding bitwise instruction. Returns false
-/// if rhs is not Integer or the call site is not simple, falling back to
-/// the regular method dispatch path.
+/// Loads operands into registers (or detects a literal fixnum operand for
+/// immediate encoding) and emits the corresponding bitwise instruction.
+/// Returns false if rhs is not Integer or the call site is not simple,
+/// falling back to the regular method dispatch path.
 ///
-/// `emit_imm` generates `<op>q rdi, imm` (rdi: tagged fixnum lhs).
+/// `emit_imm` generates `<op>q rdi, imm` (rdi: tagged fixnum lhs, imm: tagged
+/// fixnum rhs that fits in `i32`).
 /// `emit_rr` generates `<op>q rdi, rsi` (both tagged fixnums in rdi/rsi).
 fn integer_bitop_inline(
     state: &mut AbstractState,
@@ -894,8 +895,8 @@ fn integer_bitop_inline(
     store: &Store,
     callid: CallSiteId,
     rhs_class: Option<ClassId>,
-    emit_imm: impl FnOnce(&mut Codegen, i64) + 'static,
-    emit_rr: impl FnOnce(&mut Codegen) + 'static,
+    emit_imm: impl Fn(&mut Codegen, i64) + Copy + 'static,
+    emit_rr: impl Fn(&mut Codegen) + Copy + 'static,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -908,16 +909,16 @@ fn integer_bitop_inline(
         dst, args, recv, ..
     } = *callsite;
 
-    if let Some(rhs) = state.is_i16_literal(args) {
-        // recv op <i16 literal>
+    if let Some(rhs) = state.is_fixnum_literal(args) {
+        // recv op <fixnum literal>
         state.load(ir, recv, GP::Rdi);
-        let imm = Value::i32(rhs as i32).id() as i64;
-        ir.inline(move |r#gen, _, _| emit_imm(r#gen, imm));
-    } else if let Some(lhs) = state.is_i16_literal(recv) {
-        // <i16 literal> op args (commutative — swap to use immediate form)
+        let imm = Value::integer(rhs.get()).id() as i64;
+        emit_bitop_imm(ir, imm, emit_imm, emit_rr);
+    } else if let Some(lhs) = state.is_fixnum_literal(recv) {
+        // <fixnum literal> op args (commutative — swap to use immediate form)
         state.load_fixnum(ir, args, GP::Rdi);
-        let imm = Value::i32(lhs as i32).id() as i64;
-        ir.inline(move |r#gen, _, _| emit_imm(r#gen, imm));
+        let imm = Value::integer(lhs.get()).id() as i64;
+        emit_bitop_imm(ir, imm, emit_imm, emit_rr);
     } else {
         state.load(ir, recv, GP::Rdi);
         state.load_fixnum(ir, args, GP::Rsi);
@@ -925,6 +926,29 @@ fn integer_bitop_inline(
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
+}
+
+/// Emit a bitwise op with a literal rhs in `imm` (tagged fixnum form, in rdi).
+///
+/// If `imm` fits in `i32`, emit the immediate form directly. Otherwise load
+/// the full 64-bit immediate into rsi via `movabsq` and emit the register
+/// form.
+fn emit_bitop_imm(
+    ir: &mut AsmIr,
+    imm: i64,
+    emit_imm: impl Fn(&mut Codegen, i64) + Copy + 'static,
+    emit_rr: impl Fn(&mut Codegen) + Copy + 'static,
+) {
+    if i32::try_from(imm).is_ok() {
+        ir.inline(move |r#gen, _, _| emit_imm(r#gen, imm));
+    } else {
+        ir.inline(move |r#gen, _, _| {
+            monoasm!( &mut r#gen.jit,
+                movq rsi, (imm);
+            );
+            emit_rr(r#gen);
+        });
+    }
 }
 
 fn integer_bitor(
@@ -2602,7 +2626,7 @@ mod tests {
 
     #[test]
     fn integer_bitop_jit_edge_cases() {
-        // immediate rhs
+        // immediate rhs (small, tagged form fits in i32)
         run_test("a = 0xFF; a | 0x0F");
         run_test("a = 0xFF; a & 0x0F");
         run_test("a = 0xFF; a ^ 0x0F");
@@ -2614,6 +2638,14 @@ mod tests {
         run_test("a = 0xFF; b = 0x0F; a | b");
         run_test("a = 0xFF; b = 0x0F; a & b");
         run_test("a = 0xFF; b = 0x0F; a ^ b");
+        // large fixnum literal (tagged form does NOT fit in i32 → register-loaded path)
+        run_test("a = 0x12345678; a | 0xDEADBEEF_CAFE");
+        run_test("a = 0x12345678; a & 0xDEADBEEF_CAFE");
+        run_test("a = 0x12345678; a ^ 0xDEADBEEF_CAFE");
+        // commutative form with large literal
+        run_test("a = 0x12345678; 0xDEADBEEF_CAFE | a");
+        run_test("a = 0x12345678; 0xDEADBEEF_CAFE & a");
+        run_test("a = 0x12345678; 0xDEADBEEF_CAFE ^ a");
         // negative values (sign bit interaction with tag)
         run_test("a = -1; a | 0x0F");
         run_test("a = -1; a & 0x0F");
@@ -2621,6 +2653,9 @@ mod tests {
         run_test("a = -1; b = 5; a | b");
         run_test("a = -1; b = 5; a & b");
         run_test("a = -1; b = 5; a ^ b");
+        // negative large literal
+        run_test("a = -1; a & 0xDEADBEEF_CAFE");
+        run_test("a = -1; a ^ 0xDEADBEEF_CAFE");
         // identity / zero
         run_test("a = 42; a | 0");
         run_test("a = 42; a & 0");
