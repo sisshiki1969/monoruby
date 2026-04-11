@@ -334,4 +334,183 @@ mod tests {
         // Binary and UTF-8 symbols with same bytes are distinct
         run_test_no_result_check(r#""\xC3\xA3".to_sym != "\xC3\xA3".b.to_sym"#);
     }
+
+    #[test]
+    fn symbol_inspect_unquoted() {
+        // Plain identifiers
+        run_test(r#":hello.inspect"#);
+        run_test(r#":Fred.inspect"#);
+        run_test(r#":_abc.inspect"#);
+        run_test(r#":fred?.inspect"#);
+        run_test(r#":fred!.inspect"#);
+        run_test(r#":BAD!.inspect"#);
+        run_test(r#":_BAD!.inspect"#);
+        // Global / ivar / cvar
+        run_test(r#":$ruby.inspect"#);
+        run_test(r#":@ruby.inspect"#);
+        run_test(r#":@@ruby.inspect"#);
+        run_test(r#":$-w.inspect"#);
+        // Special single-char globals
+        run_test(r#":$+.inspect"#);
+        run_test(r#":$~.inspect"#);
+        run_test(r#":$?.inspect"#);
+        run_test(r#":$!.inspect"#);
+        // $digits
+        run_test(r#":$0.inspect"#);
+        run_test(r#":$1234.inspect"#);
+        // Operators
+        run_test(r#":+.inspect"#);
+        run_test(r#":-.inspect"#);
+        run_test(r#":*.inspect"#);
+        run_test(r#":**.inspect"#);
+        run_test(r#":+@.inspect"#);
+        run_test(r#":-@.inspect"#);
+        run_test(r#":<=>.inspect"#);
+        run_test(r#":==.inspect"#);
+        run_test(r#":===.inspect"#);
+        run_test(r#":=~.inspect"#);
+        run_test(r#":[].inspect"#);
+        run_test(r#":[]=.inspect"#);
+        run_test(r#":"<<".inspect"#);
+        run_test(r#":">>".inspect"#);
+        // Non-ASCII letters are valid identifier chars
+        run_test(r#":"ê".inspect"#);
+        run_test(r#":"日本語".inspect"#);
+    }
+
+    #[test]
+    fn symbol_inspect_quoted() {
+        // $ followed by non-simple content
+        run_test(r#":"$ruby!".inspect"#);
+        run_test(r#":"@ruby!".inspect"#);
+        run_test(r#":"@@ruby!".inspect"#);
+        run_test(r#":"$-ww".inspect"#);
+        run_test(r#":"$".inspect"#);
+        // Non-identifier, non-operator sequences
+        run_test(r#":"foo bar".inspect"#);
+        run_test(r#":"9".inspect"#);
+        run_test(r#":"*foo".inspect"#);
+        run_test(r#":"foo ".inspect"#);
+        run_test(r#":" foo".inspect"#);
+        run_test(r#":" ".inspect"#);
+        run_test(r#":"&&".inspect"#);
+        run_test(r#":"||".inspect"#);
+        run_test(r#":"|||".inspect"#);
+        run_test(r#":"++".inspect"#);
+        run_test(r#":":".inspect"#);
+        run_test(r#":"::".inspect"#);
+        run_test(r#":",".inspect"#);
+        run_test(r#":".".inspect"#);
+        run_test(r#":"..".inspect"#);
+        run_test(r#":"...".inspect"#);
+        run_test(r#":";".inspect"#);
+        run_test(r#":"=".inspect"#);
+        run_test(r#":"=>".inspect"#);
+        run_test(r#":"?".inspect"#);
+        run_test(r#":"@".inspect"#);
+        // Escaped characters inside quoted form
+        run_test(r#":"\"".inspect"#);
+        run_test(r#":"\"\"".inspect"#);
+        run_test(r#":"'".inspect"#);
+        // Binary symbol gets quoted with escape
+        run_test(r#""foo\xA4".b.to_sym.inspect"#);
+    }
+
+    #[test]
+    fn symbol_to_proc_metadata() {
+        // Arity is -2 (one required + rest)
+        run_test(r#":to_i.to_proc.arity"#);
+        // Parameters is [[:req], [:rest]] with no names (native builtin body)
+        run_test(r#":to_i.to_proc.parameters"#);
+        // Source location is nil (not an ISeq)
+        run_test(r#":to_i.to_proc.source_location"#);
+        // It is a lambda
+        run_test(r#":to_i.to_proc.lambda?"#);
+        // It is a Proc
+        run_test(r#":to_i.to_proc.is_a?(Proc)"#);
+    }
+
+    #[test]
+    fn symbol_to_proc_block_forwarding() {
+        // A block passed to Proc#call on a Symbol-derived proc must be
+        // forwarded to the underlying method.
+        run_test(
+            r#"
+            klass = Class.new do
+              def m
+                yield
+              end
+            end
+            :m.to_proc.call(klass.new) { :value }
+            "#,
+        );
+    }
+
+    #[test]
+    fn symbol_to_proc_no_receiver_raises() {
+        // Proc#call with no receiver argument raises ArgumentError.
+        run_test_error(r#":object_id.to_proc.call"#);
+    }
+
+    #[test]
+    fn symbol_to_s_chilled_basics() {
+        // Symbol#to_s returns a mutable string (chilled, not frozen).
+        run_test(r#":hello.to_s.frozen?"#);
+        // dup clears the chilled bit so mutation is silent.
+        run_test(r#"s = :hello.to_s.dup; s << "X"; s"#);
+        // Each call returns a fresh string instance.
+        run_test(r#":hello.to_s.equal?(:hello.to_s)"#);
+        // Mutation succeeds (warning or not) and the string changes.
+        run_test(
+            r#"
+            Warning[:deprecated] = false
+            s = :bad!.to_s
+            s.upcase!
+            s
+            "#,
+        );
+    }
+
+    #[test]
+    fn symbol_to_s_chilled_dup_silent() {
+        // With Warning[:deprecated]=true and a StringIO'd $stderr, dup'd
+        // chilled strings must not emit a warning on mutation.
+        run_test_once(
+            r#"
+            require 'stringio'
+            old_stderr = $stderr
+            old_dep = Warning[:deprecated]
+            begin
+              $stderr = StringIO.new
+              Warning[:deprecated] = true
+              :hello.to_s.dup << "X"
+              $stderr.string
+            ensure
+              $stderr = old_stderr
+              Warning[:deprecated] = old_dep
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn symbol_to_s_chilled_suppressed() {
+        // Warning[:deprecated]=false suppresses the mutation warning.
+        run_test_once(
+            r#"
+            require 'stringio'
+            old_stderr = $stderr
+            old_dep = Warning[:deprecated]
+            begin
+              $stderr = StringIO.new
+              Warning[:deprecated] = false
+              :bad!.to_s.upcase!
+              $stderr.string
+            ensure
+              $stderr = old_stderr
+              Warning[:deprecated] = old_dep
+            end
+            "#,
+        );
+    }
 }

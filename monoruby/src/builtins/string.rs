@@ -5220,6 +5220,34 @@ mod tests {
     }
 
     #[test]
+    fn string_xnn_literal_is_utf8() {
+        // Source-file `\xNN` escapes inherit the source (UTF-8) encoding
+        // regardless of whether the resulting bytes form valid UTF-8,
+        // matching CRuby.
+        run_test(r#""\xC3\xA9".encoding.name"#);
+        run_test(r#""\xC3\xA9".valid_encoding?"#);
+        run_test(r#""\xA9".encoding.name"#);
+        run_test(r#""\xA9".valid_encoding?"#);
+        run_test(r#""\xe3\x81\x82".encoding.name"#);
+        run_test(r#""\xe3\x81\x82".valid_encoding?"#);
+    }
+
+    #[test]
+    fn string_multibyte_char_boundary_check() {
+        // é (UTF-8 0xC3 0xA9) is a single character; start_with?/end_with?
+        // on a mid-character byte must return false even though the byte
+        // literally matches.
+        run_test(r#""\xC3\xA9".start_with?("\xC3")"#);
+        run_test(r#""\xC3\xA9".end_with?("\xA9")"#);
+        // 3-byte sequence for あ (UTF-8 0xE3 0x81 0x82)
+        run_test(r#""\xe3\x81\x82".end_with?("\x82")"#);
+        run_test(r#""\xe3\x81\x82".start_with?("\xe3")"#);
+        // Full-character match still succeeds.
+        run_test(r#""\xC3\xA9".start_with?("\xC3\xA9")"#);
+        run_test(r#""\xC3\xA9".end_with?("\xC3\xA9")"#);
+    }
+
+    #[test]
     fn string_index_at_end() {
         run_test(r#""blablabla".index("", 9)"#);
         run_test(r#""blablabla".index("", 10)"#);

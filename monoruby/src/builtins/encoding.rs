@@ -875,4 +875,37 @@ mod tests {
         run_test_once("Encoding::CompatibilityError.is_a?(Class)");
         run_test_once("Encoding::CompatibilityError < EncodingError");
     }
+
+    #[test]
+    fn encoding_ascii_compatible_p() {
+        // ASCII-compatible encodings
+        run_test(r#"Encoding::UTF_8.ascii_compatible?"#);
+        run_test(r#"Encoding::US_ASCII.ascii_compatible?"#);
+        run_test(r#"Encoding::ASCII_8BIT.ascii_compatible?"#);
+        run_test(r#"Encoding::ISO_8859_1.ascii_compatible?"#);
+        run_test(r#"Encoding::Shift_JIS.ascii_compatible?"#);
+        run_test(r#"Encoding::EUC_JP.ascii_compatible?"#);
+        // Non-ASCII-compatible encodings
+        run_test(r#"Encoding::UTF_16.ascii_compatible?"#);
+        run_test(r#"Encoding::UTF_16BE.ascii_compatible?"#);
+        run_test(r#"Encoding::UTF_16LE.ascii_compatible?"#);
+        run_test(r#"Encoding::UTF_32.ascii_compatible?"#);
+        run_test(r#"Encoding::UTF_32BE.ascii_compatible?"#);
+        run_test(r#"Encoding::UTF_32LE.ascii_compatible?"#);
+    }
+
+    #[test]
+    fn encoding_dummy_p() {
+        // Non-dummy encodings
+        run_test(r#"Encoding::UTF_8.dummy?"#);
+        run_test(r#"Encoding::US_ASCII.dummy?"#);
+        run_test(r#"Encoding::ASCII_8BIT.dummy?"#);
+        run_test(r#"Encoding::UTF_16BE.dummy?"#);
+        run_test(r#"Encoding::UTF_16LE.dummy?"#);
+        run_test(r#"Encoding::Shift_JIS.dummy?"#);
+        // Dummy encodings (stateful / no-BOM UTF-16/32)
+        run_test(r#"Encoding::UTF_16.dummy?"#);
+        run_test(r#"Encoding::UTF_32.dummy?"#);
+        run_test(r#"Encoding::ISO_2022_JP.dummy?"#);
+    }
 }
