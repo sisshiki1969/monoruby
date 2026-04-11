@@ -146,6 +146,8 @@ pub(super) fn init_encoding(globals: &mut Globals) {
     globals.define_builtin_func(enc.id(), "to_s", enc_to_s, 0);
     globals.define_builtin_func(enc.id(), "inspect", enc_inspect, 0);
     globals.define_builtin_func(enc.id(), "name", enc_to_s, 0);
+    globals.define_builtin_func(enc.id(), "ascii_compatible?", enc_ascii_compatible_p, 0);
+    globals.define_builtin_func(enc.id(), "dummy?", enc_dummy_p, 0);
 }
 
 // -------------------------------------------------------
@@ -664,6 +666,78 @@ fn enc_inspect(
         Some(v) => Ok(v),
         None => Ok(Value::string_from_str("#<Encoding:UTF-8>")),
     }
+}
+
+///
+/// ### Encoding#ascii_compatible?
+/// - ascii_compatible? -> bool
+///
+/// Returns true for encodings whose encoded forms are a superset of ASCII.
+///
+#[monoruby_builtin]
+fn enc_ascii_compatible_p(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let name = globals
+        .store
+        .get_ivar(self_, IdentId::_ENCODING)
+        .and_then(|v| v.is_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+    Ok(Value::bool(is_ascii_compatible_encoding(&name)))
+}
+
+///
+/// ### Encoding#dummy?
+/// - dummy? -> bool
+///
+#[monoruby_builtin]
+fn enc_dummy_p(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let name = globals
+        .store
+        .get_ivar(self_, IdentId::_ENCODING)
+        .and_then(|v| v.is_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+    Ok(Value::bool(is_dummy_encoding(&name)))
+}
+
+fn is_ascii_compatible_encoding(name: &str) -> bool {
+    !matches!(
+        name,
+        "UTF-16"
+            | "UTF-32"
+            | "UTF-16BE"
+            | "UTF-16LE"
+            | "UTF-32BE"
+            | "UTF-32LE"
+            | "ISO-2022-JP"
+            | "STATELESS-ISO-2022-JP"
+            | "CP50220"
+            | "CP50221"
+            | "UTF-7"
+    )
+}
+
+fn is_dummy_encoding(name: &str) -> bool {
+    matches!(
+        name,
+        "UTF-16"
+            | "UTF-32"
+            | "ISO-2022-JP"
+            | "STATELESS-ISO-2022-JP"
+            | "CP50220"
+            | "CP50221"
+            | "UTF-7"
+    )
 }
 
 #[cfg(test)]

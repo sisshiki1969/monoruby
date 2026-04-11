@@ -1,8 +1,21 @@
 use super::*;
+use std::sync::OnceLock;
 
 //
 // Symbol class
 //
+
+///
+/// FuncId of the shared native body used by `Symbol#to_proc`.
+///
+/// Stored once at init so that `Proc#call` can detect symbol-to-proc procs
+/// for block-forwarding fast path.
+///
+static SYMBOL_TO_PROC_BODY_FID: OnceLock<FuncId> = OnceLock::new();
+
+pub(crate) fn symbol_to_proc_body_fid() -> Option<FuncId> {
+    SYMBOL_TO_PROC_BODY_FID.get().copied()
+}
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Symbol", SYMBOL_CLASS, None);
@@ -14,6 +27,21 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SYMBOL_CLASS, "!=", ne, 1);
     globals.define_builtin_func(SYMBOL_CLASS, "to_s", sym_to_s, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "name", sym_name, 0);
+    globals.define_builtin_func(SYMBOL_CLASS, "inspect", sym_inspect, 0);
+    globals.define_builtin_func(SYMBOL_CLASS, "to_proc", sym_to_proc, 0);
+    // Register the shared body function used by Symbol#to_proc. It is
+    // installed on SYMBOL_CLASS with an internal name so that Proc dispatch
+    // can invoke it through the normal block-invoker path, but ordinary Ruby
+    // code has no reason to call it directly.
+    let body_fid = globals.define_builtin_func_with(
+        SYMBOL_CLASS,
+        "__monoruby_symbol_to_proc_body__",
+        symbol_to_proc_body,
+        1,
+        1,
+        true,
+    );
+    let _ = SYMBOL_TO_PROC_BODY_FID.set(body_fid);
     // Symbol.new is undefined (raises NoMethodError).
     let meta = globals.store.get_metaclass(SYMBOL_CLASS).id();
     globals
@@ -31,8 +59,9 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/to_s.html]
 #[monoruby_builtin]
-fn sym_to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let sym = lfp.self_val().as_symbol();
+fn sym_to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let sym = self_val.as_symbol();
     let ident_name = sym.get_ident_name_clone();
     let (bytes, enc) = match &ident_name {
         IdentName::Utf8(s) => {
@@ -46,7 +75,90 @@ fn sym_to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
         IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
     };
     let inner = RStringInner::from_encoding(bytes, enc);
-    Ok(Value::string_from_inner(inner))
+    let result = Value::string_from_inner(inner);
+    emit_to_s_chilled_warning(vm, globals, self_val, &ident_name)?;
+    Ok(result)
+}
+
+/// Emit the "string returned by :foo.to_s will be frozen in the future"
+/// deprecation warning when `Warning[:deprecated]` is enabled. This is
+/// approximate: CRuby fires the warning on mutation of the chilled string,
+/// but monoruby does not track chilled strings, so we fire it eagerly.
+fn emit_to_s_chilled_warning(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    ident_name: &IdentName,
+) -> Result<()> {
+    // Check Warning[:deprecated]
+    let warning_val = match globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Warning"))
+    {
+        Some(v) => v,
+        None => return Ok(()),
+    };
+    let dep_sym = Value::symbol(IdentId::get_id("deprecated"));
+    let dep = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("[]"),
+        warning_val,
+        &[dep_sym],
+        None,
+        None,
+    )?;
+    if dep.is_nil() || dep == Value::bool(false) {
+        return Ok(());
+    }
+
+    // Build the inspect form of self
+    let inspect = if is_simple_symbol(ident_name) {
+        let mut res = String::from(":");
+        match ident_name {
+            IdentName::Utf8(name) => res.push_str(name),
+            IdentName::Bytes(bytes) => res.push_str(&String::from_utf8_lossy(bytes)),
+        }
+        res
+    } else {
+        let (bytes, enc) = match ident_name {
+            IdentName::Utf8(s) => {
+                let enc = if s.is_ascii() {
+                    Encoding::UsAscii
+                } else {
+                    Encoding::Utf8
+                };
+                (s.as_bytes(), enc)
+            }
+            IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
+        };
+        let inner = RStringInner::from_encoding(bytes, enc);
+        let mut res = String::from(":\"");
+        res.push_str(&inner.inspect());
+        res.push('"');
+        res
+    };
+    let _ = self_val;
+
+    let msg = format!(
+        "warning: string returned by {}.to_s will be frozen in the future\n",
+        inspect
+    );
+    let stderr = globals
+        .get_gvar(IdentId::get_id("$stderr"))
+        .unwrap_or(Value::nil());
+    if stderr.is_nil() {
+        return Ok(());
+    }
+    let msg_val = Value::string(msg);
+    vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("write"),
+        stderr,
+        &[msg_val],
+        None,
+        None,
+    )?;
+    Ok(())
 }
 
 ///
@@ -81,6 +193,255 @@ fn sym_name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     v.set_frozen();
     globals.symbol_names.insert(sym, v);
     Ok(v)
+}
+
+///
+/// ### Symbol#inspect
+///
+/// - inspect -> String
+///
+/// Returns a string representation of the symbol as a symbol literal.
+/// Names that are not valid simple identifiers / operators / global-ivar-cvar
+/// forms are wrapped in `:"..."` with string-style escaping.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/inspect.html]
+#[monoruby_builtin]
+fn sym_inspect(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let sym = lfp.self_val().as_symbol();
+    let ident_name = sym.get_ident_name_clone();
+    let s = if is_simple_symbol(&ident_name) {
+        let mut res = String::from(":");
+        match &ident_name {
+            IdentName::Utf8(name) => res.push_str(name),
+            IdentName::Bytes(bytes) => {
+                res.push_str(&String::from_utf8_lossy(bytes));
+            }
+        }
+        res
+    } else {
+        let (bytes, enc) = match &ident_name {
+            IdentName::Utf8(s) => {
+                let enc = if s.is_ascii() {
+                    Encoding::UsAscii
+                } else {
+                    Encoding::Utf8
+                };
+                (s.as_bytes(), enc)
+            }
+            IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
+        };
+        let inner = RStringInner::from_encoding(bytes, enc);
+        let mut res = String::from(":\"");
+        res.push_str(&inner.inspect());
+        res.push('"');
+        res
+    };
+    Ok(Value::string(s))
+}
+
+///
+/// ### Symbol#to_proc
+///
+/// - to_proc -> Proc
+///
+/// Returns a Proc object whose parameters are `[[:req], [:rest]]` and whose
+/// `source_location` is `nil`, matching CRuby's C-level implementation.
+/// When invoked with `(recv, *args, &blk)`, it calls `recv.public_send(self,
+/// *args, &blk)`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/to_proc.html]
+#[monoruby_builtin]
+fn sym_to_proc(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let body_fid = SYMBOL_TO_PROC_BODY_FID
+        .get()
+        .copied()
+        .expect("symbol_to_proc body function not initialized");
+    let outer_lfp = Lfp::heap_frame(self_val, globals[body_fid].meta());
+    let proc = Proc::from_parts(outer_lfp, body_fid, pc);
+    Ok(proc.into())
+}
+
+///
+/// Shared body for `Symbol#to_proc`-created procs.
+///
+/// Invoked via the block-invoker path (for `&:sym` usage in e.g. `map(&:to_s)`).
+/// `lfp.self_val()` carries the symbol (from the proc's outer_lfp), `arg(0)` is
+/// the receiver, and `arg(1)` is the rest array.
+///
+#[monoruby_builtin]
+fn symbol_to_proc_body(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let symbol_val = lfp.self_val();
+    let symbol = symbol_val
+        .try_symbol()
+        .expect("symbol_to_proc_body invoked with non-symbol self");
+    let recv = lfp.arg(0);
+    let rest_val = lfp.arg(1);
+    let rest_array = rest_val.as_array();
+    let rest: Vec<Value> = rest_array.iter().cloned().collect();
+    // public_send semantics: reject private and protected methods.
+    let class_id = recv.class();
+    if let Some(entry) = globals.check_method_for_class(class_id, symbol) {
+        match entry.visibility() {
+            Visibility::Private => {
+                return Err(MonorubyErr::private_method_called(
+                    globals, symbol, recv,
+                ));
+            }
+            Visibility::Protected => {
+                return Err(MonorubyErr::protected_method_called(
+                    globals, symbol, recv,
+                ));
+            }
+            _ => {}
+        }
+    }
+    let bh = lfp.block();
+    vm.invoke_method_inner(globals, symbol, recv, &rest, bh, None)
+}
+
+/// Test whether a symbol name can be rendered without quotes.
+fn is_simple_symbol(name: &IdentName) -> bool {
+    let s = match name.as_str() {
+        Some(s) => s,
+        None => return false,
+    };
+    if s.is_empty() {
+        return false;
+    }
+    if is_operator_symbol(s) {
+        return true;
+    }
+    if let Some(rest) = s.strip_prefix("@@") {
+        return is_plain_identifier(rest);
+    }
+    if let Some(rest) = s.strip_prefix('@') {
+        return is_plain_identifier(rest);
+    }
+    if let Some(rest) = s.strip_prefix('$') {
+        return is_global_var_tail(rest);
+    }
+    is_method_identifier(s)
+}
+
+fn is_operator_symbol(s: &str) -> bool {
+    matches!(
+        s,
+        "|" | "^"
+            | "&"
+            | "<=>"
+            | "=="
+            | "==="
+            | "=~"
+            | ">"
+            | ">="
+            | "<"
+            | "<="
+            | "<<"
+            | ">>"
+            | "+"
+            | "-"
+            | "*"
+            | "/"
+            | "%"
+            | "**"
+            | "~"
+            | "+@"
+            | "-@"
+            | "[]"
+            | "[]="
+            | "`"
+            | "!"
+            | "!="
+            | "!~"
+    )
+}
+
+fn is_ident_start_char(c: char) -> bool {
+    c == '_' || c.is_ascii_alphabetic() || (c as u32) >= 0x80
+}
+
+fn is_ident_cont_char(c: char) -> bool {
+    c == '_' || c.is_ascii_alphanumeric() || (c as u32) >= 0x80
+}
+
+fn is_plain_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if is_ident_start_char(c) => {}
+        _ => return false,
+    }
+    chars.all(is_ident_cont_char)
+}
+
+fn is_method_identifier(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let body_end = match bytes.last() {
+        Some(b'!') | Some(b'?') | Some(b'=') => bytes.len() - 1,
+        _ => bytes.len(),
+    };
+    if body_end == 0 {
+        return false;
+    }
+    is_plain_identifier(&s[..body_end])
+}
+
+fn is_global_var_tail(rest: &str) -> bool {
+    if rest.is_empty() {
+        return false;
+    }
+    // $1234: digits only
+    if rest.bytes().all(|b| b.is_ascii_digit()) {
+        return true;
+    }
+    // $-X: dash + exactly one identifier-ish char
+    if let Some(after_dash) = rest.strip_prefix('-') {
+        let mut chars = after_dash.chars();
+        if let (Some(c), None) = (chars.next(), chars.next()) {
+            return is_ident_cont_char(c);
+        }
+        return false;
+    }
+    // Single special char globals like $~, $*, $$, $?, $!, ...
+    if rest.len() == 1 {
+        let c = rest.as_bytes()[0];
+        if matches!(
+            c,
+            b'~' | b'*'
+                | b'$'
+                | b'?'
+                | b'!'
+                | b'@'
+                | b'/'
+                | b'\\'
+                | b';'
+                | b','
+                | b'.'
+                | b'<'
+                | b'>'
+                | b':'
+                | b'"'
+                | b'&'
+                | b'\''
+                | b'`'
+                | b'+'
+                | b'='
+        ) {
+            return true;
+        }
+    }
+    // $name: plain identifier, no !/?/= suffix allowed
+    is_plain_identifier(rest)
 }
 
 ///
