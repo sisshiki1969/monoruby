@@ -740,14 +740,22 @@ mod tests {
 
     #[test]
     fn defined_hooked_special_vars() {
-        // `defined?` consults GvarTable::is_defined which recognises
-        // hooked entries as defined regardless of whether they have a
-        // current value.
+        // `defined?` consults GvarTable::defined_runtime, which treats
+        // $~/$LOAD_PATH/$LOADED_FEATURES as always defined and treats
+        // $&/$'/$`/$N as defined only when the underlying $~ has a
+        // value (mirroring CRuby's BACK_REF / NTH_REF semantics).
         run_test(
             r#"
             [defined?($~), defined?($&), defined?($'), defined?($`),
              defined?($1), defined?($LOAD_PATH), defined?($:),
              defined?($LOADED_FEATURES), defined?($")]
+            "#,
+        );
+        // After a successful match, $&/$'/$`/$N also become defined.
+        run_test(
+            r#"
+            "abc" =~ /(b)/
+            [defined?($&), defined?($'), defined?($`), defined?($1)]
             "#,
         );
         // But undefined names are still nil.

@@ -701,18 +701,18 @@ mod tests {
     fn encoding_default_internal() {
         run_test(r#"Encoding.default_internal"#);
         // setter and getter round-trip
-        run_test_once(r#"
+        run_test(r#"
             Encoding.default_internal = Encoding::UTF_8
             res = Encoding.default_internal == Encoding::UTF_8
             Encoding.default_internal = nil
             res
         "#);
-        run_test_once(r#"
+        run_test(r#"
             Encoding.default_internal = nil
             Encoding.default_internal
         "#);
         // string argument to setter
-        run_test_once(r#"
+        run_test(r#"
             Encoding.default_internal = "UTF-8"
             res = Encoding.default_internal == Encoding::UTF_8
             Encoding.default_internal = nil
@@ -722,7 +722,7 @@ mod tests {
 
     #[test]
     fn encoding_list() {
-        run_test_once(
+        run_test(
             r#"
             list = Encoding.list
             list.is_a?(Array)
@@ -749,7 +749,7 @@ mod tests {
 
     #[test]
     fn encoding_aliases() {
-        run_test_once(
+        run_test(
             r#"
             Encoding.aliases.is_a?(Hash)
             "#,
@@ -770,7 +770,7 @@ mod tests {
 
     #[test]
     fn encoding_compatible() {
-        run_test_once(
+        run_test(
             r#"
             Encoding.compatible?("a", "b").nil?.!
             "#,
@@ -780,11 +780,11 @@ mod tests {
     #[test]
     fn warning_module() {
         // Warning[] returns category status
-        run_test_once("Warning[:deprecated]");
-        run_test_once("Warning[:experimental]");
-        run_test_once("Warning[:performance]");
+        run_test("Warning[:deprecated]");
+        run_test("Warning[:experimental]");
+        run_test("Warning[:performance]");
         // Warning[]= sets category
-        run_test_once(r#"
+        run_test(r#"
             old = Warning[:deprecated]
             Warning[:deprecated] = false
             res = Warning[:deprecated]
@@ -798,7 +798,7 @@ mod tests {
     #[test]
     fn compatibility_error_class() {
         // Encoding::CompatibilityError exists and inherits from EncodingError
-        run_test_once("Encoding::CompatibilityError.is_a?(Class)");
-        run_test_once("Encoding::CompatibilityError < EncodingError");
+        run_test("Encoding::CompatibilityError.is_a?(Class)");
+        run_test("Encoding::CompatibilityError < EncodingError");
     }
 }

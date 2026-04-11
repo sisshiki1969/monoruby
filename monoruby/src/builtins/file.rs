@@ -1089,15 +1089,17 @@ mod tests {
 
     #[test]
     fn join() {
-        run_test(r##"File.join("a","b")"##);
-        run_test(r##"File.join("a/","b")"##);
-        run_test(r##"File.join("a/","/b")"##);
-        run_test(r##"File.join("a","/b")"##);
-        run_test(r##"File.join("a",["b",["c",["d"]]])"##);
-        run_test(r##"File.join("", "a",["b",["c",["d"]]])"##);
-        run_test(r##"File.join("","","","a")"##);
-        run_test(r##"File.join([])"##);
-        run_test(r##"File.join"##);
+        run_tests(&[
+            r##"File.join("a","b")"##,
+            r##"File.join("a/","b")"##,
+            r##"File.join("a/","/b")"##,
+            r##"File.join("a","/b")"##,
+            r##"File.join("a",["b",["c",["d"]]])"##,
+            r##"File.join("", "a",["b",["c",["d"]]])"##,
+            r##"File.join("","","","a")"##,
+            r##"File.join([])"##,
+            r##"File.join"##,
+        ]);
     }
 
     #[test]
@@ -1109,28 +1111,28 @@ mod tests {
 
     #[test]
     fn dirname() {
-        run_test(r##"File.dirname("dir/file.ext")"##);
-        run_test(r##"File.dirname("file.ext")"##);
-        run_test(r##"File.dirname("foo/bar/")"##);
-
-        run_test(r##"File.basename("dir/file.ext")"##);
-        run_test(r##"File.basename("file.ext")"##);
-        run_test(r##"File.basename("foo/bar/")"##);
-        run_test(r##"File.basename("")"##);
-        run_test(r##"File.basename("/")"##);
-        run_test(r##"File.basename("//")"##);
-        run_test(r##"File.basename("..")"##);
-        run_test(r##"File.basename("/..")"##);
-        run_test(r##"File.basename("/../")"##);
-        run_test(r##"File.basename("/../.")"##);
-
-        run_test(r##"File.extname("foo/foo.txt")"##);
-        run_test(r##"File.extname("foo/foo.tar.gz")"##);
-        run_test(r##"File.extname("foo/bar")"##);
-        run_test(r##"File.extname("foo/.bar")"##);
-        run_test(r##"File.extname("foo.txt/bar")"##);
-        run_test(r##"File.extname(".foo")"##);
-        run_test(r##"File.extname("foo.")"##);
+        run_tests(&[
+            r##"File.dirname("dir/file.ext")"##,
+            r##"File.dirname("file.ext")"##,
+            r##"File.dirname("foo/bar/")"##,
+            r##"File.basename("dir/file.ext")"##,
+            r##"File.basename("file.ext")"##,
+            r##"File.basename("foo/bar/")"##,
+            r##"File.basename("")"##,
+            r##"File.basename("/")"##,
+            r##"File.basename("//")"##,
+            r##"File.basename("..")"##,
+            r##"File.basename("/..")"##,
+            r##"File.basename("/../")"##,
+            r##"File.basename("/../.")"##,
+            r##"File.extname("foo/foo.txt")"##,
+            r##"File.extname("foo/foo.tar.gz")"##,
+            r##"File.extname("foo/bar")"##,
+            r##"File.extname("foo/.bar")"##,
+            r##"File.extname("foo.txt/bar")"##,
+            r##"File.extname(".foo")"##,
+            r##"File.extname("foo.")"##,
+        ]);
     }
 
     #[test]
@@ -1211,16 +1213,18 @@ mod tests {
 
     #[test]
     fn fnmatch() {
-        run_test(r##"File.fnmatch("cat", "cat")"##);
-        run_test(r##"File.fnmatch("cat", "category")"##);
-        run_test(r##"File.fnmatch("c*", "cats")"##);
-        run_test(r##"File.fnmatch("c?t", "cat")"##);
-        run_test(r##"File.fnmatch("c?t", "cot")"##);
-        run_test(r##"File.fnmatch("c?t", "ct")"##);
-        run_test(r##"File.fnmatch("c[ao]t", "cat")"##);
-        run_test(r##"File.fnmatch("c[ao]t", "cot")"##);
-        run_test(r##"File.fnmatch("c[ao]t", "cut")"##);
-        run_test(r##"File.fnmatch?("cat", "cat")"##);
+        run_tests(&[
+            r##"File.fnmatch("cat", "cat")"##,
+            r##"File.fnmatch("cat", "category")"##,
+            r##"File.fnmatch("c*", "cats")"##,
+            r##"File.fnmatch("c?t", "cat")"##,
+            r##"File.fnmatch("c?t", "cot")"##,
+            r##"File.fnmatch("c?t", "ct")"##,
+            r##"File.fnmatch("c[ao]t", "cat")"##,
+            r##"File.fnmatch("c[ao]t", "cot")"##,
+            r##"File.fnmatch("c[ao]t", "cut")"##,
+            r##"File.fnmatch?("cat", "cat")"##,
+        ]);
     }
 
     #[test]
@@ -1244,7 +1248,7 @@ mod tests {
 
     #[test]
     fn file_new() {
-        run_test_once(
+        run_test(
             r#"
             f = File.new("Cargo.toml", "r")
             result = f.read(10).is_a?(String)

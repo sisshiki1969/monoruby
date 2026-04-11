@@ -919,11 +919,11 @@ pub(super) extern "C" fn defined_const(
 /// Set `dst`` to `nil` if not exists.
 ///
 pub(super) extern "C" fn defined_gvar(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
 ) -> Value {
-    if globals.gvars.is_defined(name) {
+    if GvarTable::defined_runtime(vm, globals, name) {
         Value::string_from_str("global-variable")
     } else {
         Value::nil()

@@ -2126,22 +2126,16 @@ mod tests {
 
     #[test]
     fn even_() {
-        run_test("100.even?");
-        run_test("-100.even?");
-        run_test(
+        run_tests(&[
+            "100.even?",
+            "-100.even?",
             "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.even?",
-        );
-        run_test(
             "-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.even?",
-        );
-        run_test("100.odd?");
-        run_test("-100.odd?");
-        run_test(
+            "100.odd?",
+            "-100.odd?",
             "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.odd?",
-        );
-        run_test(
             "-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.odd?",
-        );
+        ]);
     }
 
     #[test]
@@ -2220,14 +2214,16 @@ mod tests {
 
     #[test]
     fn integer_round() {
-        run_test("42.round");
-        run_test("42.round(0)");
-        run_test("42.round(-1)");
-        run_test("45.round(-1)");
-        run_test("(-42).round(-1)");
-        run_test("15.round(-1)");
-        run_test("25.round(-1)");
-        run_test("35.round(-1)");
+        run_tests(&[
+            "42.round",
+            "42.round(0)",
+            "42.round(-1)",
+            "45.round(-1)",
+            "(-42).round(-1)",
+            "15.round(-1)",
+            "25.round(-1)",
+            "35.round(-1)",
+        ]);
     }
 
     #[test]
@@ -2264,15 +2260,17 @@ mod tests {
 
     #[test]
     fn integer_gcd_lcm() {
-        run_test("12.gcd(8)");
-        run_test("12.gcd(-8)");
-        run_test("(-12).gcd(8)");
-        run_test("0.gcd(5)");
-        run_test("5.gcd(0)");
-        run_test("12.lcm(8)");
-        run_test("12.lcm(-8)");
-        run_test("0.lcm(5)");
-        run_test("12.gcdlcm(8)");
+        run_tests(&[
+            "12.gcd(8)",
+            "12.gcd(-8)",
+            "(-12).gcd(8)",
+            "0.gcd(5)",
+            "5.gcd(0)",
+            "12.lcm(8)",
+            "12.lcm(-8)",
+            "0.lcm(5)",
+            "12.gcdlcm(8)",
+        ]);
     }
 
     #[test]
@@ -2284,26 +2282,30 @@ mod tests {
 
     #[test]
     fn integer_allbits() {
-        run_test("0b1010.allbits?(0b1010)");
-        run_test("0b1010.allbits?(0b1000)");
-        run_test("0b1010.allbits?(0b1011)");
-        run_test("0b1010.anybits?(0b0001)");
-        run_test("0b1010.anybits?(0b1001)");
-        run_test("0b1010.nobits?(0b0101)");
-        run_test("0b1010.nobits?(0b0001)");
+        run_tests(&[
+            "0b1010.allbits?(0b1010)",
+            "0b1010.allbits?(0b1000)",
+            "0b1010.allbits?(0b1011)",
+            "0b1010.anybits?(0b0001)",
+            "0b1010.anybits?(0b1001)",
+            "0b1010.nobits?(0b0101)",
+            "0b1010.nobits?(0b0001)",
+        ]);
     }
 
     #[test]
     fn integer_bit_length() {
-        run_test("0.bit_length");
-        run_test("1.bit_length");
-        run_test("255.bit_length");
-        run_test("256.bit_length");
-        run_test("(-1).bit_length");
-        run_test("(-256).bit_length");
-        run_test("(-257).bit_length");
-        run_test("(2**100).bit_length");
-        run_test("(-(2**100)).bit_length");
+        run_tests(&[
+            "0.bit_length",
+            "1.bit_length",
+            "255.bit_length",
+            "256.bit_length",
+            "(-1).bit_length",
+            "(-256).bit_length",
+            "(-257).bit_length",
+            "(2**100).bit_length",
+            "(-(2**100)).bit_length",
+        ]);
     }
 
     #[test]
@@ -2373,8 +2375,8 @@ mod tests {
 
     #[test]
     fn integer_to_r() {
-        run_test_once("3.respond_to?(:to_r)");
-        run_test_once("3.respond_to?(:rationalize)");
+        run_test("3.respond_to?(:to_r)");
+        run_test("3.respond_to?(:rationalize)");
     }
 
     #[test]
@@ -2428,10 +2430,10 @@ mod tests {
 
     #[test]
     fn shift_to_int() {
-        run_test_once(
+        run_test_with_prelude(
+            "[8 << Foo.new, 8 >> Foo.new]",
             r#"
             class Foo; def to_int; 2; end; end
-            [8 << Foo.new, 8 >> Foo.new]
         "#,
         );
     }
@@ -2467,10 +2469,10 @@ mod tests {
 
     #[test]
     fn eq_reverse_dispatch() {
-        run_test_once(
+        run_test_with_prelude(
+            "[42 == Foo.new, 42 === Foo.new, (2**64) == Foo.new, 42 == 99]",
             r#"
             class Foo; def ==(other); other == 42; end; end
-            [42 == Foo.new, 42 === Foo.new, (2**64) == Foo.new, 42 == 99]
             "#,
         );
     }
@@ -2479,7 +2481,7 @@ mod tests {
     fn integer_dup() {
         run_test("42.dup");
         run_test("42.dup.equal?(42)");
-        run_test_once("a = 2**100; a.dup.equal?(a)");
+        run_test("a = 2**100; a.dup.equal?(a)");
     }
 
     #[test]
@@ -2519,10 +2521,10 @@ mod tests {
     #[test]
     fn integer_coerce_extended() {
         run_test_error(r#"1.coerce("")"#);
-        run_test_once(
+        run_test_with_prelude(
+            "1.coerce(Foo.new)",
             r#"
             class Foo; def to_f; 99.5; end; end
-            1.coerce(Foo.new)
         "#,
         );
     }
@@ -2638,14 +2640,14 @@ mod tests {
 
     #[test]
     fn integer_cmp_coerce() {
-        run_test_once(
+        run_test_with_prelude(
+            "[1 <=> Foo.new, 100 <=> Foo.new]",
             r#"
             class Foo
               def coerce(other)
                 [other.to_f, 42.0]
               end
             end
-            [1 <=> Foo.new, 100 <=> Foo.new]
         "#,
         );
     }
@@ -2658,8 +2660,8 @@ mod tests {
 
     #[test]
     fn fdiv_large_bigint() {
-        run_test_once("(10**200).fdiv(10**199)");
-        run_test_once("(10**200).fdiv(3 * 10**199)");
+        run_test("(10**200).fdiv(10**199)");
+        run_test("(10**200).fdiv(3 * 10**199)");
     }
 
     #[test]
@@ -2686,8 +2688,8 @@ mod tests {
 
     #[test]
     fn module_include_q() {
-        run_test_once("Integer.include?(Comparable)");
-        run_test_once("Integer.include?(Enumerable)");
+        run_test("Integer.include?(Comparable)");
+        run_test("Integer.include?(Enumerable)");
     }
 
     #[test]
@@ -2766,7 +2768,7 @@ mod tests {
         run_test("Encoding.default_internal");
         run_test_error("256.chr");
         // default_internal = UTF-8: >255 uses UTF-8
-        run_test_once(
+        run_test(
             r#"
             Encoding.default_internal = Encoding::UTF_8
             res = 0x3000.chr.bytes.to_a
@@ -2774,7 +2776,7 @@ mod tests {
             res
         "#,
         );
-        run_test_once(
+        run_test(
             r#"
             Encoding.default_internal = Encoding::UTF_8
             res = 0x3000.chr.encoding.to_s
@@ -2783,7 +2785,7 @@ mod tests {
         "#,
         );
         // 0-127 always US-ASCII regardless of default_internal
-        run_test_once(
+        run_test(
             r#"
             Encoding.default_internal = Encoding::UTF_8
             res = 65.chr.encoding.to_s
@@ -2890,21 +2892,23 @@ mod tests {
 
     #[test]
     fn integer_shr_jit_edge_cases() {
-        // negative constant rhs (>> -k == << k)
-        run_test("a = 1; a >> -3");
-        run_test("a = 5; a >> -10");
-        run_test("a = -1; a >> -3");
-        // large negative rhs (overflow → deopt to BigInt)
-        run_test("a = 0; a >> -100");
-        run_test("a = 1; a >> -100");
-        // large positive rhs
-        run_test("a = 100; a >> 64");
-        run_test("a = 100; a >> 100");
-        run_test("a = -1; a >> 64");
-        run_test("a = -1; a >> 100");
-        // zero lhs
-        run_test("a = 0; a >> 10");
-        run_test("a = 0; a >> -10");
+        run_tests(&[
+            // negative constant rhs (>> -k == << k)
+            "a = 1; a >> -3",
+            "a = 5; a >> -10",
+            "a = -1; a >> -3",
+            // large negative rhs (overflow → deopt to BigInt)
+            "a = 0; a >> -100",
+            "a = 1; a >> -100",
+            // large positive rhs
+            "a = 100; a >> 64",
+            "a = 100; a >> 100",
+            "a = -1; a >> 64",
+            "a = -1; a >> 100",
+            // zero lhs
+            "a = 0; a >> 10",
+            "a = 0; a >> -10",
+        ]);
     }
 
     #[test]
@@ -2919,22 +2923,24 @@ mod tests {
 
     #[test]
     fn integer_shl_jit_edge_cases() {
-        // negative constant rhs (<< -k == >> k)
-        run_test("a = 256; a << -4");
-        run_test("a = -256; a << -4");
-        run_test("a = 1; a << -100");
-        run_test("a = -1; a << -100");
-        // large positive rhs (overflow → deopt to BigInt)
-        run_test("a = 0; a << 100");
-        run_test("a = 1; a << 100");
-        // large negative rhs
-        run_test("a = 100; a << -64");
-        run_test("a = 100; a << -100");
-        run_test("a = -1; a << -64");
-        run_test("a = -1; a << -100");
-        // zero lhs
-        run_test("a = 0; a << 10");
-        run_test("a = 0; a << -10");
+        run_tests(&[
+            // negative constant rhs (<< -k == >> k)
+            "a = 256; a << -4",
+            "a = -256; a << -4",
+            "a = 1; a << -100",
+            "a = -1; a << -100",
+            // large positive rhs (overflow → deopt to BigInt)
+            "a = 0; a << 100",
+            "a = 1; a << 100",
+            // large negative rhs
+            "a = 100; a << -64",
+            "a = 100; a << -100",
+            "a = -1; a << -64",
+            "a = -1; a << -100",
+            // zero lhs
+            "a = 0; a << 10",
+            "a = 0; a << -10",
+        ]);
     }
 
     #[test]
@@ -2997,75 +3003,79 @@ mod tests {
 
     #[test]
     fn integer_bitop_jit_edge_cases() {
-        // immediate rhs (small, tagged form fits in i32)
-        run_test("a = 0xFF; a | 0x0F");
-        run_test("a = 0xFF; a & 0x0F");
-        run_test("a = 0xFF; a ^ 0x0F");
-        // immediate lhs (commutative)
-        run_test("a = 0x0F; 0xFF | a");
-        run_test("a = 0x0F; 0xFF & a");
-        run_test("a = 0x0F; 0xFF ^ a");
-        // both register
-        run_test("a = 0xFF; b = 0x0F; a | b");
-        run_test("a = 0xFF; b = 0x0F; a & b");
-        run_test("a = 0xFF; b = 0x0F; a ^ b");
-        // large fixnum literal (tagged form does NOT fit in i32 → register-loaded path)
-        run_test("a = 0x12345678; a | 0xDEADBEEF_CAFE");
-        run_test("a = 0x12345678; a & 0xDEADBEEF_CAFE");
-        run_test("a = 0x12345678; a ^ 0xDEADBEEF_CAFE");
-        // commutative form with large literal
-        run_test("a = 0x12345678; 0xDEADBEEF_CAFE | a");
-        run_test("a = 0x12345678; 0xDEADBEEF_CAFE & a");
-        run_test("a = 0x12345678; 0xDEADBEEF_CAFE ^ a");
-        // negative values (sign bit interaction with tag)
-        run_test("a = -1; a | 0x0F");
-        run_test("a = -1; a & 0x0F");
-        run_test("a = -1; a ^ 0x0F");
-        run_test("a = -1; b = 5; a | b");
-        run_test("a = -1; b = 5; a & b");
-        run_test("a = -1; b = 5; a ^ b");
-        // negative large literal
-        run_test("a = -1; a & 0xDEADBEEF_CAFE");
-        run_test("a = -1; a ^ 0xDEADBEEF_CAFE");
-        // identity / zero
-        run_test("a = 42; a | 0");
-        run_test("a = 42; a & 0");
-        run_test("a = 42; a ^ 0");
-        run_test("a = 42; a & -1");
-        run_test("a = 42; a ^ -1");
-        // self
-        run_test("a = 42; a | a");
-        run_test("a = 42; a & a");
-        run_test("a = 42; a ^ a");
-        // BigInt fallback (uses generic method dispatch)
-        run_test("a = 10**20; a | 0xFF");
-        run_test("a = 10**20; a & 0xFF");
-        run_test("a = 10**20; a ^ 0xFF");
+        run_tests(&[
+            // immediate rhs (small, tagged form fits in i32)
+            "a = 0xFF; a | 0x0F",
+            "a = 0xFF; a & 0x0F",
+            "a = 0xFF; a ^ 0x0F",
+            // immediate lhs (commutative)
+            "a = 0x0F; 0xFF | a",
+            "a = 0x0F; 0xFF & a",
+            "a = 0x0F; 0xFF ^ a",
+            // both register
+            "a = 0xFF; b = 0x0F; a | b",
+            "a = 0xFF; b = 0x0F; a & b",
+            "a = 0xFF; b = 0x0F; a ^ b",
+            // large fixnum literal (tagged form does NOT fit in i32 → register-loaded path)
+            "a = 0x12345678; a | 0xDEADBEEF_CAFE",
+            "a = 0x12345678; a & 0xDEADBEEF_CAFE",
+            "a = 0x12345678; a ^ 0xDEADBEEF_CAFE",
+            // commutative form with large literal
+            "a = 0x12345678; 0xDEADBEEF_CAFE | a",
+            "a = 0x12345678; 0xDEADBEEF_CAFE & a",
+            "a = 0x12345678; 0xDEADBEEF_CAFE ^ a",
+            // negative values (sign bit interaction with tag)
+            "a = -1; a | 0x0F",
+            "a = -1; a & 0x0F",
+            "a = -1; a ^ 0x0F",
+            "a = -1; b = 5; a | b",
+            "a = -1; b = 5; a & b",
+            "a = -1; b = 5; a ^ b",
+            // negative large literal
+            "a = -1; a & 0xDEADBEEF_CAFE",
+            "a = -1; a ^ 0xDEADBEEF_CAFE",
+            // identity / zero
+            "a = 42; a | 0",
+            "a = 42; a & 0",
+            "a = 42; a ^ 0",
+            "a = 42; a & -1",
+            "a = 42; a ^ -1",
+            // self
+            "a = 42; a | a",
+            "a = 42; a & a",
+            "a = 42; a ^ a",
+            // BigInt fallback (uses generic method dispatch)
+            "a = 10**20; a | 0xFF",
+            "a = 10**20; a & 0xFF",
+            "a = 10**20; a ^ 0xFF",
+        ]);
     }
 
     #[test]
     fn integer_pow_jit_edge_cases() {
-        // small fixnum^fixnum that fits in i63
-        run_test("a = 2; a ** 10");
-        run_test("a = 3; a ** 5");
-        run_test("a = 0; a ** 0"); // 0**0 == 1
-        run_test("a = 1; a ** 100");
-        run_test("a = -2; a ** 5");
-        run_test("a = -2; a ** 4");
-        // Result overflows fixnum → BigInt (handled by pow_ii runtime call)
-        run_test("a = 2; a ** 62");
-        run_test("a = 2; a ** 100");
-        run_test("a = 10; a ** 20");
-        // Negative exponent → Rational
-        run_test("a = 2; a ** -3");
-        run_test("a = -2; a ** -3");
-        // 1**n / (-1)**n / 0**n special cases
-        run_test("a = 1; a ** -100");
-        run_test("a = -1; a ** 5");
-        run_test("a = -1; a ** -5");
-        // Float rhs (non-Integer rhs falls back to method dispatch)
-        run_test("a = 2; a ** 3.0");
-        run_test("a = 2; a ** -2.0");
+        run_tests(&[
+            // small fixnum^fixnum that fits in i63
+            "a = 2; a ** 10",
+            "a = 3; a ** 5",
+            "a = 0; a ** 0", // 0**0 == 1
+            "a = 1; a ** 100",
+            "a = -2; a ** 5",
+            "a = -2; a ** 4",
+            // Result overflows fixnum → BigInt (handled by pow_ii runtime call)
+            "a = 2; a ** 62",
+            "a = 2; a ** 100",
+            "a = 10; a ** 20",
+            // Negative exponent → Rational
+            "a = 2; a ** -3",
+            "a = -2; a ** -3",
+            // 1**n / (-1)**n / 0**n special cases
+            "a = 1; a ** -100",
+            "a = -1; a ** 5",
+            "a = -1; a ** -5",
+            // Float rhs (non-Integer rhs falls back to method dispatch)
+            "a = 2; a ** 3.0",
+            "a = 2; a ** -2.0",
+        ]);
     }
 
     #[test]
@@ -3112,38 +3122,40 @@ mod tests {
 
     #[test]
     fn integer_rem_pow2_optimization() {
-        // Power-of-two RI: rhs is a positive power of 2 literal,
-        // mask fits in i32.
-        run_test("a = 100; a % 1");
-        run_test("a = 100; a % 2");
-        run_test("a = 100; a % 4");
-        run_test("a = 100; a % 8");
-        run_test("a = 100; a % 16");
-        run_test("a = 100; a % 1024");
-        // negative lhs (two's-complement bitwise AND matches Ruby's floor-mod)
-        run_test("a = -1; a % 8");
-        run_test("a = -7; a % 8");
-        run_test("a = -8; a % 8");
-        run_test("a = -100; a % 16");
-        run_test("a = -100; a % 1024");
-        // zero lhs
-        run_test("a = 0; a % 8");
-        // lhs is multiple of rhs
-        run_test("a = 1024; a % 8");
-        run_test("a = -1024; a % 8");
-        // rhs near i32 boundary for the mask (mask = rhs*2 - 1)
-        run_test("a = 12345678; a % (1 << 30)"); // mask = 2^31 - 1, fits in i32
-        run_test("a = -12345678; a % (1 << 30)");
-        // rhs needs register-loaded mask (mask exceeds i32)
-        run_test("a = 12345678; a % (1 << 31)");
-        run_test("a = 12345678; a % (1 << 40)");
-        run_test("a = -12345678; a % (1 << 31)");
-        run_test("a = -12345678; a % (1 << 40)");
-        // Non-power-of-two divisor: falls through to generic path
-        run_test("a = 100; a % 6");
-        run_test("a = 100; a % 10");
-        // Negative power-of-two: optimization not applied (rhs > 0 check)
-        run_test("a = 100; a % -8");
+        run_tests(&[
+            // Power-of-two RI: rhs is a positive power of 2 literal,
+            // mask fits in i32.
+            "a = 100; a % 1",
+            "a = 100; a % 2",
+            "a = 100; a % 4",
+            "a = 100; a % 8",
+            "a = 100; a % 16",
+            "a = 100; a % 1024",
+            // negative lhs (two's-complement bitwise AND matches Ruby's floor-mod)
+            "a = -1; a % 8",
+            "a = -7; a % 8",
+            "a = -8; a % 8",
+            "a = -100; a % 16",
+            "a = -100; a % 1024",
+            // zero lhs
+            "a = 0; a % 8",
+            // lhs is multiple of rhs
+            "a = 1024; a % 8",
+            "a = -1024; a % 8",
+            // rhs near i32 boundary for the mask (mask = rhs*2 - 1)
+            "a = 12345678; a % (1 << 30)", // mask = 2^31 - 1, fits in i32
+            "a = -12345678; a % (1 << 30)",
+            // rhs needs register-loaded mask (mask exceeds i32)
+            "a = 12345678; a % (1 << 31)",
+            "a = 12345678; a % (1 << 40)",
+            "a = -12345678; a % (1 << 31)",
+            "a = -12345678; a % (1 << 40)",
+            // Non-power-of-two divisor: falls through to generic path
+            "a = 100; a % 6",
+            "a = 100; a % 10",
+            // Negative power-of-two: optimization not applied (rhs > 0 check)
+            "a = 100; a % -8",
+        ]);
     }
 
     #[test]

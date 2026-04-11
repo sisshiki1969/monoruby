@@ -599,66 +599,72 @@ mod tests {
 
     #[test]
     fn exist() {
-        run_test_once(r#"Dir.exist?(".")"#);
-        run_test_once(r#"Dir.exist?("..")"#);
-        run_test_once(r#"Dir.exist?("src")"#);
-        run_test_once(r#"Dir.exist?("nonexistent_dir_xyz")"#);
-        run_test_once(r#"Dir.exist?("Cargo.toml")"#);
+        run_tests(&[
+            r#"Dir.exist?(".")"#,
+            r#"Dir.exist?("..")"#,
+            r#"Dir.exist?("src")"#,
+            r#"Dir.exist?("nonexistent_dir_xyz")"#,
+            r#"Dir.exist?("Cargo.toml")"#,
+        ]);
     }
 
     #[test]
     fn glob() {
-        run_test_once(r#"Dir.glob("b*")"#);
-        run_test_once(r#"Dir.glob("*.rb")"#);
-        run_test_once(r#"Dir.glob("Cargo?????")"#);
-        run_test_once(r#"Dir.glob("d{a,c}*")"#);
-        run_test_once(r#"Dir.glob("/*")"#);
-        run_test_once(r#"Dir.glob("././././C*")"#);
-        run_test_once(r#"Dir.glob("../../../../*")"#);
-        run_test_once(r#"Dir.glob("../*")"#);
-        run_test_once(r#"Dir.glob("src/builtins/*.rs")"#);
-        run_test_once(r#"Dir["src/builtins/*.rs"]"#);
-        run_test_once(r#"Dir.glob("src/**/*.rs").sort"#);
-        run_test_once(r#"Dir.glob("/")"#);
-        run_test_once(r#"Dir.glob(".")"#);
-        run_test_once(r#"Dir.glob("")"#);
-        run_test_once(r#"Dir.glob("*", base: "src/builtins")"#);
-        // Array of patterns (merged, sorted, deduped — same as CRuby).
-        run_test_once(r#"Dir.glob(["b*", "*.toml"])"#);
-        run_test_once(r#"Dir["b*", "*.toml"]"#);
-        // FNM_DOTMATCH: wildcards match dot-files.
-        run_test_once(r#"Dir.glob(".*")"#);
-        run_test_once(r#"Dir.glob("*", File::FNM_DOTMATCH)"#);
-        // Brace alternation containing `/` — must be expanded before path-splitting.
-        run_test_once(r#"Dir.glob("{,*,*/*,*/*/*}.rs").sort"#);
-        run_test_once(r#"Dir.glob("src/{lib,builtins}/*.rs")"#);
+        run_tests(&[
+            r#"Dir.glob("b*")"#,
+            r#"Dir.glob("*.rb")"#,
+            r#"Dir.glob("Cargo?????")"#,
+            r#"Dir.glob("d{a,c}*")"#,
+            r#"Dir.glob("/*")"#,
+            r#"Dir.glob("././././C*")"#,
+            r#"Dir.glob("../../../../*")"#,
+            r#"Dir.glob("../*")"#,
+            r#"Dir.glob("src/builtins/*.rs")"#,
+            r#"Dir["src/builtins/*.rs"]"#,
+            r#"Dir.glob("src/**/*.rs").sort"#,
+            r#"Dir.glob("/")"#,
+            r#"Dir.glob(".")"#,
+            r#"Dir.glob("")"#,
+            r#"Dir.glob("*", base: "src/builtins")"#,
+            // Array of patterns (merged, sorted, deduped — same as CRuby).
+            r#"Dir.glob(["b*", "*.toml"])"#,
+            r#"Dir["b*", "*.toml"]"#,
+            // FNM_DOTMATCH: wildcards match dot-files.
+            r#"Dir.glob(".*")"#,
+            r#"Dir.glob("*", File::FNM_DOTMATCH)"#,
+            // Brace alternation containing `/` — must be expanded before path-splitting.
+            r#"Dir.glob("{,*,*/*,*/*/*}.rs").sort"#,
+            r#"Dir.glob("src/{lib,builtins}/*.rs")"#,
+        ]);
     }
 
     /// Tests that do not require CRuby comparison.
     #[test]
     fn glob_extensions() {
-        // sort: false — just verify it runs without error.
-        run_test_once(r#"Dir.glob("b*", sort: false).sort"#);
-        // block form — verify it does not raise.
-        run_test_once(r#"res = []; Dir.glob("b*") { |f| res << f.upcase }; res"#);
-        // ** matches zero directories (direct child).
-        run_test_once(r#"Dir.glob("src/**/*.rs").include?("src/lib.rs")"#);
-        // ** matches multiple levels.
-        run_test_once(r#"Dir.glob("src/**/*.rs").include?("src/builtins/dir.rs")"#);
-        // Array of patterns.
-        run_test_once(r#"Dir.glob(["C*", "*.toml"])"#);
+        run_tests(&[
+            // sort: false — just verify it runs without error.
+            r#"Dir.glob("b*", sort: false).sort"#,
+            // block form — verify it does not raise.
+            r#"res = []; Dir.glob("b*") { |f| res << f.upcase }; res"#,
+            // ** matches zero directories (direct child).
+            r#"Dir.glob("src/**/*.rs").include?("src/lib.rs")"#,
+            // ** matches multiple levels.
+            r#"Dir.glob("src/**/*.rs").include?("src/builtins/dir.rs")"#,
+            // Array of patterns.
+            r#"Dir.glob(["C*", "*.toml"])"#,
+        ]);
     }
 
     #[test]
     fn home() {
-        run_test_once(r#"Dir.home"#);
+        run_test(r#"Dir.home"#);
     }
 
     #[test]
     fn pwd() {
-        run_test_once(r#"Dir.pwd"#);
-        run_test_once(r#"Dir.getwd"#);
-        run_test_once(
+        run_test(r#"Dir.pwd"#);
+        run_test(r#"Dir.getwd"#);
+        run_test(
             r##"
         $x = []
         $x << Dir.getwd
@@ -677,7 +683,7 @@ mod tests {
         // if the directory exists, CRuby raise Errno::EEXIST.
         run_test_error("Dir.mkdir('/tmp')");
         // mkdir creates a new directory
-        run_test_once(
+        run_test(
             r#"
             $x = []
             path = "/tmp/monoruby_test_mkdir_#{Process.pid}"
@@ -692,7 +698,7 @@ mod tests {
 
     #[test]
     fn dir_entries() {
-        run_test_once(
+        run_test(
             r#"
             Dir.entries(".").sort
             "#,

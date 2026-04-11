@@ -1214,37 +1214,37 @@ mod tests {
         run_test_error(r#"$stdout.read"#);
         run_test_error(r#"$stderr.read"#);
         run_test_error(r#"File.open("")"#);
-        run_test_once(
+        run_test(
             r#"
             f = File.open("Cargo.toml", "r")
             f.read
         "#,
         );
-        run_test_once(
+        run_test(
             r#"
             f = File.open("Cargo.toml", "r")
             f.read(17)
         "#,
         );
-        run_test_once(
+        run_test(
             r#"
             f = File.open("/dev/null")
             f.read
         "#,
         );
-        run_test_once(
+        run_test(
             r#"
             f = File.open("/dev/null", "r")
             f.read(0)
         "#,
         );
-        run_test_once(
+        run_test(
             r#"
             f = File.open("/dev/null", "r+")
             f.read(nil)
         "#,
         );
-        run_test_once(
+        run_test(
             r#"
             f = File.open("Cargo.toml", "r")
             f.readline
@@ -1254,14 +1254,14 @@ mod tests {
 
     #[test]
     fn io_close() {
-        run_test_once(
+        run_test(
             r#"
             r, w = IO.pipe
             w.close
             [w.closed?, r.closed?]
         "#,
         );
-        run_test_once(
+        run_test(
             r#"
             r, w = IO.pipe
             r.close
@@ -1269,7 +1269,7 @@ mod tests {
             [r.closed?, w.closed?]
         "#,
         );
-        run_test_once(
+        run_test(
             r#"
             IO.read("Cargo.toml").is_a?(String)
         "#,
@@ -1278,7 +1278,7 @@ mod tests {
 
     #[test]
     fn io_pipe() {
-        run_test_once(
+        run_test(
             r#"
             r, w = IO.pipe
             w << "hello"
@@ -1290,7 +1290,7 @@ mod tests {
 
     #[test]
     fn each_line() {
-        run_test_once(
+        run_test(
             r##"
         f = File.open("a.rb");
         res = []
@@ -1339,7 +1339,7 @@ mod tests {
 
     #[test]
     fn stringio_write() {
-        run_test_once(
+        run_test(
             r#"
             require "stringio"
             sio = StringIO.new
@@ -1347,7 +1347,7 @@ mod tests {
             sio.string
         "#,
         );
-        run_test_once(
+        run_test(
             r#"
             require "stringio"
             sio = StringIO.new
@@ -1355,7 +1355,7 @@ mod tests {
             [sio.string, n]
         "#,
         );
-        run_test_once(
+        run_test(
             r#"
             require "stringio"
             sio = StringIO.new
@@ -1368,7 +1368,7 @@ mod tests {
     #[test]
     fn io_select() {
         // select with readable pipe
-        run_test_once(
+        run_test(
             r#"
             r, w = IO.pipe
             w.write("hello")
@@ -1377,7 +1377,7 @@ mod tests {
             "#,
         );
         // select with timeout (no data available)
-        run_test_once(
+        run_test(
             r#"
             r, w = IO.pipe
             result = IO.select([r], nil, nil, 0)
@@ -1385,7 +1385,7 @@ mod tests {
             "#,
         );
         // select with writable pipe
-        run_test_once(
+        run_test(
             r#"
             r, w = IO.pipe
             result = IO.select(nil, [w], nil, 0)
@@ -1396,10 +1396,10 @@ mod tests {
 
     #[test]
     fn io_fileno() {
-        run_test_once("$stdin.fileno == 0");
-        run_test_once("$stdout.fileno == 1");
-        run_test_once("$stderr.fileno == 2");
-        run_test_once(
+        run_test("$stdin.fileno == 0");
+        run_test("$stdout.fileno == 1");
+        run_test("$stderr.fileno == 2");
+        run_test(
             r#"
             r, w = IO.pipe
             [r.fileno.is_a?(Integer), w.fileno.is_a?(Integer)]
@@ -1434,7 +1434,7 @@ mod tests {
     #[test]
     fn puts_delegates_to_write() {
         // IO#puts should call the Ruby-level write method, not bypass it.
-        run_test_once(
+        run_test(
             r#"
             r, w = IO.pipe
             $test_written = []
@@ -1452,7 +1452,7 @@ mod tests {
     #[test]
     fn print_delegates_to_write() {
         // IO#print should call the Ruby-level write method, not bypass it.
-        run_test_once(
+        run_test(
             r#"
             r, w = IO.pipe
             $test_written = []
@@ -1480,7 +1480,7 @@ mod tests {
 
     #[test]
     fn popen_rw_mode() {
-        run_test_once(
+        run_test(
             r#"
             IO.popen("cat", "r+") do |io|
               io.write("hello")
@@ -1504,7 +1504,7 @@ mod tests {
 
     #[test]
     fn close_read() {
-        run_test_once(
+        run_test(
             r#"
             IO.popen("echo hello", "r") do |io|
               data = io.read
@@ -1517,7 +1517,7 @@ mod tests {
 
     #[test]
     fn close_write() {
-        run_test_once(
+        run_test(
             r#"
             IO.popen("cat", "r+") do |io|
               io.write("hello")
@@ -1570,7 +1570,7 @@ mod tests {
 
     #[test]
     fn io_foreach_test() {
-        run_test_once(
+        run_test(
             r#"
             path = "/tmp/monoruby_test_foreach_#{Process.pid}"
             File.write(path, "hello\nworld\nfoo\n")
@@ -1584,7 +1584,7 @@ mod tests {
 
     #[test]
     fn file_foreach_test() {
-        run_test_once(
+        run_test(
             r#"
             path = "/tmp/monoruby_test_file_foreach_#{Process.pid}"
             File.write(path, "aaa\nbbb\n")
@@ -1620,7 +1620,7 @@ mod tests {
 
     #[test]
     fn io_copy_stream() {
-        run_test_once(
+        run_test(
             r#"
             path_src = "/tmp/monoruby_test_cs_src_#{Process.pid}"
             path_dst = "/tmp/monoruby_test_cs_dst_#{Process.pid}"

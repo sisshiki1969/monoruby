@@ -454,8 +454,9 @@ impl Globals {
         name: IdentId,
         getter: GvarGetter,
         setter: Option<GvarSetter>,
+        defined_kind: GvarDefinedKind,
     ) {
-        self.gvars.define_hook(name, getter, setter);
+        self.gvars.define_hook(name, getter, setter, defined_kind);
     }
 
     /// Alias `new_name` to `old_name`. Subsequent reads and writes of

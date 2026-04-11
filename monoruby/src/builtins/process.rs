@@ -316,12 +316,12 @@ mod tests {
 
     #[test]
     fn process_euid() {
-        run_test_once("Process.euid");
+        run_test("Process.euid");
     }
 
     #[test]
     fn signal_list() {
-        run_test_once(
+        run_test(
             r#"
             h = Signal.list
             [h.is_a?(Hash), h["INT"], h["KILL"], h["EXIT"]]
@@ -337,13 +337,13 @@ mod tests {
     #[test]
     fn process_last_status() {
         run_test_no_result_check("Process.last_status");
-        run_test_once(
+        run_test(
             r#"
             IO.popen("true") { |io| io.read }
             $?.exitstatus
             "#,
         );
-        run_test_once(
+        run_test(
             r#"
             IO.popen("false") { |io| io.read }
             $?.exitstatus

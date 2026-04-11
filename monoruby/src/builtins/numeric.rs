@@ -85,7 +85,11 @@ fn divmod(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     return Err(float_domain_err("NaN"));
                 }
                 if f.is_infinite() {
-                    return Err(float_domain_err(if f > 0.0 { "Infinity" } else { "-Infinity" }));
+                    return Err(float_domain_err(if f > 0.0 {
+                        "Infinity"
+                    } else {
+                        "-Infinity"
+                    }));
                 }
             }
             // For divmod, both integer zero and float zero raise ZeroDivisionError
@@ -284,44 +288,54 @@ mod tests {
 
     #[test]
     fn divmod() {
-        run_tests(
-            &[
-                "(11).divmod(3)", "(11).divmod(-3)", "(-11).divmod(3)",
-                "(11).divmod(3.5)", "(11).divmod(-3.5)", "(-11).divmod(3.5)",
-                "(11.5).divmod(3)", "(11.5).divmod(-3)", "(-11.5).divmod(3)",
-                "(11.5).divmod(3.5)", "(11.5).divmod(-3.5)", "(-11.5).divmod(3.5)",
-            ]
-            ,
-        );
+        run_tests(&[
+            "(11).divmod(3)",
+            "(11).divmod(-3)",
+            "(-11).divmod(3)",
+            "(11).divmod(3.5)",
+            "(11).divmod(-3.5)",
+            "(-11).divmod(3.5)",
+            "(11.5).divmod(3)",
+            "(11.5).divmod(-3)",
+            "(-11.5).divmod(3)",
+            "(11.5).divmod(3.5)",
+            "(11.5).divmod(-3.5)",
+            "(-11.5).divmod(3.5)",
+        ]);
     }
 
     #[test]
     fn bitnot() {
-        run_tests(
-            &["~1", "~0", "~(-1)", "~(-2)", "~(0x12345678)", "~(0x123456789abcdef0)"]
-                ,
-        );
+        run_tests(&[
+            "~1",
+            "~0",
+            "~(-1)",
+            "~(-2)",
+            "~(0x12345678)",
+            "~(0x123456789abcdef0)",
+        ]);
     }
 
     #[test]
     fn neg() {
-        run_tests(
-            &["-1", "-0", "-(0x12345678)", "-(0x123456789abcdef0)"]
-                ,
-        );
+        run_tests(&["-1", "-0", "-(0x12345678)", "-(0x123456789abcdef0)"]);
     }
 
     #[test]
     fn pos() {
-        run_tests(
-            &["+1", "+0", "+(0x12345678)", "+(0x123456789abcdef0)"]
-                ,
-        );
+        run_tests(&["+1", "+0", "+(0x12345678)", "+(0x123456789abcdef0)"]);
     }
 
     #[test]
     fn comparable_clamp() {
-        run_test_once(
+        run_test_with_prelude(
+            r#"
+            a = MyNum.new(1)
+            b = MyNum.new(3)
+            c = MyNum.new(5)
+            d = MyNum.new(4)
+            [a.clamp(b, c).val, c.clamp(b, c).val, d.clamp(b, c).val]
+        "#,
             r#"
             class MyNum
               include Comparable
@@ -329,11 +343,6 @@ mod tests {
               def initialize(v); @val = v; end
               def <=>(other); @val <=> other.val; end
             end
-            a = MyNum.new(1)
-            b = MyNum.new(3)
-            c = MyNum.new(5)
-            d = MyNum.new(4)
-            [a.clamp(b, c).val, c.clamp(b, c).val, d.clamp(b, c).val]
         "#,
         );
         run_test_error(
@@ -351,7 +360,13 @@ mod tests {
 
     #[test]
     fn comparable_between() {
-        run_test_once(
+        run_test_with_prelude(
+            r#"
+            a = MyNum.new(3)
+            lo = MyNum.new(1)
+            hi = MyNum.new(5)
+            [a.between?(lo, hi), MyNum.new(0).between?(lo, hi), MyNum.new(6).between?(lo, hi)]
+        "#,
             r#"
             class MyNum
               include Comparable
@@ -359,50 +374,53 @@ mod tests {
               def initialize(v); @val = v; end
               def <=>(other); @val <=> other.val; end
             end
-            a = MyNum.new(3)
-            lo = MyNum.new(1)
-            hi = MyNum.new(5)
-            [a.between?(lo, hi), MyNum.new(0).between?(lo, hi), MyNum.new(6).between?(lo, hi)]
         "#,
         );
     }
 
     #[test]
     fn float_truncate() {
-        run_tests(
-            &["1.5.truncate", "(-1.5).truncate", "1.567.truncate(2)", "(-1.567).truncate(2)"]
-                ,
-        );
+        run_tests(&[
+            "1.5.truncate",
+            "(-1.5).truncate",
+            "1.567.truncate(2)",
+            "(-1.567).truncate(2)",
+        ]);
     }
 
     #[test]
     fn float_ceil() {
-        run_tests(
-            &[
-                "1.1.ceil", "(-1.1).ceil", "1.0.ceil", "1.123.ceil(2)",
-                "1e50.ceil(-50)", "(-1e50).ceil(-50)", "1.23e20.ceil(-18)",
-            ]
-            ,
-        );
+        run_tests(&[
+            "1.1.ceil",
+            "(-1.1).ceil",
+            "1.0.ceil",
+            "1.123.ceil(2)",
+            "1e50.ceil(-50)",
+            "(-1e50).ceil(-50)",
+            "1.23e20.ceil(-18)",
+        ]);
     }
 
     #[test]
     fn float_floor_neg_ndigits() {
-        run_tests(
-            &["120.0.floor(-1)", "(-1e50).floor(-50)", "1e50.floor(-50)", "1.23e20.floor(-18)"]
-                ,
-        );
+        run_tests(&[
+            "120.0.floor(-1)",
+            "(-1e50).floor(-50)",
+            "1e50.floor(-50)",
+            "1.23e20.floor(-18)",
+        ]);
     }
 
     #[test]
     fn float_positive_negative() {
-        run_tests(
-            &[
-                "1.0.positive?", "(-1.0).positive?", "0.0.positive?",
-                "1.0.negative?", "(-1.0).negative?", "0.0.negative?",
-            ]
-            ,
-        );
+        run_tests(&[
+            "1.0.positive?",
+            "(-1.0).positive?",
+            "0.0.positive?",
+            "1.0.negative?",
+            "(-1.0).negative?",
+            "0.0.negative?",
+        ]);
     }
 
     #[test]
@@ -417,10 +435,11 @@ mod tests {
 
     #[test]
     fn float_remainder() {
-        run_tests(
-            &["5.0.remainder(3.0)", "(-5.0).remainder(3.0)", "5.0.remainder(-3.0)"]
-                ,
-        );
+        run_tests(&[
+            "5.0.remainder(3.0)",
+            "(-5.0).remainder(3.0)",
+            "5.0.remainder(-3.0)",
+        ]);
     }
 
     #[test]
@@ -430,23 +449,17 @@ mod tests {
 
     #[test]
     fn numeric_abs() {
-        run_tests(
-            &["1.0.abs", "(-1.0).abs", "0.0.abs", "1.0.magnitude"]
-                ,
-        );
+        run_tests(&["1.0.abs", "(-1.0).abs", "0.0.abs", "1.0.magnitude"]);
     }
 
     #[test]
     fn numeric_step() {
-        run_tests(
-            &[
-                "res = []; 1.step(10, 2) {|i| res << i}; res",
-                "res = []; 1.step(to: 5, by: 2) {|i| res << i}; res",
-                "res = []; 1.0.step(2.0, 0.5) {|i| res << i}; res",
-                "res = []; 5.step(1, -1) {|i| res << i}; res",
-                "res = []; 1.step(5) {|i| res << i}; res",
-            ]
-            ,
-        );
+        run_tests(&[
+            "res = []; 1.step(10, 2) {|i| res << i}; res",
+            "res = []; 1.step(to: 5, by: 2) {|i| res << i}; res",
+            "res = []; 1.0.step(2.0, 0.5) {|i| res << i}; res",
+            "res = []; 5.step(1, -1) {|i| res << i}; res",
+            "res = []; 1.step(5) {|i| res << i}; res",
+        ]);
     }
 }

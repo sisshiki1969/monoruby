@@ -548,61 +548,61 @@ mod tests {
 
     #[test]
     fn rational_basic() {
-        run_test_once("Rational(3, 4).numerator");
-        run_test_once("Rational(3, 4).denominator");
-        run_test_once("Rational(6, 4).numerator");
+        run_test("Rational(3, 4).numerator");
+        run_test("Rational(3, 4).denominator");
+        run_test("Rational(6, 4).numerator");
     }
 
     #[test]
     fn rational_arithmetic() {
-        run_test_once("(Rational(1, 2) + Rational(1, 3)).to_s");
-        run_test_once("(Rational(1, 2) - Rational(1, 3)).to_s");
-        run_test_once("(Rational(2, 3) * Rational(3, 4)).to_s");
-        run_test_once("(Rational(2, 3) / Rational(3, 4)).to_s");
+        run_test("(Rational(1, 2) + Rational(1, 3)).to_s");
+        run_test("(Rational(1, 2) - Rational(1, 3)).to_s");
+        run_test("(Rational(2, 3) * Rational(3, 4)).to_s");
+        run_test("(Rational(2, 3) / Rational(3, 4)).to_s");
     }
 
     #[test]
     fn rational_comparison() {
-        run_test_once("Rational(1, 2) == Rational(2, 4)");
-        run_test_once("Rational(1, 2) == 0.5");
-        run_test_once("(Rational(1, 2) <=> Rational(1, 3))");
+        run_test("Rational(1, 2) == Rational(2, 4)");
+        run_test("Rational(1, 2) == 0.5");
+        run_test("(Rational(1, 2) <=> Rational(1, 3))");
     }
 
     #[test]
     fn rational_conversion() {
-        run_test_once("Rational(3, 2).to_f");
-        run_test_once("Rational(7, 2).to_i");
-        run_test_once("Rational(3, 4).to_s");
-        run_test_once("Rational(3, 4).inspect");
+        run_test("Rational(3, 2).to_f");
+        run_test("Rational(7, 2).to_i");
+        run_test("Rational(3, 4).to_s");
+        run_test("Rational(3, 4).inspect");
     }
 
     #[test]
     fn rational_predicates() {
-        run_test_once("Rational(0, 1).zero?");
-        run_test_once("Rational(1, 2).positive?");
-        run_test_once("Rational(-1, 2).negative?");
-        run_test_once("Rational(1, 2).integer?");
+        run_test("Rational(0, 1).zero?");
+        run_test("Rational(1, 2).positive?");
+        run_test("Rational(-1, 2).negative?");
+        run_test("Rational(1, 2).integer?");
     }
 
     #[test]
     fn rational_unary() {
-        run_test_once("(-Rational(3, 4)).to_s");
-        run_test_once("Rational(-3, 4).abs.to_s");
+        run_test("(-Rational(3, 4)).to_s");
+        run_test("Rational(-3, 4).abs.to_s");
     }
 
     #[test]
     fn rational_power() {
-        run_test_once("(Rational(2, 3) ** 2).to_s");
-        run_test_once("(Rational(2, 3) ** -1).to_s");
+        run_test("(Rational(2, 3) ** 2).to_s");
+        run_test("(Rational(2, 3) ** -1).to_s");
     }
 
     #[test]
     fn rational_power_extended() {
         // Rational ** Rational (integer denominator)
-        run_test_once("(Rational(2, 3) ** Rational(2, 1)).to_s");
-        run_test_once("(Rational(2, 3) ** Rational(-1, 1)).to_s");
+        run_test("(Rational(2, 3) ** Rational(2, 1)).to_s");
+        run_test("(Rational(2, 3) ** Rational(-1, 1)).to_s");
         // Rational ** Float
-        run_test_once("(Rational(4, 1) ** 0.5).class");
+        run_test("(Rational(4, 1) ** 0.5).class");
         // Zero base with negative exponent
         run_test_error("Rational(0, 1) ** -1");
         run_test_error("Rational(0, 1) ** Rational(-1, 1)");
@@ -614,11 +614,11 @@ mod tests {
     #[test]
     fn rational_pow_negative_base_complex() {
         // Rational(-8,1) ** Rational(1,3) should return Complex
-        run_test_once("(Rational(-8, 1) ** Rational(1, 3)).class");
+        run_test("(Rational(-8, 1) ** Rational(1, 3)).class");
         // Rational(-8,1) ** 0.333... should return Complex
-        run_test_once("(Rational(-8, 1) ** (1.0/3)).class");
+        run_test("(Rational(-8, 1) ** (1.0/3)).class");
         // Integer ** Rational also goes through coerce to Rational **
-        run_test_once("((-8) ** Rational(1, 3)).class");
+        run_test("((-8) ** Rational(1, 3)).class");
     }
 
     #[test]
@@ -629,38 +629,42 @@ mod tests {
 
     #[test]
     fn rational_floor_ceil_round_ndigits() {
-        run_test_once("Rational(7, 3).floor.to_s");
-        run_test_once("Rational(7, 3).ceil.to_s");
-        run_test_once("Rational(7, 3).truncate.to_s");
-        run_test_once("Rational(7, 3).round.to_s");
-        // ndigits > 0 returns Rational
-        run_test_once("Rational(7, 3).floor(1).class");
-        run_test_once("Rational(7, 3).ceil(1).class");
-        run_test_once("Rational(7, 3).round(1).class");
+        run_tests(&[
+            "Rational(7, 3).floor.to_s",
+            "Rational(7, 3).ceil.to_s",
+            "Rational(7, 3).truncate.to_s",
+            "Rational(7, 3).round.to_s",
+            // ndigits > 0 returns Rational
+            "Rational(7, 3).floor(1).class",
+            "Rational(7, 3).ceil(1).class",
+            "Rational(7, 3).round(1).class",
+        ]);
     }
 
     #[test]
     fn rational_round_large_ndigits() {
-        // Absurdly large ndigits should not hang
-        run_test_once("Rational(3, 2).round(2_097_171)");
-        run_test_once("Rational(3, 2).floor(2_097_171)");
-        run_test_once("Rational(3, 2).ceil(2_097_171)");
-        run_test_once("Rational(3, 2).truncate(2_097_171)");
-        // Denominator=1 (integer rational)
-        run_test_once("Rational(6, 1).round(1000000)");
+        run_tests(&[
+            // Absurdly large ndigits should not hang
+            "Rational(3, 2).round(2_097_171)",
+            "Rational(3, 2).floor(2_097_171)",
+            "Rational(3, 2).ceil(2_097_171)",
+            "Rational(3, 2).truncate(2_097_171)",
+            // Denominator=1 (integer rational)
+            "Rational(6, 1).round(1000000)",
+        ]);
     }
 
     #[test]
     fn rational_cmp_coerce() {
-        run_test_once("Rational(1, 2) <=> 0.5");
-        run_test_once("Rational(1, 2) <=> 1");
-        run_test_once("Rational(1, 2) <=> 'a'");
+        run_test("Rational(1, 2) <=> 0.5");
+        run_test("Rational(1, 2) <=> 1");
+        run_test("Rational(1, 2) <=> 'a'");
     }
 
     #[test]
     fn rational_div_float_zero() {
-        run_test_once("(Rational(1, 2) / 0.0).to_s");
-        run_test_once("(Rational(-1, 2) / 0.0).to_s");
+        run_test("(Rational(1, 2) / 0.0).to_s");
+        run_test("(Rational(-1, 2) / 0.0).to_s");
     }
 
     #[test]
@@ -700,60 +704,68 @@ mod tests {
 
     #[test]
     fn rational_floor() {
-        // ndigits == 0 (returns Integer)
-        run_test_once("Rational(7, 3).floor");
-        run_test_once("Rational(-7, 3).floor");
-        run_test_once("Rational(6, 3).floor");
-        // ndigits > 0 (returns Rational)
-        run_test_once("Rational(7, 3).floor(1).to_s");
-        run_test_once("Rational(-7, 3).floor(1).to_s");
-        run_test_once("Rational(1, 4).floor(1).to_s");
-        // ndigits < 0 (rounds toward negative infinity at 10s place)
-        run_test_once("Rational(123, 1).floor(-1)");
-        run_test_once("Rational(-123, 1).floor(-1)");
-        // ndigits_sufficient: 1/4 is exact at 2 decimal places
-        run_test_once("Rational(1, 4).floor(2).to_s");
+        run_tests(&[
+            // ndigits == 0 (returns Integer)
+            "Rational(7, 3).floor",
+            "Rational(-7, 3).floor",
+            "Rational(6, 3).floor",
+            // ndigits > 0 (returns Rational)
+            "Rational(7, 3).floor(1).to_s",
+            "Rational(-7, 3).floor(1).to_s",
+            "Rational(1, 4).floor(1).to_s",
+            // ndigits < 0 (rounds toward negative infinity at 10s place)
+            "Rational(123, 1).floor(-1)",
+            "Rational(-123, 1).floor(-1)",
+            // ndigits_sufficient: 1/4 is exact at 2 decimal places
+            "Rational(1, 4).floor(2).to_s",
+        ]);
     }
 
     #[test]
     fn rational_ceil() {
-        run_test_once("Rational(7, 3).ceil");
-        run_test_once("Rational(-7, 3).ceil");
-        run_test_once("Rational(6, 3).ceil");
-        run_test_once("Rational(7, 3).ceil(1).to_s");
-        run_test_once("Rational(-7, 3).ceil(1).to_s");
-        run_test_once("Rational(123, 1).ceil(-1)");
-        run_test_once("Rational(-123, 1).ceil(-1)");
+        run_tests(&[
+            "Rational(7, 3).ceil",
+            "Rational(-7, 3).ceil",
+            "Rational(6, 3).ceil",
+            "Rational(7, 3).ceil(1).to_s",
+            "Rational(-7, 3).ceil(1).to_s",
+            "Rational(123, 1).ceil(-1)",
+            "Rational(-123, 1).ceil(-1)",
+        ]);
     }
 
     #[test]
     fn rational_truncate() {
-        run_test_once("Rational(7, 3).truncate");
-        run_test_once("Rational(-7, 3).truncate");
-        run_test_once("Rational(6, 3).truncate");
-        run_test_once("Rational(7, 3).truncate(1).to_s");
-        run_test_once("Rational(-7, 3).truncate(1).to_s");
-        run_test_once("Rational(123, 1).truncate(-1)");
+        run_tests(&[
+            "Rational(7, 3).truncate",
+            "Rational(-7, 3).truncate",
+            "Rational(6, 3).truncate",
+            "Rational(7, 3).truncate(1).to_s",
+            "Rational(-7, 3).truncate(1).to_s",
+            "Rational(123, 1).truncate(-1)",
+        ]);
     }
 
     #[test]
     fn rational_round() {
-        // Basic rounding
-        run_test_once("Rational(7, 3).round");
-        run_test_once("Rational(-7, 3).round");
-        run_test_once("Rational(5, 2).round");
-        run_test_once("Rational(-5, 2).round");
-        // half: modes
-        run_test_once("Rational(5, 2).round(0, half: :up)");
-        run_test_once("Rational(5, 2).round(0, half: :down)");
-        run_test_once("Rational(5, 2).round(0, half: :even)");
-        run_test_once("Rational(7, 2).round(0, half: :even)");
-        // ndigits > 0
-        run_test_once("Rational(7, 3).round(1).to_s");
-        run_test_once("Rational(7, 3).round(2).to_s");
-        // ndigits < 0
-        run_test_once("Rational(155, 1).round(-1)");
-        run_test_once("Rational(145, 1).round(-1)");
+        run_tests(&[
+            // Basic rounding
+            "Rational(7, 3).round",
+            "Rational(-7, 3).round",
+            "Rational(5, 2).round",
+            "Rational(-5, 2).round",
+            // half: modes
+            "Rational(5, 2).round(0, half: :up)",
+            "Rational(5, 2).round(0, half: :down)",
+            "Rational(5, 2).round(0, half: :even)",
+            "Rational(7, 2).round(0, half: :even)",
+            // ndigits > 0
+            "Rational(7, 3).round(1).to_s",
+            "Rational(7, 3).round(2).to_s",
+            // ndigits < 0
+            "Rational(155, 1).round(-1)",
+            "Rational(145, 1).round(-1)",
+        ]);
         // invalid half mode
         run_test_error("Rational(1, 2).round(0, half: :foo)");
     }

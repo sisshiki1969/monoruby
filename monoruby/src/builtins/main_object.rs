@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn define_method_with_method() {
-        run_test_once(
+        run_test(
             r#"
             def greet; "hello"; end
             m = method(:greet)
@@ -143,7 +143,7 @@ mod tests {
             greet2
         "#,
         );
-        run_test_once(
+        run_test(
             r#"
             def add(x, y); x + y; end
             m = method(:add)
@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn define_method_with_unbound_method() {
-        run_test_once(
+        run_test(
             r#"
             def calc(x); x * 10; end
             um = Object.instance_method(:calc)

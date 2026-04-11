@@ -45,6 +45,20 @@ pub type GvarGetter =
 pub type GvarSetter =
     fn(vm: &mut Executor, globals: &mut Globals, name: IdentId, val: Value) -> Result<()>;
 
+/// How `defined?` should treat a [`GvarEntry::Hooked`] entry.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum GvarDefinedKind {
+    /// `defined?` always returns `"global-variable"`. Used for variables that
+    /// CRuby considers always-present, e.g. `$~`, `$LOAD_PATH`,
+    /// `$LOADED_FEATURES`.
+    Always,
+    /// `defined?` calls the getter and returns `"global-variable"` only when
+    /// the result is non-nil. Used for derived match-data variables like
+    /// `$&`, `$'`, `` $` ``, `$1`..`$N`, which CRuby parses as BACK_REF /
+    /// NTH_REF nodes and evaluates against the current `$~`.
+    OnNonNil,
+}
+
 /// A single entry in the global variable table.
 pub enum GvarEntry {
     /// Plain global variable — value is stored in place.
@@ -55,6 +69,7 @@ pub enum GvarEntry {
     Hooked {
         getter: GvarGetter,
         setter: Option<GvarSetter>,
+        defined_kind: GvarDefinedKind,
     },
 }
 
@@ -122,6 +137,43 @@ impl GvarTable {
         }
     }
 
+    /// Runtime `defined?($name)` check.
+    ///
+    /// Returns `true` when the variable should report as `"global-variable"`:
+    /// - Plain `Simple` entries are always defined once registered.
+    /// - `Hooked` entries with [`GvarDefinedKind::Always`] are always defined.
+    /// - `Hooked` entries with [`GvarDefinedKind::OnNonNil`] call the getter
+    ///   and report defined only when the result is non-nil — this mirrors
+    ///   CRuby's BACK_REF / NTH_REF semantics for `$&`, `$'`, `` $` ``,
+    ///   `$1`..`$N`, where the variable is "defined" only after a successful
+    ///   match has populated `$~`.
+    pub fn defined_runtime(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        name: IdentId,
+    ) -> bool {
+        let id = match globals.gvars.index.get(&name).copied() {
+            Some(id) => globals.gvars.resolve(id),
+            None => return false,
+        };
+        match &globals.gvars.entries[id.index()] {
+            GvarEntry::Simple(_) => true,
+            GvarEntry::Alias(_) => unreachable!("resolve() follows aliases"),
+            GvarEntry::Hooked {
+                defined_kind: GvarDefinedKind::Always,
+                ..
+            } => true,
+            GvarEntry::Hooked {
+                getter,
+                defined_kind: GvarDefinedKind::OnNonNil,
+                ..
+            } => {
+                let getter = *getter;
+                !getter(vm, globals, name).is_nil()
+            }
+        }
+    }
+
     /// Write `val` into `name`.
     ///
     /// Returns `Err` if the target is a read-only hooked variable or the
@@ -153,8 +205,11 @@ impl GvarTable {
     }
 
     /// Returns `true` if `name` has any entry — Simple, Alias, or Hooked.
-    /// Used by `defined? $foo` to mirror CRuby's notion of "the name is
-    /// known to the global variable table".
+    /// Used by the gvar unit tests as a cheap "is the name registered"
+    /// probe; runtime `defined?` evaluation goes through
+    /// [`GvarTable::defined_runtime`] instead so it can also call hook
+    /// getters when appropriate.
+    #[cfg(test)]
     pub fn is_defined(&self, name: IdentId) -> bool {
         self.index.contains_key(&name)
     }
@@ -204,9 +259,14 @@ impl GvarTable {
         name: IdentId,
         getter: GvarGetter,
         setter: Option<GvarSetter>,
+        defined_kind: GvarDefinedKind,
     ) {
         let id = self.entry_id(name);
-        self.entries[id.index()] = GvarEntry::Hooked { getter, setter };
+        self.entries[id.index()] = GvarEntry::Hooked {
+            getter,
+            setter,
+            defined_kind,
+        };
     }
 
     /// Install an alias: reading or writing `new_name` is redirected to
@@ -311,14 +371,34 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
         }
     }
 
+    // $~ is always considered defined (CRuby parses it as a regular global
+    // variable reference).
     globals.define_hooked_variable(
         IdentId::get_id("$~"),
         get_match_data,
         Some(set_match_data),
+        GvarDefinedKind::Always,
     );
-    globals.define_hooked_variable(IdentId::get_id("$&"), get_last_match, None);
-    globals.define_hooked_variable(IdentId::get_id("$'"), get_post_match, None);
-    globals.define_hooked_variable(IdentId::get_id("$`"), get_pre_match, None);
+    // $&, $', $`, $1..$N are derived from $~ and CRuby parses them as
+    // BACK_REF / NTH_REF nodes. defined? returns nil unless $~ is set.
+    globals.define_hooked_variable(
+        IdentId::get_id("$&"),
+        get_last_match,
+        None,
+        GvarDefinedKind::OnNonNil,
+    );
+    globals.define_hooked_variable(
+        IdentId::get_id("$'"),
+        get_post_match,
+        None,
+        GvarDefinedKind::OnNonNil,
+    );
+    globals.define_hooked_variable(
+        IdentId::get_id("$`"),
+        get_pre_match,
+        None,
+        GvarDefinedKind::OnNonNil,
+    );
 
     // $1 through $9 are the common case; higher-numbered matches are also
     // allowed by name — they all share the same getter which parses the
@@ -328,6 +408,7 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
             IdentId::get_id(&format!("${}", n)),
             get_match_nth,
             None,
+            GvarDefinedKind::OnNonNil,
         );
     }
 
@@ -345,6 +426,7 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
         IdentId::get_id("$LOAD_PATH"),
         get_load_path_hook,
         None,
+        GvarDefinedKind::Always,
     );
     // `$:` is an alias of `$LOAD_PATH`.
     globals.alias_global_variable(IdentId::get_id("$:"), IdentId::get_id("$LOAD_PATH"));
@@ -363,6 +445,7 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
         IdentId::get_id("$LOADED_FEATURES"),
         get_loaded_features_hook,
         None,
+        GvarDefinedKind::Always,
     );
     globals.alias_global_variable(
         IdentId::get_id("$\""),
@@ -424,7 +507,7 @@ mod tests {
     fn is_defined_recognizes_simple_alias_and_hook() {
         let mut t = GvarTable::new();
         t.set_simple(n("$test_def_simple"), Value::integer(1));
-        t.define_hook(n("$test_def_hook"), dummy_get, None);
+        t.define_hook(n("$test_def_hook"), dummy_get, None, GvarDefinedKind::Always);
         t.define_alias(n("$test_def_alias"), n("$test_def_simple"));
         assert!(t.is_defined(n("$test_def_simple")));
         assert!(t.is_defined(n("$test_def_hook")));
@@ -484,7 +567,12 @@ mod tests {
         t.set_simple(n("$test_replace"), Value::integer(123));
         // After installing a hook, get_simple should report None because the
         // entry is now Hooked, not Simple.
-        t.define_hook(n("$test_replace"), dummy_get, Some(dummy_set));
+        t.define_hook(
+            n("$test_replace"),
+            dummy_get,
+            Some(dummy_set),
+            GvarDefinedKind::Always,
+        );
         assert!(t.get_simple(n("$test_replace")).is_none());
         assert!(t.is_defined(n("$test_replace")));
     }
@@ -496,7 +584,7 @@ mod tests {
         // reports None for it (so that the unified `defined?` path uses
         // `is_defined` instead of `get_simple`).
         let mut t = GvarTable::new();
-        t.define_hook(n("$test_ro"), dummy_get, None);
+        t.define_hook(n("$test_ro"), dummy_get, None, GvarDefinedKind::Always);
         assert!(t.get_simple(n("$test_ro")).is_none());
         assert!(t.is_defined(n("$test_ro")));
     }
@@ -507,7 +595,7 @@ mod tests {
         // get_simple should still report None because the resolved entry is
         // Hooked, but is_defined should report true.
         let mut t = GvarTable::new();
-        t.define_hook(n("$test_h_hook"), dummy_get, None);
+        t.define_hook(n("$test_h_hook"), dummy_get, None, GvarDefinedKind::Always);
         t.define_alias(n("$test_h_alias"), n("$test_h_hook"));
         assert!(t.get_simple(n("$test_h_alias")).is_none());
         assert!(t.is_defined(n("$test_h_alias")));
@@ -532,7 +620,12 @@ mod tests {
         // to plain-write to a hooked variable surface immediately as a
         // panic instead of silently bypassing the hook.
         let mut t = GvarTable::new();
-        t.define_hook(n("$test_panic_hook"), dummy_get, Some(dummy_set));
+        t.define_hook(
+            n("$test_panic_hook"),
+            dummy_get,
+            Some(dummy_set),
+            GvarDefinedKind::Always,
+        );
         t.set_simple(n("$test_panic_hook"), Value::integer(0));
     }
 
@@ -543,7 +636,7 @@ mod tests {
         // GC marker.
         let mut t = GvarTable::new();
         t.set_simple(n("$test_mark_simple"), Value::integer(5));
-        t.define_hook(n("$test_mark_hook"), dummy_get, None);
+        t.define_hook(n("$test_mark_hook"), dummy_get, None, GvarDefinedKind::Always);
         let mut visited = 0;
         t.mark_values(|_| visited += 1);
         assert_eq!(visited, 1);
