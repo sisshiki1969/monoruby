@@ -206,12 +206,16 @@ impl Globals {
             basic_object.get(),
         );
         assert_eq!(
-            FuncId::new(1),
+            ENUM_YIELDER_FUNCID,
             globals.define_builtin_func(OBJECT_CLASS, "", enum_yielder, 0)
         );
         assert_eq!(
-            FuncId::new(2),
+            YIELDER_FUNCID,
             globals.define_builtin_func_rest(OBJECT_CLASS, "", yielder)
+        );
+        assert_eq!(
+            SYMBOL_TO_PROC_BODY_FUNCID,
+            globals.define_builtin_func_with(OBJECT_CLASS, "", symbol_to_proc_body, 1, 1, true)
         );
         globals.random.init_with_seed(None);
         gvar::init_builtin_gvars(&mut globals);

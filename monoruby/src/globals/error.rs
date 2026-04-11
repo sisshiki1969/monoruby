@@ -362,7 +362,7 @@ impl MonorubyErr {
 
     pub(crate) fn wrong_number_of_arg_min(given: usize, min: usize) -> MonorubyErr {
         Self::argumenterr(format!(
-            "wrong number of arguments (given {given}, expeted {min}+)"
+            "wrong number of arguments (given {given}, expected {min}+)"
         ))
     }
 

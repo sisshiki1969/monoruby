@@ -479,6 +479,45 @@ impl Value {
         }
     }
 
+    ///
+    /// Returns true if `self` is a "chilled" String — a String returned by
+    /// `Symbol#to_s` that behaves mutable but should emit a one-shot
+    /// deprecation warning on first mutation.
+    ///
+    pub(crate) fn is_chilled(&self) -> bool {
+        match self.try_rvalue() {
+            Some(rv) => rv.is_chilled(),
+            None => false,
+        }
+    }
+
+    pub(crate) fn set_chilled(&mut self) {
+        self.rvalue_mut().set_chilled()
+    }
+
+    pub(crate) fn clear_chilled(&mut self) {
+        self.rvalue_mut().clear_chilled()
+    }
+
+    ///
+    /// Ensure `self` (a String) is mutable. If it is "chilled", emit a
+    /// one-shot deprecation warning (gated by `Warning[:deprecated]`), clear
+    /// the chilled flag, and proceed. If it is truly frozen, raise
+    /// `FrozenError`. Otherwise do nothing. Must only be called on String
+    /// receivers; behaves like `ensure_not_frozen` for non-chilled values.
+    ///
+    pub(crate) fn ensure_string_mutable(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        if self.is_chilled() {
+            self.clear_chilled();
+            emit_chilled_string_mutation_warning(vm, globals, *self)?;
+        }
+        self.ensure_not_frozen(&globals.store)
+    }
+
     pub(crate) fn change_class(&mut self, new_class_id: ClassId) {
         if let Some(rv) = self.try_rvalue_mut() {
             rv.change_class(new_class_id);
@@ -747,6 +786,19 @@ impl Value {
         RValue::new_bytes_from_slice(b).pack()
     }
 
+    ///
+    /// Build a String from a source-file byte literal (e.g. `"\xC3\xA9"`).
+    ///
+    /// The result is tagged as UTF-8, matching CRuby's source-encoding
+    /// semantics where string literals inherit the source file encoding
+    /// regardless of whether `\xNN` escapes produce valid UTF-8. The bytes
+    /// may be invalid UTF-8, in which case `#valid_encoding?` returns
+    /// false and byte-level operations still work.
+    ///
+    pub fn string_from_source_bytes(b: &[u8]) -> Self {
+        Self::string_from_inner(RStringInner::from_encoding(b, Encoding::Utf8))
+    }
+
     pub fn string_from_vec(b: Vec<u8>) -> Self {
         RValue::new_string_from_vec(b).pack()
     }
@@ -959,7 +1011,7 @@ impl Value {
             RV::Float(f) => ruby_float_to_s(f),
             RV::Complex(_) => self.as_complex().debug(store),
             RV::Rational(r) => r.inspect(),
-            RV::Symbol(id) => format!(":{id}"),
+            RV::Symbol(id) => inspect_symbol(id),
             RV::String(s) => format!(r#""{}""#, s.inspect()),
             RV::Object(rvalue) => rvalue.debug(store),
         }
@@ -975,7 +1027,7 @@ impl Value {
             RV::Float(f) => ruby_float_to_s(f),
             RV::Complex(_) => self.as_complex().debug(store),
             RV::Rational(r) => r.inspect(),
-            RV::Symbol(id) => format!(":{id}"),
+            RV::Symbol(id) => inspect_symbol(id),
             RV::String(s) => format!(r#""{}""#, s.inspect()),
             RV::Object(rvalue) => rvalue.debug(store),
         };
@@ -1037,6 +1089,247 @@ impl Value {
         }
         s
     }
+}
+
+///
+/// Emit the CRuby-compatible deprecation warning for mutating a chilled
+/// string (one returned by `Symbol#to_s`). Gated by `Warning[:deprecated]`;
+/// writes to Ruby-level `$stderr` so that mspec's `complain` matcher can
+/// capture it. The chilled flag should be cleared on the caller *before*
+/// invoking this helper so that failing tests still leave the string in a
+/// consistent state.
+///
+pub(crate) fn emit_chilled_string_mutation_warning(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+) -> Result<()> {
+    // Check Warning[:deprecated].
+    let warning_val = match globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Warning"))
+    {
+        Some(v) => v,
+        None => return Ok(()),
+    };
+    let dep_sym = Value::symbol(IdentId::get_id("deprecated"));
+    let dep = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("[]"),
+        warning_val,
+        &[dep_sym],
+        None,
+        None,
+    )?;
+    if dep.is_nil() || dep == Value::bool(false) {
+        return Ok(());
+    }
+
+    // The current bytes of a chilled string still carry the original
+    // symbol name (monoruby only produces chilled strings from
+    // Symbol#to_s, and the flag is cleared on first mutation). Re-intern
+    // so the message shows the same form CRuby would have printed.
+    let sym = match self_val.is_rstring() {
+        Some(s) => {
+            let bytes = s.as_bytes();
+            match std::str::from_utf8(bytes) {
+                Ok(utf8) => IdentId::get_id(utf8),
+                Err(_) => IdentId::get_id_from_bytes(bytes.to_vec()),
+            }
+        }
+        None => return Ok(()),
+    };
+    let msg = format!(
+        "warning: string returned by {}.to_s will be frozen in the future\n",
+        inspect_symbol(sym)
+    );
+    let stderr = globals
+        .get_gvar(IdentId::get_id("$stderr"))
+        .unwrap_or(Value::nil());
+    if stderr.is_nil() {
+        return Ok(());
+    }
+    let msg_val = Value::string(msg);
+    vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("write"),
+        stderr,
+        &[msg_val],
+        None,
+        None,
+    )?;
+    Ok(())
+}
+
+///
+/// Render a symbol as its Ruby inspect form (`:name` or `:"escaped name"`).
+///
+/// Simple names — identifiers, operators, `$gv`/`@iv`/`@@cv` — are emitted
+/// without quotes. Anything else is wrapped in `:"..."` and escaped through
+/// `RStringInner::inspect`. This matches CRuby's `rb_sym_inspect` behavior and
+/// is shared between `Symbol#inspect`, `Value::debug`, and the
+/// `Symbol#to_s`-chilled-string deprecation warning.
+///
+pub(crate) fn inspect_symbol(id: IdentId) -> String {
+    let ident_name = id.get_ident_name_clone();
+    if is_simple_symbol(&ident_name) {
+        let mut res = String::from(":");
+        match &ident_name {
+            IdentName::Utf8(name) => res.push_str(name),
+            IdentName::Bytes(bytes) => res.push_str(&String::from_utf8_lossy(bytes)),
+        }
+        return res;
+    }
+    let (bytes, enc) = match &ident_name {
+        IdentName::Utf8(s) => {
+            let enc = if s.is_ascii() {
+                Encoding::UsAscii
+            } else {
+                Encoding::Utf8
+            };
+            (s.as_bytes(), enc)
+        }
+        IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
+    };
+    let inner = RStringInner::from_encoding(bytes, enc);
+    let mut res = String::from(":\"");
+    res.push_str(&inner.inspect());
+    res.push('"');
+    res
+}
+
+/// Test whether a symbol name can be rendered without surrounding quotes.
+fn is_simple_symbol(name: &IdentName) -> bool {
+    let s = match name.as_str() {
+        Some(s) => s,
+        None => return false,
+    };
+    if s.is_empty() {
+        return false;
+    }
+    if is_operator_symbol(s) {
+        return true;
+    }
+    if let Some(rest) = s.strip_prefix("@@") {
+        return is_plain_identifier(rest);
+    }
+    if let Some(rest) = s.strip_prefix('@') {
+        return is_plain_identifier(rest);
+    }
+    if let Some(rest) = s.strip_prefix('$') {
+        return is_global_var_tail(rest);
+    }
+    is_method_identifier(s)
+}
+
+fn is_operator_symbol(s: &str) -> bool {
+    matches!(
+        s,
+        "|" | "^"
+            | "&"
+            | "<=>"
+            | "=="
+            | "==="
+            | "=~"
+            | ">"
+            | ">="
+            | "<"
+            | "<="
+            | "<<"
+            | ">>"
+            | "+"
+            | "-"
+            | "*"
+            | "/"
+            | "%"
+            | "**"
+            | "~"
+            | "+@"
+            | "-@"
+            | "[]"
+            | "[]="
+            | "`"
+            | "!"
+            | "!="
+            | "!~"
+    )
+}
+
+fn is_ident_start_char(c: char) -> bool {
+    c == '_' || c.is_ascii_alphabetic() || (c as u32) >= 0x80
+}
+
+fn is_ident_cont_char(c: char) -> bool {
+    c == '_' || c.is_ascii_alphanumeric() || (c as u32) >= 0x80
+}
+
+fn is_plain_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if is_ident_start_char(c) => {}
+        _ => return false,
+    }
+    chars.all(is_ident_cont_char)
+}
+
+fn is_method_identifier(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let body_end = match bytes.last() {
+        Some(b'!') | Some(b'?') | Some(b'=') => bytes.len() - 1,
+        _ => bytes.len(),
+    };
+    if body_end == 0 {
+        return false;
+    }
+    is_plain_identifier(&s[..body_end])
+}
+
+fn is_global_var_tail(rest: &str) -> bool {
+    if rest.is_empty() {
+        return false;
+    }
+    // $1234: digits only
+    if rest.bytes().all(|b| b.is_ascii_digit()) {
+        return true;
+    }
+    // $-X: dash + exactly one identifier-ish char
+    if let Some(after_dash) = rest.strip_prefix('-') {
+        let mut chars = after_dash.chars();
+        if let (Some(c), None) = (chars.next(), chars.next()) {
+            return is_ident_cont_char(c);
+        }
+        return false;
+    }
+    // Single-character special globals like $~, $*, $$, $?, $!, ...
+    if rest.len() == 1 {
+        let c = rest.as_bytes()[0];
+        if matches!(
+            c,
+            b'~' | b'*'
+                | b'$'
+                | b'?'
+                | b'!'
+                | b'@'
+                | b'/'
+                | b'\\'
+                | b';'
+                | b','
+                | b'.'
+                | b'<'
+                | b'>'
+                | b':'
+                | b'"'
+                | b'&'
+                | b'\''
+                | b'`'
+                | b'+'
+                | b'='
+        ) {
+            return true;
+        }
+    }
+    // $name: plain identifier, no !/?/= suffix allowed
+    is_plain_identifier(rest)
 }
 
 fn coerce_to_rstring_inner(
@@ -2200,7 +2493,7 @@ impl Value {
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
             NodeKind::String(s) => Value::string_from_str(s),
-            NodeKind::Bytes(b) => Value::bytes_from_slice(b),
+            NodeKind::Bytes(b) => Value::string_from_source_bytes(b),
             NodeKind::Array(v, ..) => {
                 let iter = v.iter().map(|node| Self::from_ast_inner(node, vm, globals));
                 Value::array_from_iter(iter)
@@ -2322,7 +2615,7 @@ impl Value {
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
             NodeKind::String(s) => Value::string_from_str(s),
-            NodeKind::Bytes(b) => Value::bytes_from_slice(b),
+            NodeKind::Bytes(b) => Value::string_from_source_bytes(b),
             NodeKind::Array(v, ..) => {
                 let iter = v.iter().map(|node| Self::from_const_ast(node));
                 Value::array_from_iter(iter)

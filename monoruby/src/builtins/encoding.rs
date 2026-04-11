@@ -146,6 +146,8 @@ pub(super) fn init_encoding(globals: &mut Globals) {
     globals.define_builtin_func(enc.id(), "to_s", enc_to_s, 0);
     globals.define_builtin_func(enc.id(), "inspect", enc_inspect, 0);
     globals.define_builtin_func(enc.id(), "name", enc_to_s, 0);
+    globals.define_builtin_func(enc.id(), "ascii_compatible?", enc_ascii_compatible_p, 0);
+    globals.define_builtin_func(enc.id(), "dummy?", enc_dummy_p, 0);
 }
 
 // -------------------------------------------------------
@@ -214,7 +216,7 @@ pub(super) fn encode_(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    lfp.self_val().ensure_string_mutable(vm, globals)?;
     // Validate encoding arguments
     if let Some(arg0) = lfp.try_arg(0) {
         resolve_enc_arg(vm, globals, arg0)?;
@@ -288,7 +290,7 @@ pub(super) fn force_encoding(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    lfp.self_val().ensure_string_mutable(vm, globals)?;
     let arg0 = lfp.arg(0);
     let enc = if let Some(s) = arg0.is_str() {
         Encoding::try_from_str(s)?
@@ -666,6 +668,78 @@ fn enc_inspect(
     }
 }
 
+///
+/// ### Encoding#ascii_compatible?
+/// - ascii_compatible? -> bool
+///
+/// Returns true for encodings whose encoded forms are a superset of ASCII.
+///
+#[monoruby_builtin]
+fn enc_ascii_compatible_p(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let name = globals
+        .store
+        .get_ivar(self_, IdentId::_ENCODING)
+        .and_then(|v| v.is_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+    Ok(Value::bool(is_ascii_compatible_encoding(&name)))
+}
+
+///
+/// ### Encoding#dummy?
+/// - dummy? -> bool
+///
+#[monoruby_builtin]
+fn enc_dummy_p(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let name = globals
+        .store
+        .get_ivar(self_, IdentId::_ENCODING)
+        .and_then(|v| v.is_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+    Ok(Value::bool(is_dummy_encoding(&name)))
+}
+
+fn is_ascii_compatible_encoding(name: &str) -> bool {
+    !matches!(
+        name,
+        "UTF-16"
+            | "UTF-32"
+            | "UTF-16BE"
+            | "UTF-16LE"
+            | "UTF-32BE"
+            | "UTF-32LE"
+            | "ISO-2022-JP"
+            | "STATELESS-ISO-2022-JP"
+            | "CP50220"
+            | "CP50221"
+            | "UTF-7"
+    )
+}
+
+fn is_dummy_encoding(name: &str) -> bool {
+    matches!(
+        name,
+        "UTF-16"
+            | "UTF-32"
+            | "ISO-2022-JP"
+            | "STATELESS-ISO-2022-JP"
+            | "CP50220"
+            | "CP50221"
+            | "UTF-7"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -800,5 +874,38 @@ mod tests {
         // Encoding::CompatibilityError exists and inherits from EncodingError
         run_test("Encoding::CompatibilityError.is_a?(Class)");
         run_test("Encoding::CompatibilityError < EncodingError");
+    }
+
+    #[test]
+    fn encoding_ascii_compatible_p() {
+        // ASCII-compatible encodings
+        run_test(r#"Encoding::UTF_8.ascii_compatible?"#);
+        run_test(r#"Encoding::US_ASCII.ascii_compatible?"#);
+        run_test(r#"Encoding::ASCII_8BIT.ascii_compatible?"#);
+        run_test(r#"Encoding::ISO_8859_1.ascii_compatible?"#);
+        run_test(r#"Encoding::Shift_JIS.ascii_compatible?"#);
+        run_test(r#"Encoding::EUC_JP.ascii_compatible?"#);
+        // Non-ASCII-compatible encodings
+        run_test(r#"Encoding::UTF_16.ascii_compatible?"#);
+        run_test(r#"Encoding::UTF_16BE.ascii_compatible?"#);
+        run_test(r#"Encoding::UTF_16LE.ascii_compatible?"#);
+        run_test(r#"Encoding::UTF_32.ascii_compatible?"#);
+        run_test(r#"Encoding::UTF_32BE.ascii_compatible?"#);
+        run_test(r#"Encoding::UTF_32LE.ascii_compatible?"#);
+    }
+
+    #[test]
+    fn encoding_dummy_p() {
+        // Non-dummy encodings
+        run_test(r#"Encoding::UTF_8.dummy?"#);
+        run_test(r#"Encoding::US_ASCII.dummy?"#);
+        run_test(r#"Encoding::ASCII_8BIT.dummy?"#);
+        run_test(r#"Encoding::UTF_16BE.dummy?"#);
+        run_test(r#"Encoding::UTF_16LE.dummy?"#);
+        run_test(r#"Encoding::Shift_JIS.dummy?"#);
+        // Dummy encodings (stateful / no-BOM UTF-16/32)
+        run_test(r#"Encoding::UTF_16.dummy?"#);
+        run_test(r#"Encoding::UTF_32.dummy?"#);
+        run_test(r#"Encoding::ISO_2022_JP.dummy?"#);
     }
 }

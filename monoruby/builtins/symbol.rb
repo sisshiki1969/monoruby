@@ -84,11 +84,4 @@ class Symbol
   def match?(other, pos = 0)
     self.to_s.match?(other, pos)
   end
-
-  def to_proc
-    m = self
-    lambda do |recv, *args, &blk|
-      recv.public_send(m, *args, &blk)
-    end
-  end
 end

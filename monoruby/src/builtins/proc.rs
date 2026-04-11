@@ -55,6 +55,40 @@ fn new(vm: &mut Executor, _: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<
 #[monoruby_builtin]
 fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
+    // Fast path for Symbol#to_proc procs: dispatch directly so that the
+    // block passed to Proc#call is forwarded to the invoked method. The
+    // regular invoke_proc/block_invoker path currently drops block handlers.
+    if proc.func_id() == SYMBOL_TO_PROC_BODY_FUNCID {
+        let symbol = proc.outer_lfp().self_val();
+        let symbol_id = symbol
+            .try_symbol()
+            .expect("symbol-to-proc outer self is not a Symbol");
+        let args_val = lfp.arg(0);
+        let args = args_val.as_array();
+        if args.is_empty() {
+            return Err(MonorubyErr::argumenterr("no receiver given"));
+        }
+        let recv = args[0];
+        let rest: Vec<Value> = args[1..].to_vec();
+        let class_id = recv.class();
+        if let Some(entry) = globals.check_method_for_class(class_id, symbol_id) {
+            match entry.visibility() {
+                Visibility::Private => {
+                    return Err(MonorubyErr::private_method_called(
+                        globals, symbol_id, recv,
+                    ));
+                }
+                Visibility::Protected => {
+                    return Err(MonorubyErr::protected_method_called(
+                        globals, symbol_id, recv,
+                    ));
+                }
+                _ => {}
+            }
+        }
+        let bh = lfp.block();
+        return vm.invoke_method_inner(globals, symbol_id, recv, &rest, bh, None);
+    }
     vm.invoke_proc(globals, &proc, &lfp.arg(0).as_array())
 }
 
