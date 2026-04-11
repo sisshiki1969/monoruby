@@ -409,6 +409,10 @@ module Enumerable
   end
   alias entries to_a
 
+  def to_set(klass = Set, *args, &block)
+    klass.new(self, *args, &block)
+  end
+
   def to_h
     h = {}
     self.each do |x|

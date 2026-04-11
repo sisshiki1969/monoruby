@@ -1,40 +1,64 @@
 #!/usr/bin/env monoruby
 # Test ActiveRecord loading by bypassing bundler entirely.
 
-# Mark set.rb as already loaded to avoid loading system set.rb
-# which conflicts with monoruby's built-in Set
-$LOADED_FEATURES << "/opt/rbenv/versions/3.3.6/lib/ruby/3.3.0/set.rb"
+GEM_BASE = "/opt/rbenv/versions/3.3.6/lib/ruby/gems/3.3.0/gems"
 
-# Patch missing Enumerable#to_set
-module Enumerable
-  def to_set(klass = Set, *args, &block)
-    klass.new(self, *args, &block)
+# Monkey-patches for monoruby feature gaps encountered while loading ActiveRecord.
+
+# BUG: Regexp#match? does not implicitly convert Symbol to String.
+class Regexp
+  alias_method :__monoruby_match_q, :match?
+  def match?(obj, pos = 0)
+    obj = obj.to_s if obj.is_a?(Symbol)
+    __monoruby_match_q(obj, pos)
   end
 end
 
-GEM_BASE = "/opt/rbenv/versions/3.3.6/lib/ruby/gems/3.3.0/gems"
+# BUG: File#path (instance method) is missing. Logger 1.7.0 feature-detects it
+# expecting IOError; monoruby raises NoMethodError, which escapes the rescue.
+class File
+  def path
+    @__monoruby_path || ""
+  end
+end
+
+# BUG: Module#singleton_class? is missing.
+class Module
+  def singleton_class?
+    false
+  end
+end
+
+# BUG: String#tr! is missing (non-destructive String#tr exists).
+class String
+  def tr!(from, to)
+    r = tr(from, to)
+    return nil if r == self
+    replace(r)
+  end
+end
 
 [
-  "activerecord-8.1.1",
-  "activemodel-8.1.1",
-  "activesupport-8.1.1",
-  "i18n-1.14.7",
-  "tzinfo-2.0.6",
-  "concurrent-ruby-1.3.5",
-  "minitest-5.26.2",
-  "bigdecimal-3.3.1",
-  "mutex_m-0.3.0",
-  "base64-0.3.0",
-  "benchmark-0.3.0",
-  "connection_pool-3.0.2",
-  "drb-2.2.3",
-  "logger-1.7.0",
-  "securerandom-0.4.1",
-  "timeout-0.5.0",
-  "uri-1.1.1",
-  "sqlite3-2.7.3-x86_64-linux-gnu",
-].each do |gem|
-  path = "#{GEM_BASE}/#{gem}/lib"
+  ["activerecord-8.1.1", "lib"],
+  ["activemodel-8.1.1", "lib"],
+  ["activesupport-8.1.1", "lib"],
+  ["i18n-1.14.7", "lib"],
+  ["tzinfo-2.0.6", "lib"],
+  ["concurrent-ruby-1.3.5", "lib/concurrent-ruby"],
+  ["minitest-5.26.2", "lib"],
+  ["bigdecimal-3.3.1", "lib"],
+  ["mutex_m-0.3.0", "lib"],
+  ["base64-0.3.0", "lib"],
+  ["benchmark-0.3.0", "lib"],
+  ["connection_pool-3.0.2", "lib"],
+  ["drb-2.2.3", "lib"],
+  ["logger-1.7.0", "lib"],
+  ["securerandom-0.4.1", "lib"],
+  ["timeout-0.5.0", "lib"],
+  ["uri-1.1.1", "lib"],
+  ["sqlite3-2.7.3-x86_64-linux-gnu", "lib"],
+].each do |gem, sub|
+  path = "#{GEM_BASE}/#{gem}/#{sub}"
   $LOAD_PATH.unshift(path) if Dir.exist?(path)
 end
 
