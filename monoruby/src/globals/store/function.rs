@@ -295,26 +295,18 @@ impl alloc::GC<RValue> for Funcs {
     }
 }
 
-#[monoruby_builtin]
-fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let e = Enumerator::new(lfp.self_val());
-    let receiver = e.obj;
-    let method = e.method;
-    let args = &*e.args;
-    vm.invoke_method_inner(
-        globals,
-        method,
-        receiver,
-        args,
-        Some(BlockHandler::from_current(FuncId::new(2))),
-        None,
-    )
-}
+///
+/// Pre-assigned FuncId for `enum_yielder`, the proc body that drives
+/// Enumerator iteration by calling the backing method with a fresh yielder.
+///
+pub(crate) const ENUM_YIELDER_FUNCID: FuncId = FuncId::new(1);
 
-#[monoruby_builtin]
-fn yielder(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    vm.yield_fiber(lfp.arg(0))
-}
+///
+/// Pre-assigned FuncId for `yielder`, the proc body invoked via a
+/// `BlockHandler::from_current` from `enum_yielder` to suspend the fiber
+/// with a value.
+///
+pub(crate) const YIELDER_FUNCID: FuncId = FuncId::new(2);
 
 ///
 /// Pre-assigned FuncId for the shared body of `Symbol#to_proc`.
@@ -325,6 +317,37 @@ fn yielder(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// (to detect symbol-to-proc procs for the block-forwarding fast path).
 ///
 pub(crate) const SYMBOL_TO_PROC_BODY_FUNCID: FuncId = FuncId::new(3);
+
+#[monoruby_builtin]
+pub(crate) fn enum_yielder(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let e = Enumerator::new(lfp.self_val());
+    let receiver = e.obj;
+    let method = e.method;
+    let args = &*e.args;
+    vm.invoke_method_inner(
+        globals,
+        method,
+        receiver,
+        args,
+        Some(BlockHandler::from_current(YIELDER_FUNCID)),
+        None,
+    )
+}
+
+#[monoruby_builtin]
+pub(crate) fn yielder(
+    vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    vm.yield_fiber(lfp.arg(0))
+}
 
 ///
 /// Shared body for procs returned by `Symbol#to_proc`.

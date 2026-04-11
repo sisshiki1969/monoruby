@@ -1507,7 +1507,7 @@ impl Executor {
         pc: BytecodePtr,
     ) -> Result<Value> {
         let outer_lfp = Lfp::dummy_heap_frame_with_self(obj);
-        let proc = Proc::from_parts(outer_lfp, FuncId::new(1), pc);
+        let proc = Proc::from_parts(outer_lfp, ENUM_YIELDER_FUNCID, pc);
         let e = Value::new_enumerator(obj, method, proc, args);
         Ok(e)
     }
