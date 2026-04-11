@@ -316,6 +316,60 @@ fn yielder(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     vm.yield_fiber(lfp.arg(0))
 }
 
+///
+/// Pre-assigned FuncId for the shared body of `Symbol#to_proc`.
+///
+/// Registered up-front in `Globals::new` (together with `enum_yielder` /
+/// `yielder`) so the FuncId is compile-time constant and can be used
+/// directly by `Symbol#to_proc` (to build a Proc) and by `Proc#call`
+/// (to detect symbol-to-proc procs for the block-forwarding fast path).
+///
+pub(crate) const SYMBOL_TO_PROC_BODY_FUNCID: FuncId = FuncId::new(3);
+
+///
+/// Shared body for procs returned by `Symbol#to_proc`.
+///
+/// Invoked via the block-invoker path (for `&:sym` usage in e.g.
+/// `map(&:to_s)`). `lfp.self_val()` carries the symbol (copied from the
+/// proc's outer_lfp), `arg(0)` is the receiver, and `arg(1)` is the rest
+/// array.
+///
+#[monoruby_builtin]
+pub(crate) fn symbol_to_proc_body(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let symbol_val = lfp.self_val();
+    let symbol = symbol_val
+        .try_symbol()
+        .expect("symbol_to_proc_body invoked with non-symbol self");
+    let recv = lfp.arg(0);
+    let rest_val = lfp.arg(1);
+    let rest_array = rest_val.as_array();
+    let rest: Vec<Value> = rest_array.iter().cloned().collect();
+    // public_send semantics: reject private and protected methods.
+    let class_id = recv.class();
+    if let Some(entry) = globals.check_method_for_class(class_id, symbol) {
+        match entry.visibility() {
+            Visibility::Private => {
+                return Err(MonorubyErr::private_method_called(
+                    globals, symbol, recv,
+                ));
+            }
+            Visibility::Protected => {
+                return Err(MonorubyErr::protected_method_called(
+                    globals, symbol, recv,
+                ));
+            }
+            _ => {}
+        }
+    }
+    let bh = lfp.block();
+    vm.invoke_method_inner(globals, symbol, recv, &rest, bh, None)
+}
+
 impl Funcs {
     pub(super) fn functions(&self) -> &[FuncInfo] {
         &self.info

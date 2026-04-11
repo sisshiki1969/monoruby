@@ -1,21 +1,8 @@
 use super::*;
-use std::sync::OnceLock;
 
 //
 // Symbol class
 //
-
-///
-/// FuncId of the shared native body used by `Symbol#to_proc`.
-///
-/// Stored once at init so that `Proc#call` can detect symbol-to-proc procs
-/// for block-forwarding fast path.
-///
-static SYMBOL_TO_PROC_BODY_FID: OnceLock<FuncId> = OnceLock::new();
-
-pub(crate) fn symbol_to_proc_body_fid() -> Option<FuncId> {
-    SYMBOL_TO_PROC_BODY_FID.get().copied()
-}
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Symbol", SYMBOL_CLASS, None);
@@ -29,19 +16,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SYMBOL_CLASS, "name", sym_name, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "inspect", sym_inspect, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "to_proc", sym_to_proc, 0);
-    // Register the shared body function used by Symbol#to_proc. It is
-    // installed on SYMBOL_CLASS with an internal name so that Proc dispatch
-    // can invoke it through the normal block-invoker path, but ordinary Ruby
-    // code has no reason to call it directly.
-    let body_fid = globals.define_builtin_func_with(
-        SYMBOL_CLASS,
-        "__monoruby_symbol_to_proc_body__",
-        symbol_to_proc_body,
-        1,
-        1,
-        true,
-    );
-    let _ = SYMBOL_TO_PROC_BODY_FID.set(body_fid);
     // Symbol.new is undefined (raises NoMethodError).
     let meta = globals.store.get_metaclass(SYMBOL_CLASS).id();
     globals
@@ -258,56 +232,10 @@ fn sym_to_proc(
     pc: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
-    let body_fid = SYMBOL_TO_PROC_BODY_FID
-        .get()
-        .copied()
-        .expect("symbol_to_proc body function not initialized");
+    let body_fid = SYMBOL_TO_PROC_BODY_FUNCID;
     let outer_lfp = Lfp::heap_frame(self_val, globals[body_fid].meta());
     let proc = Proc::from_parts(outer_lfp, body_fid, pc);
     Ok(proc.into())
-}
-
-///
-/// Shared body for `Symbol#to_proc`-created procs.
-///
-/// Invoked via the block-invoker path (for `&:sym` usage in e.g. `map(&:to_s)`).
-/// `lfp.self_val()` carries the symbol (from the proc's outer_lfp), `arg(0)` is
-/// the receiver, and `arg(1)` is the rest array.
-///
-#[monoruby_builtin]
-fn symbol_to_proc_body(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let symbol_val = lfp.self_val();
-    let symbol = symbol_val
-        .try_symbol()
-        .expect("symbol_to_proc_body invoked with non-symbol self");
-    let recv = lfp.arg(0);
-    let rest_val = lfp.arg(1);
-    let rest_array = rest_val.as_array();
-    let rest: Vec<Value> = rest_array.iter().cloned().collect();
-    // public_send semantics: reject private and protected methods.
-    let class_id = recv.class();
-    if let Some(entry) = globals.check_method_for_class(class_id, symbol) {
-        match entry.visibility() {
-            Visibility::Private => {
-                return Err(MonorubyErr::private_method_called(
-                    globals, symbol, recv,
-                ));
-            }
-            Visibility::Protected => {
-                return Err(MonorubyErr::protected_method_called(
-                    globals, symbol, recv,
-                ));
-            }
-            _ => {}
-        }
-    }
-    let bh = lfp.block();
-    vm.invoke_method_inner(globals, symbol, recv, &rest, bh, None)
 }
 
 /// Test whether a symbol name can be rendered without quotes.

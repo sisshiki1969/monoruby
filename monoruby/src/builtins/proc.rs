@@ -58,9 +58,7 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // Fast path for Symbol#to_proc procs: dispatch directly so that the
     // block passed to Proc#call is forwarded to the invoked method. The
     // regular invoke_proc/block_invoker path currently drops block handlers.
-    if let Some(body_fid) = super::symbol::symbol_to_proc_body_fid()
-        && proc.func_id() == body_fid
-    {
+    if proc.func_id() == SYMBOL_TO_PROC_BODY_FUNCID {
         let symbol = proc.outer_lfp().self_val();
         let symbol_id = symbol
             .try_symbol()
