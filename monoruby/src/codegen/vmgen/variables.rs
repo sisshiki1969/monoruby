@@ -318,6 +318,30 @@ impl Codegen {
         label
     }
 
+    /// Alias global variable.
+    ///
+    /// ~~~text
+    /// +---+---+---+---++---+---+---+---+
+    /// | op| 0 |  new  ||      old      |
+    /// +---+---+---+---++---+---+---+---+
+    /// ~~~
+    ///
+    /// `new` and `old` are both [`IdentId`]s. `new` lives in the
+    /// `op1_l` slot of the primary instruction word; `old` lives in the
+    /// extension u32 right after it.
+    pub(super) fn vm_alias_gvar(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        monoasm! { &mut self.jit,
+            movl rsi, [r13 - 16];   // rsi <- new (op1_l)
+            movl rdx, [r13 - 8];    // rdx <- old (extension u32)
+            movq rdi, r12;          // &mut Globals
+            movq rax, (runtime::alias_global_var);
+            call rax;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
     /// Load dynamic local variable
     ///
     /// ~~~text

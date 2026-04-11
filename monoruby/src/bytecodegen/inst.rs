@@ -221,6 +221,10 @@ pub(super) enum BytecodeInst {
         new: BcReg,
         old: BcReg,
     },
+    AliasGvar {
+        new: IdentId,
+        old: IdentId,
+    },
     UndefMethod {
         undef: IdentId,
     },

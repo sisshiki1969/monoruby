@@ -260,6 +260,10 @@ pub(crate) enum TraceIr {
         new: SlotId,
         old: SlotId,
     },
+    AliasGvar {
+        new: IdentId,
+        old: IdentId,
+    },
     ///
     /// Check if `yield` is callable.
     ///
@@ -393,6 +397,10 @@ impl TraceIr {
                 27 => TraceIr::LoadCvar {
                     dst: SlotId::new(op1_w),
                     name: IdentId::from(op1_l),
+                },
+                28 => TraceIr::AliasGvar {
+                    new: IdentId::from(op1_l),
+                    old: IdentId::from(op2 as u32),
                 },
                 29 => TraceIr::StoreCvar {
                     src: SlotId::new(op1_w),
@@ -1071,6 +1079,9 @@ impl TraceIr {
             }
             TraceIr::AliasMethod { new, old } => {
                 format!("alias_method({:?}<-{:?})", new, old)
+            }
+            TraceIr::AliasGvar { new, old } => {
+                format!("alias_gvar({}<-{})", new, old)
             }
             TraceIr::DefinedYield { dst } => format!("{:?} = defined?(yield)", dst),
             TraceIr::DefinedConst { dst, siteid } => {

@@ -789,6 +789,21 @@ impl Codegen {
                 );
                 self.xmm_restore(using_xmm);
             }
+            AsmInst::AliasGvar {
+                new,
+                old,
+                using_xmm,
+            } => {
+                self.xmm_save(using_xmm);
+                monoasm!( &mut self.jit,
+                    movq rdi, r12;          // &mut Globals
+                    movl rsi, (new.get());  // new IdentId
+                    movl rdx, (old.get());  // old IdentId
+                    movq rax, (runtime::alias_global_var);
+                    call rax;
+                );
+                self.xmm_restore(using_xmm);
+            }
             AsmInst::DefinedYield { dst, using_xmm } => self.defined_yield(dst, using_xmm),
             AsmInst::DefinedConst {
                 dst,

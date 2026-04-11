@@ -478,6 +478,15 @@ impl<'a> JitContext<'a> {
                 state.unset_class_version_guard();
                 state.unset_side_effect_guard();
             }
+            TraceIr::AliasGvar { new, old } => {
+                let using_xmm = state.get_using_xmm();
+                ir.push(AsmInst::AliasGvar {
+                    new,
+                    old,
+                    using_xmm,
+                });
+                state.unset_side_effect_guard();
+            }
 
             TraceIr::MethodDef { name, func_id } => {
                 let using_xmm = state.get_using_xmm();

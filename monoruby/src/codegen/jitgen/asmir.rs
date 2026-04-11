@@ -1461,6 +1461,11 @@ pub(super) enum AsmInst {
         old: SlotId,
         using_xmm: UsingXmm,
     },
+    AliasGvar {
+        new: IdentId,
+        old: IdentId,
+        using_xmm: UsingXmm,
+    },
     ///
     /// Check if `yield` is callable.
     ///

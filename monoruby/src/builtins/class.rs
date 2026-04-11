@@ -602,10 +602,30 @@ mod tests {
     }
 
     #[test]
-    fn alias_global_var_error() {
-        run_test_error(
+    fn alias_global_var() {
+        // Aliasing a global variable to a special variable used to be
+        // unsupported, but Phase C of the GvarTable refactor made it work
+        // the same way as CRuby.
+        run_test(
             r#"
+            "hello world" =~ /world/
             alias $MATCH $&
+            $MATCH
+            "#,
+        );
+        run_test(
+            r#"
+            $a = 42
+            alias $b $a
+            $b
+            "#,
+        );
+        run_test(
+            r#"
+            $a = 10
+            alias $b $a
+            $b = 99
+            [$a, $b]
             "#,
         );
     }

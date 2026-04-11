@@ -578,6 +578,10 @@ impl<'a> BytecodeGen<'a> {
                 let op2 = self.slot_id(&old);
                 Bytecode::from(enc_ww(175, op1.0, op2.0))
             }
+            BytecodeInst::AliasGvar { new, old } => {
+                // 28 (recycled from former LoadSvar opcode slot)
+                Bytecode::from_u32(enc_wl(28, 0, new.get()), old.get())
+            }
             BytecodeInst::Hash { ret, args, len } => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&args);
