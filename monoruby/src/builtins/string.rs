@@ -1821,7 +1821,7 @@ fn scan_with_block(
     vm.clear_capture_special_variables();
     for cap in re.captures_iter(&given) {
         let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
-        vm.save_capture_special_variables(&cap);
+        vm.save_capture_special_variables(&cap, &given);
         match cap.len() {
             0 => unreachable!(),
             1 => {

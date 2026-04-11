@@ -103,12 +103,6 @@ impl GvarTable {
         id
     }
 
-    /// Return the entry id for `name` if it has one, without creating a new
-    /// entry. Alias chains are *not* resolved here.
-    pub fn lookup(&self, name: IdentId) -> Option<GvarId> {
-        self.index.get(&name).copied()
-    }
-
     /// Read `name`. Returns `nil` when the name is undefined.
     ///
     /// This takes `&mut Executor` and `&mut Globals` because hooked variables
@@ -291,6 +285,14 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
         vm.sp_post_match()
     }
 
+    fn get_pre_match(
+        vm: &mut Executor,
+        _globals: &mut Globals,
+        _name: IdentId,
+    ) -> Value {
+        vm.sp_pre_match()
+    }
+
     /// `$1`, `$2`, ... — `name` is of the form `$n`. Strip the `$` and parse
     /// the decimal digits; any non-numeric suffix yields `nil`.
     fn get_match_nth(
@@ -316,6 +318,7 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
     );
     globals.define_hooked_variable(IdentId::get_id("$&"), get_last_match, None);
     globals.define_hooked_variable(IdentId::get_id("$'"), get_post_match, None);
+    globals.define_hooked_variable(IdentId::get_id("$`"), get_pre_match, None);
 
     // $1 through $9 are the common case; higher-numbered matches are also
     // allowed by name — they all share the same getter which parses the

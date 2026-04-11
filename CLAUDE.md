@@ -245,6 +245,18 @@ rbenv install 4.0.1
 rbenv global 4.0.1
 ```
 
+> **Important:** Starting with Ruby 3.4, `bigdecimal` is no longer a default
+> gem. The monoruby `bigdecimal_*` integration tests `require "bigdecimal"`
+> against the system Ruby, so install it explicitly after installing Ruby 4:
+>
+> ```sh
+> gem install bigdecimal
+> ```
+>
+> Without this, every `tests/bigdecimal.rs` test will fail because the
+> reference Ruby process exits with `LoadError: cannot load such file --
+> bigdecimal`.
+
 ### 2. Verifying Ruby Version
 
 Confirm that the `ruby` command launches CRuby 4.0 or later:
