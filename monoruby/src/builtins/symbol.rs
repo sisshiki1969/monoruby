@@ -34,8 +34,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/to_s.html]
 #[monoruby_builtin]
 fn sym_to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_val = lfp.self_val();
-    let sym = self_val.as_symbol();
+    let sym = lfp.self_val().as_symbol();
     let ident_name = sym.get_ident_name_clone();
     let (bytes, enc) = match &ident_name {
         IdentName::Utf8(s) => {
@@ -50,7 +49,7 @@ fn sym_to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     };
     let inner = RStringInner::from_encoding(bytes, enc);
     let result = Value::string_from_inner(inner);
-    emit_to_s_chilled_warning(vm, globals, self_val, &ident_name)?;
+    emit_to_s_chilled_warning(vm, globals, sym)?;
     Ok(result)
 }
 
@@ -61,8 +60,7 @@ fn sym_to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 fn emit_to_s_chilled_warning(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
-    ident_name: &IdentName,
+    sym: IdentId,
 ) -> Result<()> {
     // Check Warning[:deprecated]
     let warning_val = match globals
@@ -85,37 +83,9 @@ fn emit_to_s_chilled_warning(
         return Ok(());
     }
 
-    // Build the inspect form of self
-    let inspect = if is_simple_symbol(ident_name) {
-        let mut res = String::from(":");
-        match ident_name {
-            IdentName::Utf8(name) => res.push_str(name),
-            IdentName::Bytes(bytes) => res.push_str(&String::from_utf8_lossy(bytes)),
-        }
-        res
-    } else {
-        let (bytes, enc) = match ident_name {
-            IdentName::Utf8(s) => {
-                let enc = if s.is_ascii() {
-                    Encoding::UsAscii
-                } else {
-                    Encoding::Utf8
-                };
-                (s.as_bytes(), enc)
-            }
-            IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
-        };
-        let inner = RStringInner::from_encoding(bytes, enc);
-        let mut res = String::from(":\"");
-        res.push_str(&inner.inspect());
-        res.push('"');
-        res
-    };
-    let _ = self_val;
-
     let msg = format!(
         "warning: string returned by {}.to_s will be frozen in the future\n",
-        inspect
+        inspect_symbol(sym)
     );
     let stderr = globals
         .get_gvar(IdentId::get_id("$stderr"))
@@ -182,35 +152,7 @@ fn sym_name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn sym_inspect(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let sym = lfp.self_val().as_symbol();
-    let ident_name = sym.get_ident_name_clone();
-    let s = if is_simple_symbol(&ident_name) {
-        let mut res = String::from(":");
-        match &ident_name {
-            IdentName::Utf8(name) => res.push_str(name),
-            IdentName::Bytes(bytes) => {
-                res.push_str(&String::from_utf8_lossy(bytes));
-            }
-        }
-        res
-    } else {
-        let (bytes, enc) = match &ident_name {
-            IdentName::Utf8(s) => {
-                let enc = if s.is_ascii() {
-                    Encoding::UsAscii
-                } else {
-                    Encoding::Utf8
-                };
-                (s.as_bytes(), enc)
-            }
-            IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
-        };
-        let inner = RStringInner::from_encoding(bytes, enc);
-        let mut res = String::from(":\"");
-        res.push_str(&inner.inspect());
-        res.push('"');
-        res
-    };
-    Ok(Value::string(s))
+    Ok(Value::string(inspect_symbol(sym)))
 }
 
 ///
@@ -236,140 +178,6 @@ fn sym_to_proc(
     let outer_lfp = Lfp::heap_frame(self_val, globals[body_fid].meta());
     let proc = Proc::from_parts(outer_lfp, body_fid, pc);
     Ok(proc.into())
-}
-
-/// Test whether a symbol name can be rendered without quotes.
-fn is_simple_symbol(name: &IdentName) -> bool {
-    let s = match name.as_str() {
-        Some(s) => s,
-        None => return false,
-    };
-    if s.is_empty() {
-        return false;
-    }
-    if is_operator_symbol(s) {
-        return true;
-    }
-    if let Some(rest) = s.strip_prefix("@@") {
-        return is_plain_identifier(rest);
-    }
-    if let Some(rest) = s.strip_prefix('@') {
-        return is_plain_identifier(rest);
-    }
-    if let Some(rest) = s.strip_prefix('$') {
-        return is_global_var_tail(rest);
-    }
-    is_method_identifier(s)
-}
-
-fn is_operator_symbol(s: &str) -> bool {
-    matches!(
-        s,
-        "|" | "^"
-            | "&"
-            | "<=>"
-            | "=="
-            | "==="
-            | "=~"
-            | ">"
-            | ">="
-            | "<"
-            | "<="
-            | "<<"
-            | ">>"
-            | "+"
-            | "-"
-            | "*"
-            | "/"
-            | "%"
-            | "**"
-            | "~"
-            | "+@"
-            | "-@"
-            | "[]"
-            | "[]="
-            | "`"
-            | "!"
-            | "!="
-            | "!~"
-    )
-}
-
-fn is_ident_start_char(c: char) -> bool {
-    c == '_' || c.is_ascii_alphabetic() || (c as u32) >= 0x80
-}
-
-fn is_ident_cont_char(c: char) -> bool {
-    c == '_' || c.is_ascii_alphanumeric() || (c as u32) >= 0x80
-}
-
-fn is_plain_identifier(s: &str) -> bool {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(c) if is_ident_start_char(c) => {}
-        _ => return false,
-    }
-    chars.all(is_ident_cont_char)
-}
-
-fn is_method_identifier(s: &str) -> bool {
-    let bytes = s.as_bytes();
-    let body_end = match bytes.last() {
-        Some(b'!') | Some(b'?') | Some(b'=') => bytes.len() - 1,
-        _ => bytes.len(),
-    };
-    if body_end == 0 {
-        return false;
-    }
-    is_plain_identifier(&s[..body_end])
-}
-
-fn is_global_var_tail(rest: &str) -> bool {
-    if rest.is_empty() {
-        return false;
-    }
-    // $1234: digits only
-    if rest.bytes().all(|b| b.is_ascii_digit()) {
-        return true;
-    }
-    // $-X: dash + exactly one identifier-ish char
-    if let Some(after_dash) = rest.strip_prefix('-') {
-        let mut chars = after_dash.chars();
-        if let (Some(c), None) = (chars.next(), chars.next()) {
-            return is_ident_cont_char(c);
-        }
-        return false;
-    }
-    // Single special char globals like $~, $*, $$, $?, $!, ...
-    if rest.len() == 1 {
-        let c = rest.as_bytes()[0];
-        if matches!(
-            c,
-            b'~' | b'*'
-                | b'$'
-                | b'?'
-                | b'!'
-                | b'@'
-                | b'/'
-                | b'\\'
-                | b';'
-                | b','
-                | b'.'
-                | b'<'
-                | b'>'
-                | b':'
-                | b'"'
-                | b'&'
-                | b'\''
-                | b'`'
-                | b'+'
-                | b'='
-        ) {
-            return true;
-        }
-    }
-    // $name: plain identifier, no !/?/= suffix allowed
-    is_plain_identifier(rest)
 }
 
 ///

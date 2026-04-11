@@ -959,7 +959,7 @@ impl Value {
             RV::Float(f) => ruby_float_to_s(f),
             RV::Complex(_) => self.as_complex().debug(store),
             RV::Rational(r) => r.inspect(),
-            RV::Symbol(id) => format!(":{id}"),
+            RV::Symbol(id) => inspect_symbol(id),
             RV::String(s) => format!(r#""{}""#, s.inspect()),
             RV::Object(rvalue) => rvalue.debug(store),
         }
@@ -975,7 +975,7 @@ impl Value {
             RV::Float(f) => ruby_float_to_s(f),
             RV::Complex(_) => self.as_complex().debug(store),
             RV::Rational(r) => r.inspect(),
-            RV::Symbol(id) => format!(":{id}"),
+            RV::Symbol(id) => inspect_symbol(id),
             RV::String(s) => format!(r#""{}""#, s.inspect()),
             RV::Object(rvalue) => rvalue.debug(store),
         };
@@ -1037,6 +1037,177 @@ impl Value {
         }
         s
     }
+}
+
+///
+/// Render a symbol as its Ruby inspect form (`:name` or `:"escaped name"`).
+///
+/// Simple names — identifiers, operators, `$gv`/`@iv`/`@@cv` — are emitted
+/// without quotes. Anything else is wrapped in `:"..."` and escaped through
+/// `RStringInner::inspect`. This matches CRuby's `rb_sym_inspect` behavior and
+/// is shared between `Symbol#inspect`, `Value::debug`, and the
+/// `Symbol#to_s`-chilled-string deprecation warning.
+///
+pub(crate) fn inspect_symbol(id: IdentId) -> String {
+    let ident_name = id.get_ident_name_clone();
+    if is_simple_symbol(&ident_name) {
+        let mut res = String::from(":");
+        match &ident_name {
+            IdentName::Utf8(name) => res.push_str(name),
+            IdentName::Bytes(bytes) => res.push_str(&String::from_utf8_lossy(bytes)),
+        }
+        return res;
+    }
+    let (bytes, enc) = match &ident_name {
+        IdentName::Utf8(s) => {
+            let enc = if s.is_ascii() {
+                Encoding::UsAscii
+            } else {
+                Encoding::Utf8
+            };
+            (s.as_bytes(), enc)
+        }
+        IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
+    };
+    let inner = RStringInner::from_encoding(bytes, enc);
+    let mut res = String::from(":\"");
+    res.push_str(&inner.inspect());
+    res.push('"');
+    res
+}
+
+/// Test whether a symbol name can be rendered without surrounding quotes.
+fn is_simple_symbol(name: &IdentName) -> bool {
+    let s = match name.as_str() {
+        Some(s) => s,
+        None => return false,
+    };
+    if s.is_empty() {
+        return false;
+    }
+    if is_operator_symbol(s) {
+        return true;
+    }
+    if let Some(rest) = s.strip_prefix("@@") {
+        return is_plain_identifier(rest);
+    }
+    if let Some(rest) = s.strip_prefix('@') {
+        return is_plain_identifier(rest);
+    }
+    if let Some(rest) = s.strip_prefix('$') {
+        return is_global_var_tail(rest);
+    }
+    is_method_identifier(s)
+}
+
+fn is_operator_symbol(s: &str) -> bool {
+    matches!(
+        s,
+        "|" | "^"
+            | "&"
+            | "<=>"
+            | "=="
+            | "==="
+            | "=~"
+            | ">"
+            | ">="
+            | "<"
+            | "<="
+            | "<<"
+            | ">>"
+            | "+"
+            | "-"
+            | "*"
+            | "/"
+            | "%"
+            | "**"
+            | "~"
+            | "+@"
+            | "-@"
+            | "[]"
+            | "[]="
+            | "`"
+            | "!"
+            | "!="
+            | "!~"
+    )
+}
+
+fn is_ident_start_char(c: char) -> bool {
+    c == '_' || c.is_ascii_alphabetic() || (c as u32) >= 0x80
+}
+
+fn is_ident_cont_char(c: char) -> bool {
+    c == '_' || c.is_ascii_alphanumeric() || (c as u32) >= 0x80
+}
+
+fn is_plain_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if is_ident_start_char(c) => {}
+        _ => return false,
+    }
+    chars.all(is_ident_cont_char)
+}
+
+fn is_method_identifier(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let body_end = match bytes.last() {
+        Some(b'!') | Some(b'?') | Some(b'=') => bytes.len() - 1,
+        _ => bytes.len(),
+    };
+    if body_end == 0 {
+        return false;
+    }
+    is_plain_identifier(&s[..body_end])
+}
+
+fn is_global_var_tail(rest: &str) -> bool {
+    if rest.is_empty() {
+        return false;
+    }
+    // $1234: digits only
+    if rest.bytes().all(|b| b.is_ascii_digit()) {
+        return true;
+    }
+    // $-X: dash + exactly one identifier-ish char
+    if let Some(after_dash) = rest.strip_prefix('-') {
+        let mut chars = after_dash.chars();
+        if let (Some(c), None) = (chars.next(), chars.next()) {
+            return is_ident_cont_char(c);
+        }
+        return false;
+    }
+    // Single-character special globals like $~, $*, $$, $?, $!, ...
+    if rest.len() == 1 {
+        let c = rest.as_bytes()[0];
+        if matches!(
+            c,
+            b'~' | b'*'
+                | b'$'
+                | b'?'
+                | b'!'
+                | b'@'
+                | b'/'
+                | b'\\'
+                | b';'
+                | b','
+                | b'.'
+                | b'<'
+                | b'>'
+                | b':'
+                | b'"'
+                | b'&'
+                | b'\''
+                | b'`'
+                | b'+'
+                | b'='
+        ) {
+            return true;
+        }
+    }
+    // $name: plain identifier, no !/?/= suffix allowed
+    is_plain_identifier(rest)
 }
 
 fn coerce_to_rstring_inner(
