@@ -223,25 +223,16 @@ impl Executor {
         self.parent_fiber
     }
 
-    pub fn sp_last_match(&self) -> Value {
-        self.sp_last_match
-            .as_ref()
-            .map(|s| Value::string_from_str(s))
-            .unwrap_or_default()
+    pub fn sp_last_match(&self) -> Option<Value> {
+        self.sp_last_match.as_ref().map(|s| Value::string_from_str(s))
     }
 
-    pub fn sp_pre_match(&self) -> Value {
-        self.sp_pre_match
-            .as_ref()
-            .map(|s| Value::string_from_str(s))
-            .unwrap_or_default()
+    pub fn sp_pre_match(&self) -> Option<Value> {
+        self.sp_pre_match.as_ref().map(|s| Value::string_from_str(s))
     }
 
-    pub fn sp_post_match(&self) -> Value {
-        self.sp_post_match
-            .as_ref()
-            .map(|s| Value::string_from_str(s))
-            .unwrap_or_default()
+    pub fn sp_post_match(&self) -> Option<Value> {
+        self.sp_post_match.as_ref().map(|s| Value::string_from_str(s))
     }
 }
 
@@ -1574,16 +1565,16 @@ impl Executor {
         }
     }
 
-    pub(crate) fn get_special_matches(&self, mut nth: i64) -> Value {
+    pub(crate) fn get_special_matches(&self, mut nth: i64) -> Option<Value> {
         if nth < 0 {
             nth += self.sp_matches.len() as i64
         }
-        if nth >= 0 {
-            if let Some(Some(s)) = self.sp_matches.get(nth as usize) {
-                return Value::string_from_str(s);
-            }
-        };
-        Value::nil()
+        if nth >= 0
+            && let Some(Some(s)) = self.sp_matches.get(nth as usize)
+        {
+            return Some(Value::string_from_str(s));
+        }
+        None
     }
 
     pub(crate) fn get_last_matchdata(&self) -> Value {

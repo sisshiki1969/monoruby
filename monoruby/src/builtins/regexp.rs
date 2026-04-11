@@ -136,7 +136,7 @@ fn regexp_union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
 fn regexp_last_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
         let nth = arg0.coerce_to_int_i64(vm, globals)?;
-        Ok(vm.get_special_matches(nth))
+        Ok(vm.get_special_matches(nth).unwrap_or_default())
     } else {
         Ok(vm.get_last_matchdata())
     }
