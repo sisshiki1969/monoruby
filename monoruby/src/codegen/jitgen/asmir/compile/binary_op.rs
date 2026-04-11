@@ -151,88 +151,85 @@ impl Codegen {
                 );
                 self.jit.select_page(0);
             }
-            BinOpK::Rem => {
-                let zero_div = self.jit.label();
-                let exit = self.jit.label();
-                let negative_divisor = self.jit.label();
-                let dec = self.jit.label();
-                monoasm!( &mut self.jit,
-                    sarq R(rhs_r), 1;
-                    testq R(rhs_r), R(rhs_r);
-                    jeq  zero_div;
-                    movq rax, R(lhs_r);
-                    sarq rax, 1;
-                    cqo;
-                    idiv R(rhs_r);
-                    // rdx: remainder
-                    // rax: quotient
-                    // rhs: divisor
-                    testq R(rhs_r), R(rhs_r);
-                    js negative_divisor;
-                    testq rdx, rdx;
-                    js dec;
-                    jmp exit;
-                negative_divisor:
-                    testq rdx, rdx;
-                    jle exit;
-                dec:
-                    addq rdx, R(rhs_r);
-                exit:
-                    movq rax, rdx;
-                    salq rax, 1;
-                    orq  rax, 1;
-                );
-                self.jit.select_page(1);
-                monoasm!( &mut self.jit,
-                zero_div:
-                    movq rdi, (Value::symbol_from_str("_divide_by_zero").id());
-                    jmp deopt;
-                );
-                self.jit.select_page(0);
-            }
-            BinOpK::Exp => unreachable!(),
-            BinOpK::BitOr => match mode {
-                OpMode::RR(_, _) => {
-                    monoasm!( &mut self.jit,
-                        orq R(lhs as u64), R(rhs as u64);
-                    );
-                }
-                OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                    monoasm!( &mut self.jit,
-                        orq R(lhs as u64), (Value::i32(*i as i32).id());
-                    );
-                }
-            },
-            BinOpK::BitAnd => match mode {
-                OpMode::RR(_, _) => {
-                    monoasm!( &mut self.jit,
-                        andq R(lhs as u64), R(rhs as u64);
-                    );
-                }
-                OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                    monoasm!( &mut self.jit,
-                        andq R(lhs as u64), (Value::i32(*i as i32).id());
-                    );
-                }
-            },
-            BinOpK::BitXor => match mode {
-                OpMode::RR(_, _) => {
-                    monoasm!( &mut self.jit,
-                        xorq R(lhs as u64), R(rhs as u64);
-                        addq R(lhs as u64), 1;
-                    );
-                }
-                OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                    monoasm!( &mut self.jit,
-                        xorq R(lhs as u64), (Value::i32(*i as i32).id() - 1);
-                    );
-                }
-            },
+            BinOpK::Rem
+            | BinOpK::Exp
+            | BinOpK::BitOr
+            | BinOpK::BitAnd
+            | BinOpK::BitXor
+            | BinOpK::Shl
+            | BinOpK::Shr => unreachable!(),
         }
     }
 
-    pub(super) fn integer_exp(&mut self, using_xmm: UsingXmm, deopt: &DestLabel) {
-        let too_large = self.jit.label();
+    ///
+    /// gen code for Integer#% (rem) of two fixnums.
+    ///
+    /// ### in
+    /// - rdi: lhs:Fixnum (tagged)
+    /// - rsi: rhs:Fixnum (tagged)
+    ///
+    /// ### out
+    /// - rax: result:Fixnum (tagged)
+    ///
+    /// On zero divisor, jumps to `deopt`.
+    ///
+    /// ### destroy
+    /// - rax, rdx, rsi
+    ///
+    pub(crate) fn gen_int_rem(&mut self, deopt: &DestLabel) {
+        let zero_div = self.jit.label();
+        let exit = self.jit.label();
+        let negative_divisor = self.jit.label();
+        let dec = self.jit.label();
+        monoasm!( &mut self.jit,
+            sarq rsi, 1;
+            testq rsi, rsi;
+            jeq  zero_div;
+            movq rax, rdi;
+            sarq rax, 1;
+            cqo;
+            idiv rsi;
+            // rdx: remainder, rax: quotient, rsi: divisor
+            testq rsi, rsi;
+            js negative_divisor;
+            testq rdx, rdx;
+            js dec;
+            jmp exit;
+        negative_divisor:
+            testq rdx, rdx;
+            jle exit;
+        dec:
+            addq rdx, rsi;
+        exit:
+            movq rax, rdx;
+            salq rax, 1;
+            orq  rax, 1;
+        );
+        self.jit.select_page(1);
+        monoasm!( &mut self.jit,
+        zero_div:
+            movq rdi, (Value::symbol_from_str("_divide_by_zero").id());
+            jmp deopt;
+        );
+        self.jit.select_page(0);
+    }
+
+    ///
+    /// gen code for Integer#** (exp) of two fixnums.
+    ///
+    /// ### in
+    /// - rdi: lhs:Fixnum (tagged)
+    /// - rsi: rhs:Fixnum (tagged)
+    ///
+    /// ### out
+    /// - rax: result:Value (or 0 on error)
+    ///
+    /// On error (raised by `pow_ii`), jumps to `error`.
+    ///
+    /// ### destroy
+    /// - caller-save registers
+    ///
+    pub(crate) fn gen_int_pow(&mut self, using_xmm: UsingXmm, error: &DestLabel) {
         self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
             sarq rdi, 1;
@@ -244,15 +241,78 @@ impl Codegen {
         self.xmm_restore(using_xmm);
         monoasm!( &mut self.jit,
             testq rax, rax;
-            jeq too_large;
+            jeq error;
         );
-        self.jit.select_page(1);
+    }
+
+    ///
+    /// gen code for `Integer#%` with a Float rhs.
+    ///
+    /// Calls `rem_ff(lhs, rhs)` and stores the f64 result in `dst_xmm`.
+    ///
+    /// ### in
+    /// - xmm(*lhs_xmm*): lhs as f64 (Integer converted to f64)
+    /// - xmm(*rhs_xmm*): rhs as f64
+    ///
+    /// ### out
+    /// - xmm(*dst_xmm*): result f64
+    ///
+    pub(crate) fn gen_int_rem_if(
+        &mut self,
+        lhs_xmm: Xmm,
+        rhs_xmm: Xmm,
+        dst_xmm: Xmm,
+        using_xmm: UsingXmm,
+    ) {
+        let lhs = lhs_xmm.enc();
+        let rhs = rhs_xmm.enc();
+        let dst = dst_xmm.enc();
+        self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
-        too_large:
-            movq rdi, (Value::symbol_from_str("_exponent_too_large").id());
-            jmp deopt;
+            movq xmm0, xmm(lhs);
+            movq xmm1, xmm(rhs);
+            movq rax, (rem_ff as u64);
+            call rax;
         );
-        self.jit.select_page(0);
+        self.xmm_restore(using_xmm);
+        monoasm!( &mut self.jit,
+            movq xmm(dst), xmm0;
+        );
+    }
+
+    ///
+    /// gen code for `Integer#**` with a Float rhs.
+    ///
+    /// Calls `pow_ff(lhs, rhs)` and returns a `Value` (Float or Complex)
+    /// in `rax`. The result may be Complex when lhs is negative and rhs
+    /// is non-integer, so we cannot store it as a raw f64.
+    ///
+    /// ### in
+    /// - xmm(*lhs_xmm*): lhs as f64
+    /// - xmm(*rhs_xmm*): rhs as f64
+    ///
+    /// ### out
+    /// - rax: result Value
+    ///
+    /// ### destroy
+    /// - caller-save registers
+    ///
+    pub(crate) fn gen_int_pow_if(
+        &mut self,
+        lhs_xmm: Xmm,
+        rhs_xmm: Xmm,
+        using_xmm: UsingXmm,
+    ) {
+        let lhs = lhs_xmm.enc();
+        let rhs = rhs_xmm.enc();
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            movq xmm0, xmm(lhs);
+            movq xmm1, xmm(rhs);
+            movq rax, (pow_ff as u64);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
     }
 }
 

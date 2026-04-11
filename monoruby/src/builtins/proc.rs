@@ -23,6 +23,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(PROC_CLASS, "source_location", source_location, 0);
     globals.define_builtin_func(PROC_CLASS, "lambda?", lambda_, 0);
     globals.define_builtin_func(PROC_CLASS, "arity", proc_arity, 0);
+    globals.define_builtin_func(PROC_CLASS, "parameters", parameters, 0);
 }
 
 ///
@@ -103,6 +104,86 @@ fn lambda_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let proc = Proc::new(lfp.self_val());
     let func_id = proc.func_id();
     Ok(Value::bool(!globals[func_id].is_block_style()))
+}
+
+/// ### Proc#parameters
+///
+/// - parameters -> [[Symbol, Symbol], ...]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/parameters.html]
+#[monoruby_builtin]
+fn parameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let proc = Proc::new(lfp.self_val());
+    let func_id = proc.func_id();
+    let func_info = &globals[func_id];
+    let is_lambda = !func_info.is_block_style();
+    let params = func_info.params();
+    let req_tag = if is_lambda {
+        Value::symbol(IdentId::get_id("req"))
+    } else {
+        Value::symbol(IdentId::get_id("opt"))
+    };
+    let opt_tag = Value::symbol(IdentId::get_id("opt"));
+    let rest_tag = Value::symbol(IdentId::get_id("rest"));
+    let key_tag = Value::symbol(IdentId::get_id("key"));
+    let keyrest_tag = Value::symbol(IdentId::get_id("keyrest"));
+    let block_tag = Value::symbol(IdentId::get_id("block"));
+    let mut result = vec![];
+    let args_names = &params.args_names;
+    let mut name_idx = 0;
+    // required params
+    for _ in 0..params.req_num() {
+        let entry = if let Some(Some(name)) = args_names.get(name_idx) {
+            Value::array2(req_tag, Value::symbol(*name))
+        } else {
+            Value::array1(req_tag)
+        };
+        result.push(entry);
+        name_idx += 1;
+    }
+    // optional params
+    for _ in 0..params.opt_num() {
+        let entry = if let Some(Some(name)) = args_names.get(name_idx) {
+            Value::array2(opt_tag, Value::symbol(*name))
+        } else {
+            Value::array1(opt_tag)
+        };
+        result.push(entry);
+        name_idx += 1;
+    }
+    // rest param
+    if params.is_rest().is_some() {
+        let entry = if let Some(Some(name)) = args_names.get(name_idx) {
+            Value::array2(rest_tag, Value::symbol(*name))
+        } else {
+            Value::array1(rest_tag)
+        };
+        result.push(entry);
+        name_idx += 1;
+    }
+    // post params (required after rest)
+    for _ in 0..params.post_num() {
+        let entry = if let Some(Some(name)) = args_names.get(name_idx) {
+            Value::array2(req_tag, Value::symbol(*name))
+        } else {
+            Value::array1(req_tag)
+        };
+        result.push(entry);
+        name_idx += 1;
+    }
+    // keyword params
+    for kw_name in &params.kw_names {
+        result.push(Value::array2(key_tag, Value::symbol(*kw_name)));
+    }
+    // keyword rest
+    if params.kw_rest.is_some() {
+        result.push(Value::array1(keyrest_tag));
+    }
+    // block param
+    if let Some(block_name) = params.block_param {
+        result.push(Value::array2(block_tag, Value::symbol(block_name)));
+    }
+    Ok(Value::array_from_vec(result))
 }
 
 /// ### Proc#arity
@@ -428,6 +509,27 @@ mod tests {
         run_test("lambda {}.arity");
         run_test("lambda {|x| x}.arity");
         run_test("->(x, y) { x }.arity");
+    }
+
+    #[test]
+    fn proc_parameters() {
+        // lambda: required params are :req
+        run_test("->(x, y) {}.parameters");
+        // lambda: optional params are :opt
+        run_test("->(x, y=1) {}.parameters");
+        // lambda: rest params
+        run_test("->(x, *rest) {}.parameters");
+        // lambda: block param
+        run_test("->(x, &blk) {}.parameters");
+        // lambda: mixed
+        run_test("->(x, y=1, *rest, &blk) {}.parameters");
+        // proc: all positional params are :opt
+        run_test("Proc.new {|x, y| }.parameters");
+        // proc: rest
+        run_test("Proc.new {|x, *rest| }.parameters");
+        // no params
+        run_test("lambda {}.parameters");
+        run_test("Proc.new {}.parameters");
     }
 
     #[test]

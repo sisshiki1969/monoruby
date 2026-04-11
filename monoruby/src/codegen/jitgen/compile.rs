@@ -266,6 +266,11 @@ impl<'a> JitContext<'a> {
                 ir.load_svar(state, id);
                 state.def_rax2acc(ir, dst);
             }
+            TraceIr::StoreSvar { src, id } => {
+                state.write_back_slots(ir, &[src]);
+                ir.store_svar(state, src, id);
+                state.unset_side_effect_guard();
+            }
             TraceIr::LoadDynVar(dst, src) => {
                 assert!(!dst.is_self());
                 self.load_dynvar(state, ir, src);
@@ -294,7 +299,8 @@ impl<'a> JitContext<'a> {
                 match class {
                     _ if kind == UnOpK::Not => {
                         if let Some(recv_class) = class {
-                            return self.call_unary_method(state, ir, src, recv_class, kind, bc_pos);
+                            return self
+                                .call_unary_method(state, ir, src, recv_class, kind, bc_pos);
                         } else {
                             return Ok(CompileResult::Recompile(RecompileReason::NotCached));
                         }
@@ -392,11 +398,11 @@ impl<'a> JitContext<'a> {
                 return self.binary_cmp_br(state, ir, kind, lhs, rhs, dest_bb, brkind, ic, bc_pos);
             }
             TraceIr::Index {
-                dst,
+                dst: _,
                 base,
                 idx,
                 class: ic,
-            } => return self.index(state, ir, dst, base, idx, ic, bc_pos),
+            } => return self.index(state, ir, base, idx, ic, bc_pos),
             TraceIr::IndexAssign {
                 base,
                 idx,
@@ -740,7 +746,7 @@ impl<'a> JitContext<'a> {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, recv);
             assert_eq!(self.store[callid].pos_num, 0);
-            self.compile_method_call(state, ir, recv_class, func_id, callid)
+            self.compile_method_call(state, ir, recv_class, None, func_id, callid)
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }
@@ -753,6 +759,7 @@ impl<'a> JitContext<'a> {
         lhs: SlotId,
         rhs: SlotId,
         lhs_class: ClassId,
+        rhs_class: Option<ClassId>,
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
@@ -761,7 +768,7 @@ impl<'a> JitContext<'a> {
             assert_eq!(self.store[callid].recv, lhs);
             assert_eq!(self.store[callid].args, rhs);
             assert_eq!(self.store[callid].pos_num, 1);
-            self.compile_method_call(state, ir, lhs_class, fid, callid)
+            self.compile_method_call(state, ir, lhs_class, rhs_class, fid, callid)
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }
@@ -773,7 +780,9 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         recv: SlotId,
         idx: SlotId,
+        src: SlotId,
         recv_class: ClassId,
+        idx_class: Option<ClassId>,
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
@@ -781,8 +790,9 @@ impl<'a> JitContext<'a> {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, recv);
             assert_eq!(self.store[callid].args, idx);
+            assert_eq!(self.store[callid].args + 1usize, src);
             assert_eq!(self.store[callid].pos_num, 2);
-            self.compile_method_call(state, ir, recv_class, fid, callid)
+            self.compile_method_call(state, ir, recv_class, idx_class, fid, callid)
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }
@@ -862,7 +872,7 @@ impl<'a> JitContext<'a> {
 enum BinaryOpType {
     Integer(OpMode),
     Float(FBinOpInfo),
-    Other(Option<ClassId>),
+    Other(Option<ClassId>, Option<ClassId>),
 }
 
 impl AbstractState {
@@ -915,6 +925,6 @@ impl AbstractState {
                 _ => {}
             }
         }
-        BinaryOpType::Other(lhs_class)
+        BinaryOpType::Other(lhs_class, rhs_class)
     }
 }

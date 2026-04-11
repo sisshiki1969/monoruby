@@ -102,7 +102,7 @@ fn regexp_escape(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/union.html]
 #[monoruby_builtin]
-fn regexp_union(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn regexp_union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut rest = lfp.arg(0).as_array();
     let mut v = vec![];
     if rest.len() == 1
@@ -116,11 +116,9 @@ fn regexp_union(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
         } else if let Some(re) = arg.is_regex() {
             v.push(re.tos());
         } else {
-            return Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                *arg,
-                STRING_CLASS,
-            ));
+            // Try to_str coercion
+            let s = arg.coerce_to_str(vm, globals)?;
+            v.push(RegexpInner::escape(&s));
         }
     }
     let s = v.join("|");
@@ -137,7 +135,7 @@ fn regexp_union(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
 #[monoruby_builtin]
 fn regexp_last_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
-        let nth = arg0.coerce_to_int(vm, globals)?;
+        let nth = arg0.coerce_to_int_i64(vm, globals)?;
         Ok(vm.get_special_matches(nth))
     } else {
         Ok(vm.get_last_matchdata())
@@ -235,7 +233,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let regex = self_.is_regex().unwrap();
     let given = lfp.arg(0).coerce_to_string(vm, globals)?;
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
-        match conv_index(pos.coerce_to_int(vm, globals)?, given.chars().count()) {
+        match conv_index(pos.coerce_to_int_i64(vm, globals)?, given.chars().count()) {
             Some(pos) => pos,
             None => return Ok(Value::bool(false)),
         }
@@ -263,7 +261,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let regex = lfp.self_val().as_regexp();
     let heystack = lfp.arg(0).coerce_to_string(vm, globals)?;
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
-        match conv_index(pos.coerce_to_int(vm, globals)?, heystack.chars().count()) {
+        match conv_index(pos.coerce_to_int_i64(vm, globals)?, heystack.chars().count()) {
             Some(pos) => pos,
             None => return Ok(Value::bool(false)),
         }
@@ -316,6 +314,50 @@ mod tests {
             r#"
           /(.)(.)/ =~ "abcde"
           [Regexp.last_match(0), Regexp.last_match(1), Regexp.last_match(2), Regexp.last_match(3)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn last_match_nil_when_no_match() {
+        // Regexp.last_match returns nil when the last match failed
+        run_test(
+            r#"
+          /NOMATCH/ =~ "abc"
+          Regexp.last_match
+            "#,
+        );
+        // Regexp.last_match returns nil when no match has occurred yet
+        run_test(
+            r#"
+          /DONTMATCH/.match("")
+          Regexp.last_match
+            "#,
+        );
+    }
+
+    #[test]
+    fn dollar_tilde_read_write() {
+        // $~ reads match data after a regex match
+        run_test(
+            r#"
+          "abc" =~ /(a)(b)/
+          $~[0]
+            "#,
+        );
+        // $~ = nil clears match data
+        run_test(
+            r#"
+          "abc" =~ /(a)/
+          $~ = nil
+          $~
+            "#,
+        );
+        // $~ is nil initially after a failed match
+        run_test(
+            r#"
+          /NOMATCH/ =~ "abc"
+          $~
             "#,
         );
     }

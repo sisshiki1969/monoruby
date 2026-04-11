@@ -16,15 +16,16 @@ pub(super) fn init(globals: &mut Globals) {
         "new",
         enumerator_new,
         0,
-        0,
+        1,
         Effect::CAPTURE,
     );
     globals.define_builtin_func(ENUMERATOR_CLASS, "next", next, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "next_values", next_values, 0);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "each", each, 0);
+    globals.define_builtin_func_rest(ENUMERATOR_CLASS, "each", each);
     globals.define_builtin_func_with(ENUMERATOR_CLASS, "with_index", with_index, 0, 1, false);
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind, 0);
+    globals.define_builtin_funcs(ENUMERATOR_CLASS, "size", &["length"], enumerator_size, 0);
 
     let array_class = globals[ARRAY_CLASS].get_module();
     let yielder = globals.define_class("Yielder", array_class, ENUMERATOR_CLASS);
@@ -48,7 +49,103 @@ pub(super) fn init(globals: &mut Globals) {
         0,
         Effect::CAPTURE,
     );
-    globals.define_builtin_func(GENERATOR_CLASS, "each", generator_each, 0);
+    globals.define_builtin_func_rest(GENERATOR_CLASS, "each", generator_each);
+}
+
+///
+/// ### Enumerator#size
+///
+/// - size -> Integer or Float::INFINITY or nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/size.html]
+#[monoruby_builtin]
+fn enumerator_size(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let e = lfp.self_val();
+    if e.ty() != Some(ObjTy::ENUMERATOR) {
+        return Ok(Value::nil());
+    }
+    let inner = e.as_enumerator_inner();
+    let method_name = inner.method.get_name();
+    match method_name.as_str() {
+        "upto" => {
+            if let (Some(start), Some(stop_val)) = (inner.obj.try_fixnum(), inner.args.first()) {
+                let stop = if let Some(i) = stop_val.try_fixnum() {
+                    i
+                } else if let Some(f) = stop_val.try_float() {
+                    f.floor() as i64
+                } else {
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "comparison of Integer with {} failed: coercion was not possible",
+                        stop_val.get_real_class_name(&_globals.store)
+                    )));
+                };
+                let size = if stop >= start { stop - start + 1 } else { 0 };
+                Ok(Value::integer(size))
+            } else {
+                Ok(Value::nil())
+            }
+        }
+        "downto" => {
+            if let (Some(start), Some(stop_val)) = (inner.obj.try_fixnum(), inner.args.first()) {
+                let stop = if let Some(i) = stop_val.try_fixnum() {
+                    i
+                } else if let Some(f) = stop_val.try_float() {
+                    f.ceil() as i64
+                } else {
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "comparison of Integer with {} failed: coercion was not possible",
+                        stop_val.get_real_class_name(&_globals.store)
+                    )));
+                };
+                let size = if start >= stop { start - stop + 1 } else { 0 };
+                Ok(Value::integer(size))
+            } else {
+                Ok(Value::nil())
+            }
+        }
+        "times" => {
+            if let Some(n) = inner.obj.try_fixnum() {
+                Ok(Value::integer(if n > 0 { n } else { 0 }))
+            } else {
+                Ok(Value::nil())
+            }
+        }
+        "cycle" => {
+            let obj_len = if let Some(ary) = inner.obj.try_array_ty() {
+                ary.len() as i64
+            } else {
+                return Ok(Value::nil());
+            };
+            if inner.args.is_empty() {
+                // cycle with no count => infinite if non-empty, 0 if empty
+                if obj_len == 0 {
+                    Ok(Value::integer(0))
+                } else {
+                    Ok(Value::float(f64::INFINITY))
+                }
+            } else if inner.args[0].is_nil() {
+                if obj_len == 0 {
+                    Ok(Value::integer(0))
+                } else {
+                    Ok(Value::float(f64::INFINITY))
+                }
+            } else if let Some(n) = inner.args[0].try_fixnum() {
+                if n < 0 || obj_len == 0 {
+                    Ok(Value::integer(0))
+                } else {
+                    Ok(Value::integer(obj_len * n))
+                }
+            } else {
+                Ok(Value::nil())
+            }
+        }
+        _ => Ok(Value::nil()),
+    }
 }
 
 ///
@@ -181,13 +278,7 @@ fn with_index(
         match lfp.arg(0).unpack() {
             RV::Fixnum(_) | RV::BigInt(_) => lfp.arg(0),
             RV::Float(f) => Value::integer(f as i64),
-            _ => {
-                return Err(MonorubyErr::no_implicit_conversion(
-                    globals,
-                    lfp.arg(0),
-                    INTEGER_CLASS,
-                ));
-            }
+            _ => Value::integer(lfp.arg(0).coerce_to_int_i64(vm, globals)?),
         }
     };
     let self_val = Enumerator::new(lfp.self_val());
@@ -608,9 +699,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn enumerator_size() {
+        run_test(
+            r##"
+            res = []
+            res << Enumerator.new { |y| y << 1 }.size
+            res
+        "##,
+        );
+    }
+
     // Note: Enumerator::Lazy is defined in Ruby (enumerable.rb) but
     // monoruby has a block variable capture limitation that prevents
     // nested block forwarding from working correctly. Tests are
     // disabled until the underlying issue is fixed.
 
+    #[test]
+    fn enumerator_size_upto_downto() {
+        run_test("1.upto(5).size");
+        run_test("5.downto(1).size");
+        run_test("3.times.size");
+    }
 }

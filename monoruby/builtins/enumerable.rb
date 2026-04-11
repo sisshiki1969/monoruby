@@ -37,8 +37,8 @@ module Enumerable
     self
   end
   
-  def each_with_index
-    return self.to_enum(:each_with_index) unless block_given?
+  def each_with_index(*args)
+    return self.to_enum(:each_with_index, *args) unless block_given?
     i = 0
     self.each do |x|
       yield x, i
@@ -111,8 +111,17 @@ module Enumerable
     res
   end
 
-  def any?
-    if block_given?
+  def any?(*pattern)
+    if !pattern.empty?
+      if pattern.size != 1
+        raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
+      end
+      warn "warning: given block not used" if block_given?
+      pat = pattern[0]
+      self.each do |x|
+        return true if pat === x
+      end
+    elsif block_given?
       self.each do |x|
         return true if yield(x)
       end
@@ -125,28 +134,42 @@ module Enumerable
   end
 
   def none?(*pattern)
-    if block_given?
-      self.each do |x|
-        return false if yield(x)
+    if !pattern.empty?
+      if pattern.size != 1
+        raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
       end
-    elsif pattern.empty?
-      self.each do |x|
-        return false if x
-      end
-    elsif pattern.size == 1
+      warn "warning: given block not used" if block_given?
       pat = pattern[0]
       self.each do |x|
         return false if pat === x
       end
+    elsif block_given?
+      self.each do |x|
+        return false if yield(x)
+      end
     else
-      raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
+      self.each do |x|
+        return false if x
+      end
     end
     true
   end
 
   def one?(*pattern)
     n = 0
-    if block_given?
+    if !pattern.empty?
+      if pattern.size != 1
+        raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
+      end
+      warn "warning: given block not used" if block_given?
+      pat = pattern[0]
+      self.each do |x|
+        if pat === x
+          n += 1
+          return false if n > 1
+        end
+      end
+    elsif block_given?
       self.each do |x|
         if yield(x)
           n += 1
@@ -160,21 +183,13 @@ module Enumerable
           return false if n > 1
         end
       end
-    elsif pattern.size == 1
-      pat = pattern[0]
-      self.each do |x|
-        if pat === x
-          n += 1
-          return false if n > 1
-        end
-      end
     else
       raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
     end
     n == 1
   end
 
-  def min_by
+  def min_by(n = nil)
     return self.to_enum(:min_by) unless block_given?
     elem = nil
     res = nil
@@ -208,8 +223,8 @@ module Enumerable
   end
   alias collect_concat flat_map
 
-  def tally
-    h = {}
+  def tally(hash = nil)
+    h = hash || {}
     self.each do |x|
       h[x] = (h[x] || 0) + 1
     end
@@ -316,12 +331,16 @@ module Enumerable
     h
   end
 
+  def sort(&block)
+    self.to_a.sort(&block)
+  end
+
   def sort_by
     return self.to_enum(:sort_by) unless block_given?
     map { |x| [yield(x), x] }.sort { |a, b| a[0] <=> b[0] }.map { |x| x[1] }
   end
 
-  def max_by
+  def max_by(n = nil)
     return self.to_enum(:max_by) unless block_given?
     elem = nil
     res = nil
@@ -415,15 +434,17 @@ module Enumerable
   end
 
   def all?(*pattern)
-    if block_given?
-      self.each { |x| return false unless yield(x) }
-    elsif pattern.empty?
-      self.each { |x| return false unless x }
-    elsif pattern.size == 1
+    if !pattern.empty?
+      if pattern.size != 1
+        raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
+      end
+      warn "warning: given block not used" if block_given?
       pat = pattern[0]
       self.each { |x| return false unless pat === x }
+    elsif block_given?
+      self.each { |x| return false unless yield(x) }
     else
-      raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
+      self.each { |x| return false unless x }
     end
     true
   end
@@ -440,7 +461,7 @@ module Enumerable
     nil
   end
 
-  def min
+  def min(n = nil)
     m = nil
     if block_given?
       self.each do |x|
@@ -458,7 +479,7 @@ module Enumerable
     m
   end
 
-  def max
+  def max(n = nil)
     m = nil
     if block_given?
       self.each do |x|
@@ -476,8 +497,23 @@ module Enumerable
     m
   end
 
-  def minmax
-    [min, max]
+  def minmax(&block)
+    if block
+      mn = nil
+      mx = nil
+      self.each do |x|
+        if mn.nil?
+          mn = x
+          mx = x
+        else
+          mn = x if block.call(x, mn) < 0
+          mx = x if block.call(x, mx) > 0
+        end
+      end
+      [mn, mx]
+    else
+      [min, max]
+    end
   end
 
   def uniq

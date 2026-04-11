@@ -564,10 +564,10 @@ impl SlotState {
         i16::try_from(i).ok()
     }
 
-    pub fn is_u8_literal(&self, slot: SlotId) -> Option<u8> {
-        let i = self.is_fixnum_literal(slot)?.get();
-        u8::try_from(i).ok()
-    }
+    //pub fn is_u8_literal(&self, slot: SlotId) -> Option<u8> {
+    //    let i = self.is_fixnum_literal(slot)?.get();
+    //    u8::try_from(i).ok()
+    //}
 
     pub fn is_array_ty(&self, store: &Store, slot: SlotId) -> bool {
         let b = if let Guarded::Class(class) = self.guarded(slot) {

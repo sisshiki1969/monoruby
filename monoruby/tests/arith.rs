@@ -3,39 +3,24 @@ use monoruby::tests::*;
 
 #[test]
 fn test0() {
-    run_test("");
-    run_test("4 * (2.9 + 7 / (1.15 - 6))");
-    run_test("-4 * (2.9 + 7 / (-1.15 - 6))");
-    run_test("1.5 + (2.0 + 3) + 1.1");
-    run_test("-100/5");
-
-    run_test("a = 55; a = a /5; a");
-
-    run_test("true != true");
-    run_test("true != false");
-    run_test("false != false");
-    run_test("false != true");
-
-    run_test("a = 42; if a == 42 then 1.1 else 2.2 end");
-    run_test("a = 42.0; if a == 42.0 then 1.1 else 2.2 end");
-    run_test("a = 42.0; if a != 42.0 then 1.1 else 2.2 end");
-    run_test("a = 42.0; if a < 52.0 then 1.1 else 2.2 end");
-    run_test("a = 42.0; if a > 52.0 then 1.1 else 2.2 end");
-    run_test("a = 42.0 > 52.0; if a then 1.1 else 2.2 end");
-    run_test("4..173");
-    run_test("4...173");
-    run_test("!true");
-    run_test("!false");
-    run_test("!!false");
-    run_test("!nil");
-    run_test("a = !nil; a");
-    run_test("!!nil");
-    run_test("!100");
-    run_test("!!100");
-    run_test("!7.55");
-    run_test("!:a");
-    run_test(r#"!"g""#);
-
+    run_tests(&[
+        "",
+        "4 * (2.9 + 7 / (1.15 - 6))",
+        "-4 * (2.9 + 7 / (-1.15 - 6))",
+        "1.5 + (2.0 + 3) + 1.1",
+        "-100/5",
+        "a = 55; a = a /5; a",
+        "true != true", "true != false", "false != false", "false != true",
+        "a = 42; if a == 42 then 1.1 else 2.2 end",
+        "a = 42.0; if a == 42.0 then 1.1 else 2.2 end",
+        "a = 42.0; if a != 42.0 then 1.1 else 2.2 end",
+        "a = 42.0; if a < 52.0 then 1.1 else 2.2 end",
+        "a = 42.0; if a > 52.0 then 1.1 else 2.2 end",
+        "a = 42.0 > 52.0; if a then 1.1 else 2.2 end",
+        "4..173", "4...173",
+        "!true", "!false", "!!false", "!nil", "a = !nil; a", "!!nil",
+        "!100", "!!100", "!7.55", "!:a", r#"!"g""#,
+    ]);
     run_test_error(r##"2.56 < :Ruby"##);
     run_test_error(r##"150[:Ruby]"##);
     run_test_error(
@@ -95,28 +80,14 @@ fn test0_err() {
 
 #[test]
 fn test_exp() {
-    run_test("3.78**432");
-    run_test("3.78**-432");
-    run_test("-3.78**432");
-    run_test("-3.78**-432");
-
-    run_test("39**3");
-    run_test("39**3431");
-    run_test("392909**3431");
-    run_test("392909**4");
-    run_test("-392909**3431");
-    run_test("-392909**3432");
-
-    run_test("378**4.32");
-    run_test("378**-4.32");
-    run_test("-378**4.32");
-    run_test("-378**-4.32");
-    run_test("378258461125841513588485555**-4.32");
-
-    run_test("90.78**43.2");
-    run_test("90.78**-43.2");
-    run_test("-90.78**43.2");
-    run_test("-90.78**-43.2");
+    run_tests(&[
+        "3.78**432", "3.78**-432", "-3.78**432", "-3.78**-432",
+        "39**3", "39**3431", "392909**3431", "392909**4",
+        "-392909**3431", "-392909**3432",
+        "378**4.32", "378**-4.32", "-378**4.32", "-378**-4.32",
+        "378258461125841513588485555**-4.32",
+        "90.78**43.2", "90.78**-43.2", "-90.78**43.2", "-90.78**-43.2",
+    ]);
 }
 
 #[test]
@@ -143,34 +114,31 @@ fn test_call() {
 
 #[test]
 fn test_int_bigint() {
-    run_test("9223372036854775807"); // max number of 63bit signed int.
-    run_test("9223372036854775808"); // max number of 63bit signed int.
-    run_test("9223372036854775807 + 1");
-    run_test("9223372036854775000 + 27387904");
-    run_test("-(-9223372036854775808)");
-    run_test("-4611686018427387904"); // min number of 63bit signed int.
-    run_test("-4611686018427387904 - 1");
-    run_test("-4611686018400000001 - 27387904");
-    run_test("1 << 62");
-    run_test("1 << 63");
-    run_test("1 << 64");
-    run_test("-1 << 62");
-    run_test("-1 << 63");
-    run_test("-1 << 64");
+    run_tests(&[
+        "9223372036854775807", "9223372036854775808",
+        "9223372036854775807 + 1", "9223372036854775000 + 27387904",
+        "-(-9223372036854775808)",
+        "-4611686018427387904", "-4611686018427387904 - 1",
+        "-4611686018400000001 - 27387904",
+        "1 << 62", "1 << 63", "1 << 64",
+        "-1 << 62", "-1 << 63", "-1 << 64",
+    ]);
 }
 
 #[test]
 fn test_shift() {
+    let mut tests = vec![];
     for lhs in ["157"] {
         for rhs in ["0", "1", "54", "70"] {
             for op in ["<<", ">>"] {
-                run_test(&format!("{} {} {}", lhs, op, rhs));
-                run_test(&format!("{} {} (-{})", lhs, op, rhs));
-                run_test(&format!("-{} {} {}", lhs, op, rhs));
-                run_test(&format!("-{} {} (-{})", lhs, op, rhs));
+                tests.push(format!("{} {} {}", lhs, op, rhs));
+                tests.push(format!("{} {} (-{})", lhs, op, rhs));
+                tests.push(format!("-{} {} {}", lhs, op, rhs));
+                tests.push(format!("-{} {} (-{})", lhs, op, rhs));
             }
         }
     }
+    run_tests(&tests);
 }
 
 #[test]
@@ -1204,48 +1172,38 @@ fn defined() {
             end
         "#,
     );
-    run_test(r#"defined? 10"#);
-    run_test(r#"defined? 100000000000000000000000000000000000000000000000000000000"#);
-    run_test(r#"defined? 5.5"#);
-    run_test(r#"defined? 5i"#);
-    run_test(r#"defined? :a"#);
-    run_test(r#"defined? "abs""#);
-    run_test(r#"defined? /abs/"#);
-    run_test(r#"defined? AA..ZZ"#);
-    run_test(r#"defined? ({a:AA, b:BB})"#);
-    run_test(r#"defined? `ls -a`"#);
-    run_test(r#"defined? nil"#);
-    run_test(r#"defined? self"#);
-    run_test(r#"defined? true"#);
-    run_test(r#"defined? false"#);
-    run_test(r#"defined? break"#);
-    run_test(r#"defined? return"#);
-    run_test(r#"defined? next"#);
-    run_test(r#"defined? redo"#);
-    run_test(r#"defined? a=z"#);
-    run_test(r#"defined? a+=z"#);
+    // Pure expressions — batch together
+    run_tests(&[
+        r#"defined? 10"#,
+        r#"defined? 100000000000000000000000000000000000000000000000000000000"#,
+        r#"defined? 5.5"#, r#"defined? 5i"#, r#"defined? :a"#,
+        r#"defined? "abs""#, r#"defined? /abs/"#,
+        r#"defined? AA..ZZ"#, r#"defined? ({a:AA, b:BB})"#,
+        r#"defined? nil"#, r#"defined? self"#, r#"defined? true"#, r#"defined? false"#,
+        r#"defined? break"#, r#"defined? return"#, r#"defined? next"#, r#"defined? redo"#,
+        r#"defined? a=z"#, r#"defined? a+=z"#,
+        r#"defined? puts"#,
+        r#"defined?(1+(2+3))"#, r#"defined? 1+(2+3)"#,
+    ]);
+    // Expressions with side effects or definitions — must run individually
     run_test(r#"defined? (def f;end)"#);
     run_test(r#"defined? (def self.f;end)"#);
     run_test(r#"defined? (class F;end)"#);
     run_test(r#"defined? (class << obj F;end)"#);
+    run_test(r#"defined? a[1]"#);
+    run_test(r#"defined? (a[1]=5)"#);
+    run_test(r#"defined? `ls -a`"#);
     run_test(r#"a=10; defined? a"#);
     run_test(r#"defined? a"#);
     run_test(r#"a=""; defined? 1+a"#);
-    run_test(r#"defined? puts"#);
     run_test(r#"defined? @a"#);
     run_test(r#"@a=10; defined? @a"#);
     run_test(r#"defined? $a"#);
     run_test(r#"$a=10; defined? $a"#);
     run_test(r#"C=10; defined? C"#);
     run_test(r#"defined? C"#);
-    //run_test(r#"defined? [1,2].map{}.to_s"#);
-    //run_test(r#"defined? [1,2].map{}.zxzxz"#);
-    run_test(r#"defined? a[1]"#);
     run_test(r#"a = []; defined? a[1]"#);
-    run_test(r#"defined? (a[1]=5)"#);
     run_test(r#"a = []; defined? (a[1]=5)"#);
-    run_test(r#"defined?(1+(2+3))"#);
-    run_test(r#"defined? 1+(2+3)"#);
     run_test_with_prelude(
         r#"
             [ C.new.f, S.new.f ]
@@ -1290,9 +1248,6 @@ fn defined() {
         [defined?($gx), defined?($gy)]
     "#,
     );
-    run_test(r#"defined? $stdout"#);
-    run_test(r#"defined? $0"#);
-    run_test(r#"defined? $LOAD_PATH"#);
     // constants
     run_test(
         r#"
@@ -1302,9 +1257,6 @@ fn defined() {
         [defined?(M::C), defined?(M::D)]
     "#,
     );
-    run_test(r#"defined? Integer"#);
-    run_test(r#"defined? String"#);
-    run_test(r#"defined? NoSuchConstant"#);
     run_test(
         r#"
         class A
@@ -1315,8 +1267,6 @@ fn defined() {
     "#,
     );
     // methods
-    run_test(r#"defined? to_s"#);
-    run_test(r#"defined? no_such_method"#);
     run_test(
         r#"
         class A
@@ -1327,9 +1277,13 @@ fn defined() {
         [A.new.f, A.new.g]
     "#,
     );
-    run_test(r#"defined? [].map"#);
-    run_test(r#"defined? [].no_such_method"#);
-    run_test(r#"defined? 1.to_s"#);
+    run_tests(&[
+        r#"defined? $stdout"#, r#"defined? $0"#, r#"defined? $LOAD_PATH"#,
+        r#"defined? Integer"#, r#"defined? String"#, r#"defined? NoSuchConstant"#,
+        r#"defined? to_s"#, r#"defined? no_such_method"#,
+        r#"defined? [].map"#, r#"defined? [].no_such_method"#,
+        r#"defined? 1.to_s"#,
+    ]);
     // class variables
     run_test(
         r#"

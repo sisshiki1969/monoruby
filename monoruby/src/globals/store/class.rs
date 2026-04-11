@@ -59,9 +59,10 @@ pub const IO_ERROR_CLASS: ClassId = ClassId::new(49);
 
 pub const MATCHDATA_CLASS: ClassId = ClassId::new(50);
 pub const SET_CLASS: ClassId = ClassId::new(51);
-pub const THREAD_CLASS: ClassId = ClassId::new(52);
-pub const THREAD_ERROR_CLASS: ClassId = ClassId::new(53);
-pub const MUTEX_CLASS: ClassId = ClassId::new(54);
+pub const RATIONAL_CLASS: ClassId = ClassId::new(52);
+pub const THREAD_CLASS: ClassId = ClassId::new(53);
+pub const THREAD_ERROR_CLASS: ClassId = ClassId::new(54);
+pub const MUTEX_CLASS: ClassId = ClassId::new(55);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
@@ -123,9 +124,10 @@ impl std::fmt::Debug for ClassId {
 
             50 => write!(f, "MATCHDATA"),
             51 => write!(f, "SET"),
-            52 => write!(f, "THREAD"),
-            53 => write!(f, "THREAD_ERROR"),
-            54 => write!(f, "MUTEX"),
+            52 => write!(f, "RATIONAL"),
+            53 => write!(f, "THREAD"),
+            54 => write!(f, "THREAD_ERROR"),
+            55 => write!(f, "MUTEX"),
             n => write!(f, "ClassId({n})"),
         }
     }
@@ -178,17 +180,96 @@ impl ClassId {
         match &store.classes[self].name {
             Some(id) => id.clone(),
             None => match class.is_singleton() {
-                None => format!("#<Class:{:016x}>", class.as_val().id()),
+                None => {
+                    let kind = if class.as_val().ty() == Some(ObjTy::MODULE) {
+                        "Module"
+                    } else {
+                        "Class"
+                    };
+                    format!("#<{kind}:0x{:016x}>", class.as_val().id())
+                }
                 Some(base) => format!("#<Class:{}>", base.to_s(store)),
             },
         }
     }
 }
 
+/// Visibility of a constant. Constants are public by default;
+/// `Module#private_constant` makes them private. Visibility is stored
+/// alongside the constant's value/autoload-path inside `ConstState`, so it
+/// persists across an autoload-to-loaded transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ConstVisibility {
+    #[default]
+    Public,
+    Private,
+}
+
+impl ConstVisibility {
+    pub(crate) fn is_private(self) -> bool {
+        matches!(self, ConstVisibility::Private)
+    }
+}
+
+/// State of a constant slot in a `ClassInfo`'s constant table.
+///
+/// `kind` distinguishes a fully loaded constant from a registered autoload,
+/// and `visibility` records whether the constant is public or private. The
+/// two are kept independent so that toggling visibility on an autoload entry
+/// is preserved when the autoload is later triggered.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum ConstState {
+pub(crate) struct ConstState {
+    pub kind: ConstStateKind,
+    pub visibility: ConstVisibility,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ConstStateKind {
     Loaded(Value),
     Autoload(std::path::PathBuf),
+}
+
+impl ConstState {
+    pub(crate) fn loaded(value: Value) -> Self {
+        Self {
+            kind: ConstStateKind::Loaded(value),
+            visibility: ConstVisibility::Public,
+        }
+    }
+
+    pub(crate) fn autoload(path: std::path::PathBuf) -> Self {
+        Self {
+            kind: ConstStateKind::Autoload(path),
+            visibility: ConstVisibility::Public,
+        }
+    }
+
+    pub(crate) fn loaded_value(&self) -> Option<Value> {
+        match self.kind {
+            ConstStateKind::Loaded(v) => Some(v),
+            ConstStateKind::Autoload(_) => None,
+        }
+    }
+
+    pub(crate) fn is_loaded(&self) -> bool {
+        matches!(self.kind, ConstStateKind::Loaded(_))
+    }
+
+    pub(crate) fn is_autoload(&self) -> bool {
+        matches!(self.kind, ConstStateKind::Autoload(_))
+    }
+
+    pub(crate) fn is_private(&self) -> bool {
+        self.visibility.is_private()
+    }
+
+    pub(crate) fn set_private(&mut self) {
+        self.visibility = ConstVisibility::Private;
+    }
+
+    pub(crate) fn set_public(&mut self) {
+        self.visibility = ConstVisibility::Public;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -198,6 +279,12 @@ pub struct ClassInfo {
     /// if this class object is not bound to any constant, this is None.
     ///
     name: Option<String>,
+    ///
+    /// Cached frozen `String` Value of `name`. Lazily populated by
+    /// `Module#name` so that repeated calls return the same identical
+    /// (frozen) string object, matching CRuby's behavior.
+    ///
+    name_value: Option<Value>,
     ///
     /// the parent class of this class.
     ///
@@ -211,9 +298,17 @@ pub struct ClassInfo {
     ///
     methods: HashMap<IdentId, MethodTableEntry>,
     ///
-    /// constants table.
+    /// constants table. Each entry stores the constant's value (or autoload
+    /// path) plus its visibility (public/private).
     ///
     constants: HashMap<IdentId, ConstState>,
+    ///
+    /// Per-constant source location, recorded when a constant is first
+    /// stored. Used by `Module#const_source_location`. Constants defined in
+    /// the runtime (e.g. via `define_class_inner` from Rust builtins) have
+    /// no entry and `const_source_location` returns `nil` for them.
+    ///
+    constant_locations: HashMap<IdentId, (String, u32)>,
     ///
     /// class variable table.
     ///
@@ -235,8 +330,11 @@ impl alloc::GC<RValue> for ClassInfo {
         if let Some(v) = self.object {
             v.as_val().mark(alloc);
         }
-        self.constants.values().for_each(|v| {
-            if let ConstState::Loaded(v) = v {
+        if let Some(v) = self.name_value {
+            v.mark(alloc);
+        }
+        self.constants.values().for_each(|state| {
+            if let Some(v) = state.loaded_value() {
                 v.mark(alloc)
             }
         });
@@ -250,10 +348,12 @@ impl ClassInfo {
     pub(super) fn new() -> Self {
         Self {
             name: None,
+            name_value: None,
             parent: None,
             object: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
+            constant_locations: HashMap::default(),
             class_variables: None,
             ivar_names: indexmap::IndexMap::default(),
             instance_ty: None,
@@ -263,10 +363,12 @@ impl ClassInfo {
     pub(super) fn copy(&self) -> Self {
         Self {
             name: None,
+            name_value: None,
             parent: None,
             object: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
+            constant_locations: HashMap::default(),
             class_variables: None,
             ivar_names: self.ivar_names.clone(),
             instance_ty: self.instance_ty,
@@ -295,14 +397,67 @@ impl ClassInfo {
 
     pub(crate) fn set_name(&mut self, name: String) {
         self.name = Some(name);
+        // Invalidate any cached frozen name Value so the next call to
+        // `Module#name` rebuilds it from the current `name`.
+        self.name_value = None;
     }
 
     pub(crate) fn clear_name(&mut self) {
         self.name = None;
+        self.name_value = None;
     }
 
     pub(crate) fn get_name(&self) -> Option<&str> {
         self.name.as_ref().map(|x| x.as_str())
+    }
+
+    pub(crate) fn cached_name_value(&self) -> Option<Value> {
+        self.name_value
+    }
+
+    pub(crate) fn set_cached_name_value(&mut self, val: Value) {
+        self.name_value = Some(val);
+    }
+
+    pub(crate) fn record_constant_location(&mut self, name: IdentId, file: String, line: u32) {
+        self.constant_locations.insert(name, (file, line));
+    }
+
+    pub(crate) fn get_constant_location(&self, name: IdentId) -> Option<(&str, u32)> {
+        self.constant_locations
+            .get(&name)
+            .map(|(f, l)| (f.as_str(), *l))
+    }
+
+    /// Returns true if a constant `name` is defined directly on this
+    /// class/module (not inherited).
+    pub(crate) fn has_own_constant(&self, name: IdentId) -> bool {
+        self.constants.contains_key(&name)
+    }
+
+    /// Returns true if the constant `name` defined on this class/module is
+    /// marked as private. Constants are public by default. Returns false if
+    /// the constant is not defined on this class.
+    pub(crate) fn is_constant_private(&self, name: IdentId) -> bool {
+        self.constants
+            .get(&name)
+            .is_some_and(|state| state.is_private())
+    }
+
+    /// Marks the constant `name` as private. The caller is responsible for
+    /// verifying that the constant is defined on this class.
+    pub(crate) fn set_constant_private(&mut self, name: IdentId) {
+        if let Some(state) = self.constants.get_mut(&name) {
+            state.set_private();
+        }
+    }
+
+    /// Marks the constant `name` as public. No-op if not currently private
+    /// or not defined on this class.
+    pub(crate) fn set_constant_public(&mut self, name: IdentId) {
+        if let Some(state) = self.constants.get_mut(&name) {
+            state.set_public();
+        }
     }
 
     pub(crate) fn instance_ty(&self) -> Option<ObjTy> {
@@ -331,6 +486,10 @@ impl ClassInfo {
         self.class_variables.as_ref()?.get(&name).cloned()
     }
 
+    pub(crate) fn remove_cvar(&mut self, name: IdentId) -> Option<Value> {
+        self.class_variables.as_mut()?.remove(&name)
+    }
+
     fn cvar_names(&self) -> Vec<IdentId> {
         match &self.class_variables {
             Some(cv) => cv.keys().cloned().collect(),
@@ -341,13 +500,19 @@ impl ClassInfo {
     ///
     /// Remove a constant with *name* in the class of *class_id*.
     ///
-    /// If not found, return None.
+    /// If not found, return None. Visibility metadata is cleared
+    /// automatically since it lives inside `ConstState`. Also clears any
+    /// associated source-location entry.
     ///
     pub(in crate::globals) fn remove_constant(&mut self, name: IdentId) -> Option<Value> {
-        self.constants.remove(&name).map(|state| match state {
-            ConstState::Loaded(v) => v,
-            ConstState::Autoload(..) => Value::nil(),
-        })
+        let removed = self.constants.remove(&name).map(|state| match state.kind {
+            ConstStateKind::Loaded(v) => v,
+            ConstStateKind::Autoload(..) => Value::nil(),
+        });
+        if removed.is_some() {
+            self.constant_locations.remove(&name);
+        }
+        removed
     }
 }
 
@@ -380,7 +545,19 @@ impl ClassInfoTable {
             }
             match self[parent].name.as_ref() {
                 Some(name) => parents.push(name.to_string()),
-                None => break,
+                None => {
+                    // Anonymous ancestor: render its inspect form so the
+                    // child still has a non-nil, qualifying name (e.g.
+                    // `#<Module:0x..>::Inner`).
+                    let parent_obj = self[parent].get_module().as_val();
+                    let kind = if parent_obj.ty() == Some(ObjTy::MODULE) {
+                        "Module"
+                    } else {
+                        "Class"
+                    };
+                    parents.push(format!("#<{kind}:0x{:016x}>", parent_obj.id()));
+                    break;
+                }
             }
             class = parent;
         }
@@ -537,6 +714,38 @@ impl ClassInfoTable {
     ///
     /// Get private method names in the class of *class_id*.
     ///  
+    /// Get the immediate (direct) subclasses of *class_id*.
+    /// Returns only real classes (not iclass entries, not singleton classes,
+    /// not modules) whose direct superclass is *class_id*. The walk skips over
+    /// any intermediate iclass nodes inserted by `include`/`prepend`.
+    pub(crate) fn get_direct_subclasses(&self, class_id: ClassId) -> Vec<Value> {
+        let mut result = Vec::new();
+        for (idx, info) in self.table.iter().enumerate() {
+            let module = match info.object {
+                Some(m) => m,
+                None => continue,
+            };
+            if module.is_singleton().is_some() || module.is_iclass() {
+                continue;
+            }
+            let cid = ClassId::new(idx as u32);
+            if cid == class_id {
+                continue;
+            }
+            // Skip non-class objects (e.g. modules) — only Class entries can
+            // have *class_id* as a parent in the inheritance chain.
+            if module.as_val().ty() != Some(ObjTy::CLASS) {
+                continue;
+            }
+            if let Some(superclass) = module.get_real_superclass() {
+                if superclass.id() == class_id {
+                    result.push(module.as_val());
+                }
+            }
+        }
+        result
+    }
+
     pub(crate) fn get_private_method_names(&self, class_id: ClassId) -> Vec<Value> {
         self[class_id]
             .methods
@@ -589,7 +798,7 @@ impl ClassInfoTable {
     }
 
     ///
-    /// Get public and protected method names in the class of *class_id* and its ancesters.
+    /// Get private method names in the class of *class_id* and its ancestors.
     ///
     pub(crate) fn get_private_method_names_inherit(&self, class_id: ClassId) -> Vec<Value> {
         let mut names = HashSet::default();
@@ -600,6 +809,51 @@ impl ClassInfoTable {
                 if matches!(entry.visibility, Visibility::Undefined) {
                     exclude.insert(*name);
                 } else if entry.is_private() && !exclude.contains(name) {
+                    names.insert(*name);
+                }
+            }
+            match module.superclass() {
+                Some(superclass) => {
+                    if superclass.id() == OBJECT_CLASS {
+                        break;
+                    }
+                    module = superclass;
+                }
+                None => break,
+            }
+        }
+        names.into_iter().map(|sym| Value::symbol(sym)).collect()
+    }
+
+    ///
+    /// Get protected method names in the class of *class_id*.
+    ///
+    pub(crate) fn get_protected_method_names(&self, class_id: ClassId) -> Vec<Value> {
+        self[class_id]
+            .methods
+            .iter()
+            .filter_map(|(name, entry)| {
+                if entry.func_id().is_some() && entry.visibility() == Visibility::Protected {
+                    Some(Value::symbol(*name))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    ///
+    /// Get protected method names in the class of *class_id* and its ancestors.
+    ///
+    pub(crate) fn get_protected_method_names_inherit(&self, class_id: ClassId) -> Vec<Value> {
+        let mut names = HashSet::default();
+        let mut module = self.get_module(class_id);
+        let mut exclude = HashSet::default();
+        loop {
+            for (name, entry) in &self[module.id()].methods {
+                if matches!(entry.visibility, Visibility::Undefined) {
+                    exclude.insert(*name);
+                } else if entry.func_id().is_some() && entry.visibility() == Visibility::Protected && !exclude.contains(name) {
                     names.insert(*name);
                 }
             }
@@ -1042,7 +1296,13 @@ impl Store {
             self.invalidate_jit_code();
             let vm_entry = codegen.vm_entry();
             for func in self.functions.functions() {
-                if func.is_iseq().is_some() {
+                if let Some(iseq) = func.is_iseq() {
+                    // Skip trivial methods (ConstReturn/SelfReturn) — their
+                    // wrappers don't execute bytecode and contain no BOP usage,
+                    // so patching them to vm_entry would break execution.
+                    if self[iseq].hint != ISeqHint::Normal {
+                        continue;
+                    }
                     let entry = codegen.jit.get_label_address(&func.entry_label());
                     codegen.jit.apply_jmp_patch_address(entry, &vm_entry);
                 }

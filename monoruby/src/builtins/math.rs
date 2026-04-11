@@ -15,6 +15,54 @@ unsafe extern "C" {
     fn c_ldexp(x: f64, exp: c_int) -> f64;
     #[link_name = "frexp"]
     fn c_frexp(x: f64, exp: *mut c_int) -> f64;
+    #[link_name = "expm1"]
+    fn c_expm1(x: f64) -> f64;
+}
+
+extern "C" fn extern_cos(f: f64) -> f64 {
+    f.cos()
+}
+
+extern "C" fn extern_sin(f: f64) -> f64 {
+    f.sin()
+}
+
+extern "C" fn extern_tan(f: f64) -> f64 {
+    f.tan()
+}
+
+extern "C" fn extern_cosh(f: f64) -> f64 {
+    f.cosh()
+}
+
+extern "C" fn extern_sinh(f: f64) -> f64 {
+    f.sinh()
+}
+
+extern "C" fn extern_tanh(f: f64) -> f64 {
+    f.tanh()
+}
+
+extern "C" fn extern_exp(f: f64) -> f64 {
+    f.exp()
+}
+
+/// Helper to raise Math::DomainError
+fn math_domain_err(globals: &Globals, msg: impl ToString) -> MonorubyErr {
+    let math_module = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Math"))
+        .map(|v| v.as_class_id());
+    if let Some(math_id) = math_module {
+        if let Some(domain_err) = globals
+            .store
+            .get_constant_noautoload(math_id, IdentId::get_id("DomainError"))
+        {
+            return MonorubyErr::new(MonorubyErrKind::Other(domain_err.as_class_id()), msg);
+        }
+    }
+    // Fallback to RangeError if Math::DomainError not found
+    MonorubyErr::rangeerr(msg)
 }
 
 //
@@ -32,39 +80,46 @@ pub(super) fn init(globals: &mut Globals) {
     globals.set_constant_by_str(klass, "PI", Value::float(std::f64::consts::PI));
     globals.set_constant_by_str(klass, "E", Value::float(std::f64::consts::E));
     globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, Box::new(math_sqrt), 1);
+
     globals.define_builtin_module_cfunc_f_f(klass, "cos", cos, extern_cos, 1);
     globals.define_builtin_module_cfunc_f_f(klass, "sin", sin, extern_sin, 1);
-    globals.define_builtin_module_func(klass, "tan", tan, 1);
+    globals.define_builtin_module_cfunc_f_f(klass, "tan", tan, extern_tan, 1);
+    globals.define_builtin_module_cfunc_f_f(klass, "exp", exp, extern_exp, 1);
+    globals.define_builtin_module_cfunc_f_f(klass, "sinh", sinh, extern_sinh, 1);
+    globals.define_builtin_module_cfunc_f_f(klass, "cosh", cosh, extern_cosh, 1);
+    globals.define_builtin_module_cfunc_f_f(klass, "tanh", tanh, extern_tanh, 1);
+    globals.define_builtin_module_cfunc_f_f(klass, "erf", erf, c_erf, 1);
+    globals.define_builtin_module_cfunc_f_f(klass, "erfc", erfc, c_erfc, 1);
+    globals.define_builtin_module_cfunc_f_f(klass, "expm1", expm1, c_expm1, 1);
+
     globals.define_builtin_module_func_with(klass, "log", log, 1, 2, false);
     globals.define_builtin_module_func(klass, "log2", log2, 1);
     globals.define_builtin_module_func(klass, "log10", log10, 1);
-    globals.define_builtin_module_func(klass, "exp", exp, 1);
     globals.define_builtin_module_func(klass, "asin", asin, 1);
     globals.define_builtin_module_func(klass, "acos", acos, 1);
     globals.define_builtin_module_func(klass, "atan", atan, 1);
     globals.define_builtin_module_func(klass, "atan2", atan2, 2);
-    globals.define_builtin_module_func(klass, "sinh", sinh, 1);
-    globals.define_builtin_module_func(klass, "cosh", cosh, 1);
-    globals.define_builtin_module_func(klass, "tanh", tanh, 1);
     globals.define_builtin_module_func(klass, "asinh", asinh, 1);
     globals.define_builtin_module_func(klass, "acosh", acosh, 1);
     globals.define_builtin_module_func(klass, "atanh", atanh, 1);
-    globals.define_builtin_module_func(klass, "erf", erf, 1);
-    globals.define_builtin_module_func(klass, "erfc", erfc, 1);
     globals.define_builtin_module_func(klass, "gamma", gamma, 1);
     globals.define_builtin_module_func(klass, "lgamma", lgamma, 1);
     globals.define_builtin_module_func(klass, "cbrt", cbrt, 1);
     globals.define_builtin_module_func(klass, "hypot", hypot, 2);
     globals.define_builtin_module_func(klass, "ldexp", ldexp, 2);
     globals.define_builtin_module_func(klass, "frexp", frexp, 1);
+    globals.define_builtin_module_func(klass, "log1p", log1p, 1);
 }
 
 /// Convert a Value to f64, trying `to_f` if the value is not directly numeric.
 fn coerce_to_f64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f64> {
+    if v.is_nil() {
+        return Err(MonorubyErr::typeerr("can't convert nil into Float"));
+    }
     match v.unpack() {
         RV::Float(f) => Ok(f),
         RV::Fixnum(i) => Ok(i as f64),
-        RV::BigInt(b) => Ok(b.to_f64().unwrap()),
+        RV::BigInt(b) => Ok(b.to_f64().unwrap_or(f64::INFINITY)),
         _ => {
             // Only try to_f for non-String types (CRuby only calls to_f on Numeric subclasses)
             if v.is_str().is_none()
@@ -74,7 +129,7 @@ fn coerce_to_f64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f
                 match result.unpack() {
                     RV::Float(f) => Ok(f),
                     RV::Fixnum(i) => Ok(i as f64),
-                    _ => Err(MonorubyErr::cant_convert_into_float(globals, v)),
+                    _ => Err(MonorubyErr::cant_convert_error_f(globals, v, result)),
                 }
             } else {
                 Err(MonorubyErr::cant_convert_into_float(globals, v))
@@ -90,6 +145,15 @@ fn coerce_to_f64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f
 #[monoruby_builtin]
 fn sqrt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
+    if f.is_nan() {
+        return Ok(Value::float(f64::NAN));
+    }
+    if f < 0.0 {
+        return Err(math_domain_err(
+            globals,
+            "Numerical argument is out of domain - \"sqrt\"",
+        ));
+    }
     Ok(Value::float(f.sqrt()))
 }
 
@@ -130,9 +194,33 @@ fn tan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/log.html]
 #[monoruby_builtin]
 fn log(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
-    if f.is_sign_negative() {
-        return Err(MonorubyErr::rangeerr(
+    let arg = lfp.arg(0);
+    // Handle BigInt specially for better precision
+    let f = if let RV::BigInt(b) = arg.unpack() {
+        if b.sign() == num::bigint::Sign::Minus {
+            return Err(math_domain_err(
+                globals,
+                "Numerical argument is out of domain - \"log\"",
+            ));
+        }
+        let shift = b.bits().saturating_sub(53);
+        let top = b >> shift;
+        let top_f = top.to_f64().unwrap_or(1.0);
+        let result = top_f.ln() + (shift as f64) * std::f64::consts::LN_2;
+        if let Some(base) = lfp.try_arg(1) {
+            let base_f = coerce_to_f64(vm, globals, base)?;
+            return Ok(Value::float(result / base_f.ln()));
+        }
+        return Ok(Value::float(result));
+    } else {
+        coerce_to_f64(vm, globals, arg)?
+    };
+    if f.is_nan() {
+        return Ok(Value::float(f64::NAN));
+    }
+    if f < 0.0 {
+        return Err(math_domain_err(
+            globals,
             "Numerical argument is out of domain - \"log\"",
         ));
     }
@@ -151,9 +239,43 @@ fn log(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/log2.html]
 #[monoruby_builtin]
 fn log2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
-    if f.is_sign_negative() {
-        return Err(MonorubyErr::rangeerr(
+    let arg = lfp.arg(0);
+    if let RV::BigInt(b) = arg.unpack() {
+        if b.sign() == num::bigint::Sign::Minus {
+            return Err(math_domain_err(
+                globals,
+                "Numerical argument is out of domain - \"log2\"",
+            ));
+        }
+        let bits = b.bits() as f64;
+        // For very large numbers, to_f64() overflows. Use the bit length approach.
+        let f = b.to_f64().unwrap_or(f64::INFINITY);
+        let frac = if f.is_finite() {
+            (f / 2.0f64.powf(bits - 1.0)).log2()
+        } else {
+            // Extract top 53 bits by shifting right
+            let shift = b.bits().saturating_sub(53);
+            let top = b >> shift;
+            let top_f = top.to_f64().unwrap_or(1.0);
+            top_f.log2() - (53.0 - 1.0) + (shift as f64)
+        };
+        if f.is_finite() {
+            return Ok(Value::float(bits - 1.0 + frac));
+        } else {
+            // For very large numbers: log2(n) = log2(top_bits * 2^shift) = log2(top_bits) + shift
+            let shift = b.bits().saturating_sub(53);
+            let top = b >> shift;
+            let top_f = top.to_f64().unwrap_or(1.0);
+            return Ok(Value::float(top_f.log2() + shift as f64));
+        }
+    }
+    let f = coerce_to_f64(vm, globals, arg)?;
+    if f.is_nan() {
+        return Ok(Value::float(f64::NAN));
+    }
+    if f < 0.0 {
+        return Err(math_domain_err(
+            globals,
             "Numerical argument is out of domain - \"log2\"",
         ));
     }
@@ -166,10 +288,28 @@ fn log2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/log10.html]
 #[monoruby_builtin]
 fn log10(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
-    if f.is_sign_negative() {
-        return Err(MonorubyErr::rangeerr(
-            "Numerical argument is out of domain - log10",
+    let arg = lfp.arg(0);
+    if let RV::BigInt(b) = arg.unpack() {
+        if b.sign() == num::bigint::Sign::Minus {
+            return Err(math_domain_err(
+                globals,
+                "Numerical argument is out of domain - \"log10\"",
+            ));
+        }
+        let shift = b.bits().saturating_sub(53);
+        let top = b >> shift;
+        let top_f = top.to_f64().unwrap_or(1.0);
+        let result = top_f.log10() + (shift as f64) * std::f64::consts::LOG10_2;
+        return Ok(Value::float(result));
+    }
+    let f = coerce_to_f64(vm, globals, arg)?;
+    if f.is_nan() {
+        return Ok(Value::float(f64::NAN));
+    }
+    if f < 0.0 {
+        return Err(math_domain_err(
+            globals,
+            "Numerical argument is out of domain - \"log10\"",
         ));
     }
     Ok(Value::float(f.log10()))
@@ -192,8 +332,12 @@ fn exp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn asin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
+    if f.is_nan() {
+        return Ok(Value::float(f64::NAN));
+    }
     if f < -1.0 || f > 1.0 {
-        return Err(MonorubyErr::rangeerr(
+        return Err(math_domain_err(
+            globals,
             "Numerical argument is out of domain - \"asin\"",
         ));
     }
@@ -207,8 +351,12 @@ fn asin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn acos(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
+    if f.is_nan() {
+        return Ok(Value::float(f64::NAN));
+    }
     if f < -1.0 || f > 1.0 {
-        return Err(MonorubyErr::rangeerr(
+        return Err(math_domain_err(
+            globals,
             "Numerical argument is out of domain - \"acos\"",
         ));
     }
@@ -283,8 +431,12 @@ fn asinh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn acosh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
+    if f.is_nan() {
+        return Ok(Value::float(f64::NAN));
+    }
     if f < 1.0 {
-        return Err(MonorubyErr::rangeerr(
+        return Err(math_domain_err(
+            globals,
             "Numerical argument is out of domain - \"acosh\"",
         ));
     }
@@ -298,12 +450,16 @@ fn acosh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn atanh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
+    if f.is_nan() {
+        return Ok(Value::float(f64::NAN));
+    }
     if f <= -1.0 || f >= 1.0 {
         if f == -1.0 || f == 1.0 {
             // Returns -Infinity or Infinity
             Ok(Value::float(f.atanh()))
         } else {
-            return Err(MonorubyErr::rangeerr(
+            return Err(math_domain_err(
+                globals,
                 "Numerical argument is out of domain - \"atanh\"",
             ));
         }
@@ -341,10 +497,54 @@ fn erfc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn gamma(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
+    if f.is_nan() {
+        return Ok(Value::float(f64::NAN));
+    }
+    if f.is_infinite() {
+        if f > 0.0 {
+            return Ok(Value::float(f64::INFINITY));
+        } else {
+            return Err(math_domain_err(
+                globals,
+                "Numerical argument is out of domain - \"tgamma\"",
+            ));
+        }
+    }
     if f < 0.0 && f == f.floor() {
-        return Err(MonorubyErr::rangeerr(
+        return Err(math_domain_err(
+            globals,
             "Numerical argument is out of domain - \"tgamma\"",
         ));
+    }
+    // Use exact factorial table for small positive integers
+    static FACTORIAL_TABLE: [f64; 23] = [
+        1.0,
+        1.0,
+        2.0,
+        6.0,
+        24.0,
+        120.0,
+        720.0,
+        5040.0,
+        40320.0,
+        362880.0,
+        3628800.0,
+        39916800.0,
+        479001600.0,
+        6227020800.0,
+        87178291200.0,
+        1307674368000.0,
+        20922789888000.0,
+        355687428096000.0,
+        6402373705728000.0,
+        121645100408832000.0,
+        2432902008176640000.0,
+        51090942171709440000.0,
+        1124000727777607680000.0,
+    ];
+    if f > 0.0 && f == f.floor() && f <= 23.0 {
+        let n = f as usize;
+        return Ok(Value::float(FACTORIAL_TABLE[n - 1]));
     }
     // SAFETY: tgamma is a standard C math function with no safety concerns.
     Ok(Value::float(unsafe { c_tgamma(f) }))
@@ -357,6 +557,21 @@ fn gamma(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn lgamma(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
+    if f.is_nan() {
+        return Ok(Value::array2(Value::float(f64::NAN), Value::integer(1)));
+    }
+    if f.is_infinite() {
+        if f < 0.0 {
+            return Err(math_domain_err(
+                globals,
+                "Numerical argument is out of domain - \"lgamma\"",
+            ));
+        }
+        return Ok(Value::array2(
+            Value::float(f64::INFINITY),
+            Value::integer(1),
+        ));
+    }
     // SAFETY: lgamma_r is a standard C math function; sign is a valid pointer to a local variable.
     let mut sign: c_int = 0;
     let result = unsafe { c_lgamma_r(f, &mut sign) };
@@ -394,12 +609,58 @@ fn hypot(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn ldexp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let x = coerce_to_f64(vm, globals, lfp.arg(0))?;
-    let exp = match lfp.arg(1).unpack() {
-        RV::Fixnum(i) => i as i32,
-        RV::Float(f) => f as i32,
-        RV::BigInt(b) => b.to_i32().unwrap_or(i32::MAX),
-        _ => {
-            return Err(MonorubyErr::cant_convert_into_float(globals, lfp.arg(1)));
+    if x.is_nan() {
+        return Ok(Value::float(f64::NAN));
+    }
+    let exp_val = lfp.arg(1);
+    let exp = if exp_val.is_nil() {
+        return Err(MonorubyErr::typeerr("can't convert nil into Integer"));
+    } else {
+        match exp_val.unpack() {
+            RV::Fixnum(i) => i as i32,
+            RV::Float(f) => {
+                if f.is_nan() {
+                    return Err(MonorubyErr::rangeerr("float NaN out of range of integer"));
+                }
+                if f.is_infinite() {
+                    return Err(MonorubyErr::rangeerr(if f > 0.0 {
+                        "float Inf out of range of integer"
+                    } else {
+                        "float -Inf out of range of integer"
+                    }));
+                }
+                f as i32
+            }
+            RV::BigInt(b) => {
+                if x == 0.0 {
+                    0
+                } else {
+                    b.to_i32()
+                        .unwrap_or(if b.sign() == num::bigint::Sign::Minus {
+                            i32::MIN
+                        } else {
+                            i32::MAX
+                        })
+                }
+            }
+            _ => {
+                // Try to_int coercion
+                let to_int_id = IdentId::get_id("to_int");
+                if let Some(fid) = globals.check_method(exp_val, to_int_id) {
+                    let result = vm.invoke_func_inner(globals, fid, exp_val, &[], None, None)?;
+                    match result.unpack() {
+                        RV::Fixnum(i) => i as i32,
+                        _ => {
+                            return Err(MonorubyErr::cant_convert_into_float(globals, exp_val));
+                        }
+                    }
+                } else {
+                    return Err(MonorubyErr::typeerr(format!(
+                        "can't convert {} into Integer",
+                        exp_val.get_real_class_name(&globals.store),
+                    )));
+                }
+            }
         }
     };
     // SAFETY: ldexp is a standard C math function with no safety concerns.
@@ -422,6 +683,36 @@ fn frexp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     ))
 }
 
+/// ### Math.#expm1
+/// - expm1(x) -> Float
+///
+/// Returns e^x - 1 with better precision for small x values.
+#[monoruby_builtin]
+fn expm1(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
+    // SAFETY: expm1 is a standard C math function with no safety concerns.
+    Ok(Value::float(unsafe { c_expm1(f) }))
+}
+
+/// ### Math.#log1p
+/// - log1p(x) -> Float
+///
+/// Returns log(1 + x) with better precision for small x values.
+#[monoruby_builtin]
+fn log1p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
+    if f.is_nan() {
+        return Ok(Value::float(f64::NAN));
+    }
+    if f < -1.0 {
+        return Err(math_domain_err(
+            globals,
+            "Numerical argument is out of domain - log1p",
+        ));
+    }
+    Ok(Value::float(f.ln_1p()))
+}
+
 fn math_sqrt(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -429,6 +720,7 @@ fn math_sqrt(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -445,14 +737,6 @@ fn math_sqrt(
         });
     }
     true
-}
-
-extern "C" fn extern_cos(f: f64) -> f64 {
-    f.cos()
-}
-
-extern "C" fn extern_sin(f: f64) -> f64 {
-    f.sin()
 }
 
 #[cfg(test)]
@@ -583,5 +867,96 @@ mod tests {
             Math.cos(MyNum3.new)
             "#,
         );
+    }
+
+    #[test]
+    fn math_domain_error() {
+        run_test_error("Math.sqrt(-1)");
+        run_test_error("Math.log(-1)");
+        run_test_error("Math.asin(2)");
+        run_test_error("Math.acos(2)");
+        // NaN passthrough
+        run_test("Math.sqrt(Float::NAN).nan?");
+        run_test("Math.log(Float::NAN).nan?");
+    }
+
+    #[test]
+    fn math_nil_typeerror() {
+        run_test_error("Math.sqrt(nil)");
+        run_test_error("Math.sin(nil)");
+    }
+
+    #[test]
+    fn math_gamma_exact() {
+        run_test("Math.gamma(1)");
+        run_test("Math.gamma(5)");
+        run_test("Math.gamma(10)");
+        run_test_error("Math.gamma(-Float::INFINITY)");
+    }
+
+    #[test]
+    fn math_expm1_log1p() {
+        run_test("Math.expm1(0)");
+        run_test("Math.log1p(0)");
+    }
+
+    #[test]
+    fn math_log_bigint() {
+        run_test("Math.log(10**20)");
+        run_test("Math.log2(10**20)");
+        run_test("Math.log10(10**20)");
+    }
+
+    #[test]
+    fn math_gamma_extended() {
+        run_test("Math.gamma(5)");
+        run_test("Math.gamma(0.5)");
+    }
+
+    #[test]
+    fn math_lgamma_extended() {
+        run_test("Math.lgamma(1)");
+        run_test("Math.lgamma(0.5)");
+    }
+
+    #[test]
+    fn math_atanh_extended() {
+        run_test("Math.atanh(0)");
+        run_test("Math.atanh(0.5)");
+    }
+
+    #[test]
+    fn math_acosh_domain() {
+        run_test("Math.acosh(1)");
+        run_test_error("Math.acosh(0)");
+        run_test_once("Math.acosh(Float::NAN).nan?");
+    }
+
+    #[test]
+    fn math_asin_acos_nan() {
+        run_test_once("Math.asin(Float::NAN).nan?");
+        run_test_once("Math.acos(Float::NAN).nan?");
+    }
+
+    #[test]
+    fn math_ldexp() {
+        run_tests(&[
+            "Math.ldexp(0.5, 2)",
+            "Math.ldexp(1.0, 10)",
+            "Math.ldexp(0.5, -1)",
+        ]);
+    }
+
+    #[test]
+    fn math_log1p_domain() {
+        run_test_error("Math.log1p(-2)");
+        run_test_once("Math.log1p(Float::NAN).nan?");
+    }
+
+    #[test]
+    fn math_log_domain() {
+        run_test_error("Math.log(-1)");
+        run_test_error("Math.log2(-1)");
+        run_test_error("Math.log10(-1)");
     }
 }

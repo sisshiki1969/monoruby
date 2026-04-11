@@ -13,15 +13,82 @@ pub struct RString(Value);
 pub enum Encoding {
     Ascii8,
     Utf8,
+    UsAscii,
 }
 
 impl Encoding {
+    /// Returns true if the encoding is UTF-8 compatible (UTF-8 or US-ASCII).
+    pub fn is_utf8_compatible(self) -> bool {
+        matches!(self, Encoding::Utf8 | Encoding::UsAscii)
+    }
+
     pub fn try_from_str(s: &str) -> Result<Self> {
-        match s.to_uppercase().as_str() {
-            "ASCII-8BIT" => Ok(Encoding::Ascii8),
-            "UTF-8" => Ok(Encoding::Utf8),
+        // Normalize: uppercase, replace '-' with '_'
+        let normalized = s.to_uppercase().replace('-', "_");
+        match normalized.as_str() {
+            // UTF-8
+            "UTF_8" | "UTF8" | "CP65001" => Ok(Encoding::Utf8),
+
+            // ASCII-8BIT / BINARY
+            "ASCII_8BIT" | "BINARY" => Ok(Encoding::Ascii8),
+
+            // US-ASCII
+            "US_ASCII" | "ASCII" | "ANSI_X3.4_1968" | "646" => Ok(Encoding::UsAscii),
+
+            // Special pseudo-encoding names
+            "LOCALE" | "EXTERNAL" | "FILESYSTEM" => Ok(Encoding::Utf8),
+
+            // UTF-16/32 variants (accept but map to UTF-8 internally)
+            "UTF_16" | "UTF_16BE" | "UTF_16LE" | "UTF_32" | "UTF_32BE" | "UTF_32LE" => {
+                Ok(Encoding::Utf8)
+            }
+
+            // ISO-8859 family (map to ASCII-8BIT as they are byte-oriented)
+            "ISO_8859_1" | "ISO8859_1" | "LATIN1" | "ISO_8859_2" | "ISO8859_2" | "LATIN2"
+            | "ISO_8859_3" | "ISO8859_3" | "LATIN3" | "ISO_8859_4" | "ISO8859_4" | "LATIN4"
+            | "ISO_8859_5" | "ISO8859_5" | "ISO_8859_6" | "ISO8859_6" | "ISO_8859_7"
+            | "ISO8859_7" | "ISO_8859_8" | "ISO8859_8" | "ISO_8859_9" | "ISO8859_9"
+            | "LATIN5" | "ISO_8859_10" | "ISO8859_10" | "LATIN6" | "ISO_8859_11"
+            | "ISO8859_11" | "ISO_8859_13" | "ISO8859_13" | "LATIN7" | "ISO_8859_14"
+            | "ISO8859_14" | "LATIN8" | "ISO_8859_15" | "ISO8859_15" | "LATIN9"
+            | "ISO_8859_16" | "ISO8859_16" | "LATIN10" => Ok(Encoding::Ascii8),
+
+            // Japanese encodings
+            "EUC_JP" | "EUCJP" | "SHIFT_JIS" | "SJIS" | "ISO_2022_JP" | "ISO2022_JP"
+            | "WINDOWS_31J" | "CP932" | "CSWINDOWS31J" | "WINDOWS31J" | "MACJAPANESE"
+            | "MACJAPAN" | "EUCJP_MS" | "EUCJP_WIN" | "CP51932"
+            | "STATELESS_ISO_2022_JP" => Ok(Encoding::Ascii8),
+
+            // Windows code pages
+            "WINDOWS_1250" | "CP1250" | "WINDOWS_1251" | "CP1251" | "WINDOWS_1252" | "CP1252"
+            | "WINDOWS_1253" | "CP1253" | "WINDOWS_1254" | "CP1254" | "WINDOWS_1255"
+            | "CP1255" | "WINDOWS_1256" | "CP1256" | "WINDOWS_1257" | "CP1257"
+            | "WINDOWS_1258" | "CP1258" => Ok(Encoding::Ascii8),
+
+            // IBM code pages
+            "IBM437" | "CP437" | "IBM737" | "CP737" | "IBM775" | "CP775" | "IBM850" | "CP850"
+            | "IBM852" | "CP852" | "IBM855" | "CP855" | "IBM857" | "CP857" | "IBM860"
+            | "CP860" | "IBM861" | "CP861" | "IBM862" | "CP862" | "IBM863" | "CP863"
+            | "IBM864" | "CP864" | "IBM865" | "CP865" | "IBM866" | "CP866" | "IBM869"
+            | "CP869" => Ok(Encoding::Ascii8),
+
+            // KOI8
+            "KOI8_R" | "KOI8_U" => Ok(Encoding::Ascii8),
+
+            // Chinese encodings
+            "GB2312" | "EUC_CN" | "GBK" | "CP936" | "GB18030" | "BIG5"
+            | "BIG5_HKSCS" => Ok(Encoding::Ascii8),
+
+            // Korean encodings
+            "EUC_KR" | "EUCKR" | "CP949" => Ok(Encoding::Ascii8),
+
+            // Other
+            "EUC_TW" | "EUCTW" | "TIS_620" | "TIS620" | "CESU_8" | "CESU8" => {
+                Ok(Encoding::Ascii8)
+            }
+
             _ => Err(MonorubyErr::argumenterr(format!(
-                "Unknown encoding name - {s}"
+                "unknown encoding name - {s}"
             ))),
         }
     }
@@ -107,7 +174,7 @@ impl RStringInner {
                 }
                 Ok(std::borrow::Cow::Owned(res))
             }
-            Encoding::Utf8 => match std::str::from_utf8(self) {
+            Encoding::Utf8 | Encoding::UsAscii => match std::str::from_utf8(self) {
                 Ok(s) => Ok(std::borrow::Cow::Borrowed(s)),
                 Err(err) => Err(MonorubyErr::runtimeerr(format!(
                     "invalid byte sequence: {} {}",
@@ -127,7 +194,7 @@ impl RStringInner {
                 }
                 res
             }
-            Encoding::Utf8 => {
+            Encoding::Utf8 | Encoding::UsAscii => {
                 let mut res = String::with_capacity(self.len());
                 utf8_escape_bytes(&mut res, self.as_bytes(), utf8_escape);
                 res
@@ -144,7 +211,7 @@ impl RStringInner {
                 }
                 res
             }
-            Encoding::Utf8 => {
+            Encoding::Utf8 | Encoding::UsAscii => {
                 let mut res = String::with_capacity(self.len());
                 utf8_escape_bytes(&mut res, self.as_bytes(), utf8_inspect);
                 res
@@ -155,7 +222,7 @@ impl RStringInner {
     pub fn valid(&self) -> bool {
         match self.ty {
             Encoding::Ascii8 => true,
-            Encoding::Utf8 => std::str::from_utf8(self).is_ok(),
+            Encoding::Utf8 | Encoding::UsAscii => std::str::from_utf8(self).is_ok(),
         }
     }
 }
@@ -303,7 +370,7 @@ impl RStringInner {
     pub fn char_length(&self) -> Result<usize> {
         let len = match self.ty {
             Encoding::Ascii8 => self.content.len(),
-            Encoding::Utf8 => self.check_utf8()?.chars().count(),
+            Encoding::Utf8 | Encoding::UsAscii => self.check_utf8()?.chars().count(),
         };
         Ok(len)
     }
@@ -379,7 +446,7 @@ impl RStringInner {
                     index..index + len
                 }
             }
-            Encoding::Utf8 => match std::str::from_utf8(self) {
+            Encoding::Utf8 | Encoding::UsAscii => match std::str::from_utf8(self) {
                 Ok(s) => {
                     let mut start = 0;
                     let mut end = 0;
@@ -416,7 +483,7 @@ impl RStringInner {
         let self_ascii_only = self.content.is_ascii();
         let other_ascii_only = other.content.is_ascii();
         match (self.ty, other.ty) {
-            (Encoding::Utf8, Encoding::Ascii8) => {
+            (Encoding::Utf8 | Encoding::UsAscii, Encoding::Ascii8) => {
                 if other_ascii_only {
                     // ASCII-8BIT with only ASCII bytes is compatible with UTF-8
                 } else if self_ascii_only {
@@ -429,7 +496,7 @@ impl RStringInner {
                     ));
                 }
             }
-            (Encoding::Ascii8, Encoding::Utf8) => {
+            (Encoding::Ascii8, Encoding::Utf8 | Encoding::UsAscii) => {
                 if self_ascii_only && !other_ascii_only {
                     // self is binary but ASCII-only, other has non-ASCII UTF-8 => upgrade
                     self.ty = Encoding::Utf8;
@@ -443,7 +510,7 @@ impl RStringInner {
     }
 
     pub fn extend_from_slice_checked(&mut self, slice: &[u8]) -> Result<()> {
-        if self.ty == Encoding::Utf8 && std::str::from_utf8(slice).is_err() {
+        if self.ty.is_utf8_compatible() && std::str::from_utf8(slice).is_err() {
             return Err(MonorubyErr::runtimeerr(format!(
                 "invalid byte sequence: {:?}",
                 slice
@@ -480,7 +547,7 @@ impl RStringInner {
         // Copy replacement in
         self.content[start..start + replacement.len()].copy_from_slice(replacement);
         // Re-check encoding
-        if self.ty == Encoding::Utf8 {
+        if self.ty.is_utf8_compatible() {
             if std::str::from_utf8(&self.content).is_err() {
                 self.ty = Encoding::Ascii8;
             }
@@ -495,7 +562,7 @@ impl RStringInner {
         }
         let ord = match self.ty {
             Encoding::Ascii8 => self.as_bytes()[0] as u32,
-            Encoding::Utf8 => self.check_utf8()?.chars().next().unwrap() as u32,
+            Encoding::Utf8 | Encoding::UsAscii => self.check_utf8()?.chars().next().unwrap() as u32,
         };
         Ok(ord)
     }

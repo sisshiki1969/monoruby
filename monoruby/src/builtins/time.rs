@@ -10,7 +10,7 @@ use chrono::{
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Time", TIME_CLASS, ObjTy::TIME);
-    globals.define_builtin_class_funcs_with(TIME_CLASS, "new", &["now"], time_now, 0, 0, false);
+    globals.define_builtin_class_funcs_with(TIME_CLASS, "new", &["now"], time_now, 0, 7, false);
     globals.define_builtin_class_funcs_with(
         TIME_CLASS,
         "local",
@@ -28,7 +28,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(TIME_CLASS, "gmtime", &["utc"], gmtime, 0);
     globals.define_builtin_funcs(TIME_CLASS, "gmt?", &["utc?"], gmt_, 0);
     globals.define_builtin_func(TIME_CLASS, "inspect", inspect, 0);
-    globals.define_builtin_func(TIME_CLASS, "localtime", localtime, 0);
+    globals.define_builtin_func_with(TIME_CLASS, "localtime", localtime, 0, 1, false);
     globals.define_builtin_func(TIME_CLASS, "strftime", strftime, 1);
     globals.define_builtin_func(TIME_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(TIME_CLASS, "year", year, 0);
@@ -63,11 +63,11 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         let ns = ((f - f.floor()) * 1_000_000_000.0) as u32;
         (s, ns)
     } else {
-        let s = secs_val.coerce_to_int(vm, globals)?;
+        let s = secs_val.coerce_to_int_i64(vm, globals)?;
         (s, 0u32)
     };
     let usec_ns = if let Some(arg1) = lfp.try_arg(1) {
-        let u = arg1.coerce_to_int(vm, globals)?;
+        let u = arg1.coerce_to_int_i64(vm, globals)?;
         (u * 1000) as u32
     } else {
         0
@@ -100,8 +100,8 @@ fn allocate(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/local.html]
 #[monoruby_builtin]
-fn time_local(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let t = generate_time(globals, Local, lfp)?;
+fn time_local(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let t = generate_time(vm, globals, Local, lfp)?;
     let time_info = TimeInner::Local(t.into());
     Ok(Value::new_time(time_info))
 }
@@ -113,20 +113,20 @@ fn time_local(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
 ///
 /// [utc(year, mon = 1, day = 1, hour = 0, min = 0, sec = 0, usec = 0) -> Time]
 #[monoruby_builtin]
-fn time_gm(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let t = generate_time(globals, Utc, lfp)?;
+fn time_gm(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let t = generate_time(vm, globals, Utc, lfp)?;
     let time_info = TimeInner::Utc(t);
     Ok(Value::new_time(time_info))
 }
 
-fn from_args(store: &Store, lfp: Lfp) -> Result<Option<NaiveDateTime>> {
-    let year = if let Ok(i) = i32::try_from(lfp.arg(0).expect_integer(store)?) {
+fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Option<NaiveDateTime>> {
+    let year = if let Ok(i) = i32::try_from(lfp.arg(0).coerce_to_int_i64(vm, globals)?) {
         i
     } else {
         return Ok(None);
     };
     let mon = if let Some(mon) = lfp.try_arg(1) {
-        let i = mon.expect_integer(store)?;
+        let i = mon.coerce_to_int_i64(vm, globals)?;
         if let Ok(i) = u32::try_from(i) {
             i
         } else {
@@ -136,7 +136,7 @@ fn from_args(store: &Store, lfp: Lfp) -> Result<Option<NaiveDateTime>> {
         1
     };
     let day = if let Some(day) = lfp.try_arg(2) {
-        let i = day.expect_integer(store)?;
+        let i = day.coerce_to_int_i64(vm, globals)?;
         if let Ok(i) = u32::try_from(i) {
             i
         } else {
@@ -146,7 +146,7 @@ fn from_args(store: &Store, lfp: Lfp) -> Result<Option<NaiveDateTime>> {
         1
     };
     let hour = if let Some(hour) = lfp.try_arg(3) {
-        let i = hour.expect_integer(store)?;
+        let i = hour.coerce_to_int_i64(vm, globals)?;
         if let Ok(i) = u32::try_from(i) {
             i
         } else {
@@ -156,7 +156,7 @@ fn from_args(store: &Store, lfp: Lfp) -> Result<Option<NaiveDateTime>> {
         0
     };
     let min = if let Some(min) = lfp.try_arg(4) {
-        let i = min.expect_integer(store)?;
+        let i = min.coerce_to_int_i64(vm, globals)?;
         if let Ok(i) = u32::try_from(i) {
             i
         } else {
@@ -166,7 +166,7 @@ fn from_args(store: &Store, lfp: Lfp) -> Result<Option<NaiveDateTime>> {
         0
     };
     let sec = if let Some(sec) = lfp.try_arg(5) {
-        let i = sec.expect_integer(store)?;
+        let i = sec.coerce_to_int_i64(vm, globals)?;
         if let Ok(i) = u32::try_from(i) {
             i
         } else {
@@ -176,7 +176,7 @@ fn from_args(store: &Store, lfp: Lfp) -> Result<Option<NaiveDateTime>> {
         0
     };
     let usec = if let Some(usec) = lfp.try_arg(6) {
-        let i = usec.expect_integer(store)?;
+        let i = usec.coerce_to_int_i64(vm, globals)?;
         if let Ok(i) = u32::try_from(i) {
             i
         } else {
@@ -193,9 +193,9 @@ fn from_args(store: &Store, lfp: Lfp) -> Result<Option<NaiveDateTime>> {
     )))
 }
 
-fn generate_time<Tz: TimeZone>(store: &Store, tz: Tz, lfp: Lfp) -> Result<DateTime<Tz>> {
+fn generate_time<Tz: TimeZone>(vm: &mut Executor, globals: &mut Globals, tz: Tz, lfp: Lfp) -> Result<DateTime<Tz>> {
     let naive =
-        from_args(store, lfp)?.ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
+        from_args(vm, globals, lfp)?.ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
     Ok(match naive.and_local_timezone(tz) {
         LocalResult::Single(t) => t,
         _ => return Err(MonorubyErr::argumenterr("argument out of range.")),
@@ -255,13 +255,34 @@ fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/strftime.html]
 #[monoruby_builtin]
-fn strftime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let fmt = lfp.arg(0).expect_string(globals)?.replace("%N", "%f");
+fn strftime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let fmt_str = lfp.arg(0).coerce_to_str(vm, globals)?;
+
+    // Get nanoseconds from the time value for Ruby-specific format specifiers.
+    let nanos = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => t.timestamp_subsec_nanos(),
+        TimeInner::Utc(t) => t.timestamp_subsec_nanos(),
+    };
+
+    // Replace Ruby-specific nanosecond specifiers that chrono doesn't support.
+    let fmt = fmt_str
+        .replace("%9N", &format!("{:09}", nanos))
+        .replace("%N", &format!("{:09}", nanos))
+        .replace("%6N", &format!("{:06}", nanos / 1_000))
+        .replace("%3N", &format!("{:03}", nanos / 1_000_000))
+        .replace("%L", &format!("{:03}", nanos / 1_000_000));
+
+    use std::fmt::Write;
     let s = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.format(&fmt).to_string(),
+        TimeInner::Local(t) => {
+            let mut result = String::new();
+            let _ = write!(result, "{}", t.format(&fmt));
+            result
+        }
         TimeInner::Utc(t) => {
-            let fmt = fmt + " UTC";
-            t.format(&fmt).to_string()
+            let mut result = String::new();
+            let _ = write!(result, "{}", t.format(&fmt));
+            result
         }
     };
     Ok(Value::string(s))
@@ -331,7 +352,7 @@ fn day(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/=2d.html]
 #[monoruby_builtin]
-fn sub(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs = self_.as_time().clone();
     let rhs_rv = lfp.arg(0);
@@ -343,7 +364,7 @@ fn sub(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         Ok(Value::float(res))
     } else {
         // Time - numeric (seconds)
-        let secs = rhs_rv.coerce_to_f64(&globals.store)?;
+        let secs = rhs_rv.coerce_to_f64(vm, globals)?;
         let nanos = (secs * 1_000_000_000.0) as i64;
         let duration = chrono::Duration::nanoseconds(nanos);
         let result = lhs - duration;
@@ -519,6 +540,28 @@ mod tests {
             t = Time.at(1000)
             (t - 100).is_a?(Time)
             "#,
+        );
+    }
+
+    #[test]
+    fn time_strftime_nanoseconds() {
+        run_test_once(
+            r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%3N")"#,
+        );
+        run_test_once(
+            r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%6N")"#,
+        );
+        run_test_once(
+            r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%9N")"#,
+        );
+        run_test_once(
+            r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%N")"#,
+        );
+        run_test_once(
+            r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%L")"#,
+        );
+        run_test_once(
+            r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%Y-%m-%d %H:%M:%S.%3N")"#,
         );
     }
 }

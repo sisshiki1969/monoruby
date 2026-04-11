@@ -8,16 +8,20 @@ impl ClassInfoTable {
         file_name: String,
     ) {
         match self[class_id].constants.get_mut(&name) {
-            Some(state) => match state {
-                ConstState::Loaded(_) => {}
-                ConstState::Autoload(path) => {
+            Some(state) => match &mut state.kind {
+                // If the constant is already loaded, autoload is a no-op
+                // (matches CRuby behavior).
+                ConstStateKind::Loaded(_) => {}
+                // Re-registering autoload updates the path; visibility is
+                // preserved.
+                ConstStateKind::Autoload(path) => {
                     *path = file_name.into();
                 }
             },
             None => {
                 self[class_id]
                     .constants
-                    .insert(name, ConstState::Autoload(file_name.into()));
+                    .insert(name, ConstState::autoload(file_name.into()));
             }
         }
     }
@@ -41,8 +45,8 @@ impl ClassInfoTable {
         class_id: ClassId,
         name: IdentId,
     ) -> Option<Value> {
-        match self.get_constant(class_id, name)? {
-            ConstState::Loaded(v) => Some(*v),
+        match &self.get_constant(class_id, name)?.kind {
+            ConstStateKind::Loaded(v) => Some(*v),
             _ => unreachable!(),
         }
     }
@@ -80,24 +84,31 @@ impl ClassInfoTable {
         name: IdentId,
         val: Value,
     ) {
-        if let Some(ConstState::Loaded(_)) = self[class_id]
+        // Preserve the previous visibility if we're overwriting an existing
+        // entry, so that `M::X = 1; private_constant :X; M::X = 2` keeps :X
+        // private. New entries default to public via `ConstState::loaded`.
+        let prev_visibility = self[class_id]
             .constants
-            .insert(name, ConstState::Loaded(val))
+            .get(&name)
+            .map(|s| s.visibility);
+        let mut new_state = ConstState::loaded(val);
+        if let Some(vis) = prev_visibility {
+            new_state.visibility = vis;
+        }
+        let prev = self[class_id].constants.insert(name, new_state);
+        if prev.as_ref().is_some_and(|s| s.is_loaded())
             && WARNING.load(std::sync::atomic::Ordering::Relaxed) >= 1
         {
             eprintln!("warning: already initialized constant {name}")
         }
-        if let Some(klass) = val.is_class() {
+        if let Some(klass) = val.is_class_or_module() {
             if self[klass.id()].get_name().is_none() {
                 self[klass.id()].set_parent(class_id);
-                let name = if class_id != OBJECT_CLASS
-                    && let Some(prefix) = self[class_id].get_name()
-                {
-                    format!("{prefix}::{name}")
-                } else {
-                    format!("{name}")
-                };
-                self[klass.id()].set_name(name);
+                // Store the leaf name only; `get_parents` walks the parent
+                // chain at lookup time and joins the segments. Anonymous
+                // ancestors are rendered using their inspect form during the
+                // walk (see `get_parents`).
+                self[klass.id()].set_name(name.to_string());
             }
         }
     }

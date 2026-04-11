@@ -48,9 +48,10 @@ pub fn run_test_once(code: &str) {
     Value::assert_eq(&globals, interp_val, ruby_res);
 }
 
-pub fn run_tests(codes: &[String]) {
+pub fn run_tests<S: AsRef<str>>(codes: &[S]) {
     let mut code = "__a = [];".to_string();
     for c in codes {
+        let c = c.as_ref();
         code += &format!("__a << ({c});");
     }
     code += "__a";
@@ -73,7 +74,7 @@ pub fn run_tests(codes: &[String]) {
     for i in 0..codes.len() {
         let interp_elem = interp_val.get(i).unwrap();
         let ruby_elem = ruby_res.get(i).unwrap();
-        eprintln!("{}", codes[i]);
+        eprintln!("{}", codes[i].as_ref());
         Value::assert_eq(&globals, *interp_elem, *ruby_elem);
     }
     //Value::assert_eq(&globals, interp_val, ruby_res);
@@ -204,6 +205,7 @@ fn run_ruby(globals: &mut Globals, code: &str) -> Value {
     tmpfile.write_all(code.as_bytes()).unwrap();
 
     let res = match std::process::Command::new(&*RUBY)
+        .arg("--disable-gem")
         .arg(tmpfile.path())
         .output()
     {

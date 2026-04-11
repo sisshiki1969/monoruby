@@ -28,6 +28,9 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     );
     globals.define_builtin_funcs(COMPLEX_CLASS, "abs", &["magnitude"], abs, 0);
     globals.define_builtin_funcs(COMPLEX_CLASS, "rect", &["rectangular"], rect, 0);
+    globals.define_builtin_class_func(COMPLEX_CLASS, "allocate", super::super::class::undef_allocate, 0);
+    globals.define_builtin_func(COMPLEX_CLASS, "eql?", eql_, 1);
+    globals.define_builtin_func(COMPLEX_CLASS, "coerce", coerce, 1);
 }
 
 fn eq_bool(store: &Store, lhs: &ComplexInner, rhs: Value) -> bool {
@@ -112,6 +115,24 @@ fn abs(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Va
 }
 
 ///
+/// ### Complex#eql?
+///
+/// - eql?(other) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Complex/i/eql=3f.html]
+#[monoruby_builtin]
+fn eql_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let lhs = self_val.as_complex();
+    let rhs = lfp.arg(0);
+    if let Some(rhs) = rhs.try_complex() {
+        Ok(Value::bool(lhs.eql(rhs, vm, globals)?))
+    } else {
+        Ok(Value::bool(false))
+    }
+}
+
+///
 /// ### Complex#abs
 ///
 /// - rect -> [Numeric, Numeric]
@@ -124,6 +145,36 @@ fn rect(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     let r = self_.as_complex().re();
     let i = self_.as_complex().im();
     Ok(Value::array2(r.get(), i.get()))
+}
+
+///
+/// ### Complex#coerce
+///
+/// - coerce(other) -> [Complex, Complex]
+///
+/// Returns [Complex(other, 0), self].
+#[monoruby_builtin]
+fn coerce(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let other = lfp.arg(0);
+    match other.unpack() {
+        RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_) => {}
+        _ => {
+            if other.try_complex().is_none() {
+                return Err(MonorubyErr::typeerr(format!(
+                    "{} can't be coerced into Complex",
+                    other.get_real_class_name(globals)
+                )));
+            }
+        }
+    }
+    let other_complex = if let Some(_) = other.try_complex() {
+        other
+    } else {
+        let re = Real::try_from(globals, other)?;
+        Value::complex(re, Real::from(0))
+    };
+    Ok(Value::array2(other_complex, self_val))
 }
 
 #[cfg(test)]
@@ -166,5 +217,45 @@ mod tests {
     fn rect() {
         run_test("Complex(4, 5).rect");
         run_test("Complex(4.7, 1.5).rect");
+    }
+
+    #[test]
+    fn eql() {
+        // true cases: same type components
+        run_test("Complex(1, 2).eql?(Complex(1, 2))");
+        run_test("Complex(1.0, 2.0).eql?(Complex(1.0, 2.0))");
+        run_test("nil.to_c.eql?(Complex(0, 0))");
+        // false cases: different component values
+        run_test("Complex(1, 2).eql?(Complex(1, 3))");
+        run_test("Complex(1, 2).eql?(Complex(3, 2))");
+        // false cases: different component types (Integer vs Float)
+        run_test("Complex(1, 2).eql?(Complex(1.0, 2.0))");
+        run_test("Complex(1.0, 0.0).eql?(Complex(1, 0))");
+        // false cases: non-Complex argument
+        run_test("Complex(1, 0).eql?(1)");
+        run_test("Complex(1, 0).eql?(1.0)");
+        run_test(r#"Complex(1, 2).eql?("foo")"#);
+        run_test("Complex(1, 2).eql?(nil)");
+        run_test("Complex(1, 2).eql?([1, 2])");
+    }
+
+    #[test]
+    fn complex_allocate_disabled() {
+        run_test_error("Complex.new(1)");
+        run_test_error("Complex.allocate");
+    }
+
+    #[test]
+    fn complex_coerce() {
+        run_test("Complex(8,2).coerce(1.0)");
+        run_test("Complex(8,2).coerce(3)");
+        run_test("Complex(1,2).coerce(Complex(3,4))");
+        run_test_error("Complex(1,2).coerce(:foo)");
+    }
+
+    #[test]
+    fn float_quo_complex() {
+        run_test("74620.09.quo(Complex(8,2))");
+        run_test("1.0.fdiv(Complex(8,2))");
     }
 }

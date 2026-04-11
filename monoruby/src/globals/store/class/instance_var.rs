@@ -55,6 +55,9 @@ impl Store {
                 return Err(MonorubyErr::cant_modify_frozen(self, base));
             }
         };
+        if rval.is_frozen() {
+            return Err(MonorubyErr::cant_modify_frozen(self, base));
+        }
         let id = self.get_ivar_id(class_id, name);
         rval.set_ivar_by_ivarid(id, val);
         Ok(())

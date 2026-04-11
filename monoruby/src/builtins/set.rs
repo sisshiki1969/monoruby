@@ -24,8 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SET_CLASS, "each", each, 0);
     globals.define_builtin_func(SET_CLASS, "to_a", to_a, 0);
     // inspect/to_s defined in Ruby (builtins/builtins.rb) for cycle detection
-    globals.define_builtin_func(SET_CLASS, "to_set", to_set, 0);
-    globals.define_builtin_funcs(SET_CLASS, "dup", &["clone"], dup, 0);
+    globals.define_builtin_funcs_with_kw(SET_CLASS, "dup", &["clone"], dup, 0, 1, false, &[], false);
     globals.define_builtin_func_rest(SET_CLASS, "merge", merge);
     globals.define_builtin_func(SET_CLASS, "subtract", subtract, 1);
     globals.define_builtin_func(SET_CLASS, "replace", replace, 1);
@@ -33,7 +32,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(SET_CLASS, "|", &["+", "union"], union_, 1);
     globals.define_builtin_funcs(SET_CLASS, "-", &["difference"], difference, 1);
     globals.define_builtin_func(SET_CLASS, "^", symmetric_difference, 1);
-    globals.define_builtin_funcs(SET_CLASS, "==", &["==="], eq, 1);
+    globals.define_builtin_func(SET_CLASS, "==", eq, 1);
     globals.define_builtin_func(SET_CLASS, "eql?", eq, 1);
     globals.define_builtin_funcs(SET_CLASS, "subset?", &["<="], subset_, 1);
     globals.define_builtin_funcs(SET_CLASS, "superset?", &[">="], superset_, 1);
@@ -51,6 +50,11 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(SET_CLASS, "collect!", &["map!"], collect_, 0);
     globals.define_builtin_func(SET_CLASS, "flatten", flatten, 0);
     globals.define_builtin_func(SET_CLASS, "flatten!", flatten_, 0);
+    globals.define_builtin_func_with(SET_CLASS, "join", join, 0, 1, false);
+    globals.define_builtin_func(SET_CLASS, "classify", classify, 0);
+    globals.define_builtin_func(SET_CLASS, "divide", divide, 0);
+    globals.define_builtin_func(SET_CLASS, "reset", reset, 0);
+    globals.define_builtin_func(SET_CLASS, "hash", set_hash, 0);
 }
 
 /// Create a new empty Set (a Hash with class SET_CLASS).
@@ -89,6 +93,13 @@ fn enum_to_vec(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<V
     }
     if let Some(ary) = val.try_array_ty() {
         return Ok(ary.iter().copied().collect());
+    }
+    // Check if it responds to each (is enumerable)
+    let each_id = IdentId::get_id("each");
+    if globals.check_method(val, each_id).is_none() {
+        return Err(MonorubyErr::argumenterr(format!(
+            "value must be enumerable"
+        )));
     }
     let result = vm.invoke_method_inner(globals, IdentId::TO_A, val, &[], None, None)?;
     let ary = result.expect_array_ty(globals)?;
@@ -311,14 +322,6 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// and uses the shared HashSet-based cycle detection from Value::inspect_inner.
 
 ///
-/// ### Set#to_set
-///
-#[monoruby_builtin]
-fn to_set(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(lfp.self_val())
-}
-
-///
 /// ### Set#dup / Set#clone
 ///
 #[monoruby_builtin]
@@ -506,12 +509,14 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     if self_inner.len() != other_inner.len() {
         return Ok(Value::bool(false));
     }
-    for (k, _) in self_inner.iter() {
-        if !other_inner.contains_key(k, vm, globals)? {
-            return Ok(Value::bool(false));
+    crate::value::exec_recursive_paired(self_val.id(), other.id(), || {
+        for (k, _) in self_inner.iter() {
+            if !other_inner.contains_key(k, vm, globals)? {
+                return Ok(Value::bool(false));
+            }
         }
-    }
-    Ok(Value::bool(true))
+        Ok(Value::bool(true))
+    }, Value::bool(true))
 }
 
 ///
@@ -947,6 +952,172 @@ fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     Ok(self_val)
 }
 
+/// ### Set#join
+#[monoruby_builtin]
+fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let sep = if let Some(s) = lfp.try_arg(0) {
+        if s.is_nil() {
+            String::new()
+        } else {
+            s.coerce_to_string(vm, globals)?
+        }
+    } else {
+        String::new()
+    };
+    let keys = set_keys(lfp.self_val());
+    let mut result = String::new();
+    for (i, k) in keys.iter().enumerate() {
+        if i > 0 {
+            result.push_str(&sep);
+        }
+        let s_val = vm.invoke_method_inner(globals, IdentId::TO_S, *k, &[], None, None)?;
+        if let Some(s) = s_val.is_str() {
+            result.push_str(s);
+        } else {
+            result.push_str(&s_val.to_s(&globals.store));
+        }
+    }
+    Ok(Value::string(result))
+}
+
+/// ### Set#classify
+#[monoruby_builtin]
+fn classify(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("classify");
+            return vm.generate_enumerator(id, lfp.self_val(), vec![], pc);
+        }
+        Some(block) => block,
+    };
+    let data = vm.get_block_data(globals, bh)?;
+    let keys = set_keys(lfp.self_val());
+    // Result is a Hash mapping classification → Set
+    let mut result_hash = Value::hash_from_inner(Default::default());
+    for k in keys {
+        let classification = vm.invoke_block(globals, &data, &[k])?;
+        let existing = result_hash.as_hashmap_inner().get(classification, vm, globals)?;
+        if let Some(mut set) = existing {
+            set.as_hashmap_inner_mut().insert(k, Value::bool(true), vm, globals)?;
+        } else {
+            let mut new_set = new_empty_set();
+            new_set.as_hashmap_inner_mut().insert(k, Value::bool(true), vm, globals)?;
+            result_hash.as_hashmap_inner_mut().insert(classification, new_set, vm, globals)?;
+        }
+    }
+    Ok(result_hash)
+}
+
+/// ### Set#divide
+#[monoruby_builtin]
+fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("divide");
+            return vm.generate_enumerator(id, lfp.self_val(), vec![], pc);
+        }
+        Some(block) => block,
+    };
+    let data = vm.get_block_data(globals, bh)?;
+    let keys = set_keys(lfp.self_val());
+
+    // Check block arity to determine mode
+    let arity = if let Some(fid) = data.func_id() {
+        globals[fid].arity()
+    } else {
+        1
+    };
+    if arity == 2 || arity == -1 || arity < -2 || arity > 2 {
+        // Arity-2 mode: union-find based divide
+        // Group elements where block(a, b) returns true
+        let n = keys.len();
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn find(parent: &mut Vec<usize>, i: usize) -> usize {
+            if parent[i] != i {
+                parent[i] = find(parent, parent[i]);
+            }
+            parent[i]
+        }
+        fn union(parent: &mut Vec<usize>, i: usize, j: usize) {
+            let ri = find(parent, i);
+            let rj = find(parent, j);
+            if ri != rj {
+                parent[ri] = rj;
+            }
+        }
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let result = vm.invoke_block(globals, &data, &[keys[i], keys[j]])?;
+                if result.as_bool() {
+                    union(&mut parent, i, j);
+                }
+            }
+        }
+        // Group by root
+        let mut groups: std::collections::HashMap<usize, Vec<Value>> = std::collections::HashMap::new();
+        for i in 0..n {
+            let root = find(&mut parent, i);
+            groups.entry(root).or_default().push(keys[i]);
+        }
+        let mut result_set = new_empty_set();
+        for (_root, elems) in groups {
+            let subset = set_from_iter(elems.into_iter(), vm, globals)?;
+            result_set.as_hashmap_inner_mut().insert(subset, Value::bool(true), vm, globals)?;
+        }
+        Ok(result_set)
+    } else {
+        // Arity-1 mode: classify and return set of sets
+        let mut groups: std::collections::HashMap<u64, Vec<Value>> = std::collections::HashMap::new();
+        let mut group_order: Vec<u64> = Vec::new();
+        for k in &keys {
+            let classification = vm.invoke_block(globals, &data, &[*k])?;
+            let key = classification.id() as u64;
+            if !groups.contains_key(&key) {
+                group_order.push(key);
+            }
+            groups.entry(key).or_default().push(*k);
+        }
+        let mut result_set = new_empty_set();
+        for key in group_order {
+            if let Some(elems) = groups.remove(&key) {
+                let subset = set_from_iter(elems.into_iter(), vm, globals)?;
+                result_set.as_hashmap_inner_mut().insert(subset, Value::bool(true), vm, globals)?;
+            }
+        }
+        Ok(result_set)
+    }
+}
+
+/// ### Set#reset
+#[monoruby_builtin]
+fn reset(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // In CRuby, reset rebuilds the internal hash. For us, it's a no-op since
+    // our hash is always consistent.
+    Ok(lfp.self_val())
+}
+
+/// ### Set#hash
+#[monoruby_builtin]
+fn set_hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let keys = set_keys(lfp.self_val());
+    // XOR all element hashes for order-independence
+    let mut combined: u64 = 0;
+    let hash_id = IdentId::get_id("hash");
+    for k in keys {
+        let h = vm.invoke_method_inner(globals, hash_id, k, &[], None, None)?;
+        if let Some(i) = h.try_fixnum() {
+            combined ^= i as u64;
+        }
+    }
+    // Mix with Set class identity
+    let mut hasher = DefaultHasher::new();
+    "Set".hash(&mut hasher);
+    combined ^= hasher.finish();
+    Ok(Value::integer(combined as i64))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -1131,5 +1302,39 @@ mod tests {
     #[test]
     fn set_flatten_bang_recursive() {
         run_test_error("s = Set.new; s << s; s.flatten!");
+    }
+
+    #[test]
+    fn set_case_equality() {
+        run_test("Set[1, 2, 3] === 2");
+        run_test("Set[1, 2, 3] === 4");
+    }
+
+    #[test]
+    fn set_join() {
+        run_test("Set[1, 2, 3].join(', ')");
+    }
+
+    #[test]
+    fn set_classify() {
+        run_test("Set[1,2,3,4,5].classify {|x| x % 2}.map {|k,v| [k, v.to_a.sort]}.sort");
+    }
+
+    #[test]
+    fn set_divide_arity1() {
+        run_test("Set[1,2,3,4,5].divide {|x| x % 2}.map {|s| s.to_a.sort}.sort");
+    }
+
+    #[test]
+    fn set_reset() {
+        run_test("s = Set[1, 2, 3]; s.reset.to_a.sort");
+    }
+
+    #[test]
+    fn set_eq_recursive() {
+        // Two sets with same elements
+        run_test("Set[1, 2] == Set[1, 2]");
+        run_test("Set[1, 2] == Set[2, 1]");
+        run_test("Set[1, 2] == Set[1, 3]");
     }
 }

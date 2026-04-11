@@ -215,16 +215,18 @@ impl Codegen {
                 );
                 #[cfg(feature = "jit-log")]
                 {
-                    eprintln!(
-                        "{} {} {position:?} ({} bytes, {} bytes) {elapsed:?}",
-                        globals
-                            .store
-                            .func_description(globals.store[iseq_id].func_id()),
-                        globals.store.debug_class_name(self_class),
-                        span.0.1,
-                        span.1.1
-                    );
-                    eprintln!("{}", specialized_info.format(&globals.store));
+                    if self.startup_flag {
+                        eprintln!(
+                            "{} {} {position:?} ({} bytes, {} bytes) {elapsed:?}",
+                            globals
+                                .store
+                                .func_description(globals.store[iseq_id].func_id()),
+                            globals.store.debug_class_name(self_class),
+                            span.0.1,
+                            span.1.1
+                        );
+                        eprintln!("{}", specialized_info.format(&globals.store));
+                    }
                 }
                 self.add_compilation_unit(
                     iseq_id,
@@ -382,32 +384,32 @@ extern "C" fn jit_compile_patch(
     if !super::is_main_thread() {
         return;
     }
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        CODEGEN.with(|codegen| {
-            codegen
-                .borrow_mut()
-                .compile_patch(globals, lfp, entry_patch_point);
-        });
-    }));
-    if result.is_err() {
-        #[cfg(feature = "jit-log")]
-        eprintln!("[JIT] compile_patch panicked, falling back to VM interpreter");
-    }
+    //let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    CODEGEN.with(|codegen| {
+        codegen
+            .borrow_mut()
+            .compile_patch(globals, lfp, entry_patch_point);
+    });
+    //}));
+    //if result.is_err() {
+    //    #[cfg(feature = "jit-log")]
+    //    eprintln!("[JIT] compile_patch panicked, falling back to VM interpreter");
+    //}
 }
 
 extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: RecompileReason) {
     if !super::is_main_thread() {
         return;
     }
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        CODEGEN.with(|codegen| {
-            codegen.borrow_mut().recompile_method(globals, lfp, reason);
-        });
-    }));
-    if result.is_err() {
-        #[cfg(feature = "jit-log")]
-        eprintln!("[JIT] recompile_method panicked, falling back to VM interpreter");
-    }
+    //let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    CODEGEN.with(|codegen| {
+        codegen.borrow_mut().recompile_method(globals, lfp, reason);
+    });
+    //}));
+    //if result.is_err() {
+    //    #[cfg(feature = "jit-log")]
+    //    eprintln!("[JIT] recompile_method panicked, falling back to VM interpreter");
+    //}
 }
 
 extern "C" fn jit_recompile_method_with_recovery(
@@ -421,17 +423,15 @@ extern "C" fn jit_recompile_method_with_recovery(
     if globals.store.update_inline_cache(lfp) {
         return 1;
     };
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        CODEGEN.with(|codegen| {
-            codegen.borrow_mut().recompile_method(globals, lfp, reason);
-        });
-    }));
-    if result.is_err() {
-        #[cfg(feature = "jit-log")]
-        eprintln!(
-            "[JIT] recompile_method_with_recovery panicked, falling back to VM interpreter"
-        );
-    }
+    //    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    CODEGEN.with(|codegen| {
+        codegen.borrow_mut().recompile_method(globals, lfp, reason);
+    });
+    //    }));
+    //if result.is_err() {
+    //    #[cfg(feature = "jit-log")]
+    //    eprintln!("[JIT] recompile_method_with_recovery panicked, falling back to VM interpreter");
+    //}
     0
 }
 

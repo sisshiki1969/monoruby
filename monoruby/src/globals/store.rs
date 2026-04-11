@@ -35,6 +35,10 @@ impl MethodTableEntry {
         self.visibility
     }
 
+    pub fn is_basic_op(&self) -> bool {
+        self.is_basic_op
+    }
+
     pub fn is_public(&self) -> bool {
         self.func_id.is_some() && self.visibility == Visibility::Public
     }
@@ -247,7 +251,15 @@ impl Store {
                 v.join("::")
             }
             None => match class_obj.is_singleton() {
-                None => format!("#<Class:{:016x}>", class_obj.as_val().id()),
+                None => {
+                    // Differentiate Module from Class for anonymous values.
+                    let kind = if class_obj.as_val().ty() == Some(ObjTy::MODULE) {
+                        "Module"
+                    } else {
+                        "Class"
+                    };
+                    format!("#<{kind}:0x{:016x}>", class_obj.as_val().id())
+                }
                 Some(base) => format!("#<Class:{}>", base.to_s(self)),
             },
         }
@@ -541,11 +553,23 @@ impl Store {
         prefix: Vec<IdentId>,
         toplevel: bool,
     ) -> ConstSiteId {
+        self.new_constsite_with_loc(base, name, prefix, toplevel, None)
+    }
+
+    pub(crate) fn new_constsite_with_loc(
+        &mut self,
+        base: Option<SlotId>,
+        name: IdentId,
+        prefix: Vec<IdentId>,
+        toplevel: bool,
+        source_loc: Option<(String, u32)>,
+    ) -> ConstSiteId {
         let info = ConstSiteInfo {
             name,
             base,
             prefix,
             toplevel,
+            source_loc,
             cache: None,
         };
         let id = self.constsite_info.len();
@@ -932,6 +956,10 @@ pub struct ConstSiteInfo {
     pub prefix: Vec<IdentId>,
     /// Is toplevel?. (e.g. ::Foo)
     pub toplevel: bool,
+    /// Source location captured at compile time, used by
+    /// `Module#const_source_location` for stores. `None` for load sites
+    /// and for stores whose location is not tracked.
+    pub source_loc: Option<(String, u32)>,
     /// Inline constant cache.
     pub cache: Option<ConstCache>, //(version, base_class, value)
 }

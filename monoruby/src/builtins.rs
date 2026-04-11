@@ -4,6 +4,7 @@ mod array;
 mod binding;
 mod class;
 mod dir;
+mod encoding;
 pub(crate) mod enumerator;
 mod exception;
 mod false_class;

@@ -46,7 +46,7 @@ impl<'a> JitContext<'a> {
                 return Ok(CompileResult::Recompile(RecompileReason::NotCached));
             }
         };
-        self.compile_method_call(state, ir, recv_class, func_id, callid)
+        self.compile_method_call(state, ir, recv_class, None, func_id, callid)
     }
 
     ///
@@ -57,6 +57,7 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         ir: &mut AsmIr,
         recv_class: ClassId,
+        arg_class: Option<ClassId>,
         func_id: FuncId,
         callid: CallSiteId,
     ) -> JitResult<CompileResult> {
@@ -88,7 +89,7 @@ impl<'a> JitContext<'a> {
         {
             match info {
                 InlineFuncInfo::InlineGen(f) => {
-                    if self.inline_asm(state, ir, f, callid, recv_class) {
+                    if self.inline_asm(state, ir, f, callid, recv_class, arg_class) {
                         state.unset_side_effect_guard();
                         return Ok(CompileResult::Continue);
                     }
@@ -96,7 +97,7 @@ impl<'a> JitContext<'a> {
                 InlineFuncInfo::CFunc_F_F(f) => {
                     let CallSiteInfo { args, dst, .. } = *callsite;
                     if let Some(args) = state.coerce_C_f64(args) {
-                        let res = f(args);
+                        let res = unsafe { f(args) };
                         if match dst {
                             Some(dst) => state.def_C_float(dst, res),
                             None => true,
@@ -175,12 +176,22 @@ impl<'a> JitContext<'a> {
                 return Ok(self.attr_writer(state, ir, callid, recv_class, ivar_name));
             }
             FuncKind::Builtin { .. } => (func_id, None),
-            FuncKind::Const(v) => {
-                state.def_C(dst, v);
-                return Ok(CompileResult::Continue);
-            }
             FuncKind::Proc(proc) => (proc.func_id(), Some(proc.outer_lfp())),
             FuncKind::ISeq(iseq) => {
+                // Check ISeq hint for trivial methods
+                match self.store[iseq].hint {
+                    ISeqHint::ConstReturn(v) => {
+                        state.def_C(dst, v);
+                        return Ok(CompileResult::Continue);
+                    }
+                    ISeqHint::SelfReturn => {
+                        if let Some(dst) = dst {
+                            state.copy_slot(ir, callsite.recv, dst);
+                        }
+                        return Ok(CompileResult::Continue);
+                    }
+                    ISeqHint::Normal => {}
+                }
                 let specializable = self.store.is_simple_call(func_id, callid)
                     && (state.is_C(callsite.recv)
                         || (pos_num != 0 && (args..args + pos_num).any(|i| state.is_C(i))));
@@ -384,6 +395,8 @@ impl<'a> JitContext<'a> {
             return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
         };
         state.load(ir, recv, GP::Rdi);
+        let deopt = ir.new_deopt(state);
+        ir.guard_frozen(deopt);
         let src = state.load_or_reg(ir, args, GP::Rax);
         let is_object_ty = self.store[recv_class].is_object_ty_instance();
         let using_xmm = state.get_using_xmm();
@@ -541,13 +554,22 @@ impl<'a> JitContext<'a> {
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
-        f: impl Fn(&mut AbstractState, &mut AsmIr, &JitContext, &Store, CallSiteId, ClassId) -> bool,
+        f: impl Fn(
+            &mut AbstractState,
+            &mut AsmIr,
+            &JitContext,
+            &Store,
+            CallSiteId,
+            ClassId,
+            Option<ClassId>,
+        ) -> bool,
         callid: CallSiteId,
         recv_class: ClassId,
+        arg_class: Option<ClassId>,
     ) -> bool {
         let state_save = state.clone();
         let ir_save = ir.save();
-        if f(state, ir, self, &self.store, callid, recv_class) {
+        if f(state, ir, self, &self.store, callid, recv_class, arg_class) {
             true
         } else {
             *state = state_save;

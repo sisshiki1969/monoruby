@@ -454,6 +454,7 @@ impl<'a> Lexer<'a> {
                     match ch {
                         '&' => self.new_special_var(SPECIAL_LASTMATCH),
                         '\'' => self.new_special_var(SPECIAL_POSTMATCH),
+                        '~' => self.new_global_var("$~"),
                         ':' => self.new_special_var(SPECIAL_LOADPATH),
                         '"' => self.new_special_var(SPECIAL_LOADEDFEATURES),
                         _ => self.new_global_var(format!("${}", ch)),
@@ -650,6 +651,31 @@ impl<'a> Lexer<'a> {
                     Loc(self.token_start_pos, self.pos),
                 )))
             }
+            '$' => {
+                // Global variable symbol: :$name, :$0, :$&, :$+, etc.
+                self.get()?; // consume '$'
+                match self.peek() {
+                    Some(c) if c.is_ascii_alphanumeric() || c == '_' => {
+                        self.consume_ident();
+                    }
+                    Some(c) if c.is_ascii_punctuation() => {
+                        self.get()?;
+                        // Handle $-x style variables
+                        if c == '-' {
+                            if let Some(c2) = self.peek() {
+                                if c2.is_ascii_alphanumeric() || c2 == '_' {
+                                    self.get()?;
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                Ok(Some((
+                    self.current_slice().to_string(),
+                    Loc(self.token_start_pos, self.pos),
+                )))
+            }
             '\"' | '\'' => Ok(None),
             _ => self.read_method_name(true).map(Some),
         }
@@ -682,13 +708,14 @@ impl<'a> Lexer<'a> {
         };
         let mut s = ch.to_string();
         let mut float_flag = false;
+        let mut exp_flag = false;
         loop {
             if let Some(ch) = self.consume_numeric() {
                 s.push(ch);
             } else if self.consume('_') {
             } else if !float_flag && self.peek() == Some('.') {
                 match self.peek2() {
-                    Some(ch) if ch.is_ascii() && ch.is_numeric() => {
+                    Some(ch) if ch.is_ascii_digit() => {
                         self.get()?;
                         self.get()?;
                         float_flag = true;
@@ -702,6 +729,8 @@ impl<'a> Lexer<'a> {
             }
         }
         if self.consume('e') || self.consume('E') {
+            exp_flag = true;
+            float_flag = true;
             s.push('e');
             if !self.consume('+') && self.consume('-') {
                 s.push('-');
@@ -719,8 +748,38 @@ impl<'a> Lexer<'a> {
                     break;
                 }
             }
-            float_flag = true;
         }
+
+        if !exp_flag && self.consume('r') {
+            let (num, den) = if float_flag {
+                let mut iter = s.split('.');
+                let int_part = iter
+                    .next()
+                    .ok_or_else(|| Self::error_parse("Invalid number literal.", self.pos))?;
+                let frac_part = iter
+                    .next()
+                    .ok_or_else(|| Self::error_parse("Invalid number literal.", self.pos))?;
+                let frac_digits = frac_part.len();
+                // 3.14r => numerator = 314, denominator = 100
+                let combined = format!("{}{}", int_part, frac_part);
+                let num = BigInt::parse_bytes(combined.as_bytes(), 10)
+                    .ok_or_else(|| Self::error_parse("Invalid number literal.", self.pos))?;
+                let den = BigInt::from(10).pow(frac_digits as u32);
+                (num, den)
+            } else {
+                (
+                    BigInt::parse_bytes(s.as_bytes(), 10)
+                        .ok_or_else(|| Self::error_parse("Invalid number literal.", self.pos))?,
+                    BigInt::from(1),
+                )
+            };
+            return if self.consume('i') {
+                Ok(self.new_rimaginarylit(num, den))
+            } else {
+                Ok(self.new_rationallit(num, den))
+            };
+        }
+
         let number = if float_flag {
             match s.parse::<f64>() {
                 Ok(f) => NReal::Float(f),
@@ -735,6 +794,7 @@ impl<'a> Lexer<'a> {
                 None => return Err(Self::error_parse("Invalid number literal.", self.pos)),
             }
         };
+
         if self.consume('i') {
             Ok(self.new_imaginarylit(number))
         } else {
@@ -909,7 +969,7 @@ impl<'a> Lexer<'a> {
                 '#' => match self.peek() {
                     // string interpolation
                     Some(ch) if ch == '{' || ch == '$' || ch == '@' => {
-                        return Ok(InterpolateState::Interpolation(s, level))
+                        return Ok(InterpolateState::Interpolation(s, level));
                     }
                     _ => s.push_char('#'),
                 },
@@ -1232,7 +1292,7 @@ impl<'a> Lexer<'a> {
                         return Ok(RegexInterpolateState::Interpolation(
                             body.into(),
                             char_class,
-                        ))
+                        ));
                     }
                     _ => body.push('#'),
                 },
@@ -1528,7 +1588,7 @@ impl<'a> Lexer<'a> {
     /// Return Some(ch) if the token (ch) was consumed.
     fn consume_numeric(&mut self) -> Option<char> {
         match self.peek() {
-            Some(ch) if ch.is_ascii() && ch.is_numeric() => {
+            Some(ch) if ch.is_ascii_digit() => {
                 self.pos += ch.len_utf8();
                 Some(ch)
             }
@@ -1677,6 +1737,14 @@ impl<'a> Lexer<'a> {
 
     fn new_imaginarylit(&self, num: NReal) -> Token {
         Token::new_imaginarylit(num, self.cur_loc())
+    }
+
+    fn new_rationallit(&self, num: BigInt, den: BigInt) -> Token {
+        Token::new_rationallit(num, den, self.cur_loc())
+    }
+
+    fn new_rimaginarylit(&self, num: BigInt, den: BigInt) -> Token {
+        Token::new_rimaginarylit(num, den, self.cur_loc())
     }
 
     fn new_stringlit(&self, string: impl Into<RubyString>) -> Token {
@@ -2033,6 +2101,85 @@ mod test {
     fn hex2() {
         let program = "0xfe";
         let ans = vec![Token![NumLit(0xfe), 0, 3], Token![EOF, 4]];
+        assert_tokens(program, ans);
+    }
+
+    #[test]
+    fn rational_literal() {
+        // integer rational: 42r
+        let program = "42r";
+        let ans = vec![
+            Token::new_rationallit(BigInt::from(42), BigInt::from(1), Loc(0, 2)),
+            Token![EOF, 3],
+        ];
+        assert_tokens(program, ans);
+    }
+
+    #[test]
+    fn rational_literal_float() {
+        // float rational: 3.14r => numerator=314, denominator=100
+        let program = "3.14r";
+        let ans = vec![
+            Token::new_rationallit(BigInt::from(314), BigInt::from(100), Loc(0, 4)),
+            Token![EOF, 5],
+        ];
+        assert_tokens(program, ans);
+    }
+
+    #[test]
+    fn rational_literal_zero() {
+        // zero rational: 0r
+        let program = "0r";
+        let ans = vec![
+            Token::new_rationallit(BigInt::from(0), BigInt::from(1), Loc(0, 1)),
+            Token![EOF, 2],
+        ];
+        assert_tokens(program, ans);
+    }
+
+    #[test]
+    fn rational_literal_float_zero() {
+        // float rational with zero integer part: 0.5r => numerator=5, denominator=10
+        let program = "0.5r";
+        let ans = vec![
+            Token::new_rationallit(BigInt::from(5), BigInt::from(10), Loc(0, 3)),
+            Token![EOF, 4],
+        ];
+        assert_tokens(program, ans);
+    }
+
+    #[test]
+    fn rational_imaginary_literal() {
+        // rational imaginary: 42ri
+        let program = "42ri";
+        let ans = vec![
+            Token::new_rimaginarylit(BigInt::from(42), BigInt::from(1), Loc(0, 3)),
+            Token![EOF, 4],
+        ];
+        assert_tokens(program, ans);
+    }
+
+    #[test]
+    fn rational_imaginary_float_literal() {
+        // float rational imaginary: 3.14ri => numerator=314, denominator=100
+        let program = "3.14ri";
+        let ans = vec![
+            Token::new_rimaginarylit(BigInt::from(314), BigInt::from(100), Loc(0, 5)),
+            Token![EOF, 6],
+        ];
+        assert_tokens(program, ans);
+    }
+
+    #[test]
+    fn rational_literal_in_expr() {
+        // rational in expression: 1r + 2r
+        let program = "1r + 2r";
+        let ans = vec![
+            Token::new_rationallit(BigInt::from(1), BigInt::from(1), Loc(0, 1)),
+            Token![Punct(Punct::Plus), 3, 3],
+            Token::new_rationallit(BigInt::from(2), BigInt::from(1), Loc(5, 6)),
+            Token![EOF, 7],
+        ];
         assert_tokens(program, ans);
     }
 

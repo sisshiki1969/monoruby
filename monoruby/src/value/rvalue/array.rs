@@ -196,21 +196,21 @@ impl ArrayInner {
     where
         F: FnMut(&Value) -> Result<bool>,
     {
-        let len = self.len();
+        let mut i = 0;
         let mut del = 0;
         let mut removed = None;
-        {
-            let v = &mut **self;
-            for i in 0..len {
-                if !f(&v[i])? {
-                    removed = Some(v[i]);
-                    del += 1;
-                } else if del > 0 {
-                    v.swap(i - del, i);
-                }
+        while i < self.len() {
+            let val = self[i];
+            if !f(&val)? {
+                removed = Some(val);
+                del += 1;
+            } else if del > 0 {
+                self.0.swap(i - del, i);
             }
+            i += 1;
         }
         if del > 0 {
+            let len = self.len();
             self.truncate(len - del);
         }
         Ok(removed)
@@ -281,20 +281,28 @@ impl ArrayInner {
         let len = self.len();
         match val.try_array_ty() {
             Some(ary) => {
-                // if self = ary, something wrong happens..
-                let ary_len = ary.len();
+                let is_self = std::ptr::eq((*ary).as_ptr(), self.as_ptr());
+                let ary_data = if is_self {
+                    ary.to_vec()
+                } else {
+                    Vec::new()
+                };
+                let ary_slice: &[Value] = if is_self {
+                    &ary_data
+                } else {
+                    &ary[..]
+                };
+                let ary_len = ary_slice.len();
                 if index >= len || index + length > len {
                     self.resize(index + ary_len, Value::nil());
                 } else if ary_len > length {
-                    // possibly self == ary
                     self.resize(len + ary_len - length, Value::nil());
                     self.copy_within(index + length..len, index + ary_len);
                 } else {
-                    // self != ary
                     self.copy_within(index + length..len, index + ary_len);
                     self.resize(len + ary_len - length, Value::nil());
                 }
-                self[index..index + ary_len].copy_from_slice(&ary[0..ary_len]);
+                self[index..index + ary_len].copy_from_slice(&ary_slice[0..ary_len]);
             }
             None => {
                 if index >= len {
@@ -333,19 +341,49 @@ impl ArrayInner {
         }
     }
 
-    pub(crate) fn get_array_index_checked(&self, store: &Store, index: Value) -> Result<usize> {
-        let index = index.coerce_to_i64(store)?;
+    /// Convert a Value to an array index, treating nil as a given default.
+    /// Used for Range begin/end in Array#[]=.
+    pub(crate) fn get_array_index_checked(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        index: Value,
+    ) -> Result<usize> {
+        let index = index.coerce_to_int_i64(vm, globals)?;
         match self.get_array_index(index) {
             Some(i) => Ok(i),
             None => Err(MonorubyErr::index_too_small(index, -(self.len() as i64))),
         }
     }
 
-    pub(crate) fn get_elem2(&self, store: &Store, arg0: Value, arg1: Value) -> Result<Value> {
-        let index = arg0.coerce_to_i64(store)?;
+    /// Like get_array_index_checked, but treats nil as `default`.
+    pub(crate) fn get_array_index_nil_or(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        index: Value,
+        default: usize,
+    ) -> Result<usize> {
+        if index.is_nil() {
+            return Ok(default);
+        }
+        self.get_array_index_checked(vm, globals, index)
+    }
+
+    pub(crate) fn get_elem2(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        arg0: Value,
+        arg1: Value,
+    ) -> Result<Value> {
+        let index = arg0.coerce_to_int_i64(vm, globals)?;
         let self_len = self.len();
-        let index = self.get_array_index(index).unwrap_or(self_len);
-        let len = arg1.coerce_to_i64(store)?;
+        let index = match self.get_array_index(index) {
+            Some(i) => i,
+            None => return Ok(Value::nil()), // negative index beyond array size
+        };
+        let len = arg1.coerce_to_int_i64(vm, globals)?;
         let val = if len < 0 || index > self_len {
             Value::nil()
         } else if index == self_len {
@@ -359,12 +397,22 @@ impl ArrayInner {
         Ok(val)
     }
 
-    pub(crate) fn get_elem1(&self, store: &Store, idx: Value) -> Result<Value> {
+    pub(crate) fn get_elem1(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        idx: Value,
+    ) -> Result<Value> {
         if let Some(range) = idx.is_range() {
             let len = self.len() as i64;
-            let i_start = match range.start().coerce_to_i64(store)? {
-                i if i < 0 => len + i,
-                i => i,
+            // nil begin means 0 (beginless range)
+            let i_start = if range.start().is_nil() {
+                0
+            } else {
+                match range.start().coerce_to_int_i64(vm, globals)? {
+                    i if i < 0 => len + i,
+                    i => i,
+                }
             };
             if i_start < 0 {
                 return Ok(Value::nil());
@@ -375,23 +423,28 @@ impl ArrayInner {
                 _ => i_start as usize,
             };
 
-            let i_end = range.end().coerce_to_i64(store)?;
-            let end = if i_end >= 0 {
-                let end = i_end as usize + if range.exclude_end() { 0 } else { 1 };
-                if self.len() < end { self.len() } else { end }
+            // nil end means array length (endless range)
+            let end = if range.end().is_nil() {
+                self.len()
             } else {
-                let e = len + i_end + if range.exclude_end() { 0 } else { 1 };
-                if e < 0 {
-                    return Ok(Value::array_empty());
+                let i_end = range.end().coerce_to_int_i64(vm, globals)?;
+                if i_end >= 0 {
+                    let end = i_end as usize + if range.exclude_end() { 0 } else { 1 };
+                    if self.len() < end { self.len() } else { end }
+                } else {
+                    let e = len + i_end + if range.exclude_end() { 0 } else { 1 };
+                    if e < 0 {
+                        return Ok(Value::array_empty());
+                    }
+                    e as usize
                 }
-                e as usize
             };
             if start >= end {
                 return Ok(Value::array_empty());
             }
             Ok(Value::array_from_iter(self[start..end].iter().cloned()))
         } else {
-            let index = idx.coerce_to_i64(store)?;
+            let index = idx.coerce_to_int_i64(vm, globals)?;
             let self_len = self.len();
             let index = self.get_array_index(index).unwrap_or(self_len);
             let val = self.get(index).cloned().unwrap_or_default();

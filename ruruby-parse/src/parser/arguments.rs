@@ -70,8 +70,22 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 }
             }
             if self.consume_punct(Punct::Range3)? {
-                self.check_forwarding()?;
-                arglist.forwarding = true;
+                let next = self.peek()?;
+                if next.kind == TokenKind::Punct(Punct::RParen)
+                    || next.kind == TokenKind::Punct(Punct::Comma)
+                    || next.is_term()
+                {
+                    // argument forwarding: foo(...)
+                    self.check_forwarding()?;
+                    arglist.forwarding = true;
+                } else {
+                    // beginless exclusive range: foo(...expr)
+                    let loc = self.prev_loc();
+                    let rhs = self.parse_arg_logical_or()?;
+                    let range_loc = loc.merge(rhs.loc());
+                    let node = Node::new_range(None, Some(rhs), true, range_loc);
+                    arglist.args.push(node);
+                }
             } else if self.consume_punct(Punct::Mul)? {
                 // splat argument
                 let loc = self.prev_loc();

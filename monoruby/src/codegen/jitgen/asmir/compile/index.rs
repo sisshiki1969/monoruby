@@ -93,7 +93,7 @@ impl Codegen {
     /// - rdx: result Value
     ///
     /// ### destroy
-    /// - caller save registers
+    /// - caller save registers except xmm's
     ///
     pub(super) fn gen_array_u16_index_assign(
         &mut self,
@@ -117,7 +117,7 @@ impl Codegen {
     /// - rdx: Value
     ///    
     /// ### destroy
-    /// - caller save registers
+    /// - caller save registers except xmm's
     ///
     pub(super) fn gen_array_index_assign(&mut self, using_xmm: UsingXmm, error: &DestLabel) {
         let generic = self.jit.label();
@@ -198,7 +198,7 @@ impl Codegen {
     /// - rdx: result Value
     ///
     /// ### destroy
-    /// - caller save registers
+    /// - caller save registers except xmm's
     ///
     fn array_index_assign(&mut self, using_xmm: UsingXmm, generic: &DestLabel, error: &DestLabel) {
         let exit = self.jit.label();

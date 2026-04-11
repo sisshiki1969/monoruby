@@ -81,3 +81,30 @@ fn test_yield_over_fiber() {
         "#,
     );
 }
+
+#[test]
+fn yield_in_detached_context() {
+    run_test_with_prelude(
+        r#"
+        foo { |x| x * 2 }.call(5)
+        "#,
+        r#"
+        def foo(&b)
+          b
+        end
+        "#,
+    );
+
+    run_test_with_prelude(
+        r#"
+      a = []
+      foo { |x| a.push(x) }
+      a
+    "#,
+        r#"
+    	def foo(&block)
+        ["a","b"].each { |e| block.call(e) }
+	    end
+    "#,
+    );
+}

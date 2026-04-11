@@ -202,6 +202,10 @@ impl MonorubyErr {
     pub fn is_unexpected_eof(&self) -> bool {
         self.kind == MonorubyErrKind::Syntax && self.message == "unexpected end-of-file."
     }
+
+    pub fn is_no_method_error(&self) -> bool {
+        matches!(self.kind, MonorubyErrKind::NotMethod(_))
+    }
 }
 
 // Bytecodegen level errors.
@@ -297,10 +301,7 @@ impl MonorubyErr {
     pub(crate) fn method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::NotMethod(Some(obj.id())),
-            format!(
-                "undefined method `{name}' for {}",
-                obj.to_s(store)
-            ),
+            format!("undefined method `{name}' for {}", obj.to_s(store)),
         )
     }
 
@@ -329,11 +330,7 @@ impl MonorubyErr {
         )
     }
 
-    pub(crate) fn protected_method_called(
-        store: &Store,
-        name: IdentId,
-        obj: Value,
-    ) -> MonorubyErr {
+    pub(crate) fn protected_method_called(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::NotMethod(Some(obj.id())),
             format!(
@@ -354,11 +351,15 @@ impl MonorubyErr {
         given: usize,
         range: std::ops::RangeInclusive<usize>,
     ) -> MonorubyErr {
-        Self::argumenterr(format!(
-            "wrong number of arguments (given {given}, expected {}..{})",
-            range.start(),
-            range.end()
-        ))
+        if range.start() == range.end() {
+            Self::wrong_number_of_arg(*range.start(), given)
+        } else {
+            Self::argumenterr(format!(
+                "wrong number of arguments (given {given}, expected {}..{})",
+                range.start(),
+                range.end()
+            ))
+        }
     }
 
     pub(crate) fn wrong_number_of_arg_min(given: usize, min: usize) -> MonorubyErr {
@@ -480,6 +481,32 @@ impl MonorubyErr {
         MonorubyErr::typeerr(format!("{} is not a regexp nor a string", val.to_s(store)))
     }
 
+    pub fn cant_convert_error_ary(store: &Store, v: Value, result: Value) -> MonorubyErr {
+        Self::cant_convert_error(store, v, result, "Array", IdentId::TO_ARY)
+    }
+
+    pub fn cant_convert_error_int(store: &Store, v: Value, result: Value) -> MonorubyErr {
+        Self::cant_convert_error(store, v, result, "Integer", IdentId::TO_INT)
+    }
+
+    pub fn cant_convert_error_f(store: &Store, v: Value, result: Value) -> MonorubyErr {
+        Self::cant_convert_error(store, v, result, "Float", IdentId::TO_F)
+    }
+
+    pub fn cant_convert_error(
+        store: &Store,
+        v: Value,
+        result: Value,
+        target: &str,
+        method: IdentId,
+    ) -> MonorubyErr {
+        let class = v.get_real_class_name(store);
+        MonorubyErr::typeerr(format!(
+            "can't convert {class} into {target} ({class}#{method} gives {})",
+            result.get_real_class_name(store),
+        ))
+    }
+
     ///
     /// Set TypeError with message "can't convert *class of val* into Float".
     ///
@@ -495,12 +522,12 @@ impl MonorubyErr {
     ///
     pub(crate) fn cant_coerced_into(
         store: &Store,
-        op: IdentId,
+        _op: IdentId,
         val: Value,
         msg: &'static str,
     ) -> MonorubyErr {
         MonorubyErr::typeerr(format!(
-            "{op}: {} can't be coerced into {msg}",
+            "{} can't be coerced into {msg}",
             val.get_real_class_name(store)
         ))
     }
@@ -576,10 +603,11 @@ impl MonorubyErr {
     }
 
     pub(crate) fn cant_load(err: Option<std::io::Error>, path: &std::path::Path) -> MonorubyErr {
+        let display = path.display();
         MonorubyErr::loaderr(
             match err {
-                Some(err) => format!("can't load {path:?}. {err}"),
-                None => format!("can't load {path:?}"),
+                Some(err) => format!("cannot load such file -- {display} ({err})"),
+                None => format!("cannot load such file -- {display}"),
             },
             path.into(),
         )
@@ -595,6 +623,58 @@ impl MonorubyErr {
 
     pub(crate) fn ioerr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::IO, msg)
+    }
+
+    /// Convert a `std::io::Error` into the appropriate Ruby Errno exception.
+    ///
+    /// Looks up the Errno module and the specific error class (e.g. `Errno::ENOTDIR`)
+    /// using the OS error number. Falls back to `RuntimeError` if the class is not found.
+    pub(crate) fn from_io_err(store: &Store, err: &std::io::Error, msg: String) -> MonorubyErr {
+        if let Some(errno) = err.raw_os_error() {
+            let errno_name = errno_to_name(errno);
+            if let Some(errno_name) = errno_name {
+                // Look up `Errno` module under Object
+                let errno_module =
+                    store.get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Errno"));
+                if let Some(errno_module) = errno_module {
+                    let errno_class_id = errno_module.as_class_id();
+                    // Look up the specific error class (e.g. `ENOTDIR`) under `Errno`
+                    let err_class =
+                        store.get_constant_noautoload(errno_class_id, IdentId::get_id(errno_name));
+                    if let Some(err_class) = err_class {
+                        let class_id = err_class.as_class_id();
+                        return MonorubyErr::new(MonorubyErrKind::Other(class_id), msg);
+                    }
+                }
+            }
+        }
+        // Fallback to RuntimeError
+        MonorubyErr::runtimeerr(msg)
+    }
+
+    /// Create an Errno exception from a `std::io::Error` with a syscall name and path.
+    ///
+    /// Formats the message to match CRuby: `"<description> @ <syscall> - <path>"`
+    /// For example: `"No such file or directory @ rb_sysopen - /path/to/file"`
+    pub(crate) fn errno_with_path(
+        store: &Store,
+        err: &std::io::Error,
+        syscall: &str,
+        path: &str,
+    ) -> MonorubyErr {
+        let desc = errno_description(err);
+        let msg = format!("{} @ {} - {}", desc, syscall, path);
+        Self::from_io_err(store, err, msg)
+    }
+
+    /// Create an Errno exception from a `std::io::Error` with just a path (no syscall name).
+    ///
+    /// Formats the message to match CRuby: `"<description> - <path>"`
+    /// For example: `"No such file or directory - /path/to/file"`
+    pub(crate) fn errno_with_msg(store: &Store, err: &std::io::Error, path: &str) -> MonorubyErr {
+        let desc = errno_description(err);
+        let msg = format!("{} - {}", desc, path);
+        Self::from_io_err(store, err, msg)
     }
 
     pub(crate) fn rangeerr(msg: impl ToString) -> MonorubyErr {
@@ -670,6 +750,75 @@ impl MonorubyErrKind {
             SYSTEM_EXIT_ERROR_CLASS => MonorubyErrKind::SystemExit(0),
             _ => MonorubyErrKind::Other(class_id),
         }
+    }
+}
+
+/// Return a human-readable description for an `std::io::Error`, matching CRuby's Errno messages.
+pub(crate) fn errno_description(err: &std::io::Error) -> &'static str {
+    match err.raw_os_error() {
+        Some(1) => "Operation not permitted",
+        Some(2) => "No such file or directory",
+        Some(5) => "Input/output error",
+        Some(9) => "Bad file descriptor",
+        Some(12) => "Cannot allocate memory",
+        Some(13) => "Permission denied",
+        Some(17) => "File exists",
+        Some(20) => "Not a directory",
+        Some(21) => "Is a directory",
+        Some(22) => "Invalid argument",
+        Some(28) => "No space left on device",
+        Some(30) => "Read-only file system",
+        Some(32) => "Broken pipe",
+        Some(36) => "File name too long",
+        Some(39) => "Directory not empty",
+        _ => "Unknown error",
+    }
+}
+
+/// Map a raw OS errno number to the corresponding Ruby Errno class name.
+///
+/// Returns `None` for unknown errno values.
+fn errno_to_name(errno: i32) -> Option<&'static str> {
+    match errno {
+        1 => Some("EPERM"),
+        2 => Some("ENOENT"),
+        3 => Some("ESRCH"),
+        4 => Some("EINTR"),
+        5 => Some("EIO"),
+        6 => Some("ENXIO"),
+        7 => Some("E2BIG"),
+        8 => Some("ENOEXEC"),
+        9 => Some("EBADF"),
+        10 => Some("ECHILD"),
+        11 => Some("EAGAIN"),
+        12 => Some("ENOMEM"),
+        13 => Some("EACCES"),
+        14 => Some("EFAULT"),
+        16 => Some("EBUSY"),
+        17 => Some("EEXIST"),
+        18 => Some("EXDEV"),
+        19 => Some("ENODEV"),
+        20 => Some("ENOTDIR"),
+        21 => Some("EISDIR"),
+        22 => Some("EINVAL"),
+        23 => Some("ENFILE"),
+        24 => Some("EMFILE"),
+        25 => Some("ENOTTY"),
+        27 => Some("EFBIG"),
+        28 => Some("ENOSPC"),
+        29 => Some("ESPIPE"),
+        30 => Some("EROFS"),
+        31 => Some("EMLINK"),
+        32 => Some("EPIPE"),
+        33 => Some("EDOM"),
+        34 => Some("ERANGE"),
+        35 => Some("EDEADLK"),
+        36 => Some("ENAMETOOLONG"),
+        37 => Some("ENOLCK"),
+        38 => Some("ENOSYS"),
+        39 => Some("ENOTEMPTY"),
+        40 => Some("ELOOP"),
+        _ => None,
     }
 }
 
@@ -757,6 +906,200 @@ mod tests {
             r##"
         require "ffff"
         "##,
+        );
+    }
+
+    #[test]
+    fn errno_from_dir_operations() {
+        // Dir.rmdir on non-existent path triggers Errno::ENOENT
+        run_test_no_result_check(
+            r#"
+            begin
+              Dir.rmdir("/nonexistent_dir_xyz_123")
+              raise "should have raised"
+            rescue Errno::ENOENT
+              # expected
+            end
+            "#,
+        );
+        // Dir.mkdir on existing directory triggers Errno::EEXIST
+        run_test_no_result_check(
+            r#"
+            begin
+              Dir.mkdir("/tmp")
+              raise "should have raised"
+            rescue Errno::EEXIST
+              # expected
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_enotdir() {
+        // Dir.rmdir on a non-directory triggers Errno::ENOTDIR
+        run_test_once(
+            r#"
+            begin
+              Dir.rmdir("Cargo.toml")
+            rescue Errno::ENOTDIR => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_eexist() {
+        // Dir.mkdir on existing directory triggers Errno::EEXIST
+        run_test_once(
+            r#"
+            begin
+              Dir.mkdir("/tmp")
+            rescue Errno::EEXIST => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_file_open_enoent() {
+        // File.open on a non-existent file raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              File.open("/nonexistent_file_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_file_read_enoent() {
+        // File.read on a non-existent file raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              File.read("/nonexistent_file_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_file_delete_enoent() {
+        // File.delete on a non-existent file raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              File.delete("/nonexistent_file_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_file_readlines_enoent() {
+        // File.readlines on a non-existent file raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              File.readlines("/nonexistent_file_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_file_size_enoent() {
+        // File.size on a non-existent file raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              File.size("/nonexistent_file_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_file_write_eisdir() {
+        // File.write to a directory raises Errno::EISDIR
+        run_test_once(
+            r#"
+            begin
+              File.write("/tmp", "test")
+            rescue Errno::EISDIR => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_io_read_enoent() {
+        // IO.read on a non-existent file raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              IO.read("/nonexistent_file_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_io_sysopen_enoent() {
+        // IO.sysopen on a non-existent file raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              IO.sysopen("/nonexistent_file_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_dir_chdir_enoent() {
+        // Dir.chdir to a non-existent directory raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              Dir.chdir("/nonexistent_dir_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errno_dir_entries_enoent() {
+        // Dir.entries on a non-existent directory raises Errno::ENOENT
+        run_test_once(
+            r#"
+            begin
+              Dir.entries("/nonexistent_dir_xyz_123")
+            rescue Errno::ENOENT => e
+              e.is_a?(SystemCallError)
+            end
+            "#,
         );
     }
 }

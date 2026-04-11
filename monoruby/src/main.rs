@@ -31,7 +31,7 @@ struct CommandLineArgs {
     no_jit: bool,
     /// switch for loading gems.
     #[arg(long)]
-    no_gems: bool,
+    disable_gems: bool,
     /// switch for garbage collection.
     #[arg(long)]
     no_gc: bool,
@@ -53,13 +53,13 @@ fn main() {
     use clap::Parser;
     let mut finish_flag = false;
     let args = CommandLineArgs::parse();
-    let mut globals = Globals::new(args.warning, args.no_jit, args.no_gems);
+    let mut globals = Globals::new(args.warning, args.no_jit, args.disable_gems);
     Globals::gc_enable(!args.no_gc);
-    let lib = args.directory.iter().filter_map(|s| {
+    let lib = args.directory.iter().map(|s| {
         std::path::Path::new(s)
             .canonicalize()
             .map(|p| p.to_string_lossy().to_string())
-            .ok()
+            .unwrap_or_else(|_| s.clone())
     });
     globals.extend_load_path(lib);
 
@@ -118,8 +118,9 @@ fn main() {
         (code, std::path::PathBuf::from("-"))
     };
     if args.ast {
-        if let Err(err) = ruruby_parse::Parser::parse_program(code, path) {
-            handle_error(MonorubyErr::parse(err), &globals);
+        match ruruby_parse::Parser::parse_program(code, path) {
+            Ok(res) => eprintln!("{:#?}", res.node),
+            Err(err) => handle_error(MonorubyErr::parse(err), &globals),
         }
     } else if let Err(err) = globals.run(code, &path) {
         handle_error(err, &globals);

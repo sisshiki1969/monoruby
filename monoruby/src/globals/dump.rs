@@ -86,15 +86,8 @@ impl Globals {
             self.store.functions()[dumped_bc..]
                 .iter()
                 .enumerate()
-                .for_each(|(id, info)| match &info.kind {
+                .for_each(|(_id, info)| match &info.kind {
                     FuncKind::ISeq(iseq) => self.store.dump_iseq(*iseq),
-                    FuncKind::Const(imm) => {
-                        let func_id = FuncId::new((dumped_bc + id) as u32);
-                        eprintln!(
-                            "<{}> CONST FUNCTION:{imm:?}",
-                            self.func_description(func_id),
-                        );
-                    }
                     _ => {}
                 });
         }

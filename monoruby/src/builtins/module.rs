@@ -7,6 +7,7 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     // class methods
     globals.define_builtin_class_func(MODULE_CLASS, "new", module_new, 0);
+    globals.define_builtin_class_func(MODULE_CLASS, "nesting", module_nesting, 0);
 
     // instance methods
     globals.define_builtin_func(MODULE_CLASS, "==", eq, 1);
@@ -14,10 +15,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MODULE_CLASS, "<", lt, 1);
     globals.define_builtin_func(MODULE_CLASS, ">", gt, 1);
     globals.define_builtin_func(MODULE_CLASS, "alias_method", alias_method, 2);
+    globals.define_builtin_func_rest(MODULE_CLASS, "attr", attr);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_accessor", attr_accessor);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_reader", attr_reader);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_writer", attr_writer);
     globals.define_builtin_func(MODULE_CLASS, "autoload", autoload, 2);
+    globals.define_builtin_func_with(MODULE_CLASS, "autoload?", autoload_query, 1, 2, false);
     globals.define_builtin_funcs_with_effect(
         MODULE_CLASS,
         "class_eval",
@@ -28,11 +31,30 @@ pub(super) fn init(globals: &mut Globals) {
         false,
         Effect::EVAL,
     );
+    globals.define_builtin_funcs_with_effect(
+        MODULE_CLASS,
+        "class_exec",
+        &["module_exec"],
+        class_exec,
+        0,
+        0,
+        true,
+        Effect::EVAL,
+    );
     globals.define_builtin_func(MODULE_CLASS, "ancestors", ancestors, 0);
+    globals.define_builtin_func(MODULE_CLASS, "subclasses", subclasses, 0);
     globals.define_builtin_func_with(MODULE_CLASS, "const_defined?", const_defined, 1, 2, false);
     globals.define_builtin_func_with(MODULE_CLASS, "const_get", const_get, 1, 2, false);
     globals.define_builtin_func(MODULE_CLASS, "const_set", const_set, 2);
     globals.define_builtin_func(MODULE_CLASS, "remove_const", remove_const, 1);
+    globals.define_builtin_func_with(
+        MODULE_CLASS,
+        "const_source_location",
+        const_source_location,
+        1,
+        2,
+        false,
+    );
     globals.define_builtin_func_with(MODULE_CLASS, "constants", constants, 0, 1, false);
     globals.define_builtin_funcs_with_effect(
         MODULE_CLASS,
@@ -44,7 +66,6 @@ pub(super) fn init(globals: &mut Globals) {
         false,
         Effect::CAPTURE,
     );
-    globals.define_builtin_func_rest(MODULE_CLASS, "deprecate_constant", deprecate_constant);
     globals.define_builtin_func_with(
         MODULE_CLASS,
         "instance_methods",
@@ -57,6 +78,14 @@ pub(super) fn init(globals: &mut Globals) {
         MODULE_CLASS,
         "private_instance_methods",
         private_instance_methods,
+        0,
+        1,
+        false,
+    );
+    globals.define_builtin_func_with(
+        MODULE_CLASS,
+        "protected_instance_methods",
+        protected_instance_methods,
         0,
         1,
         false,
@@ -106,7 +135,24 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "public_class_method", public_class_method);
     globals.define_builtin_func(MODULE_CLASS, "class_variable_set", class_variable_set, 2);
     globals.define_builtin_func(MODULE_CLASS, "class_variable_get", class_variable_get, 1);
+    globals.define_builtin_func(
+        MODULE_CLASS,
+        "class_variable_defined?",
+        class_variable_defined,
+        1,
+    );
+    globals.define_builtin_func(
+        MODULE_CLASS,
+        "remove_class_variable",
+        remove_class_variable,
+        1,
+    );
     globals.define_builtin_func(MODULE_CLASS, "class_variables", class_variables, 0);
+    globals.define_builtin_func(MODULE_CLASS, "included_modules", included_modules, 0);
+    globals.define_builtin_func_rest(MODULE_CLASS, "public_constant", public_constant);
+    globals.define_builtin_func_rest(MODULE_CLASS, "private_constant", private_constant);
+    globals.define_builtin_class_func(MODULE_CLASS, "used_refinements", used_refinements, 0);
+    globals.define_builtin_func(MODULE_CLASS, "used_refinements", used_refinements_inst, 0);
     globals.define_builtin_funcs(MODULE_CLASS, "to_s", &["inspect"], tos, 0);
     globals.define_builtin_func(MODULE_CLASS, "name", name, 0);
     globals.define_builtin_func(MODULE_CLASS, "set_temporary_name", set_temporary_name, 1);
@@ -115,7 +161,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_private_builtin_func_rest(MODULE_CLASS, "private", private);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "protected", protected);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "public", public);
-    // hook methods (no-op by default)
+    // hook methods (no-op by default, overridden by startup.rb)
     globals.define_private_builtin_func(MODULE_CLASS, "method_added", module_noop_hook, 1);
     globals.define_private_builtin_func(MODULE_CLASS, "method_removed", module_noop_hook, 1);
     globals.define_private_builtin_func(MODULE_CLASS, "method_undefined", module_noop_hook, 1);
@@ -126,6 +172,7 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 /// No-op hook for method_added/removed/undefined, included/prepended/extended, const_added.
+/// Required during bootstrap before startup.rb overrides them.
 #[monoruby_builtin]
 fn module_noop_hook(
     _: &mut Executor,
@@ -149,6 +196,31 @@ fn module_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         vm.module_eval(globals, module, bh)?;
     }
     Ok(module_val)
+}
+
+/// ### Module.nesting
+/// - nesting -> [Module]
+///
+/// Returns the lexically enclosing class/module nesting at the call site,
+/// from innermost to outermost. monoruby tracks lexical nesting through the
+/// active class/module body, so the result is accurate at module/class body
+/// scope but is best-effort inside method bodies (where CRuby uses the lexical
+/// scope captured at definition time).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/s/nesting.html]
+#[monoruby_builtin]
+fn module_nesting(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let nesting = vm.current_class_nesting();
+    let ary: Vec<Value> = nesting
+        .into_iter()
+        .map(|class_id| globals.store[class_id].get_module().as_val())
+        .collect();
+    Ok(Value::array_from_vec(ary))
 }
 
 ///
@@ -238,6 +310,57 @@ fn alias_method(
 }
 
 ///
+/// ### Module#attr
+///
+/// - attr(*name) -> [Symbol]
+/// - attr(name, true) -> [Symbol]   # legacy form
+///
+/// Defines accessor methods. The legacy two-argument form `attr(name, true)`
+/// defines both a reader and writer; `attr(name, false)` defines only a
+/// reader. Otherwise (modern form) every argument is treated as a name and
+/// only readers are defined.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr.html]
+#[monoruby_builtin]
+fn attr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let visi = vm.context_visibility();
+    let args = lfp.arg(0).as_array();
+    let mut ary = Array::new_empty();
+
+    // Detect the legacy `attr(name, true|false)` form.
+    let legacy_writable = if args.len() == 2 {
+        let second = args[1];
+        if second.id() == Value::bool(true).id() {
+            Some(true)
+        } else if second.id() == Value::bool(false).id() {
+            Some(false)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some(writable) = legacy_writable {
+        let arg_name = args[0].expect_symbol_or_string(globals)?;
+        let method_name = vm.define_attr_reader(globals, class_id, arg_name, visi)?;
+        ary.push(Value::symbol(method_name));
+        if writable {
+            let method_name = vm.define_attr_writer(globals, class_id, arg_name, visi)?;
+            ary.push(Value::symbol(method_name));
+        }
+    } else {
+        for v in args.iter() {
+            let arg_name = v.expect_symbol_or_string(globals)?;
+            let method_name = vm.define_attr_reader(globals, class_id, arg_name, visi)?;
+            ary.push(Value::symbol(method_name));
+        }
+    }
+    Ok(ary.into())
+}
+
+///
 /// ### Module#attr_accessor
 ///
 /// - attr_accessor(*name) -> [Symbol]
@@ -320,11 +443,89 @@ fn attr_writer(
 #[monoruby_builtin]
 fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let const_name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    let feature = lfp.arg(1).coerce_to_string(vm, globals)?;
+    validate_constant_name(const_name)?;
+    let feature = lfp.arg(1).coerce_to_path_rstring(vm, globals)?;
+    let feature = feature.to_str()?.to_string();
+    if feature.is_empty() {
+        return Err(MonorubyErr::argumenterr("empty file name"));
+    }
+    let class_id = lfp.self_val().as_class_id();
+    let was_autoload = match globals.store.get_constant(class_id, const_name) {
+        None => true,
+        Some(state) => state.is_autoload(),
+    };
     globals
         .store
-        .set_constant_autoload(lfp.self_val().as_class_id(), const_name, feature);
+        .set_constant_autoload(class_id, const_name, feature);
+    if was_autoload {
+        let receiver = globals.store[class_id].get_module().into();
+        vm.invoke_method_inner(
+            globals,
+            IdentId::CONST_ADDED,
+            receiver,
+            &[Value::symbol(const_name)],
+            None,
+            None,
+        )?;
+    }
     Ok(Value::nil())
+}
+
+///
+/// ### Module#autoload?
+///
+/// - autoload?(name, inherit = true) -> String | nil
+///
+/// Returns the file path that would be autoloaded for the given constant
+/// `name`, or `nil` if no autoload is registered (or the constant has already
+/// been loaded). When `inherit` is true (the default), the receiver's
+/// ancestors are also searched.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/autoload=3f.html]
+#[monoruby_builtin]
+fn autoload_query(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
+    let mut module = lfp.self_val().as_class();
+    loop {
+        if let Some(state) = globals.store.get_constant(module.id(), name) {
+            match &state.kind {
+                ConstStateKind::Autoload(path) => {
+                    return Ok(Value::string(path.to_string_lossy().into_owned()));
+                }
+                ConstStateKind::Loaded(_) => return Ok(Value::nil()),
+            }
+        }
+        if !inherit {
+            return Ok(Value::nil());
+        }
+        match module.superclass() {
+            Some(superclass) => module = superclass,
+            None => return Ok(Value::nil()),
+        }
+    }
+}
+
+/// Validate that *name* is a syntactically valid Ruby constant name.
+/// CRuby raises `NameError` for autoload/const_set when the symbol cannot be
+/// a constant.
+fn validate_constant_name(name: IdentId) -> Result<()> {
+    let s = name.to_string();
+    let mut chars = s.chars();
+    let first = chars.next();
+    let valid = matches!(first, Some(c) if c.is_ascii_uppercase())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !valid {
+        return Err(MonorubyErr::nameerr(format!(
+            "wrong constant name {s}"
+        )));
+    }
+    Ok(())
 }
 
 ///
@@ -354,7 +555,7 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
             format!("(eval at {})", caller_loc)
         };
         let lineno: i64 = if let Some(arg2) = lfp.try_arg(2) {
-            arg2.coerce_to_int(vm, globals)?
+            arg2.coerce_to_int_i64(vm, globals)?
         } else {
             1
         };
@@ -368,6 +569,34 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
     } else {
         Err(MonorubyErr::wrong_number_of_arg_range(0, 1..=3))
     }
+}
+
+///
+/// ### Module#class_exec
+///
+/// - class_exec(*args) {|*args| ... } -> object
+/// - module_exec(*args) {|*args| ... } -> object
+///
+/// Evaluates the given block in the context of the module, passing any
+/// arguments through to the block. Unlike `class_eval`, this form does not
+/// accept a string.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_exec.html]
+#[monoruby_builtin]
+fn class_exec(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let module = lfp.self_val().as_class();
+    let bh = lfp.expect_block()?;
+    let data = vm.get_block_data(globals, bh)?;
+    let args = lfp.arg(0).as_array();
+    vm.push_class_context(module.id());
+    let res = vm.invoke_block_with_self(globals, &data, module.get(), &args);
+    vm.pop_class_context();
+    res
 }
 
 ///
@@ -388,9 +617,35 @@ fn ancestors(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 }
 
 ///
+/// ### Module#subclasses
+///
+/// - subclasses -> [Class]
+///
+/// Returns an array of the immediate (direct) subclasses of the receiver. Does
+/// not include modules included via `include`/`prepend`, nor singleton classes.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/subclasses.html]
+#[monoruby_builtin]
+fn subclasses(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    Ok(Value::array_from_vec(
+        globals.store.get_direct_subclasses(class_id),
+    ))
+}
+
+///
 /// ### Module#const_defined?
 ///
 /// - const_defined?(name, inherit = true) -> bool
+///
+/// Returns true if the named constant is defined on the receiver (or on an
+/// ancestor when `inherit` is true). Visibility is *not* checked: private
+/// constants are still considered defined.
 ///
 /// https://docs.ruby-lang.org/ja/latest/method/Module/i/const_defined=3f.html]
 #[monoruby_builtin]
@@ -403,9 +658,14 @@ fn const_defined(
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let module = lfp.self_val().as_class();
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
-    Ok(Value::bool(
-        vm.const_get(globals, module, name, inherit).is_ok(),
-    ))
+    let found = if inherit {
+        vm.get_constant_superclass_with_class(globals, module, name)
+            .is_ok()
+    } else {
+        // Non-inherit: only check the receiver's own table.
+        globals.store[module.id()].has_own_constant(name)
+    };
+    Ok(Value::bool(found))
 }
 
 ///
@@ -444,6 +704,50 @@ fn const_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         None,
     )?;
     Ok(val)
+}
+
+///
+/// ### Module#const_source_location
+///
+/// - const_source_location(name, inherit = true) -> [String, Integer] | nil
+///
+/// Returns the `[file, line]` source location where the named constant was
+/// last assigned, walking the ancestor chain when `inherit` is true. Returns
+/// `nil` if the constant exists but has no recorded location (e.g. constants
+/// defined by Rust builtins) or if the constant is not defined.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_source_location.html]
+#[monoruby_builtin]
+fn const_source_location(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    validate_constant_name(name)?;
+    let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
+    let mut module = lfp.self_val().as_class();
+    loop {
+        if let Some(loc) = globals.store[module.id()].get_constant_location(name) {
+            let (file, line) = (loc.0.to_string(), loc.1);
+            return Ok(Value::array_from_vec(vec![
+                Value::string(file),
+                Value::integer(line as i64),
+            ]));
+        }
+        if globals.store.get_constant(module.id(), name).is_some() {
+            // Constant exists but has no recorded location.
+            return Ok(Value::nil());
+        }
+        if !inherit {
+            return Ok(Value::nil());
+        }
+        match module.superclass() {
+            Some(superclass) => module = superclass,
+            None => return Ok(Value::nil()),
+        }
+    }
 }
 
 ///
@@ -523,24 +827,6 @@ fn define_method(
 }
 
 ///
-/// Module#deprecate_constant
-///
-/// - deprecate_constant(*name) -> self
-///
-/// TODO: implement
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/deprecate_constant.html]
-#[monoruby_builtin]
-fn deprecate_constant(
-    _: &mut Executor,
-    _: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    Ok(lfp.self_val())
-}
-
-///
 /// ### Module#instance_methods
 ///
 /// - instance_methods(inherited_too = true) -> [Symbol]
@@ -581,6 +867,28 @@ fn private_instance_methods(
         globals.store.get_private_method_names(class_id)
     } else {
         globals.store.get_private_method_names_inherit(class_id)
+    }))
+}
+
+///
+/// ### Module#protected_instance_methods
+///
+/// - protected_instance_methods(inherited_too = true) -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/protected_instance_methods.html]
+#[monoruby_builtin]
+fn protected_instance_methods(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    Ok(Value::array_from_vec(if !inherited_too {
+        globals.store.get_protected_method_names(class_id)
+    } else {
+        globals.store.get_protected_method_names_inherit(class_id)
     }))
 }
 
@@ -930,17 +1238,24 @@ fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// ### Module#name
 /// - name -> String | nil
 ///
+/// Returns the name of the module/class. The returned string is frozen and
+/// is cached so that repeated calls return the identical string object.
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/name.html]
 #[monoruby_builtin]
 fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    match globals.store[class_id].get_name() {
-        Some(_) => {
-            let class_name = globals.store.get_class_name(class_id);
-            Ok(Value::string(class_name))
-        }
-        None => Ok(Value::nil()),
+    if globals.store[class_id].get_name().is_none() {
+        return Ok(Value::nil());
     }
+    if let Some(cached) = globals.store[class_id].cached_name_value() {
+        return Ok(cached);
+    }
+    let class_name = globals.store.get_class_name(class_id);
+    let mut val = Value::string(class_name);
+    val.set_frozen();
+    globals.store[class_id].set_cached_name_value(val);
+    Ok(val)
 }
 
 ///
@@ -983,6 +1298,49 @@ fn class_variable_get(
 }
 
 ///
+/// ### Module#class_variable_defined?
+///
+/// - class_variable_defined?(name) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_variable_defined=3f.html]
+#[monoruby_builtin]
+fn class_variable_defined(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let module = globals.store[class_id].get_module();
+    Ok(Value::bool(globals.get_class_variable(module, name).is_ok()))
+}
+
+///
+/// ### Module#remove_class_variable
+///
+/// - remove_class_variable(name) -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/remove_class_variable.html]
+#[monoruby_builtin]
+fn remove_class_variable(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    match globals.store[class_id].remove_cvar(name) {
+        Some(val) => Ok(val),
+        None => Err(MonorubyErr::nameerr(format!(
+            "class variable {name} not defined for {}",
+            class_id.get_name(&globals.store)
+        ))),
+    }
+}
+
+///
 /// ### Module#class_variables
 ///
 /// - class_variables -> [Symbol]
@@ -1004,6 +1362,132 @@ fn class_variables(
 /// ### Module#set_temporary_name
 /// - set_temporary_name(name) -> self
 ///
+///
+/// ### Module#included_modules
+///
+/// - included_modules -> [Module]
+///
+/// Returns an array of all modules in the receiver's ancestor chain that are
+/// modules (not classes). This includes inherited included modules.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/included_modules.html]
+#[monoruby_builtin]
+fn included_modules(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let v: Vec<Value> = globals
+        .ancestors(class_id)
+        .into_iter()
+        .filter_map(|m| {
+            let val: Value = m.into();
+            if val.ty() == Some(ObjTy::MODULE) {
+                Some(val)
+            } else {
+                None
+            }
+        })
+        .collect();
+    Ok(Value::array_from_vec(v))
+}
+
+///
+/// ### Module#public_constant
+///
+/// - public_constant(*name) -> self
+///
+/// Marks each named constant as public. Each name must be a constant defined
+/// directly on the receiver (not inherited); otherwise `NameError` is raised.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public_constant.html]
+#[monoruby_builtin]
+fn public_constant(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    set_constants_visibility(globals, lfp, /*private=*/ false)
+}
+
+///
+/// ### Module#private_constant
+///
+/// - private_constant(*name) -> self
+///
+/// Marks each named constant as private so that qualified access
+/// (`Foo::Bar`, `Foo.const_get(:Bar)`) raises `NameError`. Lexical access
+/// from within the defining scope is unaffected. Each name must be a
+/// constant defined directly on the receiver (not inherited); otherwise
+/// `NameError` is raised.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private_constant.html]
+#[monoruby_builtin]
+fn private_constant(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    set_constants_visibility(globals, lfp, /*private=*/ true)
+}
+
+/// Shared body of `Module#private_constant` and `Module#public_constant`.
+fn set_constants_visibility(globals: &mut Globals, lfp: Lfp, make_private: bool) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let args = lfp.arg(0).as_array();
+    // Validate every name first so a partial failure does not leave the
+    // class in an inconsistent state.
+    let mut names = Vec::with_capacity(args.len());
+    for arg in args.iter() {
+        let name = arg.expect_symbol_or_string(globals)?;
+        if !globals.store[class_id].has_own_constant(name) {
+            return Err(MonorubyErr::nameerr(format!(
+                "constant {}::{} not defined",
+                class_id.get_name(&globals.store),
+                name
+            )));
+        }
+        names.push(name);
+    }
+    for name in names {
+        if make_private {
+            globals.store[class_id].set_constant_private(name);
+        } else {
+            globals.store[class_id].set_constant_public(name);
+        }
+    }
+    Ok(lfp.self_val())
+}
+
+///
+/// ### Module.used_refinements / Module#used_refinements
+///
+/// Returns an array of refinements active at the call site. monoruby does
+/// not implement refinements; we always return an empty array.
+#[monoruby_builtin]
+fn used_refinements(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::array_empty())
+}
+
+#[monoruby_builtin]
+fn used_refinements_inst(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::array_empty())
+}
+
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/set_temporary_name.html]
 #[monoruby_builtin]
 fn set_temporary_name(

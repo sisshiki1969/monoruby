@@ -1,3 +1,4 @@
+use core::f64;
 use num::ToPrimitive;
 use onigmo_regex::Captures;
 use rubymap::RubyEql;
@@ -28,6 +29,120 @@ pub const TRUE_VALUE: u64 = 0x1c; // 0001_1100
 pub const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
 
 pub const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
+
+/// Format an f64 value as a String matching CRuby's `Float#to_s` / `Float#inspect` output.
+///
+/// Uses Rust's `{:?}` formatting (Ryu algorithm, shortest round-trip representation)
+/// and then reformats to match CRuby's conventions:
+/// - Special values: "NaN", "Infinity", "-Infinity"
+/// - Preserves `-0.0`
+/// - Scientific notation when decimal exponent >= 15 or <= -5
+/// - Scientific exponent always includes sign and at least two digits (`e+02`, `e-05`)
+pub fn ruby_float_to_s(f: f64) -> String {
+    if f.is_nan() {
+        return "NaN".to_string();
+    }
+    if f.is_infinite() {
+        return if f > 0.0 {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        };
+    }
+    if f == 0.0 {
+        return if f.is_sign_negative() {
+            "-0.0".to_string()
+        } else {
+            "0.0".to_string()
+        };
+    }
+
+    // Rust's Debug format for f64 uses the Ryu algorithm, producing the shortest
+    // string that round-trips back to the same f64 value — the same property as
+    // CRuby's ruby_dtoa (mode 0).
+    let s = format!("{:?}", f);
+
+    let (negative, rest) = if let Some(r) = s.strip_prefix('-') {
+        (true, r)
+    } else {
+        (false, s.as_str())
+    };
+
+    // Parse mantissa and optional exponent from Rust's output (e.g., "1.23e-10" or "123.456")
+    let (mantissa_str, exp_offset) = if let Some(pos) = rest.find('e') {
+        let exp: i32 = rest[pos + 1..].parse().unwrap();
+        (&rest[..pos], Some(exp))
+    } else {
+        (rest, None)
+    };
+
+    let dot_pos = mantissa_str.find('.').unwrap_or(mantissa_str.len());
+    let all_digits: String = mantissa_str.chars().filter(|&c| c != '.').collect();
+    // Strip trailing zeros to get significant digits only (matching ruby_dtoa output)
+    let digits = all_digits.trim_end_matches('0');
+    let digits = if digits.is_empty() { "0" } else { digits };
+
+    // decpt: position of the decimal point (number of digits before it)
+    let decpt = if let Some(exp) = exp_offset {
+        exp + dot_pos as i32
+    } else {
+        dot_pos as i32
+    };
+
+    let mut result = String::new();
+    if negative {
+        result.push('-');
+    }
+
+    let ndigits = digits.len() as i32;
+
+    if decpt > 0 && decpt <= 15 {
+        // Fixed notation: decimal point is within range
+        if decpt >= ndigits {
+            // All significant digits before decimal point, pad with zeros
+            result.push_str(digits);
+            for _ in 0..(decpt - ndigits) {
+                result.push('0');
+            }
+            result.push_str(".0");
+        } else {
+            // Decimal point falls within the digits
+            result.push_str(&digits[..decpt as usize]);
+            result.push('.');
+            result.push_str(&digits[decpt as usize..]);
+        }
+    } else if decpt <= 0 && decpt > -4 {
+        // Fixed notation with leading zeros: 0.000...digits
+        result.push_str("0.");
+        for _ in 0..(-decpt) {
+            result.push('0');
+        }
+        result.push_str(digits);
+    } else {
+        // Scientific notation: d.dddde+dd
+        result.push_str(&digits[..1]);
+        result.push('.');
+        if ndigits > 1 {
+            result.push_str(&digits[1..]);
+        } else {
+            result.push('0');
+        }
+        let exp = decpt - 1;
+        if exp >= 0 {
+            result.push_str(&format!("e+{:02}", exp));
+        } else {
+            result.push_str(&format!("e-{:02}", -exp));
+        }
+    }
+
+    result
+}
+
+/// Integer representation for sprintf (supports both Fixnum and BigInt).
+pub(crate) enum IntegerBase {
+    Fixnum(i64),
+    BigInt(num::BigInt),
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
@@ -83,6 +198,7 @@ impl GC<RValue> for Value {
 thread_local! {
     static HASH_RECURSION_GUARD: std::cell::RefCell<HashSet<u64>> = std::cell::RefCell::new(HashSet::new());
     static INSPECT_RECURSION_GUARD: std::cell::RefCell<HashSet<u64>> = std::cell::RefCell::new(HashSet::new());
+    static COMPARE_RECURSION_GUARD: std::cell::RefCell<HashSet<(u64, u64)>> = std::cell::RefCell::new(HashSet::new());
 }
 
 /// Execute `f` with recursion protection for inspect/to_s.
@@ -97,6 +213,32 @@ where
     }
     let result = f();
     INSPECT_RECURSION_GUARD.with(|guard| guard.borrow_mut().remove(&id));
+    result
+}
+
+/// Execute `f` with recursion protection for paired operations (==, <=>, eql?).
+///
+/// Uses a `(lhs_id, rhs_id)` pair to detect when the same pair of containers
+/// is being compared recursively. Works for Array, Hash, Set, and any
+/// container type.
+///
+/// If the pair is already being compared, returns `on_recursive` immediately.
+pub(crate) fn exec_recursive_paired<F>(
+    lhs_id: u64,
+    rhs_id: u64,
+    f: F,
+    on_recursive: Value,
+) -> Result<Value>
+where
+    F: FnOnce() -> Result<Value>,
+{
+    let pair = (lhs_id, rhs_id);
+    let is_recursive = COMPARE_RECURSION_GUARD.with(|guard| !guard.borrow_mut().insert(pair));
+    if is_recursive {
+        return Ok(on_recursive);
+    }
+    let result = f();
+    COMPARE_RECURSION_GUARD.with(|guard| guard.borrow_mut().remove(&pair));
     result
 }
 
@@ -165,29 +307,44 @@ impl RubyEql<Executor, Globals, MonorubyErr> for Value {
                         }
                         (ObjTy::STRING, ObjTy::STRING) => lhs.as_rstring() == rhs.as_rstring(),
                         (ObjTy::ARRAY, ObjTy::ARRAY) => {
-                            let lhs = lhs.as_array();
-                            let rhs = rhs.as_array();
-                            if lhs.len() != rhs.len() {
+                            let lhs_ary = lhs.as_array();
+                            let rhs_ary = rhs.as_array();
+                            if lhs_ary.len() != rhs_ary.len() {
                                 return Ok(false);
                             }
-                            for (a1, a2) in lhs.iter().zip(rhs.iter()) {
-                                // Support self-containing arrays.
-                                if self.id() == a1.id() && other.id() == a2.id() {
-                                } else if self.id() == a1.id() || other.id() == a2.id() {
-                                    return Ok(false);
-                                } else {
-                                    if !a1.eql(a2, vm, globals)? {
-                                        return Ok(false);
+                            let l = self.id();
+                            let r = other.id();
+                            return exec_recursive_paired(
+                                l,
+                                r,
+                                || {
+                                    for (a1, a2) in lhs_ary.iter().zip(rhs_ary.iter()) {
+                                        if !a1.eql(a2, vm, globals)? {
+                                            return Ok(Value::bool(false));
+                                        }
                                     }
-                                }
-                            }
-                            true
+                                    Ok(Value::bool(true))
+                                },
+                                Value::bool(true),
+                            )
+                            .map(|v| v == Value::bool(true));
                         }
                         (ObjTy::RANGE, ObjTy::RANGE) => {
                             lhs.as_range().eql(rhs.as_range(), vm, globals)?
                         }
                         (ObjTy::HASH, ObjTy::HASH) => {
-                            lhs.as_hashmap().eql(rhs.as_hashmap(), vm, globals)?
+                            let lhs_id = self.id();
+                            let rhs_id = other.id();
+                            return exec_recursive_paired(
+                                lhs_id,
+                                rhs_id,
+                                || {
+                                    let r = lhs.as_hashmap().eql(rhs.as_hashmap(), vm, globals)?;
+                                    Ok(Value::bool(r))
+                                },
+                                Value::bool(true),
+                            )
+                            .map(|v| v == Value::bool(true));
                         }
                         //(ObjTy::METHOD, ObjTy::METHOD) => *self.method() == *other.method(),
                         //(ObjTy::UNBOUND_METHOD, ObjTy::UNBOUND_METHOD) => *self.method() == *other.method(),
@@ -290,6 +447,38 @@ impl Value {
         self.try_rvalue().map(|rv| rv.ty())
     }
 
+    ///
+    /// Returns true if `self` is frozen.
+    ///
+    /// Packed values (Fixnum, Symbol, true, false, nil) are always frozen.
+    ///
+    pub(crate) fn is_frozen(&self) -> bool {
+        match self.try_rvalue() {
+            Some(rv) => rv.is_frozen(),
+            None => true, // packed values are always frozen
+        }
+    }
+
+    ///
+    /// Set the frozen flag on `self`.
+    ///
+    /// Panics if `self` is a packed value (they are always frozen).
+    ///
+    pub(crate) fn set_frozen(&mut self) {
+        self.rvalue_mut().set_frozen()
+    }
+
+    ///
+    /// Ensure `self` is not frozen. Returns FrozenError if it is.
+    ///
+    pub(crate) fn ensure_not_frozen(&self, store: &Store) -> Result<()> {
+        if self.is_frozen() {
+            Err(MonorubyErr::cant_modify_frozen(store, *self))
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) fn change_class(&mut self, new_class_id: ClassId) {
         if let Some(rv) = self.try_rvalue_mut() {
             rv.change_class(new_class_id);
@@ -359,6 +548,14 @@ impl Value {
     pub(crate) fn dup(&self) -> Self {
         if let Some(rv) = self.try_rvalue() {
             rv.dup().pack()
+        } else {
+            *self
+        }
+    }
+
+    pub(crate) fn clone_value(&self) -> Self {
+        if let Some(rv) = self.try_rvalue() {
+            rv.clone_value().pack()
         } else {
             *self
         }
@@ -478,6 +675,18 @@ impl Value {
 
     pub fn complex_from(complex: num::complex::Complex<Real>) -> Self {
         RValue::new_complex_from(complex).pack()
+    }
+
+    pub fn rational(num: i64, den: i64) -> Self {
+        RValue::new_rational(RationalInner::new(num, den)).pack()
+    }
+
+    pub fn rational_from_bigint(n: BigInt, d: BigInt) -> Self {
+        RValue::new_rational(RationalInner::new_bigint(n, d)).pack()
+    }
+
+    pub fn rational_from_inner(inner: RationalInner) -> Self {
+        RValue::new_rational(inner).pack()
     }
 
     pub fn bigint(bigint: BigInt) -> Self {
@@ -747,8 +956,9 @@ impl Value {
             RV::Bool(b) => format!("{:?}", b),
             RV::Fixnum(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
-            RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
+            RV::Float(f) => ruby_float_to_s(f),
             RV::Complex(_) => self.as_complex().debug(store),
+            RV::Rational(r) => r.inspect(),
             RV::Symbol(id) => format!(":{id}"),
             RV::String(s) => format!(r#""{}""#, s.inspect()),
             RV::Object(rvalue) => rvalue.debug(store),
@@ -762,8 +972,9 @@ impl Value {
             RV::Bool(b) => format!("{:?}", b),
             RV::Fixnum(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
-            RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
+            RV::Float(f) => ruby_float_to_s(f),
             RV::Complex(_) => self.as_complex().debug(store),
+            RV::Rational(r) => r.inspect(),
             RV::Symbol(id) => format!(":{id}"),
             RV::String(s) => format!(r#""{}""#, s.inspect()),
             RV::Object(rvalue) => rvalue.debug(store),
@@ -776,6 +987,8 @@ impl Value {
             RV::Nil => "".to_string(),
             RV::Symbol(id) => id.to_string(),
             RV::String(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            RV::Complex(_) => self.as_complex().to_s_str(store),
+            RV::Rational(r) => r.to_s(),
             _ => self.debug(store),
         };
         s
@@ -841,13 +1054,9 @@ fn coerce_to_rstring_inner(
             if let Some(s) = result.is_rstring() {
                 return Ok(s);
             }
-            return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} into String",
-                recv.get_real_class_name(&globals.store),
-                //recv.get_real_class_name(&globals.store),
-                //method,
-                //result.get_real_class_name(&globals.store),
-            )));
+            return Err(MonorubyErr::cant_convert_error(
+                globals, recv, result, "String", method,
+            ));
         }
     }
     Err(MonorubyErr::typeerr(format!(
@@ -957,6 +1166,13 @@ impl Value {
         }
     }
 
+    pub fn is_integer(&self) -> bool {
+        match self.unpack() {
+            RV::Fixnum(_) | RV::BigInt(_) => true,
+            _ => false,
+        }
+    }
+
     pub(crate) fn try_symbol_or_string(&self) -> Option<IdentId> {
         if let Some(sym) = self.try_symbol() {
             Some(sym)
@@ -1031,6 +1247,21 @@ impl Value {
         assert_eq!(Some(ObjTy::COMPLEX), self.ty());
         // SAFETY: The assert ensures this RValue contains a complex number.
         unsafe { self.rvalue().as_complex() }
+    }
+
+    pub fn try_rational(&self) -> Option<&RationalInner> {
+        if self.ty()? == ObjTy::RATIONAL {
+            // SAFETY: The type check ensures this RValue contains a Rational.
+            Some(unsafe { self.rvalue().as_rational() })
+        } else {
+            None
+        }
+    }
+
+    pub fn as_rational(&self) -> &RationalInner {
+        assert_eq!(Some(ObjTy::RATIONAL), self.ty());
+        // SAFETY: The assert ensures this RValue contains a Rational.
+        unsafe { self.rvalue().as_rational() }
     }
 
     // https://github.com/ruby/ruby/blob/3251792f491bd6f8bff71c6fd3352f66ac635902/range.c#L357
@@ -1110,10 +1341,11 @@ impl Value {
         if let Some(ary) = self.try_array_ty() {
             return Ok(ary);
         } else if let Some(fid) = globals.check_method(*self, IdentId::TO_ARY) {
-            let v = vm.invoke_func_inner(globals, fid, *self, &[], None, None)?;
-            if let Some(ary) = v.try_array_ty() {
+            let result = vm.invoke_func_inner(globals, fid, *self, &[], None, None)?;
+            if let Some(ary) = result.try_array_ty() {
                 return Ok(ary);
             }
+            return Err(MonorubyErr::cant_convert_error_ary(globals, *self, result));
         }
         Err(MonorubyErr::no_implicit_conversion(
             globals,
@@ -1162,27 +1394,164 @@ impl Value {
         }
     }
 
-    /// Convert `self` to i64 via `to_int` if needed.
-    pub(crate) fn coerce_to_int(&self, vm: &mut Executor, globals: &mut Globals) -> Result<i64> {
-        if let RV::Fixnum(i) = self.unpack() {
-            return Ok(i);
-        }
-        if let Some(func_id) = globals.check_method(*self, IdentId::TO_INT) {
-            let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
-            if let RV::Fixnum(i) = result.unpack() {
-                return Ok(i);
+    ///
+    /// Try conversion from `self` to i64 using `to_int`.
+    ///
+    /// - if `self` is a Fixnum, return it as i64.
+    /// - if `self` is a Bignum, return it as i64 if it fits, otherwise return RangeError.
+    /// - if `self` responds to `to_int`, call it and try conversion on the result.
+    /// - otherwise, return TypeError.
+    ///
+    pub(crate) fn coerce_to_int_i64(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<i64> {
+        let res = match self.unpack() {
+            RV::Fixnum(_) | RV::BigInt(_) => *self,
+            _ => self.coerce_to_int(vm, globals)?,
+        };
+        match res.unpack() {
+            RV::Fixnum(i) => return Ok(i),
+            RV::BigInt(b) => {
+                use num::ToPrimitive;
+                return b
+                    .to_i64()
+                    .ok_or_else(|| MonorubyErr::rangeerr("bignum too big to convert into `long'"));
             }
-            return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} into Integer",
-                self.get_real_class_name(&globals.store),
-                //self.get_real_class_name(&globals.store),
-                //result.get_real_class_name(&globals.store),
-            )));
+            _ => unreachable!(),
+        };
+    }
+
+    /// Coerce to u64 for Array#pack. Extracts the low 64 bits from BigInts
+    /// (matching CRuby's truncation semantics) instead of raising RangeError.
+    pub(crate) fn coerce_to_pack_u64(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<u64> {
+        let res = match self.unpack() {
+            RV::Fixnum(_) | RV::BigInt(_) => *self,
+            RV::Float(f) => {
+                let i = f as i64;
+                return Ok(i as u64);
+            }
+            _ => self.coerce_to_int(vm, globals)?,
+        };
+        match res.unpack() {
+            RV::Fixnum(i) => Ok(i as u64),
+            RV::BigInt(b) => {
+                // Extract low 64 bits from the BigInt's magnitude,
+                // then apply sign (two's complement).
+                let (sign, digits) = b.to_u64_digits();
+                let abs_low = digits.first().copied().unwrap_or(0);
+                Ok(if sign == num::bigint::Sign::Minus {
+                    (abs_low as i64).wrapping_neg() as u64
+                } else {
+                    abs_low
+                })
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn coerce_to_int(&self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+        // First try direct method lookup (fast path), then fall back to
+        // invoke_method_inner which handles method_missing.
+        let result = if let Some(func_id) = globals.check_method(*self, IdentId::TO_INT) {
+            vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?
+        } else {
+            // Try via method_missing (for Mock objects etc.)
+            match vm.invoke_method_inner(globals, IdentId::TO_INT, *self, &[], None, None) {
+                Ok(result) => result,
+                Err(_) => {
+                    return Err(MonorubyErr::no_implicit_conversion(
+                        globals,
+                        *self,
+                        INTEGER_CLASS,
+                    ));
+                }
+            }
+        };
+        match result.unpack() {
+            RV::Fixnum(_) | RV::BigInt(_) => Ok(result),
+            _ => Err(MonorubyErr::cant_convert_error_int(globals, *self, result)),
+        }
+    }
+
+    /// Convert `self` to Integer (Fixnum or BigInt) for sprintf.
+    ///
+    /// Tries direct conversion first, then to_int, then to_i as fallback.
+    /// Accepts Float (truncated), String (parsed).
+    /// Raises TypeError if no conversion is possible.
+    pub(crate) fn coerce_to_integer(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<IntegerBase> {
+        match self.unpack() {
+            RV::Fixnum(i) => return Ok(IntegerBase::Fixnum(i)),
+            RV::BigInt(b) => return Ok(IntegerBase::BigInt(b.clone())),
+            RV::Float(f) => {
+                let t = f.trunc();
+                return if i64::MIN as f64 <= t && t <= i64::MAX as f64 {
+                    Ok(IntegerBase::Fixnum(t as i64))
+                } else {
+                    use num::FromPrimitive;
+                    Ok(IntegerBase::BigInt(
+                        num::BigInt::from_f64(t).expect("float is not NaN or infinite"),
+                    ))
+                };
+            }
+            RV::String(s) => {
+                let s = s.check_utf8()?;
+                if let Ok(i) = s.parse::<i64>() {
+                    return Ok(IntegerBase::Fixnum(i));
+                } else if let Ok(b) = s.parse::<num::BigInt>() {
+                    return Ok(IntegerBase::BigInt(b));
+                }
+            }
+            _ => {}
+        };
+        // Try to_int first, then to_i as fallback (matching CRuby sprintf behavior).
+        if let Ok(i) = self.coerce_to_int_i64(vm, globals) {
+            return Ok(IntegerBase::Fixnum(i));
+        }
+        if let Some(func_id) = globals.check_method(*self, IdentId::get_id("to_i")) {
+            let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
+            match result.unpack() {
+                RV::Fixnum(i) => return Ok(IntegerBase::Fixnum(i)),
+                RV::BigInt(b) => return Ok(IntegerBase::BigInt(b.clone())),
+                _ => {}
+            }
         }
         Err(MonorubyErr::typeerr(format!(
-            "no implicit conversion of {} into Integer",
+            "can't convert {} into Integer",
             self.get_real_class_name(&globals.store)
         )))
+    }
+
+    /// Convert `self` to f64 for sprintf.
+    ///
+    /// Tries direct conversion first, then to_f.
+    /// Accepts Fixnum, Float, String (parsed).
+    /// Raises TypeError if no conversion is possible.
+    pub(crate) fn coerce_to_float(&self, vm: &mut Executor, globals: &mut Globals) -> Result<f64> {
+        match self.unpack() {
+            RV::Fixnum(i) => return Ok(i as f64),
+            RV::Float(f) => return Ok(f),
+            RV::String(s) => {
+                let s = s.check_utf8()?;
+                return s.parse::<f64>().map_err(|_| {
+                    MonorubyErr::argumenterr(format!("invalid value for Float(): \"{}\"", s))
+                });
+            }
+            _ => {}
+        };
+        if let Ok(f) = self.coerce_to_f64(vm, globals) {
+            return Ok(f);
+        }
+        Err(MonorubyErr::cant_convert_into_float(globals, *self))
     }
 
     ///
@@ -1191,7 +1560,9 @@ impl Value {
     /// - if `self` is a Fixnum or a Bignum, convert it to f64.
     /// - if `self` is a Float, return it as f64.
     ///
-    pub fn coerce_to_f64(&self, store: &Store) -> Result<f64> {
+    /// Convert to f64 from numeric types only (Fixnum/Float/BigInt).
+    /// Does NOT call to_f. Use coerce_to_f64() for the full version.
+    pub fn coerce_to_f64_no_convert(&self, store: &Store) -> Result<f64> {
         match self.unpack() {
             RV::Fixnum(i) => Ok(i as f64),
             RV::Float(f) => Ok(f),
@@ -1207,6 +1578,40 @@ impl Value {
                 *self,
                 FLOAT_CLASS,
             )),
+        }
+    }
+
+    /// Convert to f64, calling `to_f` if the value is not a numeric type.
+    /// This is the standard coercion method matching CRuby behavior.
+    pub(crate) fn coerce_to_f64(&self, vm: &mut Executor, globals: &mut Globals) -> Result<f64> {
+        match self.unpack() {
+            RV::Fixnum(i) => Ok(i as f64),
+            RV::Float(f) => Ok(f),
+            RV::BigInt(b) => {
+                if let Some(f) = b.to_f64() {
+                    Ok(f)
+                } else {
+                    Err(MonorubyErr::cant_convert_into_float(&globals.store, *self))
+                }
+            }
+            _ => {
+                if self.is_str().is_none()
+                    && let Some(func_id) = globals.check_method(*self, IdentId::TO_F)
+                {
+                    let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
+                    match result.unpack() {
+                        RV::Float(f) => Ok(f),
+                        RV::Fixnum(i) => Ok(i as f64),
+                        _ => Err(MonorubyErr::cant_convert_error_f(globals, *self, result)),
+                    }
+                } else {
+                    Err(MonorubyErr::no_implicit_conversion(
+                        &globals.store,
+                        *self,
+                        FLOAT_CLASS,
+                    ))
+                }
+            }
         }
     }
 
@@ -1271,6 +1676,36 @@ impl Value {
         assert_eq!(ObjTy::HASH, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue contains a hash.
         unsafe { self.rvalue_mut().as_hashmap_mut() }
+    }
+
+    /// Coerce the value to a Hashmap by trying to_hash if necessary.
+    pub(crate) fn coerce_to_hash(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Hashmap> {
+        if let Some(h) = self.try_hash_ty() {
+            return Ok(h);
+        }
+        let to_hash_id = IdentId::get_id("to_hash");
+        if let Some(result) =
+            vm.invoke_method_if_exists(globals, to_hash_id, *self, &[], None, None)?
+        {
+            if let Some(h) = result.try_hash_ty() {
+                return Ok(h);
+            }
+            return Err(MonorubyErr::typeerr(format!(
+                "can't convert {} into Hash ({}#to_hash gives {})",
+                self.get_real_class_name(globals),
+                self.get_real_class_name(globals),
+                result.get_real_class_name(globals),
+            )));
+        }
+        Err(MonorubyErr::no_implicit_conversion(
+            &globals.store,
+            *self,
+            HASH_CLASS,
+        ))
     }
 
     pub(crate) fn as_regexp_inner(&self) -> &RegexpInner {
@@ -1486,6 +1921,21 @@ impl Value {
         self.coerce_to_string(vm, globals)
     }
 
+    /// Call Ruby-level `to_s` (explicit conversion) on the value.
+    /// This is used by sprintf %s to match CRuby behavior.
+    pub(crate) fn coerce_to_s(&self, vm: &mut Executor, globals: &mut Globals) -> Result<String> {
+        if let Some(s) = self.is_str() {
+            return Ok(s.to_string());
+        }
+        if let Some(func_id) = globals.check_method(*self, IdentId::TO_S) {
+            let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
+            if let Some(s) = result.is_str() {
+                return Ok(s.to_string());
+            }
+        }
+        Ok(self.to_s(&globals.store))
+    }
+
     pub(crate) fn coerce_to_path_rstring(
         &self,
         vm: &mut Executor,
@@ -1494,7 +1944,13 @@ impl Value {
         coerce_to_rstring_inner(vm, globals, *self, &[IdentId::TO_STR, IdentId::TO_PATH])
     }
 
-    pub(crate) fn expect_regexp_or_string(&self, store: &Store) -> Result<Regexp> {
+    /// Like `expect_regexp_or_string` but tries `to_str` coercion for
+    /// non-string/non-regexp values.
+    pub(crate) fn coerce_to_regexp_or_string(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Regexp> {
         if let Some(re) = self.is_regex() {
             Ok(re)
         } else if let Some(s) = self.is_str() {
@@ -1502,7 +1958,16 @@ impl Value {
                 RegexpInner::with_option(s, 0)?,
             )))
         } else {
-            Err(MonorubyErr::is_not_regexp_nor_string(store, *self))
+            // Try to_str coercion
+            if let Some(func_id) = globals.check_method(*self, IdentId::TO_STR) {
+                let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
+                if let Some(s) = result.is_str() {
+                    return Ok(Regexp::new_unchecked(Value::regexp(
+                        RegexpInner::with_option(s, 0)?,
+                    )));
+                }
+            }
+            Err(MonorubyErr::is_not_regexp_nor_string(&globals.store, *self))
         }
     }
 
@@ -1726,6 +2191,11 @@ impl Value {
                 NReal::Integer(i) => Value::complex(0, *i),
                 NReal::Bignum(b) => Value::complex(0, b.clone()),
             },
+            NodeKind::Rational(n, d) => Value::rational_from_bigint(n.clone(), d.clone()),
+            NodeKind::RImaginary(n, d) => {
+                let f = n.to_f64().unwrap_or(f64::INFINITY) / d.to_f64().unwrap_or(f64::INFINITY);
+                Value::complex(0, f)
+            }
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
@@ -1795,6 +2265,20 @@ impl Value {
                 }
                 Value::hash(map)
             }
+            NodeKind::BinOp(ruruby_parse::BinOp::Div, box lhs, box rhs) => {
+                // CRuby's `p` outputs rationals as `(num/den)`, which parses as BinOp(Div).
+                match (&lhs.kind, &rhs.kind) {
+                    (NodeKind::Integer(n), NodeKind::Integer(d)) => Value::rational(*n, *d),
+                    (NodeKind::UnOp(ruruby_parse::UnOp::Neg, box inner), NodeKind::Integer(d)) => {
+                        if let NodeKind::Integer(n) = &inner.kind {
+                            Value::rational(-n, *d)
+                        } else {
+                            unreachable!("{:?}", node.kind)
+                        }
+                    }
+                    _ => unreachable!("{:?}", node.kind),
+                }
+            }
             NodeKind::BinOp(ruruby_parse::BinOp::Add, box lhs, box rhs) => {
                 let lhs = Self::from_ast_inner(lhs, vm, globals);
                 if let NodeKind::Imaginary(im) = &rhs.kind {
@@ -1829,6 +2313,11 @@ impl Value {
                 NReal::Integer(i) => Value::complex(0, *i),
                 NReal::Bignum(b) => Value::complex(0, b.clone()),
             },
+            NodeKind::Rational(n, d) => Value::rational_from_bigint(n.clone(), d.clone()),
+            NodeKind::RImaginary(n, d) => {
+                let f = n.to_f64().unwrap_or(f64::INFINITY) / d.to_f64().unwrap_or(f64::INFINITY);
+                Value::complex(0, f)
+            }
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
@@ -1916,6 +2405,11 @@ impl Immediate {
 
     pub fn flonum(num: f64) -> Option<Self> {
         if num == 0.0 {
+            // -0.0 == 0.0 in IEEE 754, but Ruby distinguishes them.
+            // Store -0.0 as a heap float to preserve the sign bit.
+            if num.is_sign_negative() {
+                return None;
+            }
             return Some(unsafe { Self::from_u64_unchecked(FLOAT_ZERO) });
         }
         let unum = f64::to_bits(num);
@@ -2036,6 +2530,7 @@ pub enum RV<'a> {
     Float(f64),
     Symbol(IdentId),
     Complex(&'a num::complex::Complex<Real>),
+    Rational(&'a RationalInner),
     String(&'a RStringInner),
     Object(&'a RValue),
 }
@@ -2048,8 +2543,9 @@ impl<'a> std::fmt::Debug for RV<'a> {
             RV::Bool(b) => write!(f, "{b:?}"),
             RV::Fixnum(n) => write!(f, "{n}"),
             RV::BigInt(n) => write!(f, "Bignum({n})"),
-            RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
+            RV::Float(n) => write!(f, "{}", ruby_float_to_s(*n)),
             RV::Complex(c) => write!(f, "{:?}", c),
+            RV::Rational(r) => write!(f, "{}", r.inspect()),
             RV::Symbol(id) => write!(f, ":{}", id),
             RV::String(s) => write!(f, "\"{}\"", String::from_utf8_lossy(s.as_bytes())),
             RV::Object(rvalue) => write!(f, "{rvalue:?}"),
@@ -2065,8 +2561,9 @@ impl<'a> std::fmt::Display for RV<'a> {
             RV::Bool(b) => write!(f, "{b:?}"),
             RV::Fixnum(n) => write!(f, "{n}"),
             RV::BigInt(n) => write!(f, "{n}"),
-            RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
+            RV::Float(n) => write!(f, "{}", ruby_float_to_s(*n)),
             RV::Complex(c) => write!(f, "{}", c),
+            RV::Rational(r) => write!(f, "{}", r.to_s()),
             RV::Symbol(id) => write!(f, ":{}", id),
             RV::String(s) => write!(f, "\"{}\"", String::from_utf8_lossy(s.as_bytes())),
             RV::Object(rvalue) => write!(f, "{rvalue:?}"),

@@ -20,6 +20,7 @@ pub use io::IoInner;
 pub use ivar_table::*;
 pub use match_data::MatchDataInner;
 pub use method::*;
+pub use rational::{RationalFloorResult, RationalInner};
 pub use module::{Module, ModuleInner, ModuleType};
 pub use proc::*;
 pub use range::{RANGE_END_OFFSET, RANGE_EXCLUDE_END_OFFSET, RANGE_START_OFFSET, RangeInner};
@@ -41,10 +42,12 @@ mod method;
 mod module;
 mod proc;
 mod range;
+mod rational;
 mod regexp;
 mod string;
 
 pub const OBJECT_INLINE_IVAR: usize = 6;
+pub const RVALUE_OFFSET_FLAG: usize = std::mem::offset_of!(RValue, header.meta.flag);
 pub const RVALUE_OFFSET_TY: usize = std::mem::offset_of!(RValue, header.meta.ty);
 pub const RVALUE_OFFSET_CLASS: usize = std::mem::offset_of!(RValue, header.meta.class);
 pub const RVALUE_OFFSET_VAR: usize = std::mem::offset_of!(RValue, var_table);
@@ -86,6 +89,7 @@ impl std::fmt::Debug for ObjTy {
                 20 => "BINDING",
                 21 => "UMETHOD",
                 22 => "MATCHDATA",
+                23 => "RATIONAL",
                 _ => unreachable!("Invalid ty: {ty}"),
             }
         )
@@ -121,6 +125,7 @@ impl ObjTy {
     pub const BINDING: Self = Self(std::num::NonZeroU8::new(20).unwrap());
     pub const UMETHOD: Self = Self(std::num::NonZeroU8::new(21).unwrap());
     pub const MATCHDATA: Self = Self(std::num::NonZeroU8::new(22).unwrap());
+    pub const RATIONAL: Self = Self(std::num::NonZeroU8::new(23).unwrap());
 }
 
 #[repr(C)]
@@ -147,6 +152,7 @@ pub union ObjKind {
     generator: ManuallyDrop<GeneratorInner>,
     binding: ManuallyDrop<BindingInner>,
     matchdata: ManuallyDrop<MatchDataInner>,
+    rational: ManuallyDrop<Box<RationalInner>>,
 }
 
 impl ObjKind {
@@ -345,6 +351,12 @@ impl ObjKind {
             matchdata: ManuallyDrop::new(MatchDataInner::from_capture(captures, heystack, regex)),
         }
     }
+
+    fn rational(inner: RationalInner) -> Self {
+        Self {
+            rational: ManuallyDrop::new(Box::new(inner)),
+        }
+    }
 }
 
 /// Heap-allocated objects.
@@ -447,6 +459,7 @@ impl RValue {
                 ObjTy::ENUMERATOR => self.enumerator_debug(store),
                 ObjTy::GENERATOR => self.object_debug(store),
                 ObjTy::COMPLEX => self.as_complex().debug(store),
+                ObjTy::RATIONAL => self.as_rational().inspect(),
                 ObjTy::BINDING => self.object_debug(store),
                 ObjTy::UMETHOD => self.as_umethod().debug(store),
                 ObjTy::MATCHDATA => self.as_match_data().inspect(),
@@ -623,6 +636,7 @@ impl alloc::GC<RValue> for RValue {
                 ObjTy::BIGNUM => {}
                 ObjTy::FLOAT => {}
                 ObjTy::COMPLEX => self.as_complex().mark(alloc),
+                ObjTy::RATIONAL => self.as_rational().mark(alloc),
                 ObjTy::STRING => {}
                 ObjTy::TIME => {}
                 ObjTy::ARRAY => self.as_array().iter().for_each(|v| v.mark(alloc)),
@@ -673,6 +687,8 @@ impl alloc::GCBox for RValue {
                 ObjTy::ENUMERATOR => ManuallyDrop::drop(&mut self.kind.enumerator),
                 ObjTy::GENERATOR => ManuallyDrop::drop(&mut self.kind.generator),
                 ObjTy::BINDING => ManuallyDrop::drop(&mut self.kind.binding),
+                ObjTy::IO => ManuallyDrop::drop(&mut self.kind.io),
+                ObjTy::RATIONAL => ManuallyDrop::drop(&mut self.kind.rational),
                 _ => {}
             }
             self.set_next_none();
@@ -715,6 +731,14 @@ impl RValue {
 
     pub(crate) fn ty(&self) -> ObjTy {
         self.header.ty()
+    }
+
+    pub(crate) fn is_frozen(&self) -> bool {
+        self.header.is_frozen()
+    }
+
+    pub(crate) fn set_frozen(&mut self) {
+        self.header.set_frozen()
     }
 
     pub(crate) unsafe fn try_ty(&self) -> Option<ObjTy> {
@@ -847,6 +871,7 @@ impl RValue {
                         self.as_complex().re().deep_copy(),
                         self.as_complex().im().deep_copy(),
                     ),
+                    ObjTy::RATIONAL => ObjKind::rational((*self.as_rational()).clone()),
                     ObjTy::STRING => ObjKind::string_from_inner(self.as_rstring().clone()),
                     ObjTy::TIME => ObjKind::time(self.as_time().clone()),
                     ObjTy::ARRAY => {
@@ -888,8 +913,11 @@ impl RValue {
     }
 
     pub(super) fn dup(&self) -> Self {
+        let mut header = self.header;
+        // dup does not copy the frozen flag (clone does).
+        unsafe { header.meta.flag &= !0b10 };
         RValue {
-            header: self.header,
+            header,
             var_table: self.var_table.clone(),
             kind: unsafe {
                 if let Some(ty) = self.try_ty() {
@@ -909,6 +937,76 @@ impl RValue {
                         ObjTy::COMPLEX => ObjKind {
                             complex: ManuallyDrop::new(self.kind.complex.dup()),
                         },
+                        ObjTy::RATIONAL => ObjKind::rational((**self.kind.rational).clone()),
+                        ObjTy::STRING => ObjKind {
+                            string: self.kind.string.clone(),
+                        },
+                        ObjTy::TIME => ObjKind {
+                            time: self.kind.time.clone(),
+                        },
+                        ObjTy::ARRAY => ObjKind {
+                            array: self.kind.array.clone(),
+                        },
+                        ObjTy::RANGE => ObjKind {
+                            range: self.kind.range.clone(),
+                        },
+                        ObjTy::PROC => ObjKind {
+                            proc: self.kind.proc.clone(),
+                        },
+                        ObjTy::HASH => ObjKind {
+                            hash: self.kind.hash.clone(),
+                        },
+                        ObjTy::REGEXP => ObjKind {
+                            regexp: self.kind.regexp.clone(),
+                        },
+                        ObjTy::IO => ObjKind {
+                            io: self.kind.io.clone(),
+                        },
+                        ObjTy::EXCEPTION => ObjKind {
+                            exception: self.kind.exception.clone(),
+                        },
+                        ObjTy::METHOD => ObjKind {
+                            method: self.kind.method.clone(),
+                        },
+                        ObjTy::UMETHOD => ObjKind {
+                            umethod: self.kind.umethod.clone(),
+                        },
+                        ObjTy::MATCHDATA => ObjKind {
+                            matchdata: self.kind.matchdata.clone(),
+                        },
+                        ty => unreachable!("{ty:?}"),
+                    }
+                } else {
+                    unreachable!()
+                }
+            },
+        }
+    }
+
+    pub(super) fn clone_value(&self) -> Self {
+        let header = self.header;
+        RValue {
+            header,
+            var_table: self.var_table.clone(),
+            kind: unsafe {
+                if let Some(ty) = self.try_ty() {
+                    match ty {
+                        ObjTy::CLASS | ObjTy::MODULE => ObjKind {
+                            class: self.kind.class.clone(),
+                        },
+                        ObjTy::OBJECT => ObjKind {
+                            object: self.kind.object.clone(),
+                        },
+                        ObjTy::BIGNUM => ObjKind {
+                            bignum: self.kind.bignum.clone(),
+                        },
+                        ObjTy::FLOAT => ObjKind {
+                            float: self.kind.float,
+                        },
+                        ObjTy::COMPLEX => ObjKind {
+                            complex: ManuallyDrop::new(self.kind.complex.dup()),
+                        },
+                        ObjTy::RATIONAL => ObjKind::rational((**self.kind.rational).clone()),
                         ObjTy::STRING => ObjKind {
                             string: self.kind.string.clone(),
                         },
@@ -1004,6 +1102,14 @@ impl RValue {
         RValue {
             header: Header::new(COMPLEX_CLASS, ObjTy::COMPLEX),
             kind: ObjKind::complex_from(complex),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_rational(inner: RationalInner) -> Self {
+        RValue {
+            header: Header::new(RATIONAL_CLASS, ObjTy::RATIONAL),
+            kind: ObjKind::rational(inner),
             var_table: None,
         }
     }
@@ -1371,6 +1477,7 @@ impl RValue {
                     ObjTy::FLOAT => RV::Float(self.as_float()),
                     ObjTy::STRING => RV::String(self.as_rstring()),
                     ObjTy::COMPLEX => RV::Complex(self.as_complex()),
+                    ObjTy::RATIONAL => RV::Rational(self.as_rational()),
                     _ => RV::Object(self),
                 }
             } else {
@@ -1387,6 +1494,7 @@ impl RValue {
             match (lhs.ty(), rhs.ty()) {
                 (ObjTy::BIGNUM, ObjTy::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
                 (ObjTy::FLOAT, ObjTy::FLOAT) => lhs.as_float() == rhs.as_float(),
+                (ObjTy::RATIONAL, ObjTy::RATIONAL) => lhs.as_rational() == rhs.as_rational(),
                 (ObjTy::COMPLEX, ObjTy::COMPLEX) => {
                     lhs.as_complex().re() == rhs.as_complex().re()
                         && lhs.as_complex().im() == rhs.as_complex().im()
@@ -1469,8 +1577,12 @@ impl RValue {
 
     pub(super) unsafe fn as_complex(&self) -> &ComplexInner {
         // SAFETY: Caller must ensure this RValue contains a COMPLEX type.
-        // Accessing the complex union field is valid only when the type is COMPLEX.
         unsafe { &self.kind.complex }
+    }
+
+    pub(super) unsafe fn as_rational(&self) -> &RationalInner {
+        // SAFETY: Caller must ensure this RValue contains a RATIONAL type.
+        unsafe { &self.kind.rational }
     }
 
     pub(super) unsafe fn as_rstring(&self) -> &RStringInner {
@@ -1651,6 +1763,14 @@ impl Header {
 
     fn is_live(&self) -> bool {
         unsafe { self.meta.flag & 0b1 == 1 && self.meta.ty.is_some() }
+    }
+
+    fn is_frozen(&self) -> bool {
+        unsafe { self.meta.flag & 0b10 != 0 }
+    }
+
+    fn set_frozen(&mut self) {
+        unsafe { self.meta.flag |= 0b10 }
     }
 
     fn class(&self) -> ClassId {

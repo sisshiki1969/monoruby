@@ -15,11 +15,41 @@ class BasicObject
   end
 end
 
-class Object
-  def freeze
-    self
+module Kernel
+  private
+
+  # Internal helper: coerce value to Integer via to_int.
+  # Raises TypeError with CRuby-compatible message if conversion fails.
+  def __to_int(val)
+    return val if val.is_a?(Integer)
+    if val.respond_to?(:to_int)
+      result = val.to_int
+      unless result.is_a?(Integer)
+        raise TypeError, "can't convert #{val.class} into Integer (#{val.class}#to_int gives #{result.class})"
+      end
+      result
+    else
+      raise TypeError, "no implicit conversion of #{val.class} into Integer"
+    end
   end
 
+  # Internal helper: coerce value to String via to_str.
+  # Raises TypeError with CRuby-compatible message if conversion fails.
+  def __to_str(val)
+    return val if val.is_a?(String)
+    if val.respond_to?(:to_str)
+      result = val.to_str
+      unless result.is_a?(String)
+        raise TypeError, "can't convert #{val.class} into String (#{val.class}#to_str gives #{result.class})"
+      end
+      result
+    else
+      raise TypeError, "no implicit conversion of #{val.class} into String"
+    end
+  end
+end
+
+class Object
   def initialize(...)
   end
 
@@ -31,7 +61,7 @@ class Object
   def itself
     self
   end
-  
+
   def then
     yield self
   end
@@ -43,10 +73,6 @@ class Object
 
   def <=>(other)
     0 if equal?(other)
-  end
-
-  def frozen?
-    false
   end
 end
 
@@ -74,9 +100,6 @@ class Module
   end
 
   public
-  def private_constant(*x)
-  end
-
   def method_added(name)
   end
 
@@ -92,14 +115,35 @@ class Module
   def const_missing(name)
     raise NameError, "uninitialized constant #{self}::#{name}"
   end
+
+  def include?(mod)
+    unless mod.is_a?(Module)
+      raise TypeError, "wrong argument type #{mod.class} (expected Module)"
+    end
+    ancestors.include?(mod)
+  end
 end
 
 module Warning
+  @categories = { deprecated: false, experimental: true, performance: false }
+
   def self.warn(*x)
   end
-  
+
   def self.[](category)
-    true
+    category = category.to_sym if category.is_a?(String)
+    unless @categories.key?(category)
+      raise ArgumentError, "unknown category: #{category}"
+    end
+    @categories[category]
+  end
+
+  def self.[]=(category, value)
+    category = category.to_sym if category.is_a?(String)
+    unless @categories.key?(category)
+      raise ArgumentError, "unknown category: #{category}"
+    end
+    @categories[category] = value ? true : false
   end
 end
 
@@ -159,14 +203,20 @@ end
 
 module File::Constants
   FNM_SYSCASE = 0
+  FNM_NOESCAPE = 1
+  FNM_PATHNAME = 2
   FNM_CASEFOLD = 8
+  FNM_EXTGLOB = 16
 end
 
 class File
   include File::Constants
   FNM_SYSCASE = 0
+  FNM_NOESCAPE = 1
+  FNM_PATHNAME = 2
   FNM_DOTMATCH = 4
   FNM_CASEFOLD = 8
+  FNM_EXTGLOB = 16
   NULL = "/dev/null"
   BINARY = 0
 
@@ -263,6 +313,39 @@ class Thread
     end
   end
 
+  class SizedQueue < Queue
+    def initialize(max = nil)
+      super()
+      @max = max
+    end
+
+    def max
+      @max
+    end
+
+    def max=(new_max)
+      @max = new_max
+    end
+  end
+
+  class ConditionVariable
+    def initialize
+      @waiters = []
+    end
+
+    def wait(mutex, timeout = nil)
+      self
+    end
+
+    def signal
+      self
+    end
+
+    def broadcast
+      self
+    end
+  end
+
   class Backtrace
     class Location
       def initialize(frame)
@@ -277,6 +360,8 @@ class Thread
 end
 
 Queue = Thread::Queue
+SizedQueue = Thread::SizedQueue
+ConditionVariable = Thread::ConditionVariable
 
 class Exception
   def backtrace_locations
@@ -303,21 +388,30 @@ end
 Mutex = Thread::Mutex
 
 class TrueClass
-  TRUE_TO_S = "true"
+  class << self
+    undef_method :new
+  end
+  TRUE_TO_S = "true".freeze
   def to_s
     TRUE_TO_S
   end
 end
 
 class FalseClass
-  FALSE_TO_S = "false"
+  class << self
+    undef_method :new
+  end
+  FALSE_TO_S = "false".freeze
   def to_s
     FALSE_TO_S
   end
 end
 
 class NilClass
-  NIL_TO_S = ""
+  class << self
+    undef_method :new
+  end
+  NIL_TO_S = "".freeze
   def to_s
     NIL_TO_S
   end
@@ -326,12 +420,35 @@ class NilClass
     []
   end
 
+  def to_i
+    0
+  end
+
+  def to_f
+    0.0
+  end
+
+  def to_h
+    {}
+  end
+
   def =~(_other)
     nil
   end
 
   def to_c
     Complex(0, 0)
+  end
+
+  def to_r
+    Rational(0)
+  end
+
+  def rationalize(*args)
+    if args.length > 1
+      raise ArgumentError, "wrong number of arguments (given #{args.length}, expected 0..1)"
+    end
+    Rational(0)
   end
 end
 
@@ -386,20 +503,88 @@ module Kernel
   module_function :no_warning_require
 end
 
+module Kernel
+  module_function
+
+  def open(name, *args, &block)
+    if name.respond_to?(:to_open)
+      name.to_open(*args, &block)
+    else
+      name = name.to_path if name.respond_to?(:to_path)
+      name = name.to_str if name.respond_to?(:to_str)
+      raise TypeError, "no implicit conversion of #{name.class} into String" unless name.is_a?(String)
+      File.open(name, *args, &block)
+    end
+  end
+end
+
 class GC
   def self.auto_compact=(x)
   end
 
+  def self.count
+    0
+  end
+
   def self.start(**opts)
+  end
+
+  module Profiler
   end
 end
 
+class IO
+  SEEK_SET = 0
+  SEEK_CUR = 1
+  SEEK_END = 2
+
+  def sync
+    false
+  end
+
+  def internal_encoding
+    nil
+  end
+
+  def self.for_fd(fd, mode = nil, **opts)
+    new(fd, mode, **opts)
+  end
+end
+
+class FloatDomainError < RangeError; end
+
+class Encoding
+  class CompatibilityError < EncodingError; end
+  class InvalidByteSequenceError < EncodingError; end
+  class UndefinedConversionError < EncodingError; end
+  class Converter; end
+
+  def self.default_internal
+    $DEFAULT_INTERNAL
+  end
+end
+
+TOPLEVEL_BINDING = binding
+
 require_relative 'comparable'
+
+class Numeric
+  include Comparable
+
+  def +@
+    self
+  end
+end
+
 require_relative 'enumerable'
 require_relative 'integer'
 require_relative 'range'
 require_relative 'array'
 require_relative 'rational'
+require_relative 'float'
+require_relative 'numeric'
+require_relative 'string'
+require_relative 'symbol'
 require_relative 'error'
 require_relative 'builtins'
 require_relative 'pathname_builtins'

@@ -227,6 +227,80 @@ External crates (fetched from git):
 
 ---
 
+## Development Environment Setup
+
+### 1. Installing CRuby (rbenv)
+
+The monoruby test harness compares output against CRuby, so CRuby 4.0 or later is required. To install via rbenv:
+
+```sh
+# Install rbenv and ruby-build (if not already installed)
+git clone https://github.com/rbenv/rbenv.git ~/.rbenv
+git clone https://github.com/rbenv/ruby-build.git ~/.rbenv/plugins/ruby-build
+echo 'eval "$(~/.rbenv/bin/rbenv init -)"' >> ~/.bashrc
+source ~/.bashrc
+
+# Install CRuby 4.0.1
+rbenv install 4.0.1
+rbenv global 4.0.1
+```
+
+### 2. Verifying Ruby Version
+
+Confirm that the `ruby` command launches CRuby 4.0 or later:
+
+```sh
+ruby --version
+# => ruby 4.0.1 (2025-xx-xx ...) — must be 4.0 or later
+```
+
+`build.rs` uses this `ruby` binary at build time to capture `$LOAD_PATH` and `RUBY_VERSION`. Tests will fail if `ruby` is not in `PATH`.
+
+### 3. Setting Up and Running ruby/spec
+
+ruby/spec (mspec) is cloned outside the monoruby repository:
+
+```sh
+# Clone into the parent directory of monoruby
+cd /path/to/parent-of-monoruby
+git clone --depth 1 https://github.com/ruby/spec.git spec
+git clone --depth 1 https://github.com/ruby/mspec.git mspec
+```
+
+Expected directory layout:
+```
+parent/
+├── monoruby/    # this repository
+├── spec/        # ruby/spec
+└── mspec/       # mspec test runner
+```
+
+#### Running core category specs
+
+```sh
+# Build and install monoruby in release mode
+cd monoruby
+cargo install --path monoruby
+
+# Run a specific category (e.g., core/array)
+cd ../spec
+../mspec/bin/mspec run core/array -t monoruby
+
+# Run a single spec file
+../mspec/bin/mspec run core/array/flatten_spec.rb -t monoruby
+
+# Show results in dotted format
+../mspec/bin/mspec run core/array -t monoruby --format dotted
+
+# Run all core categories at once (bin/spec script)
+cd ../monoruby
+bin/spec
+```
+
+> **Note**: `core/io/copy_stream_spec.rb`, `core/io/select_spec.rb`, and `core/kernel/readlines_spec.rb` hang under monoruby's single-threaded runtime and are excluded by `bin/spec`.
+
+---
+
 ## Development Workflows
 
 ### Build Script (`build.rs`)

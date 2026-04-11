@@ -1,3 +1,5 @@
+require_relative 'monitor'
+
 class Enumerator
   include Enumerable
 end
@@ -83,6 +85,10 @@ end
 
 class Set
   include Enumerable
+
+  def to_set
+    self
+  end
 end
 
 class Hash
@@ -103,16 +109,33 @@ class Hash
     h
   end
 
-  def transform_keys(&block)
-    return to_enum(:transform_keys) unless block
+  def transform_keys(hash = nil, &block)
+    return to_enum(:transform_keys) unless block || hash
     h = {}
-    each { |k, v| h[block.call(k)] = v }
+    if hash
+      each do |k, v|
+        new_k = hash.key?(k) ? hash[k] : (block ? block.call(k) : k)
+        h[new_k] = v
+      end
+    else
+      each { |k, v| h[block.call(k)] = v }
+    end
     h
   end
 
-  def transform_keys!(&block)
-    return to_enum(:transform_keys!) unless block
-    keys.each { |k| self[block.call(k)] = delete(k) }
+  def transform_keys!(hash = nil, &block)
+    return to_enum(:transform_keys!) unless block || hash
+    if hash
+      keys.each do |k|
+        if hash.key?(k)
+          self[hash[k]] = delete(k)
+        elsif block
+          self[block.call(k)] = delete(k)
+        end
+      end
+    else
+      keys.each { |k| self[block.call(k)] = delete(k) }
+    end
     self
   end
 
@@ -154,18 +177,24 @@ class Hash
     obj
   end
 
-  def any?
+  def any?(*pattern)
     if block_given?
       each { |k, v| return true if yield([k, v]) }
+    elsif pattern.size == 1
+      pat = pattern[0]
+      each { |k, v| return true if pat === [k, v] }
     else
       return !empty?
     end
     false
   end
 
-  def all?
+  def all?(*pattern)
     if block_given?
       each { |k, v| return false unless yield([k, v]) }
+    elsif pattern.size == 1
+      pat = pattern[0]
+      each { |k, v| return false unless pat === [k, v] }
     else
       each { |k, v| return false unless v }
     end
@@ -220,6 +249,10 @@ class Module
   def ruby2_keywords(*)
     # no-op for compatibility
   end
+
+  def deprecate_constant(*)
+    self
+  end
 end
 
 class File
@@ -259,150 +292,6 @@ class File
   end
 end
 
-class String
-  def insert(index, other)
-    if index < 0
-      index = self.size + 1 + index
-    end
-    if index < 0 || index > self.size
-      raise IndexError, "index #{index} out of string"
-    end
-    self[index, 0] = other
-    self
-  end
-end
-
-class Float
-  def zero?
-    self == 0.0
-  end
-
-  def positive?
-    self > 0.0
-  end
-
-  def negative?
-    self < 0.0
-  end
-
-  # truncate and ceil are defined in Rust for JIT compatibility
-
-  def integer?
-    false
-  end
-
-  def coerce(other)
-    if other.is_a?(Integer)
-      [other.to_f, self]
-    elsif other.is_a?(Float)
-      [other, self]
-    else
-      raise TypeError, "#{other.class} can't be coerced into Float"
-    end
-  end
-
-  def remainder(other)
-    r = self % other
-    if r != 0 && (self < 0) != (other < 0)
-      r - other
-    else
-      r
-    end
-  end
-
-  def numerator
-    if defined?(Rational)
-      to_r.numerator
-    else
-      raise TypeError, "can't convert Float into Rational"
-    end
-  end
-
-  def denominator
-    if defined?(Rational)
-      to_r.denominator
-    else
-      raise TypeError, "can't convert Float into Rational"
-    end
-  end
-
-  def to_r
-    if defined?(Rational)
-      Rational(self)
-    else
-      self
-    end
-  end
-
-  def rationalize(eps = nil)
-    if defined?(Rational)
-      Rational(self)
-    else
-      self
-    end
-  end
-
-  def fdiv(other)
-    self / other.to_f
-  end
-end
-
-class Numeric
-  def positive?
-    self > 0
-  end
-
-  def negative?
-    self < 0
-  end
-
-  def abs
-    self < 0 ? -self : self
-  end
-  alias magnitude abs
-
-  def to_int
-    to_i
-  end
-
-  def ceil(ndigits = 0)
-    to_f.ceil(ndigits)
-  end
-
-  def floor(ndigits = 0)
-    to_f.floor(ndigits)
-  end
-
-  def round(ndigits = 0)
-    to_f.round(ndigits)
-  end
-
-  def truncate(ndigits = 0)
-    to_f.truncate(ndigits)
-  end
-
-  def step(limit = nil, step = nil, by: nil, to: nil)
-    limit = to if to
-    step = by if by
-    step ||= 1
-    raise ArgumentError, "step can't be 0" if step == 0
-    return to_enum(:step, limit, step) unless block_given?
-    i = self
-    if step > 0
-      while limit.nil? || i <= limit
-        yield i
-        i += step
-      end
-    else
-      while limit.nil? || i >= limit
-        yield i
-        i += step
-      end
-    end
-    self
-  end
-end
-
 class Proc
   def curry(arity = nil)
     arity ||= self.arity
@@ -424,155 +313,146 @@ class Proc
   end
 end
 
-class Symbol
-  def [](*args)
-    to_s.[](*args)
-  end
+class Dir
+  include Enumerable
 
-  def size
-    to_s.size
-  end
-
-  def length
-    to_s.length
-  end
-
-  def empty?
-    to_s.empty?
-  end
-
-  def upcase
-    to_s.upcase.to_sym
-  end
-
-  def downcase
-    to_s.downcase.to_sym
-  end
-
-  def capitalize
-    to_s.capitalize.to_sym
-  end
-
-  def swapcase
-    to_s.swapcase.to_sym
-  end
-
-  def start_with?(*args)
-    to_s.start_with?(*args)
-  end
-
-  def end_with?(*args)
-    to_s.end_with?(*args)
-  end
-
-  def encoding
-    to_s.encoding
-  end
-
-  def succ
-    to_s.succ.to_sym
-  end
-  alias next succ
-
-  def id2name
-    to_s
-  end
-
-  def name
-    to_s.freeze
-  end
-
-  def intern
-    self
-  end
-
-  def to_sym
-    self
-  end
-
-  def =~(other)
-    to_s =~ other
-  end
-
-  def casecmp(other)
-    return nil unless other.is_a?(Symbol)
-    to_s.casecmp(other.to_s)
-  end
-
-  def casecmp?(other)
-    return nil unless other.is_a?(Symbol)
-    to_s.casecmp?(other.to_s)
-  end
-
-  def match(other)
-    self.to_s.match(other)
-  end
-
-  def match?(other)
-    self.to_s.match?(other)
-  end
-
-  def to_proc
-    Proc.new do |*args|
-      if args.size == 0
-        raise ArgumentError, "no receiver given"
+  def self.open(path, encoding: nil, &block)
+    dir = new(path)
+    if block
+      begin
+        result = block.call(dir)
+      ensure
+        dir.close
       end
-      slf, *args = args
-      slf.send(self, *args)
+      result
+    else
+      dir
     end
+  end
+
+  def initialize(path)
+    path = path.to_path if path.respond_to?(:to_path)
+    path = path.to_str if path.respond_to?(:to_str)
+    raise TypeError, "no implicit conversion of #{path.class} into String" unless path.is_a?(String)
+    raise Errno::ENOENT, "No such file or directory @ dir_initialize - #{path}" unless File.directory?(path)
+    @path = path
+    @entries = Dir.entries(path)
+    @pos = 0
+    @closed = false
+  end
+
+  def read
+    raise IOError, "closed directory" if @closed
+    return nil if @pos >= @entries.length
+    entry = @entries[@pos]
+    @pos += 1
+    entry
+  end
+
+  def each(&block)
+    raise IOError, "closed directory" if @closed
+    return to_enum(:each) unless block
+    @entries.each { |e| block.call(e) }
+    self
+  end
+
+  def children
+    raise IOError, "closed directory" if @closed
+    @entries.reject { |e| e == "." || e == ".." }
+  end
+
+  def each_child(&block)
+    raise IOError, "closed directory" if @closed
+    return to_enum(:each_child) unless block
+    children.each { |e| block.call(e) }
+    self
+  end
+
+  def rewind
+    raise IOError, "closed directory" if @closed
+    @pos = 0
+    self
+  end
+
+  def pos
+    raise IOError, "closed directory" if @closed
+    @pos
+  end
+
+  alias tell pos
+
+  def pos=(newpos)
+    raise IOError, "closed directory" if @closed
+    @pos = newpos
+  end
+
+  alias seek pos=
+
+  def close
+    @closed = true
+    nil
+  end
+
+  def path
+    @path
+  end
+
+  alias to_path path
+
+  def inspect
+    "#<Dir:#{@path}>"
+  end
+
+  def self.children(path)
+    entries(path).reject { |e| e == "." || e == ".." }
+  end
+
+  def self.each_child(path, &block)
+    return to_enum(:each_child, path) unless block
+    children(path).each { |e| block.call(e) }
+  end
+
+  def self.empty?(path)
+    children(path).empty?
   end
 end
 
-class String
-  def +@
-    self
-  end
-  def -@
-    self
-  end
-
-  def freeze
-    self
-  end
-
-  def frozen?
-    true
-  end
-
-  def encode(*args, **opts)
-    if opts[:xml] == :attr
-      s = gsub("&", "&amp;")
-      s = s.gsub("<", "&lt;")
-      s = s.gsub(">", "&gt;")
-      s = s.gsub("\"", "&quot;")
-      "\"#{s}\""
-    elsif opts[:xml] == :text
-      s = gsub("&", "&amp;")
-      s = s.gsub("<", "&lt;")
-      s = s.gsub(">", "&gt;")
-      s
-    else
-      self
+class Array
+  def values_at(*selectors)
+    result = []
+    selectors.each do |s|
+      if s.is_a?(Range)
+        b = s.begin
+        e = s.end
+        b = b.nil? ? 0 : b.to_int
+        endless = e.nil?
+        e = endless ? size - 1 : e.to_int
+        b += size if b < 0
+        e += size if e < 0
+        e -= 1 if !endless && s.exclude_end?
+        next if b < 0
+        i = b
+        while i <= e
+          result << self[i]
+          i += 1
+        end
+      else
+        result << self[s]
+      end
     end
+    result
   end
+end
 
-  def squeeze(*args)
-    if args.empty?
-      gsub(/(.)\1+/, '\1')
-    else
-      chars_to_squeeze = args.join
-      escaped = chars_to_squeeze.gsub(/[\\\[\]\-\^]/) { |c| "\\#{c}" }
-      gsub(/([#{escaped}])\1+/, '\1')
-    end
+class File
+  def self.zero?(path)
+    s = File.size(path) rescue return false
+    s == 0
   end
+end
 
-  def squeeze!(*args)
-    result = squeeze(*args)
-    if result == self
-      nil
-    else
-      replace(result)
-      self
-    end
+module FileTest
+  def self.zero?(path)
+    File.zero?(path)
   end
 end

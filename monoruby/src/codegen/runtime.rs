@@ -71,6 +71,10 @@ impl ProcData {
         }
     }
 
+    pub(crate) fn func_id(&self) -> Option<FuncId> {
+        self.func_id
+    }
+
     pub(crate) fn from_proc(proc: &ProcInner) -> Self {
         Self {
             outer: Some(proc.outer_lfp()),
@@ -121,10 +125,14 @@ pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals
 pub(super) extern "C" fn block_arg(
     vm: &mut Executor,
     _: &mut Globals,
-    block_handler: Option<BlockHandler>,
+    mut lfp: Lfp,
     pc: BytecodePtr,
 ) -> Option<Value> {
-    let bh = match block_handler {
+    let outer = pc.op1() as u32;
+    for _ in 0..outer {
+        lfp = lfp.outer().unwrap();
+    }
+    let bh = match lfp.block() {
         Some(bh) => bh,
         None => {
             return Some(Value::nil());
@@ -133,7 +141,11 @@ pub(super) extern "C" fn block_arg(
     if bh.get().is_nil() {
         return Some(Value::nil());
     }
-    match vm.generate_proc(bh, pc) {
+    let mut cfp = vm.cfp();
+    while cfp.lfp() != lfp {
+        cfp = Executor::prev_cfp(vm, cfp).1;
+    }
+    match vm.generate_proc_inner(cfp, bh, pc) {
         Ok(val) => Some(val.into()),
         Err(err) => {
             vm.set_error(err);
@@ -535,7 +547,19 @@ pub(super) extern "C" fn get_index(
     class_slot.idx = index.class();
     match base_classid {
         ARRAY_CLASS => {
-            return match base.as_array().get_elem1(globals, index) {
+            // If the index is not a fixnum or range, try to_int coercion
+            let idx = if index.try_fixnum().is_none() && index.is_range().is_none() {
+                match index.coerce_to_int_i64(vm, globals) {
+                    Ok(i) => Value::integer(i),
+                    Err(err) => {
+                        vm.set_error(err);
+                        return None;
+                    }
+                }
+            } else {
+                index
+            };
+            return match base.as_array().get_elem1(vm, globals, idx) {
                 Ok(val) => Some(val),
                 Err(err) => {
                     vm.set_error(err);
@@ -552,15 +576,32 @@ pub(super) extern "C" fn get_index(
                 }
             };
         }
-        INTEGER_CLASS => {
-            return match op::integer_index1(globals, base, index) {
+        /*INTEGER_CLASS => {
+            // Try to_int coercion for non-integer index
+            let idx = match index.unpack() {
+                RV::Fixnum(_) | RV::BigInt(_) => index,
+                _ => {
+                    if index.is_range().is_some() {
+                        index
+                    } else {
+                        match index.coerce_to_int(vm, globals) {
+                            Ok(i) => i,
+                            Err(err) => {
+                                vm.set_error(err);
+                                return None;
+                            }
+                        }
+                    }
+                }
+            };
+            return match op::integer_index1(vm, globals, base, idx) {
                 Ok(val) => Some(val),
                 Err(err) => {
                     vm.set_error(err);
                     None
                 }
             };
-        }
+        }*/
         METHOD_CLASS => {
             let method = base.as_method();
             let func_id = method.func_id();
@@ -587,6 +628,10 @@ pub(super) extern "C" fn set_index(
         && let Some(idx) = index.try_fixnum()
     {
         class_slot.idx = INTEGER_CLASS;
+        if base.is_frozen() {
+            vm.set_error(MonorubyErr::cant_modify_frozen(&globals.store, base));
+            return None;
+        }
         return match base.as_array().set_index(idx, src) {
             Ok(val) => Some(val),
             Err(err) => {
@@ -702,14 +747,32 @@ pub(super) extern "C" fn set_global_var(globals: &mut Globals, name: IdentId, va
 ///
 /// id: 0 -> $&
 /// id: 1 -> $'
+/// id: 2 -> $~
 /// id: 100 + n -> $<n> (n >= 1)
 ///
+/// Set special variable.
+/// Currently only $~ (SPECIAL_MATCHDATA) supports assignment.
+/// $~ = nil clears the capture state.
+pub(super) extern "C" fn set_special_var(val: Value, vm: &mut Executor, id: u32) {
+    match id {
+        ruruby_parse::SPECIAL_MATCHDATA => {
+            if val.is_nil() {
+                vm.clear_capture_special_variables();
+            }
+            // non-nil assignment is silently ignored for now
+        }
+        _ => {}
+    }
+}
+
 pub(super) extern "C" fn get_special_var(vm: &Executor, globals: &Globals, id: u32) -> Value {
     match id {
         // $&
         ruruby_parse::SPECIAL_LASTMATCH => vm.sp_last_match(),
         // $'
         ruruby_parse::SPECIAL_POSTMATCH => vm.sp_post_match(),
+        // $~
+        ruruby_parse::SPECIAL_MATCHDATA => vm.get_last_matchdata(),
         // $LOAD_PATH
         ruruby_parse::SPECIAL_LOADPATH => globals.get_load_path(),
         // $LOADED_FEATURES
@@ -742,15 +805,15 @@ pub(super) extern "C" fn define_singleton_class(
     globals: &mut Globals,
     base: Value,
 ) -> Option<Value> {
-    let self_val = match globals.store.get_singleton(base) {
+    let self_val = match base.get_singleton(&mut globals.store) {
         Ok(val) => val,
         Err(err) => {
             vm.set_error(err);
             return None;
         }
     };
-    vm.push_class_context(self_val.id());
-    Some(self_val.as_val())
+    vm.push_class_context(self_val.as_class_id());
+    Some(self_val)
 }
 
 pub(super) extern "C" fn define_method(
@@ -785,8 +848,8 @@ pub(super) extern "C" fn singleton_define_method(
         globals.store[iseq].lexical_context =
             globals.store.iseq(current_func).lexical_context.clone();
     }
-    let class_id = match globals.store.get_singleton(obj) {
-        Ok(val) => val.id(),
+    let class_id = match obj.get_singleton(&mut globals.store) {
+        Ok(val) => val.as_class_id(),
         Err(err) => {
             vm.set_error(err);
             return None;

@@ -523,6 +523,7 @@ fn do_kill_thread(thread_id: u64) {
 }
 
 /// Check if the current thread has been killed.
+#[allow(dead_code)]
 fn is_current_thread_killed() -> bool {
     CURRENT_THREAD_STATE.with(|s| {
         if let Some(state) = s.borrow().as_ref() {

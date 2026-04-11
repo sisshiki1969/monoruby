@@ -1,5 +1,5 @@
 use super::*;
-use num::BigInt;
+use num::{BigInt, ToPrimitive};
 use ruruby_parse::{
     ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, LvarCollector, Node, NodeKind,
     ParseResult, RescueEntry, SourceInfoRef, UnOp,
@@ -175,6 +175,9 @@ enum LvalueKind {
     },
     LocalVar {
         dst: BcReg,
+    },
+    SpecialVar {
+        id: u32,
     },
     Discard,
 }
@@ -628,28 +631,47 @@ impl<'a> BytecodeGen<'a> {
         }
 
         let ast = info.ast;
-        let is_const = if !self.is_block()
-            && self.ir.len() == 1
-            && let NodeKind::Return(box ret) = &ast.kind
-        {
-            match &ret.kind {
-                NodeKind::Nil => Some(Immediate::nil()),
-                NodeKind::Bool(b) => Some(Immediate::bool(*b)),
-                NodeKind::Integer(i) => Immediate::check_fixnum(*i),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        if let Some(imm) = is_const {
-            self.store[self.func_id].kind = FuncKind::Const(imm);
-            return Ok(());
+        if let Some(hint) = self.hint(&ast) {
+            self.store[self.iseq_id].hint = hint;
         }
         self.apply_label(self.redo_label);
         self.gen_expr(ast, UseMode2::Ret)?;
         self.replace_init(&info.params);
         self.iseq_mut().loc = info.loc;
         self.into_bytecode()
+    }
+
+    fn hint(&self, ast: &Node) -> Option<ISeqHint> {
+        // Detect trivial methods: no params, no blocks, single-expression body.
+        if let NodeKind::Begin {
+            body,
+            rescue,
+            else_: None,
+            ensure: None,
+        } = &ast.kind
+            && rescue.is_empty()
+        {
+            let kind = match &body.kind {
+                NodeKind::CompStmt(nodes) if nodes.len() == 0 => {
+                    // def foo; end
+                    return Some(ISeqHint::ConstReturn(Immediate::nil()));
+                }
+                NodeKind::Return(box ret) => {
+                    // def foo; return expr; end
+                    &ret.kind
+                }
+                kind => kind,
+            };
+            match kind {
+                NodeKind::Nil => Some(ISeqHint::ConstReturn(Immediate::nil())),
+                NodeKind::Bool(b) => Some(ISeqHint::ConstReturn(Immediate::bool(*b))),
+                NodeKind::Integer(i) => Immediate::check_fixnum(*i).map(ISeqHint::ConstReturn),
+                NodeKind::SelfValue => Some(ISeqHint::SelfReturn),
+                _ => None,
+            }
+        } else {
+            None
+        }
     }
 
     fn is_block(&self) -> bool {
@@ -1047,6 +1069,19 @@ impl<'a> BytecodeGen<'a> {
         self.emit_literal(dst, Value::complex(0, r));
     }
 
+    fn emit_rational(&mut self, dst: BcReg, n: &BigInt, d: &BigInt) {
+        let val = Value::rational_from_bigint(n.clone(), d.clone());
+        self.emit_literal(dst, val);
+    }
+
+    fn emit_rimaginary(&mut self, dst: BcReg, n: &BigInt, d: &BigInt) {
+        // ri literal: rational imaginary, e.g. 42ri = Complex(0, Rational(42, 1))
+        // In CRuby, 42ri creates Complex(0, Rational(42, 1))
+        // For now, convert to float complex since our Complex uses Real (not Rational)
+        let f = n.to_f64().unwrap_or(f64::INFINITY) / d.to_f64().unwrap_or(f64::INFINITY);
+        self.emit_literal(dst, Value::complex(0, f));
+    }
+
     fn emit_string(&mut self, dst: BcReg, s: String) {
         self.emit_literal(dst, Value::string(s));
     }
@@ -1291,6 +1326,11 @@ impl<'a> BytecodeGen<'a> {
                 let name = IdentId::get_id(name);
                 LvalueKind::ClassVar(name)
             }
+            NodeKind::GlobalVar(name) if name == "$~" => {
+                LvalueKind::SpecialVar {
+                    id: ruruby_parse::SPECIAL_MATCHDATA,
+                }
+            }
             NodeKind::GlobalVar(name) => {
                 let name = IdentId::get_id(name);
                 LvalueKind::GlobalVar(name)
@@ -1348,9 +1388,6 @@ impl<'a> BytecodeGen<'a> {
                 LvalueKind::Send { recv, method }
             }
             NodeKind::SpecialVar(id) => {
-                // 0 => $&
-                // 1 => $'
-                // 100 + n => $n
                 return Err(self.cant_set_variable(*id, lhs.loc));
             }
             NodeKind::DiscardLhs => LvalueKind::Discard,
@@ -1422,6 +1459,10 @@ impl<'a> BytecodeGen<'a> {
             LvalueKind::LocalVar { dst } => {
                 self.set_temp(old_temp);
                 self.emit_mov(dst, src);
+            }
+            LvalueKind::SpecialVar { id } => {
+                self.set_temp(old_temp);
+                self.emit(BytecodeInst::StoreSvar { val: src, id }, loc);
             }
             LvalueKind::Discard => {
                 self.set_temp(old_temp);
@@ -1583,6 +1624,8 @@ pub(crate) enum BinOpK {
     BitXor = 6,
     Rem = 7,
     Exp = 8,
+    Shl = 9,
+    Shr = 10,
 }
 
 impl std::fmt::Display for BinOpK {
@@ -1597,6 +1640,8 @@ impl std::fmt::Display for BinOpK {
             BinOpK::BitXor => "^",
             BinOpK::Rem => "%",
             BinOpK::Exp => "**",
+            BinOpK::Shl => "<<",
+            BinOpK::Shr => ">>",
         };
         write!(f, "{}", s)
     }
@@ -1614,23 +1659,11 @@ impl BinOpK {
             6 => BinOpK::BitXor,
             7 => BinOpK::Rem,
             8 => BinOpK::Exp,
+            9 => BinOpK::Shl,
+            10 => BinOpK::Shr,
             _ => unreachable!(),
         }
     }
-
-    /*pub(crate) fn generic_func(&self) -> BinaryOpFn {
-        match self {
-            BinOpK::Add => add_values,
-            BinOpK::Sub => sub_values,
-            BinOpK::Mul => mul_values,
-            BinOpK::Div => div_values,
-            BinOpK::BitOr => bitor_values,
-            BinOpK::BitAnd => bitand_values,
-            BinOpK::BitXor => bitxor_values,
-            BinOpK::Rem => rem_values,
-            BinOpK::Exp => pow_values,
-        }
-    }*/
 }
 
 ///
@@ -1666,11 +1699,4 @@ impl UnOpK {
             _ => unreachable!(),
         }
     }
-
-    //pub(crate) fn generic_func(&self) -> UnaryOpFn {
-    //    match self {
-    //        UnOpK::Pos => pos_value,
-    //        UnOpK::Neg => neg_value,
-    //    }
-    //}
 }

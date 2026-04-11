@@ -48,13 +48,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_class("EncodingError", standarderr, OBJECT_CLASS);
     globals.define_builtin_exception_class("FiberError", FIBER_ERROR_CLASS, standarderr);
     globals.define_builtin_exception_class("ThreadError", THREAD_ERROR_CLASS, standarderr);
-    let ioerr =
-        globals.define_builtin_exception_class("IOError", IO_ERROR_CLASS, standarderr);
+    let ioerr = globals.define_builtin_exception_class("IOError", IO_ERROR_CLASS, standarderr);
     globals.define_class("EOFError", ioerr, OBJECT_CLASS);
 
     let indexerr =
         globals.define_builtin_exception_class("IndexError", INDEX_ERROR_CLASS, standarderr);
-    globals.define_builtin_exception_class("KeyError", KEY_ERROR_CLASS, indexerr);
+    let keyerr = globals.define_builtin_exception_class("KeyError", KEY_ERROR_CLASS, indexerr);
+    globals.define_builtin_func(keyerr.id(), "receiver", keyerror_receiver, 0);
+    globals.define_builtin_func(keyerr.id(), "key", keyerror_key, 0);
     globals.define_builtin_exception_class("StopIteration", STOP_ITERATION_CLASS, indexerr);
 
     globals.define_builtin_exception_class("LocalJumpError", LOCAL_JUMP_ERROR_CLASS, standarderr);
@@ -78,7 +79,7 @@ pub(super) fn init(globals: &mut Globals) {
         standarderr,
     );
 
-    globals.define_builtin_func_with(EXCEPTION_CLASS, "initialize", initialize, 0, 1, false);
+    globals.define_builtin_func_with(EXCEPTION_CLASS, "initialize", initialize, 0, 2, false);
     globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "set_backtrace", set_backtrace, 1);
@@ -103,18 +104,11 @@ fn nomethoderr_receiver(
 
 /// ### Exception.allocate
 #[monoruby_builtin]
-fn allocate(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn allocate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let name = class_id.get_name(globals);
     Ok(Value::new_exception_from_with_class(
-        name,
-        class_id,
-        class_id,
+        name, class_id, class_id,
     ))
 }
 
@@ -126,7 +120,12 @@ fn allocate(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/s/exception.html]
 #[monoruby_builtin]
-fn exception_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn exception_new(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let class_id = lfp.self_val().expect_class(globals)?.id();
     let obj = Value::new_exception_from("".to_string(), class_id);
 
@@ -153,12 +152,45 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let mut self_ = lfp.self_val();
     let class_id = self_.real_class(&globals.store).id();
     let message = if let Some(msg) = lfp.try_arg(0) {
-        msg.coerce_to_string(vm, globals)?
+        if msg.try_hash_ty().is_some() {
+            // Keyword arguments hash passed as positional arg; use default message.
+            store_exception_kwargs(vm, globals, self_, msg)?;
+            globals.store.get_class_name(class_id)
+        } else {
+            // Check if there's a keyword hash as second arg
+            if let Some(kwargs) = lfp.try_arg(1) {
+                if kwargs.try_hash_ty().is_some() {
+                    store_exception_kwargs(vm, globals, self_, kwargs)?;
+                }
+            }
+            msg.coerce_to_string(vm, globals)?
+        }
     } else {
         globals.store.get_class_name(class_id)
     };
     self_.is_exception_mut().unwrap().set_message(message);
     Ok(Value::nil())
+}
+
+/// Store keyword arguments (receiver:, key:) from a Hash into exception ivars.
+fn store_exception_kwargs(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_: Value,
+    kwargs: Value,
+) -> Result<()> {
+    let hash = kwargs.as_hash();
+    let recv_key = Value::symbol_from_str("receiver");
+    if let Ok(Some(v)) = hash.get(recv_key, vm, globals) {
+        globals
+            .store
+            .set_ivar(self_, IdentId::get_id("/receiver"), v)?;
+    }
+    let key_key = Value::symbol_from_str("key");
+    if let Ok(Some(v)) = hash.get(key_key, vm, globals) {
+        globals.store.set_ivar(self_, IdentId::get_id("/key"), v)?;
+    }
+    Ok(())
 }
 
 ///
@@ -214,6 +246,38 @@ fn set_backtrace(
     }
 }
 
+/// ### KeyError#receiver
+#[monoruby_builtin]
+fn keyerror_receiver(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let v = globals
+        .store
+        .get_ivar(self_val, IdentId::get_id("/receiver"))
+        .unwrap_or_default();
+    Ok(v)
+}
+
+/// ### KeyError#key
+#[monoruby_builtin]
+fn keyerror_key(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let v = globals
+        .store
+        .get_ivar(self_val, IdentId::get_id("/key"))
+        .unwrap_or_default();
+    Ok(v)
+}
+
 ///
 /// ### LoadError#path
 ///
@@ -221,7 +285,12 @@ fn set_backtrace(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/LoadError/i/path.html]
 #[monoruby_builtin]
-fn loaderror_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn loaderror_path(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
     Ok(globals
         .store
@@ -236,7 +305,12 @@ fn loaderror_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/SystemExit/i/status.html]
 #[monoruby_builtin]
-fn system_exit_status(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn system_exit_status(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_ = lfp.self_val();
     Ok(globals
         .store
@@ -251,13 +325,18 @@ fn system_exit_status(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: By
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/SystemExit/s/new.html]
 #[monoruby_builtin]
-fn system_exit_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn system_exit_new(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let class_id = lfp.self_val().expect_class(globals)?.id();
     let name = class_id.get_name(&globals.store);
     let (status, msg) = if let Some(arg0) = lfp.try_arg(0) {
-        let status = arg0.coerce_to_int(vm, globals)?;
+        let status = arg0.coerce_to_int_i64(vm, globals)?;
         if let Some(arg1) = lfp.try_arg(1) {
-            (status, arg1.expect_string(globals)?)
+            (status, arg1.coerce_to_str(vm, globals)?)
         } else {
             (status, name.clone())
         }
@@ -277,7 +356,10 @@ fn system_exit_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
 #[monoruby_builtin]
 fn cause(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    Ok(globals.store.get_ivar(self_, IdentId::get_id("/cause")).unwrap_or_default())
+    Ok(globals
+        .store
+        .get_ivar(self_, IdentId::get_id("/cause"))
+        .unwrap_or_default())
 }
 
 #[cfg(test)]
@@ -347,6 +429,32 @@ mod tests {
               raise "original"
             rescue => e
               e.cause
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn nomethoderror_receiver() {
+        run_test(
+            r#"
+            begin
+              nil.foo
+            rescue NoMethodError => e
+              e.receiver
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn nomethoderror_class() {
+        run_test(
+            r#"
+            begin
+              nil.foo
+            rescue => e
+              e.class
             end
             "#,
         );

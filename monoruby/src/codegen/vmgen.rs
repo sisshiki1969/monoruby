@@ -218,13 +218,15 @@ impl Codegen {
 
         let add_rr = self.vm_binops_opt(Self::int_add, add_values);
         let sub_rr = self.vm_binops_opt(Self::int_sub, sub_values);
-        let or_rr = self.vm_binops_opt(Self::int_or, bitor_values);
-        let and_rr = self.vm_binops_opt(Self::int_and, bitand_values);
-        let xor_rr = self.vm_binops_opt(Self::int_xor, bitxor_values);
+        let or_rr = self.vm_binops(bitor_values);
+        let and_rr = self.vm_binops(bitand_values);
+        let xor_rr = self.vm_binops(bitxor_values);
         let div_rr = self.vm_binops(div_values);
         let mul_rr = self.vm_binops(mul_values);
         let rem_rr = self.vm_binops(rem_values);
         let pow_rr = self.vm_binops(pow_values);
+        let shl_rr = self.vm_binops(shl_values);
+        let shr_rr = self.vm_binops(shr_values);
         let vm_send_simple = self.vm_send(true);
         let vm_send = self.vm_send(false);
 
@@ -255,6 +257,7 @@ impl Codegen {
         self.dispatch[27] = self.vm_load_cvar();
         self.dispatch[28] = self.vm_load_svar();
         self.dispatch[29] = self.vm_store_cvar();
+        self.dispatch[41] = self.vm_store_svar();
         self.dispatch[30] = vm_send_simple;
         self.dispatch[31] = vm_send;
         self.dispatch[32] = vm_send_simple;
@@ -322,17 +325,19 @@ impl Codegen {
         self.dispatch[166] = xor_rr;
         self.dispatch[167] = rem_rr;
         self.dispatch[168] = pow_rr;
+        self.dispatch[169] = shl_rr;
+        self.dispatch[170] = shr_rr;
 
-        self.dispatch[170] = self.vm_init();
-        self.dispatch[171] = self.vm_expand_array();
-        self.dispatch[172] = self.vm_undef_method();
-        self.dispatch[173] = self.vm_alias_method();
-        self.dispatch[174] = self.vm_hash();
-        self.dispatch[175] = toa;
-        self.dispatch[176] = mov;
-        self.dispatch[177] = self.vm_range(false);
-        self.dispatch[178] = self.vm_range(true);
-        self.dispatch[179] = self.vm_concat();
+        self.dispatch[172] = self.vm_init();
+        self.dispatch[173] = self.vm_expand_array();
+        self.dispatch[174] = self.vm_undef_method();
+        self.dispatch[175] = self.vm_alias_method();
+        self.dispatch[176] = self.vm_hash();
+        self.dispatch[177] = toa;
+        self.dispatch[178] = mov;
+        self.dispatch[179] = self.vm_range(false);
+        self.dispatch[180] = self.vm_range(true);
+        self.dispatch[181] = self.vm_concat();
     }
 
     ///
@@ -371,6 +376,8 @@ impl Codegen {
         self.dispatch[166] = self.vm_binops(bitxor_values_no_opt);
         self.dispatch[167] = self.vm_binops(rem_values_no_opt);
         self.dispatch[168] = self.vm_binops(pow_values_no_opt);
+        self.dispatch[169] = self.vm_binops(shl_values_no_opt);
+        self.dispatch[170] = self.vm_binops(shr_values_no_opt);
 
         self.jit.finalize();
     }
@@ -964,22 +971,12 @@ impl Codegen {
     //
     fn vm_block_arg(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let loop_ = self.jit.label();
-        let loop_exit = self.jit.label();
         let raise = self.entry_raise();
         self.fetch2();
         monoasm! { &mut self.jit,
-            movq  rax, r14;
-            testq rdi, rdi;
-            jz   loop_exit;
-        loop_:
-            movq rax, [rax];
-            subl rdi, 1;
-            jnz  loop_;
-        loop_exit:
-            movq rdx, [rax - (LFP_BLOCK)];
             movq rdi, rbx;
             movq rsi, r12;
+            movq rdx, r14;
             lea  rcx, [r13 - 16];
             movq rax, (runtime::block_arg);
             call rax;
@@ -1137,17 +1134,28 @@ impl Codegen {
     fn vm_neg(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let generic = self.jit.label();
+        let overflow = self.jit.label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
         self.guard_rdi_fixnum(&generic);
         monoasm! { &mut self.jit,
+            movq rax, rdi;  // save original tagged value for overflow case
             sarq rdi, 1;
             negq rdi;
-            lea rdi, [rdi + rdi + 1];
+            jo   overflow;  // i64 negation overflow (MIN_I64)
+            // Check if result fits in i63: add rdi to itself and check overflow
+            addq rdi, rdi;
+            jo   overflow;  // value doesn't fit in i63
+            orq  rdi, 1;    // set fixnum tag bit
         };
         self.vm_lhs_integer();
         self.vm_store_r15(GP::Rdi);
         self.fetch_and_dispatch();
+        // Overflow path: restore original tagged value and fall through to generic
+        self.jit.bind_label(overflow);
+        monoasm! { &mut self.jit,
+            movq rdi, rax;
+        };
         self.vm_generic_unop(&generic, neg_value);
         label
     }
@@ -1200,28 +1208,6 @@ impl Codegen {
             subq rax, rsi;
             jo generic;
             addb rax, 1;
-        };
-    }
-
-    fn int_or(&mut self, _generic: DestLabel) {
-        monoasm! { &mut self.jit,
-            movq rax, rdi;
-            orq rax, rsi;
-        };
-    }
-
-    fn int_and(&mut self, _generic: DestLabel) {
-        monoasm! { &mut self.jit,
-            movq rax, rdi;
-            andq rax, rsi;
-        };
-    }
-
-    fn int_xor(&mut self, _generic: DestLabel) {
-        monoasm! { &mut self.jit,
-            movq rax, rdi;
-            xorq rax, rsi;
-            orb rax, 1;
         };
     }
 

@@ -82,6 +82,8 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             TokenKind::BignumLit(num) => Ok(Node::new_bignum(num, loc)),
             TokenKind::FloatLit(num) => Ok(Node::new_float(num, loc)),
             TokenKind::ImaginaryLit(num) => Ok(Node::new_imaginary(num, loc)),
+            TokenKind::RationalLit(n, d) => Ok(Node::new_rational(n, d, loc)),
+            TokenKind::RImaginaryLit(n, d) => Ok(Node::new_rimaginary(n, d, loc)),
             TokenKind::StringLit(s) => self.parse_string_literal(s),
             TokenKind::CommandLit(s) => {
                 let content = Node::new_string(s.into(), loc);

@@ -4,17 +4,39 @@ set -e
 RUSTFLAGS=-Cforce-frame-pointers cargo install --path monoruby
 cd ../spec
 
-# Spec files that hang due to blocking IO or Thread patterns in
-# monoruby's single-threaded runtime.
-EXCLUDE_FILES="core/io/copy_stream_spec.rb|core/io/popen_spec.rb|core/io/select_spec.rb"
+# Spec files that hang due to blocking IO or Thread dependencies
+# in monoruby's single-threaded runtime.
+# - copy_stream_spec: hangs on pipe fd not closed by GC (fixture leak)
+# - select_spec: hangs on Thread.new + Thread.pass (requires real threading)
+# - readlines_spec: blocks reading from stdin
+EXCLUDE_FILES="core/io/copy_stream_spec.rb|core/io/select_spec.rb|core/kernel/readlines_spec.rb"
 
 FAILED=0
+TOTAL_EXAMPLES=0
+TOTAL_FAILURES=0
+TOTAL_ERRORS=0
+
 for cat in $(ls core/); do
   SPEC_FILES=$(find core/$cat -name '*_spec.rb' 2>/dev/null | grep -vE "$EXCLUDE_FILES" | sort)
   [ -z "$SPEC_FILES" ] && continue
-  echo "=== core/$cat ==="
-  if ! timeout 90 ../mspec/bin/mspec $SPEC_FILES -t monoruby; then
-    FAILED=$((FAILED + 1))
+
+  FILE_COUNT=$(echo "$SPEC_FILES" | wc -l)
+  echo "=== core/$cat ($FILE_COUNT files) ==="
+
+  # For categories with many spec files (>80), run in smaller batches
+  # to avoid timeouts.
+  if [ "$FILE_COUNT" -gt 80 ]; then
+    BATCH_FAILED=0
+    echo "$SPEC_FILES" | xargs -n 40 sh -c '
+      timeout 180 ../mspec/bin/mspec "$@" -t monoruby || exit 1
+    ' _ || BATCH_FAILED=1
+    if [ "$BATCH_FAILED" -ne 0 ]; then
+      FAILED=$((FAILED + 1))
+    fi
+  else
+    if ! timeout 120 ../mspec/bin/mspec $SPEC_FILES -t monoruby; then
+      FAILED=$((FAILED + 1))
+    fi
   fi
 done
 

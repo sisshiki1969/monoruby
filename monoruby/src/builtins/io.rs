@@ -1,6 +1,9 @@
 use super::*;
 use std::fs::File;
+use std::os::fd::FromRawFd;
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::rc::Rc;
 
 //
 // IO class
@@ -8,32 +11,36 @@ use std::process::{Command, Stdio};
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("IO", IO_CLASS, ObjTy::IO);
-    globals.define_builtin_class_func(IO_CLASS, "new", io_new, 0);
+    globals.define_builtin_class_func_with(IO_CLASS, "new", io_new, 1, 3, false);
     globals.define_builtin_class_func(IO_CLASS, "allocate", allocate, 0);
     globals.define_builtin_func(IO_CLASS, "<<", shl, 1);
     globals.define_builtin_func_with(IO_CLASS, "puts", puts, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "print", print, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "printf", printf, 1, 1, true);
     globals.define_builtin_func(IO_CLASS, "flush", flush, 0);
-    globals.define_builtin_func(IO_CLASS, "gets", gets, 0);
+    globals.define_builtin_func_with(IO_CLASS, "gets", gets, 0, 2, false);
     globals.define_builtin_funcs(IO_CLASS, "isatty", &["tty?"], isatty, 0);
     globals.define_builtin_func(IO_CLASS, "close", close, 0);
+    globals.define_builtin_func(IO_CLASS, "close_write", close_write, 0);
+    globals.define_builtin_func(IO_CLASS, "close_read", close_read, 0);
     globals.define_builtin_func(IO_CLASS, "closed?", closed_, 0);
-    globals.define_builtin_func(IO_CLASS, "sync", sync, 0);
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
-    globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 1, false);
-    globals.define_builtin_func(IO_CLASS, "readline", readline, 0);
+    globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 2, false);
+    globals.define_builtin_func_with(IO_CLASS, "readline", readline, 0, 2, false);
     globals.define_builtin_funcs(IO_CLASS, "each", &["each_line"], each_line, 0);
-    globals.define_builtin_class_func(IO_CLASS, "read", io_class_read, 1);
+    globals.define_builtin_class_func_with(IO_CLASS, "read", io_class_read, 1, 4, false);
     globals.define_builtin_class_func_with(IO_CLASS, "sysopen", io_sysopen, 1, 3, false);
-    globals.define_builtin_class_func(IO_CLASS, "pipe", io_pipe, 0);
+    globals.define_builtin_class_func_with(IO_CLASS, "pipe", io_pipe, 0, 3, false);
     globals.define_builtin_class_func_rest(IO_CLASS, "popen", io_popen);
     globals.define_builtin_func(IO_CLASS, "pid", io_pid, 0);
     globals.define_builtin_func(IO_CLASS, "fileno", io_fileno, 0);
     globals.define_builtin_func_with(IO_CLASS, "write", io_write_method, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "syswrite", io_syswrite, 1, 1, false);
     globals.define_builtin_class_func_with(IO_CLASS, "select", io_select, 1, 4, false);
-
+    globals.define_builtin_class_func_with(IO_CLASS, "foreach", io_foreach, 1, 2, false);
+    globals.define_builtin_class_func_with(IO_CLASS, "copy_stream", io_copy_stream, 2, 4, false);
+    globals.define_builtin_func_with(IO_CLASS, "set_encoding", set_encoding, 1, 3, false);
+    globals.define_builtin_func(IO_CLASS, "external_encoding", external_encoding, 0);
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
     globals.set_gvar(IdentId::get_id("$stdin"), stdin);
@@ -49,8 +56,24 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 #[monoruby_builtin]
-fn io_new(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Err(MonorubyErr::argumenterr("IO.new is not supported"))
+fn io_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // IO.new(fd [, mode [, opt]]) -> creates an IO object from an integer file descriptor.
+    if let Some(fd) = lfp.arg(0).try_fixnum() {
+        let fd_i32 = fd as i32;
+        if fd_i32 < 0 || unsafe { libc::fcntl(fd_i32, libc::F_GETFD) } == -1 {
+            let err = std::io::Error::from_raw_os_error(9); // EBADF
+            return Err(MonorubyErr::errno_with_path(
+                &globals.store,
+                &err,
+                "rb_sysopen",
+                &format!("fd {}", fd),
+            ));
+        }
+        let name = format!("fd {}", fd);
+        let io_inner = IoInner::from_raw_fd(fd_i32, name);
+        return Ok(Value::new_io(io_inner));
+    }
+    Err(MonorubyErr::argumenterr("IO.new requires an integer file descriptor"))
 }
 
 /// ### IO.allocate
@@ -175,7 +198,7 @@ fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let io = self_.as_io_inner_mut();
     let args = lfp.arg(1).as_array();
 
-    let buf = globals.format_by_args(&format_str, &args)?;
+    let buf = vm.format_by_args(globals, &format_str, &args)?;
     io.write(buf.as_bytes())?;
 
     Ok(Value::nil())
@@ -235,13 +258,16 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let popen_result = lfp.self_val().as_io_inner_mut().close()?;
     if let Some((exit_status, pid)) = popen_result {
         // Set $? (Process::Status) via Process::Status.new(exitstatus, pid)
-        let status_class = vm
-            .get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
+        let status_class =
+            vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
         let status_obj = vm.invoke_method_inner(
             globals,
             IdentId::NEW,
             status_class,
-            &[Value::integer(exit_status as i64), Value::integer(pid as i64)],
+            &[
+                Value::integer(exit_status as i64),
+                Value::integer(pid as i64),
+            ],
             None,
             None,
         )?;
@@ -253,17 +279,54 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// ### IO#closed?
 ///
+/// ### IO#close_write
+#[monoruby_builtin]
+fn close_write(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    match io {
+        IoInner::Popen(popen) => {
+            let popen = Rc::get_mut(popen).unwrap();
+            popen.writer = None;
+            Ok(Value::nil())
+        }
+        IoInner::Closed => Err(MonorubyErr::ioerr("closed stream")),
+        _ => Err(MonorubyErr::ioerr("closing non-duplex IO for writing")),
+    }
+}
+
+/// ### IO#close_read
+#[monoruby_builtin]
+fn close_read(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    match io {
+        IoInner::Popen(popen) => {
+            let popen = Rc::get_mut(popen).unwrap();
+            popen.reader = None;
+            Ok(Value::nil())
+        }
+        IoInner::Closed => Err(MonorubyErr::ioerr("closed stream")),
+        _ => Err(MonorubyErr::ioerr("closing non-duplex IO for reading")),
+    }
+}
+
 /// - closed? -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/closed=3f.html]
 #[monoruby_builtin]
 fn closed_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_io_inner().is_closed()))
-}
-
-#[monoruby_builtin]
-fn sync(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(false))
 }
 
 #[monoruby_builtin]
@@ -289,7 +352,7 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             if v.is_nil() {
                 None
             } else {
-                let length = v.coerce_to_int(vm, globals)?;
+                let length = v.coerce_to_int_i64(vm, globals)?;
                 if length < 0 {
                     return Err(MonorubyErr::argumenterr("negative length"));
                 }
@@ -373,21 +436,101 @@ fn io_class_read(
     let filename = lfp.arg(0).coerce_to_string(vm, globals)?;
     let mut file = match File::open(&filename) {
         Ok(file) => file,
-        Err(_) => {
-            return Err(MonorubyErr::runtimeerr(format!(
-                "No such file or directory @ rb_sysopen - {}",
-                filename
-            )));
+        Err(err) => {
+            return Err(MonorubyErr::errno_with_path(
+                &globals.store,
+                &err,
+                "rb_sysopen",
+                &filename,
+            ));
         }
     };
     let mut contents = Vec::new();
     match std::io::Read::read_to_end(&mut file, &mut contents) {
         Ok(_) => {}
-        Err(_) => {
-            return Err(MonorubyErr::runtimeerr("Could not read the file."));
+        Err(err) => {
+            return Err(MonorubyErr::errno_with_path(
+                &globals.store,
+                &err,
+                "rb_io_read",
+                &filename,
+            ));
         }
     };
     Ok(Value::bytes(contents))
+}
+
+///
+/// ### IO.foreach
+///
+/// - foreach(path, sep = "\n") {|line| ... } -> nil
+/// - foreach(path, sep = "\n") -> Enumerator
+///
+/// Opens the file at `path`, reads each line separated by `sep`,
+/// and yields each line to the block. Without a block, returns an Enumerator.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/foreach.html]
+#[monoruby_builtin]
+fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let path = lfp.arg(0).coerce_to_str(vm, globals)?;
+    let bh = match lfp.block() {
+        Some(bh) => bh,
+        None => {
+            return Err(MonorubyErr::runtimeerr(
+                "IO.foreach without block is not yet supported",
+            ));
+        }
+    };
+    let p = vm.get_block_data(globals, bh)?;
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
+    let sep = if let Some(sep_val) = lfp.try_arg(1) {
+        if sep_val.is_nil() {
+            None
+        } else {
+            Some(sep_val.coerce_to_str(vm, globals)?)
+        }
+    } else {
+        Some("\n".to_string())
+    };
+    match sep {
+        None => {
+            // When sep is nil, yield the entire content as one string
+            vm.invoke_block(globals, &p, &[Value::string(content)])?;
+        }
+        Some(sep) => {
+            let mut start = 0;
+            let content_bytes = content.as_bytes();
+            let sep_bytes = sep.as_bytes();
+            if sep_bytes.is_empty() {
+                // Paragraph mode: split on double newlines
+                let parts: Vec<&str> = content.split("\n\n").collect();
+                for part in parts {
+                    let trimmed = part.trim_start_matches('\n');
+                    if !trimmed.is_empty() {
+                        let mut line = trimmed.to_string();
+                        line.push('\n');
+                        vm.invoke_block(globals, &p, &[Value::string(line)])?;
+                    }
+                }
+            } else {
+                while start < content_bytes.len() {
+                    if let Some(pos) = content[start..].find(&sep) {
+                        let end = start + pos + sep.len();
+                        let line = &content[start..end];
+                        vm.invoke_block(globals, &p, &[Value::string(line.to_string())])?;
+                        start = end;
+                    } else {
+                        // Last line without separator
+                        let line = &content[start..];
+                        vm.invoke_block(globals, &p, &[Value::string(line.to_string())])?;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Ok(Value::nil())
 }
 
 ///
@@ -408,7 +551,9 @@ fn io_sysopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         "r".to_string()
     };
     let mut opts = std::fs::OpenOptions::new();
-    match mode_str.as_str() {
+    // Strip encoding suffix (e.g. ":UTF-8") and remove 'b' (binary) flag.
+    let mode_base = mode_str.split(':').next().unwrap().replace('b', "");
+    match mode_base.as_str() {
         "r" => {
             opts.read(true);
         }
@@ -418,13 +563,13 @@ fn io_sysopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         "a" => {
             opts.append(true).create(true);
         }
-        "r+" => {
+        "r+" | "+r" => {
             opts.read(true).write(true);
         }
-        "w+" => {
+        "w+" | "+w" => {
             opts.read(true).write(true).create(true).truncate(true);
         }
-        "a+" => {
+        "a+" | "+a" => {
             opts.read(true).append(true).create(true);
         }
         _ => {
@@ -433,7 +578,7 @@ fn io_sysopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     }
     let file = opts
         .open(&path)
-        .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
     let fd = file.into_raw_fd();
     Ok(Value::integer(fd as i64))
 }
@@ -447,7 +592,12 @@ fn io_pipe(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr
     // SAFETY: fds is a valid pointer to a 2-element array of c_int.
     let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
     if ret == -1 {
-        return Err(MonorubyErr::runtimeerr("pipe(2) failed"));
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_msg(
+            &_globals.store,
+            &err,
+            "pipe(2)",
+        ));
     }
     let read_io = Value::new_io(IoInner::from_raw_fd(fds[0], "pipe".to_string()));
     let write_io = Value::new_io(IoInner::from_raw_fd(fds[1], "pipe".to_string()));
@@ -471,30 +621,93 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let cmd_val = args[0];
 
     // Build the command from either a String or an Array of strings.
-    let mut command = if let Some(ary) = cmd_val.try_array_ty() {
+    let (mut command, cmd_name) = if let Some(ary) = cmd_val.try_array_ty() {
         let parts: Vec<String> = ary.iter().map(|v| v.to_s(globals)).collect();
         if parts.is_empty() {
             return Err(MonorubyErr::argumenterr("popen: empty command array"));
         }
+        let name = parts[0].clone();
         let mut cmd = Command::new(&parts[0]);
         for part in &parts[1..] {
             cmd.arg(part);
         }
-        cmd
+        (cmd, name)
     } else {
         let cmd_str = cmd_val.coerce_to_str(vm, globals)?;
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(cmd_str.to_string());
-        cmd
+        (cmd, cmd_str)
     };
 
-    command.stdin(Stdio::null());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::inherit());
+    // Parse mode and options.
+    // IO.popen accepts:
+    //   IO.popen(cmd)
+    //   IO.popen(cmd, mode)
+    //   IO.popen(cmd, mode, opts)
+    //   IO.popen(cmd, opts)   -- Hash as second arg means spawn options
+    let mut opts_hash = None;
+    let mode = if args.len() > 1 {
+        if args[1].try_hash_ty().is_some() {
+            // Second arg is options hash, mode defaults to "r"
+            opts_hash = Some(args[1]);
+            "r".to_string()
+        } else {
+            let m = args[1].coerce_to_str(vm, globals)?;
+            if args.len() > 2 && args[2].try_hash_ty().is_some() {
+                opts_hash = Some(args[2]);
+            }
+            m
+        }
+    } else {
+        "r".to_string()
+    };
+    let readable = mode.contains('r') || mode.contains('+');
+    let writable = mode.contains('w') || mode.contains('+');
+
+    if writable {
+        command.stdin(Stdio::piped());
+    } else {
+        command.stdin(Stdio::null());
+    }
+    if readable {
+        command.stdout(Stdio::piped());
+    } else {
+        command.stdout(Stdio::inherit());
+    }
+
+    // Handle err: [:child, :out] option to redirect stderr to stdout
+    let mut stderr_to_stdout = false;
+    if let Some(opts) = opts_hash {
+        let err_key = Value::symbol_from_str("err");
+        if let Ok(Some(err_val)) = opts.as_hash().get(err_key, vm, globals) {
+            if let Some(ary) = err_val.try_array_ty() {
+                if ary.len() == 2
+                    && ary[0].try_symbol_or_string() == Some(IdentId::get_id("child"))
+                    && ary[1].try_symbol_or_string() == Some(IdentId::get_id("out"))
+                {
+                    stderr_to_stdout = true;
+                }
+            }
+        }
+    }
+    if stderr_to_stdout {
+        // Redirect stderr to stdout via OS-level dup2
+        // SAFETY: dup2(1, 2) duplicates stdout fd to stderr fd, which is safe
+        // for child processes about to exec.
+        unsafe {
+            command.pre_exec(|| {
+                libc::dup2(1, 2);
+                Ok(())
+            });
+        }
+        command.stderr(Stdio::inherit());
+    } else {
+        command.stderr(Stdio::inherit());
+    }
 
     let child = command
         .spawn()
-        .map_err(|e| MonorubyErr::runtimeerr(format!("popen: {}", e)))?;
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_f_spawn", &cmd_name))?;
 
     let io_val = Value::new_io(IoInner::popen(child));
 
@@ -503,14 +716,17 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         let res = vm.invoke_block(globals, &data, &[io_val]);
         let mut io_close = io_val;
         if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close() {
-            if let Ok(status_class) = vm
-                .get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
+            if let Ok(status_class) =
+                vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
             {
                 if let Ok(status_obj) = vm.invoke_method_inner(
                     globals,
                     IdentId::NEW,
                     status_class,
-                    &[Value::integer(exit_status as i64), Value::integer(pid as i64)],
+                    &[
+                        Value::integer(exit_status as i64),
+                        Value::integer(pid as i64),
+                    ],
                     None,
                     None,
                 ) {
@@ -608,7 +824,12 @@ fn io_syswrite(
     // SAFETY: fd is a valid file descriptor, bytes is a valid buffer.
     let written = unsafe { libc::write(fd, bytes.as_ptr() as *const libc::c_void, bytes.len()) };
     if written < 0 {
-        return Err(MonorubyErr::runtimeerr("syswrite failed"));
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_msg(
+            &globals.store,
+            &err,
+            "syswrite",
+        ));
     }
     Ok(Value::integer(written as i64))
 }
@@ -632,7 +853,7 @@ fn value_to_fd(globals: &Globals, v: Value) -> Result<i32> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/select.html]
 #[monoruby_builtin]
-fn io_select(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let read_arg = lfp.arg(0);
     let write_arg = lfp.try_arg(1).unwrap_or(Value::nil());
     let error_arg = lfp.try_arg(2).unwrap_or(Value::nil());
@@ -642,7 +863,7 @@ fn io_select(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let timeout = if timeout_arg.is_nil() {
         None // block forever
     } else {
-        let f = timeout_arg.coerce_to_f64(&globals.store)?;
+        let f = timeout_arg.coerce_to_f64(vm, globals)?;
         if f.is_nan() {
             return Err(MonorubyErr::rangeerr("NaN out of Time range"));
         }
@@ -769,11 +990,12 @@ fn io_select(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         );
 
         if ret < 0 {
-            let err = *libc::__errno_location();
-            return Err(MonorubyErr::runtimeerr(format!(
-                "select(2) failed: errno {}",
-                err
-            )));
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::errno_with_msg(
+                &globals.store,
+                &err,
+                "select(2)",
+            ));
         }
 
         if ret == 0 {
@@ -805,6 +1027,164 @@ fn io_select(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         let e = Value::array_from_vec(ready_error);
         Ok(Value::array_from_vec(vec![r, w, e]))
     }
+}
+
+///
+/// ### IO#set_encoding
+///
+/// - set_encoding(ext_enc) -> self
+/// - set_encoding(ext_enc, int_enc) -> self
+/// - set_encoding(ext_enc, int_enc, opt) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/set_encoding.html]
+///
+/// Stub: validates encoding arguments but does not actually change encoding.
+#[monoruby_builtin]
+fn set_encoding(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    use crate::Encoding;
+    let arg0 = lfp.arg(0);
+    // Validate the encoding name if it's a string
+    if let Some(s) = arg0.is_str() {
+        // Handle "enc1:enc2" format (e.g. "UTF-8:UTF-8")
+        let ext = s.split(':').next().unwrap_or(s);
+        Encoding::try_from_str(ext)?;
+    }
+    // Validate optional second argument
+    if let Some(arg1) = lfp.try_arg(1) {
+        if let Some(s) = arg1.is_str() {
+            Encoding::try_from_str(s)?;
+        }
+    }
+    Ok(lfp.self_val())
+}
+
+///
+/// ### IO#external_encoding
+///
+/// - external_encoding -> Encoding
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/external_encoding.html]
+///
+/// Stub: always returns Encoding::UTF_8.
+#[monoruby_builtin]
+fn external_encoding(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let enc_class = globals
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::ENCODING)
+        .unwrap()
+        .as_class_id();
+    let utf8 = globals
+        .get_constant_noautoload(enc_class, IdentId::UTF_8)
+        .unwrap();
+    Ok(utf8)
+}
+
+///
+
+///
+/// ### IO.copy_stream
+///
+/// - IO.copy_stream(src, dst) -> Integer
+/// - IO.copy_stream(src, dst, copy_length) -> Integer
+/// - IO.copy_stream(src, dst, copy_length, src_offset) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/copy_stream.html]
+#[monoruby_builtin]
+fn io_copy_stream(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let copy_length: Option<i64> = lfp
+        .try_arg(2)
+        .and_then(|v| if v.is_nil() { None } else { Some(v) })
+        .map(|v| v.coerce_to_int_i64(vm, globals))
+        .transpose()?;
+    let src_offset: Option<i64> = lfp
+        .try_arg(3)
+        .and_then(|v| if v.is_nil() { None } else { Some(v) })
+        .map(|v| v.coerce_to_int_i64(vm, globals))
+        .transpose()?;
+
+    // Helper: duplicate an fd from an IO Value for use as a std::fs::File.
+    fn dup_fd_from_io(io_val: Value, globals: &Globals) -> Result<File> {
+        let mut v = io_val;
+        if v.try_rvalue().map_or(true, |rv| rv.ty() != ObjTy::IO) {
+            return Err(MonorubyErr::typeerr(format!(
+                "no implicit conversion of {} into IO",
+                v.get_real_class_name(&globals.store)
+            )));
+        }
+        let fd = v.as_io_inner_mut().fileno()?;
+        // SAFETY: dup the fd so that the original IO still owns its fd.
+        let new_fd = unsafe { libc::dup(fd) };
+        if new_fd == -1 {
+            return Err(MonorubyErr::runtimeerr("dup failed"));
+        }
+        // SAFETY: new_fd is a valid, newly duplicated file descriptor.
+        Ok(unsafe { File::from_raw_fd(new_fd) })
+    }
+
+    // Open source
+    let src_val = lfp.arg(0);
+    let mut src_owned: File;
+    let src_is_path = src_val.try_bytes().is_some();
+    if src_is_path {
+        let path = src_val.coerce_to_string(vm, globals)?;
+        src_owned = File::open(&path).map_err(|e| {
+            MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path)
+        })?;
+        if let Some(offset) = src_offset {
+            use std::io::Seek;
+            src_owned
+                .seek(std::io::SeekFrom::Start(offset as u64))
+                .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+        }
+    } else {
+        src_owned = dup_fd_from_io(src_val, globals)?;
+        if let Some(offset) = src_offset {
+            use std::io::Seek;
+            src_owned
+                .seek(std::io::SeekFrom::Start(offset as u64))
+                .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+        }
+    }
+
+    // Open destination
+    let dst_val = lfp.arg(1);
+    let dst_is_path = dst_val.try_bytes().is_some();
+    let mut dst_owned: File;
+    if dst_is_path {
+        let path = dst_val.coerce_to_string(vm, globals)?;
+        dst_owned = File::create(&path).map_err(|e| {
+            MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path)
+        })?;
+    } else {
+        dst_owned = dup_fd_from_io(dst_val, globals)?;
+    }
+
+    // Copy
+    use std::io::Read;
+    let copied = if let Some(length) = copy_length {
+        let mut limited = (&mut src_owned).take(length as u64);
+        std::io::copy(&mut limited, &mut dst_owned)
+            .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?
+    } else {
+        std::io::copy(&mut src_owned, &mut dst_owned)
+            .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?
+    };
+
+    Ok(Value::integer(copied as i64))
 }
 
 #[cfg(test)]
@@ -1094,6 +1474,168 @@ mod tests {
             fd = IO.sysopen("Cargo.toml", "r")
             raise "should be integer" unless fd.is_a?(Integer)
             raise "should be positive" unless fd > 0
+            "#,
+        );
+    }
+
+    #[test]
+    fn popen_rw_mode() {
+        run_test_once(
+            r#"
+            IO.popen("cat", "r+") do |io|
+              io.write("hello")
+              io.close_write
+              io.read
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn popen_write_mode() {
+        run_test_no_result_check(
+            r#"
+            IO.popen("cat > /dev/null", "w") do |io|
+              io.write("hello")
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn close_read() {
+        run_test_once(
+            r#"
+            IO.popen("echo hello", "r") do |io|
+              data = io.read
+              io.close_read
+              data
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn close_write() {
+        run_test_once(
+            r#"
+            IO.popen("cat", "r+") do |io|
+              io.write("hello")
+              io.close_write
+              io.read
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn external_encoding() {
+        run_test_no_result_check(
+            r#"
+            enc = $stdout.external_encoding
+            raise "should be Encoding" unless enc.is_a?(Encoding)
+            enc.name
+            "#,
+        );
+    }
+
+    #[test]
+    fn internal_encoding() {
+        run_test_no_result_check(
+            r#"
+            $stdout.internal_encoding
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_encoding_test() {
+        run_test_no_result_check(
+            r#"
+            r, w = IO.pipe
+            w.set_encoding("UTF-8")
+            w.close
+            r.close
+            "#,
+        );
+        run_test_no_result_check(
+            r#"
+            r, w = IO.pipe
+            w.set_encoding("UTF-8", "UTF-8")
+            w.close
+            r.close
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_foreach_test() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_foreach_#{Process.pid}"
+            File.write(path, "hello\nworld\nfoo\n")
+            res = []
+            IO.foreach(path) { |line| res << line }
+            File.delete(path)
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_foreach_test() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_file_foreach_#{Process.pid}"
+            File.write(path, "aaa\nbbb\n")
+            res = []
+            File.foreach(path) { |line| res << line }
+            File.delete(path)
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_new_with_fd() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_ionew_#{Process.pid}"
+            File.write(path, "io new fd")
+            fd = IO.sysopen(path)
+            io = IO.new(fd)
+            content = io.read
+            io.close
+            raise "expected 'io new fd'" unless content == "io new fd"
+            File.delete(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_new_invalid_fd() {
+        run_test_error(r#"IO.new(-1)"#);
+        run_test_error(r#"IO.new(9999)"#);
+    }
+
+    #[test]
+    fn io_copy_stream() {
+        run_test_once(
+            r#"
+            path_src = "/tmp/monoruby_test_cs_src_#{Process.pid}"
+            path_dst = "/tmp/monoruby_test_cs_dst_#{Process.pid}"
+            File.write(path_src, "hello world")
+            n = IO.copy_stream(path_src, path_dst)
+            raise "expected 11 but got #{n}" unless n == 11
+            raise unless File.read(path_dst) == "hello world"
+            n = IO.copy_stream(path_src, path_dst, 5)
+            raise "expected 5 but got #{n}" unless n == 5
+            raise unless File.read(path_dst) == "hello"
+            n = IO.copy_stream(path_src, path_dst, 5, 6)
+            raise "expected 5 but got #{n}" unless n == 5
+            raise unless File.read(path_dst) == "world"
+            File.delete(path_src)
+            File.delete(path_dst)
             "#,
         );
     }

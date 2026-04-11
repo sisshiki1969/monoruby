@@ -3,7 +3,7 @@ use super::*;
 #[allow(non_camel_case_types)]
 pub(crate) enum InlineFuncInfo {
     InlineGen(Box<InlineGen>),
-    CFunc_F_F(extern "C" fn(f64) -> f64),
+    CFunc_F_F(unsafe extern "C" fn(f64) -> f64),
     CFunc_FF_F(extern "C" fn(f64, f64) -> f64),
 }
 
@@ -12,7 +12,7 @@ impl InlineFuncInfo {
         InlineFuncInfo::InlineGen(f)
     }
 
-    pub(crate) fn new_cfunc_f_f(f: extern "C" fn(f64) -> f64) -> Self {
+    pub(crate) fn new_cfunc_f_f(f: unsafe extern "C" fn(f64) -> f64) -> Self {
         InlineFuncInfo::CFunc_F_F(f)
     }
 

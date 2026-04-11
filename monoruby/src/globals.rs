@@ -28,6 +28,7 @@ pub(crate) type InlineGen = dyn Fn(
     &Store,
     CallSiteId,
     ClassId,
+    Option<ClassId>,
 ) -> bool;
 
 pub(crate) const GLOBALS_FUNCINFO: usize =
@@ -101,6 +102,8 @@ pub struct Globals {
     random: Box<Prng>,
     /// loaded libraries (canonical path).
     pub(crate) loaded_canonicalized_files: indexmap::IndexSet<PathBuf>,
+    /// cache for Symbol#name (frozen strings keyed by IdentId).
+    pub(crate) symbol_names: HashMap<IdentId, Value>,
     /// address of invokers.
     pub(crate) invokers: Invokers,
     /// stats for deoptimization
@@ -133,6 +136,7 @@ impl alloc::GC<RValue> for Globals {
         self.load_path.mark(alloc);
         self.store.mark(alloc);
         self.global_vars.values().for_each(|v| v.mark(alloc));
+        self.symbol_names.values().for_each(|v| v.mark(alloc));
     }
 }
 
@@ -172,6 +176,7 @@ impl Globals {
             load_path: Value::array_empty(),
             random: Box::new(Prng::new()),
             loaded_canonicalized_files,
+            symbol_names: HashMap::default(),
             invokers,
             #[cfg(feature = "profile")]
             deopt_stats: HashMap::default(),
@@ -595,108 +600,6 @@ impl Globals {
     }
 }
 
-macro_rules! next_char {
-    ($ch:ident, $chars:ident) => {
-        $ch = match $chars.next() {
-            Some(c) => c,
-            None => break,
-        };
-    };
-}
-
-fn expect_char(chars: &mut std::str::Chars) -> Result<char> {
-    let ch = match chars.next() {
-        Some(ch) => ch,
-        None => {
-            return Err(MonorubyErr::argumenterr(
-                "Invalid termination of format string",
-            ));
-        }
-    };
-    Ok(ch)
-}
-
-enum Integer {
-    Fixnum(i64),
-    BigInt(num::BigInt),
-}
-
-fn coerce_to_integer(globals: &mut Globals, val: Value) -> Result<Integer> {
-    match val.unpack() {
-        RV::Fixnum(i) => return Ok(Integer::Fixnum(i)),
-        RV::Float(f) => {
-            let t = f.trunc();
-            return if i64::MIN as f64 <= t && t <= i64::MAX as f64 {
-                Ok(Integer::Fixnum(t as i64))
-            } else {
-                use num::FromPrimitive;
-                Ok(Integer::BigInt(
-                    num::BigInt::from_f64(t).expect("float is not NaN or infinite"),
-                ))
-            };
-        }
-        RV::String(s) => {
-            let s = s.check_utf8()?;
-            if let Ok(i) = s.parse::<i64>() {
-                return Ok(Integer::Fixnum(i));
-            } else if let Ok(b) = s.parse::<num::BigInt>() {
-                return Ok(Integer::BigInt(b));
-            }
-        }
-        _ => {}
-    };
-    let s = val.to_s(&globals.store);
-    Err(MonorubyErr::argumenterr(format!(
-        "invalid value for Integer(): {}",
-        s
-    )))
-}
-
-fn coerce_to_float(globals: &mut Globals, val: Value) -> Result<f64> {
-    match val.unpack() {
-        RV::Fixnum(i) => Ok(i as f64),
-        RV::Float(f) => Ok(f),
-        _ => {
-            let s = val.to_s(&globals.store);
-            Err(MonorubyErr::argumenterr(format!(
-                "invalid value for Float(): {}",
-                s
-            )))
-        }
-    }
-}
-
-fn coerce_to_char(val: Value) -> Result<char> {
-    match val.unpack() {
-        RV::Fixnum(i) => {
-            if let Ok(u) = u32::try_from(i) {
-                if let Some(c) = char::from_u32(u) {
-                    return Ok(c);
-                }
-            }
-            Err(MonorubyErr::argumenterr("invalid character"))
-        }
-        RV::Float(f) => {
-            let f = f.trunc();
-            if 0.0 <= f && f <= u32::MAX as f64 {
-                if let Some(c) = char::from_u32(f as u32) {
-                    return Ok(c);
-                }
-            }
-            Err(MonorubyErr::argumenterr("invalid character"))
-        }
-        RV::String(s) => {
-            let s = s.check_utf8()?;
-            if s.chars().count() != 1 {
-                Err(MonorubyErr::argumenterr("%c requires a character"))
-            } else {
-                Ok(s.chars().next().unwrap())
-            }
-        }
-        _ => Err(MonorubyErr::argumenterr("invalid character")),
-    }
-}
-
 impl Globals {
     pub(crate) fn generate_range(
         &mut self,
@@ -712,218 +615,6 @@ impl Globals {
             return Ok(Value::range(start, end, exclude_end));
         }
         return Err(MonorubyErr::bad_range(start, end));
-    }
-
-    pub(crate) fn format_by_args(&mut self, self_str: &str, arguments: &[Value]) -> Result<String> {
-        let mut arg_no = 0;
-        let mut format_str = String::new();
-        let mut chars = self_str.chars();
-        let mut ch = match chars.next() {
-            Some(ch) => ch,
-            None => return Ok(String::new()),
-        };
-        loop {
-            if ch != '%' {
-                format_str.push(ch);
-                next_char!(ch, chars);
-                continue;
-            }
-            match chars.next() {
-                Some('%') => {
-                    format_str.push('%');
-                    next_char!(ch, chars);
-                    continue;
-                }
-                Some(c) => ch = c,
-                None => {
-                    return Err(MonorubyErr::argumenterr(
-                        "incomplete format specifier; use %% (double %) instead",
-                    ));
-                }
-            };
-            let mut zero_flag = false;
-            // Zero-fill
-            if ch == '0' {
-                zero_flag = true;
-                ch = expect_char(&mut chars)?;
-            }
-            // Width
-            let mut width = 0usize;
-            while ch.is_ascii_digit() {
-                width = width * 10 + ch as usize - '0' as usize;
-                ch = expect_char(&mut chars)?;
-            }
-            // Precision
-            let mut precision = 0usize;
-            if ch == '.' {
-                ch = expect_char(&mut chars)?;
-                while ch.is_ascii_digit() {
-                    precision = precision * 10 + ch as usize - '0' as usize;
-                    ch = expect_char(&mut chars)?;
-                }
-            } else {
-                precision = 6;
-            };
-            if arguments.len() <= arg_no {
-                return Err(MonorubyErr::argumenterr("too few arguments"));
-            };
-            // Specifier
-            let val = arguments[arg_no];
-            arg_no += 1;
-            let format = match ch {
-                'c' => {
-                    let ch = coerce_to_char(val)?;
-                    format!("{}", ch)
-                }
-                's' => val.to_s(&self.store),
-                'd' | 'i' => {
-                    let val = coerce_to_integer(self, val)?;
-                    if zero_flag {
-                        match val {
-                            Integer::Fixnum(val) => {
-                                format!("{:0w$.p$}", val, w = width, p = precision)
-                            }
-                            Integer::BigInt(val) => {
-                                format!("{:0w$.p$}", val, w = width, p = precision)
-                            }
-                        }
-                    } else {
-                        match val {
-                            Integer::Fixnum(val) => {
-                                format!("{:w$.p$}", val, w = width, p = precision)
-                            }
-                            Integer::BigInt(val) => {
-                                format!("{:w$.p$}", val, w = width, p = precision)
-                            }
-                        }
-                    }
-                }
-                'b' => {
-                    let val = coerce_to_integer(self, val)?;
-                    if zero_flag {
-                        match val {
-                            Integer::Fixnum(val) => format!("{:0w$b}", val, w = width),
-                            Integer::BigInt(val) => format!("{:0w$b}", val, w = width),
-                        }
-                    } else {
-                        match val {
-                            Integer::Fixnum(val) => format!("{:w$b}", val, w = width),
-                            Integer::BigInt(val) => format!("{:w$b}", val, w = width),
-                        }
-                    }
-                }
-                'x' => {
-                    let val = coerce_to_integer(self, val)?;
-                    if zero_flag {
-                        match val {
-                            Integer::Fixnum(val) => format!("{:0w$x}", val, w = width),
-                            Integer::BigInt(val) => format!("{:0w$x}", val, w = width),
-                        }
-                    } else {
-                        match val {
-                            Integer::Fixnum(val) => format!("{:w$x}", val, w = width),
-                            Integer::BigInt(val) => format!("{:w$x}", val, w = width),
-                        }
-                    }
-                }
-                'X' => {
-                    let val = coerce_to_integer(self, val)?;
-                    if zero_flag {
-                        match val {
-                            Integer::Fixnum(val) => format!("{:0w$X}", val, w = width),
-                            Integer::BigInt(val) => format!("{:0w$X}", val, w = width),
-                        }
-                    } else {
-                        match val {
-                            Integer::Fixnum(val) => format!("{:w$X}", val, w = width),
-                            Integer::BigInt(val) => format!("{:w$X}", val, w = width),
-                        }
-                    }
-                }
-                'f' => {
-                    let f = coerce_to_float(self, val)?;
-                    if zero_flag {
-                        format!("{:0w$.p$}", f, w = width, p = precision)
-                    } else {
-                        format!("{:w$.p$}", f, w = width, p = precision)
-                    }
-                }
-                'e' => {
-                    let f = coerce_to_float(self, val)?;
-                    if zero_flag {
-                        format!("{:0w$.p$e}", f, w = width, p = precision)
-                    } else {
-                        format!("{:w$.p$e}", f, w = width, p = precision)
-                    }
-                }
-                'E' => {
-                    let f = coerce_to_float(self, val)?;
-                    if zero_flag {
-                        format!("{:0w$.p$E}", f, w = width, p = precision)
-                    } else {
-                        format!("{:w$.p$E}", f, w = width, p = precision)
-                    }
-                }
-                _ => {
-                    return Err(MonorubyErr::argumenterr(format!(
-                        "malformed format string - %{}",
-                        ch
-                    )));
-                }
-            };
-            format_str += &format;
-            next_char!(ch, chars);
-        }
-
-        Ok(format_str)
-    }
-
-    pub(crate) fn format_by_hash(
-        &mut self,
-        vm: &mut Executor,
-        self_str: &str,
-        hash: Hashmap,
-    ) -> Result<String> {
-        let mut format_str = String::new();
-        let mut chars = self_str.chars().peekable();
-        while let Some(ch) = chars.next() {
-            if ch != '%' {
-                format_str.push(ch);
-                continue;
-            }
-            match chars.peek() {
-                Some('%') => {
-                    chars.next();
-                    format_str.push('%');
-                    continue;
-                }
-                Some('{') => {
-                    chars.next(); // consume '{'
-                    let mut key = String::new();
-                    loop {
-                        match chars.next() {
-                            Some('}') => break,
-                            Some(c) => key.push(c),
-                            None => {
-                                return Err(MonorubyErr::argumenterr(
-                                    "malformed format string - missing '}'",
-                                ));
-                            }
-                        }
-                    }
-                    let key_val = Value::symbol_from_str(&key);
-                    let val = hash.get(key_val, vm, self)?.unwrap_or(Value::nil());
-                    format_str += &val.to_s(&self.store);
-                }
-                _ => {
-                    return Err(MonorubyErr::argumenterr(format!(
-                        "malformed format string - %{}",
-                        chars.peek().map_or(' ', |c| *c)
-                    )));
-                }
-            }
-        }
-        Ok(format_str)
     }
 }
 

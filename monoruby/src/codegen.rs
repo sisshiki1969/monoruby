@@ -1281,6 +1281,10 @@ extern "C" fn set_instance_var_with_cache(
             return None;
         }
     };
+    if rval.is_frozen() {
+        vm.err_cant_modify_frozen(&globals.store, base);
+        return None;
+    }
     if class_id == cache.class_id {
         rval.set_ivar_by_ivarid(cache.ivar_id, val);
         return Some(Value::nil());

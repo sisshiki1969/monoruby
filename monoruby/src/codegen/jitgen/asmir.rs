@@ -206,10 +206,6 @@ impl AsmIr {
         self.push(AsmInst::RegSub(r, i));
     }
 
-    pub(super) fn reg_and(&mut self, r: GP, i: u64) {
-        self.push(AsmInst::RegAnd(r, i));
-    }
-
     /// movq [rsp + (ofs)], R(r);
     pub(super) fn reg2rsp_offset(&mut self, r: GP, ofs: i32) {
         self.push(AsmInst::RegToRSPOffset(r, ofs));
@@ -375,6 +371,11 @@ impl AsmIr {
         self.push(AsmInst::LoadSVar { id, using_xmm });
     }
 
+    pub(super) fn store_svar(&mut self, state: &AbstractFrame, src: SlotId, id: u32) {
+        let using_xmm = state.get_using_xmm();
+        self.push(AsmInst::StoreSVar { id, src, using_xmm });
+    }
+
     pub(super) fn to_a(&mut self, state: &AbstractFrame, src: SlotId) {
         let using_xmm = state.get_using_xmm();
         self.push(AsmInst::ToA { src, using_xmm });
@@ -479,6 +480,13 @@ impl AsmIr {
     pub(crate) fn handle_error(&mut self, error: AsmError) {
         self.push(AsmInst::HandleError(error));
     }
+
+    ///
+    /// Guard that the object in *rdi* is not frozen.
+    ///
+    pub(crate) fn guard_frozen(&mut self, deopt: AsmDeopt) {
+        self.push(AsmInst::GuardFrozen { deopt });
+    }
 }
 
 //
@@ -535,11 +543,6 @@ impl AsmIr {
             binary_xmm: (lhs, rhs),
             dst,
         });
-    }
-
-    pub(super) fn integer_exp(&mut self, state: &AbstractFrame, deopt: AsmDeopt) {
-        let using_xmm = state.get_using_xmm();
-        self.push(AsmInst::IntegerExp { using_xmm, deopt });
     }
 
     ///
@@ -635,7 +638,7 @@ impl AsmIr {
     /// - rdx: result Value
     ///
     /// ### destroy
-    /// - caller save registers
+    /// - caller save registers except xmm's
     ///
     pub(super) fn array_u16_index_assign(&mut self, state: &AbstractFrame, idx: u16) {
         let using_xmm = state.get_using_xmm();
@@ -656,7 +659,7 @@ impl AsmIr {
     /// - rdx: result Value
     ///    
     /// ### destroy
-    /// - caller save registers
+    /// - caller save registers except xmm's
     ///
     pub(super) fn array_index_assign(&mut self, state: &AbstractFrame) {
         let using_xmm = state.get_using_xmm();
@@ -730,7 +733,6 @@ pub(super) enum AsmInst {
     RegMove(GP, GP),
     RegAdd(GP, i32),
     RegSub(GP, i32),
-    RegAnd(GP, u64),
     /// movq [rsp + (ofs)], R(r);
     RegToRSPOffset(GP, i32),
     /// movq [rsp + (ofs)], 0;
@@ -1047,7 +1049,7 @@ pub(super) enum AsmInst {
     Inline(InlineProcedure),
     #[allow(non_camel_case_types)]
     CFunc_F_F {
-        f: extern "C" fn(f64) -> f64,
+        f: unsafe extern "C" fn(f64) -> f64,
         src: Xmm,
         dst: Xmm,
         using_xmm: UsingXmm,
@@ -1101,11 +1103,6 @@ pub(super) enum AsmInst {
         mode: OpMode,
         deopt: AsmDeopt,
     },
-    IntegerExp {
-        using_xmm: UsingXmm,
-        deopt: AsmDeopt,
-    },
-
     ///
     /// Integer comparison
     ///
@@ -1216,7 +1213,7 @@ pub(super) enum AsmInst {
     /// - rdx: result Value
     ///
     /// ### destroy
-    /// - caller save registers
+    /// - caller save registers except xmm's
     ///
     ArrayU16IndexAssign {
         idx: u16,
@@ -1232,7 +1229,7 @@ pub(super) enum AsmInst {
     /// - rdx: Value
     ///    
     /// ### destroy
-    /// - caller save registers
+    /// - caller save registers except xmm's
     ///
     ArrayIndexAssign {
         using_xmm: UsingXmm,
@@ -1364,6 +1361,16 @@ pub(super) enum AsmInst {
         src: GP,
         ivarid: IvarId,
     },
+    ///
+    /// Guard that the object in *rdi* is not frozen.
+    /// If frozen, deoptimize to interpreter (which will raise FrozenError).
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    ///
+    GuardFrozen {
+        deopt: AsmDeopt,
+    },
 
     /// rax = DynVar(src)
     LoadDynVar {
@@ -1411,6 +1418,11 @@ pub(super) enum AsmInst {
     },
     LoadSVar {
         id: u32,
+        using_xmm: UsingXmm,
+    },
+    StoreSVar {
+        id: u32,
+        src: SlotId,
         using_xmm: UsingXmm,
     },
 

@@ -44,7 +44,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         Effect::CAPTURE | Effect::BINDING,
     );
     globals.define_builtin_module_func(kernel_class, "loop", loop_, 0);
-    globals.define_builtin_module_func_with(kernel_class, "raise", raise, 0, 2, false);
+    globals.define_builtin_module_func_with(kernel_class, "raise", raise, 0, 3, false);
     globals.define_builtin_module_func_with(kernel_class, "fail", raise, 0, 2, false);
     globals.define_builtin_module_inline_func(
         kernel_class,
@@ -57,9 +57,10 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_rest(kernel_class, "format", format);
     globals.define_builtin_module_func_rest(kernel_class, "sprintf", format);
     globals.define_builtin_module_func_with(kernel_class, "rand", rand, 0, 1, false);
-    globals.define_builtin_module_func(kernel_class, "Integer", kernel_integer, 1);
+    globals.define_builtin_module_func_with(kernel_class, "Integer", kernel_integer, 1, 2, false);
     globals.define_builtin_module_func(kernel_class, "Float", kernel_float, 1);
     globals.define_builtin_module_func_with(kernel_class, "Complex", kernel_complex, 1, 2, false);
+    globals.define_builtin_module_func_with(kernel_class, "Rational", kernel_rational, 1, 2, false);
     globals.define_builtin_module_func_with(kernel_class, "Array", kernel_array, 1, 1, false);
     globals.define_builtin_module_func(kernel_class, "require", require, 1);
     globals.define_builtin_module_func(kernel_class, "require_relative", require_relative, 1);
@@ -120,7 +121,8 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "class", class, 0);
     globals.define_builtin_func(kernel_class, "hash", hash, 0);
     globals.define_builtin_func(kernel_class, "eql?", eql_, 1);
-    globals.define_builtin_funcs(kernel_class, "dup", &["clone"], dup, 0);
+    globals.define_builtin_func(kernel_class, "dup", dup, 0);
+    globals.define_builtin_func_with(kernel_class, "clone", clone_val, 0, 1, false);
     globals.define_private_builtin_func(kernel_class, "initialize_copy", initialize_copy, 1);
     globals.define_private_builtin_func(kernel_class, "initialize_clone", initialize_clone, 1);
     globals.define_private_builtin_func(kernel_class, "initialize_dup", initialize_clone, 1);
@@ -156,9 +158,20 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_inline_funcs_with_kw(
         kernel_class,
         "send",
-        &["__send__", "public_send"],
+        &["__send__"],
         crate::builtins::send,
         Box::new(crate::builtins::object_send),
+        0,
+        0,
+        true,
+        &[],
+        true,
+    );
+    globals.define_builtin_funcs_with_kw(
+        kernel_class,
+        "public_send",
+        &[],
+        public_send,
         0,
         0,
         true,
@@ -175,6 +188,30 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         false,
     );
     globals.define_builtin_func_with(kernel_class, "methods", methods, 0, 1, false);
+    globals.define_builtin_func_with(
+        kernel_class,
+        "private_methods",
+        private_methods,
+        0,
+        1,
+        false,
+    );
+    globals.define_builtin_func_with(
+        kernel_class,
+        "protected_methods",
+        protected_methods,
+        0,
+        1,
+        false,
+    );
+    globals.define_builtin_func_with(
+        kernel_class,
+        "public_methods",
+        public_methods,
+        0,
+        1,
+        false,
+    );
     globals.define_builtin_func_with(
         kernel_class,
         "singleton_methods",
@@ -205,6 +242,7 @@ fn kernel_nil(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -254,6 +292,7 @@ fn kernel_block_given(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -430,19 +469,24 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     if let Some(ex) = lfp.arg(0).is_exception() {
         let mut err = MonorubyErr::new_from_exception(ex);
         if let Some(arg1) = lfp.try_arg(1) {
-            err.set_msg(arg1.expect_string(globals)?);
+            if arg1.try_hash_ty().is_none() {
+                err.set_msg(arg1.coerce_to_str(vm, globals)?);
+            }
         }
         return Err(err);
     } else if let Some(klass) = lfp.arg(0).is_class() {
         if klass.id() == STOP_ITERATION_CLASS {
             return Err(MonorubyErr::stopiterationerr("".to_string()));
         } else if klass.is_exception() {
-            let ex =
-                vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &[], None, None)?;
-            let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
+            let mut args = vec![];
             if let Some(arg1) = lfp.try_arg(1) {
-                err.set_msg(arg1.expect_string(globals)?);
+                if arg1.try_hash_ty().is_none() {
+                    args.push(arg1);
+                }
             }
+            let ex =
+                vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &args, None, None)?;
+            let err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
             return Err(err);
         }
     } else if let Some(message) = lfp.arg(0).is_rstring() {
@@ -501,7 +545,7 @@ fn format(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
     let fmt = args[0].coerce_to_str(vm, globals)?;
     let arguments = &args[1..];
-    let result = globals.format_by_args(&fmt, arguments)?;
+    let result = vm.format_by_args(globals, &fmt, arguments)?;
     Ok(Value::string(result))
 }
 
@@ -518,7 +562,7 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let mut cfp = vm.cfp();
     let mut v = Vec::new();
     let level = if let Some(arg0) = lfp.try_arg(0) {
-        arg0.coerce_to_int(vm, globals)? as usize + 1
+        arg0.coerce_to_int_i64(vm, globals)? as usize + 1
     } else {
         2
     };
@@ -604,8 +648,8 @@ fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         if let Some(range) = arg0.is_range() {
             let start = range.start();
             let end = range.end();
-            let start = start.coerce_to_int(vm, globals)?;
-            let end = end.coerce_to_int(vm, globals)?;
+            let start = start.coerce_to_int_i64(vm, globals)?;
+            let end = end.coerce_to_int_i64(vm, globals)?;
             if start > end {
                 return Ok(Value::nil());
             }
@@ -613,7 +657,7 @@ fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 (rand::random::<f64>() * (end - start) as f64 + start as f64) as i64,
             ));
         }
-        arg0.coerce_to_int(vm, globals)?
+        arg0.coerce_to_int_i64(vm, globals)?
     } else {
         0i64
     };
@@ -634,7 +678,7 @@ fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Integer.html]
 #[monoruby_builtin]
 fn kernel_integer(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -656,11 +700,38 @@ fn kernel_integer(
         },
         _ => {}
     };
-    Err(MonorubyErr::no_implicit_conversion(
-        globals,
-        arg0,
-        INTEGER_CLASS,
-    ))
+    // Try to_int coercion
+    if let Some(func_id) = globals.check_method(arg0, IdentId::TO_INT) {
+        let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+        match result.unpack() {
+            RV::Fixnum(i) => return Ok(Value::integer(i)),
+            RV::BigInt(b) => return Ok(Value::bigint(b.clone())),
+            _ => {
+                return Err(MonorubyErr::cant_convert_error_int(globals, arg0, result));
+            }
+        }
+    }
+    // Try to_i coercion as a fallback
+    let to_i_id = IdentId::get_id("to_i");
+    if let Some(func_id) = globals.check_method(arg0, to_i_id) {
+        let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+        match result.unpack() {
+            RV::Fixnum(i) => return Ok(Value::integer(i)),
+            RV::BigInt(b) => return Ok(Value::bigint(b.clone())),
+            _ => {
+                return Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} into Integer ({}#to_i gives {})",
+                    arg0.get_real_class_name(globals),
+                    arg0.get_real_class_name(globals),
+                    result.get_real_class_name(globals),
+                )));
+            }
+        }
+    }
+    Err(MonorubyErr::typeerr(format!(
+        "can't convert {} into Integer",
+        arg0.get_real_class_name(globals),
+    )))
 }
 
 ///
@@ -671,7 +742,7 @@ fn kernel_integer(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Float.html]
 #[monoruby_builtin]
 fn kernel_float(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -693,11 +764,18 @@ fn kernel_float(
         }
         _ => {}
     };
-    Err(MonorubyErr::no_implicit_conversion(
-        globals,
-        arg0,
-        FLOAT_CLASS,
-    ))
+    // Try to_f coercion
+    if let Some(func_id) = globals.check_method(arg0, IdentId::TO_F) {
+        let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+        match result.unpack() {
+            RV::Float(f) => return Ok(Value::float(f)),
+            RV::Fixnum(i) => return Ok(Value::float(i as f64)),
+            _ => {
+                return Err(MonorubyErr::cant_convert_error_f(globals, arg0, result));
+            }
+        }
+    }
+    Err(MonorubyErr::cant_convert_into_float(globals, arg0))
 }
 
 ///
@@ -724,6 +802,86 @@ fn kernel_complex(
 }
 
 ///
+/// ### Kernel.#Rational
+///
+/// - Rational(a, b = 1) -> Rational
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Rational.html]
+#[monoruby_builtin]
+fn kernel_rational(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let a = lfp.arg(0);
+    if let Some(b) = lfp.try_arg(1) {
+        // Two-argument form: Rational(a, b)
+        let ar = val_to_rational(globals, a)?;
+        let br = val_to_rational(globals, b)?;
+        Ok(Value::rational_from_inner(ar.div(&br)?))
+    } else {
+        // One-argument form: Rational(a)
+        if let Some(r) = a.try_rational() {
+            return Ok(Value::rational_from_inner(r.clone()));
+        }
+        match a.unpack() {
+            RV::Fixnum(i) => Ok(Value::rational_from_inner(RationalInner::new(i, 1))),
+            RV::BigInt(b) => Ok(Value::rational_from_inner(RationalInner::new_bigint(
+                b.clone(),
+                num::BigInt::from(1),
+            ))),
+            RV::Float(f) => {
+                if f.is_nan() {
+                    return Err(MonorubyErr::rangeerr("can't convert NaN into Rational"));
+                }
+                if f.is_infinite() {
+                    return Err(MonorubyErr::rangeerr(
+                        "can't convert Infinity into Rational",
+                    ));
+                }
+                Ok(Value::rational_from_inner(RationalInner::from_f64(f)))
+            }
+            _ => {
+                // Try to_r coercion
+                let to_r_id = IdentId::get_id("to_r");
+                if let Some(func_id) = globals.check_method(a, to_r_id) {
+                    let result = vm.invoke_func_inner(globals, func_id, a, &[], None, None)?;
+                    if result.try_rational().is_some() {
+                        return Ok(result);
+                    }
+                }
+                Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} into Rational",
+                    a.get_real_class_name(&globals.store)
+                )))
+            }
+        }
+    }
+}
+
+/// Convert a Value to RationalInner for Kernel#Rational two-arg form.
+fn val_to_rational(globals: &mut Globals, v: Value) -> Result<RationalInner> {
+    if let Some(r) = v.try_rational() {
+        return Ok(r.clone());
+    }
+    match v.unpack() {
+        RV::Fixnum(i) => Ok(RationalInner::new(i, 1)),
+        RV::BigInt(b) => Ok(RationalInner::new_bigint(b.clone(), num::BigInt::from(1))),
+        RV::Float(f) => {
+            if f.is_nan() || f.is_infinite() {
+                return Err(MonorubyErr::rangeerr("can't convert Float into Rational"));
+            }
+            Ok(RationalInner::from_f64(f))
+        }
+        _ => Err(MonorubyErr::typeerr(format!(
+            "can't convert {} into Rational",
+            v.get_real_class_name(&globals.store)
+        ))),
+    }
+}
+
+///
 /// ### Kernel.#Array
 ///
 /// - Array(arg) -> Array
@@ -741,9 +899,22 @@ fn kernel_array(
         return Ok(arg);
     }
     if let Some(func_id) = globals.check_method(arg, IdentId::TO_ARY) {
-        return vm.invoke_func_inner(globals, func_id, arg, &[], None, None);
+        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+        if result.is_array_ty() {
+            return Ok(result);
+        }
+        return Err(MonorubyErr::cant_convert_error_ary(globals, arg, result));
     } else if let Some(func_id) = globals.check_method(arg, IdentId::TO_A) {
-        return vm.invoke_func_inner(globals, func_id, arg, &[], None, None);
+        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+        if result.is_array_ty() {
+            return Ok(result);
+        }
+        return Err(MonorubyErr::typeerr(format!(
+            "can't convert {} into Array ({}#to_a gives {})",
+            arg.get_real_class_name(globals),
+            arg.get_real_class_name(globals),
+            result.get_real_class_name(globals),
+        )));
     };
     if arg.is_nil() {
         Ok(Value::array_empty())
@@ -837,7 +1008,7 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         format!("(eval at {})", caller_loc)
     };
     let lineno: i64 = if let Some(l) = lfp.try_arg(3) {
-        l.coerce_to_int(vm, globals)?
+        l.coerce_to_int_i64(vm, globals)?
     } else {
         1
     };
@@ -1029,10 +1200,10 @@ fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/sleep.html]
 #[monoruby_builtin]
-fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let now = std::time::Instant::now();
     if let Some(sec) = lfp.try_arg(0) {
-        let sec = sec.coerce_to_f64(globals)?;
+        let sec = sec.coerce_to_f64(vm, globals)?;
         if sec.is_nan() || sec < 0.0 {
             return Err(MonorubyErr::argumenterr(
                 "time interval must not be negative or NaN",
@@ -1058,22 +1229,11 @@ fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.html]
 #[monoruby_builtin]
-fn abort(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn abort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let msg = if let Some(arg0) = lfp.try_arg(0) {
-        match arg0.is_str() {
-            Some(s) => {
-                let s = s.to_string();
-                eprintln!("{}", s);
-                s
-            }
-            None => {
-                return Err(MonorubyErr::no_implicit_conversion(
-                    globals,
-                    arg0,
-                    STRING_CLASS,
-                ));
-            }
-        }
+        let s = arg0.coerce_to_str(vm, globals)?;
+        eprintln!("{}", s);
+        s
     } else {
         "abort".to_string()
     };
@@ -1115,7 +1275,12 @@ fn exit(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/exit=21.html]
 #[monoruby_builtin]
-fn exit_bang(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn exit_bang(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let status = if let Some(arg0) = lfp.try_arg(0) {
         if let Some(i) = arg0.try_fixnum() {
             i as i32
@@ -1138,21 +1303,31 @@ fn exit_bang(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePt
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/warn.html]
 #[monoruby_builtin]
-fn warn(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn warn(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let message = lfp.arg(0);
     // uplevel and category keyword arguments are accepted but ignored for now.
+    let stderr_id = IdentId::get_id("$stderr");
+    let stderr = globals.get_gvar(stderr_id).unwrap_or(Value::nil());
+    let write_id = IdentId::get_id("write");
+
+    let mut messages = vec![];
     if let Some(ary) = message.try_array_ty() {
         for m in ary.iter() {
             if let Some(s) = m.is_str() {
-                eprintln!("{}", s);
+                messages.push(format!("{}\n", s));
             } else {
-                eprintln!("{}", m.to_s(&globals.store));
+                messages.push(format!("{}\n", m.to_s(&globals.store)));
             }
         }
     } else if let Some(s) = message.is_str() {
-        eprintln!("{}", s);
+        messages.push(format!("{}\n", s));
     } else {
-        eprintln!("{}", message.to_s(&globals.store));
+        messages.push(format!("{}\n", message.to_s(&globals.store)));
+    }
+
+    for msg in messages {
+        let msg_val = Value::string(msg);
+        vm.invoke_method_inner(globals, write_id, stderr, &[msg_val], None, None)?;
     }
 
     Ok(Value::nil())
@@ -1198,7 +1373,7 @@ fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // see: https://github.com/ruby/fiddle/blob/2b3747e919df5d044c835cbbb27ebf9e27df74f9/ext/fiddle/handle.c#L136
     let arg0 = lfp.arg(0);
     let flags = if let Some(arg1) = lfp.try_arg(1) {
-        match i32::try_from(arg1.coerce_to_int(vm, globals)?) {
+        match i32::try_from(arg1.coerce_to_int_i64(vm, globals)?) {
             Ok(f) => f,
             Err(_) => return Err(MonorubyErr::argumenterr("Illegale flag value.")),
         }
@@ -1469,9 +1644,9 @@ fn read_memory(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// - ____max(f1:Float, f2:Float) -> Float
 ///
 #[monoruby_builtin]
-fn max(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f1 = lfp.arg(0).coerce_to_f64(globals)?;
-    let f2 = lfp.arg(1).coerce_to_f64(globals)?;
+fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f1 = lfp.arg(0).coerce_to_f64(vm, globals)?;
+    let f2 = lfp.arg(1).coerce_to_f64(vm, globals)?;
     Ok(Value::float(f64::max(f1, f2)))
 }
 
@@ -1479,9 +1654,9 @@ fn max(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// - ____min(f1:Float, f2:Float) -> Float
 ///
 #[monoruby_builtin]
-fn min(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f1 = lfp.arg(0).coerce_to_f64(globals)?;
-    let f2 = lfp.arg(1).coerce_to_f64(globals)?;
+fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let f1 = lfp.arg(0).coerce_to_f64(vm, globals)?;
+    let f2 = lfp.arg(1).coerce_to_f64(vm, globals)?;
     Ok(Value::float(f64::min(f1, f2)))
 }
 
@@ -1551,6 +1726,54 @@ fn inline_min(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/send.html]
 #[monoruby_builtin]
+fn public_send(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let ary = lfp.arg(0).as_array();
+    if ary.len() < 1 {
+        return Err(MonorubyErr::wrong_number_of_arg_min(ary.len(), 1));
+    }
+    let method = ary[0].expect_symbol_or_string(globals)?;
+    let receiver = lfp.self_val();
+    // public_send only allows public methods.
+    // Both private and protected are rejected unconditionally.
+    let class_id = receiver.class();
+    if let Some(entry) = globals.check_method_for_class(class_id, method) {
+        match entry.visibility() {
+            Visibility::Private => {
+                return Err(MonorubyErr::private_method_called(
+                    globals, method, receiver,
+                ));
+            }
+            Visibility::Protected => {
+                return Err(MonorubyErr::protected_method_called(
+                    globals, method, receiver,
+                ));
+            }
+            _ => {}
+        }
+    }
+    vm.invoke_method_inner(
+        globals,
+        method,
+        receiver,
+        &ary[1..],
+        lfp.block(),
+        if let Some(kw) = lfp.try_arg(1)
+            && let Some(kw) = kw.try_hash_ty()
+            && !kw.is_empty()
+        {
+            Some(kw)
+        } else {
+            None
+        },
+    )
+}
+
+#[monoruby_builtin]
 pub(crate) fn send(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -1586,6 +1809,7 @@ pub fn object_send(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     let no_splat = !callsite.object_send_single_splat();
@@ -1672,7 +1896,29 @@ fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/clone.html]
 #[monoruby_builtin]
 fn dup(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(lfp.self_val().dup())
+    let self_val = lfp.self_val();
+    if let Some(class) = self_val.is_class() {
+        if class.id() == BASIC_OBJECT_CLASS {
+            return Err(MonorubyErr::typeerr("can't copy the root class"));
+        }
+    }
+    Ok(self_val.dup())
+}
+
+///
+/// ### Kernel#clone
+///
+/// - clone -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/clone.html]
+#[monoruby_builtin]
+fn clone_val(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(lfp.self_val().clone_value())
 }
 
 /// ### Kernel#define_singleton_method
@@ -1787,23 +2033,35 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
 #[monoruby_builtin]
-fn respond_to(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let include_all = if let Some(arg1) = lfp.try_arg(1) {
         arg1.as_bool()
     } else {
         false
     };
-    Ok(Value::bool(if include_all {
+    let found = if include_all {
         globals.check_method(lfp.self_val(), name).is_some()
     } else {
         globals.check_public_method(lfp.self_val(), name).is_some()
-    }))
+    };
+    if found {
+        return Ok(Value::bool(true));
+    }
+    // Call respond_to_missing?(name, include_all) as CRuby does.
+    let respond_to_missing = IdentId::get_id("respond_to_missing?");
+    if let Some(fid) = globals.check_method(lfp.self_val(), respond_to_missing) {
+        let result = vm.invoke_func_inner(
+            globals,
+            fid,
+            lfp.self_val(),
+            &[Value::symbol(name), Value::bool(include_all)],
+            None,
+            None,
+        )?;
+        return Ok(Value::bool(result.as_bool()));
+    }
+    Ok(Value::bool(false))
 }
 
 fn object_respond_to(
@@ -1813,6 +2071,7 @@ fn object_respond_to(
     store: &Store,
     callid: CallSiteId,
     recv_class: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -1842,15 +2101,17 @@ fn object_respond_to(
     } else {
         return false;
     };
-    let b = if let Some(entry) =
+    if let Some(entry) =
         store.check_method_for_class_with_version(recv_class, method_name, ctx.class_version())
     {
-        include_all || entry.is_public()
-    } else {
-        false
-    };
-    state.def_C(dst, Immediate::bool(b));
-    true
+        if include_all || entry.is_public() {
+            state.def_C(dst, Immediate::bool(true));
+            return true;
+        }
+    }
+    // Method not found directly. Cannot JIT-inline because respond_to_missing?
+    // may be overridden and needs to be called at runtime.
+    false
 }
 
 ///
@@ -1963,6 +2224,76 @@ fn methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         globals.store.get_method_names(class_id)
     } else {
         let class_id = lfp.self_val().class();
+        globals.store.get_method_names_inherit(class_id, true)
+    }))
+}
+
+///
+/// ### Kernel#private_methods
+///
+/// - private_methods(include_inherited = true) -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/private_methods.html]
+#[monoruby_builtin]
+fn private_methods(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    let class_id = lfp.self_val().class();
+    Ok(Value::array_from_vec(if !inherited_too {
+        globals.store.get_private_method_names(class_id)
+    } else {
+        globals.store.get_private_method_names_inherit(class_id)
+    }))
+}
+
+///
+/// ### Kernel#protected_methods
+///
+/// - protected_methods(include_inherited = true) -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/protected_methods.html]
+#[monoruby_builtin]
+fn protected_methods(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    let class_id = lfp.self_val().class();
+    Ok(Value::array_from_vec(if !inherited_too {
+        globals.store.get_protected_method_names(class_id)
+    } else {
+        globals.store.get_protected_method_names_inherit(class_id)
+    }))
+}
+
+///
+/// ### Kernel#public_methods
+///
+/// - public_methods(include_inherited = true) -> [Symbol]
+///
+/// monoruby's `methods` already returns the public/protected union; we
+/// implement `public_methods` as the same set, matching CRuby for the
+/// non-protected cases.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/public_methods.html]
+#[monoruby_builtin]
+fn public_methods(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    let class_id = lfp.self_val().class();
+    Ok(Value::array_from_vec(if !inherited_too {
+        globals.store.get_method_names(class_id)
+    } else {
         globals.store.get_method_names_inherit(class_id, true)
     }))
 }
@@ -2264,6 +2595,16 @@ mod tests {
         run_test(r#"warn(100, uplevel:1)"#);
         run_test(r#"warn(100, category: :experimental)"#);
         run_test_error(r#"raise "Woo""#);
+        // warn writes to $stderr (not directly to OS stderr)
+        run_test(
+            r##"
+            class MyIO; def initialize; @s = ""; end; def write(s); @s += s.to_s; end; def to_s; @s; end; end
+            old = $stderr; io = MyIO.new; $stderr = io
+            warn "hello"
+            $stderr = old
+            io.to_s
+            "##,
+        );
     }
 
     #[test]
@@ -2652,6 +2993,48 @@ mod tests {
     }
 
     #[test]
+    fn kernel_integer_to_int_coercion() {
+        // Integer() should call to_int on non-numeric arguments
+        run_test_with_prelude(
+            r#"Integer(o)"#,
+            r#"class C; def to_int; 42; end; end; o = C.new"#,
+        );
+    }
+
+    #[test]
+    fn kernel_float_to_f_coercion() {
+        // Float() should call to_f on non-numeric arguments
+        run_test_with_prelude(
+            r#"Float(o)"#,
+            r#"class C; def to_f; 3.14; end; end; o = C.new"#,
+        );
+    }
+
+    #[test]
+    fn kernel_rational() {
+        // Integer arguments
+        run_test_once("Rational(3, 4).to_s");
+        run_test_once("Rational(6, 4).to_s");
+        // Single integer
+        run_test_once("Rational(5).to_s");
+        // Float argument
+        run_test_once("Rational(1.5).to_s");
+        run_test_once("Rational(0.0).to_s");
+        // Two floats
+        run_test_once("Rational(1.5, 2.0).to_s");
+        // Mixed float/int
+        run_test_once("Rational(1.5, 3).to_s");
+        // Rational passthrough
+        run_test_once("Rational(Rational(3, 4)).to_s");
+        // Rational / Integer
+        run_test_once("Rational(Rational(3, 4), 2).to_s");
+        // Division by zero
+        run_test_error("Rational(1, 0)");
+        // Type error
+        run_test_error("Rational(:foo)");
+    }
+
+    #[test]
     fn object_instance_of() {
         run_test2(r#"5.instance_of?(Integer)"#);
         run_test2(r#"5.instance_of?(Float)"#);
@@ -2860,6 +3243,34 @@ mod tests {
           def baz; yield + 1; end
         end
         C.new.public_send(:baz) { 41 }
+        "##,
+        );
+        // private method => NoMethodError
+        run_test_error(
+            r##"
+        class C
+          private def pri; "private"; end
+        end
+        C.new.public_send(:pri)
+        "##,
+        );
+        // protected method => NoMethodError even from same class hierarchy
+        run_test_error(
+            r##"
+        class C
+          protected def pro; "protected"; end
+          def call_pro(other); other.public_send(:pro); end
+        end
+        C.new.call_pro(C.new)
+        "##,
+        );
+        // protected method from outside => NoMethodError
+        run_test_error(
+            r##"
+        class C
+          protected def pro; "protected"; end
+        end
+        C.new.public_send(:pro)
         "##,
         );
     }
@@ -3189,5 +3600,186 @@ mod tests {
             format(MyFmt.new, 42)
             "#,
         );
+    }
+
+    #[test]
+    fn sprintf_coercion() {
+        // %d calls to_int (preferred) then to_i as fallback
+        run_test(
+            r#"
+            class HasToInt; def to_int; 42; end; end
+            sprintf("%d", HasToInt.new)
+            "#,
+        );
+        run_test(
+            r#"
+            class HasToI; def to_i; 99; end; end
+            sprintf("%d", HasToI.new)
+            "#,
+        );
+        run_test(
+            r#"
+            class HasBoth; def to_int; 10; end; def to_i; 20; end; end
+            sprintf("%d", HasBoth.new)
+            "#,
+        );
+        // %x, %o, %b also call to_int/to_i
+        run_test(
+            r#"
+            class HasToInt; def to_int; 255; end; end
+            sprintf("%x", HasToInt.new)
+            "#,
+        );
+        run_test(
+            r#"
+            class HasToInt; def to_int; 255; end; end
+            sprintf("%o", HasToInt.new)
+            "#,
+        );
+        run_test(
+            r#"
+            class HasToInt; def to_int; 10; end; end
+            sprintf("%b", HasToInt.new)
+            "#,
+        );
+        // %f calls to_f
+        run_test(
+            r#"
+            class HasToF; def to_f; 3.14; end; end
+            sprintf("%f", HasToF.new)
+            "#,
+        );
+        // %e calls to_f
+        run_test(
+            r#"
+            class HasToF; def to_f; 2.5; end; end
+            sprintf("%.1e", HasToF.new)
+            "#,
+        );
+        // %s calls to_s (not to_str)
+        run_test(
+            r#"
+            class HasToS; def to_s; "hello"; end; end
+            sprintf("%s", HasToS.new)
+            "#,
+        );
+        // TypeError when no conversion method
+        run_test(
+            r#"
+            begin
+              sprintf("%d", Object.new)
+            rescue TypeError => e
+              e.message
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            begin
+              sprintf("%f", Object.new)
+            rescue TypeError => e
+              e.message
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn sprintf_positional() {
+        run_test(r#"sprintf("%1$d %2$d %1$d", 10, 20)"#);
+        run_test(r#"sprintf("%1$s %2$s %1$s", "a", "b")"#);
+        run_test(r#"sprintf("%2$d", 10, 20)"#);
+        run_test(r#"sprintf("%1$05d", 42)"#);
+        run_test(r#"sprintf("%1$x", 255)"#);
+        run_test(r#"sprintf("%1$o", 8)"#);
+        run_test(r#"sprintf("%1$f", 3.14)"#);
+    }
+
+    #[test]
+    fn sprintf_named() {
+        run_test(r#"sprintf("%{foo}", foo: "hello")"#);
+        run_test(r#"sprintf("%{foo} %{bar}", foo: 1, bar: 2)"#);
+        run_test(r#"sprintf("%{foo} %{foo}", foo: "x")"#);
+    }
+
+    #[test]
+    fn sprintf_named_format() {
+        run_test(r#"sprintf("%<foo>d", foo: 42)"#);
+        run_test(r#"sprintf("%<foo>05d", foo: 42)"#);
+        run_test(r#"sprintf("%<foo>10d", foo: 42)"#);
+        run_test(r#"sprintf("%<foo>x", foo: 255)"#);
+        run_test(r#"sprintf("%<foo>f", foo: 3.14)"#);
+        run_test(r#"sprintf("%<foo>s", foo: "hello")"#);
+    }
+
+    #[test]
+    fn kernel_clone() {
+        run_tests(&["[1,2,3].clone", r#""hello".clone"#, "{a: 1}.clone"]);
+    }
+
+    #[test]
+    fn kernel_hash_method() {
+        run_tests(&[
+            "1.hash.is_a?(Integer)",
+            r#""hello".hash.is_a?(Integer)"#,
+            ":foo.hash.is_a?(Integer)",
+        ]);
+    }
+
+    #[test]
+    fn kernel_eql() {
+        run_tests(&[
+            "1.eql?(1)",
+            "1.eql?(1.0)",
+            ":foo.eql?(:foo)",
+            ":foo.eql?(:bar)",
+        ]);
+    }
+
+    #[test]
+    fn kernel_loop_stop_iteration() {
+        run_test(
+            r#"
+            x = 0
+            loop do
+              x += 1
+              raise StopIteration if x == 5
+            end
+            x
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_caller() {
+        run_test(
+            r#"
+            def foo
+              caller
+            end
+            foo.is_a?(Array)
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_proc_lambda() {
+        run_tests(&[
+            "proc { 1 }.call",
+            "lambda { 1 }.call",
+            "proc { |x| x }.call(42)",
+            "lambda { |x| x }.call(42)",
+        ]);
+    }
+
+    #[test]
+    fn kernel_raise_class() {
+        run_test_error("raise ArgumentError");
+        run_test_error(r#"raise TypeError, "custom""#);
+    }
+
+    #[test]
+    fn kernel_format_error() {
+        run_test_error("sprintf()");
     }
 }

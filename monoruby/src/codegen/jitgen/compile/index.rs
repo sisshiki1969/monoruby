@@ -5,19 +5,18 @@ impl<'a> JitContext<'a> {
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
-        dst: SlotId,
         base: SlotId,
         idx: SlotId,
         ic: Option<(ClassId, ClassId)>,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         let (base_class, idx_class) = state.binary_class(base, idx, ic);
-        if let (Some(base_class), Some(INTEGER_CLASS)) = (base_class, idx_class) {
-            if self.store[base_class].is_array_ty_instance() {
-                state.array_integer_index(ir, &self.store, dst, base, idx);
-                return Ok(CompileResult::Continue);
-            }
-        }
+        //if let (Some(base_class), Some(INTEGER_CLASS)) = (base_class, idx_class) {
+        //    if self.store[base_class].is_array_ty_instance() {
+        //        state.array_integer_index(ir, &self.store, dst, base, idx);
+        //        return Ok(CompileResult::Continue);
+        //    }
+        //}
         if let Some(lhs_class) = base_class {
             return self.call_binary_method(
                 state,
@@ -25,6 +24,7 @@ impl<'a> JitContext<'a> {
                 base,
                 idx,
                 lhs_class,
+                idx_class,
                 IdentId::_INDEX,
                 bc_pos,
             );
@@ -43,19 +43,21 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         let (base_class, idx_class) = state.binary_class(base, idx, ic);
-        if let (Some(base_class), Some(INTEGER_CLASS)) = (base_class, idx_class) {
-            if self.store[base_class].is_array_ty_instance() {
-                state.array_integer_index_assign(ir, self.store, src, base, idx);
-                return Ok(CompileResult::Continue);
-            }
-        }
+        //if let (Some(base_class), Some(INTEGER_CLASS)) = (base_class, idx_class) {
+        //    if self.store[base_class].is_array_ty_instance() {
+        //        state.array_integer_index_assign(ir, self.store, src, base, idx);
+        //        return Ok(CompileResult::Continue);
+        //    }
+        //}
         if let Some(recv_class) = base_class {
             return self.call_ternary_method(
                 state,
                 ir,
                 base,
                 idx,
+                src,
                 recv_class,
+                idx_class,
                 IdentId::_INDEX_ASSIGN,
                 bc_pos,
             );
@@ -65,7 +67,7 @@ impl<'a> JitContext<'a> {
 }
 
 impl AbstractState {
-    fn array_integer_index(
+    pub(crate) fn array_integer_index(
         &mut self,
         ir: &mut AsmIr,
         store: &Store,
@@ -83,7 +85,17 @@ impl AbstractState {
         self.def_rax2acc(ir, dst);
     }
 
-    fn array_integer_index_assign(
+    ///
+    /// Aray index assign operation.
+    ///
+    /// ### in
+    /// - rsi: index Fixnum
+    /// - rdx: result Value
+    ///
+    /// ### destroy
+    /// - caller save registers except xmm's
+    ///
+    pub(crate) fn array_integer_index_assign(
         &mut self,
         ir: &mut AsmIr,
         store: &Store,

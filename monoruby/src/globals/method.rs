@@ -334,6 +334,28 @@ impl Globals {
         )
     }
 
+    pub(crate) fn define_private_builtin_func_with(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
+        self.new_builtin_fn(
+            class_id,
+            name,
+            address,
+            Visibility::Private,
+            min,
+            max,
+            rest,
+            &[],
+            false,
+        )
+    }
+
     pub(crate) fn define_private_builtin_func_rest(
         &mut self,
         class_id: ClassId,
@@ -473,7 +495,7 @@ impl Globals {
         )
     }
 
-    fn define_builtin_inline_funcs_with(
+    pub(crate) fn define_builtin_inline_funcs_with(
         &mut self,
         class_id: ClassId,
         name: &str,
@@ -754,7 +776,7 @@ impl Globals {
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
-        f: extern "C" fn(f64) -> f64,
+        f: unsafe extern "C" fn(f64) -> f64,
         arg_num: usize,
     ) -> FuncId {
         let fid = self.define_builtin_module_func(class_id, name, address, arg_num);

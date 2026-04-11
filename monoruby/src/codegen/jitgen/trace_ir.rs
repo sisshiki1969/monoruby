@@ -135,6 +135,10 @@ pub(crate) enum TraceIr {
         dst: SlotId,
         id: u32,
     },
+    StoreSvar {
+        src: SlotId,
+        id: u32,
+    },
     UnOp {
         kind: UnOpK,
         dst: SlotId,
@@ -452,6 +456,10 @@ impl TraceIr {
                     dst: SlotId::new(op1_w),
                     callid: CallSiteId::from(op1_l),
                 },
+                41 => TraceIr::StoreSvar {
+                    src: SlotId::new(op1_w),
+                    id: op1_l,
+                },
                 40 => {
                     let (_, op1_w2, op1_w3) = dec_www(op1);
                     TraceIr::ArrayTEq {
@@ -609,7 +617,7 @@ impl TraceIr {
                         ic,
                     }
                 }
-                160..=168 => {
+                160..=170 => {
                     let kind = BinOpK::from(opcode - 160);
                     let dst = SlotId::from(op1_w1);
                     let lhs = SlotId::new(op2_w2);
@@ -630,47 +638,47 @@ impl TraceIr {
                     }
                 }
 
-                170 => TraceIr::InitMethod(FnInitInfo {
+                172 => TraceIr::InitMethod(FnInitInfo {
                     reg_num: op1_w1 as usize,
                     arg_num: op2_w2 as usize,
                     stack_offset: op3_w3 as usize,
                 }),
-                171 => TraceIr::ExpandArray {
+                173 => TraceIr::ExpandArray {
                     src: SlotId::new(op1_w1),
                     dst: (SlotId::new(op2_w2), op3_w3, {
                         let rest = op2 as u16;
                         if rest == 0 { None } else { Some(rest - 1) }
                     }),
                 },
-                172 => {
+                174 => {
                     let undef = IdentId::from(dec_wl(op1).1);
                     TraceIr::UndefMethod { undef }
                 }
-                173 => TraceIr::AliasMethod {
+                175 => TraceIr::AliasMethod {
                     new: SlotId::new(op1_w1),
                     old: SlotId::new(op2_w2),
                 },
-                174 => TraceIr::Hash {
+                176 => TraceIr::Hash {
                     dst: SlotId::new(op1_w1),
                     args: SlotId::new(op2_w2),
                     len: op3_w3,
                 },
-                175 => TraceIr::ToA {
+                177 => TraceIr::ToA {
                     dst: SlotId::new(op1_w1),
                     src: SlotId::new(op2_w2),
                 },
-                176 => TraceIr::Mov(SlotId::new(op1_w1), SlotId::new(op2_w2)),
-                177..=178 => TraceIr::Range {
+                178 => TraceIr::Mov(SlotId::new(op1_w1), SlotId::new(op2_w2)),
+                179..=180 => TraceIr::Range {
                     dst: SlotId::new(op1_w1),
                     start: SlotId::new(op2_w2),
                     end: SlotId::new(op3_w3),
-                    exclude_end: match opcode - 177 {
+                    exclude_end: match opcode - 179 {
                         0 => false,
                         1 => true,
                         _ => unreachable!(),
                     },
                 },
-                179 => TraceIr::ConcatStr(SlotId::from(op1_w1), SlotId::new(op2_w2), op3_w3),
+                181 => TraceIr::ConcatStr(SlotId::from(op1_w1), SlotId::new(op2_w2), op3_w3),
                 _ => unreachable!("{:016x}", op1),
             }
         }
@@ -924,12 +932,19 @@ impl TraceIr {
                     match id {
                         ruruby_parse::SPECIAL_LASTMATCH => "&".to_string(),
                         ruruby_parse::SPECIAL_POSTMATCH => "'".to_string(),
+                        ruruby_parse::SPECIAL_MATCHDATA => "~".to_string(),
                         ruruby_parse::SPECIAL_LOADPATH => "$LOAD_PATH".to_string(),
                         ruruby_parse::SPECIAL_LOADEDFEATURES => "$LOADED_FEATURES".to_string(),
                         n if n >= 100 => (n - 100).to_string(),
                         _ => unreachable!(),
                     }
                 )
+            }
+            TraceIr::StoreSvar { src, id } => {
+                format!("${} = {:?}", match id {
+                    ruruby_parse::SPECIAL_MATCHDATA => "~".to_string(),
+                    _ => format!("<special:{}>", id),
+                }, src)
             }
             TraceIr::UnOp {
                 kind,

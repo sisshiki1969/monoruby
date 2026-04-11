@@ -11,6 +11,8 @@ use std::cmp::Ordering;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Array", ARRAY_CLASS, ObjTy::ARRAY);
     globals.define_builtin_class_func_with(ARRAY_CLASS, "new", new, 0, 0, true);
+    globals.define_builtin_class_func_rest(ARRAY_CLASS, "[]", array_class_bracket);
+    globals.define_builtin_class_func(ARRAY_CLASS, "try_convert", array_try_convert, 1);
     //globals.define_builtin_class_inline_func_with(
     //    ARRAY_CLASS,
     //    "new",
@@ -27,7 +29,7 @@ pub(super) fn init(globals: &mut Globals) {
         Box::new(array_allocate),
         0,
     );
-    globals.define_builtin_func_with(ARRAY_CLASS, "initialize", initialize, 0, 2, false);
+    globals.define_private_builtin_func_with(ARRAY_CLASS, "initialize", initialize, 0, 2, false);
     globals.define_builtin_inline_funcs(
         ARRAY_CLASS,
         "size",
@@ -59,15 +61,32 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs_rest(ARRAY_CLASS, "unshift", &["prepend"], unshift);
     globals.define_builtin_func_rest(ARRAY_CLASS, "concat", concat);
     globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, Box::new(array_shl), 1);
-    globals.define_builtin_func_with(ARRAY_CLASS, "push", push, 0, 0, true);
-    globals.define_builtin_func(ARRAY_CLASS, "pop", pop, 0);
+    globals.define_builtin_funcs_with(ARRAY_CLASS, "push", &["append"], push, 0, 0, true);
+    globals.define_builtin_func_with(ARRAY_CLASS, "pop", pop, 0, 1, false);
     globals.define_builtin_funcs(ARRAY_CLASS, "==", &["==="], eq, 1);
     globals.define_builtin_func(ARRAY_CLASS, "eql?", eql, 1);
     globals.define_builtin_func(ARRAY_CLASS, "<=>", cmp, 1);
-    globals.define_builtin_funcs_with(ARRAY_CLASS, "[]", &["slice"], index, 1, 2, false);
-    globals.define_builtin_func_with(ARRAY_CLASS, "[]=", index_assign, 2, 3, false);
+    globals.define_builtin_inline_funcs_with(
+        ARRAY_CLASS,
+        "[]",
+        &["slice"],
+        index,
+        Box::new(array_index),
+        1,
+        2,
+        false,
+    );
+    globals.define_builtin_inline_func_with(
+        ARRAY_CLASS,
+        "[]=",
+        index_assign,
+        Box::new(array_index_assign),
+        2,
+        3,
+        false,
+    );
     globals.define_builtin_func(ARRAY_CLASS, "clear", clear, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "fill", fill, 1);
+    globals.define_builtin_func_with(ARRAY_CLASS, "fill", fill, 0, 3, false);
     globals.define_builtin_func(ARRAY_CLASS, "drop", drop, 1);
     globals.define_builtin_func_rest(ARRAY_CLASS, "zip", zip);
     globals.define_builtin_funcs_with(ARRAY_CLASS, "inject", &["reduce"], inject, 0, 2, false);
@@ -82,6 +101,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "partition", partition, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "filter", &["select", "find_all"], filter, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "filter!", &["select!"], filter_, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "keep_if", keep_if, 0);
     globals.define_builtin_func(ARRAY_CLASS, "reject!", reject_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "delete_if", delete_if, 0);
     globals.define_builtin_func(ARRAY_CLASS, "reject", reject, 0);
@@ -95,8 +115,8 @@ pub(super) fn init(globals: &mut Globals) {
     //globals.define_builtin_funcs(ARRAY_CLASS, "map", &["collect"], map, 0);
     //globals.define_builtin_funcs(ARRAY_CLASS, "map!", &["collect!"], map_, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "flat_map", &["collect_concat"], flat_map, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "all?", all_, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "any?", any_, 0);
+    globals.define_builtin_func_with(ARRAY_CLASS, "all?", all_, 0, 1, false);
+    globals.define_builtin_func_with(ARRAY_CLASS, "any?", any_, 0, 1, false);
     globals.define_builtin_funcs(ARRAY_CLASS, "detect", &["find"], detect, 0);
     globals.define_builtin_func(ARRAY_CLASS, "grep", grep, 1);
     globals.define_builtin_func(ARRAY_CLASS, "include?", include_, 1);
@@ -108,6 +128,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(ARRAY_CLASS, "product", product);
 
     globals.define_builtin_func_rest(ARRAY_CLASS, "union", union);
+    globals.define_builtin_func_rest(ARRAY_CLASS, "difference", difference);
+    globals.define_builtin_func_rest(ARRAY_CLASS, "intersection", intersection);
     globals.define_builtin_func(ARRAY_CLASS, "intersect?", intersect_, 1);
     globals.define_builtin_func(ARRAY_CLASS, "uniq", uniq, 0);
     globals.define_builtin_func(ARRAY_CLASS, "uniq!", uniq_, 0);
@@ -184,6 +206,7 @@ fn array_allocate(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -191,12 +214,15 @@ fn array_allocate(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
+    let using_xmm = state.get_using_xmm();
+    ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _| {
         monoasm! { &mut r#gen.jit,
             movq rax, (allocate_array);
             call rax;
         }
     });
+    ir.xmm_restore(using_xmm);
 
     state.def_reg2acc(ir, GP::Rax, dst);
     true
@@ -205,6 +231,56 @@ fn array_allocate(
 extern "C" fn allocate_array(class_val: Value) -> Value {
     let class_id = class_val.as_class_id();
     Value::array_empty_with_class(class_id)
+}
+
+///
+/// ### Array.[]
+///
+/// Array[*args] -> Array
+///
+#[monoruby_builtin]
+fn array_class_bracket(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class = lfp.self_val().as_class_id();
+    let args = lfp.arg(0).as_array();
+    let ary = ArrayInner::from(args.to_vec().into());
+    Ok(Value::array_with_class(ary, class))
+}
+
+///
+/// ### Array.try_convert
+///
+/// - try_convert(obj) -> Array | nil
+///
+#[monoruby_builtin]
+fn array_try_convert(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let obj = lfp.arg(0);
+    if obj.is_array_ty() {
+        return Ok(obj);
+    }
+    if obj.is_nil() {
+        return Ok(Value::nil());
+    }
+    if let Some(func_id) = globals.check_method(obj, IdentId::TO_ARY) {
+        let result = vm.invoke_func_inner(globals, func_id, obj, &[], None, None)?;
+        if result.is_array_ty() {
+            return Ok(result);
+        }
+        if result.is_nil() {
+            return Ok(Value::nil());
+        }
+        return Err(MonorubyErr::cant_convert_error_ary(globals, obj, result));
+    }
+    Ok(Value::nil())
 }
 
 ///
@@ -217,44 +293,55 @@ extern "C" fn allocate_array(class_val: Value) -> Value {
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/s/new.html]
 #[monoruby_builtin]
 fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_val = lfp.self_val().as_array();
     if lfp.try_arg(0).is_none() {
+        self_val.clear();
         return Ok(self_val.into());
     }
-    if lfp.try_arg(1).is_none() {
-        if let Some(ary) = lfp.arg(0).try_array_ty() {
-            *self_val = (*ary).clone();
+    if lfp.try_arg(1).is_none() && lfp.block().is_none() {
+        // Try to_ary conversion first
+        let arg = lfp.arg(0);
+        if arg.is_array_ty() {
+            *self_val = (*arg.as_array()).clone();
             return Ok(self_val.into());
         }
-    }
-    if let Some(size) = lfp.arg(0).try_fixnum() {
-        if size < 0 {
-            return Err(MonorubyErr::negative_array_size());
-        }
-        let size = size as usize;
-        if let Some(bh) = lfp.block() {
-            if lfp.try_arg(1).is_some() {
-                eprintln!("warning: block supersedes default value argument");
+        let to_ary = IdentId::get_id("to_ary");
+        if let Some(func_id) = globals.check_method(arg, to_ary) {
+            let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+            if result.is_array_ty() {
+                *self_val = (*result.as_array()).clone();
+                return Ok(self_val.into());
             }
-            let iter = (0..size).map(|i| Value::integer(i as i64));
-            let mut res = vm.invoke_block_map1(globals, bh, iter, size)?;
-            RValue::swap_kind(lfp.self_val().rvalue_mut(), res.rvalue_mut());
-        } else {
-            let val = if lfp.try_arg(1).is_none() {
-                Value::nil()
-            } else {
-                lfp.arg(1)
-            };
-            *self_val = ArrayInner::from(smallvec![val; size]);
+            if !result.is_nil() {
+                return Err(MonorubyErr::cant_convert_error_ary(globals, arg, result));
+            }
         }
-        Ok(self_val.into())
-    } else {
-        Err(MonorubyErr::no_implicit_conversion(
-            globals,
-            lfp.arg(0),
-            INTEGER_CLASS,
-        ))
     }
+    // Use coerce_to_int to call to_int on the size argument
+    let size = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    if size < 0 {
+        return Err(MonorubyErr::negative_array_size());
+    }
+    let size = size as usize;
+    // Guard against unreasonably large sizes that would cause capacity overflow.
+    // CRuby also limits array size; we use a practical limit here.
+    const MAX_ARRAY_SIZE: usize = 1 << 30; // ~1 billion elements
+    if size > MAX_ARRAY_SIZE {
+        return Err(MonorubyErr::argumenterr(format!("array size too big")));
+    }
+    if let Some(bh) = lfp.block() {
+        if lfp.try_arg(1).is_some() {
+            eprintln!("warning: block supersedes default value argument");
+        }
+        let iter = (0..size).map(|i| Value::integer(i as i64));
+        let mut res = vm.invoke_block_map1(globals, bh, iter, size)?;
+        RValue::swap_kind(lfp.self_val().rvalue_mut(), res.rvalue_mut());
+    } else {
+        let val = lfp.try_arg(1).unwrap_or_default();
+        *self_val = ArrayInner::from(smallvec![val; size]);
+    }
+    Ok(self_val.into())
 }
 
 ///
@@ -277,6 +364,7 @@ fn array_size(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -319,6 +407,7 @@ fn array_clone(
     store: &Store,
     callid: CallSiteId,
     class_id: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -356,22 +445,30 @@ extern "C" fn array_dup(val: Value) -> Value {
 fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
         if lfp.block().is_some() {
-            eprintln!("warning: given block not used");
+            vm.ruby_warn(globals, "warning: given block not used")?;
         }
         let mut count = 0;
-        for elem in lfp.self_val().as_array().iter() {
-            if vm.invoke_eq(globals, arg0, *elem)? {
+        let ary = lfp.self_val();
+        let mut i = 0;
+        while i < ary.as_array().len() {
+            let elem = ary.as_array()[i];
+            if vm.invoke_eq(globals, arg0, elem)? {
                 count += 1;
             }
+            i += 1;
         }
         Ok(Value::integer(count))
     } else if let Some(bh) = lfp.block() {
         let mut count = 0;
         let bh = vm.get_block_data(globals, bh)?;
-        for elem in lfp.self_val().as_array().iter() {
-            if vm.invoke_block(globals, &bh, &[*elem])?.as_bool() {
+        let ary = lfp.self_val();
+        let mut i = 0;
+        while i < ary.as_array().len() {
+            let elem = ary.as_array()[i];
+            if vm.invoke_block(globals, &bh, &[elem])?.as_bool() {
                 count += 1;
             }
+            i += 1;
         }
         Ok(Value::integer(count))
     } else {
@@ -407,7 +504,10 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         || {
             let ary = self_val.as_array();
             if ary.len() == 0 {
-                return Ok(Value::string("[]".to_string()));
+                return Ok(Value::string_from_inner(RStringInner::from_encoding(
+                    b"[]",
+                    Encoding::UsAscii,
+                )));
             }
             let mut s = String::from("[");
             for (i, elem) in ary.iter().enumerate() {
@@ -416,7 +516,28 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                 }
                 let inspected =
                     vm.invoke_method_inner(globals, IdentId::INSPECT, *elem, &[], None, None)?;
-                s.push_str(&inspected.to_s(&globals.store));
+                // If #inspect returned a String, use it directly.
+                // Otherwise, call Ruby #to_s on the result.
+                if let Some(str_inner) = inspected.is_rstring_inner() {
+                    let bytes = str_inner.as_bytes();
+                    match std::str::from_utf8(bytes) {
+                        Ok(utf8) => s.push_str(utf8),
+                        Err(_) => s.push_str(&inspected.to_s(&globals.store)),
+                    }
+                } else {
+                    let to_s_result =
+                        vm.invoke_method_inner(globals, IdentId::TO_S, inspected, &[], None, None)?;
+                    if let Some(str_inner) = to_s_result.is_rstring_inner() {
+                        let bytes = str_inner.as_bytes();
+                        match std::str::from_utf8(bytes) {
+                            Ok(utf8) => s.push_str(utf8),
+                            Err(_) => s.push_str(&to_s_result.to_s(&globals.store)),
+                        }
+                    } else {
+                        // If #to_s also doesn't return a String, use default representation
+                        s.push_str(&to_s_result.to_s(&globals.store));
+                    }
+                }
             }
             s.push(']');
             Ok(Value::string(s))
@@ -433,7 +554,13 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_a.html]
 #[monoruby_builtin]
 fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(lfp.self_val())
+    let self_val = lfp.self_val();
+    if self_val.class() != ARRAY_CLASS {
+        let ary = self_val.as_array();
+        Ok(Value::array_from_vec(ary.to_vec()))
+    } else {
+        Ok(self_val)
+    }
 }
 
 ///
@@ -446,25 +573,36 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     fn inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<()> {
-        let self_ = lfp.self_val().as_array();
+        let self_val = lfp.self_val();
         let block = match lfp.block() {
             Some(bh) => Some(vm.get_block_data(globals, bh)?),
             None => None,
         };
-        for (i, elem) in self_.iter().enumerate() {
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let orig_elem = self_val.as_array()[i];
             let elem = if let Some(p) = &block {
-                vm.invoke_block(globals, p, &[*elem])?
+                vm.invoke_block(globals, p, &[orig_elem])?
             } else {
-                *elem
+                orig_elem
             };
-            let elem = match elem.try_array_ty() {
-                Some(a) => a,
-                None => {
+            let elem = if let Some(a) = elem.try_array_ty() {
+                a
+            } else if let Some(fid) = globals.check_method(elem, IdentId::TO_ARY) {
+                let ret = vm.invoke_func_inner(globals, fid, elem, &[], None, None)?;
+                if let Some(a) = ret.try_array_ty() {
+                    a
+                } else {
                     return Err(MonorubyErr::typeerr(format!(
                         "wrong element type {} at {i} (expected array)",
                         elem.get_real_class_name(&globals.store)
                     )));
                 }
+            } else {
+                return Err(MonorubyErr::typeerr(format!(
+                    "wrong element type {} at {i} (expected array)",
+                    elem.get_real_class_name(&globals.store)
+                )));
             };
             if elem.len() != 2 {
                 return Err(MonorubyErr::argumenterr(format!(
@@ -473,6 +611,7 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 )));
             }
             vm.temp_hash_insert(globals, elem[0], elem[1])?;
+            i += 1;
         }
         Ok(())
     }
@@ -503,20 +642,12 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2b.html]
 #[monoruby_builtin]
-fn add(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut lhs = lfp.self_val().dup().as_array();
-    let rhs = match lfp.arg(0).try_array_ty() {
-        Some(v) => v,
-        None => {
-            return Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                lfp.arg(0),
-                ARRAY_CLASS,
-            ));
-        }
-    };
-    lhs.extend_from_slice(&rhs);
-    Ok(lhs.into())
+fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let lhs = lfp.self_val().as_array();
+    let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
+    let mut v = lhs.to_vec();
+    v.extend_from_slice(&rhs);
+    Ok(Value::array_from_vec(v))
 }
 
 ///
@@ -528,21 +659,12 @@ fn add(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs_v = lfp.self_val();
-    let rhs = match lfp.arg(0).try_array_ty() {
-        Some(ary) => ary,
-        None => {
-            return Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                lfp.arg(0),
-                ARRAY_CLASS,
-            ));
-        }
-    };
+    let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
     let mut v = vec![];
     for lhs in lhs_v.as_array().iter() {
         let mut flag = true;
         for rhs in rhs.iter() {
-            if vm.eq_values_bool(globals, *lhs, *rhs)? {
+            if lhs.eql(rhs, vm, globals)? {
                 flag = false;
                 break;
             }
@@ -562,24 +684,36 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2a.html]
 #[monoruby_builtin]
-fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
-    if let Some(v) = lfp.arg(0).try_fixnum() {
+    let arg = lfp.arg(0);
+    if let Some(v) = arg.try_fixnum() {
         if v < 0 {
             return Err(MonorubyErr::negative_argument());
         }
         let rhs = v as usize;
         let vec = lhs.repeat(rhs);
         Ok(Value::array_from_vec(vec))
-    } else if let Some(sep) = lfp.arg(0).is_str() {
-        let res = array_join(&globals.store, lhs, sep);
+    } else if let Some(sep) = arg.is_str() {
+        let mut visited: HashSet<u64> = HashSet::default();
+        visited.insert(lhs.id());
+        let res = array_join(vm, globals, lhs, sep, &mut visited)?;
+        Ok(Value::string(res))
+    } else if let Ok(s) = arg.coerce_to_str(vm, globals) {
+        // Try to_str coercion for join
+        let mut visited: HashSet<u64> = HashSet::default();
+        visited.insert(lhs.id());
+        let res = array_join(vm, globals, lhs, &s, &mut visited)?;
         Ok(Value::string(res))
     } else {
-        Err(MonorubyErr::no_implicit_conversion(
-            globals,
-            lfp.arg(0),
-            INTEGER_CLASS,
-        ))
+        // Try to_int coercion for repeat
+        let v = arg.coerce_to_int_i64(vm, globals)?;
+        if v < 0 {
+            return Err(MonorubyErr::negative_argument());
+        }
+        let rhs = v as usize;
+        let vec = lhs.repeat(rhs);
+        Ok(Value::array_from_vec(vec))
     }
 }
 
@@ -591,10 +725,17 @@ fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=26.html]
 #[monoruby_builtin]
 fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut lhs = lfp.self_val().dup().as_array();
+    let mut lhs = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
     lhs.uniq(vm, globals)?;
-    lhs.retain(|v| Ok(rhs.contains(v)))?;
+    lhs.retain(|v| {
+        for rhs_elem in rhs.iter() {
+            if v.eql(rhs_elem, vm, globals)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })?;
     Ok(lhs.as_val())
 }
 
@@ -606,7 +747,7 @@ fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=7c.html]
 #[monoruby_builtin]
 fn or(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut lhs = lfp.self_val().dup().as_array();
+    let mut lhs = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
     lhs.extend(rhs.iter().cloned());
     lhs.uniq(vm, globals)?;
@@ -620,7 +761,8 @@ fn or(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/shift.html]
 #[monoruby_builtin]
-fn shift(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn shift(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
     if lfp.try_arg(0).is_none() {
         if ary.len() == 0 {
@@ -630,7 +772,7 @@ fn shift(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         ary.drain(0..1);
         Ok(res)
     } else {
-        let i = lfp.arg(0).coerce_to_i64(globals)?;
+        let i = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
         if i < 0 {
             return Err(MonorubyErr::negative_array_size());
         }
@@ -648,7 +790,8 @@ fn shift(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/prepend.html]
 #[monoruby_builtin]
-fn unshift(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn unshift(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
     ary.insert_many(0, lfp.arg(0).as_array().iter().cloned());
     Ok(ary.into())
@@ -663,6 +806,7 @@ fn unshift(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/concat.html]
 #[monoruby_builtin]
 fn concat(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_ary = lfp.self_val().as_array();
     let mut ary: Array = Array::new_empty();
     for a in lfp.arg(0).as_array().iter().cloned() {
@@ -680,7 +824,8 @@ fn concat(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=3c=3c.html]
 #[monoruby_builtin]
-fn shl(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
     ary.push(lfp.arg(0));
     Ok(ary.into())
@@ -698,6 +843,7 @@ fn array_shl(
     store: &Store,
     callid: CallSiteId,
     recv_class: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -729,7 +875,8 @@ fn array_shl(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/append.html]
 #[monoruby_builtin]
-fn push(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn push(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
     ary.extend(lfp.arg(0).as_array().iter().cloned());
     Ok(ary.into())
@@ -739,14 +886,28 @@ fn push(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// ### Array#pop
 ///
 /// - pop -> object | nil
-/// - [NOT SUPPORTED] pop(n) -> Array
+/// - pop(n) -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/pop.html]
 #[monoruby_builtin]
-fn pop(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn pop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
-    let res = ary.pop().unwrap_or_default();
-    Ok(res)
+    if let Some(n) = lfp.try_arg(0) {
+        let n = n.coerce_to_int_i64(vm, globals)?;
+        if n < 0 {
+            return Err(MonorubyErr::argumenterr("negative array size"));
+        }
+        let n = n as usize;
+        let len = ary.len();
+        let start = if n >= len { 0 } else { len - n };
+        let result = Value::array_from_iter(ary[start..].iter().cloned());
+        ary.truncate(start);
+        Ok(result)
+    } else {
+        let res = ary.pop().unwrap_or_default();
+        Ok(res)
+    }
 }
 
 ///
@@ -757,8 +918,10 @@ fn pop(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/eql=3f.html]
 #[monoruby_builtin]
 fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs = lfp.self_val().as_array();
-    let rhs = if let Some(rhs) = lfp.arg(0).try_array_ty() {
+    let self_val = lfp.self_val();
+    let arg = lfp.arg(0);
+    let lhs = self_val.as_array();
+    let rhs = if let Some(rhs) = arg.try_array_ty() {
         rhs
     } else {
         return Ok(Value::bool(false));
@@ -766,12 +929,19 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     if lhs.len() != rhs.len() {
         return Ok(Value::bool(false));
     }
-    for i in 0..lhs.len() {
-        if !lhs[i].eql(&rhs[i], vm, globals)? {
-            return Ok(Value::bool(false));
-        }
-    }
-    Ok(Value::bool(true))
+    crate::value::exec_recursive_paired(
+        self_val.id(),
+        arg.id(),
+        || {
+            for i in 0..lhs.len() {
+                if !lhs[i].eql(&rhs[i], vm, globals)? {
+                    return Ok(Value::bool(false));
+                }
+            }
+            Ok(Value::bool(true))
+        },
+        Value::bool(true),
+    )
 }
 
 ///
@@ -782,21 +952,50 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=3d=3d.html]
 #[monoruby_builtin]
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs = lfp.self_val().as_array();
-    let rhs = if let Some(rhs) = lfp.arg(0).try_array_ty() {
+    let self_val = lfp.self_val();
+    let arg = lfp.arg(0);
+    let lhs = self_val.as_array();
+    let rhs = if let Some(rhs) = arg.try_array_ty() {
         rhs
     } else {
+        // If the other object responds to #to_ary, delegate to other == self.
+        let respond_to = IdentId::get_id("respond_to?");
+        let respond = vm.invoke_method_inner(
+            globals,
+            respond_to,
+            arg,
+            &[Value::symbol(IdentId::TO_ARY)],
+            None,
+            None,
+        );
+        if respond.is_ok_and(|v| v.as_bool()) {
+            return vm
+                .invoke_method_inner(globals, IdentId::_EQ, arg, &[self_val], None, None)
+                .map(|v| Value::bool(v.as_bool()));
+        }
         return Ok(Value::bool(false));
     };
     if lhs.len() != rhs.len() {
         return Ok(Value::bool(false));
     }
-    for i in 0..lhs.len() {
-        if vm.ne_values_bool(globals, lhs[i], rhs[i])? {
-            return Ok(Value::bool(false));
-        }
-    }
-    Ok(Value::bool(true))
+    crate::value::exec_recursive_paired(
+        self_val.id(),
+        arg.id(),
+        || {
+            for i in 0..lhs.len() {
+                // CRuby first checks #equal? (identity), which makes
+                // [NaN] == [NaN] true since NaN.equal?(NaN) is true.
+                if lhs[i].id() == rhs[i].id() {
+                    continue;
+                }
+                if vm.ne_values_bool(globals, lhs[i], rhs[i])? {
+                    return Ok(Value::bool(false));
+                }
+            }
+            Ok(Value::bool(true))
+        },
+        Value::bool(true),
+    )
 }
 
 ///
@@ -807,8 +1006,9 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 /// [https://docs.ruby-lang.org/ja/3.2/method/Array/i/=3c=3d=3e.html]
 #[monoruby_builtin]
 fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     let arg = lfp.arg(0);
+    let lhs = self_val.as_array();
     let rhs = if let Some(rhs) = arg.try_array_ty() {
         rhs
     } else if let Some(fid) = globals.check_method(arg, IdentId::TO_ARY) {
@@ -821,20 +1021,30 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     } else {
         return Ok(Value::nil());
     };
-    for (i, lhs) in lhs.iter().enumerate() {
-        if let Some(rhs) = rhs.get(i) {
-            let res = vm.compare_values(globals, *lhs, *rhs)?;
-            if res != Ordering::Equal {
-                return Ok(Value::integer(res as i64));
+    crate::value::exec_recursive_paired(
+        self_val.id(),
+        arg.id(),
+        || {
+            for (i, lhs) in lhs.iter().enumerate() {
+                if let Some(rhs) = rhs.get(i) {
+                    match vm.compare_values_inner(globals, *lhs, *rhs)? {
+                        Some(res) if res != Ordering::Equal => {
+                            return Ok(Value::integer(res as i64));
+                        }
+                        Some(_) => {} // Equal, continue
+                        None => return Ok(Value::nil()),
+                    }
+                } else {
+                    return Ok(Value::integer(Ordering::Greater as i64));
+                }
             }
-        } else {
-            return Ok(Value::integer(Ordering::Greater as i64));
-        }
-    }
-    if rhs.len() > lhs.len() {
-        return Ok(Value::integer(Ordering::Less as i64));
-    }
-    Ok(Value::integer(Ordering::Equal as i64))
+            if rhs.len() > lhs.len() {
+                return Ok(Value::integer(Ordering::Less as i64));
+            }
+            Ok(Value::integer(Ordering::Equal as i64))
+        },
+        Value::integer(Ordering::Equal as i64),
+    )
 }
 
 ///
@@ -846,14 +1056,56 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d.html]
 #[monoruby_builtin]
-fn index(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    if lfp.try_arg(1).is_none() {
-        let idx = lfp.arg(0);
-        ary.get_elem1(globals, idx)
+    if let Some(arg1) = lfp.try_arg(1) {
+        let arg0 = lfp.arg(0);
+        // Coerce indices via to_int if needed
+        let arg0 = if arg0.try_fixnum().is_none() {
+            Value::integer(arg0.coerce_to_int_i64(vm, globals)?)
+        } else {
+            arg0
+        };
+        let arg1 = if arg1.try_fixnum().is_none() {
+            Value::integer(arg1.coerce_to_int_i64(vm, globals)?)
+        } else {
+            arg1
+        };
+        ary.get_elem2(vm, globals, arg0, arg1)
     } else {
-        ary.get_elem2(globals, lfp.arg(0), lfp.arg(1))
+        let idx = lfp.arg(0);
+        // If the index is not a fixnum or range, try to_int coercion
+        if idx.try_fixnum().is_none() && idx.is_range().is_none() {
+            let i = idx.coerce_to_int_i64(vm, globals)?;
+            return ary.get_elem1(vm, globals, Value::integer(i));
+        }
+        ary.get_elem1(vm, globals, idx)
     }
+}
+
+fn array_index(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    idx_class: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 1 || idx_class != Some(INTEGER_CLASS) {
+        return false;
+    }
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
+    let dst = if let Some(dst) = dst {
+        dst
+    } else {
+        return true;
+    };
+    state.array_integer_index(ir, store, dst, recv, args);
+    true
 }
 
 ///
@@ -869,6 +1121,7 @@ fn index_assign(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
     if lfp.try_arg(2).is_none() {
         let i = lfp.arg(0);
@@ -876,29 +1129,31 @@ fn index_assign(
         if let Some(idx) = i.try_fixnum() {
             ary.set_index(idx, val)
         } else if let Some(range) = i.is_range() {
-            let start = ary.get_array_index_checked(globals, range.start())?;
-            let end = ary.get_array_index_checked(globals, range.end())?;
-            let len = if range.exclude_end() {
-                end.checked_sub(start)
+            let start = ary.get_array_index_nil_or(vm, globals, range.start(), 0)?;
+            let len = if range.end().is_nil() {
+                // endless range: length is from start to end of array
+                ary.len().checked_sub(start)
             } else {
-                (end + 1).checked_sub(start)
+                let end = ary.get_array_index_nil_or(vm, globals, range.end(), ary.len())?;
+                if range.exclude_end() {
+                    end.checked_sub(start)
+                } else {
+                    (end + 1).checked_sub(start)
+                }
             };
             if let Some(len) = len {
                 ary.set_index2(start as usize, len as usize, val)
-            } else if let Some(a) = val.try_array_ty() {
-                ary.insert_many(start, a.iter().cloned());
-                Ok(val)
             } else {
-                ary.insert(start, val);
-                Ok(val)
+                // end < start: treat as zero-length replacement at start
+                ary.set_index2(start as usize, 0, val)
             }
         } else {
-            let idx = i.coerce_to_int(vm, globals)?;
+            let idx = i.coerce_to_int_i64(vm, globals)?;
             ary.set_index(idx, val)
         }
     } else {
-        let mut i = lfp.arg(0).coerce_to_int(vm, globals)?;
-        let l = lfp.arg(1).coerce_to_int(vm, globals)?;
+        let mut i = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+        let l = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
         if l < 0 {
             return Err(MonorubyErr::indexerr(format!("negative length ({})", l)));
         }
@@ -906,14 +1161,43 @@ fn index_assign(
             i += ary.len() as i64;
             if i < 0 {
                 return Err(MonorubyErr::index_too_small(
-                    lfp.arg(0).coerce_to_int(vm, globals)?,
+                    lfp.arg(0).coerce_to_int_i64(vm, globals)?,
                     0,
                 ));
             }
         }
         let val = lfp.arg(2);
+        // Try #to_ary conversion for multi-element assignment.
+        let val = if val.try_array_ty().is_some() {
+            val
+        } else if let Some(fid) = globals.check_method(val, IdentId::TO_ARY) {
+            vm.invoke_func_inner(globals, fid, val, &[], None, None)?
+        } else {
+            val
+        };
         ary.set_index2(i as usize, l as usize, val)
     }
+}
+
+fn array_index_assign(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    idx_class: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 2 || idx_class != Some(INTEGER_CLASS) {
+        return false;
+    }
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
+    assert!(dst.is_none());
+    state.array_integer_index_assign(ir, store, args + 1usize, recv, args);
+    true
 }
 
 ///
@@ -921,10 +1205,11 @@ fn index_assign(
 ///
 /// - clear -> self
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/fill.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/clear.html]
 #[monoruby_builtin]
-fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.expect_no_block()?;
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
     ary.clear();
     Ok(ary.into())
@@ -937,18 +1222,10 @@ fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/replace.html]
 #[monoruby_builtin]
-fn replace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_ary = lfp.self_val().as_array();
-    let other = match lfp.arg(0).try_array_ty() {
-        Some(v) => v,
-        None => {
-            return Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                lfp.arg(0),
-                ARRAY_CLASS,
-            ));
-        }
-    };
+    let other = lfp.arg(0).coerce_to_array(vm, globals)?;
     // Copy elements first to handle the case where self and other are the same array.
     let elems: Vec<Value> = other.iter().cloned().collect();
     self_ary.clear();
@@ -960,19 +1237,189 @@ fn replace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// ### Array#fill
 ///
 /// - fill(val) -> self
-/// - [NOT SUPPORTED] fill {|index| ... } -> self
-/// - [NOT SUPPORTED] fill(val, start, length = nil) -> self
-/// - [NOT SUPPORTED] fill(val, range) -> self
-/// - [NOT SUPPORTED] fill(start, length = nil) {|index| ... } -> self
-/// - [NOT SUPPORTED] fill(range) {|index| ... } -> self
+/// - fill(val, start, length = nil) -> self
+/// - fill(val, range) -> self
+/// - fill {|index| ... } -> self
+/// - fill(start, length = nil) {|index| ... } -> self
+/// - fill(range) {|index| ... } -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/fill.html]
 #[monoruby_builtin]
-fn fill(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.expect_no_block()?;
+fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
-    ary.fill(lfp.arg(0));
+
+    if let Some(bh) = lfp.block() {
+        // Block form: fill {}, fill(start) {}, fill(start, length) {}, fill(range) {}
+        let data = vm.get_block_data(globals, bh)?;
+        let (start, end_idx) = if let Some(arg0) = lfp.try_arg(0) {
+            if let Some(range) = arg0.is_range() {
+                // fill(range) {|index| ... } -> self
+                fill_range_indices(vm, globals, &ary, range)?
+            } else {
+                // fill(start, length = nil) {|index| ... } -> self
+                let start = arg0.coerce_to_int_i64(vm, globals)?;
+                let start = if start < 0 {
+                    let s = ary.len() as i64 + start;
+                    if s < 0 { 0i64 } else { s }
+                } else {
+                    start
+                } as usize;
+                if let Some(len_val) = lfp.try_arg(1) {
+                    if len_val.is_nil() {
+                        // nil length means fill to end
+                        (start, ary.len())
+                    } else {
+                        let len = len_val.coerce_to_int_i64(vm, globals)?;
+                        if len <= 0 {
+                            return Ok(ary.into());
+                        }
+                        let end_idx = start
+                            .checked_add(len as usize)
+                            .ok_or_else(|| MonorubyErr::argumenterr("argument too big"))?;
+                        (start, end_idx)
+                    }
+                } else {
+                    // fill {|index| ... } -> self
+                    (start, ary.len())
+                }
+            }
+        } else {
+            (0, ary.len())
+        };
+        if end_idx > ary.len() {
+            fill_resize(&mut ary, end_idx)?;
+        }
+        for i in start..end_idx {
+            let val = vm.invoke_block(globals, &data, &[Value::integer(i as i64)])?;
+            ary[i] = val;
+        }
+    } else {
+        // Non-block form: fill(val), fill(val, start), fill(val, start, length), fill(val, range)
+        let val = if let Some(v) = lfp.try_arg(0) {
+            v
+        } else {
+            return Err(MonorubyErr::wrong_number_of_arg_range(0, 1..=3));
+        };
+        if let Some(arg1) = lfp.try_arg(1) {
+            if let Some(range) = arg1.is_range() {
+                // fill(val, range) -> self
+                let (start, end_idx) = fill_range_indices(vm, globals, &ary, range)?;
+                if end_idx > ary.len() {
+                    fill_resize(&mut ary, end_idx)?;
+                }
+                for i in start..end_idx {
+                    ary[i] = val;
+                }
+            } else {
+                // fill(val, start, length = nil) -> self
+                let start = arg1.coerce_to_int_i64(vm, globals)?;
+                let start = if start < 0 {
+                    let s = ary.len() as i64 + start;
+                    if s < 0 { 0i64 } else { s }
+                } else {
+                    start
+                } as usize;
+                if let Some(len_val) = lfp.try_arg(2) {
+                    if len_val.is_nil() {
+                        // nil length means fill to end
+                        if start > ary.len() {
+                            fill_resize(&mut ary, start)?;
+                        }
+                        let len = ary.len();
+                        for i in start..len {
+                            ary[i] = val;
+                        }
+                    } else {
+                        let len = len_val.coerce_to_int_i64(vm, globals)?;
+                        if len <= 0 {
+                            return Ok(ary.into());
+                        }
+                        let end_idx = start
+                            .checked_add(len as usize)
+                            .ok_or_else(|| MonorubyErr::argumenterr("argument too big"))?;
+                        if end_idx > ary.len() {
+                            fill_resize(&mut ary, end_idx)?;
+                        }
+                        for i in start..end_idx {
+                            ary[i] = val;
+                        }
+                    }
+                } else {
+                    if start > ary.len() {
+                        fill_resize(&mut ary, start)?;
+                    }
+                    let len = ary.len();
+                    for i in start..len {
+                        ary[i] = val;
+                    }
+                }
+            }
+        } else {
+            // fill(val) -> self
+            ary.fill(val);
+        }
+    }
     Ok(ary.into())
+}
+
+/// Helper to resize array for fill, raising ArgumentError if too large.
+fn fill_resize(ary: &mut Array, new_len: usize) -> Result<()> {
+    // Limit to prevent capacity overflow panics. CRuby also refuses huge sizes.
+    const MAX_FILL_SIZE: usize = 1 << 30; // ~1 billion elements
+    if new_len > MAX_FILL_SIZE {
+        return Err(MonorubyErr::argumenterr("argument too big"));
+    }
+    ary.resize(new_len, Value::nil());
+    Ok(())
+}
+
+/// Helper to compute (start, end) indices from a Range for Array#fill.
+fn fill_range_indices(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    ary: &Array,
+    range: &RangeInner,
+) -> Result<(usize, usize)> {
+    let len = ary.len() as i64;
+    // nil begin means 0 (beginless range)
+    let mut start = if range.start().is_nil() {
+        0i64
+    } else {
+        range.start().coerce_to_int_i64(vm, globals)?
+    };
+    if start < 0 {
+        start += len;
+        if start < 0 {
+            return Err(MonorubyErr::rangeerr(format!(
+                "{}..{} out of range",
+                range.start().coerce_to_int_i64(vm, globals)?,
+                if range.end().is_nil() {
+                    String::new()
+                } else {
+                    range.end().coerce_to_int_i64(vm, globals)?.to_string()
+                }
+            )));
+        }
+    }
+    // nil end means array length (endless range)
+    let end_idx = if range.end().is_nil() {
+        len
+    } else {
+        let mut end_val = range.end().coerce_to_int_i64(vm, globals)?;
+        if end_val < 0 {
+            end_val += len;
+        }
+        if range.exclude_end() {
+            end_val
+        } else {
+            end_val + 1
+        }
+    };
+    if end_idx < start {
+        return Ok((start as usize, start as usize));
+    }
+    Ok((start as usize, end_idx as usize))
 }
 
 ///
@@ -984,7 +1431,7 @@ fn fill(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn drop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    let num = lfp.arg(0).coerce_to_int(vm, globals)?;
+    let num = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     if num < 0 {
         return Err(MonorubyErr::argumenterr(format!(
             "Attempt to drop negative size. {}",
@@ -1009,33 +1456,62 @@ fn drop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ary = lfp.self_val().as_array();
-    let mut args_ary = vec![];
+    let self_len = self_ary.len();
+    let each_id = IdentId::get_id("each");
+
+    // Phase 1: Convert each argument to an Array or collect elements via #each.
+    // For arguments responding to #each but not #to_ary, we collect only up to
+    // self.len() elements to handle infinite enumerators correctly.
+    let mut args_list: Vec<Vec<Value>> = vec![];
+
     for a in lfp.arg(0).as_array().iter() {
-        args_ary.push(a.expect_array_ty(globals)?.to_vec());
-    }
-    let mut ary = Array::new_empty();
-    for (i, val) in self_ary.iter().enumerate() {
-        let mut vec = Array::new_empty();
-        vec.push(*val);
-        for args in &args_ary {
-            if i < args.len() {
-                vec.push(args[i]);
-            } else {
-                vec.push(Value::nil());
+        if let Ok(ary) = a.coerce_to_array(vm, globals) {
+            args_list.push(ary.to_vec());
+        } else if globals.check_method(*a, each_id).is_some() {
+            let to_enum_id = IdentId::get_id("to_enum");
+            let enum_val = vm.invoke_method_inner(globals, to_enum_id, *a, &[], None, None)?;
+            let next_id = IdentId::get_id("next");
+            let mut collected = Vec::with_capacity(self_len);
+            for _ in 0..self_len {
+                match vm.invoke_method_inner(globals, next_id, enum_val, &[], None, None) {
+                    Ok(val) => collected.push(val),
+                    Err(_) => break, // StopIteration — enumerator exhausted
+                }
             }
+            args_list.push(collected);
+        } else {
+            return Err(MonorubyErr::typeerr(format!(
+                "wrong argument type {} (must respond to :each)",
+                a.get_real_class_name(&globals.store),
+            )));
         }
-        ary.push(vec.as_val());
     }
-    match lfp.block() {
-        None => Ok(ary.as_val()),
-        Some(block) => {
-            let size_hint = ary.len();
-            vm.temp_push(ary.as_val());
-            let res = vm.invoke_block_map1(globals, block, ary.iter().cloned(), size_hint);
-            vm.temp_pop();
-            res?;
-            Ok(Value::nil())
+
+    // Phase 2: Build result
+    // Helper to build a single row for index i
+    let build_row = |i: usize, val: Value, args: &[Vec<Value>]| -> Array {
+        let mut row = Array::new_empty();
+        row.push(val);
+        for arg in args {
+            row.push(if i < arg.len() { arg[i] } else { Value::nil() });
         }
+        row
+    };
+
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        for (i, val) in self_ary.iter().enumerate() {
+            let row = build_row(i, *val, &args_list);
+            vm.invoke_block(globals, &data, &[row.as_val()])?;
+        }
+        Ok(Value::nil())
+    } else {
+        let mut result_ary = Array::new_empty();
+        for (i, val) in self_ary.iter().enumerate() {
+            let row = build_row(i, *val, &args_list);
+            result_ary.push(row.as_val());
+        }
+        Ok(result_ary.as_val())
     }
 }
 
@@ -1084,27 +1560,110 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// ### Array#join
 ///
 /// - join(sep = $,) -> String
-/// TODO: support recursive join for Array class arguments.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/join.html]
 #[monoruby_builtin]
 fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.try_arg(0);
     let sep = if let Some(sep) = &arg0 {
-        sep.coerce_to_string(vm, globals)?
+        if sep.is_nil() {
+            // When nil is passed explicitly, use $, as default separator
+            get_output_field_separator(globals)
+        } else {
+            // Coerce separator via to_str
+            Some(sep.coerce_to_string(vm, globals)?)
+        }
     } else {
-        "".to_string()
+        // No argument: use $, as default separator
+        get_output_field_separator(globals)
     };
+    let sep_str = sep.as_deref().unwrap_or("");
     let ary = lfp.self_val().as_array();
-    let res = array_join(&globals.store, ary, &sep);
+    let mut visited: HashSet<u64> = HashSet::default();
+    visited.insert(ary.id());
+    let res = array_join(vm, globals, ary, sep_str, &mut visited)?;
     Ok(Value::string(res))
 }
 
-fn array_join(store: &Store, ary: Array, sep: &str) -> String {
-    ary.iter()
-        .map(|v| v.to_s(store))
-        .collect::<Vec<_>>()
-        .join(sep)
+/// Get the value of $, (output field separator) as a String.
+fn get_output_field_separator(globals: &mut Globals) -> Option<String> {
+    let gvar_id = IdentId::get_id("$,");
+    match globals.get_gvar(gvar_id) {
+        Some(v) if !v.is_nil() => Some(v.to_s(&globals.store)),
+        _ => None,
+    }
+}
+
+fn array_join(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    ary: Array,
+    sep: &str,
+    visited: &mut HashSet<u64>,
+) -> Result<String> {
+    let mut result = String::new();
+    for (i, v) in ary.iter().enumerate() {
+        if i > 0 {
+            result.push_str(sep);
+        }
+        // If element is already a string, use it directly
+        if let Some(s) = v.is_str() {
+            result.push_str(s);
+            continue;
+        }
+        // If element is an array, recursively join
+        if let Some(inner_ary) = v.try_array_ty() {
+            if !visited.insert(inner_ary.id()) {
+                return Err(MonorubyErr::argumenterr("recursive array join"));
+            }
+            let s = array_join(vm, globals, inner_ary, sep, visited)?;
+            visited.remove(&inner_ary.id());
+            result.push_str(&s);
+            continue;
+        }
+        // Conversion order: to_str -> to_ary -> to_s
+        // Try to_str first
+        if let Some(fid) = globals.check_method(*v, IdentId::TO_STR) {
+            let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
+            if let Some(s) = ret.is_str() {
+                result.push_str(s);
+                continue;
+            }
+            // to_str returned non-nil non-string: fall through
+            if !ret.is_nil() {
+                result.push_str(&ret.to_s(&globals.store));
+                continue;
+            }
+        }
+        // Try to_ary second
+        if let Some(fid) = globals.check_method(*v, IdentId::TO_ARY) {
+            let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
+            if let Some(inner_ary) = ret.try_array_ty() {
+                if !visited.insert(inner_ary.id()) {
+                    return Err(MonorubyErr::argumenterr("recursive array join"));
+                }
+                let s = array_join(vm, globals, inner_ary, sep, visited)?;
+                visited.remove(&inner_ary.id());
+                result.push_str(&s);
+                continue;
+            }
+            if !ret.is_nil() {
+                result.push_str(&ret.to_s(&globals.store));
+                continue;
+            }
+        }
+        // Try to_s third
+        if let Some(fid) = globals.check_method(*v, IdentId::TO_S) {
+            let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
+            if let Some(s) = ret.is_str() {
+                result.push_str(s);
+                continue;
+            }
+        }
+        // Fallback: use Rust-level to_s
+        result.push_str(&v.to_s(&globals.store));
+    }
+    Ok(result)
 }
 
 ///
@@ -1120,7 +1679,7 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     if lfp.try_arg(0).is_none() {
         Ok(ary.first().cloned().unwrap_or_default())
     } else {
-        let n = lfp.arg(0).coerce_to_int(vm, globals)?;
+        let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
         if n < 0 {
             return Err(MonorubyErr::argumenterr("must be positive."));
         }
@@ -1141,12 +1700,12 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/last.html]
 #[monoruby_builtin]
-fn last(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if lfp.try_arg(0).is_none() {
         Ok(ary.last().cloned().unwrap_or_default())
     } else {
-        let n = lfp.arg(0).coerce_to_i64(globals)?;
+        let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
         if n < 0 {
             return Err(MonorubyErr::argumenterr("must be positive."));
         }
@@ -1170,7 +1729,7 @@ fn last(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    let index = lfp.arg(0).coerce_to_int(vm, globals)?;
+    let index = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let resolved = ary.get_array_index(index);
     if let Some(idx) = resolved {
         if let Some(val) = ary.get(idx) {
@@ -1201,9 +1760,9 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/take.html]
 #[monoruby_builtin]
-fn take(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn take(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    let n = lfp.arg(0).coerce_to_i64(globals)?;
+    let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     if n < 0 {
         return Err(MonorubyErr::argumenterr("must be positive."));
     }
@@ -1254,50 +1813,80 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// ### Array#min
 ///
 /// - min -> object | nil
+/// - min {|a, b| ... } -> object | nil
 /// - [NOT SUPPORTED] min(n) -> Array
-/// - [NOT SUPPORTED] min {|a, b| ... } -> object | nil
 /// - [NOT SUPPORTED] min(n) {|a, b| ... } -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/min.html]
 #[monoruby_builtin]
 fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.expect_no_block()?;
     let ary = lfp.self_val().as_array();
     if ary.len() == 0 {
         return Ok(Value::nil());
     }
-    let mut min = ary[0];
-    for v in &ary[1..] {
-        if vm.compare_values(globals, min, *v)? == std::cmp::Ordering::Greater {
-            min = *v;
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let mut min = ary[0];
+        for v in &ary[1..] {
+            let block_res = vm.invoke_block(globals, &data, &[*v, min])?;
+            if block_res.is_nil() {
+                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
+            }
+            let res = block_res.coerce_to_int_i64(vm, globals)?;
+            if res < 0 {
+                min = *v;
+            }
         }
+        Ok(min)
+    } else {
+        let mut min = ary[0];
+        for v in &ary[1..] {
+            if vm.compare_values(globals, min, *v)? == std::cmp::Ordering::Greater {
+                min = *v;
+            }
+        }
+        Ok(min)
     }
-    Ok(min)
 }
 
 ///
 /// ### Array#max
 ///
 /// - max -> object | nil
+/// - max {|a, b| ... } -> object | nil
 /// - [NOT SUPPORTED] max(n) -> Array
-/// - [NOT SUPPORTED] max {|a, b| ... } -> object | nil
 /// - [NOT SUPPORTED] max(n) {|a, b| ... } -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/max.html]
 #[monoruby_builtin]
 fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.expect_no_block()?;
     let ary = lfp.self_val().as_array();
     if ary.len() == 0 {
         return Ok(Value::nil());
     }
-    let mut max = ary[0];
-    for v in &ary[1..] {
-        if vm.compare_values(globals, max, *v)? == std::cmp::Ordering::Less {
-            max = *v;
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let mut max = ary[0];
+        for v in &ary[1..] {
+            let block_res = vm.invoke_block(globals, &data, &[*v, max])?;
+            if block_res.is_nil() {
+                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
+            }
+            let res = block_res.coerce_to_int_i64(vm, globals)?;
+            if res > 0 {
+                max = *v;
+            }
         }
+        Ok(max)
+    } else {
+        let mut max = ary[0];
+        for v in &ary[1..] {
+            if vm.compare_values(globals, max, *v)? == std::cmp::Ordering::Less {
+                max = *v;
+            }
+        }
+        Ok(max)
     }
-    Ok(max)
 }
 
 ///
@@ -1310,16 +1899,20 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let aref = lfp.self_val().expect_array_ty(globals)?;
+    let self_val = lfp.self_val();
+    self_val.expect_array_ty(globals)?;
     let mut res_true = vec![];
     let mut res_false = vec![];
     let p = vm.get_block_data(globals, bh)?;
-    for elem in aref.iter().cloned() {
+    let mut i = 0;
+    while i < self_val.as_array().len() {
+        let elem = self_val.as_array()[i];
         if vm.invoke_block(globals, &p, &[elem])?.as_bool() {
             res_true.push(elem);
         } else {
             res_false.push(elem);
         };
+        i += 1;
     }
     Ok(Value::array2(
         Value::array_from_vec(res_true),
@@ -1331,9 +1924,29 @@ fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
         let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
-            let res = vm
-                .invoke_block(globals, &data, &[lhs, rhs])?
-                .coerce_to_int(vm, globals)?;
+            let block_res = vm.invoke_block(globals, &data, &[lhs, rhs])?;
+            if block_res.is_nil() {
+                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
+            }
+            // Try to use <=> with 0 for non-Integer results
+            let res = match block_res.try_fixnum() {
+                Some(i) => i,
+                None => {
+                    // Try coercing via <=> with 0
+                    let cmp = vm.invoke_method_inner(
+                        globals,
+                        IdentId::_CMP,
+                        block_res,
+                        &[Value::integer(0)],
+                        None,
+                        None,
+                    )?;
+                    if cmp.is_nil() {
+                        return Err(MonorubyErr::argumenterr("comparison of elements failed"));
+                    }
+                    cmp.coerce_to_int_i64(vm, globals)?
+                }
+            };
             Ok(match res {
                 0 => std::cmp::Ordering::Equal,
                 res if res < 0 => std::cmp::Ordering::Less,
@@ -1356,6 +1969,7 @@ fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
 #[monoruby_builtin]
 fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let ary = lfp.self_val().as_array();
     let gc_enabled = Globals::gc_enable(false);
     let res = sort_inner(vm, globals, lfp, ary);
@@ -1372,7 +1986,7 @@ fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
 #[monoruby_builtin]
 fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ary = lfp.self_val().dup().as_array();
+    let ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     let gc_enabled = Globals::gc_enable(false);
     let res = sort_inner(vm, globals, lfp, ary);
     Globals::gc_enable(gc_enabled);
@@ -1383,24 +1997,57 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// ### Array#sort_by!
 ///
 /// - sort_by! {|item| ... } -> self
-/// - [NOT SUPPORTED] sort_by! -> Enumerator
+/// - sort_by! -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort_by=21.html]
 #[monoruby_builtin]
-fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let bh = lfp.expect_block()?;
-    let data = vm.get_block_data(globals, bh)?;
-    let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
-        let lhs = vm.invoke_block(globals, &data, &[lhs])?;
-        let rhs = vm.invoke_block(globals, &data, &[rhs])?;
-        Executor::compare_values(vm, globals, lhs, rhs)
-    };
-    let mut ary = lfp.self_val().as_array();
-    let gc_enabled = Globals::gc_enable(false);
-    let res = executor::op::sort_by(&mut ary, f);
-    Globals::gc_enable(gc_enabled);
-    res?;
-    Ok(ary.into())
+fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    if let Some(bh) = lfp.block() {
+        lfp.self_val().ensure_not_frozen(&globals.store)?;
+        let data = vm.get_block_data(globals, bh)?;
+        // Collect (key, value) pairs. Re-read array each iteration to
+        // tolerate mutations during block execution.
+        let mut pairs: Vec<(Value, Value)> = vec![];
+        let mut i = 0;
+        loop {
+            let ary = lfp.self_val().as_array();
+            if i >= ary.len() {
+                break;
+            }
+            let elem = ary[i];
+            let key = vm.invoke_block(globals, &data, &[elem])?;
+            pairs.push((key, elem));
+            i += 1;
+        }
+        // Sort the collected pairs by key.
+        let gc_enabled = Globals::gc_enable(false);
+        let mut err = None;
+        pairs.sort_by(|a, b| {
+            if err.is_some() {
+                return std::cmp::Ordering::Equal;
+            }
+            match Executor::compare_values(vm, globals, a.0, b.0) {
+                Ok(o) => o,
+                Err(e) => {
+                    err = Some(e);
+                    std::cmp::Ordering::Equal
+                }
+            }
+        });
+        Globals::gc_enable(gc_enabled);
+        if let Some(e) = err {
+            return Err(e);
+        }
+        // Write sorted values back to the array.
+        let mut ary = lfp.self_val().as_array();
+        ary.truncate(0);
+        for (_, val) in pairs {
+            ary.push(val);
+        }
+        Ok(ary.into())
+    } else {
+        vm.generate_enumerator(IdentId::get_id("sort_by!"), lfp.self_val(), vec![], pc)
+    }
 }
 
 ///
@@ -1419,7 +2066,7 @@ fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
             let rhs = vm.invoke_block(globals, &data, &[rhs])?;
             Executor::compare_values(vm, globals, lhs, rhs)
         };
-        let mut ary = lfp.self_val().dup().as_array();
+        let mut ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
         let gc_enabled = Globals::gc_enable(false);
         let res = executor::op::sort_by(&mut ary, f);
         Globals::gc_enable(gc_enabled);
@@ -1441,18 +2088,90 @@ fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/filter.html]
 #[monoruby_builtin]
 fn filter(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
         let mut res = vec![];
-        for elem in ary.iter() {
-            if vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
-                res.push(*elem);
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
+            if vm.invoke_block(globals, &data, &[elem])?.as_bool() {
+                res.push(elem);
             };
+            i += 1;
         }
         Ok(Value::array_from_vec(res))
     } else {
         vm.generate_enumerator(IdentId::get_id("filter"), lfp.self_val(), vec![], pc)
+    }
+}
+
+/// Helper for delete_if, keep_if, filter!, reject! that properly tolerates
+/// array mutation during iteration and handles errors gracefully.
+///
+/// When `negate` is true, elements for which the block returns true are removed
+/// (delete_if/reject! semantics). When false, elements for which the block
+/// returns false are removed (filter!/select!/keep_if semantics).
+///
+/// Returns true if any elements were removed.
+fn retain_with_block(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    data: &ProcData,
+    negate: bool,
+) -> Result<bool> {
+    let mut i = 0;
+    let mut del = 0;
+    loop {
+        // Re-read array each iteration to see mutations from the block.
+        let ary = self_val.as_array();
+        if i >= ary.len() {
+            break;
+        }
+        let val = ary[i];
+        match vm.invoke_block(globals, data, &[val]) {
+            Ok(res) => {
+                let keep = if negate {
+                    !res.as_bool()
+                } else {
+                    res.as_bool()
+                };
+                if keep {
+                    if del > 0 {
+                        // Re-read ary in case the block mutated it.
+                        let mut ary = self_val.as_array();
+                        let val = ary[i];
+                        ary[i - del] = val;
+                    }
+                } else {
+                    del += 1;
+                }
+                i += 1;
+            }
+            Err(e) => {
+                // On error: compact elements processed so far, then re-raise.
+                if del > 0 {
+                    let mut ary = self_val.as_array();
+                    let len = ary.len();
+                    // Shift remaining unprocessed elements left by `del`.
+                    for j in i..len {
+                        let v = ary[j];
+                        ary[j - del] = v;
+                    }
+                    ary.truncate(len - del);
+                }
+                return Err(e);
+            }
+        }
+    }
+    if del > 0 {
+        let mut ary = self_val.as_array();
+        let new_len = ary.len() - del;
+        ary.truncate(new_len);
+        Ok(true)
+    } else {
+        Ok(false)
     }
 }
 
@@ -1467,15 +2186,10 @@ fn filter(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/filter=21.html]
 #[monoruby_builtin]
 fn filter_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let mut ary = lfp.self_val().as_array();
     if let Some(bh) = lfp.block() {
+        lfp.self_val().ensure_not_frozen(&globals.store)?;
         let data = vm.get_block_data(globals, bh)?;
-        let changed = ary
-            .retain(|v| {
-                vm.invoke_block(globals, &data, &[*v])
-                    .map(|res| res.as_bool())
-            })?
-            .is_some();
+        let changed = retain_with_block(vm, globals, lfp.self_val(), &data, false)?;
         Ok(if changed {
             lfp.self_val()
         } else {
@@ -1483,6 +2197,25 @@ fn filter_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         })
     } else {
         vm.generate_enumerator(IdentId::get_id("filter!"), lfp.self_val(), vec![], pc)
+    }
+}
+
+///
+/// ### Array#keep_if
+///
+/// - keep_if {|item| block } -> self
+/// - keep_if -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/keep_if.html]
+#[monoruby_builtin]
+fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    if let Some(bh) = lfp.block() {
+        lfp.self_val().ensure_not_frozen(&globals.store)?;
+        let data = vm.get_block_data(globals, bh)?;
+        retain_with_block(vm, globals, lfp.self_val(), &data, false)?;
+        Ok(lfp.self_val())
+    } else {
+        vm.generate_enumerator(IdentId::get_id("keep_if"), lfp.self_val(), vec![], pc)
     }
 }
 
@@ -1495,14 +2228,17 @@ fn filter_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reject.html]
 #[monoruby_builtin]
 fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
         let mut res = vec![];
-        for elem in ary.iter() {
-            if !vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
-                res.push(*elem);
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
+            if !vm.invoke_block(globals, &data, &[elem])?.as_bool() {
+                res.push(elem);
             };
+            i += 1;
         }
         Ok(Value::array_from_vec(res))
     } else {
@@ -1519,15 +2255,10 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/delete_if.html]
 #[monoruby_builtin]
 fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let mut ary = lfp.self_val().as_array();
     if let Some(bh) = lfp.block() {
+        lfp.self_val().ensure_not_frozen(&globals.store)?;
         let data = vm.get_block_data(globals, bh)?;
-        let changed = ary
-            .retain(|v| {
-                vm.invoke_block(globals, &data, &[*v])
-                    .map(|res| !res.as_bool())
-            })?
-            .is_some();
+        let changed = retain_with_block(vm, globals, lfp.self_val(), &data, true)?;
         Ok(if changed {
             lfp.self_val()
         } else {
@@ -1547,13 +2278,10 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/delete_if.html]
 #[monoruby_builtin]
 fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let mut ary = lfp.self_val().as_array();
     if let Some(bh) = lfp.block() {
+        lfp.self_val().ensure_not_frozen(&globals.store)?;
         let data = vm.get_block_data(globals, bh)?;
-        ary.retain(|v| {
-            vm.invoke_block(globals, &data, &[*v])
-                .map(|res| !res.as_bool())
-        })?;
+        retain_with_block(vm, globals, lfp.self_val(), &data, true)?;
         Ok(lfp.self_val())
     } else {
         vm.generate_enumerator(IdentId::get_id("delete_if"), lfp.self_val(), vec![], pc)
@@ -1573,23 +2301,26 @@ fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
         vm: &mut Executor,
         globals: &mut Globals,
         data: &ProcData,
-        ary: Array,
+        self_val: Value,
         map: &mut RubyMap<Value, Value>,
     ) -> Result<()> {
-        for elem in ary.iter() {
-            let key = vm.invoke_block(globals, &data, &[*elem])?;
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
+            let key = vm.invoke_block(globals, &data, &[elem])?;
             map.entry(key, vm, globals)?
-                .and_modify(|v: &mut Value| v.as_array().push(*elem))
-                .or_insert(Value::array1(*elem));
+                .and_modify(|v: &mut Value| v.as_array().push(elem))
+                .or_insert(Value::array1(elem));
+            i += 1;
         }
         Ok(())
     }
-    let ary = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
         let mut map = RubyMap::default();
         let gc_enabled = Globals::gc_enable(false);
-        let res = inner(vm, globals, &data, ary, &mut map);
+        let res = inner(vm, globals, &data, self_val, &mut map);
         Globals::gc_enable(gc_enabled);
         res?;
         /*for elem in ary.iter() {
@@ -1704,19 +2435,38 @@ fn all_any_inner(
     lfp: Lfp,
     is_all: bool,
 ) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, bh)?;
-        for elem in ary.iter() {
-            if vm.invoke_block(globals, &data, &[*elem])?.as_bool() != is_all {
+    let self_val = lfp.self_val();
+    if let Some(pattern) = lfp.try_arg(0) {
+        // Pattern form: all?(pattern) / any?(pattern) — block is ignored
+        if lfp.block().is_some() {
+            vm.ruby_warn(globals, "warning: given block not used")?;
+        }
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
+            if op::cmp_teq_values_bool(vm, globals, pattern, elem)? != is_all {
                 return Ok(Value::bool(!is_all));
             };
+            i += 1;
+        }
+    } else if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
+            if vm.invoke_block(globals, &data, &[elem])?.as_bool() != is_all {
+                return Ok(Value::bool(!is_all));
+            };
+            i += 1;
         }
     } else {
-        for elem in ary.iter() {
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
             if elem.as_bool() != is_all {
                 return Ok(Value::bool(!is_all));
             };
+            i += 1;
         }
     }
     Ok(Value::bool(is_all))
@@ -1727,7 +2477,7 @@ fn all_any_inner(
 ///
 /// - all? -> bool
 /// - all? {|item| ... } -> bool
-/// - [NOT SUPPORTED] all?(pattern) -> bool
+/// - all?(pattern) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/all=3f.html]
 #[monoruby_builtin]
@@ -1740,7 +2490,7 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// - any? -> bool
 /// - any? {|item| ... } -> bool
-/// - [NOT SUPPORTED] any?(pattern) -> bool
+/// - any?(pattern) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/any=3f.html]
 #[monoruby_builtin]
@@ -1757,13 +2507,16 @@ fn any_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/detect.html]
 #[monoruby_builtin]
 fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     let bh = lfp.expect_block()?;
     let data = vm.get_block_data(globals, bh)?;
-    for elem in ary.iter() {
-        if vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
-            return Ok(*elem);
+    let mut i = 0;
+    while i < self_val.as_array().len() {
+        let elem = self_val.as_array()[i];
+        if vm.invoke_block(globals, &data, &[elem])?.as_bool() {
+            return Ok(elem);
         };
+        i += 1;
     }
     Ok(Value::nil())
 }
@@ -1777,25 +2530,31 @@ fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/grep.html]
 #[monoruby_builtin]
 fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     let ary: Vec<_> = match lfp.block() {
         None => {
             let mut res = vec![];
-            for v in ary.iter() {
-                if cmp_teq_values_bool(vm, globals, lfp.arg(0), *v)? {
-                    res.push(*v)
+            let mut i = 0;
+            while i < self_val.as_array().len() {
+                let v = self_val.as_array()[i];
+                if cmp_teq_values_bool(vm, globals, lfp.arg(0), v)? {
+                    res.push(v)
                 }
+                i += 1;
             }
             res
         }
         Some(bh) => {
             let bh = vm.get_block_data(globals, bh)?;
             let mut res = vec![];
-            for v in lfp.self_val().as_array().iter() {
-                if cmp_teq_values_bool(vm, globals, lfp.arg(0), *v)? {
-                    let mapped = vm.invoke_block(globals, &bh, &[*v])?;
+            let mut i = 0;
+            while i < self_val.as_array().len() {
+                let v = self_val.as_array()[i];
+                if cmp_teq_values_bool(vm, globals, lfp.arg(0), v)? {
+                    let mapped = vm.invoke_block(globals, &bh, &[v])?;
                     res.push(mapped);
                 }
+                i += 1;
             }
             res
         }
@@ -1811,12 +2570,15 @@ fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/include=3f.html]
 #[monoruby_builtin]
 fn include_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
+    let self_val = lfp.self_val();
     let rhs = lfp.arg(0);
-    for lhs in ary.iter().cloned() {
+    let mut i = 0;
+    while i < self_val.as_array().len() {
+        let lhs = self_val.as_array()[i];
         if vm.eq_values_bool(globals, lhs, rhs)? {
             return Ok(Value::bool(true));
         };
+        i += 1;
     }
     Ok(Value::bool(false))
 }
@@ -1841,7 +2603,8 @@ fn reverse(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reverse.html]
 #[monoruby_builtin]
-fn reverse_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn reverse_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
     ary.reverse();
     Ok(ary.into())
@@ -1854,27 +2617,18 @@ fn reverse_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reverse.html]
 #[monoruby_builtin]
-fn transpose(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn transpose(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if ary.len() == 0 {
         return Ok(Value::array_empty());
     }
-    let len = ary[0]
-        .try_array_ty()
-        .ok_or_else(|| MonorubyErr::argumenterr("Each element of receiver must be an array."))?
-        .len();
+    let first = coerce_to_array_for_transpose(vm, globals, ary[0])?;
+    let len = first.len();
     let mut trans = Array::new_empty();
     for i in 0..len {
         let mut temp = Array::new_empty();
         for v in ary.iter() {
-            let a = v.try_array_ty().ok_or_else(|| {
-                MonorubyErr::argumenterr("Each element of receiver must be an array.")
-            })?;
+            let a = coerce_to_array_for_transpose(vm, globals, *v)?;
             if a.len() != len {
                 return Err(MonorubyErr::indexerr("Element size differs."));
             }
@@ -1885,6 +2639,27 @@ fn transpose(
     Ok(trans.into())
 }
 
+fn coerce_to_array_for_transpose(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+) -> Result<Array> {
+    if let Some(ary) = val.try_array_ty() {
+        return Ok(ary);
+    }
+    // Try to_ary
+    if let Some(fid) = globals.check_method(val, IdentId::TO_ARY) {
+        let ret = vm.invoke_func_inner(globals, fid, val, &[], None, None)?;
+        if let Some(ary) = ret.try_array_ty() {
+            return Ok(ary);
+        }
+    }
+    Err(MonorubyErr::typeerr(format!(
+        "no implicit conversion of {} into Array",
+        val.get_real_class_name(globals)
+    )))
+}
+
 ///
 /// ### Array#rotate!
 ///
@@ -1892,9 +2667,10 @@ fn transpose(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/rotate=21.html]
 #[monoruby_builtin]
-fn rotate_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn rotate_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let i = if let Some(arg0) = lfp.try_arg(0) {
-        arg0.coerce_to_i64(globals)?
+        arg0.coerce_to_int_i64(vm, globals)?
     } else {
         1
     };
@@ -1918,13 +2694,13 @@ fn rotate_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/rotate.html]
 #[monoruby_builtin]
-fn rotate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn rotate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let i = if let Some(arg0) = lfp.try_arg(0) {
-        arg0.coerce_to_i64(globals)?
+        arg0.coerce_to_int_i64(vm, globals)?
     } else {
         1
     };
-    let mut ary: Array = lfp.self_val().dup().as_array();
+    let mut ary: Array = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     let ary_len = ary.len() as i64;
     if ary_len == 0 {
     } else if i > 0 {
@@ -1949,7 +2725,7 @@ fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let lhs = lfp.self_val().as_array();
     let mut lists = vec![];
     for rhs in lfp.arg(0).as_array().into_iter() {
-        lists.push(rhs.expect_array_ty(globals)?);
+        lists.push(rhs.coerce_to_array(vm, globals)?);
     }
     // Check total product size to avoid memory exhaustion.
     let mut total: usize = lhs.len();
@@ -1966,12 +2742,11 @@ fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         .map(|a| Value::array_from_iter(a.into_iter().cloned()))
         .collect();
     if let Some(bh) = lfp.block() {
-        let len = v.len();
         let ary = Array::new_from_vec(v);
         vm.temp_push(ary.into());
-        let res = vm.invoke_block_map1(globals, bh, ary.into_iter().cloned(), len);
+        vm.invoke_block_iter1(globals, bh, ary.into_iter().cloned())?;
         vm.temp_pop();
-        res
+        Ok(lfp.self_val())
     } else {
         Ok(Value::array_from_vec(v))
     }
@@ -2003,13 +2778,83 @@ fn product_inner(lhs: Array, rhs: Vec<Array>) -> Vec<Array> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/union.html]
 #[monoruby_builtin]
 fn union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut ary = lfp.self_val().dup().as_array();
+    let mut ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     for rhs in lfp.arg(0).as_array().into_iter() {
-        let rhs = rhs.expect_array_ty(globals)?;
+        let rhs = rhs.coerce_to_array(vm, globals)?;
         ary.extend(rhs.into_iter().cloned());
     }
     ary.uniq(vm, globals)?;
     Ok(ary.into())
+}
+
+///
+/// ### Array#difference
+///
+/// - difference(*other_arrays) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/difference.html]
+#[monoruby_builtin]
+fn difference(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let lhs_v = lfp.self_val();
+    let others: Vec<_> = lfp
+        .arg(0)
+        .as_array()
+        .iter()
+        .map(|v| v.coerce_to_array(vm, globals))
+        .collect::<Result<Vec<_>>>()?;
+    let mut v = vec![];
+    'outer: for lhs in lhs_v.as_array().iter() {
+        for other in &others {
+            for rhs in other.iter() {
+                if lhs.eql(rhs, vm, globals)? {
+                    continue 'outer;
+                }
+            }
+        }
+        v.push(*lhs);
+    }
+    Ok(Value::array_from_vec(v))
+}
+
+///
+/// ### Array#intersection
+///
+/// - intersection(*other_arrays) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/intersection.html]
+#[monoruby_builtin]
+fn intersection(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let src = lfp.self_val().as_array();
+    // Build a unique copy as a plain Array
+    let mut ary = Value::array_from_vec(src.to_vec()).as_array();
+    ary.uniq(vm, globals)?;
+    let others: Vec<_> = lfp
+        .arg(0)
+        .as_array()
+        .iter()
+        .map(|v| v.coerce_to_array(vm, globals))
+        .collect::<Result<Vec<_>>>()?;
+    ary.retain(|lhs| {
+        for other in &others {
+            let mut found = false;
+            for rhs in other.iter() {
+                if lhs.eql(rhs, vm, globals)? {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    })?;
+    Ok(ary.as_val())
 }
 
 ///
@@ -2042,56 +2887,77 @@ fn intersect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/uniq.html]
 #[monoruby_builtin]
 fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut ary = lfp.self_val().dup().as_array();
     match lfp.block() {
-        None => ary.uniq(vm, globals)?,
-        Some(bh) => uniq_block(vm, globals, ary, bh)?,
-    };
-    Ok(ary.into())
+        None => {
+            let mut ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
+            ary.uniq(vm, globals)?;
+            Ok(ary.into())
+        }
+        Some(bh) => {
+            let data = vm.get_block_data(globals, bh)?;
+            let mut h = RubySet::default();
+            let mut result = vec![];
+            let mut i = 0;
+            loop {
+                let ary = lfp.self_val().as_array();
+                if i >= ary.len() {
+                    break;
+                }
+                let elem = ary[i];
+                let key = vm.invoke_block(globals, &data, &[elem])?;
+                if h.insert(key, vm, globals)? {
+                    result.push(elem);
+                }
+                i += 1;
+            }
+            Ok(Value::array_from_vec(result))
+        }
+    }
 }
 
 #[monoruby_builtin]
 fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut ary = lfp.self_val().as_array();
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let deleted = match lfp.block() {
-        None => ary.uniq(vm, globals)?,
-        Some(bh) => uniq_block(vm, globals, ary, bh)?,
+        None => {
+            let mut ary = lfp.self_val().as_array();
+            ary.uniq(vm, globals)?
+        }
+        Some(bh) => {
+            let data = vm.get_block_data(globals, bh)?;
+            let mut h = RubySet::default();
+            let mut i = 0;
+            let mut del = 0;
+            loop {
+                let ary = lfp.self_val().as_array();
+                if i >= ary.len() {
+                    break;
+                }
+                let elem = ary[i];
+                let key = vm.invoke_block(globals, &data, &[elem])?;
+                if h.insert(key, vm, globals)? {
+                    if del > 0 {
+                        let mut ary = lfp.self_val().as_array();
+                        ary[i - del] = elem;
+                    }
+                } else {
+                    del += 1;
+                }
+                i += 1;
+            }
+            if del > 0 {
+                let mut ary = lfp.self_val().as_array();
+                let new_len = ary.len() - del;
+                ary.truncate(new_len);
+            }
+            del > 0
+        }
     };
     if deleted {
         Ok(lfp.self_val())
     } else {
         Ok(Value::nil())
     }
-}
-
-fn uniq_block(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    ary: Array,
-    bh: BlockHandler,
-) -> Result<bool> {
-    vm.temp_push(ary.into());
-    let res = uniq_inner(vm, globals, ary, bh);
-    vm.temp_pop();
-    res
-}
-
-fn uniq_inner(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    mut ary: Array,
-    bh: BlockHandler,
-) -> Result<bool> {
-    let mut h = RubySet::default();
-    let data = vm.get_block_data(globals, bh)?;
-    vm.temp_array_new(Some(ary.len()));
-    let res = ary.retain(|x| {
-        let res = vm.invoke_block(globals, &data, &[*x])?;
-        vm.temp_array_push(res);
-        Ok(h.insert(res, vm, globals)?)
-    });
-    vm.temp_pop();
-    res.map(|removed| removed.is_some())
 }
 
 ///
@@ -2103,35 +2969,50 @@ fn uniq_inner(
 ///
 /// https://docs.ruby-lang.org/ja/latest/method/Array/i/slice=21.html
 #[monoruby_builtin]
-fn slice_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let ary = lfp.self_val().as_array();
     if let Some(arg1) = lfp.try_arg(1) {
-        let start = match ary.get_array_index(lfp.arg(0).coerce_to_i64(globals)?) {
+        let start = match ary.get_array_index(lfp.arg(0).coerce_to_int_i64(vm, globals)?) {
             Some(i) => i,
             None => return Ok(Value::nil()),
         };
-        let len = arg1.coerce_to_i64(globals)?;
+        let len = arg1.coerce_to_int_i64(vm, globals)?;
         if len < 0 {
             return Ok(Value::nil());
         };
         let len = len as usize;
         Ok(slice_inner(ary, start, len))
     } else if let Some(range) = lfp.arg(0).is_range() {
-        let start = match ary.get_array_index(range.start().coerce_to_i64(globals)?) {
-            Some(i) => i,
-            None => return Ok(Value::nil()),
+        // nil begin means 0 (beginless range)
+        let start = if range.start().is_nil() {
+            0
+        } else {
+            match ary.get_array_index(range.start().coerce_to_int_i64(vm, globals)?) {
+                Some(i) => i,
+                None => return Ok(Value::nil()),
+            }
         };
-        let end = match ary.get_array_index(range.end().coerce_to_i64(globals)?) {
-            Some(i) => i,
-            None => return Ok(Value::array_empty()),
+        // nil end means array length (endless range)
+        let end = if range.end().is_nil() {
+            ary.len().saturating_sub(1)
+        } else {
+            match ary.get_array_index(range.end().coerce_to_int_i64(vm, globals)?) {
+                Some(i) => i,
+                None => return Ok(Value::array_empty()),
+            }
         };
         if end < start {
             return Ok(Value::array_empty());
         }
-        let len = end - start + if range.exclude_end() { 0 } else { 1 };
+        let len = if range.end().is_nil() {
+            ary.len() - start
+        } else {
+            end - start + if range.exclude_end() { 0 } else { 1 }
+        };
         Ok(slice_inner(ary, start, len))
     } else {
-        let index = lfp.arg(0).coerce_to_i64(globals)?;
+        let index = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
         let index = match ary.get_array_index(index) {
             Some(i) if i < ary.len() => i,
             _ => return Ok(Value::nil()),
@@ -2169,26 +3050,45 @@ fn slice_inner(mut aref: Array, start: usize, len: usize) -> Value {
 #[monoruby_builtin]
 fn pack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let template = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let buffer = lfp.try_arg(1);
     let ary = lfp.self_val().as_array();
-    rvalue::pack(globals, &ary, &template)
+    rvalue::pack(vm, globals, &ary, &template, buffer)
 }
 
 fn try_convert_to_array(
     v: &Value,
     vm: &mut Executor,
     globals: &mut Globals,
-) -> Option<Array> {
+) -> Result<Option<Array>> {
     if let Some(ary) = v.try_array_ty() {
-        return Some(ary);
+        return Ok(Some(ary));
     }
-    if let Some(fid) = globals.check_method(*v, IdentId::TO_ARY) {
-        if let Ok(result) = vm.invoke_func_inner(globals, fid, *v, &[], None, None) {
-            if let Some(ary) = result.try_array_ty() {
-                return Some(ary);
-            }
-        }
+    // Check respond_to?(:to_ary, true) to respect respond_to_missing? protocol.
+    let respond_to = IdentId::get_id("respond_to?");
+    let responds = match vm.invoke_method_inner(
+        globals,
+        respond_to,
+        *v,
+        &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
+        None,
+        None,
+    ) {
+        Ok(val) => val.as_bool(),
+        // BasicObject without respond_to? and without method_missing
+        Err(_) => return Ok(None),
+    };
+    if !responds {
+        return Ok(None);
     }
-    None
+    // Call to_ary via invoke_method_inner to support method_missing.
+    let result = vm.invoke_method_inner(globals, IdentId::TO_ARY, *v, &[], None, None)?;
+    if let Some(ary) = result.try_array_ty() {
+        return Ok(Some(ary));
+    }
+    if result.is_nil() {
+        return Ok(None);
+    }
+    Err(MonorubyErr::cant_convert_error_ary(globals, *v, result))
 }
 
 fn flatten_inner(
@@ -2206,16 +3106,16 @@ fn flatten_inner(
     }
     seen.push(id);
     for v in ary.iter() {
-        if let Some(inner) = try_convert_to_array(v, vm, globals) {
+        // At level 0, no flattening occurs — do not call to_ary.
+        if let Some(0) = lv {
+            res.push(*v);
+            continue;
+        }
+        if let Some(inner) = try_convert_to_array(v, vm, globals)? {
+            *changed = true;
             if let Some(lv) = lv {
-                if lv == 0 {
-                    res.push(*v);
-                } else {
-                    *changed = true;
-                    flatten_inner(vm, globals, &inner, res, Some(lv - 1), changed, seen)?;
-                }
+                flatten_inner(vm, globals, &inner, res, Some(lv - 1), changed, seen)?;
             } else {
-                *changed = true;
                 flatten_inner(vm, globals, &inner, res, None, changed, seen)?;
             }
         } else {
@@ -2239,7 +3139,7 @@ fn flatten(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         if arg0.is_nil() {
             None
         } else {
-            match arg0.coerce_to_int(vm, globals)? {
+            match arg0.coerce_to_int_i64(vm, globals)? {
                 i if i >= 0 => Some(i as usize),
                 _ => None,
             }
@@ -2262,12 +3162,13 @@ fn flatten(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/flatten.html]
 #[monoruby_builtin]
 fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
     let lv = if let Some(arg0) = lfp.try_arg(0) {
         if arg0.is_nil() {
             None
         } else {
-            match arg0.coerce_to_int(vm, globals)? {
+            match arg0.coerce_to_int_i64(vm, globals)? {
                 i if i >= 0 => Some(i as usize),
                 _ => None,
             }
@@ -2292,13 +3193,14 @@ fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/compact.html]
 #[monoruby_builtin]
 fn compact(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut ary = lfp.self_val().dup().as_array();
+    let mut ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     ary.retain(|v| Ok(!v.is_nil()))?;
     Ok(ary.into())
 }
 
 #[monoruby_builtin]
-fn compact_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn compact_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
     Ok(if ary.retain(|v| Ok(!v.is_nil()))?.is_some() {
         lfp.self_val()
@@ -2315,7 +3217,8 @@ fn compact_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/shuffle=21.html]
 #[monoruby_builtin]
-fn shuffle_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn shuffle_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
     ary.shuffle(&mut rand::rng());
     Ok(lfp.self_val())
@@ -2330,6 +3233,7 @@ fn shuffle_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/delete.html]
 #[monoruby_builtin]
 fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
     let arg0 = lfp.arg(0);
     let f = |v: &Value| Ok(!vm.eq_values_bool(globals, *v, arg0)?);
@@ -2350,8 +3254,9 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/delete_at.html]
 #[monoruby_builtin]
 fn delete_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut ary = lfp.self_val().as_array();
-    let pos = lfp.arg(0).coerce_to_int(vm, globals)?;
+    let pos = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let pos = if pos < 0 {
         let pos = pos + ary.len() as i64;
         if pos < 0 {
@@ -2384,24 +3289,33 @@ fn find_index(
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, bh)?;
-        for (i, v) in ary.iter().enumerate() {
-            if vm.invoke_block(globals, &data, &[*v])?.as_bool() {
-                return Ok(Value::integer(i as i64));
-            }
+    let self_val = lfp.self_val();
+    if let Some(arg0) = lfp.try_arg(0) {
+        if lfp.block().is_some() {
+            vm.ruby_warn(globals, "warning: given block not used")?;
         }
-        Ok(Value::nil())
-    } else if let Some(arg0) = lfp.try_arg(0) {
         let func_id = vm.find_method(globals, arg0, IdentId::_EQ, false)?;
-        for (i, v) in ary.iter().enumerate() {
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let v = self_val.as_array()[i];
             if vm
-                .invoke_func_inner(globals, func_id, arg0, &[*v], None, None)?
+                .invoke_func_inner(globals, func_id, arg0, &[v], None, None)?
                 .as_bool()
             {
                 return Ok(Value::integer(i as i64));
             }
+            i += 1;
+        }
+        Ok(Value::nil())
+    } else if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let v = self_val.as_array()[i];
+            if vm.invoke_block(globals, &data, &[v])?.as_bool() {
+                return Ok(Value::integer(i as i64));
+            }
+            i += 1;
         }
         Ok(Value::nil())
     } else {
@@ -2418,12 +3332,13 @@ fn find_index(
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/insert.html]
 #[monoruby_builtin]
 fn insert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let val = lfp.arg(1).as_array();
     if val.len() == 0 {
         return Ok(lfp.self_val());
     }
     let mut ary = lfp.self_val().as_array();
-    let nth = lfp.arg(0).coerce_to_int(vm, globals)?;
+    let nth = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let nth = if nth < 0 {
         let nth = nth + ary.len() as i64 + 1;
         if nth < 0 {
@@ -2498,6 +3413,19 @@ mod tests {
         run_test_no_result_check("[].hash");
         run_test_error("Array.new(-5)");
         run_test_error("Array.new(:r, 42)");
+    }
+
+    #[test]
+    fn array_new_to_int_coercion() {
+        // Array.new should call to_int on size argument
+        run_test_with_prelude(
+            r#"Array.new(o)"#,
+            r#"class C; def to_int; 3; end; end; o = C.new"#,
+        );
+        run_test_with_prelude(
+            r#"Array.new(o, "x")"#,
+            r#"class C; def to_int; 2; end; end; o = C.new"#,
+        );
     }
 
     #[test]
@@ -2708,10 +3636,85 @@ mod tests {
     }
 
     #[test]
+    fn eq_recursive() {
+        // Self-referencing array: a == a should return true, not stack overflow
+        run_test("a = []; a << a; a == a");
+        run_test("a = [1]; a << a; a == a");
+        // Two distinct recursive arrays with same structure
+        run_test("a = [1]; a << a; b = [1]; b << b; a == b");
+        // Cross-recursive: a contains b, b contains a
+        run_test("a = [1]; b = [1]; a << b; b << a; a == b");
+        // Different lengths: recursive but not equal
+        run_test("a = [1]; a << a; b = [1, 2]; b << b; a == b");
+        // Non-recursive element differs
+        run_test("a = [1]; a << a; b = [2]; b << b; a == b");
+        // Empty self-referencing
+        run_test("a = []; a << a; b = []; b << b; a == b");
+    }
+
+    #[test]
+    fn cmp_recursive() {
+        // Self-referencing array: a <=> a should return 0, not stack overflow
+        run_test("a = []; a << a; (a <=> a)");
+        run_test("a = [1]; a << a; (a <=> a)");
+        // Cross-recursive same structure
+        run_test("a = [1]; b = [1]; a << b; b << a; (a <=> b)");
+        // Different lengths with recursive element — returns nil, not ArgumentError
+        run_test("a = [1]; a << a; b = [1, 2]; b << b; (a <=> b)");
+        run_test("a = [1, 2]; a << a; b = [1]; b << b; (b <=> a)");
+    }
+
+    #[test]
+    fn cmp_incomparable_elements() {
+        // Incomparable elements return nil instead of ArgumentError
+        run_test("[1, :a] <=> [1, 2]");
+        run_test("[1, 2] <=> [1, :a]");
+    }
+
+    #[test]
+    fn recursive_guard_cleanup() {
+        // Guard must be cleaned up after use: non-recursive comparison after recursive
+        run_test(
+            r#"
+            a = [1]; a << a
+            r1 = a == a
+            r2 = [1, 2] == [1, 2]
+            [r1, r2]
+            "#,
+        );
+        // Multiple recursive operations in sequence
+        run_test(
+            r#"
+            a = []; a << a
+            r1 = a == a
+            r2 = (a <=> a)
+            r3 = a == a
+            [r1, r2, r3]
+            "#,
+        );
+    }
+
+    #[test]
     fn eql() {
         run_test(r##"["a", "b", "c"].eql? ["a", "b", "c"]"##);
         run_test(r##"["a", "b", "c"].eql? ["a", "c", "b"]"##);
         run_test(r##"["a", "b", 1].eql? ["a", "b", 1.0]"##);
+    }
+
+    #[test]
+    fn eql_recursive() {
+        // Self-referencing array eql?
+        run_test("a = []; a << a; a.eql?(a)");
+        run_test("a = [1]; a << a; b = [1]; b << b; a.eql?(b)");
+        // Cross-recursive via hash
+        run_test(
+            r#"
+            x, y, z = [], [], []
+            a = {foo: x, bar: 42}; b = {foo: y, bar: 42}; c = {foo: z, bar: 42}
+            x << a; y << c; z << b
+            y.eql?(z)
+            "#,
+        );
     }
 
     #[test]
@@ -2818,11 +3821,169 @@ mod tests {
     }
 
     #[test]
+    fn index_nil_range() {
+        // Array#[] with beginless range (nil..n)
+        run_test(r##"[1,2,3,4,5][nil..2]"##);
+        run_test(r##"[1,2,3,4,5][nil...2]"##);
+        // Array#[] with endless range (n..nil)
+        run_test(r##"[1,2,3,4,5][2..nil]"##);
+        run_test(r##"[1,2,3,4,5][2...nil]"##);
+        // Array#[] with nil..nil
+        run_test(r##"[1,2,3,4,5][nil..nil]"##);
+        // Array#[] with beginless/endless using .. syntax
+        run_test(r##"[1,2,3,4,5][..2]"##);
+        run_test(r##"[1,2,3,4,5][...2]"##);
+        run_test(r##"[1,2,3,4,5][2..]"##);
+        // Array#[]= with beginless range
+        run_test(
+            r##"
+        a = [1,2,3,4,5]
+        a[nil..2] = [10,20]
+        a
+        "##,
+        );
+        // Array#[]= with endless range
+        run_test(
+            r##"
+        a = [1,2,3,4,5]
+        a[2..nil] = [10,20]
+        a
+        "##,
+        );
+        // Array#[]= with nil..nil
+        run_test(
+            r##"
+        a = [1,2,3,4,5]
+        a[nil..nil] = [10,20]
+        a
+        "##,
+        );
+        // values_at with beginless/endless ranges
+        run_test(r##"[1,2,3,4,5].values_at(..2)"##);
+        run_test(r##"[1,2,3,4,5].values_at(2..)"##);
+        run_test(r##"[1,2,3,4,5].values_at(nil..nil)"##);
+    }
+
+    #[test]
+    fn index_negative_count_nil() {
+        // Negative index beyond array size with count returns nil
+        run_test("[1, 2, 3][-10, 2]");
+        // Negative index within range works normally
+        run_test("[1, 2, 3][-2, 2]");
+        // Positive index beyond array size with count returns nil
+        run_test("[1, 2, 3][4, 2]");
+        // At end returns empty
+        run_test("[1, 2, 3][3, 2]");
+    }
+
+    #[test]
     fn fill() {
         run_test(
             r##"
             a = [2, 3, 4, 5]
             a.fill(100)
+            a"##,
+        );
+        run_test(
+            r##"
+            a = [1, 2, 3, 4]
+            a.fill("a", 0..3)
+            a"##,
+        );
+        run_test(
+            r##"
+            a = [1, 2, 3, 4]
+            a.fill("x", 1, 2)
+            a"##,
+        );
+        run_test(
+            r##"
+            a = [1, 2, 3, 4]
+            a.fill { |i| i * 10 }
+            a"##,
+        );
+        run_test(
+            r##"
+            a = [1, 2, 3, 4]
+            a.fill(-2) { |i| i * 10 }
+            a"##,
+        );
+        // fill with no arguments fills with nil
+        run_test_error(
+            r#"
+            a = [1, 2, 3]
+            a.fill
+            a
+            "#,
+        );
+        // fill with range (non-block form)
+        run_test(
+            r##"
+            a = [1, 2, 3, 4, 5]
+            a.fill("z", 1..3)
+            a"##,
+        );
+        // fill with block and range
+        run_test(
+            r##"
+            a = [1, 2, 3, 4]
+            a.fill(0..2) { |i| i * 100 }
+            a"##,
+        );
+        // fill extending the array
+        run_test(
+            r##"
+            a = [1, 2]
+            a.fill("x", 0, 5)
+            a"##,
+        );
+        // fill with negative start
+        run_test(
+            r##"
+            a = [1, 2, 3, 4]
+            a.fill("y", -3, 2)
+            a"##,
+        );
+        // fill with beginless range
+        run_test(
+            r##"
+            a = [1, 2, 3, 4, 5]
+            a.fill("x", ..2)
+            a"##,
+        );
+        // fill with endless range
+        run_test(
+            r##"
+            a = [1, 2, 3, 4, 5]
+            a.fill("x", 2..)
+            a"##,
+        );
+        // fill with nil..nil range
+        run_test(
+            r##"
+            a = [1, 2, 3, 4, 5]
+            a.fill("x", nil..nil)
+            a"##,
+        );
+        // fill with block and beginless range
+        run_test(
+            r##"
+            a = [1, 2, 3, 4, 5]
+            a.fill(..2) { |i| i * 10 }
+            a"##,
+        );
+        // fill(val, start, nil) means fill to end
+        run_test(
+            r##"
+            a = [0, 1, 2, 3, 4]
+            a.fill(:a, 1, nil)
+            a"##,
+        );
+        // fill with block(start, nil) means fill to end
+        run_test(
+            r##"
+            a = [0, 1, 2, 3, 4]
+            a.fill(1, nil) { |i| i * 10 }
             a"##,
         );
     }
@@ -2849,6 +4010,20 @@ mod tests {
             a
         "##,
         );
+        // zip with enumerator / non-array enumerable (uses #each fallback)
+        run_test("[1, 2, 3].zip((4..6))");
+        // zip with infinite enumerator (must not hang)
+        run_test("[1, 2].zip(10.upto(Float::INFINITY))");
+        // zip with shorter #each-based enumerable fills nil
+        run_test(
+            r##"
+            o = Object.new
+            def o.each; yield 10; end
+            [1, 2].zip(o)
+        "##,
+        );
+        // zip raises TypeError for non-enumerable
+        run_test_error(r##"[1, 2].zip(42)"##);
     }
 
     #[test]
@@ -3024,6 +4199,11 @@ mod tests {
         ary2
         "##,
         );
+        // Enumerable#sort (delegates to to_a.sort)
+        run_test("[1,2,3].permutation(2).to_a.sort");
+        run_test("[1,2].repeated_combination(2).to_a.sort");
+        run_test("[1,2].repeated_permutation(2).to_a.sort");
+        run_test("[3,1,2].each.sort { |a,b| b <=> a }");
     }
 
     #[test]
@@ -3133,6 +4313,9 @@ mod tests {
         run_test(r#"[5, nil, 7].all?"#);
         run_test(r#"[5, -1, false].all?"#);
         run_test(r#"[nil, false].all?"#);
+        run_test(r#"[1, 2, 3].all?(Integer)"#);
+        run_test(r#"[1, "a", 3].all?(Integer)"#);
+        run_test(r#"[].all?(Integer)"#);
 
         run_test(r#"[5,  6, 7].any? {|v| v > 0 }"#);
         run_test(r#"[5, -1, 7].any? {|v| v > 0 }"#);
@@ -3140,6 +4323,27 @@ mod tests {
         run_test(r#"[5, nil, 7].any?"#);
         run_test(r#"[5, -1, false].any?"#);
         run_test(r#"[nil, false].any?"#);
+        run_test(r#"[1, "a", 3].any?(String)"#);
+        run_test(r#"[1, 2, 3].any?(String)"#);
+    }
+
+    #[test]
+    fn pop_with_count() {
+        run_test(
+            r##"
+            a = [1, 2, 3, 4, 5]
+            [a.pop(2), a]"##,
+        );
+        run_test(
+            r##"
+            a = [1, 2, 3]
+            [a.pop(0), a]"##,
+        );
+        run_test(
+            r##"
+            a = [1, 2, 3]
+            [a.pop(10), a]"##,
+        );
     }
 
     #[test]
@@ -3399,6 +4603,30 @@ mod tests {
         [a, b]
         "#,
         );
+        // slice! with beginless range
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e" ]
+        b = a.slice!(..2)
+        [a, b]
+        "#,
+        );
+        // slice! with endless range
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e" ]
+        b = a.slice!(2..)
+        [a, b]
+        "#,
+        );
+        // slice! with nil..nil
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e" ]
+        b = a.slice!(nil..nil)
+        [a, b]
+        "#,
+        );
     }
 
     #[test]
@@ -3406,6 +4634,83 @@ mod tests {
         run_test(r#"[*(0..100)].pack("C*")"#);
         run_test(r#"[0x12345678].pack("I")"#);
         run_test(r#"[0x12345678].pack("N")"#);
+    }
+
+    #[test]
+    fn pack_count() {
+        run_test(r#"[1,2,3].pack("L3").unpack("L3")"#);
+        run_test(r#"[1,2,3,4,5].pack("L*").unpack("L*")"#);
+        run_test(r#"[1,2,3].pack("S3").unpack("S3")"#);
+        run_test(r#"[1,2,3,4].pack("C4").unpack("C4")"#);
+        run_test(r#"[1,2,3].pack("Q2").unpack("Q2")"#);
+        run_test(r#"[0x1234, 0x5678].pack("n2").unpack("n2")"#);
+        run_test(r#"[0x12345678, 0xdeadbeef].pack("V2").unpack("V2")"#);
+    }
+
+    #[test]
+    fn pack_endian() {
+        run_test(r#"[0x1234].pack("s<").unpack("s<")"#);
+        run_test(r#"[0x1234].pack("s>").unpack("s>")"#);
+        run_test(r#"[0x12345678].pack("l<").unpack("l<")"#);
+        run_test(r#"[0x12345678].pack("l>").unpack("l>")"#);
+        run_test(r#"[0x123456789ABCDEF0].pack("q<").unpack("q<")"#);
+        run_test(r#"[0x123456789ABCDEF0].pack("q>").unpack("q>")"#);
+        run_test(r#"[0x1234].pack("S<").unpack("S<")"#);
+        run_test(r#"[0x1234].pack("S>").unpack("S>")"#);
+        run_test(r#"[0x12345678].pack("L<").unpack("L<")"#);
+        run_test(r#"[0x12345678].pack("L>").unpack("L>")"#);
+    }
+
+    #[test]
+    fn pack_native_size() {
+        // l!/L! — native long is 64-bit on x86-64
+        run_test(r#"[0x123456789ABCDEF0].pack("l!").unpack("l!")"#);
+        run_test(r#"[0x123456789ABCDEF0].pack("L!").unpack("L!")"#);
+        // s!/S! — native short is still 16-bit
+        run_test(r#"[0x1234].pack("s!").unpack("s!")"#);
+        run_test(r#"[0x1234].pack("S!").unpack("S!")"#);
+        // i!/I! — native int is still 32-bit
+        run_test(r#"[0x12345678].pack("i!").unpack("i!")"#);
+        run_test(r#"[0x12345678].pack("I!").unpack("I!")"#);
+        // _ modifier is equivalent to !
+        run_test(r#"[0x123456789ABCDEF0].pack("l_").unpack("l_")"#);
+        run_test(r#"[0x123456789ABCDEF0].pack("L_").unpack("L_")"#);
+    }
+
+    #[test]
+    fn pack_pointer_size() {
+        // j/J — pointer-sized integer (64-bit on x86-64)
+        run_test(r#"[42].pack("j").unpack("j")"#);
+        run_test(r#"[42].pack("J").unpack("J")"#);
+        run_test(r#"[-1].pack("j").unpack("j")"#);
+        run_test(r#"[123456789].pack("J").unpack("J")"#);
+    }
+
+    #[test]
+    fn pack_whitespace_and_comments() {
+        // Whitespace between directives should be ignored
+        run_test(r#"[1, 2].pack("C C").unpack("C C")"#);
+        run_test(r#"[1, 2, 3].pack("C  C\tC").unpack("CCC")"#);
+        // Comments should be ignored (# to end of line)
+        run_test(r#"[1, 2].pack("C #comment\nC").unpack("CC")"#);
+    }
+
+    #[test]
+    fn pack_bits() {
+        run_test(r#"["10110001"].pack("b8").unpack("b8")"#);
+        run_test(r#"["10110001"].pack("B8").unpack("B8")"#);
+        run_test(r#"["1011"].pack("b4").unpack("b8")"#);
+        run_test(r#"["1011"].pack("B4").unpack("B8")"#);
+        run_test(r#"["10110001010"].pack("b*").unpack("b*")"#);
+        run_test(r#"["10110001010"].pack("B*").unpack("B*")"#);
+    }
+
+    #[test]
+    fn pack_utf8() {
+        run_test(r#"[65, 66, 67].pack("U3")"#);
+        run_test(r#"[0x3042, 0x3044].pack("U*")"#);
+        run_test(r#"[65, 0x3042, 0x1F600].pack("U*").unpack("U*")"#);
+        run_test(r#""ABC".unpack("U3")"#);
     }
 
     #[test]
@@ -3651,6 +4956,28 @@ mod tests {
     }
 
     #[test]
+    fn index_assign_self() {
+        // Self-assignment: b[start, length] = b
+        run_test(r##"b = [1, 2, 3, 4, 5]; b[1, 0] = b; b"##);
+        run_test(r##"b = [1, 2, 3, 4, 5]; b[0, 5] = b; b"##);
+        run_test(r##"b = [1, 2, 3, 4, 5]; b[2, 2] = b; b"##);
+        run_test(r##"b = [1, 2, 3]; b[0, 0] = b; b"##);
+        run_test(r##"b = [1]; b[0, 1] = b; b"##);
+        // Self-assignment via range
+        run_test(r##"b = [1, 2, 3, 4, 5]; b[1..2] = b; b"##);
+        run_test(r##"b = [1, 2, 3]; b[0..0] = b; b"##);
+    }
+
+    #[test]
+    fn index_assign_range_end_less_than_start() {
+        // end < start with range: treated as zero-length insert at start
+        run_test(r##"a = [1, 2, 3, 4, 5]; a[3..1] = [:a, :b]; a"##);
+        // start beyond array size: fills with nil then inserts
+        run_test(r##"a = [1, 2, 3]; a[5..2] = [99]; a"##);
+        run_test(r##"a = [1, 2, 3]; a[5..2] = 42; a"##);
+    }
+
+    #[test]
     fn replace() {
         run_test(r##"a = [1,2,3]; b = [4,5]; a.replace(b); [a, b]"##);
         run_test(r##"a = [1,2,3]; a.replace([]); a"##);
@@ -3814,5 +5141,437 @@ mod tests {
         );
         run_test("[1,2,3].repeated_combination(0).to_a");
         run_test("[1,2,3].repeated_combination(1).to_a");
+    }
+
+    #[test]
+    fn array_implicit_conversions() {
+        // Array#+ calls to_ary
+        run_test_with_prelude(
+            "[1, 2] + o",
+            "class C; def to_ary; [3, 4]; end; end; o = C.new",
+        );
+        // Array#- calls to_ary
+        run_test_with_prelude(
+            "[1, 2, 3] - o",
+            "class C; def to_ary; [2]; end; end; o = C.new",
+        );
+        // Array#* with to_str joins
+        run_test_with_prelude(
+            "[1, 2, 3] * o",
+            r#"class C; def to_str; ","; end; end; o = C.new"#,
+        );
+        // Array#* with to_int repeats
+        run_test_with_prelude("[1, 2] * o", "class C; def to_int; 3; end; end; o = C.new");
+        // Array#[] with to_int
+        run_test_with_prelude(
+            "[10, 20, 30][o]",
+            "class C; def to_int; 1; end; end; o = C.new",
+        );
+        // Array#last with to_int
+        run_test_with_prelude(
+            "[1,2,3,4,5].last(o)",
+            "class C; def to_int; 2; end; end; o = C.new",
+        );
+        // Array#take with to_int
+        run_test_with_prelude(
+            "[1,2,3,4,5].take(o)",
+            "class C; def to_int; 3; end; end; o = C.new",
+        );
+    }
+
+    #[test]
+    fn array_new_huge_size() {
+        run_test_error(r##"Array.new(2**62)"##);
+        run_test_error(r##"Array.new(1 << 31)"##);
+    }
+
+    #[test]
+    fn pack_hex() {
+        run_test(r#"["6162"].pack("h4")"#);
+        run_test(r#"["6162"].pack("H4")"#);
+        run_test(r#"["6162636465"].pack("h*")"#);
+        run_test(r#"["6162636465"].pack("H*")"#);
+        run_test(r#""\x16\x26".unpack("h4")"#);
+        run_test(r#""\x61\x62".unpack("H4")"#);
+    }
+
+    // ===== Tests for new methods =====
+
+    #[test]
+    fn array_class_bracket() {
+        run_test("Array[1, 2, 3]");
+        run_test("Array[]");
+        run_test("Array[42]");
+        // Subclass support
+        run_test_with_prelude("A[1, 2, 3]", "class A < Array; end");
+        run_test_with_prelude("A[1, 2, 3].class", "class A < Array; end");
+    }
+
+    #[test]
+    fn array_try_convert() {
+        run_test("Array.try_convert([1, 2])");
+        run_test("Array.try_convert(nil)");
+        run_test(r#"Array.try_convert("string")"#);
+        // Object with to_ary
+        run_test_with_prelude(
+            "Array.try_convert(C.new)",
+            "class C; def to_ary; [1, 2]; end; end",
+        );
+        // Object without to_ary returns nil
+        run_test_with_prelude("Array.try_convert(C.new)", "class C; end");
+        // to_ary returns non-Array raises TypeError
+        run_test_error("class C; def to_ary; 'not array'; end; end; Array.try_convert(C.new)");
+    }
+
+    #[test]
+    fn array_at() {
+        run_test("[1, 2, 3].at(0)");
+        run_test("[1, 2, 3].at(1)");
+        run_test("[1, 2, 3].at(-1)");
+        run_test("[1, 2, 3].at(5)");
+    }
+
+    #[test]
+    fn array_rindex() {
+        // With value argument
+        run_test("[1, 2, 3, 2, 1].rindex(2)");
+        run_test("[1, 2, 3].rindex(4)");
+        // With block
+        run_test("[1, 2, 3, 4].rindex {|x| x > 2}");
+        run_test("[1, 2, 3].rindex {|x| x > 10}");
+    }
+
+    #[test]
+    fn array_each_index() {
+        run_test("res = []; [10, 20, 30].each_index {|i| res << i}; res");
+        run_test("[].each_index {|i| i}");
+    }
+
+    #[test]
+    fn array_difference() {
+        run_test("[1, 2, 3, 4, 5].difference([2, 4])");
+        run_test("[1, 2, 3].difference([1], [3])");
+        run_test("[1, 2, 3].difference([])");
+        run_test("[1, 2, 3].difference()");
+        // Duplicates preserved from self
+        run_test("[1, 1, 2, 2, 3].difference([1])");
+    }
+
+    #[test]
+    fn array_intersection() {
+        run_test("[1, 2, 3, 4].intersection([2, 3, 5])");
+        run_test("[1, 2, 3].intersection([2, 3], [3, 4])");
+        run_test("[1, 2, 3].intersection([])");
+        // Duplicates removed
+        run_test("[1, 1, 2, 2].intersection([1, 2])");
+    }
+
+    #[test]
+    fn array_repeated_permutation() {
+        run_test("[1, 2].repeated_permutation(2).to_a.sort");
+        run_test("[1, 2, 3].repeated_permutation(0).to_a");
+        run_test("[1, 2].repeated_permutation(1).to_a.sort");
+        run_test("[].repeated_permutation(2).to_a");
+    }
+
+    #[test]
+    fn array_join_nil_separator() {
+        run_test("[1, 2, 3].join(nil)");
+        run_test("[1, 2, 3].join");
+        run_test(r#"[1, 2, 3].join("-")"#);
+        run_test("[].join(nil)");
+        // nested arrays use same separator
+        run_test(r#"[[1, [2]], 3].join("-")"#);
+        // * with string acts like join
+        run_test(r#"[1, 2, 3] * ",""#);
+        run_test(r#"[[1, 2], [3, 4]] * "-""#);
+    }
+
+    #[test]
+    fn join_conversion_order() {
+        // to_str is tried first
+        run_test_with_prelude(
+            r#"[C.new].join"#,
+            r#"class C; def to_s; "s"; end; def to_str; "str"; end; end"#,
+        );
+        // to_ary causes recursive join
+        run_test_with_prelude(
+            r#"[C.new].join("-")"#,
+            r#"class C; def to_ary; [1, 2]; end; end"#,
+        );
+    }
+
+    #[test]
+    fn bsearch_nil_result() {
+        // nil block result treated as find-minimum (false)
+        run_test("[1, 2, 3].bsearch { nil }");
+        run_test("[1, 2, 3].bsearch_index { nil }");
+        // empty block => nil
+        run_test("[1, 2, 3, 4].bsearch { |x| nil }");
+    }
+
+    #[test]
+    fn sort_block_nil_and_cmp() {
+        // block returning nil raises ArgumentError
+        run_test_error("[1, 2].sort {}");
+        // block with <=> comparison
+        run_test("[1, 2, 5, 10, 7, -4, 12].sort { |n, m| n - m }");
+    }
+
+    #[test]
+    fn transpose_to_ary() {
+        run_test("[[1, 2], [3, 4]].transpose");
+        run_test_with_prelude(
+            "[[1, 2], C.new].transpose",
+            "class C; def to_ary; [3, 4]; end; end",
+        );
+    }
+
+    #[test]
+    fn index_ignores_block_with_arg() {
+        run_test("[1, 2, 3].index(2) { |x| false }");
+        run_test("[1, 2, 3].rindex(2) { |x| false }");
+    }
+
+    #[test]
+    fn map_bang_frozen() {
+        run_test_error("[1, 2, 3].freeze.map! { |x| x }");
+        run_test_error("[].freeze.map! { |x| x }");
+    }
+
+    #[test]
+    fn values_at_range_padding() {
+        run_test("[1, 2, 3].values_at(1..5)");
+        run_test("[].values_at(0..2)");
+        run_test("[1, 2, 3, 4, 5].values_at(1..3)");
+        // endless range
+        run_test("[1, 2, 3, 4].values_at(1..)");
+        run_test("[1, 2, 3, 4].values_at(3...)");
+        run_test("[1, 2, 3].values_at(0...5)");
+    }
+
+    #[test]
+    fn cycle_to_int_and_size() {
+        run_test("[1, 2, 3].cycle(2).to_a");
+        run_test("[1, 2, 3].cycle(0).to_a");
+        run_test("[].cycle(5).to_a");
+        // Enumerator size
+        run_test("[1, 2, 3].cycle(2).size");
+        run_test("[1, 2, 3].cycle(0).size");
+        run_test("[].cycle(2).size");
+        run_test_no_result_check("[1, 2].cycle.size");
+    }
+
+    #[test]
+    fn subclass_return_types() {
+        run_test_with_prelude("C[1,2,3].sort.class", "class C < Array; end");
+        run_test_with_prelude("(C[1,2] + [3]).class", "class C < Array; end");
+        run_test_with_prelude("(C[1,2,2] & [2,3]).class", "class C < Array; end");
+        run_test_with_prelude("(C[1,2] | [3]).class", "class C < Array; end");
+        run_test_with_prelude("C[1,2,2].uniq.class", "class C < Array; end");
+        run_test_with_prelude("C[1,nil,2].compact.class", "class C < Array; end");
+        run_test_with_prelude("C[3,1,2].rotate.class", "class C < Array; end");
+        run_test_with_prelude("C[1,2].union([3]).class", "class C < Array; end");
+        run_test_with_prelude("C[1,2,3].to_a.class", "class C < Array; end");
+        run_test_with_prelude("C[1,2,3].map { |x| x }.class", "class C < Array; end");
+    }
+
+    #[test]
+    fn pattern_arg_ignores_block() {
+        run_test("[1, 2, 3].all?(Integer) { |x| false }");
+        run_test("[1, 2, 3].any?(String) { |x| true }");
+        run_test("[1, 2, 3].count(1) { |x| true }");
+        run_test("[1, 2, 3].none?(String) { |x| true }");
+        run_test("[1, 2, 3].one?(1) { |x| false }");
+    }
+
+    #[test]
+    fn minmax_with_block() {
+        run_test("[1, 3, 2].minmax");
+        run_test("[1, 3, 2].minmax { |a, b| b <=> a }");
+        run_test("[].minmax");
+        run_test("[5].minmax");
+    }
+
+    #[test]
+    fn sample() {
+        // sample without arguments returns a single element
+        run_test("[1].sample");
+        run_test("[].sample");
+        // sample(n) returns an array of n elements
+        run_test("[1, 2, 3, 4, 5].sample(0)");
+        run_test("[1, 2, 3].sample(1).size");
+        run_test("[1, 2, 3].sample(5).sort");
+        run_test_no_result_check("[1, 2, 3, 4, 5].sample(3).size");
+        // sample with negative n raises error
+        run_test_error("[1, 2, 3].sample(-1)");
+    }
+
+    #[test]
+    fn shuffle_nondestructive() {
+        // shuffle returns a new array with the same elements
+        run_test_no_result_check("[1, 2, 3].shuffle.sort");
+        run_test(
+            r#"
+            a = [1, 2, 3]
+            a.shuffle
+            a
+            "#,
+        );
+        // shuffle returns Array, not subclass
+        run_test_with_prelude(
+            r#"
+            a = C.new([1, 2, 3])
+            a.shuffle.class
+            "#,
+            "class C < Array; end",
+        );
+    }
+
+    #[test]
+    fn fetch_values() {
+        run_test("[10, 20, 30].fetch_values(0, 2)");
+        run_test("[10, 20, 30].fetch_values(0, -1)");
+        run_test("[10, 20, 30].fetch_values");
+        // with block for missing indices
+        run_test("[10, 20, 30].fetch_values(0, 5) { |i| i * 100 }");
+        // error for out-of-range without block
+        run_test_error("[10, 20, 30].fetch_values(0, 5)");
+    }
+
+    #[test]
+    fn min_max_with_block() {
+        // min with block
+        run_test("[2, 33, 4, 11].min {|a, b| a <=> b}");
+        run_test(r#"["2","33","4","11"].min {|a,b| a.length <=> b.length}"#);
+        run_test("[2, 33, 4, 11].min {|a, b| b <=> a}");
+        // max with block
+        run_test("[2, 33, 4, 11].max {|a, b| a <=> b}");
+        run_test(r#"["2","33","4","11"].max {|a,b| a.length <=> b.length}"#);
+        run_test("[2, 33, 4, 11].max {|a, b| b <=> a}");
+        // block returning constant
+        run_test("[1, 2, 3, 4].min {|a,b| 15}");
+        run_test("[1, 2, 3, 4].max {|a,b| 15}");
+        // nil block result raises ArgumentError
+        run_test_error("[11, 12, 22, 33].min {|a, b| nil}");
+        run_test_error("[11, 12, 22, 33].max {|a, b| nil}");
+        // empty array
+        run_test("[].min {|a,b| a <=> b}");
+        run_test("[].max {|a,b| a <=> b}");
+    }
+
+    #[test]
+    fn assoc() {
+        run_test(
+            r#"
+            s1 = [1, 2]
+            s2 = [2, 3]
+            a = [s1, s2]
+            [a.assoc(1), a.assoc(2), a.assoc(42)]
+            "#,
+        );
+        // ignores non-array elements
+        run_test(r#"["foo", [1, 2], [3, 4]].assoc(3)"#);
+        run_test(r#"["foo", [1, 2], [3, 4]].assoc("bar")"#);
+    }
+
+    #[test]
+    fn rassoc() {
+        run_test(
+            r#"
+            a = [[1, "one"], [2, "two"], [3, "three"]]
+            [a.rassoc("two"), a.rassoc("four")]
+            "#,
+        );
+        // ignores non-array elements
+        run_test(r#"["foo", [1, 2], [3, 4]].rassoc(4)"#);
+        run_test(r#"["foo", [1, 2], [3, 4]].rassoc(99)"#);
+    }
+
+    #[test]
+    fn keep_if() {
+        run_test(
+            r#"
+            a = [1, 2, 3, 4, 5]
+            a.keep_if { |x| x > 2 }
+            a
+            "#,
+        );
+        // returns self even when no changes
+        run_test(
+            r#"
+            a = [1, 2, 3]
+            a.keep_if { |x| true }.equal?(a)
+            "#,
+        );
+        run_test("[1, 2, 3].keep_if { |x| x.odd? }");
+    }
+
+    #[test]
+    fn append_method() {
+        run_test("[1, 2].append(3, 4)");
+        run_test("[].append(1)");
+        run_test(
+            r#"
+            a = [1]
+            a.append(2, 3)
+            a
+            "#,
+        );
+    }
+
+    #[test]
+    fn drop_while() {
+        run_test("[1, 2, 3, 4, 5].drop_while { |x| x < 3 }");
+        run_test("[1, 2, 3].drop_while { |x| true }");
+        run_test("[1, 2, 3].drop_while { |x| false }");
+        run_test("[].drop_while { |x| true }");
+    }
+
+    #[test]
+    fn to_ary() {
+        run_test("[1, 2, 3].to_ary");
+        run_test(
+            r#"
+            a = [1, 2]
+            a.to_ary.equal?(a)
+            "#,
+        );
+    }
+
+    #[test]
+    fn deconstruct() {
+        run_test("[1, 2, 3].deconstruct");
+        run_test(
+            r#"
+            a = [1, 2]
+            a.deconstruct.equal?(a)
+            "#,
+        );
+    }
+
+    #[test]
+    fn frozen_returns_enumerator_without_block() {
+        // filter!/select! on frozen array without block should return Enumerator
+        run_test(r#"[1,2,3].freeze.select!.class"#);
+        run_test(r#"[1,2,3].freeze.filter!.class"#);
+        // keep_if on frozen array without block should return Enumerator
+        run_test(r#"[1,2,3].freeze.keep_if.class"#);
+        // reject! on frozen array without block should return Enumerator
+        run_test(r#"[1,2,3].freeze.reject!.class"#);
+        // delete_if on frozen array without block should return Enumerator
+        run_test(r#"[1,2,3].freeze.delete_if.class"#);
+        // sort_by! on frozen array without block should return Enumerator
+        run_test(r#"[1,2,3].freeze.sort_by!.class"#);
+    }
+
+    #[test]
+    fn all_any_ignore_block_with_pattern() {
+        // When pattern argument is given, block should be ignored
+        run_test(r#"[1, 2, 3].all?(Integer) { |x| false }"#);
+        run_test(r#"[1, 2, 3].any?(String) { |x| true }"#);
+        run_test(r#"[1, 2, 3].none?(String) { |x| true }"#);
+        run_test(r#"[1, 2, 3].one?(Integer) { |x| false }"#);
+        run_test(r#"[1, 2, 3].count(2) { |x| true }"#);
     }
 }

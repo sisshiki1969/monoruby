@@ -4,6 +4,7 @@ use paste::paste;
 mod complex;
 mod float;
 mod integer;
+pub(super) mod rational;
 
 //
 // Numeric class
@@ -14,6 +15,7 @@ pub(super) fn init(globals: &mut Globals) {
     integer::init(globals, numeric);
     float::init(globals, numeric);
     complex::init(globals, numeric);
+    rational::init(globals, numeric);
     globals.define_builtin_func(NUMERIC_CLASS, "+", add, 1);
     globals.define_builtin_func(NUMERIC_CLASS, "-", sub, 1);
     globals.define_builtin_func(NUMERIC_CLASS, "*", mul, 1);
@@ -21,7 +23,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(NUMERIC_CLASS, "%", &["module"], rem, 1);
     globals.define_builtin_func(NUMERIC_CLASS, "**", pow, 1);
     globals.define_builtin_func(NUMERIC_CLASS, "-@", neg, 0);
-    globals.define_builtin_func(NUMERIC_CLASS, "+@", pos, 0);
     globals.define_builtin_func(NUMERIC_CLASS, "~", bitnot, 0);
     globals.define_builtin_funcs(NUMERIC_CLASS, "angle", &["arg", "phase"], angle, 0);
 }
@@ -60,13 +61,44 @@ fn divmod(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
 
+    // Helper for FloatDomainError
+    let float_domain_err = |msg: &str| -> MonorubyErr {
+        let class_id = globals
+            .store
+            .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("FloatDomainError"))
+            .map(|v| v.as_class_id());
+        match class_id {
+            Some(cid) => MonorubyErr::new(MonorubyErrKind::Other(cid), msg),
+            None => MonorubyErr::rangeerr(msg),
+        }
+    };
     let (div, modulo) = match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
         (Some(lhs), Some(rhs)) => {
-            if rhs.check_zero_div() {
+            // NaN raises FloatDomainError
+            if let RealKind::Float(f) = rhs {
+                if f.is_nan() {
+                    return Err(float_domain_err("NaN"));
+                }
+            }
+            if let RealKind::Float(f) = lhs {
+                if f.is_nan() {
+                    return Err(float_domain_err("NaN"));
+                }
+                if f.is_infinite() {
+                    return Err(float_domain_err(if f > 0.0 { "Infinity" } else { "-Infinity" }));
+                }
+            }
+            // For divmod, both integer zero and float zero raise ZeroDivisionError
+            if rhs.check_zero_div() || rhs.is_float_zero() {
                 return Err(MonorubyErr::divide_by_zero());
             }
             let (div, modulo) = lhs.ruby_div_mod(&rhs);
-            (div.into(), modulo.into())
+            // Ruby's divmod always returns an Integer quotient
+            let div = match div {
+                RealKind::Float(f) => Value::coerce_f64_to_int(f)?,
+                _ => div.into(),
+            };
+            (div, modulo.into())
         }
         _ => return Err(MonorubyErr::cant_convert_into_float(globals, lfp.arg(0))),
     };
@@ -95,17 +127,6 @@ macro_rules! unop {
 }
 
 unop!(neg, bitnot);
-
-///
-/// ### Integer#+@
-///
-/// - + self -> Integer
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/=2b=40.html]
-#[monoruby_builtin]
-fn pos(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(lfp.self_val())
-}
 
 ///
 /// ### Numeric#angle
@@ -243,52 +264,59 @@ mod tests {
     }
 
     #[test]
+    fn bigint_float_cmp_precision() {
+        // BigInt vs near-float comparison (precision-sensitive)
+        run_test_once("(0x8000_0000_0000_0000 + 39) <= (0x8000_0000_0000_0000 + 39 + 0.0)");
+        run_test_once("(0x8000_0000_0000_0000 + 39) == (0x8000_0000_0000_0000 + 39 + 0.0)");
+        run_test_once("(0x8000_0000_0000_0000 + 39) <=> (0x8000_0000_0000_0000 + 39 + 0.0)");
+        run_test_once("(0x8000_0000_0000_0000 + 39) > (0x8000_0000_0000_0000 + 39 + 0.0)");
+        // Float vs BigInt (reversed operands)
+        run_test_once("(0x8000_0000_0000_0000 + 39 + 0.0) >= (0x8000_0000_0000_0000 + 39)");
+        run_test_once("(0x8000_0000_0000_0000 + 39 + 0.0) == (0x8000_0000_0000_0000 + 39)");
+        // BigInt exactly equal to float
+        run_test_once("(1 << 53) == (1 << 53).to_f");
+        run_test_once("(1 << 53) <=> (1 << 53).to_f");
+        // NaN comparison
+        run_test_once("(1 << 100) == Float::NAN");
+        run_test_once("(1 << 100) < Float::NAN");
+        run_test_once("Float::NAN > (1 << 100)");
+    }
+
+    #[test]
     fn divmod() {
-        run_test("(11).divmod(3)");
-        run_test("(11).divmod(-3)");
-        run_test("(11).divmod(-3)");
-        run_test("(-11).divmod(3)");
-
-        run_test("(11).divmod(3.5)");
-        run_test("(11).divmod(-3.5)");
-        run_test("(11).divmod(-3.5)");
-        run_test("(-11).divmod(3.5)");
-
-        run_test("(11.5).divmod(3)");
-        run_test("(11.5).divmod(-3)");
-        run_test("(11.5).divmod(-3)");
-        run_test("(-11.5).divmod(3)");
-
-        run_test("(11.5).divmod(3.5)");
-        run_test("(11.5).divmod(-3.5)");
-        run_test("(11.5).divmod(-3.5)");
-        run_test("(-11.5).divmod(3.5)");
+        run_tests(
+            &[
+                "(11).divmod(3)", "(11).divmod(-3)", "(-11).divmod(3)",
+                "(11).divmod(3.5)", "(11).divmod(-3.5)", "(-11).divmod(3.5)",
+                "(11.5).divmod(3)", "(11.5).divmod(-3)", "(-11.5).divmod(3)",
+                "(11.5).divmod(3.5)", "(11.5).divmod(-3.5)", "(-11.5).divmod(3.5)",
+            ]
+            ,
+        );
     }
 
     #[test]
     fn bitnot() {
-        run_test("~1");
-        run_test("~0");
-        run_test("~(-1)");
-        run_test("~(-2)");
-        run_test("~(0x12345678)");
-        run_test("~(0x123456789abcdef0)");
+        run_tests(
+            &["~1", "~0", "~(-1)", "~(-2)", "~(0x12345678)", "~(0x123456789abcdef0)"]
+                ,
+        );
     }
 
     #[test]
     fn neg() {
-        run_test("-1");
-        run_test("-0");
-        run_test("-(0x12345678)");
-        run_test("-(0x123456789abcdef0)");
+        run_tests(
+            &["-1", "-0", "-(0x12345678)", "-(0x123456789abcdef0)"]
+                ,
+        );
     }
 
     #[test]
     fn pos() {
-        run_test("+1");
-        run_test("+0");
-        run_test("+(0x12345678)");
-        run_test("+(0x123456789abcdef0)");
+        run_tests(
+            &["+1", "+0", "+(0x12345678)", "+(0x123456789abcdef0)"]
+                ,
+        );
     }
 
     #[test]
@@ -341,69 +369,84 @@ mod tests {
 
     #[test]
     fn float_truncate() {
-        run_test("1.5.truncate");
-        run_test("(-1.5).truncate");
-        run_test("1.567.truncate(2)");
-        run_test("(-1.567).truncate(2)");
+        run_tests(
+            &["1.5.truncate", "(-1.5).truncate", "1.567.truncate(2)", "(-1.567).truncate(2)"]
+                ,
+        );
     }
 
     #[test]
     fn float_ceil() {
-        run_test("1.1.ceil");
-        run_test("(-1.1).ceil");
-        run_test("1.0.ceil");
-        run_test("1.123.ceil(2)");
+        run_tests(
+            &[
+                "1.1.ceil", "(-1.1).ceil", "1.0.ceil", "1.123.ceil(2)",
+                "1e50.ceil(-50)", "(-1e50).ceil(-50)", "1.23e20.ceil(-18)",
+            ]
+            ,
+        );
+    }
+
+    #[test]
+    fn float_floor_neg_ndigits() {
+        run_tests(
+            &["120.0.floor(-1)", "(-1e50).floor(-50)", "1e50.floor(-50)", "1.23e20.floor(-18)"]
+                ,
+        );
     }
 
     #[test]
     fn float_positive_negative() {
-        run_test("1.0.positive?");
-        run_test("(-1.0).positive?");
-        run_test("0.0.positive?");
-        run_test("1.0.negative?");
-        run_test("(-1.0).negative?");
-        run_test("0.0.negative?");
+        run_tests(
+            &[
+                "1.0.positive?", "(-1.0).positive?", "0.0.positive?",
+                "1.0.negative?", "(-1.0).negative?", "0.0.negative?",
+            ]
+            ,
+        );
     }
 
     #[test]
     fn float_integer() {
-        run_test("1.0.integer?");
-        run_test("1.5.integer?");
+        run_tests(&["1.0.integer?", "1.5.integer?"]);
     }
 
     #[test]
     fn float_coerce() {
-        run_test("1.0.coerce(2)");
-        run_test("1.0.coerce(2.5)");
+        run_tests(&["1.0.coerce(2)", "1.0.coerce(2.5)"]);
     }
 
     #[test]
     fn float_remainder() {
-        run_test("5.0.remainder(3.0)");
-        run_test("(-5.0).remainder(3.0)");
-        run_test("5.0.remainder(-3.0)");
+        run_tests(
+            &["5.0.remainder(3.0)", "(-5.0).remainder(3.0)", "5.0.remainder(-3.0)"]
+                ,
+        );
     }
 
     #[test]
     fn float_fdiv() {
-        run_test("1.0.fdiv(2)");
-        run_test("1.0.fdiv(2.0)");
+        run_tests(&["1.0.fdiv(2)", "1.0.fdiv(2.0)"]);
     }
 
     #[test]
     fn numeric_abs() {
-        run_test("1.0.abs");
-        run_test("(-1.0).abs");
-        run_test("0.0.abs");
-        run_test("1.0.magnitude");
+        run_tests(
+            &["1.0.abs", "(-1.0).abs", "0.0.abs", "1.0.magnitude"]
+                ,
+        );
     }
 
     #[test]
     fn numeric_step() {
-        run_test("res = []; 1.step(10, 2) {|i| res << i}; res");
-        run_test("res = []; 1.step(to: 5, by: 2) {|i| res << i}; res");
-        run_test("res = []; 1.0.step(2.0, 0.5) {|i| res << i}; res");
-        run_test("res = []; 5.step(1, -1) {|i| res << i}; res");
-        run_test("res = []; 1.step(5) {|i| res << i}; res");
+        run_tests(
+            &[
+                "res = []; 1.step(10, 2) {|i| res << i}; res",
+                "res = []; 1.step(to: 5, by: 2) {|i| res << i}; res",
+                "res = []; 1.0.step(2.0, 0.5) {|i| res << i}; res",
+                "res = []; 5.step(1, -1) {|i| res << i}; res",
+                "res = []; 1.step(5) {|i| res << i}; res",
+            ]
+            ,
+        );
     }
 }

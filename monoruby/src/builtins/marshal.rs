@@ -282,7 +282,7 @@ impl<'a> MarshalReader<'a> {
         let len = self.read_fixnum()? as usize;
         let bytes = self.read_bytes(len)?;
         let val = match encoding {
-            Encoding::Utf8 => Value::string_from_inner(RStringInner::from_encoding(bytes, Encoding::Utf8)),
+            Encoding::Utf8 | Encoding::UsAscii => Value::string_from_inner(RStringInner::from_encoding(bytes, Encoding::Utf8)),
             Encoding::Ascii8 => Value::bytes_from_slice(bytes),
         };
         self.objects.push(val);
@@ -410,8 +410,11 @@ impl<'a> MarshalReader<'a> {
 
         // Look up the class by checking constants on Object
         let class_name_id = IdentId::get_id(&class_name);
-        let obj = match globals.get_constant(OBJECT_CLASS, class_name_id) {
-            Some(ConstState::Loaded(class_val)) => {
+        let obj = match globals
+            .get_constant(OBJECT_CLASS, class_name_id)
+            .and_then(|state| state.loaded_value())
+        {
+            Some(class_val) => {
                 if let Some(module) = class_val.is_class_or_module() {
                     Value::object(module.id())
                 } else {
@@ -695,7 +698,7 @@ fn marshal_write_string(buf: &mut Vec<u8>, s: &RStringInner, symbols: &mut Vec<I
             marshal_write_symbol(buf, IdentId::get_id("E"), symbols);
             buf.push(b'T'); // true
         }
-        Encoding::Ascii8 => {
+        Encoding::UsAscii | Encoding::Ascii8 => {
             buf.push(b'"');
             marshal_write_fixnum(buf, bytes.len() as i32);
             buf.extend_from_slice(bytes);

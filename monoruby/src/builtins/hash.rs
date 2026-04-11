@@ -6,7 +6,7 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS, ObjTy::HASH);
-    globals.define_builtin_class_func_with_effect(HASH_CLASS, "new", new, 0, 1, Effect::CAPTURE);
+    globals.define_builtin_class_func_with_effect(HASH_CLASS, "new", new, 0, 2, Effect::CAPTURE);
     globals.define_builtin_class_func(HASH_CLASS, "allocate", allocate, 0);
     globals.define_builtin_class_func_rest(HASH_CLASS, "[]", hash_bracket);
     globals.define_builtin_class_func(HASH_CLASS, "try_convert", try_convert, 1);
@@ -58,7 +58,17 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "key", key, 1);
     globals.define_builtin_func(HASH_CLASS, "keep_if", keep_if, 0);
     globals.define_builtin_func(HASH_CLASS, "values", values, 0);
-    globals.define_builtin_funcs(HASH_CLASS, "clone", &["dup"], clone, 0);
+    globals.define_builtin_funcs_with_kw(
+        HASH_CLASS,
+        "clone",
+        &["dup"],
+        clone,
+        0,
+        1,
+        false,
+        &[],
+        false,
+    );
     globals.define_builtin_func(HASH_CLASS, "compare_by_identity?", compare_by_identity_, 0);
     globals.define_builtin_func_rest(HASH_CLASS, "values_at", values_at);
     globals.define_builtin_func_rest(HASH_CLASS, "dig", dig);
@@ -194,30 +204,6 @@ fn hash_bracket(
     }
 }
 
-/// Try to use a value as a Hash, calling `to_hash` if it doesn't have hash type.
-fn coerce_to_hash(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<Value> {
-    if arg.try_hash_ty().is_some() {
-        return Ok(arg);
-    }
-    let to_hash_id = IdentId::get_id("to_hash");
-    if let Some(result) = vm.invoke_method_if_exists(globals, to_hash_id, arg, &[], None, None)? {
-        if result.try_hash_ty().is_some() {
-            return Ok(result);
-        }
-        return Err(MonorubyErr::typeerr(format!(
-            "can't convert {} to Hash ({}#to_hash gives {})",
-            arg.get_real_class_name(globals),
-            arg.get_real_class_name(globals),
-            result.get_real_class_name(globals),
-        )));
-    }
-    Err(MonorubyErr::no_implicit_conversion(
-        &globals.store,
-        arg,
-        HASH_CLASS,
-    ))
-}
-
 /// Helper to convert an iterator of values (expected to be [k,v] pairs) into a Hash.
 fn hash_from_array_pairs(
     iter: impl Iterator<Item = Value>,
@@ -272,7 +258,7 @@ fn try_convert(
             return Ok(result);
         }
         return Err(MonorubyErr::typeerr(format!(
-            "can't convert {} to Hash ({}#to_hash gives {})",
+            "can't convert {} into Hash ({}#to_hash gives {})",
             arg.get_real_class_name(globals),
             arg.get_real_class_name(globals),
             result.get_real_class_name(globals),
@@ -331,6 +317,7 @@ fn default_proc_assign(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let arg = lfp.arg(0);
     let mut hash = lfp.self_val().as_hash();
     if arg.is_nil() {
@@ -354,7 +341,13 @@ fn default_proc_assign(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/default=3d.html]
 #[monoruby_builtin]
-fn default_assign(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn default_assign(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let default = lfp.arg(0);
     lfp.self_val().as_hash().set_defalut_value(default);
     Ok(default)
@@ -383,8 +376,9 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/length.html]
 #[monoruby_builtin]
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
     let rhs_v = lfp.arg(0);
-    let lhs = lfp.self_val().as_hash();
+    let lhs = self_val.as_hash();
     let rhs = if let Some(rhs) = rhs_v.try_hash_ty() {
         rhs
     } else {
@@ -393,16 +387,18 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     if lhs.len() != rhs.len() {
         return Ok(Value::bool(false));
     }
-    for (k, lhs_value) in lhs.iter() {
-        if let Some(rhs_value) = rhs.get(k, vm, globals)?
-            && vm.eq_values_bool(globals, lhs_value, rhs_value)?
-        {
-            continue;
-        } else {
-            return Ok(Value::bool(false));
+    crate::value::exec_recursive_paired(self_val.id(), rhs_v.id(), || {
+        for (k, lhs_value) in lhs.iter() {
+            if let Some(rhs_value) = rhs.get(k, vm, globals)?
+                && vm.eq_values_bool(globals, lhs_value, rhs_value)?
+            {
+                continue;
+            } else {
+                return Ok(Value::bool(false));
+            }
         }
-    }
-    Ok(Value::bool(true))
+        Ok(Value::bool(true))
+    }, Value::bool(true))
 }
 
 /// Check if all key-value pairs in `sub` exist in `sup`.
@@ -434,7 +430,8 @@ fn hash_subset(
 #[monoruby_builtin]
 fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_hash();
-    let rhs = lfp.arg(0).expect_hash_ty(globals)?;
+    let rhs_val = lfp.arg(0).coerce_to_hash(vm, globals)?;
+    let rhs = rhs_val;
     let result = lhs.len() < rhs.len() && hash_subset(lhs, rhs, vm, globals)?;
     Ok(Value::bool(result))
 }
@@ -449,7 +446,8 @@ fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 #[monoruby_builtin]
 fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_hash();
-    let rhs = lfp.arg(0).expect_hash_ty(globals)?;
+    let rhs_val = lfp.arg(0).coerce_to_hash(vm, globals)?;
+    let rhs = rhs_val;
     let result = lhs.len() <= rhs.len() && hash_subset(lhs, rhs, vm, globals)?;
     Ok(Value::bool(result))
 }
@@ -464,7 +462,8 @@ fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 #[monoruby_builtin]
 fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_hash();
-    let rhs = lfp.arg(0).expect_hash_ty(globals)?;
+    let rhs_val = lfp.arg(0).coerce_to_hash(vm, globals)?;
+    let rhs = rhs_val;
     let result = lhs.len() > rhs.len() && hash_subset(rhs, lhs, vm, globals)?;
     Ok(Value::bool(result))
 }
@@ -479,7 +478,8 @@ fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 #[monoruby_builtin]
 fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_hash();
-    let rhs = lfp.arg(0).expect_hash_ty(globals)?;
+    let rhs_val = lfp.arg(0).coerce_to_hash(vm, globals)?;
+    let rhs = rhs_val;
     let result = lhs.len() >= rhs.len() && hash_subset(rhs, lhs, vm, globals)?;
     Ok(Value::bool(result))
 }
@@ -498,6 +498,7 @@ fn index_assign(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let key = lfp.arg(0);
     let val = lfp.arg(1);
     lfp.self_val().as_hash().insert(key, val, vm, globals)?;
@@ -524,6 +525,7 @@ fn hash_index(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -534,6 +536,8 @@ fn hash_index(
     }
     state.load(ir, callsite.args, GP::Rcx);
     state.load(ir, callsite.recv, GP::Rdx);
+    let using_xmm = state.get_using_xmm();
+    ir.xmm_save(using_xmm);
     ir.inline(|r#gen, _, _| {
         monoasm! {&mut r#gen.jit,
             movq rdi, rbx;
@@ -542,6 +546,7 @@ fn hash_index(
             call rax;
         }
     });
+    ir.xmm_restore(using_xmm);
     let error = ir.new_error(state);
     ir.handle_error(error);
     state.def_rax2acc(ir, callsite.dst);
@@ -571,7 +576,8 @@ extern "C" fn hashindex(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/clear.html]
 #[monoruby_builtin]
-fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     lfp.self_val().as_hash().clear();
     Ok(lfp.self_val())
 }
@@ -584,10 +590,11 @@ fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/replace.html]
 #[monoruby_builtin]
 fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_ = lfp.self_val();
-    let arg = coerce_to_hash(vm, globals, lfp.arg(0))?;
+    let arg = lfp.arg(0).coerce_to_hash(vm, globals)?;
     let h = self_.as_hashmap_inner_mut();
-    *h = arg.as_hashmap_inner().clone();
+    *h = arg.inner().clone();
 
     Ok(lfp.self_val())
 }
@@ -638,6 +645,7 @@ fn clone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/delete.html]
 #[monoruby_builtin]
 fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut h = lfp.self_val().as_hash();
     let key = lfp.arg(0);
     let removed_value = h.remove(key, vm, globals)?;
@@ -791,6 +799,7 @@ fn select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/select=21.html]
 #[monoruby_builtin]
 fn select_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("select!");
@@ -926,6 +935,7 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/delete_if.html]
 #[monoruby_builtin]
 fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("delete_if");
@@ -956,6 +966,7 @@ fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/reject=21.html]
 #[monoruby_builtin]
 fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("reject!");
@@ -1065,10 +1076,10 @@ fn invert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.expect_no_block()?;
-    let mut h = lfp.self_val().dup().expect_hash_ty(globals)?;
+    let mut h = lfp.self_val().dup().as_hash();
     for arg in lfp.arg(0).as_array().iter() {
-        let other_val = coerce_to_hash(vm, globals, *arg)?;
-        let other = other_val.expect_hash_ty(globals)?;
+        let other_val = arg.coerce_to_hash(vm, globals)?;
+        let other = other_val;
         for (k, v) in other.iter() {
             h.insert(k, v, vm, globals)?;
         }
@@ -1088,12 +1099,13 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/merge=21.html]
 #[monoruby_builtin]
 fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut h = lfp.self_val().as_hash();
     if let Some(block) = lfp.block() {
         let data = vm.get_block_data(globals, block)?;
         for arg in lfp.arg(0).as_array().iter() {
-            let other_val = coerce_to_hash(vm, globals, *arg)?;
-            let other = other_val.expect_hash_ty(globals)?;
+            let other_val = arg.coerce_to_hash(vm, globals)?;
+            let other = other_val;
             for (k, other_v) in other.iter() {
                 if let Some(self_v) = h.get(k, vm, globals)? {
                     let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
@@ -1105,8 +1117,8 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         }
     } else {
         for arg in lfp.arg(0).as_array().iter() {
-            let other_val = coerce_to_hash(vm, globals, *arg)?;
-            let other = other_val.expect_hash_ty(globals)?;
+            let other_val = arg.coerce_to_hash(vm, globals)?;
+            let other = other_val;
             for (k, v) in other.iter() {
                 h.insert(k, v, vm, globals)?;
             }
@@ -1128,6 +1140,7 @@ fn compare_by_identity(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     lfp.expect_no_block()?;
     lfp.self_val().as_hash().compare_by_identity(vm, globals)?;
     Ok(lfp.self_val())
@@ -1135,9 +1148,16 @@ fn compare_by_identity(
 
 /// ### Hash#compare_by_identity?
 #[monoruby_builtin]
-fn compare_by_identity_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn compare_by_identity_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     lfp.expect_no_block()?;
-    Ok(Value::bool(lfp.self_val().as_hash().is_compare_by_identity()))
+    Ok(Value::bool(
+        lfp.self_val().as_hash().is_compare_by_identity(),
+    ))
 }
 
 /// ### Hash#values_at
@@ -1158,14 +1178,23 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 fn dig(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     if args.is_empty() {
-        return Err(MonorubyErr::argumenterr("wrong number of arguments (given 0, expected 1+)"));
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 0, expected 1+)",
+        ));
     }
     let hash = lfp.self_val().as_hash();
     let first_key = args[0];
-    let mut val = if let Some(v) = hash.get(first_key, vm, globals)? { v } else { return Ok(Value::nil()); };
+    let mut val = if let Some(v) = hash.get(first_key, vm, globals)? {
+        v
+    } else {
+        return Ok(Value::nil());
+    };
     for i in 1..args.len() {
-        if val.is_nil() { return Ok(Value::nil()); }
-        val = vm.invoke_method_inner(globals, IdentId::get_id("dig"), val, &[args[i]], None, None)?;
+        if val.is_nil() {
+            return Ok(Value::nil());
+        }
+        val =
+            vm.invoke_method_inner(globals, IdentId::get_id("dig"), val, &[args[i]], None, None)?;
     }
     Ok(val)
 }
@@ -1182,7 +1211,9 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             let result = vm.invoke_block(globals, &data, &[k, v])?;
             let arr = result.expect_array_ty(globals)?;
             if arr.len() != 2 {
-                return Err(MonorubyErr::typeerr("wrong element type (expected array with 2 elements)"));
+                return Err(MonorubyErr::typeerr(
+                    "wrong element type (expected array with 2 elements)",
+                ));
             }
             new_map.insert(arr[0], arr[1], vm, globals)?;
         }
@@ -1201,13 +1232,12 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn env_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let key = lfp.arg(0);
-    if key.is_str().is_none() {
-        return Err(MonorubyErr::no_implicit_conversion(
-            globals,
-            key,
-            STRING_CLASS,
-        ));
-    }
+    let key = if key.is_str().is_some() {
+        key
+    } else {
+        let s = key.coerce_to_str(vm, globals)?;
+        Value::string(s)
+    };
     let val = lfp
         .self_val()
         .as_hash()
@@ -1237,28 +1267,29 @@ fn env_to_hash(
 #[monoruby_builtin]
 fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let hash = lfp.self_val().as_hash();
+    let arg0 = lfp.arg(0);
     let s = if let Some(bh) = lfp.block() {
         if lfp.try_arg(1).is_some() {
             eprintln!("warning: block supersedes default value argument");
         }
-        match hash.get(lfp.arg(0), vm, globals)? {
+        match hash.get(arg0, vm, globals)? {
             Some(v) => v,
-            None => vm.invoke_block_once(globals, bh, &[lfp.arg(0)])?,
+            None => vm.invoke_block_once(globals, bh, &[arg0])?,
         }
-    } else if lfp.try_arg(1).is_none() {
-        match hash.get(lfp.arg(0), vm, globals)? {
+    } else if let Some(arg1) = lfp.try_arg(1) {
+        match hash.get(arg0, vm, globals)? {
+            Some(v) => v,
+            None => arg1,
+        }
+    } else {
+        match hash.get(arg0, vm, globals)? {
             Some(v) => v,
             None => {
                 return Err(MonorubyErr::keyerr(format!(
                     "key not found: {}",
-                    lfp.arg(0).to_s(&globals.store)
+                    arg0.to_s(&globals.store)
                 )));
             }
-        }
-    } else {
-        match hash.get(lfp.arg(0), vm, globals)? {
-            Some(v) => v,
-            None => lfp.arg(1),
         }
     };
     Ok(s)
@@ -1272,6 +1303,7 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/shift.html]
 #[monoruby_builtin]
 fn shift(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut h = lfp.self_val().as_hash();
     match h.shift(vm, globals)? {
         Some((k, v)) => Ok(Value::array2(k, v)),
@@ -1306,6 +1338,7 @@ fn key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/keep_if.html]
 #[monoruby_builtin]
 fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("keep_if");
@@ -1409,6 +1442,20 @@ mod tests {
         run_test(r##"{a:4} == {a:5}"##);
         run_test(r##"{a:4} == {a:5, b:7}"##);
         run_test(r##"{a:4} == :a"##);
+    }
+
+    #[test]
+    fn eq_recursive() {
+        // Self-referencing hash: h == h should return true, not stack overflow
+        run_test("h = {}; h[:a] = h; h == h");
+        // Two distinct recursive hashes with same structure
+        run_test("a = {}; a[:x] = a; b = {}; b[:x] = b; a == b");
+        // Cross-recursive hashes: a contains b, b contains a
+        run_test("a = {}; b = {}; a[:x] = b; b[:x] = a; a == b");
+        // Recursive hash with non-matching values
+        run_test("a = {x: 1}; a[:y] = a; b = {x: 2}; b[:y] = b; a == b");
+        // Nested: array inside hash, hash inside array
+        run_test("h = {}; a = [h]; h[:a] = a; h == h");
     }
 
     #[test]
@@ -1985,5 +2032,19 @@ mod tests {
         run_test("Hash.try_convert({a: 1})");
         run_test("Hash.try_convert(1)");
         run_test("Hash.try_convert(nil)");
+    }
+
+    #[test]
+    fn hash_implicit_conversions() {
+        // Hash#merge with to_hash
+        run_test_with_prelude(
+            "{a: 1}.merge(o)",
+            "class C; def to_hash; {b: 2}; end; end; o = C.new",
+        );
+        // Hash#< with to_hash
+        run_test_with_prelude(
+            "{a: 1} < o",
+            "class C; def to_hash; {a: 1, b: 2}; end; end; o = C.new",
+        );
     }
 }

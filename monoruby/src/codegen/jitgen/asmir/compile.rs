@@ -136,12 +136,6 @@ impl Codegen {
                     }
                 }
             }
-            AsmInst::RegAnd(r, i) => {
-                let r = r as u64;
-                monoasm! { &mut self.jit,
-                    andq R(r), (i);
-                }
-            }
             AsmInst::RegToRSPOffset(r, ofs) => {
                 let r = r as u64;
                 monoasm!( &mut self.jit,
@@ -459,7 +453,8 @@ impl Codegen {
                     sarq  R(r), 1;
                     negq  R(r);
                     jo    deopt;
-                    salq  R(r), 1;
+                    addq  R(r), R(r);
+                    jo    deopt;
                     orq   R(r), 1;
                 }
             }
@@ -483,11 +478,6 @@ impl Codegen {
                 let deopt = &labels[deopt];
                 self.integer_binop(lhs, rhs, &mode, kind, deopt);
             }
-            AsmInst::IntegerExp { using_xmm, deopt } => {
-                let deopt = &labels[deopt];
-                self.integer_exp(using_xmm, deopt);
-            }
-
             AsmInst::IntegerCmp {
                 mode,
                 kind,
@@ -597,12 +587,11 @@ impl Codegen {
             }
             AsmInst::BlockArg {
                 ret,
-                outer,
+                outer: _,
                 using_xmm,
                 error,
                 call_site_bc_ptr,
             } => {
-                self.get_method_lfp(outer);
                 self.block_arg(using_xmm, call_site_bc_ptr);
                 self.handle_error(&labels[error]);
                 self.store_rax(ret);
@@ -635,6 +624,10 @@ impl Codegen {
                 is_object_ty,
             } => self.store_self_ivar_heap(src, ivarid, is_object_ty),
             AsmInst::StoreIVarInline { src, ivarid } => self.store_ivar_object_inline(src, ivarid),
+            AsmInst::GuardFrozen { deopt } => {
+                let deopt = &labels[deopt];
+                self.guard_frozen(deopt);
+            }
 
             AsmInst::LoadCVar { name, using_xmm } => {
                 self.load_cvar(name, using_xmm);
@@ -657,6 +650,7 @@ impl Codegen {
                 using_xmm,
             } => self.store_gvar(name, src, using_xmm),
             AsmInst::LoadSVar { id, using_xmm } => self.load_svar(id, using_xmm),
+            AsmInst::StoreSVar { id, src, using_xmm } => self.store_svar(id, src, using_xmm),
 
             AsmInst::ClassDef {
                 base,
@@ -1056,7 +1050,7 @@ impl Codegen {
         let call_site_ptr_val = call_site_bc_ptr.as_ptr() as u64;
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
-            movq rdx, [rax - (LFP_BLOCK)];
+            movq rdx, r14;
             movq rdi, rbx;
             movq rsi, r12;
             movq rcx, (call_site_ptr_val);

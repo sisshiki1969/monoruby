@@ -53,11 +53,15 @@ pub(super) fn init(globals: &mut Globals) {
         &[],
         true,
     );
+    globals.define_builtin_func(OBJECT_CLASS, "freeze", freeze, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "frozen?", frozen, 0);
+
     globals.define_private_builtin_func_rest(
         BASIC_OBJECT_CLASS,
         "method_missing",
         bo_method_missing,
     );
+    // hook methods (no-op by default, overridden by startup.rb)
     globals.define_private_builtin_func(
         BASIC_OBJECT_CLASS,
         "singleton_method_added",
@@ -76,7 +80,6 @@ pub(super) fn init(globals: &mut Globals) {
         bo_noop_hook,
         1,
     );
-
 }
 
 ///
@@ -87,10 +90,38 @@ fn bo_initialize(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -
     Ok(Value::nil())
 }
 
-/// No-op hook for singleton_method_added/removed/undefined on BasicObject.
+/// No-op hook for singleton_method_added/removed/undefined (overridden by startup.rb).
 #[monoruby_builtin]
 fn bo_noop_hook(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::nil())
+}
+
+///
+/// ### Object#freeze
+///
+/// - freeze -> self
+///
+/// Freezes the object, preventing further modification.
+///
+#[monoruby_builtin]
+fn freeze(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    if !self_val.is_packed_value() {
+        self_val.set_frozen();
+    }
+    Ok(self_val)
+}
+
+///
+/// ### Object#frozen?
+///
+/// - frozen? -> bool
+///
+/// Returns true if the object is frozen.
+///
+#[monoruby_builtin]
+fn frozen(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().is_frozen()))
 }
 
 ///
@@ -131,6 +162,7 @@ fn object_not(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -181,7 +213,12 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/object_id.html]
 #[monoruby_builtin]
-pub(super) fn object_id(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn object_id(
+    _: &mut Executor,
+    _: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(Value::integer(lfp.self_val().id() as i64))
 }
 
@@ -192,6 +229,7 @@ pub(super) fn object_object_id(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -302,11 +340,12 @@ fn instance_eval_inner(
             format!("(eval at {})", caller_loc)
         };
         let lineno: i64 = if argc >= 3 {
-            args[2].coerce_to_int(vm, globals)?
+            args[2].coerce_to_int_i64(vm, globals)?
         } else {
             1
         };
-        let fid = globals.compile_script_eval(expr, path, caller_cfp, Some(self_val.class()), lineno)?;
+        let fid =
+            globals.compile_script_eval(expr, path, caller_cfp, Some(self_val.class()), lineno)?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block_with_self(globals, &proc, self_val, &[])
     } else {
@@ -390,9 +429,7 @@ mod tests {
         // instance_eval with filename and lineno
         run_test(r#"instance_eval("__LINE__", "test.rb", 42)"#);
         run_test(r#"instance_eval("__FILE__", "test.rb", 42)"#);
-        run_test(
-            r#"instance_eval("__LINE__\n__LINE__", "test.rb", 10)"#,
-        );
+        run_test(r#"instance_eval("__LINE__\n__LINE__", "test.rb", 10)"#);
     }
 
     #[test]

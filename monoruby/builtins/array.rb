@@ -3,13 +3,60 @@ class Array
 
   def self.new(...)
     o = allocate
-    o.initialize(...)
+    o.__send__(:initialize, ...)
     o
   end
 
-  def sample
-    return nil if self.empty?
-    self[rand(self.size)]
+  def sample(n = (no_n = true; nil), random: nil)
+    if no_n
+      return nil if empty?
+      if random
+        r = random.rand(size)
+        r = r.to_int unless r.is_a?(Integer)
+        raise RangeError, "random number too big #{r}" if r < 0 || r >= size
+        self[r]
+      else
+        self[rand(size)]
+      end
+    else
+      n = n.to_int
+      raise ArgumentError, "negative sample number" if n < 0
+      return [] if empty? || n == 0
+      n = size if n > size
+      result = self.dup
+      i = 0
+      while i < n
+        remaining = size - i
+        if random
+          r = random.rand(remaining)
+          r = r.to_int unless r.is_a?(Integer)
+          raise RangeError, "random number too big #{r}" if r < 0 || r >= remaining
+          j = i + r
+        else
+          j = i + rand(remaining)
+        end
+        result[i], result[j] = result[j], result[i]
+        i += 1
+      end
+      result[0, n]
+    end
+  end
+
+  def shuffle(random: nil)
+    result = Array.new(self)
+    if random
+      i = result.size
+      while i > 1
+        i -= 1
+        r = random.rand(i + 1)
+        r = r.to_int unless r.is_a?(Integer)
+        raise RangeError, "random number too big #{r}" if r < 0 || r > i
+        result[i], result[r] = result[r], result[i]
+      end
+      result
+    else
+      result.shuffle!
+    end
   end
 
   def each
@@ -48,6 +95,7 @@ class Array
 
   def map!
     return self.to_enum(:map!) unless block_given?
+    raise FrozenError, "can't modify frozen #{self.class}: #{self.inspect}" if frozen?
     i = 0
     while i < self.size
       self[i] = yield(self[i])
@@ -59,7 +107,7 @@ class Array
 
   def map
     return self.to_enum(:map) unless block_given?
-    res = self.dup
+    res = Array.new(self.size)
     i = 0
     while i < self.size
       res[i] = yield(self[i])
@@ -87,7 +135,6 @@ class Array
     return to_enum(:bsearch) unless block_given?
     low = 0
     high = size
-    # 判定モードを最初の呼び出しで決定
     mode = nil
     while low < high
       mid = (low + high) / 2
@@ -95,12 +142,12 @@ class Array
       res = yield(val)
 
       if mode.nil?
-        if res == true || res == false
+        if res == true || res == false || res.nil?
           mode = :find_min
         elsif res.is_a?(Numeric)
           mode = :find_exact
         else
-          raise TypeError, "unexpected block result #{res.inspect}"
+          raise TypeError, "wrong argument type #{res.class} (must be numeric, true, false or nil)"
         end
       end
 
@@ -112,7 +159,9 @@ class Array
           low = mid + 1
         end
       when :find_exact
-        if res < 0
+        if res.nil?
+          low = mid + 1
+        elsif res < 0
           low = mid + 1
         elsif res > 0
           high = mid
@@ -158,15 +207,24 @@ class Array
     res
   end
 
-  def cycle(n = nil)
-    return to_enum(:cycle, n) unless block_given?
+  def cycle(n = (no_n = true; nil))
+    unless block_given?
+      unless no_n || n.nil? || n.is_a?(Integer)
+        raise TypeError, "no implicit conversion of #{n.class} into Integer" unless n.respond_to?(:to_int)
+        n = n.to_int
+      end
+      return to_enum(:cycle, *(no_n ? [] : [n]))
+    end
     return nil if empty?
     if n.nil?
-      loop do
+      while true
         each { |x| yield x }
       end
     else
-      n = n.to_int
+      unless n.is_a?(Integer)
+        raise TypeError, "no implicit conversion of #{n.class} into Integer" unless n.respond_to?(:to_int)
+        n = n.to_int
+      end
       n.times do
         each { |x| yield x }
       end
@@ -209,12 +267,12 @@ class Array
       res = yield(val)
 
       if mode.nil?
-        if res == true || res == false
+        if res == true || res == false || res.nil?
           mode = :find_min
         elsif res.is_a?(Numeric)
           mode = :find_exact
         else
-          raise TypeError, "unexpected block result #{res.inspect}"
+          raise TypeError, "wrong argument type #{res.class} (must be numeric, true, false or nil)"
         end
       end
 
@@ -226,7 +284,9 @@ class Array
           low = mid + 1
         end
       when :find_exact
-        if res < 0
+        if res.nil?
+          low = mid + 1
+        elsif res < 0
           low = mid + 1
         elsif res > 0
           high = mid
@@ -295,6 +355,139 @@ class Array
           end
         end
         return self unless found
+      end
+    end
+    self
+  end
+
+  def at(index)
+    self[index]
+  end
+
+  def to_ary
+    self
+  end
+
+  def deconstruct
+    self
+  end
+
+  def drop_while
+    return to_enum(:drop_while) unless block_given?
+    i = 0
+    while i < size
+      break unless yield(self[i])
+      i += 1
+    end
+    self[i, size - i]
+  end
+
+  def fetch_values(*indexes)
+    result = []
+    if block_given?
+      indexes.each do |i|
+        idx = i.to_int
+        if idx < -size || idx >= size
+          result << yield(i)
+        else
+          result << self[idx]
+        end
+      end
+    else
+      indexes.each do |i|
+        result << fetch(i)
+      end
+    end
+    result
+  end
+
+  def rindex(val = (no_val = true; nil))
+    unless no_val
+      warn "warning: given block not used" if block_given?
+      i = self.size - 1
+      while i >= 0
+        if i >= self.size
+          i = self.size - 1
+          next
+        end
+        return i if self[i] == val
+        i -= 1
+      end
+      return nil
+    end
+    if block_given?
+      i = self.size - 1
+      while i >= 0
+        if i >= self.size
+          i = self.size - 1
+          next
+        end
+        return i if yield(self[i])
+        i -= 1
+      end
+      return nil
+    end
+    return self.to_enum(:rindex)
+  end
+
+  def assoc(key)
+    each do |elem|
+      if elem.is_a?(Array)
+        return elem if elem.size > 0 && elem[0] == key
+      elsif elem.respond_to?(:to_ary)
+        ary = elem.to_ary
+        return ary if ary.is_a?(Array) && ary.size > 0 && ary[0] == key
+      end
+    end
+    nil
+  end
+
+  def rassoc(key)
+    each do |elem|
+      if elem.is_a?(Array)
+        return elem if elem.size > 1 && elem[1] == key
+      elsif elem.respond_to?(:to_ary)
+        ary = elem.to_ary
+        return ary if ary.is_a?(Array) && ary.size > 1 && ary[1] == key
+      end
+    end
+    nil
+  end
+
+  def each_index
+    return self.to_enum(:each_index) unless block_given?
+    i = 0
+    while i < self.size
+      yield i
+      i += 1
+    end
+    self
+  end
+
+  def repeated_permutation(n)
+    return to_enum(:repeated_permutation, n) unless block_given?
+    n = n.to_int
+    copy = self.dup
+    len = copy.size
+    if n == 0
+      yield []
+    elsif len == 0
+      # nothing
+    elsif n > 0
+      indices = [0] * n
+      loop do
+        yield indices.map { |i| copy[i] }
+        # Increment from the rightmost
+        i = n - 1
+        while i >= 0
+          indices[i] += 1
+          if indices[i] < len
+            break
+          end
+          indices[i] = 0
+          i -= 1
+        end
+        break if i < 0
       end
     end
     self

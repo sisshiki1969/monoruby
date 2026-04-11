@@ -224,6 +224,27 @@ fn imaginary() {
 }
 
 #[test]
+fn rational_literal() {
+    run_test(r#"42r"#);
+    run_test(r#"0r"#);
+    run_test(r#"3.14r"#);
+    run_test(r#"0.5r"#);
+    run_test(r#"1r + 2r"#);
+    run_test(r#"3r * 4r"#);
+    run_test(r#"1r / 3r"#);
+    run_test(r#"1r"#);
+    run_test(r#"3.14r"#);
+    run_test(r#"42r == Rational(42, 1)"#);
+    run_test(r#"3.14r == Rational(314, 100)"#);
+}
+
+#[test]
+fn rational_imaginary_literal() {
+    run_test_once(r#"42ri.class.to_s"#);
+    run_test_once(r#"3.14ri.class.to_s"#);
+}
+
+#[test]
 fn lambda() {
     run_test(
         r#"

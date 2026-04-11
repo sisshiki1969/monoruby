@@ -29,7 +29,7 @@ pub(super) fn init(globals: &mut Globals) {
         &["base", "sort"],
         false,
     );
-    globals.define_builtin_class_func(klass, "home", home, 0);
+    globals.define_builtin_class_func_with(klass, "home", home, 0, 1, false);
     globals.define_builtin_class_funcs(klass, "pwd", &["getwd"], pwd, 0);
     globals.define_builtin_class_func_with(klass, "chdir", chdir, 0, 1, false);
     globals.define_builtin_class_func(klass, "exist?", exist, 1);
@@ -45,8 +45,10 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn rmdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let path = lfp.arg(0).coerce_to_str(vm, globals)?;
-    std::fs::remove_dir(&path)
-        .map_err(|e| MonorubyErr::runtimeerr(format!("Dir.rmdir: {}: {}", path, e)))?;
+    std::fs::remove_dir(&path).map_err(|e| {
+        let desc = errno_description(&e);
+        MonorubyErr::from_io_err(globals, &e, format!("{} @ dir_s_rmdir - {}", desc, path))
+    })?;
     Ok(Value::integer(0))
 }
 
@@ -60,23 +62,20 @@ fn rmdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn mkdir(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let path = lfp.arg(0).coerce_to_str(_vm, globals)?;
     let mode = if let Some(m) = lfp.try_arg(1) {
-        m.coerce_to_i64(&globals.store)? as u32
+        m.coerce_to_int_i64(_vm, globals)? as u32
     } else {
         0o777
     };
     match std::fs::DirBuilder::new().mode(mode).create(&path) {
         Ok(()) => Ok(Value::integer(0)),
-        //Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-        //    // CRuby raises Errno::EEXIST but monoruby doesn't have Errno error kinds yet.
-        //    // For now, return 0 if the directory already exists (matching mkdir_p behavior).
-        //    // This is necessary for mspec's tmp() helper which calls mkdir_p → Dir.mkdir.
-        //    Ok(Value::integer(0))
-        //}
-        Err(e) => Err(MonorubyErr::runtimeerr(format!(
-            "{} @ dir_s_mkdir - {}",
-            e.to_string(),
-            path
-        ))),
+        Err(e) => {
+            let desc = errno_description(&e);
+            Err(MonorubyErr::from_io_err(
+                globals,
+                &e,
+                format!("{} @ dir_s_mkdir - {}", desc, path),
+            ))
+        }
     }
 }
 
@@ -155,10 +154,10 @@ fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         pat_val
             .as_array_inner()
             .iter()
-            .map(|v| v.expect_str(globals).map(|s| s.to_string()))
+            .map(|v| v.coerce_to_str(vm, globals))
             .collect::<Result<_>>()?
     } else {
-        vec![pat_val.expect_str(globals)?.to_string()]
+        vec![pat_val.coerce_to_str(vm, globals)?]
     };
 
     let all_matches = glob_impl(patterns, flags, base, sort)?;
@@ -204,7 +203,7 @@ fn glob2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // Accept a single String pattern or an Array of String patterns.
     let patterns: Vec<String> = pat_val
         .iter()
-        .map(|v| v.expect_str(globals).map(|s| s.to_string()))
+        .map(|v| v.coerce_to_str(vm, globals))
         .collect::<Result<_>>()?;
 
     let all_matches: Vec<RStringInner> = glob_impl(patterns, flags, base, sort)?;
@@ -534,7 +533,7 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         match std::env::set_current_dir(&path) {
             Ok(_) => {}
             Err(err) => {
-                return Err(MonorubyErr::runtimeerr(err.to_string()));
+                return Err(MonorubyErr::errno_with_msg(&globals.store, &err, &path));
             }
         }
         let path = Value::string(path);
@@ -543,7 +542,7 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         res
     } else {
         std::env::set_current_dir(&path)
-            .map_err(|e| MonorubyErr::runtimeerr(format!("Dir.chdir: {}: {}", path, e)))?;
+            .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
         Ok(Value::integer(0))
     }
 }
@@ -584,9 +583,9 @@ fn entries(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         Value::string("..".to_string()),
     ];
     for entry in
-        std::fs::read_dir(&path).map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?
+        std::fs::read_dir(&path).map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?
     {
-        let entry = entry.map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+        let entry = entry.map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
         result.push(Value::string(
             entry.file_name().to_string_lossy().to_string(),
         ));
@@ -698,5 +697,17 @@ mod tests {
             Dir.entries(".").sort
             "#,
         );
+    }
+
+    #[test]
+    fn rmdir_non_directory() {
+        // Dir.rmdir on a regular file should raise Errno::ENOTDIR
+        run_test_error("Dir.rmdir('Cargo.toml')");
+    }
+
+    #[test]
+    fn mkdir_existing() {
+        // Dir.mkdir on an existing directory should raise Errno::EEXIST
+        run_test_error("Dir.mkdir('/tmp')");
     }
 }

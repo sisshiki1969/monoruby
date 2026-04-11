@@ -21,8 +21,8 @@ impl<'a> BytecodeGen<'a> {
             BinOp::BitOr => self.gen_bitor(use_mode, lhs, rhs, loc),
             BinOp::BitAnd => self.gen_bitand(use_mode, lhs, rhs, loc),
             BinOp::BitXor => self.gen_bitxor(use_mode, lhs, rhs, loc),
-            BinOp::Shr => self.gen_binop_method(IdentId::_SHR, lhs, rhs, use_mode, loc),
-            BinOp::Shl => self.gen_binop_method(IdentId::_SHL, lhs, rhs, use_mode, loc),
+            BinOp::Shr => self.gen_shr(use_mode, lhs, rhs, loc),
+            BinOp::Shl => self.gen_shl(use_mode, lhs, rhs, loc),
             BinOp::Match => self.gen_binop_method(IdentId::_MATCH, lhs, rhs, use_mode, loc),
             BinOp::Unmatch => self.gen_binop_method(IdentId::_UNMATCH, lhs, rhs, use_mode, loc),
             BinOp::Compare => self.gen_binop_method(IdentId::_CMP, lhs, rhs, use_mode, loc),
@@ -176,7 +176,9 @@ impl<'a> BytecodeGen<'a> {
         (bitand, BitAnd),
         (bitxor, BitXor),
         (exp, Exp),
-        (rem, Rem)
+        (rem, Rem),
+        (shl, Shl),
+        (shr, Shr)
     );
 
     ///

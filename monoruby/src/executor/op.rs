@@ -1,12 +1,50 @@
 use super::*;
 
-mod binary_ops;
+pub(crate) mod binary_ops;
 mod sort;
 
 pub(crate) use binary_ops::*;
-use num::{BigInt, ToPrimitive};
+use num::{BigInt, FromPrimitive};
 use paste::paste;
 pub(crate) use sort::*;
+
+/// Compare BigInt with f64 precisely without losing precision.
+/// Returns Ordering (Less, Equal, Greater) of bigint relative to float.
+/// Returns None if the float is NaN.
+pub(crate) fn bigint_cmp_float(bigint: &BigInt, f: f64) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    if f.is_nan() {
+        return None;
+    }
+    if f.is_infinite() {
+        return if f > 0.0 {
+            Some(Ordering::Less)
+        } else {
+            Some(Ordering::Greater)
+        };
+    }
+    // Convert float to its exact BigInt truncation
+    let f_trunc = f.trunc();
+    let f_bigint = match BigInt::from_f64(f_trunc) {
+        Some(v) => v,
+        None => return Some(Ordering::Less), // shouldn't happen for finite f
+    };
+    match bigint.cmp(&f_bigint) {
+        Ordering::Greater => Some(Ordering::Greater),
+        Ordering::Less => Some(Ordering::Less),
+        Ordering::Equal => {
+            // BigInt == trunc(f), so compare with fractional part
+            let frac = f - f_trunc;
+            if frac > 0.0 {
+                Some(Ordering::Less) // bigint < bigint + positive_frac
+            } else if frac < 0.0 {
+                Some(Ordering::Greater) // bigint > bigint + negative_frac
+            } else {
+                Some(Ordering::Equal)
+            }
+        }
+    }
+}
 
 //
 // Generic operations.
@@ -31,18 +69,70 @@ macro_rules! cmp_values {
                     (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).$op(&rhs),
                     (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.$op(&BigInt::from(rhs)),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.$op(&rhs),
-                    (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().$op(&rhs),
+                    (RV::BigInt(lhs), RV::Float(rhs)) => {
+                        match bigint_cmp_float(&lhs, rhs) {
+                            Some(ord) => ord.$op(&std::cmp::Ordering::Equal),
+                            None => false, // NaN comparisons are always false
+                        }
+                    }
                     (RV::Fixnum(_)| RV::BigInt(_) , _) => {
-                        let err = MonorubyErr::cant_coerced_into(globals, $op_str, rhs, "Integer");
+                        // Try coerce protocol for comparison, propagate exceptions
+                        let coerce_id = IdentId::get_id("coerce");
+                        match vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None) {
+                            Ok(Some(result)) => {
+                                if let Some(ary) = result.try_array_ty() {
+                                    if ary.len() == 2 {
+                                        return vm.invoke_method_simple(globals, $op_str, ary[0], &[ary[1]]);
+                                    }
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                // Propagate exception from coerce
+                                vm.set_error(e);
+                                return None;
+                            }
+                        }
+                        let err = MonorubyErr::argumenterr(format!(
+                            "comparison of {} with {} failed",
+                            lhs.get_real_class_name(globals),
+                            rhs.get_real_class_name(globals),
+                        ));
                         vm.set_error(err);
                         return None;
                     }
 
                     (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.$op(&(rhs as f64)),
-                    (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
+                    (RV::Float(lhs), RV::BigInt(rhs)) => {
+                        match bigint_cmp_float(&rhs, lhs) {
+                            Some(ord) => ord.reverse().$op(&std::cmp::Ordering::Equal),
+                            None => false, // NaN comparisons are always false
+                        }
+                    }
                     (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
                     (RV::Float(_) , _) => {
-                        let err = MonorubyErr::cant_coerced_into(globals, $op_str, rhs, "Float");
+                        // Try coerce protocol for comparison, propagate exceptions
+                        let coerce_id = IdentId::get_id("coerce");
+                        match vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None) {
+                            Ok(Some(result)) => {
+                                if let Some(ary) = result.try_array_ty() {
+                                    if ary.len() == 2 {
+                                        return vm.invoke_method_simple(globals, $op_str, ary[0], &[ary[1]]);
+                                    }
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                // Propagate exception from coerce
+                                vm.set_error(e);
+                                return None;
+                            }
+                        }
+                        let err = MonorubyErr::argumenterr(format!(
+                            "comparison of {} with {} failed",
+                            lhs.get_real_class_name(globals),
+                            rhs.get_real_class_name(globals),
+                        ));
                         vm.set_error(err);
                         return None;
                     }
@@ -91,15 +181,28 @@ impl Executor {
             (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
             (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
             (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
-            (RV::Fixnum(_), _) => false,
+            (RV::Fixnum(_), _) => {
+                // Reverse dispatch: try rhs == lhs
+                return self.invoke_eq(globals, rhs, lhs);
+            }
             (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
             (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
-            (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
-            (RV::BigInt(_), _) => false,
+            (RV::BigInt(lhs), RV::Float(rhs)) => {
+                bigint_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
+            }
+            (RV::BigInt(_), _) => {
+                // Reverse dispatch: try rhs == lhs
+                return self.invoke_eq(globals, rhs, lhs);
+            }
             (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
-            (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
+            (RV::Float(lhs), RV::BigInt(rhs)) => {
+                bigint_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
+            }
             (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
-            (RV::Float(_), _) => false,
+            (RV::Float(_), _) => {
+                // Reverse dispatch: try rhs == lhs
+                return self.invoke_eq(globals, rhs, lhs);
+            }
             (RV::Bool(lhs), RV::Bool(rhs)) => lhs.eq(&rhs),
             (RV::Bool(_), _) => false,
             (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs.eq(&rhs),
@@ -126,6 +229,17 @@ impl Executor {
         lhs: Value,
         rhs: Value,
     ) -> Result<bool> {
+        // Check if the receiver has a custom != method (not the default basic op).
+        // If so, dispatch to it directly instead of negating ==.
+        let class_id = lhs.class();
+        if let Some(entry) = globals.check_method_for_class(class_id, IdentId::_NEQ) {
+            if !entry.is_basic_op() {
+                if let Some(func_id) = entry.func_id() {
+                    let b = self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)?;
+                    return Ok(b.as_bool());
+                }
+            }
+        }
         Ok(!self.eq_values_bool(globals, lhs, rhs)?)
     }
 
@@ -135,7 +249,9 @@ impl Executor {
         lhs: Value,
         rhs: Value,
     ) -> Result<bool> {
-        Ok(!self.invoke_eq(globals, lhs, rhs)?)
+        let func_id = self.find_method(globals, lhs, IdentId::_NEQ, true)?;
+        let b = self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)?;
+        Ok(b.as_bool())
     }
 }
 
@@ -242,15 +358,28 @@ pub(crate) extern "C" fn cmp_teq_values(
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
         (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
         (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
-        (RV::Fixnum(_), _) => false,
+        (RV::Fixnum(_), _) => {
+            // Reverse dispatch for Integer === non-numeric
+            return vm.invoke_method_simple(globals, IdentId::_EQ, rhs, &[lhs]);
+        }
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
-        (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
-        (RV::BigInt(_), _) => false,
+        (RV::BigInt(lhs), RV::Float(rhs)) => {
+            bigint_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
+        }
+        (RV::BigInt(_), _) => {
+            // Reverse dispatch for Integer === non-numeric
+            return vm.invoke_method_simple(globals, IdentId::_EQ, rhs, &[lhs]);
+        }
         (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
-        (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
+        (RV::Float(lhs), RV::BigInt(rhs)) => {
+            bigint_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
+        }
         (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
-        (RV::Float(_), _) => false,
+        (RV::Float(_), _) => {
+            // Reverse dispatch for Float === non-numeric
+            return vm.invoke_method_simple(globals, IdentId::_EQ, rhs, &[lhs]);
+        }
         _ => {
             return vm.invoke_method_simple(globals, IdentId::_TEQ, lhs, &[rhs]);
         }
@@ -283,15 +412,28 @@ pub(crate) fn cmp_teq_values_bool(
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
         (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
         (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
-        (RV::Fixnum(_), _) => false,
+        (RV::Fixnum(_), _) => {
+            // Reverse dispatch: try rhs == lhs
+            return vm.invoke_eq(globals, rhs, lhs);
+        }
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
-        (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
-        (RV::BigInt(_), _) => false,
+        (RV::BigInt(lhs), RV::Float(rhs)) => {
+            bigint_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
+        }
+        (RV::BigInt(_), _) => {
+            // Reverse dispatch: try rhs == lhs
+            return vm.invoke_eq(globals, rhs, lhs);
+        }
         (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
-        (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
+        (RV::Float(lhs), RV::BigInt(rhs)) => {
+            bigint_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
+        }
         (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
-        (RV::Float(_), _) => false,
+        (RV::Float(_), _) => {
+            // Reverse dispatch: try rhs == lhs
+            return vm.invoke_eq(globals, rhs, lhs);
+        }
         _ => {
             return vm
                 .invoke_method_inner(globals, IdentId::_TEQ, lhs, &[rhs], None, None)
@@ -313,6 +455,16 @@ pub(crate) fn cmp_teq_values_bool_no_opt(
 }
 
 impl Executor {
+    /// Emit a Ruby warning by writing to `$stderr`.
+    pub(crate) fn ruby_warn(&mut self, globals: &mut Globals, msg: &str) -> Result<()> {
+        let stderr_id = IdentId::get_id("$stderr");
+        let stderr = globals.get_gvar(stderr_id).unwrap_or(Value::nil());
+        let write_id = IdentId::get_id("write");
+        let msg_val = Value::string(format!("{}\n", msg));
+        self.invoke_method_inner(globals, write_id, stderr, &[msg_val], None, None)?;
+        Ok(())
+    }
+
     pub(crate) fn compare_values(
         &mut self,
         globals: &mut Globals,
@@ -347,10 +499,12 @@ impl Executor {
             (RV::Fixnum(_), _) => None,
             (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&BigInt::from(rhs)),
             (RV::BigInt(lhs), RV::BigInt(rhs)) => Some(lhs.cmp(rhs)),
-            (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().partial_cmp(&rhs),
+            (RV::BigInt(lhs), RV::Float(rhs)) => bigint_cmp_float(lhs, rhs),
             (RV::BigInt(_), _) => None,
             (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&(rhs as f64)),
-            (RV::Float(lhs), RV::BigInt(rhs)) => lhs.partial_cmp(&(rhs.to_f64().unwrap())),
+            (RV::Float(lhs), RV::BigInt(rhs)) => {
+                bigint_cmp_float(rhs, lhs).map(|ord| ord.reverse())
+            }
             (RV::Float(lhs), RV::Float(rhs)) => lhs.partial_cmp(&rhs),
             (RV::Float(_), _) => None,
             _ => {
@@ -470,14 +624,117 @@ pub(crate) extern "C" fn bitnot_value(
     Some(v)
 }
 
-pub(crate) fn integer_index1(store: &Store, base: Value, index: Value) -> Result<Value> {
+pub(crate) fn integer_index1(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    base: Value,
+    index: Value,
+) -> Result<Value> {
     // Handle Integer#[Range]
     if let Some(range) = index.is_range() {
-        let start = range.start().coerce_to_i64(store)?;
-        let end = range.end().coerce_to_i64(store)?;
+        let start_val = range.start();
+        let end_val = range.end();
         let exclude_end = range.exclude_end();
-        let end = if exclude_end { end } else { end + 1 };
+
+        // Check for Float::INFINITY in range boundaries
+        fn check_float_domain(val: Value, globals: &Globals) -> Result<()> {
+            if let Some(f) = val.try_float() {
+                if f.is_infinite() || f.is_nan() {
+                    let msg = if f.is_nan() {
+                        "NaN".to_string()
+                    } else if f > 0.0 {
+                        "Infinity".to_string()
+                    } else {
+                        "-Infinity".to_string()
+                    };
+                    let class_id = globals
+                        .store
+                        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("FloatDomainError"))
+                        .map(|v| v.as_class_id());
+                    return Err(match class_id {
+                        Some(cid) => MonorubyErr::new(MonorubyErrKind::Other(cid), msg),
+                        None => MonorubyErr::rangeerr(msg),
+                    });
+                }
+            }
+            Ok(())
+        }
+        check_float_domain(start_val, globals)?;
+        check_float_domain(end_val, globals)?;
+
+        let is_beginless = start_val.is_nil();
+        let is_endless = end_val.is_nil();
+
+        // Handle beginless range (..i)
+        if is_beginless {
+            let end = end_val.coerce_to_int_i64(vm, globals)?;
+            let end = if exclude_end { end } else { end + 1 };
+            // Extract bits 0..end from base
+            let extracted = match base.unpack() {
+                RV::Fixnum(b) => {
+                    if end <= 0 {
+                        0i64
+                    } else if end >= 64 {
+                        b
+                    } else {
+                        b & ((1i64 << end) - 1)
+                    }
+                }
+                RV::BigInt(b) => {
+                    if end <= 0 {
+                        0i64
+                    } else {
+                        let mask = (BigInt::from(1) << end as usize) - 1;
+                        let result: BigInt = b & mask;
+                        // Convert to i64 if possible
+                        use num::ToPrimitive;
+                        result.to_i64().unwrap_or(1) // non-zero means raise
+                    }
+                }
+                _ => unreachable!(),
+            };
+            if extracted != 0 {
+                return Err(MonorubyErr::argumenterr(
+                    "The beginless range for Integer#[] results in infinity",
+                ));
+            }
+            return Ok(Value::integer(0));
+        }
+
+        // Handle endless range (i..)
+        if is_endless {
+            let start = start_val.coerce_to_int_i64(vm, globals)?;
+            return match base.unpack() {
+                RV::Fixnum(b) => {
+                    if start >= 0 {
+                        if start >= 64 {
+                            Ok(Value::integer(if b < 0 { -1 } else { 0 }))
+                        } else {
+                            Ok(Value::integer(b >> start))
+                        }
+                    } else {
+                        // Negative start in endless range: shift left
+                        Ok(Value::bigint(BigInt::from(b) << (-start) as usize))
+                    }
+                }
+                RV::BigInt(b) => {
+                    if start >= 0 {
+                        Ok(Value::bigint(b >> start as usize))
+                    } else {
+                        Ok(Value::bigint(b << (-start) as usize))
+                    }
+                }
+                _ => unreachable!(),
+            };
+        }
+
+        let start = start_val.coerce_to_int_i64(vm, globals)?;
+        let end_raw = end_val.coerce_to_int_i64(vm, globals)?;
+        let end = if exclude_end { end_raw } else { end_raw + 1 };
         let width = end - start;
+        // Check if range is "reversed": for inclusive a..b where b < a, or
+        // exclusive a...b where b < a (but NOT a...a which is 0-width)
+        let is_reversed = if exclude_end { end_raw < start } else { end_raw < start };
         let shifted = |base: &BigInt| -> BigInt {
             if start >= 0 {
                 base >> start
@@ -485,16 +742,19 @@ pub(crate) fn integer_index1(store: &Store, base: Value, index: Value) -> Result
                 base << (-start) as usize
             }
         };
-        // When width < 0, extract all bits from start (no masking)
-        if width < 0 {
+        // When reversed, extract all bits from start (no masking)
+        if is_reversed {
             return match base.unpack() {
                 RV::Fixnum(base) => {
-                    let val = if start >= 0 {
-                        base >> start
+                    if start >= 0 {
+                        if start >= 64 {
+                            Ok(Value::integer(if base < 0 { -1 } else { 0 }))
+                        } else {
+                            Ok(Value::integer(base >> start))
+                        }
                     } else {
-                        base << -start
-                    };
-                    Ok(Value::integer(val))
+                        Ok(Value::bigint(BigInt::from(base) << (-start) as usize))
+                    }
                 }
                 RV::BigInt(base) => Ok(Value::bigint(shifted(base))),
                 _ => unreachable!(),
@@ -518,8 +778,14 @@ pub(crate) fn integer_index1(store: &Store, base: Value, index: Value) -> Result
             RV::BigInt(base) => base.clone(),
             _ => unreachable!(),
         };
-        let mask = (BigInt::from(1) << width as usize) - 1;
-        let val = shifted(&base_bigint) & mask;
+        let shifted_val = shifted(&base_bigint);
+        let bits = shifted_val.bits() as i64;
+        let val = if width > bits + 1 && shifted_val >= BigInt::ZERO {
+            shifted_val
+        } else {
+            let mask = (BigInt::from(1) << width as usize) - 1;
+            shifted_val & mask
+        };
         return Ok(Value::bigint(val));
     }
     match (base.unpack(), index.unpack()) {
@@ -535,7 +801,7 @@ pub(crate) fn integer_index1(store: &Store, base: Value, index: Value) -> Result
         }
         (RV::Fixnum(_), RV::BigInt(_)) => Ok(Value::integer(0)),
         (RV::Fixnum(_), _) => Err(MonorubyErr::no_implicit_conversion(
-            store,
+            globals,
             index,
             INTEGER_CLASS,
         )),
@@ -549,7 +815,7 @@ pub(crate) fn integer_index1(store: &Store, base: Value, index: Value) -> Result
         }
         (RV::BigInt(_), RV::BigInt(_)) => Ok(Value::integer(0)),
         (RV::BigInt(_), _) => Err(MonorubyErr::no_implicit_conversion(
-            store,
+            globals,
             index,
             INTEGER_CLASS,
         )),

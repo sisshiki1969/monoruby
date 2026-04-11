@@ -32,7 +32,7 @@ pub use frame::Lfp;
 use fxhash::FxHashMap as HashMap;
 use fxhash::FxHashSet as HashSet;
 use globals::*;
-pub use id_table::IdentId;
+pub use id_table::{IdentId, IdentName};
 use monoruby_attr::*;
 
 const STRING_INLINE_CAP: usize = 32;
