@@ -8,6 +8,7 @@ use super::*;
 
 mod dump;
 mod error;
+mod gvar;
 mod method;
 mod prng;
 mod require;
@@ -15,6 +16,7 @@ mod store;
 #[cfg(any(feature = "deopt", feature = "profile"))]
 pub(crate) use dump::log_deoptimize;
 pub use error::*;
+pub use gvar::*;
 use prng::*;
 pub use require::load_file;
 pub use store::*;
@@ -88,8 +90,8 @@ pub struct Globals {
     pub main_object: Value,
     /// function and class info.
     pub store: Store,
-    /// globals variables.
-    global_vars: HashMap<IdentId, Value>,
+    /// global variables and special variables.
+    pub(crate) gvars: GvarTable,
     /// suppress jit compilation.
     pub no_jit: bool,
     /// suppress loading gem.
@@ -135,7 +137,7 @@ impl alloc::GC<RValue> for Globals {
         self.main_object.mark(alloc);
         self.load_path.mark(alloc);
         self.store.mark(alloc);
-        self.global_vars.values().for_each(|v| v.mark(alloc));
+        self.gvars.mark_values(|v| v.mark(alloc));
         self.symbol_names.values().for_each(|v| v.mark(alloc));
     }
 }
@@ -169,7 +171,7 @@ impl Globals {
         let mut globals = Self {
             main_object,
             store: Store::new(),
-            global_vars: HashMap::default(),
+            gvars: GvarTable::new(),
             no_jit,
             no_gems,
             stdout: BufWriter::new(stdout()),
@@ -425,14 +427,40 @@ impl Globals {
         .map_err(|e| MonorubyErr::runtimeerr(format!("write: {}", e)))
     }
 
-    // Handling global variable
+    // Handling global variables.
+    //
+    // The plain `set_gvar` / `get_gvar` methods skip hooks and directly touch
+    // `Simple` entries. They are used for call sites that assign to pre-known
+    // plain globals like `$0`, `$*`, `$!`, where hooking is not involved.
+    //
+    // The hook-aware entry point is [`GvarTable::get`] / [`GvarTable::set`],
+    // which takes `&mut Executor` and is used by the bytecode/JIT runtime
+    // trampolines for `LoadGvar` / `StoreGvar`.
 
     pub fn set_gvar(&mut self, name: IdentId, val: Value) {
-        self.global_vars.insert(name, val);
+        self.gvars.set_simple(name, val);
     }
 
     pub fn get_gvar(&mut self, name: IdentId) -> Option<Value> {
-        self.global_vars.get(&name).cloned()
+        self.gvars.get_simple(name)
+    }
+
+    /// Register a getter / setter pair for a global variable name.
+    ///
+    /// `setter == None` makes the variable read-only.
+    pub fn define_hooked_variable(
+        &mut self,
+        name: IdentId,
+        getter: GvarGetter,
+        setter: Option<GvarSetter>,
+    ) {
+        self.gvars.define_hook(name, getter, setter);
+    }
+
+    /// Alias `new_name` to `old_name`. Subsequent reads and writes of
+    /// `new_name` are forwarded to `old_name`'s entry.
+    pub fn alias_global_variable(&mut self, new_name: IdentId, old_name: IdentId) {
+        self.gvars.define_alias(new_name, old_name);
     }
 
     ///
