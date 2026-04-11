@@ -1087,7 +1087,10 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn emit_bytes(&mut self, dst: BcReg, b: Vec<u8>) {
-        self.emit_literal(dst, Value::bytes(b));
+        // `NodeKind::Bytes` comes from source literals containing `\xNN`
+        // escapes. Tag as UTF-8 so it inherits the source encoding like
+        // CRuby, rather than being forced to BINARY.
+        self.emit_literal(dst, Value::string_from_source_bytes(&b));
     }
 
     fn emit_array(&mut self, dst: BcReg, src: BcReg, len: usize, splat: Vec<usize>, loc: Loc) {

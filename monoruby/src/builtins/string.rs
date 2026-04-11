@@ -3139,11 +3139,13 @@ fn parse_bigint(s: &str, radix: u32) -> BigInt {
 fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let inner = self_val.as_rstring_inner();
-    let id = if inner.encoding().is_utf8_compatible() {
-        let s = inner.check_utf8()?;
-        IdentId::get_id(s)
-    } else {
-        IdentId::get_id_from_bytes(inner.as_bytes().to_vec())
+    // Intern based on actual byte validity rather than the encoding tag:
+    // a UTF-8 labeled string may legitimately contain invalid byte
+    // sequences (e.g. `"\xA9"` from a source literal) and must round-trip
+    // through a Bytes-variant IdentName.
+    let id = match std::str::from_utf8(inner.as_bytes()) {
+        Ok(s) => IdentId::get_id(s),
+        Err(_) => IdentId::get_id_from_bytes(inner.as_bytes().to_vec()),
     };
     Ok(Value::symbol(id))
 }
@@ -5196,11 +5198,11 @@ mod tests {
 
     #[test]
     fn string_casecmp_p_invalid_utf8() {
-        // In monoruby, string literals with non-UTF-8 bytes are automatically
-        // assigned ASCII-8BIT encoding, so casecmp? performs byte comparison
-        // instead of raising ArgumentError as CRuby does.
-        run_test_no_result_check(r#""\xc3".casecmp?("\xc3")"#);
-        run_test_no_result_check(r#""\xc3".casecmp?("\xe3")"#);
+        // `"\xc3"` is a UTF-8 tagged string with an invalid byte sequence
+        // (matching CRuby's source-encoding semantics), so casecmp? raises
+        // ArgumentError just as CRuby does.
+        run_test_error(r#""\xc3".casecmp?("\xc3")"#);
+        run_test_error(r#""\xc3".casecmp?("\xe3")"#);
         run_test(r#""a".casecmp?("A")"#);
         run_test(r#""abc".casecmp?("ABC")"#);
     }

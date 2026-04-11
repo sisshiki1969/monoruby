@@ -786,6 +786,19 @@ impl Value {
         RValue::new_bytes_from_slice(b).pack()
     }
 
+    ///
+    /// Build a String from a source-file byte literal (e.g. `"\xC3\xA9"`).
+    ///
+    /// The result is tagged as UTF-8, matching CRuby's source-encoding
+    /// semantics where string literals inherit the source file encoding
+    /// regardless of whether `\xNN` escapes produce valid UTF-8. The bytes
+    /// may be invalid UTF-8, in which case `#valid_encoding?` returns
+    /// false and byte-level operations still work.
+    ///
+    pub fn string_from_source_bytes(b: &[u8]) -> Self {
+        Self::string_from_inner(RStringInner::from_encoding(b, Encoding::Utf8))
+    }
+
     pub fn string_from_vec(b: Vec<u8>) -> Self {
         RValue::new_string_from_vec(b).pack()
     }
@@ -2480,7 +2493,7 @@ impl Value {
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
             NodeKind::String(s) => Value::string_from_str(s),
-            NodeKind::Bytes(b) => Value::bytes_from_slice(b),
+            NodeKind::Bytes(b) => Value::string_from_source_bytes(b),
             NodeKind::Array(v, ..) => {
                 let iter = v.iter().map(|node| Self::from_ast_inner(node, vm, globals));
                 Value::array_from_iter(iter)
@@ -2602,7 +2615,7 @@ impl Value {
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
             NodeKind::String(s) => Value::string_from_str(s),
-            NodeKind::Bytes(b) => Value::bytes_from_slice(b),
+            NodeKind::Bytes(b) => Value::string_from_source_bytes(b),
             NodeKind::Array(v, ..) => {
                 let iter = v.iter().map(|node| Self::from_const_ast(node));
                 Value::array_from_iter(iter)
