@@ -410,8 +410,11 @@ impl<'a> MarshalReader<'a> {
 
         // Look up the class by checking constants on Object
         let class_name_id = IdentId::get_id(&class_name);
-        let obj = match globals.get_constant(OBJECT_CLASS, class_name_id) {
-            Some(ConstState::Loaded(class_val)) => {
+        let obj = match globals
+            .get_constant(OBJECT_CLASS, class_name_id)
+            .and_then(|state| state.loaded_value())
+        {
+            Some(class_val) => {
                 if let Some(module) = class_val.is_class_or_module() {
                     Value::object(module.id())
                 } else {

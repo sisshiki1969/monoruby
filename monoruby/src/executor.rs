@@ -412,6 +412,23 @@ impl Executor {
             .unwrap_or(OBJECT_CLASS)
     }
 
+    /// Returns the lexical class nesting at the current point of execution,
+    /// from innermost to outermost. Used by `Module.nesting`.
+    pub(crate) fn current_class_nesting(&self) -> Vec<ClassId> {
+        let frame = match self.lexical_class.last() {
+            Some(f) => f,
+            None => return vec![],
+        };
+        frame
+            .iter()
+            .rev()
+            .filter_map(|cref| match cref.context {
+                DefinitionContext::Class(class_id) => Some(class_id),
+                DefinitionContext::Receiver(_) => None,
+            })
+            .collect()
+    }
+
     pub(crate) fn context_visibility(&self) -> Visibility {
         self.lexical_class
             .last()
@@ -582,6 +599,9 @@ impl Executor {
         } else if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
+            // Lexical access (`Foo` with no qualifier): visibility is not
+            // enforced. Constants are reachable from their own lexical
+            // scope regardless of `private_constant`.
             let v = self.search_constant_checked(globals, name, current_func)?;
             return Ok((v, None));
         } else {
@@ -591,13 +611,22 @@ impl Executor {
                 .id()
         };
         for constant in prefix {
-            parent = self
-                .get_constant_checked(globals, parent, constant)?
-                .expect_class_or_module(&globals.store)?
-                .id();
+            // Each intermediate `Foo::Bar::...::Name` lookup is a qualified
+            // access; enforce visibility for it as well.
+            let (val, defining) = self.get_constant_superclass_with_class(
+                globals,
+                globals[parent].get_module(),
+                constant,
+            )?;
+            check_constant_visibility(globals, defining, constant)?;
+            parent = val.expect_class_or_module(&globals.store)?.id();
         }
-        let v =
-            self.get_constant_superclass_checked(globals, globals[parent].get_module(), name)?;
+        let (v, defining) = self.get_constant_superclass_with_class(
+            globals,
+            globals[parent].get_module(),
+            name,
+        )?;
+        check_constant_visibility(globals, defining, name)?;
         Ok((v, base))
     }
 
@@ -612,6 +641,7 @@ impl Executor {
             base,
             mut prefix,
             name,
+            source_loc,
             ..
         } = globals.store[site_id].clone();
         let mut parent = if let Some(base) = base {
@@ -637,6 +667,9 @@ impl Executor {
                 .id();
         }
         globals.set_constant(parent, name, val);
+        if let Some((file, line)) = source_loc {
+            globals.store[parent].record_constant_location(name, file, line);
+        }
         let receiver = globals.store[parent].get_module().into();
         self.invoke_method_inner(
             globals,
@@ -1405,7 +1438,7 @@ impl Executor {
             Some(base) => base.expect_class_or_module(&globals.store)?.id(),
             None => self.context_class_id(),
         };
-        let self_val = match self.get_constant(globals, parent, name)? {
+        let (self_val, is_new) = match self.get_constant(globals, parent, name)? {
             Some(val) => {
                 let val = val.expect_class_or_module(&globals.store)?;
                 if let Some(superclass) = superclass {
@@ -1415,7 +1448,7 @@ impl Executor {
                         return Err(MonorubyErr::superclass_mismatch(name));
                     }
                 }
-                val
+                (val, false)
             }
             None => {
                 let superclass = match superclass {
@@ -1425,11 +1458,22 @@ impl Executor {
                     }
                     None => globals.store.object_class(),
                 };
-                if is_module {
+                let new_module = if is_module {
                     globals.define_module_with_identid(name, parent)
                 } else {
                     let new_class =
                         globals.define_class_with_identid(name, Some(superclass), parent);
+                    // CRuby invokes `const_added` BEFORE `inherited` when a
+                    // new class is created via the `class` keyword.
+                    let parent_val = globals.store[parent].get_module().into();
+                    self.invoke_method_inner(
+                        globals,
+                        IdentId::CONST_ADDED,
+                        parent_val,
+                        &[Value::symbol(name)],
+                        None,
+                        None,
+                    )?;
                     self.invoke_method_inner(
                         globals,
                         IdentId::INHERITED,
@@ -1438,12 +1482,30 @@ impl Executor {
                         None,
                         None,
                     )?;
-                    new_class
-                }
+                    return self.finish_class_def(globals, new_class);
+                };
+                (new_module, true)
             }
         };
+        if is_new {
+            // Module case: const_added without inherited.
+            let parent_val = globals.store[parent].get_module().into();
+            self.invoke_method_inner(
+                globals,
+                IdentId::CONST_ADDED,
+                parent_val,
+                &[Value::symbol(name)],
+                None,
+                None,
+            )?;
+        }
         self.push_class_context(self_val.id());
         Ok(self_val.as_val())
+    }
+
+    fn finish_class_def(&mut self, _globals: &mut Globals, new_class: Module) -> Result<Value> {
+        self.push_class_context(new_class.id());
+        Ok(new_class.as_val())
     }
 }
 
@@ -1656,6 +1718,25 @@ impl BlockHandler {
     pub(crate) fn id(&self) -> u64 {
         self.0.id()
     }
+}
+
+/// Raise `NameError` if the named constant defined on `class_id` is marked
+/// private. Used by qualified constant lookups (`Foo::Bar`, `obj::Bar`,
+/// `::Bar`) and by reflection methods that bypass lexical scope (e.g.
+/// `Module#const_get`).
+pub(crate) fn check_constant_visibility(
+    globals: &Globals,
+    class_id: ClassId,
+    name: IdentId,
+) -> Result<()> {
+    if globals.store[class_id].is_constant_private(name) {
+        return Err(MonorubyErr::nameerr(format!(
+            "private constant {}::{} referenced",
+            class_id.get_name(&globals.store),
+            name
+        )));
+    }
+    Ok(())
 }
 
 /// The default definee context for `def`.

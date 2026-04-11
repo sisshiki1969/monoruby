@@ -8,6 +8,11 @@ impl Executor {
         name: IdentId,
         inherit: bool,
     ) -> Result<Value> {
+        // Note: `Module#const_get` is a reflection API and (since Ruby 3.0+)
+        // intentionally does *not* enforce constant visibility — private
+        // constants are readable through `const_get`. Visibility is only
+        // checked for syntactic qualified access (`Foo::Bar`, `::Bar`,
+        // `obj::Bar`) in `Executor::find_constant`.
         if inherit {
             self.get_constant_superclass_checked(globals, module, name)
         } else {
@@ -44,31 +49,32 @@ impl Executor {
     ) -> Result<Option<Value>> {
         match globals.get_constant(class_id, name) {
             None => return Ok(None),
-            Some(ConstState::Loaded(v)) => return Ok(Some(*v)),
-            Some(ConstState::Autoload(file_name)) => {
-                let file_name = file_name.clone();
-                globals.remove_constant(class_id, name);
-                let _level = self.inc_require_level();
+            Some(state) => match &state.kind {
+                ConstStateKind::Loaded(v) => return Ok(Some(*v)),
+                ConstStateKind::Autoload(file_name) => {
+                    let file_name = file_name.clone();
+                    globals.remove_constant(class_id, name);
+                    let _level = self.inc_require_level();
 
-                #[cfg(feature = "dump-require")]
-                eprintln!("{} > Autoload:{:?}", "  ".repeat(_level), name);
+                    #[cfg(feature = "dump-require")]
+                    eprintln!("{} > Autoload:{:?}", "  ".repeat(_level), name);
 
-                let res = self.require(globals, &file_name, false);
+                    let res = self.require(globals, &file_name, false);
 
-                #[cfg(feature = "dump-require")]
-                eprintln!("{} < Autoload:{:?}", "  ".repeat(_level), name);
+                    #[cfg(feature = "dump-require")]
+                    eprintln!("{} < Autoload:{:?}", "  ".repeat(_level), name);
 
-                self.dec_require_level();
-                res?;
-                /*if name == IdentId::get_id("FeatureFlag") {
-                    return Err(MonorubyErr::runtimeerr("FeatureFlag is loaded."));
-                }*/
-            }
+                    self.dec_require_level();
+                    res?;
+                }
+            },
         };
         match globals.get_constant(class_id, name) {
             None => Ok(None),
-            Some(ConstState::Loaded(v)) => Ok(Some(*v)),
-            Some(ConstState::Autoload(_)) => Ok(None),
+            Some(state) => match &state.kind {
+                ConstStateKind::Loaded(v) => Ok(Some(*v)),
+                ConstStateKind::Autoload(_) => Ok(None),
+            },
         }
     }
 
@@ -98,6 +104,42 @@ impl Executor {
         loop {
             match self.get_constant(globals, module.id(), name)? {
                 Some(v) => return Ok(v),
+                None => match module.superclass() {
+                    Some(superclass) => module = superclass,
+                    None => break,
+                },
+            };
+        }
+        Err(MonorubyErr::uninitialized_constant(name))
+    }
+
+    /// Walk the ancestor chain of *module* to find the constant *name* and
+    /// return both its value and the class on which it is defined. Used by
+    /// callers that need to enforce constant visibility, since visibility is
+    /// stored on the *defining* class.
+    pub(crate) fn get_constant_superclass_with_class(
+        &mut self,
+        globals: &mut Globals,
+        mut module: Module,
+        name: IdentId,
+    ) -> Result<(Value, ClassId)> {
+        loop {
+            // Snapshot whether the class has the constant before triggering
+            // autoload, since `get_constant` may transition the entry from
+            // `Autoload` to `Loaded` and we still want to attribute the
+            // visibility to the defining class.
+            let owns = globals.store[module.id()].has_own_constant(name);
+            match self.get_constant(globals, module.id(), name)? {
+                Some(v) => {
+                    if owns {
+                        return Ok((v, module.id()));
+                    } else {
+                        // Should not normally happen since `get_constant`
+                        // only returns Some when the entry exists on this
+                        // class, but be defensive.
+                        return Ok((v, module.id()));
+                    }
+                }
                 None => match module.superclass() {
                     Some(superclass) => module = superclass,
                     None => break,

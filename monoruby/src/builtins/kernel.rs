@@ -190,6 +190,30 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func_with(kernel_class, "methods", methods, 0, 1, false);
     globals.define_builtin_func_with(
         kernel_class,
+        "private_methods",
+        private_methods,
+        0,
+        1,
+        false,
+    );
+    globals.define_builtin_func_with(
+        kernel_class,
+        "protected_methods",
+        protected_methods,
+        0,
+        1,
+        false,
+    );
+    globals.define_builtin_func_with(
+        kernel_class,
+        "public_methods",
+        public_methods,
+        0,
+        1,
+        false,
+    );
+    globals.define_builtin_func_with(
+        kernel_class,
         "singleton_methods",
         singleton_methods,
         0,
@@ -1870,7 +1894,13 @@ fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/clone.html]
 #[monoruby_builtin]
 fn dup(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(lfp.self_val().dup())
+    let self_val = lfp.self_val();
+    if let Some(class) = self_val.is_class() {
+        if class.id() == BASIC_OBJECT_CLASS {
+            return Err(MonorubyErr::typeerr("can't copy the root class"));
+        }
+    }
+    Ok(self_val.dup())
 }
 
 ///
@@ -2192,6 +2222,76 @@ fn methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         globals.store.get_method_names(class_id)
     } else {
         let class_id = lfp.self_val().class();
+        globals.store.get_method_names_inherit(class_id, true)
+    }))
+}
+
+///
+/// ### Kernel#private_methods
+///
+/// - private_methods(include_inherited = true) -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/private_methods.html]
+#[monoruby_builtin]
+fn private_methods(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    let class_id = lfp.self_val().class();
+    Ok(Value::array_from_vec(if !inherited_too {
+        globals.store.get_private_method_names(class_id)
+    } else {
+        globals.store.get_private_method_names_inherit(class_id)
+    }))
+}
+
+///
+/// ### Kernel#protected_methods
+///
+/// - protected_methods(include_inherited = true) -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/protected_methods.html]
+#[monoruby_builtin]
+fn protected_methods(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    let class_id = lfp.self_val().class();
+    Ok(Value::array_from_vec(if !inherited_too {
+        globals.store.get_protected_method_names(class_id)
+    } else {
+        globals.store.get_protected_method_names_inherit(class_id)
+    }))
+}
+
+///
+/// ### Kernel#public_methods
+///
+/// - public_methods(include_inherited = true) -> [Symbol]
+///
+/// monoruby's `methods` already returns the public/protected union; we
+/// implement `public_methods` as the same set, matching CRuby for the
+/// non-protected cases.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/public_methods.html]
+#[monoruby_builtin]
+fn public_methods(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    let class_id = lfp.self_val().class();
+    Ok(Value::array_from_vec(if !inherited_too {
+        globals.store.get_method_names(class_id)
+    } else {
         globals.store.get_method_names_inherit(class_id, true)
     }))
 }
