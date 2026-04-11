@@ -213,11 +213,11 @@ mod tests {
 
     #[test]
     fn fiber_current() {
-        run_test_once("Fiber.current.is_a?(Fiber)");
+        run_test("Fiber.current.is_a?(Fiber)");
     }
 
     #[test]
     fn thread_pass() {
-        run_test_once("Thread.pass.nil?");
+        run_test("Thread.pass.nil?");
     }
 }

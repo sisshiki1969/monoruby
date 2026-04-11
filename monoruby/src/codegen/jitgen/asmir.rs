@@ -366,16 +366,6 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn load_svar(&mut self, state: &AbstractFrame, id: u32) {
-        let using_xmm = state.get_using_xmm();
-        self.push(AsmInst::LoadSVar { id, using_xmm });
-    }
-
-    pub(super) fn store_svar(&mut self, state: &AbstractFrame, src: SlotId, id: u32) {
-        let using_xmm = state.get_using_xmm();
-        self.push(AsmInst::StoreSVar { id, src, using_xmm });
-    }
-
     pub(super) fn to_a(&mut self, state: &AbstractFrame, src: SlotId) {
         let using_xmm = state.get_using_xmm();
         self.push(AsmInst::ToA { src, using_xmm });
@@ -1416,15 +1406,6 @@ pub(super) enum AsmInst {
         src: SlotId,
         using_xmm: UsingXmm,
     },
-    LoadSVar {
-        id: u32,
-        using_xmm: UsingXmm,
-    },
-    StoreSVar {
-        id: u32,
-        src: SlotId,
-        using_xmm: UsingXmm,
-    },
 
     ClassDef {
         base: Option<SlotId>,
@@ -1478,6 +1459,11 @@ pub(super) enum AsmInst {
     AliasMethod {
         new: SlotId,
         old: SlotId,
+        using_xmm: UsingXmm,
+    },
+    AliasGvar {
+        new: IdentId,
+        old: IdentId,
         using_xmm: UsingXmm,
     },
     ///

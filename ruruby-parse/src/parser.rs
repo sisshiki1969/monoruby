@@ -11,17 +11,6 @@ mod literals;
 mod primary;
 pub(crate) use lexer::*;
 
-/// $&
-pub const SPECIAL_LASTMATCH: u32 = 0;
-/// $'
-pub const SPECIAL_POSTMATCH: u32 = 1;
-/// $~
-pub const SPECIAL_MATCHDATA: u32 = 2;
-/// $LOAD_PATH
-pub const SPECIAL_LOADPATH: u32 = 10;
-/// $LOADED_FEATURES
-pub const SPECIAL_LOADEDFEATURES: u32 = 11;
-
 pub trait LocalsContext: Sized {
     fn find_lvar(&self, id: &str) -> Option<usize>;
 }
@@ -1023,42 +1012,42 @@ mod test {
         parse_node(
             "$&",
             Annot {
-                kind: NodeKind::SpecialVar(SPECIAL_LASTMATCH),
+                kind: NodeKind::GlobalVar("$&".to_string()),
                 loc: Loc(0, 1),
             },
         );
         parse_node(
             "$'",
             Annot {
-                kind: NodeKind::SpecialVar(SPECIAL_POSTMATCH),
+                kind: NodeKind::GlobalVar("$'".to_string()),
                 loc: Loc(0, 1),
             },
         );
         parse_node(
             "$LOAD_PATH",
             Annot {
-                kind: NodeKind::SpecialVar(SPECIAL_LOADPATH),
+                kind: NodeKind::GlobalVar("$LOAD_PATH".to_string()),
                 loc: Loc(0, 9),
             },
         );
         parse_node(
             "$:",
             Annot {
-                kind: NodeKind::SpecialVar(SPECIAL_LOADPATH),
+                kind: NodeKind::GlobalVar("$:".to_string()),
                 loc: Loc(0, 1),
             },
         );
         parse_node(
             "$LOADED_FEATURES",
             Annot {
-                kind: NodeKind::SpecialVar(SPECIAL_LOADEDFEATURES),
+                kind: NodeKind::GlobalVar("$LOADED_FEATURES".to_string()),
                 loc: Loc(0, 15),
             },
         );
         parse_node(
             "$\"",
             Annot {
-                kind: NodeKind::SpecialVar(SPECIAL_LOADEDFEATURES),
+                kind: NodeKind::GlobalVar("$\"".to_string()),
                 loc: Loc(0, 1),
             },
         );

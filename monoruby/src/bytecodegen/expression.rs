@@ -215,9 +215,6 @@ impl<'a> BytecodeGen<'a> {
                 let name = IdentId::get_id_from_string(name);
                 self.emit_load_ivar(dst.into(), name, loc);
             }
-            NodeKind::GlobalVar(ref name) if name == "$~" => {
-                self.emit_load_svar(dst.into(), ruruby_parse::SPECIAL_MATCHDATA, loc);
-            }
             NodeKind::GlobalVar(name) => {
                 let name = IdentId::get_id_from_string(name);
                 self.emit_load_gvar(dst.into(), name, loc);
@@ -225,9 +222,6 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::ClassVar(name) => {
                 let name = IdentId::get_id_from_string(name);
                 self.emit_load_cvar(dst.into(), name, loc);
-            }
-            NodeKind::SpecialVar(id) => {
-                self.emit_load_svar(dst.into(), id, loc);
             }
             NodeKind::MethodCall {
                 box receiver,
@@ -364,8 +358,7 @@ impl<'a> BytecodeGen<'a> {
             | NodeKind::Const { .. }
             | NodeKind::InstanceVar(_)
             | NodeKind::ClassVar(_)
-            | NodeKind::GlobalVar(_)
-            | NodeKind::SpecialVar(_) => {
+            | NodeKind::GlobalVar(_) => {
                 let ret = self.push().into();
                 self.gen_store_expr(ret, expr)?;
             }
@@ -715,23 +708,45 @@ impl<'a> BytecodeGen<'a> {
                     (&new.kind, &old.kind)
                 {
                     if new_name.starts_with('$') && old_name.starts_with('$') {
-                        return Err(self.unsupported_feature(
-                            "Global variable aliasing is not supported.",
+                        // Global variable alias: resolve names at compile
+                        // time and emit a dedicated AliasGvar instruction.
+                        let new_id = IdentId::get_id_from_string(new_name.clone());
+                        let old_id = IdentId::get_id_from_string(old_name.clone());
+                        self.emit(
+                            BytecodeInst::AliasGvar {
+                                new: new_id,
+                                old: old_id,
+                            },
                             loc,
-                        ));
+                        );
+                        self.push_nil();
+                        // fall through to use_mode handling at end of match
+                    } else {
+                        let new = self.push_expr(new)?;
+                        let old = self.push_expr(old)?;
+                        self.temp -= 2;
+                        self.emit(
+                            BytecodeInst::AliasMethod {
+                                new: new.into(),
+                                old: old.into(),
+                            },
+                            loc,
+                        );
+                        self.push_nil();
                     }
+                } else {
+                    let new = self.push_expr(new)?;
+                    let old = self.push_expr(old)?;
+                    self.temp -= 2;
+                    self.emit(
+                        BytecodeInst::AliasMethod {
+                            new: new.into(),
+                            old: old.into(),
+                        },
+                        loc,
+                    );
+                    self.push_nil();
                 }
-                let new = self.push_expr(new)?;
-                let old = self.push_expr(old)?;
-                self.temp -= 2;
-                self.emit(
-                    BytecodeInst::AliasMethod {
-                        new: new.into(),
-                        old: old.into(),
-                    },
-                    loc,
-                );
-                self.push_nil();
                 //match use_mode {
                 //    UseMode2::Ret => {
                 //        self.push_nil();

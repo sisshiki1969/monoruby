@@ -516,7 +516,7 @@ mod tests {
             t.utc.year
             "#,
         );
-        run_test_once(
+        run_test(
             r#"
             t = Time.at(1000000000, 500000)
             t.utc.to_s
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn time_sub() {
         // Time - Time => Float (seconds)
-        run_test_once(
+        run_test(
             r#"
             t1 = Time.at(1000)
             t2 = Time.at(900)
@@ -535,7 +535,7 @@ mod tests {
             "#,
         );
         // Time - numeric => Time
-        run_test_once(
+        run_test(
             r#"
             t = Time.at(1000)
             (t - 100).is_a?(Time)
@@ -545,23 +545,13 @@ mod tests {
 
     #[test]
     fn time_strftime_nanoseconds() {
-        run_test_once(
+        run_tests(&[
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%3N")"#,
-        );
-        run_test_once(
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%6N")"#,
-        );
-        run_test_once(
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%9N")"#,
-        );
-        run_test_once(
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%N")"#,
-        );
-        run_test_once(
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%L")"#,
-        );
-        run_test_once(
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%Y-%m-%d %H:%M:%S.%3N")"#,
-        );
+        ]);
     }
 }

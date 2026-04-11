@@ -1821,7 +1821,7 @@ fn scan_with_block(
     vm.clear_capture_special_variables();
     for cap in re.captures_iter(&given) {
         let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
-        vm.save_capture_special_variables(&cap);
+        vm.save_capture_special_variables(&cap, &given);
         match cap.len() {
             0 => unreachable!(),
             1 => {
@@ -3993,23 +3993,25 @@ mod tests {
 
     #[test]
     fn slice() {
-        run_test(r##"s = "this is a string"; [s.slice!(2), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(-2), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(-20), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(20), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(3..6), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(3...6), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(-3...6), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(-12...1), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(-12...6), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(-12...50), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(30...50), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(/s.*t/), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(/s/), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(/s/, 2), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(/s/, 5), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(/s/, -1), s]"##);
-        run_test(r##"s = "this is a string"; [s.slice!(/s/, -10), s]"##);
+        run_tests(&[
+            r##"s = "this is a string"; [s.slice!(2), s]"##,
+            r##"s = "this is a string"; [s.slice!(-2), s]"##,
+            r##"s = "this is a string"; [s.slice!(-20), s]"##,
+            r##"s = "this is a string"; [s.slice!(20), s]"##,
+            r##"s = "this is a string"; [s.slice!(3..6), s]"##,
+            r##"s = "this is a string"; [s.slice!(3...6), s]"##,
+            r##"s = "this is a string"; [s.slice!(-3...6), s]"##,
+            r##"s = "this is a string"; [s.slice!(-12...1), s]"##,
+            r##"s = "this is a string"; [s.slice!(-12...6), s]"##,
+            r##"s = "this is a string"; [s.slice!(-12...50), s]"##,
+            r##"s = "this is a string"; [s.slice!(30...50), s]"##,
+            r##"s = "this is a string"; [s.slice!(/s.*t/), s]"##,
+            r##"s = "this is a string"; [s.slice!(/s/), s]"##,
+            r##"s = "this is a string"; [s.slice!(/s/, 2), s]"##,
+            r##"s = "this is a string"; [s.slice!(/s/, 5), s]"##,
+            r##"s = "this is a string"; [s.slice!(/s/, -1), s]"##,
+            r##"s = "this is a string"; [s.slice!(/s/, -10), s]"##,
+        ]);
     }
 
     #[test]
@@ -4324,11 +4326,16 @@ mod tests {
 
     #[test]
     fn strip() {
-        run_test(r##""  abc  \r\n".strip"##);
-        run_test(r##""abc\n".strip"##);
-        run_test(r##""  abc".strip"##);
-        run_test(r##""abc".strip"##);
-        run_test(r##""  \0  abc  \0".strip"##);
+        run_tests(&[
+            r##""  abc  \r\n".strip"##,
+            r##""abc\n".strip"##,
+            r##""  abc".strip"##,
+            r##""abc".strip"##,
+            r##""  \0  abc  \0".strip"##,
+            r##""  abc\n".lstrip"##,
+            r##""\t abc\n".lstrip"##,
+            r##""abc\n".lstrip"##,
+        ]);
         run_test(
             r##"
         str = "abc\n"
@@ -4354,9 +4361,6 @@ mod tests {
         [str.strip!, str]
         "##,
         );
-        run_test(r##""  abc\n".lstrip"##);
-        run_test(r##""\t abc\n".lstrip"##);
-        run_test(r##""abc\n".lstrip"##);
         run_test(
             r##"
         str = "abc\n"
@@ -4382,10 +4386,12 @@ mod tests {
         [str.lstrip!, str]
         "##,
         );
-        run_test(r##""  abc\n".rstrip"##);
-        run_test(r##""  abc \t\r\n\0".rstrip"##);
-        run_test(r##""  abc".rstrip"##);
-        run_test(r##""  abc\0 ".rstrip"##);
+        run_tests(&[
+            r##""  abc\n".rstrip"##,
+            r##""  abc \t\r\n\0".rstrip"##,
+            r##""  abc".rstrip"##,
+            r##""  abc\0 ".rstrip"##,
+        ]);
         run_test(
             r##"
         str = "abc\n"
@@ -4516,21 +4522,23 @@ mod tests {
 
     #[test]
     fn rindex() {
-        run_test(r##""astrochemistry".rindex("str")"##);
-        run_test(r##""character".rindex(?c)"##);
-        run_test(r##""regexprindex".rindex(/e.*x/, 2)"##);
-        run_test(r##""foobarfoobar".rindex("bar", 6)"##);
-        run_test(r##""foobarfoobar".rindex("bar", -6)"##);
-        run_test(r##""windows".rindex("w", 100)"##);
-        run_test(r##""windows".rindex("w", -100)"##);
-        run_test(r##""windows".rindex("w", -1)"##);
-        run_test(r##""windows".rindex("w", -3)"##);
-        run_test(r##""windows".rindex("w", -8)"##);
-        run_test(r##""".rindex("")"##);
-        run_test(r##""".rindex(".")"##);
-        run_test(r##""超時空要塞超時空要塞超時空要塞".index(/時/, 11)"##);
-        run_test(r##""超時空要塞超時空要塞超時空要塞".index(/時/, 1)"##);
-        run_test(r##""超時空要塞超時空要塞超時空要塞".index(/時/, 0)"##);
+        run_tests(&[
+            r##""astrochemistry".rindex("str")"##,
+            r##""character".rindex(?c)"##,
+            r##""regexprindex".rindex(/e.*x/, 2)"##,
+            r##""foobarfoobar".rindex("bar", 6)"##,
+            r##""foobarfoobar".rindex("bar", -6)"##,
+            r##""windows".rindex("w", 100)"##,
+            r##""windows".rindex("w", -100)"##,
+            r##""windows".rindex("w", -1)"##,
+            r##""windows".rindex("w", -3)"##,
+            r##""windows".rindex("w", -8)"##,
+            r##""".rindex("")"##,
+            r##""".rindex(".")"##,
+            r##""超時空要塞超時空要塞超時空要塞".index(/時/, 11)"##,
+            r##""超時空要塞超時空要塞超時空要塞".index(/時/, 1)"##,
+            r##""超時空要塞超時空要塞超時空要塞".index(/時/, 0)"##,
+        ]);
     }
 
     #[test]
@@ -4574,12 +4582,12 @@ mod tests {
         run_test_no_result_check(r#""\xC3\xA9".end_with?("\xA9")"#);
         run_test_no_result_check(r#""\xe3\x81\x82".end_with?("\x82")"#);
         // Explicit UTF-8 string with force_encoding: boundary check works
-        run_test_once(
+        run_test(
             r#""\xC3\xA9".force_encoding("UTF-8").end_with?("\xA9".force_encoding("UTF-8"))"#,
         );
         // start_with? UTF-8 character boundary check
         run_test_no_result_check(r#""\xC3\xA9".start_with?("\xC3")"#);
-        run_test_once(
+        run_test(
             r#""\xC3\xA9".force_encoding("UTF-8").start_with?("\xC3".force_encoding("UTF-8"))"#,
         );
         // start_with? with Regexp sets/clears $~
@@ -4588,8 +4596,8 @@ mod tests {
         // end_with? with Regexp raises TypeError
         run_test_error(r#""hello".end_with?(/lo/)"#);
         // Binary string start_with?/end_with?
-        run_test_once(r#""\xC3".b.start_with?("\xC3".b)"#);
-        run_test_once(r#""\xC3".b.end_with?("\xC3".b)"#);
+        run_test(r#""\xC3".b.start_with?("\xC3".b)"#);
+        run_test(r#""\xC3".b.end_with?("\xC3".b)"#);
         run_test(r##""string".include?("str")"##);
         run_test(r##""string".include?("ing")"##);
         run_test(r##""string".include?("ingi")"##);
@@ -4629,18 +4637,20 @@ mod tests {
 
     #[test]
     fn byteslice() {
-        run_test(r##""hello".byteslice(1)"##);
-        run_test(r##""hello".byteslice(-1)"##);
-        run_test(r##""hello".byteslice(5)"##);
-        run_test(r##""hello".byteslice(-6)"##);
-        run_test(r##""hello".byteslice(1, 2)"##);
-        run_test(r##""hello".byteslice(1, 0)"##);
-        run_test(r##""hello".byteslice(1, -1)"##);
-        run_test(r##""hello".byteslice(1..3)"##);
-        run_test(r##""hello".byteslice(1...3)"##);
-        run_test(r##""hello".byteslice(-3..-1)"##);
-        run_test(r##""hello".byteslice(0, 5)"##);
-        run_test(r##""hello".byteslice(0, 100)"##);
+        run_tests(&[
+            r##""hello".byteslice(1)"##,
+            r##""hello".byteslice(-1)"##,
+            r##""hello".byteslice(5)"##,
+            r##""hello".byteslice(-6)"##,
+            r##""hello".byteslice(1, 2)"##,
+            r##""hello".byteslice(1, 0)"##,
+            r##""hello".byteslice(1, -1)"##,
+            r##""hello".byteslice(1..3)"##,
+            r##""hello".byteslice(1...3)"##,
+            r##""hello".byteslice(-3..-1)"##,
+            r##""hello".byteslice(0, 5)"##,
+            r##""hello".byteslice(0, 100)"##,
+        ]);
     }
 
     #[test]
@@ -4669,33 +4679,35 @@ mod tests {
 
     #[test]
     fn split() {
-        run_test(r##""   a \t  b \n  c".split(/\s+/)"##);
         //run_test(r##""   a \t  b \n  c".split(nil)"##);
-        run_test(r##""   a \t  b \n  c  ".split(' ')"##);
-        run_test(r##""   a \t  b \n  c  ".split(' ', -1)"##);
-        run_test(r##""   a \t  b \n  c ".split(' ', -1)"##);
-        run_test(r##""   a \t  b \n  c".split(' ', -1)"##);
-        run_test(r##""   a \t  b \n  c  ".split(' ', 0)"##);
-        run_test(r##""   a \t  b \n  c  ".split(' ', 2)"##);
-        run_test(r##""   a \t  b \n  c".split"##);
-        run_test(r##""hello world".split"##);
-        run_test(r##""  hello  world  ".split"##);
-        run_test(r##""\t\n hello \t world \n".split"##);
-        run_test(r##""".split"##);
-        run_test(r##""   ".split"##);
-        run_test(r##"'1-10,20'.split(/([-,])/)"##);
-        run_test(r##"'hi there'.split(/\s*/).join(':')"##);
-        run_test(r##"'hi there'.split(//).join(':')"##);
-        run_test(r##""a,b,c,,,".split(/,/, 0)"##);
-        run_test(r##""a,b,c,,,".split(/,/)"##);
-        run_test(r##""a,b,c,d,e".split(/,/, 1)"##);
-        run_test(r##""a,b,c,d,e".split(/,/, 2)"##);
-        run_test(r##""a,b,c,d,e".split(/,/, 3)"##);
-        run_test(r##""a,b,c,d,e".split(/,/, 4)"##);
-        run_test(r##""a,b,c,d,e".split(/,/, 5)"##);
-        run_test(r##""a,b,c,d,e".split(/,/, 6)"##);
-        run_test(r##""a,b,c,d,e".split(/,/, 7)"##);
-        run_test(r##""a,b,c,d,e".split(/,/, -1)"##);
+        run_tests(&[
+            r##""   a \t  b \n  c".split(/\s+/)"##,
+            r##""   a \t  b \n  c  ".split(' ')"##,
+            r##""   a \t  b \n  c  ".split(' ', -1)"##,
+            r##""   a \t  b \n  c ".split(' ', -1)"##,
+            r##""   a \t  b \n  c".split(' ', -1)"##,
+            r##""   a \t  b \n  c  ".split(' ', 0)"##,
+            r##""   a \t  b \n  c  ".split(' ', 2)"##,
+            r##""   a \t  b \n  c".split"##,
+            r##""hello world".split"##,
+            r##""  hello  world  ".split"##,
+            r##""\t\n hello \t world \n".split"##,
+            r##""".split"##,
+            r##""   ".split"##,
+            r##"'1-10,20'.split(/([-,])/)"##,
+            r##"'hi there'.split(/\s*/).join(':')"##,
+            r##"'hi there'.split(//).join(':')"##,
+            r##""a,b,c,,,".split(/,/, 0)"##,
+            r##""a,b,c,,,".split(/,/)"##,
+            r##""a,b,c,d,e".split(/,/, 1)"##,
+            r##""a,b,c,d,e".split(/,/, 2)"##,
+            r##""a,b,c,d,e".split(/,/, 3)"##,
+            r##""a,b,c,d,e".split(/,/, 4)"##,
+            r##""a,b,c,d,e".split(/,/, 5)"##,
+            r##""a,b,c,d,e".split(/,/, 6)"##,
+            r##""a,b,c,d,e".split(/,/, 7)"##,
+            r##""a,b,c,d,e".split(/,/, -1)"##,
+        ]);
     }
 
     #[test]
@@ -4776,45 +4788,51 @@ mod tests {
 
     #[test]
     fn hex() {
-        run_test(r#""0x0a".hex"#);
-        run_test(r#""ff".hex"#);
-        run_test(r#""0xFF".hex"#);
-        run_test(r#""-0x7f".hex"#);
-        run_test(r#""+0x7f".hex"#);
-        run_test(r#""  -0xFF".hex"#);
-        run_test(r#""0".hex"#);
-        run_test(r#""".hex"#);
-        run_test(r#""xyz".hex"#);
-        run_test(r#""10".hex"#);
-        run_test(r#""CE".hex"#);
-        run_test(r#""0xdeadbeef".hex"#);
+        run_tests(&[
+            r#""0x0a".hex"#,
+            r#""ff".hex"#,
+            r#""0xFF".hex"#,
+            r#""-0x7f".hex"#,
+            r#""+0x7f".hex"#,
+            r#""  -0xFF".hex"#,
+            r#""0".hex"#,
+            r#""".hex"#,
+            r#""xyz".hex"#,
+            r#""10".hex"#,
+            r#""CE".hex"#,
+            r#""0xdeadbeef".hex"#,
+        ]);
     }
 
     #[test]
     fn oct() {
-        run_test(r#""77".oct"#);
-        run_test(r#""0o77".oct"#);
-        run_test(r#""077".oct"#);
-        run_test(r#""-077".oct"#);
-        run_test(r#""0x1f".oct"#);
-        run_test(r#""-0x1f".oct"#);
-        run_test(r#""0b1010".oct"#);
-        run_test(r#""-0b1010".oct"#);
-        run_test(r#""0d99".oct"#);
-        run_test(r#""-0d99".oct"#);
-        run_test(r#""0".oct"#);
-        run_test(r#""".oct"#);
-        run_test(r#""xyz".oct"#);
+        run_tests(&[
+            r#""77".oct"#,
+            r#""0o77".oct"#,
+            r#""077".oct"#,
+            r#""-077".oct"#,
+            r#""0x1f".oct"#,
+            r#""-0x1f".oct"#,
+            r#""0b1010".oct"#,
+            r#""-0b1010".oct"#,
+            r#""0d99".oct"#,
+            r#""-0d99".oct"#,
+            r#""0".oct"#,
+            r#""".oct"#,
+            r#""xyz".oct"#,
+        ]);
     }
 
     #[test]
     fn to_f() {
-        run_test(r"'4285'.to_f");
-        run_test(r"'-4285'.to_f");
-        run_test(r"'428.55'.to_f");
-        run_test(r"'-428.55'.to_f");
-        run_test(r"'-428.55e12'.to_f");
-        run_test(r"'-428.55e-12'.to_f");
+        run_tests(&[
+            r"'4285'.to_f",
+            r"'-4285'.to_f",
+            r"'428.55'.to_f",
+            r"'-428.55'.to_f",
+            r"'-428.55e12'.to_f",
+            r"'-428.55e-12'.to_f",
+        ]);
     }
 
     #[test]
@@ -5082,49 +5100,53 @@ mod tests {
 
     #[test]
     fn pack_unpack_float() {
-        run_test(r#"[1.5].pack("E")"#);
-        run_test(r#"[1.5].pack("E").unpack1("E")"#);
-        run_test(r#"[1.5, -2.25, 0.0].pack("E*").unpack("E*")"#);
-        run_test(r#"[1.5].pack("e")"#);
-        run_test(r#"[1.5].pack("e").unpack1("e")"#);
-        run_test(r#"[1.5, -2.25].pack("e*").unpack("e*")"#);
-        run_test(r#"[1.5].pack("G")"#);
-        run_test(r#"[1.5].pack("G").unpack1("G")"#);
-        run_test(r#"[1.5].pack("g")"#);
-        run_test(r#"[1.5].pack("g").unpack1("g")"#);
-        run_test(r#"[3.14].pack("d").unpack1("d")"#);
-        run_test(r#"[3.14].pack("D").unpack1("D")"#);
-        run_test(r#"[3.14].pack("f").unpack1("f")"#);
-        run_test(r#"[3.14].pack("F").unpack1("F")"#);
+        run_tests(&[
+            r#"[1.5].pack("E")"#,
+            r#"[1.5].pack("E").unpack1("E")"#,
+            r#"[1.5, -2.25, 0.0].pack("E*").unpack("E*")"#,
+            r#"[1.5].pack("e")"#,
+            r#"[1.5].pack("e").unpack1("e")"#,
+            r#"[1.5, -2.25].pack("e*").unpack("e*")"#,
+            r#"[1.5].pack("G")"#,
+            r#"[1.5].pack("G").unpack1("G")"#,
+            r#"[1.5].pack("g")"#,
+            r#"[1.5].pack("g").unpack1("g")"#,
+            r#"[3.14].pack("d").unpack1("d")"#,
+            r#"[3.14].pack("D").unpack1("D")"#,
+            r#"[3.14].pack("f").unpack1("f")"#,
+            r#"[3.14].pack("F").unpack1("F")"#,
+        ]);
     }
 
     #[test]
     fn string_bytesplice() {
-        // bytesplice(index, length, str)
-        run_test(r#"s = "hello world"; s.bytesplice(5, 1, "---"); s"#);
-        run_test(r#"s = "hello"; s.bytesplice(0, 1, "H"); s"#);
-        run_test(r#"s = "hello"; s.bytesplice(5, 0, " world"); s"#);
-        run_test(r#"s = "hello world"; s.bytesplice(-5, 5, "WORLD"); s"#);
-        // bytesplice(index, length, str, str_index, str_length)
-        run_test(r#"s = "hello world"; s.bytesplice(0, 5, "HELLO WORLD", 0, 5); s"#);
-        run_test(r#"s = "hello world"; s.bytesplice(6, 5, "BEAUTIFUL WORLD", 10, 5); s"#);
-        // bytesplice(range, str)
-        run_test(r#"s = "hello world"; s.bytesplice(0..4, "HELLO"); s"#);
-        run_test(r#"s = "hello world"; s.bytesplice(0...5, "HELLO"); s"#);
-        // bytesplice(range, str, str_range)
-        run_test(r#"s = "hello world"; s.bytesplice(0..4, "HELLO WORLD", 0..4); s"#);
-        // return value is self
-        run_test(r#"s = "hello"; r = s.bytesplice(0, 1, "H"); r.equal?(s)"#);
-        // negative index
-        run_test(r#"s = "hello"; s.bytesplice(-5, 5, "HELLO"); s"#);
-        // insert at end
-        run_test(r#"s = "hello"; s.bytesplice(5, 0, "!"); s"#);
-        // UTF-8 splice at character boundary
-        run_test(r#"s = "あいう"; s.bytesplice(0, 3, "X"); s"#);
-        run_test(r#"s = "あいう"; s.bytesplice(3, 3, "X"); s"#);
-        run_test(r#"s = "あいう"; s.bytesplice(6, 3, "え"); s"#);
-        // UTF-8 splice at boundary, replace with ASCII
-        run_test(r#"s = "あいう"; s.bytesplice(3, 3, "B"); s"#);
+        run_tests(&[
+            // bytesplice(index, length, str)
+            r#"s = "hello world"; s.bytesplice(5, 1, "---"); s"#,
+            r#"s = "hello"; s.bytesplice(0, 1, "H"); s"#,
+            r#"s = "hello"; s.bytesplice(5, 0, " world"); s"#,
+            r#"s = "hello world"; s.bytesplice(-5, 5, "WORLD"); s"#,
+            // bytesplice(index, length, str, str_index, str_length)
+            r#"s = "hello world"; s.bytesplice(0, 5, "HELLO WORLD", 0, 5); s"#,
+            r#"s = "hello world"; s.bytesplice(6, 5, "BEAUTIFUL WORLD", 10, 5); s"#,
+            // bytesplice(range, str)
+            r#"s = "hello world"; s.bytesplice(0..4, "HELLO"); s"#,
+            r#"s = "hello world"; s.bytesplice(0...5, "HELLO"); s"#,
+            // bytesplice(range, str, str_range)
+            r#"s = "hello world"; s.bytesplice(0..4, "HELLO WORLD", 0..4); s"#,
+            // return value is self
+            r#"s = "hello"; r = s.bytesplice(0, 1, "H"); r.equal?(s)"#,
+            // negative index
+            r#"s = "hello"; s.bytesplice(-5, 5, "HELLO"); s"#,
+            // insert at end
+            r#"s = "hello"; s.bytesplice(5, 0, "!"); s"#,
+            // UTF-8 splice at character boundary
+            r#"s = "あいう"; s.bytesplice(0, 3, "X"); s"#,
+            r#"s = "あいう"; s.bytesplice(3, 3, "X"); s"#,
+            r#"s = "あいう"; s.bytesplice(6, 3, "え"); s"#,
+            // UTF-8 splice at boundary, replace with ASCII
+            r#"s = "あいう"; s.bytesplice(3, 3, "B"); s"#,
+        ]);
         // UTF-8 + ASCII-8BIT (ascii-only) at char boundary
         run_test(
             r##"
@@ -5208,11 +5230,11 @@ mod tests {
     #[test]
     fn string_casecmp_p_encoding() {
         // Binary vs binary: ASCII-only case-insensitive comparison
-        run_test_once(r#""\x41".b.casecmp?("\x61".b)"#);
+        run_test(r#""\x41".b.casecmp?("\x61".b)"#);
         // Binary vs binary: non-ASCII bytes are compared as-is
-        run_test_once(r#""\xC3".b.casecmp?("\xE3".b)"#);
+        run_test(r#""\xC3".b.casecmp?("\xE3".b)"#);
         // Binary vs UTF-8: incompatible encodings return nil
-        run_test_once(r#""\xC3".b.casecmp?("abc")"#);
+        run_test(r#""\xC3".b.casecmp?("abc")"#);
         // UTF-8 vs UTF-8: Unicode case folding
         run_test(r#""ä".casecmp?("Ä")"#);
     }
@@ -5462,15 +5484,15 @@ mod tests {
     #[test]
     fn unpack_big_m_soft_line_breaks() {
         // M unpack: =\n is a soft line break (removed)
-        run_test_once(r#""hello=\nworld".unpack("M")"#);
+        run_test(r#""hello=\nworld".unpack("M")"#);
         // =\r\n is also a soft line break
-        run_test_once(r#""hello=\r\nworld".unpack("M")"#);
+        run_test(r#""hello=\r\nworld".unpack("M")"#);
         // =\r alone is NOT a soft line break (kept as-is)
-        run_test_once(r#""hello=\rworld".unpack("M")"#);
+        run_test(r#""hello=\rworld".unpack("M")"#);
         // =XX hex decoding
         run_test(r#""=41=42=43".unpack("M")"#);
         // Mixed content
-        run_test_once(r#""line1=\r\nline2=\nline3".unpack("M")"#);
+        run_test(r#""line1=\r\nline2=\nline3".unpack("M")"#);
     }
 
     #[test]

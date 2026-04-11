@@ -649,8 +649,6 @@ impl Codegen {
                 src,
                 using_xmm,
             } => self.store_gvar(name, src, using_xmm),
-            AsmInst::LoadSVar { id, using_xmm } => self.load_svar(id, using_xmm),
-            AsmInst::StoreSVar { id, src, using_xmm } => self.store_svar(id, src, using_xmm),
 
             AsmInst::ClassDef {
                 base,
@@ -787,6 +785,21 @@ impl Codegen {
                     movq rdx, [r14 - (conv(old))];
                     movq rcx, [r14 - (conv(new))];
                     movq rax, (runtime::alias_method);
+                    call rax;
+                );
+                self.xmm_restore(using_xmm);
+            }
+            AsmInst::AliasGvar {
+                new,
+                old,
+                using_xmm,
+            } => {
+                self.xmm_save(using_xmm);
+                monoasm!( &mut self.jit,
+                    movq rdi, r12;          // &mut Globals
+                    movl rsi, (new.get());  // new IdentId
+                    movl rdx, (old.get());  // old IdentId
+                    movq rax, (runtime::alias_global_var);
                     call rax;
                 );
                 self.xmm_restore(using_xmm);

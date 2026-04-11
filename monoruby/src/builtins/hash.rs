@@ -1685,7 +1685,7 @@ mod tests {
 
     #[test]
     fn hash_inspect_recursive() {
-        run_test_once(
+        run_test(
             r##"
         h = {}
         h[:self] = h
@@ -1696,14 +1696,14 @@ mod tests {
 
     #[test]
     fn hash_replace_type_check() {
-        run_test_once(
+        run_test(
             r##"
         begin
           {}.replace(42)
           false
         rescue TypeError
           true
-        end        
+        end
         "##,
         );
     }
@@ -1734,7 +1734,7 @@ mod tests {
         run_test(r#"a = {a:1}; {a:a, b:a}.to_s"#);
         run_test(r#"a = {a:1}; {a:[a], b:a}.to_s"#);
         // Self-containing hash
-        run_test_once(
+        run_test(
             r##"
         h = {a: 1}
         h[:self] = h

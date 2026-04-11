@@ -98,52 +98,55 @@ mod tests {
 
     #[test]
     fn xor() {
-        run_test(r##"nil ^ true"##);
-        run_test(r##"nil ^ false"##);
-        run_test(r##"nil ^ nil"##);
-        run_test(r##"nil ^ 100"##);
-        run_test(r##"nil ^ //"##);
-        run_test(r##"nil ^ "100""##);
-
-        run_test(r##"nil.^ true"##);
-        run_test(r##"nil.^ false"##);
-        run_test(r##"nil.^ nil"##);
-        run_test(r##"nil.^ 100"##);
-        run_test(r##"nil.^ //"##);
-        run_test(r##"nil.^ "100""##);
+        run_tests(&[
+            r##"nil ^ true"##,
+            r##"nil ^ false"##,
+            r##"nil ^ nil"##,
+            r##"nil ^ 100"##,
+            r##"nil ^ //"##,
+            r##"nil ^ "100""##,
+            r##"nil.^ true"##,
+            r##"nil.^ false"##,
+            r##"nil.^ nil"##,
+            r##"nil.^ 100"##,
+            r##"nil.^ //"##,
+            r##"nil.^ "100""##,
+        ]);
     }
 
     #[test]
     fn and() {
-        run_test(r##"nil & true"##);
-        run_test(r##"nil & false"##);
-        run_test(r##"nil & nil"##);
-        run_test(r##"nil & 100"##);
-        run_test(r##"nil & //"##);
-        run_test(r##"nil & "100""##);
-
-        run_test(r##"nil.& true"##);
-        run_test(r##"nil.& false"##);
-        run_test(r##"nil.& nil"##);
-        run_test(r##"nil.& 100"##);
-        run_test(r##"nil.& //"##);
-        run_test(r##"nil.& "100""##);
+        run_tests(&[
+            r##"nil & true"##,
+            r##"nil & false"##,
+            r##"nil & nil"##,
+            r##"nil & 100"##,
+            r##"nil & //"##,
+            r##"nil & "100""##,
+            r##"nil.& true"##,
+            r##"nil.& false"##,
+            r##"nil.& nil"##,
+            r##"nil.& 100"##,
+            r##"nil.& //"##,
+            r##"nil.& "100""##,
+        ]);
     }
 
     #[test]
     fn or() {
-        run_test(r##"nil | true"##);
-        run_test(r##"nil | false"##);
-        run_test(r##"nil | nil"##);
-        run_test(r##"nil | 100"##);
-        run_test(r##"nil | //"##);
-        run_test(r##"nil | "100""##);
-
-        run_test(r##"nil.| true"##);
-        run_test(r##"nil.| false"##);
-        run_test(r##"nil.| nil"##);
-        run_test(r##"nil.| 100"##);
-        run_test(r##"nil.| //"##);
-        run_test(r##"nil.| "100""##);
+        run_tests(&[
+            r##"nil | true"##,
+            r##"nil | false"##,
+            r##"nil | nil"##,
+            r##"nil | 100"##,
+            r##"nil | //"##,
+            r##"nil | "100""##,
+            r##"nil.| true"##,
+            r##"nil.| false"##,
+            r##"nil.| nil"##,
+            r##"nil.| 100"##,
+            r##"nil.| //"##,
+            r##"nil.| "100""##,
+        ]);
     }
 }

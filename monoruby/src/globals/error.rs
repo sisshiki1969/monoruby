@@ -820,7 +820,7 @@ mod tests {
 
     #[test]
     fn io_closed_error() {
-        run_test_once(
+        run_test(
             r#"
             r, w = IO.pipe
             w.close
@@ -930,7 +930,7 @@ mod tests {
     #[test]
     fn errno_enotdir() {
         // Dir.rmdir on a non-directory triggers Errno::ENOTDIR
-        run_test_once(
+        run_test(
             r#"
             begin
               Dir.rmdir("Cargo.toml")
@@ -944,7 +944,7 @@ mod tests {
     #[test]
     fn errno_eexist() {
         // Dir.mkdir on existing directory triggers Errno::EEXIST
-        run_test_once(
+        run_test(
             r#"
             begin
               Dir.mkdir("/tmp")
@@ -958,7 +958,7 @@ mod tests {
     #[test]
     fn errno_file_open_enoent() {
         // File.open on a non-existent file raises Errno::ENOENT
-        run_test_once(
+        run_test(
             r#"
             begin
               File.open("/nonexistent_file_xyz_123")
@@ -972,7 +972,7 @@ mod tests {
     #[test]
     fn errno_file_read_enoent() {
         // File.read on a non-existent file raises Errno::ENOENT
-        run_test_once(
+        run_test(
             r#"
             begin
               File.read("/nonexistent_file_xyz_123")
@@ -986,7 +986,7 @@ mod tests {
     #[test]
     fn errno_file_delete_enoent() {
         // File.delete on a non-existent file raises Errno::ENOENT
-        run_test_once(
+        run_test(
             r#"
             begin
               File.delete("/nonexistent_file_xyz_123")
@@ -1000,7 +1000,7 @@ mod tests {
     #[test]
     fn errno_file_readlines_enoent() {
         // File.readlines on a non-existent file raises Errno::ENOENT
-        run_test_once(
+        run_test(
             r#"
             begin
               File.readlines("/nonexistent_file_xyz_123")
@@ -1014,7 +1014,7 @@ mod tests {
     #[test]
     fn errno_file_size_enoent() {
         // File.size on a non-existent file raises Errno::ENOENT
-        run_test_once(
+        run_test(
             r#"
             begin
               File.size("/nonexistent_file_xyz_123")
@@ -1028,7 +1028,7 @@ mod tests {
     #[test]
     fn errno_file_write_eisdir() {
         // File.write to a directory raises Errno::EISDIR
-        run_test_once(
+        run_test(
             r#"
             begin
               File.write("/tmp", "test")
@@ -1042,7 +1042,7 @@ mod tests {
     #[test]
     fn errno_io_read_enoent() {
         // IO.read on a non-existent file raises Errno::ENOENT
-        run_test_once(
+        run_test(
             r#"
             begin
               IO.read("/nonexistent_file_xyz_123")
@@ -1056,7 +1056,7 @@ mod tests {
     #[test]
     fn errno_io_sysopen_enoent() {
         // IO.sysopen on a non-existent file raises Errno::ENOENT
-        run_test_once(
+        run_test(
             r#"
             begin
               IO.sysopen("/nonexistent_file_xyz_123")
@@ -1070,7 +1070,7 @@ mod tests {
     #[test]
     fn errno_dir_chdir_enoent() {
         // Dir.chdir to a non-existent directory raises Errno::ENOENT
-        run_test_once(
+        run_test(
             r#"
             begin
               Dir.chdir("/nonexistent_dir_xyz_123")
@@ -1084,7 +1084,7 @@ mod tests {
     #[test]
     fn errno_dir_entries_enoent() {
         // Dir.entries on a non-existent directory raises Errno::ENOENT
-        run_test_once(
+        run_test(
             r#"
             begin
               Dir.entries("/nonexistent_dir_xyz_123")

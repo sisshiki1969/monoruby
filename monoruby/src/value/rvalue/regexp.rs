@@ -143,7 +143,7 @@ impl RegexpInner {
         match self.regex.captures_from_pos(given, pos) {
             Ok(res) => {
                 if let Some(captures) = &res {
-                    vm.save_capture_special_variables(captures)
+                    vm.save_capture_special_variables(captures, given)
                 } else {
                     vm.clear_capture_special_variables();
                 }
@@ -306,7 +306,7 @@ impl RegexpInner {
 
                 let matched_str = m.as_str();
                 let matched = Value::string_from_str(matched_str);
-                vm.save_capture_special_variables(&cap);
+                vm.save_capture_special_variables(&cap, given);
                 let result = vm.invoke_block(globals, &data, &[matched])?;
                 let replace = result.to_s(&globals.store);
 
@@ -410,7 +410,7 @@ impl RegexpInner {
 
                 let matched_str = m.as_str();
                 let key = Value::string_from_str(matched_str);
-                vm.save_capture_special_variables(&cap);
+                vm.save_capture_special_variables(&cap, given);
                 let replacement = if let Some(v) = hash.get(key, vm, globals)? {
                     v.to_s(&globals.store)
                 } else {
@@ -513,7 +513,7 @@ impl RegexpInner {
         }
 
         if let Some(c) = last_captures {
-            vm.save_capture_special_variables(&c)
+            vm.save_capture_special_variables(&c, given)
         }
         Ok(ary)
     }
@@ -547,7 +547,7 @@ impl RegexpInner {
         }
 
         if let Some(c) = last_captures {
-            vm.save_capture_special_variables(&c)
+            vm.save_capture_special_variables(&c, given)
         }
 
         Ok((res, !is_empty))

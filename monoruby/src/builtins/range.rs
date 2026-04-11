@@ -1377,14 +1377,16 @@ mod tests {
 
     #[test]
     fn cover() {
-        run_test("(1..10).cover?(5)");
-        run_test("(1..10).cover?(0)");
-        run_test("(1..10).cover?(11)");
-        run_test("(1...10).cover?(10)");
-        run_test("(1...10).cover?(9)");
-        run_test("(1..10).cover?(1..5)");
-        run_test("(1..10).cover?(0..5)");
-        run_test("(1..10).cover?(5..15)");
-        run_test("('a'..'z').cover?('m')");
+        run_tests(&[
+            "(1..10).cover?(5)",
+            "(1..10).cover?(0)",
+            "(1..10).cover?(11)",
+            "(1...10).cover?(10)",
+            "(1...10).cover?(9)",
+            "(1..10).cover?(1..5)",
+            "(1..10).cover?(0..5)",
+            "(1..10).cover?(5..15)",
+            "('a'..'z').cover?('m')",
+        ]);
     }
 }

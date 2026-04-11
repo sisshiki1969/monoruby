@@ -169,11 +169,13 @@ impl AbstractState {
     pub(super) fn jit_store_gvar(&mut self, ir: &mut AsmIr, name: IdentId, src: SlotId) {
         self.write_back_slots(ir, &[src]);
         let using_xmm = self.get_using_xmm();
+        let error = ir.new_error(self);
         ir.push(AsmInst::StoreGVar {
             name,
             src,
             using_xmm,
         });
+        ir.handle_error(error);
     }
 
     pub(super) fn jit_load_cvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {

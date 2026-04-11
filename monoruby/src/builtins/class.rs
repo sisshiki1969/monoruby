@@ -686,10 +686,190 @@ mod tests {
     }
 
     #[test]
-    fn alias_global_var_error() {
+    fn alias_global_var() {
+        // Aliasing a global variable to a special variable used to be
+        // unsupported, but Phase C of the GvarTable refactor made it work
+        // the same way as CRuby.
+        run_test(
+            r#"
+            "hello world" =~ /world/
+            alias $MATCH $&
+            $MATCH
+            "#,
+        );
+        run_test(
+            r#"
+            $a = 42
+            alias $b $a
+            $b
+            "#,
+        );
+        run_test(
+            r#"
+            $a = 10
+            alias $b $a
+            $b = 99
+            [$a, $b]
+            "#,
+        );
+        // alias chain: $c -> $b -> $a
+        run_test(
+            r#"
+            $a = 1
+            alias $b $a
+            alias $c $b
+            $c = 42
+            [$a, $b, $c]
+            "#,
+        );
+    }
+
+    #[test]
+    fn special_gvar_pre_post_match() {
+        // Pre-match ($`), matched ($&), post-match ($') backed by hooked
+        // getters in GvarTable.
+        run_test(
+            r#"
+            "hello world" =~ /world/
+            [$`, $&, $']
+            "#,
+        );
+        run_test(
+            r#"
+            "abcXYZdef" =~ /XYZ/
+            [$`, $&, $']
+            "#,
+        );
+        // After a non-matching regex, all three reset to nil.
+        run_test(
+            r#"
+            "foo" =~ /X/
+            [$`, $&, $']
+            "#,
+        );
+    }
+
+    #[test]
+    fn special_gvar_nth_match() {
+        // $1..$9 backed by hooked getter that parses the integer suffix
+        // out of the IdentId at runtime.
+        run_test(
+            r#"
+            "2024-04-11" =~ /(\d+)-(\d+)-(\d+)/
+            [$1, $2, $3]
+            "#,
+        );
+        // $~ is an alias-capable hooked variable (writing nil clears it).
+        run_test(
+            r#"
+            "abc" =~ /(.)(.)(.)/
+            alias $md $~
+            $md.to_a
+            "#,
+        );
+    }
+
+    #[test]
+    fn special_gvar_load_path_aliases() {
+        // `$:` should alias `$LOAD_PATH` (both backed by the same hooked
+        // getter in GvarTable::init_builtin_gvars).
+        run_test(
+            r#"
+            $LOAD_PATH.class == Array
+            "#,
+        );
+        run_test(
+            r#"
+            $LOAD_PATH.equal?($:)
+            "#,
+        );
+        // $LOADED_FEATURES has the right class and reflects the loaded
+        // files. (Note: monoruby reconstructs a fresh array on each
+        // access, so `equal?` against `$"` is NOT tested here.)
+        run_test(
+            r#"
+            $LOADED_FEATURES.class == Array
+            "#,
+        );
+        run_test(
+            r#"
+            $".class == Array
+            "#,
+        );
+    }
+
+    #[test]
+    fn special_gvar_program_name_alias() {
+        // $PROGRAM_NAME is an alias of $0; assigning to one is visible
+        // through the other.
+        run_test(
+            r#"
+            $PROGRAM_NAME == $0
+            "#,
+        );
+    }
+
+    #[test]
+    fn special_gvar_match_data_clear_via_nil_assignment() {
+        // `$~ = nil` is the one supported write to a hooked match data
+        // variable; it must clear $~, $&, $', $`, and $1..$N.
+        run_test(
+            r#"
+            "abc" =~ /(b)/
+            $~ = nil
+            [$~, $&, $', $`, $1]
+            "#,
+        );
+    }
+
+    #[test]
+    fn defined_hooked_special_vars() {
+        // `defined?` consults GvarTable::defined_runtime, which treats
+        // $~/$LOAD_PATH/$LOADED_FEATURES as always defined and treats
+        // $&/$'/$`/$N as defined only when the underlying $~ has a
+        // value (mirroring CRuby's BACK_REF / NTH_REF semantics).
+        run_test(
+            r#"
+            [defined?($~), defined?($&), defined?($'), defined?($`),
+             defined?($1), defined?($LOAD_PATH), defined?($:),
+             defined?($LOADED_FEATURES), defined?($")]
+            "#,
+        );
+        // After a successful match, $&/$'/$`/$N also become defined.
+        run_test(
+            r#"
+            "abc" =~ /(b)/
+            [defined?($&), defined?($'), defined?($`), defined?($1)]
+            "#,
+        );
+        // But undefined names are still nil.
+        run_test(
+            r#"
+            defined?($there_is_no_such_global_xxxxx)
+            "#,
+        );
+    }
+
+    #[test]
+    fn write_to_readonly_special_var_raises() {
+        // Hooked variables registered with `setter == None` raise on
+        // assignment, both directly...
+        run_test_error(r#"$& = "x""#);
+        run_test_error(r#"$' = "x""#);
+        run_test_error(r#"$` = "x""#);
+        run_test_error(r#"$1 = "x""#);
+        run_test_error(r#"$LOAD_PATH = []"#);
+    }
+
+    #[test]
+    fn write_through_alias_to_readonly_raises() {
+        // ...and via aliases. CRuby reports the alias name in the error
+        // message; we don't necessarily match the message text, but we do
+        // match the fact that it raises.
         run_test_error(
             r#"
-            alias $MATCH $&
+            alias $ro_alias $&
+            $ro_alias = "x"
             "#,
         );
     }

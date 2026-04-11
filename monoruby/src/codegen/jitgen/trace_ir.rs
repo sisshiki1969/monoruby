@@ -131,14 +131,6 @@ pub(crate) enum TraceIr {
         src: SlotId,
         name: IdentId,
     },
-    LoadSvar {
-        dst: SlotId,
-        id: u32,
-    },
-    StoreSvar {
-        src: SlotId,
-        id: u32,
-    },
     UnOp {
         kind: UnOpK,
         dst: SlotId,
@@ -267,6 +259,10 @@ pub(crate) enum TraceIr {
     AliasMethod {
         new: SlotId,
         old: SlotId,
+    },
+    AliasGvar {
+        new: IdentId,
+        old: IdentId,
     },
     ///
     /// Check if `yield` is callable.
@@ -402,9 +398,9 @@ impl TraceIr {
                     dst: SlotId::new(op1_w),
                     name: IdentId::from(op1_l),
                 },
-                28 => TraceIr::LoadSvar {
-                    dst: SlotId::new(op1_w),
-                    id: op1_l,
+                28 => TraceIr::AliasGvar {
+                    new: IdentId::from(op1_l),
+                    old: IdentId::from(op2 as u32),
                 },
                 29 => TraceIr::StoreCvar {
                     src: SlotId::new(op1_w),
@@ -455,10 +451,6 @@ impl TraceIr {
                 39 => TraceIr::Array {
                     dst: SlotId::new(op1_w),
                     callid: CallSiteId::from(op1_l),
-                },
-                41 => TraceIr::StoreSvar {
-                    src: SlotId::new(op1_w),
-                    id: op1_l,
                 },
                 40 => {
                     let (_, op1_w2, op1_w3) = dec_www(op1);
@@ -922,30 +914,6 @@ impl TraceIr {
             TraceIr::StoreCvar { src, name } => {
                 format!("{name} = {:?}", src)
             }
-            TraceIr::LoadSvar { dst: ret, id } => {
-                // 0 => $&
-                // 1 => $'
-                // 100 + n => $n
-                format!(
-                    "{:?} = ${}",
-                    ret,
-                    match id {
-                        ruruby_parse::SPECIAL_LASTMATCH => "&".to_string(),
-                        ruruby_parse::SPECIAL_POSTMATCH => "'".to_string(),
-                        ruruby_parse::SPECIAL_MATCHDATA => "~".to_string(),
-                        ruruby_parse::SPECIAL_LOADPATH => "$LOAD_PATH".to_string(),
-                        ruruby_parse::SPECIAL_LOADEDFEATURES => "$LOADED_FEATURES".to_string(),
-                        n if n >= 100 => (n - 100).to_string(),
-                        _ => unreachable!(),
-                    }
-                )
-            }
-            TraceIr::StoreSvar { src, id } => {
-                format!("${} = {:?}", match id {
-                    ruruby_parse::SPECIAL_MATCHDATA => "~".to_string(),
-                    _ => format!("<special:{}>", id),
-                }, src)
-            }
             TraceIr::UnOp {
                 kind,
                 dst,
@@ -1111,6 +1079,9 @@ impl TraceIr {
             }
             TraceIr::AliasMethod { new, old } => {
                 format!("alias_method({:?}<-{:?})", new, old)
+            }
+            TraceIr::AliasGvar { new, old } => {
+                format!("alias_gvar({}<-{})", new, old)
             }
             TraceIr::DefinedYield { dst } => format!("{:?} = defined?(yield)", dst),
             TraceIr::DefinedConst { dst, siteid } => {

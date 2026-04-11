@@ -34,53 +34,56 @@ mod tests {
 
     #[test]
     fn xor() {
-        run_test(r##"true ^ true"##);
-        run_test(r##"true ^ false"##);
-        run_test(r##"true ^ nil"##);
-        run_test(r##"true ^ 100"##);
-        run_test(r##"true ^ //"##);
-        run_test(r##"true ^ "100""##);
-
-        run_test(r##"true.^ true"##);
-        run_test(r##"true.^ false"##);
-        run_test(r##"true.^ nil"##);
-        run_test(r##"true.^ 100"##);
-        run_test(r##"true.^ //"##);
-        run_test(r##"true.^ "100""##);
+        run_tests(&[
+            r##"true ^ true"##,
+            r##"true ^ false"##,
+            r##"true ^ nil"##,
+            r##"true ^ 100"##,
+            r##"true ^ //"##,
+            r##"true ^ "100""##,
+            r##"true.^ true"##,
+            r##"true.^ false"##,
+            r##"true.^ nil"##,
+            r##"true.^ 100"##,
+            r##"true.^ //"##,
+            r##"true.^ "100""##,
+        ]);
     }
 
     #[test]
     fn and() {
-        run_test(r##"true & true"##);
-        run_test(r##"true & false"##);
-        run_test(r##"true & nil"##);
-        run_test(r##"true & 100"##);
-        run_test(r##"true & //"##);
-        run_test(r##"true & "100""##);
-
-        run_test(r##"true.& true"##);
-        run_test(r##"true.& false"##);
-        run_test(r##"true.& nil"##);
-        run_test(r##"true.& 100"##);
-        run_test(r##"true.& //"##);
-        run_test(r##"true.& "100""##);
+        run_tests(&[
+            r##"true & true"##,
+            r##"true & false"##,
+            r##"true & nil"##,
+            r##"true & 100"##,
+            r##"true & //"##,
+            r##"true & "100""##,
+            r##"true.& true"##,
+            r##"true.& false"##,
+            r##"true.& nil"##,
+            r##"true.& 100"##,
+            r##"true.& //"##,
+            r##"true.& "100""##,
+        ]);
     }
 
     #[test]
     fn or() {
-        run_test(r##"true | true"##);
-        run_test(r##"true | false"##);
-        run_test(r##"true | nil"##);
-        run_test(r##"true | 100"##);
-        run_test(r##"true | //"##);
-        run_test(r##"true | "100""##);
-
-        run_test(r##"true.| true"##);
-        run_test(r##"true.| false"##);
-        run_test(r##"true.| nil"##);
-        run_test(r##"true.| 100"##);
-        run_test(r##"true.| //"##);
-        run_test(r##"true.| "100""##);
+        run_tests(&[
+            r##"true | true"##,
+            r##"true | false"##,
+            r##"true | nil"##,
+            r##"true | 100"##,
+            r##"true | //"##,
+            r##"true | "100""##,
+            r##"true.| true"##,
+            r##"true.| false"##,
+            r##"true.| nil"##,
+            r##"true.| 100"##,
+            r##"true.| //"##,
+            r##"true.| "100""##,
+        ]);
     }
 
     #[test]

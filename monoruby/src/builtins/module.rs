@@ -174,12 +174,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// No-op hook for method_added/removed/undefined, included/prepended/extended, const_added.
 /// Required during bootstrap before startup.rb overrides them.
 #[monoruby_builtin]
-fn module_noop_hook(
-    _: &mut Executor,
-    _: &mut Globals,
-    _lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn module_noop_hook(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::nil())
 }
 
@@ -536,7 +531,12 @@ fn validate_constant_name(name: IdentId) -> Result<()> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_eval.html]
 #[monoruby_builtin]
-fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+fn class_eval(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
     let module = lfp.self_val().as_class();
 
     if let Some(bh) = lfp.block() {
@@ -1800,14 +1800,14 @@ mod tests {
     #[test]
     fn module_new() {
         // Module.new returns an anonymous module with nil name
-        run_test_once(
+        run_test(
             r#"
             m = Module.new
             m.name
             "#,
         );
         // Module.new creates a proper Module
-        run_test_once(
+        run_test(
             r#"
             Module.new.is_a?(Module)
             "#,
@@ -1817,14 +1817,14 @@ mod tests {
     #[test]
     fn set_temporary_name() {
         // set_temporary_name returns self
-        run_test_once(
+        run_test(
             r#"
             m = Module.new
             m.set_temporary_name("foo").equal?(m)
             "#,
         );
         // set_temporary_name changes name
-        run_test_once(
+        run_test(
             r#"
             m = Module.new
             m.set_temporary_name("my_temp")
@@ -1832,7 +1832,7 @@ mod tests {
             "#,
         );
         // set_temporary_name with nil resets name
-        run_test_once(
+        run_test(
             r#"
             m = Module.new
             m.set_temporary_name("temp")
@@ -1841,7 +1841,7 @@ mod tests {
             "#,
         );
         // set_temporary_name works on Class.new
-        run_test_once(
+        run_test(
             r#"
             c = Class.new
             c.set_temporary_name("my_cls")
@@ -2505,7 +2505,7 @@ mod tests {
 
     #[test]
     fn alias_method() {
-        run_test_once(
+        run_test(
             r#"
             class String
               alias_method :foo, :upcase
@@ -2517,7 +2517,7 @@ mod tests {
 
     #[test]
     fn method_defined() {
-        run_test_once(
+        run_test(
             r##"
         module A
           def method1; end
@@ -2673,7 +2673,7 @@ mod tests {
 
     #[test]
     fn method_added_hook() {
-        run_test_once(
+        run_test(
             r##"
             $res = []
             class C
@@ -2690,7 +2690,7 @@ mod tests {
 
     #[test]
     fn singleton_method_added_hook() {
-        run_test_once(
+        run_test(
             r##"
             $res = []
             class C
@@ -2707,7 +2707,7 @@ mod tests {
 
     #[test]
     fn method_removed_hook() {
-        run_test_once(
+        run_test(
             r##"
             $res = []
             class C
@@ -2725,7 +2725,7 @@ mod tests {
 
     #[test]
     fn method_undefined_hook() {
-        run_test_once(
+        run_test(
             r##"
             $res = []
             class C
@@ -2742,7 +2742,7 @@ mod tests {
 
     #[test]
     fn singleton_method_removed_hook() {
-        run_test_once(
+        run_test(
             r##"
             $res = []
             class C
@@ -2762,7 +2762,7 @@ mod tests {
 
     #[test]
     fn singleton_method_undefined_hook() {
-        run_test_once(
+        run_test(
             r##"
             $res = []
             class C
@@ -2782,7 +2782,7 @@ mod tests {
 
     #[test]
     fn singleton_method_removed_on_object() {
-        run_test_once(
+        run_test(
             r##"
             $res = []
             obj = Object.new
@@ -2801,7 +2801,7 @@ mod tests {
 
     #[test]
     fn singleton_method_undefined_on_object() {
-        run_test_once(
+        run_test(
             r##"
             $res = []
             obj = Object.new
@@ -2820,7 +2820,7 @@ mod tests {
 
     #[test]
     fn const_added_hook() {
-        run_test_once(
+        run_test(
             r##"
             $res = []
             class C
@@ -2837,7 +2837,7 @@ mod tests {
 
     #[test]
     fn const_added_const_set() {
-        run_test_once(
+        run_test(
             r##"
             $res = []
             class C
@@ -2853,7 +2853,7 @@ mod tests {
 
     #[test]
     fn define_method_hook() {
-        run_test_once(
+        run_test(
             r##"
             $res = []
             class C
@@ -3128,5 +3128,4 @@ mod tests {
             "#,
         );
     }
-
 }

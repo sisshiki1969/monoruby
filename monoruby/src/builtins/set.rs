@@ -1124,22 +1124,26 @@ mod tests {
 
     #[test]
     fn set_basic() {
-        run_test("Set.new.class.to_s");
-        run_test("Set[1, 2, 3].size");
-        run_test("Set[1, 2, 3].include?(2)");
-        run_test("Set[1, 2, 3].include?(4)");
-        run_test("Set.new.empty?");
-        run_test("Set[1].empty?");
+        run_tests(&[
+            "Set.new.class.to_s",
+            "Set[1, 2, 3].size",
+            "Set[1, 2, 3].include?(2)",
+            "Set[1, 2, 3].include?(4)",
+            "Set.new.empty?",
+            "Set[1].empty?",
+        ]);
     }
 
     #[test]
     fn set_add_delete() {
-        run_test("s = Set.new; s << 1; s << 2; s << 1; s.size");
-        run_test("s = Set[1, 2]; s.add?(3).equal?(s)");
-        run_test("s = Set[1, 2]; s.add?(1).nil?");
-        run_test("s = Set[1, 2, 3]; s.delete(2); s.include?(2)");
-        run_test("s = Set[1, 2]; s.delete?(2).equal?(s)");
-        run_test("s = Set[1, 2]; s.delete?(3).nil?");
+        run_tests(&[
+            "s = Set.new; s << 1; s << 2; s << 1; s.size",
+            "s = Set[1, 2]; s.add?(3).equal?(s)",
+            "s = Set[1, 2]; s.add?(1).nil?",
+            "s = Set[1, 2, 3]; s.delete(2); s.include?(2)",
+            "s = Set[1, 2]; s.delete?(2).equal?(s)",
+            "s = Set[1, 2]; s.delete?(3).nil?",
+        ]);
     }
 
     #[test]
@@ -1152,16 +1156,18 @@ mod tests {
 
     #[test]
     fn set_comparison() {
-        run_test("Set[1, 2] == Set[2, 1]");
-        run_test("Set[1, 2] == Set[1, 2, 3]");
-        run_test("Set[1, 2].subset?(Set[1, 2, 3])");
-        run_test("Set[1, 2, 3].superset?(Set[1, 2])");
-        run_test("Set[1, 2].proper_subset?(Set[1, 2, 3])");
-        run_test("Set[1, 2].proper_subset?(Set[1, 2])");
-        run_test("Set[1, 2].disjoint?(Set[3, 4])");
-        run_test("Set[1, 2].disjoint?(Set[2, 3])");
-        run_test("Set[1, 2].intersect?(Set[2, 3])");
-        run_test("Set[1, 2].intersect?(Set[3, 4])");
+        run_tests(&[
+            "Set[1, 2] == Set[2, 1]",
+            "Set[1, 2] == Set[1, 2, 3]",
+            "Set[1, 2].subset?(Set[1, 2, 3])",
+            "Set[1, 2, 3].superset?(Set[1, 2])",
+            "Set[1, 2].proper_subset?(Set[1, 2, 3])",
+            "Set[1, 2].proper_subset?(Set[1, 2])",
+            "Set[1, 2].disjoint?(Set[3, 4])",
+            "Set[1, 2].disjoint?(Set[2, 3])",
+            "Set[1, 2].intersect?(Set[2, 3])",
+            "Set[1, 2].intersect?(Set[3, 4])",
+        ]);
     }
 
     #[test]

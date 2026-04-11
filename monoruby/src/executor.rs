@@ -58,6 +58,7 @@ pub struct Executor {
     /// lexical class stack.
     lexical_class: Vec<Vec<Cref>>,
     sp_last_match: Option<String>,   // $&        : Regexp.last_match(0)
+    sp_pre_match: Option<String>,    // $`        : Regexp.pre_match
     sp_post_match: Option<String>,   // $'        : Regexp.post_match
     sp_matches: Vec<Option<String>>, // $&, $1 ... $n : Regexp.last_match(n)
     temp_stack: Vec<Value>,
@@ -75,6 +76,7 @@ impl std::default::Default for Executor {
             stack_limit: 0,
             lexical_class: vec![vec![]],
             sp_last_match: None,
+            sp_pre_match: None,
             sp_post_match: None,
             sp_matches: vec![],
             temp_stack: vec![],
@@ -99,7 +101,11 @@ impl Executor {
     pub fn init(globals: &mut Globals, program_name: &str) -> Result<Self> {
         let program_name = Value::string_from_str(program_name);
         globals.set_gvar(IdentId::get_id("$0"), program_name);
-        globals.set_gvar(IdentId::get_id("$PROGRAM_NAME"), program_name);
+        // $PROGRAM_NAME is an alias of $0 in Ruby; make them share one entry.
+        globals.alias_global_variable(
+            IdentId::get_id("$PROGRAM_NAME"),
+            IdentId::get_id("$0"),
+        );
         let mut executor = Self::default();
         let path = dirs::home_dir()
             .unwrap()
@@ -217,18 +223,16 @@ impl Executor {
         self.parent_fiber
     }
 
-    pub fn sp_last_match(&self) -> Value {
-        self.sp_last_match
-            .as_ref()
-            .map(|s| Value::string_from_str(s))
-            .unwrap_or_default()
+    pub fn sp_last_match(&self) -> Option<Value> {
+        self.sp_last_match.as_ref().map(|s| Value::string_from_str(s))
     }
 
-    pub fn sp_post_match(&self) -> Value {
-        self.sp_post_match
-            .as_ref()
-            .map(|s| Value::string_from_str(s))
-            .unwrap_or_default()
+    pub fn sp_pre_match(&self) -> Option<Value> {
+        self.sp_pre_match.as_ref().map(|s| Value::string_from_str(s))
+    }
+
+    pub fn sp_post_match(&self) -> Option<Value> {
+        self.sp_post_match.as_ref().map(|s| Value::string_from_str(s))
     }
 }
 
@@ -1580,6 +1584,7 @@ impl Executor {
 impl Executor {
     pub(crate) fn clear_capture_special_variables(&mut self) {
         self.sp_last_match = None;
+        self.sp_pre_match = None;
         self.sp_post_match = None;
         self.sp_matches.clear();
     }
@@ -1590,19 +1595,28 @@ impl Executor {
     ///
     /// - $& <- The string which matched successfully at last.
     ///
+    /// - $` <- The string before $&.
+    ///
     /// - $' <- The string after $&.
     ///
     pub(crate) fn save_capture_special_variables<'h>(
         &mut self,
         captures: &onigmo_regex::Captures<'h>,
+        haystack: &str,
     ) {
         match captures.get(0) {
             Some(m) => {
-                self.sp_last_match = Some(m.to_string());
-                self.sp_post_match = Some(m.post().to_string());
+                let matched = m.as_str();
+                let post = m.post();
+                // `haystack = pre ++ matched ++ post`
+                let pre_len = haystack.len() - matched.len() - post.len();
+                self.sp_last_match = Some(matched.to_string());
+                self.sp_pre_match = Some(haystack[..pre_len].to_string());
+                self.sp_post_match = Some(post.to_string());
             }
             None => {
                 self.sp_last_match = None;
+                self.sp_pre_match = None;
                 self.sp_post_match = None;
             }
         };
@@ -1613,16 +1627,16 @@ impl Executor {
         }
     }
 
-    pub(crate) fn get_special_matches(&self, mut nth: i64) -> Value {
+    pub(crate) fn get_special_matches(&self, mut nth: i64) -> Option<Value> {
         if nth < 0 {
             nth += self.sp_matches.len() as i64
         }
-        if nth >= 0 {
-            if let Some(Some(s)) = self.sp_matches.get(nth as usize) {
-                return Value::string_from_str(s);
-            }
-        };
-        Value::nil()
+        if nth >= 0
+            && let Some(Some(s)) = self.sp_matches.get(nth as usize)
+        {
+            return Some(Value::string_from_str(s));
+        }
+        None
     }
 
     pub(crate) fn get_last_matchdata(&self) -> Value {

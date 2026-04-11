@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn binding_source_location() {
         // source_location returns [String, Integer]
-        run_test_once(
+        run_test(
             r#"
         b = binding
         sl = b.source_location
@@ -200,14 +200,14 @@ mod tests {
         "#,
         );
         // source_location line matches the binding call line
-        run_test_once(
+        run_test(
             r#"
         line = __LINE__; b = binding
         b.source_location[1] == line
         "#,
         );
         // binding inside a block returns the block's line
-        run_test_once(
+        run_test(
             r#"
         b = nil
         line = nil

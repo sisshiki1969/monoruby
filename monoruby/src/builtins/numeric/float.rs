@@ -883,95 +883,107 @@ mod tests {
 
     #[test]
     fn angle() {
-        run_test("1.0.angle");
-        run_test("(-1.0).angle");
-        run_test("0.0.angle");
-        run_test("(1.0/0).angle");
-        run_test("(-1.0/0).angle");
-        run_test_once("Float::NAN.angle.nan?");
-        run_test("1.0.arg");
-        run_test("(-1.0).arg");
-        run_test("1.0.phase");
-        run_test("(-1.0).phase");
-        // NaN returns self (object identity)
-        run_test_once("n = Float::NAN; n.angle.equal?(n)");
-        run_test_once("n = Float::NAN; n.arg.equal?(n)");
-        run_test_once("n = Float::NAN; n.phase.equal?(n)");
-        run_test("1.angle");
-        run_test("(-1).angle");
-        run_test("0.angle");
+        run_tests(&[
+            "1.0.angle",
+            "(-1.0).angle",
+            "0.0.angle",
+            "(1.0/0).angle",
+            "(-1.0/0).angle",
+            "Float::NAN.angle.nan?",
+            "1.0.arg",
+            "(-1.0).arg",
+            "1.0.phase",
+            "(-1.0).phase",
+            // NaN returns self (object identity)
+            "n = Float::NAN; n.angle.equal?(n)",
+            "n = Float::NAN; n.arg.equal?(n)",
+            "n = Float::NAN; n.phase.equal?(n)",
+            "1.angle",
+            "(-1).angle",
+            "0.angle",
+        ]);
     }
 
     #[test]
     fn float() {
-        run_test("4.87.to_i");
-        run_test("-2.18.to_i");
-        run_test("4.7777.to_f");
-        run_test("-725.11.to_f");
-        run_test("3.0.div(2)");
-        run_test("3.0.div(-2)");
-        run_test("(-3.0).div(2)");
-        run_test("(-3.0).div(-2)");
-        run_test("(-37.044).abs");
-        run_test("37.044.magnitude");
+        run_tests(&[
+            "4.87.to_i",
+            "-2.18.to_i",
+            "4.7777.to_f",
+            "-725.11.to_f",
+            "3.0.div(2)",
+            "3.0.div(-2)",
+            "(-3.0).div(2)",
+            "(-3.0).div(-2)",
+            "(-37.044).abs",
+            "37.044.magnitude",
+        ]);
     }
 
     #[test]
     fn round() {
-        run_test("1.2.floor");
-        run_test("(-1.2).floor");
-        run_test("1.2.floor(1)");
-        run_test("(-1.2).floor(1)");
-        run_test("1.567.floor(2)");
-        run_test("1234.567.floor(-2)");
-        run_test("11.6.round");
-        run_test("11.5.round");
-        run_test("11.4.round");
-        run_test("(-11.4).round");
-        run_test("(-11.5).round");
-        run_test("(-11.6).round");
-        run_test("(1000 * Math::PI).round(3)");
-        run_test("(1000 * Math::PI).round(0)");
-        run_test("(1000 * Math::PI).round(-3)");
+        run_tests(&[
+            "1.2.floor",
+            "(-1.2).floor",
+            "1.2.floor(1)",
+            "(-1.2).floor(1)",
+            "1.567.floor(2)",
+            "1234.567.floor(-2)",
+            "11.6.round",
+            "11.5.round",
+            "11.4.round",
+            "(-11.4).round",
+            "(-11.5).round",
+            "(-11.6).round",
+            "(1000 * Math::PI).round(3)",
+            "(1000 * Math::PI).round(0)",
+            "(1000 * Math::PI).round(-3)",
+        ]);
     }
 
     #[test]
     fn ceil_truncate_round_large_ndigits() {
-        // ndigits > 9 would overflow 10i32.pow() before the fix
-        run_test("1.123456789.ceil(15)");
-        run_test("1.123456789.floor(15)");
-        run_test("1.123456789.truncate(15)");
-        run_test("1.123456789.round(15)");
-        // Large negative ndigits
-        run_test("123456789.0.ceil(-15)");
-        run_test("123456789.0.floor(-15)");
-        run_test("123456789.0.truncate(-15)");
-        run_test("123456789.0.round(-15)");
+        run_tests(&[
+            // ndigits > 9 would overflow 10i32.pow() before the fix
+            "1.123456789.ceil(15)",
+            "1.123456789.floor(15)",
+            "1.123456789.truncate(15)",
+            "1.123456789.round(15)",
+            // Large negative ndigits
+            "123456789.0.ceil(-15)",
+            "123456789.0.floor(-15)",
+            "123456789.0.truncate(-15)",
+            "123456789.0.round(-15)",
+        ]);
     }
 
     #[test]
     fn finite() {
-        run_test("(1/0.0).finite?");
-        run_test("(-1/0.0).finite?");
-        run_test("(Float::NAN).finite?");
-        run_test("(5.5).finite?");
-        run_test("(1/0.0).infinite?");
-        run_test("(-1/0.0).infinite?");
-        run_test("(Float::NAN).infinite?");
-        run_test("(5.5).infinite?");
-        run_test("(1/0.0).nan?");
-        run_test("(-1/0.0).nan?");
-        run_test("(Float::NAN).nan?");
-        run_test("(5.5).nan?");
+        run_tests(&[
+            "(1/0.0).finite?",
+            "(-1/0.0).finite?",
+            "(Float::NAN).finite?",
+            "(5.5).finite?",
+            "(1/0.0).infinite?",
+            "(-1/0.0).infinite?",
+            "(Float::NAN).infinite?",
+            "(5.5).infinite?",
+            "(1/0.0).nan?",
+            "(-1/0.0).nan?",
+            "(Float::NAN).nan?",
+            "(5.5).nan?",
+        ]);
     }
 
     #[test]
     fn float_division_by_zero() {
-        run_test("(0.0/0).nan?");
-        run_test("(0.0/0.0).nan?");
-        run_test("1.0/0 == Float::INFINITY");
-        run_test("-1.0/0 == -Float::INFINITY");
-        run_test("1.0/0.0 == Float::INFINITY");
+        run_tests(&[
+            "(0.0/0).nan?",
+            "(0.0/0.0).nan?",
+            "1.0/0 == Float::INFINITY",
+            "-1.0/0 == -Float::INFINITY",
+            "1.0/0.0 == Float::INFINITY",
+        ]);
     }
 
     #[test]
@@ -990,24 +1002,28 @@ mod tests {
 
     #[test]
     fn zero_positive_negative() {
-        run_test("0.0.zero?");
-        run_test("1.0.zero?");
-        run_test("(-1.0).zero?");
-        run_test("1.0.positive?");
-        run_test("(-1.0).positive?");
-        run_test("0.0.positive?");
-        run_test("1.0.negative?");
-        run_test("(-1.0).negative?");
-        run_test("0.0.negative?");
+        run_tests(&[
+            "0.0.zero?",
+            "1.0.zero?",
+            "(-1.0).zero?",
+            "1.0.positive?",
+            "(-1.0).positive?",
+            "0.0.positive?",
+            "1.0.negative?",
+            "(-1.0).negative?",
+            "0.0.negative?",
+        ]);
     }
 
     #[test]
     fn float_to_r() {
-        run_test_once("1.5.to_r");
-        run_test_once("1.5.to_r.class");
-        run_test_once("0.0.to_r");
-        run_test_once("(-2.5).to_r");
-        run_test_once("0.1.to_r");
+        run_tests(&[
+            "1.5.to_r",
+            "1.5.to_r.class",
+            "0.0.to_r",
+            "(-2.5).to_r",
+            "0.1.to_r",
+        ]);
         run_test_error("Float::NAN.to_r");
         run_test_error("Float::INFINITY.to_r");
         run_test_error("(-Float::INFINITY).to_r");
@@ -1015,38 +1031,40 @@ mod tests {
 
     #[test]
     fn float_inspect_to_s() {
-        // Special values
-        run_test("(1.0/0.0).inspect");
-        run_test("(-1.0/0.0).inspect");
-        run_test("(0.0/0.0).inspect");
-        run_test("(1.0/0.0).to_s");
-        run_test("(-1.0/0.0).to_s");
-        run_test("(0.0/0.0).to_s");
-        // Negative zero
-        run_test("(-0.0).inspect");
-        run_test("(-0.0).to_s");
-        run_test("0.0.inspect");
-        // Simple values
-        run_test("1.0.inspect");
-        run_test("100.0.inspect");
-        run_test("(-1.0).inspect");
-        // Fixed notation boundaries
-        run_test("0.0001.inspect");
-        run_test("0.001.inspect");
-        run_test("100000000000000.0.inspect");
-        // Scientific notation
-        run_test("0.00001.inspect");
-        run_test("(-0.00001).inspect");
-        run_test("1e15.inspect");
-        run_test("(-1e15).inspect");
-        run_test("1e16.inspect");
-        run_test("1e20.inspect");
-        // Shortest round-trip representation
-        run_test("(1.0/7).inspect");
-        run_test("0.21611564636388508.inspect");
-        // String interpolation uses to_s
-        run_test("\"#{1.0/0.0}\"");
-        run_test("\"#{-0.0}\"");
+        run_tests(&[
+            // Special values
+            "(1.0/0.0).inspect",
+            "(-1.0/0.0).inspect",
+            "(0.0/0.0).inspect",
+            "(1.0/0.0).to_s",
+            "(-1.0/0.0).to_s",
+            "(0.0/0.0).to_s",
+            // Negative zero
+            "(-0.0).inspect",
+            "(-0.0).to_s",
+            "0.0.inspect",
+            // Simple values
+            "1.0.inspect",
+            "100.0.inspect",
+            "(-1.0).inspect",
+            // Fixed notation boundaries
+            "0.0001.inspect",
+            "0.001.inspect",
+            "100000000000000.0.inspect",
+            // Scientific notation
+            "0.00001.inspect",
+            "(-0.00001).inspect",
+            "1e15.inspect",
+            "(-1e15).inspect",
+            "1e16.inspect",
+            "1e20.inspect",
+            // Shortest round-trip representation
+            "(1.0/7).inspect",
+            "0.21611564636388508.inspect",
+            // String interpolation uses to_s
+            "\"#{1.0/0.0}\"",
+            "\"#{-0.0}\"",
+        ]);
     }
 
     #[test]
@@ -1120,21 +1138,21 @@ mod tests {
     // Fix 5: Float#<=> with infinite? objects
     #[test]
     fn float_cmp_infinite() {
-        run_test_once(
+        run_test(
             r#"
             obj = Object.new
             def obj.infinite?; 1; end
             Float::INFINITY <=> obj
             "#,
         );
-        run_test_once(
+        run_test(
             r#"
             obj = Object.new
             def obj.infinite?; -1; end
             Float::INFINITY <=> obj
             "#,
         );
-        run_test_once(
+        run_test(
             r#"
             obj = Object.new
             def obj.infinite?; nil; end
@@ -1218,7 +1236,7 @@ mod tests {
 
     #[test]
     fn float_coerce_string() {
-        run_test_once(r#"1.0.coerce("2.5").inspect"#);
+        run_test(r#"1.0.coerce("2.5").inspect"#);
         run_test_error(r#"1.0.coerce("not_a_number")"#);
     }
 
@@ -1249,20 +1267,20 @@ mod tests {
 
     #[test]
     fn float_eq_coerce_fallback() {
-        run_test_once(
+        run_test_with_prelude(
+            "1.0 == Coercible.new",
             r#"
             class Coercible
               def ==(other); true; end
             end
-            1.0 == Coercible.new
             "#,
         );
-        run_test_once(
+        run_test_with_prelude(
+            "1.0 === Coercible.new",
             r#"
             class Coercible
               def ==(other); true; end
             end
-            1.0 === Coercible.new
             "#,
         );
     }

@@ -262,15 +262,6 @@ impl<'a> JitContext<'a> {
                 state.jit_store_gvar(ir, name, val);
                 state.unset_side_effect_guard();
             }
-            TraceIr::LoadSvar { dst, id } => {
-                ir.load_svar(state, id);
-                state.def_rax2acc(ir, dst);
-            }
-            TraceIr::StoreSvar { src, id } => {
-                state.write_back_slots(ir, &[src]);
-                ir.store_svar(state, src, id);
-                state.unset_side_effect_guard();
-            }
             TraceIr::LoadDynVar(dst, src) => {
                 assert!(!dst.is_self());
                 self.load_dynvar(state, ir, src);
@@ -485,6 +476,15 @@ impl<'a> JitContext<'a> {
                 state.write_back_slots(ir, &[new, old]);
                 ir.alias_method(state, new, old);
                 state.unset_class_version_guard();
+                state.unset_side_effect_guard();
+            }
+            TraceIr::AliasGvar { new, old } => {
+                let using_xmm = state.get_using_xmm();
+                ir.push(AsmInst::AliasGvar {
+                    new,
+                    old,
+                    using_xmm,
+                });
                 state.unset_side_effect_guard();
             }
 

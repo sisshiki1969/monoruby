@@ -828,23 +828,25 @@ mod tests {
 
     #[test]
     fn marshal_dump_integers() {
-        run_test("Marshal.dump(0)");
-        run_test("Marshal.dump(1)");
-        run_test("Marshal.dump(-1)");
-        run_test("Marshal.dump(5)");
-        run_test("Marshal.dump(-5)");
-        run_test("Marshal.dump(122)");
-        run_test("Marshal.dump(-123)");
-        run_test("Marshal.dump(123)");
-        run_test("Marshal.dump(-124)");
-        run_test("Marshal.dump(255)");
-        run_test("Marshal.dump(256)");
-        run_test("Marshal.dump(65535)");
-        run_test("Marshal.dump(65536)");
-        run_test("Marshal.dump(0xffffff)");
-        run_test("Marshal.dump(0x1000000)");
-        run_test("Marshal.dump(0x3fffffff)");
-        run_test("Marshal.dump(-0x40000000)");
+        run_tests(&[
+            "Marshal.dump(0)",
+            "Marshal.dump(1)",
+            "Marshal.dump(-1)",
+            "Marshal.dump(5)",
+            "Marshal.dump(-5)",
+            "Marshal.dump(122)",
+            "Marshal.dump(-123)",
+            "Marshal.dump(123)",
+            "Marshal.dump(-124)",
+            "Marshal.dump(255)",
+            "Marshal.dump(256)",
+            "Marshal.dump(65535)",
+            "Marshal.dump(65536)",
+            "Marshal.dump(0xffffff)",
+            "Marshal.dump(0x1000000)",
+            "Marshal.dump(0x3fffffff)",
+            "Marshal.dump(-0x40000000)",
+        ]);
     }
 
     #[test]
@@ -857,28 +859,30 @@ mod tests {
 
     #[test]
     fn marshal_dump_float() {
-        run_test("Marshal.dump(0.0)");
         //run_test("Marshal.dump(-0.0)"); // monoruby doesn't preserve -0.0 literal yet
-        run_test("Marshal.dump(1.0)");
-        run_test("Marshal.dump(-1.5)");
-        run_test("Marshal.dump(1.0/0)");
-        run_test("Marshal.dump(-1.0/0)");
-        run_test("Marshal.dump(0.0/0.0)");
-        run_test("Marshal.dump(3.14159265358979)");
-        run_test("Marshal.dump(100.0)");
-        run_test("Marshal.dump(12.0)");
-        run_test("Marshal.dump(0.1)");
-        run_test("Marshal.dump(0.001)");
-        run_test("Marshal.dump(1.23e5)");
-        run_test("Marshal.dump(1.23e-5)");
-        run_test("Marshal.dump(1.7976931348623157e308)");
-        run_test("Marshal.dump(0.0001)");
-        run_test("Marshal.dump(0.00001)");
-        run_test("Marshal.dump(-100.0)");
-        run_test("Marshal.dump(-1.23e-5)");
-        run_test("Marshal.dump(2.718281828459045)");
-        run_test("Marshal.dump(10.0)");
-        run_test("Marshal.dump(1000.0)");
+        run_tests(&[
+            "Marshal.dump(0.0)",
+            "Marshal.dump(1.0)",
+            "Marshal.dump(-1.5)",
+            "Marshal.dump(1.0/0)",
+            "Marshal.dump(-1.0/0)",
+            "Marshal.dump(0.0/0.0)",
+            "Marshal.dump(3.14159265358979)",
+            "Marshal.dump(100.0)",
+            "Marshal.dump(12.0)",
+            "Marshal.dump(0.1)",
+            "Marshal.dump(0.001)",
+            "Marshal.dump(1.23e5)",
+            "Marshal.dump(1.23e-5)",
+            "Marshal.dump(1.7976931348623157e308)",
+            "Marshal.dump(0.0001)",
+            "Marshal.dump(0.00001)",
+            "Marshal.dump(-100.0)",
+            "Marshal.dump(-1.23e-5)",
+            "Marshal.dump(2.718281828459045)",
+            "Marshal.dump(10.0)",
+            "Marshal.dump(1000.0)",
+        ]);
     }
 
     #[test]
@@ -928,21 +932,23 @@ mod tests {
 
     #[test]
     fn marshal_load_integers() {
-        run_test("Marshal.load(Marshal.dump(0))");
-        run_test("Marshal.load(Marshal.dump(1))");
-        run_test("Marshal.load(Marshal.dump(-1))");
-        run_test("Marshal.load(Marshal.dump(122))");
-        run_test("Marshal.load(Marshal.dump(-123))");
-        run_test("Marshal.load(Marshal.dump(123))");
-        run_test("Marshal.load(Marshal.dump(-124))");
-        run_test("Marshal.load(Marshal.dump(255))");
-        run_test("Marshal.load(Marshal.dump(256))");
-        run_test("Marshal.load(Marshal.dump(65535))");
-        run_test("Marshal.load(Marshal.dump(65536))");
-        run_test("Marshal.load(Marshal.dump(0xffffff))");
-        run_test("Marshal.load(Marshal.dump(0x1000000))");
-        run_test("Marshal.load(Marshal.dump(0x3fffffff))");
-        run_test("Marshal.load(Marshal.dump(-0x40000000))");
+        run_tests(&[
+            "Marshal.load(Marshal.dump(0))",
+            "Marshal.load(Marshal.dump(1))",
+            "Marshal.load(Marshal.dump(-1))",
+            "Marshal.load(Marshal.dump(122))",
+            "Marshal.load(Marshal.dump(-123))",
+            "Marshal.load(Marshal.dump(123))",
+            "Marshal.load(Marshal.dump(-124))",
+            "Marshal.load(Marshal.dump(255))",
+            "Marshal.load(Marshal.dump(256))",
+            "Marshal.load(Marshal.dump(65535))",
+            "Marshal.load(Marshal.dump(65536))",
+            "Marshal.load(Marshal.dump(0xffffff))",
+            "Marshal.load(Marshal.dump(0x1000000))",
+            "Marshal.load(Marshal.dump(0x3fffffff))",
+            "Marshal.load(Marshal.dump(-0x40000000))",
+        ]);
     }
 
     #[test]

@@ -77,7 +77,6 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             TokenKind::InstanceVar(name) => Ok(Node::new_instance_var(name, loc)),
             TokenKind::ClassVar(name) => Ok(Node::new_class_var(name, loc)),
             TokenKind::GlobalVar(name) => Ok(Node::new_global_var(name, loc)),
-            TokenKind::SpecialVar(id) => Ok(Node::new_special_var(id, loc)),
             TokenKind::IntegerLit(num) => Ok(Node::new_integer(num, loc)),
             TokenKind::BignumLit(num) => Ok(Node::new_bignum(num, loc)),
             TokenKind::FloatLit(num) => Ok(Node::new_float(num, loc)),
@@ -369,7 +368,6 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 TokenKind::GlobalVar(_)
                     | TokenKind::InstanceVar(_)
                     | TokenKind::ClassVar(_)
-                    | TokenKind::SpecialVar(_)
                     | TokenKind::StringLit(_)
             )
         }

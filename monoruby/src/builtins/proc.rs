@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn proc_source_location() {
         // source_location returns [String, Integer]
-        run_test_once(
+        run_test(
             r#"
         p = proc {}
         sl = p.source_location
@@ -423,21 +423,21 @@ mod tests {
         "#,
         );
         // source_location line matches the proc creation line
-        run_test_once(
+        run_test(
             r#"
         line = __LINE__; p = proc {}
         p.source_location[1] == line
         "#,
         );
         // lambda source_location line matches creation line
-        run_test_once(
+        run_test(
             r#"
         line = __LINE__; l = lambda {}
         l.source_location[1] == line
         "#,
         );
         // two procs on consecutive lines have consecutive line numbers
-        run_test_once(
+        run_test(
             r#"
         p1 = proc {}
         p2 = proc {}
@@ -445,7 +445,7 @@ mod tests {
         "#,
         );
         // Proc#binding.source_location returns the same line as the proc
-        run_test_once(
+        run_test(
             r#"
         p = proc {}
         b = p.binding

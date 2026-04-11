@@ -176,9 +176,6 @@ enum LvalueKind {
     LocalVar {
         dst: BcReg,
     },
-    SpecialVar {
-        id: u32,
-    },
     Discard,
 }
 
@@ -1191,11 +1188,6 @@ impl<'a> BytecodeGen<'a> {
         self.emit(BytecodeInst::CheckCvar { dst: ret, name }, loc);
     }
 
-    fn emit_load_svar(&mut self, dst: Option<BcReg>, id: u32, loc: Loc) {
-        let ret = self.get_reg(dst);
-        self.emit(BytecodeInst::LoadSvar { ret, id }, loc);
-    }
-
     fn emit_unary_op(&mut self, kind: UnOpK, dst: BcReg, recv: Node, loc: Loc) -> Result<()> {
         if let Some(recv) = self.is_refer_local(&recv) {
             self.emit(BytecodeInst::UnOp { kind, dst, recv }, loc);
@@ -1326,11 +1318,6 @@ impl<'a> BytecodeGen<'a> {
                 let name = IdentId::get_id(name);
                 LvalueKind::ClassVar(name)
             }
-            NodeKind::GlobalVar(name) if name == "$~" => {
-                LvalueKind::SpecialVar {
-                    id: ruruby_parse::SPECIAL_MATCHDATA,
-                }
-            }
             NodeKind::GlobalVar(name) => {
                 let name = IdentId::get_id(name);
                 LvalueKind::GlobalVar(name)
@@ -1386,9 +1373,6 @@ impl<'a> BytecodeGen<'a> {
                 let recv = self.gen_expr_reg(receiver.clone())?;
                 let method = IdentId::get_id_from_string(format!("{method}="));
                 LvalueKind::Send { recv, method }
-            }
-            NodeKind::SpecialVar(id) => {
-                return Err(self.cant_set_variable(*id, lhs.loc));
             }
             NodeKind::DiscardLhs => LvalueKind::Discard,
             NodeKind::Splat(node) => {
@@ -1459,10 +1443,6 @@ impl<'a> BytecodeGen<'a> {
             LvalueKind::LocalVar { dst } => {
                 self.set_temp(old_temp);
                 self.emit_mov(dst, src);
-            }
-            LvalueKind::SpecialVar { id } => {
-                self.set_temp(old_temp);
-                self.emit(BytecodeInst::StoreSvar { val: src, id }, loc);
             }
             LvalueKind::Discard => {
                 self.set_temp(old_temp);
@@ -1584,24 +1564,6 @@ impl<'a> BytecodeGen<'a> {
         MonorubyErr::escape_from_eval(msg, loc, self.sourceinfo.clone(), self.func_id)
     }
 
-    fn cant_set_variable(&self, id: u32, loc: Loc) -> MonorubyErr {
-        // 0 => $&
-        // 1 => $'
-        // 100 + n => $n
-        self.syntax_error(
-            format!(
-                "can't set variable ${}.",
-                match id {
-                    ruruby_parse::SPECIAL_LASTMATCH => "&".to_string(),
-                    ruruby_parse::SPECIAL_POSTMATCH => "'".to_string(),
-                    ruruby_parse::SPECIAL_LOADPATH => "LOAD_PATH".to_string(),
-                    ruruby_parse::SPECIAL_LOADEDFEATURES => "LOADED_FEATURES".to_string(),
-                    n => (n - 100).to_string(),
-                }
-            ),
-            loc,
-        )
-    }
 }
 
 enum RecvKind {

@@ -244,7 +244,6 @@ impl<'a> BytecodeGen<'a> {
                 let name = IdentId::get_id_from_string(name);
                 self.emit(BytecodeInst::DefinedGvar { dst: ret, name }, node.loc);
             }
-            NodeKind::SpecialVar(..) => {}
             NodeKind::ClassVar(name) => {
                 let name = IdentId::get_id_from_string(name);
                 self.emit(BytecodeInst::DefinedCvar { dst: ret, name }, node.loc);
@@ -306,7 +305,7 @@ fn defined_str(node: &Node) -> &'static str {
         NodeKind::MulAssign(..) | NodeKind::AssignOp(..) => "assignment",
         NodeKind::LocalVar(..) => "local-variable",
         NodeKind::InstanceVar(..) => "instance-variable",
-        NodeKind::GlobalVar(..) | NodeKind::SpecialVar(..) => "global-variable",
+        NodeKind::GlobalVar(..) => "global-variable",
         NodeKind::ClassVar(..) => "class-variable",
         NodeKind::Const { .. } => "constant",
         NodeKind::BinOp(..)

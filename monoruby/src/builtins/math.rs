@@ -929,13 +929,13 @@ mod tests {
     fn math_acosh_domain() {
         run_test("Math.acosh(1)");
         run_test_error("Math.acosh(0)");
-        run_test_once("Math.acosh(Float::NAN).nan?");
+        run_test("Math.acosh(Float::NAN).nan?");
     }
 
     #[test]
     fn math_asin_acos_nan() {
-        run_test_once("Math.asin(Float::NAN).nan?");
-        run_test_once("Math.acos(Float::NAN).nan?");
+        run_test("Math.asin(Float::NAN).nan?");
+        run_test("Math.acos(Float::NAN).nan?");
     }
 
     #[test]
@@ -950,7 +950,7 @@ mod tests {
     #[test]
     fn math_log1p_domain() {
         run_test_error("Math.log1p(-2)");
-        run_test_once("Math.log1p(Float::NAN).nan?");
+        run_test("Math.log1p(Float::NAN).nan?");
     }
 
     #[test]
