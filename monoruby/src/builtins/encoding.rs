@@ -216,7 +216,7 @@ pub(super) fn encode_(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    lfp.self_val().ensure_string_mutable(vm, globals)?;
     // Validate encoding arguments
     if let Some(arg0) = lfp.try_arg(0) {
         resolve_enc_arg(vm, globals, arg0)?;
@@ -290,7 +290,7 @@ pub(super) fn force_encoding(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    lfp.self_val().ensure_string_mutable(vm, globals)?;
     let arg0 = lfp.arg(0);
     let enc = if let Some(s) = arg0.is_str() {
         Encoding::try_from_str(s)?

@@ -479,6 +479,45 @@ impl Value {
         }
     }
 
+    ///
+    /// Returns true if `self` is a "chilled" String — a String returned by
+    /// `Symbol#to_s` that behaves mutable but should emit a one-shot
+    /// deprecation warning on first mutation.
+    ///
+    pub(crate) fn is_chilled(&self) -> bool {
+        match self.try_rvalue() {
+            Some(rv) => rv.is_chilled(),
+            None => false,
+        }
+    }
+
+    pub(crate) fn set_chilled(&mut self) {
+        self.rvalue_mut().set_chilled()
+    }
+
+    pub(crate) fn clear_chilled(&mut self) {
+        self.rvalue_mut().clear_chilled()
+    }
+
+    ///
+    /// Ensure `self` (a String) is mutable. If it is "chilled", emit a
+    /// one-shot deprecation warning (gated by `Warning[:deprecated]`), clear
+    /// the chilled flag, and proceed. If it is truly frozen, raise
+    /// `FrozenError`. Otherwise do nothing. Must only be called on String
+    /// receivers; behaves like `ensure_not_frozen` for non-chilled values.
+    ///
+    pub(crate) fn ensure_string_mutable(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        if self.is_chilled() {
+            self.clear_chilled();
+            emit_chilled_string_mutation_warning(vm, globals, *self)?;
+        }
+        self.ensure_not_frozen(&globals.store)
+    }
+
     pub(crate) fn change_class(&mut self, new_class_id: ClassId) {
         if let Some(rv) = self.try_rvalue_mut() {
             rv.change_class(new_class_id);
@@ -1037,6 +1076,76 @@ impl Value {
         }
         s
     }
+}
+
+///
+/// Emit the CRuby-compatible deprecation warning for mutating a chilled
+/// string (one returned by `Symbol#to_s`). Gated by `Warning[:deprecated]`;
+/// writes to Ruby-level `$stderr` so that mspec's `complain` matcher can
+/// capture it. The chilled flag should be cleared on the caller *before*
+/// invoking this helper so that failing tests still leave the string in a
+/// consistent state.
+///
+pub(crate) fn emit_chilled_string_mutation_warning(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+) -> Result<()> {
+    // Check Warning[:deprecated].
+    let warning_val = match globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Warning"))
+    {
+        Some(v) => v,
+        None => return Ok(()),
+    };
+    let dep_sym = Value::symbol(IdentId::get_id("deprecated"));
+    let dep = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("[]"),
+        warning_val,
+        &[dep_sym],
+        None,
+        None,
+    )?;
+    if dep.is_nil() || dep == Value::bool(false) {
+        return Ok(());
+    }
+
+    // The current bytes of a chilled string still carry the original
+    // symbol name (monoruby only produces chilled strings from
+    // Symbol#to_s, and the flag is cleared on first mutation). Re-intern
+    // so the message shows the same form CRuby would have printed.
+    let sym = match self_val.is_rstring() {
+        Some(s) => {
+            let bytes = s.as_bytes();
+            match std::str::from_utf8(bytes) {
+                Ok(utf8) => IdentId::get_id(utf8),
+                Err(_) => IdentId::get_id_from_bytes(bytes.to_vec()),
+            }
+        }
+        None => return Ok(()),
+    };
+    let msg = format!(
+        "warning: string returned by {}.to_s will be frozen in the future\n",
+        inspect_symbol(sym)
+    );
+    let stderr = globals
+        .get_gvar(IdentId::get_id("$stderr"))
+        .unwrap_or(Value::nil());
+    if stderr.is_nil() {
+        return Ok(());
+    }
+    let msg_val = Value::string(msg);
+    vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("write"),
+        stderr,
+        &[msg_val],
+        None,
+        None,
+    )?;
+    Ok(())
 }
 
 ///

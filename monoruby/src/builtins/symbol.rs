@@ -28,12 +28,14 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// - to_s -> String
 ///
-/// Returns the name of the symbol as a string.
-/// ASCII-only symbols return a US-ASCII encoded string.
+/// Returns the name of the symbol as a string. ASCII-only symbols return a
+/// US-ASCII encoded string. The returned String is "chilled": it behaves as
+/// mutable but emits a one-shot deprecation warning on first mutation
+/// (matching CRuby's `rb_sym_to_s`).
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/to_s.html]
 #[monoruby_builtin]
-fn sym_to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn sym_to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let sym = lfp.self_val().as_symbol();
     let ident_name = sym.get_ident_name_clone();
     let (bytes, enc) = match &ident_name {
@@ -48,61 +50,9 @@ fn sym_to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
     };
     let inner = RStringInner::from_encoding(bytes, enc);
-    let result = Value::string_from_inner(inner);
-    emit_to_s_chilled_warning(vm, globals, sym)?;
+    let mut result = Value::string_from_inner(inner);
+    result.set_chilled();
     Ok(result)
-}
-
-/// Emit the "string returned by :foo.to_s will be frozen in the future"
-/// deprecation warning when `Warning[:deprecated]` is enabled. This is
-/// approximate: CRuby fires the warning on mutation of the chilled string,
-/// but monoruby does not track chilled strings, so we fire it eagerly.
-fn emit_to_s_chilled_warning(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    sym: IdentId,
-) -> Result<()> {
-    // Check Warning[:deprecated]
-    let warning_val = match globals
-        .store
-        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Warning"))
-    {
-        Some(v) => v,
-        None => return Ok(()),
-    };
-    let dep_sym = Value::symbol(IdentId::get_id("deprecated"));
-    let dep = vm.invoke_method_inner(
-        globals,
-        IdentId::get_id("[]"),
-        warning_val,
-        &[dep_sym],
-        None,
-        None,
-    )?;
-    if dep.is_nil() || dep == Value::bool(false) {
-        return Ok(());
-    }
-
-    let msg = format!(
-        "warning: string returned by {}.to_s will be frozen in the future\n",
-        inspect_symbol(sym)
-    );
-    let stderr = globals
-        .get_gvar(IdentId::get_id("$stderr"))
-        .unwrap_or(Value::nil());
-    if stderr.is_nil() {
-        return Ok(());
-    }
-    let msg_val = Value::string(msg);
-    vm.invoke_method_inner(
-        globals,
-        IdentId::get_id("write"),
-        stderr,
-        &[msg_val],
-        None,
-        None,
-    )?;
-    Ok(())
 }
 
 ///

@@ -741,6 +741,18 @@ impl RValue {
         self.header.set_frozen()
     }
 
+    pub(crate) fn is_chilled(&self) -> bool {
+        self.header.is_chilled()
+    }
+
+    pub(crate) fn set_chilled(&mut self) {
+        self.header.set_chilled()
+    }
+
+    pub(crate) fn clear_chilled(&mut self) {
+        self.header.clear_chilled()
+    }
+
     pub(crate) unsafe fn try_ty(&self) -> Option<ObjTy> {
         unsafe { self.header.meta.ty }
     }
@@ -914,8 +926,8 @@ impl RValue {
 
     pub(super) fn dup(&self) -> Self {
         let mut header = self.header;
-        // dup does not copy the frozen flag (clone does).
-        unsafe { header.meta.flag &= !0b10 };
+        // dup does not copy the frozen or chilled flag (clone does).
+        unsafe { header.meta.flag &= !0b110 };
         RValue {
             header,
             var_table: self.var_table.clone(),
@@ -1771,6 +1783,25 @@ impl Header {
 
     fn set_frozen(&mut self) {
         unsafe { self.meta.flag |= 0b10 }
+    }
+
+    ///
+    /// A "chilled" string behaves like a mutable String but emits a
+    /// deprecation warning (gated by `Warning[:deprecated]`) the first time
+    /// it is mutated. monoruby only produces chilled strings from
+    /// `Symbol#to_s`; the flag is cleared on first mutation so the warning
+    /// fires at most once per string. Currently only Strings are chilled.
+    ///
+    fn is_chilled(&self) -> bool {
+        unsafe { self.meta.flag & 0b100 != 0 }
+    }
+
+    fn set_chilled(&mut self) {
+        unsafe { self.meta.flag |= 0b100 }
+    }
+
+    fn clear_chilled(&mut self) {
+        unsafe { self.meta.flag &= !0b100 }
     }
 
     fn class(&self) -> ClassId {
