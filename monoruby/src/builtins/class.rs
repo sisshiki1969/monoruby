@@ -726,6 +726,63 @@ mod tests {
     }
 
     #[test]
+    fn special_gvar_match_data_clear_via_nil_assignment() {
+        // `$~ = nil` is the one supported write to a hooked match data
+        // variable; it must clear $~, $&, $', $`, and $1..$N.
+        run_test(
+            r#"
+            "abc" =~ /(b)/
+            $~ = nil
+            [$~, $&, $', $`, $1]
+            "#,
+        );
+    }
+
+    #[test]
+    fn defined_hooked_special_vars() {
+        // `defined?` consults GvarTable::is_defined which recognises
+        // hooked entries as defined regardless of whether they have a
+        // current value.
+        run_test(
+            r#"
+            [defined?($~), defined?($&), defined?($'), defined?($`),
+             defined?($1), defined?($LOAD_PATH), defined?($:),
+             defined?($LOADED_FEATURES), defined?($")]
+            "#,
+        );
+        // But undefined names are still nil.
+        run_test(
+            r#"
+            defined?($there_is_no_such_global_xxxxx)
+            "#,
+        );
+    }
+
+    #[test]
+    fn write_to_readonly_special_var_raises() {
+        // Hooked variables registered with `setter == None` raise on
+        // assignment, both directly...
+        run_test_error(r#"$& = "x""#);
+        run_test_error(r#"$' = "x""#);
+        run_test_error(r#"$` = "x""#);
+        run_test_error(r#"$1 = "x""#);
+        run_test_error(r#"$LOAD_PATH = []"#);
+    }
+
+    #[test]
+    fn write_through_alias_to_readonly_raises() {
+        // ...and via aliases. CRuby reports the alias name in the error
+        // message; we don't necessarily match the message text, but we do
+        // match the fact that it raises.
+        run_test_error(
+            r#"
+            alias $ro_alias $&
+            $ro_alias = "x"
+            "#,
+        );
+    }
+
+    #[test]
     fn def_operator_dmul() {
         run_test(
             r#"

@@ -369,3 +369,183 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
         IdentId::get_id("$LOADED_FEATURES"),
     );
 }
+
+// ============================================================================
+// Unit tests
+//
+// These tests cover the pure-Rust internals of `GvarTable` (allocation, alias
+// resolution, hook lookup, cycle detection) without needing a full
+// `Globals`/`Executor` to be constructed. End-to-end Ruby-level behaviour for
+// `$~`, `$&`, `$1..$9`, alias chains, and read-only hooks is exercised by
+// the integration tests in `monoruby/src/builtins/class.rs`.
+// ============================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn n(s: &str) -> IdentId {
+        IdentId::get_id(s)
+    }
+
+    /// Dummy getter that always returns nil. We can't actually fire hooks in
+    /// these tests because the [`GvarGetter`] signature requires
+    /// `&mut Executor` and `&mut Globals`, which would be expensive to
+    /// construct. The hook *registration* and *resolution* are what we test
+    /// here; the live invocation is covered by the Ruby-level integration
+    /// tests.
+    fn dummy_get(_vm: &mut Executor, _g: &mut Globals, _n: IdentId) -> Value {
+        Value::nil()
+    }
+
+    fn dummy_set(
+        _vm: &mut Executor,
+        _g: &mut Globals,
+        _n: IdentId,
+        _v: Value,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    #[test]
+    fn simple_set_get_round_trip() {
+        let mut t = GvarTable::new();
+        t.set_simple(n("$test_a"), Value::integer(42));
+        assert_eq!(t.get_simple(n("$test_a")), Some(Value::integer(42)));
+    }
+
+    #[test]
+    fn unknown_name_returns_none_and_is_not_defined() {
+        let t = GvarTable::new();
+        assert!(t.get_simple(n("$test_undefined_xxxx")).is_none());
+        assert!(!t.is_defined(n("$test_undefined_xxxx")));
+    }
+
+    #[test]
+    fn is_defined_recognizes_simple_alias_and_hook() {
+        let mut t = GvarTable::new();
+        t.set_simple(n("$test_def_simple"), Value::integer(1));
+        t.define_hook(n("$test_def_hook"), dummy_get, None);
+        t.define_alias(n("$test_def_alias"), n("$test_def_simple"));
+        assert!(t.is_defined(n("$test_def_simple")));
+        assert!(t.is_defined(n("$test_def_hook")));
+        assert!(t.is_defined(n("$test_def_alias")));
+        assert!(!t.is_defined(n("$test_def_unknown")));
+    }
+
+    #[test]
+    fn alias_redirects_simple_writes_and_reads() {
+        // alias $test_b -> $test_a; writing $test_b should land in $test_a's
+        // slot and vice versa.
+        let mut t = GvarTable::new();
+        t.set_simple(n("$test_a"), Value::integer(1));
+        t.define_alias(n("$test_b"), n("$test_a"));
+        // read through alias
+        assert_eq!(t.get_simple(n("$test_b")), Some(Value::integer(1)));
+        // write through alias
+        t.set_simple(n("$test_b"), Value::integer(99));
+        assert_eq!(t.get_simple(n("$test_a")), Some(Value::integer(99)));
+        assert_eq!(t.get_simple(n("$test_b")), Some(Value::integer(99)));
+    }
+
+    #[test]
+    fn alias_chain_resolves_to_terminal_entry() {
+        // $c -> $b -> $a, all reads/writes land in $a's slot.
+        let mut t = GvarTable::new();
+        t.set_simple(n("$test_chain_a"), Value::integer(0));
+        t.define_alias(n("$test_chain_b"), n("$test_chain_a"));
+        t.define_alias(n("$test_chain_c"), n("$test_chain_b"));
+        t.set_simple(n("$test_chain_c"), Value::integer(7));
+        assert_eq!(t.get_simple(n("$test_chain_a")), Some(Value::integer(7)));
+        assert_eq!(t.get_simple(n("$test_chain_b")), Some(Value::integer(7)));
+        assert_eq!(t.get_simple(n("$test_chain_c")), Some(Value::integer(7)));
+    }
+
+    #[test]
+    fn alias_cycle_does_not_infinite_loop() {
+        // Construct $x -> $y -> $x and verify resolve() bails out instead of
+        // looping forever.
+        let mut t = GvarTable::new();
+        t.set_simple(n("$test_cycle_x"), Value::integer(1));
+        t.set_simple(n("$test_cycle_y"), Value::integer(2));
+        t.define_alias(n("$test_cycle_x"), n("$test_cycle_y"));
+        t.define_alias(n("$test_cycle_y"), n("$test_cycle_x"));
+        // get_simple just needs to terminate; the value it returns is
+        // unspecified once a cycle is involved.
+        let _ = t.get_simple(n("$test_cycle_x"));
+        let _ = t.get_simple(n("$test_cycle_y"));
+        // is_defined should still return true.
+        assert!(t.is_defined(n("$test_cycle_x")));
+        assert!(t.is_defined(n("$test_cycle_y")));
+    }
+
+    #[test]
+    fn define_hook_replaces_simple_entry() {
+        let mut t = GvarTable::new();
+        t.set_simple(n("$test_replace"), Value::integer(123));
+        // After installing a hook, get_simple should report None because the
+        // entry is now Hooked, not Simple.
+        t.define_hook(n("$test_replace"), dummy_get, Some(dummy_set));
+        assert!(t.get_simple(n("$test_replace")).is_none());
+        assert!(t.is_defined(n("$test_replace")));
+    }
+
+    #[test]
+    fn define_hook_with_no_setter_is_read_only() {
+        // We can't actually fire the hook here without a live Globals, but we
+        // can verify the entry was installed and that get_simple correctly
+        // reports None for it (so that the unified `defined?` path uses
+        // `is_defined` instead of `get_simple`).
+        let mut t = GvarTable::new();
+        t.define_hook(n("$test_ro"), dummy_get, None);
+        assert!(t.get_simple(n("$test_ro")).is_none());
+        assert!(t.is_defined(n("$test_ro")));
+    }
+
+    #[test]
+    fn alias_to_hook_resolves_through_to_hook_entry() {
+        // alias $test_h_alias -> $test_h_hook (a hooked entry).
+        // get_simple should still report None because the resolved entry is
+        // Hooked, but is_defined should report true.
+        let mut t = GvarTable::new();
+        t.define_hook(n("$test_h_hook"), dummy_get, None);
+        t.define_alias(n("$test_h_alias"), n("$test_h_hook"));
+        assert!(t.get_simple(n("$test_h_alias")).is_none());
+        assert!(t.is_defined(n("$test_h_alias")));
+    }
+
+    #[test]
+    fn alias_to_self_is_a_noop() {
+        // `alias $x $x` must not destroy the entry.
+        let mut t = GvarTable::new();
+        t.set_simple(n("$test_self_alias"), Value::integer(11));
+        t.define_alias(n("$test_self_alias"), n("$test_self_alias"));
+        assert_eq!(
+            t.get_simple(n("$test_self_alias")),
+            Some(Value::integer(11))
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "set_simple called on hooked global variable")]
+    fn set_simple_panics_on_hook() {
+        // The hardening introduced in Phase A: Rust-side mistakes that try
+        // to plain-write to a hooked variable surface immediately as a
+        // panic instead of silently bypassing the hook.
+        let mut t = GvarTable::new();
+        t.define_hook(n("$test_panic_hook"), dummy_get, Some(dummy_set));
+        t.set_simple(n("$test_panic_hook"), Value::integer(0));
+    }
+
+    #[test]
+    fn mark_values_visits_only_simple_entries() {
+        // Hooked entries' backing storage is owned elsewhere (e.g.
+        // `Globals::load_path`); only Simple slots should be visited by the
+        // GC marker.
+        let mut t = GvarTable::new();
+        t.set_simple(n("$test_mark_simple"), Value::integer(5));
+        t.define_hook(n("$test_mark_hook"), dummy_get, None);
+        let mut visited = 0;
+        t.mark_values(|_| visited += 1);
+        assert_eq!(visited, 1);
+    }
+}
