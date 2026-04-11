@@ -649,8 +649,6 @@ impl Codegen {
                 src,
                 using_xmm,
             } => self.store_gvar(name, src, using_xmm),
-            AsmInst::LoadSVar { id, using_xmm } => self.load_svar(id, using_xmm),
-            AsmInst::StoreSVar { id, src, using_xmm } => self.store_svar(id, src, using_xmm),
 
             AsmInst::ClassDef {
                 base,

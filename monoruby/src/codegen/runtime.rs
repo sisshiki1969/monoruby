@@ -734,53 +734,38 @@ pub(super) extern "C" fn set_class_var(
 ///
 /// rax: Value
 ///
-pub(super) extern "C" fn get_global_var(globals: &mut Globals, name: IdentId) -> Value {
-    globals.get_gvar(name).unwrap_or_default()
+pub(super) extern "C" fn get_global_var(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    name: IdentId,
+) -> Value {
+    GvarTable::get(vm, globals, name)
 }
 
-pub(super) extern "C" fn set_global_var(globals: &mut Globals, name: IdentId, val: Value) {
-    globals.set_gvar(name, val);
-}
-
-///
-/// Get special variable.
-///
-/// id: 0 -> $&
-/// id: 1 -> $'
-/// id: 2 -> $~
-/// id: 100 + n -> $<n> (n >= 1)
-///
-/// Set special variable.
-/// Currently only $~ (SPECIAL_MATCHDATA) supports assignment.
-/// $~ = nil clears the capture state.
-pub(super) extern "C" fn set_special_var(val: Value, vm: &mut Executor, id: u32) {
-    match id {
-        ruruby_parse::SPECIAL_MATCHDATA => {
-            if val.is_nil() {
-                vm.clear_capture_special_variables();
-            }
-            // non-nil assignment is silently ignored for now
+pub(super) extern "C" fn set_global_var(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    name: IdentId,
+    val: Value,
+) -> Option<Value> {
+    match GvarTable::set(vm, globals, name, val) {
+        Ok(()) => Some(Value::nil()),
+        Err(err) => {
+            vm.set_error(err);
+            None
         }
-        _ => {}
     }
 }
 
-pub(super) extern "C" fn get_special_var(vm: &Executor, globals: &Globals, id: u32) -> Value {
-    match id {
-        // $&
-        ruruby_parse::SPECIAL_LASTMATCH => vm.sp_last_match(),
-        // $'
-        ruruby_parse::SPECIAL_POSTMATCH => vm.sp_post_match(),
-        // $~
-        ruruby_parse::SPECIAL_MATCHDATA => vm.get_last_matchdata(),
-        // $LOAD_PATH
-        ruruby_parse::SPECIAL_LOADPATH => globals.get_load_path(),
-        // $LOADED_FEATURES
-        ruruby_parse::SPECIAL_LOADEDFEATURES => globals.get_loaded_features(),
-        // $1, $2, ..
-        id if id >= 100 => vm.get_special_matches(id as i64 - 100),
-        _ => unreachable!(),
-    }
+///
+/// Alias global variable `new_name` to `old_name`.
+///
+pub(super) extern "C" fn alias_global_var(
+    globals: &mut Globals,
+    new_name: IdentId,
+    old_name: IdentId,
+) {
+    globals.alias_global_variable(new_name, old_name);
 }
 
 pub(super) extern "C" fn define_class(
@@ -938,7 +923,7 @@ pub(super) extern "C" fn defined_gvar(
     globals: &mut Globals,
     name: IdentId,
 ) -> Value {
-    if globals.get_gvar(name).is_some() {
+    if globals.gvars.is_defined(name) {
         Value::string_from_str("global-variable")
     } else {
         Value::nil()

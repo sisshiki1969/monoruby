@@ -446,17 +446,17 @@ impl<'a> Lexer<'a> {
             while let Some(ch) = self.consume_numeric() {
                 id = id * 10 + ch as u32 - '0' as u32;
             }
-            Ok(self.new_special_var(id + 100))
+            Ok(self.new_global_var(format!("${}", id)))
         } else {
             let tok = match self.peek() {
                 Some(ch) if ch.is_ascii_punctuation() => {
                     let ch = self.get()?;
                     match ch {
-                        '&' => self.new_special_var(SPECIAL_LASTMATCH),
-                        '\'' => self.new_special_var(SPECIAL_POSTMATCH),
+                        '&' => self.new_global_var("$&"),
+                        '\'' => self.new_global_var("$'"),
                         '~' => self.new_global_var("$~"),
-                        ':' => self.new_special_var(SPECIAL_LOADPATH),
-                        '"' => self.new_special_var(SPECIAL_LOADEDFEATURES),
+                        ':' => self.new_global_var("$:"),
+                        '"' => self.new_global_var("$\""),
                         _ => self.new_global_var(format!("${}", ch)),
                     }
                 }
@@ -515,13 +515,7 @@ impl<'a> Lexer<'a> {
             VarKind::InstanceVar => return Ok(self.new_instance_var(tok)),
             VarKind::ClassVar => return Ok(self.new_class_var(tok)),
             VarKind::GlobalVar => {
-                if tok == "$LOAD_PATH" {
-                    return Ok(self.new_special_var(SPECIAL_LOADPATH));
-                } else if tok == "$LOADED_FEATURES" {
-                    return Ok(self.new_special_var(SPECIAL_LOADEDFEATURES));
-                } else {
-                    return Ok(self.new_global_var(tok));
-                }
+                return Ok(self.new_global_var(tok));
             }
             _ => {}
         }
@@ -1709,10 +1703,6 @@ impl<'a> Lexer<'a> {
 
     fn new_global_var(&self, ident: impl Into<String>) -> Token {
         Annot::new(TokenKind::GlobalVar(ident.into()), self.cur_loc())
-    }
-
-    fn new_special_var(&self, id: u32) -> Token {
-        Annot::new(TokenKind::SpecialVar(id), self.cur_loc())
     }
 
     fn new_const(&self, ident: impl Into<String>) -> Token {

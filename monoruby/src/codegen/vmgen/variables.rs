@@ -279,8 +279,9 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch2();
         monoasm! { &mut self.jit,
-            movl rsi, rdi; // name: IdentId
-            movq rdi, r12; // &mut Globals
+            movl rdx, rdi; // name: IdentId
+            movq rdi, rbx; // &mut Executor
+            movq rsi, r12; // &mut Globals
             movq rax, (runtime::get_global_var);
             call rax;
         };
@@ -305,60 +306,14 @@ impl Codegen {
         self.fetch2();
         self.vm_get_slot_value(GP::R15);
         monoasm! { &mut self.jit,
-            movl rsi, rdi;  // name: IdentId
-            movq rdi, r12;  // &mut Globals
-            movq rdx, r15;  // base: Value
+            movl rdx, rdi;  // name: IdentId
+            movq rdi, rbx;  // &mut Executor
+            movq rsi, r12;  // &mut Globals
+            movq rcx, r15;  // val: Value
             movq rax, (runtime::set_global_var);
             call rax;
         };
-        self.fetch_and_dispatch();
-        label
-    }
-
-    /// Load special variable
-    ///
-    /// ~~~text
-    /// +---+---+---+---++---+---+---+---+
-    /// | op|dst|   id  ||               |
-    /// +---+---+---+---++---+---+---+---+
-    /// ~~~
-    pub(super) fn vm_load_svar(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        self.fetch2();
-        monoasm! { &mut self.jit,
-            movl rdx, rdi;  // id
-            movq rdi, rbx;  // &Executor
-            movq rsi, r12;  // &Globals
-            movq rax, (runtime::get_special_var);
-            call rax;
-        };
-        self.vm_store_r15(GP::Rax);
-        self.fetch_and_dispatch();
-        label
-    }
-
-    /// Store special variable ($~ only)
-    ///
-    /// ~~~text
-    /// +---+---+---+---++---+---+---+---+
-    /// |   id  |val| op||               |
-    /// +---+---+---+---++---+---+---+---+
-    /// ~~~
-    pub(super) fn vm_store_svar(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        self.fetch2();
-        // rdi = id (op1_l), r15 = val slot (op1_w)
-        monoasm! { &mut self.jit,
-            movl rdx, rdi;  // id: u32 (save before overwriting rdi)
-        };
-        self.vm_get_slot_value(GP::R15);
-        monoasm! { &mut self.jit,
-            movq rdi, r15;  // val: Value
-            movq rsi, rbx;  // &mut Executor
-            // rdx already set to id
-            movq rax, (runtime::set_special_var);
-            call rax;
-        };
+        self.vm_handle_error();
         self.fetch_and_dispatch();
         label
     }

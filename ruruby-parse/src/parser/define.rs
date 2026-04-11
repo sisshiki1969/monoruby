@@ -184,16 +184,10 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     pub(crate) fn alias_name(&mut self) -> Result<Node, LexerErr> {
         if self.consume_punct_no_term(Punct::Colon)? {
             self.parse_symbol()
-        } else if let TokenKind::GlobalVar(_) | TokenKind::SpecialVar(_) =
-            self.peek_no_term()?.kind
-        {
+        } else if matches!(self.peek_no_term()?.kind, TokenKind::GlobalVar(_)) {
             let tok = self.get()?;
             match &tok.kind {
                 TokenKind::GlobalVar(name) => Ok(Node::new_symbol(name.to_owned(), tok.loc)),
-                TokenKind::SpecialVar(id) => {
-                    let name = Self::special_var_name(*id);
-                    Ok(Node::new_symbol(name, tok.loc))
-                }
                 _ => unreachable!(),
             }
         } else {
@@ -201,23 +195,6 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 self.read_method_name(true)?.0,
                 self.prev_loc(),
             ))
-        }
-    }
-
-    fn special_var_name(id: u32) -> String {
-        use crate::SPECIAL_LASTMATCH;
-        use crate::SPECIAL_LOADEDFEATURES;
-        use crate::SPECIAL_LOADPATH;
-        use crate::SPECIAL_MATCHDATA;
-        use crate::SPECIAL_POSTMATCH;
-        match id {
-            SPECIAL_LASTMATCH => "$&".to_string(),
-            SPECIAL_POSTMATCH => "$'".to_string(),
-            SPECIAL_MATCHDATA => "$~".to_string(),
-            SPECIAL_LOADPATH => "$:".to_string(),
-            SPECIAL_LOADEDFEATURES => "$\"".to_string(),
-            id if id >= 100 => format!("${}", id - 100),
-            _ => format!("$<special:{}>", id),
         }
     }
 

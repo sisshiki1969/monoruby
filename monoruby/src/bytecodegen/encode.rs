@@ -400,20 +400,10 @@ impl<'a> BytecodeGen<'a> {
                 let op1 = self.slot_id(&dst);
                 Bytecode::from(enc_wl(27, op1.0, name.get()))
             }
-            BytecodeInst::LoadSvar { ret, id } => {
-                // 28
-                let op1 = self.slot_id(&ret);
-                Bytecode::from(enc_wl(28, op1.0, id))
-            }
             BytecodeInst::StoreCvar { val, name } => {
                 // 29
                 let op1 = self.slot_id(&val);
                 Bytecode::from(enc_wl(29, op1.0, name.get()))
-            }
-            BytecodeInst::StoreSvar { val, id } => {
-                // 40
-                let op1 = self.slot_id(&val);
-                Bytecode::from(enc_wl(41, op1.0, id))
             }
             BytecodeInst::MethodCall(box callsite) => {
                 // 30, 31

@@ -546,7 +546,6 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 TokenKind::GlobalVar(name) => Node::new_global_var(name, loc),
                 TokenKind::InstanceVar(name) => Node::new_instance_var(name, loc),
                 TokenKind::ClassVar(name) => Node::new_class_var(name, loc),
-                TokenKind::SpecialVar(name) => Node::new_special_var(name, loc),
                 _ => unreachable!("{:?}", tok),
             };
             nodes.push(node);

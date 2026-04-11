@@ -158,6 +158,13 @@ impl GvarTable {
         }
     }
 
+    /// Returns `true` if `name` has any entry — Simple, Alias, or Hooked.
+    /// Used by `defined? $foo` to mirror CRuby's notion of "the name is
+    /// known to the global variable table".
+    pub fn is_defined(&self, name: IdentId) -> bool {
+        self.index.contains_key(&name)
+    }
+
     /// Plain getter that only consults [`GvarEntry::Simple`] entries and
     /// ignores hooks. Returns `None` if `name` is unknown or is currently a
     /// hook/alias rather than a simple value.
@@ -177,16 +184,21 @@ impl GvarTable {
     /// Plain setter that stores into the resolved [`GvarEntry::Simple`]
     /// entry, creating one if necessary. Hooks are bypassed — callers should
     /// use [`GvarTable::set`] instead when hook semantics are required.
+    ///
+    /// Panics if `name` resolves to a [`GvarEntry::Hooked`] entry: that
+    /// combination means Rust-side code is trying to assign to a virtual
+    /// variable without going through its setter, which is almost certainly
+    /// a bug at the call site.
     pub fn set_simple(&mut self, name: IdentId, val: Value) {
         let id = self.entry_id(name);
         let id = self.resolve(id);
         match &mut self.entries[id.index()] {
             GvarEntry::Simple(slot) => *slot = val,
-            // If someone already installed a hook at this name, we still want
-            // assignments to `$stdin = ...` (etc.) to land somewhere sensible.
-            // Overwrite the hook with a `Simple` slot. Phase B will replace
-            // these early-boot assignments with hook-aware calls.
-            entry => *entry = GvarEntry::Simple(val),
+            GvarEntry::Alias(_) => unreachable!("resolve() follows aliases"),
+            GvarEntry::Hooked { .. } => panic!(
+                "set_simple called on hooked global variable {name}; \
+                 use set_gvar through the hook API instead"
+            ),
         }
     }
 
@@ -227,4 +239,130 @@ impl GvarTable {
             }
         }
     }
+}
+
+///
+/// Register hook-based special variables at `Globals::new` time.
+///
+/// All `$~`, `$&`, `$'`, `$1`..`$9`, `$LOAD_PATH` / `$:`, `$LOADED_FEATURES`
+/// / `$"` are installed here as [`GvarEntry::Hooked`] entries so they can be
+/// freely `alias`ed and so no bytecode or runtime code needs to know their
+/// names by hand.
+///
+pub fn init_builtin_gvars(globals: &mut Globals) {
+    // --- Regexp-related special variables -----------------------------------
+
+    fn get_match_data(
+        vm: &mut Executor,
+        _globals: &mut Globals,
+        _name: IdentId,
+    ) -> Value {
+        vm.get_last_matchdata()
+    }
+
+    fn set_match_data(
+        vm: &mut Executor,
+        _globals: &mut Globals,
+        _name: IdentId,
+        val: Value,
+    ) -> Result<()> {
+        // CRuby only allows `$~ = nil | MatchData`. We mirror the previous
+        // behaviour: nil clears the capture state, anything else is a no-op
+        // for now (see TODO in original runtime::set_special_var).
+        if val.is_nil() {
+            vm.clear_capture_special_variables();
+        }
+        Ok(())
+    }
+
+    fn get_last_match(
+        vm: &mut Executor,
+        _globals: &mut Globals,
+        _name: IdentId,
+    ) -> Value {
+        vm.sp_last_match()
+    }
+
+    fn get_post_match(
+        vm: &mut Executor,
+        _globals: &mut Globals,
+        _name: IdentId,
+    ) -> Value {
+        vm.sp_post_match()
+    }
+
+    /// `$1`, `$2`, ... — `name` is of the form `$n`. Strip the `$` and parse
+    /// the decimal digits; any non-numeric suffix yields `nil`.
+    fn get_match_nth(
+        vm: &mut Executor,
+        _globals: &mut Globals,
+        name: IdentId,
+    ) -> Value {
+        let s = name.get_name();
+        let rest = match s.strip_prefix('$') {
+            Some(rest) => rest,
+            None => return Value::nil(),
+        };
+        match rest.parse::<i64>() {
+            Ok(n) => vm.get_special_matches(n),
+            Err(_) => Value::nil(),
+        }
+    }
+
+    globals.define_hooked_variable(
+        IdentId::get_id("$~"),
+        get_match_data,
+        Some(set_match_data),
+    );
+    globals.define_hooked_variable(IdentId::get_id("$&"), get_last_match, None);
+    globals.define_hooked_variable(IdentId::get_id("$'"), get_post_match, None);
+
+    // $1 through $9 are the common case; higher-numbered matches are also
+    // allowed by name — they all share the same getter which parses the
+    // numeric suffix out of `name`.
+    for n in 1..=9 {
+        globals.define_hooked_variable(
+            IdentId::get_id(&format!("${}", n)),
+            get_match_nth,
+            None,
+        );
+    }
+
+    // --- Library load path --------------------------------------------------
+
+    fn get_load_path_hook(
+        _vm: &mut Executor,
+        globals: &mut Globals,
+        _name: IdentId,
+    ) -> Value {
+        globals.get_load_path()
+    }
+
+    globals.define_hooked_variable(
+        IdentId::get_id("$LOAD_PATH"),
+        get_load_path_hook,
+        None,
+    );
+    // `$:` is an alias of `$LOAD_PATH`.
+    globals.alias_global_variable(IdentId::get_id("$:"), IdentId::get_id("$LOAD_PATH"));
+
+    // --- Loaded features ----------------------------------------------------
+
+    fn get_loaded_features_hook(
+        _vm: &mut Executor,
+        globals: &mut Globals,
+        _name: IdentId,
+    ) -> Value {
+        globals.get_loaded_features()
+    }
+
+    globals.define_hooked_variable(
+        IdentId::get_id("$LOADED_FEATURES"),
+        get_loaded_features_hook,
+        None,
+    );
+    globals.alias_global_variable(
+        IdentId::get_id("$\""),
+        IdentId::get_id("$LOADED_FEATURES"),
+    );
 }

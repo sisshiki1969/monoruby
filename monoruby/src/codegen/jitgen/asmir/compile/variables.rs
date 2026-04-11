@@ -298,8 +298,9 @@ impl Codegen {
     pub(super) fn load_gvar(&mut self, name: IdentId, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
-            movq rdi, r12;
-            movl rsi, (name.get());
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, (name.get());
             movq rax, (runtime::get_global_var);
             call rax;
         };
@@ -309,34 +310,11 @@ impl Codegen {
     pub(super) fn store_gvar(&mut self, name: IdentId, src: SlotId, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
-            movq rdi, r12;
-            movl rsi, (name.get());
-            movq rdx, [rbp - (rbp_local(src))];
-            movq rax, (runtime::set_global_var);
-            call rax;
-        };
-        self.xmm_restore(using_xmm);
-    }
-
-    pub(super) fn load_svar(&mut self, id: u32, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            movl rdx, (id);
-            movq rax, (runtime::get_special_var);
-            call rax;
-        };
-        self.xmm_restore(using_xmm);
-    }
-
-    pub(super) fn store_svar(&mut self, id: u32, src: SlotId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
-            movq rdi, [r14 - (conv(src))];  // val: Value
-            movq rsi, rbx;                   // &mut Executor
-            movl rdx, (id);                  // id: u32
-            movq rax, (runtime::set_special_var);
+            movl rdx, (name.get());
+            movq rcx, [rbp - (rbp_local(src))];
+            movq rax, (runtime::set_global_var);
             call rax;
         };
         self.xmm_restore(using_xmm);

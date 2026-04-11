@@ -214,6 +214,7 @@ impl Globals {
             globals.define_builtin_func_rest(OBJECT_CLASS, "", yielder)
         );
         globals.random.init_with_seed(None);
+        gvar::init_builtin_gvars(&mut globals);
         crate::builtins::init_builtins(&mut globals);
         globals
             .store

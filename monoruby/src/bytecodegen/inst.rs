@@ -117,14 +117,6 @@ pub(super) enum BytecodeInst {
         val: BcReg,
         name: IdentId,
     },
-    LoadSvar {
-        ret: BcReg,
-        id: u32,
-    },
-    StoreSvar {
-        val: BcReg,
-        id: u32,
-    },
     BlockArgProxy(BcReg, usize),
     BlockArg(BcReg, usize),
     LoadDynVar {

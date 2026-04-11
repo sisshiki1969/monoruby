@@ -215,9 +215,6 @@ impl<'a> BytecodeGen<'a> {
                 let name = IdentId::get_id_from_string(name);
                 self.emit_load_ivar(dst.into(), name, loc);
             }
-            NodeKind::GlobalVar(ref name) if name == "$~" => {
-                self.emit_load_svar(dst.into(), ruruby_parse::SPECIAL_MATCHDATA, loc);
-            }
             NodeKind::GlobalVar(name) => {
                 let name = IdentId::get_id_from_string(name);
                 self.emit_load_gvar(dst.into(), name, loc);
@@ -225,9 +222,6 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::ClassVar(name) => {
                 let name = IdentId::get_id_from_string(name);
                 self.emit_load_cvar(dst.into(), name, loc);
-            }
-            NodeKind::SpecialVar(id) => {
-                self.emit_load_svar(dst.into(), id, loc);
             }
             NodeKind::MethodCall {
                 box receiver,
@@ -364,8 +358,7 @@ impl<'a> BytecodeGen<'a> {
             | NodeKind::Const { .. }
             | NodeKind::InstanceVar(_)
             | NodeKind::ClassVar(_)
-            | NodeKind::GlobalVar(_)
-            | NodeKind::SpecialVar(_) => {
+            | NodeKind::GlobalVar(_) => {
                 let ret = self.push().into();
                 self.gen_store_expr(ret, expr)?;
             }

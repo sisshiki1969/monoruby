@@ -275,7 +275,6 @@ impl<'a> BytecodeGen<'a> {
             | NodeKind::Ident(_)
             | NodeKind::InstanceVar(_)
             | NodeKind::GlobalVar(_)
-            | NodeKind::SpecialVar(_)
             | NodeKind::ClassVar(_)
             | NodeKind::MethodDef(..)
             | NodeKind::SingletonMethodDef(..)
