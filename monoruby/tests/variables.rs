@@ -271,6 +271,30 @@ fn constant4() {
 }
 
 #[test]
+fn constant_basicobject_own() {
+    // A class inheriting from BasicObject can reference its own constants.
+    run_test(
+        r#"
+            class Foo < BasicObject
+              C = 123
+            end
+            Foo::C
+        "#,
+    );
+}
+
+#[test]
+fn forward_reference_local() {
+    // Forward reference: condition uses `x` before the assignment in the body
+    run_test(
+        r#"
+            x = 1 until x
+            x
+        "#,
+    );
+}
+
+#[test]
 fn global_var() {
     run_test(
         r#"

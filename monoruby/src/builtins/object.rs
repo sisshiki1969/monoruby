@@ -387,6 +387,21 @@ mod tests {
     }
 
     #[test]
+    fn case_eq() {
+        run_test(
+            r#"
+            class Foo
+              def ==(other)
+                other == 42
+              end
+            end
+            Foo.new === 42
+            "#,
+        );
+        run_test("Object.new === Object.new");
+    }
+
+    #[test]
     fn instance_eval() {
         run_test_with_prelude(
             r#"

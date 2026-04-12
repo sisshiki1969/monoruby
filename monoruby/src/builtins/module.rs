@@ -1879,6 +1879,21 @@ mod tests {
     }
 
     #[test]
+    fn define_method_in_eval() {
+        // `def` inside string class_eval inherits the receiver's lexical
+        // context so that constants defined in C are visible.
+        run_test_once(
+            r#"
+            class C
+              X = 99
+            end
+            C.class_eval "def get_x; X; end"
+            C.new.get_x
+            "#,
+        );
+    }
+
+    #[test]
     fn module_new() {
         // Module.new returns an anonymous module with nil name
         run_test(
@@ -1892,6 +1907,49 @@ mod tests {
             r#"
             Module.new.is_a?(Module)
             "#,
+        );
+    }
+
+    #[test]
+    fn module_new_with_block() {
+        run_test(
+            r#"
+            m = Module.new do |mod|
+              mod.define_method(:hello) { "world" }
+            end
+            Class.new { include m }.new.hello
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_new_subclass() {
+        run_test_once(
+            r#"
+            class MyMod < Module
+              def initialize(name)
+                @name = name
+                super()
+              end
+              def my_name; @name; end
+            end
+            m = MyMod.new("test")
+            [m.is_a?(MyMod), m.is_a?(Module), m.my_name]
+            "#,
+        );
+    }
+
+    #[test]
+    fn public_instance_method() {
+        run_test_with_prelude(
+            r##"
+            Foo.public_instance_method(:bar).name
+            "##,
+            r##"
+            class Foo
+              def bar; end
+            end
+            "##,
         );
     }
 

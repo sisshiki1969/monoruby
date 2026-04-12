@@ -2908,6 +2908,29 @@ mod tests {
     }
 
     #[test]
+    fn dup_module() {
+        run_test(
+            r#"
+            m = Module.new
+            m.define_method(:foo) { 42 }
+            d = m.dup
+            d.instance_methods.include?(:foo)
+            "#,
+        );
+        // dup should not share method table
+        run_test_once(
+            r#"
+            m = Module.new
+            m.define_method(:foo) { 42 }
+            d = m.dup
+            d.undef_method(:foo)
+            m.instance_methods.include?(:foo)
+            "#,
+        );
+        run_test_error("BasicObject.dup");
+    }
+
+    #[test]
     fn block_given_kernel() {
         run_test_with_prelude(
             r##"

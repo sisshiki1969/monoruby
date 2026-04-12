@@ -539,6 +539,30 @@ mod tests {
     }
 
     #[test]
+    fn method_parameters() {
+        run_test_with_prelude(
+            r##"
+            Foo.new.method(:bar).parameters
+            "##,
+            r##"
+            class Foo
+              def bar(x, y=1, *rest, &blk); end
+            end
+            "##,
+        );
+        run_test_with_prelude(
+            r##"
+            Foo.instance_method(:baz).parameters
+            "##,
+            r##"
+            class Foo
+              def baz(a, b); end
+            end
+            "##,
+        );
+    }
+
+    #[test]
     fn uowner() {
         run_test_with_prelude(
             r##"

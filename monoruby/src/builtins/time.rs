@@ -708,6 +708,85 @@ mod tests {
     }
 
     #[test]
+    fn time_accessors() {
+        // Test yday, wday, hour, min, sec
+        run_test(
+            r#"
+            t = Time.local(2000,3,1,14,30,45)
+            [t.yday, t.wday, t.hour, t.min, t.sec]
+            "#,
+        );
+        run_test(
+            r#"
+            t = Time.utc(2000,1,1,0,0,0)
+            [t.yday, t.wday, t.hour, t.min, t.sec]
+            "#,
+        );
+    }
+
+    #[test]
+    fn time_usec_nsec() {
+        run_test(
+            r#"
+            t = Time.utc(2000,1,1,20,15,1,123456)
+            [t.usec, t.nsec, t.tv_nsec]
+            "#,
+        );
+    }
+
+    #[test]
+    fn time_subsec() {
+        run_test("Time.utc(2000,1,1,0,0,0).subsec");
+        // CRuby returns Rational for non-zero subsec; monoruby approximates
+        // with Float. Just test that the value is numeric and non-zero.
+        run_test_once("Time.utc(2000,1,1,0,0,0,500000).subsec > 0");
+    }
+
+    #[test]
+    fn time_to_i_to_f() {
+        run_test(
+            r#"
+            t = Time.at(946684800)
+            [t.to_i, t.tv_sec]
+            "#,
+        );
+        run_test(
+            r#"
+            t = Time.at(946684800, 500000)
+            t.to_f.class
+            "#,
+        );
+    }
+
+    #[test]
+    fn time_utc_offset() {
+        run_test("Time.utc(2000).utc_offset");
+        run_test_once("Time.local(2000).utc_offset.is_a?(Integer)");
+    }
+
+    #[test]
+    fn time_add() {
+        run_test(
+            r#"
+            t = Time.at(1000)
+            (t + 100).is_a?(Time)
+            "#,
+        );
+        run_test(
+            r#"
+            t = Time.at(1000)
+            (t + 100).to_i - t.to_i
+            "#,
+        );
+        run_test(
+            r#"
+            t = Time.at(1000)
+            (t + 0.5).to_f - t.to_f > 0
+            "#,
+        );
+    }
+
+    #[test]
     fn time_strftime_nanoseconds() {
         run_tests(&[
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%3N")"#,

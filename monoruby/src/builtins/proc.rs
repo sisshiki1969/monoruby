@@ -593,6 +593,16 @@ mod tests {
     }
 
     #[test]
+    fn proc_ruby2_keywords() {
+        run_test(
+            r#"
+            p = proc {|*args| args}
+            p.ruby2_keywords.equal?(p)
+            "#,
+        );
+    }
+
+    #[test]
     fn proc_curry() {
         run_test("proc {|a,b,c| a+b+c}.curry[1][2][3]");
         run_test("proc {|a,b,c| a+b+c}.curry[1,2][3]");
