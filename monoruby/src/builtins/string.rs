@@ -164,8 +164,22 @@ pub(super) fn init(globals: &mut Globals) {
         0,
     );
     globals.define_builtin_func(STRING_CLASS, "ascii_only?", super::encoding::ascii_only, 0);
-    globals.define_builtin_func_with(STRING_CLASS, "unicode_normalize", unicode_normalize, 0, 1, false);
-    globals.define_builtin_func_with(STRING_CLASS, "unicode_normalize!", unicode_normalize_, 0, 1, false);
+    globals.define_builtin_func_with(
+        STRING_CLASS,
+        "unicode_normalize",
+        unicode_normalize,
+        0,
+        1,
+        false,
+    );
+    globals.define_builtin_func_with(
+        STRING_CLASS,
+        "unicode_normalize!",
+        unicode_normalize_,
+        0,
+        1,
+        false,
+    );
 
     super::encoding::init_encoding(globals);
 }
@@ -3812,11 +3826,7 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     )))
 }
 
-fn normalize_form(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-) -> Result<&'static str> {
+fn normalize_form(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<&'static str> {
     if let Some(form) = lfp.try_arg(0) {
         match form.expect_symbol_or_string(globals)?.to_string().as_str() {
             "nfc" => Ok("nfc"),
@@ -4690,9 +4700,7 @@ mod tests {
         run_test_no_result_check(r#""\xC3\xA9".end_with?("\xA9")"#);
         run_test_no_result_check(r#""\xe3\x81\x82".end_with?("\x82")"#);
         // Explicit UTF-8 string with force_encoding: boundary check works
-        run_test(
-            r#""\xC3\xA9".force_encoding("UTF-8").end_with?("\xA9".force_encoding("UTF-8"))"#,
-        );
+        run_test(r#""\xC3\xA9".force_encoding("UTF-8").end_with?("\xA9".force_encoding("UTF-8"))"#);
         // start_with? UTF-8 character boundary check
         run_test_no_result_check(r#""\xC3\xA9".start_with?("\xC3")"#);
         run_test(
@@ -5070,7 +5078,9 @@ mod tests {
         run_test(r#"buf = "string"; buf[1...3]="!!"; buf"#);
         run_test(r#"buf = "string"; buf[3..-1]=""; buf"#);
         run_test(r#"buf = "string"; buf[-3..-1]="!!"; buf"#);
-        run_test(r#"buf = "hello world"; rindex = buf.rindex("\n"); s = rindex ? buf[rindex+1..-1] : buf; buf[rindex ? rindex+1..-1 : 0..-1] = ""; buf"#);
+        run_test(
+            r#"buf = "hello world"; rindex = buf.rindex("\n"); s = rindex ? buf[rindex+1..-1] : buf; buf[rindex ? rindex+1..-1 : 0..-1] = ""; buf"#,
+        );
     }
 
     #[test]

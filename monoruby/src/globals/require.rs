@@ -103,11 +103,7 @@ impl Globals {
         // more things monoruby cannot handle) would be loaded first and
         // fail.
         if file_name.extension().is_none() {
-            let mut fallback = dirs::home_dir()
-                .unwrap()
-                .join(".monoruby")
-                .join("lib")
-                .join(file_name);
+            let mut fallback = dirs::home_dir().unwrap().join(".monoruby").join(file_name);
             fallback.set_extension("rb");
             if fallback.exists() {
                 return Some(fallback);

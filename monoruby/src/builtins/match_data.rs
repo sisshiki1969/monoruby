@@ -8,6 +8,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("MatchData", MATCHDATA_CLASS, ObjTy::MATCHDATA);
     globals.define_builtin_class_func(MATCHDATA_CLASS, "allocate", super::class::undef_allocate, 0);
     globals.define_builtin_func(MATCHDATA_CLASS, "captures", captures, 0);
+    globals.define_builtin_func(MATCHDATA_CLASS, "to_a", to_a, 0);
     globals.define_builtin_func_with(MATCHDATA_CLASS, "[]", index, 1, 2, false);
     globals.define_builtin_func(MATCHDATA_CLASS, "begin", match_begin, 1);
     globals.define_builtin_func(MATCHDATA_CLASS, "end", match_end, 1);
@@ -24,6 +25,24 @@ pub(super) fn init(globals: &mut Globals) {
 fn captures(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::array_from_iter(
         lfp.self_val().as_match_data().captures().skip(1).map(|s| {
+            if let Some(s) = s {
+                Value::string_from_str(s)
+            } else {
+                Value::nil()
+            }
+        }),
+    ))
+}
+
+/// ### MatchData#to_a
+///
+/// - to_a -> [String]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/to_a.html]
+#[monoruby_builtin]
+fn to_a(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::array_from_iter(
+        lfp.self_val().as_match_data().captures().map(|s| {
             if let Some(s) = s {
                 Value::string_from_str(s)
             } else {
