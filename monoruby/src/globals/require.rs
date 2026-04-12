@@ -95,15 +95,19 @@ impl Globals {
     }
 
     pub(crate) fn search_lib(&mut self, file_name: &std::path::Path) -> Option<PathBuf> {
-        // Priority: ~/.monoruby/<name>.rb overrides both $LOAD_PATH and
-        // native .so extensions. The files installed there by build.rs
-        // (e.g. fiddle.rb, strscan.rb, psych.rb, weakref.rb) are stubs
-        // that replace native extensions monoruby cannot load. They must
-        // take precedence, otherwise CRuby's stdlib wrappers (which
-        // themselves require more things monoruby cannot handle) would
-        // be loaded first and fail.
+        // Priority: ~/.monoruby/lib/<name>.rb overrides both $LOAD_PATH
+        // and native .so extensions. The files installed there by
+        // build.rs (from stdlib/ and gem/) are stubs that replace native
+        // extensions monoruby cannot load. They must take precedence,
+        // otherwise CRuby's stdlib wrappers (which themselves require
+        // more things monoruby cannot handle) would be loaded first and
+        // fail.
         if file_name.extension().is_none() {
-            let mut fallback = dirs::home_dir().unwrap().join(".monoruby").join(file_name);
+            let mut fallback = dirs::home_dir()
+                .unwrap()
+                .join(".monoruby")
+                .join("lib")
+                .join(file_name);
             fallback.set_extension("rb");
             if fallback.exists() {
                 return Some(fallback);
@@ -158,6 +162,7 @@ impl Globals {
             let mut lib = dirs::home_dir()
                 .unwrap()
                 .join(".monoruby")
+                .join("lib")
                 .join(canonicalized_path.file_name().unwrap());
             lib.set_extension("rb");
             load_file(&lib)?

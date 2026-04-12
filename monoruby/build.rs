@@ -5,10 +5,11 @@ use std::{fs, io};
 fn main() {
     let lib_path = dirs::home_dir().unwrap().join(".monoruby");
 
+    let lib_dir = lib_path.join("lib");
     let sources = [
-        (PathBuf::from("startup"), lib_path.clone()),
         (PathBuf::from("builtins"), lib_path.join("builtins")),
-        (PathBuf::from("lib"), lib_path.join("lib")),
+        (PathBuf::from("stdlib"), lib_dir.clone()),
+        (PathBuf::from("gem"), lib_dir),
     ];
 
     for (src, _) in &sources {
