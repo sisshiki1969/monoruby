@@ -210,6 +210,29 @@ mod tests {
     }
 
     #[test]
+    fn match_data_via_last_match() {
+        run_test(
+            r#"
+            "foobar" =~ /(foo)(bar)/
+            m = Regexp.last_match
+            [m.class.to_s, m[0], m[1], m[2], m.begin(0), m.end(0), m.begin(1), m.end(2)]
+            "#,
+        );
+        run_test(
+            r#"
+            "hello world" =~ /(\w+)\s(\w+)/
+            [Regexp.last_match.begin(1), Regexp.last_match.end(2)]
+            "#,
+        );
+        run_test(
+            r#"
+            "abc".scan(/(b)/) { }
+            [Regexp.last_match.class.to_s, Regexp.last_match[0], Regexp.last_match[1]]
+            "#,
+        );
+    }
+
+    #[test]
     fn match_data_begin_end_out_of_range() {
         // Index out of range -> IndexError
         run_test_error(r##"/(foo)(bar)/.match("foobar").begin(5)"##);

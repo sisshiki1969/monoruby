@@ -5813,4 +5813,24 @@ mod tests {
         run_test(r#""" * 1000000"#);
         run_test(r#""ab" * 3"#);
     }
+
+    #[test]
+    fn unicode_normalize() {
+        run_tests(&[
+            r##""café".unicode_normalize(:nfc).bytes.to_a"##,
+            r##""café".unicode_normalize(:nfd).bytes.to_a"##,
+            r##""café".unicode_normalize(:nfkc).bytes.to_a"##,
+            r##""café".unicode_normalize(:nfkd).bytes.to_a"##,
+            r##""café".unicode_normalize.bytes.to_a"##,
+            r##""ABC".unicode_normalize"##,
+        ]);
+        run_test(
+            r#"
+            s = "café".dup
+            s.unicode_normalize!(:nfd)
+            s.bytes.to_a
+            "#,
+        );
+        run_test_error(r#""café".unicode_normalize(:bad)"#);
+    }
 }

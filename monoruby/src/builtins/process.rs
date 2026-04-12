@@ -416,6 +416,24 @@ mod tests {
     }
 
     #[test]
+    fn process_wait() {
+        run_test(
+            r#"
+            pid = fork { exit 0 }
+            ret = Process.wait(pid)
+            [ret == pid, $?.exitstatus]
+            "#,
+        );
+        run_test(
+            r#"
+            pid = fork { exit 0 }
+            ret, status = Process.wait2(pid)
+            [ret == pid, status.class.to_s, status.exitstatus]
+            "#,
+        );
+    }
+
+    #[test]
     fn process_last_status() {
         run_test_no_result_check("Process.last_status");
         run_test(

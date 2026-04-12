@@ -1163,7 +1163,12 @@ fn fork(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             let data = vm.get_block_data(globals, bh)?;
             match vm.invoke_block(globals, &data, &[]) {
                 Ok(_) => std::process::exit(0),
-                Err(_) => std::process::exit(1),
+                Err(err) => {
+                    if let MonorubyErrKind::SystemExit(status) = &err.kind {
+                        std::process::exit(*status as i32)
+                    }
+                    std::process::exit(1)
+                }
             }
         }
         Ok(Value::nil())
