@@ -6,20 +6,26 @@ fn main() {
     let lib_path = dirs::home_dir().unwrap().join(".monoruby");
 
     let lib_dir = lib_path.join("lib");
+    let builtins_dir = lib_path.join("builtins");
     let sources = [
-        (PathBuf::from("builtins"), lib_path.join("builtins")),
+        (PathBuf::from("builtins"), builtins_dir.clone()),
         (PathBuf::from("stdlib"), lib_dir.clone()),
-        (PathBuf::from("gem"), lib_dir),
+        (PathBuf::from("gem"), lib_dir.clone()),
     ];
 
     for (src, _) in &sources {
-        emit_rerun_if_changed(src);
+        println!("cargo:rerun-if-changed={}", src.display());
     }
 
-    if lib_path.exists() {
-        fs::remove_dir_all(&lib_path).unwrap();
+    if !lib_path.exists() {
+        fs::create_dir(&lib_path).unwrap();
     }
-    fs::create_dir(&lib_path).unwrap();
+    for p in [&lib_dir, &builtins_dir] {
+        if p.exists() {
+            fs::remove_dir_all(p).unwrap();
+        }
+        fs::create_dir(p).unwrap();
+    }
 
     match Command::new("ruby").args(["-e", "puts($:)"]).output() {
         Ok(output) => {
@@ -52,7 +58,7 @@ fn main() {
 }
 
 fn copy_dir_all(src: &Path, dst: &Path) -> io::Result<()> {
-    if !dst.exists() {
+    if !fs::exists(dst)? {
         fs::create_dir(dst)?;
     }
     for entry in fs::read_dir(src)? {
@@ -66,19 +72,4 @@ fn copy_dir_all(src: &Path, dst: &Path) -> io::Result<()> {
         }
     }
     Ok(())
-}
-
-fn emit_rerun_if_changed(src: &Path) {
-    println!("cargo:rerun-if-changed={}", src.display());
-    let Ok(entries) = fs::read_dir(src) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            emit_rerun_if_changed(&path);
-        } else {
-            println!("cargo:rerun-if-changed={}", path.display());
-        }
-    }
 }

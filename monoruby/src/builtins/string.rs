@@ -1535,7 +1535,14 @@ fn chomp_sub<'a>(self_: &'a str, rs: &str) -> &'a str {
         }
         s
     } else if rs == "\n" {
-        self_.trim_end_matches(&['\n', '\r'])
+        // Default separator: remove one trailing \r\n, \n, or \r.
+        if self_.ends_with("\r\n") {
+            &self_[..self_.len() - 2]
+        } else if self_.ends_with('\n') || self_.ends_with('\r') {
+            &self_[..self_.len() - 1]
+        } else {
+            self_
+        }
     } else {
         self_.trim_end_matches(rs)
     }
@@ -4828,13 +4835,21 @@ mod tests {
 
     #[test]
     fn chomp() {
-        run_test(r##""foo\n".chomp"##);
-        run_test(r##""foo\n".chomp("\n")"##);
-        run_test(r##""foo\r\n".chomp("\r\n")"##);
-        run_test(r##""string\n".chomp(nil)"##);
-        run_test(r##""foo\r\n\n".chomp("")"##);
-        run_test(r##""foo\n\r\n".chomp("")"##);
-        run_test(r##""foo\n\r\r".chomp("")"##);
+        run_tests(&[
+            r##""foo\n".chomp"##,
+            r##""foo\n".chomp("\n")"##,
+            r##""foo\r\n".chomp("\r\n")"##,
+            r##""string\n".chomp(nil)"##,
+            r##""foo\r\n\n".chomp("")"##,
+            r##""foo\n\r\n".chomp("")"##,
+            r##""foo\n\r\r".chomp("")"##,
+            // Default separator removes exactly one \n, \r\n, or \r
+            r##""hello\n\n".chomp"##,
+            r##""hello\r\n\r\n".chomp"##,
+            r##""hello\r\r".chomp"##,
+            r##""hello\n\r\n".chomp"##,
+            r##""hello".chomp"##,
+        ]);
     }
 
     #[test]
@@ -5880,5 +5895,30 @@ mod tests {
             "#,
         );
         run_test_error(r#""café".unicode_normalize(:bad)"#);
+    }
+
+    #[test]
+    fn string_inspect() {
+        run_tests(&[
+            // ASCII
+            r##""hello".inspect"##,
+            r##""line1\nline2".inspect"##,
+            r##""tab\there".inspect"##,
+            r##""quote\"here".inspect"##,
+            r##""back\\slash".inspect"##,
+            // UTF-8 printable chars displayed inline
+            r##""café".inspect"##,
+            r##""André".inspect"##,
+            r##""日本語".inspect"##,
+            r##""emoji: 🎉".inspect"##,
+            // Control characters use \uNNNN in UTF-8
+            r##""\x00".inspect"##,
+            r##""\x01".inspect"##,
+            r##""\x1f".inspect"##,
+            // Named escapes
+            r##""\a\b\t\n\v\f\r\e".inspect"##,
+            // Empty string
+            r##""".inspect"##,
+        ]);
     }
 }

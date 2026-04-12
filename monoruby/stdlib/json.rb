@@ -58,7 +58,13 @@ module JSON
   # --- Module methods ---
 
   def self.parse(source, opts = {})
-    Parser.new(source, opts).parse
+    # Use native Rust parser for speed; fall back to Ruby parser
+    # only when advanced options are requested.
+    if opts.empty? || (opts.keys - [:max_nesting, :allow_nan]).empty?
+      String.__json_parse(source)
+    else
+      Parser.new(source, opts).parse
+    end
   end
 
   def self.parse!(source, opts = {})
@@ -66,14 +72,18 @@ module JSON
       max_nesting: false,
       allow_nan: true
     }.merge(opts)
-    Parser.new(source, opts).parse
+    if (opts.keys - [:max_nesting, :allow_nan]).empty?
+      String.__json_parse(source)
+    else
+      Parser.new(source, opts).parse
+    end
   end
 
   def self.generate(obj, opts = nil)
     if opts
       State.generate(obj, opts)
     else
-      State.generate(obj)
+      String.__json_generate(obj)
     end
   end
 
