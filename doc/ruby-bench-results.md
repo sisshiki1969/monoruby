@@ -1,70 +1,71 @@
-# ruby-bench results (2026-04-12)
+# ruby-bench results (2026-04-13)
 
 monoruby v0.3.0 on x86-64 Linux, single run (`--once`).
 
 ## Summary
 
 - **Total benchmarks**: 72
-- **Passed**: 50
-- **Failed**: 22
-- **Newly fixed** (this session): addressable-equality, addressable-merge, addressable-normalize, knucleotide, liquid-compile
+- **Passed**: 51
+- **Failed**: 21
+- **Newly fixed** (this session): addressable-equality, addressable-merge, addressable-normalize, knucleotide, liquid-compile, protoboeuf-encode
 
 ## Successful benchmarks (time in ms)
 
 | Benchmark | Time (ms) |
 |---|---:|
+| setivar_young | 3.3 |
+| setivar_object | 3.5 |
 | setivar | 3.7 |
-| setivar_object | 3.9 |
-| setivar_young | 4.6 |
-| structaset | 5.7 |
-| throw | 7.3 |
-| getivar | 7.6 |
+| structaset | 4.6 |
+| throw | 6.3 |
+| structaref | 6.8 |
+| getivar | 7.3 |
 | attr_accessor | 7.9 |
-| structaref | 8.3 |
-| cfunc_itself | 14.9 |
-| send_rubyfunc_block | 15.0 |
-| nbody | 16.3 |
-| getivar-module | 17.4 |
-| nqueens | 20.7 |
-| fib | 25.8 |
-| object-new-initialize | 26.4 |
-| send_bmethod | 35.1 |
-| knucleotide | 39.8 |
-| keyword_args | 40.3 |
-| str_concat | 56.7 |
-| object-new-no-escape | 61.4 |
-| ruby-xor | 65.3 |
-| object-new | 70.6 |
-| sudoku | 70.8 |
-| fannkuchredux | 73.4 |
-| protoboeuf | 77.3 |
-| matmul | 77.8 |
-| addressable-new | 78.1 |
-| blurhash | 79.8 |
-| send_cfunc_block | 83.5 |
-| addressable-setters | 130.7 |
-| liquid-compile | 137.7 |
-| loops-times | 142.0 |
-| addressable-getters | 146.6 |
-| 30k_methods | 155.2 |
-| addressable-to-s | 166.3 |
-| addressable-merge | 175.9 |
-| addressable-parse | 242.3 |
-| binarytrees | 262.0 |
-| respond_to | 294.6 |
-| addressable-normalize | 384.6 |
-| addressable-join | 401.2 |
-| 30k_ifelse | 421.3 |
-| lee | 463.9 |
-| splay | 482.7 |
-| rubykon | 622.9 |
-| addressable-equality | 693.3 |
-| optcarrot | 1078.8 |
-| gcbench | 1431.3 |
-| rubyboy | 3431.2 |
-| psych-load | 3566.9 |
+| nbody | 12.1 |
+| cfunc_itself | 13.1 |
+| send_rubyfunc_block | 15.2 |
+| getivar-module | 16.7 |
+| nqueens | 16.8 |
+| object-new-initialize | 24.0 |
+| fib | 30.8 |
+| keyword_args | 31.4 |
+| send_bmethod | 33.8 |
+| knucleotide | 35.9 |
+| object-new | 47.9 |
+| object-new-no-escape | 50.2 |
+| str_concat | 51.8 |
+| ruby-xor | 57.2 |
+| matmul | 57.3 |
+| sudoku | 58.5 |
+| blurhash | 70.9 |
+| fannkuchredux | 73.8 |
+| protoboeuf | 75.1 |
+| send_cfunc_block | 87.7 |
+| addressable-new | 102.1 |
+| protoboeuf-encode | 108.6 |
+| loops-times | 123.6 |
+| addressable-setters | 129.3 |
+| liquid-compile | 133.9 |
+| 30k_methods | 155.8 |
+| addressable-getters | 173.2 |
+| addressable-merge | 176.6 |
+| addressable-to-s | 211.0 |
+| binarytrees | 231.6 |
+| addressable-parse | 242.5 |
+| respond_to | 244.7 |
+| addressable-join | 356.6 |
+| splay | 428.3 |
+| lee | 439.4 |
+| addressable-normalize | 441.9 |
+| 30k_ifelse | 446.4 |
+| rubykon | 587.9 |
+| addressable-equality | 840.3 |
+| optcarrot | 852.9 |
+| gcbench | 1499.2 |
+| rubyboy | 2857.0 |
+| psych-load | 2910.3 |
 
-## Failed benchmarks (22) by category
+## Failed benchmarks (21) by category
 
 ### 1. Missing C extension stubs (6 benchmarks)
 
@@ -78,15 +79,15 @@ No `.rb` replacement exists for the native `.so` extension.
 | fluentd | `yajl/yajl.rb` (yajl-ruby gem) |
 | liquid-c | `liquid_c.rb` (liquid-c gem) |
 
-### 2. Missing File#path method (3 benchmarks)
+### 2. Missing Module#singleton_class? (3 benchmarks)
 
-`File#path` is not implemented. Logger gem requires it.
+ActiveSupport's `mattr_reader` calls `singleton_class?` which is not implemented.
 
 | Benchmark | Error |
 |---|---|
-| erubi-rails | `undefined method 'path' for #<File:fd 120>` |
-| railsbench | `undefined method 'path' for #<File:fd 111>` |
-| shipit | `undefined method 'path' for #<File:fd 5>` |
+| erubi-rails | `undefined method 'singleton_class?' for ActiveSupport::Logger` |
+| railsbench | `undefined method 'singleton_class?' for ActiveSupport::Logger` |
+| shipit | `undefined method 'singleton_class?' for ActiveSupport::Logger` |
 
 ### 3. Missing Thread support (1 benchmark)
 
@@ -115,12 +116,10 @@ No `.rb` replacement exists for the native `.so` extension.
 | sequel | `uninitialized constant Module` |
 | rubocop | `uninitialized constant V4_0_0` (dynamic `const_get` for Ruby 4.0 version) |
 
-### 7. Core method / type conversion issues (3 benchmarks)
+### 7. Core method issues (1 benchmark)
 
 | Benchmark | Error |
 |---|---|
-| erubi | `no implicit conversion of Range into Integer` (Range used as String index) |
-| protoboeuf-encode | `index 11 out of string` (String byte manipulation bug) |
 | ruby-lsp | `undefined method 'first' for ""` (sorbet-runtime internal) |
 
 ### 8. Runtime issues (1 benchmark)
@@ -129,9 +128,10 @@ No `.rb` replacement exists for the native `.so` extension.
 |---|---|
 | liquid-render | `RuntimeError` in liquid.rb (empty message, likely Liquid version check) |
 
-### 9. Unknown (2 benchmarks)
+### 9. Unknown (3 benchmarks)
 
 | Benchmark | Error |
 |---|---|
-| etanni | (no error message captured) |
-| tinygql | (no error message captured) |
+| erubi | (no clear error captured) |
+| etanni | (no clear error captured) |
+| tinygql | (no clear error captured) |
