@@ -123,6 +123,8 @@ impl<'a> Parser<'a> {
 
     fn parse_string_raw(&mut self) -> Option<String> {
         self.advance(); // skip opening "
+        // Scan for closing " to find the raw extent, handling escapes
+        // by collecting into a String.
         let mut s = String::new();
         loop {
             let ch = *self.src.get(self.pos)?;
@@ -144,7 +146,6 @@ impl<'a> Parser<'a> {
                         b'u' => {
                             let cp = self.parse_unicode_escape()?;
                             if (0xD800..=0xDBFF).contains(&cp) {
-                                // high surrogate — expect \uXXXX low surrogate
                                 if self.src.get(self.pos) == Some(&b'\\')
                                     && self.src.get(self.pos + 1) == Some(&b'u')
                                 {
@@ -167,6 +168,32 @@ impl<'a> Parser<'a> {
                         _ => {
                             s.push('\\');
                             s.push(esc as char);
+                        }
+                    }
+                }
+                // Multi-byte UTF-8: decode the full sequence
+                b if b >= 0x80 => {
+                    self.pos -= 1; // back up to re-read the lead byte
+                    let remaining = &self.src[self.pos..];
+                    match std::str::from_utf8(remaining) {
+                        Ok(rest) => {
+                            let c = rest.chars().next()?;
+                            s.push(c);
+                            self.pos += c.len_utf8();
+                        }
+                        Err(e) => {
+                            // Partial valid prefix
+                            let valid_len = e.valid_up_to();
+                            if valid_len > 0 {
+                                let valid = std::str::from_utf8(&remaining[..valid_len]).ok()?;
+                                let c = valid.chars().next()?;
+                                s.push(c);
+                                self.pos += c.len_utf8();
+                            } else {
+                                // Skip invalid byte
+                                s.push(char::REPLACEMENT_CHARACTER);
+                                self.pos += 1;
+                            }
                         }
                     }
                 }
