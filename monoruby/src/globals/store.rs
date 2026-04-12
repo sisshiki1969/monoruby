@@ -372,16 +372,6 @@ impl Store {
             result.source_info,
             true,
         )?;
-        // Top-level scripts have an implicit cref of `[Object]` in CRuby.
-        // Seeding the lexical_context with OBJECT_CLASS ensures that class
-        // bodies nested inside the top level inherit Object at the base of
-        // their lexical chain, matching CRuby's constant-lookup semantics.
-        // Without this, `class Foo < BasicObject` reopens cannot resolve
-        // top-level constants (`ActiveSupport::Tryable`, etc.) because the
-        // superclass fallback terminates at BasicObject.
-        if let Some(info) = self.iseq_mut(fid) {
-            info.lexical_context.push(OBJECT_CLASS);
-        }
         Ok(fid)
     }
 

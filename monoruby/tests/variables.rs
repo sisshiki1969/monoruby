@@ -140,15 +140,10 @@ fn class_variables3() {
             end
         "#,
     );
-    run_test_error(
-        r#"
-            @@x = 1
-        "#,
-    );
-    run_test_error(
+    run_test_once(
         r#"
             class C
-              @@x
+              @@x = 1
             end
         "#,
     );
@@ -166,6 +161,15 @@ fn class_variables3() {
 
 #[test]
 fn class_variables4() {
+    run_test_error(
+        r#"
+            @@x = 1       #=> class variable access from toplevel (RuntimeError)
+        "#,
+    );
+}
+
+#[test]
+fn class_variables5() {
     run_test(
         r##"
             class C
