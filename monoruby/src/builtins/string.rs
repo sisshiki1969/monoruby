@@ -1535,7 +1535,14 @@ fn chomp_sub<'a>(self_: &'a str, rs: &str) -> &'a str {
         }
         s
     } else if rs == "\n" {
-        self_.trim_end_matches(&['\n', '\r'])
+        // Default separator: remove one trailing \r\n, \n, or \r.
+        if self_.ends_with("\r\n") {
+            &self_[..self_.len() - 2]
+        } else if self_.ends_with('\n') || self_.ends_with('\r') {
+            &self_[..self_.len() - 1]
+        } else {
+            self_
+        }
     } else {
         self_.trim_end_matches(rs)
     }
@@ -4828,13 +4835,21 @@ mod tests {
 
     #[test]
     fn chomp() {
-        run_test(r##""foo\n".chomp"##);
-        run_test(r##""foo\n".chomp("\n")"##);
-        run_test(r##""foo\r\n".chomp("\r\n")"##);
-        run_test(r##""string\n".chomp(nil)"##);
-        run_test(r##""foo\r\n\n".chomp("")"##);
-        run_test(r##""foo\n\r\n".chomp("")"##);
-        run_test(r##""foo\n\r\r".chomp("")"##);
+        run_tests(&[
+            r##""foo\n".chomp"##,
+            r##""foo\n".chomp("\n")"##,
+            r##""foo\r\n".chomp("\r\n")"##,
+            r##""string\n".chomp(nil)"##,
+            r##""foo\r\n\n".chomp("")"##,
+            r##""foo\n\r\n".chomp("")"##,
+            r##""foo\n\r\r".chomp("")"##,
+            // Default separator removes exactly one \n, \r\n, or \r
+            r##""hello\n\n".chomp"##,
+            r##""hello\r\n\r\n".chomp"##,
+            r##""hello\r\r".chomp"##,
+            r##""hello\n\r\n".chomp"##,
+            r##""hello".chomp"##,
+        ]);
     }
 
     #[test]
