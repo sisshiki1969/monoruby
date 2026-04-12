@@ -4639,6 +4639,25 @@ mod tests {
     }
 
     #[test]
+    fn pack_buffer() {
+        run_test(
+            r#"
+            buf = "hello".b
+            [3.14].pack("E", buffer: buf)
+            [buf.bytesize, buf[0, 5]]
+            "#,
+        );
+        run_test(
+            r#"
+            buf = "".b
+            buf << 0x08
+            [42].pack("C", buffer: buf)
+            buf.bytes.to_a
+            "#,
+        );
+    }
+
+    #[test]
     fn pack_count() {
         run_test(r#"[1,2,3].pack("L3").unpack("L3")"#);
         run_test(r#"[1,2,3,4,5].pack("L*").unpack("L*")"#);

@@ -771,8 +771,40 @@ fn index_assign(
         lhs.replace_range(start..end, &subst);
         *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
         Ok(lfp.self_val())
+    } else if let Some(info) = arg0_val.is_range() {
+        let char_len = len;
+        let start_raw = info.start().coerce_to_int_i64(vm, globals)?;
+        let end_raw = info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64;
+        let start_char = match conv_index(start_raw, char_len) {
+            Some(i) => i,
+            None => return Err(MonorubyErr::rangeerr("out of range.")),
+        };
+        let end_char = if end_raw < 0 {
+            let e = char_len as i64 + end_raw;
+            if e < 0 {
+                return Err(MonorubyErr::rangeerr("out of range."));
+            }
+            e as usize
+        } else {
+            end_raw as usize
+        };
+        let byte_start = lhs
+            .char_indices()
+            .nth(start_char)
+            .map(|(i, _)| i)
+            .unwrap_or(lhs.len());
+        let byte_end = if end_char >= start_char {
+            lhs.char_indices()
+                .nth(end_char + 1)
+                .map(|(i, _)| i)
+                .unwrap_or(lhs.len())
+        } else {
+            byte_start
+        };
+        lhs.replace_range(byte_start..byte_end, &subst);
+        *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
+        Ok(lfp.self_val())
     } else {
-        // Try to_int coercion on the index argument
         let idx = arg0_val.coerce_to_int_i64(vm, globals)?;
         let start = match conv_index(idx, len) {
             Some(i) => i,
@@ -5033,6 +5065,12 @@ mod tests {
         run_test(r#"buf = "string"; buf[3,10]="!!"; buf"#);
         run_test(r#"buf = "string"; buf[3,0]="!!"; buf"#);
         run_test_error(r#"buf = "string"; buf[3,-1]="!!"; buf"#);
+        // Range indexing
+        run_test(r#"buf = "string"; buf[1..3]="!!"; buf"#);
+        run_test(r#"buf = "string"; buf[1...3]="!!"; buf"#);
+        run_test(r#"buf = "string"; buf[3..-1]=""; buf"#);
+        run_test(r#"buf = "string"; buf[-3..-1]="!!"; buf"#);
+        run_test(r#"buf = "hello world"; rindex = buf.rindex("\n"); s = rindex ? buf[rindex+1..-1] : buf; buf[rindex ? rindex+1..-1 : 0..-1] = ""; buf"#);
     }
 
     #[test]

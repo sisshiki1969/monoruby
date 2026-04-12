@@ -48,6 +48,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(file_test, "executable?", executable_, 1);
 
     globals.define_builtin_func_rest(file, "write", write);
+    globals.define_builtin_funcs(file, "path", &["to_path"], file_instance_path, 0);
     globals.define_builtin_func(file, "size", file_instance_size, 0);
 
     globals.define_builtin_class_func_with(file, "umask", umask, 0, 1, false);
@@ -1061,6 +1062,24 @@ fn file_size_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// ### File#size (instance method)
 /// - size -> Integer
 ///
+/// ### File#path / File#to_path
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/i/path.html]
+#[monoruby_builtin]
+fn file_instance_path(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let io = self_.as_io_inner();
+    match io.name() {
+        Some(name) => Ok(Value::string_from_str(name)),
+        None => Err(MonorubyErr::runtimeerr("path not available for this IO")),
+    }
+}
+
 /// Returns the size of the file in bytes.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/i/size.html]
@@ -1374,6 +1393,22 @@ mod tests {
             raise "expected line1" unless lines[0] == "line1\n"
             raise "expected line2" unless lines[1] == "line2\n"
             raise "expected line3" unless lines[2] == "line3\n"
+            File.delete(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_path() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_path_#{Process.pid}"
+            File.write(path, "x")
+            f = File.open(path)
+            raise "path mismatch" unless f.path == path
+            raise "to_path mismatch" unless f.to_path == path
+            raise "class mismatch" unless f.path.is_a?(String)
+            f.close
             File.delete(path)
             "#,
         );
