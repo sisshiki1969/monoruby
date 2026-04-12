@@ -86,6 +86,10 @@ end
 class Hash
   include Enumerable
 
+  def to_hash
+    self
+  end
+
   # Hash#to_h
   # to_h -> self
   # to_h {|key, value| block } -> Hash

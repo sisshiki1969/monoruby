@@ -28,11 +28,8 @@ module JSON
   end
 end
 
-# Load generator and parser from startup directory
-# At runtime they are at ~/.monoruby/generator.rb and ~/.monoruby/parser.rb
-_monoruby_home = File.join(Dir.home, '.monoruby')
-load File.join(_monoruby_home, 'generator.rb')
-load File.join(_monoruby_home, 'parser.rb')
+require 'json/ext/generator'
+require 'json/ext/parser'
 
 # Setup the main JSON module API
 module JSON

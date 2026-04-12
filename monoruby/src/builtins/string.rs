@@ -164,6 +164,22 @@ pub(super) fn init(globals: &mut Globals) {
         0,
     );
     globals.define_builtin_func(STRING_CLASS, "ascii_only?", super::encoding::ascii_only, 0);
+    globals.define_builtin_func_with(
+        STRING_CLASS,
+        "unicode_normalize",
+        unicode_normalize,
+        0,
+        1,
+        false,
+    );
+    globals.define_builtin_func_with(
+        STRING_CLASS,
+        "unicode_normalize!",
+        unicode_normalize_,
+        0,
+        1,
+        false,
+    );
 
     super::encoding::init_encoding(globals);
 }
@@ -769,8 +785,40 @@ fn index_assign(
         lhs.replace_range(start..end, &subst);
         *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
         Ok(lfp.self_val())
+    } else if let Some(info) = arg0_val.is_range() {
+        let char_len = len;
+        let start_raw = info.start().coerce_to_int_i64(vm, globals)?;
+        let end_raw = info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64;
+        let start_char = match conv_index(start_raw, char_len) {
+            Some(i) => i,
+            None => return Err(MonorubyErr::rangeerr("out of range.")),
+        };
+        let end_char = if end_raw < 0 {
+            let e = char_len as i64 + end_raw;
+            if e < 0 {
+                return Err(MonorubyErr::rangeerr("out of range."));
+            }
+            e as usize
+        } else {
+            end_raw as usize
+        };
+        let byte_start = lhs
+            .char_indices()
+            .nth(start_char)
+            .map(|(i, _)| i)
+            .unwrap_or(lhs.len());
+        let byte_end = if end_char >= start_char {
+            lhs.char_indices()
+                .nth(end_char + 1)
+                .map(|(i, _)| i)
+                .unwrap_or(lhs.len())
+        } else {
+            byte_start
+        };
+        lhs.replace_range(byte_start..byte_end, &subst);
+        *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
+        Ok(lfp.self_val())
     } else {
-        // Try to_int coercion on the index argument
         let idx = arg0_val.coerce_to_int_i64(vm, globals)?;
         let start = match conv_index(idx, len) {
             Some(i) => i,
@@ -3778,6 +3826,74 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     )))
 }
 
+fn normalize_form(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<&'static str> {
+    if let Some(form) = lfp.try_arg(0) {
+        match form.expect_symbol_or_string(globals)?.to_string().as_str() {
+            "nfc" => Ok("nfc"),
+            "nfd" => Ok("nfd"),
+            "nfkc" => Ok("nfkc"),
+            "nfkd" => Ok("nfkd"),
+            other => Err(MonorubyErr::argumenterr(format!(
+                "invalid normalization form -- {other}"
+            ))),
+        }
+    } else {
+        Ok("nfc")
+    }
+}
+
+/// ### String#unicode_normalize
+/// - unicode_normalize(form = :nfc) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/unicode_normalize.html]
+#[monoruby_builtin]
+fn unicode_normalize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    use unicode_normalization::UnicodeNormalization;
+    let s = lfp.self_val().expect_string(globals)?;
+    let form = normalize_form(vm, globals, lfp)?;
+    let result: String = match form {
+        "nfc" => s.nfc().collect(),
+        "nfd" => s.nfd().collect(),
+        "nfkc" => s.nfkc().collect(),
+        "nfkd" => s.nfkd().collect(),
+        _ => unreachable!(),
+    };
+    Ok(Value::string(result))
+}
+
+/// ### String#unicode_normalize!
+/// - unicode_normalize!(form = :nfc) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/unicode_normalize=21.html]
+#[monoruby_builtin]
+fn unicode_normalize_(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    use unicode_normalization::UnicodeNormalization;
+    let s = lfp.self_val().expect_string(globals)?;
+    let form = normalize_form(vm, globals, lfp)?;
+    let result: String = match form {
+        "nfc" => s.nfc().collect(),
+        "nfd" => s.nfd().collect(),
+        "nfkc" => s.nfkc().collect(),
+        "nfkd" => s.nfkd().collect(),
+        _ => unreachable!(),
+    };
+    let old_len = lfp.self_val().as_rstring_inner().len();
+    lfp.self_val()
+        .as_rstring_inner_mut()
+        .bytesplice(0, old_len, result.as_bytes());
+    Ok(lfp.self_val())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -4584,9 +4700,7 @@ mod tests {
         run_test_no_result_check(r#""\xC3\xA9".end_with?("\xA9")"#);
         run_test_no_result_check(r#""\xe3\x81\x82".end_with?("\x82")"#);
         // Explicit UTF-8 string with force_encoding: boundary check works
-        run_test(
-            r#""\xC3\xA9".force_encoding("UTF-8").end_with?("\xA9".force_encoding("UTF-8"))"#,
-        );
+        run_test(r#""\xC3\xA9".force_encoding("UTF-8").end_with?("\xA9".force_encoding("UTF-8"))"#);
         // start_with? UTF-8 character boundary check
         run_test_no_result_check(r#""\xC3\xA9".start_with?("\xC3")"#);
         run_test(
@@ -4959,6 +5073,14 @@ mod tests {
         run_test(r#"buf = "string"; buf[3,10]="!!"; buf"#);
         run_test(r#"buf = "string"; buf[3,0]="!!"; buf"#);
         run_test_error(r#"buf = "string"; buf[3,-1]="!!"; buf"#);
+        // Range indexing
+        run_test(r#"buf = "string"; buf[1..3]="!!"; buf"#);
+        run_test(r#"buf = "string"; buf[1...3]="!!"; buf"#);
+        run_test(r#"buf = "string"; buf[3..-1]=""; buf"#);
+        run_test(r#"buf = "string"; buf[-3..-1]="!!"; buf"#);
+        run_test(
+            r#"buf = "hello world"; rindex = buf.rindex("\n"); s = rindex ? buf[rindex+1..-1] : buf; buf[rindex ? rindex+1..-1 : 0..-1] = ""; buf"#,
+        );
     }
 
     #[test]
@@ -5738,5 +5860,25 @@ mod tests {
         );
         run_test(r#""" * 1000000"#);
         run_test(r#""ab" * 3"#);
+    }
+
+    #[test]
+    fn unicode_normalize() {
+        run_tests(&[
+            r##""café".unicode_normalize(:nfc).bytes.to_a"##,
+            r##""café".unicode_normalize(:nfd).bytes.to_a"##,
+            r##""café".unicode_normalize(:nfkc).bytes.to_a"##,
+            r##""café".unicode_normalize(:nfkd).bytes.to_a"##,
+            r##""café".unicode_normalize.bytes.to_a"##,
+            r##""ABC".unicode_normalize"##,
+        ]);
+        run_test(
+            r#"
+            s = "café".dup
+            s.unicode_normalize!(:nfd)
+            s.bytes.to_a
+            "#,
+        );
+        run_test_error(r#""café".unicode_normalize(:bad)"#);
     }
 }

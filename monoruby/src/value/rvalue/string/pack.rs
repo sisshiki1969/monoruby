@@ -904,9 +904,10 @@ pub(crate) fn pack(
         };
     }
     if let Some(mut buf_val) = buffer {
-        // Write the packed data into the provided buffer string.
-        let rstr = buf_val.as_rstring_inner_mut();
-        *rstr = RStringInner::bytes_from_vec(packed);
+        // Append the packed data to the provided buffer string.
+        buf_val
+            .as_rstring_inner_mut()
+            .extend_from_slice_checked(&packed)?;
         Ok(buf_val)
     } else if template_is_empty && packed.is_empty() {
         // Empty format string produces US-ASCII encoded empty string.

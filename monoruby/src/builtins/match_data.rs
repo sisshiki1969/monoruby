@@ -8,6 +8,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("MatchData", MATCHDATA_CLASS, ObjTy::MATCHDATA);
     globals.define_builtin_class_func(MATCHDATA_CLASS, "allocate", super::class::undef_allocate, 0);
     globals.define_builtin_func(MATCHDATA_CLASS, "captures", captures, 0);
+    globals.define_builtin_func(MATCHDATA_CLASS, "to_a", to_a, 0);
     globals.define_builtin_func_with(MATCHDATA_CLASS, "[]", index, 1, 2, false);
     globals.define_builtin_func(MATCHDATA_CLASS, "begin", match_begin, 1);
     globals.define_builtin_func(MATCHDATA_CLASS, "end", match_end, 1);
@@ -24,6 +25,24 @@ pub(super) fn init(globals: &mut Globals) {
 fn captures(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::array_from_iter(
         lfp.self_val().as_match_data().captures().skip(1).map(|s| {
+            if let Some(s) = s {
+                Value::string_from_str(s)
+            } else {
+                Value::nil()
+            }
+        }),
+    ))
+}
+
+/// ### MatchData#to_a
+///
+/// - to_a -> [String]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/to_a.html]
+#[monoruby_builtin]
+fn to_a(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::array_from_iter(
+        lfp.self_val().as_match_data().captures().map(|s| {
             if let Some(s) = s {
                 Value::string_from_str(s)
             } else {
@@ -61,8 +80,12 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             .map(|s| Value::string_from_str(s))
             .unwrap_or_default())
     } else if let Some(sym) = lfp.arg(0).try_symbol_or_string() {
-        if let Some(i) = m.regexp().get_group_members(&format!("{sym}")).last() {
-            if let Some(s) = m.at(*i as usize) {
+        if let Some(i) = m
+            .regexp()
+            .map(|r| r.get_group_members(&format!("{sym}")))
+            .and_then(|g| g.last().copied())
+        {
+            if let Some(s) = m.at(i as usize) {
                 Ok(Value::string_from_str(s))
             } else {
                 Ok(Value::nil())
@@ -146,7 +169,10 @@ fn match_end(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 fn named_captures(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
-    let names = m.regexp().capture_names().unwrap();
+    let names = m
+        .regexp()
+        .and_then(|r| r.capture_names().ok())
+        .unwrap_or_default();
     let mut map = RubyMap::default();
     for (i, name) in names.iter().enumerate() {
         let key = Value::string_from_str(name);
@@ -200,6 +226,29 @@ mod tests {
     #[test]
     fn match_data_named_captures() {
         run_test(r##"/(?<a>foo)(?<b>bar)/.match("foobar").named_captures"##);
+    }
+
+    #[test]
+    fn match_data_via_last_match() {
+        run_test(
+            r#"
+            "foobar" =~ /(foo)(bar)/
+            m = Regexp.last_match
+            [m.class.to_s, m[0], m[1], m[2], m.begin(0), m.end(0), m.begin(1), m.end(2)]
+            "#,
+        );
+        run_test(
+            r#"
+            "hello world" =~ /(\w+)\s(\w+)/
+            [Regexp.last_match.begin(1), Regexp.last_match.end(2)]
+            "#,
+        );
+        run_test(
+            r#"
+            "abc".scan(/(b)/) { }
+            [Regexp.last_match.class.to_s, Regexp.last_match[0], Regexp.last_match[1]]
+            "#,
+        );
     }
 
     #[test]

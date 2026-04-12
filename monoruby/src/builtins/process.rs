@@ -22,6 +22,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_with(klass, "exit!", process_exit_bang, 0, 1, false);
     globals.define_builtin_module_func(klass, "euid", euid, 0);
     globals.define_builtin_module_func(klass, "last_status", last_status, 0);
+    globals.define_builtin_module_func_with(klass, "wait", process_wait, 0, 2, false);
+    globals.define_builtin_module_func_with(klass, "waitpid", process_wait, 0, 2, false);
+    globals.define_builtin_module_func_with(klass, "wait2", process_wait2, 0, 2, false);
+    globals.define_builtin_module_func_with(klass, "waitpid2", process_wait2, 0, 2, false);
 
     // Process::Status class — methods defined in Ruby (startup.rb)
     globals.define_class("Status", object_class, klass);
@@ -210,8 +214,85 @@ fn euid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -
     Ok(Value::integer(uid as i64))
 }
 
+/// ### Process.wait / Process.waitpid
 ///
-/// ### Signal.list
+/// - wait(pid = -1, flags = 0) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Process/m/wait.html]
+#[monoruby_builtin]
+fn process_wait(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let (pid, status) = do_waitpid(vm, globals, lfp)?;
+    globals.set_gvar(IdentId::get_id("$?"), status);
+    Ok(Value::integer(pid as i64))
+}
+
+/// ### Process.wait2 / Process.waitpid2
+///
+/// - wait2(pid = -1, flags = 0) -> [Integer, Process::Status]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Process/m/wait2.html]
+#[monoruby_builtin]
+fn process_wait2(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let (pid, status) = do_waitpid(vm, globals, lfp)?;
+    globals.set_gvar(IdentId::get_id("$?"), status);
+    Ok(Value::array_from_vec(vec![
+        Value::integer(pid as i64),
+        status,
+    ]))
+}
+
+fn do_waitpid(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+) -> Result<(i32, Value)> {
+    let pid = if let Some(arg) = lfp.try_arg(0) {
+        arg.coerce_to_int_i64(vm, globals)? as i32
+    } else {
+        -1
+    };
+    let flags = if let Some(arg) = lfp.try_arg(1) {
+        arg.coerce_to_int_i64(vm, globals)? as i32
+    } else {
+        0
+    };
+    let mut status: i32 = 0;
+    // SAFETY: waitpid is a POSIX system call.
+    let ret = unsafe { libc::waitpid(pid, &mut status, flags) };
+    if ret == -1 {
+        return Err(MonorubyErr::runtimeerr("No child processes"));
+    }
+    let exit_status = if libc::WIFEXITED(status) {
+        libc::WEXITSTATUS(status)
+    } else {
+        -1
+    };
+    let status_class =
+        vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
+    let status_obj = vm.invoke_method_inner(
+        globals,
+        IdentId::NEW,
+        status_class,
+        &[
+            Value::integer(exit_status as i64),
+            Value::integer(ret as i64),
+        ],
+        None,
+        None,
+    )?;
+    Ok((ret, status_obj))
+}
+
 ///
 /// ### Process.last_status
 ///
@@ -332,6 +413,24 @@ mod tests {
     #[test]
     fn process_exit_bang() {
         run_test("Process.respond_to?(:exit!)");
+    }
+
+    #[test]
+    fn process_wait() {
+        run_test(
+            r#"
+            pid = fork { exit 0 }
+            ret = Process.wait(pid)
+            [ret == pid, $?.exitstatus]
+            "#,
+        );
+        run_test(
+            r#"
+            pid = fork { exit 0 }
+            ret, status = Process.wait2(pid)
+            [ret == pid, status.class.to_s, status.exitstatus]
+            "#,
+        );
     }
 
     #[test]

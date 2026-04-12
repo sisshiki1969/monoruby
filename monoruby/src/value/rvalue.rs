@@ -352,6 +352,12 @@ impl ObjKind {
         }
     }
 
+    fn matchdata_from_inner(inner: MatchDataInner) -> Self {
+        Self {
+            matchdata: ManuallyDrop::new(inner),
+        }
+    }
+
     fn rational(inner: RationalInner) -> Self {
         Self {
             rational: ManuallyDrop::new(Box::new(inner)),
@@ -1475,6 +1481,14 @@ impl RValue {
         RValue {
             header: Header::new(MATCHDATA_CLASS, ObjTy::MATCHDATA),
             kind: ObjKind::matchdata(captures, heystack.to_string(), regex),
+            var_table: None,
+        }
+    }
+
+    pub(crate) fn new_match_data_from_inner(inner: MatchDataInner) -> Self {
+        RValue {
+            header: Header::new(MATCHDATA_CLASS, ObjTy::MATCHDATA),
+            kind: ObjKind::matchdata_from_inner(inner),
             var_table: None,
         }
     }
