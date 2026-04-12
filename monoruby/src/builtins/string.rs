@@ -5896,4 +5896,29 @@ mod tests {
         );
         run_test_error(r#""café".unicode_normalize(:bad)"#);
     }
+
+    #[test]
+    fn string_inspect() {
+        run_tests(&[
+            // ASCII
+            r##""hello".inspect"##,
+            r##""line1\nline2".inspect"##,
+            r##""tab\there".inspect"##,
+            r##""quote\"here".inspect"##,
+            r##""back\\slash".inspect"##,
+            // UTF-8 printable chars displayed inline
+            r##""café".inspect"##,
+            r##""André".inspect"##,
+            r##""日本語".inspect"##,
+            r##""emoji: 🎉".inspect"##,
+            // Control characters use \uNNNN in UTF-8
+            r##""\x00".inspect"##,
+            r##""\x01".inspect"##,
+            r##""\x1f".inspect"##,
+            // Named escapes
+            r##""\a\b\t\n\v\f\r\e".inspect"##,
+            // Empty string
+            r##""".inspect"##,
+        ]);
+    }
 }

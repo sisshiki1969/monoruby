@@ -422,6 +422,144 @@ fn generate(buf: &mut String, val: Value, store: &Store) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    #[test]
+    fn json_parse_scalars() {
+        run_tests(&[
+            r#"require "json"; JSON.parse("null")"#,
+            r#"require "json"; JSON.parse("true")"#,
+            r#"require "json"; JSON.parse("false")"#,
+            r#"require "json"; JSON.parse("42")"#,
+            r#"require "json"; JSON.parse("-7")"#,
+            r#"require "json"; JSON.parse("0")"#,
+            r#"require "json"; JSON.parse("3.14")"#,
+            r#"require "json"; JSON.parse("-0.5")"#,
+            r#"require "json"; JSON.parse("1e10")"#,
+            r#"require "json"; JSON.parse("2.5E-3")"#,
+            r#"require "json"; JSON.parse("1e+2")"#,
+            r#"require "json"; JSON.parse("\"hello\"")"#,
+            r#"require "json"; JSON.parse("\"\"")"#,
+        ]);
+    }
+
+    #[test]
+    fn json_parse_string_escapes() {
+        run_tests(&[
+            r#"require "json"; JSON.parse("\"line1\\nline2\"")"#,
+            r#"require "json"; JSON.parse("\"tab\\there\"")"#,
+            r#"require "json"; JSON.parse("\"back\\\\slash\"")"#,
+            r#"require "json"; JSON.parse("\"quote\\\"here\"")"#,
+            r#"require "json"; JSON.parse("\"slash\\/ok\"")"#,
+            r#"require "json"; JSON.parse("\"bs\\b\"")"#,
+            r#"require "json"; JSON.parse("\"ff\\f\"")"#,
+            r#"require "json"; JSON.parse("\"cr\\r\"")"#,
+        ]);
+    }
+
+    #[test]
+    fn json_parse_unicode_escapes() {
+        run_tests(&[
+            // BMP character
+            r#"require "json"; JSON.parse("\"\\u0041\"") == "A""#,
+            r#"require "json"; JSON.parse("\"\\u00e9\"") == "é""#,
+            // Surrogate pair (U+1F600 = 😀)
+            r#"require "json"; JSON.parse("\"\\uD83D\\uDE00\"") == "😀""#,
+        ]);
+    }
+
+    #[test]
+    fn json_parse_utf8_multibyte() {
+        run_test(
+            r#"
+            require "json"
+            data = JSON.parse("{\"name\": \"Nokogiri (鋸)\"}")
+            data["name"] == "Nokogiri (鋸)"
+            "#,
+        );
+    }
+
+    #[test]
+    fn json_parse_objects() {
+        run_tests(&[
+            r#"require "json"; JSON.parse("{}")"#,
+            r#"require "json"; JSON.parse("{\"a\":1}")"#,
+            r#"require "json"; JSON.parse("{\"a\":1,\"b\":2}")"#,
+            r#"require "json"; JSON.parse("{\"x\":{\"y\":3}}")"#,
+        ]);
+    }
+
+    #[test]
+    fn json_parse_arrays() {
+        run_tests(&[
+            r#"require "json"; JSON.parse("[]")"#,
+            r#"require "json"; JSON.parse("[1]")"#,
+            r#"require "json"; JSON.parse("[1,2,3]")"#,
+            r#"require "json"; JSON.parse("[[1],[2]]")"#,
+        ]);
+    }
+
+    #[test]
+    fn json_parse_nested() {
+        run_test(
+            r#"
+            require "json"
+            data = JSON.parse('{"a":[1,{"b":true}],"c":null}')
+            [data["a"][0], data["a"][1]["b"], data["c"]]
+            "#,
+        );
+    }
+
+    #[test]
+    fn json_parse_whitespace() {
+        run_test(
+            r#"
+            require "json"
+            JSON.parse("  {  \"a\" : 1 ,  \"b\" :  [ 2 , 3 ]  }  ")
+            "#,
+        );
+    }
+
+    #[test]
+    fn json_parse_large_integer() {
+        run_tests(&[
+            r#"require "json"; JSON.parse("9223372036854775807")"#,
+            r#"require "json"; JSON.parse("-9223372036854775808")"#,
+        ]);
+    }
+
+    #[test]
+    fn json_parse_errors() {
+        run_test_error(r#"require "json"; JSON.parse("")"#);
+        run_test_error(r#"require "json"; JSON.parse("{invalid}")"#);
+        run_test_error(r#"require "json"; JSON.parse("[1,]")"#);
+    }
+
+    #[test]
+    fn json_generate() {
+        run_tests(&[
+            r#"require "json"; JSON.generate([1, 2, 3])"#,
+            r#"require "json"; JSON.generate({"a" => 1})"#,
+            r#"require "json"; JSON.generate({"a" => [true, false, nil]})"#,
+        ]);
+    }
+
+    #[test]
+    fn json_roundtrip() {
+        run_test(
+            r#"
+            require "json"
+            original = {"key" => [1, "two", nil, true, false, 3.14]}
+            json_str = JSON.generate(original)
+            parsed = JSON.parse(json_str)
+            parsed == original
+            "#,
+        );
+    }
+}
+
 fn generate_string(buf: &mut String, s: &str) {
     buf.push('"');
     for ch in s.chars() {
