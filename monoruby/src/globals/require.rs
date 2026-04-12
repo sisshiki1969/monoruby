@@ -159,11 +159,18 @@ impl Globals {
             return Ok(None);
         }
         let res = if let Some(b"so") = canonicalized_path.extension().map(|s| s.as_bytes()) {
-            let mut lib = dirs::home_dir()
-                .unwrap()
-                .join(".monoruby")
-                .join("lib")
-                .join(canonicalized_path.file_name().unwrap());
+            let monoruby_lib = dirs::home_dir().unwrap().join(".monoruby").join("lib");
+            let relative = self
+                .load_path
+                .as_array()
+                .iter()
+                .filter_map(|entry| {
+                    let prefix = PathBuf::from(entry.is_str()?);
+                    canonicalized_path.strip_prefix(&prefix).ok()
+                })
+                .next()
+                .unwrap_or_else(|| canonicalized_path.file_name().unwrap().as_ref());
+            let mut lib = monoruby_lib.join(relative);
             lib.set_extension("rb");
             load_file(&lib)?
         } else {
