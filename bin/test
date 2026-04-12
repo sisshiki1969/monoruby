@@ -7,7 +7,7 @@ cargo llvm-cov nextest --no-report
 cargo llvm-cov run --no-report --features emit-asm --features deopt --features perf --features gc-debug --features jit-debug --features emit-cfg -- --version > /dev/null
 MONORUBY="$PWD/target/llvm-cov-target/debug/monoruby"
 
-$MONORUBY benchmark/app_fib.rb > monoruby.log
+$MONORUBY benchmark/app_fib.rb > monoruby.log 2> /dev/null
 ruby --yjit benchmark/app_fib.rb > ruby.log
 diff -s monoruby.log ruby.log
 

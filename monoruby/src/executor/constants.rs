@@ -98,19 +98,31 @@ impl Executor {
     pub(crate) fn get_constant_superclass_checked(
         &mut self,
         globals: &mut Globals,
-        mut module: Module,
+        module: Module,
         name: IdentId,
     ) -> Result<Value> {
+        match self.get_constant_superclass(globals, module, name)? {
+            Some(v) => Ok(v),
+            None => Err(MonorubyErr::uninitialized_constant(name)),
+        }
+    }
+
+    fn get_constant_superclass(
+        &mut self,
+        globals: &mut Globals,
+        mut module: Module,
+        name: IdentId,
+    ) -> Result<Option<Value>> {
         loop {
             match self.get_constant(globals, module.id(), name)? {
-                Some(v) => return Ok(v),
+                Some(v) => return Ok(Some(v)),
                 None => match module.superclass() {
                     Some(superclass) => module = superclass,
                     None => break,
                 },
             };
         }
-        Err(MonorubyErr::uninitialized_constant(name))
+        Ok(None)
     }
 
     /// Walk the ancestor chain of *module* to find the constant *name* and
@@ -181,7 +193,20 @@ impl Executor {
             current_func.lexical_class(globals)
         };
         let module = globals[lexical_class].get_module();
-        self.get_constant_superclass_checked(globals, module, name)
+        match self.get_constant_superclass(globals, module, name)? {
+            Some(v) => return Ok(v),
+            None => {
+                // Fall back to Object class, matching CRuby's implicit
+                // top-level cref.  This ensures that classes inheriting from
+                // BasicObject can still resolve top-level constants.
+                if lexical_class == BASIC_OBJECT_CLASS {
+                    if let Some(v) = self.get_constant(globals, OBJECT_CLASS, name)? {
+                        return Ok(v);
+                    }
+                }
+            }
+        }
+        Err(MonorubyErr::uninitialized_constant(name))
     }
 
     fn search_lexical_stack(

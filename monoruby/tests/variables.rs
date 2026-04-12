@@ -140,15 +140,10 @@ fn class_variables3() {
             end
         "#,
     );
-    run_test_error(
-        r#"
-            @@x = 1
-        "#,
-    );
-    run_test_error(
+    run_test_once(
         r#"
             class C
-              @@x
+              @@x = 1
             end
         "#,
     );
@@ -166,6 +161,15 @@ fn class_variables3() {
 
 #[test]
 fn class_variables4() {
+    run_test_error(
+        r#"
+            @@x = 1       #=> class variable access from toplevel (RuntimeError)
+        "#,
+    );
+}
+
+#[test]
+fn class_variables5() {
     run_test(
         r##"
             class C
@@ -262,6 +266,30 @@ fn constant4() {
               include M
               C = 200
             end
+        "#,
+    );
+}
+
+#[test]
+fn constant_basicobject_own() {
+    // A class inheriting from BasicObject can reference its own constants.
+    run_test(
+        r#"
+            class Foo < BasicObject
+              C = 123
+            end
+            Foo::C
+        "#,
+    );
+}
+
+#[test]
+fn forward_reference_local() {
+    // Forward reference: condition uses `x` before the assignment in the body
+    run_test(
+        r#"
+            x = 1 until x
+            x
         "#,
     );
 }

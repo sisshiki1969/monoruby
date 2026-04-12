@@ -6,7 +6,31 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     // class methods
-    globals.define_builtin_class_func(MODULE_CLASS, "new", module_new, 0);
+    globals.define_builtin_class_func_with_kw(
+        MODULE_CLASS,
+        "new",
+        module_new,
+        0,
+        0,
+        true,
+        &[],
+        true,
+    );
+    // Default `Module#initialize`: yields to the block. Private, so it's
+    // only callable via Module.new/allocate+initialize. Subclasses of
+    // Module (e.g. AcceptsMultiparameterTime in ActiveModel) override
+    // this; `module_new` above invokes whichever `initialize` is in
+    // effect for the receiver class.
+    globals.define_private_builtin_func_with_kw(
+        MODULE_CLASS,
+        "initialize",
+        module_initialize,
+        0,
+        0,
+        true,
+        &[],
+        true,
+    );
     globals.define_builtin_class_func(MODULE_CLASS, "nesting", module_nesting, 0);
 
     // instance methods
@@ -104,6 +128,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "prepend", prepend);
     globals.define_builtin_func(MODULE_CLASS, "prepend_features", prepend_features, 1);
     globals.define_builtin_func(MODULE_CLASS, "instance_method", instance_method, 1);
+    // `public_instance_method` is nearly identical to `instance_method`; the
+    // only difference is that it raises NameError for private/protected
+    // methods. ActiveSupport's `delegate` builds dispatch code from the
+    // parameter list of `public_instance_method`, so a working approximation
+    // is enough for AR to load.
+    globals.define_builtin_func(MODULE_CLASS, "public_instance_method", instance_method, 1);
     globals.define_builtin_func_rest(MODULE_CLASS, "remove_method", remove_method);
     globals.define_builtin_func_rest(MODULE_CLASS, "undef_method", undef_method);
     globals.define_builtin_func_with(MODULE_CLASS, "method_defined?", method_defined, 1, 2, false);
@@ -182,15 +212,66 @@ fn module_noop_hook(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr
 /// - new -> Module
 /// - new {|mod| ... } -> Module
 ///
+/// Also handles subclasses of Module (e.g. `class Foo < Module`). In that
+/// case the receiver is the subclass, the returned value is an instance of
+/// the subclass (its header class is the subclass's id), and the subclass's
+/// `#initialize` is invoked with the forwarded arguments and block.
+/// ActiveModel's `AcceptsMultiparameterTime < Module` relies on this.
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/s/new.html]
 #[monoruby_builtin]
 fn module_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_class_id = lfp.self_val().as_class_id();
     let module = globals.store.define_unnamed_module();
-    let module_val = module.as_val();
+    let mut module_val = module.as_val();
+    // When called on a subclass of Module, re-tag the header so `#class`
+    // reports the subclass rather than the plain `Module` class.
+    if self_class_id != MODULE_CLASS {
+        module_val.change_class(self_class_id);
+    }
+    // Invoke `#initialize` so subclasses that override it (with args and
+    // block) run their setup. For plain `Module.new`, the default
+    // initialize is a no-op that just yields to the block, which the
+    // builtin `module_initialize` below emulates.
+    //
+    // Signature: rest=true, kw_rest=true → lfp.arg(0) is the rest array,
+    // lfp.arg(1) is the kwargs hash (matching `Class#new`'s convention).
+    let args = lfp.arg(0).as_array();
+    let kw = if let Some(kw) = lfp.try_arg(1)
+        && let Some(kw) = kw.try_hash_ty()
+        && !kw.is_empty()
+    {
+        Some(kw)
+    } else {
+        None
+    };
+    vm.invoke_method_inner(
+        globals,
+        IdentId::INITIALIZE,
+        module_val,
+        &args,
+        lfp.block(),
+        kw,
+    )?;
+    Ok(module_val)
+}
+
+///
+/// Default `Module#initialize` — called by `Module.new` (and subclasses
+/// that don't override it). Yields the new module to the given block if
+/// one is present.
+#[monoruby_builtin]
+fn module_initialize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     if let Some(bh) = lfp.block() {
+        let module = lfp.self_val().as_class();
         vm.module_eval(globals, module, bh)?;
     }
-    Ok(module_val)
+    Ok(Value::nil())
 }
 
 /// ### Module.nesting
@@ -1798,6 +1879,21 @@ mod tests {
     }
 
     #[test]
+    fn define_method_in_eval() {
+        // `def` inside string class_eval inherits the receiver's lexical
+        // context so that constants defined in C are visible.
+        run_test_once(
+            r#"
+            class C
+              X = 99
+            end
+            C.class_eval "def get_x; X; end"
+            C.new.get_x
+            "#,
+        );
+    }
+
+    #[test]
     fn module_new() {
         // Module.new returns an anonymous module with nil name
         run_test(
@@ -1811,6 +1907,49 @@ mod tests {
             r#"
             Module.new.is_a?(Module)
             "#,
+        );
+    }
+
+    #[test]
+    fn module_new_with_block() {
+        run_test(
+            r#"
+            m = Module.new do |mod|
+              mod.define_method(:hello) { "world" }
+            end
+            Class.new { include m }.new.hello
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_new_subclass() {
+        run_test_once(
+            r#"
+            class MyMod < Module
+              def initialize(name)
+                @name = name
+                super()
+              end
+              def my_name; @name; end
+            end
+            m = MyMod.new("test")
+            [m.is_a?(MyMod), m.is_a?(Module), m.my_name]
+            "#,
+        );
+    }
+
+    #[test]
+    fn public_instance_method() {
+        run_test_with_prelude(
+            r##"
+            Foo.public_instance_method(:bar).name
+            "##,
+            r##"
+            class Foo
+              def bar; end
+            end
+            "##,
         );
     }
 

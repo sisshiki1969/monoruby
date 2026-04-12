@@ -24,6 +24,23 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(PROC_CLASS, "lambda?", lambda_, 0);
     globals.define_builtin_func(PROC_CLASS, "arity", proc_arity, 0);
     globals.define_builtin_func(PROC_CLASS, "parameters", parameters, 0);
+    // `ruby2_keywords` is a marker method used by CRuby to tag a proc/method
+    // so that its rest args can pass a trailing keyword hash through to
+    // another method. monoruby does not distinguish keyword args from a
+    // trailing hash at the runtime level in a way that needs this marker,
+    // so it's a safe no-op that returns the receiver.
+    globals.define_builtin_func(PROC_CLASS, "ruby2_keywords", ruby2_keywords, 0);
+}
+
+/// `Proc#ruby2_keywords` — no-op marker that returns self.
+#[monoruby_builtin]
+fn ruby2_keywords(
+    _: &mut Executor,
+    _: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(lfp.self_val())
 }
 
 ///
@@ -149,8 +166,17 @@ fn lambda_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn parameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
     let func_id = proc.func_id();
+    let is_lambda = !globals[func_id].is_block_style();
+    Ok(build_parameters(globals, func_id, is_lambda))
+}
+
+/// Build the array of `[[type, name], ...]` entries returned by
+/// `Proc#parameters`, `Method#parameters`, and `UnboundMethod#parameters`.
+///
+/// `is_lambda` controls how required positional params are tagged: lambdas
+/// and named methods use `:req`, while non-lambda procs (blocks) use `:opt`.
+pub(crate) fn build_parameters(globals: &Globals, func_id: FuncId, is_lambda: bool) -> Value {
     let func_info = &globals[func_id];
-    let is_lambda = !func_info.is_block_style();
     let params = func_info.params();
     let req_tag = if is_lambda {
         Value::symbol(IdentId::get_id("req"))
@@ -217,7 +243,7 @@ fn parameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     if let Some(block_name) = params.block_param {
         result.push(Value::array2(block_tag, Value::symbol(block_name)));
     }
-    Ok(Value::array_from_vec(result))
+    Value::array_from_vec(result)
 }
 
 /// ### Proc#arity
@@ -564,6 +590,16 @@ mod tests {
         // no params
         run_test("lambda {}.parameters");
         run_test("Proc.new {}.parameters");
+    }
+
+    #[test]
+    fn proc_ruby2_keywords() {
+        run_test(
+            r#"
+            p = proc {|*args| args}
+            p.ruby2_keywords.equal?(p)
+            "#,
+        );
     }
 
     #[test]

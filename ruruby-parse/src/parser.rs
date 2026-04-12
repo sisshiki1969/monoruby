@@ -483,7 +483,12 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             Punct::Shr => Ok(">>"),
             Punct::BitAnd => Ok("&"),
             Punct::BitOr => Ok("|"),
-            Punct::BitNot => Ok("~"),
+            Punct::BitNot => {
+                // `def ~@` is an alternative spelling of `def ~`.
+                // CRuby accepts both and uses `~` as the method name.
+                self.consume_char('@');
+                Ok("~")
+            }
 
             Punct::Cmp => Ok("<=>"),
             Punct::Eq => Ok("=="),
@@ -616,8 +621,29 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     None => args.push(FormalParam::kwrest_discard(loc)),
                 }
             } else {
-                let name = self.expect_ident()?;
-                if self.consume_punct(Punct::Assign)? {
+                // Accept a reserved word as a keyword argument name when it
+                // is immediately followed by `:` (e.g. `def foo(if: true)`).
+                // CRuby allows reserved words only for keyword parameters,
+                // never for positional ones, so this branch handles exactly
+                // the `reserved-name:` case and does not allow `Assign`.
+                let reserved_kw = {
+                    let tok = self.peek_no_term()?;
+                    if let TokenKind::Reserved(r) = tok.kind
+                        && self.lexer.has_trailing_colon(&tok)
+                    {
+                        Some((r.as_str().to_string(), tok.loc))
+                    } else {
+                        None
+                    }
+                };
+                let name = if let Some((kw_name, _)) = &reserved_kw {
+                    // Consume the reserved token.
+                    self.get()?;
+                    kw_name.clone()
+                } else {
+                    self.expect_ident()?
+                };
+                if reserved_kw.is_none() && self.consume_punct(Punct::Assign)? {
                     // Optional param
                     let default = if let Some(Punct::BitOr) = terminator {
                         let node = self.parse_primary()?;

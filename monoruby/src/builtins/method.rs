@@ -15,6 +15,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(METHOD_CLASS, "receiver", receiver, 0);
     globals.define_builtin_func(METHOD_CLASS, "owner", owner, 0);
     globals.define_builtin_func(METHOD_CLASS, "unbind", unbind, 0);
+    globals.define_builtin_func(METHOD_CLASS, "parameters", parameters, 0);
 
     globals.define_builtin_class_under_obj("UnboundMethod", UMETHOD_CLASS, ObjTy::METHOD);
     globals.define_builtin_class_func(UMETHOD_CLASS, "allocate", super::class::undef_allocate, 0);
@@ -23,6 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(UMETHOD_CLASS, "source_location", usource_location, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "name", uname, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "owner", uowner, 0);
+    globals.define_builtin_func(UMETHOD_CLASS, "parameters", uparameters, 0);
 }
 
 ///
@@ -249,6 +251,37 @@ fn uowner(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
     Ok(globals.store[method.owner()].get_module().get())
+}
+
+///
+/// ### Method#parameters
+///
+/// - parameters -> [[Symbol, Symbol], ...]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Method/i/parameters.html]
+#[monoruby_builtin]
+fn parameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_method();
+    Ok(super::proc::build_parameters(globals, method.func_id(), true))
+}
+
+///
+/// ### UnboundMethod#parameters
+///
+/// - parameters -> [[Symbol, Symbol], ...]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/parameters.html]
+#[monoruby_builtin]
+fn uparameters(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_umethod();
+    Ok(super::proc::build_parameters(globals, method.func_id(), true))
 }
 
 #[cfg(test)]
@@ -500,6 +533,30 @@ mod tests {
             r##"
             class Foo
               def bar; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_parameters() {
+        run_test_with_prelude(
+            r##"
+            Foo.new.method(:bar).parameters
+            "##,
+            r##"
+            class Foo
+              def bar(x, y=1, *rest, &blk); end
+            end
+            "##,
+        );
+        run_test_with_prelude(
+            r##"
+            Foo.instance_method(:baz).parameters
+            "##,
+            r##"
+            class Foo
+              def baz(a, b); end
             end
             "##,
         );

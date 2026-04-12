@@ -18,6 +18,7 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func(BASIC_OBJECT_CLASS, "==", eq, 1);
     globals.define_builtin_func(BASIC_OBJECT_CLASS, "equal?", eq, 1);
+    globals.define_builtin_func(BASIC_OBJECT_CLASS, "===", case_eq, 1);
     globals.define_builtin_inline_func(BASIC_OBJECT_CLASS, "!", not_, Box::new(object_not), 0);
     globals.define_builtin_func(BASIC_OBJECT_CLASS, "!=", ne, 1);
     globals.define_builtin_funcs_with_effect(
@@ -206,6 +207,15 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     Ok(Value::bool(!res.as_bool()))
 }
 
+/// Default `Object#===` — delegates to `==` so that subclasses which
+/// override `==` get consistent `case` behaviour.
+#[monoruby_builtin]
+fn case_eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let other = lfp.arg(0);
+    vm.invoke_method_inner(globals, IdentId::_EQ, self_val, &[other], None, None)
+}
+
 ///
 /// ### BasicObject#__id__
 ///
@@ -374,6 +384,21 @@ mod tests {
         b = a
         a.equal?(b)"##,
         );
+    }
+
+    #[test]
+    fn case_eq() {
+        run_test(
+            r#"
+            class Foo
+              def ==(other)
+                other == 42
+              end
+            end
+            Foo.new === 42
+            "#,
+        );
+        run_test("Object.new === Object.new");
     }
 
     #[test]

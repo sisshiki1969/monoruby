@@ -828,7 +828,7 @@ pub(super) extern "C" fn singleton_define_method(
         vm.set_error(MonorubyErr::typeerr("can't define singleton"));
         return None;
     }
-    let current_func = vm.method_func_id();
+    let current_func = vm.definition_func_id(globals);
     if let Some(iseq) = globals.store[func].is_iseq() {
         globals.store[iseq].lexical_context =
             globals.store.iseq(current_func).lexical_context.clone();

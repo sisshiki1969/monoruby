@@ -365,13 +365,14 @@ impl Store {
             loc: Loc::default(),
         };
         let compile_info = Store::handle_args(info, vec![])?;
-        self.new_iseq_method(
+        let fid = self.new_iseq_method(
             Some(IdentId::get_id("/main")),
             compile_info,
             Loc::default(),
             result.source_info,
             true,
-        )
+        )?;
+        Ok(fid)
     }
 
     pub(crate) fn new_classdef(

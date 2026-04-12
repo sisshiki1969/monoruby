@@ -1893,12 +1893,18 @@ fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/clone.html]
 #[monoruby_builtin]
-fn dup(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn dup(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    if let Some(class) = self_val.is_class() {
-        if class.id() == BASIC_OBJECT_CLASS {
+    if let Some(module) = self_val.is_class_or_module() {
+        if module.id() == BASIC_OBJECT_CLASS {
             return Err(MonorubyErr::typeerr("can't copy the root class"));
         }
+        // Module/Class duplicates must own their own method/constant tables,
+        // otherwise `undef_method`, `define_method`, etc. on the copy would
+        // mutate the original. `delegate.rb` relies on this by duping Kernel,
+        // stripping a few methods, then `include`-ing the dup.
+        let dup_module = globals.store.duplicate_module(module.id());
+        return Ok(dup_module.as_val());
     }
     Ok(self_val.dup())
 }
@@ -2899,6 +2905,29 @@ mod tests {
         run_test("[1,2,3].dup");
         run_test("{a:1,b:2}.dup");
         run_test("(1..3).dup");
+    }
+
+    #[test]
+    fn dup_module() {
+        run_test(
+            r#"
+            m = Module.new
+            m.define_method(:foo) { 42 }
+            d = m.dup
+            d.instance_methods.include?(:foo)
+            "#,
+        );
+        // dup should not share method table
+        run_test_once(
+            r#"
+            m = Module.new
+            m.define_method(:foo) { 42 }
+            d = m.dup
+            d.undef_method(:foo)
+            m.instance_methods.include?(:foo)
+            "#,
+        );
+        run_test_error("BasicObject.dup");
     }
 
     #[test]

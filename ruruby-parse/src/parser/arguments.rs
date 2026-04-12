@@ -63,10 +63,17 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         }
         let mut as_hash_splat = vec![];
         let mut kw_args = vec![];
+        // `closed` tracks whether the terminating punct has already been
+        // consumed inside the loop (happens for empty arglists and for a
+        // trailing comma immediately before the closing punct).  When set,
+        // the post-loop code skips the redundant punct consume but still
+        // runs the kw_args / hash_splat finalization below.
+        let mut closed = false;
         loop {
             if let Some(punct) = punct {
                 if self.consume_punct(punct)? {
-                    return Ok(arglist);
+                    closed = true;
+                    break;
                 }
             }
             if self.consume_punct(Punct::Range3)? {
@@ -132,11 +139,26 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     {
                         // keyword args
                         // Check for value-omitted keyword argument shorthand (Ruby 3.1+)
-                        // e.g., foo(x:) is equivalent to foo(x: x)
-                        let next_kind = self.peek_no_term()?.kind;
-                        let value = if next_kind == TokenKind::Punct(Punct::RParen)
-                            || next_kind == TokenKind::Punct(Punct::Comma)
-                        {
+                        // e.g., foo(x:) is equivalent to foo(x: x).
+                        //
+                        // Inside `(...)`, line terminators are not significant,
+                        // so use `peek` (which skips LineTerm) rather than
+                        // `peek_no_term` — otherwise `foo(\n  x:,\n  y:\n)`
+                        // fails to recognise the shorthand because the token
+                        // immediately after the colon is a newline.
+                        let next_kind = if punct.is_some() {
+                            self.peek()?.kind
+                        } else {
+                            self.peek_no_term()?.kind
+                        };
+                        let is_shorthand = matches!(
+                            next_kind,
+                            TokenKind::Punct(Punct::Comma)
+                                | TokenKind::Punct(Punct::RParen)
+                                | TokenKind::Punct(Punct::RBrace)
+                                | TokenKind::Punct(Punct::RBracket)
+                        );
+                        let value = if is_shorthand {
                             // Value-omitted shorthand: use the identifier as the value
                             node.clone()
                         } else {
@@ -171,7 +193,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             arglist.kw_args = kw_args;
         }
 
-        if let Some(punct) = punct {
+        if !closed && let Some(punct) = punct {
             self.consume_punct(punct)?;
         };
         Ok(arglist)

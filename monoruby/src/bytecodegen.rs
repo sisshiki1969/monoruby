@@ -813,14 +813,22 @@ impl<'a> BytecodeGen<'a> {
         match self.iseq().locals.get(&name) {
             Some(r) => Some((*r).into()),
             None => {
-                if Some(name) != self.block_param {
-                    unreachable!(
-                        "undefined local variable: {} {:?}",
-                        ident,
-                        self.iseq().locals
-                    )
-                };
-                None
+                // The block parameter is modelled as a `BlockArg` instruction,
+                // not a regular local slot, so bail out with `None` so the
+                // caller emits `BlockArg` instead.
+                if Some(name) == self.block_param {
+                    return None;
+                }
+                // The parser only emits `LocalVar` for identifiers it has
+                // already decided are locals (via `LvarCollector`). That
+                // includes forward references like `x = 1 until x`, where the
+                // condition is evaluated before the body on the first
+                // iteration. Since `fill_nil` in `vm_init_func` pre-initialises
+                // every non-argument slot to `nil` at method entry, we can
+                // safely materialise a fresh slot here — the initial read
+                // returns `nil`, matching CRuby semantics.
+                let local = self.add_local(name);
+                Some(local.into())
             }
         }
     }

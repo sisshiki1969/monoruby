@@ -422,16 +422,37 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 let expr = self.parse_arg(false)?;
                 splat.push(expr);
             } else {
-                let mut key = self.parse_arg(false)?;
-                if let Some(sym) = key.is_symbol_key()
+                let key_expr = self.parse_arg(false)?;
+                if let Some(sym) = key_expr.is_symbol_key()
                     && self.consume_punct(Punct::Colon)?
                 {
-                    key = Node::new_symbol(sym, key.loc());
+                    // Ruby 3.1+ shorthand: `{x:}` is equivalent to `{x: x}`.
+                    // When the token immediately following the colon is a
+                    // comma, `}`, `)` or `]`, treat the key expression itself
+                    // (the local variable / method call we just parsed) as
+                    // the value.  `peek` skips line terminators so that the
+                    // shorthand is recognised across newlines.
+                    let next_kind = self.peek()?.kind;
+                    let is_shorthand = matches!(
+                        next_kind,
+                        TokenKind::Punct(Punct::Comma)
+                            | TokenKind::Punct(Punct::RBrace)
+                            | TokenKind::Punct(Punct::RParen)
+                            | TokenKind::Punct(Punct::RBracket)
+                    );
+                    let key_loc = key_expr.loc();
+                    let value = if is_shorthand {
+                        key_expr.clone()
+                    } else {
+                        self.parse_arg(false)?
+                    };
+                    let key = Node::new_symbol(sym, key_loc);
+                    kvp.push((key, value));
                 } else {
                     self.expect_punct(Punct::FatArrow)?;
+                    let value = self.parse_arg(false)?;
+                    kvp.push((key_expr, value));
                 }
-                let value = self.parse_arg(false)?;
-                kvp.push((key, value));
             }
             if !self.consume_punct(Punct::Comma)? {
                 break;

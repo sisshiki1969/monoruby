@@ -869,6 +869,31 @@ impl Executor {
         Ok(())
     }
 
+    ///
+    /// Return the *FuncId* whose `lexical_context` should be inherited when a
+    /// method is defined in the current frame.
+    ///
+    /// In the common case this is the enclosing method (the outermost LFP).
+    /// However, when we are executing inside a string `eval` /
+    /// `class_eval` / `module_eval` / `instance_eval`, the immediate frame's
+    /// iseq carries a dedicated `lexical_context` (seeded by
+    /// `compile_script_eval`) which must take precedence over the caller's
+    /// context, otherwise methods defined via string-eval cannot resolve
+    /// class variables / constants scoped to the eval's receiver.
+    ///
+    pub(crate) fn definition_func_id(&self, globals: &Globals) -> FuncId {
+        let current = self.method_func_id();
+        let frame = self.cfp().lfp().func_id();
+        if frame != current
+            && let Some(iseq) = globals.store[frame].is_iseq()
+            && !globals.store[iseq].lexical_context.is_empty()
+        {
+            frame
+        } else {
+            current
+        }
+    }
+
     pub(crate) fn define_method(
         &mut self,
         globals: &mut Globals,
@@ -876,7 +901,7 @@ impl Executor {
         func: FuncId,
     ) -> Result<Value> {
         let cref = self.get_class_context();
-        let current_func = self.method_func_id();
+        let current_func = self.definition_func_id(globals);
         if let Some(iseq) = globals.store[func].is_iseq() {
             globals.store[iseq].lexical_context =
                 globals.store.iseq(current_func).lexical_context.clone();
