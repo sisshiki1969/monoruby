@@ -231,7 +231,7 @@ fn options(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resul
 fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
-    let given = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let given = lfp.arg(0).expect_symbol_or_string(globals)?.to_string();
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
         match conv_index(pos.coerce_to_int_i64(vm, globals)?, given.chars().count()) {
             Some(pos) => pos,
@@ -259,7 +259,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let regex = lfp.self_val().as_regexp();
-    let heystack = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let heystack = lfp.arg(0).expect_symbol_or_string(globals)?.to_string();
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
         match conv_index(pos.coerce_to_int_i64(vm, globals)?, heystack.chars().count()) {
             Some(pos) => pos,
