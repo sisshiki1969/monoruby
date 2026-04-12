@@ -951,6 +951,47 @@ impl ClassInfoTable {
         self.define_class_inner(None, Some(object_class), None, true, None)
     }
 
+    /// Create an anonymous duplicate of `original_class` that owns its own
+    /// method table. Used by `Module#dup` / `Module#clone` so that subsequent
+    /// `undef_method`, `define_method`, constant assignment, etc. on the copy
+    /// do not bleed into the original module/class.
+    ///
+    /// The new module inherits the same superclass as the original, has no
+    /// name, and is registered under no parent. Its methods, constants,
+    /// constant source locations, and class variables are deep-cloned. The
+    /// new module is a plain module (ObjTy::MODULE) regardless of whether
+    /// the original was a class or module — matching CRuby's behaviour of
+    /// producing an anonymous duplicate usable for `include`.
+    pub(crate) fn duplicate_module(&mut self, original_class: ClassId) -> Module {
+        let orig = &self[original_class];
+        let superclass = self.get_module(original_class).superclass();
+        let is_module = orig.instance_ty.is_none();
+        let instance_ty = orig.instance_ty;
+        // Snapshot data we need to copy before borrowing mut.
+        let methods = orig.methods.clone();
+        let constants = orig.constants.clone();
+        let constant_locations = orig.constant_locations.clone();
+        let class_variables = orig.class_variables.clone();
+
+        let new_id = self.add_class();
+        let class_obj = if is_module {
+            Value::module_empty(new_id, superclass)
+        } else {
+            Value::class_empty(new_id, superclass)
+        };
+        let info = &mut self[new_id];
+        info.object = Some(class_obj.as_class());
+        info.name = None;
+        info.parent = None;
+        info.instance_ty = instance_ty;
+        info.methods = methods;
+        info.constants = constants;
+        info.constant_locations = constant_locations;
+        info.class_variables = class_variables;
+        self.get_metaclass(new_id);
+        class_obj.as_class()
+    }
+
     pub(crate) fn define_struct_class(
         &mut self,
         name: Option<IdentId>,

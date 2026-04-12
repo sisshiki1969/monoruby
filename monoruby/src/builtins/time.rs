@@ -1,7 +1,7 @@
 use super::*;
 use chrono::{
     DateTime, Datelike, Duration, FixedOffset, Local, LocalResult, NaiveDate, NaiveDateTime,
-    NaiveTime, TimeZone, Utc,
+    NaiveTime, Timelike, TimeZone, Utc,
 };
 
 //
@@ -34,7 +34,19 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(TIME_CLASS, "year", year, 0);
     globals.define_builtin_funcs(TIME_CLASS, "month", &["mon"], month, 0);
     globals.define_builtin_funcs(TIME_CLASS, "day", &["mday"], day, 0);
+    globals.define_builtin_func(TIME_CLASS, "yday", yday, 0);
+    globals.define_builtin_func(TIME_CLASS, "wday", wday, 0);
+    globals.define_builtin_func(TIME_CLASS, "hour", hour, 0);
+    globals.define_builtin_func(TIME_CLASS, "min", min_, 0);
+    globals.define_builtin_func(TIME_CLASS, "sec", sec_, 0);
+    globals.define_builtin_func(TIME_CLASS, "usec", usec, 0);
+    globals.define_builtin_funcs(TIME_CLASS, "nsec", &["tv_nsec"], nsec, 0);
+    globals.define_builtin_func(TIME_CLASS, "subsec", subsec, 0);
+    globals.define_builtin_funcs(TIME_CLASS, "to_i", &["tv_sec"], to_i, 0);
+    globals.define_builtin_func(TIME_CLASS, "to_f", to_f, 0);
+    globals.define_builtin_func(TIME_CLASS, "utc_offset", utc_offset, 0);
     globals.define_builtin_func(TIME_CLASS, "-", sub, 1);
+    globals.define_builtin_func(TIME_CLASS, "+", add, 1);
 }
 
 ///
@@ -347,6 +359,139 @@ fn day(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(Value::integer(day as _))
 }
 
+///
+/// ### Time#yday
+/// - yday -> Integer
+///
+/// Returns the day of the year (1..366).
+#[monoruby_builtin]
+fn yday(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let d = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => t.ordinal(),
+        TimeInner::Utc(t) => t.ordinal(),
+    };
+    Ok(Value::integer(d as _))
+}
+
+///
+/// ### Time#wday
+/// - wday -> Integer
+///
+/// Returns the day of the week (0=Sunday .. 6=Saturday).
+#[monoruby_builtin]
+fn wday(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let w = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => t.weekday().num_days_from_sunday(),
+        TimeInner::Utc(t) => t.weekday().num_days_from_sunday(),
+    };
+    Ok(Value::integer(w as _))
+}
+
+///
+/// ### Time#hour
+#[monoruby_builtin]
+fn hour(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let h = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => t.hour(),
+        TimeInner::Utc(t) => t.hour(),
+    };
+    Ok(Value::integer(h as _))
+}
+
+///
+/// ### Time#min
+#[monoruby_builtin]
+fn min_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let m = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => t.minute(),
+        TimeInner::Utc(t) => t.minute(),
+    };
+    Ok(Value::integer(m as _))
+}
+
+///
+/// ### Time#sec
+#[monoruby_builtin]
+fn sec_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let s = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => t.second(),
+        TimeInner::Utc(t) => t.second(),
+    };
+    Ok(Value::integer(s as _))
+}
+
+///
+/// ### Time#usec
+#[monoruby_builtin]
+fn usec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ns = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => t.nanosecond(),
+        TimeInner::Utc(t) => t.nanosecond(),
+    };
+    Ok(Value::integer((ns / 1_000) as _))
+}
+
+///
+/// ### Time#nsec
+#[monoruby_builtin]
+fn nsec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ns = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => t.nanosecond(),
+        TimeInner::Utc(t) => t.nanosecond(),
+    };
+    Ok(Value::integer(ns as _))
+}
+
+///
+/// ### Time#subsec
+#[monoruby_builtin]
+fn subsec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ns = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => t.nanosecond(),
+        TimeInner::Utc(t) => t.nanosecond(),
+    };
+    // Returns a Rational in CRuby; monoruby doesn't have Rational, so
+    // approximate with a Float. ActiveModel only compares against 0.
+    if ns == 0 {
+        Ok(Value::integer(0))
+    } else {
+        Ok(Value::float(ns as f64 / 1_000_000_000.0))
+    }
+}
+
+///
+/// ### Time#to_i
+#[monoruby_builtin]
+fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let s = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => t.timestamp(),
+        TimeInner::Utc(t) => t.timestamp(),
+    };
+    Ok(Value::integer(s))
+}
+
+///
+/// ### Time#to_f
+#[monoruby_builtin]
+fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let (s, ns) = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => (t.timestamp(), t.nanosecond()),
+        TimeInner::Utc(t) => (t.timestamp(), t.nanosecond()),
+    };
+    Ok(Value::float(s as f64 + ns as f64 / 1_000_000_000.0))
+}
+
+///
+/// ### Time#utc_offset
+#[monoruby_builtin]
+fn utc_offset(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let offs = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => t.offset().local_minus_utc(),
+        TimeInner::Utc(_) => 0,
+    };
+    Ok(Value::integer(offs as _))
+}
+
 /// ### Time#-
 /// - self - time -> Float
 ///
@@ -370,6 +515,25 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let result = lhs - duration;
         Ok(Value::new_time(result))
     }
+}
+
+///
+/// ### Time#+
+/// - self + other -> Time
+///
+/// `other` is a numeric number of seconds (integer or float). Returns a
+/// new Time advanced by that many seconds. (Unlike Time#-, Time + Time is
+/// not a valid Ruby operation.)
+#[monoruby_builtin]
+fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let lhs = self_.as_time().clone();
+    let rhs_rv = lfp.arg(0);
+    let secs = rhs_rv.coerce_to_f64(vm, globals)?;
+    let nanos = (secs * 1_000_000_000.0) as i64;
+    let duration = chrono::Duration::nanoseconds(nanos);
+    let result = lhs + duration;
+    Ok(Value::new_time(result))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

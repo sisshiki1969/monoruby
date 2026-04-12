@@ -38,6 +38,67 @@ class String
   end
 end
 
+# BUG: ObjectSpace::WeakMap is missing. The stdlib weakref.rb uses it, so
+# define a non-GC-aware stand-in backed by a plain Hash. This keeps strong
+# references, which is semantically weaker than a real weakref but
+# sufficient for descendants_tracker and connection_pool::reaper to
+# function.
+module ObjectSpace
+  class WeakMap
+    include Enumerable
+
+    def initialize
+      @store = {}
+    end
+
+    def []=(key, value)
+      @store[key] = value
+    end
+
+    def [](key)
+      @store[key]
+    end
+
+    def key?(key)
+      @store.key?(key)
+    end
+
+    def include?(key)
+      @store.key?(key)
+    end
+
+    def delete(key)
+      @store.delete(key)
+    end
+
+    def keys
+      @store.keys
+    end
+
+    def values
+      @store.values
+    end
+
+    def each_pair(&block)
+      @store.each_pair(&block)
+      self
+    end
+    alias each each_pair
+
+    def size
+      @store.size
+    end
+    alias length size
+  end
+end unless defined?(ObjectSpace::WeakMap)
+
+# BUG: ObjectSpace.define_finalizer / undefine_finalizer / _id2ref are missing.
+# monoruby has no GC finalization hooks, so make them no-ops.
+module ObjectSpace
+  def self.define_finalizer(obj, aproc = nil, &block); obj; end
+  def self.undefine_finalizer(obj); obj; end
+end
+
 [
   ["activerecord-8.1.1", "lib"],
   ["activemodel-8.1.1", "lib"],

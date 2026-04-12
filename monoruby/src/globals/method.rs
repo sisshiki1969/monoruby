@@ -365,6 +365,30 @@ impl Globals {
         self.new_builtin_fn_rest(class_id, name, address, Visibility::Private)
     }
 
+    pub(crate) fn define_private_builtin_func_with_kw(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+        kw_names: &[&str],
+        kw_rest: bool,
+    ) -> FuncId {
+        self.new_builtin_fn(
+            class_id,
+            name,
+            address,
+            Visibility::Private,
+            min,
+            max,
+            rest,
+            kw_names,
+            kw_rest,
+        )
+    }
+
     pub(crate) fn define_builtin_module_func(
         &mut self,
         class_id: ClassId,

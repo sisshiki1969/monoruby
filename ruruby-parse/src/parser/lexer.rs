@@ -571,13 +571,24 @@ impl<'a> Lexer<'a> {
         }
         self.token_start_pos = self.pos;
         let ch = self.get()?;
+        // `~@` is an alternative spelling of the unary `~` operator
+        // method. CRuby accepts both `def ~` and `def ~@` and stores
+        // the method under the name `~`. We handle this by consuming
+        // the trailing `@` here and returning the normalised name
+        // below.
+        let mut normalize_tilde = false;
         if ch.is_ascii_punctuation() && ch != '_' {
             // re-definable operators
             // https://docs.ruby-lang.org/ja/latest/doc/spec=2foperator.html
             // |  ^  &  <=>  ==  ===  =~  >   >=  <   <=   <<  >>
             // +  -  *  /    %   **   ~   +@  -@  []  []=  ` ! != !~
             match ch {
-                '/' | '%' | '&' | '|' | '^' | '~' | '`' => {}
+                '/' | '%' | '&' | '|' | '^' | '`' => {}
+                '~' => {
+                    if self.consume('@') {
+                        normalize_tilde = true;
+                    }
+                }
                 '*' => {
                     self.consume('*');
                 }
@@ -621,10 +632,12 @@ impl<'a> Lexer<'a> {
         } else {
             return Err(self.error_unexpected(self.token_start_pos));
         };
-        Ok((
-            self.current_slice().to_string(),
-            Loc(self.token_start_pos, self.pos),
-        ))
+        let name = if normalize_tilde {
+            "~".to_string()
+        } else {
+            self.current_slice().to_string()
+        };
+        Ok((name, Loc(self.token_start_pos, self.pos)))
     }
 
     pub(crate) fn read_symbol_literal(&mut self) -> Result<Option<(String, Loc)>, LexerErr> {

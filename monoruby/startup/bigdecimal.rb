@@ -9,7 +9,7 @@
 #   @exp    - Integer exponent: value = sign * @coeff * 10^@exp
 #
 
-class BigDecimal
+class BigDecimal < Numeric
   include Comparable
 
   # Sign constants
