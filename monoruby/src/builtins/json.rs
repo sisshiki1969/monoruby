@@ -515,11 +515,50 @@ mod tests {
     }
 
     #[test]
-    fn json_generate() {
+    fn json_generate_scalars() {
         run_tests(&[
+            r#"require "json"; JSON.generate(nil)"#,
+            r#"require "json"; JSON.generate(true)"#,
+            r#"require "json"; JSON.generate(false)"#,
+            r#"require "json"; JSON.generate(42)"#,
+            r#"require "json"; JSON.generate(-7)"#,
+            r#"require "json"; JSON.generate(3.14)"#,
+            r#"require "json"; JSON.generate("hello")"#,
+            r#"require "json"; JSON.generate("")"#,
+        ]);
+    }
+
+    #[test]
+    fn json_generate_string_escapes() {
+        run_tests(&[
+            r#"require "json"; JSON.generate("line\n")"#,
+            r#"require "json"; JSON.generate("tab\t")"#,
+            r#"require "json"; JSON.generate("q\"q")"#,
+            r#"require "json"; JSON.generate("b\\s")"#,
+            r#"require "json"; JSON.generate("\b\f\r")"#,
+        ]);
+    }
+
+    #[test]
+    fn json_generate_collections() {
+        run_tests(&[
+            r#"require "json"; JSON.generate([])"#,
             r#"require "json"; JSON.generate([1, 2, 3])"#,
+            r#"require "json"; JSON.generate([[1], [2]])"#,
+            r#"require "json"; JSON.generate({})"#,
             r#"require "json"; JSON.generate({"a" => 1})"#,
             r#"require "json"; JSON.generate({"a" => [true, false, nil]})"#,
+            r#"require "json"; JSON.generate({"a" => {"b" => 1}})"#,
+        ]);
+    }
+
+    #[test]
+    fn json_generate_special_floats() {
+        run_tests(&[
+            r#"require "json"; JSON.generate(0.0)"#,
+            r#"require "json"; JSON.generate(-0.0)"#,
+            r#"require "json"; JSON.generate(1.5)"#,
+            r#"require "json"; JSON.generate(-2.5)"#,
         ]);
     }
 
@@ -532,6 +571,17 @@ mod tests {
             json_str = JSON.generate(original)
             parsed = JSON.parse(json_str)
             parsed == original
+            "#,
+        );
+    }
+
+    #[test]
+    fn json_roundtrip_string_escapes() {
+        run_test(
+            r#"
+            require "json"
+            s = "tab\there\nnewline\r\nand\\backslash\"quote"
+            JSON.parse(JSON.generate(s)) == s
             "#,
         );
     }

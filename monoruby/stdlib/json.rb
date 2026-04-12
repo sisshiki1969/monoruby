@@ -83,7 +83,7 @@ module JSON
     if opts
       State.generate(obj, opts)
     else
-      State.generate(obj)
+      String.__json_generate(obj)
     end
   end
 
