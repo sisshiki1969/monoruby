@@ -164,6 +164,8 @@ pub(super) fn init(globals: &mut Globals) {
         0,
     );
     globals.define_builtin_func(STRING_CLASS, "ascii_only?", super::encoding::ascii_only, 0);
+    globals.define_builtin_func_with(STRING_CLASS, "unicode_normalize", unicode_normalize, 0, 1, false);
+    globals.define_builtin_func_with(STRING_CLASS, "unicode_normalize!", unicode_normalize_, 0, 1, false);
 
     super::encoding::init_encoding(globals);
 }
@@ -3776,6 +3778,78 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
         r#""{}""#,
         lfp.self_val().as_rstring_inner().dump()
     )))
+}
+
+fn normalize_form(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+) -> Result<&'static str> {
+    if let Some(form) = lfp.try_arg(0) {
+        match form.expect_symbol_or_string(globals)?.to_string().as_str() {
+            "nfc" => Ok("nfc"),
+            "nfd" => Ok("nfd"),
+            "nfkc" => Ok("nfkc"),
+            "nfkd" => Ok("nfkd"),
+            other => Err(MonorubyErr::argumenterr(format!(
+                "invalid normalization form -- {other}"
+            ))),
+        }
+    } else {
+        Ok("nfc")
+    }
+}
+
+/// ### String#unicode_normalize
+/// - unicode_normalize(form = :nfc) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/unicode_normalize.html]
+#[monoruby_builtin]
+fn unicode_normalize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    use unicode_normalization::UnicodeNormalization;
+    let s = lfp.self_val().expect_string(globals)?;
+    let form = normalize_form(vm, globals, lfp)?;
+    let result: String = match form {
+        "nfc" => s.nfc().collect(),
+        "nfd" => s.nfd().collect(),
+        "nfkc" => s.nfkc().collect(),
+        "nfkd" => s.nfkd().collect(),
+        _ => unreachable!(),
+    };
+    Ok(Value::string(result))
+}
+
+/// ### String#unicode_normalize!
+/// - unicode_normalize!(form = :nfc) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/unicode_normalize=21.html]
+#[monoruby_builtin]
+fn unicode_normalize_(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    use unicode_normalization::UnicodeNormalization;
+    let s = lfp.self_val().expect_string(globals)?;
+    let form = normalize_form(vm, globals, lfp)?;
+    let result: String = match form {
+        "nfc" => s.nfc().collect(),
+        "nfd" => s.nfd().collect(),
+        "nfkc" => s.nfkc().collect(),
+        "nfkd" => s.nfkd().collect(),
+        _ => unreachable!(),
+    };
+    let old_len = lfp.self_val().as_rstring_inner().len();
+    lfp.self_val()
+        .as_rstring_inner_mut()
+        .bytesplice(0, old_len, result.as_bytes());
+    Ok(lfp.self_val())
 }
 
 #[cfg(test)]

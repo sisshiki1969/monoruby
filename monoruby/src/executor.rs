@@ -61,6 +61,8 @@ pub struct Executor {
     sp_pre_match: Option<String>,    // $`        : Regexp.pre_match
     sp_post_match: Option<String>,   // $'        : Regexp.post_match
     sp_matches: Vec<Option<String>>, // $&, $1 ... $n : Regexp.last_match(n)
+    sp_match_positions: Vec<Option<(usize, usize)>>, // byte positions for MatchData
+    sp_match_haystack: Option<String>,               // haystack for MatchData
     temp_stack: Vec<Value>,
     require_level: usize,
     /// error information.
@@ -79,6 +81,8 @@ impl std::default::Default for Executor {
             sp_pre_match: None,
             sp_post_match: None,
             sp_matches: vec![],
+            sp_match_positions: vec![],
+            sp_match_haystack: None,
             temp_stack: vec![],
             require_level: 0,
             exception: None,
@@ -1612,6 +1616,8 @@ impl Executor {
         self.sp_pre_match = None;
         self.sp_post_match = None;
         self.sp_matches.clear();
+        self.sp_match_positions.clear();
+        self.sp_match_haystack = None;
     }
     ///
     /// Save captured strings to special variables.
@@ -1647,7 +1653,11 @@ impl Executor {
         };
 
         self.sp_matches.clear();
+        self.sp_match_positions.clear();
+        self.sp_match_haystack = Some(haystack.to_string());
         for m in captures.iter() {
+            self.sp_match_positions
+                .push(m.as_ref().map(|m| (m.start(), m.end())));
             self.sp_matches.push(m.map(|m| m.to_string()));
         }
     }
@@ -1665,16 +1675,12 @@ impl Executor {
     }
 
     pub(crate) fn get_last_matchdata(&self) -> Value {
-        if self.sp_matches.is_empty() {
+        if self.sp_match_positions.is_empty() {
             return Value::nil();
         }
-        Value::array_from_iter(self.sp_matches.iter().map(|s| {
-            if let Some(s) = s {
-                Value::string_from_str(s)
-            } else {
-                Value::nil()
-            }
-        }))
+        let haystack = self.sp_match_haystack.as_deref().unwrap_or("");
+        let md = MatchDataInner::new(haystack.to_string(), self.sp_match_positions.clone());
+        RValue::new_match_data_from_inner(md).pack()
     }
 }
 

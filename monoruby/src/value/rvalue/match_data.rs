@@ -3,21 +3,23 @@ use super::*;
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct MatchDataInner {
-    regex: Regexp,
+    regex: Option<Regexp>,
     heystack: String,
     matches: Box<Vec<Option<(usize, usize)>>>,
 }
 
 impl GC<RValue> for MatchDataInner {
     fn mark(&self, alloc: &mut Allocator<RValue>) {
-        self.regex.mark(alloc);
+        if let Some(re) = &self.regex {
+            re.mark(alloc);
+        }
     }
 }
 
 impl MatchDataInner {
-    pub fn new(regex: Regexp, heystack: String, matches: Vec<Option<(usize, usize)>>) -> Self {
+    pub fn new(heystack: String, matches: Vec<Option<(usize, usize)>>) -> Self {
         MatchDataInner {
-            regex,
+            regex: None,
             heystack,
             matches: Box::new(matches),
         }
@@ -34,10 +36,12 @@ impl MatchDataInner {
                 }
             })
             .collect();
-        MatchDataInner::new(regex, heystack, matches)
+        let mut md = MatchDataInner::new(heystack, matches);
+        md.regex = Some(regex);
+        md
     }
 
-    pub fn regexp(&self) -> Regexp {
+    pub fn regexp(&self) -> Option<Regexp> {
         self.regex
     }
 
@@ -69,7 +73,10 @@ impl MatchDataInner {
 
     pub fn inspect(&self) -> String {
         let mut s = format!("#<MatchData \"{}\"", self.at(0).unwrap());
-        let names = self.regexp().capture_names().unwrap();
+        let names = self
+            .regexp()
+            .and_then(|r| r.capture_names().ok())
+            .unwrap_or_default();
         for i in 1..self.len() {
             if names.is_empty() {
                 s.push_str(&format!(" {i}:"));

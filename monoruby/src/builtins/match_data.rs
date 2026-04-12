@@ -61,8 +61,12 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             .map(|s| Value::string_from_str(s))
             .unwrap_or_default())
     } else if let Some(sym) = lfp.arg(0).try_symbol_or_string() {
-        if let Some(i) = m.regexp().get_group_members(&format!("{sym}")).last() {
-            if let Some(s) = m.at(*i as usize) {
+        if let Some(i) = m
+            .regexp()
+            .map(|r| r.get_group_members(&format!("{sym}")))
+            .and_then(|g| g.last().copied())
+        {
+            if let Some(s) = m.at(i as usize) {
                 Ok(Value::string_from_str(s))
             } else {
                 Ok(Value::nil())
@@ -146,7 +150,10 @@ fn match_end(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 fn named_captures(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
-    let names = m.regexp().capture_names().unwrap();
+    let names = m
+        .regexp()
+        .and_then(|r| r.capture_names().ok())
+        .unwrap_or_default();
     let mut map = RubyMap::default();
     for (i, name) in names.iter().enumerate() {
         let key = Value::string_from_str(name);
