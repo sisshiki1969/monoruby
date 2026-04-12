@@ -2,24 +2,18 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(STRING_CLASS, "__json_parse", json_parse, 1);
+    globals.define_builtin_class_func(STRING_CLASS, "__json_generate", json_generate, 1);
 }
 
 /// String.__json_parse(source) class method
 #[monoruby_builtin]
-fn json_parse(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn json_parse(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let src = lfp.arg(0).expect_string(globals)?;
     let mut parser = Parser::new(src.as_bytes());
     parser
         .parse_value(vm, globals)
         .ok_or_else(|| MonorubyErr::runtimeerr(parser.error_message()))
 }
-
-/// Fast native JSON generator: JSON.__generate(obj) -> String
 
 /// Fast native JSON generator: JSON.__generate(obj) -> String
 #[monoruby_builtin]
@@ -275,11 +269,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_object(
-        &mut self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Option<Value> {
+    fn parse_object(&mut self, vm: &mut Executor, globals: &mut Globals) -> Option<Value> {
         self.advance(); // skip {
         self.skip_ws();
         let mut map = RubyMap::default();
@@ -290,10 +280,7 @@ impl<'a> Parser<'a> {
         loop {
             self.skip_ws();
             if self.peek() != Some(b'"') {
-                self.set_error(format!(
-                    "expected string key at position {}",
-                    self.pos
-                ));
+                self.set_error(format!("expected string key at position {}", self.pos));
                 return None;
             }
             let key = self.parse_string()?;
@@ -312,21 +299,14 @@ impl<'a> Parser<'a> {
                     return Some(Value::hash(map));
                 }
                 _ => {
-                    self.set_error(format!(
-                        "expected ',' or '}}' at position {}",
-                        self.pos
-                    ));
+                    self.set_error(format!("expected ',' or '}}' at position {}", self.pos));
                     return None;
                 }
             }
         }
     }
 
-    fn parse_array(
-        &mut self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Option<Value> {
+    fn parse_array(&mut self, vm: &mut Executor, globals: &mut Globals) -> Option<Value> {
         self.advance(); // skip [
         self.skip_ws();
         let mut arr = vec![];
@@ -347,10 +327,7 @@ impl<'a> Parser<'a> {
                     return Some(Value::array_from_vec(arr));
                 }
                 _ => {
-                    self.set_error(format!(
-                        "expected ',' or ']' at position {}",
-                        self.pos
-                    ));
+                    self.set_error(format!("expected ',' or ']' at position {}", self.pos));
                     return None;
                 }
             }
