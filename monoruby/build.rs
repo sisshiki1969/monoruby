@@ -13,13 +13,14 @@ fn main() {
     ];
 
     for (src, _) in &sources {
-        emit_rerun_if_changed(src);
+        println!("cargo:rerun-if-changed={}", src.display());
     }
 
     if lib_path.exists() {
         fs::remove_dir_all(&lib_path).unwrap();
+    } else {
+        fs::create_dir(&lib_path).unwrap();
     }
-    fs::create_dir(&lib_path).unwrap();
 
     match Command::new("ruby").args(["-e", "puts($:)"]).output() {
         Ok(output) => {
