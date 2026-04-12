@@ -23,7 +23,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SET_CLASS, "delete?", delete_q, 1);
     globals.define_builtin_func(SET_CLASS, "each", each, 0);
     globals.define_builtin_func(SET_CLASS, "to_a", to_a, 0);
-    // inspect/to_s defined in Ruby (builtins/builtins.rb) for cycle detection
+    // inspect/to_s handled by RValue::hash_inspect (value/rvalue.rs) for cycle detection
     globals.define_builtin_funcs_with_kw(SET_CLASS, "dup", &["clone"], dup, 0, 1, false, &[], false);
     globals.define_builtin_func_rest(SET_CLASS, "merge", merge);
     globals.define_builtin_func(SET_CLASS, "subtract", subtract, 1);
@@ -171,6 +171,7 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
 fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let val = lfp.arg(0);
     let mut self_val = lfp.self_val();
+    self_val.ensure_not_frozen(&globals.store)?;
     self_val
         .as_hashmap_inner_mut()
         .insert(val, Value::bool(true), vm, globals)?;
@@ -187,6 +188,7 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 fn add_q(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let val = lfp.arg(0);
     let mut self_val = lfp.self_val();
+    self_val.ensure_not_frozen(&globals.store)?;
     let already = self_val.as_hashmap_inner().contains_key(val, vm, globals)?;
     if already {
         Ok(Value::nil())
@@ -246,8 +248,9 @@ fn empty_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Set/i/clear.html]
 #[monoruby_builtin]
-fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_val = lfp.self_val();
+    self_val.ensure_not_frozen(&globals.store)?;
     self_val.as_hashmap_inner_mut().clear();
     Ok(self_val)
 }
@@ -262,6 +265,7 @@ fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let val = lfp.arg(0);
     let mut self_val = lfp.self_val();
+    self_val.ensure_not_frozen(&globals.store)?;
     self_val.as_hashmap_inner_mut().remove(val, vm, globals)?;
     Ok(self_val)
 }
@@ -276,6 +280,7 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn delete_q(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let val = lfp.arg(0);
     let mut self_val = lfp.self_val();
+    self_val.ensure_not_frozen(&globals.store)?;
     let removed = self_val.as_hashmap_inner_mut().remove(val, vm, globals)?;
     if removed.is_some() {
         Ok(self_val)
@@ -336,6 +341,7 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_val = lfp.self_val();
+    self_val.ensure_not_frozen(&globals.store)?;
     let args = lfp.arg(0).as_array();
     for arg in args.iter().copied() {
         let elems = enum_to_vec(vm, globals, arg)?;
@@ -353,8 +359,9 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 #[monoruby_builtin]
 fn subtract(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let elems = enum_to_vec(vm, globals, lfp.arg(0))?;
     let mut self_val = lfp.self_val();
+    self_val.ensure_not_frozen(&globals.store)?;
+    let elems = enum_to_vec(vm, globals, lfp.arg(0))?;
     for elem in elems {
         self_val.as_hashmap_inner_mut().remove(elem, vm, globals)?;
     }
@@ -366,8 +373,9 @@ fn subtract(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 #[monoruby_builtin]
 fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let elems = enum_to_vec(vm, globals, lfp.arg(0))?;
     let mut self_val = lfp.self_val();
+    self_val.ensure_not_frozen(&globals.store)?;
+    let elems = enum_to_vec(vm, globals, lfp.arg(0))?;
     self_val.as_hashmap_inner_mut().clear();
     for elem in elems {
         self_val
@@ -751,6 +759,7 @@ fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
         }
         Some(block) => block,
     };
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let keys = set_keys(lfp.self_val());
     let data = vm.get_block_data(globals, bh)?;
     let mut to_delete = vec![];
@@ -779,6 +788,7 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         }
         Some(block) => block,
     };
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let keys = set_keys(lfp.self_val());
     let data = vm.get_block_data(globals, bh)?;
     let mut to_delete = vec![];
@@ -807,6 +817,7 @@ fn select_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         }
         Some(block) => block,
     };
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let keys = set_keys(lfp.self_val());
     let data = vm.get_block_data(globals, bh)?;
     let mut to_delete = vec![];
@@ -838,6 +849,7 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         }
         Some(block) => block,
     };
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let keys = set_keys(lfp.self_val());
     let data = vm.get_block_data(globals, bh)?;
     let mut to_delete = vec![];
@@ -869,6 +881,7 @@ fn collect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
         }
         Some(block) => block,
     };
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let keys = set_keys(lfp.self_val());
     let data = vm.get_block_data(globals, bh)?;
     let mut new_elems = vec![];
@@ -936,6 +949,7 @@ fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     if !has_nested {
         return Ok(Value::nil());
     }
+    self_val.ensure_not_frozen(&globals.store)?;
     let mut result = new_empty_set();
     let mut seen = std::collections::HashSet::new();
     seen.insert(self_val.id());
@@ -1342,5 +1356,51 @@ mod tests {
         run_test("Set[1, 2] == Set[1, 2]");
         run_test("Set[1, 2] == Set[2, 1]");
         run_test("Set[1, 2] == Set[1, 3]");
+    }
+
+    #[test]
+    fn set_frozen_mutations_raise() {
+        for op in [
+            "s << 9",
+            "s.add(9)",
+            "s.add?(9)",
+            "s.add?(1)",
+            "s.delete(9)",
+            "s.delete(1)",
+            "s.delete?(9)",
+            "s.delete?(1)",
+            "s.clear",
+            "s.merge([9])",
+            "s.merge([])",
+            "s.subtract([9])",
+            "s.subtract([])",
+            "s.replace([9])",
+            "s.replace([])",
+            "s.delete_if {|x| false}",
+            "s.keep_if {|x| true}",
+            "s.select! {|x| true}",
+            "s.reject! {|x| false}",
+            "s.collect! {|x| x}",
+        ] {
+            run_test_error(&format!("s = Set[1, 2, 3].freeze; {op}"));
+        }
+    }
+
+    #[test]
+    fn set_frozen_flatten_bang() {
+        // Flat frozen set: flatten! returns nil without raising.
+        run_test("Set[1, 2, 3].freeze.flatten!.inspect");
+        // Nested frozen set: flatten! raises FrozenError.
+        run_test_error("Set[Set[1, 2]].freeze.flatten!");
+    }
+
+    #[test]
+    fn set_frozen_block_no_block_returns_enumerator() {
+        // Without a block, these return an enumerator even on frozen sets.
+        run_test("Set[1, 2, 3].freeze.delete_if.class.to_s");
+        run_test("Set[1, 2, 3].freeze.keep_if.class.to_s");
+        run_test("Set[1, 2, 3].freeze.select!.class.to_s");
+        run_test("Set[1, 2, 3].freeze.reject!.class.to_s");
+        run_test("Set[1, 2, 3].freeze.collect!.class.to_s");
     }
 }

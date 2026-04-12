@@ -83,14 +83,6 @@ class NilClass
   end
 end
 
-class Set
-  include Enumerable
-
-  def to_set
-    self
-  end
-end
-
 class Hash
   include Enumerable
 
