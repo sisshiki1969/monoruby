@@ -236,12 +236,27 @@ fn utf8_escape(s: &mut String, ch: char) {
 }
 
 fn utf8_inspect(s: &mut String, ch: char) {
-    if ch as u32 <= 0xff {
-        ascii_escape(s, ch as u8);
+    if ch.is_ascii() {
+        let b = ch as u8;
+        match b {
+            b'"' => s.push_str("\\\""),
+            b'\\' => s.push_str("\\\\"),
+            b'\t' => s.push_str("\\t"),
+            b'\n' => s.push_str("\\n"),
+            b'\r' => s.push_str("\\r"),
+            b'\x0c' => s.push_str("\\f"),
+            b'\x08' => s.push_str("\\b"),
+            b'\x07' => s.push_str("\\a"),
+            b'\x1b' => s.push_str("\\e"),
+            b'\x0b' => s.push_str("\\v"),
+            c if c.is_ascii_graphic() || c == b' ' => s.push(c as char),
+            // Other ASCII control chars use \uNNNN in UTF-8 strings
+            _ => s.push_str(&format!("\\u{:0>4X}", b)),
+        }
     } else if printable::is_printable(ch) {
         s.push(ch);
     } else {
-        s.push_str(&format!("\\u{:0>4X}", ch as u32));
+        s.push_str(&format!("\\u{{{:0>4X}}}", ch as u32));
     }
 }
 
