@@ -22,13 +22,7 @@ pub(super) fn init(globals: &mut Globals) {
     //    0,
     //    true,
     //);
-    globals.define_builtin_class_inline_func(
-        ARRAY_CLASS,
-        "allocate",
-        allocate,
-        Box::new(array_allocate),
-        0,
-    );
+    globals.store[ARRAY_CLASS].set_alloc_func(array_alloc_func);
     globals.define_private_builtin_func_with(ARRAY_CLASS, "initialize", initialize, 0, 2, false);
     globals.define_builtin_inline_funcs(
         ARRAY_CLASS,
@@ -187,49 +181,8 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     Ok(obj)
 }
 
-///
-/// ### Array#allocate
-/// - allocate -> object
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
-#[monoruby_builtin]
-fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let class = lfp.self_val().as_class_id();
-    let obj = Value::array_empty_with_class(class);
-    Ok(obj)
-}
-
-fn array_allocate(
-    state: &mut AbstractState,
-    ir: &mut AsmIr,
-    _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
-    _: ClassId,
-    _: Option<ClassId>,
-) -> bool {
-    let callsite = &store[callid];
-    if !callsite.is_simple() {
-        return false;
-    }
-    let dst = callsite.dst;
-    state.load(ir, callsite.recv, GP::Rdi);
-    let using_xmm = state.get_using_xmm();
-    ir.xmm_save(using_xmm);
-    ir.inline(move |r#gen, _, _| {
-        monoasm! { &mut r#gen.jit,
-            movq rax, (allocate_array);
-            call rax;
-        }
-    });
-    ir.xmm_restore(using_xmm);
-
-    state.def_reg2acc(ir, GP::Rax, dst);
-    true
-}
-
-extern "C" fn allocate_array(class_val: Value) -> Value {
-    let class_id = class_val.as_class_id();
+/// Allocator for `Array` and its subclasses.
+pub(crate) extern "C" fn array_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
     Value::array_empty_with_class(class_id)
 }
 

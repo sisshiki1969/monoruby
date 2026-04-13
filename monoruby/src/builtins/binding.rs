@@ -6,7 +6,7 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Binding", BINDING_CLASS, ObjTy::BINDING);
-    globals.define_builtin_class_func(BINDING_CLASS, "allocate", super::class::undef_allocate, 0);
+    globals.store[BINDING_CLASS].clear_alloc_func();
     globals.define_builtin_func(BINDING_CLASS, "local_variables", local_variables, 0);
     globals.define_builtin_func(BINDING_CLASS, "source_location", source_location, 0);
 }

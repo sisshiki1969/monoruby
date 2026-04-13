@@ -6,7 +6,7 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("MatchData", MATCHDATA_CLASS, ObjTy::MATCHDATA);
-    globals.define_builtin_class_func(MATCHDATA_CLASS, "allocate", super::class::undef_allocate, 0);
+    globals.store[MATCHDATA_CLASS].clear_alloc_func();
     globals.define_builtin_func(MATCHDATA_CLASS, "captures", captures, 0);
     globals.define_builtin_func(MATCHDATA_CLASS, "to_a", to_a, 0);
     globals.define_builtin_func_with(MATCHDATA_CLASS, "[]", index, 1, 2, false);

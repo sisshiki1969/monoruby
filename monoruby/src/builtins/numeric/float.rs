@@ -55,7 +55,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_funcs(FLOAT_CLASS, "to_s", &["inspect"], float_to_s, 0);
     globals.define_builtin_func(FLOAT_CLASS, "to_r", float_to_r, 0);
     globals.define_builtin_func_with(FLOAT_CLASS, "rationalize", float_rationalize, 0, 1, false);
-    globals.define_builtin_class_func(FLOAT_CLASS, "allocate", super::super::class::undef_allocate, 0);
+    globals.store[FLOAT_CLASS].clear_alloc_func();
     // Float.new should raise NoMethodError (not TypeError from allocate)
     let float_meta = globals.store.get_metaclass(FLOAT_CLASS).id();
     globals.add_empty_method(float_meta, IdentId::get_id("new"), Visibility::Undefined);

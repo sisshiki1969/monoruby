@@ -17,7 +17,7 @@ pub(super) fn init(globals: &mut Globals) {
         true,
     );
 
-    globals.define_builtin_class_func(EXCEPTION_CLASS, "allocate", allocate, 0);
+    globals.store[EXCEPTION_CLASS].set_alloc_func(exception_alloc_func);
 
     let standarderr = globals.define_class("StandardError", exception_class, OBJECT_CLASS);
 
@@ -101,14 +101,12 @@ fn nomethoderr_receiver(
     Ok(v)
 }
 
-/// ### Exception.allocate
-#[monoruby_builtin]
-fn allocate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
+/// Allocator for `Exception` and its subclasses. The exception is created
+/// with its message set to the class name (matching CRuby:
+/// `Exception.allocate.message # => "Exception"`).
+pub(crate) extern "C" fn exception_alloc_func(class_id: ClassId, globals: &mut Globals) -> Value {
     let name = class_id.get_name(globals);
-    Ok(Value::new_exception_from_with_class(
-        name, class_id, class_id,
-    ))
+    Value::new_exception_from_with_class(name, class_id, class_id)
 }
 
 ///

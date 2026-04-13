@@ -9,26 +9,23 @@ pub fn gen_class_new_object() -> Box<InlineGen> {
 }
 
 pub(super) fn init(globals: &mut Globals) {
+    // Class.allocate / Class#new on a class object both produce a fresh,
+    // uninitialized Class. Install that as Class's alloc_func so it flows
+    // through the unified `Class#allocate` path.
+    globals.store[CLASS_CLASS].set_alloc_func(class_alloc_func);
     // class methods
     globals.define_builtin_class_func_with(CLASS_CLASS, "new", class_new, 0, 1, false);
-    // Override allocate on Class's singleton class so that Class.allocate
-    // creates a proper (uninitialized) Class object instead of a plain object.
-    globals.define_builtin_class_func(CLASS_CLASS, "allocate", class_allocate, 0);
 
-    // instance methods
-    globals.define_builtin_inline_func(
-        CLASS_CLASS,
-        "allocate",
-        allocate,
-        Box::new(inline_allocate),
-        0,
-    );
-    globals.define_builtin_inline_funcs_with_kw(
+    // instance methods. The default `Class#allocate` consults the receiver
+    // class's `ClassInfo.alloc_func`, raising TypeError when None.
+    globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
+    // NOTE: Phase B disables the JIT inline for `Class#new` to keep the
+    // semantics correct while we migrate per-class allocators. Phase C will
+    // restore an inline that calls `ClassInfo.alloc_func` directly.
+    globals.define_builtin_func_with_kw(
         CLASS_CLASS,
         "new",
-        &[],
         new,
-        gen_class_new_object(),
         0,
         0,
         true,
@@ -88,20 +85,11 @@ fn class_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     Ok(obj)
 }
 
-/// ### Class.allocate
-/// - allocate -> Class
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
-#[monoruby_builtin]
-fn class_allocate(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    lfp.expect_no_block()?;
-    let obj = globals.store.allocate_uninit_class();
-    Ok(obj.as_val())
+/// Allocator installed on `Class` itself. Produces a new uninitialized
+/// `Class` value (no name, no superclass), used by both `Class.allocate`
+/// and the bootstrap path of `Class.new`.
+pub(crate) extern "C" fn class_alloc_func(_class_id: ClassId, globals: &mut Globals) -> Value {
+    globals.store.allocate_uninit_class().as_val()
 }
 
 /// Validate a value used as a superclass for `Class.new`/`Class#initialize`.
@@ -189,48 +177,12 @@ pub(super) fn new(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    // CRuby's Class#new uses an internal allocator (a C-level alloc_func) and
-    // does NOT dispatch to a user-defined `allocate` method. monoruby has no
-    // separate alloc_func table, so emulate this by looking up `allocate`
-    // starting at the class's metaclass superclass — skipping any user
-    // override on the receiver class's own singleton class.
+    // Class#new dispatches to the receiver's C-level allocator (`alloc_func`),
+    // bypassing any user-defined Ruby `def self.allocate`. Matches CRuby's
+    // `rb_class_alloc` semantics.
     let self_val = lfp.self_val();
-    let meta_id = self_val.class();
-    // First check the normal lookup. If the resolved `allocate` is a native
-    // (built-in) function we use it as-is — that covers registered class-level
-    // allocators such as Hash's allocate or Complex's `undef_allocate`.
-    // If it's a Ruby-level override (`def self.allocate`) on the receiver
-    // class's own metaclass, skip past it and search from the metaclass's
-    // superclass so we use the inherited built-in allocator, matching CRuby's
-    // C-level alloc_func behavior.
-    let alloc_fid = globals
-        .store
-        .check_method_for_class(meta_id, IdentId::ALLOCATE)
-        .and_then(|e| e.func_id());
-    let alloc_fid = match alloc_fid {
-        Some(fid)
-            if !matches!(
-                globals.store[fid].kind,
-                crate::globals::FuncKind::ISeq(_) | crate::globals::FuncKind::Proc(_)
-            ) =>
-        {
-            Some(fid)
-        }
-        _ => {
-            let meta = globals.store[meta_id].get_module();
-            let search_from = meta.superclass().map(|m| m.id()).unwrap_or(meta_id);
-            globals
-                .store
-                .check_method_for_class(search_from, IdentId::ALLOCATE)
-                .and_then(|e| e.func_id())
-        }
-    };
-    let obj = match alloc_fid {
-        Some(fid) => vm.invoke_func_inner(globals, fid, self_val, &[], None, None)?,
-        None => {
-            vm.invoke_method_inner(globals, IdentId::ALLOCATE, self_val, &[], None, None)?
-        }
-    };
+    let class_id = self_val.as_class_id();
+    let obj = call_alloc_func(globals, class_id)?;
 
     vm.invoke_method_inner(
         globals,
@@ -279,37 +231,27 @@ fn superclass(
 /// ### Class#allocate
 /// - allocate -> object
 ///
+/// Default `allocate` for every class. Looks up `ClassInfo.alloc_func` on
+/// the receiver class and invokes it. Raises TypeError when the class has
+/// no allocator (None).
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
 #[monoruby_builtin]
 fn allocate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    match class_id {
-        TRUE_CLASS | FALSE_CLASS | NIL_CLASS | SYMBOL_CLASS => {
-            return Err(MonorubyErr::typeerr(&format!(
-                "allocator undefined for {}",
-                class_id.get_name(globals)
-            )));
-        }
-        _ => {}
-    }
-    let obj = Value::object(class_id);
-    Ok(obj)
+    call_alloc_func(globals, class_id)
 }
 
-/// allocate that raises "allocator undefined for ClassName".
-/// Used for classes that cannot be instantiated (TrueClass, FalseClass, NilClass, Symbol, Integer, Float).
-#[monoruby_builtin]
-pub(super) fn undef_allocate(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
-    Err(MonorubyErr::typeerr(&format!(
-        "allocator undefined for {}",
-        class_id.get_name(globals)
-    )))
+/// Look up the receiver class's `alloc_func` and invoke it; raise the
+/// standard "allocator undefined" TypeError when None.
+pub(crate) fn call_alloc_func(globals: &mut Globals, class_id: ClassId) -> Result<Value> {
+    match globals.store[class_id].alloc_func() {
+        Some(f) => Ok(f(class_id, globals)),
+        None => Err(MonorubyErr::typeerr(format!(
+            "allocator undefined for {}",
+            class_id.get_name(globals)
+        ))),
+    }
 }
 
 pub(super) fn gen_class_new(

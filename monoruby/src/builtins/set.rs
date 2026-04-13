@@ -10,7 +10,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Set", SET_CLASS, ObjTy::HASH);
     globals.define_builtin_class_func_rest(SET_CLASS, "[]", set_index);
     globals.define_builtin_class_func_with(SET_CLASS, "new", new, 0, 1, false);
-    globals.define_builtin_class_func(SET_CLASS, "allocate", allocate, 0);
+    globals.store[SET_CLASS].set_alloc_func(set_alloc_func);
 
     globals.define_builtin_func(SET_CLASS, "<<", add, 1);
     globals.define_builtin_func(SET_CLASS, "add", add, 1);
@@ -139,21 +139,11 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> 
     Ok(obj)
 }
 
-///
-/// ### Set.allocate
-///
-/// - allocate -> Set
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
-#[monoruby_builtin]
-fn allocate(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
-    Ok(Value::hash_with_class_and_default(class_id, Value::nil()))
+/// Allocator for `Set` and its subclasses. Set uses the same underlying hash
+/// storage as `Hash`, so the allocator hands back an empty hash typed with
+/// the given class id.
+pub(crate) extern "C" fn set_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
+    Value::hash_with_class_and_default(class_id, Value::nil())
 }
 
 ///

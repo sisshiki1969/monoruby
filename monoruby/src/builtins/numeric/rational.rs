@@ -42,7 +42,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         RATIONAL_CLASS, "round", rat_round, 0, 1, false, &["half"], false,
     );
     globals.define_builtin_class_func(RATIONAL_CLASS, "__allocate", allocate, 2);
-    globals.define_builtin_class_func(RATIONAL_CLASS, "allocate", super::super::class::undef_allocate, 0);
+    globals.store[RATIONAL_CLASS].clear_alloc_func();
 }
 
 /// Rational.__allocate(num, den) — internal constructor from Ruby

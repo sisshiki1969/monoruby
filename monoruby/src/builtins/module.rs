@@ -5,6 +5,10 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
+    // Module.allocate raises (CRuby behavior); Module.new uses an internal
+    // allocator inside `module_new`, not Class#new. Class subclasses Module
+    // and reinstalls its own alloc_func in `class.rs::init`.
+    globals.store[MODULE_CLASS].clear_alloc_func();
     // class methods
     globals.define_builtin_class_func_with_kw(
         MODULE_CLASS,
