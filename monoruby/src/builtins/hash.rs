@@ -578,7 +578,7 @@ extern "C" fn hashindex(
 #[monoruby_builtin]
 fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
-    lfp.self_val().as_hash().clear();
+    lfp.self_val().as_hash().clear()?;
     Ok(lfp.self_val())
 }
 
@@ -705,6 +705,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     };
     let hash = lfp.self_val().as_hash();
     let data = vm.get_block_data(globals, bh)?;
+    let _iter_guard = hash.iter_guard();
     for (k, v) in hash.iter() {
         vm.invoke_block(globals, &data, &[Value::array2(k, v)])?;
     }
@@ -733,6 +734,7 @@ fn each_value(
         Some(block) => block,
     };
     let hash = lfp.self_val().as_hash();
+    let _iter_guard = hash.iter_guard();
     let iter = hash.iter().map(|(_, v)| v);
     vm.invoke_block_iter1(globals, bh, iter)?;
     Ok(lfp.self_val())
@@ -755,6 +757,7 @@ fn each_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
         Some(block) => block,
     };
     let hash = lfp.self_val().as_hash();
+    let _iter_guard = hash.iter_guard();
     let iter = hash.iter().map(|(k, _)| k);
     vm.invoke_block_iter1(globals, bh, iter)?;
     Ok(lfp.self_val())
@@ -809,9 +812,14 @@ fn select_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     };
     let data = vm.get_block_data(globals, bh)?;
     let mut remove = vec![];
-    for (k, v) in lfp.self_val().as_hash().iter() {
-        if !vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
-            remove.push(k);
+    let self_val = lfp.self_val();
+    let hash = self_val.as_hash();
+    {
+        let _iter_guard = hash.iter_guard();
+        for (k, v) in hash.iter() {
+            if !vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+                remove.push(k);
+            }
         }
     }
     let changed = !remove.is_empty();
@@ -945,9 +953,14 @@ fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
     };
     let data = vm.get_block_data(globals, bh)?;
     let mut remove = vec![];
-    for (k, v) in lfp.self_val().as_hash().iter() {
-        if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
-            remove.push(k);
+    let self_val = lfp.self_val();
+    let hash = self_val.as_hash();
+    {
+        let _iter_guard = hash.iter_guard();
+        for (k, v) in hash.iter() {
+            if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+                remove.push(k);
+            }
         }
     }
     let mut h = lfp.self_val().as_hash();
@@ -976,9 +989,14 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     };
     let data = vm.get_block_data(globals, bh)?;
     let mut remove = vec![];
-    for (k, v) in lfp.self_val().as_hash().iter() {
-        if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
-            remove.push(k);
+    let self_val = lfp.self_val();
+    let hash = self_val.as_hash();
+    {
+        let _iter_guard = hash.iter_guard();
+        for (k, v) in hash.iter() {
+            if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+                remove.push(k);
+            }
         }
     }
     let changed = !remove.is_empty();
@@ -1348,9 +1366,14 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     };
     let data = vm.get_block_data(globals, bh)?;
     let mut remove = vec![];
-    for (k, v) in lfp.self_val().as_hash().iter() {
-        if !vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
-            remove.push(k);
+    let self_val = lfp.self_val();
+    let hash = self_val.as_hash();
+    {
+        let _iter_guard = hash.iter_guard();
+        for (k, v) in hash.iter() {
+            if !vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+                remove.push(k);
+            }
         }
     }
     let mut h = lfp.self_val().as_hash();

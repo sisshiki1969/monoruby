@@ -16,6 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(METHOD_CLASS, "owner", owner, 0);
     globals.define_builtin_func(METHOD_CLASS, "unbind", unbind, 0);
     globals.define_builtin_func(METHOD_CLASS, "parameters", parameters, 0);
+    globals.define_builtin_funcs(METHOD_CLASS, "==", &["eql?"], method_eq, 1);
 
     globals.define_builtin_class_under_obj("UnboundMethod", UMETHOD_CLASS, ObjTy::METHOD);
     globals.define_builtin_class_func(UMETHOD_CLASS, "allocate", super::class::undef_allocate, 0);
@@ -25,6 +26,47 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(UMETHOD_CLASS, "name", uname, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "owner", uowner, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "parameters", uparameters, 0);
+    globals.define_builtin_funcs(UMETHOD_CLASS, "==", &["eql?"], umethod_eq, 1);
+}
+
+///
+/// ### Method#==
+///
+/// - self == other -> bool
+/// - eql?(other) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Method/i/=3d=3d.html]
+#[monoruby_builtin]
+fn method_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let other = lfp.arg(0);
+    if self_val.class() != other.class() {
+        return Ok(Value::bool(false));
+    }
+    let a = self_val.as_method();
+    let b = other.as_method();
+    let eq = a.func_id() == b.func_id() && a.receiver().id() == b.receiver().id();
+    Ok(Value::bool(eq))
+}
+
+///
+/// ### UnboundMethod#==
+///
+/// - self == other -> bool
+/// - eql?(other) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/=3d=3d.html]
+#[monoruby_builtin]
+fn umethod_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let other = lfp.arg(0);
+    if self_val.class() != other.class() {
+        return Ok(Value::bool(false));
+    }
+    let a = self_val.as_umethod();
+    let b = other.as_umethod();
+    let eq = a.func_id() == b.func_id() && a.owner() == b.owner();
+    Ok(Value::bool(eq))
 }
 
 ///
@@ -35,7 +77,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// - call(*args) { ... } -> object
 /// - self === *args -> object
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Method/i/=3d=3d=3d.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/Method/i/call.html]
 #[monoruby_builtin]
 fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
@@ -72,6 +114,7 @@ fn arity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// - arity -> Integer
 ///
+/// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/arity.html]
 #[monoruby_builtin]
 fn uarity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
@@ -86,7 +129,7 @@ fn uarity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// - to_proc -> Proc
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Method/i/to_proc.html]
-/// TODO: support keyword arguments
+// TODO: support keyword arguments
 #[monoruby_builtin]
 fn to_proc(_: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
@@ -107,7 +150,7 @@ fn to_proc(_: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 /// - bind(obj) -> Method
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/bind.html]
-/// TODO: we must reject invalid objects for *obj*
+// TODO: we must reject invalid objects for *obj*
 #[monoruby_builtin]
 fn bind(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
