@@ -23,6 +23,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(STRING_CLASS, "try_convert", string_try_convert, 1);
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
     globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
+    globals.define_builtin_func(STRING_CLASS, "hash", hash, 0);
     globals.define_builtin_func(STRING_CLASS, "==", eq, 1);
     globals.define_builtin_func(STRING_CLASS, "===", eq, 1);
     globals.define_builtin_func(STRING_CLASS, "<=>", cmp, 1);
@@ -263,6 +264,18 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     }
     let res = Value::string_from_inner(inner.repeat(count));
     Ok(res)
+}
+
+///
+/// ### String#hash
+///
+/// - hash -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/hash.html]
+#[monoruby_builtin]
+fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let h = lfp.self_val().calculate_hash(vm, globals)?;
+    Ok(Value::integer_from_u64(h))
 }
 
 ///
@@ -5895,6 +5908,21 @@ mod tests {
             "#,
         );
         run_test_error(r#""café".unicode_normalize(:bad)"#);
+    }
+
+    #[test]
+    fn string_hash() {
+        // Hash values differ between monoruby and CRuby, so assert the
+        // Object#hash contract (equal content -> equal hash) instead.
+        run_tests(&[
+            r#""hello".hash == "hello".hash"#,
+            r#""b".hash == "b".hash"#,
+            r#"s1 = "hello"; s2 = "hel" + "lo"; s1.hash == s2.hash"#,
+            r#""".hash == "".hash"#,
+            r#""café".hash == "café".hash"#,
+            r#""a".hash == "b".hash"#,
+            r#""hello".hash.is_a?(Integer)"#,
+        ]);
     }
 
     #[test]
