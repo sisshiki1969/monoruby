@@ -988,7 +988,43 @@ impl ClassInfoTable {
         info.constants = constants;
         info.constant_locations = constant_locations;
         info.class_variables = class_variables;
-        self.get_metaclass(new_id);
+
+        // Duplicate the singleton class too: CRuby's Module#initialize_copy
+        // clones the singleton class so `def self.foo` and `extend`-ed modules
+        // on the original are reachable through the dup.
+        let orig_meta = self.get_metaclass(original_class);
+        let new_meta = self.get_metaclass(new_id);
+
+        // Copy singleton-class method/constant/cvar tables.
+        let orig_meta_info = &self[orig_meta.id()];
+        let m_methods = orig_meta_info.methods.clone();
+        let m_constants = orig_meta_info.constants.clone();
+        let m_constant_locations = orig_meta_info.constant_locations.clone();
+        let m_class_variables = orig_meta_info.class_variables.clone();
+        let new_meta_info = &mut self[new_meta.id()];
+        new_meta_info.methods = m_methods;
+        new_meta_info.constants = m_constants;
+        new_meta_info.constant_locations = m_constant_locations;
+        new_meta_info.class_variables = m_class_variables;
+
+        // Replicate `extend`-ed modules (iclasses hanging off the original
+        // metaclass's superclass chain) on the new metaclass in the same
+        // order. `include_module` prepends, so walk the original chain from
+        // nearest to furthest and re-include in reverse.
+        let mut included: Vec<ClassId> = vec![];
+        let mut cur = orig_meta.superclass();
+        while let Some(sc) = cur
+            && sc.is_iclass()
+        {
+            included.push(sc.id());
+            cur = sc.superclass();
+        }
+        let mut new_meta = new_meta;
+        for mod_id in included.into_iter().rev() {
+            let module = self.get_module(mod_id);
+            let _ = new_meta.include_module(module);
+        }
+
         class_obj.as_class()
     }
 
