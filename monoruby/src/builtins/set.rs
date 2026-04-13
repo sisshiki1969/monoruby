@@ -1309,22 +1309,25 @@ fn reset(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Set/i/hash.html]
 #[monoruby_builtin]
 fn set_hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use crate::RubyHash;
     use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+    use std::hash::Hasher;
+    // Hash every element through `Value::ruby_hash`, which is content-based
+    // (e.g. strings hash by bytes, not by object identity). Combine with
+    // XOR so the result is order-independent — two Sets with the same
+    // members always hash equal regardless of insertion order.
+    //
+    // `DefaultHasher::new()` uses fixed keys, so the result is stable
+    // across processes with the same element hashes.
     let keys = set_keys(lfp.self_val());
-    // XOR all element hashes for order-independence
-    let mut combined: u64 = 0;
-    let hash_id = IdentId::get_id("hash");
+    // Seed mixed in to distinguish an empty Set from other empty
+    // aggregates that XOR-combine to 0.
+    let mut combined: u64 = 0x5e7_5e7_5e7_5e7;
     for k in keys {
-        let h = vm.invoke_method_inner(globals, hash_id, k, &[], None, None)?;
-        if let Some(i) = h.try_fixnum() {
-            combined ^= i as u64;
-        }
+        let mut hasher = DefaultHasher::new();
+        k.ruby_hash(&mut hasher, vm, globals)?;
+        combined ^= hasher.finish();
     }
-    // Mix with Set class identity
-    let mut hasher = DefaultHasher::new();
-    "Set".hash(&mut hasher);
-    combined ^= hasher.finish();
     Ok(Value::integer(combined as i64))
 }
 
