@@ -316,6 +316,24 @@ pub struct ClassInfo {
     /// None for modules.
     ///
     instance_ty: Option<ObjTy>,
+    ///
+    /// C-level allocator (CRuby's `rb_alloc_func_t` equivalent). Invoked by
+    /// `Class#new` and the default `Class#allocate` to produce an
+    /// uninitialized instance. Inherited from the superclass at class
+    /// definition time; `None` means "allocator undefined" (raise TypeError).
+    ///
+    alloc_func: Option<AllocFunc>,
+}
+
+/// C-level allocator function pointer. Given a class id, returns a freshly
+/// allocated (uninitialized) instance of that class.
+pub type AllocFunc = extern "C" fn(ClassId) -> Value;
+
+/// Default allocator used by `BasicObject` and inherited by any class that
+/// does not override it. Produces a plain `RValue::Object` tagged with the
+/// given class id.
+pub extern "C" fn default_alloc_func(class_id: ClassId) -> Value {
+    Value::object(class_id)
 }
 
 impl alloc::GC<RValue> for ClassInfo {
@@ -350,6 +368,7 @@ impl ClassInfo {
             class_variables: None,
             ivar_names: indexmap::IndexMap::default(),
             instance_ty: None,
+            alloc_func: None,
         }
     }
 
@@ -365,7 +384,20 @@ impl ClassInfo {
             class_variables: None,
             ivar_names: self.ivar_names.clone(),
             instance_ty: self.instance_ty,
+            alloc_func: self.alloc_func,
         }
+    }
+
+    pub(crate) fn alloc_func(&self) -> Option<AllocFunc> {
+        self.alloc_func
+    }
+
+    pub(crate) fn set_alloc_func(&mut self, f: AllocFunc) {
+        self.alloc_func = Some(f);
+    }
+
+    pub(crate) fn clear_alloc_func(&mut self) {
+        self.alloc_func = None;
     }
 
     pub(crate) fn get_module(&self) -> Module {
@@ -886,10 +918,21 @@ impl ClassInfoTable {
         } else {
             Value::class_empty(class_id, superclass)
         };
+        // Inherit `alloc_func` from the superclass. Modules have no alloc_func.
+        // Builtin classes that need a custom allocator will overwrite this
+        // later via `ClassInfo::set_alloc_func`.
+        let inherited_alloc = if is_module {
+            None
+        } else if let Some(sc) = superclass {
+            self[sc.id()].alloc_func
+        } else {
+            None
+        };
         self[class_id].object = Some(class_obj.as_class());
         self[class_id].name = name.map(|id| id.to_string());
         self[class_id].parent = parent;
         self[class_id].instance_ty = instance_ty;
+        self[class_id].alloc_func = inherited_alloc;
         if let Some(name) = name {
             self.set_constant(parent.unwrap(), name, class_obj);
         }
