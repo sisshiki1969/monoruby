@@ -1602,4 +1602,120 @@ mod tests {
         run_test("Set[1, 2, 3].freeze.reject!.class.to_s");
         run_test("Set[1, 2, 3].freeze.collect!.class.to_s");
     }
+
+    #[test]
+    fn set_divide_arity2() {
+        // Symmetric relation: elements within abs-difference of 1 group together.
+        run_test(
+            "Set[1, 3, 4, 6, 9, 10, 11].divide {|x, y| (x - y).abs == 1 }\
+             .map {|s| s.to_a.sort }.sort",
+        );
+        // SCC with a symmetric relation: (a+b).even? on {1,2,3,4} groups
+        // odd {1,3} and even {2,4}.
+        run_test(
+            "Set[1, 2, 3, 4].divide {|a, b| (a + b).even? }\
+             .map {|s| s.to_a.sort }.sort",
+        );
+    }
+
+    #[test]
+    fn set_initialize_private() {
+        run_test("Set.private_instance_methods(false).include?(:initialize)");
+    }
+
+    #[test]
+    fn set_initialize_uses_each_entry_when_available() {
+        // If the argument responds to #each_entry, Set.new uses it
+        // (rather than #each or #to_a).
+        run_test_with_prelude(
+            "$trace = []; s = Set.new(E.new([10, 20, 30])); [$trace.sort, s.to_a.sort]",
+            r#"
+            class E
+              def initialize(a); @a = a; end
+              def each_entry; @a.each { |x| $trace << x; yield x }; end
+              def each; raise "should not be called"; end
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_initialize_falls_back_to_each() {
+        run_test_with_prelude(
+            "s = Set.new(E.new([1, 2, 2, 3])); s.to_a.sort",
+            r#"
+            class E
+              def initialize(a); @a = a; end
+              def each; @a.each { |x| yield x }; end
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_initialize_non_enumerable_raises() {
+        run_test_error("Set.new(42)");
+    }
+
+    #[test]
+    fn set_inspect_to_s_alias_equal_method() {
+        // Both names resolve to the same underlying Method.
+        run_test("Set.instance_method(:to_s) == Set.instance_method(:inspect)");
+        run_test("Set[].method(:to_s) == Set[].method(:inspect)");
+    }
+
+    #[test]
+    fn set_case_equality_alias() {
+        // Set#=== is an alias for #include? / #member?.
+        run_test("Set.instance_method(:===) == Set.instance_method(:include?)");
+        run_test("Set.instance_method(:===) == Set.instance_method(:member?)");
+    }
+
+    #[test]
+    fn set_iteration_mutation_raises() {
+        // Adding a new element during iteration should raise RuntimeError.
+        run_test_error(
+            "s = Set[:a, :b, :c]; s.each { |x| s << :new if x == :a }",
+        );
+        // merge during iteration raises.
+        run_test_error(
+            "s = Set[1]; s.each { s.merge([99]) }",
+        );
+        // replace during iteration raises (clear inside).
+        run_test_error(
+            "s = Set[1, 2]; s.each { s.replace([9]) }",
+        );
+    }
+
+    #[test]
+    fn set_iteration_delete_allowed() {
+        // Removing an element during iteration is permitted (CRuby-compatible).
+        run_test(
+            "s = Set[1, 2, 3]; s.each { |x| s.delete(x) if x == 2 }; s.to_a.sort",
+        );
+    }
+
+    #[test]
+    fn set_hash_static() {
+        // Same content → same hash, regardless of insertion order.
+        run_test("Set[].hash == Set[].hash");
+        run_test("Set[1, 2, 3].hash == Set[1, 2, 3].hash");
+        run_test("Set[:a, \"b\", \"c\"].hash == Set[\"c\", \"b\", :a].hash");
+        run_test("Set[].hash != Set[1, 2, 3].hash");
+    }
+
+    #[test]
+    fn set_enumerator_forwards_block_result() {
+        // select!/reject! without a block return an Enumerator whose #each
+        // drives the backing method; the user block's truthiness must reach
+        // the filter logic.
+        run_test(
+            "s = Set[\"one\", \"two\", \"three\"]; \
+             s.select!.each { |x| x.size != 3 }; s.to_a",
+        );
+        run_test(
+            "s = Set[\"one\", \"two\", \"three\"]; \
+             s.reject!.each { |x| x.size == 3 }; s.to_a",
+        );
+    }
 }

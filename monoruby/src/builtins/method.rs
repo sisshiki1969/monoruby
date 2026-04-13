@@ -618,4 +618,76 @@ mod tests {
             "##,
         );
     }
+
+    #[test]
+    fn method_eq_alias() {
+        // Aliased methods share the same FuncId, so Method#== returns true.
+        run_test_with_prelude(
+            r##"
+            f = Foo.new
+            [f.method(:bar) == f.method(:baz),
+             f.method(:bar).eql?(f.method(:baz)),
+             f.method(:bar) == f.method(:other)]
+            "##,
+            r##"
+            class Foo
+              def bar; 1; end
+              alias_method :baz, :bar
+              def other; 2; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_eq_different_receiver() {
+        // Same method name on two instances → different receiver → not equal.
+        run_test_with_prelude(
+            r##"
+            f1 = Foo.new
+            f2 = Foo.new
+            [f1.method(:bar) == f1.method(:bar),
+             f1.method(:bar) == f2.method(:bar)]
+            "##,
+            r##"
+            class Foo
+              def bar; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_eq_non_method() {
+        // Comparing with a non-Method returns false, not an error.
+        run_test_with_prelude(
+            r##"
+            Foo.new.method(:bar) == 42
+            "##,
+            r##"
+            class Foo
+              def bar; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn umethod_eq_alias() {
+        // UnboundMethod#== compares FuncId + owner.
+        run_test_with_prelude(
+            r##"
+            [Foo.instance_method(:bar) == Foo.instance_method(:baz),
+             Foo.instance_method(:bar).eql?(Foo.instance_method(:baz)),
+             Foo.instance_method(:bar) == Foo.instance_method(:other)]
+            "##,
+            r##"
+            class Foo
+              def bar; 1; end
+              alias_method :baz, :bar
+              def other; 2; end
+            end
+            "##,
+        );
+    }
 }

@@ -2070,4 +2070,59 @@ mod tests {
             "class C; def to_hash; {a: 1, b: 2}; end; end; o = C.new",
         );
     }
+
+    #[test]
+    fn hash_iter_guard_new_key_raises() {
+        // Adding a brand-new key during iteration must raise RuntimeError.
+        run_test_error("h = {a: 1, b: 2}; h.each { h[:c] = 3 }");
+        run_test_error("h = {a: 1}; h.each_key { h[:new] = 0 }");
+        run_test_error("h = {a: 1}; h.each_value { h[:new] = 0 }");
+    }
+
+    #[test]
+    fn hash_iter_guard_existing_key_allowed() {
+        // Updating an already-present key during iteration is allowed,
+        // matching CRuby semantics.
+        run_test("h = {a: 1, b: 2}; h.each { |k, v| h[k] = v * 10 }; h.to_a.sort");
+    }
+
+    #[test]
+    fn hash_iter_guard_delete_allowed() {
+        // Hash#delete during iteration does NOT raise (CRuby-compatible).
+        // Exact visitation order is implementation-defined, so just check
+        // that the call succeeds and returns the pre-delete value.
+        run_test(
+            "h = {a: 1}; \
+             seen = nil; \
+             h.each { |k, v| seen = h.delete(k) }; \
+             [seen, h.empty?]",
+        );
+    }
+
+    #[test]
+    fn hash_iter_guard_clear_raises() {
+        run_test_error("h = {a: 1, b: 2}; h.each { h.clear }");
+    }
+
+    #[test]
+    fn hash_iter_guard_nested_iteration() {
+        // Nested iteration increments iter_lev twice and decrements back to 0;
+        // after all iterations complete, mutation is allowed again.
+        run_test(
+            "h = {a: 1, b: 2}; \
+             h.each { |k1, _| h.each { |k2, _| _ = [k1, k2] } }; \
+             h[:c] = 3; h.keys.sort",
+        );
+    }
+
+    #[test]
+    fn hash_iter_guard_released_after_block_exception() {
+        // If the each block raises, the iter_lev guard is still decremented
+        // (RAII Drop) so subsequent mutations succeed.
+        run_test(
+            "h = {a: 1}; \
+             begin; h.each { raise 'stop' }; rescue; end; \
+             h[:b] = 2; h.keys.sort",
+        );
+    }
 }
