@@ -389,7 +389,7 @@ impl<'a> JitContext<'a> {
                 return self.binary_cmp_br(state, ir, kind, lhs, rhs, dest_bb, brkind, ic, bc_pos);
             }
             TraceIr::Index {
-                dst: _,
+                _dst: _,
                 base,
                 idx,
                 class: ic,

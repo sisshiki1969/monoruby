@@ -587,7 +587,7 @@ impl Codegen {
             }
             AsmInst::BlockArg {
                 ret,
-                outer: _,
+                _outer: _,
                 using_xmm,
                 error,
                 call_site_bc_ptr,

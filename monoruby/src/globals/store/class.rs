@@ -156,6 +156,7 @@ impl ClassId {
                 | SYMBOL_CLASS
                 | RANGE_CLASS
                 | COMPLEX_CLASS
+                | REGEXP_CLASS
         )
     }
 
@@ -883,7 +884,10 @@ impl ClassInfoTable {
             for (name, entry) in &self[module.id()].methods {
                 if matches!(entry.visibility, Visibility::Undefined) {
                     exclude.insert(*name);
-                } else if entry.func_id().is_some() && entry.visibility() == Visibility::Protected && !exclude.contains(name) {
+                } else if entry.func_id().is_some()
+                    && entry.visibility() == Visibility::Protected
+                    && !exclude.contains(name)
+                {
                     names.insert(*name);
                 }
             }
@@ -1468,8 +1472,7 @@ impl Store {
                 return false;
             }
         }
-        let Some(version_label) = self[iseq_id]
-            .get_jit_class_version(lfp.self_val().class())
+        let Some(version_label) = self[iseq_id].get_jit_class_version(lfp.self_val().class())
         else {
             // JIT entry was invalidated between cache_map check and here.
             return false;

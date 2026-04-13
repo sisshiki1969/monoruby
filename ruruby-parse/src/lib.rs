@@ -31,7 +31,6 @@ impl<T: PartialEq + Default> Annot<T> {
 enum ParenKind {
     Bracket,
     Paren,
-    Brace,
 }
 
 #[derive(Debug, Clone, PartialEq)]

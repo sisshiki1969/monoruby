@@ -359,7 +359,7 @@ impl AsmIr {
         let error = self.new_error(state);
         self.push(AsmInst::BlockArg {
             ret,
-            outer,
+            _outer: outer,
             using_xmm,
             error,
             call_site_bc_ptr,
@@ -1275,7 +1275,7 @@ pub(super) enum AsmInst {
     },
     BlockArg {
         ret: SlotId,
-        outer: usize,
+        _outer: usize,
         using_xmm: UsingXmm,
         error: AsmError,
         call_site_bc_ptr: BytecodePtr,

@@ -166,7 +166,7 @@ pub(crate) enum TraceIr {
         rhs: SlotId,
     },
     Index {
-        dst: SlotId,
+        _dst: SlotId,
         base: SlotId,
         idx: SlotId,
         class: Option<(ClassId, ClassId)>, // (base_class, idx_class)
@@ -525,7 +525,7 @@ impl TraceIr {
                 }
                 130 => TraceIr::InlineCache,
                 132 => TraceIr::Index {
-                    dst: SlotId::new(op1_w1),
+                    _dst: SlotId::new(op1_w1),
                     base: SlotId::new(op2_w2),
                     idx: SlotId::new(op3_w3),
                     class: if let Some(base_class) = pc.classid1()
@@ -834,7 +834,7 @@ impl TraceIr {
                 format!("{:?} = hash[{:?}; {}]", dst, args, len)
             }
             TraceIr::Index {
-                dst,
+                _dst: dst,
                 base,
                 idx,
                 class,
