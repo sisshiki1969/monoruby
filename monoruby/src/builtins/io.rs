@@ -12,7 +12,7 @@ use std::rc::Rc;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("IO", IO_CLASS, ObjTy::IO);
     globals.define_builtin_class_func_with(IO_CLASS, "new", io_new, 1, 3, false);
-    globals.define_builtin_class_func(IO_CLASS, "allocate", allocate, 0);
+    globals.store[IO_CLASS].set_alloc_func(io_alloc_func);
     globals.define_builtin_func(IO_CLASS, "<<", shl, 1);
     globals.define_builtin_func_with(IO_CLASS, "puts", puts, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "print", print, 0, 0, true);
@@ -76,11 +76,9 @@ fn io_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Err(MonorubyErr::argumenterr("IO.new requires an integer file descriptor"))
 }
 
-/// ### IO.allocate
-#[monoruby_builtin]
-fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
-    Ok(Value::new_io_with_class(IoInner::Closed, class_id))
+/// Allocator for `IO` and its subclasses.
+pub(crate) extern "C" fn io_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
+    Value::new_io_with_class(IoInner::Closed, class_id)
 }
 
 ///

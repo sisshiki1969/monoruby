@@ -7,7 +7,7 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS, ObjTy::HASH);
     globals.define_builtin_class_func_with_effect(HASH_CLASS, "new", new, 0, 2, Effect::CAPTURE);
-    globals.define_builtin_class_func(HASH_CLASS, "allocate", allocate, 0);
+    globals.store[HASH_CLASS].set_alloc_func(hash_alloc_func);
     globals.define_builtin_class_func_rest(HASH_CLASS, "[]", hash_bracket);
     globals.define_builtin_class_func(HASH_CLASS, "try_convert", try_convert, 1);
 
@@ -126,14 +126,9 @@ fn new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     Ok(obj)
 }
 
-/// ### Hash.allocate
-/// - allocate -> Hash
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
-#[monoruby_builtin]
-fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
-    Ok(Value::hash_with_class_and_default(class_id, Value::nil()))
+/// Allocator for `Hash` and its subclasses.
+pub(crate) extern "C" fn hash_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
+    Value::hash_with_class_and_default(class_id, Value::nil())
 }
 
 ///

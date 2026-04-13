@@ -9,6 +9,7 @@ use std::ops::{BitAnd, BitOr, BitXor};
 
 pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_class("Integer", INTEGER_CLASS, numeric, OBJECT_CLASS, None);
+    globals.store[INTEGER_CLASS].clear_alloc_func();
     globals.define_builtin_func_with(INTEGER_CLASS, "chr", chr, 0, 1, false);
     //globals.define_builtin_inline_func(INTEGER_CLASS, "succ", succ, Box::new(integer_succ), 0);
     //globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);

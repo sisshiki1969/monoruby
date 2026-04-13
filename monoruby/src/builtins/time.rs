@@ -23,7 +23,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_funcs_with(TIME_CLASS, "gm", &["utc"], time_gm, 1, 7, false);
     globals.define_builtin_class_func(TIME_CLASS, "now", time_now, 0);
     globals.define_builtin_class_func_with(TIME_CLASS, "at", time_at, 1, 2, false);
-    globals.define_builtin_class_func(TIME_CLASS, "allocate", allocate, 0);
+    globals.store[TIME_CLASS].set_alloc_func(time_alloc_func);
 
     globals.define_builtin_funcs(TIME_CLASS, "gmtime", &["utc"], gmtime, 0);
     globals.define_builtin_funcs(TIME_CLASS, "gmt?", &["utc?"], gmt_, 0);
@@ -92,17 +92,10 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(Value::new_time(time_info))
 }
 
-/// ### Time.allocate
-#[monoruby_builtin]
-fn allocate(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
+/// Allocator for `Time` and its subclasses.
+pub(crate) extern "C" fn time_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
     let time_info = TimeInner::Utc(DateTime::<Utc>::default());
-    Ok(Value::new_time_with_class(time_info, class_id))
+    Value::new_time_with_class(time_info, class_id)
 }
 
 ///

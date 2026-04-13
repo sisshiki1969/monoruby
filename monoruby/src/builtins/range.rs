@@ -7,7 +7,7 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Range", RANGE_CLASS, ObjTy::RANGE);
     globals.define_builtin_class_func_with(RANGE_CLASS, "new", range_new, 2, 3, false);
-    globals.define_builtin_class_func(RANGE_CLASS, "allocate", allocate, 0);
+    globals.store[RANGE_CLASS].set_alloc_func(range_alloc_func);
     globals.define_builtin_inline_func(RANGE_CLASS, "begin", begin, Box::new(range_begin), 0);
     globals.define_builtin_func_with(RANGE_CLASS, "first", first, 0, 1, false);
     globals.define_builtin_inline_func(RANGE_CLASS, "end", end, Box::new(range_end), 0);
@@ -45,16 +45,9 @@ fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     globals.generate_range(lfp.arg(0), lfp.arg(1), exclude_end)
 }
 
-/// ### Range.allocate
-#[monoruby_builtin]
-fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
-    Ok(Value::range_with_class(
-        Value::nil(),
-        Value::nil(),
-        false,
-        class_id,
-    ))
+/// Allocator for `Range` and its subclasses.
+pub(crate) extern "C" fn range_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
+    Value::range_with_class(Value::nil(), Value::nil(), false, class_id)
 }
 
 ///

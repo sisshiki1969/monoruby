@@ -316,6 +316,29 @@ pub struct ClassInfo {
     /// None for modules.
     ///
     instance_ty: Option<ObjTy>,
+    ///
+    /// C-level allocator (CRuby's `rb_alloc_func_t` equivalent). Invoked by
+    /// `Class#new` and the default `Class#allocate` to produce an
+    /// uninitialized instance. Inherited from the superclass at class
+    /// definition time; `None` means "allocator undefined" (raise TypeError).
+    ///
+    alloc_func: Option<AllocFunc>,
+}
+
+/// C-level allocator function pointer. Given a class id (and a globals
+/// handle, used by a few allocators that need e.g. the class name), returns
+/// a freshly allocated (uninitialized) instance of that class.
+///
+/// The second parameter is always passed (matching a fixed calling
+/// convention so the JIT can install a single call sequence), but many
+/// allocators ignore it.
+pub type AllocFunc = extern "C" fn(ClassId, &mut crate::Globals) -> Value;
+
+/// Default allocator used by `BasicObject` and inherited by any class that
+/// does not override it. Produces a plain `RValue::Object` tagged with the
+/// given class id.
+pub extern "C" fn default_alloc_func(class_id: ClassId, _: &mut crate::Globals) -> Value {
+    Value::object(class_id)
 }
 
 impl alloc::GC<RValue> for ClassInfo {
@@ -350,6 +373,7 @@ impl ClassInfo {
             class_variables: None,
             ivar_names: indexmap::IndexMap::default(),
             instance_ty: None,
+            alloc_func: None,
         }
     }
 
@@ -365,7 +389,20 @@ impl ClassInfo {
             class_variables: None,
             ivar_names: self.ivar_names.clone(),
             instance_ty: self.instance_ty,
+            alloc_func: self.alloc_func,
         }
+    }
+
+    pub(crate) fn alloc_func(&self) -> Option<AllocFunc> {
+        self.alloc_func
+    }
+
+    pub(crate) fn set_alloc_func(&mut self, f: AllocFunc) {
+        self.alloc_func = Some(f);
+    }
+
+    pub(crate) fn clear_alloc_func(&mut self) {
+        self.alloc_func = None;
     }
 
     pub(crate) fn get_module(&self) -> Module {
@@ -886,10 +923,21 @@ impl ClassInfoTable {
         } else {
             Value::class_empty(class_id, superclass)
         };
+        // Inherit `alloc_func` from the superclass. Modules have no alloc_func.
+        // Builtin classes that need a custom allocator will overwrite this
+        // later via `ClassInfo::set_alloc_func`.
+        let inherited_alloc = if is_module {
+            None
+        } else if let Some(sc) = superclass {
+            self[sc.id()].alloc_func
+        } else {
+            None
+        };
         self[class_id].object = Some(class_obj.as_class());
         self[class_id].name = name.map(|id| id.to_string());
         self[class_id].parent = parent;
         self[class_id].instance_ty = instance_ty;
+        self[class_id].alloc_func = inherited_alloc;
         if let Some(name) = name {
             self.set_constant(parent.unwrap(), name, class_obj);
         }
@@ -972,6 +1020,7 @@ impl ClassInfoTable {
         let constants = orig.constants.clone();
         let constant_locations = orig.constant_locations.clone();
         let class_variables = orig.class_variables.clone();
+        let alloc_func = orig.alloc_func;
 
         let new_id = self.add_class();
         let class_obj = if is_module {
@@ -988,6 +1037,7 @@ impl ClassInfoTable {
         info.constants = constants;
         info.constant_locations = constant_locations;
         info.class_variables = class_variables;
+        info.alloc_func = alloc_func;
 
         // Duplicate the singleton class too: CRuby's Module#initialize_copy
         // clones the singleton class so `def self.foo` and `extend`-ed modules
@@ -1038,7 +1088,12 @@ impl ClassInfoTable {
         } else {
             None
         };
-        self.define_class_inner(name, superclass, parent, false, Some(ObjTy::OBJECT))
+        let m = self.define_class_inner(name, superclass, parent, false, Some(ObjTy::OBJECT));
+        // Struct itself has no alloc_func, so a class created with `<` Struct
+        // would inherit None. `Struct.new(...)` however produces instantiable
+        // classes — install the default allocator explicitly.
+        self[m.id()].set_alloc_func(default_alloc_func);
+        m
     }
 
     fn define_class_inner(

@@ -6,7 +6,7 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("NilClass", NIL_CLASS, None);
-    globals.define_builtin_class_func(NIL_CLASS, "allocate", super::class::undef_allocate, 0);
+    globals.store[NIL_CLASS].clear_alloc_func();
 }
 
 #[cfg(test)]

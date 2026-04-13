@@ -200,6 +200,12 @@ impl Globals {
             ObjTy::OBJECT,
         );
         object_class.set_superclass(Some(basic_object));
+        // Seed the root of the alloc_func inheritance chain with the default
+        // generic allocator. `generate_class_obj` copies this field from the
+        // superclass at class-creation time, so every subsequent class picks
+        // it up automatically unless a builtin overrides it.
+        globals.store[BASIC_OBJECT_CLASS].set_alloc_func(default_alloc_func);
+        globals.store[OBJECT_CLASS].set_alloc_func(default_alloc_func);
         globals.set_constant(
             BASIC_OBJECT_CLASS,
             IdentId::get_id("BasicObject"),

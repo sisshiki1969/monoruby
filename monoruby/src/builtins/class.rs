@@ -4,25 +4,26 @@ use super::*;
 // Class class
 //
 
+/// Returns the JIT inliner for `Class#new`. The inliner reads the receiver
+/// class's `alloc_func` from `ClassInfo` at JIT-compile time, embeds the raw
+/// function pointer into the generated code, and calls it directly (ABI:
+/// `extern "C" fn(ClassId, &mut Globals) -> Value`), matching the slow-path
+/// `call_alloc_func` helper.
 pub fn gen_class_new_object() -> Box<InlineGen> {
-    Box::new(gen_class_new(allocate_object))
+    Box::new(gen_class_new_inline)
 }
 
 pub(super) fn init(globals: &mut Globals) {
+    // Class.allocate / Class#new on a class object both produce a fresh,
+    // uninitialized Class. Install that as Class's alloc_func so it flows
+    // through the unified `Class#allocate` path.
+    globals.store[CLASS_CLASS].set_alloc_func(class_alloc_func);
     // class methods
     globals.define_builtin_class_func_with(CLASS_CLASS, "new", class_new, 0, 1, false);
-    // Override allocate on Class's singleton class so that Class.allocate
-    // creates a proper (uninitialized) Class object instead of a plain object.
-    globals.define_builtin_class_func(CLASS_CLASS, "allocate", class_allocate, 0);
 
-    // instance methods
-    globals.define_builtin_inline_func(
-        CLASS_CLASS,
-        "allocate",
-        allocate,
-        Box::new(inline_allocate),
-        0,
-    );
+    // instance methods. The default `Class#allocate` consults the receiver
+    // class's `ClassInfo.alloc_func`, raising TypeError when None.
+    globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
     globals.define_builtin_inline_funcs_with_kw(
         CLASS_CLASS,
         "new",
@@ -88,20 +89,11 @@ fn class_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     Ok(obj)
 }
 
-/// ### Class.allocate
-/// - allocate -> Class
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
-#[monoruby_builtin]
-fn class_allocate(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    lfp.expect_no_block()?;
-    let obj = globals.store.allocate_uninit_class();
-    Ok(obj.as_val())
+/// Allocator installed on `Class` itself. Produces a new uninitialized
+/// `Class` value (no name, no superclass), used by both `Class.allocate`
+/// and the bootstrap path of `Class.new`.
+pub(crate) extern "C" fn class_alloc_func(_class_id: ClassId, globals: &mut Globals) -> Value {
+    globals.store.allocate_uninit_class().as_val()
 }
 
 /// Validate a value used as a superclass for `Class.new`/`Class#initialize`.
@@ -189,48 +181,12 @@ pub(super) fn new(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    // CRuby's Class#new uses an internal allocator (a C-level alloc_func) and
-    // does NOT dispatch to a user-defined `allocate` method. monoruby has no
-    // separate alloc_func table, so emulate this by looking up `allocate`
-    // starting at the class's metaclass superclass — skipping any user
-    // override on the receiver class's own singleton class.
+    // Class#new dispatches to the receiver's C-level allocator (`alloc_func`),
+    // bypassing any user-defined Ruby `def self.allocate`. Matches CRuby's
+    // `rb_class_alloc` semantics.
     let self_val = lfp.self_val();
-    let meta_id = self_val.class();
-    // First check the normal lookup. If the resolved `allocate` is a native
-    // (built-in) function we use it as-is — that covers registered class-level
-    // allocators such as Hash's allocate or Complex's `undef_allocate`.
-    // If it's a Ruby-level override (`def self.allocate`) on the receiver
-    // class's own metaclass, skip past it and search from the metaclass's
-    // superclass so we use the inherited built-in allocator, matching CRuby's
-    // C-level alloc_func behavior.
-    let alloc_fid = globals
-        .store
-        .check_method_for_class(meta_id, IdentId::ALLOCATE)
-        .and_then(|e| e.func_id());
-    let alloc_fid = match alloc_fid {
-        Some(fid)
-            if !matches!(
-                globals.store[fid].kind,
-                crate::globals::FuncKind::ISeq(_) | crate::globals::FuncKind::Proc(_)
-            ) =>
-        {
-            Some(fid)
-        }
-        _ => {
-            let meta = globals.store[meta_id].get_module();
-            let search_from = meta.superclass().map(|m| m.id()).unwrap_or(meta_id);
-            globals
-                .store
-                .check_method_for_class(search_from, IdentId::ALLOCATE)
-                .and_then(|e| e.func_id())
-        }
-    };
-    let obj = match alloc_fid {
-        Some(fid) => vm.invoke_func_inner(globals, fid, self_val, &[], None, None)?,
-        None => {
-            vm.invoke_method_inner(globals, IdentId::ALLOCATE, self_val, &[], None, None)?
-        }
-    };
+    let class_id = self_val.as_class_id();
+    let obj = call_alloc_func(globals, class_id)?;
 
     vm.invoke_method_inner(
         globals,
@@ -279,133 +235,36 @@ fn superclass(
 /// ### Class#allocate
 /// - allocate -> object
 ///
+/// Default `allocate` for every class. Looks up `ClassInfo.alloc_func` on
+/// the receiver class and invokes it. Raises TypeError when the class has
+/// no allocator (None).
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
 #[monoruby_builtin]
 fn allocate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    match class_id {
-        TRUE_CLASS | FALSE_CLASS | NIL_CLASS | SYMBOL_CLASS => {
-            return Err(MonorubyErr::typeerr(&format!(
-                "allocator undefined for {}",
-                class_id.get_name(globals)
-            )));
-        }
-        _ => {}
-    }
-    let obj = Value::object(class_id);
-    Ok(obj)
+    call_alloc_func(globals, class_id)
 }
 
-/// allocate that raises "allocator undefined for ClassName".
-/// Used for classes that cannot be instantiated (TrueClass, FalseClass, NilClass, Symbol, Integer, Float).
-#[monoruby_builtin]
-pub(super) fn undef_allocate(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
-    Err(MonorubyErr::typeerr(&format!(
-        "allocator undefined for {}",
-        class_id.get_name(globals)
-    )))
-}
-
-pub(super) fn gen_class_new(
-    f: extern "C" fn(Value) -> Value,
-) -> impl Fn(
-    &mut AbstractState,
-    &mut AsmIr,
-    &JitContext,
-    &Store,
-    CallSiteId,
-    ClassId,
-    Option<ClassId>,
-) -> bool {
-    move |state: &mut AbstractState,
-          ir: &mut AsmIr,
-          _: &JitContext,
-          store: &Store,
-          callid: CallSiteId,
-          _: ClassId,
-          _: Option<ClassId>| {
-        let callsite = &store[callid];
-        if !callsite.is_simple() {
-            return false;
-        }
-        let CallSiteInfo {
-            recv,
-            args,
-            pos_num,
-            dst,
-            ..
-        } = *callsite;
-        state.writeback_acc(ir);
-        state.load(ir, recv, GP::Rdi);
-        state.write_back_recv_and_callargs(ir, callsite);
-        let using_xmm = state.get_using_xmm();
-        let error = ir.new_error(state);
-        ir.xmm_save(using_xmm);
-        ir.inline(move |r#gen, _, _| {
-            let cached_version = r#gen.jit.data_i32(-1);
-            let cached_funcid = r#gen.jit.data_i32(-1);
-            let class_version = r#gen.class_version_label();
-            let slow_path = r#gen.jit.label();
-            let checked = r#gen.jit.label();
-            let initialize = r#gen.jit.label();
-            let exit = r#gen.jit.label();
-            monoasm!( &mut r#gen.jit,
-                movq rax, (f);
-                call rax;
-                movq r15, rax; // r15 <- new instance
-                movl rax, [rip + class_version];
-                cmpl rax, [rip + cached_version];
-                jne  slow_path;
-                movl rax, [rip + cached_funcid];
-            checked:
-                testq rax, rax;
-                jne  initialize;
-            exit:
-                movq rax, r15;
-            );
-
-            r#gen.jit.select_page(1);
-            monoasm!( &mut r#gen.jit,
-            initialize:
-                movq rdi, rbx;
-                movq rsi, r12;
-                movq rdx, rax;
-                movq rcx, r15;
-                lea r8, [r14 - (crate::executor::jitgen::conv(args))];
-                movl r9, (pos_num);
-                // TODO: Currently inline call does not support calling with block or keyword arguments.
-                movq rax, (r#gen.method_invoker2);
-                call rax;
-                testq rax, rax;
-                jne  exit;
-                xorq r15, r15;
-                jmp  exit;
-            slow_path:
-                movq rdi, r12;
-                movq rsi, r15;
-                movq rax, (check_initializer);
-                call rax;
-                movl [rip + cached_funcid], rax;
-                movl rdi, [rip + class_version];
-                movl [rip + cached_version], rdi;
-                jmp  checked;
-            );
-            r#gen.jit.select_page(0);
-        });
-        ir.xmm_restore(using_xmm);
-        ir.handle_error(error);
-        state.def_rax2acc(ir, dst);
-        true
+/// Look up the receiver class's `alloc_func` and invoke it; raise the
+/// standard "allocator undefined" TypeError when None.
+pub(crate) fn call_alloc_func(globals: &mut Globals, class_id: ClassId) -> Result<Value> {
+    match globals.store[class_id].alloc_func() {
+        Some(f) => Ok(f(class_id, globals)),
+        None => Err(MonorubyErr::typeerr(format!(
+            "allocator undefined for {}",
+            class_id.get_name(globals)
+        ))),
     }
 }
 
-fn inline_allocate(
+/// JIT inliner for `Class#new`. Resolves the receiver class's `alloc_func`
+/// at compile time and emits a direct C call, then falls through to the
+/// usual cached-`initialize` dispatch used by the previous implementation.
+///
+/// Bails to the slow path (Rust `new`, which raises `TypeError`) when the
+/// class has no allocator, mirroring `call_alloc_func`.
+pub(super) fn gen_class_new_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
@@ -418,40 +277,91 @@ fn inline_allocate(
     if !callsite.is_simple() {
         return false;
     }
-    let CallSiteInfo { recv, dst, .. } = *callsite;
+    // When `Class#new` is called on a class object, the receiver's class is
+    // that class's singleton (metaclass). Unwrap it to the attached class
+    // so we read the right `alloc_func`.
     let mut self_module = store[self_class].get_module();
     if let Some(origin) = self_module.is_singleton() {
         self_module = origin.as_class();
     }
+    let class_id = self_module.id();
+
+    let alloc_func = match store[class_id].alloc_func() {
+        Some(f) => f,
+        None => return false,
+    };
+
+    let CallSiteInfo {
+        recv,
+        args,
+        pos_num,
+        dst,
+        ..
+    } = *callsite;
+    state.writeback_acc(ir);
     state.load(ir, recv, GP::Rdi);
     state.write_back_recv_and_callargs(ir, callsite);
     let using_xmm = state.get_using_xmm();
+    let error = ir.new_error(state);
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _| {
+        let cached_version = r#gen.jit.data_i32(-1);
+        let cached_funcid = r#gen.jit.data_i32(-1);
+        let class_version = r#gen.class_version_label();
+        let slow_path = r#gen.jit.label();
+        let checked = r#gen.jit.label();
+        let initialize = r#gen.jit.label();
+        let exit = r#gen.jit.label();
         monoasm!( &mut r#gen.jit,
-            movl rsi, (self_module.id().u32());
-            movq rax, (allocate_object2);
+            // alloc_func(class_id, &mut Globals) -> Value
+            movl rdi, (class_id.u32());
+            movq rsi, r12;
+            movq rax, (alloc_func);
             call rax;
+            movq r15, rax; // r15 <- new instance
+            movl rax, [rip + class_version];
+            cmpl rax, [rip + cached_version];
+            jne  slow_path;
+            movl rax, [rip + cached_funcid];
+        checked:
+            testq rax, rax;
+            jne  initialize;
+        exit:
+            movq rax, r15;
         );
+
+        r#gen.jit.select_page(1);
+        monoasm!( &mut r#gen.jit,
+        initialize:
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, rax;
+            movq rcx, r15;
+            lea r8, [r14 - (crate::executor::jitgen::conv(args))];
+            movl r9, (pos_num);
+            // TODO: Currently inline call does not support calling with block or keyword arguments.
+            movq rax, (r#gen.method_invoker2);
+            call rax;
+            testq rax, rax;
+            jne  exit;
+            xorq r15, r15;
+            jmp  exit;
+        slow_path:
+            movq rdi, r12;
+            movq rsi, r15;
+            movq rax, (check_initializer);
+            call rax;
+            movl [rip + cached_funcid], rax;
+            movl rdi, [rip + class_version];
+            movl [rip + cached_version], rdi;
+            jmp  checked;
+        );
+        r#gen.jit.select_page(0);
     });
     ir.xmm_restore(using_xmm);
-    state.def_reg2acc_class(ir, GP::Rax, dst, self_module.id());
+    ir.handle_error(error);
+    state.def_rax2acc(ir, dst);
     true
-}
-
-extern "C" fn allocate_object(class_val: Value) -> Value {
-    let class_id = class_val.as_class_id();
-    Value::object(class_id)
-}
-
-extern "C" fn allocate_object2(class_val: Value, self_class: ClassId) -> Value {
-    let class_id = class_val.as_class_id();
-    debug_assert_eq!(class_id, self_class);
-    //eprintln!(
-    //    "allocate_object: class_id={:?}, self_class={:?}",
-    //    class_id, self_class
-    //);
-    Value::object(self_class)
 }
 
 extern "C" fn check_initializer(globals: &mut Globals, receiver: Value) -> Option<FuncId> {

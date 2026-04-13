@@ -19,7 +19,7 @@ pub(super) fn init(globals: &mut Globals) {
         &["encoding", "capacity"],
         false,
     );
-    globals.define_builtin_class_func(STRING_CLASS, "allocate", allocate, 0);
+    globals.store[STRING_CLASS].set_alloc_func(string_alloc_func);
     globals.define_builtin_class_func(STRING_CLASS, "try_convert", string_try_convert, 1);
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
     globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
@@ -202,11 +202,10 @@ fn string_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     Ok(Value::string(s))
 }
 
-/// ### String.allocate
-#[monoruby_builtin]
-fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
-    Ok(Value::string_with_class("", class_id))
+/// Allocator for `String` and its subclasses. Installed on `STRING_CLASS`'s
+/// `ClassInfo.alloc_func`; invoked by `Class#new` and `Class#allocate`.
+pub(crate) extern "C" fn string_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
+    Value::string_with_class("", class_id)
 }
 
 ///

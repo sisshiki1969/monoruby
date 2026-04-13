@@ -6,7 +6,7 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Method", METHOD_CLASS, ObjTy::METHOD);
-    globals.define_builtin_class_func(METHOD_CLASS, "allocate", super::class::undef_allocate, 0);
+    globals.store[METHOD_CLASS].clear_alloc_func();
     globals.define_builtin_funcs_rest(METHOD_CLASS, "call", &["[]", "==="], call);
     globals.define_builtin_func(METHOD_CLASS, "arity", arity, 0);
     globals.define_builtin_func(METHOD_CLASS, "to_proc", to_proc, 0);
@@ -19,7 +19,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(METHOD_CLASS, "==", &["eql?"], method_eq, 1);
 
     globals.define_builtin_class_under_obj("UnboundMethod", UMETHOD_CLASS, ObjTy::METHOD);
-    globals.define_builtin_class_func(UMETHOD_CLASS, "allocate", super::class::undef_allocate, 0);
+    globals.store[UMETHOD_CLASS].clear_alloc_func();
     globals.define_builtin_func(UMETHOD_CLASS, "arity", uarity, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "bind", bind, 1);
     globals.define_builtin_func(UMETHOD_CLASS, "source_location", usource_location, 0);
