@@ -201,105 +201,111 @@ mod tests {
 
     #[test]
     fn symbol_match() {
-        run_test(r#":hello.match?(/ell/)"#);
-        run_test(r#":hello.match?(/xyz/)"#);
-        run_test(r#":hello.match?(/\A[a-z]+\z/)"#);
+        run_tests(&[
+            r#":hello.match?(/ell/)"#,
+            r#":hello.match?(/xyz/)"#,
+            r#":hello.match?(/\A[a-z]+\z/)"#,
+        ]);
     }
 
     #[test]
     fn symbol_methods() {
-        run_test(r#":hello.upcase"#);
-        run_test(r#":hello.downcase"#);
-        run_test(r#":hello.capitalize"#);
-        run_test(r#":hElLo.swapcase"#);
-        run_test(r#":hello.size"#);
-        run_test(r#":hello.length"#);
-        run_test(r#":hello.empty?"#);
-        run_test(r#":"".empty?"#);
-        run_test(r#":hello.start_with?("he")"#);
-        run_test(r#":hello.end_with?("lo")"#);
-        run_test(r#":hello.succ"#);
-        run_test(r#":hello.next"#);
-        run_test(r#":hello.id2name"#);
-        run_test(r#":hello.name"#);
-        run_test(r#":hello.name.frozen?"#);
-        run_test(r#":hello.intern"#);
-        run_test(r#":hello.to_sym"#);
-        run_test(r#":hello =~ /ell/"#);
-        run_test(r#":hello[1]"#);
-        run_test(r#":hello[1,3]"#);
-        run_test(r#":abc.casecmp(:ABC)"#);
-        run_test(r#":abc.casecmp(:abd)"#);
-        run_test(r#":abc.casecmp?(:ABC)"#);
-        run_test(r#":abc.casecmp("abc")"#);
+        run_tests(&[
+            r#":hello.upcase"#,
+            r#":hello.downcase"#,
+            r#":hello.capitalize"#,
+            r#":hElLo.swapcase"#,
+            r#":hello.size"#,
+            r#":hello.length"#,
+            r#":hello.empty?"#,
+            r#":"".empty?"#,
+            r#":hello.start_with?("he")"#,
+            r#":hello.end_with?("lo")"#,
+            r#":hello.succ"#,
+            r#":hello.next"#,
+            r#":hello.id2name"#,
+            r#":hello.name"#,
+            r#":hello.name.frozen?"#,
+            r#":hello.intern"#,
+            r#":hello.to_sym"#,
+            r#":hello =~ /ell/"#,
+            r#":hello[1]"#,
+            r#":hello[1,3]"#,
+            r#":abc.casecmp(:ABC)"#,
+            r#":abc.casecmp(:abd)"#,
+            r#":abc.casecmp?(:ABC)"#,
+            r#":abc.casecmp("abc")"#,
+        ]);
     }
 
     #[test]
     fn symbol_all_symbols() {
-        run_test(r#"Symbol.all_symbols.is_a?(Array)"#);
-        run_test(r#"Symbol.all_symbols.all? { |s| s.is_a?(Symbol) }"#);
-        run_test(r#"Symbol.all_symbols.include?(:to_s)"#);
+        run_tests(&[
+            r#"Symbol.all_symbols.is_a?(Array)"#,
+            r#"Symbol.all_symbols.all? { |s| s.is_a?(Symbol) }"#,
+            r#"Symbol.all_symbols.include?(:to_s)"#,
+        ]);
     }
 
     #[test]
     fn symbol_to_proc() {
-        run_test(
-            r#"
-        :to_i.to_proc.call("42")
-        "#,
-        );
-        run_test(
-            r#"
-        :to_i.to_proc["ff", 16]
-        "#,
-        );
-        run_test(
-            r#"
-        (1..3).collect(&:to_s)
-        "#,
-        );
+        run_tests(&[
+            r#":to_i.to_proc.call("42")"#,
+            r#":to_i.to_proc["ff", 16]"#,
+            r#"(1..3).collect(&:to_s)"#,
+        ]);
     }
 
     #[test]
     fn symbol_to_s_encoding() {
-        run_test(r#":hello.to_s.encoding.to_s"#);
-        run_test(r#":"日本語".to_s.encoding.to_s"#);
+        run_tests(&[
+            r#":hello.to_s.encoding.to_s"#,
+            r#":"日本語".to_s.encoding.to_s"#,
+        ]);
     }
 
     #[test]
     fn symbol_match_with_matchdata() {
-        run_test(r#":hello.match(/ell/).class"#);
-        run_test(r#":hello.match(/ell/)[0]"#);
-        run_test(r#":hello.match(/xyz/)"#);
+        run_tests(&[
+            r#":hello.match(/ell/).class"#,
+            r#":hello.match(/ell/)[0]"#,
+            r#":hello.match(/xyz/)"#,
+        ]);
     }
 
     #[test]
     fn symbol_to_proc_public_send() {
         // to_proc should use public_send and forward blocks
-        run_test(r#"[1, 2, 3].map(&:to_s)"#);
-        run_test(r#"["a", "b", "c"].map(&:upcase)"#);
+        run_tests(&[
+            r#"[1, 2, 3].map(&:to_s)"#,
+            r#"["a", "b", "c"].map(&:upcase)"#,
+        ]);
     }
 
     #[test]
     fn symbol_comparable() {
         // Comparable methods derived from <=>
-        run_test(r#":abc < :abd"#);
-        run_test(r#":abd > :abc"#);
-        run_test(r#":abc >= :abc"#);
-        run_test(r#":abc <= :abc"#);
-        run_test(r#":bbb.between?(:aaa, :ccc)"#);
-        run_test(r#":aaa.between?(:bbb, :ccc)"#);
-        run_test(r#":ddd.clamp(:bbb, :ccc)"#);
-        run_test(r#":aaa.clamp(:bbb, :ccc)"#);
-        run_test(r#":bbb.clamp(:aaa, :ccc)"#);
+        run_tests(&[
+            r#":abc < :abd"#,
+            r#":abd > :abc"#,
+            r#":abc >= :abc"#,
+            r#":abc <= :abc"#,
+            r#":bbb.between?(:aaa, :ccc)"#,
+            r#":aaa.between?(:bbb, :ccc)"#,
+            r#":ddd.clamp(:bbb, :ccc)"#,
+            r#":aaa.clamp(:bbb, :ccc)"#,
+            r#":bbb.clamp(:aaa, :ccc)"#,
+        ]);
     }
 
     #[test]
     fn symbol_name_identity() {
         // Symbol#name returns the same frozen String object each time
-        run_test(r#":hello.name.equal?(:hello.name)"#);
-        run_test(r#":hello.name.frozen?"#);
-        run_test(r#":world.name.equal?(:world.name)"#);
+        run_tests(&[
+            r#":hello.name.equal?(:hello.name)"#,
+            r#":hello.name.frozen?"#,
+            r#":world.name.equal?(:world.name)"#,
+        ]);
     }
 
     #[test]
@@ -311,123 +317,133 @@ mod tests {
 
     #[test]
     fn symbol_global_var_literal() {
-        // :$name symbol literals
-        run_test(r#":$ruby"#);
-        run_test(r#":$0"#);
-        run_test(r#":$~"#);
-        run_test(r#":$&"#);
-        run_test(r#":$'"#);
-        run_test(r#":$+"#);
-        // :$-w style
-        run_test(r#":$-w"#);
-        // :@name and :@@name
-        run_test(r#":@ruby"#);
-        run_test(r#":@@ruby"#);
+        run_tests(&[
+            // :$name symbol literals
+            r#":$ruby"#,
+            r#":$0"#,
+            r#":$~"#,
+            r#":$&"#,
+            r#":$'"#,
+            r#":$+"#,
+            // :$-w style
+            r#":$-w"#,
+            // :@name and :@@name
+            r#":@ruby"#,
+            r#":@@ruby"#,
+        ]);
     }
 
     #[test]
     fn symbol_binary() {
         // Binary (ASCII-8BIT) string can be converted to symbol and back
-        run_test(r#""\xC3".b.to_sym.to_s.encoding.to_s"#);
-        run_test(r#""\xC3".b.to_sym.to_s == "\xC3".b"#);
-        run_test(r#""\xC3".b.to_sym == "\xC3".b.to_sym"#);
+        run_tests(&[
+            r#""\xC3".b.to_sym.to_s.encoding.to_s"#,
+            r#""\xC3".b.to_sym.to_s == "\xC3".b"#,
+            r#""\xC3".b.to_sym == "\xC3".b.to_sym"#,
+        ]);
         // Binary and UTF-8 symbols with same bytes are distinct
         run_test_no_result_check(r#""\xC3\xA3".to_sym != "\xC3\xA3".b.to_sym"#);
     }
 
     #[test]
     fn symbol_inspect_unquoted() {
-        // Plain identifiers
-        run_test(r#":hello.inspect"#);
-        run_test(r#":Fred.inspect"#);
-        run_test(r#":_abc.inspect"#);
-        run_test(r#":fred?.inspect"#);
-        run_test(r#":fred!.inspect"#);
-        run_test(r#":BAD!.inspect"#);
-        run_test(r#":_BAD!.inspect"#);
-        // Global / ivar / cvar
-        run_test(r#":$ruby.inspect"#);
-        run_test(r#":@ruby.inspect"#);
-        run_test(r#":@@ruby.inspect"#);
-        run_test(r#":$-w.inspect"#);
-        // Special single-char globals
-        run_test(r#":$+.inspect"#);
-        run_test(r#":$~.inspect"#);
-        run_test(r#":$?.inspect"#);
-        run_test(r#":$!.inspect"#);
-        // $digits
-        run_test(r#":$0.inspect"#);
-        run_test(r#":$1234.inspect"#);
-        // Operators
-        run_test(r#":+.inspect"#);
-        run_test(r#":-.inspect"#);
-        run_test(r#":*.inspect"#);
-        run_test(r#":**.inspect"#);
-        run_test(r#":+@.inspect"#);
-        run_test(r#":-@.inspect"#);
-        run_test(r#":<=>.inspect"#);
-        run_test(r#":==.inspect"#);
-        run_test(r#":===.inspect"#);
-        run_test(r#":=~.inspect"#);
-        run_test(r#":[].inspect"#);
-        run_test(r#":[]=.inspect"#);
-        run_test(r#":"<<".inspect"#);
-        run_test(r#":">>".inspect"#);
-        // Non-ASCII letters are valid identifier chars
-        run_test(r#":"ê".inspect"#);
-        run_test(r#":"日本語".inspect"#);
+        run_tests(&[
+            // Plain identifiers
+            r#":hello.inspect"#,
+            r#":Fred.inspect"#,
+            r#":_abc.inspect"#,
+            r#":fred?.inspect"#,
+            r#":fred!.inspect"#,
+            r#":BAD!.inspect"#,
+            r#":_BAD!.inspect"#,
+            // Global / ivar / cvar
+            r#":$ruby.inspect"#,
+            r#":@ruby.inspect"#,
+            r#":@@ruby.inspect"#,
+            r#":$-w.inspect"#,
+            // Special single-char globals
+            r#":$+.inspect"#,
+            r#":$~.inspect"#,
+            r#":$?.inspect"#,
+            r#":$!.inspect"#,
+            // $digits
+            r#":$0.inspect"#,
+            r#":$1234.inspect"#,
+            // Operators
+            r#":+.inspect"#,
+            r#":-.inspect"#,
+            r#":*.inspect"#,
+            r#":**.inspect"#,
+            r#":+@.inspect"#,
+            r#":-@.inspect"#,
+            r#":<=>.inspect"#,
+            r#":==.inspect"#,
+            r#":===.inspect"#,
+            r#":=~.inspect"#,
+            r#":[].inspect"#,
+            r#":[]=.inspect"#,
+            r#":"<<".inspect"#,
+            r#":">>".inspect"#,
+            // Non-ASCII letters are valid identifier chars
+            r#":"ê".inspect"#,
+            r#":"日本語".inspect"#,
+        ]);
     }
 
     #[test]
     fn symbol_inspect_quoted() {
-        // $ followed by non-simple content
-        run_test(r#":"$ruby!".inspect"#);
-        run_test(r#":"@ruby!".inspect"#);
-        run_test(r#":"@@ruby!".inspect"#);
-        run_test(r#":"$-ww".inspect"#);
-        run_test(r#":"$".inspect"#);
-        // Non-identifier, non-operator sequences
-        run_test(r#":"foo bar".inspect"#);
-        run_test(r#":"9".inspect"#);
-        run_test(r#":"*foo".inspect"#);
-        run_test(r#":"foo ".inspect"#);
-        run_test(r#":" foo".inspect"#);
-        run_test(r#":" ".inspect"#);
-        run_test(r#":"&&".inspect"#);
-        run_test(r#":"||".inspect"#);
-        run_test(r#":"|||".inspect"#);
-        run_test(r#":"++".inspect"#);
-        run_test(r#":":".inspect"#);
-        run_test(r#":"::".inspect"#);
-        run_test(r#":",".inspect"#);
-        run_test(r#":".".inspect"#);
-        run_test(r#":"..".inspect"#);
-        run_test(r#":"...".inspect"#);
-        run_test(r#":";".inspect"#);
-        run_test(r#":"=".inspect"#);
-        run_test(r#":"=>".inspect"#);
-        run_test(r#":"?".inspect"#);
-        run_test(r#":"@".inspect"#);
-        // Escaped characters inside quoted form
-        run_test(r#":"\"".inspect"#);
-        run_test(r#":"\"\"".inspect"#);
-        run_test(r#":"'".inspect"#);
-        // Binary symbol gets quoted with escape
-        run_test(r#""foo\xA4".b.to_sym.inspect"#);
+        run_tests(&[
+            // $ followed by non-simple content
+            r#":"$ruby!".inspect"#,
+            r#":"@ruby!".inspect"#,
+            r#":"@@ruby!".inspect"#,
+            r#":"$-ww".inspect"#,
+            r#":"$".inspect"#,
+            // Non-identifier, non-operator sequences
+            r#":"foo bar".inspect"#,
+            r#":"9".inspect"#,
+            r#":"*foo".inspect"#,
+            r#":"foo ".inspect"#,
+            r#":" foo".inspect"#,
+            r#":" ".inspect"#,
+            r#":"&&".inspect"#,
+            r#":"||".inspect"#,
+            r#":"|||".inspect"#,
+            r#":"++".inspect"#,
+            r#":":".inspect"#,
+            r#":"::".inspect"#,
+            r#":",".inspect"#,
+            r#":".".inspect"#,
+            r#":"..".inspect"#,
+            r#":"...".inspect"#,
+            r#":";".inspect"#,
+            r#":"=".inspect"#,
+            r#":"=>".inspect"#,
+            r#":"?".inspect"#,
+            r#":"@".inspect"#,
+            // Escaped characters inside quoted form
+            r#":"\"".inspect"#,
+            r#":"\"\"".inspect"#,
+            r#":"'".inspect"#,
+            // Binary symbol gets quoted with escape
+            r#""foo\xA4".b.to_sym.inspect"#,
+        ]);
     }
 
     #[test]
     fn symbol_to_proc_metadata() {
-        // Arity is -2 (one required + rest)
-        run_test(r#":to_i.to_proc.arity"#);
-        // Parameters is [[:req], [:rest]] with no names (native builtin body)
-        run_test(r#":to_i.to_proc.parameters"#);
-        // Source location is nil (not an ISeq)
-        run_test(r#":to_i.to_proc.source_location"#);
-        // It is a lambda
-        run_test(r#":to_i.to_proc.lambda?"#);
-        // It is a Proc
-        run_test(r#":to_i.to_proc.is_a?(Proc)"#);
+        run_tests(&[
+            // Arity is -2 (one required + rest)
+            r#":to_i.to_proc.arity"#,
+            // Parameters is [[:req], [:rest]] with no names (native builtin body)
+            r#":to_i.to_proc.parameters"#,
+            // Source location is nil (not an ISeq)
+            r#":to_i.to_proc.source_location"#,
+            // It is a lambda
+            r#":to_i.to_proc.lambda?"#,
+            // It is a Proc
+            r#":to_i.to_proc.is_a?(Proc)"#,
+        ]);
     }
 
     #[test]
@@ -454,21 +470,21 @@ mod tests {
 
     #[test]
     fn symbol_to_s_chilled_basics() {
-        // Symbol#to_s returns a mutable string (chilled, not frozen).
-        run_test(r#":hello.to_s.frozen?"#);
-        // dup clears the chilled bit so mutation is silent.
-        run_test(r#"s = :hello.to_s.dup; s << "X"; s"#);
-        // Each call returns a fresh string instance.
-        run_test(r#":hello.to_s.equal?(:hello.to_s)"#);
-        // Mutation succeeds (warning or not) and the string changes.
-        run_test(
+        run_tests(&[
+            // Symbol#to_s returns a mutable string (chilled, not frozen).
+            r#":hello.to_s.frozen?"#,
+            // dup clears the chilled bit so mutation is silent.
+            r#"s = :hello.to_s.dup; s << "X"; s"#,
+            // Each call returns a fresh string instance.
+            r#":hello.to_s.equal?(:hello.to_s)"#,
+            // Mutation succeeds (warning or not) and the string changes.
             r#"
             Warning[:deprecated] = false
             s = :bad!.to_s
             s.upcase!
             s
             "#,
-        );
+        ]);
     }
 
     #[test]

@@ -4699,44 +4699,43 @@ mod tests {
 
     #[test]
     fn with() {
-        run_test(r##""string".start_with?("str")"##);
-        run_test(r##""string".start_with?("ing")"##);
-        run_test(r##""string".start_with?("jng", "hng", "ing")"##);
-        run_test_error(r##""string".start_with?("jng", 3, "ing")"##);
-        // Regexp argument
-        run_test(r##""string".start_with?(/str/)"##);
-        run_test(r##""string".start_with?(/ing/)"##);
-        run_test(r##""hello".delete_prefix("hel")"##);
-        run_test(r##""hello".delete_prefix("her")"##);
-        run_test(r##"s = "hello"; [s.delete_prefix!("hel"), s]"##);
-        run_test(r##"s = "hello"; [s.delete_prefix!("her"), s]"##);
-        run_test(r##""string".end_with?("str")"##);
-        run_test(r##""string".end_with?("ing")"##);
-        run_test(r##""string".end_with?("jng", "hng", "ing")"##);
-        run_test_error(r##""string".end_with?("jng", 3, "ing")"##);
-        // end_with? UTF-8 character boundary check
-        // monoruby assigns BINARY encoding to \xNN literals (CRuby keeps UTF-8),
-        // so results differ. Use run_test_no_result_check.
-        run_test_no_result_check(r#""\xC3\xA9".end_with?("\xA9")"#);
-        run_test_no_result_check(r#""\xe3\x81\x82".end_with?("\x82")"#);
-        // Explicit UTF-8 string with force_encoding: boundary check works
-        run_test(r#""\xC3\xA9".force_encoding("UTF-8").end_with?("\xA9".force_encoding("UTF-8"))"#);
-        // start_with? UTF-8 character boundary check
-        run_test_no_result_check(r#""\xC3\xA9".start_with?("\xC3")"#);
-        run_test(
+        run_tests(&[
+            r##""string".start_with?("str")"##,
+            r##""string".start_with?("ing")"##,
+            r##""string".start_with?("jng", "hng", "ing")"##,
+            // Regexp argument
+            r##""string".start_with?(/str/)"##,
+            r##""string".start_with?(/ing/)"##,
+            r##""hello".delete_prefix("hel")"##,
+            r##""hello".delete_prefix("her")"##,
+            r##"s = "hello"; [s.delete_prefix!("hel"), s]"##,
+            r##"s = "hello"; [s.delete_prefix!("her"), s]"##,
+            r##""string".end_with?("str")"##,
+            r##""string".end_with?("ing")"##,
+            r##""string".end_with?("jng", "hng", "ing")"##,
+            // Explicit UTF-8 string with force_encoding: boundary check works
+            r#""\xC3\xA9".force_encoding("UTF-8").end_with?("\xA9".force_encoding("UTF-8"))"#,
             r#""\xC3\xA9".force_encoding("UTF-8").start_with?("\xC3".force_encoding("UTF-8"))"#,
-        );
-        // start_with? with Regexp sets/clears $~
-        run_test(r#""test-123".start_with?(/test/); $~[0]"#);
-        run_test(r#""test-123".start_with?(/xxx/); $~"#);
+            // start_with? with Regexp sets/clears $~
+            r#""test-123".start_with?(/test/); $~[0]"#,
+            r#""test-123".start_with?(/xxx/); $~"#,
+            // Binary string start_with?/end_with?
+            r#""\xC3".b.start_with?("\xC3".b)"#,
+            r#""\xC3".b.end_with?("\xC3".b)"#,
+            r##""string".include?("str")"##,
+            r##""string".include?("ing")"##,
+            r##""string".include?("ingi")"##,
+            // start_with? UTF-8 character boundary check
+            r#""\xC3\xA9".start_with?("\xC3")"#,
+            // end_with? UTF-8 character boundary check
+            r#""\xC3\xA9".end_with?("\xA9")"#,
+            r#""\xe3\x81\x82".end_with?("\x82")"#,
+        ]);
+
+        run_test_error(r##""string".start_with?("jng", 3, "ing")"##);
+        run_test_error(r##""string".end_with?("jng", 3, "ing")"##);
         // end_with? with Regexp raises TypeError
         run_test_error(r#""hello".end_with?(/lo/)"#);
-        // Binary string start_with?/end_with?
-        run_test(r#""\xC3".b.start_with?("\xC3".b)"#);
-        run_test(r#""\xC3".b.end_with?("\xC3".b)"#);
-        run_test(r##""string".include?("str")"##);
-        run_test(r##""string".include?("ing")"##);
-        run_test(r##""string".include?("ingi")"##);
     }
 
     #[test]

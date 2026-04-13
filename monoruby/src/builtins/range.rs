@@ -1132,66 +1132,64 @@ mod tests {
         }
         run_tests(&test);
 
-        // Beginless ranges (nil..end)
-        run_test(r#"(nil..5).include?(3)"#);
-        run_test(r#"(nil..5).include?(5)"#);
-        run_test(r#"(nil..5).include?(6)"#);
-        run_test(r#"(nil...5).include?(5)"#);
-        run_test(r#"(nil..5.0).include?(3.0)"#);
-        run_test(r#"(nil..5).include?(:a)"#);
-        // exclude-end beginless
-        run_test(r#"(nil...5).include?(4)"#);
-        run_test(r#"(nil...5.0).include?(5.0)"#);
-        // beginless with float endpoint and integer value
-        run_test(r#"(nil..5.0).include?(3)"#);
-        run_test(r#"(nil..5.0).include?(5)"#);
-        // beginless via ===
-        run_test(r#"(nil..5) === 3"#);
-        run_test(r#"(nil..5) === 6"#);
-        run_test(r#"(nil...5) === 5"#);
-
-        // Endless ranges (beg..nil)
-        run_test(r#"(1..nil).include?(3)"#);
-        run_test(r#"(1..nil).include?(0)"#);
-        run_test(r#"(1.0..nil).include?(3.0)"#);
-        run_test(r#"(1..nil).include?(:a)"#);
-        // endless with float endpoint and integer value
-        run_test(r#"(1.0..nil).include?(2)"#);
-        run_test(r#"(1.0..nil).include?(0)"#);
-        // endless via ===
-        run_test(r#"(1..nil) === 3"#);
-        run_test(r#"(1..nil) === 0"#);
-        run_test(r#"(1.0..nil) === 3.0"#);
-
-        // Both-nil ranges (nil..nil) — numeric values are always included
-        run_test(r#"(nil..nil).include?(0)"#);
-        run_test(r#"(nil..nil).include?(42)"#);
-        run_test(r#"(nil..nil).include?(3.14)"#);
-        // (nil..nil).include?(:a) raises TypeError in CRuby; monoruby returns false
-        // (nil..nil) === :a  returns true in CRuby (cover? semantics); monoruby returns false
-        // These divergences are not tested here.
-        run_test(r#"(nil..nil) === 0"#);
-
-        // String ranges
-        run_test(r#"("a".."z").include?("a")"#);
-        run_test(r#"("a".."z").include?("m")"#);
-        run_test(r#"("a".."z").include?("z")"#);
-        run_test(r#"("a"..."z").include?("z")"#);
-        run_test(r#"("a".."z").include?("A")"#);
-        run_test(r#"("a".."z").include?(1)"#);
-        // string ranges via ===
-        run_test(r#"("a".."z") === "a""#);
-        run_test(r#"("a".."z") === "m""#);
-        run_test(r#"("a".."z") === "z""#);
-        run_test(r#"("a"..."z") === "z""#);
-        run_test(r#"("a".."z") === 1"#);
-
-        // member? is an alias for include?
-        run_test(r#"(1..5).member?(3)"#);
-        run_test(r#"(1..5).member?(6)"#);
-        run_test(r#"("a".."z").member?("m")"#);
-        run_test(r#"(nil..5).member?(3)"#);
-        run_test(r#"(1..nil).member?(3)"#);
+        run_tests(&[
+            // Beginless ranges (nil..end)
+            r#"(nil..5).include?(3)"#,
+            r#"(nil..5).include?(5)"#,
+            r#"(nil..5).include?(6)"#,
+            r#"(nil...5).include?(5)"#,
+            r#"(nil..5.0).include?(3.0)"#,
+            r#"(nil..5).include?(:a)"#,
+            // exclude-end beginless
+            r#"(nil...5).include?(4)"#,
+            r#"(nil...5.0).include?(5.0)"#,
+            // beginless with float endpoint and integer value
+            r#"(nil..5.0).include?(3)"#,
+            r#"(nil..5.0).include?(5)"#,
+            // beginless via ===
+            r#"(nil..5) === 3"#,
+            r#"(nil..5) === 6"#,
+            r#"(nil...5) === 5"#,
+            // Endless ranges (beg..nil)
+            r#"(1..nil).include?(3)"#,
+            r#"(1..nil).include?(0)"#,
+            r#"(1.0..nil).include?(3.0)"#,
+            r#"(1..nil).include?(:a)"#,
+            // endless with float endpoint and integer value
+            r#"(1.0..nil).include?(2)"#,
+            r#"(1.0..nil).include?(0)"#,
+            // endless via ===
+            r#"(1..nil) === 3"#,
+            r#"(1..nil) === 0"#,
+            r#"(1.0..nil) === 3.0"#,
+            // Both-nil ranges (nil..nil) — numeric values are always included
+            r#"(nil..nil).include?(0)"#,
+            r#"(nil..nil).include?(42)"#,
+            r#"(nil..nil).include?(3.14)"#,
+            // (nil..nil).include?(:a) raises TypeError in CRuby; monoruby returns false
+            // (nil..nil) === :a  returns true in CRuby (cover? semantics); monoruby returns false
+            // These divergences are not tested here.
+            r#"(nil..nil) === 0"#,
+            // String ranges
+            r#"("a".."z").include?("a")"#,
+            r#"("a".."z").include?("m")"#,
+            r#"("a".."z").include?("z")"#,
+            r#"("a"..."z").include?("z")"#,
+            r#"("a".."z").include?("A")"#,
+            r#"("a".."z").include?(1)"#,
+            // string ranges via ===
+            r#"("a".."z") === "a""#,
+            r#"("a".."z") === "m""#,
+            r#"("a".."z") === "z""#,
+            r#"("a"..."z") === "z""#,
+            r#"("a".."z") === 1"#,
+            // member? is an alias for include?
+            r#"(1..5).member?(3)"#,
+            r#"(1..5).member?(6)"#,
+            r#"("a".."z").member?("m")"#,
+            r#"(nil..5).member?(3)"#,
+            r#"(1..nil).member?(3)"#,
+        ]);
     }
 
     /// Test that beginless/endless ranges with non-numeric, non-nil endpoints raise TypeError.
