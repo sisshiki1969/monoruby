@@ -5911,6 +5911,21 @@ mod tests {
     }
 
     #[test]
+    fn string_hash() {
+        // Hash values differ between monoruby and CRuby, so assert the
+        // Object#hash contract (equal content -> equal hash) instead.
+        run_tests(&[
+            r#""hello".hash == "hello".hash"#,
+            r#""b".hash == "b".hash"#,
+            r#"s1 = "hello"; s2 = "hel" + "lo"; s1.hash == s2.hash"#,
+            r#""".hash == "".hash"#,
+            r#""café".hash == "café".hash"#,
+            r#""a".hash == "b".hash"#,
+            r#""hello".hash.is_a?(Integer)"#,
+        ]);
+    }
+
+    #[test]
     fn string_inspect() {
         run_tests(&[
             // ASCII
