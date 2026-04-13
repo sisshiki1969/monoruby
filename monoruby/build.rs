@@ -13,9 +13,9 @@ fn main() {
         (PathBuf::from("gem"), lib_dir.clone()),
     ];
 
-    for (src, _) in &sources {
-        println!("cargo:rerun-if-changed={}", src.display());
-    }
+    //for (src, _) in &sources {
+    //    println!("cargo:rerun-if-changed={}", src.display());
+    //}
 
     if !lib_path.exists() {
         fs::create_dir(&lib_path).unwrap();

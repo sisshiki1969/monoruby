@@ -38,12 +38,7 @@ pub(crate) fn init(globals: &mut Globals) {
 
 /// ### Regexp.allocate
 #[monoruby_builtin]
-fn allocate(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let regexp = RegexpInner::with_option("", 0)?;
     Ok(Value::regexp_with_class(regexp, class_id))
@@ -58,7 +53,11 @@ fn allocate(
 #[monoruby_builtin]
 fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.arg(0);
-    let string = arg0.coerce_to_string(vm, globals)?;
+    let string = if let Some(re) = arg0.is_regex() {
+        re.tos()
+    } else {
+        arg0.coerce_to_string(vm, globals)?
+    };
     let option = if let Some(option) = lfp.try_arg(1) {
         if let Some(option) = option.try_fixnum() {
             option as i32 as u32
@@ -89,7 +88,12 @@ fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/escape.html]
 #[monoruby_builtin]
-fn regexp_escape(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn regexp_escape(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let string = arg0.coerce_to_str(vm, globals)?;
     let val = Value::string(RegexpInner::escape(&string));
@@ -102,7 +106,12 @@ fn regexp_escape(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/union.html]
 #[monoruby_builtin]
-fn regexp_union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn regexp_union(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let mut rest = lfp.arg(0).as_array();
     let mut v = vec![];
     if rest.len() == 1
@@ -133,7 +142,12 @@ fn regexp_union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/last_match.html]
 #[monoruby_builtin]
-fn regexp_last_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn regexp_last_match(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
         let nth = arg0.coerce_to_int_i64(vm, globals)?;
         Ok(vm.get_special_matches(nth).unwrap_or_default())
@@ -164,7 +178,12 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/=3d=7e.html]
 #[monoruby_builtin]
-fn regexp_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn regexp_match(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     if lfp.arg(0).is_nil() {
         vm.clear_capture_special_variables();
         return Ok(Value::nil());
@@ -261,7 +280,10 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let regex = lfp.self_val().as_regexp();
     let heystack = lfp.arg(0).expect_symbol_or_string(globals)?.to_string();
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
-        match conv_index(pos.coerce_to_int_i64(vm, globals)?, heystack.chars().count()) {
+        match conv_index(
+            pos.coerce_to_int_i64(vm, globals)?,
+            heystack.chars().count(),
+        ) {
             Some(pos) => pos,
             None => return Ok(Value::bool(false)),
         }
@@ -493,5 +515,4 @@ mod tests {
         run_test(r##"/(.).(.)/.match("foobar", 3).captures"##);
         run_test(r##"/(.).(.)/.match("foobar", -3).captures"##);
     }
-
 }
