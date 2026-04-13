@@ -142,4 +142,27 @@ mod test {
         .unwrap();
         eprintln!("{:?}", res)
     }
+
+    /// Regression test for issue #316: regex literals with unescaped `{`/`}`
+    /// in contexts Onigmo accepts (inside `[...]` or as literal braces inside
+    /// groups) must parse successfully.
+    #[test]
+    fn regex_brace_in_char_class() {
+        use crate::parser::*;
+        let sources = [
+            r#"p /a(\[|: {)[\]}]b/"#,
+            r#"p /can't modify frozen Set: (#<)?Set(\[|: {)[\]}]>?/"#,
+            r#"p /[{}]/"#,
+            r#"p /a{1,2}/"#,
+            r#"p /({)/"#,
+            r#"p /(})/"#,
+        ];
+        for src in sources {
+            Parser::<DummyContext>::parse_program(
+                src.to_string(),
+                std::path::PathBuf::from("path"),
+            )
+            .unwrap_or_else(|e| panic!("failed to parse {src:?}: {e:?}"));
+        }
+    }
 }
