@@ -1235,17 +1235,6 @@ impl<'a> Lexer<'a> {
                         return Err(self.error_unexpected(self.pos - 1));
                     };
                 }
-                '{' if char_class.last() != Some(&ParenKind::Bracket) => {
-                    char_class.push(ParenKind::Brace);
-                    body.push('{');
-                }
-                '}' if char_class.last() != Some(&ParenKind::Bracket) => {
-                    if let Some(ParenKind::Brace) = char_class.pop() {
-                        body.push('}');
-                    } else {
-                        return Err(self.error_unexpected(self.pos - 1));
-                    };
-                }
                 '\\' => {
                     let ch = self.get()?;
                     match ch {
