@@ -44,10 +44,31 @@ impl std::default::Default for HashDefault {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct HashmapInner {
     default: HashDefault,
     content: HashContent,
+    /// Active iteration count on this hash. Incremented while a block-based
+    /// traversal (each, each_pair, each_key, etc.) is in progress and
+    /// decremented when it finishes. Mutating operations consult this via
+    /// [`Self::check_iter`] and raise `RuntimeError` when non-zero.
+    ///
+    /// Corresponds to CRuby's `RHASH_ITER_LEV`. Wrapped in `Cell` so that
+    /// a traversal holding a shared borrow of the hash (for iteration) can
+    /// still record its presence here.
+    iter_lev: std::cell::Cell<u32>,
+}
+
+impl Clone for HashmapInner {
+    /// Clones the default and content but resets `iter_lev` to 0 — a fresh
+    /// copy is not being iterated, regardless of the original's state.
+    fn clone(&self) -> Self {
+        HashmapInner {
+            default: self.default.clone(),
+            content: self.content.clone(),
+            iter_lev: std::cell::Cell::new(0),
+        }
+    }
 }
 
 impl RubyEql<Executor, Globals, MonorubyErr> for HashmapInner {
@@ -88,6 +109,7 @@ impl HashmapInner {
         HashmapInner {
             default: HashDefault::default(),
             content: HashContent::new(map),
+            iter_lev: std::cell::Cell::new(0),
         }
     }
 
@@ -95,6 +117,7 @@ impl HashmapInner {
         HashmapInner {
             default: HashDefault::Value(default),
             content: HashContent::new(map),
+            iter_lev: std::cell::Cell::new(0),
         }
     }
 
@@ -102,6 +125,7 @@ impl HashmapInner {
         HashmapInner {
             default: HashDefault::Proc(default_proc),
             content: HashContent::new(map),
+            iter_lev: std::cell::Cell::new(0),
         }
     }
 
@@ -127,6 +151,30 @@ impl HashmapInner {
 
     pub fn set_defalut_proc(&mut self, default_proc: Proc) {
         self.default = HashDefault::Proc(default_proc);
+    }
+
+    /// Raise `RuntimeError` if a traversal is currently in progress on
+    /// this hash. Called from mutating entry points that change the set
+    /// of keys (delete, clear, shift, compare_by_identity). Updating the
+    /// value of an already-present key does *not* go through this check —
+    /// matching CRuby, where `h.each { h[existing] = v }` is allowed but
+    /// `h.each { h[new] = v }` or `h.each { h.delete(k) }` raises.
+    pub fn check_iter(&self) -> Result<()> {
+        if self.iter_lev.get() > 0 {
+            Err(MonorubyErr::runtimeerr(
+                "can't modify hash during iteration",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Start a traversal: returns an RAII guard that decrements `iter_lev`
+    /// when dropped. Takes `&self` (not `&mut`) so the hash can be iterated
+    /// concurrently with the guard being alive.
+    pub fn iter_guard(&self) -> IterGuard<'_> {
+        self.iter_lev.set(self.iter_lev.get() + 1);
+        IterGuard { inner: self }
     }
 
     fn id(&self) -> HashId {
@@ -157,10 +205,52 @@ impl HashmapInner {
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<Option<Value>> {
+        // Removing a key during iteration is explicitly allowed — CRuby
+        // behaves the same way (see ruby/spec core/hash/delete_spec.rb
+        // "allows removing a key while iterating").
         Ok(match &mut self.content {
             HashContent::Map(map) => map.shift_remove(&k, vm, globals)?,
             HashContent::IdentMap(map) => map.shift_remove(&IdentKey(k), vm, globals)?,
         })
+    }
+
+    pub fn insert(
+        &mut self,
+        k: Value,
+        v: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        if self.iter_lev.get() > 0 && !self.content.contains_key(k, vm, globals)? {
+            return Err(MonorubyErr::runtimeerr(
+                "can't add a new key into hash during iteration",
+            ));
+        }
+        self.content.insert(k, v, vm, globals)
+    }
+
+    pub fn clear(&mut self) -> Result<()> {
+        self.check_iter()?;
+        self.content.clear();
+        Ok(())
+    }
+
+    pub fn shift(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Option<(Value, Value)>> {
+        self.check_iter()?;
+        self.content.shift(vm, globals)
+    }
+
+    pub fn compare_by_identity(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        self.check_iter()?;
+        self.content.compare_by_identity(vm, globals)
     }
 
     /*pub fn entry_and_modify<F>(&mut self, k: Value, f: F)
@@ -240,6 +330,20 @@ impl HashmapInner {
                 format! {"{{{}}}", result}
             }
         }
+    }
+}
+
+/// RAII guard returned from [`HashmapInner::iter_guard`].
+///
+/// While alive it represents a single layer of active iteration; dropping it
+/// (normal return or unwinding via `Result::Err`) decrements `iter_lev`.
+pub struct IterGuard<'a> {
+    inner: &'a HashmapInner,
+}
+
+impl Drop for IterGuard<'_> {
+    fn drop(&mut self) {
+        self.inner.iter_lev.set(self.inner.iter_lev.get() - 1);
     }
 }
 

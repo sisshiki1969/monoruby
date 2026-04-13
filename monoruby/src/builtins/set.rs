@@ -23,7 +23,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SET_CLASS, "delete?", delete_q, 1);
     globals.define_builtin_func(SET_CLASS, "each", each, 0);
     globals.define_builtin_func(SET_CLASS, "to_a", to_a, 0);
-    // inspect/to_s handled by RValue::hash_inspect (value/rvalue.rs) for cycle detection
+    // inspect/to_s dispatch to RValue::hash_inspect (value/rvalue.rs) via a shared
+    // FuncId so that `Set#to_s` and `Set#inspect` compare equal as Method objects.
+    globals.define_builtin_funcs(SET_CLASS, "inspect", &["to_s"], set_inspect, 0);
     globals.define_builtin_funcs_with_kw(SET_CLASS, "dup", &["clone"], dup, 0, 1, false, &[], false);
     globals.define_builtin_func_rest(SET_CLASS, "merge", merge);
     globals.define_builtin_func(SET_CLASS, "subtract", subtract, 1);
@@ -106,7 +108,43 @@ fn enum_to_vec(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<V
     Ok(ary.iter().copied().collect())
 }
 
+///
+/// ### Set.new
+///
+/// - new(enum = nil) -> Set
+/// - new(enum) {|o| ... } -> Set
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/s/new.html]
+///
+/// Explicit class method so that `Set.new` goes through `Set.allocate`
+/// (producing a Hash-backed instance) and then calls the Ruby-level
+/// `initialize`. Without this override, the default `Class#new` inline
+/// fast path allocates a plain Object instead of a Hash-backed Set.
+#[monoruby_builtin]
+fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+    let obj =
+        vm.invoke_method_inner(globals, IdentId::ALLOCATE, lfp.self_val(), &[], None, None)?;
+    let args: Vec<Value> = match lfp.try_arg(0) {
+        Some(v) => vec![v],
+        None => vec![],
+    };
+    vm.invoke_method_inner(
+        globals,
+        IdentId::INITIALIZE,
+        obj,
+        &args,
+        lfp.block(),
+        None,
+    )?;
+    Ok(obj)
+}
+
+///
 /// ### Set.allocate
+///
+/// - allocate -> Set
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
 #[monoruby_builtin]
 fn allocate(
     _vm: &mut Executor,
@@ -121,43 +159,13 @@ fn allocate(
 ///
 /// ### Set.[]
 ///
-/// - Set[*ary -> Set
+/// - Set[*ary] -> Set
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Set/s/=5b=5d.html]
 #[monoruby_builtin]
 fn set_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     set_from_iter(args.iter().copied(), vm, globals)
-}
-
-///
-/// ### Set.new
-///
-/// - new(enum = nil) -> Set
-/// - new(enum) {|o| block } -> Set
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Set/s/new.html]
-#[monoruby_builtin]
-fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
-    let enum_val = lfp.try_arg(0);
-    match enum_val {
-        Some(val) if !val.is_nil() => {
-            let elems = enum_to_vec(vm, globals, val)?;
-            if let Some(bh) = lfp.block() {
-                let data = vm.get_block_data(globals, bh)?;
-                let mut set = new_empty_set();
-                for elem in elems {
-                    let mapped = vm.invoke_block(globals, &data, &[elem])?;
-                    set.as_hashmap_inner_mut()
-                        .insert(mapped, Value::bool(true), vm, globals)?;
-                }
-                Ok(set)
-            } else {
-                set_from_iter(elems.into_iter(), vm, globals)
-            }
-        }
-        _ => Ok(new_empty_set()),
-    }
 }
 
 ///
@@ -179,11 +187,11 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 }
 
 ///
-/// ### Set#<<
+/// ### Set#add?
 ///
 /// - add?(o) -> self | nil
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/=3c=3c.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/add=3f.html]
 #[monoruby_builtin]
 fn add_q(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let val = lfp.arg(0);
@@ -203,7 +211,7 @@ fn add_q(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// ### Set#===
 ///
-/// - include?(o) -> bool[permalink][rdoc][edit]
+/// - include?(o) -> bool
 /// - member?(o) -> bool
 /// - self === o -> bool
 ///
@@ -251,7 +259,7 @@ fn empty_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
-    self_val.as_hashmap_inner_mut().clear();
+    self_val.as_hashmap_inner_mut().clear()?;
     Ok(self_val)
 }
 
@@ -292,6 +300,10 @@ fn delete_q(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// ### Set#each
 ///
+/// - each {|o| ... } -> self
+/// - each -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/each.html]
 #[monoruby_builtin]
 fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let bh = match lfp.block() {
@@ -302,8 +314,10 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         Some(block) => block,
     };
     let self_val = lfp.self_val();
-    let keys = self_val.as_hashmap_inner().keys();
+    let inner = self_val.as_hashmap_inner();
+    let keys = inner.keys();
     let data = vm.get_block_data(globals, bh)?;
+    let _iter_guard = inner.iter_guard();
     for val in keys {
         vm.invoke_block(globals, &data, &[val])?;
     }
@@ -313,6 +327,9 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
 ///
 /// ### Set#to_a
 ///
+/// - to_a -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/to_a.html]
 #[monoruby_builtin]
 fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let keys = set_keys(lfp.self_val());
@@ -320,15 +337,35 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 }
 
 ///
-/// ### Set#inspect / Set#to_s
+/// ### Set#inspect
 ///
-/// Handled by RValue::hash_inspect (in value/rvalue.rs) which detects
-/// whether the HASH-typed object is a Set or Hash by checking the class ID,
-/// and uses the shared HashSet-based cycle detection from Value::inspect_inner.
+/// - inspect -> String
+/// - to_s -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/inspect.html]
+///
+/// Delegates to the shared `Value::inspect` path (which dispatches to
+/// `RValue::hash_inspect` for HASH-typed values and handles cycle
+/// detection). Registered as an alias pair so the two method names
+/// share a single `FuncId` and compare equal as `Method` objects.
+#[monoruby_builtin]
+fn set_inspect(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let s = lfp.self_val().inspect(&globals.store);
+    Ok(Value::string(s))
+}
 
 ///
-/// ### Set#dup / Set#clone
+/// ### Set#dup
 ///
+/// - dup -> Set
+/// - clone -> Set
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/dup.html]
 #[monoruby_builtin]
 fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let keys = set_keys(lfp.self_val());
@@ -338,6 +375,9 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// ### Set#merge
 ///
+/// - merge(*enums) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/merge.html]
 #[monoruby_builtin]
 fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_val = lfp.self_val();
@@ -357,6 +397,9 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// ### Set#subtract
 ///
+/// - subtract(enum) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/subtract.html]
 #[monoruby_builtin]
 fn subtract(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_val = lfp.self_val();
@@ -371,12 +414,15 @@ fn subtract(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// ### Set#replace
 ///
+/// - replace(enum) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/replace.html]
 #[monoruby_builtin]
 fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
     let elems = enum_to_vec(vm, globals, lfp.arg(0))?;
-    self_val.as_hashmap_inner_mut().clear();
+    self_val.as_hashmap_inner_mut().clear()?;
     for elem in elems {
         self_val
             .as_hashmap_inner_mut()
@@ -386,8 +432,12 @@ fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 }
 
 ///
-/// ### Set#& / Set#intersection
+/// ### Set#&
 ///
+/// - self & enum -> Set
+/// - intersection(enum) -> Set
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/=26.html]
 #[monoruby_builtin]
 fn intersection(
     vm: &mut Executor,
@@ -418,8 +468,13 @@ fn intersection(
 }
 
 ///
-/// ### Set#| / Set#+ / Set#union
+/// ### Set#|
 ///
+/// - self | enum -> Set
+/// - self + enum -> Set
+/// - union(enum) -> Set
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/=7c.html]
 #[monoruby_builtin]
 fn union_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_keys = set_keys(lfp.self_val());
@@ -439,8 +494,12 @@ fn union_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 }
 
 ///
-/// ### Set#- / Set#difference
+/// ### Set#-
 ///
+/// - self - enum -> Set
+/// - difference(enum) -> Set
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/=2d.html]
 #[monoruby_builtin]
 fn difference(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
@@ -467,6 +526,9 @@ fn difference(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 ///
 /// ### Set#^
 ///
+/// - self ^ enum -> Set
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/=5e.html]
 #[monoruby_builtin]
 fn symmetric_difference(
     vm: &mut Executor,
@@ -505,6 +567,10 @@ fn symmetric_difference(
 ///
 /// ### Set#==
 ///
+/// - self == set -> bool
+/// - eql?(set) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/=3d=3d.html]
 #[monoruby_builtin]
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let other = lfp.arg(0);
@@ -528,8 +594,12 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 }
 
 ///
-/// ### Set#subset? / Set#<=
+/// ### Set#subset?
 ///
+/// - subset?(set) -> bool
+/// - self <= set -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/=3c=3d.html]
 #[monoruby_builtin]
 fn subset_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
@@ -551,8 +621,12 @@ fn subset_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 }
 
 ///
-/// ### Set#superset? / Set#>=
+/// ### Set#superset?
 ///
+/// - superset?(set) -> bool
+/// - self >= set -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/=3e=3d.html]
 #[monoruby_builtin]
 fn superset_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
@@ -574,8 +648,12 @@ fn superset_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 }
 
 ///
-/// ### Set#proper_subset? / Set#<
+/// ### Set#proper_subset?
 ///
+/// - proper_subset?(set) -> bool
+/// - self < set -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/proper_subset=3f.html]
 #[monoruby_builtin]
 fn proper_subset_(
     vm: &mut Executor,
@@ -602,8 +680,12 @@ fn proper_subset_(
 }
 
 ///
-/// ### Set#proper_superset? / Set#>
+/// ### Set#proper_superset?
 ///
+/// - proper_superset?(set) -> bool
+/// - self > set -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/proper_superset=3f.html]
 #[monoruby_builtin]
 fn proper_superset_(
     vm: &mut Executor,
@@ -632,6 +714,9 @@ fn proper_superset_(
 ///
 /// ### Set#<=>
 ///
+/// - self <=> set -> -1 | 0 | 1 | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/=3c=3d=3e.html]
 #[monoruby_builtin]
 fn spaceship(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let other = lfp.arg(0);
@@ -672,6 +757,9 @@ fn spaceship(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// ### Set#disjoint?
 ///
+/// - disjoint?(enum) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/disjoint=3f.html]
 #[monoruby_builtin]
 fn disjoint_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
@@ -711,6 +799,9 @@ fn disjoint_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// ### Set#intersect?
 ///
+/// - intersect?(enum) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/intersect=3f.html]
 #[monoruby_builtin]
 fn intersect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
@@ -750,6 +841,10 @@ fn intersect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 ///
 /// ### Set#delete_if
 ///
+/// - delete_if {|o| ... } -> self
+/// - delete_if -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/delete_if.html]
 #[monoruby_builtin]
 fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let bh = match lfp.block() {
@@ -779,6 +874,10 @@ fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
 ///
 /// ### Set#keep_if
 ///
+/// - keep_if {|o| ... } -> self
+/// - keep_if -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/keep_if.html]
 #[monoruby_builtin]
 fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let bh = match lfp.block() {
@@ -806,8 +905,14 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 }
 
 ///
-/// ### Set#select! / Set#filter!
+/// ### Set#select!
 ///
+/// - select! {|o| ... } -> self | nil
+/// - filter! {|o| ... } -> self | nil
+/// - select! -> Enumerator
+/// - filter! -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/select=21.html]
 #[monoruby_builtin]
 fn select_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let bh = match lfp.block() {
@@ -840,6 +945,10 @@ fn select_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 ///
 /// ### Set#reject!
 ///
+/// - reject! {|o| ... } -> self | nil
+/// - reject! -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/reject=21.html]
 #[monoruby_builtin]
 fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let bh = match lfp.block() {
@@ -870,8 +979,14 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 }
 
 ///
-/// ### Set#collect! / Set#map!
+/// ### Set#collect!
 ///
+/// - collect! {|o| ... } -> self
+/// - map! {|o| ... } -> self
+/// - collect! -> Enumerator
+/// - map! -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/collect=21.html]
 #[monoruby_builtin]
 fn collect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let bh = match lfp.block() {
@@ -890,7 +1005,7 @@ fn collect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
         new_elems.push(mapped);
     }
     let mut self_val = lfp.self_val();
-    self_val.as_hashmap_inner_mut().clear();
+    self_val.as_hashmap_inner_mut().clear()?;
     for elem in new_elems {
         self_val
             .as_hashmap_inner_mut()
@@ -902,6 +1017,9 @@ fn collect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
 ///
 /// ### Set#flatten
 ///
+/// - flatten -> Set
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/flatten.html]
 #[monoruby_builtin]
 fn flatten(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
@@ -941,6 +1059,9 @@ fn flatten_set_into(
 ///
 /// ### Set#flatten!
 ///
+/// - flatten! -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/flatten=21.html]
 #[monoruby_builtin]
 fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
@@ -956,7 +1077,7 @@ fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     flatten_set_into(&mut result, self_val, vm, globals, &mut seen)?;
     // Replace self's contents
     let mut self_val = lfp.self_val();
-    self_val.as_hashmap_inner_mut().clear();
+    self_val.as_hashmap_inner_mut().clear()?;
     let new_keys = set_keys(result);
     for k in new_keys {
         self_val
@@ -966,7 +1087,12 @@ fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     Ok(self_val)
 }
 
+///
 /// ### Set#join
+///
+/// - join(sep = "") -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/join.html]
 #[monoruby_builtin]
 fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let sep = if let Some(s) = lfp.try_arg(0) {
@@ -994,7 +1120,13 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     Ok(Value::string(result))
 }
 
+///
 /// ### Set#classify
+///
+/// - classify {|o| ... } -> Hash
+/// - classify -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/classify.html]
 #[monoruby_builtin]
 fn classify(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let bh = match lfp.block() {
@@ -1022,7 +1154,14 @@ fn classify(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
     Ok(result_hash)
 }
 
+///
 /// ### Set#divide
+///
+/// - divide {|o| ... } -> Set
+/// - divide {|o1, o2| ... } -> Set
+/// - divide -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/divide.html]
 #[monoruby_builtin]
 fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let bh = match lfp.block() {
@@ -1041,40 +1180,87 @@ fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     } else {
         1
     };
-    if arity == 2 || arity == -1 || arity < -2 || arity > 2 {
-        // Arity-2 mode: union-find based divide
-        // Group elements where block(a, b) returns true
+    if arity == 2 {
+        // Arity-2 mode: group elements by strongly-connected components
+        // of the directed graph with edge i->j iff block(keys[i], keys[j])
+        // returns truthy. Block is called for every ordered pair (i, j)
+        // where i != j.
         let n = keys.len();
-        let mut parent: Vec<usize> = (0..n).collect();
-        fn find(parent: &mut Vec<usize>, i: usize) -> usize {
-            if parent[i] != i {
-                parent[i] = find(parent, parent[i]);
-            }
-            parent[i]
-        }
-        fn union(parent: &mut Vec<usize>, i: usize, j: usize) {
-            let ri = find(parent, i);
-            let rj = find(parent, j);
-            if ri != rj {
-                parent[ri] = rj;
-            }
-        }
+        let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
         for i in 0..n {
-            for j in (i + 1)..n {
+            for j in 0..n {
+                if i == j {
+                    continue;
+                }
                 let result = vm.invoke_block(globals, &data, &[keys[i], keys[j]])?;
                 if result.as_bool() {
-                    union(&mut parent, i, j);
+                    adj[i].push(j);
                 }
             }
         }
-        // Group by root
-        let mut groups: std::collections::HashMap<usize, Vec<Value>> = std::collections::HashMap::new();
-        for i in 0..n {
-            let root = find(&mut parent, i);
-            groups.entry(root).or_default().push(keys[i]);
+        // Tarjan's SCC
+        let mut index_counter: usize = 0;
+        let mut stack: Vec<usize> = Vec::new();
+        let mut on_stack: Vec<bool> = vec![false; n];
+        let mut idx: Vec<Option<usize>> = vec![None; n];
+        let mut low: Vec<usize> = vec![0; n];
+        let mut sccs: Vec<Vec<usize>> = Vec::new();
+        // Iterative Tarjan to avoid stack overflow on large sets.
+        enum Step { Enter(usize), Resume(usize, usize) }
+        for start in 0..n {
+            if idx[start].is_some() {
+                continue;
+            }
+            let mut work: Vec<Step> = vec![Step::Enter(start)];
+            while let Some(step) = work.pop() {
+                match step {
+                    Step::Enter(v) => {
+                        idx[v] = Some(index_counter);
+                        low[v] = index_counter;
+                        index_counter += 1;
+                        stack.push(v);
+                        on_stack[v] = true;
+                        work.push(Step::Resume(v, 0));
+                    }
+                    Step::Resume(v, i) => {
+                        if i < adj[v].len() {
+                            let w = adj[v][i];
+                            work.push(Step::Resume(v, i + 1));
+                            if idx[w].is_none() {
+                                work.push(Step::Enter(w));
+                            } else if on_stack[w] {
+                                if let Some(wi) = idx[w] {
+                                    if wi < low[v] {
+                                        low[v] = wi;
+                                    }
+                                }
+                            }
+                        } else {
+                            // Propagate low from children that have returned.
+                            for &w in &adj[v] {
+                                if on_stack[w] && low[w] < low[v] {
+                                    low[v] = low[w];
+                                }
+                            }
+                            if Some(low[v]) == idx[v] {
+                                let mut comp = Vec::new();
+                                while let Some(w) = stack.pop() {
+                                    on_stack[w] = false;
+                                    comp.push(w);
+                                    if w == v {
+                                        break;
+                                    }
+                                }
+                                sccs.push(comp);
+                            }
+                        }
+                    }
+                }
+            }
         }
         let mut result_set = new_empty_set();
-        for (_root, elems) in groups {
+        for comp in sccs {
+            let elems: Vec<Value> = comp.into_iter().map(|i| keys[i]).collect();
             let subset = set_from_iter(elems.into_iter(), vm, globals)?;
             result_set.as_hashmap_inner_mut().insert(subset, Value::bool(true), vm, globals)?;
         }
@@ -1102,7 +1288,12 @@ fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     }
 }
 
+///
 /// ### Set#reset
+///
+/// - reset -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/reset.html]
 #[monoruby_builtin]
 fn reset(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // In CRuby, reset rebuilds the internal hash. For us, it's a no-op since
@@ -1110,25 +1301,33 @@ fn reset(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(lfp.self_val())
 }
 
+///
 /// ### Set#hash
+///
+/// - hash -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/hash.html]
 #[monoruby_builtin]
 fn set_hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use crate::RubyHash;
     use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+    use std::hash::Hasher;
+    // Hash every element through `Value::ruby_hash`, which is content-based
+    // (e.g. strings hash by bytes, not by object identity). Combine with
+    // XOR so the result is order-independent — two Sets with the same
+    // members always hash equal regardless of insertion order.
+    //
+    // `DefaultHasher::new()` uses fixed keys, so the result is stable
+    // across processes with the same element hashes.
     let keys = set_keys(lfp.self_val());
-    // XOR all element hashes for order-independence
-    let mut combined: u64 = 0;
-    let hash_id = IdentId::get_id("hash");
+    // Seed mixed in to distinguish an empty Set from other empty
+    // aggregates that XOR-combine to 0.
+    let mut combined: u64 = 0x5e7_5e7_5e7_5e7;
     for k in keys {
-        let h = vm.invoke_method_inner(globals, hash_id, k, &[], None, None)?;
-        if let Some(i) = h.try_fixnum() {
-            combined ^= i as u64;
-        }
+        let mut hasher = DefaultHasher::new();
+        k.ruby_hash(&mut hasher, vm, globals)?;
+        combined ^= hasher.finish();
     }
-    // Mix with Set class identity
-    let mut hasher = DefaultHasher::new();
-    "Set".hash(&mut hasher);
-    combined ^= hasher.finish();
     Ok(Value::integer(combined as i64))
 }
 
@@ -1402,5 +1601,121 @@ mod tests {
         run_test("Set[1, 2, 3].freeze.select!.class.to_s");
         run_test("Set[1, 2, 3].freeze.reject!.class.to_s");
         run_test("Set[1, 2, 3].freeze.collect!.class.to_s");
+    }
+
+    #[test]
+    fn set_divide_arity2() {
+        // Symmetric relation: elements within abs-difference of 1 group together.
+        run_test(
+            "Set[1, 3, 4, 6, 9, 10, 11].divide {|x, y| (x - y).abs == 1 }\
+             .map {|s| s.to_a.sort }.sort",
+        );
+        // SCC with a symmetric relation: (a+b).even? on {1,2,3,4} groups
+        // odd {1,3} and even {2,4}.
+        run_test(
+            "Set[1, 2, 3, 4].divide {|a, b| (a + b).even? }\
+             .map {|s| s.to_a.sort }.sort",
+        );
+    }
+
+    #[test]
+    fn set_initialize_private() {
+        run_test("Set.private_instance_methods(false).include?(:initialize)");
+    }
+
+    #[test]
+    fn set_initialize_uses_each_entry_when_available() {
+        // If the argument responds to #each_entry, Set.new uses it
+        // (rather than #each or #to_a).
+        run_test_with_prelude(
+            "$trace = []; s = Set.new(E.new([10, 20, 30])); [$trace.sort, s.to_a.sort]",
+            r#"
+            class E
+              def initialize(a); @a = a; end
+              def each_entry; @a.each { |x| $trace << x; yield x }; end
+              def each; raise "should not be called"; end
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_initialize_falls_back_to_each() {
+        run_test_with_prelude(
+            "s = Set.new(E.new([1, 2, 2, 3])); s.to_a.sort",
+            r#"
+            class E
+              def initialize(a); @a = a; end
+              def each; @a.each { |x| yield x }; end
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_initialize_non_enumerable_raises() {
+        run_test_error("Set.new(42)");
+    }
+
+    #[test]
+    fn set_inspect_to_s_alias_equal_method() {
+        // Both names resolve to the same underlying Method.
+        run_test("Set.instance_method(:to_s) == Set.instance_method(:inspect)");
+        run_test("Set[].method(:to_s) == Set[].method(:inspect)");
+    }
+
+    #[test]
+    fn set_case_equality_alias() {
+        // Set#=== is an alias for #include? / #member?.
+        run_test("Set.instance_method(:===) == Set.instance_method(:include?)");
+        run_test("Set.instance_method(:===) == Set.instance_method(:member?)");
+    }
+
+    #[test]
+    fn set_iteration_mutation_raises() {
+        // Adding a new element during iteration should raise RuntimeError.
+        run_test_error(
+            "s = Set[:a, :b, :c]; s.each { |x| s << :new if x == :a }",
+        );
+        // merge during iteration raises.
+        run_test_error(
+            "s = Set[1]; s.each { s.merge([99]) }",
+        );
+        // replace during iteration raises (clear inside).
+        run_test_error(
+            "s = Set[1, 2]; s.each { s.replace([9]) }",
+        );
+    }
+
+    #[test]
+    fn set_iteration_delete_allowed() {
+        // Removing an element during iteration is permitted (CRuby-compatible).
+        run_test(
+            "s = Set[1, 2, 3]; s.each { |x| s.delete(x) if x == 2 }; s.to_a.sort",
+        );
+    }
+
+    #[test]
+    fn set_hash_static() {
+        // Same content → same hash, regardless of insertion order.
+        run_test("Set[].hash == Set[].hash");
+        run_test("Set[1, 2, 3].hash == Set[1, 2, 3].hash");
+        run_test("Set[:a, \"b\", \"c\"].hash == Set[\"c\", \"b\", :a].hash");
+        run_test("Set[].hash != Set[1, 2, 3].hash");
+    }
+
+    #[test]
+    fn set_enumerator_forwards_block_result() {
+        // select!/reject! without a block return an Enumerator whose #each
+        // drives the backing method; the user block's truthiness must reach
+        // the filter logic.
+        run_test(
+            "s = Set[\"one\", \"two\", \"three\"]; \
+             s.select!.each { |x| x.size != 3 }; s.to_a",
+        );
+        run_test(
+            "s = Set[\"one\", \"two\", \"three\"]; \
+             s.reject!.each { |x| x.size == 3 }; s.to_a",
+        );
     }
 }

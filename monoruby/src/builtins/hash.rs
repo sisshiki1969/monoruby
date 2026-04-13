@@ -578,7 +578,7 @@ extern "C" fn hashindex(
 #[monoruby_builtin]
 fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
-    lfp.self_val().as_hash().clear();
+    lfp.self_val().as_hash().clear()?;
     Ok(lfp.self_val())
 }
 
@@ -705,6 +705,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     };
     let hash = lfp.self_val().as_hash();
     let data = vm.get_block_data(globals, bh)?;
+    let _iter_guard = hash.iter_guard();
     for (k, v) in hash.iter() {
         vm.invoke_block(globals, &data, &[Value::array2(k, v)])?;
     }
@@ -733,6 +734,7 @@ fn each_value(
         Some(block) => block,
     };
     let hash = lfp.self_val().as_hash();
+    let _iter_guard = hash.iter_guard();
     let iter = hash.iter().map(|(_, v)| v);
     vm.invoke_block_iter1(globals, bh, iter)?;
     Ok(lfp.self_val())
@@ -755,6 +757,7 @@ fn each_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
         Some(block) => block,
     };
     let hash = lfp.self_val().as_hash();
+    let _iter_guard = hash.iter_guard();
     let iter = hash.iter().map(|(k, _)| k);
     vm.invoke_block_iter1(globals, bh, iter)?;
     Ok(lfp.self_val())
@@ -809,9 +812,14 @@ fn select_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     };
     let data = vm.get_block_data(globals, bh)?;
     let mut remove = vec![];
-    for (k, v) in lfp.self_val().as_hash().iter() {
-        if !vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
-            remove.push(k);
+    let self_val = lfp.self_val();
+    let hash = self_val.as_hash();
+    {
+        let _iter_guard = hash.iter_guard();
+        for (k, v) in hash.iter() {
+            if !vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+                remove.push(k);
+            }
         }
     }
     let changed = !remove.is_empty();
@@ -945,9 +953,14 @@ fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
     };
     let data = vm.get_block_data(globals, bh)?;
     let mut remove = vec![];
-    for (k, v) in lfp.self_val().as_hash().iter() {
-        if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
-            remove.push(k);
+    let self_val = lfp.self_val();
+    let hash = self_val.as_hash();
+    {
+        let _iter_guard = hash.iter_guard();
+        for (k, v) in hash.iter() {
+            if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+                remove.push(k);
+            }
         }
     }
     let mut h = lfp.self_val().as_hash();
@@ -976,9 +989,14 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     };
     let data = vm.get_block_data(globals, bh)?;
     let mut remove = vec![];
-    for (k, v) in lfp.self_val().as_hash().iter() {
-        if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
-            remove.push(k);
+    let self_val = lfp.self_val();
+    let hash = self_val.as_hash();
+    {
+        let _iter_guard = hash.iter_guard();
+        for (k, v) in hash.iter() {
+            if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+                remove.push(k);
+            }
         }
     }
     let changed = !remove.is_empty();
@@ -1348,9 +1366,14 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     };
     let data = vm.get_block_data(globals, bh)?;
     let mut remove = vec![];
-    for (k, v) in lfp.self_val().as_hash().iter() {
-        if !vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
-            remove.push(k);
+    let self_val = lfp.self_val();
+    let hash = self_val.as_hash();
+    {
+        let _iter_guard = hash.iter_guard();
+        for (k, v) in hash.iter() {
+            if !vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+                remove.push(k);
+            }
         }
     }
     let mut h = lfp.self_val().as_hash();
@@ -2045,6 +2068,61 @@ mod tests {
         run_test_with_prelude(
             "{a: 1} < o",
             "class C; def to_hash; {a: 1, b: 2}; end; end; o = C.new",
+        );
+    }
+
+    #[test]
+    fn hash_iter_guard_new_key_raises() {
+        // Adding a brand-new key during iteration must raise RuntimeError.
+        run_test_error("h = {a: 1, b: 2}; h.each { h[:c] = 3 }");
+        run_test_error("h = {a: 1}; h.each_key { h[:new] = 0 }");
+        run_test_error("h = {a: 1}; h.each_value { h[:new] = 0 }");
+    }
+
+    #[test]
+    fn hash_iter_guard_existing_key_allowed() {
+        // Updating an already-present key during iteration is allowed,
+        // matching CRuby semantics.
+        run_test("h = {a: 1, b: 2}; h.each { |k, v| h[k] = v * 10 }; h.to_a.sort");
+    }
+
+    #[test]
+    fn hash_iter_guard_delete_allowed() {
+        // Hash#delete during iteration does NOT raise (CRuby-compatible).
+        // Exact visitation order is implementation-defined, so just check
+        // that the call succeeds and returns the pre-delete value.
+        run_test(
+            "h = {a: 1}; \
+             seen = nil; \
+             h.each { |k, v| seen = h.delete(k) }; \
+             [seen, h.empty?]",
+        );
+    }
+
+    #[test]
+    fn hash_iter_guard_clear_raises() {
+        run_test_error("h = {a: 1, b: 2}; h.each { h.clear }");
+    }
+
+    #[test]
+    fn hash_iter_guard_nested_iteration() {
+        // Nested iteration increments iter_lev twice and decrements back to 0;
+        // after all iterations complete, mutation is allowed again.
+        run_test(
+            "h = {a: 1, b: 2}; \
+             h.each { |k1, _| h.each { |k2, _| _ = [k1, k2] } }; \
+             h[:c] = 3; h.keys.sort",
+        );
+    }
+
+    #[test]
+    fn hash_iter_guard_released_after_block_exception() {
+        // If the each block raises, the iter_lev guard is still decremented
+        // (RAII Drop) so subsequent mutations succeed.
+        run_test(
+            "h = {a: 1}; \
+             begin; h.each { raise 'stop' }; rescue; end; \
+             h[:b] = 2; h.keys.sort",
         );
     }
 }

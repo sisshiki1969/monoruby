@@ -207,13 +207,14 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         block_data: &ProcData,
         self_val: Enumerator,
     ) -> Result<Value> {
+        let mut res = Value::nil();
         loop {
-            let v = internal.enum_yield_values(vm, globals, self_val, Value::nil())?;
+            let v = internal.enum_yield_values(vm, globals, self_val, res)?;
             if internal.is_terminated() {
                 return Ok(v);
             }
             let a = v.as_array();
-            vm.invoke_block(globals, block_data, &[a.peel()])?;
+            res = vm.invoke_block(globals, block_data, &[a.peel()])?;
         }
     }
     let self_val: Enumerator = match Enumerator::try_new(lfp.self_val()) {
