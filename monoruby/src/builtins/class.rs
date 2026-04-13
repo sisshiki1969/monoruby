@@ -74,9 +74,6 @@ fn class_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         .as_val();
     let m = globals.store.define_unnamed_class(superclass);
     let obj = m.as_val();
-    if let Some(block) = lfp.block() {
-        vm.module_eval(globals, m, block)?;
-    }
     vm.invoke_method_inner(
         globals,
         IdentId::INHERITED,
@@ -85,6 +82,9 @@ fn class_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         None,
         None,
     )?;
+    if let Some(block) = lfp.block() {
+        vm.module_eval(globals, m, block)?;
+    }
     Ok(obj)
 }
 
@@ -189,8 +189,48 @@ pub(super) fn new(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let obj =
-        vm.invoke_method_inner(globals, IdentId::ALLOCATE, lfp.self_val(), &[], None, None)?;
+    // CRuby's Class#new uses an internal allocator (a C-level alloc_func) and
+    // does NOT dispatch to a user-defined `allocate` method. monoruby has no
+    // separate alloc_func table, so emulate this by looking up `allocate`
+    // starting at the class's metaclass superclass — skipping any user
+    // override on the receiver class's own singleton class.
+    let self_val = lfp.self_val();
+    let meta_id = self_val.class();
+    // First check the normal lookup. If the resolved `allocate` is a native
+    // (built-in) function we use it as-is — that covers registered class-level
+    // allocators such as Hash's allocate or Complex's `undef_allocate`.
+    // If it's a Ruby-level override (`def self.allocate`) on the receiver
+    // class's own metaclass, skip past it and search from the metaclass's
+    // superclass so we use the inherited built-in allocator, matching CRuby's
+    // C-level alloc_func behavior.
+    let alloc_fid = globals
+        .store
+        .check_method_for_class(meta_id, IdentId::ALLOCATE)
+        .and_then(|e| e.func_id());
+    let alloc_fid = match alloc_fid {
+        Some(fid)
+            if !matches!(
+                globals.store[fid].kind,
+                crate::globals::FuncKind::ISeq(_) | crate::globals::FuncKind::Proc(_)
+            ) =>
+        {
+            Some(fid)
+        }
+        _ => {
+            let meta = globals.store[meta_id].get_module();
+            let search_from = meta.superclass().map(|m| m.id()).unwrap_or(meta_id);
+            globals
+                .store
+                .check_method_for_class(search_from, IdentId::ALLOCATE)
+                .and_then(|e| e.func_id())
+        }
+    };
+    let obj = match alloc_fid {
+        Some(fid) => vm.invoke_func_inner(globals, fid, self_val, &[], None, None)?,
+        None => {
+            vm.invoke_method_inner(globals, IdentId::ALLOCATE, self_val, &[], None, None)?
+        }
+    };
 
     vm.invoke_method_inner(
         globals,
@@ -217,14 +257,22 @@ pub(super) fn new(
 #[monoruby_builtin]
 fn superclass(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let class = lfp.self_val().as_class();
     match class.get_real_superclass() {
         Some(class) => Ok(class.into()),
-        None => Ok(Value::nil()),
+        None => {
+            // Distinguish uninitialized classes (from Class.allocate) from BasicObject.
+            // An uninitialized class has neither a name nor a superclass.
+            let info = &globals.store[class.id()];
+            if info.get_name().is_none() && class.superclass().is_none() && class.id() != BASIC_OBJECT_CLASS {
+                return Err(MonorubyErr::typeerr("uninitialized class"));
+            }
+            Ok(Value::nil())
+        }
     }
 }
 
@@ -517,6 +565,128 @@ mod tests {
         Class.new(A)
         $res
         "##,
+        );
+    }
+
+    #[test]
+    fn class_new_block_runs_after_inherited_hook() {
+        // `Class.new(sup) { block }` must fire `inherited` before yielding the block.
+        run_test(
+            r##"
+        $res = []
+        class D
+          def self.inherited(sub)
+            $res << "inherited:#{self}"
+          end
+        end
+        k = Class.new(D) { $res << "block" }
+        $res
+        "##,
+        );
+    }
+
+    #[test]
+    fn class_allocate_superclass_raises() {
+        // Uninitialized class (from Class.allocate) must raise TypeError on #superclass.
+        run_test_error("Class.allocate.superclass");
+        // But BasicObject#superclass must still return nil (not raise).
+        run_test("BasicObject.superclass.inspect");
+    }
+
+    #[test]
+    fn class_new_bypasses_user_allocate() {
+        // User-level `def self.allocate` must NOT be called by Class#new
+        // (CRuby uses an internal C-level allocator).
+        run_test(
+            r#"
+        klass = Class.new do
+          def self.allocate
+            raise "allocate should not be called"
+          end
+        end
+        instance = klass.new
+        [instance.is_a?(klass), instance.class == klass]
+        "#,
+        );
+        // But `klass.allocate` called directly still dispatches to user override.
+        run_test_error(
+            r#"
+        klass = Class.new do
+          def self.allocate
+            raise "boom"
+          end
+        end
+        klass.allocate
+        "#,
+        );
+        // Built-in undef_allocate (e.g. Complex) must still prevent instantiation.
+        run_test_error("Complex.new(1)");
+        run_test_error("Rational.new(1)");
+    }
+
+    #[test]
+    fn class_dup_preserves_singleton_class() {
+        // `def self.foo` on the original must survive `.dup`.
+        run_test(
+            r#"
+        klass = Class.new do
+          def hello; "hello"; end
+          def self.message; "text"; end
+        end
+        d = klass.dup
+        [d.new.hello, d.message]
+        "#,
+        );
+        // `extend`-ed module must remain in the dup's singleton-class ancestor chain.
+        run_test(
+            r#"
+        mod = Module.new do
+          def greet; "hi"; end
+        end
+        klass = Class.new
+        klass.extend(mod)
+        d = klass.dup
+        d.greet
+        "#,
+        );
+        // Superclass singleton methods are still inherited through the dup.
+        run_test(
+            r#"
+        sup = Class.new do
+          def self.message; "text"; end
+          def hello; "hello"; end
+        end
+        klass = Class.new(sup)
+        d = klass.dup
+        [d.new.hello, d.message]
+        "#,
+        );
+    }
+
+    #[test]
+    fn defined_scoped_const_via_self() {
+        // `defined?(self::C)` must resolve the constant against the parent
+        // expression (here: self, the receiver in the inherited hook).
+        run_test(
+            r##"
+        $res = []
+        parent = Class.new do
+          def self.inherited(subclass)
+            $res << defined?(self::C)
+            $res << const_defined?(:C)
+            $res << constants
+          end
+        end
+        class parent::C < parent; end
+        $res
+        "##,
+        );
+        // `defined?` returns nil when the scoped constant is missing.
+        run_test(
+            r#"
+        m = Module.new
+        defined?(m::NOPE).inspect
+        "#,
         );
     }
 

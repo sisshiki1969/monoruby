@@ -512,13 +512,15 @@ impl<'a> BytecodeGen<'a> {
             }
             BytecodeInst::DefinedConst {
                 ret,
+                base,
                 toplevel,
                 prefix,
                 name,
             } => {
                 // 65
                 let op1 = self.slot_id(&ret);
-                let op2 = self.store.new_constsite(None, name, prefix, toplevel);
+                let base = base.map(|base| self.slot_id(&base));
+                let op2 = self.store.new_constsite(base, name, prefix, toplevel);
                 Bytecode::from_u32(enc_www(65, op1.0, 0, 0), op2.0)
             }
             BytecodeInst::DefinedMethod { ret, recv, name } => {

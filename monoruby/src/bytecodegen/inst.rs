@@ -233,6 +233,7 @@ pub(super) enum BytecodeInst {
     },
     DefinedConst {
         ret: BcReg,
+        base: Option<BcReg>,
         toplevel: bool,
         prefix: Vec<IdentId>,
         name: IdentId,

@@ -216,7 +216,7 @@ impl<'a> BytecodeGen<'a> {
             }
             NodeKind::Const {
                 toplevel,
-                parent: _,
+                parent,
                 prefix,
                 name,
             } => {
@@ -225,9 +225,27 @@ impl<'a> BytecodeGen<'a> {
                     .into_iter()
                     .map(IdentId::get_id_from_string)
                     .collect();
+                let base = if let Some(box parent) = parent {
+                    // Evaluate the parent expression; if it raises, defined? yields nil.
+                    let body_start = self.new_label();
+                    let body_end = self.new_label();
+                    self.apply_label(body_start);
+                    let base = self.gen_temp_expr(parent)?;
+                    self.apply_label(body_end);
+                    self.exception_table.push(ExceptionEntry {
+                        range: body_start..body_end,
+                        rescue: Some(nil_label),
+                        ensure: None,
+                        err_reg: None,
+                    });
+                    Some(base)
+                } else {
+                    None
+                };
                 self.emit(
                     BytecodeInst::DefinedConst {
                         ret,
+                        base,
                         toplevel,
                         prefix,
                         name,
