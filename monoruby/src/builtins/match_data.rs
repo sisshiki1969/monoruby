@@ -30,7 +30,17 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(MATCHDATA_CLASS, "deconstruct_keys", deconstruct_keys_md, 1, 1, false);
 }
 
-/// ### MatchData#deconstruct_keys(keys) -> Hash
+///
+/// ### MatchData#deconstruct_keys
+///
+/// - deconstruct_keys(keys) -> Hash
+///
+/// Returns a hash of named captures for pattern matching. With `nil`,
+/// returns every named capture. With an Array of Symbols, CRuby's
+/// all-or-nothing rule applies: if any requested key isn't a named
+/// capture, returns `{}`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/deconstruct_keys.html]
 #[monoruby_builtin]
 fn deconstruct_keys_md(
     vm: &mut Executor,
@@ -85,6 +95,14 @@ fn deconstruct_keys_md(
     Ok(Value::hash(map))
 }
 
+///
+/// ### MatchData#bytebegin
+///
+/// - bytebegin(n) -> Integer | nil
+///
+/// Byte-based offset of the start of the nth match.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/bytebegin.html]
 #[monoruby_builtin]
 fn bytebegin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
@@ -99,6 +117,14 @@ fn bytebegin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     }
 }
 
+///
+/// ### MatchData#byteend
+///
+/// - byteend(n) -> Integer | nil
+///
+/// Byte-based offset just past the end of the nth match.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/byteend.html]
 #[monoruby_builtin]
 fn byteend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
@@ -113,6 +139,14 @@ fn byteend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     }
 }
 
+///
+/// ### MatchData#byteoffset
+///
+/// - byteoffset(n) -> [Integer, Integer] | [nil, nil]
+///
+/// Byte-based `[begin, end]` offsets of the nth match.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/byteoffset.html]
 #[monoruby_builtin]
 fn byteoffset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
@@ -130,11 +164,28 @@ fn byteoffset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     }
 }
 
+///
+/// ### MatchData#size
+///
+/// - size -> Integer
+/// - length -> Integer
+///
+/// Number of captures including the whole match (index 0).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/length.html]
 #[monoruby_builtin]
 fn size(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::integer(lfp.self_val().as_match_data().len() as i64))
 }
 
+///
+/// ### MatchData#regexp
+///
+/// - regexp -> Regexp | nil
+///
+/// Returns the Regexp that produced this MatchData.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/regexp.html]
 #[monoruby_builtin]
 fn regexp_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     match lfp.self_val().as_match_data().regexp() {
@@ -143,11 +194,27 @@ fn regexp_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resul
     }
 }
 
+///
+/// ### MatchData#string
+///
+/// - string -> String
+///
+/// Returns the source string against which the match was performed.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/string.html]
 #[monoruby_builtin]
 fn string_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::string_from_str(lfp.self_val().as_match_data().string()))
 }
 
+///
+/// ### MatchData#pre_match
+///
+/// - pre_match -> String
+///
+/// Returns the portion of the source string before the match.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/pre_match.html]
 #[monoruby_builtin]
 fn pre_match(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
@@ -158,6 +225,14 @@ fn pre_match(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     }
 }
 
+///
+/// ### MatchData#post_match
+///
+/// - post_match -> String
+///
+/// Returns the portion of the source string after the match.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/post_match.html]
 #[monoruby_builtin]
 fn post_match(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
@@ -168,6 +243,14 @@ fn post_match(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     }
 }
 
+///
+/// ### MatchData#offset
+///
+/// - offset(n) -> [Integer, Integer] | [nil, nil]
+///
+/// Character-based `[begin, end]` offsets of the nth match.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/offset.html]
 #[monoruby_builtin]
 fn offset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
@@ -186,6 +269,14 @@ fn offset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
 }
 
+///
+/// ### MatchData#names
+///
+/// - names -> [String]
+///
+/// Returns the names of named captures in the original Regexp.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/names.html]
 #[monoruby_builtin]
 fn names(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
@@ -196,6 +287,14 @@ fn names(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<
     ))
 }
 
+///
+/// ### MatchData#values_at
+///
+/// - values_at(*indices) -> [String | nil]
+///
+/// Returns captures at the given integer indices (nil for out-of-range).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/values_at.html]
 #[monoruby_builtin]
 fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
@@ -223,6 +322,15 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     Ok(Value::array_from_vec(res))
 }
 
+///
+/// ### MatchData#deconstruct
+///
+/// - deconstruct -> [String | nil]
+///
+/// Returns the captures (without the whole-match at index 0) for array
+/// pattern matching.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/deconstruct.html]
 #[monoruby_builtin]
 fn deconstruct(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::array_from_iter(
@@ -232,6 +340,15 @@ fn deconstruct(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     ))
 }
 
+///
+/// ### MatchData#match
+///
+/// - match(n) -> String | nil
+/// - match(name) -> String | nil
+///
+/// Returns the matched string for the given index or named capture.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/match.html]
 #[monoruby_builtin]
 fn match_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
@@ -269,6 +386,16 @@ fn match_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     }
 }
 
+///
+/// ### MatchData#match_length
+///
+/// - match_length(n) -> Integer | nil
+/// - match_length(name) -> Integer | nil
+///
+/// Character length of the nth / named match, or nil if the group
+/// didn't match.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/match_length.html]
 #[monoruby_builtin]
 fn match_length(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();

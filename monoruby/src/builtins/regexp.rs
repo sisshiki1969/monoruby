@@ -35,15 +35,27 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.store[REGEXP_CLASS].set_alloc_func(regexp_alloc_func);
 }
 
+///
 /// ### Regexp#names
+///
 /// - names -> [String]
+///
+/// Returns the names of named captures declared in the pattern.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/names.html]
 #[monoruby_builtin]
 fn names(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let re = self_.as_regexp_inner();
-    let names = re.capture_names().unwrap_or_default();
+    let raw = re.capture_names().unwrap_or_default();
+    let mut unique: Vec<String> = Vec::with_capacity(raw.len());
+    for n in raw {
+        if !unique.iter().any(|u| *u == n) {
+            unique.push(n);
+        }
+    }
     Ok(Value::array_from_iter(
-        names.iter().map(|n| Value::string_from_str(n)),
+        unique.iter().map(|n| Value::string_from_str(n)),
     ))
 }
 
@@ -526,5 +538,19 @@ mod tests {
     fn r#match() {
         run_test(r##"/(.).(.)/.match("foobar", 3).captures"##);
         run_test(r##"/(.).(.)/.match("foobar", -3).captures"##);
+    }
+
+    #[test]
+    fn regexp_names() {
+        // No named captures → empty array
+        run_test(r##"/(foo)(bar)/.names"##);
+        // Single named capture
+        run_test(r##"/(?<a>foo)/.names"##);
+        // Multiple named captures preserve declaration order
+        run_test(r##"/(?<a>foo)(?<b>bar)/.names"##);
+        // Mixed named + unnamed
+        run_test(r##"/(?<a>foo)(bar)(?<c>baz)/.names"##);
+        // Duplicate names appear once each in declaration order
+        run_test(r##"/(?<a>foo)(?<a>bar)/.names"##);
     }
 }

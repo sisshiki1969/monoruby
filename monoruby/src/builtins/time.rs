@@ -68,6 +68,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(TIME_CLASS, "deconstruct_keys", deconstruct_keys_, 1, 1, false);
 }
 
+///
+/// ### Time#deconstruct_keys
+///
+/// - deconstruct_keys(keys) -> Hash
+///
+/// Returns a hash of component keys for pattern matching. With `nil`,
+/// returns all keys (year, month, day, yday, wday, hour, min, sec,
+/// subsec, dst, zone). With an Array, returns only matching Symbol keys.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/deconstruct_keys.html]
 #[monoruby_builtin]
 fn deconstruct_keys_(
     vm: &mut Executor,
@@ -140,40 +150,105 @@ fn wday_val(lfp: &Lfp) -> u32 {
     }
 }
 
+///
+/// ### Time#sunday?
+///
+/// - sunday? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/sunday=3f.html]
 #[monoruby_builtin]
 fn sunday_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(wday_val(&lfp) == 0))
 }
+
+///
+/// ### Time#monday?
+///
+/// - monday? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/monday=3f.html]
 #[monoruby_builtin]
 fn monday_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(wday_val(&lfp) == 1))
 }
+
+///
+/// ### Time#tuesday?
+///
+/// - tuesday? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/tuesday=3f.html]
 #[monoruby_builtin]
 fn tuesday_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(wday_val(&lfp) == 2))
 }
+
+///
+/// ### Time#wednesday?
+///
+/// - wednesday? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/wednesday=3f.html]
 #[monoruby_builtin]
 fn wednesday_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(wday_val(&lfp) == 3))
 }
+
+///
+/// ### Time#thursday?
+///
+/// - thursday? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/thursday=3f.html]
 #[monoruby_builtin]
 fn thursday_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(wday_val(&lfp) == 4))
 }
+
+///
+/// ### Time#friday?
+///
+/// - friday? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/friday=3f.html]
 #[monoruby_builtin]
 fn friday_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(wday_val(&lfp) == 5))
 }
+
+///
+/// ### Time#saturday?
+///
+/// - saturday? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/saturday=3f.html]
 #[monoruby_builtin]
 fn saturday_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(wday_val(&lfp) == 6))
 }
 
+///
+/// ### Time#dst?
+///
+/// - dst? -> bool
+/// - isdst -> bool
+///
+/// Always returns `false`; monoruby does not track DST transitions.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/dst=3f.html]
 #[monoruby_builtin]
 fn dst_q(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(false))
 }
 
+///
+/// ### Time#zone
+///
+/// - zone -> String | nil
+///
+/// Returns "UTC" for UTC times, `nil` for fixed-offset local times.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/zone.html]
 #[monoruby_builtin]
 fn zone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     match lfp.self_val().as_time() {
@@ -182,6 +257,15 @@ fn zone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
 }
 
+///
+/// ### Time#getutc
+///
+/// - getutc -> Time
+/// - getgm -> Time
+///
+/// Returns a new Time representing the same instant in UTC.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/getgm.html]
 #[monoruby_builtin]
 fn getutc(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let new = match lfp.self_val().as_time() {
@@ -191,6 +275,16 @@ fn getutc(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     Ok(Value::new_time(new))
 }
 
+///
+/// ### Time#getlocal
+///
+/// - getlocal -> Time
+/// - getlocal(utc_offset) -> Time
+///
+/// Returns a new Time representing the same instant in the local time
+/// zone (or the given fixed offset in seconds).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/getlocal.html]
 #[monoruby_builtin]
 fn getlocal(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let new = if let Some(arg0) = lfp.try_arg(0) {
@@ -216,6 +310,14 @@ fn getlocal(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     Ok(Value::new_time(new))
 }
 
+///
+/// ### Time#to_a
+///
+/// - to_a -> Array
+///
+/// Returns `[sec, min, hour, day, month, year, wday, yday, isdst, zone]`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/to_a.html]
 #[monoruby_builtin]
 fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let t = lfp.self_val();
@@ -249,6 +351,16 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     ]))
 }
 
+///
+/// ### Time#iso8601
+///
+/// - iso8601 -> String
+/// - xmlschema -> String
+///
+/// Returns an ISO 8601 / XML Schema representation such as
+/// `"2000-01-02T03:04:05+09:00"` or `"2000-01-02T03:04:05Z"`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/iso8601.html]
 #[monoruby_builtin]
 fn iso8601(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let s = match lfp.self_val().as_time() {
@@ -258,6 +370,15 @@ fn iso8601(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     Ok(Value::string(s))
 }
 
+///
+/// ### Time#asctime
+///
+/// - asctime -> String
+/// - ctime -> String
+///
+/// Returns the canonical `strftime("%a %b %e %H:%M:%S %Y")` form.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/asctime.html]
 #[monoruby_builtin]
 fn asctime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let s = match lfp.self_val().as_time() {
@@ -322,16 +443,43 @@ fn apply_subsec(lfp: &Lfp, mode: i8, precision: u32) -> TimeInner {
     }
 }
 
+///
+/// ### Time#floor
+///
+/// - floor(precision = 0) -> Time
+///
+/// Rounds sub-seconds toward minus infinity at the given decimal precision
+/// (0..9). With `precision = 0`, truncates sub-seconds entirely.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/floor.html]
 #[monoruby_builtin]
 fn floor_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let p = precision_arg(vm, globals, &lfp)?;
     Ok(Value::new_time(apply_subsec(&lfp, -1, p)))
 }
+
+///
+/// ### Time#ceil
+///
+/// - ceil(precision = 0) -> Time
+///
+/// Rounds sub-seconds toward plus infinity at the given decimal precision.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/ceil.html]
 #[monoruby_builtin]
 fn ceil_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let p = precision_arg(vm, globals, &lfp)?;
     Ok(Value::new_time(apply_subsec(&lfp, 1, p)))
 }
+
+///
+/// ### Time#round
+///
+/// - round(precision = 0) -> Time
+///
+/// Rounds sub-seconds half-up at the given decimal precision.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/round.html]
 #[monoruby_builtin]
 fn round_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let p = precision_arg(vm, globals, &lfp)?;
