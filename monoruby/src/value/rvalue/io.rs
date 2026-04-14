@@ -1,10 +1,19 @@
 use std::{
     io::{BufRead, IsTerminal, Read, Write},
     os::fd::{AsRawFd, FromRawFd},
+    os::unix::process::ExitStatusExt,
     rc::Rc,
 };
 
 use super::*;
+
+/// Recover the raw POSIX `wait(2)` status word from an `ExitStatus` so that
+/// Ruby-side `Process::Status` can decode exit code vs termination signal
+/// uniformly. `ExitStatus::code()` returns `None` for signal-terminated
+/// children, which loses information; using the raw status preserves it.
+fn encode_wait_status(status: &std::process::ExitStatus) -> i32 {
+    status.into_raw()
+}
 
 #[derive(Debug)]
 pub struct FileDescriptor {
@@ -80,7 +89,10 @@ impl IoInner {
         matches!(self, Self::Closed)
     }
 
-    /// Close the IO. Returns (exit_status, pid) for Popen, None for others.
+    /// Close the IO. Returns `(raw_wait_status, pid)` for Popen, `None`
+    /// otherwise. `raw_wait_status` is the POSIX `wait(2)` status word, so
+    /// callers (and `Process::Status`) can distinguish exit code, signal
+    /// termination, and core-dump state.
     pub fn close(&mut self) -> Result<Option<(i32, u32)>> {
         if self.is_closed() {
             return Err(MonorubyErr::ioerr("closed stream"));
@@ -91,8 +103,11 @@ impl IoInner {
             popen.writer = None;
             popen.child.stdout.take();
             let pid = popen.child.id();
-            let status = popen.child.wait().ok().and_then(|s| s.code()).unwrap_or(0);
-            Some((status, pid))
+            let raw_status = match popen.child.wait() {
+                Ok(s) => encode_wait_status(&s),
+                Err(_) => 0,
+            };
+            Some((raw_status, pid))
         } else {
             None
         };

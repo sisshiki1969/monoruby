@@ -269,20 +269,12 @@ fn do_waitpid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<(i32
     if ret == -1 {
         return Err(MonorubyErr::runtimeerr("No child processes"));
     }
-    let exit_status = if libc::WIFEXITED(status) {
-        libc::WEXITSTATUS(status)
-    } else {
-        -1
-    };
     let status_class = vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
     let status_obj = vm.invoke_method_inner(
         globals,
         IdentId::NEW,
         status_class,
-        &[
-            Value::integer(exit_status as i64),
-            Value::integer(ret as i64),
-        ],
+        &[Value::integer(status as i64), Value::integer(ret as i64)],
         None,
         None,
     )?;
@@ -522,8 +514,8 @@ mod tests {
             r#"
             pid = fork { sleep 5 }
             count = Process.kill("TERM", pid)
-            reaped = Process.wait(pid)
-            [count, reaped == pid]
+            Process.wait(pid)
+            [count, $?.signaled?, $?.termsig, $?.exited?]
             "#,
         );
     }
@@ -533,9 +525,9 @@ mod tests {
         run_test(
             r#"
             pid = fork { sleep 5 }
-            count = Process.kill("SIGKILL", pid)
-            reaped = Process.wait(pid)
-            [count, reaped == pid]
+            Process.kill("SIGKILL", pid)
+            Process.wait(pid)
+            [$?.signaled?, $?.termsig, $?.success?]
             "#,
         );
     }
@@ -545,9 +537,43 @@ mod tests {
         run_test(
             r#"
             pid = fork { sleep 5 }
-            count = Process.kill(9, pid)
-            reaped = Process.wait(pid)
-            [count, reaped == pid]
+            Process.kill(9, pid)
+            Process.wait(pid)
+            [$?.signaled?, $?.termsig]
+            "#,
+        );
+    }
+
+    #[test]
+    fn process_status_exited_normally() {
+        run_test(
+            r#"
+            pid = fork { exit 7 }
+            Process.wait(pid)
+            [$?.exited?, $?.exitstatus, $?.signaled?, $?.termsig, $?.success?]
+            "#,
+        );
+    }
+
+    #[test]
+    fn process_status_success() {
+        run_test(
+            r#"
+            pid = fork { exit 0 }
+            Process.wait(pid)
+            [$?.exited?, $?.exitstatus, $?.success?]
+            "#,
+        );
+    }
+
+    #[test]
+    fn process_status_to_i_round_trips() {
+        run_test(
+            r#"
+            pid = fork { exit 3 }
+            Process.wait(pid)
+            # exited status in high byte, low 7 bits zero -> 3 << 8 = 768
+            $?.to_i
             "#,
         );
     }

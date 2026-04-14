@@ -162,32 +162,65 @@ class Process
     attr_accessor :utime, :stime, :cutime, :cstime
   end
 
+  # Wraps the raw POSIX wait(2) status word (as returned by `waitpid`).
+  # Callers pass the raw int and pid; all predicates decode the bit layout:
+  #   bits 0..6  = termination signal (0 = normal exit)
+  #   bit  7     = core dumped flag
+  #   bits 8..15 = exit code (for normal exit)
+  #   low byte 0x7F = stopped (SIGSTOP etc.)
   class Status
-    attr_reader :exitstatus, :pid
+    attr_reader :pid
 
-    def initialize(exitstatus, pid)
-      @exitstatus = exitstatus
+    def initialize(raw_status, pid)
+      @status = raw_status
       @pid = pid
     end
 
-    def success?
-      @exitstatus == 0
+    def exited?
+      (@status & 0x7F) == 0
     end
 
-    def exited?
-      true
+    def exitstatus
+      exited? ? (@status >> 8) & 0xFF : nil
     end
 
     def signaled?
-      false
+      low = @status & 0x7F
+      low != 0 && low != 0x7F
+    end
+
+    def termsig
+      signaled? ? @status & 0x7F : nil
+    end
+
+    def stopped?
+      (@status & 0xFF) == 0x7F
+    end
+
+    def stopsig
+      stopped? ? (@status >> 8) & 0xFF : nil
+    end
+
+    def coredump?
+      (@status & 0x80) != 0
+    end
+
+    def success?
+      exited? ? exitstatus == 0 : nil
     end
 
     def to_i
-      @exitstatus << 8
+      @status
     end
 
     def inspect
-      "#<Process::Status: pid #{@pid} exit #{@exitstatus}>"
+      if signaled?
+        "#<Process::Status: pid #{@pid} SIG#{termsig}#{coredump? ? ' (core dumped)' : ''}>"
+      elsif stopped?
+        "#<Process::Status: pid #{@pid} stopped SIG#{stopsig}>"
+      else
+        "#<Process::Status: pid #{@pid} exit #{exitstatus}>"
+      end
     end
     alias to_s inspect
 
