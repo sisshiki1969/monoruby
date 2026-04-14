@@ -13,6 +13,242 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MATCHDATA_CLASS, "begin", match_begin, 1);
     globals.define_builtin_func(MATCHDATA_CLASS, "end", match_end, 1);
     globals.define_builtin_func_with(MATCHDATA_CLASS, "named_captures", named_captures, 0, 1, false);
+    globals.define_builtin_funcs(MATCHDATA_CLASS, "size", &["length"], size, 0);
+    globals.define_builtin_func(MATCHDATA_CLASS, "regexp", regexp_, 0);
+    globals.define_builtin_func(MATCHDATA_CLASS, "string", string_, 0);
+    globals.define_builtin_func(MATCHDATA_CLASS, "pre_match", pre_match, 0);
+    globals.define_builtin_func(MATCHDATA_CLASS, "post_match", post_match, 0);
+    globals.define_builtin_func(MATCHDATA_CLASS, "offset", offset, 1);
+    globals.define_builtin_func(MATCHDATA_CLASS, "names", names, 0);
+    globals.define_builtin_func_rest(MATCHDATA_CLASS, "values_at", values_at);
+    globals.define_builtin_func(MATCHDATA_CLASS, "deconstruct", deconstruct, 0);
+    globals.define_builtin_func(MATCHDATA_CLASS, "match", match_, 1);
+    globals.define_builtin_func(MATCHDATA_CLASS, "match_length", match_length, 1);
+    globals.define_builtin_func(MATCHDATA_CLASS, "bytebegin", bytebegin, 1);
+    globals.define_builtin_func(MATCHDATA_CLASS, "byteend", byteend, 1);
+    globals.define_builtin_func(MATCHDATA_CLASS, "byteoffset", byteoffset, 1);
+}
+
+#[monoruby_builtin]
+fn bytebegin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let m = self_.as_match_data();
+    let idx = lfp.arg(0).coerce_to_int_i64(vm, globals)? as usize;
+    if idx >= m.len() {
+        return Err(MonorubyErr::indexerr(format!("index {idx} out of matches")));
+    }
+    match m.pos(idx) {
+        Some((start, _)) => Ok(Value::integer(start as i64)),
+        None => Ok(Value::nil()),
+    }
+}
+
+#[monoruby_builtin]
+fn byteend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let m = self_.as_match_data();
+    let idx = lfp.arg(0).coerce_to_int_i64(vm, globals)? as usize;
+    if idx >= m.len() {
+        return Err(MonorubyErr::indexerr(format!("index {idx} out of matches")));
+    }
+    match m.pos(idx) {
+        Some((_, end)) => Ok(Value::integer(end as i64)),
+        None => Ok(Value::nil()),
+    }
+}
+
+#[monoruby_builtin]
+fn byteoffset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let m = self_.as_match_data();
+    let idx = lfp.arg(0).coerce_to_int_i64(vm, globals)? as usize;
+    if idx >= m.len() {
+        return Err(MonorubyErr::indexerr(format!("index {idx} out of matches")));
+    }
+    match m.pos(idx) {
+        Some((s, e)) => Ok(Value::array_from_vec(vec![
+            Value::integer(s as i64),
+            Value::integer(e as i64),
+        ])),
+        None => Ok(Value::array_from_vec(vec![Value::nil(), Value::nil()])),
+    }
+}
+
+#[monoruby_builtin]
+fn size(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::integer(lfp.self_val().as_match_data().len() as i64))
+}
+
+#[monoruby_builtin]
+fn regexp_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    match lfp.self_val().as_match_data().regexp() {
+        Some(r) => Ok(r.as_val()),
+        None => Ok(Value::nil()),
+    }
+}
+
+#[monoruby_builtin]
+fn string_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::string_from_str(lfp.self_val().as_match_data().string()))
+}
+
+#[monoruby_builtin]
+fn pre_match(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let m = self_.as_match_data();
+    match m.pos(0) {
+        Some((start, _)) => Ok(Value::string_from_str(&m.string()[..start])),
+        None => Ok(Value::string_from_str("")),
+    }
+}
+
+#[monoruby_builtin]
+fn post_match(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let m = self_.as_match_data();
+    match m.pos(0) {
+        Some((_, end)) => Ok(Value::string_from_str(&m.string()[end..])),
+        None => Ok(Value::string_from_str("")),
+    }
+}
+
+#[monoruby_builtin]
+fn offset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let m = self_.as_match_data();
+    let idx = lfp.arg(0).coerce_to_int_i64(vm, globals)? as usize;
+    if idx >= m.len() {
+        return Err(MonorubyErr::indexerr(format!("index {idx} out of matches")));
+    }
+    match m.pos(idx) {
+        Some((start, end)) => {
+            let s = m.string()[..start].chars().count() as i64;
+            let e = m.string()[..end].chars().count() as i64;
+            Ok(Value::array_from_vec(vec![Value::integer(s), Value::integer(e)]))
+        }
+        None => Ok(Value::array_from_vec(vec![Value::nil(), Value::nil()])),
+    }
+}
+
+#[monoruby_builtin]
+fn names(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let m = self_.as_match_data();
+    let names = m.regexp().and_then(|r| r.capture_names().ok()).unwrap_or_default();
+    Ok(Value::array_from_iter(
+        names.iter().map(|n| Value::string_from_str(n)),
+    ))
+}
+
+#[monoruby_builtin]
+fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let m = self_.as_match_data();
+    let args = lfp.arg(0).as_array();
+    let mut res = vec![];
+    for a in args.iter() {
+        let idx = a.coerce_to_int_i64(vm, globals)?;
+        let idx = if idx >= 0 {
+            idx as usize
+        } else {
+            let v = idx + m.len() as i64;
+            if v < 0 {
+                res.push(Value::nil());
+                continue;
+            }
+            v as usize
+        };
+        if idx >= m.len() {
+            res.push(Value::nil());
+        } else {
+            res.push(m.at(idx).map(Value::string_from_str).unwrap_or_default());
+        }
+    }
+    Ok(Value::array_from_vec(res))
+}
+
+#[monoruby_builtin]
+fn deconstruct(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::array_from_iter(
+        lfp.self_val().as_match_data().captures().skip(1).map(|s| {
+            s.map(Value::string_from_str).unwrap_or_default()
+        }),
+    ))
+}
+
+#[monoruby_builtin]
+fn match_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let m = self_.as_match_data();
+    let arg = lfp.arg(0);
+    if let Some(idx) = arg.try_fixnum() {
+        let idx = if idx >= 0 {
+            idx as usize
+        } else {
+            let v = idx + m.len() as i64;
+            if v < 0 { return Ok(Value::nil()); }
+            v as usize
+        };
+        if idx >= m.len() {
+            return Ok(Value::nil());
+        }
+        Ok(m.at(idx).map(Value::string_from_str).unwrap_or_default())
+    } else if let Some(sym) = arg.try_symbol_or_string() {
+        if let Some(i) = m
+            .regexp()
+            .map(|r| r.get_group_members(&format!("{sym}")))
+            .and_then(|g| g.last().copied())
+        {
+            Ok(m.at(i as usize).map(Value::string_from_str).unwrap_or_default())
+        } else {
+            Err(MonorubyErr::indexerr(format!(
+                "undefined group name reference: {sym}"
+            )))
+        }
+    } else {
+        Err(MonorubyErr::typeerr(format!(
+            "no implicit conversion of {} into Integer",
+            arg.get_real_class_name(globals)
+        )))
+    }
+}
+
+#[monoruby_builtin]
+fn match_length(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let m = self_.as_match_data();
+    let arg = lfp.arg(0);
+    let idx = if let Some(idx) = arg.try_fixnum() {
+        if idx >= 0 {
+            idx as usize
+        } else {
+            let v = idx + m.len() as i64;
+            if v < 0 { return Ok(Value::nil()); }
+            v as usize
+        }
+    } else if let Some(sym) = arg.try_symbol_or_string() {
+        if let Some(i) = m
+            .regexp()
+            .map(|r| r.get_group_members(&format!("{sym}")))
+            .and_then(|g| g.last().copied())
+        {
+            i as usize
+        } else {
+            return Err(MonorubyErr::indexerr(format!(
+                "undefined group name reference: {sym}"
+            )));
+        }
+    } else {
+        let _ = (vm, globals);
+        return Err(MonorubyErr::typeerr("no implicit conversion into Integer"));
+    };
+    if idx >= m.len() {
+        return Ok(Value::nil());
+    }
+    match m.at(idx) {
+        Some(s) => Ok(Value::integer(s.chars().count() as i64)),
+        None => Ok(Value::nil()),
+    }
 }
 
 ///
@@ -249,6 +485,71 @@ mod tests {
             [Regexp.last_match.class.to_s, Regexp.last_match[0], Regexp.last_match[1]]
             "#,
         );
+    }
+
+    #[test]
+    fn match_data_size_length() {
+        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").size"##);
+        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").length"##);
+    }
+
+    #[test]
+    fn match_data_regexp_string() {
+        run_test(r##"/(foo)(bar)/.match("foobarbaz").regexp.source"##);
+        run_test(r##"/(foo)(bar)/.match("foobarbaz").string"##);
+    }
+
+    #[test]
+    fn match_data_pre_post_match() {
+        run_test(r##"/bar/.match("foobarbaz").pre_match"##);
+        run_test(r##"/bar/.match("foobarbaz").post_match"##);
+        run_test(r##"/^foo/.match("foobar").pre_match"##);
+        run_test(r##"/baz$/.match("foobaz").post_match"##);
+    }
+
+    #[test]
+    fn match_data_offset() {
+        run_test(r##"/(foo)(bar)/.match("foobar").offset(0)"##);
+        run_test(r##"/(foo)(bar)/.match("foobar").offset(1)"##);
+        run_test(r##"/(foo)(bar)/.match("foobar").offset(2)"##);
+        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobar").offset(3)"##);
+        run_test_error(r##"/(foo)(bar)/.match("foobar").offset(10)"##);
+    }
+
+    #[test]
+    fn match_data_names() {
+        run_test(r##"/(?<a>foo)(?<b>bar)/.match("foobar").names"##);
+        run_test(r##"/(foo)(bar)/.match("foobar").names"##);
+    }
+
+    #[test]
+    fn match_data_values_at() {
+        run_test(r##"/(foo)(bar)(baz)/.match("foobarbaz").values_at(0,1,2,3)"##);
+        run_test(r##"/(foo)(bar)(baz)/.match("foobarbaz").values_at(-1,-2,-100,100)"##);
+    }
+
+    #[test]
+    fn match_data_deconstruct() {
+        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").deconstruct"##);
+    }
+
+    #[test]
+    fn match_data_match_and_match_length() {
+        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").match(0)"##);
+        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").match(3)"##);
+        run_test(r##"/(foo)(bar)/.match("foobar").match_length(0)"##);
+        run_test(r##"/(foo)(bar)/.match("foobar").match_length(1)"##);
+        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobar").match_length(3)"##);
+    }
+
+    #[test]
+    fn match_data_byte_offsets() {
+        run_test(r##"/(foo)(bar)/.match("foobar").bytebegin(0)"##);
+        run_test(r##"/(foo)(bar)/.match("foobar").byteend(1)"##);
+        run_test(r##"/(foo)(bar)/.match("foobar").byteoffset(2)"##);
+        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobar").byteoffset(3)"##);
+        // multibyte: UTF-8, byte offsets differ from char offsets
+        run_test(r##"/い/.match("あぃい").byteoffset(0)"##);
     }
 
     #[test]

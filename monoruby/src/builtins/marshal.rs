@@ -24,7 +24,8 @@ fn dump(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     buf.push(0x04);
     buf.push(0x08);
     let mut symbols: Vec<IdentId> = Vec::new();
-    marshal_dump_value(&mut buf, obj, globals, &mut symbols)?;
+    let mut in_progress: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    marshal_dump_value(&mut buf, obj, globals, &mut symbols, &mut in_progress)?;
     Ok(Value::bytes(buf))
 }
 
@@ -410,13 +411,23 @@ impl<'a> MarshalReader<'a> {
 
         // Look up the class by checking constants on Object
         let class_name_id = IdentId::get_id(&class_name);
-        let obj = match globals
+        let (obj, native_class) = match globals
             .get_constant(OBJECT_CLASS, class_name_id)
             .and_then(|state| state.loaded_value())
         {
             Some(class_val) => {
                 if let Some(module) = class_val.is_class_or_module() {
-                    Value::object(module.id())
+                    // Classes with a custom allocator have internal storage
+                    // (e.g. Range, Time, Exception). Creating a generic
+                    // Value::object for them would violate later invariants
+                    // and cause native panics when methods run. Flag them so
+                    // we can reconstruct or raise.
+                    let uses_default = globals.store[module.id()]
+                        .alloc_func()
+                        .map(|f| f as usize
+                            == crate::default_alloc_func as usize)
+                        .unwrap_or(true);
+                    (Value::object(module.id()), !uses_default)
                 } else {
                     return Err(MonorubyErr::argumenterr(format!(
                         "undefined class/module {}",
@@ -431,14 +442,42 @@ impl<'a> MarshalReader<'a> {
                 )));
             }
         };
-        // Set instance variables
+        // Read instance variables.
+        let mut ivars: Vec<(IdentId, Value)> = Vec::with_capacity(ivar_count);
         for _ in 0..ivar_count {
             let ivar_sym = self.read_symbol()?;
             let val = self.read_value(vm, globals)?;
-            globals.set_ivar(obj, ivar_sym, val)?;
+            ivars.push((ivar_sym, val));
         }
-        self.objects[obj_idx] = obj;
-        Ok(obj)
+        // Built-in classes with internal storage (e.g. Range) can't be
+        // represented as generic 'o' objects. If the class is Range, try to
+        // reconstruct a real Range from its @begin/@end/@excl ivars.
+        let built_obj = if native_class && class_name != "Range" {
+            return Err(MonorubyErr::argumenterr(format!(
+                "can't load instance of {} from generic marshal object",
+                class_name
+            )));
+        } else if class_name == "Range" {
+            let mut begin = Value::nil();
+            let mut end = Value::nil();
+            let mut excl = false;
+            for (name, val) in &ivars {
+                match name.get_name().as_str() {
+                    "begin" => begin = *val,
+                    "end" => end = *val,
+                    "excl" => excl = val.as_bool(),
+                    _ => {}
+                }
+            }
+            Value::range(begin, end, excl)
+        } else {
+            for (name, val) in &ivars {
+                globals.set_ivar(obj, *name, *val)?;
+            }
+            obj
+        };
+        self.objects[obj_idx] = built_obj;
+        Ok(built_obj)
     }
 
     /// Read a user-marshal object ('u' tag).
@@ -711,6 +750,7 @@ fn marshal_dump_value(
     obj: Value,
     globals: &Globals,
     symbols: &mut Vec<IdentId>,
+    in_progress: &mut std::collections::HashSet<u64>,
 ) -> Result<()> {
     match obj.unpack() {
         RV::Nil => {
@@ -756,6 +796,13 @@ fn marshal_dump_value(
             marshal_write_string(buf, s, symbols);
         }
         RV::Object(_rv) => {
+            let obj_id = obj.id();
+            if !in_progress.insert(obj_id) {
+                return Err(MonorubyErr::argumenterr(
+                    "can't dump cyclic reference",
+                ));
+            }
+            let r = (|| -> Result<()> {
             // Check for Array and Hash via ty()
             match obj.ty() {
                 Some(ObjTy::ARRAY) => {
@@ -763,16 +810,33 @@ fn marshal_dump_value(
                     buf.push(b'[');
                     marshal_write_fixnum(buf, inner.len() as i32);
                     for elem in inner.iter() {
-                        marshal_dump_value(buf, *elem, globals, symbols)?;
+                        marshal_dump_value(buf, *elem, globals, symbols, in_progress)?;
                     }
+                }
+                Some(ObjTy::RANGE) => {
+                    // Serialize Range as a generic 'o' object with the
+                    // three ivars CRuby uses: @begin, @end, @excl.
+                    let range = obj.as_range();
+                    let begin = range.start();
+                    let end = range.end();
+                    let excl = range.exclude_end();
+                    buf.push(b'o');
+                    marshal_write_symbol(buf, IdentId::get_id("Range"), symbols);
+                    marshal_write_fixnum(buf, 3);
+                    marshal_write_symbol(buf, IdentId::get_id("begin"), symbols);
+                    marshal_dump_value(buf, begin, globals, symbols, in_progress)?;
+                    marshal_write_symbol(buf, IdentId::get_id("end"), symbols);
+                    marshal_dump_value(buf, end, globals, symbols, in_progress)?;
+                    marshal_write_symbol(buf, IdentId::get_id("excl"), symbols);
+                    buf.push(if excl { b'T' } else { b'F' });
                 }
                 Some(ObjTy::HASH) => {
                     let inner = obj.as_hashmap_inner();
                     buf.push(b'{');
                     marshal_write_fixnum(buf, inner.len() as i32);
                     for (k, v) in inner.iter() {
-                        marshal_dump_value(buf, k, globals, symbols)?;
-                        marshal_dump_value(buf, v, globals, symbols)?;
+                        marshal_dump_value(buf, k, globals, symbols, in_progress)?;
+                        marshal_dump_value(buf, v, globals, symbols, in_progress)?;
                     }
                 }
                 Some(ObjTy::OBJECT) => {
@@ -786,7 +850,7 @@ fn marshal_dump_value(
                     marshal_write_fixnum(buf, ivars.len() as i32);
                     for (name, val) in ivars {
                         marshal_write_symbol(buf, name, symbols);
-                        marshal_dump_value(buf, val, globals, symbols)?;
+                        marshal_dump_value(buf, val, globals, symbols, in_progress)?;
                     }
                 }
                 _ => {
@@ -796,6 +860,10 @@ fn marshal_dump_value(
                     )));
                 }
             }
+            Ok(())
+            })();
+            in_progress.remove(&obj_id);
+            r?;
         }
         _ => {
             return Err(MonorubyErr::typeerr(format!(
@@ -1077,6 +1145,61 @@ mod tests {
     fn marshal_dump_unsupported() {
         // Regexp is not supported
         run_test_error(r#"Marshal.dump(/foo/)"#);
+    }
+
+    #[test]
+    fn marshal_dump_cyclic_array() {
+        // Recursive arrays must raise ArgumentError, not overflow the stack.
+        run_test_error(
+            r#"
+            a = []
+            a << a
+            Marshal.dump(a)
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_dump_cyclic_hash() {
+        run_test_error(
+            r#"
+            h = {}
+            h[:self] = h
+            Marshal.dump(h)
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_range_roundtrip() {
+        // A Range reconstructed from the 'o' format should behave as a
+        // real Range (responds to begin/end/exclude_end?).
+        run_test(
+            r#"
+            r = Marshal.load(Marshal.dump(1..10))
+            [r.class.to_s, r.begin, r.end, r.exclude_end?]
+            "#,
+        );
+        run_test(
+            r#"
+            r = Marshal.load(Marshal.dump(1...10))
+            [r.begin, r.end, r.exclude_end?]
+            "#,
+        );
+    }
+
+    #[test]
+    fn data_define_basic() {
+        // Data.define returns a class with attribute readers for each
+        // given field name.
+        run_test(
+            r#"
+            klass = Data.define(:a, :b)
+            inst = klass.new(1, 2)
+            [inst.a, inst.b]
+            "#,
+        );
+        run_test(r#"Data.define.is_a?(Class)"#);
     }
 
     #[test]

@@ -96,13 +96,12 @@ impl RubyString {
     fn into_string(self) -> Result<String, LexerErr> {
         match self {
             RubyString::Bytes(bytes) => {
-                let s = String::from_utf8(bytes).map_err(|_| {
-                    LexerErr(
-                        ParseErrKind::SyntaxError("Invalid UTF-8.".to_string()),
-                        Loc(0, 0),
-                    )
-                })?;
-                Ok(s)
+                // Lossy decode: non-UTF-8 bytes (e.g. from `\xHH` escapes in
+                // binary-encoded source) survive as U+FFFD so that later
+                // fragments of an interpolated string can still be tokenized.
+                // This diverges from CRuby for binary-encoded strings, but
+                // monoruby's Value::String is UTF-8-only anyway.
+                Ok(String::from_utf8_lossy(&bytes).into_owned())
             }
             RubyString::Utf8(string) => Ok(string),
         }
