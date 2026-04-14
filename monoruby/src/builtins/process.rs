@@ -515,4 +515,77 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn process_kill_with_string() {
+        run_test(
+            r#"
+            pid = fork { sleep 5 }
+            count = Process.kill("TERM", pid)
+            reaped = Process.wait(pid)
+            [count, reaped == pid]
+            "#,
+        );
+    }
+
+    #[test]
+    fn process_kill_with_sig_prefix() {
+        run_test(
+            r#"
+            pid = fork { sleep 5 }
+            count = Process.kill("SIGKILL", pid)
+            reaped = Process.wait(pid)
+            [count, reaped == pid]
+            "#,
+        );
+    }
+
+    #[test]
+    fn process_kill_with_integer() {
+        run_test(
+            r#"
+            pid = fork { sleep 5 }
+            count = Process.kill(9, pid)
+            reaped = Process.wait(pid)
+            [count, reaped == pid]
+            "#,
+        );
+    }
+
+    #[test]
+    fn process_kill_signal_zero_checks_existence() {
+        // Signal 0 does not deliver but returns success if pid exists.
+        run_test(
+            r#"
+            pid = fork { sleep 5 }
+            count = Process.kill(0, pid)
+            Process.kill("KILL", pid)
+            Process.wait(pid)
+            count
+            "#,
+        );
+    }
+
+    #[test]
+    fn process_kill_multiple_pids_returns_count() {
+        run_test(
+            r#"
+            pids = [fork { sleep 5 }, fork { sleep 5 }, fork { sleep 5 }]
+            count = Process.kill("KILL", *pids)
+            pids.each { |p| Process.wait(p) }
+            count
+            "#,
+        );
+    }
+
+    #[test]
+    fn process_kill_unknown_signal() {
+        run_test_error(r#"Process.kill("NOPE", 1)"#);
+    }
+
+    #[test]
+    fn process_kill_missing_pid() {
+        // No pid at all -> ArgumentError.
+        run_test_error(r#"Process.kill("TERM")"#);
+    }
 }

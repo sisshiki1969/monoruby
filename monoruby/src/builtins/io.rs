@@ -1365,4 +1365,88 @@ mod tests {
         run_test_error(r#"IO.new(-1)"#);
         run_test_error(r#"IO.new(9999)"#);
     }
+
+    #[test]
+    fn io_popen_read_stdout() {
+        run_test(
+            r#"
+            io = IO.popen("echo hello")
+            s = io.read
+            io.close
+            s
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_popen_with_block_returns_block_result() {
+        run_test(
+            r#"
+            IO.popen("echo world") { |io| io.read.chomp }
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_popen_block_sets_last_status() {
+        run_test(
+            r#"
+            IO.popen(["true"]) { |io| io.read }
+            [$?.class.to_s, $?.exitstatus]
+            "#,
+        );
+        run_test(
+            r#"
+            IO.popen(["false"]) { |io| io.read }
+            $?.exitstatus
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_popen_write_mode() {
+        run_test_no_result_check(
+            r#"
+            io = IO.popen("cat >/dev/null", "w")
+            io.write("bar")
+            io.close
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_popen_array_command_avoids_shell() {
+        // Array form should pass args directly without going through sh -c.
+        run_test(
+            r#"
+            IO.popen(["echo", "a b"]) { |io| io.read }
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_popen_stderr_to_stdout() {
+        run_test(
+            r#"
+            IO.popen(["sh", "-c", "echo out; echo err 1>&2"], err: [:child, :out]) { |io| io.read }
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_popen_pid_is_integer() {
+        run_test(
+            r#"
+            io = IO.popen("true")
+            pid = io.pid
+            io.close
+            pid.is_a?(Integer)
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_popen_empty_args() {
+        run_test_error(r#"IO.popen"#);
+    }
 }
