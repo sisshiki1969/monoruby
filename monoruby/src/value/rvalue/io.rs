@@ -119,15 +119,15 @@ impl IoInner {
         }))
     }
 
-    //pub(crate) fn popen(mut child: std::process::Child) -> Self {
-    //    let reader = child.stdout.take().map(std::io::BufReader::new);
-    //    let writer = child.stdin.take();
-    //    Self::Popen(Rc::new(PopenDescriptor {
-    //        child,
-    //        reader,
-    //        writer,
-    //    }))
-    //}
+    pub(crate) fn popen(mut child: std::process::Child) -> Self {
+        let reader = child.stdout.take().map(std::io::BufReader::new);
+        let writer = child.stdin.take();
+        Self::Popen(Rc::new(PopenDescriptor {
+            child,
+            reader,
+            writer,
+        }))
+    }
 
     pub(crate) fn pid(&self) -> Option<u32> {
         match self {

@@ -1,5 +1,7 @@
 use super::*;
 use std::fs::File;
+use std::os::unix::process::CommandExt;
+use std::process::{Command, Stdio};
 use std::rc::Rc;
 
 //
@@ -609,134 +611,128 @@ fn io_pipe(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/popen.html]
 #[monoruby_builtin]
-fn io_popen(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
-    return Err(MonorubyErr::runtimeerr("IO.popen is not yet supported"));
-    //let args = lfp.arg(0).as_array();
-    //if args.is_empty() {
-    //    return Err(MonorubyErr::argumenterr(
-    //        "wrong number of arguments (given 0, expected 1+)",
-    //    ));
-    //}
-    //let cmd_val = args[0];
+fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    if args.is_empty() {
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 0, expected 1+)",
+        ));
+    }
+    let cmd_val = args[0];
 
-    //// Build the command from either a String or an Array of strings.
-    //let (mut command, cmd_name) = if let Some(ary) = cmd_val.try_array_ty() {
-    //    let parts: Vec<String> = ary.iter().map(|v| v.to_s(globals)).collect();
-    //    if parts.is_empty() {
-    //        return Err(MonorubyErr::argumenterr("popen: empty command array"));
-    //    }
-    //    let name = parts[0].clone();
-    //    let mut cmd = Command::new(&parts[0]);
-    //    for part in &parts[1..] {
-    //        cmd.arg(part);
-    //    }
-    //    (cmd, name)
-    //} else {
-    //    let cmd_str = cmd_val.coerce_to_str(vm, globals)?;
-    //    let mut cmd = Command::new("sh");
-    //    cmd.arg("-c").arg(cmd_str.to_string());
-    //    (cmd, cmd_str)
-    //};
+    // Build the command from either a String or an Array of strings.
+    let (mut command, cmd_name) = if let Some(ary) = cmd_val.try_array_ty() {
+        let parts: Vec<String> = ary.iter().map(|v| v.to_s(globals)).collect();
+        if parts.is_empty() {
+            return Err(MonorubyErr::argumenterr("popen: empty command array"));
+        }
+        let name = parts[0].clone();
+        let mut cmd = Command::new(&parts[0]);
+        for part in &parts[1..] {
+            cmd.arg(part);
+        }
+        (cmd, name)
+    } else {
+        let cmd_str = cmd_val.coerce_to_str(vm, globals)?;
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(cmd_str.to_string());
+        (cmd, cmd_str)
+    };
 
     // Parse mode and options.
-    // IO.popen accepts:
     //   IO.popen(cmd)
     //   IO.popen(cmd, mode)
     //   IO.popen(cmd, mode, opts)
     //   IO.popen(cmd, opts)   -- Hash as second arg means spawn options
-    //let mut opts_hash = None;
-    //let mode = if args.len() > 1 {
-    //    if args[1].try_hash_ty().is_some() {
-    //        // Second arg is options hash, mode defaults to "r"
-    //        opts_hash = Some(args[1]);
-    //        "r".to_string()
-    //    } else {
-    //        let m = args[1].coerce_to_str(vm, globals)?;
-    //        if args.len() > 2 && args[2].try_hash_ty().is_some() {
-    //            opts_hash = Some(args[2]);
-    //        }
-    //        m
-    //    }
-    //} else {
-    //    "r".to_string()
-    //};
-    //let readable = mode.contains('r') || mode.contains('+');
-    //let writable = mode.contains('w') || mode.contains('+');
+    let mut opts_hash = None;
+    let mode = if args.len() > 1 {
+        if args[1].try_hash_ty().is_some() {
+            opts_hash = Some(args[1]);
+            "r".to_string()
+        } else {
+            let m = args[1].coerce_to_str(vm, globals)?;
+            if args.len() > 2 && args[2].try_hash_ty().is_some() {
+                opts_hash = Some(args[2]);
+            }
+            m
+        }
+    } else {
+        "r".to_string()
+    };
+    let readable = mode.contains('r') || mode.contains('+');
+    let writable = mode.contains('w') || mode.contains('+');
 
-    //if writable {
-    //    command.stdin(Stdio::piped());
-    //} else {
-    //    command.stdin(Stdio::null());
-    //}
-    //if readable {
-    //    command.stdout(Stdio::piped());
-    //} else {
-    //    command.stdout(Stdio::inherit());
-    //}
+    if writable {
+        command.stdin(Stdio::piped());
+    } else {
+        command.stdin(Stdio::null());
+    }
+    if readable {
+        command.stdout(Stdio::piped());
+    } else {
+        command.stdout(Stdio::inherit());
+    }
 
     // Handle err: [:child, :out] option to redirect stderr to stdout
-    //let mut stderr_to_stdout = false;
-    //if let Some(opts) = opts_hash {
-    //    let err_key = Value::symbol_from_str("err");
-    //    if let Ok(Some(err_val)) = opts.as_hash().get(err_key, vm, globals) {
-    //        if let Some(ary) = err_val.try_array_ty() {
-    //            if ary.len() == 2
-    //                && ary[0].try_symbol_or_string() == Some(IdentId::get_id("child"))
-    //                && ary[1].try_symbol_or_string() == Some(IdentId::get_id("out"))
-    //            {
-    //                stderr_to_stdout = true;
-    //            }
-    //        }
-    //    }
-    //}
-    //if stderr_to_stdout {
-    //    // Redirect stderr to stdout via OS-level dup2
-    //    // SAFETY: dup2(1, 2) duplicates stdout fd to stderr fd, which is safe
-    //    // for child processes about to exec.
-    //    unsafe {
-    //        command.pre_exec(|| {
-    //            libc::dup2(1, 2);
-    //            Ok(())
-    //        });
-    //    }
-    //    command.stderr(Stdio::inherit());
-    //} else {
-    //    command.stderr(Stdio::inherit());
-    //}
+    let mut stderr_to_stdout = false;
+    if let Some(opts) = opts_hash {
+        let err_key = Value::symbol_from_str("err");
+        if let Ok(Some(err_val)) = opts.as_hash().get(err_key, vm, globals) {
+            if let Some(ary) = err_val.try_array_ty() {
+                if ary.len() == 2
+                    && ary[0].try_symbol_or_string() == Some(IdentId::get_id("child"))
+                    && ary[1].try_symbol_or_string() == Some(IdentId::get_id("out"))
+                {
+                    stderr_to_stdout = true;
+                }
+            }
+        }
+    }
+    if stderr_to_stdout {
+        // SAFETY: dup2(1, 2) duplicates stdout fd to stderr fd in the child
+        // process right before exec; no Rust state is touched.
+        unsafe {
+            command.pre_exec(|| {
+                libc::dup2(1, 2);
+                Ok(())
+            });
+        }
+    }
+    command.stderr(Stdio::inherit());
 
-    //let child = command
-    //    .spawn()
-    //    .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_f_spawn", &cmd_name))?;
-    //
-    //let io_val = Value::new_io(IoInner::popen(child));
+    let child = command
+        .spawn()
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_f_spawn", &cmd_name))?;
 
-    //if let Some(bh) = lfp.block() {
-    //    let data = vm.get_block_data(globals, bh)?;
-    //    let res = vm.invoke_block(globals, &data, &[io_val]);
-    //    let mut io_close = io_val;
-    //    if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close() {
-    //        if let Ok(status_class) =
-    //            vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
-    //        {
-    //            if let Ok(status_obj) = vm.invoke_method_inner(
-    //                globals,
-    //                IdentId::NEW,
-    //                status_class,
-    //                &[
-    //                    Value::integer(exit_status as i64),
-    //                    Value::integer(pid as i64),
-    //                ],
-    //                None,
-    //                None,
-    //            ) {
-    //                globals.set_gvar(IdentId::get_id("$?"), status_obj);
-    //            }
-    //        }
-    //    }
-    //    res
-    //} else {
-    //    Ok(io_val)
-    //}
+    let io_val = Value::new_io(IoInner::popen(child));
+
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let res = vm.invoke_block(globals, &data, &[io_val]);
+        let mut io_close = io_val;
+        if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close() {
+            if let Ok(status_class) =
+                vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
+            {
+                if let Ok(status_obj) = vm.invoke_method_inner(
+                    globals,
+                    IdentId::NEW,
+                    status_class,
+                    &[
+                        Value::integer(exit_status as i64),
+                        Value::integer(pid as i64),
+                    ],
+                    None,
+                    None,
+                ) {
+                    globals.set_gvar(IdentId::get_id("$?"), status_obj);
+                }
+            }
+        }
+        res
+    } else {
+        Ok(io_val)
+    }
 }
 
 /// ### IO#pid
