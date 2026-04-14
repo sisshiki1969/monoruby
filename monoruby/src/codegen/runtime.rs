@@ -77,7 +77,7 @@ impl ProcData {
 
     pub(crate) fn from_proc(proc: &ProcInner) -> Self {
         Self {
-            outer: Some(proc.outer_lfp()),
+            outer: proc.outer_lfp(),
             func_id: Some(proc.func_id()),
         }
     }

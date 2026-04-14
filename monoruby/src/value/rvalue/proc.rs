@@ -17,29 +17,44 @@ impl Proc {
         }
     }
 
-    pub(crate) fn from_parts(outer_lfp: Lfp, func_id: FuncId, pc: BytecodePtr) -> Self {
-        Proc(Value::new_proc(ProcInner::new(outer_lfp, func_id, pc)))
+    pub(crate) fn from_outer(outer_lfp: Lfp, func_id: FuncId, pc: BytecodePtr) -> Self {
+        Proc(Value::new_proc(ProcInner::from_parts(
+            Some(outer_lfp),
+            func_id,
+            outer_lfp.self_val(),
+            pc,
+        )))
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct ProcInner {
-    outer_lfp: Lfp,
+    outer_lfp: Option<Lfp>,
     func_id: FuncId,
+    self_value: Value,
     pc: BytecodePtr,
 }
 
 impl alloc::GC<RValue> for ProcInner {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.outer_lfp.mark(alloc)
+        if let Some(outer_lfp) = &self.outer_lfp {
+            outer_lfp.mark(alloc);
+        }
+        self.self_value.mark(alloc);
     }
 }
 
 impl ProcInner {
-    pub(crate) fn new(outer_lfp: Lfp, func_id: FuncId, pc: BytecodePtr) -> Self {
+    pub(crate) fn from_parts(
+        outer_lfp: Option<Lfp>,
+        func_id: FuncId,
+        self_value: Value,
+        pc: BytecodePtr,
+    ) -> Self {
         ProcInner {
             outer_lfp,
             func_id,
+            self_value,
             pc,
         }
     }
@@ -48,12 +63,12 @@ impl ProcInner {
         self.func_id
     }
 
-    pub fn outer_lfp(&self) -> Lfp {
+    pub fn outer_lfp(&self) -> Option<Lfp> {
         self.outer_lfp
     }
 
     pub fn self_val(&self) -> Value {
-        self.outer_lfp.self_val()
+        self.self_value
     }
 
     pub(crate) fn source(&self) -> BytecodePtr {

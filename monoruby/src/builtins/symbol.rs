@@ -126,7 +126,7 @@ fn sym_to_proc(
     let self_val = lfp.self_val();
     let body_fid = SYMBOL_TO_PROC_BODY_FUNCID;
     let outer_lfp = Lfp::heap_frame(self_val, globals[body_fid].meta());
-    let proc = Proc::from_parts(outer_lfp, body_fid, pc);
+    let proc = Proc::from_outer(outer_lfp, body_fid, pc);
     Ok(proc.into())
 }
 

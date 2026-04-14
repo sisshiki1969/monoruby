@@ -136,7 +136,7 @@ fn to_proc(_: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     let method = self_.as_method();
     let self_val = method.receiver();
     let func_id = method.func_id();
-    let proc = Proc::from_parts(
+    let proc = Proc::from_outer(
         Lfp::heap_frame(self_val, globals[func_id].meta()),
         func_id,
         pc,
@@ -306,7 +306,11 @@ fn uowner(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn parameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
-    Ok(super::proc::build_parameters(globals, method.func_id(), true))
+    Ok(super::proc::build_parameters(
+        globals,
+        method.func_id(),
+        true,
+    ))
 }
 
 ///
@@ -316,15 +320,14 @@ fn parameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/parameters.html]
 #[monoruby_builtin]
-fn uparameters(
-    _: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn uparameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
-    Ok(super::proc::build_parameters(globals, method.func_id(), true))
+    Ok(super::proc::build_parameters(
+        globals,
+        method.func_id(),
+        true,
+    ))
 }
 
 #[cfg(test)]

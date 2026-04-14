@@ -176,7 +176,7 @@ impl<'a> JitContext<'a> {
                 return Ok(self.attr_writer(state, ir, callid, recv_class, ivar_name));
             }
             FuncKind::Builtin { .. } => (func_id, None),
-            FuncKind::Proc(proc) => (proc.func_id(), Some(proc.outer_lfp())),
+            FuncKind::Proc(proc) => (proc.func_id(), proc.outer_lfp()),
             FuncKind::ISeq(iseq) => {
                 // Check ISeq hint for trivial methods
                 match self.store[iseq].hint {

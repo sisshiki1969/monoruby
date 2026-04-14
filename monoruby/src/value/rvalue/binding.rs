@@ -21,8 +21,8 @@ impl Binding {
         Binding(Value::new_binding(outer_lfp, None))
     }
 
-    pub(crate) fn from_outer(outer_lfp: Lfp, call_site_pc: Option<BytecodePtr>) -> Self {
-        Binding(Value::new_binding(outer_lfp, call_site_pc))
+    pub(crate) fn from_outer(outer_lfp: Lfp, call_site_pc: BytecodePtr) -> Self {
+        Binding(Value::new_binding(outer_lfp, Some(call_site_pc)))
     }
 }
 
@@ -59,6 +59,10 @@ impl BindingInner {
 
     pub fn outer_lfp(&self) -> Lfp {
         self.outer_lfp
+    }
+
+    pub fn outer_fid(&self) -> FuncId {
+        self.outer_lfp.func_id()
     }
 
     pub fn func_id(&self) -> Option<FuncId> {

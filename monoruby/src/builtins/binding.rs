@@ -20,7 +20,7 @@ fn source_location(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let binding = self_val.as_binding_inner();
-    let fid = binding.outer_lfp().func_id();
+    let fid = binding.outer_fid();
     if let Some(pc) = binding.pc {
         if let Some(iseq) = globals.store[fid].is_iseq() {
             let iseq_info = &globals.store[iseq];
@@ -42,7 +42,7 @@ fn source_location(
     let fid = if let Some(fid) = binding.func_id() {
         fid
     } else {
-        binding.outer_lfp().func_id()
+        binding.outer_fid()
     };
     let iseq = globals.store.iseq(fid);
     let file_name = Value::string(iseq.sourceinfo.short_file_name().to_string());
@@ -62,7 +62,7 @@ fn local_variables(
     let fid = if let Some(fid) = binding.func_id() {
         fid
     } else {
-        binding.outer_lfp().func_id()
+        binding.outer_fid()
     };
     let v = globals.store.local_variables(globals.store[fid].as_iseq());
     Ok(Value::array_from_vec(v))

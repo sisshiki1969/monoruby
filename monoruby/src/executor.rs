@@ -62,7 +62,7 @@ pub struct Executor {
     sp_post_match: Option<String>,   // $'        : Regexp.post_match
     sp_matches: Vec<Option<String>>, // $&, $1 ... $n : Regexp.last_match(n)
     sp_match_positions: Vec<Option<(usize, usize)>>, // byte positions for MatchData
-    sp_match_haystack: Option<String>,               // haystack for MatchData
+    sp_match_haystack: Option<String>, // haystack for MatchData
     temp_stack: Vec<Value>,
     require_level: usize,
     /// error information.
@@ -106,10 +106,7 @@ impl Executor {
         let program_name = Value::string_from_str(program_name);
         globals.set_gvar(IdentId::get_id("$0"), program_name);
         // $PROGRAM_NAME is an alias of $0 in Ruby; make them share one entry.
-        globals.alias_global_variable(
-            IdentId::get_id("$PROGRAM_NAME"),
-            IdentId::get_id("$0"),
-        );
+        globals.alias_global_variable(IdentId::get_id("$PROGRAM_NAME"), IdentId::get_id("$0"));
         let mut executor = Self::default();
         let path = dirs::home_dir()
             .unwrap()
@@ -228,15 +225,21 @@ impl Executor {
     }
 
     pub fn sp_last_match(&self) -> Option<Value> {
-        self.sp_last_match.as_ref().map(|s| Value::string_from_str(s))
+        self.sp_last_match
+            .as_ref()
+            .map(|s| Value::string_from_str(s))
     }
 
     pub fn sp_pre_match(&self) -> Option<Value> {
-        self.sp_pre_match.as_ref().map(|s| Value::string_from_str(s))
+        self.sp_pre_match
+            .as_ref()
+            .map(|s| Value::string_from_str(s))
     }
 
     pub fn sp_post_match(&self) -> Option<Value> {
-        self.sp_post_match.as_ref().map(|s| Value::string_from_str(s))
+        self.sp_post_match
+            .as_ref()
+            .map(|s| Value::string_from_str(s))
     }
 }
 
@@ -629,11 +632,8 @@ impl Executor {
             check_constant_visibility(globals, defining, constant)?;
             parent = val.expect_class_or_module(&globals.store)?.id();
         }
-        let (v, defining) = self.get_constant_superclass_with_class(
-            globals,
-            globals[parent].get_module(),
-            name,
-        )?;
+        let (v, defining) =
+            self.get_constant_superclass_with_class(globals, globals[parent].get_module(), name)?;
         check_constant_visibility(globals, defining, name)?;
         Ok((v, base))
     }
@@ -1563,7 +1563,7 @@ impl Executor {
             // Move the correct outer frame (and its lexical chain) to the heap,
             // so the proc can safely reference it after the current scope exits.
             let outer_lfp = cfp.lfp().move_frame_to_heap();
-            Ok(Proc::from_parts(outer_lfp, fid, pc))
+            Ok(Proc::from_outer(outer_lfp, fid, pc))
         } else if let Some(proc) = bh.try_proc() {
             Ok(proc)
         } else {
@@ -1575,12 +1575,12 @@ impl Executor {
 
     pub(crate) fn generate_lambda(&mut self, func_id: FuncId, pc: BytecodePtr) -> Proc {
         let outer_lfp = self.cfp().lfp().move_frame_to_heap();
-        Proc::from_parts(outer_lfp, func_id, pc)
+        Proc::from_outer(outer_lfp, func_id, pc)
     }
 
     pub(crate) fn generate_binding(&mut self, pc: BytecodePtr) -> Binding {
         let lfp = self.cfp().prev().unwrap().lfp();
-        Binding::from_outer(lfp, Some(pc))
+        Binding::from_outer(lfp, pc)
     }
 
     ///
@@ -1602,7 +1602,7 @@ impl Executor {
         pc: BytecodePtr,
     ) -> Result<Value> {
         let outer_lfp = Lfp::dummy_heap_frame_with_self(obj);
-        let proc = Proc::from_parts(outer_lfp, ENUM_YIELDER_FUNCID, pc);
+        let proc = Proc::from_outer(outer_lfp, ENUM_YIELDER_FUNCID, pc);
         let e = Value::new_enumerator(obj, method, proc, args);
         Ok(e)
     }

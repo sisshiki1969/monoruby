@@ -34,9 +34,13 @@ impl Codegen {
             }
             FuncKind::Proc(proc) => {
                 //self.vm_execute_gc();
+                let outer_ptr = match proc.outer_lfp() {
+                    Some(outer) => outer.as_ptr() as usize,
+                    None => 0,
+                };
                 monoasm! { &mut self.jit,
                     movl rdx, (proc.func_id().get());
-                    movq rax, (proc.outer_lfp().as_ptr());
+                    movq rax, (outer_ptr);
                 }
                 // rax: outer, rdx: FuncId
                 self.get_func_data();

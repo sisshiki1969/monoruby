@@ -34,12 +34,7 @@ pub(super) fn init(globals: &mut Globals) {
 
 /// `Proc#ruby2_keywords` — no-op marker that returns self.
 #[monoruby_builtin]
-fn ruby2_keywords(
-    _: &mut Executor,
-    _: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn ruby2_keywords(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val())
 }
 
@@ -76,7 +71,7 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // block passed to Proc#call is forwarded to the invoked method. The
     // regular invoke_proc/block_invoker path currently drops block handlers.
     if proc.func_id() == SYMBOL_TO_PROC_BODY_FUNCID {
-        let symbol = proc.outer_lfp().self_val();
+        let symbol = proc.self_val();
         let symbol_id = symbol
             .try_symbol()
             .expect("symbol-to-proc outer self is not a Symbol");
@@ -91,9 +86,7 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         if let Some(entry) = globals.check_method_for_class(class_id, symbol_id) {
             match entry.visibility() {
                 Visibility::Private => {
-                    return Err(MonorubyErr::private_method_called(
-                        globals, symbol_id, recv,
-                    ));
+                    return Err(MonorubyErr::private_method_called(globals, symbol_id, recv));
                 }
                 Visibility::Protected => {
                     return Err(MonorubyErr::protected_method_called(
@@ -146,7 +139,7 @@ fn binding_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
     let proc = Proc::new(lfp.self_val());
     let outer_lfp = proc.outer_lfp();
     let pc = proc.source();
-    Ok(Binding::from_outer(outer_lfp, Some(pc)).as_val())
+    Ok(Binding::from_outer(outer_lfp.unwrap(), pc).as_val())
 }
 
 /// ### Proc#lambda?

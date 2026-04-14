@@ -355,7 +355,7 @@ impl Globals {
         lineno: i64,
     ) -> Result<()> {
         let line_offset = lineno - 1;
-        let outer_fid = binding.outer_lfp().func_id();
+        let outer_fid = binding.outer_fid();
         let outer = match self.store[outer_fid].is_iseq() {
             Some(iseq) => iseq,
             None => {
