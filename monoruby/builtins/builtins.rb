@@ -239,6 +239,16 @@ class Hash
     end
     min_entry
   end
+
+  def has_value?(value)
+    each_value { |v| return true if v == value }
+    false
+  end
+  alias value? has_value?
+
+  def deconstruct_keys(keys)
+    self
+  end
 end
 
 class Module

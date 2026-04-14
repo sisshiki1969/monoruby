@@ -42,6 +42,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MODULE_CLASS, "===", teq, 1);
     globals.define_builtin_func(MODULE_CLASS, "<", lt, 1);
     globals.define_builtin_func(MODULE_CLASS, ">", gt, 1);
+    globals.define_builtin_func(MODULE_CLASS, "<=", le, 1);
+    globals.define_builtin_func(MODULE_CLASS, ">=", ge, 1);
+    globals.define_builtin_func(MODULE_CLASS, "singleton_class?", singleton_class_, 0);
     globals.define_builtin_func(MODULE_CLASS, "alias_method", alias_method, 2);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr", attr);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_accessor", attr_accessor);
@@ -331,6 +334,14 @@ fn less_than(lhs: Module, rhs: Module) -> Value {
     }
 }
 
+fn less_than_or_equal(lhs: Module, rhs: Module) -> Value {
+    if lhs.id() == rhs.id() {
+        Value::bool(true)
+    } else {
+        less_than(lhs, rhs)
+    }
+}
+
 ///
 /// ### Module#<
 ///
@@ -355,6 +366,53 @@ fn gt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let rhs = lfp.arg(0).expect_class_or_module(&globals.store)?;
     let lhs = lfp.self_val().as_class();
     Ok(less_than(rhs, lhs))
+}
+
+///
+/// ### Module#<=
+///
+/// - self <= other -> bool | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3c=3d.html]
+#[monoruby_builtin]
+fn le(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let rhs = lfp.arg(0).expect_class_or_module(&globals.store)?;
+    let lhs = lfp.self_val().as_class();
+    Ok(less_than_or_equal(lhs, rhs))
+}
+
+///
+/// ### Module#>=
+///
+/// - self >= other -> bool | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3e=3d.html]
+#[monoruby_builtin]
+fn ge(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let rhs = lfp.arg(0).expect_class_or_module(&globals.store)?;
+    let lhs = lfp.self_val().as_class();
+    if lhs.id() == rhs.id() {
+        Ok(Value::bool(true))
+    } else {
+        Ok(less_than(rhs, lhs))
+    }
+}
+
+///
+/// ### Module#singleton_class?
+///
+/// - singleton_class? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/singleton_class=3f.html]
+#[monoruby_builtin]
+fn singleton_class_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class = lfp.self_val().as_class();
+    Ok(Value::bool(class.is_singleton().is_some()))
 }
 
 ///
@@ -1749,6 +1807,60 @@ mod tests {
         Foo < Object.new
         "##,
         )
+    }
+
+    #[test]
+    fn compare_le_ge() {
+        run_test(
+            r#"
+        module Foo; end
+        class Bar; include Foo; end
+        class Baz < Bar; end
+        class Qux; end
+        res = []
+        # <=
+        res << (Bar <= Foo)   # true (includes)
+        res << (Baz <= Bar)   # true (subclass)
+        res << (Baz <= Foo)   # true (transitive include)
+        res << (Foo <= Foo)   # true (equal)
+        res << (Bar <= Bar)   # true (equal)
+        res << (Foo <= Bar)   # false (ancestor)
+        res << (Bar <= Baz)   # false (ancestor)
+        res << (Bar <= Qux)   # nil (unrelated)
+        # >=
+        res << (Foo >= Bar)   # true (included by)
+        res << (Bar >= Baz)   # true (superclass)
+        res << (Foo >= Baz)   # true (transitive)
+        res << (Foo >= Foo)   # true (equal)
+        res << (Bar >= Foo)   # false (descendant)
+        res << (Baz >= Bar)   # false (descendant)
+        res << (Bar >= Qux)   # nil (unrelated)
+        res
+        "#,
+        );
+        run_test_error(
+            r##"
+        module Foo; end
+        Foo <= Object.new
+        "##,
+        );
+        run_test_error(
+            r##"
+        module Foo; end
+        Foo >= Object.new
+        "##,
+        );
+    }
+
+    #[test]
+    fn singleton_class_q() {
+        run_test(
+            r#"
+        class A; end
+        [A.singleton_class.singleton_class?, A.singleton_class?,
+         Class.singleton_class?, Object.singleton_class?]
+        "#,
+        );
     }
 
     #[test]
