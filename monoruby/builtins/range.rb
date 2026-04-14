@@ -92,4 +92,11 @@ class Range
   def lazy
     Enumerator::Lazy.new(self)
   end
+
+  def to_set(klass = Set, *args, &block)
+    if self.end.nil?
+      raise RangeError, "cannot convert endless range to a set"
+    end
+    klass.new(self, *args, &block)
+  end
 end
