@@ -323,12 +323,13 @@ pub(super) extern "C" fn handle_error(
     meta: Meta,
     pc: BytecodePtr,
 ) -> ErrorReturn {
-    let func_info = &globals.store[meta.func_id()];
     if vm.exception().is_none() {
+        runtime::_dump_stacktrace(vm, globals);
         vm.set_error(MonorubyErr::runtimeerr(
             "[FATAL] internal error: unknown exception.",
         ));
     }
+    let func_info = &globals.store[meta.func_id()];
     match &func_info.kind {
         FuncKind::ISeq(info) => {
             let bc_base = globals.store[*info].get_top_pc();

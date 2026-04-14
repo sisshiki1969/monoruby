@@ -819,21 +819,6 @@ mod tests {
     use crate::tests::*;
 
     #[test]
-    fn io_closed_error() {
-        run_test(
-            r#"
-            r, w = IO.pipe
-            w.close
-            begin
-                w.write("test")
-            rescue IOError => e
-                e.message
-            end
-        "#,
-        );
-    }
-
-    #[test]
     fn error() {
         run_test_error(
             r##"

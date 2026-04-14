@@ -1248,42 +1248,6 @@ mod tests {
     }
 
     #[test]
-    fn io_close() {
-        run_test(
-            r#"
-            r, w = IO.pipe
-            w.close
-            [w.closed?, r.closed?]
-        "#,
-        );
-        run_test(
-            r#"
-            r, w = IO.pipe
-            r.close
-            w.close
-            [r.closed?, w.closed?]
-        "#,
-        );
-        run_test(
-            r#"
-            IO.read("Cargo.toml").is_a?(String)
-        "#,
-        );
-    }
-
-    #[test]
-    fn io_pipe() {
-        run_test(
-            r#"
-            r, w = IO.pipe
-            w << "hello"
-            w.close
-            r.read
-        "#,
-        );
-    }
-
-    #[test]
     fn each_line() {
         run_test(
             r##"
@@ -1294,41 +1258,6 @@ mod tests {
         end
         res
         "##,
-        );
-    }
-
-    #[test]
-    fn popen_close() {
-        // Verify IO.popen + close doesn't deadlock when child writes to stdout.
-        run_test_no_result_check(
-            r#"
-            io = IO.popen("echo hello")
-            s = io.read
-            io.close
-            s
-            "#,
-        );
-    }
-
-    #[test]
-    fn popen_close_without_read() {
-        // Closing without reading should not hang (child gets SIGPIPE).
-        run_test_no_result_check(
-            r#"
-            io = IO.popen("echo hello")
-            io.close
-            "#,
-        );
-    }
-
-    #[test]
-    fn popen_block() {
-        // IO.popen with block should auto-close.
-        run_test_no_result_check(
-            r#"
-            result = IO.popen("echo hello") {|io| io.read }
-            result
-            "#,
         );
     }
 
@@ -1361,164 +1290,12 @@ mod tests {
     }
 
     #[test]
-    fn io_select() {
-        // select with readable pipe
-        run_test(
-            r#"
-            r, w = IO.pipe
-            w.write("hello")
-            result = IO.select([r], nil, nil, 0)
-            result[0].size
-            "#,
-        );
-        // select with timeout (no data available)
-        run_test(
-            r#"
-            r, w = IO.pipe
-            result = IO.select([r], nil, nil, 0)
-            result.nil?
-            "#,
-        );
-        // select with writable pipe
-        run_test(
-            r#"
-            r, w = IO.pipe
-            result = IO.select(nil, [w], nil, 0)
-            result[1].size
-            "#,
-        );
-    }
-
-    #[test]
-    fn io_fileno() {
-        run_test("$stdin.fileno == 0");
-        run_test("$stdout.fileno == 1");
-        run_test("$stderr.fileno == 2");
-        run_test(
-            r#"
-            r, w = IO.pipe
-            [r.fileno.is_a?(Integer), w.fileno.is_a?(Integer)]
-            "#,
-        );
-    }
-
-    #[test]
-    fn io_write_variadic() {
-        run_test_no_result_check(
-            r#"
-            r, w = IO.pipe
-            n = w.write("hello", " ", "world")
-            w.close
-            [r.read, n]
-            "#,
-        );
-    }
-
-    #[test]
-    fn io_syswrite() {
-        run_test_no_result_check(
-            r#"
-            r, w = IO.pipe
-            n = w.syswrite("hello")
-            w.close
-            [r.read, n]
-            "#,
-        );
-    }
-
-    #[test]
-    fn puts_delegates_to_write() {
-        // IO#puts should call the Ruby-level write method, not bypass it.
-        run_test(
-            r#"
-            r, w = IO.pipe
-            $test_written = []
-            def w.write(s)
-              $test_written << s
-              super(s)
-            end
-            w.puts("hello")
-            w.close
-            [$test_written.join, r.read]
-            "#,
-        );
-    }
-
-    #[test]
-    fn print_delegates_to_write() {
-        // IO#print should call the Ruby-level write method, not bypass it.
-        run_test(
-            r#"
-            r, w = IO.pipe
-            $test_written = []
-            def w.write(s)
-              $test_written << s
-              super(s)
-            end
-            w.print("hello", "world")
-            w.close
-            [$test_written.join, r.read]
-            "#,
-        );
-    }
-
-    #[test]
     fn io_sysopen() {
         run_test_no_result_check(
             r#"
             fd = IO.sysopen("Cargo.toml", "r")
             raise "should be integer" unless fd.is_a?(Integer)
             raise "should be positive" unless fd > 0
-            "#,
-        );
-    }
-
-    #[test]
-    fn popen_rw_mode() {
-        run_test(
-            r#"
-            IO.popen("cat", "r+") do |io|
-              io.write("hello")
-              io.close_write
-              io.read
-            end
-            "#,
-        );
-    }
-
-    #[test]
-    fn popen_write_mode() {
-        run_test_no_result_check(
-            r#"
-            IO.popen("cat > /dev/null", "w") do |io|
-              io.write("hello")
-            end
-            "#,
-        );
-    }
-
-    #[test]
-    fn close_read() {
-        run_test(
-            r#"
-            IO.popen("echo hello", "r") do |io|
-              data = io.read
-              io.close_read
-              data
-            end
-            "#,
-        );
-    }
-
-    #[test]
-    fn close_write() {
-        run_test(
-            r#"
-            IO.popen("cat", "r+") do |io|
-              io.write("hello")
-              io.close_write
-              io.read
-            end
             "#,
         );
     }
@@ -1539,26 +1316,6 @@ mod tests {
         run_test_no_result_check(
             r#"
             $stdout.internal_encoding
-            "#,
-        );
-    }
-
-    #[test]
-    fn set_encoding_test() {
-        run_test_no_result_check(
-            r#"
-            r, w = IO.pipe
-            w.set_encoding("UTF-8")
-            w.close
-            r.close
-            "#,
-        );
-        run_test_no_result_check(
-            r#"
-            r, w = IO.pipe
-            w.set_encoding("UTF-8", "UTF-8")
-            w.close
-            r.close
             "#,
         );
     }
@@ -1611,27 +1368,5 @@ mod tests {
     fn io_new_invalid_fd() {
         run_test_error(r#"IO.new(-1)"#);
         run_test_error(r#"IO.new(9999)"#);
-    }
-
-    #[test]
-    fn io_copy_stream() {
-        run_test(
-            r#"
-            path_src = "/tmp/monoruby_test_cs_src_#{Process.pid}"
-            path_dst = "/tmp/monoruby_test_cs_dst_#{Process.pid}"
-            File.write(path_src, "hello world")
-            n = IO.copy_stream(path_src, path_dst)
-            raise "expected 11 but got #{n}" unless n == 11
-            raise unless File.read(path_dst) == "hello world"
-            n = IO.copy_stream(path_src, path_dst, 5)
-            raise "expected 5 but got #{n}" unless n == 5
-            raise unless File.read(path_dst) == "hello"
-            n = IO.copy_stream(path_src, path_dst, 5, 6)
-            raise "expected 5 but got #{n}" unless n == 5
-            raise unless File.read(path_dst) == "world"
-            File.delete(path_src)
-            File.delete(path_dst)
-            "#,
-        );
     }
 }

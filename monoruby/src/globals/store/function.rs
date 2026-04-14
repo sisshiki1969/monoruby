@@ -406,6 +406,10 @@ impl Funcs {
         self.compile_info.remove(0)
     }
 
+    pub(crate) fn clear_compile_info(&mut self) {
+        self.compile_info.clear();
+    }
+
     pub(super) fn new_proc_method(&mut self, proc: Proc) -> FuncId {
         let func_id = self.next_func_id();
         let is_block_style = self[proc.func_id()].is_block_style();

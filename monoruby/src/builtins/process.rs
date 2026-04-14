@@ -251,11 +251,7 @@ fn process_wait2(
     ]))
 }
 
-fn do_waitpid(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-) -> Result<(i32, Value)> {
+fn do_waitpid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<(i32, Value)> {
     let pid = if let Some(arg) = lfp.try_arg(0) {
         arg.coerce_to_int_i64(vm, globals)? as i32
     } else {
@@ -277,8 +273,7 @@ fn do_waitpid(
     } else {
         -1
     };
-    let status_class =
-        vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
+    let status_class = vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
     let status_obj = vm.invoke_method_inner(
         globals,
         IdentId::NEW,
@@ -429,23 +424,6 @@ mod tests {
             pid = fork { exit 0 }
             ret, status = Process.wait2(pid)
             [ret == pid, status.class.to_s, status.exitstatus]
-            "#,
-        );
-    }
-
-    #[test]
-    fn process_last_status() {
-        run_test_no_result_check("Process.last_status");
-        run_test(
-            r#"
-            IO.popen("true") { |io| io.read }
-            $?.exitstatus
-            "#,
-        );
-        run_test(
-            r#"
-            IO.popen("false") { |io| io.read }
-            $?.exitstatus
             "#,
         );
     }

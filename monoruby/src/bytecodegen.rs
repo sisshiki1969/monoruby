@@ -39,15 +39,22 @@ fn bytecode_compile(
     binding: Option<LvarCollector>,
 ) -> Result<()> {
     assert!(globals.store.func_len() > main_fid.get() as usize);
-    bytecode_compile_func(globals, main_fid, binding)?;
-    let mut fid = FuncId::new(main_fid.get() + 1);
-
-    while globals.store.func_len() > fid.get() as usize {
-        bytecode_compile_func(globals, fid, None)?;
-        fid = FuncId::new(fid.get() + 1);
+    let result = (|| {
+        bytecode_compile_func(globals, main_fid, binding)?;
+        let mut fid = FuncId::new(main_fid.get() + 1);
+        while globals.store.func_len() > fid.get() as usize {
+            bytecode_compile_func(globals, fid, None)?;
+            fid = FuncId::new(fid.get() + 1);
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        // A compile error leaves unconsumed CompileInfo entries in the queue.
+        // If not cleared, subsequent top-level loads would pick them up via
+        // FIFO, producing iseqs whose bytecode belongs to the failed file.
+        globals.functions.clear_compile_info();
     }
-
-    Ok(())
+    result
 }
 
 fn bytecode_compile_func(
