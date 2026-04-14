@@ -813,6 +813,23 @@ fn marshal_dump_value(
                         marshal_dump_value(buf, *elem, globals, symbols, in_progress)?;
                     }
                 }
+                Some(ObjTy::RANGE) => {
+                    // Serialize Range as a generic 'o' object with the
+                    // three ivars CRuby uses: @begin, @end, @excl.
+                    let range = obj.as_range();
+                    let begin = range.start();
+                    let end = range.end();
+                    let excl = range.exclude_end();
+                    buf.push(b'o');
+                    marshal_write_symbol(buf, IdentId::get_id("Range"), symbols);
+                    marshal_write_fixnum(buf, 3);
+                    marshal_write_symbol(buf, IdentId::get_id("begin"), symbols);
+                    marshal_dump_value(buf, begin, globals, symbols, in_progress)?;
+                    marshal_write_symbol(buf, IdentId::get_id("end"), symbols);
+                    marshal_dump_value(buf, end, globals, symbols, in_progress)?;
+                    marshal_write_symbol(buf, IdentId::get_id("excl"), symbols);
+                    buf.push(if excl { b'T' } else { b'F' });
+                }
                 Some(ObjTy::HASH) => {
                     let inner = obj.as_hashmap_inner();
                     buf.push(b'{');
@@ -1128,6 +1145,61 @@ mod tests {
     fn marshal_dump_unsupported() {
         // Regexp is not supported
         run_test_error(r#"Marshal.dump(/foo/)"#);
+    }
+
+    #[test]
+    fn marshal_dump_cyclic_array() {
+        // Recursive arrays must raise ArgumentError, not overflow the stack.
+        run_test_error(
+            r#"
+            a = []
+            a << a
+            Marshal.dump(a)
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_dump_cyclic_hash() {
+        run_test_error(
+            r#"
+            h = {}
+            h[:self] = h
+            Marshal.dump(h)
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_range_roundtrip() {
+        // A Range reconstructed from the 'o' format should behave as a
+        // real Range (responds to begin/end/exclude_end?).
+        run_test(
+            r#"
+            r = Marshal.load(Marshal.dump(1..10))
+            [r.class.to_s, r.begin, r.end, r.exclude_end?]
+            "#,
+        );
+        run_test(
+            r#"
+            r = Marshal.load(Marshal.dump(1...10))
+            [r.begin, r.end, r.exclude_end?]
+            "#,
+        );
+    }
+
+    #[test]
+    fn data_define_basic() {
+        // Data.define returns a class with attribute readers for each
+        // given field name.
+        run_test(
+            r#"
+            klass = Data.define(:a, :b)
+            inst = klass.new(1, 2)
+            [inst.a, inst.b]
+            "#,
+        );
+        run_test(r#"Data.define.is_a?(Class)"#);
     }
 
     #[test]
