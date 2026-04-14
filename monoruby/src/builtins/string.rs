@@ -258,7 +258,7 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let inner = self_.as_rstring_inner();
     let byte_len = inner.as_bytes().len();
     // Guard against overflow / OOM for huge counts
-    if byte_len > 0 && count > (isize::MAX as usize) / byte_len {
+    if byte_len > 0 && count > (u32::MAX as usize) / byte_len {
         return Err(MonorubyErr::argumenterr("argument too big"));
     }
     let res = Value::string_from_inner(inner.repeat(count));
