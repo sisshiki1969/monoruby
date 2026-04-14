@@ -704,3 +704,90 @@ fn test_regexp() {
     assert!(re.find("/").unwrap().is_some());
     assert!(!re.find("a").unwrap().is_some());
 }
+
+#[cfg(test)]
+mod expand_unicode_braces_tests {
+    use super::expand_unicode_braces;
+
+    fn ok(input: &str) -> String {
+        expand_unicode_braces(input).expect("expected success")
+    }
+
+    #[test]
+    fn passthrough_when_no_brace() {
+        assert_eq!(ok(""), "");
+        assert_eq!(ok("abc"), "abc");
+        assert_eq!(ok("\\uFFFF"), "\\uFFFF");
+        assert_eq!(ok("\\x{20}"), "\\x{20}");
+        assert_eq!(ok("\\n\\t"), "\\n\\t");
+    }
+
+    #[test]
+    fn bmp_codepoint_is_zero_padded() {
+        assert_eq!(ok("\\u{20}"), "\\u0020");
+        assert_eq!(ok("\\u{7e}"), "\\u007E");
+        assert_eq!(ok("\\u{0041}"), "\\u0041");
+        assert_eq!(ok("\\u{FFFF}"), "\\uFFFF");
+    }
+
+    #[test]
+    fn range_with_braces() {
+        assert_eq!(ok("[\\u{20}-\\u{7e}]"), "[\\u0020-\\u007E]");
+    }
+
+    #[test]
+    fn supplementary_plane_emits_raw_utf8() {
+        // U+1F600 😀 => 4-byte UTF-8 sequence
+        assert_eq!(ok("\\u{1F600}"), "😀");
+    }
+
+    #[test]
+    fn multi_codepoint_brace() {
+        assert_eq!(ok("\\u{20 7e}"), "\\u0020\\u007E");
+        assert_eq!(ok("\\u{41 42 43}"), "\\u0041\\u0042\\u0043");
+    }
+
+    #[test]
+    fn escaped_backslash_is_preserved() {
+        // `\\u{20}` => literal backslash followed by `u{20}` characters
+        assert_eq!(ok("\\\\u{20}"), "\\\\u{20}");
+    }
+
+    #[test]
+    fn mixed_with_surrounding_regex_syntax() {
+        assert_eq!(ok("^(\\u{41})+$"), "^(\\u0041)+$");
+    }
+
+    #[test]
+    fn rejects_invalid_hex() {
+        assert!(expand_unicode_braces("\\u{xyz}").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_braces() {
+        assert!(expand_unicode_braces("\\u{}").is_err());
+    }
+
+    #[test]
+    fn rejects_out_of_range() {
+        assert!(expand_unicode_braces("\\u{110000}").is_err());
+    }
+
+    #[test]
+    fn bmp_surrogate_passes_through_as_four_digits() {
+        // Surrogate values are in the BMP range; we emit them as \uHHHH and
+        // leave validation to Onigmo (same behavior as CRuby for regex literals).
+        assert_eq!(ok("\\u{D800}"), "\\uD800");
+    }
+
+    #[test]
+    fn preserves_non_ascii_after_backslash() {
+        assert_eq!(ok("\\あ"), "\\あ");
+    }
+
+    #[test]
+    fn unterminated_brace_is_left_alone() {
+        // No closing `}` — fall through and let Onigmo surface its own error.
+        assert_eq!(ok("\\u{20"), "\\u{20");
+    }
+}
