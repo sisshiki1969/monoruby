@@ -65,6 +65,72 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(TIME_CLASS, "floor", floor_, 0, 1, false);
     globals.define_builtin_func_with(TIME_CLASS, "ceil", ceil_, 0, 1, false);
     globals.define_builtin_func_with(TIME_CLASS, "round", round_, 0, 1, false);
+    globals.define_builtin_func_with(TIME_CLASS, "deconstruct_keys", deconstruct_keys_, 1, 1, false);
+}
+
+#[monoruby_builtin]
+fn deconstruct_keys_(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    let self_ = lfp.self_val();
+    let is_utc = self_.as_time().is_utc();
+    let (year, month, day, yday, wday, hour, min, sec, subsec_ns) = match self_.as_time() {
+        TimeInner::Local(t) => (
+            t.year(), t.month(), t.day(), t.ordinal(),
+            t.weekday().num_days_from_sunday(), t.hour(), t.minute(), t.second(),
+            t.nanosecond(),
+        ),
+        TimeInner::Utc(t) => (
+            t.year(), t.month(), t.day(), t.ordinal(),
+            t.weekday().num_days_from_sunday(), t.hour(), t.minute(), t.second(),
+            t.nanosecond(),
+        ),
+    };
+    let zone_val = if is_utc { Value::string_from_str("UTC") } else { Value::nil() };
+    let subsec_val = if subsec_ns == 0 {
+        Value::integer(0)
+    } else {
+        Value::float(subsec_ns as f64 / 1_000_000_000.0)
+    };
+    let pairs: [(&str, Value); 11] = [
+        ("year", Value::integer(year as i64)),
+        ("month", Value::integer(month as i64)),
+        ("day", Value::integer(day as i64)),
+        ("yday", Value::integer(yday as i64)),
+        ("wday", Value::integer(wday as i64)),
+        ("hour", Value::integer(hour as i64)),
+        ("min", Value::integer(min as i64)),
+        ("sec", Value::integer(sec as i64)),
+        ("subsec", subsec_val),
+        ("dst", Value::bool(false)),
+        ("zone", zone_val),
+    ];
+    let mut map = RubyMap::default();
+    if arg.is_nil() {
+        for (k, v) in &pairs {
+            map.insert(Value::symbol_from_str(k), *v, vm, globals)?;
+        }
+    } else if arg.is_array_ty() {
+        let arr = arg.as_array();
+        for key in arr.iter() {
+            // Silently skip non-Symbol keys (matching CRuby behaviour).
+            let Some(sym) = key.try_symbol() else { continue };
+            let name = sym.get_name();
+            if let Some((_, v)) = pairs.iter().find(|(k, _)| *k == name) {
+                map.insert(*key, *v, vm, globals)?;
+            }
+        }
+    } else {
+        return Err(MonorubyErr::typeerr(format!(
+            "wrong argument type {} (expected Array or nil)",
+            arg.get_real_class_name(globals)
+        )));
+    }
+    Ok(Value::hash(map))
 }
 
 fn wday_val(lfp: &Lfp) -> u32 {
@@ -1070,6 +1136,27 @@ mod tests {
         run_test(r#"Time.utc(2000,1,1,0,0,0,500000).round.usec"#);
         run_test(r#"Time.utc(2000,1,1,0,0,0,123456).floor(3).usec"#);
         run_test(r#"Time.utc(2000,1,1,0,0,0,123456).ceil(3).usec"#);
+    }
+
+    #[test]
+    fn time_deconstruct_keys() {
+        run_test(
+            r#"
+            t = Time.utc(2022, 10, 5, 13, 30)
+            h = t.deconstruct_keys(nil)
+            [h[:year], h[:month], h[:day], h[:hour], h[:min], h[:sec], h[:zone], h[:dst]]
+            "#,
+        );
+        run_test(
+            r#"Time.utc(2022,10,5,13,30).deconstruct_keys([:year, :month])"#,
+        );
+        run_test(r#"Time.utc(2022,10,5,13,30).deconstruct_keys([])"#);
+        // non-symbol entries are silently dropped
+        run_test(r#"Time.utc(2022,10,5,13,30).deconstruct_keys(['year', []])"#);
+        // TypeError for wrong arg types
+        run_test_error(r#"Time.utc(2022,10,5,13,30).deconstruct_keys(1)"#);
+        run_test_error(r#"Time.utc(2022,10,5,13,30).deconstruct_keys("asd")"#);
+        run_test_error(r#"Time.utc(2022,10,5,13,30).deconstruct_keys({})"#);
     }
 
     #[test]

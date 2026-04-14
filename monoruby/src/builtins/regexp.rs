@@ -31,7 +31,20 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_func(REGEXP_CLASS, "options", options, 0);
     globals.define_builtin_func_with(REGEXP_CLASS, "match?", match_, 1, 2, false);
     globals.define_builtin_func_with(REGEXP_CLASS, "match", rmatch, 1, 2, false);
+    globals.define_builtin_func(REGEXP_CLASS, "names", names, 0);
     globals.store[REGEXP_CLASS].set_alloc_func(regexp_alloc_func);
+}
+
+/// ### Regexp#names
+/// - names -> [String]
+#[monoruby_builtin]
+fn names(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let re = self_.as_regexp_inner();
+    let names = re.capture_names().unwrap_or_default();
+    Ok(Value::array_from_iter(
+        names.iter().map(|n| Value::string_from_str(n)),
+    ))
 }
 
 // Class methods

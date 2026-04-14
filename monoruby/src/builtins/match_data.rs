@@ -27,6 +27,62 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MATCHDATA_CLASS, "bytebegin", bytebegin, 1);
     globals.define_builtin_func(MATCHDATA_CLASS, "byteend", byteend, 1);
     globals.define_builtin_func(MATCHDATA_CLASS, "byteoffset", byteoffset, 1);
+    globals.define_builtin_func_with(MATCHDATA_CLASS, "deconstruct_keys", deconstruct_keys_md, 1, 1, false);
+}
+
+/// ### MatchData#deconstruct_keys(keys) -> Hash
+#[monoruby_builtin]
+fn deconstruct_keys_md(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    let self_ = lfp.self_val();
+    let m = self_.as_match_data();
+    let names = m
+        .regexp()
+        .and_then(|r| r.capture_names().ok())
+        .unwrap_or_default();
+    let val_for = |name: &str| -> Value {
+        let mut last: Option<usize> = None;
+        for (i, n) in names.iter().enumerate() {
+            if n == name {
+                last = Some(i);
+            }
+        }
+        match last.and_then(|i| m.at(i + 1)) {
+            Some(s) => Value::string_from_str(s),
+            None => Value::nil(),
+        }
+    };
+    let mut map = RubyMap::default();
+    if arg.is_nil() {
+        for name in &names {
+            let key = Value::symbol_from_str(name);
+            map.insert(key, val_for(name), vm, globals)?;
+        }
+    } else if arg.is_array_ty() {
+        let arr = arg.as_array();
+        // CRuby: if any requested symbol isn't a named capture, return `{}`.
+        for key in arr.iter() {
+            let Some(sym) = key.try_symbol() else {
+                return Ok(Value::hash(RubyMap::default()));
+            };
+            let name = sym.get_name();
+            if !names.iter().any(|n| *n == name) {
+                return Ok(Value::hash(RubyMap::default()));
+            }
+            map.insert(*key, val_for(&name), vm, globals)?;
+        }
+    } else {
+        return Err(MonorubyErr::typeerr(format!(
+            "wrong argument type {} (expected Array or nil)",
+            arg.get_real_class_name(globals)
+        )));
+    }
+    Ok(Value::hash(map))
 }
 
 #[monoruby_builtin]
@@ -550,6 +606,22 @@ mod tests {
         run_test(r##"/(foo)(bar)(BAZ)?/.match("foobar").byteoffset(3)"##);
         // multibyte: UTF-8, byte offsets differ from char offsets
         run_test(r##"/い/.match("あぃい").byteoffset(0)"##);
+    }
+
+    #[test]
+    fn match_data_deconstruct_keys() {
+        run_test(
+            r##"/(?<a>foo)(?<b>bar)/.match("foobar").deconstruct_keys(nil)"##,
+        );
+        run_test(
+            r##"/(?<a>foo)(?<b>bar)/.match("foobar").deconstruct_keys([:a])"##,
+        );
+        run_test(
+            r##"/(?<a>foo)(?<b>bar)/.match("foobar").deconstruct_keys([:a, :missing, :b])"##,
+        );
+        // No named captures → empty hash
+        run_test(r##"/(foo)(bar)/.match("foobar").deconstruct_keys(nil)"##);
+        run_test_error(r##"/(?<a>x)/.match("x").deconstruct_keys(1)"##);
     }
 
     #[test]
