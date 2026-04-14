@@ -79,6 +79,97 @@ impl RegexpInner {
     pub fn escape(text: &str) -> String {
         regex::escape(text)
     }
+}
+
+/// Expand Ruby's `\u{XXXX}` / `\u{XX YY ZZ}` regex-literal escapes into the
+/// forms Onigmo understands (`\uHHHH` for BMP, raw UTF-8 for supplementary).
+///
+/// Onigmo's `\u` handler only accepts exactly four hex digits, so the
+/// Ruby-level brace form must be normalized before the source is handed off.
+/// Leaves every other escape (including `\\u{...}`) untouched.
+fn expand_unicode_braces(src: &str) -> Result<String> {
+    if !src.contains("\\u{") {
+        return Ok(src.to_string());
+    }
+    let bytes = src.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' {
+            if i + 2 < bytes.len() && bytes[i + 1] == b'u' && bytes[i + 2] == b'{' {
+                let content_start = i + 3;
+                if let Some(rel_end) = bytes[content_start..].iter().position(|&b| b == b'}') {
+                    let content = std::str::from_utf8(&bytes[content_start..content_start + rel_end])
+                        .map_err(|_| MonorubyErr::regexerr("invalid utf-8 in \\u{...}"))?;
+                    let mut buf = String::new();
+                    let mut ok = true;
+                    let mut empty = true;
+                    for tok in content.split_ascii_whitespace() {
+                        empty = false;
+                        if tok.is_empty() || tok.len() > 6 || !tok.bytes().all(|b| b.is_ascii_hexdigit()) {
+                            ok = false;
+                            break;
+                        }
+                        match u32::from_str_radix(tok, 16) {
+                            Ok(cp) if cp <= 0x10FFFF => {
+                                if cp <= 0xFFFF {
+                                    use std::fmt::Write;
+                                    let _ = write!(buf, "\\u{:04X}", cp);
+                                } else if let Some(ch) = char::from_u32(cp) {
+                                    buf.push(ch);
+                                } else {
+                                    ok = false;
+                                    break;
+                                }
+                            }
+                            _ => {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if ok && !empty {
+                        out.push_str(&buf);
+                        i = content_start + rel_end + 1;
+                        continue;
+                    }
+                    return Err(MonorubyErr::regexerr("invalid Unicode escape \\u{...}"));
+                }
+            }
+            // Copy the backslash and the following character (if any) verbatim
+            // so escapes like `\\`, `\u0041`, `\x{...}` are preserved.
+            out.push('\\');
+            i += 1;
+            if i < bytes.len() {
+                let ch_len = utf8_char_len(bytes[i]);
+                out.push_str(&src[i..i + ch_len]);
+                i += ch_len;
+            }
+            continue;
+        }
+        // Copy one UTF-8 scalar verbatim.
+        let ch_len = utf8_char_len(bytes[i]);
+        out.push_str(&src[i..i + ch_len]);
+        i += ch_len;
+    }
+    Ok(out)
+}
+
+fn utf8_char_len(b: u8) -> usize {
+    if b < 0x80 {
+        1
+    } else if b < 0xC0 {
+        1 // continuation byte (should not be seen as a leader, but avoid panic)
+    } else if b < 0xE0 {
+        2
+    } else if b < 0xF0 {
+        3
+    } else {
+        4
+    }
+}
+
+impl RegexpInner {
 
     /// Create `RegexpInfo` from `escaped_str` escaping all meta characters.
     pub fn from_escaped(text: &str) -> Result<Self> {
@@ -97,6 +188,7 @@ impl RegexpInner {
         encoding: OnigmoEncoding,
     ) -> Result<Self> {
         let reg_str: String = reg_str.into();
+        let reg_str = expand_unicode_braces(&reg_str)?;
         match REGEX_CACHE
             .write()
             .unwrap()
