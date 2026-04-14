@@ -204,14 +204,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         1,
         false,
     );
-    globals.define_builtin_func_with(
-        kernel_class,
-        "public_methods",
-        public_methods,
-        0,
-        1,
-        false,
-    );
+    globals.define_builtin_func_with(kernel_class, "public_methods", public_methods, 0, 1, false);
     globals.define_builtin_func_with(
         kernel_class,
         "singleton_methods",
@@ -1060,7 +1053,7 @@ fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
 fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::process::Command;
     let arg0 = lfp.arg(0);
-    let (program, mut args) = prepare_command_arg(arg0.as_str());
+    let (program, mut args) = prepare_command_arg(&arg0.coerce_to_str(vm, globals)?);
     if let Some(arg1) = lfp.try_arg(1) {
         for v in arg1.as_array().iter() {
             args.push(v.coerce_to_string(vm, globals)?);
@@ -1185,9 +1178,9 @@ fn fork(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/=60.html]
 #[monoruby_builtin]
-fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.arg(0);
-    let (program, args) = prepare_command_arg(arg0.as_str());
+    let (program, args) = prepare_command_arg(&arg0.coerce_to_string(vm, globals)?);
     match std::process::Command::new(program).args(&args).output() {
         Ok(output) => {
             std::io::stderr().write_all(&output.stderr).unwrap();
@@ -1250,21 +1243,18 @@ fn abort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/exit.html]
 #[monoruby_builtin]
-fn exit(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn exit(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let status = if let Some(arg0) = lfp.try_arg(0) {
-        if let Some(i) = arg0.try_fixnum() {
-            i as u8
-        } else {
-            match arg0.as_bool() {
-                true => 0,
-                false => 1,
-            }
+        match arg0.unpack() {
+            RV::Bool(true) => 0,
+            RV::Bool(false) => 1,
+            _ => arg0.coerce_to_int_i64(vm, globals)?,
         }
     } else {
         0
     };
     Err(MonorubyErr::new(
-        MonorubyErrKind::SystemExit(status),
+        MonorubyErrKind::SystemExit(status as u8),
         "exit",
     ))
 }

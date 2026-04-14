@@ -65,7 +65,9 @@ impl IoInner {
             Self::Popen(popen) => {
                 let popen = Rc::get_mut(popen).unwrap();
                 if let Some(ref mut writer) = popen.writer {
-                    writer.flush().map_err(|e| MonorubyErr::ioerr(e.to_string()))?;
+                    writer
+                        .flush()
+                        .map_err(|e| MonorubyErr::ioerr(e.to_string()))?;
                 }
                 return Ok(());
             }
@@ -117,15 +119,15 @@ impl IoInner {
         }))
     }
 
-    pub(crate) fn popen(mut child: std::process::Child) -> Self {
-        let reader = child.stdout.take().map(std::io::BufReader::new);
-        let writer = child.stdin.take();
-        Self::Popen(Rc::new(PopenDescriptor {
-            child,
-            reader,
-            writer,
-        }))
-    }
+    //pub(crate) fn popen(mut child: std::process::Child) -> Self {
+    //    let reader = child.stdout.take().map(std::io::BufReader::new);
+    //    let writer = child.stdin.take();
+    //    Self::Popen(Rc::new(PopenDescriptor {
+    //        child,
+    //        reader,
+    //        writer,
+    //    }))
+    //}
 
     pub(crate) fn pid(&self) -> Option<u32> {
         match self {

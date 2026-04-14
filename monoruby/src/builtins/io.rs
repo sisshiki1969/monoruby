@@ -1,8 +1,5 @@
 use super::*;
 use std::fs::File;
-use std::os::fd::FromRawFd;
-use std::os::unix::process::CommandExt;
-use std::process::{Command, Stdio};
 use std::rc::Rc;
 
 //
@@ -73,7 +70,9 @@ fn io_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         let io_inner = IoInner::from_raw_fd(fd_i32, name);
         return Ok(Value::new_io(io_inner));
     }
-    Err(MonorubyErr::argumenterr("IO.new requires an integer file descriptor"))
+    Err(MonorubyErr::argumenterr(
+        "IO.new requires an integer file descriptor",
+    ))
 }
 
 /// Allocator for `IO` and its subclasses.
@@ -586,20 +585,21 @@ fn io_sysopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/pipe.html]
 #[monoruby_builtin]
 fn io_pipe(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut fds: [libc::c_int; 2] = [0; 2];
-    // SAFETY: fds is a valid pointer to a 2-element array of c_int.
-    let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
-    if ret == -1 {
-        let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::errno_with_msg(
-            &_globals.store,
-            &err,
-            "pipe(2)",
-        ));
-    }
-    let read_io = Value::new_io(IoInner::from_raw_fd(fds[0], "pipe".to_string()));
-    let write_io = Value::new_io(IoInner::from_raw_fd(fds[1], "pipe".to_string()));
-    Ok(Value::array2(read_io, write_io))
+    return Err(MonorubyErr::runtimeerr("IO.pipe is not yet supported"));
+    //let mut fds: [libc::c_int; 2] = [0; 2];
+    //// SAFETY: fds is a valid pointer to a 2-element array of c_int.
+    //let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    //if ret == -1 {
+    //    let err = std::io::Error::last_os_error();
+    //    return Err(MonorubyErr::errno_with_msg(
+    //        &_globals.store,
+    //        &err,
+    //        "pipe(2)",
+    //    ));
+    //}
+    //let read_io = Value::new_io(IoInner::from_raw_fd(fds[0], "pipe".to_string()));
+    //let write_io = Value::new_io(IoInner::from_raw_fd(fds[1], "pipe".to_string()));
+    //Ok(Value::array2(read_io, write_io))
 }
 
 /// ### IO.popen
@@ -609,33 +609,34 @@ fn io_pipe(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/popen.html]
 #[monoruby_builtin]
-fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let args = lfp.arg(0).as_array();
-    if args.is_empty() {
-        return Err(MonorubyErr::argumenterr(
-            "wrong number of arguments (given 0, expected 1+)",
-        ));
-    }
-    let cmd_val = args[0];
+fn io_popen(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    return Err(MonorubyErr::runtimeerr("IO.popen is not yet supported"));
+    //let args = lfp.arg(0).as_array();
+    //if args.is_empty() {
+    //    return Err(MonorubyErr::argumenterr(
+    //        "wrong number of arguments (given 0, expected 1+)",
+    //    ));
+    //}
+    //let cmd_val = args[0];
 
-    // Build the command from either a String or an Array of strings.
-    let (mut command, cmd_name) = if let Some(ary) = cmd_val.try_array_ty() {
-        let parts: Vec<String> = ary.iter().map(|v| v.to_s(globals)).collect();
-        if parts.is_empty() {
-            return Err(MonorubyErr::argumenterr("popen: empty command array"));
-        }
-        let name = parts[0].clone();
-        let mut cmd = Command::new(&parts[0]);
-        for part in &parts[1..] {
-            cmd.arg(part);
-        }
-        (cmd, name)
-    } else {
-        let cmd_str = cmd_val.coerce_to_str(vm, globals)?;
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg(cmd_str.to_string());
-        (cmd, cmd_str)
-    };
+    //// Build the command from either a String or an Array of strings.
+    //let (mut command, cmd_name) = if let Some(ary) = cmd_val.try_array_ty() {
+    //    let parts: Vec<String> = ary.iter().map(|v| v.to_s(globals)).collect();
+    //    if parts.is_empty() {
+    //        return Err(MonorubyErr::argumenterr("popen: empty command array"));
+    //    }
+    //    let name = parts[0].clone();
+    //    let mut cmd = Command::new(&parts[0]);
+    //    for part in &parts[1..] {
+    //        cmd.arg(part);
+    //    }
+    //    (cmd, name)
+    //} else {
+    //    let cmd_str = cmd_val.coerce_to_str(vm, globals)?;
+    //    let mut cmd = Command::new("sh");
+    //    cmd.arg("-c").arg(cmd_str.to_string());
+    //    (cmd, cmd_str)
+    //};
 
     // Parse mode and options.
     // IO.popen accepts:
@@ -643,99 +644,99 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     //   IO.popen(cmd, mode)
     //   IO.popen(cmd, mode, opts)
     //   IO.popen(cmd, opts)   -- Hash as second arg means spawn options
-    let mut opts_hash = None;
-    let mode = if args.len() > 1 {
-        if args[1].try_hash_ty().is_some() {
-            // Second arg is options hash, mode defaults to "r"
-            opts_hash = Some(args[1]);
-            "r".to_string()
-        } else {
-            let m = args[1].coerce_to_str(vm, globals)?;
-            if args.len() > 2 && args[2].try_hash_ty().is_some() {
-                opts_hash = Some(args[2]);
-            }
-            m
-        }
-    } else {
-        "r".to_string()
-    };
-    let readable = mode.contains('r') || mode.contains('+');
-    let writable = mode.contains('w') || mode.contains('+');
+    //let mut opts_hash = None;
+    //let mode = if args.len() > 1 {
+    //    if args[1].try_hash_ty().is_some() {
+    //        // Second arg is options hash, mode defaults to "r"
+    //        opts_hash = Some(args[1]);
+    //        "r".to_string()
+    //    } else {
+    //        let m = args[1].coerce_to_str(vm, globals)?;
+    //        if args.len() > 2 && args[2].try_hash_ty().is_some() {
+    //            opts_hash = Some(args[2]);
+    //        }
+    //        m
+    //    }
+    //} else {
+    //    "r".to_string()
+    //};
+    //let readable = mode.contains('r') || mode.contains('+');
+    //let writable = mode.contains('w') || mode.contains('+');
 
-    if writable {
-        command.stdin(Stdio::piped());
-    } else {
-        command.stdin(Stdio::null());
-    }
-    if readable {
-        command.stdout(Stdio::piped());
-    } else {
-        command.stdout(Stdio::inherit());
-    }
+    //if writable {
+    //    command.stdin(Stdio::piped());
+    //} else {
+    //    command.stdin(Stdio::null());
+    //}
+    //if readable {
+    //    command.stdout(Stdio::piped());
+    //} else {
+    //    command.stdout(Stdio::inherit());
+    //}
 
     // Handle err: [:child, :out] option to redirect stderr to stdout
-    let mut stderr_to_stdout = false;
-    if let Some(opts) = opts_hash {
-        let err_key = Value::symbol_from_str("err");
-        if let Ok(Some(err_val)) = opts.as_hash().get(err_key, vm, globals) {
-            if let Some(ary) = err_val.try_array_ty() {
-                if ary.len() == 2
-                    && ary[0].try_symbol_or_string() == Some(IdentId::get_id("child"))
-                    && ary[1].try_symbol_or_string() == Some(IdentId::get_id("out"))
-                {
-                    stderr_to_stdout = true;
-                }
-            }
-        }
-    }
-    if stderr_to_stdout {
-        // Redirect stderr to stdout via OS-level dup2
-        // SAFETY: dup2(1, 2) duplicates stdout fd to stderr fd, which is safe
-        // for child processes about to exec.
-        unsafe {
-            command.pre_exec(|| {
-                libc::dup2(1, 2);
-                Ok(())
-            });
-        }
-        command.stderr(Stdio::inherit());
-    } else {
-        command.stderr(Stdio::inherit());
-    }
+    //let mut stderr_to_stdout = false;
+    //if let Some(opts) = opts_hash {
+    //    let err_key = Value::symbol_from_str("err");
+    //    if let Ok(Some(err_val)) = opts.as_hash().get(err_key, vm, globals) {
+    //        if let Some(ary) = err_val.try_array_ty() {
+    //            if ary.len() == 2
+    //                && ary[0].try_symbol_or_string() == Some(IdentId::get_id("child"))
+    //                && ary[1].try_symbol_or_string() == Some(IdentId::get_id("out"))
+    //            {
+    //                stderr_to_stdout = true;
+    //            }
+    //        }
+    //    }
+    //}
+    //if stderr_to_stdout {
+    //    // Redirect stderr to stdout via OS-level dup2
+    //    // SAFETY: dup2(1, 2) duplicates stdout fd to stderr fd, which is safe
+    //    // for child processes about to exec.
+    //    unsafe {
+    //        command.pre_exec(|| {
+    //            libc::dup2(1, 2);
+    //            Ok(())
+    //        });
+    //    }
+    //    command.stderr(Stdio::inherit());
+    //} else {
+    //    command.stderr(Stdio::inherit());
+    //}
 
-    let child = command
-        .spawn()
-        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_f_spawn", &cmd_name))?;
+    //let child = command
+    //    .spawn()
+    //    .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_f_spawn", &cmd_name))?;
+    //
+    //let io_val = Value::new_io(IoInner::popen(child));
 
-    let io_val = Value::new_io(IoInner::popen(child));
-
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, bh)?;
-        let res = vm.invoke_block(globals, &data, &[io_val]);
-        let mut io_close = io_val;
-        if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close() {
-            if let Ok(status_class) =
-                vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
-            {
-                if let Ok(status_obj) = vm.invoke_method_inner(
-                    globals,
-                    IdentId::NEW,
-                    status_class,
-                    &[
-                        Value::integer(exit_status as i64),
-                        Value::integer(pid as i64),
-                    ],
-                    None,
-                    None,
-                ) {
-                    globals.set_gvar(IdentId::get_id("$?"), status_obj);
-                }
-            }
-        }
-        res
-    } else {
-        Ok(io_val)
-    }
+    //if let Some(bh) = lfp.block() {
+    //    let data = vm.get_block_data(globals, bh)?;
+    //    let res = vm.invoke_block(globals, &data, &[io_val]);
+    //    let mut io_close = io_val;
+    //    if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close() {
+    //        if let Ok(status_class) =
+    //            vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
+    //        {
+    //            if let Ok(status_obj) = vm.invoke_method_inner(
+    //                globals,
+    //                IdentId::NEW,
+    //                status_class,
+    //                &[
+    //                    Value::integer(exit_status as i64),
+    //                    Value::integer(pid as i64),
+    //                ],
+    //                None,
+    //                None,
+    //            ) {
+    //                globals.set_gvar(IdentId::get_id("$?"), status_obj);
+    //            }
+    //        }
+    //    }
+    //    res
+    //} else {
+    //    Ok(io_val)
+    //}
 }
 
 /// ### IO#pid
@@ -1097,92 +1098,88 @@ fn external_encoding(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/copy_stream.html]
 #[monoruby_builtin]
-fn io_copy_stream(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let copy_length: Option<i64> = lfp
-        .try_arg(2)
-        .and_then(|v| if v.is_nil() { None } else { Some(v) })
-        .map(|v| v.coerce_to_int_i64(vm, globals))
-        .transpose()?;
-    let src_offset: Option<i64> = lfp
-        .try_arg(3)
-        .and_then(|v| if v.is_nil() { None } else { Some(v) })
-        .map(|v| v.coerce_to_int_i64(vm, globals))
-        .transpose()?;
+fn io_copy_stream(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    return Err(MonorubyErr::runtimeerr(
+        "IO.copy_stream is not yet supported",
+    ));
+    //let copy_length: Option<i64> = lfp
+    //    .try_arg(2)
+    //    .and_then(|v| if v.is_nil() { None } else { Some(v) })
+    //    .map(|v| v.coerce_to_int_i64(vm, globals))
+    //    .transpose()?;
+    //let src_offset: Option<i64> = lfp
+    //    .try_arg(3)
+    //    .and_then(|v| if v.is_nil() { None } else { Some(v) })
+    //    .map(|v| v.coerce_to_int_i64(vm, globals))
+    //    .transpose()?;
 
     // Helper: duplicate an fd from an IO Value for use as a std::fs::File.
-    fn dup_fd_from_io(io_val: Value, globals: &Globals) -> Result<File> {
-        let mut v = io_val;
-        if v.try_rvalue().map_or(true, |rv| rv.ty() != ObjTy::IO) {
-            return Err(MonorubyErr::typeerr(format!(
-                "no implicit conversion of {} into IO",
-                v.get_real_class_name(&globals.store)
-            )));
-        }
-        let fd = v.as_io_inner_mut().fileno()?;
-        // SAFETY: dup the fd so that the original IO still owns its fd.
-        let new_fd = unsafe { libc::dup(fd) };
-        if new_fd == -1 {
-            return Err(MonorubyErr::runtimeerr("dup failed"));
-        }
-        // SAFETY: new_fd is a valid, newly duplicated file descriptor.
-        Ok(unsafe { File::from_raw_fd(new_fd) })
-    }
+    //fn dup_fd_from_io(io_val: Value, globals: &Globals) -> Result<File> {
+    //    let mut v = io_val;
+    //    if v.try_rvalue().map_or(true, |rv| rv.ty() != ObjTy::IO) {
+    //        return Err(MonorubyErr::typeerr(format!(
+    //            "no implicit conversion of {} into IO",
+    //            v.get_real_class_name(&globals.store)
+    //        )));
+    //    }
+    //    let fd = v.as_io_inner_mut().fileno()?;
+    //    // SAFETY: dup the fd so that the original IO still owns its fd.
+    //    let new_fd = unsafe { libc::dup(fd) };
+    //    if new_fd == -1 {
+    //        return Err(MonorubyErr::runtimeerr("dup failed"));
+    //    }
+    //    // SAFETY: new_fd is a valid, newly duplicated file descriptor.
+    //    Ok(unsafe { File::from_raw_fd(new_fd) })
+    //}
 
     // Open source
-    let src_val = lfp.arg(0);
-    let mut src_owned: File;
-    let src_is_path = src_val.try_bytes().is_some();
-    if src_is_path {
-        let path = src_val.coerce_to_string(vm, globals)?;
-        src_owned = File::open(&path).map_err(|e| {
-            MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path)
-        })?;
-        if let Some(offset) = src_offset {
-            use std::io::Seek;
-            src_owned
-                .seek(std::io::SeekFrom::Start(offset as u64))
-                .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
-        }
-    } else {
-        src_owned = dup_fd_from_io(src_val, globals)?;
-        if let Some(offset) = src_offset {
-            use std::io::Seek;
-            src_owned
-                .seek(std::io::SeekFrom::Start(offset as u64))
-                .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
-        }
-    }
+    //let src_val = lfp.arg(0);
+    //let mut src_owned: File;
+    //let src_is_path = src_val.try_bytes().is_some();
+    //if src_is_path {
+    //    let path = src_val.coerce_to_string(vm, globals)?;
+    //    src_owned = File::open(&path)
+    //        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
+    //    if let Some(offset) = src_offset {
+    //        use std::io::Seek;
+    //        src_owned
+    //            .seek(std::io::SeekFrom::Start(offset as u64))
+    //            .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+    //    }
+    //} else {
+    //    src_owned = dup_fd_from_io(src_val, globals)?;
+    //    if let Some(offset) = src_offset {
+    //        use std::io::Seek;
+    //        src_owned
+    //            .seek(std::io::SeekFrom::Start(offset as u64))
+    //            .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+    //    }
+    //}
 
     // Open destination
-    let dst_val = lfp.arg(1);
-    let dst_is_path = dst_val.try_bytes().is_some();
-    let mut dst_owned: File;
-    if dst_is_path {
-        let path = dst_val.coerce_to_string(vm, globals)?;
-        dst_owned = File::create(&path).map_err(|e| {
-            MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path)
-        })?;
-    } else {
-        dst_owned = dup_fd_from_io(dst_val, globals)?;
-    }
+    //let dst_val = lfp.arg(1);
+    //let dst_is_path = dst_val.try_bytes().is_some();
+    //let mut dst_owned: File;
+    //if dst_is_path {
+    //    let path = dst_val.coerce_to_string(vm, globals)?;
+    //    dst_owned = File::create(&path)
+    //        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
+    //} else {
+    //    dst_owned = dup_fd_from_io(dst_val, globals)?;
+    //}
 
     // Copy
-    use std::io::Read;
-    let copied = if let Some(length) = copy_length {
-        let mut limited = (&mut src_owned).take(length as u64);
-        std::io::copy(&mut limited, &mut dst_owned)
-            .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?
-    } else {
-        std::io::copy(&mut src_owned, &mut dst_owned)
-            .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?
-    };
+    //use std::io::Read;
+    //let copied = if let Some(length) = copy_length {
+    //    let mut limited = (&mut src_owned).take(length as u64);
+    //    std::io::copy(&mut limited, &mut dst_owned)
+    //        .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?
+    //} else {
+    //    std::io::copy(&mut src_owned, &mut dst_owned)
+    //        .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?
+    //};
 
-    Ok(Value::integer(copied as i64))
+    //Ok(Value::integer(copied as i64))
 }
 
 #[cfg(test)]
