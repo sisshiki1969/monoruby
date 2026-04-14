@@ -26,6 +26,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_with(klass, "waitpid", process_wait, 0, 2, false);
     globals.define_builtin_module_func_with(klass, "wait2", process_wait2, 0, 2, false);
     globals.define_builtin_module_func_with(klass, "waitpid2", process_wait2, 0, 2, false);
+    globals.define_builtin_module_func_rest(klass, "kill", process_kill);
 
     // Process::Status class — methods defined in Ruby (startup.rb)
     globals.define_class("Status", object_class, klass);
@@ -306,6 +307,93 @@ fn last_status(
 }
 
 /// - list -> Hash
+/// Map a signal name (with optional "SIG" prefix) to its numeric value.
+fn signal_name_to_number(name: &str) -> Option<i32> {
+    let n = name.strip_prefix("SIG").unwrap_or(name);
+    Some(match n {
+        "EXIT" => 0,
+        "HUP" => 1,
+        "INT" => 2,
+        "QUIT" => 3,
+        "ILL" => 4,
+        "TRAP" => 5,
+        "ABRT" | "IOT" => 6,
+        "BUS" => 7,
+        "FPE" => 8,
+        "KILL" => 9,
+        "USR1" => 10,
+        "SEGV" => 11,
+        "USR2" => 12,
+        "PIPE" => 13,
+        "ALRM" => 14,
+        "TERM" => 15,
+        "STKFLT" => 16,
+        "CLD" | "CHLD" => 17,
+        "CONT" => 18,
+        "STOP" => 19,
+        "TSTP" => 20,
+        "TTIN" => 21,
+        "TTOU" => 22,
+        "URG" => 23,
+        "XCPU" => 24,
+        "XFSZ" => 25,
+        "VTALRM" => 26,
+        "PROF" => 27,
+        "WINCH" => 28,
+        "IO" | "POLL" => 29,
+        "PWR" => 30,
+        "SYS" => 31,
+        _ => return None,
+    })
+}
+
+///
+/// ### Process.#kill
+///
+/// - kill(signal, *pids) -> Integer
+///
+/// Send `signal` to each pid. `signal` may be an Integer, Symbol or String
+/// (with or without a leading "SIG").
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Process/m/kill.html]
+#[monoruby_builtin]
+fn process_kill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    if args.len() < 2 {
+        return Err(MonorubyErr::argumenterr(format!(
+            "wrong number of arguments (given {}, expected 2+)",
+            args.len()
+        )));
+    }
+    let sig_arg = args[0];
+    let signum = if let Some(i) = sig_arg.try_fixnum() {
+        i as i32
+    } else {
+        let s = sig_arg.coerce_to_str(vm, globals)?;
+        match signal_name_to_number(&s) {
+            Some(n) => n,
+            None => {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "unsupported signal SIG{}",
+                    s.trim_start_matches("SIG")
+                )));
+            }
+        }
+    };
+    let mut count = 0i64;
+    for pid_val in args.iter().skip(1) {
+        let pid = pid_val.coerce_to_int_i64(vm, globals)? as i32;
+        // SAFETY: libc::kill is an OS syscall with no Rust aliasing concerns.
+        let r = unsafe { libc::kill(pid, signum) };
+        if r == -1 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "kill"));
+        }
+        count += 1;
+    }
+    Ok(Value::integer(count))
+}
+
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Signal/m/list.html]
 #[monoruby_builtin]
