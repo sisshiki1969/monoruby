@@ -213,16 +213,19 @@ class Process
       @status
     end
 
-    def inspect
+    def to_s
       if signaled?
-        "#<Process::Status: pid #{@pid} SIG#{termsig}#{coredump? ? ' (core dumped)' : ''}>"
+        "pid #{@pid} SIG#{termsig}#{coredump? ? ' (core dumped)' : ''}"
       elsif stopped?
-        "#<Process::Status: pid #{@pid} stopped SIG#{stopsig}>"
+        "pid #{@pid} stopped SIG#{stopsig}"
       else
-        "#<Process::Status: pid #{@pid} exit #{exitstatus}>"
+        "pid #{@pid} exit #{exitstatus}"
       end
     end
-    alias to_s inspect
+
+    def inspect
+      "#<Process::Status: #{to_s}>"
+    end
 
     def ==(other)
       if other.is_a?(Integer)
