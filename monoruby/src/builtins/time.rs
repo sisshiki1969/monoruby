@@ -44,9 +44,232 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(TIME_CLASS, "subsec", subsec, 0);
     globals.define_builtin_funcs(TIME_CLASS, "to_i", &["tv_sec"], to_i, 0);
     globals.define_builtin_func(TIME_CLASS, "to_f", to_f, 0);
-    globals.define_builtin_func(TIME_CLASS, "utc_offset", utc_offset, 0);
+    globals.define_builtin_funcs(TIME_CLASS, "utc_offset", &["gmt_offset", "gmtoff"], utc_offset, 0);
     globals.define_builtin_func(TIME_CLASS, "-", sub, 1);
     globals.define_builtin_func(TIME_CLASS, "+", add, 1);
+    globals.define_builtin_func(TIME_CLASS, "sunday?", sunday_q, 0);
+    globals.define_builtin_func(TIME_CLASS, "monday?", monday_q, 0);
+    globals.define_builtin_func(TIME_CLASS, "tuesday?", tuesday_q, 0);
+    globals.define_builtin_func(TIME_CLASS, "wednesday?", wednesday_q, 0);
+    globals.define_builtin_func(TIME_CLASS, "thursday?", thursday_q, 0);
+    globals.define_builtin_func(TIME_CLASS, "friday?", friday_q, 0);
+    globals.define_builtin_func(TIME_CLASS, "saturday?", saturday_q, 0);
+    globals.define_builtin_funcs(TIME_CLASS, "dst?", &["isdst"], dst_q, 0);
+    globals.define_builtin_func(TIME_CLASS, "zone", zone, 0);
+    globals.define_builtin_funcs(TIME_CLASS, "getutc", &["getgm"], getutc, 0);
+    globals.define_builtin_func_with(TIME_CLASS, "getlocal", getlocal, 0, 1, false);
+    globals.define_builtin_func(TIME_CLASS, "to_a", to_a, 0);
+    globals.define_builtin_funcs(TIME_CLASS, "iso8601", &["xmlschema"], iso8601, 0);
+    globals.define_builtin_func(TIME_CLASS, "asctime", asctime, 0);
+    globals.define_builtin_func(TIME_CLASS, "ctime", asctime, 0);
+    globals.define_builtin_func_with(TIME_CLASS, "floor", floor_, 0, 1, false);
+    globals.define_builtin_func_with(TIME_CLASS, "ceil", ceil_, 0, 1, false);
+    globals.define_builtin_func_with(TIME_CLASS, "round", round_, 0, 1, false);
+}
+
+fn wday_val(lfp: &Lfp) -> u32 {
+    match lfp.self_val().as_time() {
+        TimeInner::Local(t) => t.weekday().num_days_from_sunday(),
+        TimeInner::Utc(t) => t.weekday().num_days_from_sunday(),
+    }
+}
+
+#[monoruby_builtin]
+fn sunday_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(wday_val(&lfp) == 0))
+}
+#[monoruby_builtin]
+fn monday_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(wday_val(&lfp) == 1))
+}
+#[monoruby_builtin]
+fn tuesday_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(wday_val(&lfp) == 2))
+}
+#[monoruby_builtin]
+fn wednesday_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(wday_val(&lfp) == 3))
+}
+#[monoruby_builtin]
+fn thursday_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(wday_val(&lfp) == 4))
+}
+#[monoruby_builtin]
+fn friday_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(wday_val(&lfp) == 5))
+}
+#[monoruby_builtin]
+fn saturday_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(wday_val(&lfp) == 6))
+}
+
+#[monoruby_builtin]
+fn dst_q(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(false))
+}
+
+#[monoruby_builtin]
+fn zone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    match lfp.self_val().as_time() {
+        TimeInner::Utc(_) => Ok(Value::string_from_str("UTC")),
+        TimeInner::Local(_) => Ok(Value::nil()),
+    }
+}
+
+#[monoruby_builtin]
+fn getutc(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let new = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => TimeInner::Utc(t.with_timezone(&Utc)),
+        TimeInner::Utc(t) => TimeInner::Utc(*t),
+    };
+    Ok(Value::new_time(new))
+}
+
+#[monoruby_builtin]
+fn getlocal(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let new = if let Some(arg0) = lfp.try_arg(0) {
+        let offset_secs = arg0.coerce_to_int_i64(vm, globals)? as i32;
+        let fixed = FixedOffset::east_opt(offset_secs)
+            .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))?;
+        match lfp.self_val().as_time() {
+            TimeInner::Local(t) => TimeInner::Local(t.with_timezone(&fixed)),
+            TimeInner::Utc(t) => TimeInner::Local(t.with_timezone(&fixed)),
+        }
+    } else {
+        match lfp.self_val().as_time() {
+            TimeInner::Local(t) => {
+                let local: DateTime<Local> = (*t).into();
+                TimeInner::Local(local.into())
+            }
+            TimeInner::Utc(t) => {
+                let local: DateTime<Local> = (*t).into();
+                TimeInner::Local(local.into())
+            }
+        }
+    };
+    Ok(Value::new_time(new))
+}
+
+#[monoruby_builtin]
+fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let t = lfp.self_val();
+    let is_utc = t.as_time().is_utc();
+    let (sec, min, hour, day, mon, year, wday, yday) = match t.as_time() {
+        TimeInner::Local(t) => (
+            t.second(), t.minute(), t.hour(), t.day(), t.month(), t.year(),
+            t.weekday().num_days_from_sunday(), t.ordinal(),
+        ),
+        TimeInner::Utc(t) => (
+            t.second(), t.minute(), t.hour(), t.day(), t.month(), t.year(),
+            t.weekday().num_days_from_sunday(), t.ordinal(),
+        ),
+    };
+    let zone = if is_utc {
+        Value::string_from_str("UTC")
+    } else {
+        Value::nil()
+    };
+    Ok(Value::array_from_vec(vec![
+        Value::integer(sec as _),
+        Value::integer(min as _),
+        Value::integer(hour as _),
+        Value::integer(day as _),
+        Value::integer(mon as _),
+        Value::integer(year as _),
+        Value::integer(wday as _),
+        Value::integer(yday as _),
+        Value::bool(false),
+        zone,
+    ]))
+}
+
+#[monoruby_builtin]
+fn iso8601(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let s = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => t.format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
+        TimeInner::Utc(t) => t.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    };
+    Ok(Value::string(s))
+}
+
+#[monoruby_builtin]
+fn asctime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let s = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => t.format("%a %b %e %H:%M:%S %Y").to_string(),
+        TimeInner::Utc(t) => t.format("%a %b %e %H:%M:%S %Y").to_string(),
+    };
+    Ok(Value::string(s))
+}
+
+fn precision_arg(vm: &mut Executor, globals: &mut Globals, lfp: &Lfp) -> Result<u32> {
+    if let Some(a) = lfp.try_arg(0) {
+        let v = a.coerce_to_int_i64(vm, globals)?;
+        if !(0..=9).contains(&v) {
+            return Err(MonorubyErr::argumenterr("precision out of range"));
+        }
+        Ok(v as u32)
+    } else {
+        Ok(0)
+    }
+}
+
+fn rescale_nsec(ns: u32, precision: u32, mode: i8) -> u32 {
+    // mode: -1 floor, 0 round, 1 ceil
+    if precision >= 9 {
+        return ns;
+    }
+    let div = 10u32.pow(9 - precision);
+    let q = ns / div;
+    let r = ns % div;
+    let q = match mode {
+        -1 => q,
+        1 => if r == 0 { q } else { q + 1 },
+        _ => if r * 2 >= div { q + 1 } else { q },
+    };
+    q * div
+}
+
+fn apply_subsec(lfp: &Lfp, mode: i8, precision: u32) -> TimeInner {
+    match lfp.self_val().as_time() {
+        TimeInner::Local(t) => {
+            let ns = t.nanosecond();
+            let new_ns = rescale_nsec(ns, precision, mode);
+            let mut result = t.with_nanosecond(0).unwrap();
+            if new_ns >= 1_000_000_000 {
+                result = result + Duration::seconds(1);
+            } else {
+                result = result.with_nanosecond(new_ns).unwrap();
+            }
+            TimeInner::Local(result)
+        }
+        TimeInner::Utc(t) => {
+            let ns = t.nanosecond();
+            let new_ns = rescale_nsec(ns, precision, mode);
+            let mut result = t.with_nanosecond(0).unwrap();
+            if new_ns >= 1_000_000_000 {
+                result = result + Duration::seconds(1);
+            } else {
+                result = result.with_nanosecond(new_ns).unwrap();
+            }
+            TimeInner::Utc(result)
+        }
+    }
+}
+
+#[monoruby_builtin]
+fn floor_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let p = precision_arg(vm, globals, &lfp)?;
+    Ok(Value::new_time(apply_subsec(&lfp, -1, p)))
+}
+#[monoruby_builtin]
+fn ceil_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let p = precision_arg(vm, globals, &lfp)?;
+    Ok(Value::new_time(apply_subsec(&lfp, 1, p)))
+}
+#[monoruby_builtin]
+fn round_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let p = precision_arg(vm, globals, &lfp)?;
+    Ok(Value::new_time(apply_subsec(&lfp, 0, p)))
 }
 
 ///
@@ -777,6 +1000,76 @@ mod tests {
             (t + 0.5).to_f - t.to_f > 0
             "#,
         );
+    }
+
+    #[test]
+    fn time_weekday_predicates() {
+        run_test(
+            r#"
+            t = Time.utc(2000,1,3) # Monday
+            [t.sunday?, t.monday?, t.tuesday?, t.wednesday?,
+             t.thursday?, t.friday?, t.saturday?]
+            "#,
+        );
+    }
+
+    #[test]
+    fn time_gmt_offset_aliases() {
+        run_test("Time.utc(2000).gmt_offset");
+        run_test("Time.utc(2000).gmtoff");
+    }
+
+    #[test]
+    fn time_dst() {
+        run_test("Time.utc(2000).dst?");
+        run_test("Time.utc(2000).isdst");
+    }
+
+    #[test]
+    fn time_zone() {
+        run_test("Time.utc(2000).zone");
+    }
+
+    #[test]
+    fn time_getutc_getgm() {
+        run_test("Time.local(2000,1,1,9,0,0).getutc.to_s");
+        run_test("Time.local(2000,1,1,9,0,0).getgm.utc?");
+        run_test("Time.utc(2000,1,1).getutc.utc?");
+    }
+
+    #[test]
+    fn time_getlocal() {
+        run_test_once("Time.utc(2000,1,1).getlocal.is_a?(Time)");
+        run_test("Time.utc(2000,1,1,12,0,0).getlocal(3600).to_s");
+        run_test("Time.utc(2000,1,1,12,0,0).getlocal(-18000).to_s");
+    }
+
+    #[test]
+    fn time_to_a() {
+        run_test("Time.utc(2000,1,2,3,4,5).to_a");
+    }
+
+    #[test]
+    fn time_iso8601() {
+        run_test(r#"Time.utc(2000,1,2,3,4,5).iso8601"#);
+        run_test(r#"Time.utc(2000,1,2,3,4,5).xmlschema"#);
+    }
+
+    #[test]
+    fn time_asctime_ctime() {
+        run_test(r#"Time.utc(2000,1,2,3,4,5).asctime"#);
+        run_test(r#"Time.utc(2000,1,2,3,4,5).ctime"#);
+    }
+
+    #[test]
+    fn time_floor_ceil_round() {
+        run_test(r#"Time.utc(2000,1,1,0,0,0,500000).floor.usec"#);
+        run_test(r#"Time.utc(2000,1,1,0,0,0,500000).ceil.usec"#);
+        run_test(r#"Time.utc(2000,1,1,0,0,0,500000).ceil.sec"#);
+        run_test(r#"Time.utc(2000,1,1,0,0,0,499999).round.usec"#);
+        run_test(r#"Time.utc(2000,1,1,0,0,0,500000).round.usec"#);
+        run_test(r#"Time.utc(2000,1,1,0,0,0,123456).floor(3).usec"#);
+        run_test(r#"Time.utc(2000,1,1,0,0,0,123456).ceil(3).usec"#);
     }
 
     #[test]

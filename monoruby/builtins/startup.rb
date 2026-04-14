@@ -654,6 +654,18 @@ TOPLEVEL_BINDING = binding
 
 require_relative 'comparable'
 
+# Minimal Data class (Ruby 3.2+). Modeled on Struct but conceptually
+# immutable. Full semantics (keyword-only initializer, with-method, frozen
+# instances) are not yet implemented; this is enough for fixtures that
+# reference `Data.define`.
+class Data
+  def self.define(*members, &block)
+    klass = ::Struct.new(*members)
+    klass.class_eval(&block) if block
+    klass
+  end
+end unless defined?(::Data)
+
 class Numeric
   include Comparable
 
