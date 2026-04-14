@@ -9,6 +9,8 @@ globals.define_builtin_class_func_with_kw(klass, "xxx", xxx, min: 1, max: 2, res
 - rest: rest argument
 - kw: keyword arguments
 
+in this examples, the method `xxx` has 1 required argument(=`arg0`), 1 optional argument(=`arg1`), rest argument(=`arg2`), and 2 keyword arguments (`base`(=`arg3`) and `sort`(=`arg4`)).
+
 ```text
 arg0: rewuired ----+
 arg1: optional ----+-- positional
