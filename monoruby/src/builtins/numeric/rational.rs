@@ -334,30 +334,13 @@ fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 }
 
 #[monoruby_builtin]
-fn pow(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs = self_rat(lfp);
+fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let lhs = self_rat(lfp).clone();
     let rhs = lfp.arg(0);
     match rhs.unpack() {
-        RV::Fixnum(exp) => {
-            if exp >= 0 {
-                let exp = exp as u32;
-                let n = lhs.num().pow(exp);
-                let d = lhs.den().pow(exp);
-                Ok(Value::rational_from_bigint(n, d))
-            } else {
-                if lhs.is_zero() {
-                    return Err(MonorubyErr::divide_by_zero());
-                }
-                let exp = (-exp) as u32;
-                let n = lhs.den().pow(exp);
-                let d = lhs.num().pow(exp);
-                Ok(Value::rational_from_bigint(n, d))
-            }
-        }
+        RV::Fixnum(exp) => pow_by_integer(&lhs, &BigInt::from(exp)),
+        RV::BigInt(exp) => pow_by_integer(&lhs, exp),
         RV::Float(f) => {
-            if lhs.is_zero() && f < 0.0 {
-                return Err(MonorubyErr::divide_by_zero());
-            }
             let base = lhs.to_f();
             let result = base.powf(f);
             if result.is_nan() && base < 0.0 {
@@ -375,23 +358,7 @@ fn pow(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
                     return Err(MonorubyErr::divide_by_zero());
                 }
                 if *r.den() == BigInt::from(1) {
-                    use num::ToPrimitive;
-                    if let Some(exp) = r.num().to_i64() {
-                        if exp >= 0 {
-                            let exp = exp as u32;
-                            let n = lhs.num().pow(exp);
-                            let d = lhs.den().pow(exp);
-                            return Ok(Value::rational_from_bigint(n, d));
-                        } else {
-                            if lhs.is_zero() {
-                                return Err(MonorubyErr::divide_by_zero());
-                            }
-                            let exp = (-exp) as u32;
-                            let n = lhs.den().pow(exp);
-                            let d = lhs.num().pow(exp);
-                            return Ok(Value::rational_from_bigint(n, d));
-                        }
-                    }
+                    return pow_by_integer(&lhs, r.num());
                 }
                 let base = lhs.to_f();
                 let exp = r.to_f();
@@ -403,11 +370,75 @@ fn pow(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
                 }
                 return Ok(Value::float(result));
             }
+            // Fallback: use coerce protocol when the argument is not a Numeric.
+            let coerce_id = IdentId::get_id("coerce");
+            if globals.check_method(rhs, coerce_id).is_none() {
+                return Err(MonorubyErr::typeerr(format!(
+                    "{} can't be coerced into Rational",
+                    rhs.get_real_class_name(&globals.store),
+                )));
+            }
+            let result = vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
+            if let Some(ary) = result.try_array_ty() {
+                if ary.len() == 2 {
+                    let pow_id = IdentId::get_id("**");
+                    return vm.invoke_method_inner(globals, pow_id, ary[0], &[ary[1]], None, None);
+                }
+            }
             Err(MonorubyErr::typeerr(format!(
                 "{} can't be coerced into Rational",
                 rhs.get_real_class_name(&globals.store),
             )))
         }
+    }
+}
+
+/// Raise a Rational to an integer (BigInt) power.
+///
+/// Handles the Ruby 3.4+ behaviour of raising `ArgumentError` for very large
+/// exponents (|lhs| > 1), zero-base special cases, and pure integer exponents.
+fn pow_by_integer(lhs: &RationalInner, exp: &BigInt) -> Result<Value> {
+    use num::ToPrimitive;
+    use num::Zero;
+    use num::bigint::Sign;
+    if exp.is_zero() {
+        return Ok(Value::rational_from_bigint(BigInt::from(1), BigInt::from(1)));
+    }
+    if lhs.is_zero() {
+        if exp.sign() == Sign::Minus {
+            return Err(MonorubyErr::divide_by_zero());
+        }
+        return Ok(Value::rational_from_bigint(BigInt::from(0), BigInt::from(1)));
+    }
+    // |lhs| == 1 shortcut: Rational(1) stays 1; Rational(-1) alternates.
+    let is_one = lhs.num() == &BigInt::from(1) && lhs.den() == &BigInt::from(1);
+    let is_neg_one = lhs.num() == &BigInt::from(-1) && lhs.den() == &BigInt::from(1);
+    if is_one {
+        return Ok(Value::rational_from_bigint(BigInt::from(1), BigInt::from(1)));
+    }
+    if is_neg_one {
+        // (-1)^exp is 1 if exp even, -1 if odd.
+        let is_even = (exp % 2u32).is_zero();
+        let result = if is_even { 1 } else { -1 };
+        return Ok(Value::rational_from_bigint(BigInt::from(result), BigInt::from(1)));
+    }
+    // Exponent must fit in i64 for finite computation.
+    let exp_i64 = match exp.to_i64() {
+        Some(n) => n,
+        None => {
+            return Err(MonorubyErr::argumenterr("exponent is too large"));
+        }
+    };
+    if exp_i64 >= 0 {
+        let e = exp_i64 as u32;
+        let n = lhs.num().pow(e);
+        let d = lhs.den().pow(e);
+        Ok(Value::rational_from_bigint(n, d))
+    } else {
+        let e = (-exp_i64) as u32;
+        let n = lhs.den().pow(e);
+        let d = lhs.num().pow(e);
+        Ok(Value::rational_from_bigint(n, d))
     }
 }
 
@@ -461,13 +492,28 @@ fn rat_ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Rational/i/truncate.html]
 #[monoruby_builtin]
 fn rat_truncate(
-    vm: &mut Executor,
-    globals: &mut Globals,
+    _: &mut Executor,
+    _: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let r = self_rat(lfp);
-    let ndigits = coerce_ndigits(vm, globals, lfp)?;
+    // Rational#truncate is strict: it does not invoke to_int.
+    let ndigits = match lfp.try_arg(0) {
+        Some(v) => match v.unpack() {
+            RV::Fixnum(i) => i,
+            RV::BigInt(b) => {
+                use num::ToPrimitive;
+                b.to_i64().unwrap_or(if b.sign() == num::bigint::Sign::Minus {
+                    i64::MIN
+                } else {
+                    i64::MAX
+                })
+            }
+            _ => return Err(MonorubyErr::typeerr("not an integer")),
+        },
+        None => 0,
+    };
     Ok(floor_result_to_value(r.rational_truncate(ndigits)))
 }
 
@@ -789,6 +835,107 @@ mod tests {
             "(Rational(1, 2) / 3).to_s",
             // Rational / Float
             "(Rational(1, 2) / 0.5).class",
+        ]);
+    }
+
+    #[test]
+    fn rational_new_raises_no_method_error() {
+        // Rational.new is undefined; calling it must raise NoMethodError.
+        run_test(
+            r#"
+            begin
+              Rational.new(1)
+            rescue NoMethodError => e
+              :nm
+            rescue => e
+              e.class
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn rational_div_divmod_mod_float_zero() {
+        // Rational#div(0.0) must raise ZeroDivisionError (not FloatDomainError).
+        run_tests(&[
+            r#"begin; Rational(3, 4).div(0.0); rescue ZeroDivisionError; :zd; end"#,
+            r#"begin; Rational(3, 4).divmod(0.0); rescue ZeroDivisionError; :zd; end"#,
+            r#"begin; Rational(3, 4) % 0.0; rescue ZeroDivisionError; :zd; end"#,
+            // Integer 0 also raises ZeroDivisionError.
+            r#"begin; Rational(3, 4).div(0); rescue ZeroDivisionError; :zd; end"#,
+            // Non-numeric argument must raise TypeError (not NoMethodError).
+            r#"begin; Rational(3, 4).div([]); rescue TypeError; :te; end"#,
+        ]);
+    }
+
+    #[test]
+    fn rational_pow_bigint_and_special_bases() {
+        // Rational(1) ** BigInt stays Rational(1).
+        run_test("(Rational(1) ** (10 ** 20)).to_s");
+        // Rational(-1) ** even/odd BigInt.
+        run_test("(Rational(-1) ** (10 ** 20)).to_s");
+        run_test("(Rational(-1) ** ((10 ** 20) + 1)).to_s");
+        // Rational(0) ** negative Float returns Infinity (no error).
+        run_test("(Rational(0, 1) ** -1.0).infinite?");
+        // Rational(2) ** BigInt raises ArgumentError ("exponent is too large").
+        run_test(
+            r#"begin; Rational(2) ** (10 ** 20); rescue ArgumentError; :ae; end"#,
+        );
+    }
+
+    #[test]
+    fn rational_to_f_large_numerator_denominator() {
+        // Both numerator and denominator exceed f64 range; ratio is finite.
+        // Matches CRuby's Rational#to_f for ~10^308 magnitude inputs.
+        run_test(
+            r#"
+            num = 10 ** 310
+            den = 2 * 10 ** 310
+            Rational(num, den).to_f
+            "#,
+        );
+        // Extremely large magnitudes with exact 500:1 ratio.
+        run_test(
+            r#"
+            num = 5 * 10 ** 600
+            den = 10 ** 598
+            Rational(num, den).to_f
+            "#,
+        );
+    }
+
+    #[test]
+    fn rational_rationalize_negative() {
+        // Stern-Brocot on negative self must negate and restore sign.
+        run_tests(&[
+            "Rational(-5404319552844595, 18014398509481984).rationalize(Rational(1, 10)).to_s",
+            "Rational(-5404319552844595, 18014398509481984).rationalize(0.05).to_s",
+            "Rational(-5404319552844595, 18014398509481984).rationalize(0.001).to_s",
+            // Positive case still works.
+            "Rational(5404319552844595, 18014398509481984).rationalize(Rational(1, 10)).to_s",
+            // No argument returns self.
+            "Rational(3, 4).rationalize.to_s",
+        ]);
+    }
+
+    #[test]
+    fn rational_truncate_strict_precision() {
+        // truncate rejects non-Integer precision without calling to_int.
+        run_tests(&[
+            r#"begin; Rational(7, 3).truncate(nil); rescue TypeError => e; e.message; end"#,
+            r#"begin; Rational(7, 3).truncate(1.0); rescue TypeError => e; e.message; end"#,
+            r#"begin; Rational(7, 3).truncate(""); rescue TypeError => e; e.message; end"#,
+            // Integer precision still works.
+            "Rational(7, 3).truncate(2).to_s",
+        ]);
+    }
+
+    #[test]
+    fn rational_marshal_dump_private() {
+        // marshal_dump is a private instance method returning [num, den].
+        run_tests(&[
+            "Rational.private_instance_methods(false).include?(:marshal_dump)",
+            "Rational(3, 5).send(:marshal_dump)",
         ]);
     }
 }

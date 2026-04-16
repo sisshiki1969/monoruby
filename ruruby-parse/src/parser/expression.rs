@@ -579,7 +579,10 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     fn parse_exponent(&mut self) -> Result<Node, LexerErr> {
         let lhs = self.parse_unary()?;
         if self.consume_punct_no_term(Punct::DMul)? {
-            let rhs = self.parse_exponent()?;
+            // The RHS of `**` accepts unary minus: `2 ** -x` means `2 ** (-x)`.
+            // parse_unary_minus handles that and still preserves right-associativity
+            // because it falls through to parse_exponent when no `-` is present.
+            let rhs = self.parse_unary_minus()?;
             Ok(Node::new_binop(BinOp::Exp, lhs, rhs))
         } else {
             Ok(lhs)

@@ -2634,6 +2634,31 @@ mod tests {
     }
 
     #[test]
+    fn pow_unary_minus_rhs() {
+        // `x ** -expr` where expr is a method call / identifier must parse
+        // as `x ** (-expr)` (right-associative and tighter than outer `-`).
+        run_test(
+            r#"
+            def three; 3; end
+            2 ** -three
+            "#,
+        );
+        // Double negation: `2 ** --3`.
+        run_test("2 ** --3");
+        // `-x ** y` keeps the `-` outside (unary minus binds looser than **).
+        run_test("-3 ** 4");
+        // Right-associative: `2 ** -3 ** 2` == `2 ** -(3 ** 2)`.
+        run_test("2 ** -3 ** 2");
+        // Negation of a BigInt expression as RHS.
+        run_test(
+            r#"
+            big = 10 ** 20
+            (Rational(1) ** -big).to_s
+            "#,
+        );
+    }
+
+    #[test]
     fn integer_size_bigint() {
         run_test("(2**64).size");
         run_test("(2**63).size");
