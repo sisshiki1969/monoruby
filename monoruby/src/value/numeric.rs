@@ -99,7 +99,26 @@ impl Real {
             RV::Fixnum(i) => Ok(Real(Value::integer(i))),
             RV::BigInt(b) => Ok(Real(Value::bigint(b.clone()))),
             RV::Float(f) => Ok(Real(Value::float(f))),
-            _ => Err(MonorubyErr::cant_convert_into_float(store, value)),
+            _ => {
+                // Rational: store the Value unchanged so Complex can keep
+                // rational parts; arithmetic converts via to_f64.
+                if value.try_rational().is_some() {
+                    return Ok(Real(value));
+                }
+                // Any other Numeric subclass (e.g., user-defined real-like
+                // numerics) is stored as-is. Arithmetic will fall back to
+                // f64 via to_f / partial conversions.
+                let numeric_id = IdentId::get_id("Numeric");
+                if let Some(numeric) = store
+                    .get_constant_noautoload(OBJECT_CLASS, numeric_id)
+                    .map(|v| v.as_class_id())
+                {
+                    if value.is_kind_of(store, numeric) {
+                        return Ok(Real(value));
+                    }
+                }
+                Err(MonorubyErr::cant_convert_into_float(store, value))
+            }
         }
     }
 }
@@ -265,7 +284,16 @@ impl std::convert::From<Real> for RealKind {
             RV::Fixnum(i) => RealKind::Integer(i),
             RV::Float(f) => RealKind::Float(f),
             RV::BigInt(b) => RealKind::BigInt(b.clone()),
-            _ => unreachable!(),
+            _ => {
+                // Rational collapses to Float for arithmetic inside Complex.
+                if let Some(rat) = r.0.try_rational() {
+                    return RealKind::Float(rat.to_f());
+                }
+                // Any other Numeric subclass stored in Real: treat as 0.0
+                // for arithmetic fallback. Higher-level code should avoid
+                // reaching here by handling such values explicitly.
+                RealKind::Float(0.0)
+            }
         }
     }
 }

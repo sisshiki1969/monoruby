@@ -5,6 +5,10 @@
 class Rational
   include Comparable
 
+  class << self
+    undef_method :new
+  end
+
   def to_r
     self
   end
@@ -66,10 +70,14 @@ class Rational
   end
 
   def div(other)
+    raise TypeError, "#{other.class} can't be coerced into Rational" unless other.is_a?(Numeric)
+    raise ZeroDivisionError, "divided by 0" if other == 0
     (self / other).floor
   end
 
   def divmod(other)
+    raise TypeError, "#{other.class} can't be coerced into Rational" unless other.is_a?(Numeric)
+    raise ZeroDivisionError, "divided by 0" if other == 0
     q = (self / other).floor
     [q, self - q * other]
   end
@@ -82,9 +90,12 @@ class Rational
   def rationalize(eps = nil)
     return self if eps.nil?
     eps = eps.abs
+    # Stern-Brocot operates on non-negative rationals; handle sign outside.
+    return -(-self).rationalize(eps) if self < 0
     lo = self - eps
     hi = self + eps
-    # Stern-Brocot search for simplest rational in [lo, hi]
+    # If 0 is within [lo, hi] the simplest answer is 0/1.
+    return Rational(0, 1) if lo <= 0
     p0, q0 = 0, 1
     p1, q1 = 1, 0
     loop do
@@ -111,5 +122,11 @@ class Rational
 
   def lcm(other)
     numerator.lcm(other)
+  end
+
+  private
+
+  def marshal_dump
+    [numerator, denominator]
   end
 end

@@ -93,21 +93,52 @@ impl ComplexInner {
 
     /// Returns the `inspect` representation: `(1+2i)`
     pub fn debug(&self, store: &Store) -> String {
-        format!(
-            "({}{}{}i)",
-            self.re.get().debug(store),
-            if self.im.is_negative() { "" } else { "+" },
-            self.im.get().debug(store)
-        )
+        let (sign, im_str) = self.formatted_im_parts(store, |v| v.debug(store));
+        let sep = if self.needs_star(store) { "*" } else { "" };
+        format!("({}{}{}{}i)", self.re.get().debug(store), sign, im_str, sep)
     }
 
     /// Returns the `to_s` representation: `1+2i`
     pub fn to_s_str(&self, store: &Store) -> String {
-        format!(
-            "{}{}{}i",
-            self.re.get().debug(store),
-            if self.im.is_negative() { "" } else { "+" },
-            self.im.get().debug(store)
-        )
+        let (sign, im_str) = self.formatted_im_parts(store, |v| v.to_s(store));
+        let sep = if self.needs_star(store) { "*" } else { "" };
+        format!("{}{}{}{}i", self.re.get().to_s(store), sign, im_str, sep)
+    }
+
+    /// Extract the sign-prefix and the absolute textual form of the imaginary
+    /// component for Complex rendering. NaN is always emitted with a `+`.
+    fn formatted_im_parts(
+        &self,
+        _: &Store,
+        fmt: impl Fn(Value) -> String,
+    ) -> (&'static str, String) {
+        let im_val = self.im.get();
+        if let RV::Float(f) = im_val.unpack() {
+            if f.is_nan() {
+                return ("+", "NaN".to_string());
+            }
+            if f.is_infinite() {
+                return (if f < 0.0 { "-" } else { "+" }, "Infinity".to_string());
+            }
+        }
+        let text = fmt(im_val);
+        if self.im.is_negative() {
+            ("", text)
+        } else {
+            ("+", text)
+        }
+    }
+
+    /// Does the imaginary part need a `*` between it and the trailing `i`?
+    /// CRuby inserts `*` when the rendered imaginary part ends in a
+    /// non-digit (Infinity, NaN, or a parenthesised form).
+    fn needs_star(&self, _: &Store) -> bool {
+        let im_val = self.im.get();
+        if let RV::Float(f) = im_val.unpack() {
+            if !f.is_finite() {
+                return true;
+            }
+        }
+        false
     }
 }

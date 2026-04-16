@@ -75,17 +75,31 @@ impl RationalInner {
     }
 
     pub fn to_f(&self) -> f64 {
-        let n = self.num.to_f64().unwrap_or(if self.num.is_positive() {
-            f64::INFINITY
-        } else {
-            f64::NEG_INFINITY
-        });
-        let d = self.den.to_f64().unwrap_or(if self.den.is_positive() {
-            f64::INFINITY
-        } else {
-            f64::NEG_INFINITY
-        });
-        n / d
+        if self.num.is_zero() {
+            return 0.0;
+        }
+        // Direct conversion when both fit safely in f64.
+        let num_bits = self.num.bits() as i32;
+        let den_bits = self.den.bits() as i32;
+        if num_bits < 1020 && den_bits < 1020 {
+            let n = self.num.to_f64().unwrap_or(f64::INFINITY);
+            let d = self.den.to_f64().unwrap_or(f64::INFINITY);
+            if n.is_finite() && d.is_finite() && d != 0.0 {
+                return n / d;
+            }
+        }
+        // Otherwise, keep the top ~60 bits of each to preserve precision,
+        // then scale the quotient by 2^(num_shift - den_shift).
+        let keep: i32 = 60;
+        let num_shift = (num_bits - keep).max(0);
+        let den_shift = (den_bits - keep).max(0);
+        let num_reduced = self.num.clone() >> num_shift as usize;
+        let den_reduced = self.den.clone() >> den_shift as usize;
+        let sign = if self.num.is_negative() { -1.0 } else { 1.0 };
+        let n = num_reduced.to_f64().unwrap_or(0.0).abs();
+        let d = den_reduced.to_f64().unwrap_or(1.0);
+        let exp_diff = num_shift - den_shift;
+        sign * (n / d) * 2.0f64.powi(exp_diff)
     }
 
     pub fn to_i(&self) -> BigInt {
