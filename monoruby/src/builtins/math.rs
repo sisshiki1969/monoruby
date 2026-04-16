@@ -65,6 +65,13 @@ fn math_domain_err(globals: &Globals, msg: impl ToString) -> MonorubyErr {
     MonorubyErr::rangeerr(msg)
 }
 
+fn numerical_argument_out_of_domain_err(globals: &Globals, method_name: &str) -> MonorubyErr {
+    math_domain_err(
+        globals,
+        format!("Numerical argument is out of domain - \"{}\"", method_name),
+    )
+}
+
 //
 // Math class
 //
@@ -149,10 +156,7 @@ fn sqrt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         return Ok(Value::float(f64::NAN));
     }
     if f < 0.0 {
-        return Err(math_domain_err(
-            globals,
-            "Numerical argument is out of domain - \"sqrt\"",
-        ));
+        return Err(numerical_argument_out_of_domain_err(globals, "sqrt"));
     }
     Ok(Value::float(f.sqrt()))
 }
@@ -198,10 +202,7 @@ fn log(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     // Handle BigInt specially for better precision
     let f = if let RV::BigInt(b) = arg.unpack() {
         if b.sign() == num::bigint::Sign::Minus {
-            return Err(math_domain_err(
-                globals,
-                "Numerical argument is out of domain - \"log\"",
-            ));
+            return Err(numerical_argument_out_of_domain_err(globals, "log"));
         }
         let shift = b.bits().saturating_sub(53);
         let top = b >> shift;
@@ -219,10 +220,7 @@ fn log(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         return Ok(Value::float(f64::NAN));
     }
     if f < 0.0 {
-        return Err(math_domain_err(
-            globals,
-            "Numerical argument is out of domain - \"log\"",
-        ));
+        return Err(numerical_argument_out_of_domain_err(globals, "log"));
     }
     let result = if let Some(base) = lfp.try_arg(1) {
         let b = coerce_to_f64(vm, globals, base)?;
@@ -242,10 +240,7 @@ fn log2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let arg = lfp.arg(0);
     if let RV::BigInt(b) = arg.unpack() {
         if b.sign() == num::bigint::Sign::Minus {
-            return Err(math_domain_err(
-                globals,
-                "Numerical argument is out of domain - \"log2\"",
-            ));
+            return Err(numerical_argument_out_of_domain_err(globals, "log2"));
         }
         let bits = b.bits() as f64;
         // For very large numbers, to_f64() overflows. Use the bit length approach.
@@ -274,10 +269,7 @@ fn log2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         return Ok(Value::float(f64::NAN));
     }
     if f < 0.0 {
-        return Err(math_domain_err(
-            globals,
-            "Numerical argument is out of domain - \"log2\"",
-        ));
+        return Err(numerical_argument_out_of_domain_err(globals, "log2"));
     }
     Ok(Value::float(f.log2()))
 }
@@ -291,10 +283,7 @@ fn log10(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let arg = lfp.arg(0);
     if let RV::BigInt(b) = arg.unpack() {
         if b.sign() == num::bigint::Sign::Minus {
-            return Err(math_domain_err(
-                globals,
-                "Numerical argument is out of domain - \"log10\"",
-            ));
+            return Err(numerical_argument_out_of_domain_err(globals, "log10"));
         }
         let shift = b.bits().saturating_sub(53);
         let top = b >> shift;
@@ -307,10 +296,7 @@ fn log10(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         return Ok(Value::float(f64::NAN));
     }
     if f < 0.0 {
-        return Err(math_domain_err(
-            globals,
-            "Numerical argument is out of domain - \"log10\"",
-        ));
+        return Err(numerical_argument_out_of_domain_err(globals, "log10"));
     }
     Ok(Value::float(f.log10()))
 }
@@ -336,10 +322,7 @@ fn asin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         return Ok(Value::float(f64::NAN));
     }
     if f < -1.0 || f > 1.0 {
-        return Err(math_domain_err(
-            globals,
-            "Numerical argument is out of domain - \"asin\"",
-        ));
+        return Err(numerical_argument_out_of_domain_err(globals, "asin"));
     }
     Ok(Value::float(f.asin()))
 }
@@ -355,10 +338,7 @@ fn acos(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         return Ok(Value::float(f64::NAN));
     }
     if f < -1.0 || f > 1.0 {
-        return Err(math_domain_err(
-            globals,
-            "Numerical argument is out of domain - \"acos\"",
-        ));
+        return Err(numerical_argument_out_of_domain_err(globals, "acos"));
     }
     Ok(Value::float(f.acos()))
 }
@@ -435,10 +415,7 @@ fn acosh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         return Ok(Value::float(f64::NAN));
     }
     if f < 1.0 {
-        return Err(math_domain_err(
-            globals,
-            "Numerical argument is out of domain - \"acosh\"",
-        ));
+        return Err(numerical_argument_out_of_domain_err(globals, "acosh"));
     }
     Ok(Value::float(f.acosh()))
 }
@@ -458,10 +435,7 @@ fn atanh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             // Returns -Infinity or Infinity
             Ok(Value::float(f.atanh()))
         } else {
-            return Err(math_domain_err(
-                globals,
-                "Numerical argument is out of domain - \"atanh\"",
-            ));
+            return Err(numerical_argument_out_of_domain_err(globals, "atanh"));
         }
     } else {
         Ok(Value::float(f.atanh()))
@@ -504,17 +478,11 @@ fn gamma(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         if f > 0.0 {
             return Ok(Value::float(f64::INFINITY));
         } else {
-            return Err(math_domain_err(
-                globals,
-                "Numerical argument is out of domain - \"tgamma\"",
-            ));
+            return Err(numerical_argument_out_of_domain_err(globals, "tgamma"));
         }
     }
     if f < 0.0 && f == f.floor() {
-        return Err(math_domain_err(
-            globals,
-            "Numerical argument is out of domain - \"tgamma\"",
-        ));
+        return Err(numerical_argument_out_of_domain_err(globals, "tgamma"));
     }
     // Use exact factorial table for small positive integers
     static FACTORIAL_TABLE: [f64; 23] = [
@@ -562,10 +530,7 @@ fn lgamma(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
     if f.is_infinite() {
         if f < 0.0 {
-            return Err(math_domain_err(
-                globals,
-                "Numerical argument is out of domain - \"lgamma\"",
-            ));
+            return Err(numerical_argument_out_of_domain_err(globals, "lgamma"));
         }
         return Ok(Value::array2(
             Value::float(f64::INFINITY),
@@ -705,10 +670,7 @@ fn log1p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         return Ok(Value::float(f64::NAN));
     }
     if f < -1.0 {
-        return Err(math_domain_err(
-            globals,
-            "Numerical argument is out of domain - log1p",
-        ));
+        return Err(numerical_argument_out_of_domain_err(globals, "log1p"));
     }
     Ok(Value::float(f.ln_1p()))
 }
@@ -728,14 +690,33 @@ fn math_sqrt(
     }
     let CallSiteInfo { args, dst, .. } = *callsite;
     let fsrc = state.load_xmm(ir, args).enc();
-    if let Some(dst) = dst {
-        let fret = state.def_F(dst).enc();
-        ir.inline(move |r#gen, _, _| {
+    // Create the deopt label before allocating `fret` so the write-back
+    // state captured here does not include the (unmodified) dst slot.
+    // On a negative argument we bail out to the interpreter, which will
+    // re-execute the call via the regular builtin and raise DomainError.
+    let deopt = ir.new_deopt(state);
+    let fret = dst.map(|dst| state.def_F(dst));
+    ir.inline(move |r#gen, _, labels| {
+        let deopt_label = &labels[deopt];
+        let do_sqrt = r#gen.jit.label();
+        // ucomisd sets PF=1 for NaN and CF=1 for val < 0.
+        // NaN passes through (sqrt(NaN) = NaN); negative values deopt.
+        // -0.0 compares equal to 0.0, so it skips the deopt and sqrtsd
+        // yields -0.0 as CRuby does.
+        monoasm!( &mut r#gen.jit,
+            xorpd xmm1, xmm1;
+            ucomisd xmm(fsrc), xmm1;
+            jp do_sqrt;
+            jb deopt_label;
+        do_sqrt:
+        );
+        if let Some(fret) = fret {
+            let fret = fret.enc();
             monoasm!( &mut r#gen.jit,
                 sqrtsd xmm(fret), xmm(fsrc);
             );
-        });
-    }
+        }
+    });
     true
 }
 
@@ -877,7 +858,32 @@ mod tests {
         run_test_error("Math.acos(2)");
         // NaN passthrough
         run_test("Math.sqrt(Float::NAN).nan?");
+        run_test("Math.sqrt(Float::INFINITY).infinite?");
         run_test("Math.log(Float::NAN).nan?");
+    }
+
+    #[test]
+    fn math_sqrt_jit_domain_error() {
+        // Warm up the JIT with non-negative values, then invoke with a
+        // negative operand to exercise the inline-asm domain check.
+        run_test(
+            r#"
+            begin
+              Math.sqrt(-3.7)
+            rescue =>e
+              e.to_s
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            begin
+              Math.sqrt(-Float::INFINITY)
+            rescue =>e
+              e.to_s
+            end
+            "#,
+        );
     }
 
     #[test]
