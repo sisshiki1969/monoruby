@@ -539,23 +539,6 @@ impl Codegen {
                 self.handle_error(&labels[error]);
             }
 
-            AsmInst::ArrayU16Index { idx } => {
-                self.gen_array_u16_index(idx);
-            }
-            AsmInst::ArrayIndex => {
-                self.gen_array_index();
-            }
-            AsmInst::ArrayU16IndexAssign {
-                idx,
-                using_xmm,
-                error,
-            } => {
-                self.gen_array_u16_index_assign(using_xmm, &labels[error], idx);
-            }
-            AsmInst::ArrayIndexAssign { using_xmm, error } => {
-                self.gen_array_index_assign(using_xmm, &labels[error]);
-            }
-
             AsmInst::ArrayTEq {
                 lhs,
                 rhs,

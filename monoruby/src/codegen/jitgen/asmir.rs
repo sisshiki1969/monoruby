@@ -590,74 +590,6 @@ impl AsmIr {
 ///
 /// index operations
 ///
-impl AsmIr {
-    ///
-    /// Array index operation with u16 index `idx``.
-    ///
-    /// Execute *rdi*[[`idx`]] and store the result to *rax*.
-    ///
-    /// ### in
-    /// - rdi: base Array
-    ///
-    /// ### out
-    /// - rax: result Value
-    ///
-    pub(crate) fn array_u16_index(&mut self, idx: u16) {
-        self.push(AsmInst::ArrayU16Index { idx });
-    }
-
-    ///
-    /// Array index operation.
-    ///
-    /// ### in
-    /// - rdi: base Array
-    /// - rsi: index Fixnum
-    ///
-    /// ### out
-    /// - rax: result Value
-    ///
-    pub(crate) fn array_index(&mut self) {
-        self.push(AsmInst::ArrayIndex);
-    }
-
-    ///
-    /// Array index assign operation with u16 index `idx`.
-    ///
-    /// ### in
-    /// - rdi: base: Array
-    /// - rdx: result Value
-    ///
-    /// ### destroy
-    /// - caller save registers except xmm's
-    ///
-    pub(super) fn array_u16_index_assign(&mut self, state: &AbstractFrame, idx: u16) {
-        let using_xmm = state.get_using_xmm();
-        let error = self.new_error(state);
-        self.push(AsmInst::ArrayU16IndexAssign {
-            idx,
-            using_xmm,
-            error,
-        });
-    }
-
-    ///
-    /// Aray index assign operation.
-    ///
-    /// ### in
-    /// - rdi: base Array
-    /// - rsi: index Fixnum
-    /// - rdx: result Value
-    ///    
-    /// ### destroy
-    /// - caller save registers except xmm's
-    ///
-    pub(super) fn array_index_assign(&mut self, state: &AbstractFrame) {
-        let using_xmm = state.get_using_xmm();
-        let error = self.new_error(state);
-        self.inst
-            .push(AsmInst::ArrayIndexAssign { using_xmm, error });
-    }
-}
 
 impl AsmIr {
     pub(super) fn new_array(&mut self, using_xmm: UsingXmm, callid: CallSiteId) {
@@ -1165,63 +1097,6 @@ pub(super) enum AsmInst {
     },
     StoreConstant {
         id: ConstSiteId,
-        using_xmm: UsingXmm,
-        error: AsmError,
-    },
-
-    ///
-    /// Array index operation with u16 index `idx``.
-    ///
-    /// Execute *rdi*[[`idx`]] and store the result to *rax*.
-    ///
-    /// ### in
-    /// - rdi: base Array
-    ///
-    /// ### out
-    /// - rax: result Value
-    ///
-    ArrayU16Index {
-        idx: u16,
-    },
-    ///
-    /// Array index operation.
-    ///
-    /// ### in
-    /// - rdi: base Array
-    /// - rsi: index Fixnum
-    ///
-    /// ### out
-    /// - rax: result Value
-    ///
-    ArrayIndex,
-
-    ///
-    /// Array index assign operation with u16 index `idx`.
-    ///
-    /// ### in
-    /// - rdi: base: Array
-    /// - rdx: result Value
-    ///
-    /// ### destroy
-    /// - caller save registers except xmm's
-    ///
-    ArrayU16IndexAssign {
-        idx: u16,
-        using_xmm: UsingXmm,
-        error: AsmError,
-    },
-    ///
-    /// Aray index assign operation.
-    ///
-    /// ### in
-    /// - rdi: base Array
-    /// - rsi: index Fixnum
-    /// - rdx: Value
-    ///    
-    /// ### destroy
-    /// - caller save registers except xmm's
-    ///
-    ArrayIndexAssign {
         using_xmm: UsingXmm,
         error: AsmError,
     },

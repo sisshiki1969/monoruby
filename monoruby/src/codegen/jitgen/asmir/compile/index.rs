@@ -1,149 +1,6 @@
 use super::*;
 
 impl Codegen {
-    /*///
-    /// Generic index operation.
-    ///
-    /// Execute `base`[[`idx`]] and store the result to *rax*.
-    ///
-    /// ### out
-    /// - rax: result Option<Value>
-    ///
-    /// ### destroy
-    ///
-    /// - caller save registers
-    ///
-    pub(super) fn generic_index(
-        &mut self,
-        using: UsingXmm,
-        base: SlotId,
-        idx: SlotId,
-        pc: BytecodePtr,
-    ) {
-        self.xmm_save(using);
-        monoasm! { &mut self.jit,
-            movq rdi, rbx; // &mut Interp
-            movq rsi, r12; // &mut Globals
-            movq rdx, [r14 - (conv(base))]; // base: Value
-            movq rcx, [r14 - (conv(idx))]; // idx: Value
-            movq r8, (pc.as_ptr() as usize + 8);
-            movq rax, (runtime::get_index);
-            call rax;
-        }
-        self.xmm_restore(using);
-    }*/
-
-    ///
-    /// Array index operation with u16 index `idx``.
-    ///
-    /// Execute *rdi*[[`idx`]] and store the result to *rax*.
-    ///
-    /// ### in
-    /// - rdi: base Array
-    ///
-    /// ### out
-    /// - rax: result Value
-    ///
-    pub(super) fn gen_array_u16_index(&mut self, idx: u16) {
-        let out_range = self.jit.label();
-        monoasm! { &mut self.jit,
-            movl rsi, (idx);
-        }
-        self.array_index(&out_range);
-    }
-
-    ///
-    /// Array index operation.
-    ///
-    /// ### in
-    /// - rdi: base Array
-    /// - rsi: index Fixnum
-    ///
-    /// ### out
-    /// - rax: result Value
-    ///
-    pub(super) fn gen_array_index(&mut self) {
-        let generic = self.jit.label();
-        let checked = self.jit.label();
-        let negative = self.jit.label();
-        monoasm! { &mut self.jit,
-            sarq  rsi, 1;
-            testq rsi, rsi;
-            js  negative;
-        checked:
-        }
-        self.array_index(&generic);
-
-        self.jit.select_page(1);
-        self.jit.bind_label(negative);
-        self.get_array_length();
-        monoasm! { &mut self.jit,
-            addq rsi, rax;
-            jns  checked;
-            jmp  generic;
-        }
-        self.jit.select_page(0);
-    }
-
-    ///
-    /// Array index assign operation with u16 index `idx`.
-    ///
-    /// ### in
-    /// - rdi: base: Array
-    /// - rdx: result Value
-    ///
-    /// ### destroy
-    /// - caller save registers except xmm's
-    ///
-    pub(super) fn gen_array_u16_index_assign(
-        &mut self,
-        using_xmm: UsingXmm,
-        error: &DestLabel,
-        idx: u16,
-    ) {
-        let generic = self.jit.label();
-        monoasm! { &mut self.jit,
-            movl rsi, (idx);
-        }
-        self.array_index_assign(using_xmm, &generic, error);
-    }
-
-    ///
-    /// Aray index assign operation.
-    ///
-    /// ### in
-    /// - rdi: base Array
-    /// - rsi: index Fixnum
-    /// - rdx: Value
-    ///    
-    /// ### destroy
-    /// - caller save registers except xmm's
-    ///
-    pub(super) fn gen_array_index_assign(&mut self, using_xmm: UsingXmm, error: &DestLabel) {
-        let generic = self.jit.label();
-        let checked = self.jit.label();
-        let negative = self.jit.label();
-        monoasm! { &mut self.jit,
-            sarq  rsi, 1;
-            testq rsi, rsi;
-            js   negative;
-        checked:
-        };
-        self.array_index_assign(using_xmm, &generic, error);
-
-        self.jit.select_page(1);
-        self.jit.bind_label(negative);
-        self.get_array_length();
-        monoasm! { &mut self.jit,
-            addq rsi, rax;
-            jns  checked;
-            jmp  generic;
-        }
-        self.jit.select_page(0);
-    }
-}
-
-impl Codegen {
     ///
     /// Array index operation with non-negative i64 index.
     ///
@@ -154,7 +11,7 @@ impl Codegen {
     /// ### out
     /// - rax: result Value
     ///
-    fn array_index(&mut self, out_range: &DestLabel) {
+    pub(crate) fn array_index(&mut self, out_range: &DestLabel) {
         let exit = self.jit.label();
         let heap = self.jit.label();
         monoasm! { &mut self.jit,
@@ -200,7 +57,12 @@ impl Codegen {
     /// ### destroy
     /// - caller save registers except xmm's
     ///
-    fn array_index_assign(&mut self, using_xmm: UsingXmm, generic: &DestLabel, error: &DestLabel) {
+    pub(crate) fn array_index_assign(
+        &mut self,
+        using_xmm: UsingXmm,
+        generic: &DestLabel,
+        error: &DestLabel,
+    ) {
         let exit = self.jit.label();
         let heap = self.jit.label();
 
