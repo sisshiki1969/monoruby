@@ -68,7 +68,7 @@ fn math_domain_err(globals: &Globals, msg: impl ToString) -> MonorubyErr {
 fn numerical_argument_out_of_domain_err(globals: &Globals, method_name: &str) -> MonorubyErr {
     math_domain_err(
         globals,
-        format!("Numerical argument is out of domain - \"{}\"", method_name),
+        format!("Numerical argument is out of domain - {}", method_name),
     )
 }
 
