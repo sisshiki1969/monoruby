@@ -545,35 +545,80 @@ mod tests {
     }
 
     #[test]
-    fn process_status_exited_normally() {
+    fn process_status_exit_cases() {
+        // Bundle all non-fork-heavy exit-path checks into one fork so the
+        // test process doesn't spawn 25*N children under parallel cargo test.
         run_test(
             r#"
-            pid = fork { exit 7 }
+            pid = fork { exit 5 }
             Process.wait(pid)
-            [$?.exited?, $?.exitstatus, $?.signaled?, $?.termsig, $?.success?]
+            s = $?
+            [
+              s.exited?,                       # true
+              s.exitstatus,                    # 5
+              s.signaled?,                     # false
+              s.termsig,                       # nil
+              s.stopped?,                      # false
+              s.stopsig,                       # nil
+              s.coredump?,                     # false
+              s.success?,                      # false (non-zero)
+              s.pid == pid,                    # true
+              s.to_i,                          # 5 << 8 = 1280
+              s == 1280,                       # true
+              s == 0,                          # false
+              s == "nope",                     # false
+              s.to_s != s.inspect,             # true (to_s is shorter)
+              s.inspect.include?("Process::Status"),
+              s.inspect.include?("exit 5"),    # true
+              s.to_s.include?("exit 5"),       # true
+            ]
             "#,
         );
     }
 
     #[test]
-    fn process_status_success() {
+    fn process_status_success_case() {
         run_test(
             r#"
             pid = fork { exit 0 }
             Process.wait(pid)
-            [$?.exited?, $?.exitstatus, $?.success?]
+            s = $?
+            [s.exited?, s.exitstatus, s.success?, s.termsig.nil?, s.stopsig.nil?, s.to_i]
             "#,
         );
     }
 
     #[test]
-    fn process_status_to_i_round_trips() {
+    fn process_status_signaled_case() {
+        // One fork + kill covers the signaled branch end-to-end.
         run_test(
             r#"
-            pid = fork { exit 3 }
+            pid = fork { sleep 5 }
+            Process.kill("TERM", pid)
             Process.wait(pid)
-            # exited status in high byte, low 7 bits zero -> 3 << 8 = 768
-            $?.to_i
+            s = $?
+            [
+              s.exited?,                 # false
+              s.exitstatus,              # nil
+              s.signaled?,               # true
+              s.termsig,                 # 15 (SIGTERM)
+              s.success?,                # nil (not exited)
+              s.coredump?,               # false (usually)
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn process_status_after_popen_block() {
+        // popen path is exercised here rather than under fork to avoid doubling
+        // up with the fork-heavy tests above.
+        run_test(
+            r#"
+            IO.popen(["true"]) { |io| io.read }
+            a = [$?.exited?, $?.exitstatus, $?.signaled?]
+            IO.popen(["false"]) { |io| io.read }
+            a + [$?.exitstatus]
             "#,
         );
     }
