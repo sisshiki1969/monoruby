@@ -208,9 +208,16 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             match tok.kind {
                 TokenKind::LineTerm | TokenKind::Eof => false,
                 TokenKind::Punct(p) => match p {
-                    Punct::LParen | Punct::LBracket | Punct::Scope | Punct::Arrow | Punct::Not => {
-                        true
-                    }
+                    // Unambiguous argument-starting punctuators: `(`, `[`,
+                    // `::`, `->`, `!`, and `~`. `~` is only ever a unary
+                    // operator, so it always begins an argument (matches
+                    // CRuby's `foo ~x` parse).
+                    Punct::LParen
+                    | Punct::LBracket
+                    | Punct::Scope
+                    | Punct::Arrow
+                    | Punct::Not
+                    | Punct::BitNot => true,
                     Punct::Colon
                     | Punct::Plus
                     | Punct::Minus

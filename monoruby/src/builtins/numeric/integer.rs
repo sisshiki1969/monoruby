@@ -2634,6 +2634,23 @@ mod tests {
     }
 
     #[test]
+    fn command_call_with_bitnot_arg() {
+        // `p ~x` / `foo ~x` — `~` is only ever a unary operator, so it
+        // must begin an argument in a parenless method call (matches
+        // CRuby's `p ~5 == -6`).
+        run_test("p ~5");
+        run_test("p ~5 + 3");
+        run_test("a = 10; p ~a");
+        run_test("a = 10; b = 20; p ~a + b");
+        run_test(
+            r#"
+            def foo(x); x; end
+            foo ~5
+            "#,
+        );
+    }
+
+    #[test]
     fn pow_unary_minus_rhs() {
         // `x ** -expr` where expr is a method call / identifier must parse
         // as `x ** (-expr)` (right-associative and tighter than outer `-`).
