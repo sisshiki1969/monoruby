@@ -702,22 +702,14 @@ class Data
   end
 end unless defined?(::Data)
 
-class Numeric
-  include Comparable
-
-  def +@
-    self
-  end
-end
-
 require_relative 'enumerable'
+require_relative 'numeric'
 require_relative 'integer'
 require_relative 'range'
 require_relative 'array'
 require_relative 'rational'
 require_relative 'complex'
 require_relative 'float'
-require_relative 'numeric'
 require_relative 'string'
 require_relative 'symbol'
 require_relative 'error'

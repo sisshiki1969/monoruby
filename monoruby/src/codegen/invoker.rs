@@ -437,8 +437,8 @@ impl JitModule {
     fn invoker_frame_setup(&mut self, invoke_block: bool, specify_self: bool) {
         if invoke_block {
             monoasm! { &mut self.jit,
-                // set block
-                movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], 0;
+                // set block (rcx holds optional block handler passed from caller)
+                movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], rcx;
                 movq rax, [rdx + (PROCDATA_OUTER)];        // rax <- outer_lfp
                 movl rdx, [rdx + (PROCDATA_FUNCID)];    // rdx <- FuncId
             };

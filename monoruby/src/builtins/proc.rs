@@ -99,7 +99,8 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         let bh = lfp.block();
         return vm.invoke_method_inner(globals, symbol_id, recv, &rest, bh, None);
     }
-    vm.invoke_proc(globals, &proc, &lfp.arg(0).as_array())
+    let bh = lfp.block();
+    vm.invoke_proc_with_block(globals, &proc, &lfp.arg(0).as_array(), bh)
 }
 
 ///
