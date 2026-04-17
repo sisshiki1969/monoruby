@@ -1352,12 +1352,26 @@ impl Executor {
         proc: &ProcInner,
         args: &[Value],
     ) -> Result<Value> {
+        self.invoke_proc_with_block(globals, proc, args, None)
+    }
+
+    pub(crate) fn invoke_proc_with_block(
+        &mut self,
+        globals: &mut Globals,
+        proc: &ProcInner,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+    ) -> Result<Value> {
         let proc = ProcData::from_proc(proc);
+        let block_val = match bh {
+            Some(handler) => handler.get(),
+            None => Value::nil(),
+        };
         (globals.invokers.block)(
             self,
             globals,
             &proc,
-            Value::nil(),
+            block_val,
             args.as_ptr(),
             args.len(),
             None,

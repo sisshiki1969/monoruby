@@ -22,7 +22,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(NUMERIC_CLASS, "/", div, 1);
     globals.define_builtin_funcs(NUMERIC_CLASS, "%", &["module"], rem, 1);
     globals.define_builtin_func(NUMERIC_CLASS, "**", pow, 1);
-    globals.define_builtin_func(NUMERIC_CLASS, "-@", neg, 0);
+    globals.define_builtin_func(INTEGER_CLASS, "-@", neg, 0);
+    globals.define_builtin_func(FLOAT_CLASS, "-@", neg, 0);
+    globals.define_builtin_func(COMPLEX_CLASS, "-@", neg, 0);
     globals.define_builtin_func(NUMERIC_CLASS, "~", bitnot, 0);
     globals.define_builtin_funcs(NUMERIC_CLASS, "angle", &["arg", "phase"], angle, 0);
 }
