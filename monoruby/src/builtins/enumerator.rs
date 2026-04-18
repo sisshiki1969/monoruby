@@ -144,7 +144,73 @@ fn enumerator_size(
                 Ok(Value::nil())
             }
         }
+        "step" => {
+            // `to_enum(:step, limit, step)` from Numeric#step, so
+            // `inner.args == [limit, step]`.
+            let limit = inner.args.first().copied().unwrap_or(Value::nil());
+            let step_val = inner
+                .args
+                .get(1)
+                .copied()
+                .unwrap_or(Value::integer(1));
+            // Non-numeric step: iteration will raise, don't provide a size.
+            let step_f = match numeric_to_f64(step_val) {
+                Some(f) => f,
+                None => return Ok(Value::nil()),
+            };
+            if step_f == 0.0 {
+                return Ok(Value::nil());
+            }
+            if limit.is_nil() {
+                return Ok(Value::float(f64::INFINITY));
+            }
+            let limit_f = match numeric_to_f64(limit) {
+                Some(f) => f,
+                None => return Ok(Value::nil()),
+            };
+            let beg_f = match numeric_to_f64(inner.obj) {
+                Some(f) => f,
+                None => return Ok(Value::nil()),
+            };
+            if step_f.is_infinite() {
+                let yields = if step_f > 0.0 {
+                    beg_f <= limit_f
+                } else {
+                    beg_f >= limit_f
+                };
+                return Ok(Value::integer(if yields { 1 } else { 0 }));
+            }
+            if limit_f.is_infinite() {
+                let dir_match =
+                    (limit_f > 0.0 && step_f > 0.0) || (limit_f < 0.0 && step_f < 0.0);
+                return if dir_match {
+                    Ok(Value::float(f64::INFINITY))
+                } else {
+                    Ok(Value::integer(0))
+                };
+            }
+            let n = (limit_f - beg_f) / step_f;
+            if n.is_nan() || n < 0.0 {
+                return Ok(Value::integer(0));
+            }
+            let err = (beg_f.abs() + limit_f.abs() + (limit_f - beg_f).abs()) / step_f.abs()
+                * f64::EPSILON;
+            let err = err.min(0.5);
+            let count = (n + err).floor() as i64 + 1;
+            Ok(Value::integer(count))
+        }
         _ => Ok(Value::nil()),
+    }
+}
+
+/// Best-effort cast of a numeric Value (Fixnum / Float / BigInt) to
+/// f64. Returns None for non-numeric values.
+fn numeric_to_f64(v: Value) -> Option<f64> {
+    match v.unpack() {
+        RV::Fixnum(i) => Some(i as f64),
+        RV::Float(f) => Some(f),
+        RV::BigInt(b) => b.to_f64(),
+        _ => None,
     }
 }
 

@@ -185,16 +185,86 @@ class Numeric
     step ||= 1
     raise ArgumentError, "step can't be 0" if step == 0
     return to_enum(:step, limit, step) unless block_given?
-    i = self
-    if step > 0
-      while (limit.nil? || i <= limit) && i.finite?
-        yield i
-        i += step
+
+    # Non-numeric `step` (e.g. `"foo"`) passes through `to_enum`
+    # unchanged -- matching CRuby, which only raises at iteration time
+    # -- but must fail loudly once we actually start iterating.
+    unless step.is_a?(Numeric)
+      raise ArgumentError, "step must be numeric"
+    end
+
+    use_float = self.is_a?(Float) ||
+                (!limit.nil? && limit.is_a?(Float)) ||
+                step.is_a?(Float)
+
+    if use_float
+      beg  = self.to_f
+      unit = step.to_f
+
+      # `unit` is +/- Infinity: at most one yield at `beg`, if the
+      # direction matches.
+      if unit.infinite?
+        if limit.nil?
+          yield beg
+        else
+          endv = limit.to_f
+          if unit > 0 ? beg <= endv : beg >= endv
+            yield beg
+          end
+        end
+        return self
+      end
+
+      if limit.nil?
+        # Unbounded: counted loop to avoid accumulated FP drift.
+        i = 0
+        loop do
+          yield beg + i * unit
+          i += 1
+        end
+      else
+        endv = limit.to_f
+        n = (endv - beg) / unit
+        if n.nan? || n < 0
+          # Direction mismatch or NaN: no yield.
+          return self
+        end
+        if n.infinite?
+          # `endv` is +/- Infinity in the iteration direction: yield
+          # forever, computing each value from the index to avoid
+          # cumulative rounding error.
+          i = 0
+          loop do
+            yield beg + i * unit
+            i += 1
+          end
+        end
+        # Tolerance mimicking CRuby's ruby_float_step:
+        #   err = (|beg| + |end| + |end-beg|) / |unit| * DBL_EPSILON
+        err = (beg.abs + endv.abs + (endv - beg).abs) / unit.abs * Float::EPSILON
+        err = 0.5 if err > 0.5
+        n = (n + err).floor
+        (0..n).each do |i|
+          d = beg + i * unit
+          # Clamp overshoot past the boundary (floating-point rounding).
+          if unit > 0 ? d > endv : d < endv
+            d = endv
+          end
+          yield d
+        end
       end
     else
-      while (limit.nil? || i >= limit) && i.finite?
-        yield i
-        i += step
+      i = self
+      if step > 0
+        while limit.nil? || i <= limit
+          yield i
+          i += step
+        end
+      else
+        while limit.nil? || i >= limit
+          yield i
+          i += step
+        end
       end
     end
     self
