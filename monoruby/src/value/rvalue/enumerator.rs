@@ -11,6 +11,11 @@ pub struct EnumeratorInner {
     pub proc: Proc,
     pub args: Box<Vec<Value>>,
     buffer: Option<Array>,
+    /// Optional size associated with the Enumerator:
+    ///   - `None`                → unknown / fall back to method-name dispatch
+    ///   - `Some(v)` with `Proc` → evaluated lazily when `#size` is called
+    ///   - `Some(v)` otherwise   → Integer / Float returned as-is
+    size: Option<Value>,
 }
 
 impl alloc::GC<RValue> for EnumeratorInner {
@@ -24,11 +29,20 @@ impl alloc::GC<RValue> for EnumeratorInner {
         if let Some(buf) = self.buffer {
             buf.mark(alloc)
         }
+        if let Some(size) = self.size {
+            size.mark(alloc);
+        }
     }
 }
 
 impl EnumeratorInner {
-    pub(crate) fn new(obj: Value, method: IdentId, proc: Proc, args: Vec<Value>) -> Self {
+    pub(crate) fn new(
+        obj: Value,
+        method: IdentId,
+        proc: Proc,
+        args: Vec<Value>,
+        size: Option<Value>,
+    ) -> Self {
         Self {
             obj,
             method,
@@ -36,7 +50,13 @@ impl EnumeratorInner {
             proc,
             args: Box::new(args),
             buffer: None,
+            size,
         }
+    }
+
+    /// Raw accessor for the stored size value (before proc resolution).
+    pub fn size(&self) -> Option<Value> {
+        self.size
     }
 }
 

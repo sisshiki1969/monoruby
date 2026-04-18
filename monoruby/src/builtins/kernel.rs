@@ -1868,7 +1868,15 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/enum_for.html]
 #[monoruby_builtin]
 fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    lfp.expect_no_block()?;
+    // When a block is supplied, it becomes the size proc:
+    //   `to_enum(:step, limit, step) { step_size }`
+    // CRuby evaluates this lazily when `.size` is called on the
+    // returned Enumerator.
+    let size = if let Some(bh) = lfp.block() {
+        Some(vm.generate_proc(globals, bh, pc)?.as_val())
+    } else {
+        None
+    };
     let args = lfp.arg(0).as_array();
     let (method, args) = if args.is_empty() {
         (IdentId::EACH, vec![])
@@ -1878,7 +1886,7 @@ fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
             args[1..].to_vec(),
         )
     };
-    vm.generate_enumerator(method, lfp.self_val(), args, pc)
+    vm.generate_enumerator_with_size(method, lfp.self_val(), args, pc, size)
 }
 
 ///

@@ -148,7 +148,7 @@ pub union ObjKind {
     method: ManuallyDrop<MethodInner>,
     umethod: ManuallyDrop<UMethodInner>,
     fiber: ManuallyDrop<FiberInner>,
-    enumerator: ManuallyDrop<EnumeratorInner>,
+    enumerator: ManuallyDrop<Box<EnumeratorInner>>,
     generator: ManuallyDrop<GeneratorInner>,
     binding: ManuallyDrop<BindingInner>,
     matchdata: ManuallyDrop<MatchDataInner>,
@@ -328,9 +328,17 @@ impl ObjKind {
         }
     }
 
-    fn enumerator(obj: Value, method: IdentId, proc: Proc, args: Vec<Value>) -> Self {
+    fn enumerator(
+        obj: Value,
+        method: IdentId,
+        proc: Proc,
+        args: Vec<Value>,
+        size: Option<Value>,
+    ) -> Self {
         Self {
-            enumerator: ManuallyDrop::new(EnumeratorInner::new(obj, method, proc, args)),
+            enumerator: ManuallyDrop::new(Box::new(EnumeratorInner::new(
+                obj, method, proc, args, size,
+            ))),
         }
     }
 
@@ -1451,10 +1459,11 @@ impl RValue {
         method: IdentId,
         proc: Proc,
         args: Vec<Value>,
+        size: Option<Value>,
     ) -> Self {
         RValue {
             header: Header::new(ENUMERATOR_CLASS, ObjTy::ENUMERATOR),
-            kind: ObjKind::enumerator(obj, method, proc, args),
+            kind: ObjKind::enumerator(obj, method, proc, args, size),
             var_table: None,
         }
     }
