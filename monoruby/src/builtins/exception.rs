@@ -21,6 +21,12 @@ pub(super) fn init(globals: &mut Globals) {
 
     let standarderr = globals.define_class("StandardError", exception_class, OBJECT_CLASS);
 
+    // FatalError — raised when a Rust panic is caught at an `extern "C"`
+    // boundary. Inherits directly from Exception (not StandardError) so a
+    // bare `rescue` clause does not catch it; the runtime additionally
+    // prevents `rescue Exception` / `rescue => e` from catching it.
+    globals.define_builtin_exception_class("FatalError", FATAL_ERROR_CLASS, exception_class);
+
     let system_exit = globals.define_builtin_exception_class(
         "SystemExit",
         SYSTEM_EXIT_ERROR_CLASS,

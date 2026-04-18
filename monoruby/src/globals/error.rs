@@ -147,6 +147,7 @@ impl MonorubyErr {
             MonorubyErrKind::MethodReturn(..) => "MethodReturn",
             MonorubyErrKind::Retry => "Retry",
             MonorubyErrKind::Redo => "Redo",
+            MonorubyErrKind::Fatal => "FatalError",
         }
         .to_string()
     }
@@ -174,6 +175,7 @@ impl MonorubyErr {
             MonorubyErrKind::StopIteration => STOP_ITERATION_CLASS,
             MonorubyErrKind::SystemExit(..) => SYSTEM_EXIT_ERROR_CLASS,
             MonorubyErrKind::Other(class_id) => *class_id,
+            MonorubyErrKind::Fatal => FATAL_ERROR_CLASS,
             MonorubyErrKind::MethodReturn(..) | MonorubyErrKind::Retry | MonorubyErrKind::Redo => {
                 unreachable!()
             }
@@ -615,6 +617,18 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Runtime, msg)
     }
 
+    /// Construct a FatalError. Used when a Rust `panic!` is caught at an
+    /// `extern "C"` boundary. FatalError propagates up through Ruby's
+    /// `rescue` handlers without being caught.
+    pub fn fatal(msg: impl ToString) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Fatal, msg)
+    }
+
+    /// Convenience: is this error a fatal (panic-caught) one?
+    pub fn is_fatal(&self) -> bool {
+        self.kind.is_fatal()
+    }
+
     pub(crate) fn ioerr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::IO, msg)
     }
@@ -715,6 +729,18 @@ pub enum MonorubyErrKind {
     MethodReturn(Value, Lfp),
     Retry,
     Redo,
+    /// FatalError — raised when a Rust `panic!` is caught at an `extern "C"`
+    /// boundary. Deliberately NOT catchable from Ruby `rescue` (even
+    /// `rescue Exception`); propagates up to the top level.
+    Fatal,
+}
+
+impl MonorubyErrKind {
+    /// Returns true if this error must not be caught by any Ruby-level
+    /// `rescue` clause. See `MonorubyErrKind::Fatal`.
+    pub fn is_fatal(&self) -> bool {
+        matches!(self, MonorubyErrKind::Fatal)
+    }
 }
 
 impl MonorubyErrKind {

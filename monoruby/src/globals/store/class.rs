@@ -60,6 +60,7 @@ pub const IO_ERROR_CLASS: ClassId = ClassId::new(49);
 pub const MATCHDATA_CLASS: ClassId = ClassId::new(50);
 pub const SET_CLASS: ClassId = ClassId::new(51);
 pub const RATIONAL_CLASS: ClassId = ClassId::new(52);
+pub const FATAL_ERROR_CLASS: ClassId = ClassId::new(53);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
@@ -121,6 +122,8 @@ impl std::fmt::Debug for ClassId {
 
             50 => write!(f, "MATCHDATA"),
             51 => write!(f, "SET"),
+            52 => write!(f, "RATIONAL"),
+            53 => write!(f, "FATAL_ERROR"),
             n => write!(f, "ClassId({n})"),
         }
     }

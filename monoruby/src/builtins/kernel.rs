@@ -385,9 +385,9 @@ fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/lambda.html]
 #[monoruby_builtin]
-fn proc(vm: &mut Executor, _: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+fn proc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     if let Some(bh) = lfp.block() {
-        let p = vm.generate_proc(bh, pc)?;
+        let p = vm.generate_proc(globals, bh, pc)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())
@@ -399,7 +399,7 @@ fn lambda(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     if let Some(bh) = lfp.block() {
         let func_id = bh.func_id();
         globals.store[func_id].set_method_style();
-        let p = vm.generate_proc(bh, pc)?;
+        let p = vm.generate_proc(globals, bh, pc)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())
@@ -1951,7 +1951,7 @@ fn define_singleton_method(
             ));
         }
     } else if let Some(bh) = lfp.block() {
-        let proc = vm.generate_proc(bh, pc)?;
+        let proc = vm.generate_proc(globals, bh, pc)?;
         globals.define_proc_method(proc)
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
@@ -3750,6 +3750,144 @@ mod tests {
             r#""hello".hash.is_a?(Integer)"#,
             ":foo.hash.is_a?(Integer)",
         ]);
+    }
+
+    // --- tests for module_functions added in PR #328 ---
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn kernel_String_fn() {
+        run_tests(&[
+            r#"String(1)"#,
+            r#"String(:foo)"#,
+            r#"String("hello")"#,
+            r#"String(nil)"#,
+            r#"String(3.14)"#,
+            // to_str takes precedence over to_s
+            r#"
+              class C
+                def to_str; "str"; end
+                def to_s;   "should_not_see"; end
+              end
+              String(C.new)
+            "#,
+        ]);
+        // A String(...) of an object without to_s should raise
+        // TypeError. Use a BasicObject subclass to avoid Object#to_s.
+        run_test_error(
+            r#"
+              class X < BasicObject; end
+              String(X.new)
+            "#,
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn kernel_Hash_fn() {
+        run_tests(&[
+            r#"Hash(nil)"#,
+            r#"Hash([])"#,
+            r#"Hash({a: 1})"#,
+            r#"
+              class HLike
+                def to_hash; {b: 2}; end
+              end
+              Hash(HLike.new)
+            "#,
+        ]);
+        run_test_error(r#"Hash(1)"#);
+        run_test_error(r#"Hash("str")"#);
+    }
+
+    #[test]
+    fn kernel_srand_fn() {
+        // srand returns the previous seed and seeds the global PRNG.
+        // We can't compare PRNG output against CRuby's, so just assert
+        // return type and stability of a seed round-trip.
+        run_test(
+            r#"
+              old = srand(42)
+              old.is_a?(Integer) && srand(old).is_a?(Integer)
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_test_fn() {
+        // `test(?e, path)` - exist?
+        run_test(r#"test(?e, "/etc/hosts") == true"#);
+        // `test(?f, path)` - regular file
+        run_test(r#"test(?f, "/etc/hosts") == true"#);
+        // `test(?d, path)` - directory
+        run_test(r#"test(?d, "/etc") == true"#);
+        // integer form accepted too
+        run_test(r#"test(?e.ord, "/etc/hosts") == true"#);
+    }
+
+    #[test]
+    fn kernel_putc_fn() {
+        // `putc` returns the argument unchanged. Writes to stdout as a
+        // side effect -- the test framework captures that.
+        run_tests(&[
+            r#"putc(65)"#,
+            r#"putc("Z")"#,
+        ]);
+    }
+
+    // --- tests for ARGF stub added in PR #328 ---
+    //
+    // Monoruby's ARGF is a compatibility stub (plain `ARGFClass`) whose
+    // internals are not identical to CRuby's C-level ARGF, so we don't
+    // try to compare against CRuby's output here -- instead each test
+    // raises if the assertion fails, which surfaces as a panic in the
+    // Rust test harness.
+
+    #[test]
+    fn argf_basic_shape() {
+        run_test_no_result_check(
+            r#"
+              raise "ARGF should include Enumerable" unless ARGF.is_a?(Enumerable)
+              raise "ARGF.class should be a Class"   unless ARGF.class.is_a?(Class)
+              raise "ARGF.filename should be '-'"    unless ARGF.filename == '-'
+              raise "ARGF.argv should be an Array"   unless ARGF.argv.is_a?(Array)
+              # mspec's `argf` helper constructs via ARGF.class.new(*argv)
+              dup = ARGF.class.new('a.txt', 'b.txt')
+              raise "new(*argv) argv wrong"          unless dup.argv == ['a.txt', 'b.txt']
+              raise "new(a).filename wrong"          unless ARGF.class.new('a.txt').filename == 'a.txt'
+              :ok
+            "#,
+        );
+    }
+
+    #[test]
+    fn argf_enumerable_aliases() {
+        run_test_no_result_check(
+            r#"
+              %i[path file each_line lines eof eof? readlines read to_a].each do |m|
+                raise "ARGF missing ##{m}" unless ARGF.respond_to?(m)
+              end
+              :ok
+            "#,
+        );
+    }
+
+    // --- tests for FatalError class added in PR #328 ---
+
+    #[test]
+    fn fatal_error_class_shape() {
+        // FatalError must be defined and sit directly under Exception
+        // (so a bare `rescue` / `rescue StandardError` cannot see it).
+        // CRuby doesn't define a `FatalError` constant, so compare-mode
+        // tests would fail; use monoruby-only checks.
+        run_test_no_result_check(
+            r#"
+              raise "FatalError not defined"                  unless defined?(FatalError) == 'constant'
+              raise "FatalError must inherit Exception"       unless FatalError.ancestors.include?(Exception)
+              raise "FatalError must NOT be a StandardError"  if     FatalError.ancestors.include?(StandardError)
+              :ok
+            "#,
+        );
     }
 
     #[test]

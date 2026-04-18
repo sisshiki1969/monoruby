@@ -638,6 +638,84 @@ module Kernel
       File.open(name, *args, &block)
     end
   end
+
+  def String(arg)
+    return arg if arg.is_a?(::String)
+    if arg.respond_to?(:to_str)
+      result = arg.to_str
+      return result if result.is_a?(::String)
+      raise TypeError, "can't convert #{arg.class} to String (#{arg.class}#to_str gives #{result.class})"
+    end
+    result = arg.to_s
+    unless result.is_a?(::String)
+      raise TypeError, "can't convert #{arg.class} to String (#{arg.class}#to_s gives #{result.class})"
+    end
+    result
+  end
+
+  def Hash(arg)
+    return {} if arg.nil?
+    return {} if arg.is_a?(::Array) && arg.empty?
+    return arg if arg.is_a?(::Hash)
+    if arg.respond_to?(:to_hash)
+      result = arg.to_hash
+      return {} if result.nil?
+      return result if result.is_a?(::Hash)
+      raise TypeError, "can't convert #{arg.class} to Hash (#{arg.class}#to_hash gives #{result.class})"
+    end
+    raise TypeError, "can't convert #{arg.class} into Hash"
+  end
+
+  def srand(*args)
+    Random.srand(*args)
+  end
+
+  def putc(ch)
+    s = ch.is_a?(Integer) ? (ch & 0xff).chr : ch.to_s[0]
+    $stdout.write(s)
+    ch
+  end
+
+  # Kernel#test(cmd, file1[, file2]) — minimal subset of CRuby's file-test
+  # operator. `cmd` accepts either a single-character string or its integer
+  # code-point.
+  def test(cmd, file1, file2 = nil)
+    c = cmd.is_a?(Integer) ? cmd : cmd.to_s.ord
+    case c
+    when ?e.ord then File.exist?(file1)
+    when ?f.ord then File.file?(file1)
+    when ?d.ord then File.directory?(file1)
+    when ?r.ord then File.readable?(file1)
+    when ?R.ord then File.readable_real?(file1)
+    when ?w.ord then File.writable?(file1)
+    when ?W.ord then File.writable_real?(file1)
+    when ?x.ord then File.executable?(file1)
+    when ?X.ord then File.executable_real?(file1)
+    when ?l.ord then File.symlink?(file1)
+    when ?p.ord then File.pipe?(file1)
+    when ?S.ord then File.socket?(file1)
+    when ?b.ord then File.blockdev?(file1)
+    when ?c.ord then File.chardev?(file1)
+    when ?u.ord then File.setuid?(file1)
+    when ?g.ord then File.setgid?(file1)
+    when ?k.ord then File.sticky?(file1)
+    when ?o.ord then File.owned?(file1)
+    when ?G.ord then File.grpowned?(file1)
+    when ?s.ord
+      sz = File.size?(file1)
+      sz && sz > 0 ? sz : nil
+    when ?z.ord then File.zero?(file1)
+    when ?M.ord then File.mtime(file1)
+    when ?A.ord then File.atime(file1)
+    when ?C.ord then File.ctime(file1)
+    when ?-.ord then File.identical?(file1, file2)
+    when ?=.ord then File.mtime(file1) == File.mtime(file2)
+    when ?<.ord then File.mtime(file1) < File.mtime(file2)
+    when ?>.ord then File.mtime(file1) > File.mtime(file2)
+    else
+      raise ArgumentError, "unknown command '#{cmd.is_a?(Integer) ? cmd.chr : cmd}'"
+    end
+  end
 end
 
 class GC
@@ -716,3 +794,141 @@ require_relative 'error'
 require_relative 'set'
 require_relative 'builtins'
 require_relative 'pathname_builtins'
+
+# Minimal ARGF implementation. Full semantics (transparent line-by-line
+# reading across ARGV files with $_/$.) are only partially implemented;
+# enough shape is provided for specs to load and for simple cases to
+# proceed. Deliberately defined after enumerable is loaded so the
+# `include Enumerable` on the class body resolves.
+class ARGFClass
+  include Enumerable
+
+  def initialize(*argv)
+    @argv = argv.empty? ? (defined?(::ARGV) ? ::ARGV : []) : argv
+    @current_file = nil
+    @current_name = nil
+    @lineno = 0
+  end
+
+  def argv
+    @argv
+  end
+
+  def filename
+    @current_name || (@argv.first || '-')
+  end
+  alias_method :path, :filename
+
+  def file
+    advance
+    @current_file || $stdin
+  end
+
+  def advance
+    return true if @current_file && !@current_file.closed?
+    if @argv.empty?
+      @current_file ||= $stdin
+      @current_name ||= '-'
+      false
+    else
+      @current_name = @argv.shift
+      @current_file = @current_name == '-' ? $stdin : File.open(@current_name)
+      true
+    end
+  end
+
+  def lineno;     @lineno; end
+  def lineno=(n); @lineno = n; end
+  def pos;        0;       end
+  alias_method :tell, :pos
+  def pos=(n);    n;       end
+  def closed?
+    !@current_file || @current_file.closed?
+  end
+  def close
+    @current_file.close if @current_file && !@current_file.closed? && @current_file != $stdin
+    self
+  end
+  def eof?
+    @argv.empty? && (@current_file.nil? || @current_file.closed?)
+  end
+  alias_method :eof, :eof?
+  def skip
+    if @current_file && !@current_file.closed? && @current_file != $stdin
+      @current_file.close
+    end
+    @current_file = nil
+    self
+  end
+  def rewind
+    @current_file.rewind if @current_file && !@current_file.closed?
+    @lineno = 0
+  end
+  def each
+    return to_enum(:each) unless block_given?
+    while advance && @current_file
+      @current_file.each_line do |line|
+        @lineno += 1
+        yield line
+      end
+      @current_file.close if @current_file && !@current_file.closed? && @current_file != $stdin
+      @current_file = nil
+    end
+    self
+  end
+  alias_method :each_line, :each
+  alias_method :lines, :each
+  def readlines(*args)
+    result = []
+    each { |line| result << line }
+    result
+  end
+  def read(*)
+    buf = String.new
+    while advance && @current_file
+      buf << @current_file.read.to_s
+      @current_file.close if @current_file != $stdin
+      @current_file = nil
+    end
+    buf
+  end
+  def readline(*args)
+    line = nil
+    each { |l| line = l; break }
+    raise EOFError, "end of file reached" if line.nil?
+    line
+  end
+  def gets(*args)
+    line = nil
+    each { |l| line = l; break }
+    line
+  end
+  def getc;     nil; end
+  def readchar; raise EOFError; end
+  def getbyte;  nil; end
+  def readbyte; raise EOFError; end
+  def inspect;  'ARGF'; end
+  def to_s;     'ARGF'; end
+  def to_a
+    readlines
+  end
+  def fileno
+    file.fileno
+  end
+  alias_method :to_i, :fileno
+  def to_io
+    file
+  end
+  def binmode;  self; end
+  def binmode?; false; end
+  def external_encoding; Encoding.default_external; end
+  def internal_encoding; Encoding.default_internal; end
+  def inplace_mode;  nil; end
+  def inplace_mode=(v); v; end
+  def set_encoding(*); self; end
+  def write(*args); args.map(&:to_s).join.bytesize; end
+  def print(*args); $stdout.print(*args); end
+  def puts(*args);  $stdout.puts(*args); end
+end
+
+ARGF = ARGFClass.new

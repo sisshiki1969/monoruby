@@ -6,28 +6,31 @@ extern "C" fn vm_get_constant(
     site_id: ConstSiteId,
     const_version: usize,
 ) -> Option<Value> {
-    if let Some(cache) = &globals.store[site_id].cache {
-        let base_class = globals.store[site_id]
-            .base
-            .map(|base| unsafe { vm.get_slot(base) }.unwrap());
-        if cache.version == const_version && cache.base_class == base_class {
-            return Some(cache.value);
-        };
-    }
-    match vm.find_constant(globals, site_id) {
-        Ok((value, base_class)) => {
-            globals.store[site_id].cache = Some(ConstCache {
-                version: const_version,
-                base_class,
-                value,
-            });
-            Some(value)
+    crate::executor::catch_panic_extern_c(vm, globals, "vm_get_constant", |vm, globals| {
+        if let Some(cache) = &globals.store[site_id].cache {
+            let base_class = globals.store[site_id]
+                .base
+                .map(|base| unsafe { vm.get_slot(base) }.unwrap());
+            if cache.version == const_version && cache.base_class == base_class {
+                return Some(cache.value);
+            };
         }
-        Err(err) => {
-            vm.set_error(err);
-            None
+        match vm.find_constant(globals, site_id) {
+            Ok((value, base_class)) => {
+                globals.store[site_id].cache = Some(ConstCache {
+                    version: const_version,
+                    base_class,
+                    value,
+                });
+                Some(value)
+            }
+            Err(err) => {
+                vm.set_error(err);
+                None
+            }
         }
-    }
+    })
+    .unwrap_or(None)
 }
 
 extern "C" fn vm_check_constant(
@@ -36,25 +39,28 @@ extern "C" fn vm_check_constant(
     site_id: ConstSiteId,
     const_version: usize,
 ) -> Value {
-    if let Some(cache) = &globals.store[site_id].cache {
-        let base_class = globals.store[site_id]
-            .base
-            .map(|base| unsafe { vm.get_slot(base) }.unwrap());
-        if cache.version == const_version && cache.base_class == base_class {
-            return cache.value;
-        };
-    }
-    match vm.find_constant(globals, site_id) {
-        Ok((value, base_class)) => {
-            globals.store[site_id].cache = Some(ConstCache {
-                version: const_version,
-                base_class,
-                value,
-            });
-            value
+    crate::executor::catch_panic_extern_c(vm, globals, "vm_check_constant", |vm, globals| {
+        if let Some(cache) = &globals.store[site_id].cache {
+            let base_class = globals.store[site_id]
+                .base
+                .map(|base| unsafe { vm.get_slot(base) }.unwrap());
+            if cache.version == const_version && cache.base_class == base_class {
+                return cache.value;
+            };
         }
-        Err(_) => Value::nil(),
-    }
+        match vm.find_constant(globals, site_id) {
+            Ok((value, base_class)) => {
+                globals.store[site_id].cache = Some(ConstCache {
+                    version: const_version,
+                    base_class,
+                    value,
+                });
+                value
+            }
+            Err(_) => Value::nil(),
+        }
+    })
+    .unwrap_or_else(Value::nil)
 }
 
 impl Codegen {

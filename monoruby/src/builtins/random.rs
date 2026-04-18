@@ -32,7 +32,21 @@ fn random_srand(
     } else {
         match lfp.arg(0).unpack() {
             RV::Fixnum(i) => Some(i),
-            _ => unimplemented!(),
+            RV::BigInt(b) => Some(b.to_i64().unwrap_or_else(|| {
+                // Truncate BigInt to i64 by taking its low 64 bits.
+                use num::bigint::Sign;
+                let (sign, digits) = b.to_u64_digits();
+                let low = digits.first().copied().unwrap_or(0) as i64;
+                if sign == Sign::Minus { low.wrapping_neg() } else { low }
+            })),
+            RV::Float(f) => Some(f.trunc() as i64),
+            _ => {
+                return Err(MonorubyErr::no_implicit_conversion(
+                    &globals.store,
+                    lfp.arg(0),
+                    INTEGER_CLASS,
+                ));
+            }
         }
     };
     globals.random_init(new_seed);

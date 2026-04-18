@@ -45,9 +45,9 @@ fn ruby2_keywords(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Proc/s/new.html]
 #[monoruby_builtin]
-fn new(vm: &mut Executor, _: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     if let Some(bh) = lfp.block() {
-        let p = vm.generate_proc(bh, pc)?;
+        let p = vm.generate_proc(globals, bh, pc)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())
@@ -603,5 +603,78 @@ mod tests {
         run_test("proc {|a,b,c| a+b+c}.curry[1,2,3]");
         run_test("->(a,b) { a + b }.curry[1][2]");
         run_test("proc {|a,b,c| [a,b,c]}.curry(3)[1][2][3]");
+    }
+
+    // --- regression tests for PR #328 ---
+
+    /// `->(&b) { b.call }.call { <const> }` used to panic with
+    /// `unreachable!` in `FuncInfo::as_iseq()` because the proxy
+    /// BlockHandler's depth was under-counted by 1 on Proc#call
+    /// passthrough, leaving the block's outer lfp pointing at
+    /// Proc#call (a Builtin). Now the constant lookup resolves
+    /// normally.
+    #[test]
+    fn proc_call_block_constant_lookup() {
+        run_test(r#"->(&b) { b.call }.call { Integer }.equal?(Integer)"#);
+        run_test(
+            r#"
+              step = ->(a, b, &blk) { a.step(b, &blk) }
+              seen = []
+              step.call(1, 3) { |i| seen << [i, Integer.name] }
+              seen
+            "#,
+        );
+    }
+
+    /// Block passed through `&blk` must preserve the outer lexical
+    /// scope of where the block was defined, even when invoked via
+    /// `Proc#call`. A `raise` inside the block looks up the
+    /// exception class through that scope.
+    #[test]
+    fn proc_call_block_raise_class_lookup() {
+        run_test(
+            r#"
+              step = ->(a, b, &blk) { a.step(b, &blk) }
+              begin
+                step.call(1, 2) { raise ArgumentError, "hi" }
+                :not_raised
+              rescue ArgumentError => e
+                e.message
+              end
+            "#,
+        );
+    }
+
+    /// `&:sym` passed as a block should materialize a Proc only
+    /// on demand; capturing it back as `&blk` must work (used to
+    /// fail with `not yet implemented: block handler …`).
+    #[test]
+    fn proc_amp_symbol_reified_via_blk() {
+        run_test(
+            r#"
+              def take_block(&blk); blk; end
+              bl = take_block(&:to_s)
+              [bl.class, bl.call(42)]
+            "#,
+        );
+        run_test(
+            r#"
+              def apply(x, &b); b.call(x); end
+              [apply(5, &:to_s), apply([1,2], &:length)]
+            "#,
+        );
+    }
+
+    /// `&:sym` forwarded as `&b` through a middle Proc and
+    /// re-dispatched must behave the same as a direct `&:sym`
+    /// block arg.
+    #[test]
+    fn proc_amp_symbol_forwarded() {
+        run_test(
+            r#"
+              def forward(&b); [1,2,3].map(&b); end
+              forward(&:to_s)
+            "#,
+        );
     }
 }

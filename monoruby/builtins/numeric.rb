@@ -187,12 +187,12 @@ class Numeric
     return to_enum(:step, limit, step) unless block_given?
     i = self
     if step > 0
-      while limit.nil? || i <= limit
+      while (limit.nil? || i <= limit) && i.finite?
         yield i
         i += step
       end
     else
-      while limit.nil? || i >= limit
+      while (limit.nil? || i >= limit) && i.finite?
         yield i
         i += step
       end

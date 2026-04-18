@@ -19,7 +19,21 @@ pub fn monoruby_builtin(_attr: TokenStream, item: TokenStream) -> TokenStream {
             lfp: Lfp,
             pc: BytecodePtr,
         ) -> Option<Value> {
-            match #wrapped(vm, globals, lfp, pc) {
+            // Catch any Rust panic that escapes the inner function before
+            // it reaches the `extern "C"` boundary (where it would become
+            // a non-unwinding abort). On panic, a FatalError has already
+            // been set on `vm`; fall through to the error-handling branch.
+            let result = match catch_panic_extern_c(vm, globals, stringify!(#base_name), |vm, globals| {
+                #wrapped(vm, globals, lfp, pc)
+            }) {
+                Some(r) => r,
+                None => {
+                    // Panic caught; FatalError set. Reclaim it as Err so
+                    // the shared error-reporting path runs.
+                    Err(vm.take_error())
+                }
+            };
+            match result {
                 Ok(val) => Some(val),
                 Err(mut err) => {
                     if let MonorubyErrKind::MethodReturn(val, target_lfp) = err.kind() && lfp == *target_lfp {

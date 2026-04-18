@@ -281,8 +281,8 @@ impl JitModule {
 }
 
 extern "C" fn unimplemented_inst(vm: &mut Executor, _: &mut Globals, opcode: u16) -> Option<Value> {
-    vm.set_error(MonorubyErr::runtimeerr(format!(
-        "[FATAL] internal error: unimplemented instruction. {:04x}",
+    vm.set_error(MonorubyErr::fatal(format!(
+        "internal error: unimplemented instruction. {:04x}",
         opcode
     )));
     None
@@ -325,8 +325,8 @@ pub(super) extern "C" fn handle_error(
 ) -> ErrorReturn {
     if vm.exception().is_none() {
         runtime::_dump_stacktrace(vm, globals);
-        vm.set_error(MonorubyErr::runtimeerr(
-            "[FATAL] internal error: unknown exception.",
+        vm.set_error(MonorubyErr::fatal(
+            "internal error: unknown exception.",
         ));
     }
     let func_info = &globals.store[meta.func_id()];
@@ -364,6 +364,13 @@ pub(super) extern "C" fn handle_error(
             let loc = info.sourcemap[pc.to_usize()];
             let fid = info.func_id();
             vm.push_error_location(loc, sourceinfo, fid);
+            // Fatal errors (Rust panics caught at an `extern "C"` boundary)
+            // must never be caught by `rescue`, and we also skip `ensure`
+            // since the interpreter/VM state may be inconsistent after a
+            // panic. Propagate straight up to the top.
+            if vm.exception().unwrap().is_fatal() {
+                return ErrorReturn::return_err();
+            }
             if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {
                 let err_val = vm.take_ex_obj(globals);
                 globals.set_gvar(IdentId::get_id("$!"), err_val);
