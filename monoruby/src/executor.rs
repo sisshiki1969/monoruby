@@ -1408,8 +1408,18 @@ impl Executor {
         bh: Option<BlockHandler>,
     ) -> Result<Value> {
         let proc = ProcData::from_proc(proc);
+        // A proxy BlockHandler encodes its lexical scope as "walk N
+        // prev-cfps from the callee's frame". `invoke_func` applies
+        // `.delegate()` (+1) when entering a Ruby method so that the
+        // callee can walk back to the caller. But invoking a Proc body
+        // via Proc#call adds an extra cfp layer (the Proc body itself
+        // sits on top of the Proc#call builtin frame), so we need one
+        // more `.delegate()` here. Without it, `block_arg` inside the
+        // invoked body walks back one frame short and ends up with a
+        // Proc#call (Builtin) lfp as the block's outer — which later
+        // panics in `as_iseq()` during constant lookup.
         let block_val = match bh {
-            Some(handler) => handler.get(),
+            Some(handler) => handler.delegate().get(),
             None => Value::nil(),
         };
         (globals.invokers.block)(
