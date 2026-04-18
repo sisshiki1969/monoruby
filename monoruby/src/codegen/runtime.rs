@@ -82,16 +82,6 @@ impl ProcData {
         }
     }
 
-    pub(crate) fn from_proxy(mut executor: &Executor, proxy: (FuncId, u16)) -> Self {
-        let mut cfp = executor.cfp();
-        for _ in 0..proxy.1 {
-            (executor, cfp) = Executor::prev_cfp(executor, cfp);
-        }
-        ProcData {
-            outer: Some(cfp.lfp()),
-            func_id: Some(proxy.0),
-        }
-    }
 }
 
 ///

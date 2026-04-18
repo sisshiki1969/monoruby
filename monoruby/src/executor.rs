@@ -1501,35 +1501,75 @@ impl Executor {
 }
 
 impl Executor {
+    /// Resolve the "straightforward" shape of a `BlockHandler` into the
+    /// `(outer_lfp, func_id)` pair that both Proc construction and
+    /// transient ProcData dispatch need.
     ///
-    /// Generate *ProcInner* from 'bh'.
+    /// Handles three handler variants that don't require invoking any
+    /// Ruby-level code:
+    ///   * Proxy `(fid, depth)`: walk `depth` prev-cfps from `cfp` and
+    ///     return `(cfp.lfp(), fid)`. The resulting lfp may be on the
+    ///     stack; callers that need a long-lived reference must
+    ///     `move_frame_to_heap` it.
+    ///   * Proc: return `(proc.outer_lfp, proc.func_id)`. The outer is
+    ///     already heap-allocated. `None` outer (not currently produced
+    ///     by our constructors) is not handled here and the caller
+    ///     should special-case it.
+    ///   * Symbol (`&:sym`, carried lazily through the block slot):
+    ///     build a fresh heap frame with the symbol as `self` and pair
+    ///     it with `SYMBOL_TO_PROC_BODY_FUNCID`, matching what
+    ///     `Symbol#to_proc` would produce.
     ///
+    /// Returns `None` for anything else (e.g. an object whose `to_proc`
+    /// would need to be invoked); the caller decides whether to fall
+    /// back to method dispatch or raise.
+    fn resolve_block_target(
+        &self,
+        globals: &Globals,
+        cfp: Cfp,
+        bh: BlockHandler,
+    ) -> Option<(Lfp, FuncId)> {
+        if let Some((fid, depth)) = bh.try_proxy() {
+            let mut vm: &Executor = self;
+            let mut cfp = cfp;
+            for _ in 0..depth {
+                (vm, cfp) = Self::prev_cfp(vm, cfp);
+            }
+            Some((cfp.lfp(), fid))
+        } else if let Some(proc) = bh.try_proc() {
+            proc.outer_lfp().map(|outer| (outer, proc.func_id()))
+        } else if bh.try_symbol().is_some() {
+            let fid = SYMBOL_TO_PROC_BODY_FUNCID;
+            let outer = Lfp::heap_frame(bh.0, globals[fid].meta());
+            Some((outer, fid))
+        } else {
+            None
+        }
+    }
+
+    /// Build a transient `ProcData` (for yield-style dispatch) from a
+    /// BlockHandler. Falls back to invoking `to_proc` on arbitrary
+    /// objects if none of the handler fast-paths apply.
     pub(crate) fn get_block_data(
         &mut self,
         globals: &mut Globals,
         bh: BlockHandler,
     ) -> Result<ProcData> {
-        if let Some(proxy) = bh.try_proxy() {
-            Ok(ProcData::from_proxy(self, proxy))
-        } else if let Some(proc) = bh.0.is_proc() {
-            Ok(ProcData::from_proc(&proc))
-        } else if bh.try_symbol().is_some() {
-            // `&:sym` is carried through as a plain Symbol Value in the
-            // BlockHandler to avoid eagerly allocating a Proc. Build the
-            // same ProcData shape that `Symbol#to_proc` would produce
-            // (`symbol_to_proc_body` with the Symbol as self), directly
-            // and without calling Ruby-level `to_proc`.
-            let meta = globals[SYMBOL_TO_PROC_BODY_FUNCID].meta();
-            let outer = Lfp::heap_frame(bh.0, meta);
-            Ok(ProcData::new(outer, SYMBOL_TO_PROC_BODY_FUNCID))
-        } else if let Some(proc) =
+        if let Some((outer, fid)) = self.resolve_block_target(globals, self.cfp(), bh) {
+            // outer is left un-moved: ProcData is transient and the
+            // dispatch runs immediately, so the on-stack frame (for
+            // proxy) is still live.
+            return Ok(ProcData::new(outer, fid));
+        }
+        // General `to_proc` fallback: covers user-defined classes that
+        // implement `to_proc` (e.g. Method#to_proc).
+        if let Some(proc) =
             self.invoke_method_if_exists(globals, IdentId::TO_PROC, bh.0, &[], None, None)?
             && let Some(proc) = proc.is_proc()
         {
-            Ok(ProcData::from_proc(&proc))
-        } else {
-            Err(MonorubyErr::wrong_argument_type(globals, bh.0, "Proc"))
+            return Ok(ProcData::from_proc(&proc));
         }
+        Err(MonorubyErr::wrong_argument_type(globals, bh.0, "Proc"))
     }
 
     pub fn to_s(&mut self, globals: &mut Globals, receiver: Value) -> Result<String> {
@@ -1630,38 +1670,32 @@ impl Executor {
         self.generate_proc_inner(globals, self.cfp(), bh, pc)
     }
 
+    /// Build a long-lived `Proc` from a BlockHandler. The resulting
+    /// Proc may outlive the current frame, so any on-stack outer lfp
+    /// is moved to the heap here.
     pub(crate) fn generate_proc_inner(
         &self,
         globals: &Globals,
-        mut cfp: Cfp,
+        cfp: Cfp,
         bh: BlockHandler,
         pc: BytecodePtr,
     ) -> Result<Proc> {
-        if let Some((fid, outer)) = bh.try_proxy() {
-            // Walk back through the call frame chain to the block's outer scope,
-            // using the proxy's depth index.
-            let mut vm = self;
-            for _ in 0..outer {
-                (vm, cfp) = Self::prev_cfp(vm, cfp);
-            }
-            // Move the correct outer frame (and its lexical chain) to the heap,
-            // so the proc can safely reference it after the current scope exits.
-            let outer_lfp = cfp.lfp().move_frame_to_heap();
-            Ok(Proc::from_outer(outer_lfp, fid, pc))
-        } else if let Some(proc) = bh.try_proc() {
-            Ok(proc)
-        } else if bh.try_symbol().is_some() {
-            // `&:sym` carried through without eager conversion: build the
-            // same Proc shape that `Symbol#to_proc` would produce, lazily
-            // here at the point of use.
-            let body_fid = SYMBOL_TO_PROC_BODY_FUNCID;
-            let outer_lfp = Lfp::heap_frame(bh.0, globals[body_fid].meta());
-            Ok(Proc::from_outer(outer_lfp, body_fid, pc))
-        } else {
-            Err(MonorubyErr::runtimeerr(format!(
-                "not yet implemented: block handler {bh:?}"
-            )))
+        // Already-materialized Proc: keep the identity (Ruby-visible
+        // object) rather than reconstructing.
+        if let Some(proc) = bh.try_proc() {
+            return Ok(proc);
         }
+        if let Some((outer, fid)) = self.resolve_block_target(globals, cfp, bh) {
+            // move_frame_to_heap is a no-op when `outer` is already on
+            // the heap (Symbol case). For the proxy case it promotes
+            // the stack frame so the Proc can be used past the current
+            // call.
+            let outer = outer.move_frame_to_heap();
+            return Ok(Proc::from_outer(outer, fid, pc));
+        }
+        Err(MonorubyErr::runtimeerr(format!(
+            "not yet implemented: block handler {bh:?}"
+        )))
     }
 
     pub(crate) fn generate_lambda(&mut self, func_id: FuncId, pc: BytecodePtr) -> Proc {
