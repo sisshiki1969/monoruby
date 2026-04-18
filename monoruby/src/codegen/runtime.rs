@@ -124,7 +124,7 @@ pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals
 
 pub(super) extern "C" fn block_arg(
     vm: &mut Executor,
-    _: &mut Globals,
+    globals: &mut Globals,
     mut lfp: Lfp,
     pc: BytecodePtr,
 ) -> Option<Value> {
@@ -145,7 +145,7 @@ pub(super) extern "C" fn block_arg(
     while cfp.lfp() != lfp {
         cfp = Executor::prev_cfp(vm, cfp).1;
     }
-    match vm.generate_proc_inner(cfp, bh, pc) {
+    match vm.generate_proc_inner(globals, cfp, bh, pc) {
         Ok(val) => Some(val.into()),
         Err(err) => {
             vm.set_error(err);

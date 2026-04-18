@@ -385,9 +385,9 @@ fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/lambda.html]
 #[monoruby_builtin]
-fn proc(vm: &mut Executor, _: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+fn proc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     if let Some(bh) = lfp.block() {
-        let p = vm.generate_proc(bh, pc)?;
+        let p = vm.generate_proc(globals, bh, pc)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())
@@ -399,7 +399,7 @@ fn lambda(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     if let Some(bh) = lfp.block() {
         let func_id = bh.func_id();
         globals.store[func_id].set_method_style();
-        let p = vm.generate_proc(bh, pc)?;
+        let p = vm.generate_proc(globals, bh, pc)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())
@@ -1951,7 +1951,7 @@ fn define_singleton_method(
             ));
         }
     } else if let Some(bh) = lfp.block() {
-        let proc = vm.generate_proc(bh, pc)?;
+        let proc = vm.generate_proc(globals, bh, pc)?;
         globals.define_proc_method(proc)
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));

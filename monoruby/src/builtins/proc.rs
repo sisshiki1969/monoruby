@@ -45,9 +45,9 @@ fn ruby2_keywords(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Proc/s/new.html]
 #[monoruby_builtin]
-fn new(vm: &mut Executor, _: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     if let Some(bh) = lfp.block() {
-        let p = vm.generate_proc(bh, pc)?;
+        let p = vm.generate_proc(globals, bh, pc)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())

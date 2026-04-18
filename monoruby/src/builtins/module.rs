@@ -960,7 +960,7 @@ fn define_method(
             ));
         }
     } else if let Some(bh) = lfp.block() {
-        let proc = vm.generate_proc(bh, pc)?;
+        let proc = vm.generate_proc(globals, bh, pc)?;
         globals.define_proc_method(proc)
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));

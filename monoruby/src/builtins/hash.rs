@@ -114,10 +114,10 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/s/new.html]
 #[monoruby_builtin]
-fn new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = if let Some(bh) = lfp.block() {
-        let default_proc = vm.generate_proc(bh, pc)?;
+        let default_proc = vm.generate_proc(globals, bh, pc)?;
         Value::hash_with_class_and_default_proc(class, default_proc)
     } else {
         let default = lfp.try_arg(0).unwrap_or_default();

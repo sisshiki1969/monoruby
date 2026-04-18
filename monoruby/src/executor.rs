@@ -1513,6 +1513,15 @@ impl Executor {
             Ok(ProcData::from_proxy(self, proxy))
         } else if let Some(proc) = bh.0.is_proc() {
             Ok(ProcData::from_proc(&proc))
+        } else if bh.try_symbol().is_some() {
+            // `&:sym` is carried through as a plain Symbol Value in the
+            // BlockHandler to avoid eagerly allocating a Proc. Build the
+            // same ProcData shape that `Symbol#to_proc` would produce
+            // (`symbol_to_proc_body` with the Symbol as self), directly
+            // and without calling Ruby-level `to_proc`.
+            let meta = globals[SYMBOL_TO_PROC_BODY_FUNCID].meta();
+            let outer = Lfp::heap_frame(bh.0, meta);
+            Ok(ProcData::new(outer, SYMBOL_TO_PROC_BODY_FUNCID))
         } else if let Some(proc) =
             self.invoke_method_if_exists(globals, IdentId::TO_PROC, bh.0, &[], None, None)?
             && let Some(proc) = proc.is_proc()
@@ -1612,12 +1621,18 @@ impl Executor {
 }
 
 impl Executor {
-    pub(crate) fn generate_proc(&self, bh: BlockHandler, pc: BytecodePtr) -> Result<Proc> {
-        self.generate_proc_inner(self.cfp(), bh, pc)
+    pub(crate) fn generate_proc(
+        &self,
+        globals: &Globals,
+        bh: BlockHandler,
+        pc: BytecodePtr,
+    ) -> Result<Proc> {
+        self.generate_proc_inner(globals, self.cfp(), bh, pc)
     }
 
     pub(crate) fn generate_proc_inner(
         &self,
+        globals: &Globals,
         mut cfp: Cfp,
         bh: BlockHandler,
         pc: BytecodePtr,
@@ -1635,6 +1650,13 @@ impl Executor {
             Ok(Proc::from_outer(outer_lfp, fid, pc))
         } else if let Some(proc) = bh.try_proc() {
             Ok(proc)
+        } else if bh.try_symbol().is_some() {
+            // `&:sym` carried through without eager conversion: build the
+            // same Proc shape that `Symbol#to_proc` would produce, lazily
+            // here at the point of use.
+            let body_fid = SYMBOL_TO_PROC_BODY_FUNCID;
+            let outer_lfp = Lfp::heap_frame(bh.0, globals[body_fid].meta());
+            Ok(Proc::from_outer(outer_lfp, body_fid, pc))
         } else {
             Err(MonorubyErr::runtimeerr(format!(
                 "not yet implemented: block handler {bh:?}"
@@ -1807,6 +1829,14 @@ impl BlockHandler {
             let idx = i as u16;
             (func_id, idx)
         })
+    }
+
+    /// A `&:sym` block-arg is carried through without eagerly calling
+    /// `Symbol#to_proc`; the resulting Proc is only materialized when
+    /// the callee actually inspects the block (yield / `&blk`). This
+    /// returns the wrapped Symbol in that case.
+    pub fn try_symbol(&self) -> Option<IdentId> {
+        self.0.try_symbol()
     }
 
     pub fn delegate(self) -> Self {

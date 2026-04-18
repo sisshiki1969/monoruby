@@ -155,9 +155,14 @@ fn enumerator_size(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/s/new.html]
 #[monoruby_builtin]
-fn enumerator_new(vm: &mut Executor, _: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+fn enumerator_new(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let proc = vm.generate_proc(bh, pc)?;
+    let proc = vm.generate_proc(globals, bh, pc)?;
     let obj = Value::new_generator(proc);
     vm.generate_enumerator(IdentId::EACH, obj, vec![], pc)
 }
@@ -364,12 +369,12 @@ fn yielder_yield(
 #[monoruby_builtin]
 fn generator_new(
     vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let proc = vm.generate_proc(bh, pc)?;
+    let proc = vm.generate_proc(globals, bh, pc)?;
     Ok(Value::new_generator(proc))
 }
 
