@@ -281,8 +281,8 @@ impl JitModule {
 }
 
 extern "C" fn unimplemented_inst(vm: &mut Executor, _: &mut Globals, opcode: u16) -> Option<Value> {
-    vm.set_error(MonorubyErr::runtimeerr(format!(
-        "[FATAL] internal error: unimplemented instruction. {:04x}",
+    vm.set_error(MonorubyErr::fatal(format!(
+        "internal error: unimplemented instruction. {:04x}",
         opcode
     )));
     None
@@ -325,8 +325,8 @@ pub(super) extern "C" fn handle_error(
 ) -> ErrorReturn {
     if vm.exception().is_none() {
         runtime::_dump_stacktrace(vm, globals);
-        vm.set_error(MonorubyErr::runtimeerr(
-            "[FATAL] internal error: unknown exception.",
+        vm.set_error(MonorubyErr::fatal(
+            "internal error: unknown exception.",
         ));
     }
     let func_info = &globals.store[meta.func_id()];
