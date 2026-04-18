@@ -60,8 +60,8 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/size.html]
 #[monoruby_builtin]
 fn enumerator_size(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
@@ -70,6 +70,14 @@ fn enumerator_size(
         return Ok(Value::nil());
     }
     let inner = e.as_enumerator_inner();
+    // Explicit size attached via `to_enum(...) { size }` / Enumerator.new(size).
+    // Proc values are evaluated lazily, matching CRuby.
+    if let Some(stored) = inner.size() {
+        if let Some(proc) = stored.is_proc() {
+            return vm.invoke_proc(globals, &proc, &[]);
+        }
+        return Ok(stored);
+    }
     let method_name = inner.method.get_name();
     match method_name.as_str() {
         "upto" => {
@@ -81,7 +89,7 @@ fn enumerator_size(
                 } else {
                     return Err(MonorubyErr::argumenterr(format!(
                         "comparison of Integer with {} failed: coercion was not possible",
-                        stop_val.get_real_class_name(&_globals.store)
+                        stop_val.get_real_class_name(&globals.store)
                     )));
                 };
                 let size = if stop >= start { stop - start + 1 } else { 0 };
@@ -99,7 +107,7 @@ fn enumerator_size(
                 } else {
                     return Err(MonorubyErr::argumenterr(format!(
                         "comparison of Integer with {} failed: coercion was not possible",
-                        stop_val.get_real_class_name(&_globals.store)
+                        stop_val.get_real_class_name(&globals.store)
                     )));
                 };
                 let size = if start >= stop { start - stop + 1 } else { 0 };
@@ -144,85 +152,18 @@ fn enumerator_size(
                 Ok(Value::nil())
             }
         }
-        "step" => {
-            // `to_enum(:step, limit, step)` from Numeric#step, so
-            // `inner.args == [limit, step]`.
-            let limit = inner.args.first().copied().unwrap_or(Value::nil());
-            let step_val = inner
-                .args
-                .get(1)
-                .copied()
-                .unwrap_or(Value::integer(1));
-            // Non-numeric step (e.g. `"1"`, `"foo"`) is accepted by the
-            // enumerator constructor, but asking for `.size` must raise
-            // the same error that iterating would raise -- matching
-            // CRuby.
-            let step_f = match numeric_to_f64(step_val) {
-                Some(f) => f,
-                None => {
-                    return Err(MonorubyErr::argumenterr("step must be numeric"));
-                }
-            };
-            if step_f == 0.0 {
-                return Ok(Value::nil());
-            }
-            if limit.is_nil() {
-                return Ok(Value::float(f64::INFINITY));
-            }
-            let limit_f = match numeric_to_f64(limit) {
-                Some(f) => f,
-                None => return Ok(Value::nil()),
-            };
-            let beg_f = match numeric_to_f64(inner.obj) {
-                Some(f) => f,
-                None => return Ok(Value::nil()),
-            };
-            if step_f.is_infinite() {
-                let yields = if step_f > 0.0 {
-                    beg_f <= limit_f
-                } else {
-                    beg_f >= limit_f
-                };
-                return Ok(Value::integer(if yields { 1 } else { 0 }));
-            }
-            if limit_f.is_infinite() {
-                let dir_match =
-                    (limit_f > 0.0 && step_f > 0.0) || (limit_f < 0.0 && step_f < 0.0);
-                return if dir_match {
-                    Ok(Value::float(f64::INFINITY))
-                } else {
-                    Ok(Value::integer(0))
-                };
-            }
-            let n = (limit_f - beg_f) / step_f;
-            if n.is_nan() || n < 0.0 {
-                return Ok(Value::integer(0));
-            }
-            let err = (beg_f.abs() + limit_f.abs() + (limit_f - beg_f).abs()) / step_f.abs()
-                * f64::EPSILON;
-            let err = err.min(0.5);
-            let count = (n + err).floor() as i64 + 1;
-            Ok(Value::integer(count))
-        }
+        // `"step"` used to have a dedicated arm here; it is now computed
+        // by `Numeric#__step_size`, attached via the size block of
+        // `to_enum(:step, limit, step) { ... }` and returned from the
+        // `inner.size()` fast-path above.
         _ => Ok(Value::nil()),
-    }
-}
-
-/// Best-effort cast of a numeric Value (Fixnum / Float / BigInt) to
-/// f64. Returns None for non-numeric values.
-fn numeric_to_f64(v: Value) -> Option<f64> {
-    match v.unpack() {
-        RV::Fixnum(i) => Some(i as f64),
-        RV::Float(f) => Some(f),
-        RV::BigInt(b) => b.to_f64(),
-        _ => None,
     }
 }
 
 ///
 /// ### Enumerator.new
 ///
-/// - new([NOT SUPPORTED] size=nil) {|y| ... } -> Enumerator
+/// - new(size=nil) {|y| ... } -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/s/new.html]
 #[monoruby_builtin]
@@ -235,7 +176,11 @@ fn enumerator_new(
     let bh = lfp.expect_block()?;
     let proc = vm.generate_proc(globals, bh, pc)?;
     let obj = Value::new_generator(proc);
-    vm.generate_enumerator(IdentId::EACH, obj, vec![], pc)
+    // Optional size argument: nil (default) / Integer / Float /
+    // Float::INFINITY / Proc. Stored verbatim; Enumerator#size resolves
+    // Proc values lazily.
+    let size = lfp.try_arg(0).filter(|v| !v.is_nil());
+    vm.generate_enumerator_with_size(IdentId::EACH, obj, vec![], pc, size)
 }
 
 ///

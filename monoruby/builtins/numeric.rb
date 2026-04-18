@@ -184,7 +184,11 @@ class Numeric
     step = by unless by.nil?
     step ||= 1
     raise ArgumentError, "step can't be 0" if step == 0
-    return to_enum(:step, limit, step) unless block_given?
+    unless block_given?
+      # Attach a size-computing block so `to_enum(:step).size` reports
+      # the correct value without iterating.  The block runs lazily.
+      return to_enum(:step, limit, step) { __step_size(limit, step) }
+    end
 
     # Non-numeric `step` (e.g. `"foo"`) passes through `to_enum`
     # unchanged -- matching CRuby, which only raises at iteration time
@@ -268,5 +272,40 @@ class Numeric
       end
     end
     self
+  end
+
+  private
+
+  # Compute the size that `step(limit, step)` will yield, without
+  # actually iterating. Invoked lazily via the size block attached to
+  # `to_enum(:step, ...)`. Returns:
+  #   - `Float::INFINITY` when iteration is unbounded in the step's
+  #     direction (`limit == nil` or limit = +/-INFINITY aligned with
+  #     step's sign),
+  #   - `1` / `0` for infinite step, depending on whether the first
+  #     yield occurs,
+  #   - `floor((limit - self)/step + err) + 1` otherwise,
+  #   - raises `ArgumentError` for a non-numeric step, matching
+  #     `.each`'s behavior.
+  def __step_size(limit, step)
+    unless step.is_a?(Numeric)
+      raise ArgumentError, "step must be numeric"
+    end
+    return Float::INFINITY if limit.nil?
+    beg  = self.to_f
+    unit = step.to_f
+    endv = limit.to_f
+    if unit.infinite?
+      return (unit > 0 ? (beg <= endv ? 1 : 0) : (beg >= endv ? 1 : 0))
+    end
+    if endv.infinite?
+      dir = (endv > 0 && unit > 0) || (endv < 0 && unit < 0)
+      return dir ? Float::INFINITY : 0
+    end
+    n = (endv - beg) / unit
+    return 0 if n.nan? || n < 0
+    err = (beg.abs + endv.abs + (endv - beg).abs) / unit.abs * Float::EPSILON
+    err = 0.5 if err > 0.5
+    (n + err).floor + 1
   end
 end

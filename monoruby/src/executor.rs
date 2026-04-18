@@ -1726,9 +1726,20 @@ impl Executor {
         args: Vec<Value>,
         pc: BytecodePtr,
     ) -> Result<Value> {
+        self.generate_enumerator_with_size(method, obj, args, pc, None)
+    }
+
+    pub(crate) fn generate_enumerator_with_size(
+        &mut self,
+        method: IdentId,
+        obj: Value,
+        args: Vec<Value>,
+        pc: BytecodePtr,
+        size: Option<Value>,
+    ) -> Result<Value> {
         let outer_lfp = Lfp::dummy_heap_frame_with_self(obj);
         let proc = Proc::from_outer(outer_lfp, ENUM_YIELDER_FUNCID, pc);
-        let e = Value::new_enumerator(obj, method, proc, args);
+        let e = Value::new_enumerator(obj, method, proc, args, size);
         Ok(e)
     }
 }

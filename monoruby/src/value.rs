@@ -957,8 +957,9 @@ impl Value {
         method: IdentId,
         proc: Proc,
         args: Vec<Value>,
+        size: Option<Value>,
     ) -> Self {
-        RValue::new_enumerator(obj, method, proc, args).pack()
+        RValue::new_enumerator(obj, method, proc, args, size).pack()
     }
 
     pub(crate) fn new_generator(proc: Proc) -> Self {
