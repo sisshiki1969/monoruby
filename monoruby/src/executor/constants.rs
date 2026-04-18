@@ -215,13 +215,18 @@ impl Executor {
         name: IdentId,
         current_func: FuncId,
     ) -> Result<Option<Value>> {
-        let stack = globals
-            .store
-            .iseq(current_func)
+        // Builtin (native-Rust) methods have no lexical scope, so they
+        // can't contribute to constant resolution. Skip them cleanly
+        // instead of panicking via `as_iseq()` on a non-ISeq FuncInfo.
+        let Some(iseq_id) = globals.store[current_func].is_iseq() else {
+            return Ok(None);
+        };
+        let stack = globals.store[iseq_id]
             .lexical_context
             .iter()
             .rev()
-            .cloned();
+            .cloned()
+            .collect::<Vec<_>>();
         for module in stack {
             if globals.store.get_constant(module, name).is_some() {
                 return self.get_constant(globals, module, name);
