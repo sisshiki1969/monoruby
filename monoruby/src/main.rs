@@ -70,6 +70,9 @@ fn main() {
 
     if !args.exec.is_empty() {
         let path = std::path::Path::new("-e");
+        let argv = Value::array_from_iter(args.file.iter().cloned().map(Value::string));
+        globals.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
+        globals.set_gvar(monoruby::IdentId::get_id("$*"), argv);
         if args.ast {
             for code in args.exec {
                 match ruruby_parse::Parser::parse_program(code, path) {
@@ -99,10 +102,11 @@ fn main() {
     }
 
     let mut iter = args.file.into_iter();
-    let (code, path) = if let Some(file_name) = iter.next() {
-        let argv = Value::array_from_iter(iter.map(Value::string));
-        globals.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
-        globals.set_gvar(monoruby::IdentId::get_id("$*"), argv);
+    let first = iter.next();
+    let argv = Value::array_from_iter(iter.map(Value::string));
+    globals.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
+    globals.set_gvar(monoruby::IdentId::get_id("$*"), argv);
+    let (code, path) = if let Some(file_name) = first {
         match load_file(&std::path::PathBuf::from(&file_name)) {
             Ok(res) => res,
             Err(err) => {
