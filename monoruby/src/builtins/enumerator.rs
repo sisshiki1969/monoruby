@@ -153,10 +153,15 @@ fn enumerator_size(
                 .get(1)
                 .copied()
                 .unwrap_or(Value::integer(1));
-            // Non-numeric step: iteration will raise, don't provide a size.
+            // Non-numeric step (e.g. `"1"`, `"foo"`) is accepted by the
+            // enumerator constructor, but asking for `.size` must raise
+            // the same error that iterating would raise -- matching
+            // CRuby.
             let step_f = match numeric_to_f64(step_val) {
                 Some(f) => f,
-                None => return Ok(Value::nil()),
+                None => {
+                    return Err(MonorubyErr::argumenterr("step must be numeric"));
+                }
             };
             if step_f == 0.0 {
                 return Ok(Value::nil());
