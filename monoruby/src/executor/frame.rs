@@ -239,6 +239,20 @@ impl Lfp {
     }
 
     ///
+    /// Get CFP without checking `on_stack`. Used in the invalidated
+    /// stack path of `move_frame_to_heap`, where the LFP pointer is
+    /// still a valid stack address (we're within the owner frame's
+    /// stack extent) but the meta's on_stack bit has been flipped.
+    ///
+    /// ### safety
+    ///
+    /// *self* must point at a valid (possibly invalidated) stack
+    /// frame with a well-formed CFP at `self + 16`.
+    unsafe fn cfp_unchecked(&self) -> Cfp {
+        unsafe { Cfp::new(self.as_ptr().add(16) as _) }
+    }
+
+    ///
     /// Get the *FuncId* of the current frame.
     ///
     pub fn func_id(&self) -> FuncId {
@@ -327,24 +341,35 @@ impl Lfp {
     /// ### return
     /// - the frame moved to the heap.
     ///
-    pub fn move_frame_to_heap(self) -> Self {
-        if self.on_stack() {
-            unsafe {
-                let mut cfp = self.cfp();
-                let len = self.frame_bytes();
-                let v = self.frame_ref().to_vec().into_boxed_slice();
-                let mut heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
-                heap_lfp.meta_mut().set_on_heap();
-                cfp.set_lfp(heap_lfp);
-                if let Some(outer_lfp) = heap_lfp.outer() {
-                    let outer = outer_lfp.move_frame_to_heap();
-                    heap_lfp.set_outer(Some(outer));
-                }
-                assert!(!heap_lfp.on_stack());
-                heap_lfp
+    pub fn move_frame_to_heap(mut self) -> Self {
+        if !self.on_stack() {
+            return self;
+        }
+        // Already copied to heap: a caller is holding a stale stack
+        // pointer (e.g. `Kernel#loop` cached ProcData.outer before
+        // another capture promoted this frame). Forward to the heap
+        // copy via `cfp.lfp()`, which was redirected at promotion.
+        if self.meta().invalidated() {
+            return unsafe { self.cfp_unchecked().lfp() };
+        }
+        unsafe {
+            let mut cfp = self.cfp();
+            let len = self.frame_bytes();
+            let v = self.frame_ref().to_vec().into_boxed_slice();
+            let mut heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
+            heap_lfp.meta_mut().set_on_heap();
+            cfp.set_lfp(heap_lfp);
+            // Mark the stack slot as a tombstone so any future reader
+            // (this function's recursive step, ProcData.outer lookups
+            // at block invocation, etc.) forwards to the heap copy
+            // instead of re-copying.
+            self.meta_mut().set_invalidated();
+            if let Some(outer_lfp) = heap_lfp.outer() {
+                let outer = outer_lfp.move_frame_to_heap();
+                heap_lfp.set_outer(Some(outer));
             }
-        } else {
-            self
+            assert!(!heap_lfp.on_stack());
+            heap_lfp
         }
     }
 

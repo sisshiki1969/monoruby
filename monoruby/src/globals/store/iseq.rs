@@ -256,6 +256,21 @@ impl ISeqInfo {
         self.bytecode = Some(Box::into_pin(bc.into_boxed_slice()));
     }
 
+    /// True if this ISeq contains a `BlockArg` bytecode (opcode 23) —
+    /// the `&block` forwarding / materialisation operation. Methods
+    /// with BlockArg must not be JIT-specialised (inlined) into their
+    /// callers because BlockArg triggers `move_frame_to_heap` on an
+    /// outer frame; an inlined context has no `pop_frame` to refresh
+    /// r14 to the heap copy, so locals/outer access in the caller
+    /// after the capture point would silently diverge between stack
+    /// tombstone and heap.
+    pub(crate) fn has_block_arg(&self) -> bool {
+        let Some(bc) = self.bytecode.as_ref() else {
+            return false;
+        };
+        bc.iter().any(|b| (b.op1() >> 48) as u8 == 23)
+    }
+
     ///
     /// Get a number of registers.
     ///

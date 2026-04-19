@@ -332,13 +332,25 @@ impl JitModule {
     }
 
     ///
-    /// Test whether the current local frame is on the heap ("captured").
+    /// Test whether the current local frame has been "captured" —
+    /// either already promoted to heap (bit 7 `on_heap`) or still at
+    /// its stack address but content has been moved to heap with a
+    /// tombstone (bit 3 `invalidated`). Both cases violate the JIT's
+    /// stack-layout assumptions for register-cached locals / the
+    /// specialised rbp-relative outer access and require a deopt.
     ///
-    /// if the frame is on the heap, jump to *label*.
+    /// The `invalidated` case arises when a method call (often an
+    /// inlined wrapper like the Ruby `Integer#downto`) promotes an
+    /// ancestor frame via `move_frame_to_heap` but JIT-inlined code
+    /// never does a `pop_frame` to reload r14 from the updated
+    /// `cfp.lfp` slot. The tombstone bit lets the guard catch that
+    /// case too.
+    ///
+    /// if the frame is captured, jump to *label*.
     ///
     fn branch_if_captured(&mut self, label: &DestLabel) {
         monoasm! { &mut self.jit,
-            testb [r14 - (LFP_META - META_KIND)], (0b1000_0000_u8 as i8);
+            testb [r14 - (LFP_META - META_KIND)], (0b1000_1000_u8 as i8);
             jnz label;
         }
     }
@@ -482,6 +494,37 @@ impl JitModule {
             movq rsi, r12;
             movq rax, (runtime::get_yield_data);
             call rax;
+        }
+        self.resolve_invalidated_outer(GP::Rax);
+    }
+
+    ///
+    /// If the outer LFP in `R(reg)` points at a stack frame whose
+    /// content has already been copied to heap by `move_frame_to_heap`
+    /// (flagged `invalidated` on the tombstone), forward the pointer
+    /// to the live heap copy via the owning CFP's LFP slot.
+    ///
+    /// - `invalidated` bit = bit 3 of the `kind` byte in Meta; `kind`
+    ///   lives at `lfp - (LFP_META - META_KIND)` = `lfp - 1`.
+    /// - the LFP's CFP is at `lfp + 16`, and `cfp.lfp` slot is at
+    ///   `cfp - 8` = `lfp + 8`. Reading 8 bytes there gives the heap
+    ///   pointer that `cfp.set_lfp(heap)` stored at promotion time.
+    ///
+    /// Emits 3 instructions + 1 conditional branch on the happy
+    /// (not-invalidated) path.
+    fn resolve_invalidated_outer(&mut self, reg: GP) {
+        let skip = self.jit.label();
+        monoasm! { &mut self.jit,
+            // Skip if outer is NULL (e.g. `get_yield_data` returned
+            // the default ProcData on a no-block-given error). The
+            // ASM callers handle that via a subsequent error check,
+            // but we must not dereference a null lfp here.
+            testq R(reg as _), R(reg as _);
+            jz   skip;
+            testb [R(reg as _) - 1], (0b0000_1000_u8 as i8);
+            jz   skip;
+            movq R(reg as _), [R(reg as _) + 8];
+        skip:
         }
     }
 
