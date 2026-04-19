@@ -2,6 +2,11 @@ require_relative 'monitor'
 
 class Enumerator
   include Enumerable
+
+  # Placeholder for CRuby's Enumerator::ArithmeticSequence. We treat it as
+  # an alias of Enumerator so `Numeric#step` / `Range#step` can report the
+  # conventional class without a dedicated implementation.
+  ArithmeticSequence = self unless defined?(ArithmeticSequence)
 end
 
 class CallerLocation
