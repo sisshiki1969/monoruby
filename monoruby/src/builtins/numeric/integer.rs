@@ -170,13 +170,6 @@ fn step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/upto.html]
 #[monoruby_builtin]
 fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let bh = match lfp.block() {
-        None => {
-            let id = IdentId::get_id("upto");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
-        }
-        Some(block) => block,
-    };
     let cur = lfp.self_val().expect_integer(globals)?;
     let limit = if let Some(f) = lfp.arg(0).try_float() {
         if f.is_nan() {
@@ -188,6 +181,25 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
             Ok(v) => v,
             Err(_) => return Err(MonorubyErr::argumenterr(format!("bad value for range"))),
         }
+    };
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("upto");
+            // Size hint: `stop - start + 1` if `stop >= start`, else 0.
+            let size = if limit >= cur {
+                Value::integer(limit - cur + 1)
+            } else {
+                Value::integer(0)
+            };
+            return vm.generate_enumerator_with_size(
+                id,
+                lfp.self_val(),
+                lfp.iter().collect(),
+                pc,
+                Some(size),
+            );
+        }
+        Some(block) => block,
     };
     if cur > limit {
         return Ok(lfp.self_val());
@@ -211,13 +223,6 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/downto.html]
 #[monoruby_builtin]
 fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let bh = match lfp.block() {
-        None => {
-            let id = IdentId::get_id("downto");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
-        }
-        Some(block) => block,
-    };
     let cur = lfp.self_val().expect_integer(globals)?;
     let limit = if let Some(f) = lfp.arg(0).try_float() {
         if f.is_nan() {
@@ -229,6 +234,25 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
             Ok(v) => v,
             Err(_) => return Err(MonorubyErr::argumenterr(format!("bad value for range"))),
         }
+    };
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("downto");
+            // Size hint: `start - stop + 1` if `start >= stop`, else 0.
+            let size = if cur >= limit {
+                Value::integer(cur - limit + 1)
+            } else {
+                Value::integer(0)
+            };
+            return vm.generate_enumerator_with_size(
+                id,
+                lfp.self_val(),
+                lfp.iter().collect(),
+                pc,
+                Some(size),
+            );
+        }
+        Some(block) => block,
     };
     if cur < limit {
         return Ok(lfp.self_val());

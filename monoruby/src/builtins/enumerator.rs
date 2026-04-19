@@ -58,6 +58,12 @@ pub(super) fn init(globals: &mut Globals) {
 /// - size -> Integer or Float::INFINITY or nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/size.html]
+///
+/// Returns the size attached to the Enumerator at construction
+/// (`Enumerator.new(size)`, `to_enum(...) { size }`, or one of the
+/// builtin iterators that pass it via `generate_enumerator_with_size`).
+/// `nil` when no size hint was provided -- there is no method-name
+/// dispatch here; each method is responsible for its own size.
 #[monoruby_builtin]
 fn enumerator_size(
     vm: &mut Executor,
@@ -70,94 +76,13 @@ fn enumerator_size(
         return Ok(Value::nil());
     }
     let inner = e.as_enumerator_inner();
-    // Explicit size attached via `to_enum(...) { size }` / Enumerator.new(size).
-    // Proc values are evaluated lazily, matching CRuby.
-    if let Some(stored) = inner.size() {
-        if let Some(proc) = stored.is_proc() {
-            return vm.invoke_proc(globals, &proc, &[]);
-        }
-        return Ok(stored);
+    let Some(stored) = inner.size() else {
+        return Ok(Value::nil());
+    };
+    if let Some(proc) = stored.is_proc() {
+        return vm.invoke_proc(globals, &proc, &[]);
     }
-    let method_name = inner.method.get_name();
-    match method_name.as_str() {
-        "upto" => {
-            if let (Some(start), Some(stop_val)) = (inner.obj.try_fixnum(), inner.args.first()) {
-                let stop = if let Some(i) = stop_val.try_fixnum() {
-                    i
-                } else if let Some(f) = stop_val.try_float() {
-                    f.floor() as i64
-                } else {
-                    return Err(MonorubyErr::argumenterr(format!(
-                        "comparison of Integer with {} failed: coercion was not possible",
-                        stop_val.get_real_class_name(&globals.store)
-                    )));
-                };
-                let size = if stop >= start { stop - start + 1 } else { 0 };
-                Ok(Value::integer(size))
-            } else {
-                Ok(Value::nil())
-            }
-        }
-        "downto" => {
-            if let (Some(start), Some(stop_val)) = (inner.obj.try_fixnum(), inner.args.first()) {
-                let stop = if let Some(i) = stop_val.try_fixnum() {
-                    i
-                } else if let Some(f) = stop_val.try_float() {
-                    f.ceil() as i64
-                } else {
-                    return Err(MonorubyErr::argumenterr(format!(
-                        "comparison of Integer with {} failed: coercion was not possible",
-                        stop_val.get_real_class_name(&globals.store)
-                    )));
-                };
-                let size = if start >= stop { start - stop + 1 } else { 0 };
-                Ok(Value::integer(size))
-            } else {
-                Ok(Value::nil())
-            }
-        }
-        "times" => {
-            if let Some(n) = inner.obj.try_fixnum() {
-                Ok(Value::integer(if n > 0 { n } else { 0 }))
-            } else {
-                Ok(Value::nil())
-            }
-        }
-        "cycle" => {
-            let obj_len = if let Some(ary) = inner.obj.try_array_ty() {
-                ary.len() as i64
-            } else {
-                return Ok(Value::nil());
-            };
-            if inner.args.is_empty() {
-                // cycle with no count => infinite if non-empty, 0 if empty
-                if obj_len == 0 {
-                    Ok(Value::integer(0))
-                } else {
-                    Ok(Value::float(f64::INFINITY))
-                }
-            } else if inner.args[0].is_nil() {
-                if obj_len == 0 {
-                    Ok(Value::integer(0))
-                } else {
-                    Ok(Value::float(f64::INFINITY))
-                }
-            } else if let Some(n) = inner.args[0].try_fixnum() {
-                if n < 0 || obj_len == 0 {
-                    Ok(Value::integer(0))
-                } else {
-                    Ok(Value::integer(obj_len * n))
-                }
-            } else {
-                Ok(Value::nil())
-            }
-        }
-        // `"step"` used to have a dedicated arm here; it is now computed
-        // by `Numeric#__step_size`, attached via the size block of
-        // `to_enum(:step, limit, step) { ... }` and returned from the
-        // `inner.size()` fast-path above.
-        _ => Ok(Value::nil()),
-    }
+    Ok(stored)
 }
 
 ///

@@ -213,7 +213,24 @@ class Array
         raise TypeError, "no implicit conversion of #{n.class} into Integer" unless n.respond_to?(:to_int)
         n = n.to_int
       end
-      return to_enum(:cycle, *(no_n ? [] : [n]))
+      # Size hint:
+      #   * empty array            -> 0
+      #   * cycle()/cycle(nil)     -> Float::INFINITY
+      #   * cycle(n) with n >= 0   -> length * n
+      #   * cycle(n) with n  < 0   -> 0
+      args = no_n ? [] : [n]
+      return to_enum(:cycle, *args) {
+        len = self.length
+        if len == 0
+          0
+        elsif no_n || n.nil?
+          Float::INFINITY
+        elsif n < 0
+          0
+        else
+          len * n
+        end
+      }
     end
     return nil if empty?
     if n.nil?
