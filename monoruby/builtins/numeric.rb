@@ -87,6 +87,9 @@ class Numeric
   end
 
   def quo(other)
+    unless other.is_a?(Numeric)
+      raise TypeError, "#{other.class} can't be coerced into Rational"
+    end
     Rational(self) / other
   end
 
@@ -105,12 +108,23 @@ class Numeric
   alias % modulo
 
   def remainder(other)
-    mod = self % other
-    if mod != 0 && ((self < 0 && other > 0) || (self > 0 && other < 0))
-      mod - other
+    if other.respond_to?(:coerce)
+      a, b = other.coerce(self)
+    else
+      a, b = self, other
+    end
+    mod = a % b
+    if mod == 0
+      mod
+    elsif (a < 0 && b > 0) || (a > 0 && b < 0)
+      mod - b
     else
       mod
     end
+  end
+
+  def singleton_method_added(name)
+    raise TypeError, "can't define singleton method \"#{name}\" for #{self.class}"
   end
 
   def eql?(other)
