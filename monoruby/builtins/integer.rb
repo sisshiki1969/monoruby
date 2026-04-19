@@ -28,6 +28,25 @@ class Integer
     self
   end
 
+  alias __upto upto
+  alias __downto downto
+
+  def upto(limit, &block)
+    if block
+      __upto(limit, &block)
+    else
+      to_enum(:__upto, limit) { self <= limit ? limit - self + 1 : 0 }
+    end
+  end
+
+  def downto(limit, &block)
+    if block
+      __downto(limit, &block)
+    else
+      to_enum(:__downto, limit) { self >= limit ? self - limit + 1 : 0 }
+    end
+  end
+
   def negative?
     self < 0
   end
