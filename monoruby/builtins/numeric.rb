@@ -184,19 +184,128 @@ class Numeric
     step = by unless by.nil?
     step ||= 1
     raise ArgumentError, "step can't be 0" if step == 0
-    return to_enum(:step, limit, step) unless block_given?
-    i = self
-    if step > 0
-      while (limit.nil? || i <= limit) && i.finite?
-        yield i
-        i += step
+    unless block_given?
+      # Attach a size-computing block so `to_enum(:step).size` reports
+      # the correct value without iterating.  The block runs lazily.
+      return to_enum(:step, limit, step) { __step_size(limit, step) }
+    end
+
+    # Non-numeric `step` (e.g. `"foo"`) passes through `to_enum`
+    # unchanged -- matching CRuby, which only raises at iteration time
+    # -- but must fail loudly once we actually start iterating.
+    unless step.is_a?(Numeric)
+      raise ArgumentError, "step must be numeric"
+    end
+
+    use_float = self.is_a?(Float) ||
+                (!limit.nil? && limit.is_a?(Float)) ||
+                step.is_a?(Float)
+
+    if use_float
+      beg  = self.to_f
+      unit = step.to_f
+
+      # `unit` is +/- Infinity: at most one yield at `beg`, if the
+      # direction matches.
+      if unit.infinite?
+        if limit.nil?
+          yield beg
+        else
+          endv = limit.to_f
+          if unit > 0 ? beg <= endv : beg >= endv
+            yield beg
+          end
+        end
+        return self
+      end
+
+      if limit.nil?
+        # Unbounded: counted loop to avoid accumulated FP drift.
+        i = 0
+        loop do
+          yield beg + i * unit
+          i += 1
+        end
+      else
+        endv = limit.to_f
+        n = (endv - beg) / unit
+        if n.nan? || n < 0
+          # Direction mismatch or NaN: no yield.
+          return self
+        end
+        if n.infinite?
+          # `endv` is +/- Infinity in the iteration direction: yield
+          # forever, computing each value from the index to avoid
+          # cumulative rounding error.
+          i = 0
+          loop do
+            yield beg + i * unit
+            i += 1
+          end
+        end
+        # Tolerance mimicking CRuby's ruby_float_step:
+        #   err = (|beg| + |end| + |end-beg|) / |unit| * DBL_EPSILON
+        err = (beg.abs + endv.abs + (endv - beg).abs) / unit.abs * Float::EPSILON
+        err = 0.5 if err > 0.5
+        n = (n + err).floor
+        (0..n).each do |i|
+          d = beg + i * unit
+          # Clamp overshoot past the boundary (floating-point rounding).
+          if unit > 0 ? d > endv : d < endv
+            d = endv
+          end
+          yield d
+        end
       end
     else
-      while (limit.nil? || i >= limit) && i.finite?
-        yield i
-        i += step
+      i = self
+      if step > 0
+        while limit.nil? || i <= limit
+          yield i
+          i += step
+        end
+      else
+        while limit.nil? || i >= limit
+          yield i
+          i += step
+        end
       end
     end
     self
+  end
+
+  private
+
+  # Compute the size that `step(limit, step)` will yield, without
+  # actually iterating. Invoked lazily via the size block attached to
+  # `to_enum(:step, ...)`. Returns:
+  #   - `Float::INFINITY` when iteration is unbounded in the step's
+  #     direction (`limit == nil` or limit = +/-INFINITY aligned with
+  #     step's sign),
+  #   - `1` / `0` for infinite step, depending on whether the first
+  #     yield occurs,
+  #   - `floor((limit - self)/step + err) + 1` otherwise,
+  #   - raises `ArgumentError` for a non-numeric step, matching
+  #     `.each`'s behavior.
+  def __step_size(limit, step)
+    unless step.is_a?(Numeric)
+      raise ArgumentError, "step must be numeric"
+    end
+    return Float::INFINITY if limit.nil?
+    beg  = self.to_f
+    unit = step.to_f
+    endv = limit.to_f
+    if unit.infinite?
+      return (unit > 0 ? (beg <= endv ? 1 : 0) : (beg >= endv ? 1 : 0))
+    end
+    if endv.infinite?
+      dir = (endv > 0 && unit > 0) || (endv < 0 && unit < 0)
+      return dir ? Float::INFINITY : 0
+    end
+    n = (endv - beg) / unit
+    return 0 if n.nan? || n < 0
+    err = (beg.abs + endv.abs + (endv - beg).abs) / unit.abs * Float::EPSILON
+    err = 0.5 if err > 0.5
+    (n + err).floor + 1
   end
 end

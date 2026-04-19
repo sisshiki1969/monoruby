@@ -19,7 +19,7 @@ class Integer
   # floor, ceil, round, truncate are implemented in Rust (integer.rs)
 
   def times
-    return self.to_enum(:times) unless block_given?
+    return self.to_enum(:times) { self > 0 ? self : 0 } unless block_given?
     i = 0
     while i < self
       yield i
