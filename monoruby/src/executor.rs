@@ -112,6 +112,11 @@ pub struct Executor {
     require_level: usize,
     /// error information.
     exception: Option<MonorubyErr>,
+    /// Lazy heap promotion: per-still-live-cfp list of raw pointers into
+    /// captured Procs/Bindings' `outer_lfp` field (and into heap-promoted
+    /// frames' own outer slot). Drained by `promote_frame_on_return` when
+    /// the matching cfp pops; entries get rewritten with the heap pointer.
+    escapees: std::collections::HashMap<usize, Vec<*mut Lfp>>,
 }
 
 impl std::default::Default for Executor {
@@ -131,6 +136,7 @@ impl std::default::Default for Executor {
             temp_stack: vec![],
             require_level: 0,
             exception: None,
+            escapees: std::collections::HashMap::new(),
         }
     }
 }
@@ -1662,19 +1668,75 @@ impl Executor {
 
 impl Executor {
     pub(crate) fn generate_proc(
-        &self,
+        &mut self,
         globals: &Globals,
         bh: BlockHandler,
         pc: BytecodePtr,
     ) -> Result<Proc> {
-        self.generate_proc_inner(globals, self.cfp(), bh, pc)
+        let cfp = self.cfp();
+        self.generate_proc_inner(globals, cfp, bh, pc)
     }
 
-    /// Build a long-lived `Proc` from a BlockHandler. The resulting
-    /// Proc may outlive the current frame, so any on-stack outer lfp
-    /// is moved to the heap here.
+    /// Lazy heap promotion plumbing.
+    ///
+    /// Register an escapee: a raw pointer to the `outer_lfp` slot of a
+    /// captured Proc/Binding (or to the `outer` slot of an
+    /// already-promoted heap frame).  The slot currently holds a stack
+    /// `Lfp` belonging to *cfp*'s frame.  When that cfp returns,
+    /// `promote_frame_on_return` will copy the frame to the heap and
+    /// rewrite *slot_ptr* with the heap pointer.
+    pub(crate) fn register_escapee(&mut self, cfp: Cfp, slot_ptr: *mut Lfp) {
+        debug_assert!(cfp.lfp().on_stack());
+        let key = cfp.as_ptr() as usize;
+        self.escapees.entry(key).or_default().push(slot_ptr);
+        let mut lfp = cfp.lfp();
+        unsafe { lfp.meta_mut_for_escapee().set_has_escapee() };
+    }
+
+    /// Called at every site that pops a still-live stack frame
+    /// (epilogue, method_return, block_break, error unwind, fiber
+    /// terminate). If the frame had any registered escapees, copy it to
+    /// heap and overwrite each escapee slot with the heap pointer.
+    pub(crate) fn promote_frame_on_return(&mut self, cfp: Cfp) {
+        if !cfp.lfp().meta().has_escapee() {
+            return;
+        }
+        let key = cfp.as_ptr() as usize;
+        let entries = match self.escapees.remove(&key) {
+            Some(v) => v,
+            None => return,
+        };
+        if entries.is_empty() {
+            return;
+        }
+        let stack_lfp = cfp.lfp();
+        // Detached snapshot: copies the frame to heap without mutating
+        // cfp.lfp and without recursively promoting outers. Outers stay
+        // on stack until they hit their own return hook.
+        let heap_lfp = stack_lfp.detached_heap_copy();
+        for slot in entries {
+            unsafe { *slot = heap_lfp };
+        }
+        // If the heap frame's outer is still on stack, register the
+        // heap frame's own `outer` slot as an escapee of that ancestor
+        // cfp so the chain gets rewritten transitively when the
+        // ancestor returns.
+        if let Some(outer) = heap_lfp.outer()
+            && outer.on_stack()
+        {
+            let outer_cfp = unsafe { outer.cfp_unchecked() };
+            let outer_slot = heap_lfp.outer_slot_ptr();
+            self.register_escapee(outer_cfp, outer_slot);
+        }
+    }
+
+    /// Build a long-lived `Proc` from a BlockHandler. With lazy heap
+    /// promotion, the captured outer frame is left on the stack while
+    /// it is still live; the Proc's `outer_lfp` slot is registered as
+    /// an escapee of that frame's cfp so it gets rewritten with the
+    /// heap pointer at frame return.
     pub(crate) fn generate_proc_inner(
-        &self,
+        &mut self,
         globals: &Globals,
         cfp: Cfp,
         bh: BlockHandler,
@@ -1686,12 +1748,13 @@ impl Executor {
             return Ok(proc);
         }
         if let Some((outer, fid)) = self.resolve_block_target(globals, cfp, bh) {
-            // move_frame_to_heap is a no-op when `outer` is already on
-            // the heap (Symbol case). For the proxy case it promotes
-            // the stack frame so the Proc can be used past the current
-            // call.
-            let outer = outer.move_frame_to_heap();
-            return Ok(Proc::from_outer(outer, fid, pc));
+            let mut proc = Proc::from_outer(outer, fid, pc);
+            if outer.on_stack() {
+                let owner_cfp = unsafe { outer.cfp_unchecked() };
+                let slot = proc.outer_lfp_slot_ptr();
+                self.register_escapee(owner_cfp, slot);
+            }
+            return Ok(proc);
         }
         Err(MonorubyErr::runtimeerr(format!(
             "not yet implemented: block handler {bh:?}"
@@ -1699,13 +1762,25 @@ impl Executor {
     }
 
     pub(crate) fn generate_lambda(&mut self, func_id: FuncId, pc: BytecodePtr) -> Proc {
-        let outer_lfp = self.cfp().lfp().move_frame_to_heap();
-        Proc::from_outer(outer_lfp, func_id, pc)
+        let outer_lfp = self.cfp().lfp();
+        let mut proc = Proc::from_outer(outer_lfp, func_id, pc);
+        if outer_lfp.on_stack() {
+            let owner_cfp = unsafe { outer_lfp.cfp_unchecked() };
+            let slot = proc.outer_lfp_slot_ptr();
+            self.register_escapee(owner_cfp, slot);
+        }
+        proc
     }
 
     pub(crate) fn generate_binding(&mut self, pc: BytecodePtr) -> Binding {
         let lfp = self.cfp().prev().unwrap().lfp();
-        Binding::from_outer(lfp, pc)
+        let mut binding = Binding::from_outer(lfp, pc);
+        if lfp.on_stack() {
+            let owner_cfp = unsafe { lfp.cfp_unchecked() };
+            let slot = binding.outer_lfp_slot_ptr();
+            self.register_escapee(owner_cfp, slot);
+        }
+        binding
     }
 
     ///

@@ -332,13 +332,18 @@ impl JitModule {
     }
 
     ///
-    /// Test whether the current local frame is on the heap ("captured").
+    /// Test whether the current local frame is "captured" — either
+    /// already promoted to heap (bit 7) or still on the stack with
+    /// pending escapees from lazy heap promotion (bit 3). In either
+    /// case the frame should opt out of loop-JIT compilation, since
+    /// captured frames violate the JIT's stack-layout assumptions for
+    /// register-cached locals.
     ///
-    /// if the frame is on the heap, jump to *label*.
+    /// if the frame is captured, jump to *label*.
     ///
     fn branch_if_captured(&mut self, label: &DestLabel) {
         monoasm! { &mut self.jit,
-            testb [r14 - (LFP_META - META_KIND)], (0b1000_0000_u8 as i8);
+            testb [r14 - (LFP_META - META_KIND)], (0b1000_1000_u8 as i8);
             jnz label;
         }
     }
@@ -1016,7 +1021,22 @@ impl Codegen {
     }
 
     fn epilogue(&mut self) {
+        // Lazy heap promotion hook: if the current frame's `has_escapee`
+        // bit is set, promote it to heap and rewrite registered escapee
+        // slots before the stack frame is released. The fast path (no
+        // escapee) is gated by the inline flag check so the cost on
+        // ordinary returns is one byte test + one branch.
+        let no_escapee = self.jit.label();
         monoasm!( &mut self.jit,
+            // Meta is at [r14 - LFP_META]; kind byte is at offset
+            // META_KIND inside Meta. LFP_META(8) - META_KIND(7) = 1.
+            testb [r14 - 1], (0b0000_1000_u8 as i8);
+            jz   no_escapee;
+            movq rdi, rbx;
+            movq rsi, rax;
+            movq rax, (runtime::lazy_promote_check);
+            call rax;
+        no_escapee:
             leave;
             ret;
         );

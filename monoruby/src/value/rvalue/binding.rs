@@ -24,6 +24,12 @@ impl Binding {
     pub(crate) fn from_outer(outer_lfp: Lfp, call_site_pc: BytecodePtr) -> Self {
         Binding(Value::new_binding(outer_lfp, Some(call_site_pc)))
     }
+
+    /// Raw pointer to this Binding's `outer_lfp` slot. Used by lazy
+    /// heap promotion to register the slot as an escapee.
+    pub(crate) fn outer_lfp_slot_ptr(&mut self) -> *mut Lfp {
+        &mut self.outer_lfp as *mut Lfp
+    }
 }
 
 #[derive(Debug, Clone)]

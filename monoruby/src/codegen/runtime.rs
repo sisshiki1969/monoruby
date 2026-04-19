@@ -112,6 +112,17 @@ pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals
     }
 }
 
+/// Lazy heap promotion: called from the JIT/VM epilogue when the
+/// `has_escapee` bit is set on the current frame's Meta. Copies the
+/// frame to heap and rewrites every registered escapee `outer_lfp`
+/// slot. The return value (`retval` in `rsi`) is passed through in rax
+/// so the caller can keep its return value across the call.
+pub(super) extern "C" fn lazy_promote_check(vm: &mut Executor, retval: u64) -> u64 {
+    let cfp = vm.cfp();
+    vm.promote_frame_on_return(cfp);
+    retval
+}
+
 pub(super) extern "C" fn block_arg(
     vm: &mut Executor,
     globals: &mut Globals,

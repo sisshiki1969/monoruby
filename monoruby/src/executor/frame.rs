@@ -21,10 +21,17 @@ impl Cfp {
         Cfp(std::ptr::NonNull::new(ptr as *mut Option<Cfp>).unwrap())
     }
 
+    /// Public alias of `new` for cross-module construction in
+    /// lazy-promotion helpers. SAFETY contract is identical: *ptr* must
+    /// point at a valid Cfp slot.
+    pub(crate) unsafe fn new_pub(ptr: *mut u8) -> Self {
+        unsafe { Self::new(ptr) }
+    }
+
     ///
     /// Get inner raw pointer.
     ///
-    fn as_ptr(&self) -> *const Option<Cfp> {
+    pub(crate) fn as_ptr(&self) -> *const Option<Cfp> {
         self.0.as_ptr()
     }
 
@@ -348,6 +355,35 @@ impl Lfp {
         }
     }
 
+    /// Lazy heap promotion: produce a heap snapshot of `self` (which
+    /// must be on the stack) **without** mutating `cfp.lfp` and
+    /// **without** recursively promoting the outer chain.
+    ///
+    /// The caller is responsible for:
+    ///  - rewriting registered escapee slots to point at the returned
+    ///    heap lfp;
+    ///  - if the returned heap lfp's outer is still on stack,
+    ///    registering the heap lfp's `outer` slot as an escapee of the
+    ///    appropriate ancestor cfp so it gets promoted transitively.
+    ///
+    /// The has_escapee flag bit is cleared on the (about-to-die) stack
+    /// frame's meta — a sanity hygiene step; the stack frame is being
+    /// released either way.
+    pub fn detached_heap_copy(self) -> Self {
+        debug_assert!(self.on_stack());
+        unsafe {
+            let len = self.frame_bytes();
+            let v = self.frame_ref().to_vec().into_boxed_slice();
+            let mut heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
+            heap_lfp.meta_mut().set_on_heap();
+            // The stack copy's meta still has `has_escapee` set; the
+            // copy we made inherits it. Clear it on the heap copy so a
+            // future capture pointing here re-registers cleanly.
+            heap_lfp.meta_mut().clear_has_escapee();
+            heap_lfp
+        }
+    }
+
     pub fn heap_frame(self_val: Value, mut meta: Meta) -> Self {
         let local_len = meta.reg_num() as usize - 1;
         meta.set_on_heap();
@@ -390,6 +426,32 @@ impl Lfp {
 
     fn meta_mut(&mut self) -> &mut Meta {
         unsafe { &mut *(self.sub(LFP_META as _) as *mut Meta) }
+    }
+
+    /// Mutable reference to Meta from outside the frame module
+    /// (used by lazy heap promotion to set the has_escapee flag).
+    ///
+    /// ### safety
+    /// The Lfp must point at a valid live frame (stack or heap).
+    pub(crate) unsafe fn meta_mut_for_escapee(&mut self) -> &mut Meta {
+        self.meta_mut()
+    }
+
+    /// Get CFP without requiring the frame to be on stack.
+    /// Caller asserts the lfp is on stack — this avoids the panic in
+    /// `cfp()` so callers in lazy-promotion paths can use it.
+    ///
+    /// ### safety
+    /// `self` must point at a stack frame (Lfp+16 must be a valid Cfp slot).
+    pub(crate) unsafe fn cfp_unchecked(&self) -> Cfp {
+        unsafe { Cfp::new_pub(self.as_ptr().add(16) as _) }
+    }
+
+    /// Raw pointer to this Lfp's outer slot. Used by lazy promotion
+    /// to register a heap frame's outer field as an escapee of an
+    /// ancestor cfp so the chain promotes transitively.
+    pub(crate) fn outer_slot_ptr(self) -> *mut Lfp {
+        self.0.as_ptr() as *mut Lfp
     }
 
     ///

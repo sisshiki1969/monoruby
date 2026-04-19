@@ -25,6 +25,18 @@ impl Proc {
             pc,
         )))
     }
+
+    /// Raw pointer to this Proc's `outer_lfp` slot inside the heap-allocated
+    /// RValue. Used by lazy heap promotion to register the slot as an
+    /// escapee so it gets rewritten when the captured stack frame is
+    /// promoted.
+    ///
+    /// Reads/writes 8 bytes — `Option<Lfp>` and `Lfp` share the same
+    /// representation (NonNull niche), so writing a non-null `Lfp`
+    /// through this pointer leaves the field as `Some(new)`.
+    pub(crate) fn outer_lfp_slot_ptr(&mut self) -> *mut Lfp {
+        &mut self.outer_lfp as *mut Option<Lfp> as *mut Lfp
+    }
 }
 
 #[derive(Debug, Clone)]
