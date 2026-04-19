@@ -200,6 +200,75 @@ wrapper pattern — and, by extension, lets `Range#step`,
 size proc through `to_enum` without risking `LocalJumpError` in
 unrelated enclosing loops.
 
+## Why a "check-before-copy" patch is not enough (experiment log)
+
+An obvious-looking tweak: **"before copying the frame, see if it's
+already on the heap and skip the copy if so."** The existing code
+already does this at the first level (`if self.on_stack()`), and we
+tried extending it to detect a stale stack `Lfp` pointer whose cfp
+had been previously redirected, plus a matching extension in
+`Cfp::caller()` so that the pointer comparison succeeded when the
+block's `outer_lfp` still named the original stack slot:
+
+```rust
+// move_frame_to_heap entry:
+let cfp = self.cfp();
+if cfp.lfp().as_ptr() != self.as_ptr() {
+    return cfp.lfp();         // stack slot was already redirected
+}
+```
+
+```rust
+// Cfp::caller(): normalise the target through its owning cfp
+if target_lfp.on_stack() {
+    let owner_cfp = unsafe { Cfp::new(target_lfp.as_ptr().add(16) as _) };
+    let live = owner_cfp.lfp();
+    if live.as_ptr() != target_lfp.as_ptr() {
+        target_lfp = live;
+    }
+}
+```
+
+With both patches applied, the reproducer *no longer* raised
+`LocalJumpError`:
+
+* `[1,2,3,4,5].permutation(3).to_a.size` returned **60** (correct),
+* the minimal-repro loop actually ran 4 iterations.
+
+**But the loop counter came out wrong** (`1` instead of `4`). Reason:
+`BlockA` writes `outer_iter` through `outer_lfp` -> heap `/main`
+copy, while `/main` itself continues executing with `r14` pointing
+at the *stack* `/main`. The frame's locals exist in two places that
+diverge.
+
+So the patch turns the `LocalJumpError` into a silent correctness
+bug. The architectural invariant that `move_frame_to_heap` was
+written against is "once we have promoted the frame to heap, nobody
+still reads through the stack copy" — and that's violated as soon as
+you recursively promote an outer frame that is still actively
+executing (a `/main` that is still waiting for `Kernel#loop` to
+return). A fix localised to `move_frame_to_heap` / `caller()` can
+only paper over one symptom at a time.
+
+The real fix has to address the invariant:
+
+1. **Don't promote an outer that is still live.** Defer the heap
+   promotion until the outer actually returns (or the Proc is
+   first invoked past the outer's return). Until then, hold the
+   Proc's `outer_lfp` as a "tag" that resolves to the current stack
+   slot on demand. This is the YARV approach.
+2. **Alias the stack and heap copies.** Either treat the stack slot
+   as a cache of the heap (write-through) or vice versa. Expensive
+   in the register-based VM but avoids the active-frame issue.
+3. **Avoid the round-trip in user code.** Keep `Integer#upto` /
+   `#downto` in Rust, accept the lazy-validation spec regression,
+   and document the pattern "Ruby wrapper -> `&block` -> Rust
+   builtin" as unsafe until (1) or (2) lands.
+
+The check-before-copy idea was a good question to validate — it
+falsifies itself in ~20 minutes because the counter test is a
+single-line change and catches the write/read split immediately.
+
 ## What was temporarily needed to reproduce
 
 * Rename Rust `upto` / `downto` registrations to `__upto` /
