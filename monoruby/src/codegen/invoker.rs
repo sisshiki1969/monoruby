@@ -442,6 +442,12 @@ impl JitModule {
                 movq rax, [rdx + (PROCDATA_OUTER)];        // rax <- outer_lfp
                 movl rdx, [rdx + (PROCDATA_FUNCID)];    // rdx <- FuncId
             };
+            // ProcData.outer may have been cached when the owner
+            // frame was still on the stack (e.g. `Kernel#loop`
+            // captures before iterating) and been invalidated since
+            // by `move_frame_to_heap`. Forward to the heap copy so
+            // the invoked block sees a consistent outer.
+            self.resolve_invalidated_outer(GP::Rax);
             self.get_func_data();
             // r15: &FuncData
             self.set_block_outer();

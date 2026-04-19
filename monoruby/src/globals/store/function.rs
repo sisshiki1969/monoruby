@@ -121,6 +121,9 @@ pub struct Meta {
     mode: u8,
     /// bit 7:  0:on_stack 1:on_heap
     /// bit 4:  1:simple (no optional, no rest, no keyword, no block)
+    /// bit 3:  1:invalidated (stack LFP whose content has been copied
+    ///         to heap via `move_frame_to_heap`; subsequent readers
+    ///         must forward to the heap copy via `cfp.lfp()`)
     /// bit 2:  0:method_style arg 1:block_style arg
     /// bit 1:  0:Ruby 1:native
     kind: u8,
@@ -226,6 +229,18 @@ impl Meta {
 
     pub fn set_on_heap(&mut self) {
         self.kind |= 0b1000_0000;
+    }
+
+    /// True if this LFP's content has been copied to heap by
+    /// `move_frame_to_heap` — the stack slot address is now a dead
+    /// tombstone and any reader must forward via `cfp.lfp()` to find
+    /// the live heap copy.
+    pub fn invalidated(&self) -> bool {
+        self.kind & 0b0000_1000 != 0
+    }
+
+    pub fn set_invalidated(&mut self) {
+        self.kind |= 0b0000_1000;
     }
 
     ///
