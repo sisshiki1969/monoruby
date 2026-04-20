@@ -51,6 +51,10 @@ class Range
       unless block_given?
         return to_enum(:reverse_each) do
           if b.nil?
+            # Beginless is only iterable when end is Integer.
+            unless e.is_a?(Integer)
+              raise TypeError, "can't iterate from #{e.class}"
+            end
             Float::INFINITY
           else
             top >= b ? top - b + 1 : 0
@@ -79,7 +83,9 @@ class Range
     unless block_given?
       return to_enum(:reverse_each) do
         if b.is_a?(Numeric) || e.is_a?(Numeric)
-          raise TypeError, "can't iterate from #{b.class}"
+          # Match CRuby: report the end's class (falling back to begin's).
+          reported = e.nil? ? b.class : e.class
+          raise TypeError, "can't iterate from #{reported}"
         else
           nil
         end
