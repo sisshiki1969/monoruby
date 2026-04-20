@@ -120,6 +120,10 @@ pub struct Meta {
     reg_num: u16,
     mode: u8,
     /// bit 7:  0:on_stack 1:on_heap
+    /// bit 5:  1:proc-method frame (ISeq body wrapped as a method via
+    ///         `Module#define_method`; a set `MethodReturn` must be
+    ///         absorbed at this frame so `return` has lambda-like
+    ///         method-return semantics)
     /// bit 4:  1:simple (no optional, no rest, no keyword, no block)
     /// bit 3:  1:invalidated (stack LFP whose content has been copied
     ///         to heap via `move_frame_to_heap`; subsequent readers
@@ -174,6 +178,11 @@ impl Meta {
         unsafe { std::mem::transmute(*self) }
     }
 
+    /// u64 bit mask for the `is_proc_method` flag (bit 5 of the `kind`
+    /// byte). Used by the `define_method` wrapper to tag the proc body's
+    /// `LFP_META` so that `handle_error` can recognize the frame.
+    pub(crate) const PROC_METHOD_MASK: u64 = 1 << 61;
+
     fn vm_method(func_id: FuncId, reg_num: u16, is_block_style: bool, is_simple: bool) -> Self {
         Self::new(func_id, reg_num, is_simple, false, is_block_style)
     }
@@ -217,6 +226,12 @@ impl Meta {
 
     fn set_method_style(&mut self) {
         self.kind &= !0b100
+    }
+
+    /// True when this frame is a define_method proc-method entry;
+    /// `handle_error` treats it as the target for `MethodReturn`.
+    pub(crate) fn is_proc_method(&self) -> bool {
+        (self.kind & 0b0010_0000) != 0
     }
 
     pub fn is_native(&self) -> bool {
@@ -368,9 +383,13 @@ pub(crate) fn yielder(
 /// Shared body for procs returned by `Symbol#to_proc`.
 ///
 /// Invoked via the block-invoker path (for `&:sym` usage in e.g.
-/// `map(&:to_s)`). `lfp.self_val()` carries the symbol (copied from the
-/// proc's outer_lfp), `arg(0)` is the receiver, and `arg(1)` is the rest
-/// array.
+/// `map(&:to_s)`) and via the proc-method wrapper path when the proc
+/// is installed with `define_method(:foo, &sym.to_proc)`. The symbol
+/// lives on the proc's `outer_lfp` (set up by `sym_to_proc`); reading
+/// it there rather than from `lfp.self_val()` works for both paths —
+/// the block invoker copies `outer_lfp.self` into the inner frame's
+/// self, but `define_method`'s wrapper keeps the receiver as self.
+/// `arg(0)` is the receiver, and `arg(1)` is the rest array.
 ///
 #[monoruby_builtin]
 pub(crate) fn symbol_to_proc_body(
@@ -379,10 +398,13 @@ pub(crate) fn symbol_to_proc_body(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let symbol_val = lfp.self_val();
+    let symbol_val = lfp
+        .outer()
+        .expect("symbol_to_proc_body called without outer_lfp")
+        .self_val();
     let symbol = symbol_val
         .try_symbol()
-        .expect("symbol_to_proc_body invoked with non-symbol self");
+        .expect("symbol_to_proc_body invoked with non-symbol outer self");
     let recv = lfp.arg(0);
     let rest_val = lfp.arg(1);
     let rest_array = rest_val.as_array();

@@ -352,7 +352,12 @@ pub(super) extern "C" fn handle_error(
             if let MonorubyErrKind::MethodReturn(val, target_lfp) = vm.exception().unwrap().kind() {
                 return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
                     ErrorReturn::goto(bc_base + ensure)
-                } else if lfp == *target_lfp {
+                } else if lfp == *target_lfp || meta.is_proc_method() {
+                    // Stop unwinding either at the matching target LFP
+                    // or at a `define_method` proc-method boundary, so
+                    // that `return` inside a wrapped block exits the
+                    // method rather than escaping to the block's
+                    // lexical enclosing scope.
                     let val = *val;
                     vm.take_error();
                     ErrorReturn::return_normal(val)
