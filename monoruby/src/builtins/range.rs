@@ -1008,6 +1008,42 @@ mod tests {
     }
 
     #[test]
+    fn range_to_s_inspect() {
+        // `to_s` uses element `to_s` and elides nil endpoints.
+        run_tests(&[
+            "(1..5).to_s",
+            "(1...5).to_s",
+            "('a'..'z').to_s",
+            "(..5).to_s",
+            "(...5).to_s",
+            "(1..).to_s",
+            "(1...).to_s",
+            "(nil..nil).to_s",
+            "(nil...nil).to_s",
+        ]);
+        // `inspect` uses element `inspect`; nil endpoints elide one-sided
+        // but render as literal "nil" when both ends are nil.
+        run_tests(&[
+            "(1..5).inspect",
+            "(1...5).inspect",
+            "('a'..'z').inspect",
+            "(:a..:z).inspect",
+            "(..5).inspect",
+            "(1..).inspect",
+            "(nil..nil).inspect",
+            "(nil...nil).inspect",
+        ]);
+        // Ranges embedded in containers use `inspect` via the container.
+        run_tests(&[
+            "[1..5].inspect",
+            "[nil..5].inspect",
+            "[1..nil].inspect",
+            "[nil..nil].inspect",
+            r#"["a".."z"].inspect"#,
+        ]);
+    }
+
+    #[test]
     fn each() {
         run_test(
             r#"
