@@ -521,6 +521,7 @@ impl RValue {
                 ObjTy::REGEXP => self.as_regex().inspect(),
                 ObjTy::MATCHDATA => self.as_match_data().inspect(),
                 ObjTy::HASH => self.hash_inspect(store, set),
+                ObjTy::RANGE => self.as_range().inspect(store, set),
                 _ => self.to_s(store),
             }
         }

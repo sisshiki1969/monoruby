@@ -82,11 +82,37 @@ impl RangeInner {
     }
 
     pub(super) fn to_s(&self, store: &Store) -> String {
+        // Matches CRuby: renders each endpoint with `to_s`, so a nil
+        // endpoint (beginless/endless range) renders as an empty
+        // string. `(nil..5).to_s == "..5"`, `(nil..nil).to_s == ".."`.
         format!(
             "{}{}{}",
-            self.start.inspect(store),
+            self.start.to_s(store),
             if self.exclude_end() { "..." } else { ".." },
-            self.end.inspect(store),
+            self.end.to_s(store),
         )
+    }
+
+    pub(super) fn inspect(&self, store: &Store, set: &mut HashSet<u64>) -> String {
+        // Matches CRuby: renders each endpoint with `inspect`, but a
+        // single nil endpoint is elided (one-sided range). Only when
+        // BOTH endpoints are nil does the output keep the literal
+        // "nil..nil" so `(nil..nil).inspect` is distinguishable from
+        // `(..).to_s`.
+        let sep = if self.exclude_end() { "..." } else { ".." };
+        if self.start.is_nil() && self.end.is_nil() {
+            return format!("nil{sep}nil");
+        }
+        let start = if self.start.is_nil() {
+            String::new()
+        } else {
+            self.start.inspect_inner(store, set)
+        };
+        let end = if self.end.is_nil() {
+            String::new()
+        } else {
+            self.end.inspect_inner(store, set)
+        };
+        format!("{start}{sep}{end}")
     }
 }
