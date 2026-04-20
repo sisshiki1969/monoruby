@@ -47,9 +47,23 @@ enum CArg {
     U64(u64),
     F32(f32),
     F64(f64),
+    /// Ruby String passed as a C `char*`. Owns a heap buffer with an
+    /// appended NUL terminator (Ruby strings are not NUL-terminated) and
+    /// caches its pointer as a u64 so `as_libffi_arg` can reference a
+    /// stable location. Moving the `CArg` is safe because the `Vec<u8>`
+    /// move leaves the heap allocation in place.
+    CStr { _buf: Vec<u8>, ptr: u64 },
 }
 
 impl CArg {
+    fn from_bytes_nul_terminated(bytes: &[u8]) -> Self {
+        let mut buf = Vec::with_capacity(bytes.len() + 1);
+        buf.extend_from_slice(bytes);
+        buf.push(0);
+        let ptr = buf.as_ptr() as u64;
+        CArg::CStr { _buf: buf, ptr }
+    }
+
     /// Return a libffi Arg pointing into this CArg.
     /// SAFETY: `self` must not be moved or dropped while the Arg is in use.
     fn as_libffi_arg(&'_ self) -> Arg<'_> {
@@ -64,6 +78,7 @@ impl CArg {
             CArg::U64(v) => Arg::new(v),
             CArg::F32(v) => Arg::new(v),
             CArg::F64(v) => Arg::new(v),
+            CArg::CStr { ptr, .. } => Arg::new(ptr),
         }
     }
 
@@ -79,6 +94,7 @@ impl CArg {
             CArg::U64(_) => Type::u64(),
             CArg::F32(_) => Type::f32(),
             CArg::F64(_) => Type::f64(),
+            CArg::CStr { .. } => Type::pointer(),
         }
     }
 }
@@ -136,9 +152,14 @@ fn value_to_carg(globals: &mut Globals, val: Value, ty: i64) -> Result<CArg> {
                 RV::BigInt(b) => Ok(CArg::U64(num::ToPrimitive::to_u64(b).unwrap_or(0))),
                 RV::Nil => Ok(CArg::U64(0)),
                 RV::String(_) => {
-                    // String: pass raw content pointer (GC cannot run here)
-                    let ptr = val.as_rstring_inner().as_ptr() as u64;
-                    Ok(CArg::U64(ptr))
+                    // Ruby strings are not NUL-terminated, so passing
+                    // `as_ptr()` directly to a C function expecting a
+                    // `char*` (e.g. `SDL_SetWindowTitle`, `strlen`)
+                    // causes a read past the end of the string buffer.
+                    // Copy into a NUL-terminated buffer owned by the
+                    // CArg for the duration of the libffi call.
+                    let inner = val.as_rstring_inner();
+                    Ok(CArg::from_bytes_nul_terminated(inner.as_bytes()))
                 }
                 _ => {
                     // Other objects (e.g. FFI::Pointer): coerce via to_i
