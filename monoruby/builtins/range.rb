@@ -366,16 +366,18 @@ class Range
         i = 0
         while i <= n_int
           d = beg + i * unit
-          if unit > 0
-            if d > endv
-              break if excl
-              d = endv
-            end
-          else
-            if d < endv
-              break if excl
-              d = endv
-            end
+          # Avoid the `d = endv` after `if d > endv` pattern; it
+          # currently triggers a JIT misoptimisation that freezes `d`
+          # at its initial loop value. Branch straight to yielding
+          # `endv` in the overshoot case.
+          if unit > 0 && d > endv
+            break if excl
+            yield endv
+            break
+          elsif unit < 0 && d < endv
+            break if excl
+            yield endv
+            break
           end
           break if excl && d == endv
           yield d
