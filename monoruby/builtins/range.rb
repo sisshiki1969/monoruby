@@ -120,10 +120,30 @@ class Range
     res
   end
 
-  def bsearch
-    return to_enum(:bsearch) unless block_given?
-    self.to_a.bsearch do |x|
-      yield(x)
+  def bsearch(&block)
+    b = self.begin
+    e = self.end
+    excl = self.exclude_end?
+
+    # Reject non-numeric ranges unconditionally (including when no block).
+    numeric_b = b.nil? || b.is_a?(Numeric)
+    numeric_e = e.nil? || e.is_a?(Numeric)
+    unless numeric_b && numeric_e
+      sample = numeric_b ? e : b
+      raise TypeError, "can't do binary search for #{sample.class}"
+    end
+
+    unless block_given?
+      return to_enum(:bsearch)
+    end
+
+    has_float = b.is_a?(Float) || e.is_a?(Float) ||
+                (b.is_a?(Float) && b.infinite?) || (e.is_a?(Float) && e.infinite?)
+
+    if has_float
+      __bsearch_float(b, e, excl, &block)
+    else
+      __bsearch_int(b, e, excl, &block)
     end
   end
 
@@ -239,6 +259,159 @@ class Range
   alias % step
 
   private
+
+  # Classify block-return value for bsearch.
+  # Returns :satisfied, :unsatisfied, :equal, :less, :greater, or raises.
+  def __bsearch_classify(v)
+    case v
+    when true
+      :satisfied
+    when nil, false
+      :unsatisfied
+    when Numeric
+      if v == 0
+        :equal
+      elsif v > 0
+        :greater # current element is too low; search upward
+      else
+        :less    # current element is too high; search downward
+      end
+    else
+      raise TypeError, "wrong argument type #{v.class} (must be numeric, true, false or nil)"
+    end
+  end
+
+  def __bsearch_int(b, e, excl)
+    # Convert exclusive end to inclusive.
+    hi = if e.nil?
+           nil
+         elsif excl
+           e - 1
+         else
+           e
+         end
+
+    # Beginless: scan downward with doubling steps until block transitions
+    # to "before the target" (false/nil for find-min, positive for find-any),
+    # giving us a real lower search bound. If it never transitions, the
+    # answer (if any) lives at the bottom of the explored range; fall back
+    # to a regular search starting from the last probed candidate.
+    if b.nil?
+      return nil if hi.nil?
+      step = 1
+      b = hi
+      loop do
+        candidate = hi - step
+        v = yield(candidate)
+        c = __bsearch_classify(v)
+        if c == :unsatisfied || c == :greater
+          b = candidate
+          break
+        end
+        step *= 2
+      end
+    end
+
+    # Endless: scan up with doubling steps until we find an upper bound
+    # that is "at or past the target".
+    if hi.nil?
+      step = 1
+      hi = b
+      loop do
+        candidate = b + step
+        v = yield(candidate)
+        c = __bsearch_classify(v)
+        if c == :satisfied || c == :equal || c == :less
+          hi = candidate
+          break
+        end
+        step *= 2
+      end
+    end
+
+    return nil if b > hi
+
+    satisfied = nil
+    lo = b
+    while lo <= hi
+      mid = lo + (hi - lo) / 2
+      v = yield(mid)
+      c = __bsearch_classify(v)
+      case c
+      when :equal
+        return mid
+      when :satisfied
+        satisfied = mid
+        hi = mid - 1
+      when :less
+        hi = mid - 1
+      when :greater, :unsatisfied
+        lo = mid + 1
+      end
+    end
+    satisfied
+  end
+
+  def __bsearch_float(b, e, excl)
+    inf = Float::INFINITY
+    # Empty cases
+    return nil if !b.nil? && !e.nil? && b > e
+    return nil if !b.nil? && !e.nil? && excl && b == e
+
+    # Normalise endpoints.
+    lo_f = b.nil? ? -inf : b.to_f
+    hi_f = e.nil? ?  inf : e.to_f
+    return nil if lo_f > hi_f
+
+    # Treat each float bit-pattern as a sortable u64 (IEEE 754 trick).
+    mask = (1 << 64) - 1
+    sign = 1 << 63
+    to_key = ->(f) {
+      signed = [f].pack('D').unpack1('q')
+      bits = signed & mask
+      if (bits >> 63) == 0
+        bits | sign
+      else
+        (~bits) & mask
+      end
+    }
+    from_key = ->(k) {
+      bits = if (k >> 63) == 1
+               k & ~sign
+             else
+               (~k) & mask
+             end
+      signed = bits >= sign ? bits - (1 << 64) : bits
+      [signed].pack('q').unpack1('D')
+    }
+
+    # If exclusive, drop one ULP from the upper bound.
+    lo_k = to_key.call(lo_f)
+    hi_k = to_key.call(hi_f)
+    hi_k -= 1 if excl
+
+    return nil if lo_k > hi_k
+
+    satisfied = nil
+    while lo_k <= hi_k
+      mid_k = lo_k + (hi_k - lo_k) / 2
+      mid = from_key.call(mid_k)
+      v = yield(mid)
+      c = __bsearch_classify(v)
+      case c
+      when :equal
+        return mid
+      when :satisfied
+        satisfied = mid
+        hi_k = mid_k - 1
+      when :less
+        hi_k = mid_k - 1
+      when :greater, :unsatisfied
+        lo_k = mid_k + 1
+      end
+    end
+    satisfied
+  end
 
   def __cover_val_q(val)
     b = self.begin
