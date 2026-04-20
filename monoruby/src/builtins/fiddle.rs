@@ -480,3 +480,167 @@ pub(super) fn init(globals: &mut Globals) {
         globals.set_constant_by_str(fiddle, name, Value::integer(size));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    // The harness's reference Ruby runs with `--disable-gem`, so the
+    // ffi gem is unavailable to compare against. These tests instead
+    // drive the low-level builtins registered in `ffi.rs`
+    // (`FFI.___dlopen`/`___dlsym`/`___call`/`___read`/`___write`/…) and
+    // embed their own `raise` assertions — a misbehaving primitive
+    // surfaces as a monoruby-side exception and fails the test.
+    //
+    // Type codes match the constants defined at the top of this file
+    // (kept in sync with `startup/ffi_c.rb`).
+    const TYPE_PRELUDE: &str = r#"
+        TY_VOIDP = -1
+        TY_INT   = -6
+        TY_LLONG = -10
+        TY_DOUBLE = -13
+        TY_SIZE_T = -18
+        LIBC = FFI.___dlopen("libc.so.6")
+        LIBM = FFI.___dlopen("libm.so.6") || FFI.___dlopen("libc.so.6")
+    "#;
+
+    // Regression for https://github.com/sisshiki1969/monoruby/pull/337:
+    // Ruby strings must be NUL-terminated before being handed to C via
+    // a `TYPE_VOIDP` argument. Without the fix, `strlen` read past the
+    // end of the string buffer and returned a length that depended on
+    // whatever garbage followed in memory — the cause of the garbled
+    // optcarrot window title.
+    #[test]
+    fn fiddle_string_is_nul_terminated() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            strlen = FFI.___dlsym(LIBC, "strlen")
+            call = ->(s) {{ FFI.___call(strlen, [s], [TY_VOIDP], TY_SIZE_T) }}
+            raise unless call.call("")               == 0
+            raise unless call.call("hello")          == 5
+            raise unless call.call("hello_optcarrot") == 15
+            # Short strings placed back-to-back used to leak neighbouring
+            # bytes through strlen before the fix; loop many times so at
+            # least one iteration trips any non-zero byte left over in
+            # the small-string inline buffer.
+            50.times do |i|
+              s = "t_#{{i}}"
+              actual = call.call(s)
+              raise "strlen=#{{actual}} bytesize=#{{s.bytesize}}" unless actual == s.bytesize
+            end
+            :ok
+            "#
+        ));
+    }
+
+    // Two `:string` arguments forwarded in one call — exercises the
+    // CArg storage path that keeps multiple NUL-terminated buffers
+    // alive at once.
+    #[test]
+    fn fiddle_two_string_args() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            strcmp = FFI.___dlsym(LIBC, "strcmp")
+            call = ->(a, b) {{ FFI.___call(strcmp, [a, b], [TY_VOIDP, TY_VOIDP], TY_INT) }}
+            raise unless call.call("abc", "abc") == 0
+            raise unless call.call("abc", "abd")  < 0
+            raise unless call.call("abd", "abc")  > 0
+            20.times do |i|
+              raise unless call.call("k_#{{i}}", "k_#{{i}}") == 0
+            end
+            :ok
+            "#
+        ));
+    }
+
+    // Integer args/returns of varying widths.
+    #[test]
+    fn fiddle_integer_roundtrip() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            abs   = FFI.___dlsym(LIBC, "abs")
+            llabs = FFI.___dlsym(LIBC, "llabs")
+            raise unless FFI.___call(abs,   [-42], [TY_INT],   TY_INT)   == 42
+            raise unless FFI.___call(abs,   [ 42], [TY_INT],   TY_INT)   == 42
+            raise unless FFI.___call(llabs, [-1_000_000_000_000], [TY_LLONG], TY_LLONG) == 1_000_000_000_000
+            raise unless FFI.___call(llabs, [ 1_000_000_000_000], [TY_LLONG], TY_LLONG) == 1_000_000_000_000
+            :ok
+            "#
+        ));
+    }
+
+    // Double args/returns via libm's `sqrt` and `floor`.
+    #[test]
+    fn fiddle_double_args() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            sqrt  = FFI.___dlsym(LIBM, "sqrt")
+            floor = FFI.___dlsym(LIBM, "floor")
+            raise unless FFI.___call(sqrt,  [0.0], [TY_DOUBLE], TY_DOUBLE) == 0.0
+            raise unless (FFI.___call(sqrt, [2.0], [TY_DOUBLE], TY_DOUBLE) - Math.sqrt(2.0)).abs < 1e-12
+            raise unless FFI.___call(floor, [3.7],  [TY_DOUBLE], TY_DOUBLE) == 3.0
+            raise unless FFI.___call(floor, [-0.5], [TY_DOUBLE], TY_DOUBLE) == -1.0
+            :ok
+            "#
+        ));
+    }
+
+    // Typed memory read/write at a heap address via ___malloc / ___write
+    // / ___read / ___free — exercises the numeric argument path for
+    // int and double without involving the ffi gem.
+    #[test]
+    fn fiddle_read_write_roundtrip() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            ptr = FFI.___malloc(16)
+            raise "malloc returned NULL" if ptr == 0
+            begin
+              FFI.___write(ptr, TY_INT, 0x41424344)
+              raise unless FFI.___read(ptr, TY_INT) == 0x41424344
+              FFI.___write(ptr, TY_DOUBLE, 3.14)
+              raise unless FFI.___read(ptr, TY_DOUBLE) == 3.14
+            ensure
+              FFI.___free(ptr)
+            end
+            :ok
+            "#
+        ));
+    }
+
+    // `___read_string` stops at the first NUL byte; `___read_bytes`
+    // takes an explicit length. Verifying both on the same buffer keeps
+    // the string-read path in sync with the NUL-termination behaviour
+    // of the write path.
+    #[test]
+    fn fiddle_read_string_and_bytes() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            ptr = FFI.___malloc(32)
+            raise if ptr == 0
+            begin
+              FFI.___write_bytes(ptr, "hello\0world\0junk")
+              raise unless FFI.___read_string(ptr)    == "hello"
+              raise unless FFI.___read_bytes(ptr, 11) == "hello\0world"
+            ensure
+              FFI.___free(ptr)
+            end
+            :ok
+            "#
+        ));
+    }
+
+    // Passing `nil` as `TYPE_VOIDP` resolves to a NULL pointer.
+    // `memcpy(NULL, NULL, 0)` is well-defined on glibc — the zero
+    // length short-circuits before any dereference.
+    #[test]
+    fn fiddle_null_pointer_arg() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            memcpy = FFI.___dlsym(LIBC, "memcpy")
+            res = FFI.___call(memcpy, [nil, nil, 0], [TY_VOIDP, TY_VOIDP, TY_SIZE_T], TY_VOIDP)
+            raise unless res == 0
+            :ok
+            "#
+        ));
+    }
+}
