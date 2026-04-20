@@ -49,8 +49,13 @@ impl Codegen {
                     // set outer
                     movq [r14 - (LFP_OUTER)], rax;
                     // use given self
-                    // set meta
+                    // set meta; tag with the proc-method bit so that
+                    // `handle_error` absorbs `MethodReturn` at this
+                    // frame (define_method's `return` acts like a
+                    // lambda-style method return).
                     movq rax, [r15 + (FUNCDATA_META)];
+                    movq rdi, (Meta::PROC_METHOD_MASK);
+                    orq  rax, rdi;
                     movq [r14 - (LFP_META)], rax;
                     // set pc
                     movq r13, [r15 + (FUNCDATA_PC)];

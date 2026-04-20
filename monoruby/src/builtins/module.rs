@@ -1995,6 +1995,33 @@ mod tests {
     }
 
     #[test]
+    fn define_method_return() {
+        // `return` inside a `define_method` block acts like a lambda-style
+        // method return: it exits the method created by `define_method`,
+        // not the block's lexical enclosing scope.
+        run_test(
+            r#"
+            k = Class.new { define_method(:m) { return 42 } }
+            k.new.m
+            "#,
+        );
+        // Multiple return values via `return a, b` — wraps as an Array.
+        run_test(
+            r#"
+            k = Class.new { define_method(:m) { |a, b| return a, b } }
+            k.new.m(10, 20)
+            "#,
+        );
+        // `return` from a nested block still targets the proc-method frame.
+        run_test(
+            r#"
+            k = Class.new { define_method(:m) { [1, 2, 3].each { |x| return x if x == 2 }; :no_return } }
+            k.new.m
+            "#,
+        );
+    }
+
+    #[test]
     fn define_method_in_eval() {
         // `def` inside string class_eval inherits the receiver's lexical
         // context so that constants defined in C are visible.

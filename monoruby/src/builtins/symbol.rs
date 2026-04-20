@@ -274,6 +274,20 @@ mod tests {
     }
 
     #[test]
+    fn symbol_to_proc_via_define_method() {
+        // Regression: `define_method` wrapping a Symbol#to_proc must
+        // resolve the symbol from the proc's outer_lfp, not from the
+        // method receiver which is not a Symbol.
+        run_test(
+            r#"
+            symbol_proc = :+.to_proc
+            klass = Class.new { define_method :foo, &symbol_proc }
+            klass.new.foo(1, 2)
+            "#,
+        );
+    }
+
+    #[test]
     fn symbol_to_proc_public_send() {
         // to_proc should use public_send and forward blocks
         run_tests(&[
