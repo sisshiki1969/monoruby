@@ -111,6 +111,36 @@ module Enumerable
     res
   end
 
+  def take(n)
+    n = n.to_int if !n.is_a?(Integer) && n.respond_to?(:to_int)
+    unless n.is_a?(Integer)
+      raise TypeError, "no implicit conversion of #{n.class} into Integer"
+    end
+    raise ArgumentError, "attempt to take negative size" if n < 0
+    res = []
+    return res if n == 0
+    self.each do |x|
+      res << x
+      break if res.size >= n
+    end
+    res
+  end
+
+  def drop(n)
+    n = n.to_int if !n.is_a?(Integer) && n.respond_to?(:to_int)
+    unless n.is_a?(Integer)
+      raise TypeError, "no implicit conversion of #{n.class} into Integer"
+    end
+    raise ArgumentError, "attempt to drop negative size" if n < 0
+    res = []
+    i = 0
+    self.each do |x|
+      res << x if i >= n
+      i += 1
+    end
+    res
+  end
+
   def any?(*pattern)
     if !pattern.empty?
       if pattern.size != 1
