@@ -174,15 +174,28 @@ class Range
   def include?(val)
     b = self.begin
     e = self.end
-    if (b.nil? || b.is_a?(Numeric)) && (e.nil? || e.is_a?(Numeric))
+    # Fully-open range: accept Numeric val, reject anything else as
+    # "inclusion undecidable".
+    if b.nil? && e.nil?
+      return true if val.is_a?(Numeric)
+      raise TypeError, "cannot determine inclusion in beginless/endless ranges"
+    end
+    # Numeric-backed range uses cover? (continuous semantics).
+    if b.is_a?(Numeric) || e.is_a?(Numeric)
       return cover?(val)
     end
-    if !b.nil? && b.respond_to?(:succ)
+    # Non-numeric ranges with a nil endpoint cannot decide inclusion.
+    if b.nil? || e.nil?
+      raise TypeError, "cannot determine inclusion in beginless/endless ranges"
+    end
+    # Both endpoints present and non-numeric: use succ iteration if possible.
+    if b.respond_to?(:succ)
       self.each do |x|
         return true if x == val
       end
       return false
     end
+    # Non-succ types (e.g., Time): fall back to cover? semantics.
     cover?(val)
   end
   alias member? include?
