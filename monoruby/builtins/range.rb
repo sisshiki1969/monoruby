@@ -13,7 +13,13 @@ class Range
         i = i.succ
       end
     else
+      # For String ranges, stop once succ extends past the end string's
+      # length -- monoruby's byte-wise #<=> keeps reporting -1 forever
+      # while CRuby's String#upto stops at the same-size boundary.
+      string_mode = i.is_a?(String) && e.is_a?(String)
+      end_len = e.length if string_mode
       loop do
+        break if string_mode && i.length > end_len
         c = (i <=> e)
         break if c.nil?
         if excl
