@@ -1222,12 +1222,15 @@ impl<'a> Lexer<'a> {
                     outer_level += 1;
                     body.push(ch);
                 }
-                ch if ch == term && char_class.is_empty() => {
-                    if track_outer && outer_level > 0 {
-                        outer_level -= 1;
-                        body.push(ch);
-                        continue;
+                ch if track_outer && ch == term => {
+                    if outer_level == 0 {
+                        let postfix = self.check_postfix();
+                        return Ok(RegexInterpolateState::Finished { body, postfix });
                     }
+                    outer_level -= 1;
+                    body.push(ch);
+                }
+                ch if ch == term && char_class.is_empty() => {
                     let postfix = self.check_postfix();
                     return Ok(RegexInterpolateState::Finished { body, postfix });
                 }
