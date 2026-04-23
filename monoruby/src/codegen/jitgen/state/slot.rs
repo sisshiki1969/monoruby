@@ -1384,4 +1384,61 @@ mod tests {
         "###,
         );
     }
+
+    /// Merging `F(l)` and `F(r)` with `l != r` used to keep `self`'s
+    /// register even though the other entry's value lived elsewhere; the
+    /// subsequent per-slot swap then displaced a partner slot sharing the
+    /// register from a `copy_slot` alias. Regression test: before the fix
+    /// the loop returned `[-1.0, -1.0, -1.0, -1.0, -1.0]` after JIT warm-up.
+    #[test]
+    fn test_join_float_register_disagreement() {
+        run_test(
+            r###"
+        def test
+          res = []
+          i = 0
+          endv = 1.0
+          while i <= 4
+            a = -1.0 + i * 0.5
+            if a > endv
+              a = endv
+            end
+            res << a
+            i += 1
+          end
+          res
+        end
+        test
+        "###,
+        );
+    }
+
+    /// Same regression, but with the assigned-value differing from both the
+    /// `endv` register and the computed register -- exercises the fresh-xmm
+    /// rebind path when neither `l` nor `r` is safe to keep.
+    #[test]
+    fn test_join_float_register_three_way() {
+        run_test(
+            r###"
+        def test
+          res = []
+          i = 0
+          lo  = -2.0
+          hi  =  2.0
+          while i < 5
+            a = -1.0 + i * 0.5
+            if a > hi
+              a = hi
+            elsif a < lo
+              a = lo
+            end
+            res << a
+            i += 1
+          end
+          res
+        end
+        test
+        "###,
+        );
+    }
 }
