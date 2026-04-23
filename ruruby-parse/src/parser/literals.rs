@@ -231,8 +231,9 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             'r' => {
                 let mut nodes = vec![];
                 let mut char_class = vec![];
+                let mut outer_level = 0usize;
                 loop {
-                    let tok = self.lexer.get_regexp(term, char_class)?;
+                    let tok = self.lexer.get_regexp(open, term, char_class, outer_level)?;
                     let loc = tok.loc();
                     match tok.kind {
                         TokenKind::Regex { body, postfix } => {
@@ -242,11 +243,12 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                             let loc = Loc(start, self.lexer.current_pos());
                             return Ok(Node::new_regexp(nodes, postfix, loc));
                         }
-                        TokenKind::OpenRegex(s, char_class_new) => {
+                        TokenKind::OpenRegex(s, char_class_new, outer_level_new) => {
                             if !s.is_empty() {
                                 nodes.push(Node::new_string(s.into(), loc));
                             }
                             char_class = char_class_new;
+                            outer_level = outer_level_new;
                             self.parse_template(&mut nodes)?;
                         }
                         _ => unreachable!(),
@@ -496,22 +498,24 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         let start_loc = self.prev_loc();
         let mut nodes = vec![];
         let mut char_class = vec![];
+        let mut outer_level = 0usize;
         loop {
-            let tok = self.lexer.get_regexp(term, char_class)?;
+            let tok = self.lexer.get_regexp(None, term, char_class, outer_level)?;
             let loc = tok.loc();
             match tok.kind {
                 TokenKind::Regex { body, postfix } => {
                     nodes.push(Node::new_string(body.into(), loc));
                     return Ok(Node::new_regexp(nodes, postfix, start_loc.merge(loc)));
                 }
-                TokenKind::OpenRegex(s, char_class_new) => {
+                TokenKind::OpenRegex(s, char_class_new, outer_level_new) => {
                     nodes.push(Node::new_string(s.into(), loc));
                     char_class = char_class_new;
+                    outer_level = outer_level_new;
                     self.parse_template(&mut nodes)?;
                 }
                 _ => unreachable!(),
             }
-        }
+}
     }
 
     pub(super) fn parse_lambda_literal(&mut self) -> Result<Node, LexerErr> {

@@ -56,7 +56,7 @@ pub(crate) enum TokenKind {
     Reserved(Reserved),
     Punct(Punct),
     OpenString(String, Option<char>, usize), // (content, delimiter, paren_level)
-    OpenRegex(String, Vec<ParenKind>),
+    OpenRegex(String, Vec<ParenKind>, usize),
     OpenCommand(String, Option<char>, usize),
     LineTerm,
 }
@@ -273,8 +273,13 @@ impl Token {
         Annot::new(TokenKind::OpenCommand(s.into(), delimiter, level), loc)
     }
 
-    pub(crate) fn new_open_reg(s: impl Into<String>, char_class: Vec<ParenKind>, loc: Loc) -> Self {
-        Annot::new(TokenKind::OpenRegex(s.into(), char_class), loc)
+    pub(crate) fn new_open_reg(
+        s: impl Into<String>,
+        char_class: Vec<ParenKind>,
+        outer_level: usize,
+        loc: Loc,
+    ) -> Self {
+        Annot::new(TokenKind::OpenRegex(s.into(), char_class, outer_level), loc)
     }
 
     pub(crate) fn new_punct(punct: Punct, loc: Loc) -> Self {

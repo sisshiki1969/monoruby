@@ -58,7 +58,7 @@ enum InterpolateState {
 #[derive(Debug, Clone, PartialEq)]
 enum RegexInterpolateState {
     Finished { body: String, postfix: String },
-    Interpolation(RubyString, Vec<ParenKind>), // (string, char_level)
+    Interpolation(RubyString, Vec<ParenKind>, usize), // (string, char_level, outer_delim_level)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1186,29 +1186,50 @@ impl<'a> Lexer<'a> {
     /// return TokenKind::Regex or TokenKind::OpenRegex.
     pub(crate) fn get_regexp(
         &mut self,
+        open: Option<char>,
         term: char,
         char_class: Vec<ParenKind>,
+        outer_level: usize,
     ) -> Result<Token, LexerErr> {
-        match self.read_regexp_sub(term, char_class)? {
+        match self.read_regexp_sub(open, term, char_class, outer_level)? {
             RegexInterpolateState::Finished { body, postfix } => {
                 Ok(self.new_regexlit(body, postfix))
             }
-            RegexInterpolateState::Interpolation(s, char_class) => {
-                Ok(self.new_open_reg(s.into_string()?, char_class))
+            RegexInterpolateState::Interpolation(s, char_class, outer_level) => {
+                Ok(self.new_open_reg(s.into_string()?, char_class, outer_level))
             }
         }
     }
 
     /// Scan as regular expression.
+    ///
+    /// `open` is the paired opening delimiter for percent-literals whose open/close
+    /// characters are not already meaningful in regex syntax (e.g. `{` for `%r{...}`,
+    /// `<` for `%r<...>`). It is ignored for delimiters handled by the existing
+    /// char_class tracking (`(`, `[`).
     fn read_regexp_sub(
         &mut self,
+        open: Option<char>,
         term: char,
         mut char_class: Vec<ParenKind>,
+        mut outer_level: usize,
     ) -> Result<RegexInterpolateState, LexerErr> {
         let mut body = "".to_string();
-        //let mut char_class = 0;
+        let track_outer = matches!(open, Some('{') | Some('<'));
         loop {
             match self.get()? {
+                ch if track_outer && Some(ch) == open => {
+                    outer_level += 1;
+                    body.push(ch);
+                }
+                ch if track_outer && ch == term => {
+                    if outer_level == 0 {
+                        let postfix = self.check_postfix();
+                        return Ok(RegexInterpolateState::Finished { body, postfix });
+                    }
+                    outer_level -= 1;
+                    body.push(ch);
+                }
                 ch if ch == term && char_class.is_empty() => {
                     let postfix = self.check_postfix();
                     return Ok(RegexInterpolateState::Finished { body, postfix });
@@ -1288,6 +1309,7 @@ impl<'a> Lexer<'a> {
                         return Ok(RegexInterpolateState::Interpolation(
                             body.into(),
                             char_class,
+                            outer_level,
                         ));
                     }
                     _ => body.push('#'),
@@ -1768,8 +1790,8 @@ impl<'a> Lexer<'a> {
         Token::new_open_string(s, delimiter, level, self.cur_loc())
     }
 
-    fn new_open_reg(&self, s: String, char_class: Vec<ParenKind>) -> Token {
-        Token::new_open_reg(s, char_class, self.cur_loc())
+    fn new_open_reg(&self, s: String, char_class: Vec<ParenKind>, outer_level: usize) -> Token {
+        Token::new_open_reg(s, char_class, outer_level, self.cur_loc())
     }
 
     fn new_open_command(&self, s: String, delimiter: Option<char>, level: usize) -> Token {
