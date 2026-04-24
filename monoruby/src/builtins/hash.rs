@@ -104,6 +104,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.set_constant_by_str(OBJECT_CLASS, "ENV", env);
     globals.define_builtin_singleton_func_with(env, "fetch", fetch, 1, 2, false);
     globals.define_builtin_singleton_func(env, "[]", env_index, 1);
+    globals.define_builtin_singleton_func(env, "[]=", env_index_assign, 2);
+    globals.define_builtin_singleton_func(env, "store", env_index_assign, 2);
+    globals.define_builtin_singleton_func(env, "delete", env_delete, 1);
     globals.define_builtin_singleton_func(env, "to_hash", env_to_hash, 0);
 }
 
@@ -1269,6 +1272,120 @@ fn env_to_hash(
     Ok(lfp.self_val())
 }
 
+/// Coerce a `Value` into an owned `String` for use as an environment variable
+/// name or value. Non-String values that do not respond to `to_str` raise a
+/// `TypeError`; strings that contain an embedded NUL byte raise an
+/// `ArgumentError`, matching CRuby's `ENV` semantics.
+fn coerce_env_string(
+    v: Value,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<String> {
+    let s = if v.is_str().is_some() {
+        v.expect_string(&globals.store)?
+    } else {
+        v.coerce_to_str(vm, globals)?
+    };
+    if s.as_bytes().contains(&0) {
+        return Err(MonorubyErr::argumenterr("bare \\0 in env"));
+    }
+    Ok(s)
+}
+
+/// ### ENV.[]=
+/// - self[key] = value
+/// - store(key, value) -> value
+///
+/// Sets an environment variable. `value = nil` deletes the variable.
+/// Updates both the Ruby-visible hash and libc's `environ` via
+/// `setenv(3)` / `unsetenv(3)` so that FFI callers (e.g. `getenv(3)`)
+/// observe the change.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/=5b=5d=3d.html]
+#[monoruby_builtin]
+fn env_index_assign(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    let key_val = lfp.arg(0);
+    let value_val = lfp.arg(1);
+
+    let key = coerce_env_string(key_val, vm, globals)?;
+
+    if value_val.is_nil() {
+        // Delete the variable from both the hash and libc's environ.
+        let key_v = Value::string(key.clone());
+        lfp.self_val().as_hash().remove(key_v, vm, globals)?;
+        let c_key = std::ffi::CString::new(key.as_bytes())
+            .map_err(|_| MonorubyErr::argumenterr("bare \\0 in env"))?;
+        // SAFETY: `c_key` is a NUL-terminated C string whose storage
+        // outlives this call. `unsetenv` is thread-safe on Linux.
+        unsafe {
+            libc::unsetenv(c_key.as_ptr());
+        }
+        return Ok(Value::nil());
+    }
+
+    let value = coerce_env_string(value_val, vm, globals)?;
+
+    let c_key = std::ffi::CString::new(key.as_bytes())
+        .map_err(|_| MonorubyErr::argumenterr("bare \\0 in env"))?;
+    let c_val = std::ffi::CString::new(value.as_bytes())
+        .map_err(|_| MonorubyErr::argumenterr("bare \\0 in env"))?;
+    // SAFETY: both pointers reference NUL-terminated C strings whose
+    // storage outlives this call. `setenv` copies its arguments.
+    unsafe {
+        libc::setenv(c_key.as_ptr(), c_val.as_ptr(), 1);
+    }
+
+    let key_v = Value::string(key);
+    let val_v = Value::string(value);
+    lfp.self_val()
+        .as_hash()
+        .insert(key_v, val_v, vm, globals)?;
+    Ok(val_v)
+}
+
+/// ### ENV.delete
+/// - delete(key) -> String | nil
+/// - delete(key) {|key| ... } -> object
+///
+/// Removes an environment variable from both the Ruby-visible hash and
+/// libc's `environ` (via `unsetenv(3)`).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/delete.html]
+#[monoruby_builtin]
+fn env_delete(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    let key_val = lfp.arg(0);
+    let key = coerce_env_string(key_val, vm, globals)?;
+    let key_v = Value::string(key.clone());
+    let removed = lfp.self_val().as_hash().remove(key_v, vm, globals)?;
+
+    let c_key = std::ffi::CString::new(key.as_bytes())
+        .map_err(|_| MonorubyErr::argumenterr("bare \\0 in env"))?;
+    // SAFETY: `c_key` is a NUL-terminated C string whose storage outlives
+    // this call. `unsetenv` is a no-op if the variable is not set.
+    unsafe {
+        libc::unsetenv(c_key.as_ptr());
+    }
+
+    if removed.is_none()
+        && let Some(bh) = lfp.block()
+    {
+        return vm.invoke_block_once(globals, bh, &[key_v]);
+    }
+    Ok(removed.unwrap_or_default())
+}
+
 ///
 /// ### Hash#fetch
 ///
@@ -1699,6 +1816,101 @@ mod tests {
         run_test(r##"ENV.fetch("XZCDEWS", "ABC")"##);
         run_test(r##"ENV.fetch("XZCDEWS") {|key| key + "先生"}"##);
         run_test_error(r##"ENV[100]"##);
+    }
+
+    #[test]
+    fn env_index_assign_updates_hash() {
+        // Assignment is visible via ENV[]
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_BASIC"] = "hello"
+            v = ENV["MONORUBY_ENV_TEST_BASIC"]
+            ENV["MONORUBY_ENV_TEST_BASIC"] = nil
+            [v, ENV["MONORUBY_ENV_TEST_BASIC"]]
+            "##,
+        );
+    }
+
+    #[test]
+    fn env_index_assign_delete_via_nil() {
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_DEL"] = "x"
+            before = ENV["MONORUBY_ENV_TEST_DEL"]
+            ENV["MONORUBY_ENV_TEST_DEL"] = nil
+            [before, ENV["MONORUBY_ENV_TEST_DEL"]]
+            "##,
+        );
+    }
+
+    #[test]
+    fn env_delete_method() {
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_DEL2"] = "y"
+            a = ENV.delete("MONORUBY_ENV_TEST_DEL2")
+            b = ENV.delete("MONORUBY_ENV_TEST_DEL2")
+            c = ENV.delete("MONORUBY_ENV_TEST_DEL2") {|k| k + "!missing"}
+            [a, b, c]
+            "##,
+        );
+    }
+
+    #[test]
+    fn env_index_assign_type_errors() {
+        run_test_error(r##"ENV[100] = "x""##);
+        run_test_error(r##"ENV["MONORUBY_ENV_TEST_BAD"] = 100"##);
+    }
+
+    #[test]
+    fn env_index_assign_embedded_nul() {
+        run_test_error(r##"ENV["A\0B"] = "x""##);
+        run_test_error(r##"ENV["MONORUBY_ENV_TEST_NUL"] = "a\0b""##);
+    }
+
+    /// Verify that `ENV[]=` propagates to libc's `environ`, so that FFI
+    /// callers of `getenv(3)` observe the value. This is what was
+    /// previously broken.
+    #[test]
+    fn env_assign_propagates_to_libc_setenv() {
+        use std::ffi::{CStr, CString};
+        let key = "MONORUBY_ENV_TEST_LIBC_PROP";
+        let c_key = CString::new(key).unwrap();
+        // Make sure the variable is not present before the test runs.
+        unsafe { libc::unsetenv(c_key.as_ptr()) };
+
+        // Run a short Ruby script that sets the variable via `ENV[]=`.
+        let mut globals = crate::Globals::new_test();
+        let src = format!(r#"ENV["{key}"] = "hello""#);
+        let _ = globals.run(src, std::path::Path::new("(test)"));
+
+        // libc `getenv` should now see "hello".
+        let got = unsafe { libc::getenv(c_key.as_ptr()) };
+        assert!(!got.is_null(), "getenv returned NULL after ENV[]=");
+        let s = unsafe { CStr::from_ptr(got) }.to_str().unwrap();
+        assert_eq!(s, "hello");
+
+        // ENV[] = nil should remove it from libc as well.
+        let src = format!(r#"ENV["{key}"] = nil"#);
+        let _ = globals.run(src, std::path::Path::new("(test)"));
+        let got = unsafe { libc::getenv(c_key.as_ptr()) };
+        assert!(got.is_null(), "getenv should return NULL after ENV[]=nil");
+    }
+
+    #[test]
+    fn env_delete_propagates_to_libc_unsetenv() {
+        use std::ffi::CString;
+        let key = "MONORUBY_ENV_TEST_LIBC_DEL";
+        let c_key = CString::new(key).unwrap();
+        unsafe { libc::unsetenv(c_key.as_ptr()) };
+
+        let mut globals = crate::Globals::new_test();
+        let src = format!(
+            r#"ENV["{key}"] = "bye"; ENV.delete("{key}")"#
+        );
+        let _ = globals.run(src, std::path::Path::new("(test)"));
+        let got = unsafe { libc::getenv(c_key.as_ptr()) };
+        assert!(got.is_null(), "getenv should return NULL after ENV.delete");
     }
 
     #[test]
