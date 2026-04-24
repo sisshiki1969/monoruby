@@ -227,4 +227,40 @@ module Gosu
       Gosu::SDL2.get_error
     end
   end
+
+  # ----------------------------------------------------------------------
+  # SDL2_ttf bindings -- loaded lazily on first `Gosu::Font.new` /
+  # `Gosu::Image.from_text`. `TTF_Init` is called once per process and
+  # cleaned up in `at_exit`.
+  # ----------------------------------------------------------------------
+  module SDL2_ttf
+    extend FFI::Library
+    ffi_lib "libSDL2_ttf-2.0.so.0"
+
+    # SDL_Color in big-endian order: r, g, b, a.
+    class Color < FFI::Struct
+      layout :r, :uint8,
+             :g, :uint8,
+             :b, :uint8,
+             :a, :uint8
+    end
+
+    attach_function :ttf_init,              :TTF_Init,              [], :int
+    attach_function :ttf_quit,              :TTF_Quit,              [], :void
+    attach_function :ttf_open_font,         :TTF_OpenFont,          [:string, :int], :pointer
+    attach_function :ttf_close_font,        :TTF_CloseFont,         [:pointer], :void
+    attach_function :ttf_render_utf8_blended, :TTF_RenderUTF8_Blended,
+      [:pointer, :string, :uint32], :pointer
+    # NOTE: SDL_Color is a 4-byte struct that libTTF expects by value.
+    # FFI's `:uint32` ABI-matches the little-endian byte layout
+    # `r | (g<<8) | (b<<16) | (a<<24)`.
+    attach_function :ttf_size_utf8,         :TTF_SizeUTF8,
+      [:pointer, :string, :pointer, :pointer], :int
+    attach_function :ttf_font_height,       :TTF_FontHeight,        [:pointer], :int
+    attach_function :ttf_font_ascent,       :TTF_FontAscent,        [:pointer], :int
+
+    def self.ttf_get_error
+      Gosu::SDL2.get_error
+    end
+  end
 end

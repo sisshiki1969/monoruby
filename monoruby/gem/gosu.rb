@@ -608,8 +608,30 @@ module Gosu
       end
     end
 
-    def self.from_text(_text, _height, *_opts); new; end
-    def self.from_text_without_window(_text, _height, *_opts); new; end
+    def self.from_text(text, height, opts = {})
+      Gosu._lazy_ttf_init
+      path = (opts.is_a?(Hash) && opts[:font_name].is_a?(String) &&
+              File.file?(opts[:font_name])) ? opts[:font_name] : DEFAULT_FONT_PATH
+      font = SDL2_ttf.ttf_open_font(path, height.to_i)
+      if font.null?
+        raise RuntimeError,
+              "TTF_OpenFont failed: #{SDL2_ttf.ttf_get_error}"
+      end
+      # Render white; tint via `#draw`'s colour argument.
+      surface = SDL2_ttf.ttf_render_utf8_blended(font, text.to_s,
+                                                  0xffffffff)
+      SDL2_ttf.ttf_close_font(font)
+      if surface.null?
+        raise RuntimeError,
+              "TTF_RenderUTF8_Blended failed: #{SDL2_ttf.ttf_get_error}"
+      end
+      img = allocate
+      img._init_from_surface(surface)
+      img
+    end
+    def self.from_text_without_window(text, height, opts = {})
+      from_text(text, height, opts)
+    end
     def self.from_markup(_text, _height, *_opts); new; end
     def self.load_tiles(_source, _tile_w, _tile_h, *_opts); []; end
 
@@ -668,13 +690,23 @@ module Gosu
         raise RuntimeError,
               "IMG_Load(#{path.inspect}) failed: #{SDL2_image.img_get_error}"
       end
-      begin
-        @width  = @columns = surface.get_int32(SDL2::SURFACE_W_OFFSET)
-        @height = @rows    = surface.get_int32(SDL2::SURFACE_H_OFFSET)
-      ensure
-        @_pending_surface = surface  # turned into a texture on first draw
-      end
+      _init_from_surface(surface)
     end
+
+    public
+
+    # Adopt an already-loaded SDL surface. Used by `Image.from_text` to
+    # feed a TTF-rendered surface into a fresh Image instance.
+    def _init_from_surface(surface)
+      @width  = @columns = surface.get_int32(SDL2::SURFACE_W_OFFSET)
+      @height = @rows    = surface.get_int32(SDL2::SURFACE_H_OFFSET)
+      @_pending_surface  = surface  # converted to texture on first draw
+      @_texture = nil
+      @_renderer = nil
+      @_owns_texture = true
+    end
+
+    private
 
     def _ensure_texture
       win = Gosu._current_window
@@ -730,22 +762,136 @@ module Gosu
     end
   end
 
+  # ---------------------------------------------------------------------
+  # Fonts: lazy SDL2_ttf init.
+  # ---------------------------------------------------------------------
+  @@_ttf_inited = false
+  def self._lazy_ttf_init
+    return if @@_ttf_inited
+    if SDL2_ttf.ttf_init != 0
+      raise RuntimeError, "TTF_Init failed: #{SDL2_ttf.ttf_get_error}"
+    end
+    @@_ttf_inited = true
+    at_exit { SDL2_ttf.ttf_quit }
+  end
+
+  # Default font path; falls back to a well-known DejaVu file present
+  # on most Linux distros. Can be overridden with `Gosu::DEFAULT_FONT_PATH`.
+  DEFAULT_FONT_PATH =
+    (ENV["GOSU_DEFAULT_FONT"].to_s.empty? ?
+       "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf" :
+       ENV["GOSU_DEFAULT_FONT"]).freeze
+
   class Font
     attr_accessor :name, :height
 
     def initialize(height, *opts)
+      Gosu._lazy_ttf_init
       @height = height.to_i
-      @name = opts.first.is_a?(Hash) ? (opts.first[:name] || "") : ""
+      @_options = opts.first.is_a?(Hash) ? opts.first : {}
+      @name = @_options[:name] || ""
+      path = _resolve_font_path(@name)
+      @_ttf_font = SDL2_ttf.ttf_open_font(path, @height)
+      if @_ttf_font.null?
+        raise RuntimeError,
+              "TTF_OpenFont(#{path.inspect}, #{@height}) failed: #{SDL2_ttf.ttf_get_error}"
+      end
+      # Cache textures per (text, color, renderer) so redraws are cheap.
+      @_cache = {}
     end
 
-    def draw_text(*); end
-    def draw_text_rel(*); end
-    def draw_markup(*); end
-    def draw_markup_rel(*); end
-    def text_width(text, *_opts); text.to_s.length * (@height / 2); end
-    def markup_width(text, *_opts); text_width(text); end
+    # draw_text(text, x, y, z = 0, scale_x = 1, scale_y = 1,
+    #           color = WHITE, mode = :default)
+    def draw_text(text, x, y, _z = 0, scale_x = 1.0, scale_y = 1.0,
+                  color = 0xffffffff, _mode = :default)
+      tex, w, h = _texture_for(text.to_s, color)
+      return unless tex
+      ren = Gosu._current_window&._sdl_renderer
+      return unless ren
+      dst = SDL2::Rect.new
+      dst[:x] = x.to_i
+      dst[:y] = y.to_i
+      dst[:w] = (w * scale_x).to_i
+      dst[:h] = (h * scale_y).to_i
+      SDL2.render_copy(ren, tex, nil, dst.pointer)
+    end
+
+    # draw_text_rel(text, x, y, z, rel_x, rel_y, scale_x, scale_y,
+    #               color, mode) -- relative anchor.
+    def draw_text_rel(text, x, y, z = 0, rel_x = 0.0, rel_y = 0.0,
+                      scale_x = 1.0, scale_y = 1.0,
+                      color = 0xffffffff, mode = :default)
+      w = text_width(text) * scale_x
+      h = @height * scale_y
+      draw_text(text, x - w * rel_x, y - h * rel_y, z,
+                scale_x, scale_y, color, mode)
+    end
+
+    def draw_markup(*args)
+      draw_text(*args)
+    end
+
+    def draw_markup_rel(*args)
+      draw_text_rel(*args)
+    end
+
+    def text_width(text, scale_x = 1.0)
+      return 0 if text.to_s.empty?
+      w_ptr = FFI::MemoryPointer.new(:int)
+      h_ptr = FFI::MemoryPointer.new(:int)
+      SDL2_ttf.ttf_size_utf8(@_ttf_font, text.to_s, w_ptr, h_ptr)
+      (w_ptr.get_int32(0) * scale_x).to_i
+    end
+
+    def markup_width(text, *opts); text_width(text, *opts); end
+
     def set_image(_codepoint, _image); end
     def []=(*); end
+
+    private
+
+    def _resolve_font_path(name)
+      return name if name.is_a?(String) && File.file?(name)
+      DEFAULT_FONT_PATH
+    end
+
+    # Returns [SDL_Texture*, width, height] or nil if the renderer is
+    # not yet available (e.g. Font.text_width before Window#show).
+    def _texture_for(text, color)
+      return [nil, 0, 0] if text.empty?
+      ren = Gosu._current_window&._sdl_renderer
+      return [nil, 0, 0] unless ren
+
+      argb = _color_to_argb(color)
+      key = [text, argb, ren.address]
+      if (entry = @_cache[key])
+        return entry
+      end
+
+      r = (argb >> 16) & 0xff
+      g = (argb >>  8) & 0xff
+      b =  argb        & 0xff
+      a = (argb >> 24) & 0xff
+      # SDL_Color packed little-endian: r | g<<8 | b<<16 | a<<24.
+      packed = r | (g << 8) | (b << 16) | (a << 24)
+      surface = SDL2_ttf.ttf_render_utf8_blended(@_ttf_font, text, packed)
+      return [nil, 0, 0] if surface.null?
+      w = surface.get_int32(SDL2::SURFACE_W_OFFSET)
+      h = surface.get_int32(SDL2::SURFACE_H_OFFSET)
+      tex = SDL2.create_texture_from_surface(ren, surface)
+      SDL2.free_surface(surface)
+      return [nil, 0, 0] if tex.null?
+      SDL2.set_texture_blend_mode(tex, 1)  # BLEND
+      @_cache[key] = [tex, w, h]
+    end
+
+    def _color_to_argb(color)
+      if color.is_a?(Color)
+        color.to_i
+      else
+        color.to_i & 0xffffffff
+      end
+    end
   end
 
   # ---------------------------------------------------------------------
