@@ -641,12 +641,24 @@ module Gosu
              color = nil, _mode = :default)
       return unless _ensure_texture
       _apply_color_mod(color)
-      dst = SDL2::Rect.new
-      dst[:x] = x.to_i
-      dst[:y] = y.to_i
-      dst[:w] = (@width * scale_x).to_i
-      dst[:h] = (@height * scale_y).to_i
-      SDL2.render_copy(@_renderer, @_texture, nil, dst.pointer)
+      tx, ty, msx, msy, angle = Gosu._decompose
+      px, py = Gosu._apply_point(x, y)
+      w = (@width  * scale_x * msx).to_f
+      h = (@height * scale_y * msy).to_f
+      dst = SDL2::FRect.new
+      dst[:x] = px.to_f
+      dst[:y] = py.to_f
+      dst[:w] = w
+      dst[:h] = h
+      if angle == 0.0
+        SDL2.render_copy_f(@_renderer, @_texture, nil, dst.pointer)
+      else
+        center = SDL2::FPoint.new
+        center[:x] = 0.0
+        center[:y] = 0.0
+        SDL2.render_copy_ex_f(@_renderer, @_texture, nil, dst.pointer,
+                            angle, center.pointer, SDL2::SDL_FLIP_NONE)
+      end
     end
 
     # Image#draw_rot(x, y, z, angle, center_x = 0.5, center_y = 0.5,
@@ -658,18 +670,20 @@ module Gosu
                  color = nil, _mode = :default)
       return unless _ensure_texture
       _apply_color_mod(color)
-      w = (@width  * scale_x).to_i
-      h = (@height * scale_y).to_i
-      dst = SDL2::Rect.new
-      dst[:x] = (x - w * center_x).to_i
-      dst[:y] = (y - h * center_y).to_i
+      _, _, msx, msy, extra_angle = Gosu._decompose
+      px, py = Gosu._apply_point(x, y)
+      w = (@width  * scale_x * msx).to_f
+      h = (@height * scale_y * msy).to_f
+      dst = SDL2::FRect.new
+      dst[:x] = (px - w * center_x).to_f
+      dst[:y] = (py - h * center_y).to_f
       dst[:w] = w
       dst[:h] = h
-      center = SDL2::Point.new
-      center[:x] = (w * center_x).to_i
-      center[:y] = (h * center_y).to_i
-      SDL2.render_copy_ex(@_renderer, @_texture, nil, dst.pointer,
-                          angle.to_f, center.pointer,
+      center = SDL2::FPoint.new
+      center[:x] = (w * center_x).to_f
+      center[:y] = (h * center_y).to_f
+      SDL2.render_copy_ex_f(@_renderer, @_texture, nil, dst.pointer,
+                          angle.to_f + extra_angle, center.pointer,
                           SDL2::SDL_FLIP_NONE)
     end
 
@@ -1081,6 +1095,62 @@ module Gosu
   def self._current_window; @@_current_window; end
   def self._current_window=(w); @@_current_window = w; end
 
+  # ---------------------------------------------------------------------
+  # Transform stack
+  # ---------------------------------------------------------------------
+  # Each entry is a 6-element Array [a, b, c, d, tx, ty] representing
+  # the affine matrix
+  #     | a c tx |
+  #     | b d ty |
+  #     | 0 0  1 |
+  # so a world point (x, y) maps to (a*x + c*y + tx, b*x + d*y + ty).
+  IDENTITY_MATRIX = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0].freeze
+  @@_mat_stack = [IDENTITY_MATRIX]
+
+  def self._mat; @@_mat_stack.last; end
+  def self._mat_mul(m1, m2)
+    a1, b1, c1, d1, tx1, ty1 = m1
+    a2, b2, c2, d2, tx2, ty2 = m2
+    [a1 * a2 + c1 * b2,
+     b1 * a2 + d1 * b2,
+     a1 * c2 + c1 * d2,
+     b1 * c2 + d1 * d2,
+     a1 * tx2 + c1 * ty2 + tx1,
+     b1 * tx2 + d1 * ty2 + ty1]
+  end
+
+  def self._apply_point(x, y)
+    m = _mat
+    # Fast path for the (very common) identity case — the JIT's float
+    # register allocator thrashes hot inlining `a*x + c*y + tx` etc.
+    return [x.to_f, y.to_f] if m.equal?(IDENTITY_MATRIX)
+    a, b, c, d, tx, ty = m
+    [a * x + c * y + tx, b * x + d * y + ty]
+  end
+
+  # Decompose the current affine into (tx, ty, scale_x, scale_y,
+  # angle_in_degrees) suitable for SDL_RenderCopyEx. Assumes no shear.
+  def self._decompose
+    m = _mat
+    return [0.0, 0.0, 1.0, 1.0, 0.0] if m.equal?(IDENTITY_MATRIX)
+    a, b, c, d, tx, ty = m
+    sx = Math.sqrt(a * a + b * b)
+    sy = Math.sqrt(c * c + d * d)
+    # Fix sign of sy via the determinant, so a pure Y-flip stays a flip.
+    sy = -sy if (a * d - b * c) < 0
+    angle = Math.atan2(b, a) * 180.0 / Math::PI
+    [tx, ty, sx, sy, angle]
+  end
+
+  def self._push_matrix(m)
+    @@_mat_stack.push(_mat_mul(_mat, m))
+    begin
+      yield if block_given?
+    ensure
+      @@_mat_stack.pop
+    end
+  end
+
   class << self
     # Split an ARGB / Color into 4 bytes for SDL colour calls.
     def _split_color(color)
@@ -1093,40 +1163,163 @@ module Gosu
     end
     private :_split_color
 
+    # -------- Transform block helpers (Gosu.translate / rotate / scale /
+    # transform). Each yields under the resulting matrix then pops on
+    # exit. --------
+    def translate(dx, dy, &block)
+      _push_matrix([1.0, 0.0, 0.0, 1.0, dx.to_f, dy.to_f], &block)
+    end
+
+    def scale(sx, sy = nil, around_x = 0.0, around_y = 0.0, &block)
+      sy ||= sx
+      m = [sx.to_f, 0.0, 0.0, sy.to_f, 0.0, 0.0]
+      if around_x != 0 || around_y != 0
+        m = _mat_mul([1.0, 0.0, 0.0, 1.0, around_x.to_f, around_y.to_f], m)
+        m = _mat_mul(m, [1.0, 0.0, 0.0, 1.0, -around_x.to_f, -around_y.to_f])
+      end
+      _push_matrix(m, &block)
+    end
+
+    def rotate(degrees, around_x = 0.0, around_y = 0.0, &block)
+      rad = degrees.to_f * Math::PI / 180.0
+      cos_r = Math.cos(rad)
+      sin_r = Math.sin(rad)
+      m = [cos_r, sin_r, -sin_r, cos_r, 0.0, 0.0]
+      if around_x != 0 || around_y != 0
+        m = _mat_mul([1.0, 0.0, 0.0, 1.0, around_x.to_f, around_y.to_f], m)
+        m = _mat_mul(m, [1.0, 0.0, 0.0, 1.0, -around_x.to_f, -around_y.to_f])
+      end
+      _push_matrix(m, &block)
+    end
+
+    def transform(a, b, c, d, tx, ty, &block)
+      _push_matrix([a.to_f, b.to_f, c.to_f, d.to_f, tx.to_f, ty.to_f], &block)
+    end
+
+    # Build a 2-triangle (4-vertex) SDL_RenderGeometry draw from four
+    # transformed corner points of colour `rgba`.
+    def _render_quad(ren, corners, rgba)
+      r, g, b, a = rgba
+      verts = FFI::MemoryPointer.new(:uint8, 20 * 4)
+      corners.each_with_index do |(px, py), i|
+        off = i * 20
+        verts.put_float32(off, px)
+        verts.put_float32(off + 4, py)
+        verts.put_uint8(off + 8,  r)
+        verts.put_uint8(off + 9,  g)
+        verts.put_uint8(off + 10, b)
+        verts.put_uint8(off + 11, a)
+        verts.put_float32(off + 12, 0.0)
+        verts.put_float32(off + 16, 0.0)
+      end
+      idx = FFI::MemoryPointer.new(:int32, 6)
+      [0, 1, 2, 0, 2, 3].each_with_index { |v, i| idx.put_int32(i * 4, v) }
+      SDL2.render_geometry(ren, nil, verts, 4, idx, 6)
+    end
+    private :_render_quad
+
+    def _identity_transform?
+      _mat == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    end
+    private :_identity_transform?
+
     def draw_rect(x, y, w, h, color, _z = 0, _mode = :default)
       ren = (_current_window && _current_window._sdl_renderer)
       return unless ren
-      r, g, b, a = _split_color(color)
+      rgba = _split_color(color)
       SDL2.set_draw_blend_mode(ren, 1) # SDL_BLENDMODE_BLEND
-      SDL2.set_draw_color(ren, r, g, b, a)
-      rect = SDL2::Rect.new
-      rect[:x] = x.to_i
-      rect[:y] = y.to_i
-      rect[:w] = w.to_i
-      rect[:h] = h.to_i
-      SDL2.render_fill_rect(ren, rect.pointer)
+      SDL2.set_draw_color(ren, *rgba)
+
+      if _identity_transform?
+        frect = SDL2::FRect.new
+        frect[:x] = x.to_f
+        frect[:y] = y.to_f
+        frect[:w] = w.to_f
+        frect[:h] = h.to_f
+        SDL2.render_fill_rect_f(ren, frect.pointer)
+      else
+        corners = [
+          _apply_point(x,     y    ),
+          _apply_point(x + w, y    ),
+          _apply_point(x + w, y + h),
+          _apply_point(x,     y + h),
+        ]
+        _render_quad(ren, corners, rgba)
+      end
     end
 
     def draw_line(x1, y1, c1, x2, y2, _c2 = nil, _z = 0, _mode = :default)
       ren = (_current_window && _current_window._sdl_renderer)
       return unless ren
-      r, g, b, a = _split_color(c1)
+      rgba = _split_color(c1)
       SDL2.set_draw_blend_mode(ren, 1)
-      SDL2.set_draw_color(ren, r, g, b, a)
-      SDL2.render_draw_line(ren, x1.to_i, y1.to_i, x2.to_i, y2.to_i)
+      SDL2.set_draw_color(ren, *rgba)
+      px1, py1 = _apply_point(x1, y1)
+      px2, py2 = _apply_point(x2, y2)
+      SDL2.render_draw_line_f(ren, px1, py1, px2, py2)
     end
 
-    def draw_triangle(*); end
-    def draw_quad(*); end
+    # draw_triangle(x1, y1, c1, x2, y2, c2, x3, y3, c3, z=0, mode=:default)
+    def draw_triangle(x1, y1, c1, x2, y2, c2, x3, y3, c3, _z = 0, _mode = :default)
+      ren = (_current_window && _current_window._sdl_renderer)
+      return unless ren
+      verts = FFI::MemoryPointer.new(:uint8, 20 * 3)
+      [[x1, y1, c1], [x2, y2, c2], [x3, y3, c3]].each_with_index do |(px, py, col), i|
+        tx, ty = _apply_point(px, py)
+        r, g, b, a = _split_color(col)
+        off = i * 20
+        verts.put_float32(off,       tx)
+        verts.put_float32(off + 4,   ty)
+        verts.put_uint8(off + 8,   r)
+        verts.put_uint8(off + 9,   g)
+        verts.put_uint8(off + 10,  b)
+        verts.put_uint8(off + 11,  a)
+        verts.put_float32(off + 12,  0.0)
+        verts.put_float32(off + 16,  0.0)
+      end
+      SDL2.render_geometry(ren, nil, verts, 3, nil, 0)
+    end
+
+    # draw_quad(x1, y1, c1, x2, y2, c2, x3, y3, c3, x4, y4, c4,
+    #           z=0, mode=:default)  -- Gosu's vertex order is
+    # top-left, top-right, bottom-left, bottom-right. Render as two
+    # triangles (v0,v1,v2) and (v2,v1,v3).
+    def draw_quad(x1, y1, c1, x2, y2, c2, x3, y3, c3, x4, y4, c4,
+                  _z = 0, _mode = :default)
+      ren = (_current_window && _current_window._sdl_renderer)
+      return unless ren
+      verts = FFI::MemoryPointer.new(:uint8, 20 * 4)
+      [[x1, y1, c1], [x2, y2, c2], [x3, y3, c3], [x4, y4, c4]].each_with_index do |(px, py, col), i|
+        tx, ty = _apply_point(px, py)
+        r, g, b, a = _split_color(col)
+        off = i * 20
+        verts.put_float32(off,       tx)
+        verts.put_float32(off + 4,   ty)
+        verts.put_uint8(off + 8,   r)
+        verts.put_uint8(off + 9,   g)
+        verts.put_uint8(off + 10,  b)
+        verts.put_uint8(off + 11,  a)
+        verts.put_float32(off + 12,  0.0)
+        verts.put_float32(off + 16,  0.0)
+      end
+      idx = FFI::MemoryPointer.new(:int32, 6)
+      [0, 1, 2, 2, 1, 3].each_with_index { |v, i| idx.put_int32(i * 4, v) }
+      SDL2.render_geometry(ren, nil, verts, 4, idx, 6)
+    end
+
     def flush; end
     def record(_w, _h); yield if block_given?; nil; end
 
     def clip_to(x, y, w, h)
       ren = (_current_window && _current_window._sdl_renderer)
       if ren
+        tx, ty = _apply_point(x, y)
+        _, _, sx, sy, _ = _decompose
         rect = SDL2::Rect.new
-        rect[:x] = x.to_i; rect[:y] = y.to_i
-        rect[:w] = w.to_i; rect[:h] = h.to_i
+        rect[:x] = tx.to_i
+        rect[:y] = ty.to_i
+        rect[:w] = (w * sx).to_i
+        rect[:h] = (h * sy).to_i
         SDL2.render_set_clip_rect(ren, rect.pointer)
         begin
           yield if block_given?
@@ -1137,11 +1330,6 @@ module Gosu
         yield if block_given?
       end
     end
-
-    def translate(*); yield if block_given?; end
-    def rotate(*); yield if block_given?; end
-    def scale(*); yield if block_given?; end
-    def transform(*); yield if block_given?; end
 
     def fps; 60; end
     def milliseconds

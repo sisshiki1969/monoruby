@@ -141,6 +141,43 @@ module Gosu
       layout :x, :int32,
              :y, :int32
     end
+
+    # --- Float point / rect / vertex used by transformed drawing ---
+    class FPoint < FFI::Struct
+      layout :x, :float,
+             :y, :float
+    end
+
+    class FRect < FFI::Struct
+      layout :x, :float,
+             :y, :float,
+             :w, :float,
+             :h, :float
+    end
+
+    # SDL_Vertex: { SDL_FPoint position; SDL_Color color; SDL_FPoint tex_coord; }
+    # 20 bytes total (2 floats + 4 bytes + 2 floats).
+    class Vertex < FFI::Struct
+      layout :pos_x,  :float,
+             :pos_y,  :float,
+             :r,      :uint8,
+             :g,      :uint8,
+             :b,      :uint8,
+             :a,      :uint8,
+             :uv_x,   :float,
+             :uv_y,   :float
+    end
+
+    attach_function :render_draw_line_f,    :SDL_RenderDrawLineF,
+      [:pointer, :float, :float, :float, :float], :int
+    attach_function :render_fill_rect_f,    :SDL_RenderFillRectF,
+      [:pointer, :pointer], :int
+    attach_function :render_copy_f,         :SDL_RenderCopyF,
+      [:pointer, :pointer, :pointer, :pointer], :int
+    attach_function :render_copy_ex_f,      :SDL_RenderCopyExF,
+      [:pointer, :pointer, :pointer, :pointer, :double, :pointer, :int], :int
+    attach_function :render_geometry,       :SDL_RenderGeometry,
+      [:pointer, :pointer, :pointer, :int, :pointer, :int], :int
   end
 
   # ----------------------------------------------------------------------
