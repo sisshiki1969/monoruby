@@ -20,6 +20,8 @@
 # (`KbLeft`, `Gp0Button0`, ...), deprecation helpers, and `Numeric`
 # angle-conversion extensions, matching the real gem's public API.
 
+require "gosu/sdl2"
+
 module Gosu
   GP_0_BUTTON_0 = 293
   GP_0_BUTTON_1 = 294
@@ -393,9 +395,9 @@ module Gosu
   end
 
   # ---------------------------------------------------------------------
-  # Window -- stubbed game window. `show` is a no-op so programs that
-  # just construct the window and call `show` exit immediately instead
-  # of hanging.
+  # Window -- real SDL2-backed game window. `show` runs an event loop
+  # that pumps SDL events, calls `update` / `draw`, and renders to the
+  # window until `close` is called (or the user closes the window).
   # ---------------------------------------------------------------------
   class Window
     attr_accessor :caption, :width, :height, :mouse_x, :mouse_y,
@@ -413,12 +415,54 @@ module Gosu
       @fullscreen = fullscreen_or_flags != 0
       @resizable = false
       @borderless = false
+      @_sdl_window = nil
+      @_sdl_renderer = nil
+      @_closing = false
+      @_event_buf = FFI::MemoryPointer.new(:uint8, SDL2::EVENT_SIZE)
     end
 
-    def show; self; end
-    def close; end
-    def close!; end
+    def show
+      _lazy_sdl_init
+      _create_window unless @_sdl_window
+      Gosu._current_window = self
+      last_tick = SDL2.get_ticks
+      until @_closing
+        _pump_events
+        now = SDL2.get_ticks
+        if now - last_tick >= @update_interval
+          update
+          last_tick = now
+        end
+        draw
+        SDL2.render_present(@_sdl_renderer)
+        SDL2.delay(1)
+      end
+      close!
+      self
+    end
+
+    def close
+      @_closing = true
+    end
+
+    def close!
+      if @_sdl_renderer
+        SDL2.destroy_renderer(@_sdl_renderer)
+        @_sdl_renderer = nil
+      end
+      if @_sdl_window
+        SDL2.destroy_window(@_sdl_window)
+        @_sdl_window = nil
+      end
+      Gosu._current_window = nil if Gosu._current_window == self
+    end
+
     def tick; false; end
+
+    def caption=(title)
+      @caption = title.to_s
+      SDL2.set_window_title(@_sdl_window, @caption) if @_sdl_window
+    end
 
     def fullscreen?; @fullscreen; end
     def fullscreen=(v); @fullscreen = !!v; end
@@ -426,6 +470,10 @@ module Gosu
     def resizable=(v); @resizable = !!v; end
     def borderless?; @borderless; end
     def borderless=(v); @borderless = !!v; end
+
+    # Internal: exposed so `Gosu.draw_rect` / `Gosu.draw_line` can reach
+    # the SDL renderer attached to the currently-showing window.
+    def _sdl_renderer; @_sdl_renderer; end
 
     # Callbacks default to no-op so subclasses override only what they
     # actually use.
@@ -440,6 +488,85 @@ module Gosu
     def gamepad_connected(_index); end
     def gamepad_disconnected(_index); end
     def drop(_filename); end
+
+    private
+
+    @@_sdl_inited = false
+
+    def _lazy_sdl_init
+      return if @@_sdl_inited
+      if SDL2.init(SDL2::INIT_VIDEO | SDL2::INIT_EVENTS) != 0
+        raise RuntimeError, "SDL_Init failed: #{SDL2.get_error}"
+      end
+      @@_sdl_inited = true
+      at_exit { SDL2.quit }
+    end
+
+    def _create_window
+      flags = SDL2::WINDOW_SHOWN
+      flags |= SDL2::WINDOW_FULLSCREEN_DESKTOP if @fullscreen
+      flags |= SDL2::WINDOW_RESIZABLE          if @resizable
+      flags |= SDL2::WINDOW_BORDERLESS         if @borderless
+      @_sdl_window = SDL2.create_window(
+        @caption.empty? ? "Gosu" : @caption,
+        SDL2::WINDOWPOS_CENTERED, SDL2::WINDOWPOS_CENTERED,
+        @width, @height, flags
+      )
+      if @_sdl_window.null?
+        raise RuntimeError, "SDL_CreateWindow failed: #{SDL2.get_error}"
+      end
+      @_sdl_renderer = SDL2.create_renderer(
+        @_sdl_window, -1,
+        SDL2::RENDERER_ACCELERATED | SDL2::RENDERER_PRESENTVSYNC
+      )
+      if @_sdl_renderer.null?
+        # Fall back to software renderer (e.g. under SDL_VIDEODRIVER=dummy).
+        @_sdl_renderer = SDL2.create_renderer(@_sdl_window, -1,
+                                              SDL2::RENDERER_SOFTWARE)
+      end
+      if @_sdl_renderer.null?
+        raise RuntimeError, "SDL_CreateRenderer failed: #{SDL2.get_error}"
+      end
+      SDL2.set_draw_color(@_sdl_renderer, 0, 0, 0, 255)
+      SDL2.render_clear(@_sdl_renderer)
+    end
+
+    # SDL_Event field offsets we care about (x86_64 / little-endian):
+    #   event.type             uint32 @ 0
+    #   SDL_KeyboardEvent:
+    #     .keysym.scancode     int32  @ 16
+    #   SDL_MouseMotionEvent:
+    #     .x                   int32  @ 20
+    #     .y                   int32  @ 24
+    #   SDL_MouseButtonEvent:
+    #     .button              uint8  @ 16
+    # All other fields are ignored for now.
+    def _pump_events
+      while SDL2.poll_event(@_event_buf) != 0
+        type = @_event_buf.get_uint32(0)
+        case type
+        when SDL2::EVENT_QUIT
+          close
+        when SDL2::EVENT_KEYDOWN
+          scancode = @_event_buf.get_int32(16)
+          button_down(scancode)
+        when SDL2::EVENT_KEYUP
+          scancode = @_event_buf.get_int32(16)
+          button_up(scancode)
+        when SDL2::EVENT_MOUSEMOTION
+          @mouse_x = @_event_buf.get_int32(20).to_f
+          @mouse_y = @_event_buf.get_int32(24).to_f
+        when SDL2::EVENT_MOUSEBUTTONDOWN
+          btn = @_event_buf.get_uint8(16)
+          button_down(255 + btn)
+        when SDL2::EVENT_MOUSEBUTTONUP
+          btn = @_event_buf.get_uint8(16)
+          button_up(255 + btn)
+        end
+      end
+    end
+
+    public
 
     def minimize; end
     def restore; end
@@ -567,21 +694,80 @@ module Gosu
   # ---------------------------------------------------------------------
   # Module-level helpers.
   # ---------------------------------------------------------------------
+  # The window that is currently running `#show`. `draw_rect` etc. reach
+  # through it to the SDL renderer.
+  @@_current_window = nil
+  def self._current_window; @@_current_window; end
+  def self._current_window=(w); @@_current_window = w; end
+
   class << self
-    def draw_line(*); end
+    # Split an ARGB / Color into 4 bytes for SDL colour calls.
+    def _split_color(color)
+      if color.is_a?(Color)
+        [color.red, color.green, color.blue, color.alpha]
+      else
+        argb = color.to_i
+        [(argb >> 16) & 0xff, (argb >> 8) & 0xff, argb & 0xff, (argb >> 24) & 0xff]
+      end
+    end
+    private :_split_color
+
+    def draw_rect(x, y, w, h, color, _z = 0, _mode = :default)
+      ren = (_current_window && _current_window._sdl_renderer)
+      return unless ren
+      r, g, b, a = _split_color(color)
+      SDL2.set_draw_blend_mode(ren, 1) # SDL_BLENDMODE_BLEND
+      SDL2.set_draw_color(ren, r, g, b, a)
+      rect = SDL2::Rect.new
+      rect[:x] = x.to_i
+      rect[:y] = y.to_i
+      rect[:w] = w.to_i
+      rect[:h] = h.to_i
+      SDL2.render_fill_rect(ren, rect.pointer)
+    end
+
+    def draw_line(x1, y1, c1, x2, y2, _c2 = nil, _z = 0, _mode = :default)
+      ren = (_current_window && _current_window._sdl_renderer)
+      return unless ren
+      r, g, b, a = _split_color(c1)
+      SDL2.set_draw_blend_mode(ren, 1)
+      SDL2.set_draw_color(ren, r, g, b, a)
+      SDL2.render_draw_line(ren, x1.to_i, y1.to_i, x2.to_i, y2.to_i)
+    end
+
     def draw_triangle(*); end
     def draw_quad(*); end
-    def draw_rect(*); end
     def flush; end
     def record(_w, _h); yield if block_given?; nil; end
-    def clip_to(*); yield if block_given?; end
+
+    def clip_to(x, y, w, h)
+      ren = (_current_window && _current_window._sdl_renderer)
+      if ren
+        rect = SDL2::Rect.new
+        rect[:x] = x.to_i; rect[:y] = y.to_i
+        rect[:w] = w.to_i; rect[:h] = h.to_i
+        SDL2.render_set_clip_rect(ren, rect.pointer)
+        begin
+          yield if block_given?
+        ensure
+          SDL2.render_set_clip_rect(ren, nil)
+        end
+      else
+        yield if block_given?
+      end
+    end
+
     def translate(*); yield if block_given?; end
     def rotate(*); yield if block_given?; end
     def scale(*); yield if block_given?; end
     def transform(*); yield if block_given?; end
 
     def fps; 60; end
-    def milliseconds; (Time.now.to_f * 1000).to_i; end
+    def milliseconds
+      SDL2.get_ticks
+    rescue
+      (Time.now.to_f * 1000).to_i
+    end
     def random(a, b); a + rand * (b - a); end
 
     def available_width(_window = nil); 1920; end
