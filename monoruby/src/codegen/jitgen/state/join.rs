@@ -57,7 +57,19 @@ impl AbstractFrame {
                 (_, LinkMode::V) => {
                     self.discard(i);
                 }
-                (LinkMode::F(_), LinkMode::F(_)) => {}
+                (LinkMode::F(l), LinkMode::F(r)) => {
+                    if l != r {
+                        // Registers differ across branches. Keeping `F(l)`
+                        // here would force the `F(r)` side's bridge to swap
+                        // `l <-> r`, which displaces any other slot bound to
+                        // `l` in that source state (a common occurrence when
+                        // the `F(l)` side reached the merge via the zero-cost
+                        // alias created by `copy_slot`). Rebind to a fresh
+                        // xmm that no slot in the merge context uses, so
+                        // each bridge can emit a single `xmm_move` instead.
+                        self.set_new_F(i);
+                    }
+                }
                 (LinkMode::F(_), LinkMode::C(r)) if r.is_float() => {}
                 (LinkMode::F(x), LinkMode::Sf(_, _))
                 | (LinkMode::Sf(x, _), LinkMode::Sf(_, _) | LinkMode::F(_)) => {
@@ -66,13 +78,21 @@ impl AbstractFrame {
                         LinkMode::Sf(_, guarded) => guarded,
                         _ => unreachable!(),
                     };
-                    let other = match other.mode(i) {
-                        LinkMode::F(_) => SfGuarded::Float,
-                        LinkMode::Sf(_, guarded) => guarded,
+                    let (other_xmm, other_g) = match other.mode(i) {
+                        LinkMode::F(y) => (y, SfGuarded::Float),
+                        LinkMode::Sf(y, guarded) => (y, guarded),
                         _ => unreachable!(),
                     };
-                    guarded.join(other);
-                    self.set_Sf(i, x, guarded);
+                    guarded.join(other_g);
+                    if x == other_xmm {
+                        self.set_Sf(i, x, guarded);
+                    } else {
+                        // Same reasoning as the F/F arm: register disagreement
+                        // across branches would force bridge-time swaps that
+                        // trample partner slots created by `copy_slot`'s
+                        // zero-cost alias. Rebind to a fresh xmm.
+                        self.set_new_Sf(i, guarded);
+                    }
                 }
                 (LinkMode::Sf(x, mut guarded), LinkMode::C(r)) if r.is_float() || r.is_fixnum() => {
                     guarded.join(SfGuarded::from_concrete_value(r));
