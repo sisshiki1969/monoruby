@@ -40,6 +40,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with(IO_CLASS, "copy_stream", io_copy_stream, 2, 4, false);
     globals.define_builtin_func_with(IO_CLASS, "set_encoding", set_encoding, 1, 3, false);
     globals.define_builtin_func(IO_CLASS, "external_encoding", external_encoding, 0);
+    globals.define_builtin_func_rest(IO_CLASS, "wait", io_wait);
+    globals.define_builtin_func_with(IO_CLASS, "wait_readable", io_wait_readable, 0, 1, false);
+    globals.define_builtin_func_with(IO_CLASS, "wait_writable", io_wait_writable, 0, 1, false);
+    globals.define_builtin_func_with(IO_CLASS, "wait_priority", io_wait_priority, 0, 1, false);
+    // IO::READABLE / WRITABLE / PRIORITY event masks (same values as POSIX
+    // POLLIN / POLLOUT / POLLPRI; these are the constants ruby/spec's
+    // `library/io-wait` expects).
+    globals.set_constant_by_str(IO_CLASS, "READABLE", Value::integer(1));
+    globals.set_constant_by_str(IO_CLASS, "PRIORITY", Value::integer(2));
+    globals.set_constant_by_str(IO_CLASS, "WRITABLE", Value::integer(4));
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
     globals.set_gvar(IdentId::get_id("$stdin"), stdin);
@@ -586,22 +596,17 @@ fn io_sysopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/pipe.html]
 #[monoruby_builtin]
-fn io_pipe(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    return Err(MonorubyErr::runtimeerr("IO.pipe is not yet supported"));
-    //let mut fds: [libc::c_int; 2] = [0; 2];
-    //// SAFETY: fds is a valid pointer to a 2-element array of c_int.
-    //let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
-    //if ret == -1 {
-    //    let err = std::io::Error::last_os_error();
-    //    return Err(MonorubyErr::errno_with_msg(
-    //        &_globals.store,
-    //        &err,
-    //        "pipe(2)",
-    //    ));
-    //}
-    //let read_io = Value::new_io(IoInner::from_raw_fd(fds[0], "pipe".to_string()));
-    //let write_io = Value::new_io(IoInner::from_raw_fd(fds[1], "pipe".to_string()));
-    //Ok(Value::array2(read_io, write_io))
+fn io_pipe(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut fds: [libc::c_int; 2] = [0; 2];
+    // SAFETY: fds is a valid pointer to a 2-element array of c_int.
+    let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if ret == -1 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "pipe(2)"));
+    }
+    let read_io = Value::new_io(IoInner::from_raw_fd(fds[0], "pipe".to_string()));
+    let write_io = Value::new_io(IoInner::from_raw_fd(fds[1], "pipe".to_string()));
+    Ok(Value::array2(read_io, write_io))
 }
 
 /// ### IO.popen
@@ -1085,6 +1090,261 @@ fn external_encoding(
 
 ///
 
+/// Parse the optional timeout argument shared by `IO#wait`, `#wait_readable`,
+/// `#wait_writable`, and `#wait_priority`. `nil` / missing means block
+/// indefinitely; a numeric value is converted to a `poll(2)` millisecond
+/// timeout (capped at `i32::MAX`).
+fn parse_wait_timeout(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg: Option<Value>,
+) -> Result<i32> {
+    let Some(v) = arg else {
+        return Ok(-1);
+    };
+    if v.is_nil() {
+        return Ok(-1);
+    }
+    let f = v.coerce_to_f64(vm, globals)?;
+    if f.is_nan() {
+        return Err(MonorubyErr::rangeerr("NaN out of Time range"));
+    }
+    if f < 0.0 {
+        return Err(MonorubyErr::argumenterr(
+            "time interval must not be negative",
+        ));
+    }
+    let ms = (f * 1000.0).ceil();
+    let capped = if ms > i32::MAX as f64 {
+        i32::MAX
+    } else {
+        ms as i32
+    };
+    Ok(capped)
+}
+
+/// Wait on a single fd via `poll(2)` with the given `events` mask (mixing
+/// `POLLIN`/`POLLPRI`/`POLLOUT`) and a timeout in milliseconds. Returns the
+/// revents from the kernel, or 0 on timeout. Closed / invalid fds raise
+/// `IOError: closed stream`.
+fn poll_single_fd(self_val: Value, events: i16, timeout_ms: i32) -> Result<i16> {
+    if self_val.as_io_inner().is_closed() {
+        return Err(MonorubyErr::ioerr("closed stream"));
+    }
+    let fd = self_val.as_io_inner().fileno()?;
+    let mut pfd = libc::pollfd {
+        fd,
+        events,
+        revents: 0,
+    };
+    // SAFETY: `poll` accepts a pointer to an array of pollfd; we pass
+    // exactly one element with length 1.
+    let ret = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+    if ret < 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::EINTR) {
+            return Ok(0);
+        }
+        return Err(MonorubyErr::ioerr(format!("poll failed: {err}")));
+    }
+    if (pfd.revents & (libc::POLLNVAL as i16)) != 0 {
+        return Err(MonorubyErr::ioerr("closed stream"));
+    }
+    Ok(pfd.revents)
+}
+
+/// Parse an `IO#wait` mode Symbol (`:r`, `:read`, `:readable`,
+/// `:w`, `:write`, `:writable`, `:rw`, `:read_write`,
+/// `:readable_writable`, `:p`, `:priority`) into the corresponding
+/// `IO::READABLE`/`WRITABLE`/`PRIORITY` event bits.
+fn mode_symbol_to_events(name: &str) -> Option<i64> {
+    match name {
+        "r" | "read" | "readable" => Some(1),
+        "w" | "write" | "writable" => Some(4),
+        "p" | "priority" => Some(2),
+        "rw" | "read_write" | "readable_writable" => Some(1 | 4),
+        _ => None,
+    }
+}
+
+///
+/// ### IO#wait
+///
+/// - wait(events, timeout = nil) -> Integer or nil
+/// - wait(timeout = nil, *modes) -> self or nil
+///
+/// If called with an Integer event mask, returns the ready events mask
+/// (or `nil` on timeout). If called with Symbol mode(s) (`:r`, `:w`,
+/// `:rw`, ...) — optionally with a numeric timeout — returns `self`
+/// on ready, `nil` on timeout.
+#[monoruby_builtin]
+fn io_wait(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    if self_val.as_io_inner().is_closed() {
+        return Err(MonorubyErr::ioerr("closed stream"));
+    }
+    let args = lfp.arg(0).as_array();
+
+    if args.is_empty() {
+        let revents = poll_single_fd(self_val, libc::POLLIN as i16, -1)?;
+        return if revents == 0 {
+            Ok(Value::nil())
+        } else {
+            Ok(self_val)
+        };
+    }
+
+    // `wait` supports two shapes:
+    //   * traditional: `wait(events, timeout=nil)` with events an Integer mask.
+    //   * modern:      `wait(timeout=nil, *modes)` where modes are Symbols.
+    // If any argument is a Symbol, use the modern form; otherwise traditional.
+    let has_symbol = args.iter().any(|a| a.try_symbol().is_some());
+
+    let mut events: i64 = 0;
+    let mut timeout: Option<Value> = None;
+
+    if has_symbol {
+        for arg in args.iter().copied() {
+            if let Some(sym) = arg.try_symbol() {
+                let name = sym.get_name();
+                match mode_symbol_to_events(&name) {
+                    Some(bits) => events |= bits,
+                    None => {
+                        return Err(MonorubyErr::argumenterr(format!(
+                            "unsupported mode: {name}"
+                        )));
+                    }
+                }
+            } else {
+                if timeout.is_some() {
+                    return Err(MonorubyErr::argumenterr("timeout given more than once"));
+                }
+                timeout = Some(arg);
+            }
+        }
+    } else {
+        if args.len() > 2 {
+            return Err(MonorubyErr::argumenterr(format!(
+                "wrong number of arguments (given {}, expected 0..2)",
+                args.len()
+            )));
+        }
+        events = args[0].coerce_to_int_i64(vm, globals)?;
+        if events <= 0 {
+            return Err(MonorubyErr::argumenterr(
+                "Events must be positive integer!",
+            ));
+        }
+        if args.len() == 2 {
+            timeout = Some(args[1]);
+        }
+    }
+
+    let timeout_ms = parse_wait_timeout(vm, globals, timeout)?;
+
+    let mut poll_events: i16 = 0;
+    if events & 1 != 0 {
+        poll_events |= libc::POLLIN as i16;
+    }
+    if events & 2 != 0 {
+        poll_events |= libc::POLLPRI as i16;
+    }
+    if events & 4 != 0 {
+        poll_events |= libc::POLLOUT as i16;
+    }
+
+    let revents = poll_single_fd(self_val, poll_events, timeout_ms)?;
+
+    if has_symbol {
+        let ready = (revents & libc::POLLIN as i16) != 0
+            || (revents & libc::POLLOUT as i16) != 0
+            || (revents & libc::POLLPRI as i16) != 0;
+        return if ready {
+            Ok(self_val)
+        } else {
+            Ok(Value::nil())
+        };
+    }
+
+    let mut mask: i64 = 0;
+    if (revents & libc::POLLIN as i16) != 0 {
+        mask |= 1;
+    }
+    if (revents & libc::POLLPRI as i16) != 0 {
+        mask |= 2;
+    }
+    if (revents & libc::POLLOUT as i16) != 0 {
+        mask |= 4;
+    }
+    if mask == 0 {
+        return Ok(Value::nil());
+    }
+    Ok(Value::integer(mask))
+}
+
+///
+/// ### IO#wait_readable
+///
+/// - wait_readable(timeout = nil) -> self or nil
+///
+#[monoruby_builtin]
+fn io_wait_readable(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let timeout_ms = parse_wait_timeout(vm, globals, lfp.try_arg(0))?;
+    let revents = poll_single_fd(self_val, libc::POLLIN as i16, timeout_ms)?;
+    if revents == 0 {
+        return Ok(Value::nil());
+    }
+    Ok(self_val)
+}
+
+///
+/// ### IO#wait_writable
+///
+/// - wait_writable(timeout = nil) -> self or nil
+///
+#[monoruby_builtin]
+fn io_wait_writable(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let timeout_ms = parse_wait_timeout(vm, globals, lfp.try_arg(0))?;
+    let revents = poll_single_fd(self_val, libc::POLLOUT as i16, timeout_ms)?;
+    if revents == 0 {
+        return Ok(Value::nil());
+    }
+    Ok(self_val)
+}
+
+///
+/// ### IO#wait_priority
+///
+/// - wait_priority(timeout = nil) -> self or nil
+///
+#[monoruby_builtin]
+fn io_wait_priority(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let timeout_ms = parse_wait_timeout(vm, globals, lfp.try_arg(0))?;
+    let revents = poll_single_fd(self_val, libc::POLLPRI as i16, timeout_ms)?;
+    if revents == 0 {
+        return Ok(Value::nil());
+    }
+    Ok(self_val)
+}
+
 ///
 /// ### IO.copy_stream
 ///
@@ -1448,5 +1708,150 @@ mod tests {
     #[test]
     fn io_popen_empty_args() {
         run_test_error(r#"IO.popen"#);
+    }
+
+    #[test]
+    fn io_wait_constants() {
+        run_test(
+            r#"
+            [IO::READABLE, IO::WRITABLE, IO::PRIORITY]
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_wait_pipe_readable() {
+        // wait(events, timeout): when readable within the timeout, returns
+        // the event mask (Integer form). When not, returns nil.
+        run_test(
+            r#"
+            r, w = IO.pipe
+            w.write("hi")
+            a = r.wait(IO::READABLE, 1)
+            b = r.wait_readable(1)
+            [a, b == r]
+            "#,
+        );
+        run_test(
+            r#"
+            r, _w = IO.pipe
+            [r.wait(IO::READABLE, 0), r.wait_readable(0)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_wait_pipe_writable() {
+        // Fresh pipe writer is writable immediately.
+        run_test(
+            r#"
+            _r, w = IO.pipe
+            [w.wait(IO::WRITABLE, 0), w.wait_writable(0) == w]
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_wait_returns_self_in_symbol_form() {
+        // Any accepted symbol combination returns `self` on ready, `nil`
+        // on timeout.
+        run_test(
+            r#"
+            r, w = IO.pipe
+            w.write("x")
+            [
+              r.wait(:r, 0) == r,
+              r.wait(:read, 0) == r,
+              r.wait(:readable, 0) == r,
+              r.wait(0, :r) == r,
+              r.wait(:r, 0, :w) == r,
+            ]
+            "#,
+        );
+        run_test(
+            r#"
+            r, _w = IO.pipe
+            r.wait(:r, 0).nil?
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_wait_writable_symbols() {
+        run_test(
+            r#"
+            _r, w = IO.pipe
+            [
+              w.wait(:w, 0) == w,
+              w.wait(:write, 0) == w,
+              w.wait(:writable, 0) == w,
+              w.wait(0, :rw) == w,
+              w.wait(:read_write, 0) == w,
+              w.wait(:readable_writable, 0) == w,
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_wait_event_mask_not_ready() {
+        // wait(events, 0) on a not-yet-readable pipe returns nil.
+        run_test(
+            r#"
+            r, _w = IO.pipe
+            r.wait(IO::READABLE, 0)
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_wait_rejects_nonpositive_events() {
+        run_test_error(r#"r, _w = IO.pipe; r.wait(0, 0)"#);
+        run_test_error(r#"r, _w = IO.pipe; r.wait(-1, 0)"#);
+    }
+
+    #[test]
+    fn io_wait_rejects_unknown_symbol_mode() {
+        run_test_error(r#"r, _w = IO.pipe; r.wait(:wrong, 0)"#);
+    }
+
+    #[test]
+    fn io_wait_rejects_multiple_timeouts() {
+        run_test_error(r#"r, _w = IO.pipe; r.wait(0, 10, :r)"#);
+    }
+
+    #[test]
+    fn io_wait_rejects_too_many_positional_args() {
+        run_test_error(r#"r, _w = IO.pipe; r.wait(IO::READABLE, 0, 1)"#);
+    }
+
+    #[test]
+    fn io_wait_on_closed_stream_raises() {
+        run_test_error(
+            r#"
+            r, _w = IO.pipe
+            r.close
+            r.wait(IO::READABLE, 0)
+            "#,
+        );
+        run_test_error(
+            r#"
+            r, _w = IO.pipe
+            r.close
+            r.wait_readable(0)
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_wait_priority() {
+        // `wait_priority` is a read-side event; call on the read end of the
+        // pipe so it doesn't raise "not opened for reading" on CRuby.
+        run_test(
+            r#"
+            r, _w = IO.pipe
+            r.wait_priority(0).nil?
+            "#,
+        );
     }
 }
