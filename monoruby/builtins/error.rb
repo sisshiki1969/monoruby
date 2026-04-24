@@ -60,6 +60,9 @@ class Errno
     Errno = 11
   end
 
+  # EWOULDBLOCK is an alias for EAGAIN on Linux.
+  EWOULDBLOCK = EAGAIN
+
   class ENOMEM < SystemCallError
     Errno = 12
   end
