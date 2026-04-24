@@ -97,6 +97,19 @@ module Gosu
       [:pointer], :void
     attach_function :create_texture_from_surface, :SDL_CreateTextureFromSurface,
       [:pointer, :pointer], :pointer
+    attach_function :create_rgb_surface_with_format,
+      :SDL_CreateRGBSurfaceWithFormat,
+      [:uint32, :int, :int, :int, :uint32], :pointer
+    attach_function :convert_surface_format,  :SDL_ConvertSurfaceFormat,
+      [:pointer, :uint32, :uint32], :pointer
+    attach_function :lock_surface,            :SDL_LockSurface,
+      [:pointer], :int
+    attach_function :unlock_surface,          :SDL_UnlockSurface,
+      [:pointer], :void
+
+    # SDL_PIXELFORMAT_ABGR8888: four bytes in memory order R, G, B, A.
+    # This matches Gosu's to_blob / from_blob convention.
+    PIXELFORMAT_ABGR8888 = 0x16762004
     attach_function :destroy_texture,         :SDL_DestroyTexture,
       [:pointer], :void
     attach_function :query_texture,           :SDL_QueryTexture,
@@ -115,9 +128,10 @@ module Gosu
     # SDL_Surface starts with `Uint32 flags; SDL_PixelFormat *format;
     # int w; int h; int pitch;` — we only need w/h/pitch, which sit at
     # offsets 16/20/24 on x86_64.
-    SURFACE_W_OFFSET     = 16
-    SURFACE_H_OFFSET     = 20
-    SURFACE_PITCH_OFFSET = 24
+    SURFACE_W_OFFSET      = 16
+    SURFACE_H_OFFSET      = 20
+    SURFACE_PITCH_OFFSET  = 24
+    SURFACE_PIXELS_OFFSET = 32
 
     # --- Event pump -----------------------------------------------------
     # SDL_Event is a 56-byte union on x86_64. We stash it in a

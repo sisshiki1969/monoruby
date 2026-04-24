@@ -739,15 +739,15 @@ module Gosu
       @_texture = nil
       @_renderer = nil  # the renderer the texture was created against
       @_owns_texture = true
+      @_rgba_blob = nil
 
       if source.is_a?(String)
         _load_from_path(source)
-      elsif source.respond_to?(:columns) && source.respond_to?(:rows)
-        # `Image::BlobHelper`-shaped object from `Image.from_blob`.
-        # Texture creation is deferred until first `#draw`.
-        @width  = @columns = source.columns.to_i
-        @height = @rows    = source.rows.to_i
-        @_blob_rgba = source.to_blob if source.respond_to?(:to_blob)
+      elsif source.respond_to?(:columns) && source.respond_to?(:rows) &&
+            source.respond_to?(:to_blob)
+        # `Image::BlobHelper`-shaped object: build a surface from raw RGBA.
+        _init_from_blob(source.to_blob.to_s,
+                        source.columns.to_i, source.rows.to_i)
       elsif source.nil?
         @width = @columns = 0
         @height = @rows   = 0
@@ -755,6 +755,15 @@ module Gosu
         @width = @columns = 0
         @height = @rows   = 0
       end
+    end
+
+    # Gosu 1.x convenience: `Image.from_blob(width, height, rgba_bytes)`.
+    # Matches the real gem's signature (width/height then blob).
+    def self.from_blob(columns, rows, blob)
+      img = allocate
+      img.send(:_init_blob_state)
+      img.send(:_init_from_blob, blob.to_s, columns.to_i, rows.to_i)
+      img
     end
 
     def self.from_text(text, height, opts = {})
@@ -838,7 +847,12 @@ module Gosu
 
     def draw_as_quad(*); end
     def draw_mod(*); end
-    def to_blob; "\0\0\0\0" * (width * height); end
+    # Raw RGBA bytes (4 bytes per pixel, row-major, top-to-bottom).
+    # Captured once from the source surface; subsequent draws don't
+    # affect the returned string.
+    def to_blob
+      @_rgba_blob || ("\0".b * (@width.to_i * @height.to_i * 4))
+    end
     def save(_path); end
     def insert(_img, _x, _y); self; end
     def subimage(_x, _y, _w, _h); Image.new; end
@@ -859,14 +873,89 @@ module Gosu
     public
 
     # Adopt an already-loaded SDL surface. Used by `Image.from_text` to
-    # feed a TTF-rendered surface into a fresh Image instance.
+    # feed a TTF-rendered surface into a fresh Image instance. Also
+    # extracts an RGBA snapshot for `#to_blob` before the surface is
+    # eventually uploaded to a texture (and freed).
     def _init_from_surface(surface)
       @width  = @columns = surface.get_int32(SDL2::SURFACE_W_OFFSET)
       @height = @rows    = surface.get_int32(SDL2::SURFACE_H_OFFSET)
+      @_rgba_blob = _surface_to_rgba(surface, @width, @height)
       @_pending_surface  = surface  # converted to texture on first draw
       @_texture = nil
       @_renderer = nil
       @_owns_texture = true
+    end
+
+    # Build a surface from raw RGBA bytes (Gosu blob layout: 4 bytes
+    # per pixel in memory order R, G, B, A).
+    def _init_from_blob(blob, w, h)
+      needed = w * h * 4
+      if blob.bytesize < needed
+        raise ArgumentError,
+              "blob too small: got #{blob.bytesize} bytes, need #{needed}"
+      end
+      surface = SDL2.create_rgb_surface_with_format(
+        0, w, h, 32, SDL2::PIXELFORMAT_ABGR8888)
+      if surface.null?
+        raise RuntimeError,
+              "SDL_CreateRGBSurfaceWithFormat failed: #{SDL2.get_error}"
+      end
+      pitch      = surface.get_int32(SDL2::SURFACE_PITCH_OFFSET)
+      pixels_ptr = surface.get_pointer(SDL2::SURFACE_PIXELS_OFFSET)
+      row_bytes  = w * 4
+      SDL2.lock_surface(surface)
+      if pitch == row_bytes
+        pixels_ptr.put_bytes(0, blob, 0, needed)
+      else
+        h.times do |y|
+          pixels_ptr.put_bytes(y * pitch, blob, y * row_bytes, row_bytes)
+        end
+      end
+      SDL2.unlock_surface(surface)
+      @width  = @columns = w
+      @height = @rows    = h
+      # Blob is already in RGBA; reuse it directly for to_blob.
+      @_rgba_blob        = blob.byteslice(0, needed).dup
+      @_pending_surface  = surface
+      @_texture = nil
+      @_renderer = nil
+      @_owns_texture = true
+    end
+
+    # Reset instance state used by allocate + _init_from_blob (bypassing
+    # the normal initialize path).
+    def _init_blob_state
+      @_texture = nil
+      @_renderer = nil
+      @_owns_texture = true
+      @_rgba_blob = nil
+    end
+
+    # Read an SDL_Surface's pixels into an RGBA8888 Ruby String. The
+    # surface is converted to `PIXELFORMAT_ABGR8888` first so we always
+    # get 4 bytes per pixel in R, G, B, A order.
+    def _surface_to_rgba(surface, w, h)
+      return "".b if w <= 0 || h <= 0
+      converted = SDL2.convert_surface_format(surface,
+                                              SDL2::PIXELFORMAT_ABGR8888,
+                                              0)
+      return "\0".b * (w * h * 4) if converted.null?
+      begin
+        SDL2.lock_surface(converted)
+        pitch      = converted.get_int32(SDL2::SURFACE_PITCH_OFFSET)
+        pixels_ptr = converted.get_pointer(SDL2::SURFACE_PIXELS_OFFSET)
+        row_bytes  = w * 4
+        if pitch == row_bytes
+          buf = pixels_ptr.get_bytes(0, row_bytes * h)
+        else
+          buf = "".b
+          h.times { |y| buf << pixels_ptr.get_bytes(y * pitch, row_bytes) }
+        end
+        SDL2.unlock_surface(converted)
+        buf
+      ensure
+        SDL2.free_surface(converted)
+      end
     end
 
     private
