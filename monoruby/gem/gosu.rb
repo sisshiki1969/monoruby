@@ -495,11 +495,14 @@ module Gosu
 
     def _lazy_sdl_init
       return if @@_sdl_inited
-      if SDL2.init(SDL2::INIT_VIDEO | SDL2::INIT_EVENTS) != 0
+      flags = SDL2::INIT_VIDEO | SDL2::INIT_EVENTS |
+              SDL2::INIT_JOYSTICK | SDL2::INIT_GAMECONTROLLER
+      if SDL2.init(flags) != 0
         raise RuntimeError, "SDL_Init failed: #{SDL2.get_error}"
       end
       @@_sdl_inited = true
       at_exit { SDL2.quit }
+      _enumerate_controllers
     end
 
     def _create_window
@@ -562,8 +565,93 @@ module Gosu
         when SDL2::EVENT_MOUSEBUTTONUP
           btn = @_event_buf.get_uint8(16)
           button_up(255 + btn)
+        when SDL2::EVENT_CONTROLLERDEVICEADDED
+          device_index = @_event_buf.get_int32(8)
+          _open_controller(device_index)
+        when SDL2::EVENT_CONTROLLERDEVICEREMOVED
+          instance_id = @_event_buf.get_int32(8)
+          _close_controller_by_instance(instance_id)
+        when SDL2::EVENT_CONTROLLERBUTTONDOWN
+          instance_id = @_event_buf.get_int32(8)
+          sdl_button  = @_event_buf.get_uint8(12)
+          gosu_id = _gosu_pad_button_id(instance_id, sdl_button)
+          button_down(gosu_id) if gosu_id
+        when SDL2::EVENT_CONTROLLERBUTTONUP
+          instance_id = @_event_buf.get_int32(8)
+          sdl_button  = @_event_buf.get_uint8(12)
+          gosu_id = _gosu_pad_button_id(instance_id, sdl_button)
+          button_up(gosu_id) if gosu_id
+        when SDL2::EVENT_CONTROLLERAXISMOTION
+          instance_id = @_event_buf.get_int32(8)
+          axis_idx    = @_event_buf.get_uint8(12)
+          raw         = @_event_buf.get_int16(16)
+          _set_controller_axis(instance_id, axis_idx, raw)
         end
       end
+    end
+
+    # --- Controller bookkeeping ---------------------------------------
+    # @@_controllers is a shared-across-windows hash of
+    #   SDL joystick instance_id => { slot: 0..3, handle: SDL_GameController*,
+    #                                 axes: Hash{0..5 => Float -1.0..1.0} }
+    # Slot 0..3 maps to Gosu's GP_N_BUTTON_X / GP_N_DPAD_* constants.
+    @@_controllers = {}
+    def self._controllers; @@_controllers; end
+
+    SDL_GAMEPAD_BUTTON_DPAD_UP    = 11
+    SDL_GAMEPAD_BUTTON_DPAD_DOWN  = 12
+    SDL_GAMEPAD_BUTTON_DPAD_LEFT  = 13
+    SDL_GAMEPAD_BUTTON_DPAD_RIGHT = 14
+
+    def _open_controller(device_index)
+      return unless SDL2.is_game_controller(device_index) != 0
+      handle = SDL2.game_controller_open(device_index)
+      return if handle.null?
+      joystick = SDL2.game_controller_get_joystick(handle)
+      instance_id = SDL2.joystick_instance_id(joystick)
+      # Assign the lowest free slot (0..3).
+      used_slots = @@_controllers.values.map { |e| e[:slot] }
+      slot = (0..3).find { |s| !used_slots.include?(s) }
+      return unless slot
+      @@_controllers[instance_id] = { slot: slot, handle: handle, axes: {} }
+      gamepad_connected(slot)
+    end
+
+    def _close_controller_by_instance(instance_id)
+      entry = @@_controllers.delete(instance_id)
+      return unless entry
+      SDL2.game_controller_close(entry[:handle]) if entry[:handle] && !entry[:handle].null?
+      gamepad_disconnected(entry[:slot])
+    end
+
+    def _gosu_pad_button_id(instance_id, sdl_button)
+      entry = @@_controllers[instance_id]
+      return nil unless entry
+      slot = entry[:slot]
+      case sdl_button
+      when SDL_GAMEPAD_BUTTON_DPAD_UP
+        case slot; when 0 then 291; when 1 then 311; when 2 then 331; when 3 then 351; end
+      when SDL_GAMEPAD_BUTTON_DPAD_DOWN
+        case slot; when 0 then 292; when 1 then 312; when 2 then 332; when 3 then 352; end
+      when SDL_GAMEPAD_BUTTON_DPAD_LEFT
+        case slot; when 0 then 289; when 1 then 309; when 2 then 329; when 3 then 349; end
+      when SDL_GAMEPAD_BUTTON_DPAD_RIGHT
+        case slot; when 0 then 290; when 1 then 310; when 2 then 330; when 3 then 350; end
+      else
+        # GP_<slot>_BUTTON_<sdl_button>, starting at 293 for slot 0, step 20.
+        293 + slot * 20 + sdl_button
+      end
+    end
+
+    def _set_controller_axis(instance_id, axis_idx, raw)
+      entry = @@_controllers[instance_id]
+      return unless entry
+      entry[:axes][axis_idx] = raw / 32767.0
+    end
+
+    def _enumerate_controllers
+      count = SDL2.num_joysticks
+      count.times { |i| _open_controller(i) }
     end
 
     public
@@ -1344,11 +1432,79 @@ module Gosu
     def screen_width(_window = nil); 1920; end
     def screen_height(_window = nil); 1080; end
 
-    def button_down?(_id); false; end
+    def button_down?(id)
+      id = id.to_i
+      # Keyboard scancodes occupy 0..256.
+      if id >= 0 && id < 256
+        state_ptr = SDL2.get_keyboard_state(nil)
+        return false if state_ptr.nil? || state_ptr.null?
+        return state_ptr.get_uint8(id) != 0
+      end
+      # Mouse buttons are encoded as 255 + SDL_BUTTON_*.
+      if id >= 256 && id <= 263
+        mask = SDL2.get_mouse_state(nil, nil)
+        sdl_btn = id - 255   # SDL_BUTTON_LEFT == 1
+        return (mask & (1 << (sdl_btn - 1))) != 0
+      end
+      # Game controller DPad buttons (GP_N_DPAD_LEFT/UP/DOWN/RIGHT) and
+      # GP_N_BUTTON_X -- look up live state on the controller instance.
+      Window._controllers.each_value do |entry|
+        slot = entry[:slot]
+        handle = entry[:handle]
+        next unless handle && !handle.null?
+        mapping = [
+          [293 + slot * 20 + 0,  0], [293 + slot * 20 + 1,  1],
+          [293 + slot * 20 + 2,  2], [293 + slot * 20 + 3,  3],
+          [293 + slot * 20 + 4,  4], [293 + slot * 20 + 5,  5],
+          [293 + slot * 20 + 6,  6], [293 + slot * 20 + 7,  7],
+          [293 + slot * 20 + 8,  8], [293 + slot * 20 + 9,  9],
+          [293 + slot * 20 + 10, 10],
+        ].find { |gid, _| gid == id }
+        if mapping
+          return SDL2.game_controller_get_button(handle, mapping[1]) != 0
+        end
+        dpad_btn =
+          case id
+          when 291, 311, 331, 351 then 11  # DPAD_UP
+          when 292, 312, 332, 352 then 12  # DPAD_DOWN
+          when 289, 309, 329, 349 then 13  # DPAD_LEFT
+          when 290, 310, 330, 350 then 14  # DPAD_RIGHT
+          end
+        if dpad_btn && (id - 289) / 20 == slot
+          return SDL2.game_controller_get_button(handle, dpad_btn) != 0
+        end
+      end
+      false
+    end
+
     def button_name(_id); nil; end
     def button_id_to_char(_id); nil; end
     def char_to_button_id(_c); nil; end
-    def axis(_id); 0.0; end
+
+    # Gosu axis IDs:
+    #   0/1: GP_LEFT_STICK_X/Y (any controller — we report controller 0)
+    #   2/3: GP_RIGHT_STICK_X/Y
+    #   4:   GP_LEFT_TRIGGER
+    #   5:   GP_RIGHT_TRIGGER
+    #   6..29: per-controller axis: 6 + 6*slot + (0..5)
+    def axis(id)
+      id = id.to_i
+      slot, axis_idx =
+        case id
+        when 0..5       then [nil, id]        # any controller
+        when 6..29      then [(id - 6) / 6, (id - 6) % 6]
+        else return 0.0
+        end
+      if slot.nil?
+        Window._controllers.each_value do |entry|
+          v = entry[:axes][axis_idx]
+          return v if v && v.abs > 0.01
+        end
+        return 0.0
+      end
+      entry = Window._controllers.values.find { |e| e[:slot] == slot }
+      entry && entry[:axes][axis_idx] || 0.0
+    end
 
     def default_font_name; "DejaVu Sans"; end
     def user_languages; []; end

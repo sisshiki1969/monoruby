@@ -52,9 +52,12 @@ module Gosu
     EVENT_MOUSEBUTTONDOWN = 0x401
     EVENT_MOUSEBUTTONUP   = 0x402
     EVENT_MOUSEWHEEL      = 0x403
-    EVENT_CONTROLLERBUTTONDOWN = 0x650
-    EVENT_CONTROLLERBUTTONUP   = 0x651
-    EVENT_TEXTINPUT = 0x303
+    EVENT_CONTROLLERAXISMOTION    = 0x650
+    EVENT_CONTROLLERBUTTONDOWN    = 0x651
+    EVENT_CONTROLLERBUTTONUP      = 0x652
+    EVENT_CONTROLLERDEVICEADDED   = 0x653
+    EVENT_CONTROLLERDEVICEREMOVED = 0x654
+    EVENT_TEXTINPUT               = 0x303
 
     # --- Core -----------------------------------------------------------
     attach_function :init,             :SDL_Init,             [:uint32], :int
@@ -178,6 +181,28 @@ module Gosu
       [:pointer, :pointer, :pointer, :pointer, :double, :pointer, :int], :int
     attach_function :render_geometry,       :SDL_RenderGeometry,
       [:pointer, :pointer, :pointer, :int, :pointer, :int], :int
+
+    # --- Game controller / joystick ------------------------------------
+    # `SDL_NumJoysticks` gives the total attached joystick count;
+    # `SDL_IsGameController(index)` tells whether a given slot has a
+    # GameController mapping (so it can be opened via
+    # `SDL_GameControllerOpen`). Buttons 0..14 map to SDL's standard
+    # layout (A, B, X, Y, Back, Guide, Start, LStick, RStick,
+    # LShoulder, RShoulder, DPadUp, DPadDown, DPadLeft, DPadRight);
+    # axes 0..5 cover the two analog sticks and the two triggers.
+    attach_function :num_joysticks,             :SDL_NumJoysticks,        [], :int
+    attach_function :is_game_controller,        :SDL_IsGameController,    [:int], :int
+    attach_function :game_controller_open,      :SDL_GameControllerOpen,  [:int], :pointer
+    attach_function :game_controller_close,     :SDL_GameControllerClose, [:pointer], :void
+    attach_function :game_controller_get_attached, :SDL_GameControllerGetAttached,
+      [:pointer], :int
+    attach_function :game_controller_get_button, :SDL_GameControllerGetButton,
+      [:pointer, :int], :uint8
+    attach_function :game_controller_get_axis,   :SDL_GameControllerGetAxis,
+      [:pointer, :int], :int16
+    attach_function :game_controller_get_joystick, :SDL_GameControllerGetJoystick,
+      [:pointer], :pointer
+    attach_function :joystick_instance_id,       :SDL_JoystickInstanceID,  [:pointer], :int32
   end
 
   # ----------------------------------------------------------------------
