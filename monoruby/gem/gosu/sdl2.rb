@@ -203,6 +203,11 @@ module Gosu
     attach_function :game_controller_get_joystick, :SDL_GameControllerGetJoystick,
       [:pointer], :pointer
     attach_function :joystick_instance_id,       :SDL_JoystickInstanceID,  [:pointer], :int32
+
+    # --- Text input -----------------------------------------------------
+    attach_function :start_text_input,  :SDL_StartTextInput,  [], :void
+    attach_function :stop_text_input,   :SDL_StopTextInput,   [], :void
+    attach_function :is_text_input_active, :SDL_IsTextInputActive, [], :int
   end
 
   # ----------------------------------------------------------------------

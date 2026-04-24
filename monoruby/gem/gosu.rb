@@ -401,7 +401,8 @@ module Gosu
   # ---------------------------------------------------------------------
   class Window
     attr_accessor :caption, :width, :height, :mouse_x, :mouse_y,
-                  :update_interval, :text_input
+                  :update_interval
+    attr_reader :text_input
 
     def initialize(width, height, fullscreen_or_flags = 0,
                    update_interval = 16.666666)
@@ -462,6 +463,20 @@ module Gosu
     def caption=(title)
       @caption = title.to_s
       SDL2.set_window_title(@_sdl_window, @caption) if @_sdl_window
+    end
+
+    # Enable/disable SDL text input alongside storing the TextInput.
+    # When a TextInput is attached, SDL will emit SDL_TEXTINPUT events
+    # which _pump_events routes into TextInput#insert_text.
+    def text_input=(input)
+      @text_input = input
+      if @@_sdl_inited
+        if input
+          SDL2.start_text_input
+        else
+          SDL2.stop_text_input
+        end
+      end
     end
 
     def fullscreen?; @fullscreen; end
@@ -532,6 +547,7 @@ module Gosu
       end
       SDL2.set_draw_color(@_sdl_renderer, 0, 0, 0, 255)
       SDL2.render_clear(@_sdl_renderer)
+      SDL2.start_text_input if @text_input
     end
 
     # SDL_Event field offsets we care about (x86_64 / little-endian):
@@ -552,10 +568,18 @@ module Gosu
           close
         when SDL2::EVENT_KEYDOWN
           scancode = @_event_buf.get_int32(16)
+          next if @text_input && _text_input_consume_keydown(scancode)
           button_down(scancode)
         when SDL2::EVENT_KEYUP
           scancode = @_event_buf.get_int32(16)
+          next if @text_input && _text_input_editing_key?(scancode)
           button_up(scancode)
+        when SDL2::EVENT_TEXTINPUT
+          if @text_input
+            # SDL_TextInputEvent.text is a NUL-terminated UTF-8 char[32] at offset 12.
+            s = @_event_buf.get_string(12)
+            @text_input.insert_text(s) unless s.empty?
+          end
         when SDL2::EVENT_MOUSEMOTION
           @mouse_x = @_event_buf.get_int32(20).to_f
           @mouse_y = @_event_buf.get_int32(24).to_f
@@ -652,6 +676,43 @@ module Gosu
     def _enumerate_controllers
       count = SDL2.num_joysticks
       count.times { |i| _open_controller(i) }
+    end
+
+    # --- Text input editing keys --------------------------------------
+    # When a TextInput is attached, these keys are consumed by the
+    # text input widget instead of firing button_down / button_up.
+    def _text_input_editing_key?(scancode)
+      case scancode
+      when KB_BACKSPACE, KB_DELETE, KB_LEFT, KB_RIGHT, KB_HOME, KB_END
+        true
+      else
+        false
+      end
+    end
+
+    def _text_input_consume_keydown(scancode)
+      t = @text_input
+      case scancode
+      when KB_BACKSPACE
+        t.delete_backward
+      when KB_DELETE
+        t.delete_forward
+      when KB_LEFT
+        t.caret_pos = t.caret_pos - 1 if t.caret_pos > 0
+        t.selection_start = t.caret_pos
+      when KB_RIGHT
+        t.caret_pos = t.caret_pos + 1 if t.caret_pos < t.text.length
+        t.selection_start = t.caret_pos
+      when KB_HOME
+        t.caret_pos = 0
+        t.selection_start = 0
+      when KB_END
+        t.caret_pos = t.text.length
+        t.selection_start = t.caret_pos
+      else
+        return false
+      end
+      true
     end
 
     public
@@ -1148,18 +1209,68 @@ module Gosu
   end
 
   class TextInput
-    attr_accessor :text, :caret_pos, :selection_start, :filter
+    attr_accessor :filter
+    attr_reader :text, :caret_pos, :selection_start
 
     def initialize
-      @text = ""
+      @text = String.new(encoding: Encoding::UTF_8) rescue +""
       @caret_pos = 0
       @selection_start = 0
       @filter = nil
     end
 
-    def delete_forward; end
-    def delete_backward; end
-    def insert_text(_); end
+    def text=(new_text)
+      @text = new_text.dup.to_s
+      @caret_pos = @text.length
+      @selection_start = @caret_pos
+    end
+
+    def caret_pos=(pos)
+      @caret_pos = pos.to_i.clamp(0, @text.length)
+    end
+
+    def selection_start=(pos)
+      @selection_start = pos.to_i.clamp(0, @text.length)
+    end
+
+    # Insert `new_text`, optionally running it through `@filter` first.
+    # Replaces any selection between `caret_pos` and `selection_start`.
+    def insert_text(new_text)
+      s = new_text.to_s
+      s = @filter.call(s) if @filter
+      return if s.empty?
+      _replace_selection(s)
+      nil
+    end
+
+    def delete_backward
+      if @caret_pos != @selection_start
+        _replace_selection("")
+      elsif @caret_pos > 0
+        @text = @text[0, @caret_pos - 1].to_s +
+                @text[@caret_pos, @text.length - @caret_pos].to_s
+        @caret_pos -= 1
+        @selection_start = @caret_pos
+      end
+    end
+
+    def delete_forward
+      if @caret_pos != @selection_start
+        _replace_selection("")
+      elsif @caret_pos < @text.length
+        @text = @text[0, @caret_pos].to_s +
+                @text[@caret_pos + 1, @text.length - @caret_pos - 1].to_s
+      end
+    end
+
+    private
+
+    def _replace_selection(str)
+      lo, hi = [@caret_pos, @selection_start].sort
+      @text = @text[0, lo].to_s + str + @text[hi, @text.length - hi].to_s
+      @caret_pos = lo + str.length
+      @selection_start = @caret_pos
+    end
   end
 
   class GLTexInfo
