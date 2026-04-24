@@ -85,6 +85,37 @@ module Gosu
     attach_function :render_draw_point,   :SDL_RenderDrawPoint,  [:pointer, :int, :int], :int
     attach_function :render_set_clip_rect,:SDL_RenderSetClipRect,[:pointer, :pointer], :int
 
+    # --- Surface / Texture ---------------------------------------------
+    SDL_FLIP_NONE       = 0x00000000
+    SDL_FLIP_HORIZONTAL = 0x00000001
+    SDL_FLIP_VERTICAL   = 0x00000002
+
+    attach_function :free_surface,            :SDL_FreeSurface,
+      [:pointer], :void
+    attach_function :create_texture_from_surface, :SDL_CreateTextureFromSurface,
+      [:pointer, :pointer], :pointer
+    attach_function :destroy_texture,         :SDL_DestroyTexture,
+      [:pointer], :void
+    attach_function :query_texture,           :SDL_QueryTexture,
+      [:pointer, :pointer, :pointer, :pointer, :pointer], :int
+    attach_function :set_texture_color_mod,   :SDL_SetTextureColorMod,
+      [:pointer, :uint8, :uint8, :uint8], :int
+    attach_function :set_texture_alpha_mod,   :SDL_SetTextureAlphaMod,
+      [:pointer, :uint8], :int
+    attach_function :set_texture_blend_mode,  :SDL_SetTextureBlendMode,
+      [:pointer, :int], :int
+    attach_function :render_copy,             :SDL_RenderCopy,
+      [:pointer, :pointer, :pointer, :pointer], :int
+    attach_function :render_copy_ex,          :SDL_RenderCopyEx,
+      [:pointer, :pointer, :pointer, :pointer, :double, :pointer, :int], :int
+
+    # SDL_Surface starts with `Uint32 flags; SDL_PixelFormat *format;
+    # int w; int h; int pitch;` — we only need w/h/pitch, which sit at
+    # offsets 16/20/24 on x86_64.
+    SURFACE_W_OFFSET     = 16
+    SURFACE_H_OFFSET     = 20
+    SURFACE_PITCH_OFFSET = 24
+
     # --- Event pump -----------------------------------------------------
     # SDL_Event is a 56-byte union on x86_64. We stash it in a
     # MemoryPointer and pull fields out by byte offset (see
@@ -103,6 +134,97 @@ module Gosu
              :y, :int32,
              :w, :int32,
              :h, :int32
+    end
+
+    # --- 2-int Point used by SDL_RenderCopyEx for the rotation center ---
+    class Point < FFI::Struct
+      layout :x, :int32,
+             :y, :int32
+    end
+  end
+
+  # ----------------------------------------------------------------------
+  # SDL2_image bindings -- loaded lazily on first `Gosu::Image.new(path)`
+  # so monoruby installs without libSDL2_image present can still
+  # `require "gosu"`.
+  # ----------------------------------------------------------------------
+  module SDL2_image
+    extend FFI::Library
+    ffi_lib "libSDL2_image-2.0.so.0"
+
+    INIT_JPG  = 0x01
+    INIT_PNG  = 0x02
+    INIT_TIF  = 0x04
+    INIT_WEBP = 0x08
+    INIT_DEFAULT = INIT_JPG | INIT_PNG | INIT_TIF | INIT_WEBP
+
+    attach_function :img_init,  :IMG_Init,    [:int], :int
+    attach_function :img_quit,  :IMG_Quit,    [], :void
+    attach_function :img_load,  :IMG_Load,    [:string], :pointer
+
+    # SDL2_image 2.x routes errors through SDL_GetError (it's a #define
+    # in SDL_image.h), so use the core SDL function rather than a
+    # non-existent IMG_GetError symbol.
+    def self.img_get_error
+      Gosu::SDL2.get_error
+    end
+  end
+
+  # ----------------------------------------------------------------------
+  # SDL2_mixer bindings -- loaded lazily on first
+  # `Gosu::Sample.new` / `Gosu::Song.new`. Audio init happens on demand
+  # so windowed-only programs don't open an audio device.
+  # ----------------------------------------------------------------------
+  module SDL2_mixer
+    extend FFI::Library
+    ffi_lib "libSDL2_mixer-2.0.so.0"
+
+    INIT_FLAC = 0x01
+    INIT_MOD  = 0x02
+    INIT_MP3  = 0x08
+    INIT_OGG  = 0x10
+    INIT_MID  = 0x20
+    INIT_OPUS = 0x40
+
+    DEFAULT_FREQUENCY = 44100
+    AUDIO_S16LSB      = 0x8010
+    DEFAULT_CHANNELS  = 2
+    DEFAULT_CHUNKSIZE = 1024
+
+    attach_function :mix_init,           :Mix_Init,           [:int], :int
+    attach_function :mix_quit,           :Mix_Quit,           [], :void
+    attach_function :mix_open_audio,     :Mix_OpenAudio,
+      [:int, :uint16, :int, :int], :int
+    attach_function :mix_close_audio,    :Mix_CloseAudio,     [], :void
+    attach_function :mix_allocate_channels, :Mix_AllocateChannels, [:int], :int
+
+    attach_function :mix_load_wav,       :Mix_LoadWAV,        [:string], :pointer
+    attach_function :mix_free_chunk,     :Mix_FreeChunk,      [:pointer], :void
+    attach_function :mix_play_channel,   :Mix_PlayChannel,
+      [:int, :pointer, :int], :int
+    attach_function :mix_volume,         :Mix_Volume,         [:int, :int], :int
+    attach_function :mix_volume_chunk,   :Mix_VolumeChunk,    [:pointer, :int], :int
+    attach_function :mix_halt_channel,   :Mix_HaltChannel,    [:int], :int
+    attach_function :mix_pause,          :Mix_Pause,          [:int], :void
+    attach_function :mix_resume,         :Mix_Resume,         [:int], :void
+    attach_function :mix_paused,         :Mix_Paused,         [:int], :int
+    attach_function :mix_playing,        :Mix_Playing,        [:int], :int
+    attach_function :mix_set_panning,    :Mix_SetPanning,
+      [:int, :uint8, :uint8], :int
+
+    attach_function :mix_load_mus,       :Mix_LoadMUS,        [:string], :pointer
+    attach_function :mix_free_music,     :Mix_FreeMusic,      [:pointer], :void
+    attach_function :mix_play_music,     :Mix_PlayMusic,      [:pointer, :int], :int
+    attach_function :mix_halt_music,     :Mix_HaltMusic,      [], :int
+    attach_function :mix_pause_music,    :Mix_PauseMusic,     [], :void
+    attach_function :mix_resume_music,   :Mix_ResumeMusic,    [], :void
+    attach_function :mix_paused_music,   :Mix_PausedMusic,    [], :int
+    attach_function :mix_playing_music,  :Mix_PlayingMusic,   [], :int
+    attach_function :mix_volume_music,   :Mix_VolumeMusic,    [:int], :int
+
+    # Errors flow through SDL_GetError (Mix_GetError is a #define).
+    def self.mix_get_error
+      Gosu::SDL2.get_error
     end
   end
 end

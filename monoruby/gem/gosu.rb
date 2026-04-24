@@ -587,12 +587,24 @@ module Gosu
     attr_reader :width, :height, :columns, :rows
 
     def initialize(source = nil, *_opts)
-      if source.respond_to?(:columns) && source.respond_to?(:rows)
+      @_texture = nil
+      @_renderer = nil  # the renderer the texture was created against
+      @_owns_texture = true
+
+      if source.is_a?(String)
+        _load_from_path(source)
+      elsif source.respond_to?(:columns) && source.respond_to?(:rows)
+        # `Image::BlobHelper`-shaped object from `Image.from_blob`.
+        # Texture creation is deferred until first `#draw`.
         @width  = @columns = source.columns.to_i
         @height = @rows    = source.rows.to_i
+        @_blob_rgba = source.to_blob if source.respond_to?(:to_blob)
+      elsif source.nil?
+        @width = @columns = 0
+        @height = @rows   = 0
       else
-        @width  = @columns = 0
-        @height = @rows    = 0
+        @width = @columns = 0
+        @height = @rows   = 0
       end
     end
 
@@ -601,8 +613,44 @@ module Gosu
     def self.from_markup(_text, _height, *_opts); new; end
     def self.load_tiles(_source, _tile_w, _tile_h, *_opts); []; end
 
-    def draw(*); end
-    def draw_rot(*); end
+    # Image#draw(x, y, z, scale_x = 1, scale_y = 1, color = WHITE,
+    #            mode = :default)
+    def draw(x, y, _z = 0, scale_x = 1.0, scale_y = 1.0,
+             color = nil, _mode = :default)
+      return unless _ensure_texture
+      _apply_color_mod(color)
+      dst = SDL2::Rect.new
+      dst[:x] = x.to_i
+      dst[:y] = y.to_i
+      dst[:w] = (@width * scale_x).to_i
+      dst[:h] = (@height * scale_y).to_i
+      SDL2.render_copy(@_renderer, @_texture, nil, dst.pointer)
+    end
+
+    # Image#draw_rot(x, y, z, angle, center_x = 0.5, center_y = 0.5,
+    #                scale_x = 1, scale_y = 1, color = WHITE,
+    #                mode = :default)
+    def draw_rot(x, y, _z = 0, angle = 0,
+                 center_x = 0.5, center_y = 0.5,
+                 scale_x = 1.0, scale_y = 1.0,
+                 color = nil, _mode = :default)
+      return unless _ensure_texture
+      _apply_color_mod(color)
+      w = (@width  * scale_x).to_i
+      h = (@height * scale_y).to_i
+      dst = SDL2::Rect.new
+      dst[:x] = (x - w * center_x).to_i
+      dst[:y] = (y - h * center_y).to_i
+      dst[:w] = w
+      dst[:h] = h
+      center = SDL2::Point.new
+      center[:x] = (w * center_x).to_i
+      center[:y] = (h * center_y).to_i
+      SDL2.render_copy_ex(@_renderer, @_texture, nil, dst.pointer,
+                          angle.to_f, center.pointer,
+                          SDL2::SDL_FLIP_NONE)
+    end
+
     def draw_as_quad(*); end
     def draw_mod(*); end
     def to_blob; "\0\0\0\0" * (width * height); end
@@ -610,6 +658,76 @@ module Gosu
     def insert(_img, _x, _y); self; end
     def subimage(_x, _y, _w, _h); Image.new; end
     def gl_tex_info; nil; end
+
+    private
+
+    def _load_from_path(path)
+      @_image_path = path
+      surface = SDL2_image.img_load(path)
+      if surface.null?
+        raise RuntimeError,
+              "IMG_Load(#{path.inspect}) failed: #{SDL2_image.img_get_error}"
+      end
+      begin
+        @width  = @columns = surface.get_int32(SDL2::SURFACE_W_OFFSET)
+        @height = @rows    = surface.get_int32(SDL2::SURFACE_H_OFFSET)
+      ensure
+        @_pending_surface = surface  # turned into a texture on first draw
+      end
+    end
+
+    def _ensure_texture
+      win = Gosu._current_window
+      ren = win && win._sdl_renderer
+      return false unless ren
+
+      # If we already have a texture for THIS renderer, reuse it.
+      return true if @_texture && @_renderer == ren
+
+      _destroy_texture
+      surface = @_pending_surface
+      surface = nil unless surface && !surface.null?
+
+      if surface
+        @_texture = SDL2.create_texture_from_surface(ren, surface)
+        SDL2.free_surface(surface)
+        @_pending_surface = nil
+      else
+        return false
+      end
+      if @_texture.null?
+        @_texture = nil
+        return false
+      end
+      SDL2.set_texture_blend_mode(@_texture, 1)  # SDL_BLENDMODE_BLEND
+      @_renderer = ren
+      true
+    end
+
+    def _apply_color_mod(color)
+      return unless @_texture
+      if color.is_a?(Color)
+        SDL2.set_texture_color_mod(@_texture, color.red, color.green, color.blue)
+        SDL2.set_texture_alpha_mod(@_texture, color.alpha)
+      elsif color.is_a?(Integer)
+        SDL2.set_texture_color_mod(@_texture,
+                                    (color >> 16) & 0xff,
+                                    (color >>  8) & 0xff,
+                                    color         & 0xff)
+        SDL2.set_texture_alpha_mod(@_texture, (color >> 24) & 0xff)
+      else
+        SDL2.set_texture_color_mod(@_texture, 255, 255, 255)
+        SDL2.set_texture_alpha_mod(@_texture, 255)
+      end
+    end
+
+    def _destroy_texture
+      if @_texture && !@_texture.null?
+        SDL2.destroy_texture(@_texture)
+      end
+      @_texture = nil
+      @_renderer = nil
+    end
   end
 
   class Font
@@ -630,38 +748,155 @@ module Gosu
     def []=(*); end
   end
 
+  # ---------------------------------------------------------------------
+  # Audio: lazy SDL2_mixer init shared by Sample / Song.
+  # ---------------------------------------------------------------------
+  @@_mixer_inited = false
+  def self._lazy_mixer_init
+    return if @@_mixer_inited
+    if SDL2.init_sub_system(SDL2::INIT_AUDIO) != 0
+      raise RuntimeError, "SDL_InitSubSystem(AUDIO) failed: #{SDL2.get_error}"
+    end
+    if SDL2_mixer.mix_open_audio(SDL2_mixer::DEFAULT_FREQUENCY,
+                                 SDL2_mixer::AUDIO_S16LSB,
+                                 SDL2_mixer::DEFAULT_CHANNELS,
+                                 SDL2_mixer::DEFAULT_CHUNKSIZE) != 0
+      raise RuntimeError,
+            "Mix_OpenAudio failed: #{SDL2_mixer.mix_get_error}"
+    end
+    SDL2_mixer.mix_allocate_channels(16)
+    @@_mixer_inited = true
+    at_exit do
+      SDL2_mixer.mix_close_audio
+    end
+  end
+
   class Sample
-    def initialize(_path); end
-    def play(_vol = 1.0, _speed = 1.0, _looping = false); Channel.new; end
-    def play_pan(_pan = 0.0, _vol = 1.0, _speed = 1.0, _looping = false)
-      Channel.new
+    def initialize(path)
+      Gosu._lazy_mixer_init
+      @_chunk = SDL2_mixer.mix_load_wav(path.to_s)
+      if @_chunk.null?
+        raise RuntimeError,
+              "Mix_LoadWAV(#{path.inspect}) failed: #{SDL2_mixer.mix_get_error}"
+      end
+    end
+
+    def play(volume = 1.0, _speed = 1.0, looping = false)
+      ch = SDL2_mixer.mix_play_channel(-1, @_chunk, looping ? -1 : 0)
+      if ch >= 0
+        SDL2_mixer.mix_volume(ch, (volume.to_f.clamp(0.0, 1.0) * 128).to_i)
+        Channel.new(ch)
+      else
+        Channel.new(-1)
+      end
+    end
+
+    def play_pan(pan = 0.0, volume = 1.0, speed = 1.0, looping = false)
+      ch = play(volume, speed, looping)
+      ch.pan = pan if ch && ch.respond_to?(:pan=)
+      ch
     end
   end
 
   class Song
-    def initialize(_path); end
-    def self.current_song; nil; end
+    @@_current = nil
+    def self.current_song; @@_current; end
     def self.update; end
-    def play(_looping = false); end
-    def pause; end
-    def paused?; false; end
-    def stop; end
-    def playing?; false; end
-    def volume; 1.0; end
-    def volume=(_); end
+
+    def initialize(path)
+      Gosu._lazy_mixer_init
+      @_music = SDL2_mixer.mix_load_mus(path.to_s)
+      if @_music.null?
+        raise RuntimeError,
+              "Mix_LoadMUS(#{path.inspect}) failed: #{SDL2_mixer.mix_get_error}"
+      end
+      @_volume = 1.0
+    end
+
+    def play(looping = false)
+      SDL2_mixer.mix_volume_music((@_volume.clamp(0.0, 1.0) * 128).to_i)
+      SDL2_mixer.mix_play_music(@_music, looping ? -1 : 1)
+      @@_current = self
+    end
+
+    def pause
+      SDL2_mixer.mix_pause_music
+    end
+
+    def paused?
+      SDL2_mixer.mix_paused_music != 0
+    end
+
+    def stop
+      SDL2_mixer.mix_halt_music
+      @@_current = nil if @@_current.equal?(self)
+    end
+
+    def playing?
+      @@_current.equal?(self) && SDL2_mixer.mix_playing_music != 0
+    end
+
+    def volume; @_volume; end
+    def volume=(v)
+      @_volume = v.to_f
+      SDL2_mixer.mix_volume_music((@_volume.clamp(0.0, 1.0) * 128).to_i) if playing?
+    end
   end
 
   class Channel
+    attr_reader :_channel_id
+
+    def initialize(channel_id = -1)
+      @_channel_id = channel_id
+      @_pan = 0.0
+      @_volume = 1.0
+    end
+
     def current_channel; self; end
-    def playing?; false; end
-    def paused?; false; end
-    def pause; end
-    def resume; end
-    def stop; end
-    def volume; 1.0; end
-    def volume=(_); end
-    def pan; 0.0; end
-    def pan=(_); end
+
+    def playing?
+      @_channel_id >= 0 && SDL2_mixer.mix_playing(@_channel_id) != 0
+    end
+
+    def paused?
+      @_channel_id >= 0 && SDL2_mixer.mix_paused(@_channel_id) != 0
+    end
+
+    def pause
+      SDL2_mixer.mix_pause(@_channel_id) if @_channel_id >= 0
+    end
+
+    def resume
+      SDL2_mixer.mix_resume(@_channel_id) if @_channel_id >= 0
+    end
+
+    def stop
+      SDL2_mixer.mix_halt_channel(@_channel_id) if @_channel_id >= 0
+    end
+
+    def volume; @_volume; end
+    def volume=(v)
+      @_volume = v.to_f
+      if @_channel_id >= 0
+        SDL2_mixer.mix_volume(@_channel_id, (@_volume.clamp(0.0, 1.0) * 128).to_i)
+      end
+    end
+
+    def pan; @_pan; end
+    def pan=(p)
+      @_pan = p.to_f.clamp(-1.0, 1.0)
+      if @_channel_id >= 0
+        # SDL_mixer pan: 0..255 left, 0..255 right.
+        if @_pan <= 0
+          left = 255
+          right = (255 * (1.0 + @_pan)).to_i
+        else
+          left = (255 * (1.0 - @_pan)).to_i
+          right = 255
+        end
+        SDL2_mixer.mix_set_panning(@_channel_id, left, right)
+      end
+    end
   end
 
   class TextInput
