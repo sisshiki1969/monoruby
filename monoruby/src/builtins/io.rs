@@ -1709,4 +1709,149 @@ mod tests {
     fn io_popen_empty_args() {
         run_test_error(r#"IO.popen"#);
     }
+
+    #[test]
+    fn io_wait_constants() {
+        run_test(
+            r#"
+            [IO::READABLE, IO::WRITABLE, IO::PRIORITY]
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_wait_pipe_readable() {
+        // wait(events, timeout): when readable within the timeout, returns
+        // the event mask (Integer form). When not, returns nil.
+        run_test(
+            r#"
+            r, w = IO.pipe
+            w.write("hi")
+            a = r.wait(IO::READABLE, 1)
+            b = r.wait_readable(1)
+            [a, b == r]
+            "#,
+        );
+        run_test(
+            r#"
+            r, _w = IO.pipe
+            [r.wait(IO::READABLE, 0), r.wait_readable(0)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_wait_pipe_writable() {
+        // Fresh pipe writer is writable immediately.
+        run_test(
+            r#"
+            _r, w = IO.pipe
+            [w.wait(IO::WRITABLE, 0), w.wait_writable(0) == w]
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_wait_returns_self_in_symbol_form() {
+        // Any accepted symbol combination returns `self` on ready, `nil`
+        // on timeout.
+        run_test(
+            r#"
+            r, w = IO.pipe
+            w.write("x")
+            [
+              r.wait(:r, 0) == r,
+              r.wait(:read, 0) == r,
+              r.wait(:readable, 0) == r,
+              r.wait(0, :r) == r,
+              r.wait(:r, 0, :w) == r,
+            ]
+            "#,
+        );
+        run_test(
+            r#"
+            r, _w = IO.pipe
+            r.wait(:r, 0).nil?
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_wait_writable_symbols() {
+        run_test(
+            r#"
+            _r, w = IO.pipe
+            [
+              w.wait(:w, 0) == w,
+              w.wait(:write, 0) == w,
+              w.wait(:writable, 0) == w,
+              w.wait(0, :rw) == w,
+              w.wait(:read_write, 0) == w,
+              w.wait(:readable_writable, 0) == w,
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_wait_event_mask_not_ready() {
+        // wait(events, 0) on a not-yet-readable pipe returns nil.
+        run_test(
+            r#"
+            r, _w = IO.pipe
+            r.wait(IO::READABLE, 0)
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_wait_rejects_nonpositive_events() {
+        run_test_error(r#"r, _w = IO.pipe; r.wait(0, 0)"#);
+        run_test_error(r#"r, _w = IO.pipe; r.wait(-1, 0)"#);
+    }
+
+    #[test]
+    fn io_wait_rejects_unknown_symbol_mode() {
+        run_test_error(r#"r, _w = IO.pipe; r.wait(:wrong, 0)"#);
+    }
+
+    #[test]
+    fn io_wait_rejects_multiple_timeouts() {
+        run_test_error(r#"r, _w = IO.pipe; r.wait(0, 10, :r)"#);
+    }
+
+    #[test]
+    fn io_wait_rejects_too_many_positional_args() {
+        run_test_error(r#"r, _w = IO.pipe; r.wait(IO::READABLE, 0, 1)"#);
+    }
+
+    #[test]
+    fn io_wait_on_closed_stream_raises() {
+        run_test_error(
+            r#"
+            r, _w = IO.pipe
+            r.close
+            r.wait(IO::READABLE, 0)
+            "#,
+        );
+        run_test_error(
+            r#"
+            r, _w = IO.pipe
+            r.close
+            r.wait_readable(0)
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_wait_priority() {
+        // `wait_priority` is a read-side event; call on the read end of the
+        // pipe so it doesn't raise "not opened for reading" on CRuby.
+        run_test(
+            r#"
+            r, _w = IO.pipe
+            r.wait_priority(0).nil?
+            "#,
+        );
+    }
 }
