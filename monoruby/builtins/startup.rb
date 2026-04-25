@@ -487,7 +487,9 @@ ConditionVariable = Thread::ConditionVariable
 
 class Exception
   def backtrace_locations
-    backtrace.map do |frame|
+    bt = backtrace
+    return nil if bt.nil?
+    bt.map do |frame|
       Thread::Backtrace::Location.new(frame)
     end
   end
