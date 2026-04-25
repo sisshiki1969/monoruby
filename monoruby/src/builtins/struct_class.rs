@@ -9,6 +9,14 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_rest(STRUCT_CLASS, "new", struct_new);
     globals.define_builtin_class_func_rest(STRUCT_CLASS, "initialize", struct_initialize);
 
+    // Instance-level initialize lives on Struct itself (private, matching
+    // CRuby) so that a user's `def initialize ... super(...) end` inside a
+    // `Struct.new(...) do ... end` block can reach the default member-
+    // assignment initializer via super. Mirrors CRuby's
+    // `rb_define_method(rb_cStruct, "initialize", ...)` together with the
+    // implicit private visibility of `initialize`.
+    globals.define_private_builtin_func_rest(STRUCT_CLASS, "initialize", initialize);
+
     globals.define_builtin_func(STRUCT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(STRUCT_CLASS, "to_s", inspect, 0);
     globals.define_builtin_func(STRUCT_CLASS, "members", members, 0);
@@ -80,7 +88,10 @@ fn struct_initialize(
         Box::new(super::class::gen_class_new_object()),
     );
     globals.define_builtin_class_func(class_id, "members", struct_members, 0);
-    globals.define_builtin_func_rest(class_id, "initialize", initialize);
+    // `initialize` is inherited from `Struct` (installed in `init`), so the
+    // subclass does not need its own copy. This makes `super` from a user-
+    // defined `initialize` inside the `Struct.new ... do ... end` block reach
+    // the default member-assignment initializer.
     globals.define_builtin_funcs(class_id, "==", &["eql?"], eq, 1);
     globals.define_builtin_func(class_id, "!=", ne, 1);
 
@@ -399,6 +410,45 @@ mod tests {
         S = Struct.new(:x, :y)
         $added
         "##,
+        );
+    }
+
+    #[test]
+    fn struct_custom_initialize_super() {
+        // A user-defined `initialize` inside `Struct.new(...) do ... end` must
+        // be able to reach the default member-assignment initializer via
+        // `super(...)`. Regression test for a bug where the subclass shadowed
+        // the default initialize, leaving `super` to fall through to
+        // `Object#initialize` and silently drop all positional args (so every
+        // member ended up `nil`).
+        run_test_with_prelude(
+            r##"
+            v = V.new(7)
+            [v.a, v.b, v.c]
+            "##,
+            r##"
+            V = Struct.new(:a, :b, :c) do
+              def initialize(a)
+                super(a, 99, -1)
+              end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn struct_initialize_visibility() {
+        // `initialize` on Struct must be private, matching CRuby. Calling
+        // `instance.initialize(...)` directly should raise NoMethodError.
+        run_test(
+            r##"
+            S = Struct.new(:a, :b)
+            [
+              Struct.private_method_defined?(:initialize, false),
+              Struct.public_method_defined?(:initialize, false),
+              S.instance_method(:initialize).owner == Struct,
+            ]
+            "##,
         );
     }
 
