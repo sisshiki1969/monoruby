@@ -67,6 +67,10 @@ module Gosu
     attach_function :get_ticks,        :SDL_GetTicks,         [], :uint32
     attach_function :delay,            :SDL_Delay,            [:uint32], :void
 
+    # SDL_RWops factory used to feed Mix_LoadWAV_RW (see SDL2_mixer below) —
+    # `Mix_LoadWAV` is a header-only macro and not a real exported symbol.
+    attach_function :rw_from_file,     :SDL_RWFromFile,       [:string, :string], :pointer
+
     # --- Window / Renderer ---------------------------------------------
     attach_function :create_window,       :SDL_CreateWindow,
       [:string, :int, :int, :int, :int, :uint32], :pointer
@@ -279,10 +283,26 @@ module Gosu
     attach_function :mix_close_audio,    :Mix_CloseAudio,     [], :void
     attach_function :mix_allocate_channels, :Mix_AllocateChannels, [:int], :int
 
-    attach_function :mix_load_wav,       :Mix_LoadWAV,        [:string], :pointer
+    # `Mix_LoadWAV` in SDL_mixer.h is `#define`d as
+    # `Mix_LoadWAV_RW(SDL_RWFromFile(file,"rb"),1)` — only `Mix_LoadWAV_RW`
+    # is an actual exported symbol. Bind that and wrap it in `mix_load_wav`.
+    attach_function :mix_load_wav_rw,    :Mix_LoadWAV_RW,     [:pointer, :int], :pointer
+
+    def self.mix_load_wav(path)
+      rw = Gosu::SDL2.rw_from_file(path, "rb")
+      return rw if rw.null?
+      mix_load_wav_rw(rw, 1)
+    end
     attach_function :mix_free_chunk,     :Mix_FreeChunk,      [:pointer], :void
-    attach_function :mix_play_channel,   :Mix_PlayChannel,
-      [:int, :pointer, :int], :int
+    # `Mix_PlayChannel` in SDL_mixer.h is `#define`d as
+    # `Mix_PlayChannelTimed(channel,chunk,loops,-1)` — only the *Timed*
+    # variant is actually exported. Bind that and wrap.
+    attach_function :mix_play_channel_timed, :Mix_PlayChannelTimed,
+      [:int, :pointer, :int, :int], :int
+
+    def self.mix_play_channel(channel, chunk, loops)
+      mix_play_channel_timed(channel, chunk, loops, -1)
+    end
     attach_function :mix_volume,         :Mix_Volume,         [:int, :int], :int
     attach_function :mix_volume_chunk,   :Mix_VolumeChunk,    [:pointer, :int], :int
     attach_function :mix_halt_channel,   :Mix_HaltChannel,    [:int], :int
