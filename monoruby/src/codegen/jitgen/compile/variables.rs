@@ -127,7 +127,7 @@ impl AbstractState {
         });
         ir.lit2reg(*value, GP::Rax);
         if let Some(f) = value.try_float() {
-            let fdst = self.def_Sf_float(dst);
+            let fdst = self.def_Sf_float(ir, dst);
             ir.f64_to_xmm(f, fdst);
             ir.reg2stack(GP::Rax, dst);
         } else {

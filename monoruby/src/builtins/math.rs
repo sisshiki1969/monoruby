@@ -695,7 +695,7 @@ fn math_sqrt(
     // On a negative argument we bail out to the interpreter, which will
     // re-execute the call via the regular builtin and raise DomainError.
     let deopt = ir.new_deopt(state);
-    let fret = dst.map(|dst| state.def_F(dst));
+    let fret = dst.map(|dst| state.def_F(ir, dst));
     ir.inline(move |r#gen, _, labels| {
         let deopt_label = &labels[deopt];
         let do_sqrt = r#gen.jit.label();

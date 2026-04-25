@@ -497,7 +497,7 @@ impl AbstractFrame {
                 self.def_F_with_xmm(dst, lhs);
                 lhs
             } else {
-                self.def_F(dst)
+                self.def_F(ir, dst)
             }
         });
         (lhs, rhs, dst)

@@ -101,7 +101,7 @@ impl AbstractFrame {
                 // S -> Sf
                 ir.stack2reg(slot, GP::Rdi);
                 self.guard_fixnum(ir, slot, GP::Rdi);
-                let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
+                let x = self.set_new_Sf(ir, slot, SfGuarded::Fixnum);
                 ir.fixnum2xmm(GP::Rdi, x);
                 x
             }
@@ -109,7 +109,7 @@ impl AbstractFrame {
                 // G -> Sf
                 ir.reg2stack(GP::R15, slot);
                 self.guard_fixnum(ir, slot, GP::R15);
-                let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
+                let x = self.set_new_Sf(ir, slot, SfGuarded::Fixnum);
                 ir.fixnum2xmm(GP::R15, x);
                 x
             }
@@ -134,14 +134,14 @@ impl AbstractFrame {
             LinkMode::Sf(x, _) | LinkMode::F(x) => x,
             LinkMode::S(_) => {
                 // -> Sf
-                let x = self.set_new_Sf(slot, SfGuarded::Float);
+                let x = self.set_new_Sf(ir, slot, SfGuarded::Float);
                 ir.stack2reg(slot, GP::Rdi);
                 ir.float_to_xmm(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::G(_) => {
                 // -> Sf
-                let x = self.set_new_Sf(slot, SfGuarded::Float);
+                let x = self.set_new_Sf(ir, slot, SfGuarded::Float);
                 ir.reg2stack(GP::R15, slot);
                 ir.float_to_xmm(GP::R15, x, deopt);
                 x
@@ -162,7 +162,7 @@ impl AbstractFrame {
             }
             RV::Fixnum(i) => {
                 // -> Sf
-                let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
+                let x = self.set_new_Sf(ir, slot, SfGuarded::Fixnum);
                 ir.i64_to_stack_and_xmm(i, slot, x);
                 x
             }
@@ -173,7 +173,7 @@ impl AbstractFrame {
     }
 
     fn load_xmm_from_f64(&mut self, ir: &mut AsmIr, slot: SlotId, f: f64) -> Xmm {
-        let x = self.set_new_F(slot);
+        let x = self.set_new_F(ir, slot);
         ir.f64_to_xmm(f, x);
         x
     }

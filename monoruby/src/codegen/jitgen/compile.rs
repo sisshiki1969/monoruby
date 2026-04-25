@@ -349,7 +349,7 @@ impl<'a> JitContext<'a> {
                             }
                         }
                         let fsrc = state.load_xmm(ir, src);
-                        let dst = state.def_F(dst);
+                        let dst = state.def_F(ir, dst);
                         ir.xmm_move(fsrc, dst);
                         ir.push(AsmInst::XmmUnOp { kind, dst });
                     }

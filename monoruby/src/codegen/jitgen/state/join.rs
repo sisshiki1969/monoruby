@@ -67,7 +67,9 @@ impl AbstractFrame {
                         // alias created by `copy_slot`). Rebind to a fresh
                         // xmm that no slot in the merge context uses, so
                         // each bridge can emit a single `xmm_move` instead.
-                        self.set_new_F(i);
+                        // No AsmIr here — if a Phase-2 spill would be needed,
+                        // fall back to keeping `F(l)` and let the bridge swap.
+                        let _ = self.try_set_new_F(i);
                     }
                 }
                 (LinkMode::F(_), LinkMode::C(r)) if r.is_float() => {}
@@ -90,8 +92,12 @@ impl AbstractFrame {
                         // Same reasoning as the F/F arm: register disagreement
                         // across branches would force bridge-time swaps that
                         // trample partner slots created by `copy_slot`'s
-                        // zero-cost alias. Rebind to a fresh xmm.
-                        self.set_new_Sf(i, guarded);
+                        // zero-cost alias. Rebind to a fresh xmm if possible;
+                        // otherwise keep the current Sf binding and let the
+                        // bridge handle the swap.
+                        if self.try_set_new_Sf(i, guarded).is_none() {
+                            self.set_Sf(i, x, guarded);
+                        }
                     }
                 }
                 (LinkMode::Sf(x, mut guarded), LinkMode::C(r)) if r.is_float() || r.is_fixnum() => {
@@ -99,16 +105,25 @@ impl AbstractFrame {
                     self.set_Sf(i, x, guarded)
                 }
                 (LinkMode::C(v), LinkMode::F(_)) if v.is_float() => {
-                    self.set_new_F(i);
+                    if self.try_set_new_F(i).is_none() {
+                        // Fall back to S — bridge will materialise from the
+                        // concrete literal on the C side and from xmm on the
+                        // F side.
+                        self.set_S_with_guard(i, Guarded::Float);
+                    }
                 }
                 (LinkMode::C(v), LinkMode::Sf(_, r)) if v.is_float() || v.is_fixnum() => {
                     let mut guarded = SfGuarded::from_concrete_value(v);
                     guarded.join(r);
-                    self.set_new_Sf(i, guarded);
+                    if self.try_set_new_Sf(i, guarded).is_none() {
+                        self.set_S_with_guard(i, guarded.into());
+                    }
                 }
                 (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
                 (LinkMode::C(l), LinkMode::C(r)) if l.is_float() && r.is_float() => {
-                    self.set_new_F(i);
+                    if self.try_set_new_F(i).is_none() {
+                        self.set_S_with_guard(i, Guarded::Float);
+                    }
                 }
                 _ => {
                     let guarded = self.guarded(i).join(&other.guarded(i));

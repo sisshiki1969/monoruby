@@ -124,7 +124,7 @@ impl<'a> JitContext<'a> {
                         let src = state.load_xmm(ir, args);
                         state.discard(dst);
                         let using_xmm = state.get_using_xmm();
-                        let dst = state.def_F(dst);
+                        let dst = state.def_F(ir, dst);
                         ir.push(AsmInst::CFunc_F_F {
                             f: *f,
                             src,
@@ -152,7 +152,7 @@ impl<'a> JitContext<'a> {
                         let rhs = state.load_xmm(ir, args);
                         state.discard(dst);
                         let using_xmm = state.get_using_xmm();
-                        let dst = state.def_F(dst);
+                        let dst = state.def_F(ir, dst);
                         ir.push(AsmInst::CFunc_FF_F {
                             f: *f,
                             lhs,
