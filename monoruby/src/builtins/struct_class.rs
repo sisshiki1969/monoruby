@@ -401,4 +401,25 @@ mod tests {
         "##,
         );
     }
+
+    #[test]
+    fn struct_block_constant_lexical_scope() {
+        // CRuby semantics: a constant assigned inside the `Struct.new ... do
+        // ... end` block goes to the *lexical* scope (top-level here), not to
+        // the new Struct subclass. Methods defined in the same block resolve
+        // the constant via the same lexical chain.
+        run_test_with_prelude(
+            r##"
+            [S.new(0).flag, S.constants, Object.constants.include?(:FLAGS)]
+            "##,
+            r##"
+            S = Struct.new(:x) do
+              FLAGS = { foo: 1 }
+              def flag
+                FLAGS[:foo]
+              end
+            end
+            "##,
+        );
+    }
 }

@@ -705,7 +705,15 @@ impl Executor {
         } else if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
-            self.context_class_id()
+            // CRuby semantics: an unqualified `X = …` assigns into the
+            // *lexical* class — the cref captured at parse time — not the
+            // runtime class context. The two diverge inside `class_eval` /
+            // `module_eval` / `instance_eval` blocks (and `Struct.new(...) do
+            // ... end`, which uses `module_eval` internally), where the
+            // runtime context is the receiver but the lexical scope is the
+            // block's enclosing scope. Mirror `find_constant` / `def`'s use
+            // of the iseq-recorded lexical context.
+            self.definition_func_id(globals).lexical_class(&globals.store)
         } else {
             let parent = prefix.remove(0);
             let current_func = self.method_func_id();
