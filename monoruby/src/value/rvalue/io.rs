@@ -1,5 +1,5 @@
 use std::{
-    io::{BufRead, IsTerminal, Read, Write},
+    io::{BufRead, IsTerminal, Read, Seek, SeekFrom, Write},
     os::fd::{AsRawFd, FromRawFd},
     os::unix::process::ExitStatusExt,
     rc::Rc,
@@ -309,6 +309,32 @@ impl IoInner {
                 }
             }
             Self::Closed => Err(MonorubyErr::ioerr("closed stream")),
+        }
+    }
+
+    /// Seek the underlying file. `whence` follows POSIX: 0 = SEEK_SET,
+    /// 1 = SEEK_CUR, 2 = SEEK_END. Returns the new absolute position.
+    /// Fails with `ESPIPE` for streams that do not support seeking
+    /// (stdin/stdout/stderr, pipes) and with `EINVAL` for unsupported
+    /// `whence` values or a negative `SEEK_SET` offset.
+    pub fn seek(&mut self, offset: i64, whence: i32) -> std::io::Result<u64> {
+        const EINVAL: i32 = 22;
+        const ESPIPE: i32 = 29;
+        let seek_from = match whence {
+            0 => {
+                if offset < 0 {
+                    return Err(std::io::Error::from_raw_os_error(EINVAL));
+                }
+                SeekFrom::Start(offset as u64)
+            }
+            1 => SeekFrom::Current(offset),
+            2 => SeekFrom::End(offset),
+            _ => return Err(std::io::Error::from_raw_os_error(EINVAL)),
+        };
+        match self {
+            Self::File(file) => Rc::get_mut(file).unwrap().reader.seek(seek_from),
+            Self::Closed => Err(std::io::Error::from_raw_os_error(9)), // EBADF
+            _ => Err(std::io::Error::from_raw_os_error(ESPIPE)),
         }
     }
 

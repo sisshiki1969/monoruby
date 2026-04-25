@@ -24,6 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "close_read", close_read, 0);
     globals.define_builtin_func(IO_CLASS, "closed?", closed_, 0);
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
+    globals.define_builtin_func_with(IO_CLASS, "seek", seek, 1, 2, false);
     globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 2, false);
     globals.define_builtin_func_with(IO_CLASS, "readline", readline, 0, 2, false);
     globals.define_builtin_funcs(IO_CLASS, "each", &["each_line"], each_line, 0);
@@ -346,6 +347,49 @@ fn assign_sync(
     _: BytecodePtr,
 ) -> Result<Value> {
     Ok(lfp.arg(0))
+}
+
+///
+/// ### IO#seek
+///
+/// - seek(offset, whence = IO::SEEK_SET) -> 0
+///
+/// `whence` may be an Integer (`IO::SEEK_SET` = 0, `IO::SEEK_CUR` = 1,
+/// `IO::SEEK_END` = 2) or one of the symbols `:SET`, `:CUR`, `:END`
+/// (also `:START` / `:BEGIN` for 0).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/seek.html]
+#[monoruby_builtin]
+fn seek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let offset = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let whence = match lfp.try_arg(1) {
+        None => 0i32,
+        Some(v) if v.is_nil() => 0i32,
+        Some(v) => {
+            if let Some(sym) = v.try_symbol() {
+                let name = sym.get_name();
+                match name.as_str() {
+                    "SET" | "START" | "BEGIN" => 0,
+                    "CUR" => 1,
+                    "END" => 2,
+                    _ => {
+                        return Err(MonorubyErr::argumenterr(format!(
+                            "invalid whence: :{}",
+                            name
+                        )));
+                    }
+                }
+            } else {
+                v.coerce_to_int_i64(vm, globals)? as i32
+            }
+        }
+    };
+    let mut self_ = lfp.self_val();
+    self_
+        .as_io_inner_mut()
+        .seek(offset, whence)
+        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
+    Ok(Value::integer(0))
 }
 
 ///
@@ -1720,6 +1764,20 @@ mod tests {
     }
 
     #[test]
+    fn io_wait_require() {
+        // `require "io/wait"` should succeed (the methods are built-in,
+        // but the file must exist so libraries that require it don't
+        // fail with LoadError).
+        run_test(
+            r#"
+            require "io/wait"
+            [IO.instance_method(:wait_readable).is_a?(UnboundMethod),
+             IO.instance_method(:wait_writable).is_a?(UnboundMethod)]
+            "#,
+        );
+    }
+
+    #[test]
     fn io_wait_pipe_readable() {
         // wait(events, timeout): when readable within the timeout, returns
         // the event mask (Integer form). When not, returns nil.
@@ -1853,5 +1911,53 @@ mod tests {
             r.wait_priority(0).nil?
             "#,
         );
+    }
+
+    #[test]
+    fn io_seek() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_test_seek_#{Process.pid}"
+            File.write(path, "0123456789")
+            f = File.open(path)
+            f.seek(3)
+            s = f.read
+            raise "expected '3456789' but got '#{s}'" unless s == "3456789"
+            f.seek(0, IO::SEEK_SET)
+            s = f.read(2)
+            raise "expected '01' but got '#{s}'" unless s == "01"
+            f.seek(2, IO::SEEK_CUR)
+            s = f.read(2)
+            raise "expected '45' but got '#{s}'" unless s == "45"
+            f.seek(-3, IO::SEEK_END)
+            s = f.read
+            raise "expected '789' but got '#{s}'" unless s == "789"
+            raise "seek should return 0" unless f.seek(0) == 0
+            f.seek(0, :SET)
+            raise "symbol :SET" unless f.read(1) == "0"
+            f.seek(0, :END)
+            raise "symbol :END" unless f.read == ""
+            f.close
+            File.delete(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_seek_errors() {
+        run_test_error(
+            r#"
+            path = "/tmp/monoruby_test_seek_neg_#{Process.pid}"
+            File.write(path, "abc")
+            f = File.open(path)
+            begin
+              f.seek(-1)
+            ensure
+              f.close
+              File.delete(path)
+            end
+            "#,
+        );
+        run_test_error(r#"$stdout.seek(0)"#);
     }
 }
