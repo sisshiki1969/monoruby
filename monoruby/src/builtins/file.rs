@@ -47,6 +47,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(file, "executable?", executable_, 1);
     globals.define_builtin_module_func(file_test, "executable?", executable_, 1);
 
+    globals.define_builtin_class_func(file, "readable?", readable_, 1);
+    globals.define_builtin_module_func(file_test, "readable?", readable_, 1);
+
+    globals.define_builtin_class_func(file, "writable?", writable_, 1);
+    globals.define_builtin_module_func(file_test, "writable?", writable_, 1);
+
     globals.define_builtin_func_rest(file, "write", write);
     globals.define_builtin_funcs(file, "path", &["to_path"], path, 0);
     globals.define_builtin_func(file, "size", size, 0);
@@ -486,6 +492,36 @@ fn executable_(
         Err(_) => false,
     };
     Ok(Value::bool(b))
+}
+
+fn access_path(vm: &mut Executor, globals: &mut Globals, val: Value, mode: i32) -> Result<bool> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = to_path(vm, globals, val)?;
+    let c = match std::ffi::CString::new(path.as_os_str().as_bytes()) {
+        Ok(c) => c,
+        Err(_) => return Ok(false),
+    };
+    Ok(unsafe { libc::access(c.as_ptr(), mode) } == 0)
+}
+
+///
+/// ### File.readable?
+/// - readable?(path) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/readable=3f.html]
+#[monoruby_builtin]
+fn readable_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(access_path(vm, globals, lfp.arg(0), libc::R_OK)?))
+}
+
+///
+/// ### File.writable?
+/// - writable?(path) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/writable=3f.html]
+#[monoruby_builtin]
+fn writable_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(access_path(vm, globals, lfp.arg(0), libc::W_OK)?))
 }
 
 ///
@@ -1260,6 +1296,16 @@ mod tests {
         run_test(r##"File.executable?("../LICENSE-MIT")"##);
         run_test(r##"File.executable?("nonexistent_file_xyz")"##);
         run_test(r##"FileTest.executable?("/bin/sh")"##);
+    }
+
+    #[test]
+    fn readable_writable() {
+        run_test(r##"File.readable?("/bin/sh")"##);
+        run_test(r##"File.readable?("nonexistent_file_xyz")"##);
+        run_test(r##"FileTest.readable?("/bin/sh")"##);
+        run_test(r##"File.writable?("/tmp")"##);
+        run_test(r##"File.writable?("nonexistent_file_xyz")"##);
+        run_test(r##"FileTest.writable?("/tmp")"##);
     }
 
     #[test]

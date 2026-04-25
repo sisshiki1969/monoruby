@@ -268,7 +268,9 @@ module FFI
     end
 
     def put_bytes(offset, str, start = 0, length = str.bytesize - start)
-      FFI.___write_bytes(@address + offset, str[start, length])
+      # Slice by bytes, not characters: callers (e.g. SDL_LockSurface +
+      # blob upload) pass binary data that may not be valid UTF-8.
+      FFI.___write_bytes(@address + offset, str.byteslice(start, length))
     end
 
     def put_string(offset, str)
