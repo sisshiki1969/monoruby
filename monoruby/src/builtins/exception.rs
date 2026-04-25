@@ -89,6 +89,15 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "set_backtrace", set_backtrace, 1);
     globals.define_builtin_func(EXCEPTION_CLASS, "cause", cause, 0);
+    globals.define_builtin_func(EXCEPTION_CLASS, "==", exception_eq, 1);
+    globals.define_builtin_func_with(
+        EXCEPTION_CLASS,
+        "exception",
+        exception_method,
+        0,
+        1,
+        false,
+    );
 }
 
 /// ### NoMethodError#receiver
@@ -215,38 +224,138 @@ fn message(_vm: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 ///
 /// - backtrace -> [String]
 ///
+/// Returns the backtrace explicitly set via `#set_backtrace` if any;
+/// otherwise the trace captured when the exception was raised.
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/backtrace.html]
 #[monoruby_builtin]
 fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let iter = self_
-        .is_exception()
-        .unwrap()
-        .trace_location(globals)
-        .into_iter()
-        .map(|s| Value::string(s));
-    Ok(Value::array_from_iter(iter))
+    if let Some(bt) = globals.store.get_ivar(self_, IdentId::get_id("/backtrace")) {
+        return Ok(bt);
+    }
+    let traces: Vec<String> = self_.is_exception().unwrap().trace_location(globals);
+    if traces.is_empty() {
+        // Exception was constructed (e.g. `Exception.new`) but never
+        // raised, so there is no backtrace to report.
+        return Ok(Value::nil());
+    }
+    Ok(Value::array_from_iter(
+        traces.into_iter().map(|s| Value::string(s)),
+    ))
 }
 
 /// ### Exception#set_backtrace
 /// - set_backtrace(backtrace) -> Array
 ///
+/// Stores `backtrace` so subsequent `#backtrace` calls return it. Per
+/// CRuby: a String is wrapped in a single-element array, nil clears
+/// the stored backtrace, an Array of Strings is used as-is.
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/set_backtrace.html]
 #[monoruby_builtin]
 fn set_backtrace(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let arg = lfp.arg(0);
-    if arg.is_nil() {
-        Ok(Value::nil())
+    let stored = if arg.is_nil() {
+        Value::nil()
     } else if arg.is_str().is_some() {
-        Ok(Value::array1(arg))
+        Value::array1(arg)
+    } else if let Some(ary) = arg.try_array_ty() {
+        for elem in ary.iter() {
+            if elem.is_str().is_none() {
+                return Err(MonorubyErr::typeerr(
+                    "backtrace must be an Array of String",
+                ));
+            }
+        }
+        arg
     } else {
-        Ok(arg)
+        return Err(MonorubyErr::typeerr(
+            "backtrace must be an Array of String or a String",
+        ));
+    };
+    globals
+        .store
+        .set_ivar(lfp.self_val(), IdentId::get_id("/backtrace"), stored)?;
+    Ok(stored)
+}
+
+/// ### Exception#exception
+///
+/// - exception -> self
+/// - exception(message) -> Exception
+///
+/// With no arguments (or with `self` as the argument), returns `self`.
+/// Otherwise returns a copy of `self` with `message` as the new
+/// `#message`. The copy is created via `#dup` so that subclass-defined
+/// instance variables are preserved (e.g. `CustomArgumentError#val`).
+#[monoruby_builtin]
+fn exception_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_v = lfp.self_val();
+    let Some(arg) = lfp.try_arg(0) else {
+        return Ok(self_v);
+    };
+    if arg.id() == self_v.id() {
+        return Ok(self_v);
     }
+    let mut new_exc = self_v.dup();
+    let msg = arg.coerce_to_string(vm, globals)?;
+    new_exc.is_exception_mut().unwrap().set_message(msg);
+    Ok(new_exc)
+}
+
+/// ### Exception#==
+///
+/// - self == other -> bool
+///
+/// Returns true when `other` is an Exception with the same class,
+/// the same `#message`, and an equal `#backtrace` (per CRuby).
+#[monoruby_builtin]
+fn exception_eq(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_v = lfp.self_val();
+    let other = lfp.arg(0);
+    if self_v.id() == other.id() {
+        return Ok(Value::bool(true));
+    }
+    let self_ex = match self_v.is_exception() {
+        Some(e) => e,
+        None => return Ok(Value::bool(false)),
+    };
+    let other_ex = match other.is_exception() {
+        Some(e) => e,
+        None => return Ok(Value::bool(false)),
+    };
+    if self_v.class() != other.class() {
+        return Ok(Value::bool(false));
+    }
+    if self_ex.message() != other_ex.message() {
+        return Ok(Value::bool(false));
+    }
+    // Compare backtraces using #backtrace (so we go through the same
+    // path users see). Both nil or both equal arrays count as equal.
+    let bt_id = IdentId::get_id("backtrace");
+    let self_bt = vm
+        .invoke_method_if_exists(globals, bt_id, self_v, &[], None, None)?
+        .unwrap_or_default();
+    let other_bt = vm
+        .invoke_method_if_exists(globals, bt_id, other, &[], None, None)?
+        .unwrap_or_default();
+    Ok(Value::bool(vm.eq_values_bool(globals, self_bt, other_bt)?))
 }
 
 /// ### KeyError#receiver
