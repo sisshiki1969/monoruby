@@ -1982,6 +1982,23 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 mod tests {
     use crate::tests::*;
 
+    /// Serializes ENV-mutating tests in this module. `setenv(3)` and
+    /// `unsetenv(3)` are not thread-safe (they manipulate the process-
+    /// wide `environ` array), so running ENV tests in parallel can race
+    /// and SIGSEGV. Tests that touch ENV take this lock for their full
+    /// body — including the `run_test_once` invocation, since CRuby
+    /// reads `environ` from the same process via `run_ruby` -> exec
+    /// before we mutate it back.
+    static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Acquire the ENV test lock, recovering through poisoning so a
+    /// failing test never wedges every other ENV test that follows it.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
     #[test]
     fn test_hash() {
         run_test(
@@ -2294,6 +2311,7 @@ mod tests {
 
     #[test]
     fn env_fetch() {
+        let _g = env_lock();
         //run_test(r##"ENV["PWD"]"##);
         //run_test(r##"ENV.fetch("PWD")"##);
         run_test(r##"ENV.fetch("XZCDEWS", "ABC")"##);
@@ -2303,6 +2321,7 @@ mod tests {
 
     #[test]
     fn env_index_assign_updates_hash() {
+        let _g = env_lock();
         // Assignment is visible via ENV[]
         run_test_once(
             r##"
@@ -2316,6 +2335,7 @@ mod tests {
 
     #[test]
     fn env_index_assign_delete_via_nil() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV["MONORUBY_ENV_TEST_DEL"] = "x"
@@ -2328,6 +2348,7 @@ mod tests {
 
     #[test]
     fn env_delete_method() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV["MONORUBY_ENV_TEST_DEL2"] = "y"
@@ -2341,12 +2362,14 @@ mod tests {
 
     #[test]
     fn env_index_assign_type_errors() {
+        let _g = env_lock();
         run_test_error(r##"ENV[100] = "x""##);
         run_test_error(r##"ENV["MONORUBY_ENV_TEST_BAD"] = 100"##);
     }
 
     #[test]
     fn env_index_assign_embedded_nul() {
+        let _g = env_lock();
         run_test_error(r##"ENV["A\0B"] = "x""##);
         run_test_error(r##"ENV["MONORUBY_ENV_TEST_NUL"] = "a\0b""##);
     }
@@ -2356,6 +2379,7 @@ mod tests {
     /// previously broken.
     #[test]
     fn env_assign_propagates_to_libc_setenv() {
+        let _g = env_lock();
         use std::ffi::{CStr, CString};
         let key = "MONORUBY_ENV_TEST_LIBC_PROP";
         let c_key = CString::new(key).unwrap();
@@ -2382,6 +2406,7 @@ mod tests {
 
     #[test]
     fn env_delete_propagates_to_libc_unsetenv() {
+        let _g = env_lock();
         use std::ffi::CString;
         let key = "MONORUBY_ENV_TEST_LIBC_DEL";
         let c_key = CString::new(key).unwrap();
@@ -2402,6 +2427,7 @@ mod tests {
     /// `ENV.send(:[]=, key, value).should equal(value)` ruby/spec.
     #[test]
     fn env_index_assign_returns_value_identity() {
+        let _g = env_lock();
         run_test_once(
             r##"
             v = "MONORUBY_TEST_VAL"
@@ -2416,6 +2442,7 @@ mod tests {
     /// the value is non-nil.
     #[test]
     fn env_index_assign_einval_for_invalid_keys() {
+        let _g = env_lock();
         run_test_error(r##"ENV[""] = "x""##);
         run_test_error(r##"ENV["foo=bar"] = "x""##);
     }
@@ -2424,6 +2451,7 @@ mod tests {
     /// raise EINVAL) so library code can clear keys defensively.
     #[test]
     fn env_index_assign_invalid_key_with_nil_is_noop() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV[""]      = nil
@@ -2437,11 +2465,13 @@ mod tests {
 
     #[test]
     fn env_to_s_returns_literal_env() {
+        let _g = env_lock();
         run_test(r##"ENV.to_s"##);
     }
 
     #[test]
     fn env_rehash_returns_nil() {
+        let _g = env_lock();
         run_test(r##"ENV.rehash"##);
     }
 
@@ -2450,6 +2480,7 @@ mod tests {
     /// `ENV.to_h` and `ENV.to_hash` return a dup'd Hash, not ENV itself.
     #[test]
     fn env_to_h_returns_fresh_hash() {
+        let _g = env_lock();
         run_test(r##"ENV.to_h.equal?(ENV)"##);
         run_test(r##"ENV.to_hash.equal?(ENV)"##);
         run_test(r##"ENV.to_h.is_a?(Hash) && !ENV.to_h.equal?(ENV)"##);
@@ -2458,6 +2489,7 @@ mod tests {
     /// Block form transforms each pair into [k', v'].
     #[test]
     fn env_to_h_with_block() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV["MONORUBY_ENV_TEST_TOH"] = "1"
@@ -2472,6 +2504,7 @@ mod tests {
     /// Block must return a 2-element Array.
     #[test]
     fn env_to_h_block_size_error() {
+        let _g = env_lock();
         run_test_error(r##"ENV.to_h { |k, v| [k] }"##);
     }
 
@@ -2479,6 +2512,7 @@ mod tests {
 
     #[test]
     fn env_assoc_basic() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV["MONORUBY_ENV_TEST_ASSOC"] = "yes"
@@ -2492,12 +2526,14 @@ mod tests {
     /// `ENV.assoc` raises TypeError for a non-coercible argument.
     #[test]
     fn env_assoc_typeerror() {
+        let _g = env_lock();
         run_test_error(r##"ENV.assoc(Object.new)"##);
     }
 
     /// `ENV.rassoc` returns nil (no TypeError) for a non-coercible value.
     #[test]
     fn env_rassoc_basic() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV["MONORUBY_ENV_TEST_RASSOC"] = "uniq_value_1234"
@@ -2512,6 +2548,7 @@ mod tests {
 
     #[test]
     fn env_key_basic() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV["MONORUBY_ENV_TEST_KEY"] = "uniq_value_5678"
@@ -2525,6 +2562,7 @@ mod tests {
 
     #[test]
     fn env_key_typeerror() {
+        let _g = env_lock();
         run_test_error(r##"ENV.key(Object.new)"##);
     }
 
@@ -2532,6 +2570,7 @@ mod tests {
 
     #[test]
     fn env_has_key_aliases() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV["MONORUBY_ENV_TEST_HK"] = "1"
@@ -2550,6 +2589,7 @@ mod tests {
 
     #[test]
     fn env_has_key_typeerror() {
+        let _g = env_lock();
         run_test_error(r##"ENV.has_key?(Object.new)"##);
         run_test_error(r##"ENV.include?(Object.new)"##);
     }
@@ -2560,6 +2600,7 @@ mod tests {
     /// returns nil (not TypeError) for a non-coercible argument.
     #[test]
     fn env_has_value_basic() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV["MONORUBY_ENV_TEST_HV"] = "uniq_v_9999"
@@ -2579,6 +2620,7 @@ mod tests {
 
     #[test]
     fn env_merge_bang_basic() {
+        let _g = env_lock();
         run_test_once(
             r##"
             r = ENV.merge!("MONORUBY_ENV_TEST_M1" => "1",
@@ -2595,6 +2637,7 @@ mod tests {
     /// Block-form `merge!` is invoked only on collisions.
     #[test]
     fn env_merge_bang_block() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV["MONORUBY_ENV_TEST_BLK"] = "old"
@@ -2613,6 +2656,7 @@ mod tests {
     /// `update` is an alias for `merge!`.
     #[test]
     fn env_update_alias() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV.update("MONORUBY_ENV_TEST_UP" => "u")
@@ -2626,6 +2670,7 @@ mod tests {
     /// A bad pair makes `merge!` raise without applying later good pairs.
     #[test]
     fn env_merge_bang_fails_fast() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV["MONORUBY_ENV_TEST_FF"] = "0"
@@ -2642,6 +2687,7 @@ mod tests {
 
     #[test]
     fn env_merge_bang_einval() {
+        let _g = env_lock();
         run_test_error(r##"ENV.merge!("foo=" => "bar")"##);
         run_test_error(r##"ENV.merge!("" => "bar")"##);
     }
@@ -2652,6 +2698,7 @@ mod tests {
     /// the input pairs (the "replaces ENV with a Hash" spec).
     #[test]
     fn env_replace_clears_originals() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV["MONORUBY_ENV_TEST_REPL_OLD"] = "old"
@@ -2672,21 +2719,25 @@ mod tests {
 
     /// When the bad pair comes first, `replace` raises before applying
     /// any pair — covering the "does not accept good data following an
-    /// error" spec (`ENV.to_hash` should equal the saved original).
+    /// error" spec. We assert per-key (not whole-hash equality) because
+    /// other parallel tests may legitimately mutate sibling ENV keys.
     #[test]
     fn env_replace_aborts_when_bad_pair_first() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV["MONORUBY_ENV_TEST_REPL2"] = "before"
-            saved = ENV.to_hash
+            ENV.delete("MONORUBY_ENV_TEST_REPL2_NEW")
             begin
               ENV.replace({Object.new => Object.new,
-                           "MONORUBY_ENV_TEST_REPL2" => "after"})
+                           "MONORUBY_ENV_TEST_REPL2_NEW" => "x",
+                           "MONORUBY_ENV_TEST_REPL2"     => "after"})
             rescue TypeError
             end
             v = [ENV["MONORUBY_ENV_TEST_REPL2"],
-                 ENV.to_hash == saved]
+                 ENV.key?("MONORUBY_ENV_TEST_REPL2_NEW")]
             ENV.delete("MONORUBY_ENV_TEST_REPL2")
+            ENV.delete("MONORUBY_ENV_TEST_REPL2_NEW")
             v
             "##,
         );
@@ -2694,12 +2745,14 @@ mod tests {
 
     #[test]
     fn env_replace_einval() {
+        let _g = env_lock();
         run_test_error(r##"ENV.replace("=" => "bar")"##);
         run_test_error(r##"ENV.replace("" => "bar")"##);
     }
 
     #[test]
     fn env_replace_typeerror_argument() {
+        let _g = env_lock();
         run_test_error(r##"ENV.replace(Object.new)"##);
     }
 
@@ -2707,6 +2760,7 @@ mod tests {
 
     #[test]
     fn env_values_at_basic() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV["MONORUBY_ENV_TEST_VA1"] = "a"
@@ -2723,11 +2777,13 @@ mod tests {
 
     #[test]
     fn env_values_at_typeerror() {
+        let _g = env_lock();
         run_test_error(r##"ENV.values_at("PWD", Object.new)"##);
     }
 
     #[test]
     fn env_slice_basic() {
+        let _g = env_lock();
         run_test_once(
             r##"
             ENV["MONORUBY_ENV_TEST_SL1"] = "x"
@@ -2744,6 +2800,7 @@ mod tests {
 
     #[test]
     fn env_slice_typeerror() {
+        let _g = env_lock();
         run_test_error(r##"ENV.slice(Object.new)"##);
     }
 
