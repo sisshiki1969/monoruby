@@ -111,6 +111,20 @@ module Enumerable
     res
   end
 
+  def drop_while
+    return self.to_enum(:drop_while) unless block_given?
+    res = []
+    dropping = true
+    self.each do |x|
+      if dropping
+        next if yield(x)
+        dropping = false
+      end
+      res << x
+    end
+    res
+  end
+
   def take(n)
     n = n.to_int if !n.is_a?(Integer) && n.respond_to?(:to_int)
     unless n.is_a?(Integer)

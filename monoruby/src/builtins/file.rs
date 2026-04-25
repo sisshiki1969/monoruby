@@ -56,6 +56,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(file, "write", write);
     globals.define_builtin_funcs(file, "path", &["to_path"], path, 0);
     globals.define_builtin_func(file, "size", size, 0);
+    globals.define_builtin_func(file, "flock", flock_, 1);
 
     globals.define_builtin_class_func_with(file, "umask", umask, 0, 1, false);
     globals.define_builtin_class_funcs_with(file, "fnmatch", &["fnmatch?"], fnmatch, 2, 3, false);
@@ -525,6 +526,34 @@ fn writable_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 }
 
 ///
+/// ### File#flock
+/// - flock(operation) -> 0 | false
+///
+/// Wraps `flock(2)`. Returns `0` on success. With `LOCK_NB` set, returns
+/// `false` instead of blocking when the lock would not be granted.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/i/flock.html]
+#[monoruby_builtin]
+fn flock_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let op = lfp.arg(0).coerce_to_i64(&_globals.store)? as i32;
+    let self_ = lfp.self_val();
+    let fd = self_.as_io_inner().fileno()?;
+    let r = unsafe { libc::flock(fd, op) };
+    if r == 0 {
+        return Ok(Value::integer(0));
+    }
+    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+    // Non-blocking lock that would have blocked: return false (Ruby spec).
+    if (op & libc::LOCK_NB) != 0 && (errno == libc::EWOULDBLOCK || errno == libc::EAGAIN) {
+        return Ok(Value::bool(false));
+    }
+    Err(MonorubyErr::ioerr(format!(
+        "flock failed: {}",
+        std::io::Error::from_raw_os_error(errno)
+    )))
+}
+
+///
 /// ### File.path
 /// - path(filename) -> String
 ///
@@ -604,9 +633,14 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         let name = format!("fd {}", fd);
         // SAFETY: fd has been validated as a valid file descriptor above.
         let io_inner = IoInner::from_raw_fd(fd_i32, name);
-        let res = Value::new_io_with_class(io_inner, FILE_CLASS);
+        let mut res = Value::new_io_with_class(io_inner, FILE_CLASS);
         if let Some(bh) = lfp.block() {
-            return vm.invoke_block_once(globals, bh, &[res]);
+            let r = vm.invoke_block_once(globals, bh, &[res]);
+            // Match CRuby File.open(...) {|io| ... }: close at block exit.
+            // Holding the underlying fd open across blocks defeats `flock`
+            // (rubygems' open_with_flock relies on this) and leaks fds.
+            let _ = res.as_io_inner_mut().close();
+            return r;
         }
         return Ok(res);
     }
@@ -646,9 +680,12 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             ));
         }
     };
-    let res = Value::new_file(file, path);
+    let mut res = Value::new_file(file, path);
     if let Some(bh) = lfp.block() {
-        return vm.invoke_block_once(globals, bh, &[res]);
+        let r = vm.invoke_block_once(globals, bh, &[res]);
+        // CRuby File.open(...) {|io| ... } closes the file at block exit.
+        let _ = res.as_io_inner_mut().close();
+        return r;
     }
     Ok(res)
 }
