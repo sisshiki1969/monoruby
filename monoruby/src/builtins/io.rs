@@ -1764,6 +1764,20 @@ mod tests {
     }
 
     #[test]
+    fn io_wait_require() {
+        // `require "io/wait"` should succeed (the methods are built-in,
+        // but the file must exist so libraries that require it don't
+        // fail with LoadError).
+        run_test(
+            r#"
+            require "io/wait"
+            [IO.instance_method(:wait_readable).is_a?(UnboundMethod),
+             IO.instance_method(:wait_writable).is_a?(UnboundMethod)]
+            "#,
+        );
+    }
+
+    #[test]
     fn io_wait_pipe_readable() {
         // wait(events, timeout): when readable within the timeout, returns
         // the event mask (Integer form). When not, returns nil.
