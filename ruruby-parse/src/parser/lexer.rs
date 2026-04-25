@@ -1174,6 +1174,10 @@ impl<'a> Lexer<'a> {
             } else if self.consume('n') {
                 // Encoding+ ASCII-8bit
                 s.push('n');
+            } else if self.consume('s') {
+                // Encoding+ Windows-31J / Shift_JIS (legacy; treated as no-op).
+            } else if self.consume('e') {
+                // Encoding+ EUC-JP (legacy; treated as no-op).
             } else {
                 break;
             };

@@ -102,6 +102,11 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         // | UNPARENTHESIZED-METHOD
         // | ! UNPARENTHESIZED-METHOD
         // | not NOT
+        if self.consume_reserved(Reserved::Not)? {
+            let loc = self.prev_loc();
+            let rhs = self.parse_not()?;
+            return Ok(Node::new_unop(UnOp::Not, rhs, loc));
+        }
         let node = self.parse_arg(false)?;
         if self.consume_punct_no_term(Punct::Comma)? {
             // EXPR : MLHS `=' MRHS
