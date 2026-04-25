@@ -578,7 +578,7 @@ fn integer_tof(
     }
     let CallSiteInfo { dst, recv, .. } = *callsite;
     if let Some(ret) = dst {
-        let fret = state.def_F(ret).enc();
+        let fret = state.def_F(ir, ret).enc();
         state.load(ir, recv, GP::Rdi);
         ir.inline(move |r#gen, _, _| {
             monoasm! { &mut r#gen.jit,
@@ -1098,7 +1098,7 @@ fn integer_rem_float_rhs(
         // Result discarded; no work needed (rem_ff is pure).
         return true;
     };
-    let dst_xmm = state.def_F(dst);
+    let dst_xmm = state.def_F(ir, dst);
     let using_xmm = state.get_using_xmm();
     ir.inline(move |r#gen, _, _| r#gen.gen_int_rem_if(lhs_xmm, rhs_xmm, dst_xmm, using_xmm));
     true

@@ -112,7 +112,11 @@ impl SlotState {
             match self.mode(slot) {
                 LinkMode::S(_) => {
                     if as_f64 {
-                        self.set_new_Sf(slot, SfGuarded::Float);
+                        // Liveness-driven hint only — if no xmm is free without
+                        // a real spill, leave the slot on the stack and rely on
+                        // a lazy `load_xmm` later (which has access to AsmIr
+                        // and can spill if needed).
+                        let _ = self.try_set_new_Sf(slot, SfGuarded::Float);
                     }
                 }
                 LinkMode::C(_) => {}
@@ -195,18 +199,102 @@ impl SlotState {
     }
 
     ///
-    /// Allocate a new xmm register.
+    /// Try to allocate a new xmm register without emitting any asm.
     ///
-    /// ### Panics
-    /// If there is no vacant xmm register.
+    /// Phase 0: returns the first vacant xmm.
+    /// Phase 1: if no vacant xmm, finds an xmm whose linked slots are all `Sf`
+    ///          (stack already holds the value, xmm is just a read-only cache);
+    ///          demotes them all to `S` and returns the freed xmm. No asm is
+    ///          emitted because the stack already has the canonical value.
     ///
-    fn alloc_xmm(&mut self) -> Xmm {
-        for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
+    /// Returns `None` if every xmm holds at least one `F` slot (would require
+    /// a real spill; use [`Self::alloc_xmm`] from a context that has access to
+    /// `AsmIr`).
+    ///
+    fn try_alloc_xmm_demote(&mut self) -> Option<Xmm> {
+        // Phase 0: a vacant xmm.
+        for (i, xmm) in self.xmm.iter().enumerate() {
             if xmm.is_empty() {
-                return Xmm(flhs as u16);
+                return Some(Xmm(i as u16));
             }
         }
-        panic!("no xmm reg is vacant.")
+        // Phase 1: an xmm whose linked slots are all `Sf` — demote them.
+        for i in 0..self.xmm.len() {
+            if self.xmm[i].is_empty() {
+                continue;
+            }
+            let all_sf = self.xmm[i]
+                .iter()
+                .all(|&s| matches!(self.mode(s), LinkMode::Sf(_, _)));
+            if !all_sf {
+                continue;
+            }
+            let to_demote: Vec<(SlotId, SfGuarded)> = self.xmm[i]
+                .iter()
+                .map(|&s| match self.mode(s) {
+                    LinkMode::Sf(_, g) => (s, g),
+                    _ => unreachable!(),
+                })
+                .collect();
+            self.xmm[i].clear();
+            for (s, g) in to_demote {
+                self.set_mode(s, LinkMode::S(g.into()));
+            }
+            return Some(Xmm(i as u16));
+        }
+        None
+    }
+
+    ///
+    /// Allocate a new xmm register, spilling a victim if necessary.
+    ///
+    /// Tries Phase 0 (vacant) and Phase 1 (Sf-only demote) first. If both fail,
+    /// picks a victim xmm with the fewest `F` slots (cheapest to spill), emits
+    /// `xmm2stack` for each `F` slot, demotes every linked slot to `S`, and
+    /// returns the freed xmm. Always succeeds.
+    ///
+    fn alloc_xmm(&mut self, ir: &mut AsmIr) -> Xmm {
+        if let Some(x) = self.try_alloc_xmm_demote() {
+            return x;
+        }
+        // Phase 2: pick the xmm with the fewest F slots to minimise emit cost.
+        let victim_idx = (0..self.xmm.len())
+            .min_by_key(|&i| {
+                self.xmm[i]
+                    .iter()
+                    .filter(|&&s| matches!(self.mode(s), LinkMode::F(_)))
+                    .count()
+            })
+            .expect("xmm vec is empty");
+        let xmm_v = Xmm(victim_idx as u16);
+        let slots: Vec<SlotId> = self.xmm[victim_idx].iter().copied().collect();
+        debug_assert!(!slots.is_empty());
+
+        // Emit xmm2stack for each F slot. Multiple F slots aliased to the
+        // same xmm hold the same f64 value; each still needs its own stack
+        // location populated (an asmir-side optimisation could batch these).
+        for &s in &slots {
+            if matches!(self.mode(s), LinkMode::F(_)) {
+                ir.xmm2stack(xmm_v, s);
+            }
+        }
+
+        let to_demote: Vec<(SlotId, Guarded)> = slots
+            .iter()
+            .map(|&s| {
+                let g = match self.mode(s) {
+                    LinkMode::F(_) => Guarded::Float,
+                    LinkMode::Sf(_, sg) => sg.into(),
+                    _ => unreachable!(),
+                };
+                (s, g)
+            })
+            .collect();
+        self.xmm[victim_idx].clear();
+        for (s, g) in to_demote {
+            self.set_mode(s, LinkMode::S(g));
+        }
+        xmm_v
     }
 
     ///
@@ -307,23 +395,45 @@ impl SlotState {
     }
 
     ///
-    /// C -> F
+    /// C -> F (may emit a victim spill if no xmm is free).
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_new_F(&mut self, slot: SlotId) -> Xmm {
-        let x = self.alloc_xmm();
+    pub(super) fn set_new_F(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
+        let x = self.alloc_xmm(ir);
         self.set_F(slot, x);
         x
     }
 
     ///
-    /// C -> Sf
+    /// C -> F (no asm emit). Returns `None` when only Phase-2 spill could free
+    /// an xmm — caller should fall back (e.g. leave the slot as `S`).
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_new_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> Xmm {
-        let x = self.alloc_xmm();
+    pub(super) fn try_set_new_F(&mut self, slot: SlotId) -> Option<Xmm> {
+        let x = self.try_alloc_xmm_demote()?;
+        self.set_F(slot, x);
+        Some(x)
+    }
+
+    ///
+    /// C -> Sf (may emit a victim spill if no xmm is free).
+    ///
+    #[allow(non_snake_case)]
+    pub(super) fn set_new_Sf(&mut self, ir: &mut AsmIr, slot: SlotId, guarded: SfGuarded) -> Xmm {
+        let x = self.alloc_xmm(ir);
         self.set_Sf(slot, x, guarded);
         x
+    }
+
+    ///
+    /// C -> Sf (no asm emit). Returns `None` when only Phase-2 spill could free
+    /// an xmm.
+    ///
+    #[allow(non_snake_case)]
+    pub(super) fn try_set_new_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> Option<Xmm> {
+        let x = self.try_alloc_xmm_demote()?;
+        self.set_Sf(slot, x, guarded);
+        Some(x)
     }
 
     ///
@@ -356,11 +466,11 @@ impl SlotState {
     }
 
     ///
-    /// Link *slot* to a new xmm register.
+    /// Link *slot* to a new xmm register (may emit a victim spill).
     ///
     #[allow(non_snake_case)]
-    pub(crate) fn def_F(&mut self, slot: SlotId) -> Xmm {
-        let xmm = self.alloc_xmm();
+    pub(crate) fn def_F(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
+        let xmm = self.alloc_xmm(ir);
         self.discard(slot);
         self.set_F(slot, xmm);
         xmm
@@ -374,19 +484,20 @@ impl SlotState {
     }
 
     ///
-    /// Link *slot* to both of the stack and a new xmm register.
+    /// Link *slot* to both of the stack and a new xmm register (may emit a
+    /// victim spill).
     ///
     #[allow(non_snake_case)]
-    fn def_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> Xmm {
-        let xmm = self.alloc_xmm();
+    fn def_Sf(&mut self, ir: &mut AsmIr, slot: SlotId, guarded: SfGuarded) -> Xmm {
+        let xmm = self.alloc_xmm(ir);
         self.discard(slot);
         self.set_Sf(slot, xmm, guarded);
         xmm
     }
 
     #[allow(non_snake_case)]
-    pub(crate) fn def_Sf_float(&mut self, slot: SlotId) -> Xmm {
-        self.def_Sf(slot, SfGuarded::Float)
+    pub(crate) fn def_Sf_float(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
+        self.def_Sf(ir, slot, SfGuarded::Float)
     }
 
     ///
@@ -1273,7 +1384,7 @@ impl AbstractFrame {
                     ir.float_to_xmm(GP::Rax, x, deopt);
                     self.set_Sf_float(slot, x);
                 } else {
-                    let tmp = self.set_new_Sf(slot, SfGuarded::Float);
+                    let tmp = self.set_new_Sf(ir, slot, SfGuarded::Float);
                     ir.float_to_xmm(GP::Rax, tmp, deopt);
                     self.gen_xmm_swap(ir, x, tmp);
                 }
@@ -1285,7 +1396,7 @@ impl AbstractFrame {
                     ir.float_to_xmm(GP::R15, x, deopt);
                     self.set_Sf_float(slot, x);
                 } else {
-                    let tmp = self.set_new_Sf(slot, SfGuarded::Float);
+                    let tmp = self.set_new_Sf(ir, slot, SfGuarded::Float);
                     ir.float_to_xmm(GP::R15, tmp, deopt);
                     self.gen_xmm_swap(ir, x, tmp);
                 }
