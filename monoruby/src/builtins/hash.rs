@@ -1285,15 +1285,21 @@ fn env_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     Ok(val)
 }
 
-/// ### ENV.to_hash / ENV.to_h
+///
+/// ### ENV.to_hash
+/// ### ENV.to_h
+///
+/// - to_hash -> Hash
+/// - to_h -> Hash
+/// - to_h {|name, value| block } -> Hash
 ///
 /// Returns a fresh `Hash` snapshot of the environment so callers can
-/// mutate it without affecting the live environment, matching CRuby's
-/// behaviour (`h.should_not equal ENV` per the ruby/spec suite).
+/// mutate it without affecting the live environment. When a block is
+/// given, the block must return a 2-element Array `[new_name, new_value]`;
+/// otherwise an `ArgumentError` (wrong size) or `TypeError` is raised.
 ///
-/// When a block is given, behaves like `Hash#to_h { |k, v| [k', v'] }`:
-/// the block must return a 2-element Array; otherwise raises ArgumentError
-/// (wrong size) or TypeError.
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/to_h.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/to_hash.html]
 #[monoruby_builtin]
 fn env_to_hash(
     vm: &mut Executor,
@@ -1343,16 +1349,23 @@ fn coerce_env_string(
     Ok(s)
 }
 
-/// ### ENV.[]=
-/// - self[key] = value
-/// - store(key, value) -> value
 ///
-/// Sets an environment variable. `value = nil` deletes the variable.
-/// Updates both the Ruby-visible hash and libc's `environ` via
-/// `setenv(3)` / `unsetenv(3)` so that FFI callers (e.g. `getenv(3)`)
-/// observe the change.
+/// ### ENV.[]=
+/// ### ENV.store
+///
+/// - self[name] = value -> value
+/// - store(name, value) -> value
+///
+/// Sets the environment variable named *name* to *value*. If *value*
+/// is `nil`, the variable is deleted. Updates both the Ruby-visible
+/// hash and libc's `environ` via `setenv(3)` / `unsetenv(3)` so that
+/// FFI callers (e.g. `getenv(3)`) observe the change. Raises
+/// `Errno::EINVAL` when *name* is empty or contains `'='`, and
+/// `TypeError` when *name* or *value* is not a String and does not
+/// respond to `#to_str`.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/=5b=5d=3d.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/store.html]
 #[monoruby_builtin]
 fn env_index_assign(
     vm: &mut Executor,
@@ -1430,12 +1443,16 @@ fn check_env_key_for_set(key: &str, store: &Store) -> Result<()> {
     Ok(())
 }
 
-/// ### ENV.delete
-/// - delete(key) -> String | nil
-/// - delete(key) {|key| ... } -> object
 ///
-/// Removes an environment variable from both the Ruby-visible hash and
-/// libc's `environ` (via `unsetenv(3)`).
+/// ### ENV.delete
+///
+/// - delete(name) -> String | nil
+/// - delete(name) {|name| block } -> object
+///
+/// Removes the environment variable named *name* from both the
+/// Ruby-visible hash and libc's `environ` (via `unsetenv(3)`).
+/// Returns the previous value, or the block's return value (if a
+/// block is given and the variable was not set), or `nil`.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/delete.html]
 #[monoruby_builtin]
@@ -1467,25 +1484,43 @@ fn env_delete(
     Ok(removed.unwrap_or_default())
 }
 
-/// ### ENV.to_s -> "ENV"
+///
+/// ### ENV.to_s
+///
+/// - to_s -> "ENV"
+///
+/// Returns the literal String `"ENV"`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/to_s.html]
 #[monoruby_builtin]
 fn env_to_s(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::string("ENV".to_string()))
 }
 
-/// ### ENV.rehash -> nil
 ///
-/// CRuby keeps ENV in libc's `environ`, so there is no Ruby-side hash
-/// to rehash; the method exists for API compatibility and returns nil.
+/// ### ENV.rehash
+///
+/// - rehash -> nil
+///
+/// Provided for compatibility with `Hash#rehash`. monoruby keeps ENV
+/// in libc's `environ`, so there is no Ruby-side bucket to rebuild;
+/// always returns `nil`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/rehash.html]
 #[monoruby_builtin]
 fn env_rehash(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::nil())
 }
 
-/// ### ENV.assoc(key) -> [key, value] | nil
 ///
-/// Coerces `key` with `#to_str` (raising `TypeError` if not coercible)
-/// and returns `[key, value]` if the key is set, nil otherwise.
+/// ### ENV.assoc
+///
+/// - assoc(name) -> [name, value] | nil
+///
+/// Coerces *name* with `#to_str` (raising `TypeError` if not coercible)
+/// and returns `[name, value]` if the variable is set, otherwise `nil`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/assoc.html]
 #[monoruby_builtin]
 fn env_assoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let key = coerce_env_string(lfp.arg(0), vm, globals)?;
@@ -1498,10 +1533,17 @@ fn env_assoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     }
 }
 
-/// ### ENV.rassoc(value) -> [key, value] | nil
 ///
-/// Coerces `value` with `#to_str`. If `value` does not respond to
-/// `#to_str`, returns nil (no TypeError, per spec).
+/// ### ENV.rassoc
+///
+/// - rassoc(value) -> [name, value] | nil
+///
+/// Coerces *value* with `#to_str` and returns `[name, value]` for the
+/// first variable whose value equals it, or `nil` if none does. If
+/// *value* does not respond to `#to_str`, returns `nil` (no
+/// `TypeError` is raised, per spec).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/rassoc.html]
 #[monoruby_builtin]
 fn env_rassoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let target = match try_coerce_env_string(lfp.arg(0), vm, globals)? {
@@ -1517,10 +1559,16 @@ fn env_rassoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     Ok(Value::nil())
 }
 
-/// ### ENV.key(value) -> key | nil
 ///
-/// Coerces `value` with `#to_str` (raising `TypeError` if not coercible)
-/// and returns the first key whose value equals `value`, or nil.
+/// ### ENV.key
+///
+/// - key(value) -> String | nil
+///
+/// Coerces *value* with `#to_str` (raising `TypeError` if not
+/// coercible) and returns the name of the first variable whose value
+/// equals it, or `nil` if none does.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/key.html]
 #[monoruby_builtin]
 fn env_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let target = Value::string(coerce_env_string(lfp.arg(0), vm, globals)?);
@@ -1533,11 +1581,24 @@ fn env_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(Value::nil())
 }
 
-/// ### ENV.has_key?(key) -> bool
-/// Aliased as `include?`, `key?`, `member?`.
 ///
-/// Coerces `key` with `#to_str` (raising `TypeError` on failure) and
-/// returns whether the key is set in the environment.
+/// ### ENV.has_key?
+/// ### ENV.include?
+/// ### ENV.key?
+/// ### ENV.member?
+///
+/// - has_key?(name) -> bool
+/// - include?(name) -> bool
+/// - key?(name) -> bool
+/// - member?(name) -> bool
+///
+/// Coerces *name* with `#to_str` (raising `TypeError` if not coercible)
+/// and returns whether the named variable is set in ENV.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/has_key=3f.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/include=3f.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/key=3f.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/member=3f.html]
 #[monoruby_builtin]
 fn env_has_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let key_v = Value::string(coerce_env_string(lfp.arg(0), vm, globals)?);
@@ -1545,11 +1606,19 @@ fn env_has_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
     Ok(Value::bool(hash.get(key_v, vm, globals)?.is_some()))
 }
 
-/// ### ENV.has_value?(value) -> bool | nil
-/// Aliased as `value?`.
 ///
-/// Coerces `value` with `#to_str`. If `value` is not coercible, returns
-/// nil (per spec — does *not* raise TypeError).
+/// ### ENV.has_value?
+/// ### ENV.value?
+///
+/// - has_value?(value) -> bool | nil
+/// - value?(value) -> bool | nil
+///
+/// Coerces *value* with `#to_str` and returns whether some variable in
+/// ENV has it as its value. If *value* does not respond to `#to_str`,
+/// returns `nil` (no `TypeError` is raised, per spec).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/has_value=3f.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/value=3f.html]
 #[monoruby_builtin]
 fn env_has_value(
     vm: &mut Executor,
@@ -1614,16 +1683,24 @@ fn env_unset_one(
     Ok(())
 }
 
-/// ### ENV.merge! / ENV.update
-/// - merge!(*hashes) -> ENV
-/// - merge!(*hashes) { |key, old_value, new_value| ... } -> ENV
 ///
-/// Iterates each hash argument; for each pair it coerces key & value
-/// with `#to_str` (TypeError if not coercible), validates the key
-/// (Errno::EINVAL if empty or contains '='), then sets the variable.
-/// If a block is given and the key already exists in ENV, the block
-/// is invoked with `(key, old_value, new_value)` and its return value
-/// is used as the new value.
+/// ### ENV.merge!
+/// ### ENV.update
+///
+/// - merge!(*others) -> ENV
+/// - merge!(*others) {|name, old_value, new_value| block } -> ENV
+/// - update(*others) -> ENV
+/// - update(*others) {|name, old_value, new_value| block } -> ENV
+///
+/// Iterates each hash argument; for each pair, *name* and *value* are
+/// coerced with `#to_str` (`TypeError` if not coercible), *name* is
+/// validated (`Errno::EINVAL` if empty or contains `'='`), then the
+/// variable is set. When a block is given and the variable already
+/// exists, the block is invoked with `(name, old_value, new_value)`
+/// and its return value is used as the new value. Returns ENV.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/merge=21.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/update.html]
 #[monoruby_builtin]
 fn env_merge_bang(
     vm: &mut Executor,
@@ -1660,12 +1737,17 @@ fn env_merge_bang(
     Ok(lfp.self_val())
 }
 
-/// ### ENV.replace(other_hash) -> ENV
 ///
-/// Replaces the contents of ENV with `other_hash`. All keys / values
-/// are validated up front, so an invalid pair (TypeError or
-/// Errno::EINVAL) leaves ENV untouched — preserving the
-/// "does not accept good data preceding/following an error" semantics.
+/// ### ENV.replace
+///
+/// - replace(other_hash) -> ENV
+///
+/// Replaces the contents of ENV with *other_hash*. Every name / value
+/// pair is validated up front (`TypeError` for non-coercible objects,
+/// `Errno::EINVAL` for empty names or names containing `'='`), so an
+/// invalid pair leaves ENV untouched. Returns ENV.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/replace.html]
 #[monoruby_builtin]
 fn env_replace(
     vm: &mut Executor,
@@ -1707,10 +1789,16 @@ fn env_replace(
     Ok(lfp.self_val())
 }
 
-/// ### ENV.values_at(*keys) -> Array
 ///
-/// Returns an array of values for the given keys. Each key is coerced
-/// via `#to_str`, raising TypeError if not coercible.
+/// ### ENV.values_at
+///
+/// - values_at(*names) -> [String | nil]
+///
+/// Returns an Array of values for the given *names*. Each name is
+/// coerced via `#to_str` (`TypeError` if not coercible); a name that
+/// is not set produces `nil` in the resulting array.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/values_at.html]
 #[monoruby_builtin]
 fn env_values_at(
     vm: &mut Executor,
@@ -1729,12 +1817,18 @@ fn env_values_at(
     Ok(Value::array_from_vec(out))
 }
 
-/// ### ENV.slice(*keys) -> Hash
 ///
-/// Returns a Hash containing the values for keys that exist in ENV.
-/// Each key argument is coerced via `#to_str` exactly once (TypeError
-/// if not coercible); the resulting hash uses the *original* argument
-/// objects as keys, matching CRuby's spec behaviour.
+/// ### ENV.slice
+///
+/// - slice(*names) -> Hash
+///
+/// Returns a Hash containing the names that exist in ENV mapped to
+/// their values. Each name argument is coerced via `#to_str` exactly
+/// once (`TypeError` if not coercible); the resulting hash uses the
+/// *original* argument objects as keys (so a mock that responds to
+/// `#to_str` is preserved as a key in the result).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/slice.html]
 #[monoruby_builtin]
 fn env_slice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
@@ -2300,6 +2394,357 @@ mod tests {
         let _ = globals.run(src, std::path::Path::new("(test)"));
         let got = unsafe { libc::getenv(c_key.as_ptr()) };
         assert!(got.is_null(), "getenv should return NULL after ENV.delete");
+    }
+
+    // -- ENV.[]= validation ------------------------------------------------
+
+    /// Assigning a String value returns the *same* String object — the
+    /// `ENV.send(:[]=, key, value).should equal(value)` ruby/spec.
+    #[test]
+    fn env_index_assign_returns_value_identity() {
+        run_test_once(
+            r##"
+            v = "MONORUBY_TEST_VAL"
+            r = ENV.send(:[]=, "MONORUBY_ENV_TEST_ID", v)
+            ENV.send(:[]=, "MONORUBY_ENV_TEST_ID", nil)
+            r.equal?(v)
+            "##,
+        );
+    }
+
+    /// Empty key or a key containing '=' must raise Errno::EINVAL when
+    /// the value is non-nil.
+    #[test]
+    fn env_index_assign_einval_for_invalid_keys() {
+        run_test_error(r##"ENV[""] = "x""##);
+        run_test_error(r##"ENV["foo=bar"] = "x""##);
+    }
+
+    /// Per spec: `ENV[invalid_key] = nil` is a silent no-op (does *not*
+    /// raise EINVAL) so library code can clear keys defensively.
+    #[test]
+    fn env_index_assign_invalid_key_with_nil_is_noop() {
+        run_test_once(
+            r##"
+            ENV[""]      = nil
+            ENV["a=b"]   = nil
+            ENV.key?("") || ENV.key?("a=b")
+            "##,
+        );
+    }
+
+    // -- ENV.to_s / ENV.rehash --------------------------------------------
+
+    #[test]
+    fn env_to_s_returns_literal_env() {
+        run_test(r##"ENV.to_s"##);
+    }
+
+    #[test]
+    fn env_rehash_returns_nil() {
+        run_test(r##"ENV.rehash"##);
+    }
+
+    // -- ENV.to_hash / ENV.to_h -------------------------------------------
+
+    /// `ENV.to_h` and `ENV.to_hash` return a dup'd Hash, not ENV itself.
+    #[test]
+    fn env_to_h_returns_fresh_hash() {
+        run_test(r##"ENV.to_h.equal?(ENV)"##);
+        run_test(r##"ENV.to_hash.equal?(ENV)"##);
+        run_test(r##"ENV.to_h.is_a?(Hash) && !ENV.to_h.equal?(ENV)"##);
+    }
+
+    /// Block form transforms each pair into [k', v'].
+    #[test]
+    fn env_to_h_with_block() {
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_TOH"] = "1"
+            h = ENV.to_h { |k, v| [k.downcase, v + "!"] }
+            v = h["monoruby_env_test_toh"]
+            ENV.delete("MONORUBY_ENV_TEST_TOH")
+            v
+            "##,
+        );
+    }
+
+    /// Block must return a 2-element Array.
+    #[test]
+    fn env_to_h_block_size_error() {
+        run_test_error(r##"ENV.to_h { |k, v| [k] }"##);
+    }
+
+    // -- ENV.assoc / ENV.rassoc / ENV.key ---------------------------------
+
+    #[test]
+    fn env_assoc_basic() {
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_ASSOC"] = "yes"
+            r = ENV.assoc("MONORUBY_ENV_TEST_ASSOC")
+            ENV.delete("MONORUBY_ENV_TEST_ASSOC")
+            [r, ENV.assoc("MONORUBY_ENV_TEST_ASSOC_NONE")]
+            "##,
+        );
+    }
+
+    /// `ENV.assoc` raises TypeError for a non-coercible argument.
+    #[test]
+    fn env_assoc_typeerror() {
+        run_test_error(r##"ENV.assoc(Object.new)"##);
+    }
+
+    /// `ENV.rassoc` returns nil (no TypeError) for a non-coercible value.
+    #[test]
+    fn env_rassoc_basic() {
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_RASSOC"] = "uniq_value_1234"
+            r = ENV.rassoc("uniq_value_1234")
+            n = ENV.rassoc("__no_such_value__")
+            o = ENV.rassoc(Object.new)
+            ENV.delete("MONORUBY_ENV_TEST_RASSOC")
+            [r, n, o]
+            "##,
+        );
+    }
+
+    #[test]
+    fn env_key_basic() {
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_KEY"] = "uniq_value_5678"
+            r = ENV.key("uniq_value_5678")
+            n = ENV.key("__no_such_value__")
+            ENV.delete("MONORUBY_ENV_TEST_KEY")
+            [r, n]
+            "##,
+        );
+    }
+
+    #[test]
+    fn env_key_typeerror() {
+        run_test_error(r##"ENV.key(Object.new)"##);
+    }
+
+    // -- ENV.has_key? / include? / key? / member? -------------------------
+
+    #[test]
+    fn env_has_key_aliases() {
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_HK"] = "1"
+            r = [
+              ENV.has_key?("MONORUBY_ENV_TEST_HK"),
+              ENV.include?("MONORUBY_ENV_TEST_HK"),
+              ENV.key?("MONORUBY_ENV_TEST_HK"),
+              ENV.member?("MONORUBY_ENV_TEST_HK"),
+              ENV.has_key?("MONORUBY_ENV_TEST_HK_NONE"),
+            ]
+            ENV.delete("MONORUBY_ENV_TEST_HK")
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn env_has_key_typeerror() {
+        run_test_error(r##"ENV.has_key?(Object.new)"##);
+        run_test_error(r##"ENV.include?(Object.new)"##);
+    }
+
+    // -- ENV.has_value? / value? ------------------------------------------
+
+    /// `ENV.has_value?` returns false for a missing String value, but
+    /// returns nil (not TypeError) for a non-coercible argument.
+    #[test]
+    fn env_has_value_basic() {
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_HV"] = "uniq_v_9999"
+            r = [
+              ENV.has_value?("uniq_v_9999"),
+              ENV.value?("uniq_v_9999"),
+              ENV.has_value?("__no_such_value__"),
+              ENV.has_value?(Object.new),
+            ]
+            ENV.delete("MONORUBY_ENV_TEST_HV")
+            r
+            "##,
+        );
+    }
+
+    // -- ENV.merge! / ENV.update ------------------------------------------
+
+    #[test]
+    fn env_merge_bang_basic() {
+        run_test_once(
+            r##"
+            r = ENV.merge!("MONORUBY_ENV_TEST_M1" => "1",
+                           "MONORUBY_ENV_TEST_M2" => "2")
+            same = r.equal?(ENV)
+            v = [ENV["MONORUBY_ENV_TEST_M1"], ENV["MONORUBY_ENV_TEST_M2"]]
+            ENV.delete("MONORUBY_ENV_TEST_M1")
+            ENV.delete("MONORUBY_ENV_TEST_M2")
+            [same, v]
+            "##,
+        );
+    }
+
+    /// Block-form `merge!` is invoked only on collisions.
+    #[test]
+    fn env_merge_bang_block() {
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_BLK"] = "old"
+            ENV.merge!("MONORUBY_ENV_TEST_BLK" => "new",
+                       "MONORUBY_ENV_TEST_BLK_NEW" => "fresh") do
+              |k, old, new| "#{old}+#{new}"
+            end
+            r = [ENV["MONORUBY_ENV_TEST_BLK"], ENV["MONORUBY_ENV_TEST_BLK_NEW"]]
+            ENV.delete("MONORUBY_ENV_TEST_BLK")
+            ENV.delete("MONORUBY_ENV_TEST_BLK_NEW")
+            r
+            "##,
+        );
+    }
+
+    /// `update` is an alias for `merge!`.
+    #[test]
+    fn env_update_alias() {
+        run_test_once(
+            r##"
+            ENV.update("MONORUBY_ENV_TEST_UP" => "u")
+            v = ENV["MONORUBY_ENV_TEST_UP"]
+            ENV.delete("MONORUBY_ENV_TEST_UP")
+            v
+            "##,
+        );
+    }
+
+    /// A bad pair makes `merge!` raise without applying later good pairs.
+    #[test]
+    fn env_merge_bang_fails_fast() {
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_FF"] = "0"
+            begin
+              ENV.merge!({Object.new => "1", "MONORUBY_ENV_TEST_FF" => "2"})
+            rescue TypeError
+            end
+            v = ENV["MONORUBY_ENV_TEST_FF"]
+            ENV.delete("MONORUBY_ENV_TEST_FF")
+            v
+            "##,
+        );
+    }
+
+    #[test]
+    fn env_merge_bang_einval() {
+        run_test_error(r##"ENV.merge!("foo=" => "bar")"##);
+        run_test_error(r##"ENV.merge!("" => "bar")"##);
+    }
+
+    // -- ENV.replace ------------------------------------------------------
+
+    /// Successful `replace` removes the original-only keys and adopts
+    /// the input pairs (the "replaces ENV with a Hash" spec).
+    #[test]
+    fn env_replace_clears_originals() {
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_REPL_OLD"] = "old"
+            saved = ENV.to_hash
+            r = ENV.replace({"MONORUBY_ENV_TEST_REPL_NEW" => "fresh"})
+            same = r.equal?(ENV)
+            v = [same,
+                 ENV.key?("MONORUBY_ENV_TEST_REPL_OLD"),
+                 ENV["MONORUBY_ENV_TEST_REPL_NEW"]]
+            # Restore so the test does not pollute the harness env.
+            ENV.replace(saved)
+            ENV.delete("MONORUBY_ENV_TEST_REPL_OLD")
+            ENV.delete("MONORUBY_ENV_TEST_REPL_NEW")
+            v
+            "##,
+        );
+    }
+
+    /// When the bad pair comes first, `replace` raises before applying
+    /// any pair — covering the "does not accept good data following an
+    /// error" spec (`ENV.to_hash` should equal the saved original).
+    #[test]
+    fn env_replace_aborts_when_bad_pair_first() {
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_REPL2"] = "before"
+            saved = ENV.to_hash
+            begin
+              ENV.replace({Object.new => Object.new,
+                           "MONORUBY_ENV_TEST_REPL2" => "after"})
+            rescue TypeError
+            end
+            v = [ENV["MONORUBY_ENV_TEST_REPL2"],
+                 ENV.to_hash == saved]
+            ENV.delete("MONORUBY_ENV_TEST_REPL2")
+            v
+            "##,
+        );
+    }
+
+    #[test]
+    fn env_replace_einval() {
+        run_test_error(r##"ENV.replace("=" => "bar")"##);
+        run_test_error(r##"ENV.replace("" => "bar")"##);
+    }
+
+    #[test]
+    fn env_replace_typeerror_argument() {
+        run_test_error(r##"ENV.replace(Object.new)"##);
+    }
+
+    // -- ENV.values_at / ENV.slice ----------------------------------------
+
+    #[test]
+    fn env_values_at_basic() {
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_VA1"] = "a"
+            ENV["MONORUBY_ENV_TEST_VA2"] = "b"
+            r = ENV.values_at("MONORUBY_ENV_TEST_VA1",
+                              "MONORUBY_ENV_TEST_VA_NONE",
+                              "MONORUBY_ENV_TEST_VA2")
+            ENV.delete("MONORUBY_ENV_TEST_VA1")
+            ENV.delete("MONORUBY_ENV_TEST_VA2")
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn env_values_at_typeerror() {
+        run_test_error(r##"ENV.values_at("PWD", Object.new)"##);
+    }
+
+    #[test]
+    fn env_slice_basic() {
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_SL1"] = "x"
+            ENV["MONORUBY_ENV_TEST_SL2"] = "y"
+            r = ENV.slice("MONORUBY_ENV_TEST_SL1",
+                          "MONORUBY_ENV_TEST_SL_NONE",
+                          "MONORUBY_ENV_TEST_SL2")
+            ENV.delete("MONORUBY_ENV_TEST_SL1")
+            ENV.delete("MONORUBY_ENV_TEST_SL2")
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn env_slice_typeerror() {
+        run_test_error(r##"ENV.slice(Object.new)"##);
     }
 
     #[test]

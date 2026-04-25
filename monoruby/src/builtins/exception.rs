@@ -222,10 +222,12 @@ fn message(_vm: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 ///
 /// ### Exception#backtrace
 ///
-/// - backtrace -> [String]
+/// - backtrace -> [String] | nil
 ///
-/// Returns the backtrace explicitly set via `#set_backtrace` if any;
-/// otherwise the trace captured when the exception was raised.
+/// Returns the backtrace explicitly stored via `#set_backtrace` if
+/// any; otherwise the trace captured when the exception was raised.
+/// Returns `nil` for an exception that has neither been raised nor had
+/// a backtrace assigned.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/backtrace.html]
 #[monoruby_builtin]
@@ -245,12 +247,15 @@ fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     ))
 }
 
-/// ### Exception#set_backtrace
-/// - set_backtrace(backtrace) -> Array
 ///
-/// Stores `backtrace` so subsequent `#backtrace` calls return it. Per
-/// CRuby: a String is wrapped in a single-element array, nil clears
-/// the stored backtrace, an Array of Strings is used as-is.
+/// ### Exception#set_backtrace
+///
+/// - set_backtrace(errinfo) -> Array
+///
+/// Stores *errinfo* so subsequent `#backtrace` calls return it.
+/// A String is wrapped in a single-element Array, `nil` clears the
+/// stored backtrace, and an Array of Strings is used as-is. Anything
+/// else raises `TypeError`.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/set_backtrace.html]
 #[monoruby_builtin]
@@ -285,15 +290,18 @@ fn set_backtrace(
     Ok(stored)
 }
 
+///
 /// ### Exception#exception
 ///
 /// - exception -> self
-/// - exception(message) -> Exception
+/// - exception(error_message) -> Exception
 ///
-/// With no arguments (or with `self` as the argument), returns `self`.
-/// Otherwise returns a copy of `self` with `message` as the new
-/// `#message`. The copy is created via `#dup` so that subclass-defined
-/// instance variables are preserved (e.g. `CustomArgumentError#val`).
+/// With no arguments (or with `self` as the argument) returns `self`.
+/// Otherwise returns a copy of `self` (via `#dup`, so subclass-defined
+/// instance variables such as `CustomArgumentError#val` are preserved)
+/// with *error_message* coerced through `#to_str` as the new `#message`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/exception.html]
 #[monoruby_builtin]
 fn exception_method(
     vm: &mut Executor,
@@ -314,12 +322,15 @@ fn exception_method(
     Ok(new_exc)
 }
 
+///
 /// ### Exception#==
 ///
 /// - self == other -> bool
 ///
-/// Returns true when `other` is an Exception with the same class,
-/// the same `#message`, and an equal `#backtrace` (per CRuby).
+/// Returns `true` when *other* is an Exception of the same class with
+/// the same `#message` and an equal `#backtrace`; otherwise `false`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/=3d=3d.html]
 #[monoruby_builtin]
 fn exception_eq(
     vm: &mut Executor,
@@ -592,5 +603,194 @@ mod tests {
             end
             "#,
         );
+    }
+
+    // -- Exception#== ------------------------------------------------------
+
+    /// Identity-equal exceptions are equal.
+    #[test]
+    fn exception_eq_same_object() {
+        run_test(
+            r#"
+            e = ArgumentError.new
+            e == e
+            "#,
+        );
+    }
+
+    /// Exceptions of the same class with the same nil message and no
+    /// backtrace are equal.
+    #[test]
+    fn exception_eq_same_class_no_message() {
+        run_test(r#"RuntimeError.new == RuntimeError.new"#);
+    }
+
+    /// Exceptions of the same class with the same explicit message are
+    /// equal.
+    #[test]
+    fn exception_eq_same_class_same_message() {
+        run_test(r#"TypeError.new("message") == TypeError.new("message")"#);
+    }
+
+    /// Different classes are not equal even with the same message.
+    #[test]
+    fn exception_eq_different_class() {
+        run_test(r#"RuntimeError.new("m") == TypeError.new("m")"#);
+    }
+
+    /// Different messages, same class — not equal.
+    #[test]
+    fn exception_eq_different_message() {
+        run_test(r#"RuntimeError.new("a") == RuntimeError.new("b")"#);
+    }
+
+    /// Identical user-set backtraces produce equal exceptions.
+    #[test]
+    fn exception_eq_with_same_backtrace() {
+        run_test(
+            r#"
+            one = TypeError.new("m"); one.set_backtrace(["here.rb:1"])
+            two = TypeError.new("m"); two.set_backtrace(["here.rb:1"])
+            one == two
+            "#,
+        );
+    }
+
+    /// Differing user-set backtraces make exceptions unequal.
+    #[test]
+    fn exception_eq_with_different_backtrace() {
+        run_test(
+            r#"
+            one = RuntimeError.new("m"); one.set_backtrace(["a.rb:1"])
+            two = RuntimeError.new("m"); two.set_backtrace(["b.rb:2"])
+            one == two
+            "#,
+        );
+    }
+
+    /// Comparing an exception against a non-Exception returns false
+    /// without raising.
+    #[test]
+    fn exception_eq_against_non_exception() {
+        run_test(r#"RuntimeError.new("m") == "m""#);
+    }
+
+    // -- Exception#exception ----------------------------------------------
+
+    /// `e.exception` with no argument returns self.
+    #[test]
+    fn exception_method_no_arg_returns_self() {
+        run_test(
+            r#"
+            e = RuntimeError.new("m")
+            e.exception.equal?(e)
+            "#,
+        );
+    }
+
+    /// `e.exception(self)` returns self.
+    #[test]
+    fn exception_method_self_arg_returns_self() {
+        run_test(
+            r#"
+            e = RuntimeError.new("m")
+            e.exception(e).equal?(e)
+            "#,
+        );
+    }
+
+    /// `e.exception("new")` returns a fresh same-class exception with
+    /// the new message.
+    #[test]
+    fn exception_method_with_new_message() {
+        run_test(
+            r#"
+            e = RuntimeError.new("m")
+            e2 = e.exception("new")
+            [e2.class, e2.message, e2.equal?(e)]
+            "#,
+        );
+    }
+
+    /// `e.exception("new")` is created via #dup so subclass-defined
+    /// instance variables (here `@val`) are preserved without
+    /// re-running #initialize.
+    #[test]
+    fn exception_method_preserves_subclass_ivars() {
+        run_test(
+            r#"
+            class MonoRubyExceptionTestErr < StandardError
+              attr_reader :val
+              def initialize(val)
+                @val = val
+              end
+            end
+            e  = MonoRubyExceptionTestErr.new(:boom)
+            e2 = e.exception("new message")
+            [e2.class, e2.message, e2.val]
+            "#,
+        );
+    }
+
+    // -- Exception#backtrace / set_backtrace -------------------------------
+
+    /// A fresh, never-raised exception has nil backtrace.
+    #[test]
+    fn backtrace_nil_when_unraised_and_unset() {
+        run_test(r#"Exception.new.backtrace"#);
+    }
+
+    /// `set_backtrace(nil)` clears any stored backtrace; subsequent
+    /// `backtrace` returns nil.
+    #[test]
+    fn set_backtrace_nil_clears() {
+        run_test(
+            r#"
+            e = RuntimeError.new("m")
+            e.set_backtrace(["x.rb:1"])
+            e.set_backtrace(nil)
+            e.backtrace
+            "#,
+        );
+    }
+
+    /// `set_backtrace(String)` stores it as a single-element array.
+    #[test]
+    fn set_backtrace_string_wrapped() {
+        run_test(
+            r#"
+            e = RuntimeError.new("m")
+            e.set_backtrace("here.rb:1")
+            e.backtrace
+            "#,
+        );
+    }
+
+    /// An Array of Strings is stored as-is and reflected in #backtrace.
+    #[test]
+    fn set_backtrace_array_roundtrip() {
+        run_test(
+            r#"
+            e = RuntimeError.new("m")
+            e.set_backtrace(["a.rb:1", "b.rb:2"])
+            e.backtrace
+            "#,
+        );
+    }
+
+    /// Bad inputs to set_backtrace raise TypeError.
+    #[test]
+    fn set_backtrace_typeerror() {
+        run_test_error(r#"RuntimeError.new.set_backtrace(:not_a_string)"#);
+        run_test_error(r#"RuntimeError.new.set_backtrace([1, 2])"#);
+        run_test_error(r#"RuntimeError.new.set_backtrace(["ok", nil])"#);
+        run_test_error(r#"RuntimeError.new.set_backtrace([["nested"]])"#);
+    }
+
+    /// `Exception#backtrace_locations` returns nil when backtrace is
+    /// nil (regression: previously raised NoMethodError on nil#map).
+    #[test]
+    fn backtrace_locations_nil_when_unset() {
+        run_test(r#"Exception.new.backtrace_locations"#);
     }
 }
