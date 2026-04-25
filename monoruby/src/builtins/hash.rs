@@ -108,6 +108,23 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_singleton_func(env, "store", env_index_assign, 2);
     globals.define_builtin_singleton_func(env, "delete", env_delete, 1);
     globals.define_builtin_singleton_func(env, "to_hash", env_to_hash, 0);
+    globals.define_builtin_singleton_func(env, "to_h", env_to_hash, 0);
+    globals.define_builtin_singleton_func(env, "to_s", env_to_s, 0);
+    globals.define_builtin_singleton_func(env, "rehash", env_rehash, 0);
+    globals.define_builtin_singleton_func(env, "assoc", env_assoc, 1);
+    globals.define_builtin_singleton_func(env, "rassoc", env_rassoc, 1);
+    globals.define_builtin_singleton_func(env, "key", env_key, 1);
+    for name in ["has_key?", "include?", "key?", "member?"] {
+        globals.define_builtin_singleton_func(env, name, env_has_key, 1);
+    }
+    for name in ["has_value?", "value?"] {
+        globals.define_builtin_singleton_func(env, name, env_has_value, 1);
+    }
+    globals.define_builtin_singleton_func_with(env, "merge!", env_merge_bang, 0, 0, true);
+    globals.define_builtin_singleton_func_with(env, "update", env_merge_bang, 0, 0, true);
+    globals.define_builtin_singleton_func(env, "replace", env_replace, 1);
+    globals.define_builtin_singleton_func_with(env, "values_at", env_values_at, 0, 0, true);
+    globals.define_builtin_singleton_func_with(env, "slice", env_slice, 0, 0, true);
 }
 
 ///
@@ -913,12 +930,18 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// ### Hash#reject
 ///
 /// - reject {|key, value| ... } -> Hash
-/// - [NOT SUPPORTED] reject -> Enumerator
+/// - reject -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/reject.html]
 #[monoruby_builtin]
-fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let bh = lfp.expect_block()?;
+fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("reject");
+            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+        }
+        Some(block) => block,
+    };
     let h = lfp.self_val().dup();
     let p = vm.get_block_data(globals, bh)?;
     vm.temp_push(h);
@@ -1262,14 +1285,42 @@ fn env_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     Ok(val)
 }
 
+/// ### ENV.to_hash / ENV.to_h
+///
+/// Returns a fresh `Hash` snapshot of the environment so callers can
+/// mutate it without affecting the live environment, matching CRuby's
+/// behaviour (`h.should_not equal ENV` per the ruby/spec suite).
+///
+/// When a block is given, behaves like `Hash#to_h { |k, v| [k', v'] }`:
+/// the block must return a 2-element Array; otherwise raises ArgumentError
+/// (wrong size) or TypeError.
 #[monoruby_builtin]
 fn env_to_hash(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(lfp.self_val())
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let hash = lfp.self_val().as_hash();
+        let pairs: Vec<(Value, Value)> = hash.iter().collect();
+        let mut new_map = RubyMap::default();
+        for (k, v) in pairs {
+            let result = vm.invoke_block(globals, &data, &[k, v])?;
+            let arr = result.expect_array_ty(globals)?;
+            if arr.len() != 2 {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "element has wrong array length (expected 2, was {})",
+                    arr.len(),
+                )));
+            }
+            new_map.insert(arr[0], arr[1], vm, globals)?;
+        }
+        return Ok(Value::hash(new_map));
+    }
+    let inner = lfp.self_val().as_hashmap_inner().clone();
+    Ok(Value::hash_from_inner(inner))
 }
 
 /// Coerce a `Value` into an owned `String` for use as an environment variable
@@ -1317,6 +1368,10 @@ fn env_index_assign(
 
     if value_val.is_nil() {
         // Delete the variable from both the hash and libc's environ.
+        // Per CRuby, ENV[invalid_key] = nil is a silent no-op (it does
+        // *not* raise EINVAL), matching the spec
+        // "does nothing when the key is not a valid environment variable
+        //  key and the value is nil".
         let key_v = Value::string(key.clone());
         lfp.self_val().as_hash().remove(key_v, vm, globals)?;
         let c_key = std::ffi::CString::new(key.as_bytes())
@@ -1327,6 +1382,12 @@ fn env_index_assign(
             libc::unsetenv(c_key.as_ptr());
         }
         return Ok(Value::nil());
+    }
+
+    // Validate the key for setenv: empty string or '=' is rejected with
+    // Errno::EINVAL, matching CRuby and `setenv(3)`.
+    if let Err(e) = check_env_key_for_set(&key, &globals.store) {
+        return Err(e);
     }
 
     let value = coerce_env_string(value_val, vm, globals)?;
@@ -1346,7 +1407,27 @@ fn env_index_assign(
     lfp.self_val()
         .as_hash()
         .insert(key_v, val_v, vm, globals)?;
-    Ok(val_v)
+    // Per spec, ENV.[]= / ENV.store should return the *original* value
+    // argument (so that `equal?` on a String literal matches).
+    if value_val.is_str().is_some() {
+        Ok(value_val)
+    } else {
+        Ok(val_v)
+    }
+}
+
+/// Reject environment variable names that `setenv(3)` would refuse:
+/// empty strings, and names that contain a literal '=' character.
+fn check_env_key_for_set(key: &str, store: &Store) -> Result<()> {
+    if key.is_empty() || key.contains('=') {
+        let err = std::io::Error::from_raw_os_error(libc::EINVAL);
+        return Err(MonorubyErr::from_io_err(
+            store,
+            &err,
+            format!("Invalid argument - setenv({})", key),
+        ));
+    }
+    Ok(())
 }
 
 /// ### ENV.delete
@@ -1384,6 +1465,314 @@ fn env_delete(
         return vm.invoke_block_once(globals, bh, &[key_v]);
     }
     Ok(removed.unwrap_or_default())
+}
+
+/// ### ENV.to_s -> "ENV"
+#[monoruby_builtin]
+fn env_to_s(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::string("ENV".to_string()))
+}
+
+/// ### ENV.rehash -> nil
+///
+/// CRuby keeps ENV in libc's `environ`, so there is no Ruby-side hash
+/// to rehash; the method exists for API compatibility and returns nil.
+#[monoruby_builtin]
+fn env_rehash(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::nil())
+}
+
+/// ### ENV.assoc(key) -> [key, value] | nil
+///
+/// Coerces `key` with `#to_str` (raising `TypeError` if not coercible)
+/// and returns `[key, value]` if the key is set, nil otherwise.
+#[monoruby_builtin]
+fn env_assoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let key = coerce_env_string(lfp.arg(0), vm, globals)?;
+    let key_v = Value::string(key);
+    let hash = lfp.self_val().as_hash();
+    if let Some(v) = hash.get(key_v, vm, globals)? {
+        Ok(Value::array_from_vec(vec![key_v, v]))
+    } else {
+        Ok(Value::nil())
+    }
+}
+
+/// ### ENV.rassoc(value) -> [key, value] | nil
+///
+/// Coerces `value` with `#to_str`. If `value` does not respond to
+/// `#to_str`, returns nil (no TypeError, per spec).
+#[monoruby_builtin]
+fn env_rassoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let target = match try_coerce_env_string(lfp.arg(0), vm, globals)? {
+        Some(s) => Value::string(s),
+        None => return Ok(Value::nil()),
+    };
+    let hash = lfp.self_val().as_hash();
+    for (k, v) in hash.iter() {
+        if vm.eq_values_bool(globals, target, v)? {
+            return Ok(Value::array_from_vec(vec![k, v]));
+        }
+    }
+    Ok(Value::nil())
+}
+
+/// ### ENV.key(value) -> key | nil
+///
+/// Coerces `value` with `#to_str` (raising `TypeError` if not coercible)
+/// and returns the first key whose value equals `value`, or nil.
+#[monoruby_builtin]
+fn env_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let target = Value::string(coerce_env_string(lfp.arg(0), vm, globals)?);
+    let hash = lfp.self_val().as_hash();
+    for (k, v) in hash.iter() {
+        if vm.eq_values_bool(globals, target, v)? {
+            return Ok(k);
+        }
+    }
+    Ok(Value::nil())
+}
+
+/// ### ENV.has_key?(key) -> bool
+/// Aliased as `include?`, `key?`, `member?`.
+///
+/// Coerces `key` with `#to_str` (raising `TypeError` on failure) and
+/// returns whether the key is set in the environment.
+#[monoruby_builtin]
+fn env_has_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let key_v = Value::string(coerce_env_string(lfp.arg(0), vm, globals)?);
+    let hash = lfp.self_val().as_hash();
+    Ok(Value::bool(hash.get(key_v, vm, globals)?.is_some()))
+}
+
+/// ### ENV.has_value?(value) -> bool | nil
+/// Aliased as `value?`.
+///
+/// Coerces `value` with `#to_str`. If `value` is not coercible, returns
+/// nil (per spec — does *not* raise TypeError).
+#[monoruby_builtin]
+fn env_has_value(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let target = match try_coerce_env_string(lfp.arg(0), vm, globals)? {
+        Some(s) => Value::string(s),
+        None => return Ok(Value::nil()),
+    };
+    let hash = lfp.self_val().as_hash();
+    for (_, v) in hash.iter() {
+        if vm.eq_values_bool(globals, target, v)? {
+            return Ok(Value::bool(true));
+        }
+    }
+    Ok(Value::bool(false))
+}
+
+/// Set or unset a single environment variable, propagating to libc's
+/// `environ` and updating the Ruby-visible hash. Used as a building
+/// block for `ENV.[]=`, `ENV.merge!`, `ENV.update`, `ENV.replace`.
+/// `key` must already have passed `check_env_key_for_set`.
+fn env_set_one(
+    self_val: Value,
+    key: &str,
+    value: &str,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<Value> {
+    let c_key = std::ffi::CString::new(key.as_bytes())
+        .map_err(|_| MonorubyErr::argumenterr("bare \\0 in env"))?;
+    let c_val = std::ffi::CString::new(value.as_bytes())
+        .map_err(|_| MonorubyErr::argumenterr("bare \\0 in env"))?;
+    // SAFETY: both pointers reference NUL-terminated C strings whose
+    // storage outlives this call. `setenv` copies its arguments.
+    unsafe {
+        libc::setenv(c_key.as_ptr(), c_val.as_ptr(), 1);
+    }
+    let key_v = Value::string(key.to_string());
+    let val_v = Value::string(value.to_string());
+    self_val.as_hash().insert(key_v, val_v, vm, globals)?;
+    Ok(val_v)
+}
+
+fn env_unset_one(
+    self_val: Value,
+    key: &str,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<()> {
+    let key_v = Value::string(key.to_string());
+    self_val.as_hash().remove(key_v, vm, globals)?;
+    let c_key = std::ffi::CString::new(key.as_bytes())
+        .map_err(|_| MonorubyErr::argumenterr("bare \\0 in env"))?;
+    // SAFETY: `c_key` is a NUL-terminated C string whose storage outlives
+    // this call. `unsetenv` is a no-op if the variable is not set.
+    unsafe {
+        libc::unsetenv(c_key.as_ptr());
+    }
+    Ok(())
+}
+
+/// ### ENV.merge! / ENV.update
+/// - merge!(*hashes) -> ENV
+/// - merge!(*hashes) { |key, old_value, new_value| ... } -> ENV
+///
+/// Iterates each hash argument; for each pair it coerces key & value
+/// with `#to_str` (TypeError if not coercible), validates the key
+/// (Errno::EINVAL if empty or contains '='), then sets the variable.
+/// If a block is given and the key already exists in ENV, the block
+/// is invoked with `(key, old_value, new_value)` and its return value
+/// is used as the new value.
+#[monoruby_builtin]
+fn env_merge_bang(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    let block_data = if let Some(bh) = lfp.block() {
+        Some(vm.get_block_data(globals, bh)?)
+    } else {
+        None
+    };
+    for arg in lfp.arg(0).as_array().iter() {
+        let other = arg.coerce_to_hash(vm, globals)?;
+        let pairs: Vec<(Value, Value)> = other.iter().collect();
+        for (k, v) in pairs {
+            let key = coerce_env_string(k, vm, globals)?;
+            check_env_key_for_set(&key, &globals.store)?;
+            let mut value = coerce_env_string(v, vm, globals)?;
+
+            if let Some(ref data) = block_data {
+                let key_v = Value::string(key.clone());
+                if let Some(old_v) = lfp.self_val().as_hash().get(key_v, vm, globals)? {
+                    let new_v = Value::string(value.clone());
+                    let result = vm.invoke_block(globals, data, &[key_v, old_v, new_v])?;
+                    value = coerce_env_string(result, vm, globals)?;
+                }
+            }
+
+            env_set_one(lfp.self_val(), &key, &value, vm, globals)?;
+        }
+    }
+    Ok(lfp.self_val())
+}
+
+/// ### ENV.replace(other_hash) -> ENV
+///
+/// Replaces the contents of ENV with `other_hash`. All keys / values
+/// are validated up front, so an invalid pair (TypeError or
+/// Errno::EINVAL) leaves ENV untouched — preserving the
+/// "does not accept good data preceding/following an error" semantics.
+#[monoruby_builtin]
+fn env_replace(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    let other = lfp.arg(0).coerce_to_hash(vm, globals)?;
+
+    // Phase 1: validate everything up front.
+    let mut new_pairs: Vec<(String, String)> = Vec::new();
+    for (k, v) in other.iter() {
+        let key = coerce_env_string(k, vm, globals)?;
+        check_env_key_for_set(&key, &globals.store)?;
+        let value = coerce_env_string(v, vm, globals)?;
+        new_pairs.push((key, value));
+    }
+
+    // Phase 2: drop every current variable from libc + the hash.
+    let cur_keys: Vec<String> = lfp
+        .self_val()
+        .as_hash()
+        .iter()
+        .filter_map(|(k, _)| k.is_str().map(|s| s.to_string()))
+        .collect();
+    for k in &cur_keys {
+        env_unset_one(lfp.self_val(), k, vm, globals)?;
+    }
+    // The `iter()` snapshot above is keyed by string content; a hash
+    // entry whose key happens not to be a String (in theory unreachable
+    // for ENV, but defensive) would be left behind without this clear.
+    lfp.self_val().as_hash().clear()?;
+
+    // Phase 3: insert the validated pairs.
+    for (key, value) in new_pairs {
+        env_set_one(lfp.self_val(), &key, &value, vm, globals)?;
+    }
+    Ok(lfp.self_val())
+}
+
+/// ### ENV.values_at(*keys) -> Array
+///
+/// Returns an array of values for the given keys. Each key is coerced
+/// via `#to_str`, raising TypeError if not coercible.
+#[monoruby_builtin]
+fn env_values_at(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    let hash = lfp.self_val().as_hash();
+    let mut out: Vec<Value> = Vec::with_capacity(args.len());
+    for k in args.iter() {
+        let key = coerce_env_string(*k, vm, globals)?;
+        let key_v = Value::string(key);
+        out.push(hash.get(key_v, vm, globals)?.unwrap_or_default());
+    }
+    Ok(Value::array_from_vec(out))
+}
+
+/// ### ENV.slice(*keys) -> Hash
+///
+/// Returns a Hash containing the values for keys that exist in ENV.
+/// Each key argument is coerced via `#to_str` exactly once (TypeError
+/// if not coercible); the resulting hash uses the *original* argument
+/// objects as keys, matching CRuby's spec behaviour.
+#[monoruby_builtin]
+fn env_slice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    let hash = lfp.self_val().as_hash();
+    let mut map = RubyMap::default();
+    for k in args.iter() {
+        let s = coerce_env_string(*k, vm, globals)?;
+        let s_v = Value::string(s);
+        if let Some(v) = hash.get(s_v, vm, globals)? {
+            map.insert(*k, v, vm, globals)?;
+        }
+    }
+    Ok(Value::hash(map))
+}
+
+/// Like `coerce_env_string`, but returns `Ok(None)` instead of raising
+/// `TypeError` when the value is neither a String nor responds to
+/// `#to_str`. Used by `ENV.rassoc` / `ENV.has_value?` per their specs.
+fn try_coerce_env_string(
+    v: Value,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<Option<String>> {
+    if v.is_str().is_some() {
+        let s = v.expect_string(&globals.store)?;
+        if s.as_bytes().contains(&0) {
+            return Err(MonorubyErr::argumenterr("bare \\0 in env"));
+        }
+        return Ok(Some(s));
+    }
+    if globals.check_method(v, IdentId::TO_STR).is_some() {
+        let s = v.coerce_to_str(vm, globals)?;
+        if s.as_bytes().contains(&0) {
+            return Err(MonorubyErr::argumenterr("bare \\0 in env"));
+        }
+        return Ok(Some(s));
+    }
+    Ok(None)
 }
 
 ///
