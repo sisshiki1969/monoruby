@@ -4068,6 +4068,73 @@ mod tests {
     }
 
     #[test]
+    fn join_encoding() {
+        // BINARY ⊔ BINARY = BINARY: rgba blob (the doom regression repro).
+        // 0xFF must NOT be lossily replaced with U+FFFD.
+        run_test(
+            r##"
+            s = [255, 0, 0, 255].pack("CCCC")
+            v = [s, s].join
+            [v.bytes, v.length, v.encoding.name]
+            "##,
+        );
+        // BINARY separator forces BINARY result.
+        run_test(
+            r##"
+            sep = [0xff].pack("C")
+            r = ["a", "b", "c"].join(sep)
+            [r.bytes, r.encoding.name]
+            "##,
+        );
+        // BINARY ⊔ UTF-8 = BINARY (CRuby promotes to the wider, lossless one).
+        run_test(
+            r##"
+            bin = [0xff, 0x80].pack("CC")
+            r = [bin, "x"].join
+            [r.bytes, r.encoding.name]
+            "##,
+        );
+        // UTF-8 (multibyte) stays UTF-8 byte-for-byte.
+        run_test(r##"["あ","い","う"].join("-")"##);
+        run_test(r##"["あ","い","う"].join("-").encoding.name"##);
+        // Numbers (via to_s): byte content matches CRuby (don't pin encoding,
+        // CRuby reports US-ASCII for ASCII-only output and we keep UTF-8).
+        run_test(r##"[1,2,3].join(",")"##);
+        // Single-element binary array preserves binary encoding.
+        run_test(r##"[[0xff].pack("C")].join.encoding.name"##);
+        // The full doom rendering pipeline shape: palette table + index map.
+        run_test(
+            r##"
+            pal = [[255, 0, 0, 255].pack("CCCC"),
+                   [0, 255, 0, 255].pack("CCCC"),
+                   [0, 0, 255, 255].pack("CCCC")]
+            indices = [0, 1, 2, 0, 1, 2]
+            blob = indices.map { |i| pal[i] }.join
+            [blob.bytes, blob.bytesize, blob.encoding.name]
+            "##,
+        );
+    }
+
+    #[test]
+    fn join_array_repeat_string_arg() {
+        // Array#* with a string argument delegates to join — same encoding rule.
+        run_test(
+            r##"
+            s = [255, 0, 0, 255].pack("CCCC")
+            v = [s, s] * ""
+            [v.bytes, v.encoding.name]
+            "##,
+        );
+        run_test(
+            r##"
+            sep = [0xff].pack("C")
+            r = ["a", "b"] * sep
+            [r.bytes, r.encoding.name]
+            "##,
+        );
+    }
+
+    #[test]
     fn first() {
         run_test(r##"[[0,1,2,3].first, [].first]"##);
         run_test(
