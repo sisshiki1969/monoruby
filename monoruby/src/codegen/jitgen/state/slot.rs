@@ -1354,14 +1354,20 @@ impl AbstractFrame {
                     }
                 }
             }
-            (LinkMode::F(l), LinkMode::Sf(r, SfGuarded::Float)) => {
+            (
+                LinkMode::F(l),
+                LinkMode::Sf(r, guarded @ (SfGuarded::Float | SfGuarded::FixnumOrFloat)),
+            ) => {
+                // F means the xmm holds a float; writing back produces a
+                // Value::float, which satisfies both the Float and the
+                // FixnumOrFloat guards.
                 ir.xmm2stack(l, slot);
                 if l == r {
                     // F(l) -> Sf(l)
-                    self.set_Sf_float(slot, l);
+                    self.set_Sf(slot, l, guarded);
                 } else {
                     // F(l) -> Sf(r)
-                    self.to_sf(ir, slot, l, r, SfGuarded::Float);
+                    self.to_sf(ir, slot, l, r, guarded);
                 }
             }
             (LinkMode::F(_) | LinkMode::G(_), LinkMode::S(_)) => {
