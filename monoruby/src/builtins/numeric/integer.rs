@@ -883,9 +883,7 @@ fn integer_shr(
             let k = (-rhs) as u64;
             if k < 64 {
                 let deopt = ir.new_deopt(state);
-                ir.inline(move |r#gen, _, labels| {
-                    r#gen.gen_shl_rhs_imm(k as u8, &labels[deopt])
-                });
+                ir.inline(move |r#gen, _, labels| r#gen.gen_shl_rhs_imm(k as u8, &labels[deopt]));
             } else {
                 // shift too large for inline, deopt
                 let deopt = ir.new_deopt(state);
@@ -3235,10 +3233,7 @@ mod tests {
             def rem_e; 100 % 8; end
             def rem_f; 0 % 5; end
         ";
-        run_test_with_prelude(
-            "[rem_a, rem_b, rem_c, rem_d, rem_e, rem_f]",
-            prelude,
-        );
+        run_test_with_prelude("[rem_a, rem_b, rem_c, rem_d, rem_e, rem_f]", prelude);
     }
 
     #[test]
@@ -3357,19 +3352,12 @@ mod tests {
 
     #[test]
     fn integer_size() {
-        run_tests(&[
-            "1.size",
-            "(-1).size",
-            "(10**20).size",
-        ]);
+        run_tests(&["1.size", "(-1).size", "(10**20).size"]);
     }
 
     #[test]
     fn integer_abs_bigint_extended() {
-        run_tests(&[
-            "(10**20).abs",
-            "(-(10**20)).abs",
-        ]);
+        run_tests(&["(10**20).abs", "(-(10**20)).abs"]);
     }
 
     #[test]
@@ -3391,5 +3379,22 @@ mod tests {
             "(10**20).eql?(10**20)",
             "(10**20).eql?(1)",
         ]);
+    }
+
+    #[test]
+    fn partial_compile_arg_type_guard() {
+        run_test_with_prelude(
+            "my_div_loop(100, 16.5)",
+            r#"
+            def my_div_loop(num, base)
+              base = base.to_i
+              n = num
+              while n > 0
+                n /= base
+              end
+              n
+            end
+            "#,
+        );
     }
 }
