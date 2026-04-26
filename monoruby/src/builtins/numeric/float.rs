@@ -2,6 +2,7 @@ use num::{BigInt, FromPrimitive, ToPrimitive};
 
 use super::*;
 use crate::executor::Visibility;
+use jitgen::JitContext;
 
 //
 // Float class
@@ -21,7 +22,14 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.set_constant_by_str(FLOAT_CLASS, "DIG", Value::integer(f64::DIGITS as i64));
     globals.set_constant_by_str(FLOAT_CLASS, "MANT_DIG", Value::integer(f64::MANTISSA_DIGITS as i64));
     globals.set_constant_by_str(FLOAT_CLASS, "RADIX", Value::integer(f64::RADIX as i64));
-    globals.define_builtin_funcs(FLOAT_CLASS, "to_i", &["to_int"], toi, 0);
+    globals.define_builtin_inline_funcs(
+        FLOAT_CLASS,
+        "to_i",
+        &["to_int"],
+        toi,
+        Box::new(float_toi),
+        0,
+    );
     globals.define_basic_op(FLOAT_CLASS, "+", add, 1);
     globals.define_basic_op(FLOAT_CLASS, "-", sub, 1);
     globals.define_basic_op(FLOAT_CLASS, "*", mul, 1);
@@ -180,6 +188,37 @@ extern "C" fn div_ff_f(lhs: f64, rhs: f64) -> f64 {
 
 extern "C" fn rem_ff_f(lhs: f64, rhs: f64) -> f64 {
     lhs.ruby_mod(&rhs)
+}
+
+fn float_toi(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let CallSiteInfo { dst, recv, .. } = *callsite;
+    let fsrc = state.load_xmm(ir, recv).enc();
+    let deopt = ir.new_deopt(state);
+    if let Some(dst) = dst {
+        ir.inline(move |r#gen, _, labels| {
+            let deopt = &labels[deopt];
+            monoasm! { &mut r#gen.jit,
+                cvttsd2siq rdi, xmm(fsrc);
+                addq  rdi, rdi;
+                jo    deopt;
+                orq   rdi, 1;
+            }
+        });
+        state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+    }
+    true
 }
 
 ///
@@ -1082,6 +1121,36 @@ mod tests {
         );
         // Object without coerce -> nil
         run_test("1.5 <=> 'a'");
+    }
+
+    #[test]
+    fn float_toi() {
+        run_tests(&[
+            "0.0.to_i",
+            "(-0.0).to_i",
+            "0.9.to_i",
+            "(-0.9).to_i",
+            "1.0.to_i",
+            "(-1.0).to_i",
+            "1234567890.5.to_i",
+            "(-1234567890.5).to_i",
+            // i63 boundary
+            "(2.0**62 - 1).to_i",
+            "(-(2.0**62)).to_i",
+            // to_int alias
+            "3.7.to_int",
+            "(-3.7).to_int",
+        ]);
+        // BigInt fallback (exceeds i63)
+        run_test("(2.0**62).to_i");
+        run_test("(-(2.0**62) - 1).to_i");
+        run_test("(2.0**63).to_i");
+        run_test("(1.0e18).to_i");
+        run_test("(-1.0e18).to_i");
+        // NaN/Infinity raise FloatDomainError (tested through JIT warmup)
+        run_test("begin; Float::NAN.to_i; rescue => e; e.class.name; end");
+        run_test("begin; Float::INFINITY.to_i; rescue => e; e.class.name; end");
+        run_test("begin; (-Float::INFINITY).to_i; rescue => e; e.class.name; end");
     }
 
     #[test]

@@ -43,7 +43,10 @@ impl Liveness {
     ///
     pub(super) fn loop_used_as_float(&self) -> impl Iterator<Item = (SlotId, bool)> {
         self.0.iter().enumerate().flat_map(|(i, b)| match b {
-            IsUsed::Used(used) => match used.ty {
+            // `killed` means the slot was redefined before any post-kill use
+            // updated `ty`. The recorded `ty` reflects pre-kill usage which
+            // is irrelevant to the loop body's liveness, so skip it.
+            IsUsed::Used(used) if !used.killed => match used.ty {
                 UseTy::Float => Some((SlotId(i as u16), true)),
                 UseTy::Both => Some((SlotId(i as u16), false)),
                 _ => None,
