@@ -647,17 +647,39 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let rhs = v as usize;
         let vec = lhs.repeat(rhs);
         Ok(Value::array_from_vec(vec))
-    } else if let Some(sep) = arg.is_str() {
+    } else if let Some(inner) = arg.is_rstring_inner() {
+        let sep_bytes = inner.as_bytes().to_vec();
+        let sep_enc = inner.encoding();
         let mut visited: HashSet<u64> = HashSet::default();
         visited.insert(lhs.id());
-        let res = array_join(vm, globals, lhs, sep, &mut visited)?;
-        Ok(Value::string(res))
+        let mut out: Vec<u8> = Vec::new();
+        let mut enc = sep_enc;
+        array_join(
+            vm, globals, lhs, &sep_bytes, sep_enc, &mut visited, &mut out, &mut enc,
+        )?;
+        Ok(Value::string_from_inner(RStringInner::from_encoding(
+            &out, enc,
+        )))
     } else if let Ok(s) = arg.coerce_to_str(vm, globals) {
         // Try to_str coercion for join
         let mut visited: HashSet<u64> = HashSet::default();
         visited.insert(lhs.id());
-        let res = array_join(vm, globals, lhs, &s, &mut visited)?;
-        Ok(Value::string(res))
+        let sep_bytes = s.into_bytes();
+        let mut out: Vec<u8> = Vec::new();
+        let mut enc = Encoding::Utf8;
+        array_join(
+            vm,
+            globals,
+            lhs,
+            &sep_bytes,
+            Encoding::Utf8,
+            &mut visited,
+            &mut out,
+            &mut enc,
+        )?;
+        Ok(Value::string_from_inner(RStringInner::from_encoding(
+            &out, enc,
+        )))
     } else {
         // Try to_int coercion for repeat
         let v = arg.coerce_to_int_i64(vm, globals)?;
@@ -1518,24 +1540,43 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.try_arg(0);
-    let sep = if let Some(sep) = &arg0 {
+    // Resolve the separator as a (bytes, encoding) pair so binary separators
+    // propagate without UTF-8 reinterpretation.
+    let (sep_bytes, sep_enc): (Vec<u8>, Encoding) = if let Some(sep) = &arg0 {
         if sep.is_nil() {
-            // When nil is passed explicitly, use $, as default separator
-            get_output_field_separator(globals)
+            match get_output_field_separator(globals) {
+                Some(s) => (s.into_bytes(), Encoding::Utf8),
+                None => (Vec::new(), Encoding::Utf8),
+            }
+        } else if let Some(inner) = sep.is_rstring_inner() {
+            (inner.as_bytes().to_vec(), inner.encoding())
         } else {
-            // Coerce separator via to_str
-            Some(sep.coerce_to_string(vm, globals)?)
+            let s = sep.coerce_to_string(vm, globals)?;
+            (s.into_bytes(), Encoding::Utf8)
         }
     } else {
-        // No argument: use $, as default separator
-        get_output_field_separator(globals)
+        match get_output_field_separator(globals) {
+            Some(s) => (s.into_bytes(), Encoding::Utf8),
+            None => (Vec::new(), Encoding::Utf8),
+        }
     };
-    let sep_str = sep.as_deref().unwrap_or("");
     let ary = lfp.self_val().as_array();
     let mut visited: HashSet<u64> = HashSet::default();
     visited.insert(ary.id());
-    let res = array_join(vm, globals, ary, sep_str, &mut visited)?;
-    Ok(Value::string(res))
+    let mut result: Vec<u8> = Vec::new();
+    let mut enc = sep_enc;
+    array_join(
+        vm,
+        globals,
+        ary,
+        &sep_bytes,
+        sep_enc,
+        &mut visited,
+        &mut result,
+        &mut enc,
+    )?;
+    let inner = RStringInner::from_encoding(&result, enc);
+    Ok(Value::string_from_inner(inner))
 }
 
 /// Get the value of $, (output field separator) as a String.
@@ -1547,21 +1588,45 @@ fn get_output_field_separator(globals: &mut Globals) -> Option<String> {
     }
 }
 
+/// Merge the encoding of an appended element into `enc`.
+///
+/// CRuby's `Array#join` resolves the result encoding by combining all
+/// participants. `BINARY ⊔ X` always yields `BINARY` because raw bytes
+/// must not silently be reinterpreted as UTF-8 (which would turn high
+/// bytes into U+FFFD). Otherwise UTF-8 wins over US-ASCII.
+fn merge_encoding(enc: &mut Encoding, other: Encoding) {
+    *enc = match (*enc, other) {
+        (Encoding::Ascii8, _) | (_, Encoding::Ascii8) => Encoding::Ascii8,
+        (Encoding::Utf8, _) | (_, Encoding::Utf8) => Encoding::Utf8,
+        (Encoding::UsAscii, Encoding::UsAscii) => Encoding::UsAscii,
+    };
+}
+
+/// Append `s`'s bytes to `out`, also widening `enc` to be compatible.
+fn append_string(out: &mut Vec<u8>, enc: &mut Encoding, s: &RStringInner) {
+    out.extend_from_slice(s.as_bytes());
+    merge_encoding(enc, s.encoding());
+}
+
+#[allow(clippy::too_many_arguments)]
 fn array_join(
     vm: &mut Executor,
     globals: &mut Globals,
     ary: Array,
-    sep: &str,
+    sep: &[u8],
+    sep_enc: Encoding,
     visited: &mut HashSet<u64>,
-) -> Result<String> {
-    let mut result = String::new();
+    out: &mut Vec<u8>,
+    enc: &mut Encoding,
+) -> Result<()> {
     for (i, v) in ary.iter().enumerate() {
         if i > 0 {
-            result.push_str(sep);
+            out.extend_from_slice(sep);
+            merge_encoding(enc, sep_enc);
         }
-        // If element is already a string, use it directly
-        if let Some(s) = v.is_str() {
-            result.push_str(s);
+        // If element is already a string, use its raw bytes + encoding
+        if let Some(inner) = v.is_rstring_inner() {
+            append_string(out, enc, inner);
             continue;
         }
         // If element is an array, recursively join
@@ -1569,54 +1634,50 @@ fn array_join(
             if !visited.insert(inner_ary.id()) {
                 return Err(MonorubyErr::argumenterr("recursive array join"));
             }
-            let s = array_join(vm, globals, inner_ary, sep, visited)?;
+            array_join(vm, globals, inner_ary, sep, sep_enc, visited, out, enc)?;
             visited.remove(&inner_ary.id());
-            result.push_str(&s);
             continue;
         }
         // Conversion order: to_str -> to_ary -> to_s
-        // Try to_str first
         if let Some(fid) = globals.check_method(*v, IdentId::TO_STR) {
             let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
-            if let Some(s) = ret.is_str() {
-                result.push_str(s);
+            if let Some(inner) = ret.is_rstring_inner() {
+                append_string(out, enc, inner);
                 continue;
             }
-            // to_str returned non-nil non-string: fall through
             if !ret.is_nil() {
-                result.push_str(&ret.to_s(&globals.store));
+                out.extend_from_slice(ret.to_s(&globals.store).as_bytes());
+                merge_encoding(enc, Encoding::Utf8);
                 continue;
             }
         }
-        // Try to_ary second
         if let Some(fid) = globals.check_method(*v, IdentId::TO_ARY) {
             let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
             if let Some(inner_ary) = ret.try_array_ty() {
                 if !visited.insert(inner_ary.id()) {
                     return Err(MonorubyErr::argumenterr("recursive array join"));
                 }
-                let s = array_join(vm, globals, inner_ary, sep, visited)?;
+                array_join(vm, globals, inner_ary, sep, sep_enc, visited, out, enc)?;
                 visited.remove(&inner_ary.id());
-                result.push_str(&s);
                 continue;
             }
             if !ret.is_nil() {
-                result.push_str(&ret.to_s(&globals.store));
+                out.extend_from_slice(ret.to_s(&globals.store).as_bytes());
+                merge_encoding(enc, Encoding::Utf8);
                 continue;
             }
         }
-        // Try to_s third
         if let Some(fid) = globals.check_method(*v, IdentId::TO_S) {
             let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
-            if let Some(s) = ret.is_str() {
-                result.push_str(s);
+            if let Some(inner) = ret.is_rstring_inner() {
+                append_string(out, enc, inner);
                 continue;
             }
         }
-        // Fallback: use Rust-level to_s
-        result.push_str(&v.to_s(&globals.store));
+        out.extend_from_slice(v.to_s(&globals.store).as_bytes());
+        merge_encoding(enc, Encoding::Utf8);
     }
-    Ok(result)
+    Ok(())
 }
 
 ///
