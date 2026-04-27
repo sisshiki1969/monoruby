@@ -125,6 +125,10 @@ impl AbstractState {
             const_version: *version,
             deopt,
         });
+        if let Some(value) = value.is_immediate() {
+            self.def_C(dst, value);
+            return;
+        }
         ir.lit2reg(*value, GP::Rax);
         if let Some(f) = value.try_float() {
             let fdst = self.def_Sf_float(ir, dst);

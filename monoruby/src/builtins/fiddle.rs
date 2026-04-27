@@ -1,6 +1,7 @@
 use std::ffi::c_void;
 
 use super::*;
+use jitgen::JitContext;
 use libffi::middle::{Arg, Cif, CodePtr, Type};
 
 // ---------------------------------------------------------------------------
@@ -385,6 +386,182 @@ fn fiddle_write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
     Ok(lfp.arg(0)) // return ptr
 }
 
+// ---------------------------------------------------------------------------
+// Inline JIT specializations for ___read / ___write
+//
+// When the type code is a constant Fixnum at compile time and the requested
+// width fits in a Fixnum (i63), the JIT can emit a direct typed load/store
+// against the memory pointed to by `ptr`, skipping the type-code dispatch
+// and libffi-free Rust path. NULL pointers deopt to the interpreter so the
+// regular builtin raises the runtime error.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+enum ReadKind {
+    I8,
+    U8,
+    I16,
+    U16,
+    I32,
+    U32,
+    F64,
+}
+
+fn fiddle_read_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 2 {
+        return false;
+    }
+    let CallSiteInfo { args, dst, .. } = *callsite;
+    let Some(dst) = dst else {
+        return false;
+    };
+
+    let Some(ty_lit) = state.is_fixnum_literal(args + 1usize) else {
+        return false;
+    };
+    let kind = match ty_lit.get() {
+        TYPE_CHAR => ReadKind::I8,
+        TYPE_UCHAR => ReadKind::U8,
+        TYPE_SHORT => ReadKind::I16,
+        TYPE_USHORT => ReadKind::U16,
+        TYPE_INT | TYPE_BOOL => ReadKind::I32,
+        TYPE_UINT => ReadKind::U32,
+        TYPE_DOUBLE => ReadKind::F64,
+        _ => return false,
+    };
+
+    state.load_fixnum(ir, args, GP::Rdi);
+    let deopt = ir.new_deopt(state);
+
+    match kind {
+        ReadKind::F64 => {
+            let fret = state.def_F(ir, dst).enc();
+            ir.inline(move |r#gen, _, labels| {
+                let deopt_label = &labels[deopt];
+                monoasm! { &mut r#gen.jit,
+                    sarq rdi, 1;
+                    testq rdi, rdi;
+                    jz deopt_label;
+                    movq xmm(fret), [rdi];
+                };
+            });
+        }
+        _ => {
+            ir.inline(move |r#gen, _, labels| {
+                let deopt_label = &labels[deopt];
+                monoasm! { &mut r#gen.jit,
+                    sarq rdi, 1;
+                    testq rdi, rdi;
+                    jz deopt_label;
+                };
+                match kind {
+                    ReadKind::I8 => monoasm! { &mut r#gen.jit, movsxb rax, [rdi]; },
+                    ReadKind::U8 => monoasm! { &mut r#gen.jit, movzxb rax, [rdi]; },
+                    ReadKind::I16 => monoasm! { &mut r#gen.jit, movsxw rax, [rdi]; },
+                    ReadKind::U16 => monoasm! { &mut r#gen.jit, movzxw rax, [rdi]; },
+                    ReadKind::I32 => monoasm! { &mut r#gen.jit, movsxl rax, [rdi]; },
+                    ReadKind::U32 => monoasm! { &mut r#gen.jit, movl rax, [rdi]; },
+                    ReadKind::F64 => unreachable!(),
+                };
+                // Tag as Fixnum: rax = (rax << 1) | 1.
+                monoasm! { &mut r#gen.jit,
+                    addq rax, rax;
+                    orq rax, 1;
+                };
+            });
+            state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+        }
+    }
+    true
+}
+
+#[derive(Clone, Copy)]
+enum WriteKind {
+    Int8,
+    Int16,
+    Int32,
+    F64,
+}
+
+fn fiddle_write_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 3 {
+        return false;
+    }
+    let CallSiteInfo { args, dst, .. } = *callsite;
+
+    let Some(ty_lit) = state.is_fixnum_literal(args + 1usize) else {
+        return false;
+    };
+    let kind = match ty_lit.get() {
+        TYPE_CHAR | TYPE_UCHAR => WriteKind::Int8,
+        TYPE_SHORT | TYPE_USHORT => WriteKind::Int16,
+        TYPE_INT | TYPE_UINT | TYPE_BOOL => WriteKind::Int32,
+        TYPE_DOUBLE => WriteKind::F64,
+        _ => return false,
+    };
+
+    let val_slot = args + 2usize;
+    state.load_fixnum(ir, args, GP::Rdi);
+
+    match kind {
+        WriteKind::F64 => {
+            let xenc = state.load_xmm(ir, val_slot).enc();
+            let deopt = ir.new_deopt(state);
+            ir.inline(move |r#gen, _, labels| {
+                let deopt_label = &labels[deopt];
+                monoasm! { &mut r#gen.jit,
+                    movq rax, rdi;
+                    sarq rdi, 1;
+                    testq rdi, rdi;
+                    jz deopt_label;
+                    movq [rdi], xmm(xenc);
+                };
+            });
+        }
+        _ => {
+            state.load_fixnum(ir, val_slot, GP::Rsi);
+            let deopt = ir.new_deopt(state);
+            ir.inline(move |r#gen, _, labels| {
+                let deopt_label = &labels[deopt];
+                monoasm! { &mut r#gen.jit,
+                    movq rax, rdi;
+                    sarq rdi, 1;
+                    testq rdi, rdi;
+                    jz deopt_label;
+                    sarq rsi, 1;
+                };
+                match kind {
+                    WriteKind::Int8 => monoasm! { &mut r#gen.jit, movb [rdi], rsi; },
+                    WriteKind::Int16 => monoasm! { &mut r#gen.jit, movw [rdi], rsi; },
+                    WriteKind::Int32 => monoasm! { &mut r#gen.jit, movl [rdi], rsi; },
+                    WriteKind::F64 => unreachable!(),
+                };
+            });
+        }
+    }
+
+    state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+    true
+}
+
 /// ### Fiddle.___read_string(ptr) -> String | nil
 ///
 /// Read a null-terminated C string from `ptr`.
@@ -453,8 +630,20 @@ pub(super) fn init(globals: &mut Globals) {
 
     // Low-level primitives used by startup/fiddle.rb and startup/ffi_c.rb
     globals.define_builtin_module_func(fiddle, "___call", fiddle_call, 4);
-    globals.define_builtin_module_func(fiddle, "___read", fiddle_read, 2);
-    globals.define_builtin_module_func(fiddle, "___write", fiddle_write, 3);
+    globals.define_builtin_module_inline_func(
+        fiddle,
+        "___read",
+        fiddle_read,
+        Box::new(fiddle_read_inline),
+        2,
+    );
+    globals.define_builtin_module_inline_func(
+        fiddle,
+        "___write",
+        fiddle_write,
+        Box::new(fiddle_write_inline),
+        3,
+    );
     globals.define_builtin_module_func(fiddle, "___read_string", fiddle_read_string, 1);
     globals.define_builtin_module_func(fiddle, "___read_bytes", fiddle_read_bytes, 2);
     globals.define_builtin_module_func(fiddle, "___write_bytes", fiddle_write_bytes, 2);
@@ -621,6 +810,46 @@ mod tests {
               FFI.___write_bytes(ptr, "hello\0world\0junk")
               raise unless FFI.___read_string(ptr)    == "hello"
               raise unless FFI.___read_bytes(ptr, 11) == "hello\0world"
+            ensure
+              FFI.___free(ptr)
+            end
+            :ok
+            "#
+        ));
+    }
+
+    // Hot loop over `Fiddle.___read` / `Fiddle.___write` with
+    // compile-time-constant type codes — exercises the inline JIT
+    // path that emits a typed load/store instead of dispatching
+    // through the Rust builtin.
+    #[test]
+    fn fiddle_read_write_inline_jit() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            TY_CHAR   = -2
+            TY_UCHAR  = -3
+            TY_SHORT  = -4
+            TY_USHORT = -5
+            TY_UINT   = -7
+            ptr = FFI.___malloc(16)
+            raise "malloc returned NULL" if ptr == 0
+            begin
+              200.times do
+                Fiddle.___write(ptr, TY_CHAR,   -42)
+                raise unless Fiddle.___read(ptr, TY_CHAR)   == -42
+                Fiddle.___write(ptr, TY_UCHAR,  200)
+                raise unless Fiddle.___read(ptr, TY_UCHAR)  == 200
+                Fiddle.___write(ptr, TY_SHORT,  -12345)
+                raise unless Fiddle.___read(ptr, TY_SHORT)  == -12345
+                Fiddle.___write(ptr, TY_USHORT, 60000)
+                raise unless Fiddle.___read(ptr, TY_USHORT) == 60000
+                Fiddle.___write(ptr, TY_INT,    0x41424344)
+                raise unless Fiddle.___read(ptr, TY_INT)    == 0x41424344
+                Fiddle.___write(ptr, TY_UINT,   0xDEADBEEF)
+                raise unless Fiddle.___read(ptr, TY_UINT)   == 0xDEADBEEF
+                Fiddle.___write(ptr, TY_DOUBLE, 3.14)
+                raise unless Fiddle.___read(ptr, TY_DOUBLE) == 3.14
+              end
             ensure
               FFI.___free(ptr)
             end
