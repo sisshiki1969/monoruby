@@ -475,10 +475,18 @@ impl AbstractFrame {
             ..
         } = info;
         if lhs != rhs {
-            (
-                self.fetch_float_assume(ir, lhs, lhs_class),
-                self.fetch_float_assume(ir, rhs, rhs_class),
-            )
+            // Loading lhs may set an `Sf` mode on its xmm. Without pinning,
+            // the next allocator call (when loading rhs) can demote that
+            // same xmm via Phase-1 of `try_alloc_xmm_demote` and hand it
+            // back as the rhs xmm — so the consumer would compare /
+            // arithmetic the value with itself. Pin lhs across the rhs
+            // load to force the allocator to pick a different physical
+            // register.
+            let lhs_xmm = self.fetch_float_assume(ir, lhs, lhs_class);
+            self.pin_xmm(lhs_xmm);
+            let rhs_xmm = self.fetch_float_assume(ir, rhs, rhs_class);
+            self.unpin_xmm(lhs_xmm);
+            (lhs_xmm, rhs_xmm)
         } else {
             let lhs = self.fetch_float_assume(ir, lhs, lhs_class);
             (lhs, lhs)
@@ -492,6 +500,11 @@ impl AbstractFrame {
         info: FBinOpInfo,
     ) -> (Xmm, Xmm, Option<Xmm>) {
         let (lhs, rhs) = self.load_binary_xmm(ir, info);
+        // Pin both operands while allocating the destination — `def_F` calls
+        // `alloc_xmm`, which can otherwise pick `lhs` or `rhs` as the spill
+        // victim and alias dst onto an operand the consumer still needs.
+        self.pin_xmm(lhs);
+        self.pin_xmm(rhs);
         let dst = dst.map(|dst| {
             if dst == info.lhs {
                 self.def_F_with_xmm(dst, lhs);
@@ -500,6 +513,8 @@ impl AbstractFrame {
                 self.def_F(ir, dst)
             }
         });
+        self.unpin_xmm(rhs);
+        self.unpin_xmm(lhs);
         (lhs, rhs, dst)
     }
 

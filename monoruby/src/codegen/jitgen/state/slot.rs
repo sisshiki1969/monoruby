@@ -10,6 +10,14 @@ pub(crate) struct SlotState {
     xmm: [Vec<SlotId>; 14],
     r15: Option<SlotId>,
     local_num: usize,
+    /// xmm registers that must not be reused by `alloc_xmm` /
+    /// `try_alloc_xmm_demote`. Used by callers that have just produced
+    /// an xmm-resident value but have not yet emitted the consuming
+    /// instruction — without this, a subsequent allocation can pick
+    /// that same xmm as a spill victim (e.g. demote its `Sf` slot to
+    /// `S`) and hand the same physical register back, so the consumer
+    /// ends up reading both operands from the same register.
+    pinned_xmm: Vec<Xmm>,
 }
 
 impl std::fmt::Debug for SlotState {
@@ -37,6 +45,7 @@ impl SlotState {
             },
             r15: None,
             local_num,
+            pinned_xmm: Vec::new(),
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
         ctx
@@ -198,6 +207,25 @@ impl SlotState {
         self.xmm[xmm.0 as usize].retain(|e| *e != slot);
     }
 
+    /// Mark *xmm* off-limits for subsequent `alloc_xmm` /
+    /// `try_alloc_xmm_demote` calls until [`Self::unpin_xmm`] is invoked.
+    /// Use this when an xmm has just been produced (loaded or written) and
+    /// is needed by an upcoming instruction in the same compile step —
+    /// without the pin, a later allocation in the same step can choose the
+    /// freshly-loaded xmm as a spill victim and reuse it for an unrelated
+    /// value.
+    pub(in crate::codegen::jitgen) fn pin_xmm(&mut self, xmm: Xmm) {
+        if !self.pinned_xmm.contains(&xmm) {
+            self.pinned_xmm.push(xmm);
+        }
+    }
+
+    pub(in crate::codegen::jitgen) fn unpin_xmm(&mut self, xmm: Xmm) {
+        if let Some(pos) = self.pinned_xmm.iter().position(|x| *x == xmm) {
+            self.pinned_xmm.swap_remove(pos);
+        }
+    }
+
     ///
     /// Try to allocate a new xmm register without emitting any asm.
     ///
@@ -212,14 +240,21 @@ impl SlotState {
     /// `AsmIr`).
     ///
     fn try_alloc_xmm_demote(&mut self) -> Option<Xmm> {
+        let pinned = &self.pinned_xmm;
         // Phase 0: a vacant xmm.
         for (i, xmm) in self.xmm.iter().enumerate() {
+            if pinned.contains(&Xmm(i as u16)) {
+                continue;
+            }
             if xmm.is_empty() {
                 return Some(Xmm(i as u16));
             }
         }
         // Phase 1: an xmm whose linked slots are all `Sf` — demote them.
         for i in 0..self.xmm.len() {
+            if self.pinned_xmm.contains(&Xmm(i as u16)) {
+                continue;
+            }
             if self.xmm[i].is_empty() {
                 continue;
             }
@@ -259,13 +294,14 @@ impl SlotState {
         }
         // Phase 2: pick the xmm with the fewest F slots to minimise emit cost.
         let victim_idx = (0..self.xmm.len())
+            .filter(|&i| !self.pinned_xmm.contains(&Xmm(i as u16)))
             .min_by_key(|&i| {
                 self.xmm[i]
                     .iter()
                     .filter(|&&s| matches!(self.mode(s), LinkMode::F(_)))
                     .count()
             })
-            .expect("xmm vec is empty");
+            .expect("xmm vec is empty (every xmm is pinned)");
         let xmm_v = Xmm(victim_idx as u16);
         let slots: Vec<SlotId> = self.xmm[victim_idx].iter().copied().collect();
         debug_assert!(!slots.is_empty());
@@ -1526,6 +1562,41 @@ mod tests {
           res
         end
         test
+        "###,
+        );
+    }
+
+    /// Regression test for the `alloc_xmm` aliasing bug. When `load_binary_xmm`
+    /// loaded `lhs` into xmm `A` and then loaded `rhs`, Phase-1 of
+    /// `try_alloc_xmm_demote` could demote `A`'s `Sf` slot back to `S` and hand
+    /// `A` back as the rhs xmm. The consuming `ucomisd xmm A, xmm A` then
+    /// always reported equal, so `d2 > 0` evaluated false even when
+    /// `d2 = 100.0` and the ternary fell through to `Float::INFINITY`. The
+    /// trigger needs ~14 simultaneously-live floats so all xmms are occupied
+    /// when the second operand is loaded.
+    ///
+    /// Discovered while running the `khasinski/doom` Ruby port under
+    /// monoruby — the renderer's sprite-vs-wall clip uses exactly this
+    /// shape and sprites would draw through walls until the fix.
+    #[test]
+    fn test_alloc_xmm_aliasing_under_pressure() {
+        run_test(
+            r###"
+        def f(d1, d2, x, y, s, c, p)
+          px = x - 100.0
+          py = y - 100.0
+          w  = 160
+          c1 = c * p - s * w
+          c2 = s * p + c * w
+          ta = py * s  + px * c
+          tb = py * c1 - px * c2
+          s1 = d1 > 0 ? p / d1 : Float::INFINITY
+          s2 = d2 > 0 ? p / d2 : Float::INFINITY
+          [s1, s2, ta, tb, px, py]
+        end
+        # Warm the JIT, then probe.
+        1500.times { f(50.0, 100.0, 1024.0, -1024.0, 0.5, 0.866, 160.0) }
+        f(50.0, 100.0, 1024.0, -1024.0, 0.5, 0.866, 160.0)
         "###,
         );
     }

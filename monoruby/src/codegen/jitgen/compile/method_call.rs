@@ -122,9 +122,11 @@ impl<'a> JitContext<'a> {
                     }
                     if let Some(dst) = dst {
                         let src = state.load_xmm(ir, args);
+                        state.pin_xmm(src);
                         state.discard(dst);
                         let using_xmm = state.get_using_xmm();
                         let dst = state.def_F(ir, dst);
+                        state.unpin_xmm(src);
                         ir.push(AsmInst::CFunc_F_F {
                             f: *f,
                             src,
@@ -148,11 +150,19 @@ impl<'a> JitContext<'a> {
                         }
                     }
                     if let Some(dst) = dst {
+                        // Pin lhs across rhs load and dst alloc; otherwise the
+                        // allocator can pick lhs's xmm as spill victim and the
+                        // consuming CFunc gets aliased operands. Same for rhs
+                        // across the dst alloc.
                         let lhs = state.load_xmm(ir, recv);
+                        state.pin_xmm(lhs);
                         let rhs = state.load_xmm(ir, args);
+                        state.pin_xmm(rhs);
                         state.discard(dst);
                         let using_xmm = state.get_using_xmm();
                         let dst = state.def_F(ir, dst);
+                        state.unpin_xmm(rhs);
+                        state.unpin_xmm(lhs);
                         ir.push(AsmInst::CFunc_FF_F {
                             f: *f,
                             lhs,
