@@ -1,0 +1,204 @@
+name: ruby/spec core monitor
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 1'
+  push:
+    branches: [master]
+    paths:
+      - 'monoruby/**'
+      - 'ruruby-parse/**'
+      - 'monoruby_attr/**'
+      - 'rubymap/**'
+      - 'Cargo.toml'
+      - '.github/workflows/spec-core.yml'
+      - '.github/spec-pages/**'
+
+permissions:
+  contents: write
+
+jobs:
+  core-specs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0.1"
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install monoruby (release)
+        run: RUSTFLAGS=-Cforce-frame-pointers cargo install --path monoruby --locked
+
+      - name: Clone ruby/spec and mspec
+        run: |
+          git clone --depth 1 https://github.com/ruby/spec.git ../spec
+          git clone --depth 1 https://github.com/ruby/mspec.git ../mspec
+
+      - name: Run core specs per subcategory
+        id: run
+        working-directory: ../spec
+        shell: bash
+        run: |
+          set -uo pipefail
+          OUT="$GITHUB_WORKSPACE/spec-results"
+          mkdir -p "$OUT/logs"
+          REPORT="$OUT/report.md"
+          CSV="$OUT/report.csv"
+
+          {
+            echo "## ruby/spec core summary"
+            echo ""
+            echo "monoruby commit: \`$GITHUB_SHA\`"
+            echo ""
+            echo "| Category | Files | Examples | Pass | Failures | Errors | Pass rate |"
+            echo "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"
+          } > "$REPORT"
+          echo "category,files,examples,pass,failures,errors,pass_rate" > "$CSV"
+
+          parse_log () {
+            local log="$1"
+            grep -aE '[0-9]+ examples?, ' "$log" || true
+          }
+          sum_field () {
+            parse_log "$1" \
+              | grep -oE "[0-9]+ $2" \
+              | grep -oE '[0-9]+' \
+              | awk '{s+=$1} END {print s+0}'
+          }
+
+          T_FILES=0; T_EX=0; T_FAIL=0; T_ERR=0
+
+          for cat in $(ls core/ | sort); do
+            SPECS=$(find "core/$cat" -name '*_spec.rb' 2>/dev/null | sort)
+            [ -z "$SPECS" ] && continue
+            FILE_COUNT=$(echo "$SPECS" | wc -l)
+            LOG="$OUT/logs/core_${cat}.log"
+            : > "$LOG"
+
+            echo "$SPECS" | xargs -n 10 bash -c '
+              timeout 60 ../mspec/bin/mspec "$@" -t monoruby -f s
+            ' _ >> "$LOG" 2>&1 || true
+
+            EX=$(sum_field "$LOG" 'examples?')
+            FAIL=$(sum_field "$LOG" 'failures?')
+            ERR=$(sum_field "$LOG" 'errors?')
+            PASS=$((EX - FAIL - ERR))
+            [ "$PASS" -lt 0 ] && PASS=0
+            if [ "$EX" -gt 0 ] && [ "$PASS" -gt 0 ]; then
+              RATE=$(awk "BEGIN{printf \"%.1f\",($PASS/$EX)*100}")
+            else
+              RATE="0.0"
+            fi
+
+            echo "| $cat | $FILE_COUNT | $EX | $PASS | $FAIL | $ERR | ${RATE}% |" >> "$REPORT"
+            echo "$cat,$FILE_COUNT,$EX,$PASS,$FAIL,$ERR,$RATE" >> "$CSV"
+
+            T_FILES=$((T_FILES + FILE_COUNT))
+            T_EX=$((T_EX + EX))
+            T_FAIL=$((T_FAIL + FAIL))
+            T_ERR=$((T_ERR + ERR))
+          done
+
+          T_PASS=$((T_EX - T_FAIL - T_ERR))
+          [ "$T_PASS" -lt 0 ] && T_PASS=0
+          if [ "$T_EX" -gt 0 ] && [ "$T_PASS" -gt 0 ]; then
+            T_RATE=$(awk "BEGIN{printf \"%.2f\",($T_PASS/$T_EX)*100}")
+          else
+            T_RATE="0.00"
+          fi
+          echo "| **TOTAL** | **$T_FILES** | **$T_EX** | **$T_PASS** | **$T_FAIL** | **$T_ERR** | **${T_RATE}%** |" >> "$REPORT"
+
+          cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "total_examples=$T_EX"
+            echo "total_pass=$T_PASS"
+            echo "total_fail=$T_FAIL"
+            echo "total_err=$T_ERR"
+            echo "total_rate=$T_RATE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spec-core-results
+          path: spec-results/
+          retention-days: 30
+
+      - name: Publish history to gh-pages
+        if: github.event_name == 'schedule' || github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOTAL_EX: ${{ steps.run.outputs.total_examples }}
+          TOTAL_PASS: ${{ steps.run.outputs.total_pass }}
+          TOTAL_FAIL: ${{ steps.run.outputs.total_fail }}
+          TOTAL_ERR: ${{ steps.run.outputs.total_err }}
+          TOTAL_RATE: ${{ steps.run.outputs.total_rate }}
+        run: |
+          set -euo pipefail
+
+          GH_PAGES_DIR="$RUNNER_TEMP/gh-pages"
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+          if git ls-remote --exit-code --heads "$REPO_URL" gh-pages > /dev/null 2>&1; then
+            git clone --depth 1 --branch gh-pages "$REPO_URL" "$GH_PAGES_DIR"
+          else
+            mkdir -p "$GH_PAGES_DIR"
+            git -C "$GH_PAGES_DIR" init -b gh-pages
+            git -C "$GH_PAGES_DIR" remote add origin "$REPO_URL"
+          fi
+
+          cd "$GH_PAGES_DIR"
+          mkdir -p data
+
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+
+          if [ ! -f data/history.csv ]; then
+            echo "timestamp,commit,category,files,examples,pass,failures,errors,pass_rate" > data/history.csv
+          fi
+          if [ ! -f data/history_total.csv ]; then
+            echo "timestamp,commit,examples,pass,failures,errors,pass_rate" > data/history_total.csv
+          fi
+
+          tail -n +2 "$GITHUB_WORKSPACE/spec-results/report.csv" \
+            | awk -v ts="$TIMESTAMP" -v sha="$SHORT_SHA" -F, 'BEGIN{OFS=","} {print ts,sha,$0}' \
+            >> data/history.csv
+
+          echo "$TIMESTAMP,$SHORT_SHA,$TOTAL_EX,$TOTAL_PASS,$TOTAL_FAIL,$TOTAL_ERR,$TOTAL_RATE" \
+            >> data/history_total.csv
+
+          cp "$GITHUB_WORKSPACE/.github/spec-pages/index.html" index.html
+
+          cat > latest.json <<JSON
+          {"schemaVersion":1,"label":"ruby/spec core","message":"${TOTAL_RATE}%","color":"blue","timestamp":"${TIMESTAMP}","commit":"${SHORT_SHA}","examples":${TOTAL_EX},"pass":${TOTAL_PASS},"failures":${TOTAL_FAIL},"errors":${TOTAL_ERR}}
+          JSON
+
+          git add data/ index.html latest.json
+          if git diff --cached --quiet; then
+            echo "no changes to publish"
+          else
+            git commit -m "spec: ${TIMESTAMP} (${SHORT_SHA}) ${TOTAL_RATE}%"
+            for i in 1 2 3 4; do
+              if git push -u origin gh-pages; then
+                break
+              fi
+              sleep $((2 ** i))
+            done
+          fi
