@@ -578,8 +578,17 @@ fn integer_tof(
     }
     let CallSiteInfo { dst, recv, .. } = *callsite;
     if let Some(ret) = dst {
-        let fret = state.def_F(ir, ret).enc();
+        // Load `recv` BEFORE allocating `ret`'s xmm. When `ret == recv`
+        // (a common slot-reuse pattern, e.g. `496.to_f` or chained
+        // `v.x.to_f`), `def_F(ir, ret)` discards `recv`'s existing
+        // binding and sets the slot to `F(fresh_xmm)`. A subsequent
+        // `state.load(ir, recv, ..)` then sees the slot in `F` mode
+        // and emits an `xmm2stack` write-back of the *uninitialised*
+        // fresh xmm — so `rdi` ends up holding boxed-NaN garbage, the
+        // `sarq` / `cvtsi2sdq` below produce NaN, and the caller sees
+        // `496.to_f #=> NaN`.
         state.load(ir, recv, GP::Rdi);
+        let fret = state.def_F(ir, ret).enc();
         ir.inline(move |r#gen, _, _| {
             monoasm! { &mut r#gen.jit,
                 sarq  rdi, 1;
@@ -1939,6 +1948,38 @@ fn format_bigint_base(n: &BigInt, base: u32) -> String {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// Regression test for `integer_tof`: when the to_f result aliases the
+    /// receiver slot (very common — e.g. `496.to_f` or chained
+    /// `v.x.to_f` where the bytecodegen reuses the slot), the inline
+    /// allocator used to discard the receiver's binding before reading it
+    /// and produced NaN.
+    ///
+    /// Discovered while running the `khasinski/doom` Ruby port under
+    /// monoruby — the renderer's `draw_seg_range` does many
+    /// `seg_v1.x.to_f` / `seg_v1.y.to_f` calls and the chained form
+    /// returned NaN, corrupting all downstream wall-texture mapping.
+    #[test]
+    fn integer_tof_jit_inline_aliased_dst() {
+        run_test(
+            r##"
+        class V
+          attr_reader :x
+          def initialize(x); @x = x; end
+        end
+        v = V.new(496)
+        # Chained: `v.x.to_f`. bytecodegen tends to reuse the slot
+        # receiving `v.x`'s return as the dst of `to_f`, so dst aliases recv.
+        def chained(v); v.x.to_f; end
+        # Literal Integer: same shape -- the LOAD_CONST result and the to_f
+        # destination land in the same slot.
+        def literal; 496.to_f; end
+        # Warm the JIT, then check.
+        3000.times { chained(v); literal }
+        [chained(v), literal]
+        "##,
+        );
+    }
 
     #[test]
     fn times() {
