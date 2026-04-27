@@ -312,9 +312,12 @@ class Thread
   end
 
   def initialize(*args, &block)
+    @block = block
+    @args = args
     @value = nil
     @exception = nil
-    @alive = false
+    @ran = block.nil?
+    @alive = !@ran
     @keys = {}
     @thread_local = {}
   end
@@ -322,11 +325,28 @@ class Thread
   @@current = Thread.new
   @@current.instance_variable_set(:@alive, true)
 
+  def __run
+    return if @ran
+    @ran = true
+    begin
+      @value = @block.call(*@args)
+    rescue => e
+      @exception = e
+    ensure
+      @alive = false
+    end
+    self
+  end
+  private :__run
+
   def value
+    __run
+    raise @exception if @exception
     @value
   end
 
   def join(limit = nil)
+    __run
     self
   end
 
