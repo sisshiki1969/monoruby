@@ -254,6 +254,39 @@ class Hash
   def deconstruct_keys(keys)
     self
   end
+
+  def flatten(level = 1)
+    level = level.to_int if level.respond_to?(:to_int) && !level.is_a?(Integer)
+    raise TypeError, "no implicit conversion of #{level.class} into Integer" unless level.is_a?(Integer)
+    to_a.flatten(level)
+  end
+
+  def fetch_values(*keys, &block)
+    keys.map { |k| fetch(k, &block) }
+  end
+
+  def to_proc
+    hash = self
+    ->(k) { hash[k] }
+  end
+
+  def rehash
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
+    pairs = to_a
+    clear
+    pairs.each { |k, v| self[k] = v }
+    self
+  end
+
+  def self.ruby2_keywords_hash?(h)
+    raise TypeError, "no implicit conversion of #{h.class} into Hash" unless h.is_a?(Hash)
+    false
+  end
+
+  def self.ruby2_keywords_hash(h)
+    raise TypeError, "no implicit conversion of #{h.class} into Hash" unless h.is_a?(Hash)
+    h.dup
+  end
 end
 
 class Module

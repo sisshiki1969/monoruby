@@ -6,7 +6,7 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS, ObjTy::HASH);
-    globals.define_builtin_class_func_with_effect(HASH_CLASS, "new", new, 0, 2, Effect::CAPTURE);
+    globals.define_builtin_class_func_with_effect(HASH_CLASS, "new", new, 0, 1, Effect::CAPTURE);
     globals.store[HASH_CLASS].set_alloc_func(hash_alloc_func);
     globals.define_builtin_class_func_rest(HASH_CLASS, "[]", hash_bracket);
     globals.define_builtin_class_func(HASH_CLASS, "try_convert", try_convert, 1);
@@ -137,6 +137,11 @@ pub(super) fn init(globals: &mut Globals) {
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = if let Some(bh) = lfp.block() {
+        if lfp.try_arg(0).is_some() {
+            return Err(MonorubyErr::argumenterr(
+                "wrong number of arguments (given 1, expected 0)",
+            ));
+        }
         let default_proc = vm.generate_proc(globals, bh, pc)?;
         Value::hash_with_class_and_default_proc(class, default_proc)
     } else {
@@ -1036,20 +1041,48 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 /// ### Enumerable#sort
 ///
 /// - sort -> [object]
-/// - [NOT SUPPORTED] sort {|a, b| ... } -> [object]
+/// - sort {|a, b| ... } -> [object]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
 #[monoruby_builtin]
 fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.expect_no_block()?;
     let hash = lfp.self_val().as_hash();
-    let mut ary = hash.keys();
-    vm.sort(globals, &mut ary)?;
-    let mut res = vec![];
-    for k in ary {
-        res.push(Value::array2(k, hash.get(k, vm, globals)?.unwrap()))
+    let mut pairs: Vec<Value> = hash
+        .iter()
+        .map(|(k, v)| Value::array2(k, v))
+        .collect();
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        // Stable sort with a comparator block.
+        let mut err: Option<MonorubyErr> = None;
+        pairs.sort_by(|a, b| {
+            if err.is_some() {
+                return std::cmp::Ordering::Equal;
+            }
+            match vm.invoke_block(globals, &data, &[*a, *b]) {
+                Ok(r) => match r.try_fixnum() {
+                    Some(n) if n < 0 => std::cmp::Ordering::Less,
+                    Some(n) if n > 0 => std::cmp::Ordering::Greater,
+                    _ => std::cmp::Ordering::Equal,
+                },
+                Err(e) => {
+                    err = Some(e);
+                    std::cmp::Ordering::Equal
+                }
+            }
+        });
+        if let Some(e) = err {
+            return Err(e);
+        }
+    } else {
+        let mut keys = hash.keys();
+        vm.sort(globals, &mut keys)?;
+        pairs = keys
+            .iter()
+            .map(|&k| Value::array2(k, hash.get(k, vm, globals).unwrap().unwrap()))
+            .collect();
     }
-    Ok(Value::array_from_vec(res))
+    Ok(Value::array_from_vec(pairs))
 }
 
 ///
