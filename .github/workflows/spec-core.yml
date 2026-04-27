@@ -69,7 +69,7 @@ jobs:
 
           parse_log () {
             local log="$1"
-            grep -aE '[0-9]+ examples?, ' "$log" || true
+            grep -E '[0-9]+ examples?, ' "$log" || true
           }
           sum_field () {
             parse_log "$1" \
