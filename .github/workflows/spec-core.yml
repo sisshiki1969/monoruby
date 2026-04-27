@@ -171,32 +171,39 @@ jobs:
           fi
 
           cd "$GH_PAGES_DIR"
-          mkdir -p data
+
+          if [ -d data ] && [ ! -d spec/data ]; then
+            mkdir -p spec
+            mv data spec/data
+          fi
+          rm -f index.html latest.json
+
+          mkdir -p spec/data
 
           TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           SHORT_SHA="${GITHUB_SHA:0:7}"
 
-          if [ ! -f data/history.csv ]; then
-            echo "timestamp,commit,category,files,examples,pass,failures,errors,pass_rate" > data/history.csv
+          if [ ! -f spec/data/history.csv ]; then
+            echo "timestamp,commit,category,files,examples,pass,failures,errors,pass_rate" > spec/data/history.csv
           fi
-          if [ ! -f data/history_total.csv ]; then
-            echo "timestamp,commit,examples,pass,failures,errors,pass_rate" > data/history_total.csv
+          if [ ! -f spec/data/history_total.csv ]; then
+            echo "timestamp,commit,examples,pass,failures,errors,pass_rate" > spec/data/history_total.csv
           fi
 
           tail -n +2 "$GITHUB_WORKSPACE/spec-results/report.csv" \
             | awk -v ts="$TIMESTAMP" -v sha="$SHORT_SHA" -F, 'BEGIN{OFS=","} {print ts,sha,$0}' \
-            >> data/history.csv
+            >> spec/data/history.csv
 
           echo "$TIMESTAMP,$SHORT_SHA,$TOTAL_EX,$TOTAL_PASS,$TOTAL_FAIL,$TOTAL_ERR,$TOTAL_RATE" \
-            >> data/history_total.csv
+            >> spec/data/history_total.csv
 
-          cp "$GITHUB_WORKSPACE/.github/spec-pages/index.html" index.html
+          cp "$GITHUB_WORKSPACE/.github/spec-pages/index.html" spec/index.html
 
-          cat > latest.json <<JSON
+          cat > spec/latest.json <<JSON
           {"schemaVersion":1,"label":"ruby/spec core","message":"${TOTAL_RATE}%","color":"blue","timestamp":"${TIMESTAMP}","commit":"${SHORT_SHA}","examples":${TOTAL_EX},"pass":${TOTAL_PASS},"failures":${TOTAL_FAIL},"errors":${TOTAL_ERR}}
           JSON
 
-          git add data/ index.html latest.json
+          git add spec/
           if git diff --cached --quiet; then
             echo "no changes to publish"
           else
