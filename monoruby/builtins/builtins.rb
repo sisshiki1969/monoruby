@@ -99,19 +99,20 @@ class Hash
   # to_h -> self
   # to_h {|key, value| block } -> Hash
   def to_h
-    return self unless block_given?
+    return (self.instance_of?(Hash) ? self : Hash[self]) unless block_given?
     h = {}
     self.each {|k, v|
-      new_kv = yield k, v
-      new_k = new_kv[0]
-      new_v = new_kv[1]
-      h[new_k] = new_v
+      pair = yield k, v
+      pair = pair.to_ary if !pair.is_a?(Array) && pair.respond_to?(:to_ary)
+      raise TypeError, "wrong element type #{pair.class} (expected array)" unless pair.is_a?(Array)
+      raise ArgumentError, "wrong array length (given #{pair.size}, expected 2)" unless pair.size == 2
+      h[pair[0]] = pair[1]
     }
     h
   end
 
   def transform_keys(hash = nil, &block)
-    return to_enum(:transform_keys) unless block || hash
+    return to_enum(:transform_keys) { size } unless block || hash
     h = {}
     if hash
       each do |k, v|
@@ -125,7 +126,8 @@ class Hash
   end
 
   def transform_keys!(hash = nil, &block)
-    return to_enum(:transform_keys!) unless block || hash
+    return to_enum(:transform_keys!) { size } unless block || hash
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     if hash
       keys.each do |k|
         if hash.key?(k)
@@ -141,26 +143,30 @@ class Hash
   end
 
   def transform_values(&block)
-    return to_enum(:transform_values) unless block
+    return to_enum(:transform_values) { size } unless block
     h = {}
+    h.compare_by_identity if compare_by_identity?
     each { |k, v| h[k] = block.call(v) }
     h
   end
 
   def transform_values!(&block)
-    return to_enum(:transform_values!) unless block
+    return to_enum(:transform_values!) { size } unless block
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     each { |k, v| self[k] = block.call(v) }
     self
   end
 
   def slice(*keys)
     h = {}
+    h.compare_by_identity if compare_by_identity?
     keys.each { |k| h[k] = self[k] if key?(k) }
     h
   end
 
   def except(*keys)
     h = dup
+    h.default = nil
     keys.each { |k| h.delete(k) }
     h
   end

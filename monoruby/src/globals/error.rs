@@ -139,7 +139,7 @@ impl MonorubyErr {
             MonorubyErrKind::Regex => "RegexpError",
             MonorubyErrKind::Runtime => "RuntimeError",
             MonorubyErrKind::IO => "IOError",
-            MonorubyErrKind::Key => "KeyError",
+            MonorubyErrKind::Key(_) => "KeyError",
             MonorubyErrKind::Fiber => "FiberError",
             MonorubyErrKind::StopIteration => "StopIteration",
             MonorubyErrKind::SystemExit(..) => "SystemExit",
@@ -170,7 +170,7 @@ impl MonorubyErr {
             MonorubyErrKind::Regex => REGEX_ERROR_CLASS,
             MonorubyErrKind::Runtime => RUNTIME_ERROR_CLASS,
             MonorubyErrKind::IO => IO_ERROR_CLASS,
-            MonorubyErrKind::Key => KEY_ERROR_CLASS,
+            MonorubyErrKind::Key(_) => KEY_ERROR_CLASS,
             MonorubyErrKind::Fiber => FIBER_ERROR_CLASS,
             MonorubyErrKind::StopIteration => STOP_ITERATION_CLASS,
             MonorubyErrKind::SystemExit(..) => SYSTEM_EXIT_ERROR_CLASS,
@@ -567,8 +567,11 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Index, msg)
     }
 
-    pub(crate) fn keyerr(msg: String) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Key, msg)
+    pub(crate) fn keyerr_with(msg: String, receiver: Value, key: Value) -> MonorubyErr {
+        MonorubyErr::new(
+            MonorubyErrKind::Key(Some((receiver.id(), key.id()))),
+            msg,
+        )
     }
 
     pub(crate) fn stopiterationerr(msg: String) -> MonorubyErr {
@@ -721,7 +724,8 @@ pub enum MonorubyErrKind {
     Regex,
     Runtime,
     IO,
-    Key,
+    /// `KeyError` with optional `(receiver, key)` as packed `Value` u64s.
+    Key(Option<(u64, u64)>),
     Fiber,
     StopIteration,
     SystemExit(u8),
@@ -762,7 +766,7 @@ impl MonorubyErrKind {
             REGEX_ERROR_CLASS => MonorubyErrKind::Regex,
             RUNTIME_ERROR_CLASS => MonorubyErrKind::Runtime,
             IO_ERROR_CLASS => MonorubyErrKind::IO,
-            KEY_ERROR_CLASS => MonorubyErrKind::Key,
+            KEY_ERROR_CLASS => MonorubyErrKind::Key(None),
             FIBER_ERROR_CLASS => MonorubyErrKind::Fiber,
             STOP_ITERATION_CLASS => MonorubyErrKind::StopIteration,
             SYSTEM_EXIT_ERROR_CLASS => MonorubyErrKind::SystemExit(0),

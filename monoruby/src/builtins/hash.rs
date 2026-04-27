@@ -156,6 +156,19 @@ pub(crate) extern "C" fn hash_alloc_func(class_id: ClassId, _: &mut Globals) -> 
     Value::hash_with_class_and_default(class_id, Value::nil())
 }
 
+/// Build an Enumerator whose `size` returns the receiver hash's current size.
+/// Used by methods like `each`, `select`, `transform_values` etc. when called
+/// without a block.
+fn hash_to_sized_enum(
+    vm: &mut Executor,
+    method: IdentId,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    let size = Value::integer(lfp.self_val().as_hash().len() as i64);
+    vm.generate_enumerator_with_size(method, lfp.self_val(), lfp.iter().collect(), pc, Some(size))
+}
+
 ///
 /// ### Hash.[]
 ///
@@ -692,7 +705,7 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> R
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("collect");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+            return hash_to_sized_enum(vm, id, lfp, pc);
         }
         Some(block) => block,
     };
@@ -719,7 +732,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("each");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+            return hash_to_sized_enum(vm, id, lfp, pc);
         }
         Some(block) => block,
     };
@@ -749,7 +762,7 @@ fn each_value(
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("each_value");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+            return hash_to_sized_enum(vm, id, lfp, pc);
         }
         Some(block) => block,
     };
@@ -772,7 +785,7 @@ fn each_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("each_key");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+            return hash_to_sized_enum(vm, id, lfp, pc);
         }
         Some(block) => block,
     };
@@ -797,13 +810,17 @@ fn select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("select");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+            return hash_to_sized_enum(vm, id, lfp, pc);
         }
         Some(block) => block,
     };
     let data = vm.get_block_data(globals, bh)?;
+    let src = lfp.self_val().as_hash();
     let mut inner = HashmapInner::default();
-    for (k, v) in lfp.self_val().as_hash().iter() {
+    if src.is_compare_by_identity() {
+        inner.compare_by_identity(vm, globals)?;
+    }
+    for (k, v) in src.iter() {
         if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
             inner.insert(k, v, vm, globals)?;
         }
@@ -822,14 +839,14 @@ fn select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/select=21.html]
 #[monoruby_builtin]
 fn select_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("select!");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+            return hash_to_sized_enum(vm, id, lfp, pc);
         }
         Some(block) => block,
     };
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let data = vm.get_block_data(globals, bh)?;
     let mut remove = vec![];
     let self_val = lfp.self_val();
@@ -943,7 +960,7 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("reject");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+            return hash_to_sized_enum(vm, id, lfp, pc);
         }
         Some(block) => block,
     };
@@ -951,6 +968,9 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     let p = vm.get_block_data(globals, bh)?;
     vm.temp_push(h);
     let mut res = Hashmap::new(h);
+    // `reject` returns a new Hash; per spec it does NOT carry over the
+    // receiver's default value or default_proc.
+    res.set_defalut_value(Value::nil());
     for (k, v) in lfp.self_val().expect_hash_ty(globals)?.iter() {
         if vm.invoke_block(globals, &p, &[k, v])?.as_bool() {
             res.remove(k, vm, globals)?;
@@ -969,14 +989,14 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/delete_if.html]
 #[monoruby_builtin]
 fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("delete_if");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+            return hash_to_sized_enum(vm, id, lfp, pc);
         }
         Some(block) => block,
     };
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let data = vm.get_block_data(globals, bh)?;
     let mut remove = vec![];
     let self_val = lfp.self_val();
@@ -1005,14 +1025,14 @@ fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/reject=21.html]
 #[monoruby_builtin]
 fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("reject!");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+            return hash_to_sized_enum(vm, id, lfp, pc);
         }
         Some(block) => block,
     };
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let data = vm.get_block_data(globals, bh)?;
     let mut remove = vec![];
     let self_val = lfp.self_val();
@@ -1142,18 +1162,31 @@ fn invert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// ### Hash#merge
 ///
 /// - merge(*others) -> Hash
-/// - [NOT SUPPORTED]merge(*others) {|key, self_val, other_val| ... } -> Hash
+/// - merge(*others) {|key, self_val, other_val| ... } -> Hash
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/merge.html]
 #[monoruby_builtin]
 fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.expect_no_block()?;
     let mut h = lfp.self_val().dup().as_hash();
-    for arg in lfp.arg(0).as_array().iter() {
-        let other_val = arg.coerce_to_hash(vm, globals)?;
-        let other = other_val;
-        for (k, v) in other.iter() {
-            h.insert(k, v, vm, globals)?;
+    if let Some(block) = lfp.block() {
+        let data = vm.get_block_data(globals, block)?;
+        for arg in lfp.arg(0).as_array().iter() {
+            let other_val = arg.coerce_to_hash(vm, globals)?;
+            for (k, other_v) in other_val.iter() {
+                if let Some(self_v) = h.get(k, vm, globals)? {
+                    let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
+                    h.insert(k, v, vm, globals)?;
+                } else {
+                    h.insert(k, other_v, vm, globals)?;
+                }
+            }
+        }
+    } else {
+        for arg in lfp.arg(0).as_array().iter() {
+            let other_val = arg.coerce_to_hash(vm, globals)?;
+            for (k, v) in other_val.iter() {
+                h.insert(k, v, vm, globals)?;
+            }
         }
     }
 
@@ -1916,7 +1949,9 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let arg0 = lfp.arg(0);
     let s = if let Some(bh) = lfp.block() {
         if lfp.try_arg(1).is_some() {
-            eprintln!("warning: block supersedes default value argument");
+            let warn_id = IdentId::get_id("warn");
+            let msg = Value::string_from_str("warning: block supersedes default value argument");
+            vm.invoke_method_inner(globals, warn_id, lfp.self_val(), &[msg], None, None)?;
         }
         match hash.get(arg0, vm, globals)? {
             Some(v) => v,
@@ -1931,10 +1966,11 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         match hash.get(arg0, vm, globals)? {
             Some(v) => v,
             None => {
-                return Err(MonorubyErr::keyerr(format!(
-                    "key not found: {}",
-                    arg0.to_s(&globals.store)
-                )));
+                return Err(MonorubyErr::keyerr_with(
+                    format!("key not found: {}", arg0.inspect(&globals.store)),
+                    lfp.self_val(),
+                    arg0,
+                ));
             }
         }
     };
@@ -1984,14 +2020,14 @@ fn key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/keep_if.html]
 #[monoruby_builtin]
 fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("keep_if");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
+            return hash_to_sized_enum(vm, id, lfp, pc);
         }
         Some(block) => block,
     };
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let data = vm.get_block_data(globals, bh)?;
     let mut remove = vec![];
     let self_val = lfp.self_val();

@@ -23,7 +23,7 @@ impl Hashmap {
         } else {
             match self.default {
                 HashDefault::Proc(proc) => vm.invoke_proc(globals, &proc, &[self.0, key]),
-                HashDefault::Value(v) => Ok(v.dup()),
+                HashDefault::Value(v) => Ok(v),
             }
         }
     }
