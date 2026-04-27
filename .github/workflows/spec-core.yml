@@ -27,6 +27,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Drop orphan rust-smallvec gitlink
+        run: git rm --cached rust-smallvec 2>/dev/null || true
+
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
