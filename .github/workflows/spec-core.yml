@@ -95,7 +95,8 @@ jobs:
             FAIL=$(sum_field "$LOG" 'failures?')
             ERR=$(sum_field "$LOG" 'errors?')
             PASS=$((EX - FAIL - ERR))
-            if [ "$EX" -gt 0 ]; then
+            [ "$PASS" -lt 0 ] && PASS=0
+            if [ "$EX" -gt 0 ] && [ "$PASS" -gt 0 ]; then
               RATE=$(awk "BEGIN{printf \"%.1f\",($PASS/$EX)*100}")
             else
               RATE="0.0"
@@ -111,7 +112,8 @@ jobs:
           done
 
           T_PASS=$((T_EX - T_FAIL - T_ERR))
-          if [ "$T_EX" -gt 0 ]; then
+          [ "$T_PASS" -lt 0 ] && T_PASS=0
+          if [ "$T_EX" -gt 0 ] && [ "$T_PASS" -gt 0 ]; then
             T_RATE=$(awk "BEGIN{printf \"%.2f\",($T_PASS/$T_EX)*100}")
           else
             T_RATE="0.00"

@@ -130,7 +130,7 @@ async function loadCsv(path) {
     const latestTs = hist[hist.length - 1].timestamp;
     const latestSha = hist[hist.length - 1].commit;
     const latest = hist.filter(r => r.timestamp === latestTs)
-                       .sort((a, b) => parseFloat(a.pass_rate) - parseFloat(b.pass_rate));
+                       .sort((a, b) => parseFloat(b.pass_rate) - parseFloat(a.pass_rate));
     document.getElementById('latestMeta').textContent =
       'snapshot: ' + latestTs + ' @ ' + latestSha;
 
