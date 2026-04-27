@@ -13,6 +13,10 @@ on:
       - 'rubymap/**'
       - 'Cargo.toml'
       - '.github/workflows/spec-core.yml'
+      - '.github/spec-pages/**'
+
+permissions:
+  contents: write
 
 jobs:
   core-specs:
@@ -131,3 +135,68 @@ jobs:
           name: spec-core-results
           path: spec-results/
           retention-days: 30
+
+      - name: Publish history to gh-pages
+        if: github.event_name == 'schedule' || github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOTAL_EX: ${{ steps.run.outputs.total_examples }}
+          TOTAL_PASS: ${{ steps.run.outputs.total_pass }}
+          TOTAL_FAIL: ${{ steps.run.outputs.total_fail }}
+          TOTAL_ERR: ${{ steps.run.outputs.total_err }}
+          TOTAL_RATE: ${{ steps.run.outputs.total_rate }}
+        run: |
+          set -euo pipefail
+
+          GH_PAGES_DIR="$RUNNER_TEMP/gh-pages"
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+          if git ls-remote --exit-code --heads "$REPO_URL" gh-pages > /dev/null 2>&1; then
+            git clone --depth 1 --branch gh-pages "$REPO_URL" "$GH_PAGES_DIR"
+          else
+            mkdir -p "$GH_PAGES_DIR"
+            git -C "$GH_PAGES_DIR" init -b gh-pages
+            git -C "$GH_PAGES_DIR" remote add origin "$REPO_URL"
+          fi
+
+          cd "$GH_PAGES_DIR"
+          mkdir -p data
+
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+
+          if [ ! -f data/history.csv ]; then
+            echo "timestamp,commit,category,files,examples,pass,failures,errors,pass_rate" > data/history.csv
+          fi
+          if [ ! -f data/history_total.csv ]; then
+            echo "timestamp,commit,examples,pass,failures,errors,pass_rate" > data/history_total.csv
+          fi
+
+          tail -n +2 "$GITHUB_WORKSPACE/spec-results/report.csv" \
+            | awk -v ts="$TIMESTAMP" -v sha="$SHORT_SHA" -F, 'BEGIN{OFS=","} {print ts,sha,$0}' \
+            >> data/history.csv
+
+          echo "$TIMESTAMP,$SHORT_SHA,$TOTAL_EX,$TOTAL_PASS,$TOTAL_FAIL,$TOTAL_ERR,$TOTAL_RATE" \
+            >> data/history_total.csv
+
+          cp "$GITHUB_WORKSPACE/.github/spec-pages/index.html" index.html
+
+          cat > latest.json <<JSON
+          {"schemaVersion":1,"label":"ruby/spec core","message":"${TOTAL_RATE}%","color":"blue","timestamp":"${TIMESTAMP}","commit":"${SHORT_SHA}","examples":${TOTAL_EX},"pass":${TOTAL_PASS},"failures":${TOTAL_FAIL},"errors":${TOTAL_ERR}}
+          JSON
+
+          git add data/ index.html latest.json
+          if git diff --cached --quiet; then
+            echo "no changes to publish"
+          else
+            git commit -m "spec: ${TIMESTAMP} (${SHORT_SHA}) ${TOTAL_RATE}%"
+            for i in 1 2 3 4; do
+              if git push -u origin gh-pages; then
+                break
+              fi
+              sleep $((2 ** i))
+            done
+          fi
