@@ -6,7 +6,8 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS, ObjTy::HASH);
-    globals.define_builtin_class_func_with_effect(HASH_CLASS, "new", new, 0, 1, Effect::CAPTURE);
+    let hash_meta = globals.store.get_metaclass(HASH_CLASS).id();
+    globals.define_builtin_funcs_with_effect(hash_meta, "new", &[], new, 0, 0, true, Effect::CAPTURE);
     globals.store[HASH_CLASS].set_alloc_func(hash_alloc_func);
     globals.define_builtin_class_func_rest(HASH_CLASS, "[]", hash_bracket);
     globals.define_builtin_class_func(HASH_CLASS, "try_convert", try_convert, 1);
@@ -15,7 +16,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "default_proc", default_proc, 0);
     globals.define_builtin_func(HASH_CLASS, "default_proc=", default_proc_assign, 1);
     globals.define_builtin_func(HASH_CLASS, "default=", default_assign, 1);
-    globals.define_builtin_funcs(HASH_CLASS, "==", &["===", "eql?"], eq, 1);
+    globals.define_builtin_funcs(HASH_CLASS, "==", &["==="], eq, 1);
+    globals.define_builtin_func(HASH_CLASS, "eql?", eql, 1);
     globals.define_builtin_func(HASH_CLASS, "<", lt, 1);
     globals.define_builtin_func(HASH_CLASS, "<=", le, 1);
     globals.define_builtin_func(HASH_CLASS, ">", gt, 1);
@@ -131,23 +133,25 @@ pub(super) fn init(globals: &mut Globals) {
 /// ### Hash.new
 ///
 /// - new(ifnone = nil) -> Hash
+/// - new {|hash, key| ... } -> Hash
+///
+/// Allocates a fresh Hash and forwards `*args` and `&block` to
+/// `#initialize`, matching `Class#new` semantics. The default value /
+/// default proc / arg validation all live in `Hash#initialize` (Ruby).
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/s/new.html]
 #[monoruby_builtin]
-fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
-    let obj = if let Some(bh) = lfp.block() {
-        if lfp.try_arg(0).is_some() {
-            return Err(MonorubyErr::argumenterr(
-                "wrong number of arguments (given 1, expected 0)",
-            ));
-        }
-        let default_proc = vm.generate_proc(globals, bh, pc)?;
-        Value::hash_with_class_and_default_proc(class, default_proc)
-    } else {
-        let default = lfp.try_arg(0).unwrap_or_default();
-        Value::hash_with_class_and_default(class, default)
-    };
+    let obj = Value::hash_with_class_and_default(class, Value::nil());
+    vm.invoke_method_inner(
+        globals,
+        IdentId::INITIALIZE,
+        obj,
+        &lfp.arg(0).as_array(),
+        lfp.block(),
+        None,
+    )?;
     Ok(obj)
 }
 
@@ -185,41 +189,46 @@ fn hash_bracket(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
     let args = lfp.arg(0).as_array();
     let len = args.len();
-    match len {
-        0 => Ok(Value::hash(RubyMap::default())),
+    let mut result = match len {
+        0 => Value::hash(RubyMap::default()),
         1 => {
             let arg = args[0];
             if arg.try_hash_ty().is_some() {
-                // Single hash argument: return a copy
-                let inner = arg.as_hashmap_inner().clone();
-                Ok(Value::hash_from_inner(inner))
+                // Single hash argument: return a fresh hash with copied entries
+                // (do NOT carry over default value/proc or compare_by_identity).
+                let mut map = RubyMap::default();
+                for (k, v) in arg.as_hash().iter() {
+                    map.insert(k, v, vm, globals)?;
+                }
+                Value::hash(map)
             } else if let Some(ary) = arg.try_array_ty() {
                 // Single array argument: try to convert [[k,v], ...] to hash
-                hash_from_array_pairs(ary.iter().copied(), vm, globals)
+                hash_from_array_pairs(ary.iter().copied(), vm, globals)?
             } else {
                 // Try to_hash first
                 let to_hash_id = IdentId::get_id("to_hash");
-                if let Some(result) =
+                if let Some(coerced) =
                     vm.invoke_method_if_exists(globals, to_hash_id, arg, &[], None, None)?
+                    && coerced.try_hash_ty().is_some()
                 {
-                    if result.try_hash_ty().is_some() {
-                        let inner = result.as_hashmap_inner().clone();
-                        return Ok(Value::hash_from_inner(inner));
+                    let mut map = RubyMap::default();
+                    for (k, v) in coerced.as_hash().iter() {
+                        map.insert(k, v, vm, globals)?;
                     }
-                }
-                // Try to_ary
-                if let Some(result) =
+                    Value::hash(map)
+                } else if let Some(coerced) =
                     vm.invoke_method_if_exists(globals, IdentId::TO_ARY, arg, &[], None, None)?
+                    && let Some(ary) = coerced.try_array_ty()
                 {
-                    if let Some(ary) = result.try_array_ty() {
-                        return hash_from_array_pairs(ary.iter().copied(), vm, globals);
-                    }
+                    hash_from_array_pairs(ary.iter().copied(), vm, globals)?
+                } else {
+                    return Err(MonorubyErr::argumenterr(
+                        "odd number of arguments for Hash".to_string(),
+                    ));
                 }
-                Err(MonorubyErr::argumenterr(
-                    "odd number of arguments for Hash".to_string(),
-                ))
             }
         }
         _ => {
@@ -232,32 +241,58 @@ fn hash_bracket(
             for i in (0..len).step_by(2) {
                 map.insert(args[i], args[i + 1], vm, globals)?;
             }
-            Ok(Value::hash(map))
+            Value::hash(map)
         }
+    };
+    // Tag the result with the calling class so `MyHash[...]` returns a
+    // `MyHash`. Do NOT call `#initialize` on the subclass (matches CRuby).
+    if class_id != HASH_CLASS {
+        result.change_class(class_id);
     }
+    Ok(result)
 }
 
 /// Helper to convert an iterator of values (expected to be [k,v] pairs) into a Hash.
+///
+/// `[k, v]` pairs become entries; `[k]` becomes `k => nil` (matching CRuby).
+/// Anything else raises `ArgumentError` with the index of the offending element.
 fn hash_from_array_pairs(
     iter: impl Iterator<Item = Value>,
     vm: &mut Executor,
     globals: &mut Globals,
 ) -> Result<Value> {
     let mut map = RubyMap::default();
-    for elem in iter {
-        if let Some(pair) = elem.try_array_ty() {
-            if pair.len() == 2 {
-                map.insert(pair[0], pair[1], vm, globals)?;
+    for (idx, elem) in iter.enumerate() {
+        let Some(pair) = elem.try_array_ty() else {
+            // CRuby formats `nil`/`true`/`false` literally and uses class
+            // name for everything else.
+            let label = if elem.is_nil() {
+                "nil".to_string()
+            } else if elem.id() == crate::value::TRUE_VALUE {
+                "true".to_string()
+            } else if elem.id() == crate::value::FALSE_VALUE {
+                "false".to_string()
             } else {
+                elem.get_real_class_name(globals)
+            };
+            return Err(MonorubyErr::argumenterr(format!(
+                "wrong element type {} at {} (expected array)",
+                label, idx
+            )));
+        };
+        match pair.len() {
+            1 => {
+                map.insert(pair[0], Value::nil(), vm, globals)?;
+            }
+            2 => {
+                map.insert(pair[0], pair[1], vm, globals)?;
+            }
+            n => {
                 return Err(MonorubyErr::argumenterr(format!(
                     "invalid number of elements ({} for 1..2)",
-                    pair.len()
+                    n
                 )));
             }
-        } else {
-            return Err(MonorubyErr::argumenterr(
-                "wrong number of arguments (odd number of arguments for Hash)".to_string(),
-            ));
         }
     }
     Ok(Value::hash(map))
@@ -345,26 +380,50 @@ fn default_proc(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/default_proc=3d.html]
 #[monoruby_builtin]
 fn default_proc_assign(
-    _: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let arg = lfp.arg(0);
-    let mut hash = lfp.self_val().as_hash();
     if arg.is_nil() {
+        let mut hash = lfp.self_val().as_hash();
         hash.set_defalut_value(Value::nil());
-        Ok(Value::nil())
-    } else if let Some(proc) = arg.is_proc() {
-        hash.set_defalut_proc(proc);
-        Ok(arg)
-    } else {
-        Err(MonorubyErr::typeerr(format!(
-            "wrong default_proc type {} (expected Proc)",
-            arg.get_real_class_name(globals)
-        )))
+        return Ok(Value::nil());
     }
+    // Coerce via :to_proc when arg is not already a Proc, mirroring CRuby.
+    let proc_val = if arg.is_proc().is_some() {
+        arg
+    } else {
+        let to_proc_id = IdentId::get_id("to_proc");
+        let coerced =
+            vm.invoke_method_if_exists(globals, to_proc_id, arg, &[], None, None)?;
+        match coerced {
+            Some(v) if v.is_proc().is_some() => v,
+            _ => {
+                return Err(MonorubyErr::typeerr(format!(
+                    "wrong default_proc type {} (expected Proc)",
+                    arg.get_real_class_name(globals)
+                )));
+            }
+        }
+    };
+    let proc = proc_val.is_proc().unwrap();
+    // For lambdas, the arity must be exactly 2 (matches CRuby's hash.c).
+    let func_id = proc.func_id();
+    let is_lambda = !globals[func_id].is_block_style();
+    if is_lambda {
+        let arity = globals[func_id].arity();
+        if arity != 2 {
+            return Err(MonorubyErr::typeerr(format!(
+                "default_proc takes two arguments (2 for {arity})"
+            )));
+        }
+    }
+    let mut hash = lfp.self_val().as_hash();
+    hash.set_defalut_proc(proc);
+    Ok(proc_val)
 }
 
 ///
@@ -427,6 +486,49 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
             {
                 continue;
             } else {
+                return Ok(Value::bool(false));
+            }
+        }
+        Ok(Value::bool(true))
+    }, Value::bool(true))
+}
+
+///
+/// ### Hash#eql?
+///
+/// - eql?(other) -> bool
+///
+/// Like `==`, but compares values via `#eql?` rather than `#==`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/eql=3f.html]
+#[monoruby_builtin]
+fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let rhs_v = lfp.arg(0);
+    let lhs = self_val.as_hash();
+    let rhs = if let Some(rhs) = rhs_v.try_hash_ty() {
+        rhs
+    } else {
+        return Ok(Value::bool(false));
+    };
+    if lhs.len() != rhs.len() {
+        return Ok(Value::bool(false));
+    }
+    let eql_id = IdentId::get_id("eql?");
+    crate::value::exec_recursive_paired(self_val.id(), rhs_v.id(), || {
+        for (k, lhs_value) in lhs.iter() {
+            let Some(rhs_value) = rhs.get(k, vm, globals)? else {
+                return Ok(Value::bool(false));
+            };
+            let result = vm.invoke_method_inner(
+                globals,
+                eql_id,
+                lhs_value,
+                &[rhs_value],
+                None,
+                None,
+            )?;
+            if !result.as_bool() {
                 return Ok(Value::bool(false));
             }
         }
@@ -664,9 +766,16 @@ fn values(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/clone.html]
 #[monoruby_builtin]
-fn clone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let h = lfp.self_val().as_hashmap_inner().clone();
-    Ok(Value::hash_from_inner(h))
+fn clone(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // Use the real class (skipping singleton/iclass) so that singleton
+    // methods on the receiver do NOT show up on the clone.
+    let class_id = lfp.self_val().real_class(&globals.store).id();
+    let inner = lfp.self_val().as_hashmap_inner().clone();
+    let mut v = Value::hash_from_inner(inner);
+    if class_id != HASH_CLASS {
+        v.change_class(class_id);
+    }
+    Ok(v)
 }
 
 ///
@@ -927,18 +1036,25 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                     s.push_str(", ");
                 }
                 first = false;
-                let v_inspect =
-                    vm.invoke_method_inner(globals, IdentId::INSPECT, v, &[], None, None)?;
+                let v_str = inspect_value_for_hash(vm, globals, v)?;
                 if let Some(sym) = k.try_symbol() {
-                    s.push_str(&format!("{sym}: {}", v_inspect.to_s(&globals.store)));
+                    // Use the symbol's #inspect form ("name" / ":\"foo\"") to
+                    // decide whether the shorthand `name:` is valid. If the
+                    // canonical inspect quotes the symbol, mirror that here
+                    // and write `"name":`; otherwise use bare `name:`.
+                    let sym_inspect = crate::value::inspect_symbol(sym);
+                    let key_str = if let Some(rest) = sym_inspect.strip_prefix(":\"") {
+                        // `:\"...\"` -> `"..."`
+                        let inner = rest.strip_suffix('"').unwrap_or(rest);
+                        format!("\"{inner}\"")
+                    } else {
+                        // `:name` -> `name`
+                        sym_inspect.trim_start_matches(':').to_string()
+                    };
+                    s.push_str(&format!("{key_str}: {v_str}"));
                 } else {
-                    let k_inspect =
-                        vm.invoke_method_inner(globals, IdentId::INSPECT, k, &[], None, None)?;
-                    s.push_str(&format!(
-                        "{} => {}",
-                        k_inspect.to_s(&globals.store),
-                        v_inspect.to_s(&globals.store)
-                    ));
+                    let k_str = inspect_value_for_hash(vm, globals, k)?;
+                    s.push_str(&format!("{k_str} => {v_str}"));
                 }
             }
             s.push('}');
@@ -946,6 +1062,30 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         },
         Value::string("{...}".to_string()),
     )
+}
+
+/// Return the string to embed for a hash key/value when rendering
+/// `Hash#inspect`. Calls Ruby `#inspect`; if the result is not a String,
+/// calls Ruby `#to_s` on it, but does not coerce further (no `#to_str`).
+/// Per CRuby `rb_hash_inspect`, exceptions raised by `#to_s` propagate.
+fn inspect_value_for_hash(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<String> {
+    let inspected = vm.invoke_method_inner(globals, IdentId::INSPECT, v, &[], None, None)?;
+    if let Some(s) = inspected.is_str() {
+        return Ok(s.to_string());
+    }
+    let to_s_result =
+        vm.invoke_method_inner(globals, IdentId::TO_S, inspected, &[], None, None)?;
+    if let Some(s) = to_s_result.is_str() {
+        Ok(s.to_string())
+    } else {
+        // #to_s returned a non-String; fall back to the default object
+        // representation rather than coercing via #to_str.
+        Ok(to_s_result.to_s(&globals.store))
+    }
 }
 
 ///
@@ -964,20 +1104,19 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
         }
         Some(block) => block,
     };
-    let h = lfp.self_val().dup();
+    // `reject` returns a fresh Hash (NOT the receiver's class, NOT carrying
+    // singleton methods, default value, or default_proc).
+    let mut inner = HashmapInner::default();
+    if lfp.self_val().as_hash().is_compare_by_identity() {
+        inner.compare_by_identity(vm, globals)?;
+    }
     let p = vm.get_block_data(globals, bh)?;
-    vm.temp_push(h);
-    let mut res = Hashmap::new(h);
-    // `reject` returns a new Hash; per spec it does NOT carry over the
-    // receiver's default value or default_proc.
-    res.set_defalut_value(Value::nil());
-    for (k, v) in lfp.self_val().expect_hash_ty(globals)?.iter() {
-        if vm.invoke_block(globals, &p, &[k, v])?.as_bool() {
-            res.remove(k, vm, globals)?;
+    for (k, v) in lfp.self_val().as_hash().iter() {
+        if !vm.invoke_block(globals, &p, &[k, v])?.as_bool() {
+            inner.insert(k, v, vm, globals)?;
         }
     }
-    let h = vm.temp_pop();
-    Ok(h)
+    Ok(Value::hash_from_inner(inner))
 }
 
 ///

@@ -91,6 +91,18 @@ end
 class Hash
   include Enumerable
 
+  def initialize(default = (no_arg = true; nil), &block)
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
+    if block
+      raise ArgumentError, "wrong number of arguments (given 1, expected 0)" unless no_arg
+      self.default_proc = block
+    else
+      self.default = no_arg ? nil : default
+    end
+    self
+  end
+  private :initialize
+
   def to_hash
     self
   end
@@ -99,13 +111,23 @@ class Hash
   # to_h -> self
   # to_h {|key, value| block } -> Hash
   def to_h
-    return (self.instance_of?(Hash) ? self : Hash[self]) unless block_given?
+    unless block_given?
+      return self if self.instance_of?(Hash)
+      h = Hash[self]
+      h.compare_by_identity if compare_by_identity?
+      if (dp = default_proc)
+        h.default_proc = dp
+      else
+        h.default = default
+      end
+      return h
+    end
     h = {}
     self.each {|k, v|
       pair = yield k, v
       pair = pair.to_ary if !pair.is_a?(Array) && pair.respond_to?(:to_ary)
       raise TypeError, "wrong element type #{pair.class} (expected array)" unless pair.is_a?(Array)
-      raise ArgumentError, "wrong array length (given #{pair.size}, expected 2)" unless pair.size == 2
+      raise ArgumentError, "element has wrong array length (expected 2, was #{pair.size})" unless pair.size == 2
       h[pair[0]] = pair[1]
     }
     h

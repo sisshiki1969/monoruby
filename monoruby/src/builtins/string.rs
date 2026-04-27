@@ -24,8 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
     globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
     globals.define_builtin_func(STRING_CLASS, "hash", hash, 0);
-    globals.define_builtin_func(STRING_CLASS, "==", eq, 1);
-    globals.define_builtin_func(STRING_CLASS, "===", eq, 1);
+    globals.define_builtin_funcs(STRING_CLASS, "==", &["===", "eql?"], eq, 1);
     globals.define_builtin_func(STRING_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func(STRING_CLASS, "casecmp", casecmp, 1);
     globals.define_builtin_func(STRING_CLASS, "casecmp?", casecmp_p, 1);
