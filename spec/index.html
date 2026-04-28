@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>monoruby ruby/spec core history</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2em; max-width: 1100px; }
+  h1 { margin-bottom: 0.2em; }
+  .meta { color: #666; font-size: 0.9em; margin-bottom: 2em; }
+  section { margin-bottom: 3em; }
+  canvas { max-width: 100%; }
+  select { font-size: 1em; padding: 0.2em 0.5em; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
+  th, td { padding: 4px 8px; border-bottom: 1px solid #eee; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { border-bottom: 2px solid #888; }
+</style>
+</head>
+<body>
+<h1>monoruby × ruby/spec core</h1>
+<div class="meta">
+  Pass rate history of <code>core/*</code> subcategories.
+  Source: <a href="data/history.csv">history.csv</a>,
+  <a href="data/history_total.csv">history_total.csv</a>,
+  <a href="latest.json">latest.json</a>.
+</div>
+
+<section>
+  <h2>Total pass rate over time</h2>
+  <canvas id="totalChart" height="120"></canvas>
+</section>
+
+<section>
+  <h2>Per-category pass rate over time</h2>
+  <label>Category: <select id="catSelect"></select></label>
+  <canvas id="catChart" height="120"></canvas>
+</section>
+
+<section>
+  <h2>Latest snapshot</h2>
+  <div id="latestMeta" class="meta"></div>
+  <div id="latestBarWrap" style="position: relative;"><canvas id="latestBar"></canvas></div>
+  <table id="latestTable">
+    <thead>
+      <tr><th>Category</th><th>Files</th><th>Examples</th><th>Pass</th><th>Failures</th><th>Errors</th><th>Pass rate</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<script>
+async function loadCsv(path) {
+  const res = await fetch(path + '?t=' + Date.now());
+  if (!res.ok) return [];
+  const text = (await res.text()).trim();
+  if (!text) return [];
+  const [header, ...rows] = text.split('\n');
+  const cols = header.split(',');
+  return rows.map(r => {
+    const vals = r.split(',');
+    const obj = {};
+    cols.forEach((c, i) => obj[c] = vals[i]);
+    return obj;
+  });
+}
+
+(async () => {
+  const total = await loadCsv('data/history_total.csv');
+  const hist = await loadCsv('data/history.csv');
+
+  if (total.length) {
+    new Chart(document.getElementById('totalChart'), {
+      type: 'line',
+      data: {
+        labels: total.map(r => r.timestamp),
+        datasets: [{
+          label: 'Total pass rate (%)',
+          data: total.map(r => parseFloat(r.pass_rate)),
+          borderColor: '#2e7d32',
+          backgroundColor: 'rgba(46,125,50,0.15)',
+          tension: 0.15,
+          fill: true,
+          pointRadius: 2
+        }]
+      },
+      options: {
+        scales: { y: { suggestedMin: 0, suggestedMax: 100 } }
+      }
+    });
+  }
+
+  const categories = [...new Set(hist.map(r => r.category))].sort();
+  const sel = document.getElementById('catSelect');
+  for (const c of categories) {
+    const opt = document.createElement('option');
+    opt.value = c; opt.textContent = c;
+    sel.appendChild(opt);
+  }
+
+  let catChart;
+  function drawCat(cat) {
+    const rows = hist.filter(r => r.category === cat);
+    const cfg = {
+      type: 'line',
+      data: {
+        labels: rows.map(r => r.timestamp),
+        datasets: [{
+          label: cat + ' pass rate (%)',
+          data: rows.map(r => parseFloat(r.pass_rate)),
+          borderColor: '#1565c0',
+          backgroundColor: 'rgba(21,101,192,0.15)',
+          tension: 0.15,
+          fill: true,
+          pointRadius: 2
+        }]
+      },
+      options: { scales: { y: { suggestedMin: 0, suggestedMax: 100 } } }
+    };
+    if (catChart) { catChart.destroy(); }
+    catChart = new Chart(document.getElementById('catChart'), cfg);
+  }
+  if (categories.length) {
+    sel.value = categories[0];
+    drawCat(categories[0]);
+    sel.addEventListener('change', e => drawCat(e.target.value));
+  }
+
+  if (hist.length) {
+    const latestTs = hist[hist.length - 1].timestamp;
+    const latestSha = hist[hist.length - 1].commit;
+    const latest = hist.filter(r => r.timestamp === latestTs)
+                       .sort((a, b) => parseFloat(b.pass_rate) - parseFloat(a.pass_rate));
+    document.getElementById('latestMeta').textContent =
+      'snapshot: ' + latestTs + ' @ ' + latestSha;
+
+    const barColor = v => {
+      if (v >= 100) return '#2e7d32';
+      if (v >= 90)  return '#9ccc65';
+      if (v >= 70)  return '#fdd835';
+      return '#c62828';
+    };
+    document.getElementById('latestBarWrap').style.height =
+      Math.max(320, latest.length * 22) + 'px';
+
+    new Chart(document.getElementById('latestBar'), {
+      type: 'bar',
+      data: {
+        labels: latest.map(r => r.category),
+        datasets: [{
+          label: 'Pass rate (%)',
+          data: latest.map(r => parseFloat(r.pass_rate)),
+          backgroundColor: latest.map(r => barColor(parseFloat(r.pass_rate)))
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        maintainAspectRatio: false,
+        scales: {
+          x: { suggestedMin: 0, suggestedMax: 100 },
+          y: { ticks: { autoSkip: false, font: { size: 11 } } }
+        },
+        plugins: { legend: { display: false } }
+      }
+    });
+
+    const tbody = document.querySelector('#latestTable tbody');
+    for (const r of latest) {
+      const tr = document.createElement('tr');
+      for (const k of ['category','files','examples','pass','failures','errors','pass_rate']) {
+        const td = document.createElement('td');
+        td.textContent = k === 'pass_rate' ? r[k] + '%' : r[k];
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+  }
+})();
+</script>
+</body>
+</html>
