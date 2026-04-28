@@ -29,15 +29,35 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(IO_CLASS, "readline", readline, 0, 2, false);
     globals.define_builtin_funcs(IO_CLASS, "each", &["each_line"], each_line, 0);
     globals.define_builtin_class_func_with(IO_CLASS, "read", io_class_read, 1, 4, false);
+    globals.define_builtin_class_func_with(IO_CLASS, "readlines", io_class_readlines, 1, 3, false);
     globals.define_builtin_class_func_with(IO_CLASS, "sysopen", io_sysopen, 1, 3, false);
     globals.define_builtin_class_func_with(IO_CLASS, "pipe", io_pipe, 0, 3, false);
     globals.define_builtin_class_func_rest(IO_CLASS, "popen", io_popen);
     globals.define_builtin_func(IO_CLASS, "pid", io_pid, 0);
     globals.define_builtin_func(IO_CLASS, "fileno", io_fileno, 0);
+    globals.define_builtin_func(IO_CLASS, "to_i", io_fileno, 0);
+    globals.define_builtin_func(IO_CLASS, "to_io", io_to_io, 0);
     globals.define_builtin_func_with(IO_CLASS, "write", io_write_method, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "syswrite", io_syswrite, 1, 1, false);
+    globals.define_builtin_func_with(IO_CLASS, "readlines", io_readlines, 0, 2, false);
+    globals.define_builtin_func(IO_CLASS, "binmode", io_binmode, 0);
+    globals.define_builtin_func(IO_CLASS, "binmode?", io_binmode_, 0);
+    globals.define_builtin_func(IO_CLASS, "autoclose=", io_autoclose_set, 1);
+    globals.define_builtin_func(IO_CLASS, "autoclose?", io_autoclose_, 0);
+    globals.define_builtin_func_with(IO_CLASS, "advise", io_advise, 1, 3, false);
+    globals.define_builtin_funcs(IO_CLASS, "pos", &["tell"], io_pos, 0);
+    globals.define_builtin_func(IO_CLASS, "pos=", io_pos_set, 1);
+    globals.define_builtin_func(IO_CLASS, "rewind", io_rewind, 0);
+    globals.define_builtin_funcs(IO_CLASS, "eof?", &["eof"], io_eof_, 0);
+    globals.define_builtin_func(IO_CLASS, "getbyte", io_getbyte, 0);
+    globals.define_builtin_func(IO_CLASS, "readbyte", io_readbyte, 0);
+    globals.define_builtin_func(IO_CLASS, "getc", io_getc, 0);
+    globals.define_builtin_func(IO_CLASS, "readchar", io_readchar, 0);
+    globals.define_builtin_func_with(IO_CLASS, "sysseek", io_sysseek, 1, 2, false);
+    globals.define_builtin_func(IO_CLASS, "lineno", io_lineno, 0);
+    globals.define_builtin_func(IO_CLASS, "lineno=", io_lineno_set, 1);
     globals.define_builtin_class_func_with(IO_CLASS, "select", io_select, 1, 4, false);
-    globals.define_builtin_class_func_with(IO_CLASS, "foreach", io_foreach, 1, 2, false);
+    globals.define_builtin_class_func_with(IO_CLASS, "foreach", io_foreach, 1, 3, false);
     globals.define_builtin_class_func_with(IO_CLASS, "copy_stream", io_copy_stream, 2, 4, false);
     globals.define_builtin_func_with(IO_CLASS, "set_encoding", set_encoding, 1, 3, false);
     globals.define_builtin_func(IO_CLASS, "external_encoding", external_encoding, 0);
@@ -514,6 +534,40 @@ fn io_class_read(
 }
 
 ///
+/// ### IO.readlines
+///
+/// - readlines(path, [NOT SUPPORTED] sep = $/, [NOT SUPPORTED] limit = nil) -> [String]
+///
+/// Reads the entire file at `path` as a list of lines.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/readlines.html]
+#[monoruby_builtin]
+fn io_class_readlines(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let path = lfp.arg(0).coerce_to_str(vm, globals)?;
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
+    let mut lines: Vec<Value> = Vec::new();
+    let mut start = 0;
+    let bytes = content.as_bytes();
+    while start < bytes.len() {
+        if let Some(pos) = content[start..].find('\n') {
+            let end = start + pos + 1;
+            lines.push(Value::string(content[start..end].to_string()));
+            start = end;
+        } else {
+            lines.push(Value::string(content[start..].to_string()));
+            break;
+        }
+    }
+    Ok(Value::array_from_vec(lines))
+}
+
+///
 /// ### IO.foreach
 ///
 /// - foreach(path, sep = "\n") {|line| ... } -> nil
@@ -537,15 +591,26 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let p = vm.get_block_data(globals, bh)?;
     let content = std::fs::read_to_string(&path)
         .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
+    // arg1 may be a separator (String/nil) or a limit (Integer); arg2, if
+    // present, is always the limit. The limit value is currently parsed but
+    // not applied — line slicing returns whole lines.
     let sep = if let Some(sep_val) = lfp.try_arg(1) {
         if sep_val.is_nil() {
             None
+        } else if sep_val.try_fixnum().is_some() {
+            // arg1 is a limit, sep defaults to "\n".
+            Some("\n".to_string())
         } else {
             Some(sep_val.coerce_to_str(vm, globals)?)
         }
     } else {
         Some("\n".to_string())
     };
+    if let Some(arg2) = lfp.try_arg(2)
+        && !arg2.is_nil()
+    {
+        let _ = arg2.coerce_to_int_i64(vm, globals)?;
+    }
     match sep {
         None => {
             // When sep is nil, yield the entire content as one string
@@ -813,6 +878,389 @@ fn io_fileno(
     let self_ = lfp.self_val();
     let fd = self_.as_io_inner().fileno()?;
     Ok(Value::integer(fd as i64))
+}
+
+/// ### IO#to_io
+///
+/// - to_io -> self
+#[monoruby_builtin]
+fn io_to_io(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(lfp.self_val())
+}
+
+/// ### IO#readlines
+///
+/// - readlines(rs = $/, [NOT SUPPORTED] limit, [NOT SUPPORTED] chomp: false) -> [String]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readlines.html]
+#[monoruby_builtin]
+fn io_readlines(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    let mut result = Vec::new();
+    while let Some(s) = io.read_line()? {
+        result.push(Value::string(s));
+    }
+    Ok(Value::array_from_vec(result))
+}
+
+/// ### IO#binmode
+///
+/// - binmode -> self
+///
+/// On platforms with text-mode/binary-mode distinction, switches the stream
+/// to binary mode. monoruby treats all streams as binary, so this is a
+/// no-op that returns self.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/binmode.html]
+#[monoruby_builtin]
+fn io_binmode(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(lfp.self_val())
+}
+
+/// ### IO#binmode?
+///
+/// - binmode? -> bool
+#[monoruby_builtin]
+fn io_binmode_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    // monoruby always operates in binary mode.
+    Ok(Value::bool(true))
+}
+
+/// ### IO#autoclose=
+///
+/// - autoclose=(bool) -> bool
+///
+/// Tracking the autoclose flag is not currently supported; this acts as a
+/// no-op and returns the argument coerced to a Boolean.
+#[monoruby_builtin]
+fn io_autoclose_set(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::bool(lfp.arg(0).as_bool()))
+}
+
+/// ### IO#autoclose?
+///
+/// - autoclose? -> bool
+#[monoruby_builtin]
+fn io_autoclose_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::bool(true))
+}
+
+/// ### IO#advise
+///
+/// - advise(advice, offset = 0, length = 0) -> nil
+///
+/// `posix_fadvise(2)` hint. Recognized advice symbols: `:normal`,
+/// `:sequential`, `:random`, `:willneed`, `:dontneed`, `:noreuse`. Other
+/// values raise `NotImplementedError`. monoruby validates the arguments but
+/// does not actually issue the syscall.
+#[monoruby_builtin]
+fn io_advise(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg0 = lfp.arg(0);
+    let sym = arg0.try_symbol().ok_or_else(|| {
+        MonorubyErr::typeerr(format!(
+            "no implicit conversion of {} into Symbol",
+            globals.get_class_name(arg0.class()),
+        ))
+    })?;
+    let name = sym.get_name();
+    match name.as_str() {
+        "normal" | "sequential" | "random" | "willneed" | "dontneed" | "noreuse" => {}
+        _ => {
+            return Err(MonorubyErr::runtimeerr(format!(
+                "advise: unknown advice :{}",
+                name
+            )));
+        }
+    }
+    if let Some(arg1) = lfp.try_arg(1) {
+        let _ = arg1.coerce_to_int_i64(vm, globals)?;
+    }
+    if let Some(arg2) = lfp.try_arg(2) {
+        let _ = arg2.coerce_to_int_i64(vm, globals)?;
+    }
+    Ok(Value::nil())
+}
+
+/// ### IO#pos / IO#tell
+///
+/// - pos -> Integer
+/// - tell -> Integer
+#[monoruby_builtin]
+fn io_pos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    let pos = io
+        .seek(0, 1)
+        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
+    Ok(Value::integer(pos as i64))
+}
+
+/// ### IO#pos=
+///
+/// - pos=(n) -> Integer
+#[monoruby_builtin]
+fn io_pos_set(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let mut self_ = lfp.self_val();
+    self_
+        .as_io_inner_mut()
+        .seek(n, 0)
+        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
+    Ok(Value::integer(n))
+}
+
+/// ### IO#rewind
+///
+/// - rewind -> 0
+#[monoruby_builtin]
+fn io_rewind(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    self_
+        .as_io_inner_mut()
+        .seek(0, 0)
+        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
+    Ok(Value::integer(0))
+}
+
+/// ### IO#eof? / IO#eof
+///
+/// - eof? -> bool
+/// - eof -> bool
+#[monoruby_builtin]
+fn io_eof_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    // Read 1 byte; if empty, we're at EOF. Then push it back via seek(-1).
+    let buf = io.read(Some(1))?;
+    if buf.is_empty() {
+        return Ok(Value::bool(true));
+    }
+    // Try to seek back. If seek isn't supported (pipe/stdin), accept that the
+    // byte is consumed — matches CRuby's pipe semantics where eof? blocks
+    // for a read and discards the byte if it appears.
+    let _ = io.seek(-1, 1);
+    Ok(Value::bool(false))
+}
+
+/// ### IO#getbyte
+///
+/// - getbyte -> Integer | nil
+#[monoruby_builtin]
+fn io_getbyte(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    let buf = io.read(Some(1))?;
+    if buf.is_empty() {
+        Ok(Value::nil())
+    } else {
+        Ok(Value::integer(buf[0] as i64))
+    }
+}
+
+/// ### IO#readbyte
+///
+/// - readbyte -> Integer
+///
+/// Like `IO#getbyte` but raises `EOFError` at end of stream.
+#[monoruby_builtin]
+fn io_readbyte(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    let buf = io.read(Some(1))?;
+    if buf.is_empty() {
+        Err(MonorubyErr::runtimeerr("end of file reached"))
+    } else {
+        Ok(Value::integer(buf[0] as i64))
+    }
+}
+
+/// Read a single UTF-8 character (1-4 bytes) from the IO. Returns the bytes
+/// of the character, an empty Vec on EOF, or the first byte if the byte
+/// sequence is not valid UTF-8 (matching CRuby's invalid-byte behavior in
+/// binary-mode reads, which is what monoruby uses everywhere).
+fn read_one_char(io: &mut IoInner) -> Result<Vec<u8>> {
+    let first = io.read(Some(1))?;
+    if first.is_empty() {
+        return Ok(vec![]);
+    }
+    let b = first[0];
+    let total = if b & 0x80 == 0 {
+        1
+    } else if b & 0xE0 == 0xC0 {
+        2
+    } else if b & 0xF0 == 0xE0 {
+        3
+    } else if b & 0xF8 == 0xF0 {
+        4
+    } else {
+        return Ok(first);
+    };
+    let mut buf = first;
+    while buf.len() < total {
+        let next = io.read(Some(total - buf.len()))?;
+        if next.is_empty() {
+            break;
+        }
+        buf.extend_from_slice(&next);
+    }
+    Ok(buf)
+}
+
+/// ### IO#getc
+///
+/// - getc -> String | nil
+#[monoruby_builtin]
+fn io_getc(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    let buf = read_one_char(io)?;
+    if buf.is_empty() {
+        Ok(Value::nil())
+    } else {
+        Ok(Value::string_from_vec(buf))
+    }
+}
+
+/// ### IO#readchar
+///
+/// - readchar -> String
+///
+/// Like `IO#getc` but raises `EOFError` at end of stream.
+#[monoruby_builtin]
+fn io_readchar(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    let buf = read_one_char(io)?;
+    if buf.is_empty() {
+        Err(MonorubyErr::runtimeerr("end of file reached"))
+    } else {
+        Ok(Value::string_from_vec(buf))
+    }
+}
+
+/// ### IO#sysseek
+///
+/// - sysseek(offset, whence = IO::SEEK_SET) -> Integer
+#[monoruby_builtin]
+fn io_sysseek(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let offset = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let whence = match lfp.try_arg(1) {
+        None => 0i32,
+        Some(v) if v.is_nil() => 0i32,
+        Some(v) => v.coerce_to_int_i64(vm, globals)? as i32,
+    };
+    let mut self_ = lfp.self_val();
+    let pos = self_
+        .as_io_inner_mut()
+        .seek(offset, whence)
+        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
+    Ok(Value::integer(pos as i64))
+}
+
+/// ### IO#lineno
+///
+/// - lineno -> Integer
+///
+/// monoruby does not currently track a line counter independent of `gets`/
+/// `readline`; this returns 0 for streams that have not been read.
+#[monoruby_builtin]
+fn io_lineno(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::integer(0))
+}
+
+/// ### IO#lineno=
+///
+/// - lineno=(n) -> Integer
+#[monoruby_builtin]
+fn io_lineno_set(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    Ok(Value::integer(n))
 }
 
 /// ### IO#write

@@ -35,7 +35,66 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(klass, "exist?", exist, 1);
     globals.define_builtin_class_func_with(klass, "mkdir", mkdir, 1, 2, false);
     globals.define_builtin_class_func(klass, "entries", entries, 1);
+    globals.define_builtin_class_func(klass, "children", children, 1);
+    globals.define_builtin_class_func(klass, "foreach", foreach, 1);
     globals.define_builtin_class_funcs(klass, "rmdir", &["delete", "unlink"], rmdir, 1);
+}
+
+///
+/// ### Dir.children
+/// - children(path) -> [String]
+///
+/// Same as `Dir.entries` but excludes the `"."` and `".."` entries.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/children.html]
+#[monoruby_builtin]
+fn children(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let path = lfp.arg(0).coerce_to_str(vm, globals)?;
+    let mut result = vec![];
+    for entry in std::fs::read_dir(&path)
+        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?
+    {
+        let entry =
+            entry.map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
+        result.push(Value::string(
+            entry.file_name().to_string_lossy().to_string(),
+        ));
+    }
+    Ok(Value::array_from_vec(result))
+}
+
+///
+/// ### Dir.foreach
+/// - foreach(path) {|name| ... } -> nil
+/// - foreach(path) -> Enumerator
+///
+/// Yields each entry name (including `"."` and `".."`) under `path` to the
+/// block. Without a block, returns an Array (Enumerator is not yet
+/// supported).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/foreach.html]
+#[monoruby_builtin]
+fn foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let path = lfp.arg(0).coerce_to_str(vm, globals)?;
+    let mut names = vec![".".to_string(), "..".to_string()];
+    for entry in std::fs::read_dir(&path)
+        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?
+    {
+        let entry =
+            entry.map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
+        names.push(entry.file_name().to_string_lossy().to_string());
+    }
+    if let Some(bh) = lfp.block() {
+        let p = vm.get_block_data(globals, bh)?;
+        for name in names {
+            vm.invoke_block(globals, &p, &[Value::string(name)])?;
+        }
+        Ok(Value::nil())
+    } else {
+        Ok(Value::array_from_vec(
+            names.into_iter().map(Value::string).collect(),
+        ))
+    }
 }
 
 ///

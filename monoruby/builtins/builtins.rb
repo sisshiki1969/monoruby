@@ -542,10 +542,30 @@ class File
     s = File.size(path) rescue return false
     s == 0
   end
+
+  def self.empty?(path)
+    File.zero?(path)
+  end
+
+  def self.readable_real?(path)
+    File.readable?(path)
+  end
+
+  def self.writable_real?(path)
+    File.writable?(path)
+  end
+
+  def self.executable_real?(path)
+    File.executable?(path)
+  end
 end
 
 module FileTest
   def self.zero?(path)
+    File.zero?(path)
+  end
+
+  def self.empty?(path)
     File.zero?(path)
   end
 end

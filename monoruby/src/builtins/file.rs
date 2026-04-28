@@ -20,8 +20,15 @@ pub(super) fn init(globals: &mut Globals) {
         .id();
     let file_test = globals.define_toplevel_module("FileTest").id();
     globals.define_builtin_class_func(file, "write", file_write, 2);
+    globals.define_builtin_class_func_with(file, "binwrite", file_binwrite, 2, 3, false);
     globals.define_builtin_class_func_with(file, "read", file_read, 1, 4, false);
     globals.define_builtin_class_func_with(file, "binread", file_binread, 1, 3, false);
+
+    // IO class methods that share semantics with File.* class methods.
+    globals.define_builtin_class_func(IO_CLASS, "write", file_write, 2);
+    globals.define_builtin_class_func_with(IO_CLASS, "binwrite", file_binwrite, 2, 3, false);
+    globals.define_builtin_class_func_with(IO_CLASS, "binread", file_binread, 1, 3, false);
+    globals.define_builtin_class_func(IO_CLASS, "try_convert", io_try_convert, 1);
     globals.define_builtin_class_func_rest(file, "join", file_join);
     globals.define_builtin_class_func_with(file, "expand_path", file_expand_path, 1, 2, false);
     globals.define_builtin_class_func_with(file, "dirname", file_dirname, 1, 2, false);
@@ -74,6 +81,61 @@ pub(super) fn init(globals: &mut Globals) {
 
     globals.define_builtin_class_func(file, "size?", file_size_, 1);
     globals.define_builtin_module_func(file_test, "size?", file_size_, 1);
+
+    globals.define_builtin_class_func(file, "ftype", ftype, 1);
+
+    globals.define_builtin_class_func(file, "owned?", owned_, 1);
+    globals.define_builtin_module_func(file_test, "owned?", owned_, 1);
+
+    globals.define_builtin_class_func(file, "grpowned?", grpowned_, 1);
+    globals.define_builtin_module_func(file_test, "grpowned?", grpowned_, 1);
+
+    globals.define_builtin_class_func(file, "setuid?", setuid_, 1);
+    globals.define_builtin_module_func(file_test, "setuid?", setuid_, 1);
+
+    globals.define_builtin_class_func(file, "setgid?", setgid_, 1);
+    globals.define_builtin_module_func(file_test, "setgid?", setgid_, 1);
+
+    globals.define_builtin_class_func(file, "sticky?", sticky_, 1);
+    globals.define_builtin_module_func(file_test, "sticky?", sticky_, 1);
+
+    globals.define_builtin_class_func(file, "world_readable?", world_readable_, 1);
+    globals.define_builtin_module_func(file_test, "world_readable?", world_readable_, 1);
+
+    globals.define_builtin_class_func(file, "world_writable?", world_writable_, 1);
+    globals.define_builtin_module_func(file_test, "world_writable?", world_writable_, 1);
+
+    globals.define_builtin_class_func(file, "socket?", socket_, 1);
+    globals.define_builtin_module_func(file_test, "socket?", socket_, 1);
+
+    globals.define_builtin_class_func(file, "chardev?", chardev_, 1);
+    globals.define_builtin_module_func(file_test, "chardev?", chardev_, 1);
+
+    globals.define_builtin_class_func(file, "blockdev?", blockdev_, 1);
+    globals.define_builtin_module_func(file_test, "blockdev?", blockdev_, 1);
+
+    globals.define_builtin_class_func(file, "pipe?", pipe_, 1);
+    globals.define_builtin_module_func(file_test, "pipe?", pipe_, 1);
+
+    globals.define_builtin_class_func(file, "readlink", file_readlink, 1);
+    globals.define_builtin_class_func(file, "link", file_link, 2);
+    globals.define_builtin_class_func(file, "rename", file_rename, 2);
+    globals.define_builtin_class_func(file, "truncate", file_truncate, 2);
+    globals.define_builtin_class_func_with(file, "realdirpath", file_realdirpath, 1, 2, false);
+
+    globals.define_builtin_class_func(file, "identical?", identical_, 2);
+    globals.define_builtin_module_func(file_test, "identical?", identical_, 2);
+
+    globals.define_builtin_class_func_rest(file, "utime", utime);
+    globals.define_builtin_class_func_rest(file, "lutime", lutime);
+    globals.define_builtin_class_func_rest(file, "chown", file_chown);
+    globals.define_builtin_class_func_rest(file, "lchown", file_lchown);
+    globals.define_builtin_class_func_with(file, "mkfifo", file_mkfifo, 1, 2, false);
+
+    globals.define_builtin_class_func(file, "atime", file_atime, 1);
+    globals.define_builtin_class_func(file, "mtime", file_mtime, 1);
+    globals.define_builtin_class_func(file, "ctime", file_ctime, 1);
+    globals.define_builtin_class_func(file, "birthtime", file_birthtime, 1);
 
     globals.define_builtin_singleton_func(
         globals.get_load_path(),
@@ -180,13 +242,25 @@ fn file_binread(
     _: BytecodePtr,
 ) -> Result<Value> {
     let filename = to_path(vm, globals, lfp.arg(0))?;
-    let length = if let Some(arg1) = lfp.try_arg(1) {
-        Some(arg1.coerce_to_int_i64(vm, globals)?)
+    let length = if let Some(arg1) = lfp.try_arg(1)
+        && !arg1.is_nil()
+    {
+        let n = arg1.coerce_to_int_i64(vm, globals)?;
+        if n < 0 {
+            return Err(MonorubyErr::argumenterr(format!("negative length {}", n)));
+        }
+        Some(n)
     } else {
         None
     };
-    let offset = if let Some(arg2) = lfp.try_arg(2) {
-        Some(arg2.coerce_to_int_i64(vm, globals)?)
+    let offset = if let Some(arg2) = lfp.try_arg(2)
+        && !arg2.is_nil()
+    {
+        let n = arg2.coerce_to_int_i64(vm, globals)?;
+        if n < 0 {
+            return Err(MonorubyErr::argumenterr(format!("negative offset {}", n)));
+        }
+        Some(n)
     } else {
         None
     };
@@ -238,6 +312,143 @@ fn file_binread(
         };
         Ok(Value::bytes(contents))
     }
+}
+
+///
+/// ### IO.binwrite / File.binwrite
+/// - binwrite(path, string, offset = nil) -> Integer
+///
+/// Writes `string` to the file at `path` in binary mode and returns the
+/// number of bytes written. With no `offset`, the file is created if missing
+/// and truncated to the length of `string`. With an `offset`, the file is
+/// created if missing but **not** truncated; bytes are written starting at
+/// `offset`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/binwrite.html]
+#[monoruby_builtin]
+fn file_binwrite(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let name = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let val = lfp.arg(1);
+    let bytes = if let Some(s) = val.is_rstring() {
+        s.to_vec()
+    } else {
+        val.to_s(&globals.store).into_bytes()
+    };
+    let offset = if let Some(arg2) = lfp.try_arg(2)
+        && !arg2.is_nil()
+    {
+        Some(arg2.coerce_to_int_i64(vm, globals)?)
+    } else {
+        None
+    };
+    let mut file = match offset {
+        None => match File::create(&name) {
+            Ok(f) => f,
+            Err(err) => {
+                return Err(MonorubyErr::errno_with_path(
+                    &globals.store,
+                    &err,
+                    "rb_sysopen",
+                    &name,
+                ));
+            }
+        },
+        Some(off) => {
+            let mut f = match std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(&name)
+            {
+                Ok(f) => f,
+                Err(err) => {
+                    return Err(MonorubyErr::errno_with_path(
+                        &globals.store,
+                        &err,
+                        "rb_sysopen",
+                        &name,
+                    ));
+                }
+            };
+            if let Err(err) = f.seek(SeekFrom::Start(off as u64)) {
+                return Err(MonorubyErr::errno_with_path(
+                    &globals.store,
+                    &err,
+                    "rb_io_seek",
+                    &name,
+                ));
+            }
+            f
+        }
+    };
+    if let Err(err) = file.write_all(&bytes) {
+        return Err(MonorubyErr::errno_with_path(
+            &globals.store,
+            &err,
+            "rb_io_write",
+            &name,
+        ));
+    }
+    Ok(Value::integer(bytes.len() as i64))
+}
+
+///
+/// ### IO.try_convert
+/// - try_convert(obj) -> IO | nil
+///
+/// Returns `obj` if it is already an IO. Otherwise calls `obj.to_io` if
+/// defined and returns the result, or `nil` if the conversion is not
+/// supported.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/try_convert.html]
+#[monoruby_builtin]
+fn io_try_convert(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let v = lfp.arg(0);
+    if let Some(rv) = v.try_rvalue()
+        && rv.ty() == ObjTy::IO
+    {
+        return Ok(v);
+    }
+    let respond_to = IdentId::get_id("respond_to?");
+    let to_io = IdentId::get_id("to_io");
+    let responds = match vm.invoke_method_inner(
+        globals,
+        respond_to,
+        v,
+        &[Value::symbol(to_io)],
+        None,
+        None,
+    ) {
+        Ok(val) => val.as_bool(),
+        Err(_) => return Ok(Value::nil()),
+    };
+    if !responds {
+        return Ok(Value::nil());
+    }
+    let result = vm.invoke_method_inner(globals, to_io, v, &[], None, None)?;
+    if let Some(rv) = result.try_rvalue()
+        && rv.ty() == ObjTy::IO
+    {
+        return Ok(result);
+    }
+    if result.is_nil() {
+        return Ok(Value::nil());
+    }
+    Err(MonorubyErr::typeerr(format!(
+        "can't convert {} to IO ({}#to_io gives {})",
+        globals.get_class_name(v.class()),
+        globals.get_class_name(v.class()),
+        globals.get_class_name(result.class()),
+    )))
 }
 
 ///
@@ -1224,6 +1435,709 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         }
         None => Err(MonorubyErr::runtimeerr("size not available for this IO")),
     }
+}
+
+///
+/// ### File.ftype
+/// - ftype(filename) -> String
+///
+/// Returns one of: `"file"`, `"directory"`, `"characterSpecial"`,
+/// `"blockSpecial"`, `"fifo"`, `"link"`, `"socket"`, `"unknown"`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/ftype.html]
+#[monoruby_builtin]
+fn ftype(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::os::unix::fs::FileTypeExt;
+    let path = to_path(vm, globals, lfp.arg(0))?;
+    let path_str = path.to_string_lossy();
+    let metadata = std::fs::symlink_metadata(&path).map_err(|e| {
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_ftype", &path_str)
+    })?;
+    let ft = metadata.file_type();
+    let s = if ft.is_file() {
+        "file"
+    } else if ft.is_dir() {
+        "directory"
+    } else if ft.is_symlink() {
+        "link"
+    } else if ft.is_char_device() {
+        "characterSpecial"
+    } else if ft.is_block_device() {
+        "blockSpecial"
+    } else if ft.is_fifo() {
+        "fifo"
+    } else if ft.is_socket() {
+        "socket"
+    } else {
+        "unknown"
+    };
+    Ok(Value::string_from_str(s))
+}
+
+/// Stat the path and return metadata, or return `default` on error.
+fn stat_or<T>(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+    default: T,
+    f: impl FnOnce(&std::fs::Metadata) -> T,
+) -> Result<T> {
+    let path = to_path(vm, globals, val)?;
+    Ok(match std::fs::metadata(&path) {
+        Ok(meta) => f(&meta),
+        Err(_) => default,
+    })
+}
+
+///
+/// ### File.owned?
+/// - owned?(path) -> bool
+#[monoruby_builtin]
+fn owned_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: geteuid is a POSIX system call that is safe to call.
+    let euid = unsafe { libc::geteuid() };
+    let b = stat_or(vm, globals, lfp.arg(0), false, |m| m.uid() == euid)?;
+    Ok(Value::bool(b))
+}
+
+///
+/// ### File.grpowned?
+/// - grpowned?(path) -> bool
+#[monoruby_builtin]
+fn grpowned_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: getegid is a POSIX system call that is safe to call.
+    let egid = unsafe { libc::getegid() };
+    let b = stat_or(vm, globals, lfp.arg(0), false, |m| m.gid() == egid)?;
+    Ok(Value::bool(b))
+}
+
+const S_ISUID: u32 = 0o4000;
+const S_ISGID: u32 = 0o2000;
+const S_ISVTX: u32 = 0o1000;
+
+///
+/// ### File.setuid?
+/// - setuid?(path) -> bool
+#[monoruby_builtin]
+fn setuid_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::os::unix::fs::MetadataExt;
+    let b = stat_or(vm, globals, lfp.arg(0), false, |m| m.mode() & S_ISUID != 0)?;
+    Ok(Value::bool(b))
+}
+
+///
+/// ### File.setgid?
+/// - setgid?(path) -> bool
+#[monoruby_builtin]
+fn setgid_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::os::unix::fs::MetadataExt;
+    let b = stat_or(vm, globals, lfp.arg(0), false, |m| m.mode() & S_ISGID != 0)?;
+    Ok(Value::bool(b))
+}
+
+///
+/// ### File.sticky?
+/// - sticky?(path) -> bool
+#[monoruby_builtin]
+fn sticky_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::os::unix::fs::MetadataExt;
+    let b = stat_or(vm, globals, lfp.arg(0), false, |m| m.mode() & S_ISVTX != 0)?;
+    Ok(Value::bool(b))
+}
+
+///
+/// ### File.world_readable?
+/// - world_readable?(path) -> Integer | nil
+#[monoruby_builtin]
+fn world_readable_(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    use std::os::unix::fs::MetadataExt;
+    let opt = stat_or(vm, globals, lfp.arg(0), None, |m| {
+        if m.mode() & 0o004 != 0 {
+            Some((m.mode() & 0o777) as i64)
+        } else {
+            None
+        }
+    })?;
+    Ok(opt.map(Value::integer).unwrap_or_else(Value::nil))
+}
+
+///
+/// ### File.world_writable?
+/// - world_writable?(path) -> Integer | nil
+#[monoruby_builtin]
+fn world_writable_(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    use std::os::unix::fs::MetadataExt;
+    let opt = stat_or(vm, globals, lfp.arg(0), None, |m| {
+        if m.mode() & 0o002 != 0 {
+            Some((m.mode() & 0o777) as i64)
+        } else {
+            None
+        }
+    })?;
+    Ok(opt.map(Value::integer).unwrap_or_else(Value::nil))
+}
+
+///
+/// ### File.socket?
+/// - socket?(path) -> bool
+#[monoruby_builtin]
+fn socket_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::os::unix::fs::FileTypeExt;
+    let b = stat_or(vm, globals, lfp.arg(0), false, |m| m.file_type().is_socket())?;
+    Ok(Value::bool(b))
+}
+
+///
+/// ### File.chardev?
+/// - chardev?(path) -> bool
+#[monoruby_builtin]
+fn chardev_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::os::unix::fs::FileTypeExt;
+    let b = stat_or(vm, globals, lfp.arg(0), false, |m| {
+        m.file_type().is_char_device()
+    })?;
+    Ok(Value::bool(b))
+}
+
+///
+/// ### File.blockdev?
+/// - blockdev?(path) -> bool
+#[monoruby_builtin]
+fn blockdev_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::os::unix::fs::FileTypeExt;
+    let b = stat_or(vm, globals, lfp.arg(0), false, |m| {
+        m.file_type().is_block_device()
+    })?;
+    Ok(Value::bool(b))
+}
+
+///
+/// ### File.pipe?
+/// - pipe?(path) -> bool
+#[monoruby_builtin]
+fn pipe_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::os::unix::fs::FileTypeExt;
+    let b = stat_or(vm, globals, lfp.arg(0), false, |m| m.file_type().is_fifo())?;
+    Ok(Value::bool(b))
+}
+
+///
+/// ### File.readlink
+/// - readlink(path) -> String
+///
+/// Returns the target of the symbolic link `path`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/readlink.html]
+#[monoruby_builtin]
+fn file_readlink(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let path = to_path(vm, globals, lfp.arg(0))?;
+    let path_str = path.to_string_lossy();
+    let target = std::fs::read_link(&path).map_err(|e| {
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_readlink", &path_str)
+    })?;
+    Ok(Value::string(conv_pathbuf(&target)))
+}
+
+///
+/// ### File.link
+/// - link(old, new) -> 0
+///
+/// Creates a hard link `new` pointing to the existing file `old`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/link.html]
+#[monoruby_builtin]
+fn file_link(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let old = to_path(vm, globals, lfp.arg(0))?;
+    let new = to_path(vm, globals, lfp.arg(1))?;
+    let new_str = new.to_string_lossy().to_string();
+    std::fs::hard_link(&old, &new).map_err(|e| {
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_link", &new_str)
+    })?;
+    Ok(Value::integer(0))
+}
+
+///
+/// ### File.rename
+/// - rename(from, to) -> 0
+///
+/// Renames the file `from` to `to`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/rename.html]
+#[monoruby_builtin]
+fn file_rename(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let from = to_path(vm, globals, lfp.arg(0))?;
+    let to = to_path(vm, globals, lfp.arg(1))?;
+    let from_str = from.to_string_lossy().to_string();
+    std::fs::rename(&from, &to).map_err(|e| {
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_rename", &from_str)
+    })?;
+    Ok(Value::integer(0))
+}
+
+///
+/// ### File.truncate
+/// - truncate(path, length) -> 0
+///
+/// Truncates the file `path` to be at most `length` bytes.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/truncate.html]
+#[monoruby_builtin]
+fn file_truncate(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let path = to_path(vm, globals, lfp.arg(0))?;
+    let path_str = path.to_string_lossy().to_string();
+    let length = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
+    if length < 0 {
+        return Err(MonorubyErr::argumenterr(format!(
+            "negative length {}",
+            length
+        )));
+    }
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .map_err(|e| {
+            MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path_str)
+        })?;
+    file.set_len(length as u64).map_err(|e| {
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_truncate", &path_str)
+    })?;
+    Ok(Value::integer(0))
+}
+
+/// Convert `val` (a Time, Integer, or Float) to a `libc::timeval`.
+fn value_to_timeval(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+) -> Result<libc::timeval> {
+    if let Some(rv) = val.try_rvalue()
+        && rv.ty() == ObjTy::TIME
+    {
+        let to_f = IdentId::get_id("to_f");
+        let f = vm.invoke_method_inner(globals, to_f, val, &[], None, None)?;
+        if let Some(f) = f.try_float() {
+            let secs = f.floor() as i64;
+            let usec = ((f - f.floor()) * 1_000_000.0) as i64;
+            return Ok(libc::timeval {
+                tv_sec: secs,
+                tv_usec: usec,
+            });
+        }
+    }
+    if let Some(f) = val.try_float() {
+        let secs = f.floor() as i64;
+        let usec = ((f - f.floor()) * 1_000_000.0) as i64;
+        return Ok(libc::timeval {
+            tv_sec: secs,
+            tv_usec: usec,
+        });
+    }
+    let secs = val.coerce_to_int_i64(vm, globals)?;
+    Ok(libc::timeval {
+        tv_sec: secs,
+        tv_usec: 0,
+    })
+}
+
+fn utime_impl(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    follow_symlinks: bool,
+) -> Result<Value> {
+    use std::os::unix::ffi::OsStrExt;
+    let args = lfp.arg(0).as_array();
+    if args.len() < 2 {
+        return Err(MonorubyErr::argumenterr(format!(
+            "wrong number of arguments (given {}, expected 2+)",
+            args.len()
+        )));
+    }
+    let atime = value_to_timeval(vm, globals, args[0])?;
+    let mtime = value_to_timeval(vm, globals, args[1])?;
+    let times = [atime, mtime];
+    let mut count = 0i64;
+    for arg in args[2..].iter() {
+        let path = to_path(vm, globals, *arg)?;
+        let path_str = path.to_string_lossy().to_string();
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| MonorubyErr::argumenterr("path contains NUL byte"))?;
+        // SAFETY: `c` and `times` are valid pointers for the duration of
+        // the call. `utimes`/`lutimes` are POSIX system calls.
+        let rc = unsafe {
+            if follow_symlinks {
+                libc::utimes(c.as_ptr(), times.as_ptr())
+            } else {
+                libc::lutimes(c.as_ptr(), times.as_ptr())
+            }
+        };
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::errno_with_path(
+                &globals.store,
+                &err,
+                "rb_file_s_utime",
+                &path_str,
+            ));
+        }
+        count += 1;
+    }
+    Ok(Value::integer(count))
+}
+
+///
+/// ### File.utime
+/// - utime(atime, mtime, *path) -> Integer
+///
+/// Sets the access and modification times of each `path`. `atime` and
+/// `mtime` may be `Time`, `Integer`, or `Float`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/utime.html]
+#[monoruby_builtin]
+fn utime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    utime_impl(vm, globals, lfp, true)
+}
+
+///
+/// ### File.lutime
+/// - lutime(atime, mtime, *path) -> Integer
+///
+/// Same as `File.utime` but does not follow symlinks (uses `lutimes(2)`).
+#[monoruby_builtin]
+fn lutime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    utime_impl(vm, globals, lfp, false)
+}
+
+fn chown_impl(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    follow_symlinks: bool,
+) -> Result<Value> {
+    use std::os::unix::ffi::OsStrExt;
+    let args = lfp.arg(0).as_array();
+    if args.len() < 2 {
+        return Err(MonorubyErr::argumenterr(format!(
+            "wrong number of arguments (given {}, expected 2+)",
+            args.len()
+        )));
+    }
+    let uid = if args[0].is_nil() {
+        u32::MAX
+    } else {
+        args[0].coerce_to_int_i64(vm, globals)? as u32
+    };
+    let gid = if args[1].is_nil() {
+        u32::MAX
+    } else {
+        args[1].coerce_to_int_i64(vm, globals)? as u32
+    };
+    let mut count = 0i64;
+    for arg in args[2..].iter() {
+        let path = to_path(vm, globals, *arg)?;
+        let path_str = path.to_string_lossy().to_string();
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| MonorubyErr::argumenterr("path contains NUL byte"))?;
+        // SAFETY: `c` is a valid pointer. `chown`/`lchown` are POSIX system
+        // calls. uid_t::MAX is the documented sentinel for "leave unchanged".
+        let rc = unsafe {
+            if follow_symlinks {
+                libc::chown(c.as_ptr(), uid, gid)
+            } else {
+                libc::lchown(c.as_ptr(), uid, gid)
+            }
+        };
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::errno_with_path(
+                &globals.store,
+                &err,
+                "rb_file_s_chown",
+                &path_str,
+            ));
+        }
+        count += 1;
+    }
+    Ok(Value::integer(count))
+}
+
+///
+/// ### File.chown
+/// - chown(uid, gid, *path) -> Integer
+#[monoruby_builtin]
+fn file_chown(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    chown_impl(vm, globals, lfp, true)
+}
+
+///
+/// ### File.lchown
+/// - lchown(uid, gid, *path) -> Integer
+#[monoruby_builtin]
+fn file_lchown(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    chown_impl(vm, globals, lfp, false)
+}
+
+///
+/// ### File.mkfifo
+/// - mkfifo(path, mode = 0o666) -> 0
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/mkfifo.html]
+#[monoruby_builtin]
+fn file_mkfifo(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = to_path(vm, globals, lfp.arg(0))?;
+    let path_str = path.to_string_lossy().to_string();
+    let mode = if let Some(arg1) = lfp.try_arg(1) {
+        arg1.coerce_to_int_i64(vm, globals)? as libc::mode_t
+    } else {
+        0o666
+    };
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| MonorubyErr::argumenterr("path contains NUL byte"))?;
+    // SAFETY: `c` is a valid pointer. `mkfifo` is a POSIX system call.
+    let rc = unsafe { libc::mkfifo(c.as_ptr(), mode) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_path(
+            &globals.store,
+            &err,
+            "rb_file_s_mkfifo",
+            &path_str,
+        ));
+    }
+    Ok(Value::integer(0))
+}
+
+/// Given a `SystemTime` (or fallible alternative), invoke `Time.at(secs, usec)`
+/// to materialize a Ruby Time value. Errors propagate as Ruby exceptions.
+fn system_time_to_value(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    t: std::time::SystemTime,
+) -> Result<Value> {
+    let dur = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| MonorubyErr::runtimeerr(format!("invalid time: {}", e)))?;
+    let secs = Value::integer(dur.as_secs() as i64);
+    let usec = Value::integer((dur.subsec_micros()) as i64);
+    let time_class = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Time"))
+        .ok_or_else(|| MonorubyErr::runtimeerr("Time class not defined"))?;
+    let at = IdentId::get_id("at");
+    vm.invoke_method_inner(globals, at, time_class, &[secs, usec], None, None)
+}
+
+fn file_time_attr(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    f: impl FnOnce(&std::fs::Metadata) -> std::io::Result<std::time::SystemTime>,
+) -> Result<Value> {
+    let path = to_path(vm, globals, lfp.arg(0))?;
+    let path_str = path.to_string_lossy().to_string();
+    let metadata = std::fs::metadata(&path).map_err(|e| {
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path_str)
+    })?;
+    let t = f(&metadata).map_err(|e| {
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_time", &path_str)
+    })?;
+    system_time_to_value(vm, globals, t)
+}
+
+///
+/// ### File.atime
+/// - atime(path) -> Time
+#[monoruby_builtin]
+fn file_atime(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    file_time_attr(vm, globals, lfp, |m| m.accessed())
+}
+
+///
+/// ### File.mtime
+/// - mtime(path) -> Time
+#[monoruby_builtin]
+fn file_mtime(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    file_time_attr(vm, globals, lfp, |m| m.modified())
+}
+
+///
+/// ### File.ctime
+/// - ctime(path) -> Time
+///
+/// On POSIX returns the inode-change time (`st_ctime`).
+#[monoruby_builtin]
+fn file_ctime(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    use std::os::unix::fs::MetadataExt;
+    let path = to_path(vm, globals, lfp.arg(0))?;
+    let path_str = path.to_string_lossy().to_string();
+    let metadata = std::fs::metadata(&path).map_err(|e| {
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path_str)
+    })?;
+    let secs = metadata.ctime();
+    let nsec = metadata.ctime_nsec();
+    let t = std::time::UNIX_EPOCH
+        + std::time::Duration::new(secs.max(0) as u64, (nsec.max(0)) as u32);
+    system_time_to_value(vm, globals, t)
+}
+
+///
+/// ### File.birthtime
+/// - birthtime(path) -> Time
+///
+/// Returns the inode birth time. Raises `NotImplementedError` if the
+/// filesystem does not record it.
+#[monoruby_builtin]
+fn file_birthtime(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    file_time_attr(vm, globals, lfp, |m| m.created())
+}
+
+///
+/// ### File.identical?
+/// - identical?(file1, file2) -> bool
+///
+/// Returns `true` if both paths refer to the same file (matching device and
+/// inode numbers).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/identical=3f.html]
+#[monoruby_builtin]
+fn identical_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::os::unix::fs::MetadataExt;
+    let path1 = to_path(vm, globals, lfp.arg(0))?;
+    let path2 = to_path(vm, globals, lfp.arg(1))?;
+    let m1 = match std::fs::metadata(&path1) {
+        Ok(m) => m,
+        Err(_) => return Ok(Value::bool(false)),
+    };
+    let m2 = match std::fs::metadata(&path2) {
+        Ok(m) => m,
+        Err(_) => return Ok(Value::bool(false)),
+    };
+    Ok(Value::bool(m1.dev() == m2.dev() && m1.ino() == m2.ino()))
+}
+
+///
+/// ### File.realdirpath
+/// - realdirpath(pathname, basedir = nil) -> String
+///
+/// Like `File.realpath` but does not require the last component of `pathname`
+/// to exist. The directory containing the last component must exist.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/realdirpath.html]
+#[monoruby_builtin]
+fn file_realdirpath(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let path_str = to_path_str(vm, globals, lfp.arg(0))?;
+    let mut joined = if Path::new(&path_str).is_absolute() {
+        std::path::PathBuf::from(&path_str)
+    } else {
+        let base = if let Some(arg1) = lfp.try_arg(1)
+            && !arg1.is_nil()
+        {
+            std::path::PathBuf::from(to_path_str(vm, globals, arg1)?)
+        } else {
+            std::env::current_dir().map_err(|e| {
+                MonorubyErr::errno_with_msg(&globals.store, &e, ".")
+            })?
+        };
+        let mut p = base;
+        p.push(&path_str);
+        p
+    };
+    // If the full path exists, canonicalize it and we're done.
+    if let Ok(canon) = joined.canonicalize() {
+        return Ok(Value::string(conv_pathbuf(&canon)));
+    }
+    // Otherwise canonicalize the parent directory and append the basename.
+    let basename = match joined.file_name() {
+        Some(n) => n.to_owned(),
+        None => {
+            return Err(MonorubyErr::errno_with_path(
+                &globals.store,
+                &std::io::Error::from_raw_os_error(libc::ENOENT),
+                "rb_file_s_realdirpath",
+                &joined.to_string_lossy(),
+            ));
+        }
+    };
+    joined.pop();
+    let parent = joined.canonicalize().map_err(|e| {
+        MonorubyErr::errno_with_path(
+            &globals.store,
+            &e,
+            "rb_file_s_realdirpath",
+            &joined.to_string_lossy(),
+        )
+    })?;
+    let mut out = parent;
+    out.push(basename);
+    Ok(Value::string(conv_pathbuf(&out)))
 }
 
 #[cfg(test)]
