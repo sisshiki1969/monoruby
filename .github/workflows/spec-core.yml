@@ -51,6 +51,12 @@ jobs:
         working-directory: ../spec
         shell: bash
         run: |
+          # GitHub Actions' default `shell: bash` is `bash --noprofile --norc
+          # -eo pipefail`. We rely on grep-no-match returning non-zero (a
+          # category with zero summary lines is normal -- e.g. when every
+          # batch hits the 60s timeout), and on `[ test ] && cmd` patterns
+          # below; both would terminate the step under -e. Disable it.
+          set +e
           set -uo pipefail
           OUT="$GITHUB_WORKSPACE/spec-results"
           mkdir -p "$OUT/logs"
