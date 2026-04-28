@@ -2621,4 +2621,258 @@ mod tests {
         run_test_error(r#"File.open(-1)"#);
         run_test_error(r#"File.open(9999)"#);
     }
+
+    #[test]
+    fn file_predicate_aliases() {
+        // Pure-Ruby aliases over the existing predicates. Idempotent on
+        // any path that exists in the workspace, so safe under run_tests'
+        // 25-iteration loop.
+        run_tests(&[
+            r#"File.empty?("Cargo.toml")"#,
+            r#"File.empty?("nonexistent_xyz_qq")"#,
+            r#"File.readable_real?("Cargo.toml")"#,
+            r#"File.writable_real?("Cargo.toml")"#,
+            r#"File.executable_real?("Cargo.toml")"#,
+            r#"File.executable_real?("/bin/sh")"#,
+            r#"FileTest.empty?("Cargo.toml")"#,
+        ]);
+    }
+
+    #[test]
+    fn file_ftype() {
+        run_tests(&[
+            r#"File.ftype("Cargo.toml")"#,
+            r#"File.ftype(".")"#,
+            r#"File.ftype("/dev/null")"#,
+        ]);
+    }
+
+    #[test]
+    fn file_owned_grpowned() {
+        run_tests(&[
+            r#"File.owned?("Cargo.toml")"#,
+            r#"File.grpowned?("Cargo.toml")"#,
+            r#"File.owned?("/etc/hostname")"#,
+            r#"FileTest.owned?("Cargo.toml")"#,
+            r#"FileTest.grpowned?("Cargo.toml")"#,
+        ]);
+    }
+
+    #[test]
+    fn file_mode_predicates() {
+        run_tests(&[
+            r#"File.setuid?("Cargo.toml")"#,
+            r#"File.setgid?("Cargo.toml")"#,
+            r#"File.sticky?("Cargo.toml")"#,
+            r#"File.sticky?("/tmp")"#,
+            r#"FileTest.setuid?("Cargo.toml")"#,
+            r#"FileTest.setgid?("Cargo.toml")"#,
+            r#"FileTest.sticky?("Cargo.toml")"#,
+        ]);
+    }
+
+    #[test]
+    fn file_world_readable_writable() {
+        // Cargo.toml is typically owner-writable but world-readable; the
+        // exact mode bits depend on the workspace umask, so compare against
+        // CRuby (which runs the same code path on the same file).
+        run_tests(&[
+            r#"File.world_readable?("Cargo.toml").nil?"#,
+            r#"File.world_writable?("Cargo.toml").nil?"#,
+            r#"File.world_readable?("/dev/null").nil?"#,
+            r#"FileTest.world_readable?("Cargo.toml").nil?"#,
+            r#"FileTest.world_writable?("Cargo.toml").nil?"#,
+        ]);
+    }
+
+    #[test]
+    fn file_type_predicates() {
+        run_tests(&[
+            r#"File.socket?("Cargo.toml")"#,
+            r#"File.chardev?("Cargo.toml")"#,
+            r#"File.chardev?("/dev/null")"#,
+            r#"File.blockdev?("Cargo.toml")"#,
+            r#"File.pipe?("Cargo.toml")"#,
+            r#"FileTest.chardev?("/dev/null")"#,
+            r#"FileTest.pipe?("Cargo.toml")"#,
+        ]);
+    }
+
+    #[test]
+    fn file_identical() {
+        run_tests(&[
+            r#"File.identical?("Cargo.toml", "Cargo.toml")"#,
+            r#"File.identical?("Cargo.toml", "README.md")"#,
+            r#"File.identical?("Cargo.toml", "nonexistent_xyz")"#,
+            r#"FileTest.identical?("Cargo.toml", "Cargo.toml")"#,
+        ]);
+    }
+
+    #[test]
+    fn file_realdirpath() {
+        run_tests(&[
+            r#"File.realdirpath(".") == File.realpath(".")"#,
+            r#"File.realdirpath("Cargo.toml") == File.realpath("Cargo.toml")"#,
+            // Tail component need not exist (parent must, though).
+            r#"File.realdirpath("./no_such_file_xyz").end_with?("/no_such_file_xyz")"#,
+            r#"File.realdirpath("..", "/tmp")"#,
+        ]);
+    }
+
+    #[test]
+    fn file_time_methods_class() {
+        // The exact times will not match across two separate processes, so
+        // assert on the returned class and the relative ordering instead.
+        run_tests(&[
+            r#"File.atime("Cargo.toml").is_a?(Time)"#,
+            r#"File.mtime("Cargo.toml").is_a?(Time)"#,
+            r#"File.ctime("Cargo.toml").is_a?(Time)"#,
+            // mtime <= atime usually holds on a freshly checked-out repo,
+            // but is not guaranteed on every filesystem; skip ordering and
+            // just validate the type.
+            r#"File.atime("Cargo.toml").class.name"#,
+        ]);
+    }
+
+    #[test]
+    fn file_binwrite_basic() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_binwrite_#{Process.pid}_#{rand(100000)}"
+            begin
+              n = File.binwrite(path, "hello")
+              [n, File.binread(path)]
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_binwrite_with_offset() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_binwrite_off_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.binwrite(path, "0123456789")
+              File.binwrite(path, "AB", 2)
+              File.binread(path)
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_truncate() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_trunc_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "hello world")
+              File.truncate(path, 5)
+              File.read(path)
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_rename() {
+        run_test_once(
+            r#"
+            base = "/tmp/monoruby_test_rename_#{Process.pid}_#{rand(100000)}"
+            from = base + ".from"
+            to   = base + ".to"
+            begin
+              File.write(from, "payload")
+              File.rename(from, to)
+              [File.exist?(from), File.exist?(to), File.read(to)]
+            ensure
+              File.unlink(from) rescue nil
+              File.unlink(to)   rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_link_readlink() {
+        run_test_once(
+            r#"
+            base = "/tmp/monoruby_test_link_#{Process.pid}_#{rand(100000)}"
+            target = base + ".target"
+            sym    = base + ".sym"
+            hard   = base + ".hard"
+            begin
+              File.write(target, "payload")
+              File.symlink(target, sym)
+              File.link(target, hard)
+              [
+                File.readlink(sym) == target,
+                File.read(hard),
+                File.identical?(target, hard),
+                File.identical?(target, sym),
+              ]
+            ensure
+              [hard, sym, target].each { |p| File.unlink(p) rescue nil }
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_utime_roundtrip() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_utime_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "x")
+              t = Time.at(1_700_000_000)
+              File.utime(t, t, path)
+              [File.atime(path).to_i, File.mtime(path).to_i]
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_open_with_integer_mode() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_intmode_#{Process.pid}_#{rand(100000)}"
+            begin
+              f = File.new(path, File::WRONLY | File::CREAT | File::TRUNC)
+              f.write("ok")
+              f.close
+              File.read(path)
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_open_with_mode_kw() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_modekw_#{Process.pid}_#{rand(100000)}"
+            begin
+              f = File.new(path, mode: "w")
+              f.write("ok")
+              f.close
+              File.read(path)
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
 }

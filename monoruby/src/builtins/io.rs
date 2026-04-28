@@ -1290,16 +1290,20 @@ fn io_sysseek(
 ///
 /// - lineno -> Integer
 ///
-/// monoruby does not currently track a line counter independent of `gets`/
-/// `readline`; this returns 0 for streams that have not been read.
+/// Returns the value last assigned via `lineno=`, or 0 if it was never
+/// assigned. monoruby does not auto-increment `lineno` on `gets`/`readline`
+/// the way CRuby does — only the explicit setter is honored.
 #[monoruby_builtin]
 fn io_lineno(
     _vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: Lfp,
+    globals: &mut Globals,
+    lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(Value::integer(0))
+    let stored = globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("/lineno"));
+    Ok(stored.unwrap_or_else(|| Value::integer(0)))
 }
 
 /// ### IO#lineno=
@@ -1313,6 +1317,11 @@ fn io_lineno_set(
     _: BytecodePtr,
 ) -> Result<Value> {
     let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    globals.store.set_ivar(
+        lfp.self_val(),
+        IdentId::get_id("/lineno"),
+        Value::integer(n),
+    )?;
     Ok(Value::integer(n))
 }
 
@@ -2460,5 +2469,308 @@ mod tests {
             "#,
         );
         run_test_error(r#"$stdout.seek(0)"#);
+    }
+
+    #[test]
+    fn io_try_convert() {
+        run_tests(&[
+            r#"IO.try_convert($stdout).equal?($stdout)"#,
+            r#"IO.try_convert("hello")"#,
+            r#"IO.try_convert(42)"#,
+            r#"IO.try_convert(nil)"#,
+            // Custom #to_io that returns self.
+            r#"
+            klass = Class.new do
+              def initialize(io); @io = io; end
+              def to_io; @io; end
+            end
+            obj = klass.new($stdout)
+            IO.try_convert(obj).equal?($stdout)
+            "#,
+        ]);
+    }
+
+    #[test]
+    fn io_class_write_binread_binwrite() {
+        run_test_once(
+            r#"
+            base = "/tmp/monoruby_io_write_test_#{Process.pid}_#{rand(100000)}"
+            paths = [base + ".w", base + ".bw"]
+            begin
+              n1 = IO.write(paths[0], "abc\ndef")
+              n2 = IO.binwrite(paths[1], "binary\0content")
+              [n1, n2, IO.binread(paths[0]), IO.binread(paths[1]),
+               IO.binread(paths[0], 3), IO.binread(paths[0], 3, 4)]
+            ensure
+              paths.each { |p| File.unlink(p) rescue nil }
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_open_with_mode() {
+        // IO.open routes through the same opener as File.open / File.new.
+        // Exercise both fd and path forms with a string mode and an
+        // Integer flag bag.
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_io_open_#{Process.pid}_#{rand(100000)}"
+            begin
+              f = IO.open(IO.sysopen(path, "w"), "w")
+              f.write("a-")
+              f.close
+              IO.open(IO.sysopen(path, "a"), File::WRONLY) { |g| g.write("b") }
+              File.read(path)
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_binmode_and_autoclose() {
+        run_test(
+            r#"
+            f = File.open("Cargo.toml")
+            begin
+              [f.binmode.equal?(f), f.binmode?, f.autoclose?, (f.autoclose = false)]
+            ensure
+              f.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_advise() {
+        run_test(
+            r#"
+            f = File.open("Cargo.toml")
+            begin
+              [
+                f.advise(:normal),
+                f.advise(:sequential, 0, 0),
+                f.advise(:willneed, 0, 16),
+              ]
+            ensure
+              f.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_advise_unknown() {
+        run_test_error(
+            r#"
+            f = File.open("Cargo.toml")
+            begin
+              f.advise(:bogus)
+            ensure
+              f.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_pos_tell_rewind() {
+        run_test(
+            r#"
+            f = File.open("Cargo.toml")
+            begin
+              a = f.pos
+              f.read(5)
+              b = f.pos
+              c = f.tell
+              f.rewind
+              [a, b, c, f.pos]
+            ensure
+              f.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_pos_set() {
+        run_test(
+            r#"
+            f = File.open("Cargo.toml")
+            begin
+              f.pos = 4
+              [f.pos, f.read(2)]
+            ensure
+              f.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_eof() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_io_eof_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "ab")
+              f = File.open(path)
+              before = f.eof?
+              f.read
+              after = f.eof?
+              [before, after, f.eof]
+            ensure
+              f&.close
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_getbyte_readbyte() {
+        run_test(
+            r#"
+            f = File.open("Cargo.toml")
+            begin
+              [f.getbyte, f.getbyte, f.readbyte]
+            ensure
+              f.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_readbyte_eof_raises() {
+        run_test_error(
+            r#"
+            path = "/tmp/monoruby_io_readbyte_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "")
+              f = File.open(path)
+              begin
+                f.readbyte
+              ensure
+                f.close
+              end
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_getc_readchar() {
+        run_test(
+            r#"
+            f = File.open("Cargo.toml")
+            begin
+              [f.getc, f.getc, f.readchar]
+            ensure
+              f.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_readchar_eof_raises() {
+        run_test_error(
+            r#"
+            path = "/tmp/monoruby_io_readchar_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "")
+              f = File.open(path)
+              begin
+                f.readchar
+              ensure
+                f.close
+              end
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_sysseek() {
+        run_test(
+            r#"
+            f = File.open("Cargo.toml")
+            begin
+              [f.sysseek(0), f.sysseek(3), f.sysseek(0, IO::SEEK_END) >= 0]
+            ensure
+              f.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_lineno_accessors() {
+        run_test(
+            r#"
+            f = File.open("Cargo.toml")
+            begin
+              before = f.lineno
+              f.lineno = 10
+              [before, f.lineno]
+            ensure
+              f.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_to_io_to_i() {
+        run_test(
+            r#"
+            f = File.open("Cargo.toml")
+            begin
+              [f.to_io.equal?(f), f.to_i == f.fileno]
+            ensure
+              f.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_inst_readlines() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_io_readlines_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "line1\nline2\nline3\n")
+              f = File.open(path)
+              lines = f.readlines
+              f.close
+              lines
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_class_readlines() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_io_classreadlines_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "a\nb\nc")
+              IO.readlines(path)
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
     }
 }

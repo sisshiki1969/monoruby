@@ -1009,7 +1009,7 @@ mod tests {
         run_test_error("Dir.mkdir('/tmp')");
         // mkdir creates a new directory
         run_test(
-            r#"
+            r##"
             $x = []
             path = "/tmp/monoruby_test_mkdir_#{Process.pid}"
             Dir.mkdir(path)
@@ -1017,16 +1017,16 @@ mod tests {
             Dir.rmdir(path)
             $x << Dir.exist?(path)
             $x
-            "#,
+            "##,
         );
     }
 
     #[test]
     fn dir_entries() {
         run_test(
-            r#"
+            r##"
             Dir.entries(".").sort
-            "#,
+            "##,
         );
     }
 
@@ -1040,5 +1040,206 @@ mod tests {
     fn mkdir_existing() {
         // Dir.mkdir on an existing directory should raise Errno::EEXIST
         run_test_error("Dir.mkdir('/tmp')");
+    }
+
+    #[test]
+    fn dir_foreach_block() {
+        // Returned entries are unordered; sort before compare so the result
+        // is stable across implementations.
+        run_test_once(
+            r##"
+            base = "/tmp/monoruby_dir_foreach_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(base)
+            begin
+              File.write("#{base}/a", "")
+              File.write("#{base}/b", "")
+              names = []
+              Dir.foreach(base) { |n| names << n }
+              names.sort
+            ensure
+              File.unlink("#{base}/a") rescue nil
+              File.unlink("#{base}/b") rescue nil
+              Dir.rmdir(base) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn dir_children_class_method() {
+        run_test_once(
+            r##"
+            base = "/tmp/monoruby_dir_children_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(base)
+            begin
+              File.write("#{base}/x", "")
+              File.write("#{base}/y", "")
+              Dir.children(base).sort
+            ensure
+              File.unlink("#{base}/x") rescue nil
+              File.unlink("#{base}/y") rescue nil
+              Dir.rmdir(base) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn dir_each_child_class_method() {
+        run_test_once(
+            r##"
+            base = "/tmp/monoruby_dir_eachchild_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(base)
+            begin
+              File.write("#{base}/x", "")
+              File.write("#{base}/y", "")
+              names = []
+              Dir.each_child(base) { |n| names << n }
+              names.sort
+            ensure
+              File.unlink("#{base}/x") rescue nil
+              File.unlink("#{base}/y") rescue nil
+              Dir.rmdir(base) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn dir_instance_basic() {
+        // CRuby's Dir#pos returns an opaque seekdir cookie while monoruby
+        // uses an Array index, so don't compare pos values directly. Both
+        // implementations must move forward on read and reset on rewind, so
+        // verify those behaviors instead.
+        run_test_once(
+            r##"
+            base = "/tmp/monoruby_dir_inst_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(base)
+            begin
+              File.write("#{base}/a", "")
+              d = Dir.new(base)
+              entries = []
+              while (e = d.read) ; entries << e ; end
+              d.rewind
+              first_after_rewind = d.read
+              [entries.sort, [".", "..", "a"].include?(first_after_rewind), d.path == base, d.pos.is_a?(Integer)]
+            ensure
+              d&.close
+              File.unlink("#{base}/a") rescue nil
+              Dir.rmdir(base) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn dir_open_with_block() {
+        run_test_once(
+            r##"
+            base = "/tmp/monoruby_dir_openblk_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(base)
+            begin
+              kids_count = Dir.open(base) { |d| d.children.length }
+              kids_count
+            ensure
+              Dir.rmdir(base) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn dir_close_then_read_raises() {
+        run_test_error(
+            r##"
+            base = "/tmp/monoruby_dir_closed_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(base)
+            begin
+              d = Dir.new(base)
+              d.close
+              d.read
+            ensure
+              Dir.rmdir(base) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn dir_inst_chdir_with_block() {
+        run_test_once(
+            r##"
+            before = Dir.pwd
+            d = Dir.new("/tmp")
+            inside = d.chdir { Dir.pwd }
+            after = Dir.pwd
+            d.close
+            [inside == "/tmp", before == after]
+            "##,
+        );
+    }
+
+    #[test]
+    fn dir_fileno_returns_integer() {
+        run_test_once(
+            r##"
+            d = Dir.new("/tmp")
+            begin
+              fd = d.fileno
+              fd.is_a?(Integer) && fd >= 0
+            ensure
+              d.close
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn dir_fchdir() {
+        run_test_once(
+            r##"
+            before = Dir.pwd
+            d = Dir.new("/tmp")
+            fd = d.fileno
+            inside = nil
+            Dir.fchdir(fd) { inside = Dir.pwd }
+            after = Dir.pwd
+            d.close
+            [inside == "/tmp", before == after]
+            "##,
+        );
+    }
+
+    #[test]
+    fn dir_chroot_requires_root() {
+        // Without CAP_SYS_CHROOT this surfaces as Errno::EPERM. CRuby raises
+        // the same error on the same path under the same uid, so run_test
+        // will compare the two exception classes.
+        run_test_error(r#"Dir.chroot("/tmp") unless Process.uid == 0"#);
+    }
+
+    #[test]
+    fn dir_glob_brace_escape() {
+        // The temp paths embed Process.pid which differs between the two
+        // runs being compared, so reduce the result to a stable shape: the
+        // number of matches and a tail-relative path.
+        run_test_once(
+            r##"
+            base = "/tmp/monoruby_dir_brace_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(base)
+            inner = "#{base}/test{1}"
+            Dir.mkdir(inner)
+            begin
+              File.write("#{inner}/file", "")
+              # Backslash-escaped braces must match the literal { } chars.
+              matches = Dir.glob("#{base}/test\\{1\\}/file")
+              [matches.length, matches.first&.end_with?("/test{1}/file")]
+            ensure
+              File.unlink("#{inner}/file") rescue nil
+              Dir.rmdir(inner) rescue nil
+              Dir.rmdir(base) rescue nil
+            end
+            "##,
+        );
     }
 }
