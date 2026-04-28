@@ -38,6 +38,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with(file, "realpath", realpath, 1, 2, false);
     globals.define_builtin_class_func_with(file, "open", open, 1, 4, false);
     globals.define_builtin_class_func_with(file, "new", open, 1, 4, false);
+    globals.define_builtin_class_func_with(IO_CLASS, "open", open, 1, 4, false);
 
     globals.define_builtin_class_func(file, "directory?", directory_, 1);
     globals.define_builtin_module_func(file_test, "directory?", directory_, 1);
@@ -825,6 +826,45 @@ fn realpath(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// - open(path, mode = "r", [NOT SUPPORTED] perm = 0666) {|file| ... } -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/new.html]
+/// Translate a CRuby-style flags integer (e.g. `File::WRONLY | File::CREAT`)
+/// into the mode string monoruby's open path understands. The bits map to:
+/// access mode in the low 2 bits (RDONLY=0/WRONLY=1/RDWR=2), `O_CREAT`=0o100,
+/// `O_TRUNC`=0o1000, `O_APPEND`=0o2000. Other flags (EXCL, NONBLOCK, …) pass
+/// through silently — `open` handles their effect via mode-string semantics.
+fn mode_string_from_flags(flags: i64) -> String {
+    const O_CREAT: i64 = 0o100;
+    const O_TRUNC: i64 = 0o1000;
+    const O_APPEND: i64 = 0o2000;
+    let access = flags & 0b11;
+    let create = flags & O_CREAT != 0;
+    let trunc = flags & O_TRUNC != 0;
+    let append = flags & O_APPEND != 0;
+    match access {
+        // RDONLY
+        0 => "r".to_string(),
+        // WRONLY
+        1 => {
+            if append {
+                "a".to_string()
+            } else if trunc || create {
+                "w".to_string()
+            } else {
+                "w".to_string()
+            }
+        }
+        // RDWR
+        _ => {
+            if append {
+                "a+".to_string()
+            } else if trunc || create {
+                "w+".to_string()
+            } else {
+                "r+".to_string()
+            }
+        }
+    }
+}
+
 #[monoruby_builtin]
 fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // If the first argument is an Integer, treat it as a file descriptor.
@@ -856,11 +896,44 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         return Ok(res);
     }
 
-    let mode = if let Some(arg1) = lfp.try_arg(1) {
-        arg1.coerce_to_string(vm, globals)?
-    } else {
-        "r".to_string()
-    };
+    // Resolve the open mode. Each later position overrides the earlier one
+    // when it provides an explicit `:mode` (matching CRuby's option-Hash
+    // precedence): trailing options Hash > explicit mode arg > default "r".
+    let mut mode = "r".to_string();
+    if let Some(arg1) = lfp.try_arg(1) {
+        if arg1.is_nil() {
+            // explicit nil => keep default
+        } else if let Some(n) = arg1.try_fixnum() {
+            mode = mode_string_from_flags(n);
+        } else if arg1.is_rstring().is_some() {
+            mode = arg1.coerce_to_string(vm, globals)?;
+        } else if let Some(h) = arg1.try_hash_ty() {
+            if let Some(m) =
+                h.get(Value::symbol(IdentId::get_id("mode")), vm, globals)?
+                && !m.is_nil()
+            {
+                if let Some(n) = m.try_fixnum() {
+                    mode = mode_string_from_flags(n);
+                } else {
+                    mode = m.coerce_to_string(vm, globals)?;
+                }
+            }
+        }
+    }
+    // Look at later args (perm, opts) for a Hash with :mode.
+    for i in 2..4 {
+        if let Some(arg) = lfp.try_arg(i)
+            && let Some(h) = arg.try_hash_ty()
+            && let Some(m) = h.get(Value::symbol(IdentId::get_id("mode")), vm, globals)?
+            && !m.is_nil()
+        {
+            if let Some(n) = m.try_fixnum() {
+                mode = mode_string_from_flags(n);
+            } else {
+                mode = m.coerce_to_string(vm, globals)?;
+            }
+        }
+    }
     let mut opt = File::options();
     // Strip encoding suffix (e.g. ":UTF-8") and normalize the mode string:
     // remove 'b' (binary) flag since it has no effect on Unix.

@@ -538,7 +538,9 @@ fn io_class_read(
 ///
 /// - readlines(path, [NOT SUPPORTED] sep = $/, [NOT SUPPORTED] limit = nil) -> [String]
 ///
-/// Reads the entire file at `path` as a list of lines.
+/// Reads the entire file at `path` as a list of lines. Trailing arguments
+/// that are Hashes (CRuby option / keyword forms like `chomp: true`) are
+/// accepted but currently ignored.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/readlines.html]
 #[monoruby_builtin]
@@ -549,6 +551,22 @@ fn io_class_readlines(
     _: BytecodePtr,
 ) -> Result<Value> {
     let path = lfp.arg(0).coerce_to_str(vm, globals)?;
+    // Validate any subsequent positional arguments. Hash arguments
+    // (forwarded keyword opts) are accepted; Integer limit is accepted but
+    // not enforced.
+    for i in 1..3 {
+        if let Some(arg) = lfp.try_arg(i)
+            && !arg.is_nil()
+            && arg.try_hash_ty().is_none()
+            && arg.try_fixnum().is_none()
+            && arg.is_rstring().is_none()
+        {
+            return Err(MonorubyErr::typeerr(format!(
+                "no implicit conversion of {} into String",
+                globals.get_class_name(arg.class()),
+            )));
+        }
+    }
     let content = std::fs::read_to_string(&path)
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
     let mut lines: Vec<Value> = Vec::new();
@@ -591,14 +609,20 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let p = vm.get_block_data(globals, bh)?;
     let content = std::fs::read_to_string(&path)
         .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
-    // arg1 may be a separator (String/nil) or a limit (Integer); arg2, if
-    // present, is always the limit. The limit value is currently parsed but
-    // not applied — line slicing returns whole lines.
+    // arg1 may be a separator (String/nil), a limit (Integer), or an options
+    // Hash forwarded from `**opts` (CRuby allows
+    // `IO.foreach(path, chomp: true)` etc.). arg2, if present, is normally
+    // the limit, but may also be the options Hash. Both options and limit
+    // are currently accepted but not enforced — line slicing returns whole
+    // lines and the chomp/mode flags are ignored.
     let sep = if let Some(sep_val) = lfp.try_arg(1) {
         if sep_val.is_nil() {
             None
         } else if sep_val.try_fixnum().is_some() {
             // arg1 is a limit, sep defaults to "\n".
+            Some("\n".to_string())
+        } else if sep_val.try_hash_ty().is_some() {
+            // arg1 is the options hash; sep defaults to "\n".
             Some("\n".to_string())
         } else {
             Some(sep_val.coerce_to_str(vm, globals)?)
@@ -608,6 +632,7 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     };
     if let Some(arg2) = lfp.try_arg(2)
         && !arg2.is_nil()
+        && arg2.try_hash_ty().is_none()
     {
         let _ = arg2.coerce_to_int_i64(vm, globals)?;
     }
@@ -726,12 +751,27 @@ fn io_pipe(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/popen.html]
 #[monoruby_builtin]
 fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let args = lfp.arg(0).as_array();
-    if args.is_empty() {
+    let raw_args = lfp.arg(0).as_array();
+    if raw_args.is_empty() {
         return Err(MonorubyErr::argumenterr(
             "wrong number of arguments (given 0, expected 1+)",
         ));
     }
+    // CRuby `IO.popen([env,] cmd_or_argv [, mode] [, opts])`. When the first
+    // argument is a Hash, treat it as the environment and shift everything
+    // else left.
+    let mut env_hash: Option<Value> = None;
+    let mut idx = 0usize;
+    if raw_args[0].try_hash_ty().is_some() {
+        env_hash = Some(raw_args[0]);
+        idx = 1;
+    }
+    if idx >= raw_args.len() {
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 1, expected 2+)",
+        ));
+    }
+    let args: Vec<Value> = raw_args.iter().skip(idx).cloned().collect();
     let cmd_val = args[0];
 
     // Build the command from either a String or an Array of strings.
@@ -752,6 +792,19 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         cmd.arg("-c").arg(cmd_str.to_string());
         (cmd, cmd_str)
     };
+
+    // Apply the leading ENV Hash (after `command` exists so we can call .env).
+    if let Some(env) = env_hash {
+        let h = env.as_hash();
+        for (k, v) in h.iter() {
+            let key = k.to_s(globals);
+            if v.is_nil() {
+                command.env_remove(&key);
+            } else {
+                command.env(&key, v.to_s(globals));
+            }
+        }
+    }
 
     // Parse mode and options.
     //   IO.popen(cmd)
