@@ -853,6 +853,19 @@ mod tests {
     }
 
     #[test]
+    fn string_encode_changes_encoding_tag() {
+        // PR #361: `String#encode` (Ruby override + Rust encode) updates
+        // the encoding tag of the result instead of returning self verbatim.
+        run_tests(&[
+            r#""hello".encode("US-ASCII").encoding.name"#,
+            r#""hello".encode("ASCII-8BIT").encoding.name"#,
+            r#""hello".encode(Encoding::US_ASCII).encoding.name"#,
+            // Original is untouched; encode returns a copy.
+            r#"s = "hello"; s.encode("US-ASCII"); s.encoding.name"#,
+        ]);
+    }
+
+    #[test]
     fn encoding_compatible() {
         run_test(
             r#"

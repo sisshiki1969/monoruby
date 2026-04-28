@@ -4073,6 +4073,23 @@ mod tests {
     }
 
     #[test]
+    fn string_eql() {
+        // PR #361: `String#eql?` is now a value-based comparison (alias of
+        // `String#==`), not the identity-based fallback from Object.
+        run_tests(&[
+            r##""abcde".eql?("abcde")"##,
+            r##""abcde".eql?("xxxxx")"##,
+            // eql? does not coerce; non-String returns false.
+            r##""abc".eql?(:abc)"##,
+            r##""abc".eql?(nil)"##,
+            // Two distinct String objects with the same content.
+            r##"a = "x".dup; b = "x".dup; [a.equal?(b), a.eql?(b)]"##,
+            // Hash#eql? uses #eql? on values; string values must compare by content.
+            r##"{1.0 => "x"}.eql?({1.0 => "x"})"##,
+        ]);
+    }
+
+    #[test]
     fn string_cmp() {
         run_binop_tests2(
             &[

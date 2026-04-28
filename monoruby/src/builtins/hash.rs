@@ -555,11 +555,15 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         self_val.id(),
         || {
             let h = self_val.as_hash();
-            // Mix in the size so that empty hashes and hashes with nil
-            // values are distinguishable. Use wrapping addition to combine
-            // the per-pair hashes (rather than XOR) so values don't cancel
-            // when the same value appears in multiple entries.
-            let mut acc: i64 = h.len() as i64;
+            // Use a non-commutative pair mix so that swapping values between
+            // keys yields different hashes (otherwise `{a:2,b:7}` and
+            // `{a:7,b:2}` would collide). Per-pair hashes are summed (rather
+            // than XOR'd) so identical values across pairs don't cancel.
+            // Size is folded in to distinguish hashes of different cardinality.
+            const KEY_MIX: i64 = 0x100000001b3u64 as i64;
+            const VAL_MIX: i64 = 0xc6bc279692b5c323u64 as i64;
+            const KEY_OFFSET: i64 = 0x9e3779b97f4a7c15u64 as i64;
+            let mut acc: i64 = (h.len() as i64).wrapping_mul(0x9ddfea08eb382d69u64 as i64);
             let hash_id = IdentId::get_id("hash");
             for (k, v) in h.iter() {
                 let kh = vm
@@ -570,10 +574,9 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     .invoke_method_inner(globals, hash_id, v, &[], None, None)?
                     .try_fixnum()
                     .unwrap_or(0);
-                let pair = kh
-                    .wrapping_mul(0x100000001b3i64)
-                    .wrapping_add(vh.rotate_left(13).wrapping_mul(31));
-                acc = acc.wrapping_add(pair);
+                let kpart = kh.wrapping_add(KEY_OFFSET).wrapping_mul(KEY_MIX);
+                let vpart = vh.wrapping_mul(VAL_MIX).rotate_left(13);
+                acc = acc.wrapping_add(kpart ^ vpart);
             }
             Ok(Value::integer(acc))
         },
@@ -3487,5 +3490,503 @@ mod tests {
              begin; h.each { raise 'stop' }; rescue; end; \
              h[:b] = 2; h.keys.sort",
         );
+    }
+
+    // ----- Tests for ruby/spec sweep (PR #361) -----
+
+    #[test]
+    fn hash_new_validation() {
+        // 0..1 positional args ok
+        run_test("Hash.new.default");
+        run_test("Hash.new(5).default");
+        // Block-form ok
+        run_test("Hash.new { |h, k| k }.default_proc.is_a?(Proc)");
+        // Both default value and block: ArgumentError
+        run_test_error("Hash.new(5) { 0 }");
+        // More than one positional: ArgumentError
+        run_test_error("Hash.new(5, 6)");
+    }
+
+    #[test]
+    fn hash_initialize_private() {
+        run_tests(&[
+            r#"Hash.private_instance_methods.include?(:initialize)"#,
+            // Reset default value
+            r#"h = {}; h.default = 42; h.send(:initialize, 1); h.default"#,
+            r#"h = {}; h.default = 42; h.send(:initialize); h.default.nil?"#,
+            // Reset default_proc
+            r#"h = {}; h.send(:initialize) { |_, k| k * 2 }; h["a"]"#,
+            // Returns self
+            r#"h = Hash.new; h.send(:initialize).equal?(h)"#,
+        ]);
+        // FrozenError on a frozen hash
+        run_test_error(r#"{}.freeze.send(:initialize)"#);
+        run_test_error(r#"{}.freeze.send(:initialize, 5)"#);
+        run_test_error(r#"{}.freeze.send(:initialize) { 5 }"#);
+    }
+
+    #[test]
+    fn hash_initialize_subclass_args() {
+        // Hash.new must forward *args + block to the subclass's #initialize.
+        run_test(
+            r#"
+            klass = Class.new(Hash) do
+              def initialize(*args)
+                args.each_with_index { |v, i| self[i] = v }
+              end
+            end
+            h = klass.new(:one, :two)
+            [h[0], h[1], h.class.superclass]
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_bracket_subclass() {
+        // `MyHash[...]` returns a MyHash, both for Array form, kvs, and copy form.
+        run_test(
+            r#"
+            klass = Class.new(Hash)
+            [
+              klass[].instance_of?(klass),
+              klass[1, 2, 3, 4].instance_of?(klass),
+              klass[1 => 2].instance_of?(klass),
+              # Hash[subclass-instance] returns plain Hash.
+              Hash[klass[1, 2]].class,
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_bracket_array_form() {
+        // 1-element arrays become `key => nil`.
+        run_test("Hash[[[:a]]]");
+        // [[k, v], ...] form.
+        run_test("Hash[[[:a, 1], [:b, 2]]]");
+        // Wrong element type: ArgumentError carries CRuby-shaped message.
+        run_test_error("Hash[[:a]]");
+        run_test_error("Hash[[nil]]");
+        // Pair too long: ArgumentError.
+        run_test_error("Hash[[[:a, :b, :c]]]");
+    }
+
+    #[test]
+    fn hash_fetch_keyerror_fields() {
+        // KeyError carries `receiver` (the hash) and `key`, and the message
+        // formats the key with `inspect` (so a string key shows quoted).
+        run_test(
+            r#"
+            h = {}
+            begin
+              h.fetch("foo")
+            rescue KeyError => e
+              [e.receiver.equal?(h), e.key, e.message]
+            end
+            "#,
+        );
+        // Symbol keys: receiver is preserved, key is the missing symbol.
+        run_test(
+            r#"
+            h = { a: 1 }
+            begin
+              h.fetch(:z)
+            rescue KeyError => e
+              [e.receiver.equal?(h), e.key]
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_fetch_block_supersedes_warning() {
+        // Calling fetch with a default arg AND a block warns via Kernel#warn
+        // (so the message hits $stderr properly, captureable from Ruby).
+        run_test(
+            r#"
+            require "stringio"
+            old = $stderr
+            begin
+              $stderr = StringIO.new
+              r = {}.fetch(9, :foo) { |i| i * i }
+              [r, $stderr.string.include?("block supersedes")]
+            ensure
+              $stderr = old
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_fetch_values_basic() {
+        run_tests(&[
+            r#"{a: 1, b: 2, c: 3}.fetch_values(:a)"#,
+            r#"{a: 1, b: 2, c: 3}.fetch_values(:c, :a)"#,
+            r#"{a: 1, b: 2, c: 3}.fetch_values"#,
+            // Block form supplies values for missing keys.
+            r#"{a: 1}.fetch_values(:a, :z) { |k| "missing #{k}" }"#,
+        ]);
+    }
+
+    #[test]
+    fn hash_flatten() {
+        run_tests(&[
+            r#"{}.flatten.class"#,
+            r#"{}.flatten"#,
+            r#"{a: 1, b: [2, 3]}.flatten"#,
+            r#"{a: 1, b: [2, 3]}.flatten(2)"#,
+            r#"{a: [[1, 2]]}.flatten(2)"#,
+        ]);
+        // Non-Integer level raises TypeError.
+        run_test_error(r#"{a: 1}.flatten(Object.new)"#);
+    }
+
+    #[test]
+    fn hash_to_proc() {
+        run_tests(&[
+            r#"{a: 1}.to_proc.is_a?(Proc)"#,
+            r#"{a: 1}.to_proc.lambda?"#,
+            r#"{a: 1}.to_proc.arity"#,
+            r#"{a: 1, b: 2}.to_proc.call(:a)"#,
+            r#"{a: 1}.to_proc.call(:nope)"#,
+            // &proc form via map
+            r#"[:a, :b].map(&{a: 1, b: 2}.to_proc)"#,
+            // Default value visible through the lambda.
+            r#"h = Hash.new(:dflt); h.to_proc.call(:nope)"#,
+        ]);
+        run_test_error(r#"{a: 1}.to_proc.call"#);
+        run_test_error(r#"{a: 1}.to_proc.call(1, 2)"#);
+    }
+
+    #[test]
+    fn hash_rehash_basic() {
+        run_test("h = {a: 1, b: 2}; h.rehash.equal?(h)");
+        run_test_error(r#"{a: 1}.freeze.rehash"#);
+    }
+
+    #[test]
+    fn hash_compact() {
+        run_tests(&[
+            r#"{a: 1, b: nil, c: 3}.compact"#,
+            r#"{a: nil, b: nil}.compact"#,
+            // Originals are untouched.
+            r#"h = {a: 1, b: nil}; h.compact; h"#,
+            // compact! returns self when something changed, nil otherwise.
+            r#"h = {a: 1, b: nil}; r = h.compact!; [h, r.equal?(h)]"#,
+            r#"h = {a: 1, b: 2}; h.compact!"#,
+        ]);
+        // compact retains default value / proc.
+        run_test(
+            r#"
+            h = Hash.new(42)
+            h[:a] = 1
+            h[:b] = nil
+            r = h.compact
+            [r, r.default]
+            "#,
+        );
+        run_test_error(r#"{a: 1, b: nil}.freeze.compact!"#);
+    }
+
+    #[test]
+    fn hash_sort_with_block() {
+        run_test(r#"{1 => 2, 2 => 9, 3 => 4}.sort { |a, b| b <=> a }"#);
+        run_test(r#"{1 => 2, 2 => 9, 3 => 4}.sort"#);
+    }
+
+    #[test]
+    fn hash_merge_with_block() {
+        // Block is invoked for keys present in both hashes.
+        run_tests(&[
+            r#"{a: 1, b: 2}.merge({b: 3, c: 4}) { |_, l, r| l + r }"#,
+            // Multiple `others` work with the block too.
+            r#"{a: 1}.merge({a: 2}, {a: 3}) { |_, l, r| l * 10 + r }"#,
+        ]);
+    }
+
+    #[test]
+    fn hash_default_proc_assign() {
+        run_tests(&[
+            // Returns the assigned proc.
+            r#"h = {}; pr = Proc.new {}; (h.default_proc = pr).equal?(pr)"#,
+            // nil clears default_proc.
+            r#"h = Hash.new { 42 }; h.default_proc = nil; h.default_proc.nil?"#,
+            // 2-arity lambdas are accepted.
+            r#"h = {}; h.default_proc = ->(a, b) { a }; h.default_proc.is_a?(Proc)"#,
+            // :to_proc coercion: an Object whose #to_proc returns a Proc.
+            r#"
+            obj = Object.new
+            def obj.to_proc; Proc.new { 42 }; end
+            h = Hash.new
+            h.default_proc = obj
+            h[:any]
+            "#,
+        ]);
+        // Non-2-arity lambda raises TypeError.
+        run_test_error(r#"{}.default_proc = ->(a) { }"#);
+        run_test_error(r#"{}.default_proc = ->(a, b, c) { }"#);
+        // Non-Proc, non-coercible: TypeError.
+        run_test_error(r#"{}.default_proc = 42"#);
+    }
+
+    #[test]
+    fn hash_index_assign_string_key() {
+        // A non-frozen String key is dup'd and frozen on store; later
+        // mutation of the original String doesn't affect the stored key.
+        run_test(
+            r#"
+            key = +"foo"
+            h = {}
+            h[key] = 0
+            key << "bar"
+            [h.keys[0], h.keys[0].frozen?]
+            "#,
+        );
+        // Singleton methods on the original key do NOT bleed into the stored
+        // copy (the stored key uses the real String class).
+        run_test(
+            r#"
+            key = +"foo"
+            def key.reverse; "bar"; end
+            h = {}
+            h[key] = 0
+            h.keys[0].reverse
+            "#,
+        );
+        // A frozen String key is stored as-is.
+        run_test(
+            r#"
+            key = "foo".freeze
+            h = {}
+            h[key] = 0
+            h.keys[0].equal?(key)
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_index_no_dup_default() {
+        // Hash#[] returns the stored default value WITHOUT dup'ing it.
+        run_test(
+            r#"
+            d = +"foo"
+            h = Hash.new(d)
+            h[:any].equal?(d)
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_hash_method() {
+        run_tests(&[
+            // Order-independent.
+            r#"{0 => 2, 11 => 1}.hash == {11 => 1, 0 => 2}.hash"#,
+            // Same values across pairs do not cancel out.
+            r#"{a: 2, b: 2}.hash == {a: 7, b: 7}.hash"#,
+            // Different key/value pairings give different hashes.
+            r#"{a: 2, b: 7}.hash == {a: 7, b: 2}.hash"#,
+            // Stable across calls.
+            r#"h = {a: 1, b: 2}; h.hash == h.hash"#,
+        ]);
+    }
+
+    #[test]
+    fn hash_eql_separate_from_eq() {
+        // `==` compares values via `==`; `eql?` compares via `#eql?`.
+        // 1 == 1.0 but 1.eql?(1.0) is false.
+        run_tests(&[
+            r#"{a: 1} == {a: 1.0}"#,
+            r#"{a: 1}.eql?({a: 1.0})"#,
+            r#"{1.0 => "x"}.eql?({1.0 => "x"})"#,
+            // Equal values via `eql?` semantics.
+            r#"{1 => "a"}.eql?({1 => "a"})"#,
+        ]);
+    }
+
+    #[test]
+    fn hash_inspect_calls_to_s_when_inspect_returns_non_string() {
+        // Verify the *behavior* of inspect: when #inspect returns a non-
+        // String, #to_s is invoked on it; when it returns a String, #to_s
+        // is NOT invoked. We avoid asserting the exact rendered form so the
+        // test doesn't depend on Ruby's `=>` vs `: ` formatting era.
+        run_tests(&[
+            r#"
+            obj = Object.new
+            def obj.inspect; self; end
+            def obj.to_s; "X-X"; end
+            {1 => obj}.inspect.include?("X-X")
+            "#,
+            // #to_s is NOT called when #inspect returns a String.
+            r#"
+            obj = Object.new
+            def obj.inspect; "ok"; end
+            def obj.to_s; raise "should not be called"; end
+            {1 => obj}.inspect.include?("ok")
+            "#,
+        ]);
+        // Exceptions raised by #to_s propagate (not swallowed).
+        run_test(
+            r#"
+            obj = Object.new
+            def obj.inspect; self; end
+            def obj.to_s; raise "boom"; end
+            begin
+              {1 => obj}.inspect
+              :no_error
+            rescue RuntimeError
+              :ok
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_sized_enumerator_no_block() {
+        // Block-less calls return an Enumerator whose .size is the hash size.
+        run_tests(&[
+            r#"h = {a:1, b:2, c:3}; [h.each.size, h.each_key.size, h.each_value.size, h.each_pair.size]"#,
+            r#"h = {a:1, b:2}; [h.select.size, h.reject.size, h.delete_if.size, h.keep_if.size]"#,
+            r#"h = {a:1}; [h.transform_keys.size, h.transform_values.size]"#,
+        ]);
+    }
+
+    #[test]
+    fn hash_frozen_no_block_returns_enumerator() {
+        // For mutating methods, `frozen.send(method)` (no block) returns an
+        // Enumerator instead of immediately raising FrozenError.
+        run_tests(&[
+            r#"{}.freeze.delete_if.is_a?(Enumerator)"#,
+            r#"{}.freeze.keep_if.is_a?(Enumerator)"#,
+            r#"{}.freeze.select!.is_a?(Enumerator)"#,
+            r#"{}.freeze.reject!.is_a?(Enumerator)"#,
+            r#"{}.freeze.filter!.is_a?(Enumerator)"#,
+        ]);
+        // ...but with a block we still get FrozenError.
+        run_test_error(r#"{a:1}.freeze.delete_if { true }"#);
+    }
+
+    #[test]
+    fn hash_select_filter_preserves_compare_by_identity() {
+        // select / filter copy the receiver's compare_by_identity flag.
+        run_test(
+            r#"
+            h = { a: 1, b: 2 }.compare_by_identity
+            h.select { true }.compare_by_identity?
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_dup_preserves_class_not_singleton() {
+        // dup keeps the class but does NOT carry singleton methods.
+        run_test(
+            r#"
+            klass = Class.new(Hash)
+            h = klass[a: 1]
+            h.dup.class == klass
+            "#,
+        );
+        run_test(
+            r#"
+            h = { 1 => 2 }
+            def h.to_a; nil; end
+            h.dup.to_a
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_reject_no_default_carry() {
+        // reject returns a fresh hash without the receiver's default.
+        run_test(
+            r#"
+            h = Hash.new(99)
+            h[:a] = 1
+            r = h.reject { false }
+            [r.default, r[:a]]
+            "#,
+        );
+        // Singleton method on the receiver does not bleed into the result.
+        run_test(
+            r#"
+            h = { 1 => 2 }
+            def h.to_a; nil; end
+            h.reject { false }.to_a
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_except_clears_default() {
+        run_test(
+            r#"
+            h = Hash.new(99)
+            h[:a] = 1
+            r = h.except(:a)
+            [r.default, r.size]
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_to_h_block_coercion_and_errors() {
+        run_tests(&[
+            r#"{a: 1, b: 2}.to_h { |k, v| [k.to_s, v * v] }"#,
+            // Coerce via #to_ary.
+            r#"
+            obj = Object.new
+            def obj.to_ary; [:b, "b"]; end
+            { a: 1 }.to_h { |_| obj }
+            "#,
+        ]);
+        // Block returns wrong-shaped Array → ArgumentError with the
+        // specific wording the spec expects.
+        run_test_error(r#"{a: 1}.to_h { |k, v| [k, v, 1] }"#);
+        run_test_error(r#"{a: 1}.to_h { |k, v| [k] }"#);
+        // Block returns non-Array → TypeError.
+        run_test_error(r#"{a: 1}.to_h { |_| 42 }"#);
+    }
+
+    #[test]
+    fn hash_to_h_subclass_returns_plain_hash() {
+        // Hash subclass#to_h (no block) returns a plain Hash that retains
+        // default value/proc and compare_by_identity flag.
+        run_test(
+            r#"
+            klass = Class.new(Hash)
+            h = klass.new
+            h[:foo] = :bar
+            r = h.to_h
+            [r.class, r[:foo]]
+            "#,
+        );
+        run_test(
+            r#"
+            klass = Class.new(Hash)
+            h = klass.new
+            h.default = 42
+            r = h.to_h
+            r.default
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_ruby2_keywords_hash_stub() {
+        run_tests(&[
+            // Boolean predicate.
+            r#"Hash.ruby2_keywords_hash?({})"#,
+            // Mark returns a Hash (we can at least round-trip).
+            r#"Hash.ruby2_keywords_hash({a: 1}) == {a: 1}"#,
+        ]);
+        run_test_error(r#"Hash.ruby2_keywords_hash?(nil)"#);
+        run_test_error(r#"Hash.ruby2_keywords_hash([])"#);
+    }
+
+    #[test]
+    fn hash_literal_reserved_word_keys() {
+        // Parser shorthand for nil:/false:/true: (PR #361).
+        run_test("{nil: 1, false: 2, true: 3}");
+        run_test("{nil: 1}.keys");
     }
 }

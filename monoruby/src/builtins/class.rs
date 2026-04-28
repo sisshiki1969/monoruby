@@ -1102,4 +1102,46 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn class_subclasses_concurrent() {
+        // PR #361: Thread.new now defers block execution and runs it
+        // lazily on .value/.join, so the canonical "build threads, signal,
+        // collect" pattern works under monoruby's single-threaded runtime.
+        run_test(
+            r#"
+            t = 4
+            n = 50
+            go = false
+            superclass = Class.new
+            threads = t.times.map do
+              Thread.new do
+                Thread.pass until go
+                n.times.map { Class.new(superclass) }
+              end
+            end
+            go = true
+            threads.map(&:value)
+            superclass.subclasses.size
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_value_runs_block_lazily() {
+        // PR #361: Thread.new(&block) stores the block; .value/.join run it
+        // synchronously on the main thread (monoruby is single-threaded).
+        // The behavior matches CRuby for the standard "build threads,
+        // signal via a flag, then collect with .value" pattern.
+        run_test(r#"Thread.new { 42 }.value"#);
+        // join returns self and ensures the block ran by then.
+        run_test(
+            r#"
+            counter = [0]
+            t = Thread.new { counter[0] += 1 }
+            t.join
+            counter[0]
+            "#,
+        );
+    }
 }
