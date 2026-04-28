@@ -299,7 +299,8 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         self.loop_stack.push(LoopKind::Block);
 
         let (params, _) = if self.consume_punct(Punct::BitOr)? {
-            (self.parse_formal_params(Punct::BitOr)?, true)
+            // Block params (`|...|`): trailing comma triggers auto-splat.
+            (self.parse_formal_params(Punct::BitOr, true)?, true)
         } else {
             self.consume_punct(Punct::LOr)?;
             (vec![], false)

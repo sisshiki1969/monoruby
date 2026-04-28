@@ -184,7 +184,13 @@ impl FormalParam {
     }
 
     pub(crate) fn post(name: String, loc: Loc) -> Self {
-        FormalParam::new(ParamKind::Post(name), loc)
+        FormalParam::new(ParamKind::Post(Some(name)), loc)
+    }
+
+    /// Anonymous post param, used to inject a trailing-comma auto-splat
+    /// hint into block / lambda parameter lists. Does not allocate a local.
+    pub(crate) fn post_discard(loc: Loc) -> Self {
+        FormalParam::new(ParamKind::Post(None), loc)
     }
 
     pub(crate) fn keyword(name: String, default: Option<Node>, loc: Loc) -> Self {
@@ -222,7 +228,7 @@ impl FormalParam {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamKind {
     Param(String),
-    Post(String),
+    Post(Option<String>),
     Optional(String, Box<Node>), // name, default expr
     Rest(Option<String>),
     Keyword(String, Option<Box<Node>>), // name, default expr
