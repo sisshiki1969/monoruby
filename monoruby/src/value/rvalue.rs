@@ -27,7 +27,7 @@ pub use rational::{RationalFloorResult, RationalInner};
 pub use regexp::{Regexp, RegexpInner};
 pub(crate) use string::pack::*;
 pub use string::{Encoding, RString, RStringInner};
-pub use struct_inner::{STRUCT_INNER_PTR_OFFSET, StructInner};
+pub use struct_inner::{STRUCT_INLINE_SLOTS, StructInner};
 
 mod array;
 mod binding;
@@ -157,9 +157,13 @@ pub union ObjKind {
     binding: ManuallyDrop<BindingInner>,
     matchdata: ManuallyDrop<MatchDataInner>,
     rational: ManuallyDrop<Box<RationalInner>>,
-    /// Slot-array storage for `Struct` subclass instances. Boxed so the
-    /// union stays small even when the slot vector is large.
-    struct_inner: ManuallyDrop<Box<StructInner>>,
+    /// Slot-array storage for `Struct` subclass instances. Stored
+    /// directly (not boxed) so up to `STRUCT_INLINE_SLOTS` members
+    /// live inline in this union -- the JIT reuses the existing
+    /// `RVALUE_OFFSET_INLINE` / `RVALUE_OFFSET_HEAP_PTR` constants to
+    /// load slots without an extra Box deref. Same layout as
+    /// `ArrayInner`'s `SmallVec<[Value; 5]>`.
+    struct_inner: ManuallyDrop<StructInner>,
 }
 
 impl ObjKind {
@@ -954,7 +958,7 @@ impl RValue {
                             copy.set(i, v.deep_copy());
                         }
                         ObjKind {
-                            struct_inner: ManuallyDrop::new(Box::new(copy)),
+                            struct_inner: ManuallyDrop::new(copy),
                         }
                     }
                     _ => unreachable!("deep_copy()"),
@@ -1026,9 +1030,9 @@ impl RValue {
                             matchdata: self.kind.matchdata.clone(),
                         },
                         ObjTy::STRUCT => ObjKind {
-                            struct_inner: ManuallyDrop::new(Box::new(
-                                (**self.kind.struct_inner).clone(),
-                            )),
+                            struct_inner: ManuallyDrop::new(
+                                (*self.kind.struct_inner).clone(),
+                            ),
                         },
                         ty => unreachable!("{ty:?}"),
                     }
@@ -1100,9 +1104,9 @@ impl RValue {
                             matchdata: self.kind.matchdata.clone(),
                         },
                         ObjTy::STRUCT => ObjKind {
-                            struct_inner: ManuallyDrop::new(Box::new(
-                                (**self.kind.struct_inner).clone(),
-                            )),
+                            struct_inner: ManuallyDrop::new(
+                                (*self.kind.struct_inner).clone(),
+                            ),
                         },
                         ty => unreachable!("{ty:?}"),
                     }
@@ -1241,7 +1245,7 @@ impl RValue {
         RValue {
             header: Header::new(class_id, ObjTy::STRUCT),
             kind: ObjKind {
-                struct_inner: ManuallyDrop::new(Box::new(StructInner::new(len))),
+                struct_inner: ManuallyDrop::new(StructInner::new(len)),
             },
             var_table: None,
         }

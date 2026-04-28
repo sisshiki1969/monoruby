@@ -65,8 +65,12 @@ impl Codegen {
             FuncKind::Builtin { abs_address } => self.gen_native_func_wrapper(*abs_address),
             FuncKind::AttrReader { ivar_name } => self.gen_attr_reader(*ivar_name),
             FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(*ivar_name),
-            FuncKind::StructReader { slot_index } => self.gen_struct_reader(*slot_index),
-            FuncKind::StructWriter { slot_index } => self.gen_struct_writer(*slot_index),
+            FuncKind::StructReader { slot_index, inline } => {
+                self.gen_struct_reader(*slot_index, *inline)
+            }
+            FuncKind::StructWriter { slot_index, inline } => {
+                self.gen_struct_writer(*slot_index, *inline)
+            }
         };
         self.jit.finalize();
         entry
@@ -186,50 +190,49 @@ impl Codegen {
     }
 
     ///
-    /// Generate a `Struct` member reader. The slot index is hard-coded
-    /// at codegen time, so the wrapper is a fixed-cost three-load
-    /// sequence with no Rust call:
+    /// Generate a `Struct` member reader. With the slot vector now
+    /// stored as a `SmallVec<[Value; STRUCT_INLINE_SLOTS]>` directly
+    /// in the RValue's `kind` union (no Box), the inline case is a
+    /// **single mov** matching the inline-ivar `attr_reader` codegen.
+    /// The heap case dereferences `RVALUE_OFFSET_HEAP_PTR` once.
     ///
+    /// Inline:
     /// ```asm
-    ///   mov rdi, [r14 - LFP_SELF]              ; self (Value, heap ptr)
-    ///   mov rdi, [rdi + RVALUE_OFFSET_KIND]    ; Box<StructInner>
-    ///   mov rdi, [rdi + STRUCT_INNER_PTR_OFFSET]; slot array
-    ///   mov rax, [rdi + slot * 8]              ; the Value
+    ///   mov rdi, [r14 - LFP_SELF]
+    ///   mov rax, [rdi + RVALUE_OFFSET_INLINE + slot*8]
     ///   ret
     /// ```
-    ///
-    /// Receiver type is guaranteed by the dispatch path (the method
-    /// is only registered on `ObjTy::STRUCT` subclasses), so no class
-    /// guard is needed at this level.
-    fn gen_struct_reader(&mut self, slot_index: u16) {
-        monoasm!( &mut self.jit,
-            movq rdi, [r14 - (LFP_SELF)];
-            movq rdi, [rdi + (RVALUE_OFFSET_KIND as i32)];
-            movq rdi, [rdi + (STRUCT_INNER_PTR_OFFSET as i32)];
-            movq rax, [rdi + ((slot_index as i32) * 8)];
-            ret;
-        );
+    /// Heap:
+    /// ```asm
+    ///   mov rdi, [r14 - LFP_SELF]
+    ///   mov rdi, [rdi + RVALUE_OFFSET_HEAP_PTR]
+    ///   mov rax, [rdi + slot*8]
+    ///   ret
+    /// ```
+    fn gen_struct_reader(&mut self, slot_index: u16, inline: bool) {
+        if inline {
+            monoasm!( &mut self.jit,
+                movq rdi, [r14 - (LFP_SELF)];
+                movq rax, [rdi + ((slot_index as i32) * 8 + RVALUE_OFFSET_INLINE as i32)];
+                ret;
+            );
+        } else {
+            monoasm!( &mut self.jit,
+                movq rdi, [r14 - (LFP_SELF)];
+                movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR as i32)];
+                movq rax, [rdi + ((slot_index as i32) * 8)];
+                ret;
+            );
+        }
     }
 
     ///
     /// Generate a `Struct` member writer. Routes through a small
     /// runtime helper (`set_struct_slot_with_check`) to keep the
-    /// frozen check + error-flag plumbing in Rust:
-    ///
-    /// ```asm
-    ///   mov rdi, rbx                  ; &mut Executor
-    ///   mov rsi, r12                  ; &mut Globals
-    ///   mov rdx, [r14 - LFP_SELF]     ; self (Value)
-    ///   mov rcx, [r14 - LFP_ARG0]     ; the value to store
-    ///   mov r8, slot_index
-    ///   call set_struct_slot_with_check
-    ///   ret
-    /// ```
-    ///
-    /// On FrozenError the helper returns NULL and the caller picks up
-    /// the error via the existing extern-"C" None-means-error contract
-    /// (same as `set_instance_var_with_cache`).
-    fn gen_struct_writer(&mut self, slot_index: u16) {
+    /// frozen check + error-flag plumbing in Rust. The helper itself
+    /// figures out inline vs. heap from the receiver's `SmallVec`,
+    /// so the wrapper-level codegen is identical for both cases.
+    fn gen_struct_writer(&mut self, slot_index: u16, _inline: bool) {
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;

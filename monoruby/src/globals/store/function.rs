@@ -536,16 +536,26 @@ impl Funcs {
         id
     }
 
-    pub(super) fn new_struct_reader(&mut self, name: IdentId, slot_index: u16) -> FuncId {
+    pub(super) fn new_struct_reader(
+        &mut self,
+        name: IdentId,
+        slot_index: u16,
+        inline: bool,
+    ) -> FuncId {
         let id = self.next_func_id();
-        let info = FuncInfo::new_struct_reader(id, name, slot_index);
+        let info = FuncInfo::new_struct_reader(id, name, slot_index, inline);
         self.info.push(info);
         id
     }
 
-    pub(super) fn new_struct_writer(&mut self, name: IdentId, slot_index: u16) -> FuncId {
+    pub(super) fn new_struct_writer(
+        &mut self,
+        name: IdentId,
+        slot_index: u16,
+        inline: bool,
+    ) -> FuncId {
         let id = self.next_func_id();
-        let info = FuncInfo::new_struct_writer(id, name, slot_index);
+        let info = FuncInfo::new_struct_writer(id, name, slot_index, inline);
         self.info.push(info);
         id
     }
@@ -563,15 +573,15 @@ pub(crate) enum FuncKind {
     AttrReader { ivar_name: IdentId },
     AttrWriter { ivar_name: IdentId },
     /// `Struct` member reader. The slot index is fixed at class
-    /// definition time (the position in `/members`), so the JIT can
-    /// emit a direct `mov` from the per-instance slot vector — no
-    /// name lookup, no ivar id resolution. Mirrors the
-    /// `AttrReader { ivar_name }` pattern but for `ObjTy::STRUCT`
-    /// receivers.
-    StructReader { slot_index: u16 },
+    /// definition time (the position in `/members`); `inline` is
+    /// `true` when the class has at most `STRUCT_INLINE_SLOTS`
+    /// members (the slot vector lives directly in the RValue's
+    /// `kind` union, no heap allocation). The JIT and the wrapper
+    /// pick a 1-mov vs. 2-mov code variant accordingly.
+    StructReader { slot_index: u16, inline: bool },
     /// `Struct` member writer. Counterpart to `StructReader`; writes
     /// to slot `slot_index` of the per-instance `StructInner`.
-    StructWriter { slot_index: u16 },
+    StructWriter { slot_index: u16, inline: bool },
 }
 
 impl std::default::Default for FuncKind {
@@ -852,7 +862,12 @@ impl FuncInfo {
         )
     }
 
-    fn new_struct_reader(func_id: FuncId, name: IdentId, slot_index: u16) -> Self {
+    fn new_struct_reader(
+        func_id: FuncId,
+        name: IdentId,
+        slot_index: u16,
+        inline: bool,
+    ) -> Self {
         // Same parameter shape as AttrReader (zero positional args,
         // simple), so wrapper / call dispatch infra can reuse the
         // attribute-reader code paths.
@@ -860,19 +875,24 @@ impl FuncInfo {
         let reg_num = params.total_args() + 1;
         Self::new(
             name,
-            FuncKind::StructReader { slot_index },
+            FuncKind::StructReader { slot_index, inline },
             FuncType::Method,
             Meta::native(func_id, reg_num, true),
             params,
         )
     }
 
-    fn new_struct_writer(func_id: FuncId, name: IdentId, slot_index: u16) -> Self {
+    fn new_struct_writer(
+        func_id: FuncId,
+        name: IdentId,
+        slot_index: u16,
+        inline: bool,
+    ) -> Self {
         let params = ParamsInfo::new_attr_writer();
         let reg_num = params.total_args() + 1;
         Self::new(
             name,
-            FuncKind::StructWriter { slot_index },
+            FuncKind::StructWriter { slot_index, inline },
             FuncType::Method,
             Meta::native(func_id, reg_num, true),
             params,

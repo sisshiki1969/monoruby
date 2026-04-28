@@ -1227,7 +1227,9 @@ pub(super) enum AsmInst {
         ivarid: IvarId,
     },
     ///
-    /// Load slot `slot_index` of a `Struct` subclass instance into r15.
+    /// Load slot `slot_index` of a `Struct` subclass instance whose
+    /// slot vector is INLINE in the RValue's `kind` union (i.e. the
+    /// class has at most `STRUCT_INLINE_SLOTS` members). Single mov.
     ///
     /// #### in
     /// - rdi: receiver (a Value pointing at an `ObjTy::STRUCT` RValue)
@@ -1235,29 +1237,52 @@ pub(super) enum AsmInst {
     /// #### out
     /// - r15: Value at slot `slot_index`
     ///
-    /// #### destroy
-    /// - rdi
-    ///
-    LoadStructSlot {
+    LoadStructSlotInline {
         slot_index: u16,
     },
     ///
-    /// Store *src* into slot `slot_index` of the `Struct` subclass
-    /// instance `rdi`. Caller is expected to have already emitted
-    /// the `GuardFrozen` so this only does the slot store + sets
-    /// rax to the stored value.
+    /// Load slot `slot_index` of a `Struct` subclass instance whose
+    /// slot vector is on the HEAP (`> STRUCT_INLINE_SLOTS` members).
+    /// Two movs: heap-pointer deref + slot index.
     ///
     /// #### in
-    /// - rdi: receiver (an `ObjTy::STRUCT` RValue)
-    /// - src: Value to store
-    ///
+    /// - rdi: receiver
     /// #### out
-    /// - rax: src (return value of the writer)
-    ///
+    /// - r15: Value
     /// #### destroy
     /// - rdi
     ///
-    StoreStructSlot {
+    LoadStructSlotHeap {
+        slot_index: u16,
+    },
+    ///
+    /// Store *src* into the inline slot `slot_index` of the `Struct`
+    /// subclass instance `rdi`. Caller must have emitted `GuardFrozen`.
+    ///
+    /// #### in
+    /// - rdi: receiver
+    /// - src: Value to store
+    /// #### out
+    /// - rax: src (return value of the writer)
+    ///
+    StoreStructSlotInline {
+        src: GP,
+        slot_index: u16,
+    },
+    ///
+    /// Store *src* into the heap-allocated slot `slot_index` of the
+    /// `Struct` subclass instance `rdi`. Caller must have emitted
+    /// `GuardFrozen`.
+    ///
+    /// #### in
+    /// - rdi: receiver
+    /// - src: Value to store
+    /// #### out
+    /// - rax: src
+    /// #### destroy
+    /// - rdi
+    ///
+    StoreStructSlotHeap {
         src: GP,
         slot_index: u16,
     },

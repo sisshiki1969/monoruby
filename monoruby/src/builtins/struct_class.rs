@@ -180,13 +180,14 @@ fn struct_initialize(
     // `method_added` is fired after each registration so user hooks
     // (e.g. `def self.method_added`) see the same `[:x, :x=, :y, :y=]`
     // sequence that `attr_reader`/`attr_writer` would have produced.
+    let inline = members.len() <= crate::value::STRUCT_INLINE_SLOTS;
     for (i, arg) in members.iter().enumerate() {
         let name = arg.expect_symbol_or_string(globals)?;
         let slot = i as u16;
-        globals.define_struct_reader(class_id, name, slot, Visibility::Public);
+        globals.define_struct_reader(class_id, name, slot, inline, Visibility::Public);
         vm.invoke_method_added(globals, class_id, name)?;
         let writer_name =
-            globals.define_struct_writer(class_id, name, slot, Visibility::Public);
+            globals.define_struct_writer(class_id, name, slot, inline, Visibility::Public);
         vm.invoke_method_added(globals, class_id, writer_name)?;
     }
 

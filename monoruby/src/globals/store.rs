@@ -511,12 +511,22 @@ impl Store {
         self.functions.new_attr_writer(name, ivar_name)
     }
 
-    pub(super) fn new_struct_reader(&mut self, name: IdentId, slot_index: u16) -> FuncId {
-        self.functions.new_struct_reader(name, slot_index)
+    pub(super) fn new_struct_reader(
+        &mut self,
+        name: IdentId,
+        slot_index: u16,
+        inline: bool,
+    ) -> FuncId {
+        self.functions.new_struct_reader(name, slot_index, inline)
     }
 
-    pub(super) fn new_struct_writer(&mut self, name: IdentId, slot_index: u16) -> FuncId {
-        self.functions.new_struct_writer(name, slot_index)
+    pub(super) fn new_struct_writer(
+        &mut self,
+        name: IdentId,
+        slot_index: u16,
+        inline: bool,
+    ) -> FuncId {
+        self.functions.new_struct_writer(name, slot_index, inline)
     }
 
     pub(crate) fn new_callsite(
