@@ -423,7 +423,7 @@ class Dir
     end
   end
 
-  def initialize(path)
+  def initialize(path, encoding: nil)
     path = path.to_path if path.respond_to?(:to_path)
     path = path.to_str if path.respond_to?(:to_str)
     raise TypeError, "no implicit conversion of #{path.class} into String" unless path.is_a?(String)
@@ -449,12 +449,12 @@ class Dir
     self
   end
 
-  def children
+  def children(encoding: nil)
     raise IOError, "closed directory" if @closed
     @entries.reject { |e| e == "." || e == ".." }
   end
 
-  def each_child(&block)
+  def each_child(encoding: nil, &block)
     raise IOError, "closed directory" if @closed
     return to_enum(:each_child) unless block
     children.each { |e| block.call(e) }
@@ -496,11 +496,11 @@ class Dir
     "#<Dir:#{@path}>"
   end
 
-  def self.children(path)
+  def self.children(path, encoding: nil)
     entries(path).reject { |e| e == "." || e == ".." }
   end
 
-  def self.each_child(path, &block)
+  def self.each_child(path, encoding: nil, &block)
     return to_enum(:each_child, path) unless block
     children(path).each { |e| block.call(e) }
   end
