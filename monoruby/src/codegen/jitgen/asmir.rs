@@ -1227,6 +1227,41 @@ pub(super) enum AsmInst {
         ivarid: IvarId,
     },
     ///
+    /// Load slot `slot_index` of a `Struct` subclass instance into r15.
+    ///
+    /// #### in
+    /// - rdi: receiver (a Value pointing at an `ObjTy::STRUCT` RValue)
+    ///
+    /// #### out
+    /// - r15: Value at slot `slot_index`
+    ///
+    /// #### destroy
+    /// - rdi
+    ///
+    LoadStructSlot {
+        slot_index: u16,
+    },
+    ///
+    /// Store *src* into slot `slot_index` of the `Struct` subclass
+    /// instance `rdi`. Caller is expected to have already emitted
+    /// the `GuardFrozen` so this only does the slot store + sets
+    /// rax to the stored value.
+    ///
+    /// #### in
+    /// - rdi: receiver (an `ObjTy::STRUCT` RValue)
+    /// - src: Value to store
+    ///
+    /// #### out
+    /// - rax: src (return value of the writer)
+    ///
+    /// #### destroy
+    /// - rdi
+    ///
+    StoreStructSlot {
+        src: GP,
+        slot_index: u16,
+    },
+    ///
     /// Guard that the object in *rdi* is not frozen.
     /// If frozen, deoptimize to interpreter (which will raise FrozenError).
     ///

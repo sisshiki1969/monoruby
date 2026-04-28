@@ -33,7 +33,7 @@ mod range;
 mod regexp;
 mod set;
 mod string;
-mod struct_class;
+pub(crate) mod struct_class;
 mod symbol;
 mod time;
 mod true_class;

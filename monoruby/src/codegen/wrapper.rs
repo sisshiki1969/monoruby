@@ -65,6 +65,8 @@ impl Codegen {
             FuncKind::Builtin { abs_address } => self.gen_native_func_wrapper(*abs_address),
             FuncKind::AttrReader { ivar_name } => self.gen_attr_reader(*ivar_name),
             FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(*ivar_name),
+            FuncKind::StructReader { slot_index } => self.gen_struct_reader(*slot_index),
+            FuncKind::StructWriter { slot_index } => self.gen_struct_writer(*slot_index),
         };
         self.jit.finalize();
         entry
@@ -176,6 +178,65 @@ impl Codegen {
             movq r8, [r14 - (LFP_ARG0)];  //val: Value
             lea  r9, [rip + cache];
             movq rax, (set_instance_var_with_cache);
+            subq rsp, 8;
+            call rax;
+            addq rsp, 8;
+            ret;
+        );
+    }
+
+    ///
+    /// Generate a `Struct` member reader. The slot index is hard-coded
+    /// at codegen time, so the wrapper is a fixed-cost three-load
+    /// sequence with no Rust call:
+    ///
+    /// ```asm
+    ///   mov rdi, [r14 - LFP_SELF]              ; self (Value, heap ptr)
+    ///   mov rdi, [rdi + RVALUE_OFFSET_KIND]    ; Box<StructInner>
+    ///   mov rdi, [rdi + STRUCT_INNER_PTR_OFFSET]; slot array
+    ///   mov rax, [rdi + slot * 8]              ; the Value
+    ///   ret
+    /// ```
+    ///
+    /// Receiver type is guaranteed by the dispatch path (the method
+    /// is only registered on `ObjTy::STRUCT` subclasses), so no class
+    /// guard is needed at this level.
+    fn gen_struct_reader(&mut self, slot_index: u16) {
+        monoasm!( &mut self.jit,
+            movq rdi, [r14 - (LFP_SELF)];
+            movq rdi, [rdi + (RVALUE_OFFSET_KIND as i32)];
+            movq rdi, [rdi + (STRUCT_INNER_PTR_OFFSET as i32)];
+            movq rax, [rdi + ((slot_index as i32) * 8)];
+            ret;
+        );
+    }
+
+    ///
+    /// Generate a `Struct` member writer. Routes through a small
+    /// runtime helper (`set_struct_slot_with_check`) to keep the
+    /// frozen check + error-flag plumbing in Rust:
+    ///
+    /// ```asm
+    ///   mov rdi, rbx                  ; &mut Executor
+    ///   mov rsi, r12                  ; &mut Globals
+    ///   mov rdx, [r14 - LFP_SELF]     ; self (Value)
+    ///   mov rcx, [r14 - LFP_ARG0]     ; the value to store
+    ///   mov r8, slot_index
+    ///   call set_struct_slot_with_check
+    ///   ret
+    /// ```
+    ///
+    /// On FrozenError the helper returns NULL and the caller picks up
+    /// the error via the existing extern-"C" None-means-error contract
+    /// (same as `set_instance_var_with_cache`).
+    fn gen_struct_writer(&mut self, slot_index: u16) {
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, [r14 - (LFP_SELF)];
+            movq rcx, [r14 - (LFP_ARG0)];
+            movq r8, (slot_index as u32);
+            movq rax, (crate::builtins::struct_class::set_struct_slot_with_check);
             subq rsp, 8;
             call rax;
             addq rsp, 8;

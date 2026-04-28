@@ -98,6 +98,55 @@ impl Codegen {
     }
 
     ///
+    /// Load slot `slot_index` of a `Struct` subclass instance into r15.
+    /// `rdi` holds the receiver `Value` (a heap pointer to the
+    /// `ObjTy::STRUCT` RValue). The `kind` union holds a
+    /// `Box<StructInner>`; deref it once, then index into the slot
+    /// pointer.
+    ///
+    /// 3 movs total: nothing else (no length check, no nil substitution
+    /// needed — every slot is initialised to `Value::nil()` by
+    /// `struct_alloc_func` and never reset to a raw `0`).
+    ///
+    /// #### in
+    /// - rdi: &RValue (a STRUCT instance)
+    /// #### out
+    /// - r15: Value
+    /// #### destroy
+    /// - rdi
+    pub(super) fn load_struct_slot(&mut self, slot_index: u16) {
+        monoasm! {&mut self.jit,
+            movq rdi, [rdi + (RVALUE_OFFSET_KIND as i32)];        // Box<StructInner>
+            movq rdi, [rdi + (STRUCT_INNER_PTR_OFFSET as i32)];   // slot array
+            movq r15, [rdi + ((slot_index as i32) * 8)];          // the Value
+        }
+    }
+
+    ///
+    /// Store *src* into slot `slot_index` of the `Struct` subclass
+    /// instance `rdi`. Returns the stored value in `rax` (semantics of
+    /// a Ruby writer method).
+    ///
+    /// Caller is expected to have already emitted a `GuardFrozen` so
+    /// the frozen check is not duplicated here.
+    ///
+    /// #### in
+    /// - rdi: &RValue (a STRUCT instance)
+    /// - src: Value to store
+    /// #### out
+    /// - rax: src
+    /// #### destroy
+    /// - rdi
+    pub(super) fn store_struct_slot(&mut self, src: GP, slot_index: u16) {
+        monoasm! {&mut self.jit,
+            movq rdi, [rdi + (RVALUE_OFFSET_KIND as i32)];        // Box<StructInner>
+            movq rdi, [rdi + (STRUCT_INNER_PTR_OFFSET as i32)];   // slot array
+            movq [rdi + ((slot_index as i32) * 8)], R(src as _);
+            movq rax, R(src as _);
+        }
+    }
+
+    ///
     /// Store *src* in an instance var *ivarid* of the object *rdi*.
     ///
     /// #### in
