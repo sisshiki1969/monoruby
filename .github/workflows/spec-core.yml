@@ -14,6 +14,7 @@ on:
       - 'Cargo.toml'
       - '.github/workflows/spec-core.yml'
       - '.github/spec-pages/**'
+      - '.github/portal/**'
 
 permissions:
   contents: write
@@ -172,11 +173,13 @@ jobs:
 
           cd "$GH_PAGES_DIR"
 
+          # One-time migration of legacy root layout into spec/
           if [ -d data ] && [ ! -d spec/data ]; then
             mkdir -p spec
             mv data spec/data
           fi
-          rm -f index.html latest.json
+          rm -rf data
+          rm -f latest.json
 
           mkdir -p spec/data
 
@@ -198,12 +201,13 @@ jobs:
             >> spec/data/history_total.csv
 
           cp "$GITHUB_WORKSPACE/.github/spec-pages/index.html" spec/index.html
+          cp "$GITHUB_WORKSPACE/.github/portal/index.html" index.html
 
           cat > spec/latest.json <<JSON
           {"schemaVersion":1,"label":"ruby/spec core","message":"${TOTAL_RATE}%","color":"blue","timestamp":"${TIMESTAMP}","commit":"${SHORT_SHA}","examples":${TOTAL_EX},"pass":${TOTAL_PASS},"failures":${TOTAL_FAIL},"errors":${TOTAL_ERR}}
           JSON
 
-          git add spec/
+          git add -A
           if git diff --cached --quiet; then
             echo "no changes to publish"
           else
