@@ -895,4 +895,119 @@ mod tests {
             "#,
         );
     }
+
+    // ----- Struct.new edge cases -----
+
+    #[test]
+    fn struct_new_keyword_init_kwarg() {
+        // `Struct.new(:a, :b, keyword_init: true|false|nil)` parses the
+        // trailing kwarg and stores it on the new class. `keyword_init?`
+        // returns the stored value verbatim. Member parsing must not
+        // see the kwarg as a positional Symbol.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b, keyword_init: true)
+            [S.keyword_init?, S.members]
+            "#,
+        );
+        run_test(
+            r#"
+            S = Struct.new(:a, :b, keyword_init: false)
+            [S.keyword_init?, S.members]
+            "#,
+        );
+        run_test(
+            r#"
+            S = Struct.new(:a, :b, keyword_init: nil)
+            [S.keyword_init?, S.members]
+            "#,
+        );
+        // No kwarg at all -> nil.
+        run_test(r#"Struct.new(:a, :b).keyword_init?"#);
+    }
+
+    #[test]
+    fn struct_new_first_arg_nil() {
+        // `nil` as the first arg makes the struct anonymous (not stored
+        // under `Struct::Foo`); members start at the second arg.
+        run_test(
+            r#"
+            A = Struct.new(nil, :x, :y)
+            [A.name.nil? || A.name.match?(/^A$/) ? :ok : A.name, A.members]
+            "#,
+        );
+        run_test(
+            r#"
+            klass = Struct.new(nil, :a)
+            klass.new(42).a
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_new_first_arg_string_constant() {
+        // A String beginning with an uppercase letter names the struct
+        // and registers it under `Struct`. Lowercase raises NameError.
+        // We use `run_test_once` because re-defining `Struct::Foo` 25
+        // times in a row would conflict with the warn-on-redefine
+        // semantics of CRuby.
+        run_test_once(
+            r#"
+            klass = Struct.new("StructSlotTestNamed", :a, :b)
+            [klass == Struct::StructSlotTestNamed, klass.members]
+            "#,
+        );
+        run_test_error(r#"Struct.new("lowercase_invalid", :a)"#);
+    }
+
+    // ----- Struct#initialize argument-count behavior -----
+
+    #[test]
+    fn struct_initialize_arg_count_mismatch() {
+        // Too many positional arguments raises ArgumentError. Fewer
+        // arguments than members are accepted; missing slots are nil.
+        run_test_error(
+            r#"
+            S = Struct.new(:a, :b)
+            S.new(1, 2, 3)
+            "#,
+        );
+        run_test(
+            r#"
+            S = Struct.new(:a, :b, :c)
+            [S.new.to_a, S.new(1).to_a, S.new(1, 2).to_a, S.new(1, 2, 3).to_a]
+            "#,
+        );
+    }
+
+    // ----- Struct#==, Struct#!= heterogeneous comparisons -----
+
+    #[test]
+    fn struct_eq_with_non_struct() {
+        // `==` against a non-Struct (Array, nil, String, Integer)
+        // returns false. `!=` is the negation.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b, :c)
+            s = S.new(1, 2, 3)
+            [s == [1, 2, 3], s == nil, s == "x", s == 1, s == :sym]
+            "#,
+        );
+        run_test(
+            r#"
+            S = Struct.new(:a, :b, :c)
+            s = S.new(1, 2, 3)
+            [s != [1, 2, 3], s != nil, s != "x"]
+            "#,
+        );
+        // Different Struct subclasses with identical members/values are
+        // NOT equal -- class identity matters.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            T = Struct.new(:a, :b)
+            [S.new(1, 2) == T.new(1, 2), S.new(1, 2) != T.new(1, 2)]
+            "#,
+        );
+    }
 }
