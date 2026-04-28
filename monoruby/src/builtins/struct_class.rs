@@ -1342,4 +1342,345 @@ mod tests {
             "#,
         );
     }
+
+    // ----- Struct#hash -----
+
+    #[test]
+    fn struct_hash_basic_invariants() {
+        // Same class + same content -> same hash. Hash is an Integer.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            a = S.new(1, 2)
+            b = S.new(1, 2)
+            [a.hash == b.hash, a.hash.is_a?(Integer)]
+            "#,
+        );
+        // Same class + different content -> different hash (overwhelmingly
+        // likely; a collision would be a real PRF surprise).
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            S.new(1, 2).hash != S.new(1, 3).hash
+            "#,
+        );
+        // Different struct classes with identical content -> different hash.
+        // The class identity is folded into the hash, matching CRuby.
+        run_test(
+            r#"
+            A = Struct.new(:x)
+            B = Struct.new(:x)
+            A.new(1).hash != B.new(1).hash
+            "#,
+        );
+        // dup'd struct hashes the same as the original.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            s = S.new(10, 20)
+            s.hash == s.dup.hash
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_hash_eql_implies_same_hash() {
+        // The contract Hash relies on: `a.eql?(b)` => `a.hash == b.hash`.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            a = S.new(1, "x")
+            b = S.new(1, "x")
+            [a.eql?(b), a.hash == b.hash]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_hash_recursive_self_cycle() {
+        // Self-recursive struct must hash without StackOverflow. Equal
+        // self-cycles still produce equal hashes.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            x = S.new(nil, "tag")
+            x.a = x
+            y = S.new(nil, "tag")
+            y.a = y
+            [x.hash.is_a?(Integer), x.hash == y.hash]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_hash_recursive_outer_semantics() {
+        // Two structs with cycles at *different* depths still produce the
+        // same hash. This is what `exec_recursive_outer` buys us — any
+        // recursion at any depth surfaces to the outer call as the same
+        // sentinel, so depth-shape doesn't leak into the hash.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            x = S.new(nil, "tag")
+            x.a = x                # depth-1 cycle
+            y = S.new(nil, "tag")
+            y.a = x                # depth-2 cycle (y -> x -> x)
+            x.hash == y.hash
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_hash_module_override() {
+        // An `include`d module's `hash` shadows Struct's: the per-subclass
+        // installation is gone, so method lookup walks `S -> iclass(mod) ->
+        // Struct` and finds the module's `hash` first.
+        run_test(
+            r#"
+            mod = Module.new do
+              def hash
+                42
+              end
+            end
+            S = Struct.new(:arg) do
+              include mod
+            end
+            S.new(1).hash
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_hash_keyword_init() {
+        // keyword_init structs hash like any other struct: members in slot
+        // order, class folded in.
+        run_test(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            a = S.new(name: "elefant", legs: 4)
+            b = S.new(name: "elefant", legs: 4)
+            c = S.new(name: "elefant", legs: 2)
+            [a.hash == b.hash, a.hash != c.hash]
+            "#,
+        );
+    }
+
+    // ----- Struct#initialize: kwargs, keyword_init: true, error paths -----
+
+    #[test]
+    fn struct_init_implicit_kwargs() {
+        // Plain struct (no `keyword_init:`) accepts kwargs whose keys are
+        // member names — Ruby 3.2+ implicit-kwargs behavior. Equivalent to
+        // a positional call.
+        run_test(
+            r#"
+            T = Struct.new(:version, :platform)
+            pos = T.new("3.2", "OS")
+            kw = T.new(version: "3.2", platform: "OS")
+            [pos == kw, kw.version, kw.platform]
+            "#,
+        );
+        // Subset of kwargs is allowed: missing members default to nil.
+        run_test(
+            r#"
+            T = Struct.new(:a, :b, :c)
+            s = T.new(b: 20)
+            [s.a, s.b, s.c]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_explicit_hash_is_positional() {
+        // A literal Hash positional is one positional value (NOT
+        // unpacked as kwargs), distinguishing it from `T.new(a: 1)`.
+        run_test(
+            r#"
+            T = Struct.new(:a, :b)
+            s = T.new({a: 1, b: 2})
+            [s.a, s.b]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_pos_plus_kwargs_appends() {
+        // `T.new("a", b: "b")` for a plain struct: kwargs become a single
+        // positional Hash appended after positionals. The CRuby spec
+        // explicitly tests this "treats keyword arguments as a positional
+        // parameter" behavior for non-`keyword_init:` structs.
+        run_test(
+            r#"
+            T = Struct.new(:a, :b)
+            s = T.new("a", b: "b")
+            [s.a, s.b]
+            "#,
+        );
+        // 3-member struct, 1 positional + kwargs -> kwargs become member 1,
+        // member 2 stays nil.
+        run_test(
+            r#"
+            T = Struct.new(:a, :b, :c)
+            s = T.new("a", b: "b", c: "c")
+            [s.a, s.b, s.c]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_implicit_kwargs_unknown_key_raises() {
+        // Plain struct: kwargs key that doesn't name a member is
+        // ArgumentError (not silently dropped).
+        run_test_error(
+            r#"
+            T = Struct.new(:a, :b)
+            T.new(c: 1)
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_accepts_kwargs() {
+        // The canonical keyword_init: true call: kwargs map to members.
+        run_test(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            s = S.new(name: "elefant", legs: 4)
+            [s.name, s.legs]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_accepts_single_hash() {
+        // keyword_init: true also accepts a single positional Hash (treated
+        // as kwargs). The keys are still validated against members.
+        run_test(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            s = S.new({name: "elefant", legs: 4})
+            [s.name, s.legs]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_partial_keys() {
+        // keyword_init: true with a subset of keys: missing members default
+        // to nil.
+        run_test(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            s = S.new(name: "elefant")
+            [s.name, s.legs]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_no_args() {
+        // keyword_init: true with no args at all: every member is nil.
+        run_test(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            s = S.new
+            [s.name, s.legs]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_truthy_value_normalized() {
+        // `keyword_init: 1` (truthy non-true) acts as `keyword_init: true`,
+        // and `keyword_init?` returns the canonical `true`.
+        run_test(
+            r#"
+            S = Struct.new(:x, keyword_init: 1)
+            s = S.new(x: 7)
+            [S.keyword_init?, s.x]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_false_behaves_positional() {
+        // keyword_init: false reverts to positional semantics.
+        run_test(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: false)
+            s = S.new("elefant", 4)
+            [S.keyword_init?, s.name, s.legs]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_unknown_keys_raises() {
+        // `unknown keywords: foo` for any kwarg key not in members.
+        run_test_error(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            S.new(name: "elefant", legs: 4, foo: "bar")
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_positional_raises() {
+        // keyword_init: true rejects positional-only calls.
+        run_test_error(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            S.new("elefant", 4)
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_single_non_hash_raises() {
+        // keyword_init: true rejects a single non-Hash positional.
+        run_test_error(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            S.new("elefant")
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_pos_plus_kwargs_raises() {
+        // keyword_init: true rejects mixing positional + kwargs, even when
+        // kwargs alone would have been valid.
+        run_test_error(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            S.new("elefant", legs: 4)
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_too_many_positional_raises() {
+        // Plain struct: passing more positional args than members is
+        // ArgumentError ("struct size differs").
+        run_test_error(
+            r#"
+            S = Struct.new(:a, :b)
+            S.new(1, 2, 3)
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_pos_plus_kwargs_overflow_raises() {
+        // `pos + kwargs-as-hash` total exceeds members -> ArgumentError.
+        // (`type.new("a", "b", c: "c")` for a 2-member struct: 2 positionals
+        // + 1 trailing kwargs Hash = 3 effective args.)
+        run_test_error(
+            r#"
+            S = Struct.new(:a, :b)
+            S.new("a", "b", c: "c")
+            "#,
+        );
+    }
 }
