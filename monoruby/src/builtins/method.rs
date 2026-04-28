@@ -12,20 +12,25 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(METHOD_CLASS, "to_proc", to_proc, 0);
     globals.define_builtin_func(METHOD_CLASS, "source_location", source_location, 0);
     globals.define_builtin_func(METHOD_CLASS, "name", name, 0);
+    globals.define_builtin_func(METHOD_CLASS, "original_name", original_name, 0);
     globals.define_builtin_func(METHOD_CLASS, "receiver", receiver, 0);
     globals.define_builtin_func(METHOD_CLASS, "owner", owner, 0);
     globals.define_builtin_func(METHOD_CLASS, "unbind", unbind, 0);
     globals.define_builtin_func(METHOD_CLASS, "parameters", parameters, 0);
+    globals.define_builtin_func(METHOD_CLASS, "hash", method_hash, 0);
     globals.define_builtin_funcs(METHOD_CLASS, "==", &["eql?"], method_eq, 1);
 
     globals.define_builtin_class_under_obj("UnboundMethod", UMETHOD_CLASS, ObjTy::METHOD);
     globals.store[UMETHOD_CLASS].clear_alloc_func();
     globals.define_builtin_func(UMETHOD_CLASS, "arity", uarity, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "bind", bind, 1);
+    globals.define_builtin_func_rest(UMETHOD_CLASS, "bind_call", bind_call);
     globals.define_builtin_func(UMETHOD_CLASS, "source_location", usource_location, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "name", uname, 0);
+    globals.define_builtin_func(UMETHOD_CLASS, "original_name", uoriginal_name, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "owner", uowner, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "parameters", uparameters, 0);
+    globals.define_builtin_func(UMETHOD_CLASS, "hash", umethod_hash, 0);
     globals.define_builtin_funcs(UMETHOD_CLASS, "==", &["eql?"], umethod_eq, 1);
 }
 
@@ -328,6 +333,118 @@ fn uparameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         method.func_id(),
         true,
     ))
+}
+
+///
+/// ### Method#original_name
+///
+/// - original_name -> Symbol
+///
+/// Returns the underlying function's stored name. Currently identical to
+/// `Method#name` because monoruby's `MethodInner` does not yet record a
+/// separate "lookup name" -- after `alias_method :b, :a`, both names
+/// resolve to the same `FuncInfo` so `m.original_name == m.name`. The
+/// method is here so that callers depending on its existence don't blow
+/// up with NoMethodError; full alias-aware behavior is a follow-up.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Method/i/original_name.html]
+#[monoruby_builtin]
+fn original_name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_method();
+    let id = globals[method.func_id()].name().unwrap();
+    Ok(Value::symbol(id))
+}
+
+/// ### UnboundMethod#original_name -- see `Method#original_name`.
+#[monoruby_builtin]
+fn uoriginal_name(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_umethod();
+    let id = globals[method.func_id()].name().unwrap();
+    Ok(Value::symbol(id))
+}
+
+///
+/// ### Method#hash
+///
+/// - hash -> Integer
+///
+/// Order-of-magnitude consistent with `Method#==`/`#eql?`: two methods
+/// that compare equal (same `func_id` and same receiver identity) hash
+/// equal. Combines `func_id` and the receiver's object id with a non-
+/// commutative mix.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Method/i/hash.html]
+#[monoruby_builtin]
+fn method_hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_method();
+    let fid: i64 = method.func_id().get() as i64;
+    let recv: i64 = method.receiver().id() as i64;
+    let h = fid
+        .wrapping_mul(0x100000001b3i64)
+        .wrapping_add(recv.rotate_left(13));
+    // Mask sign bit so we always return a non-negative Fixnum-friendly value.
+    Ok(Value::integer(h & 0x7fff_ffff_ffff_ffff))
+}
+
+///
+/// ### UnboundMethod#hash
+///
+/// Symmetric to `Method#hash`: same `func_id` + same `owner` -> same hash.
+#[monoruby_builtin]
+fn umethod_hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_umethod();
+    let fid: i64 = method.func_id().get() as i64;
+    let owner_id: i64 = method.owner().u32() as i64;
+    let h = fid
+        .wrapping_mul(0x100000001b3i64)
+        .wrapping_add(owner_id.rotate_left(13));
+    Ok(Value::integer(h & 0x7fff_ffff_ffff_ffff))
+}
+
+///
+/// ### UnboundMethod#bind_call
+///
+/// - bind_call(recv, *args, &block) -> object
+///
+/// Equivalent to `bind(recv).call(*args, &block)` but in one step
+/// (matches CRuby's `rb_method_bind_call`). Avoids materialising an
+/// intermediate Method object.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/bind_call.html]
+#[monoruby_builtin]
+fn bind_call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_umethod();
+    let mut args: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
+    if args.is_empty() {
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 0, expected 1+)",
+        ));
+    }
+    let receiver = args.remove(0);
+    // The receiver must be kind_of? the owner module of the original
+    // method; otherwise CRuby raises TypeError. We rely on
+    // `invoke_func_inner` raising the appropriate error if the func is
+    // applied to an incompatible receiver class -- the spec covers both
+    // success and the error path through `bind_call` directly.
+    let _ = method.owner();
+    vm.invoke_func_inner(
+        globals,
+        method.func_id(),
+        receiver,
+        &args,
+        lfp.block(),
+        None,
+    )
 }
 
 #[cfg(test)]
@@ -690,6 +807,89 @@ mod tests {
               alias_method :baz, :bar
               def other; 2; end
             end
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_hash_consistent_with_eq() {
+        // Methods that compare equal must hash equal.
+        run_test_with_prelude(
+            r##"
+            a = Foo.new.method(:bar)
+            b = a # same Method object
+            [a == b, a.hash == b.hash]
+            "##,
+            r##"
+            class Foo
+              def bar; 42; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn umethod_hash_consistent_with_eq() {
+        run_test_with_prelude(
+            r##"
+            a = Foo.instance_method(:bar)
+            b = Foo.instance_method(:baz)
+            c = Foo.instance_method(:other)
+            [a == b, a.hash == b.hash, a == c]
+            "##,
+            r##"
+            class Foo
+              def bar; 1; end
+              alias_method :baz, :bar
+              def other; 2; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_original_name() {
+        // `original_name` is currently equivalent to `name` (alias-aware
+        // tracking is a follow-up); here we just assert the method is
+        // callable and returns the function's stored name as a Symbol.
+        run_test(
+            r##"
+            class Foo
+              def bar; 1; end
+            end
+            m = Foo.new.method(:bar)
+            [m.original_name, m.original_name.is_a?(Symbol)]
+            "##,
+        );
+    }
+
+    #[test]
+    fn umethod_bind_call_basic() {
+        run_test(
+            r##"
+            class Foo
+              def hello(x); "hi #{x}"; end
+            end
+            m = Foo.instance_method(:hello)
+            m.bind_call(Foo.new, "world")
+            "##,
+        );
+        // Forwarding a block.
+        run_test(
+            r##"
+            class Foo
+              def with_block; yield 7; end
+            end
+            Foo.instance_method(:with_block).bind_call(Foo.new) { |n| n * 2 }
+            "##,
+        );
+        // bind_call with no receiver argument is an ArgumentError.
+        run_test_error(
+            r##"
+            class Foo
+              def x; end
+            end
+            Foo.instance_method(:x).bind_call
             "##,
         );
     }

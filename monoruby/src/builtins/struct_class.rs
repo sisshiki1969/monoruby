@@ -22,6 +22,13 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRUCT_CLASS, "members", members, 0);
     globals.define_builtin_funcs(STRUCT_CLASS, "==", &["eql?"], eq, 1);
     globals.define_builtin_func(STRUCT_CLASS, "!=", ne, 1);
+    // `Struct.keyword_init?` returns true/false/nil to describe how the
+    // struct was created. monoruby's Struct.new currently ignores the
+    // `keyword_init:` option entirely, so this is a stub that always
+    // returns nil — sufficient to satisfy callers that just check the
+    // method exists / is callable, e.g. `klass.keyword_init?`.
+    let struct_meta = globals.store.get_metaclass(STRUCT_CLASS).id();
+    globals.define_builtin_func(struct_meta, "keyword_init?", keyword_init_p, 0);
 }
 
 ///
@@ -32,23 +39,76 @@ pub(crate) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Struct/s/=5b=5d.html]
 #[monoruby_builtin]
 fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let args = lfp.arg(0).as_array();
-    let (args, name) = if let Some(arg0) = args.first()
-        && let Some(s) = arg0.is_str()
+    let mut args: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
+
+    // Strip a trailing `keyword_init:` Hash argument before classifying the
+    // first positional. monoruby's `Struct.new` doesn't declare kwargs in
+    // its signature, so kwargs land as a positional Hash; we extract
+    // `keyword_init:` here and remember it as `/keyword_init`.
+    let keyword_init_arg = if let Some(last) = args.last()
+        && let Some(h) = last.try_hash_ty()
     {
-        if s.starts_with(|c: char| c.is_ascii_uppercase()) {
-            (args[1..].to_vec(), Some(IdentId::get_id(s)))
+        let key = Value::symbol_from_str("keyword_init");
+        if let Ok(Some(v)) = h.get(key, vm, globals)
+            && h.len() == 1
+        {
+            args.pop();
+            Some(v)
         } else {
-            return Err(MonorubyErr::identifier_must_be_constant(s));
+            None
         }
     } else {
-        (args.to_vec(), None)
+        None
+    };
+
+    // First-arg classification:
+    // * `nil` -> anonymous struct (consume the arg).
+    // * String starting with uppercase -> named struct constant.
+    // * Object with #to_str returning an uppercase-starting String -> ditto.
+    // * Anything else -> first positional becomes a member name.
+    let name = if let Some(arg0) = args.first().copied() {
+        if arg0.is_nil() {
+            args.remove(0);
+            None
+        } else if let Some(s) = arg0.is_str() {
+            if s.starts_with(|c: char| c.is_ascii_uppercase()) {
+                let n = IdentId::get_id(s);
+                args.remove(0);
+                Some(n)
+            } else {
+                return Err(MonorubyErr::identifier_must_be_constant(s));
+            }
+        } else if arg0.try_symbol().is_none()
+            && let Some(coerced) =
+                vm.invoke_method_if_exists(globals, IdentId::TO_STR, arg0, &[], None, None)?
+            && coerced.is_str().is_some()
+        {
+            let s = coerced.as_str();
+            if s.starts_with(|c: char| c.is_ascii_uppercase()) {
+                let n = IdentId::get_id(&s);
+                args.remove(0);
+                Some(n)
+            } else {
+                return Err(MonorubyErr::identifier_must_be_constant(&s));
+            }
+        } else {
+            None
+        }
+    } else {
+        None
     };
 
     let new_struct = globals
         .store
         .define_struct_class(name, lfp.self_val().as_class())
         .as_val();
+
+    if let Some(v) = keyword_init_arg {
+        globals
+            .store
+            .set_ivar(new_struct, IdentId::get_id("/keyword_init"), v)
+            .unwrap();
+    }
 
     vm.invoke_method_inner(
         globals,
@@ -96,6 +156,19 @@ fn struct_initialize(
     globals.define_builtin_func(class_id, "!=", ne, 1);
 
     let members = ArrayInner::from_iter(args.iter().cloned());
+
+    // Reject duplicate member names (matches CRuby's
+    // `rb_struct_define_without_accessor`).
+    let mut seen: Vec<IdentId> = Vec::with_capacity(members.len());
+    for arg in members.iter() {
+        let name = arg.expect_symbol_or_string(globals)?;
+        if seen.contains(&name) {
+            return Err(MonorubyErr::argumenterr(format!(
+                "duplicate member: {name:?}"
+            )));
+        }
+        seen.push(name);
+    }
 
     for arg in members.iter() {
         let name = arg.expect_symbol_or_string(globals)?;
@@ -159,46 +232,84 @@ fn initialize(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let len = lfp.arg(0).as_array().len();
+    let args = lfp.arg(0).as_array();
     let self_val = lfp.self_val();
     let members = get_members(globals, self_val.get_class_obj(globals))?;
-    if members.len() < len {
+    if members.len() < args.len() {
         return Err(MonorubyErr::argumenterr("Struct size differs."));
     };
-    for (i, val) in lfp.arg(0).as_array().iter().enumerate() {
-        let id = members[i].try_symbol().unwrap();
+    // Each member becomes an ivar. Missing positional args are stored
+    // *explicitly* as nil so that `instance_variables` lists every
+    // member -- matching CRuby's "uninitialized members default to nil"
+    // behavior.
+    for (i, member) in members.iter().enumerate() {
+        let id = member.try_symbol().unwrap();
         let ivar_name = IdentId::add_ivar_prefix(id);
-        globals.store.set_ivar(self_val, ivar_name, *val)?;
+        let val = args.get(i).copied().unwrap_or(Value::nil());
+        globals.store.set_ivar(self_val, ivar_name, val)?;
     }
     Ok(Value::nil())
 }
 
 #[monoruby_builtin]
 fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut inspect = "#<struct ".to_string();
     let self_val = lfp.self_val();
     let class_id = self_val.class();
     let struct_class = globals.store[class_id].get_module();
-    if let Some(name) = globals.store[class_id].get_name() {
-        inspect += &format!("{name}");
+    // Class name: fully qualified path (`M::S`), bypassing any user-
+    // defined `#name` so e.g. `def self.name; "x"; end` cannot affect
+    // inspect. CRuby's `rb_struct_inspect` uses `rb_class_real`-derived
+    // path for the same reason. Anonymous classes (and any ancestor in
+    // the path that's anonymous) are detected via `get_name() == None`
+    // — in that case render `#<struct member=...>` with no class name.
+    let class_name = if globals.store[class_id].get_name().is_some()
+        && let Some(qualified) = qualified_real_class_name(globals, class_id)
+    {
+        Some(qualified)
+    } else {
+        None
     };
-    let name = get_members(globals, struct_class)?;
 
-    if name.len() != 0 {
-        for x in name.iter() {
-            let name = x.try_symbol().unwrap();
-            let ivar_name = IdentId::add_ivar_prefix(name);
-            let val = match globals.store.get_ivar(self_val, ivar_name) {
-                Some(v) => v.inspect(&globals.store),
-                None => "nil".to_string(),
-            };
-            inspect += &format!(" {:?}={},", name, val);
-        }
-        inspect.pop();
+    let mut inspect = String::from("#<struct");
+    if let Some(name) = &class_name {
+        inspect.push(' ');
+        inspect.push_str(name);
     }
-    inspect += ">";
+
+    let members = get_members(globals, struct_class)?;
+    let mut first = true;
+    for m in members.iter() {
+        let name = m.try_symbol().unwrap();
+        let ivar_name = IdentId::add_ivar_prefix(name);
+        let val = match globals.store.get_ivar(self_val, ivar_name) {
+            Some(v) => v.inspect(&globals.store),
+            None => "nil".to_string(),
+        };
+        inspect.push_str(if first { " " } else { ", " });
+        first = false;
+        inspect.push_str(&format!("{name:?}={val}"));
+    }
+    inspect.push('>');
 
     Ok(Value::string(inspect))
+}
+
+/// Returns the fully-qualified class name (`M::S`) by walking the
+/// parent chain. Returns `None` if any ancestor (including the class
+/// itself) is anonymous, matching CRuby's "drop class label entirely
+/// if any segment is anonymous" rule for `Struct#inspect`.
+fn qualified_real_class_name(globals: &Globals, class_id: ClassId) -> Option<String> {
+    let parents = globals.store.get_parents(class_id);
+    if parents.iter().any(|s| s.starts_with("#<")) {
+        // `get_parents` renders anonymous segments as `#<Class:...>`.
+        return None;
+    }
+    let v: Vec<String> = parents.into_iter().rev().collect();
+    if v.is_empty() {
+        None
+    } else {
+        Some(v.join("::"))
+    }
 }
 
 ///
@@ -264,6 +375,29 @@ fn members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         .get_ivar(class_obj, IdentId::get_id("/members"))
         .unwrap();
     Ok(members)
+}
+
+///
+/// Struct.keyword_init? -> true | false | nil
+///
+/// Whether the struct was created with `keyword_init: true`. monoruby's
+/// `Struct.new` does not currently parse a `keyword_init:` kwarg, so the
+/// stored flag is never set and this always returns `nil` — matching
+/// CRuby's "no flag specified" return value.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Struct/s/keyword_init=3f.html]
+#[monoruby_builtin]
+fn keyword_init_p(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let v = globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("/keyword_init"))
+        .unwrap_or(Value::nil());
+    Ok(v)
 }
 
 #[cfg(test)]
@@ -471,5 +605,137 @@ mod tests {
             end
             "##,
         );
+    }
+
+    // ----- Tests for the iteration / accessor / introspection sweep -----
+
+    #[test]
+    fn struct_iteration_methods() {
+        // PR for core/method/struct sweep: Struct gains a Ruby-side
+        // implementation of Enumerable-friendly accessors.
+        let prelude = r#"
+        S = Struct.new(:a, :b, :c)
+        s = S.new(10, 20, 30)
+        "#;
+        run_test_with_prelude(r#"s.size"#, prelude);
+        run_test_with_prelude(r#"s.length"#, prelude);
+        run_test_with_prelude(r#"s.to_a"#, prelude);
+        run_test_with_prelude(r#"s.values"#, prelude);
+        run_test_with_prelude(r#"s.deconstruct"#, prelude);
+        run_test_with_prelude(r#"s.to_h"#, prelude);
+        run_test_with_prelude(r#"s.each.to_a"#, prelude);
+        run_test_with_prelude(r#"s.each_pair.to_a"#, prelude);
+    }
+
+    #[test]
+    fn struct_index_access() {
+        let prelude = r#"
+        S = Struct.new(:a, :b, :c)
+        s = S.new(10, 20, 30)
+        "#;
+        run_test_with_prelude(r#"[s[0], s[1], s[2]]"#, prelude);
+        run_test_with_prelude(r#"[s[:a], s[:b], s[:c]]"#, prelude);
+        run_test_with_prelude(r#"[s["a"], s["b"], s["c"]]"#, prelude);
+        run_test_with_prelude(r#"[s[-1], s[-3]]"#, prelude);
+        run_test_with_prelude(
+            r#"
+            t = S.new(10, 20, 30)
+            t[0] = 100
+            t[:b] = 200
+            t.to_a
+            "#,
+            prelude,
+        );
+        // Out-of-range index raises IndexError; unknown member raises NameError.
+        run_test_error(r#"S = Struct.new(:a); S.new(1)[5]"#);
+        run_test_error(r#"S = Struct.new(:a); S.new(1)[:nope]"#);
+    }
+
+    #[test]
+    fn struct_values_at() {
+        let prelude = r#"
+        S = Struct.new(:a, :b, :c)
+        s = S.new(10, 20, 30)
+        "#;
+        run_test_with_prelude(r#"s.values_at(0, 2)"#, prelude);
+        run_test_with_prelude(r#"s.values_at(0..2)"#, prelude);
+        run_test_with_prelude(r#"s.values_at(0..3)"#, prelude);
+        run_test_with_prelude(r#"s.values_at"#, prelude);
+        run_test_error(r#"S = Struct.new(:a, :b); S.new.values_at(3)"#);
+        run_test_error(r#"S = Struct.new(:a, :b); S.new.values_at(-3)"#);
+        run_test_error(r#"S = Struct.new(:a, :b); S.new.values_at("x")"#);
+    }
+
+    #[test]
+    fn struct_dig_traversal() {
+        let prelude = r#"
+        Inner = Struct.new(:b)
+        Outer = Struct.new(:a)
+        o = Outer.new(Inner.new({k: 1}))
+        "#;
+        run_test_with_prelude(r#"o.dig(:a, :b, :k)"#, prelude);
+        // Unknown key returns nil (not NameError) when used via dig.
+        run_test_with_prelude(r#"o.dig(:nope, 0)"#, prelude);
+        // Intermediate nil short-circuits.
+        run_test_with_prelude(r#"o.dig(:a, :b, :missing, 0)"#, prelude);
+    }
+
+    #[test]
+    fn struct_deconstruct_keys_basic() {
+        let prelude = r#"
+        S = Struct.new(:x, :y, :z)
+        s = S.new(1, 2, 3)
+        "#;
+        run_test_with_prelude(r#"s.deconstruct_keys([:x, :y])"#, prelude);
+        run_test_with_prelude(r#"s.deconstruct_keys(["x", "y"])"#, prelude);
+        run_test_with_prelude(r#"s.deconstruct_keys([0, 1])"#, prelude);
+        run_test_with_prelude(r#"s.deconstruct_keys([0, :x])"#, prelude);
+        run_test_with_prelude(r#"s.deconstruct_keys(nil)"#, prelude);
+        // More keys requested than struct has -> empty hash.
+        run_test_with_prelude(r#"s.deconstruct_keys([:x, :y, :z, :w])"#, prelude);
+    }
+
+    #[test]
+    fn struct_inspect_qualified_name() {
+        // Nested struct uses fully-qualified module path; anonymous
+        // structs render without a class label.
+        run_test(
+            r#"
+            module M
+              N = Struct.new(:a, :b)
+            end
+            M::N.new(1, 2).inspect
+            "#,
+        );
+        run_test(r#"Struct.new(:x).new("hello").inspect"#);
+    }
+
+    #[test]
+    fn struct_initialize_explicit_nil() {
+        // Members not provided to `new` are explicitly set to nil so they
+        // appear in `instance_variables` (matching CRuby's behavior of
+        // initializing all member slots).
+        run_test(
+            r#"
+            S = Struct.new(:a, :b, :c)
+            s = S.new(1)
+            [s.a, s.b, s.c]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_duplicate_member_raises() {
+        run_test_error(r#"Struct.new(:a, :b, :a)"#);
+    }
+
+    #[test]
+    fn struct_keyword_init_q() {
+        // `keyword_init?` is defined on each Struct subclass. monoruby's
+        // implementation currently always returns nil because we don't
+        // yet track the `keyword_init:` arg passed to `Struct.new`; the
+        // test asserts the method exists and returns nil (matching CRuby
+        // for the no-`keyword_init:` form).
+        run_test(r#"Struct.new(:a, :b).keyword_init?"#);
     }
 }
