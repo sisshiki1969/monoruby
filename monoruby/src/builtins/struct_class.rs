@@ -170,23 +170,23 @@ fn struct_initialize(
         seen.push(name);
     }
 
-    // Slot-based readers/writers (Phase 4): each member name gets a
-    // builtin func_id whose body reads/writes the corresponding slot
-    // in the per-instance `StructInner`. The slot index is resolved at
-    // call time from the function's stored name + the class's
-    // `/members` array, so the same `slot_reader`/`slot_writer` body
-    // can be shared by every member without per-slot specialisation.
-    // We invoke `method_added` after each registration so user hooks
+    // Slot-based readers/writers: each member name gets a dedicated
+    // `FuncKind::StructReader { slot_index }` / `StructWriter`, baking
+    // the slot index into the function metadata so the JIT can compile
+    // them to direct memory accesses (mirrors how `attr_reader` /
+    // `attr_writer` lower to inline ivar loads). Slot indices match
+    // the position in `/members`.
+    //
+    // `method_added` is fired after each registration so user hooks
     // (e.g. `def self.method_added`) see the same `[:x, :x=, :y, :y=]`
     // sequence that `attr_reader`/`attr_writer` would have produced.
-    for arg in members.iter() {
+    for (i, arg) in members.iter().enumerate() {
         let name = arg.expect_symbol_or_string(globals)?;
-        let writer_name = IdentId::add_assign_postfix(name);
-        let reader_str = name.get_name().to_string();
-        let writer_str = writer_name.get_name().to_string();
-        globals.define_builtin_func(class_id, &reader_str, slot_reader, 0);
+        let slot = i as u16;
+        globals.define_struct_reader(class_id, name, slot, Visibility::Public);
         vm.invoke_method_added(globals, class_id, name)?;
-        globals.define_builtin_func(class_id, &writer_str, slot_writer, 1);
+        let writer_name =
+            globals.define_struct_writer(class_id, name, slot, Visibility::Public);
         vm.invoke_method_added(globals, class_id, writer_name)?;
     }
 
@@ -403,58 +403,25 @@ fn members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     Ok(members)
 }
 
-/// Resolve the slot index for the member named `member_name` on the
-/// receiver's class. `Some(index)` if the class has the named member,
-/// `None` otherwise (caller raises NoMethodError or NameError).
-fn member_slot_index(globals: &Globals, self_val: Value, member_name: IdentId) -> Option<usize> {
-    let mut cls = self_val.get_class_obj(globals);
-    loop {
-        if let Some(m) = globals
-            .store
-            .get_ivar(cls.as_val(), IdentId::get_id("/members"))
-            && let Some(arr) = m.try_array_ty()
-        {
-            for (i, e) in arr.iter().enumerate() {
-                if e.try_symbol() == Some(member_name) {
-                    return Some(i);
-                }
-            }
-            return None;
-        }
-        match cls.superclass() {
-            Some(s) => cls = s,
-            None => return None,
-        }
+///
+/// `extern "C"` runtime helper for `FuncKind::StructWriter`. The
+/// JIT-emitted wrapper for a Struct member writer calls this to do
+/// the frozen-check + slot store. Returns `Some(val)` on success and
+/// `None` (with the error stored on `vm`) on FrozenError. Mirrors the
+/// shape of `set_instance_var_with_cache`.
+pub(crate) extern "C" fn set_struct_slot_with_check(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut self_val: Value,
+    val: Value,
+    slot_index: u32,
+) -> Option<Value> {
+    if let Err(err) = self_val.ensure_not_frozen(&globals.store) {
+        vm.set_error(err);
+        return None;
     }
-}
-
-/// Builtin body shared by every Struct member reader. Reads its own
-/// slot index from the call site's func name + the class members array.
-#[monoruby_builtin]
-fn slot_reader(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_val = lfp.self_val();
-    let func_name = globals[lfp.func_id()].name().unwrap();
-    let idx = member_slot_index(globals, self_val, func_name)
-        .ok_or_else(|| MonorubyErr::method_not_found(&globals.store, func_name, self_val))?;
-    Ok(self_val.as_struct().get(idx))
-}
-
-/// Builtin body shared by every Struct member writer. The function's
-/// name is `<member>=`; we strip the trailing `=` to find the slot.
-#[monoruby_builtin]
-fn slot_writer(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_val = lfp.self_val();
-    self_val.ensure_not_frozen(&globals.store)?;
-    let func_name = globals[lfp.func_id()].name().unwrap();
-    let s = func_name.get_name();
-    // Strip trailing `=` to get the member name.
-    let bare = s.strip_suffix('=').unwrap_or(&s);
-    let member_id = IdentId::get_id(bare);
-    let idx = member_slot_index(globals, self_val, member_id)
-        .ok_or_else(|| MonorubyErr::method_not_found(&globals.store, func_name, self_val))?;
-    let val = lfp.arg(0);
-    self_val.as_struct_mut().set(idx, val);
-    Ok(val)
+    self_val.as_struct_mut().set(slot_index as usize, val);
+    Some(val)
 }
 
 ///
@@ -1007,6 +974,75 @@ mod tests {
             S = Struct.new(:a, :b)
             T = Struct.new(:a, :b)
             [S.new(1, 2) == T.new(1, 2), S.new(1, 2) != T.new(1, 2)]
+            "#,
+        );
+    }
+
+    // ----- Slot reader/writer JIT-compiled accessor -----
+
+    #[test]
+    fn struct_slot_reader_jitted() {
+        // `run_test` runs the body 25 times, well past the JIT
+        // compilation threshold (5 calls in test mode), so this also
+        // exercises the JIT-inlined `LoadStructSlot` path.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b, :c)
+            s = S.new(10, 20, 30)
+            n = 0
+            1000.times { n += s.a + s.b + s.c }
+            n
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_slot_writer_jitted() {
+        // Hot loop hits the JIT-inlined `StoreStructSlot` after the
+        // class guard. The frozen-check happens via the `GuardFrozen`
+        // deopt; here the receiver is mutable so the deopt never
+        // fires.
+        run_test(
+            r#"
+            S = Struct.new(:counter)
+            s = S.new(0)
+            1000.times { s.counter = s.counter + 1 }
+            s.counter
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_writer_frozen_raises() {
+        // The wrapper-level frozen check (via `set_struct_slot_with_check`)
+        // raises FrozenError on a frozen receiver.
+        run_test(
+            r#"
+            S = Struct.new(:x)
+            s = S.new(1).freeze
+            begin
+              s.x = 2
+              :no_error
+            rescue FrozenError
+              :ok
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_member_method_metadata() {
+        // Member readers/writers are still introspectable as Ruby
+        // methods of the struct subclass even though they live in
+        // dedicated `FuncKind::StructReader` / `StructWriter` slots.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            [
+              S.instance_method(:a).arity,
+              S.instance_method(:a=).arity,
+              S.instance_method(:a).owner == S,
+            ]
             "#,
         );
     }

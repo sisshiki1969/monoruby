@@ -536,6 +536,20 @@ impl Funcs {
         id
     }
 
+    pub(super) fn new_struct_reader(&mut self, name: IdentId, slot_index: u16) -> FuncId {
+        let id = self.next_func_id();
+        let info = FuncInfo::new_struct_reader(id, name, slot_index);
+        self.info.push(info);
+        id
+    }
+
+    pub(super) fn new_struct_writer(&mut self, name: IdentId, slot_index: u16) -> FuncId {
+        let id = self.next_func_id();
+        let info = FuncInfo::new_struct_writer(id, name, slot_index);
+        self.info.push(info);
+        id
+    }
+
     pub(super) fn next_func_id(&self) -> FuncId {
         FuncId::new(self.info.len() as u32)
     }
@@ -548,6 +562,16 @@ pub(crate) enum FuncKind {
     Builtin { abs_address: u64 },
     AttrReader { ivar_name: IdentId },
     AttrWriter { ivar_name: IdentId },
+    /// `Struct` member reader. The slot index is fixed at class
+    /// definition time (the position in `/members`), so the JIT can
+    /// emit a direct `mov` from the per-instance slot vector — no
+    /// name lookup, no ivar id resolution. Mirrors the
+    /// `AttrReader { ivar_name }` pattern but for `ObjTy::STRUCT`
+    /// receivers.
+    StructReader { slot_index: u16 },
+    /// `Struct` member writer. Counterpart to `StructReader`; writes
+    /// to slot `slot_index` of the per-instance `StructInner`.
+    StructWriter { slot_index: u16 },
 }
 
 impl std::default::Default for FuncKind {
@@ -822,6 +846,33 @@ impl FuncInfo {
         Self::new(
             name,
             FuncKind::AttrWriter { ivar_name },
+            FuncType::Method,
+            Meta::native(func_id, reg_num, true),
+            params,
+        )
+    }
+
+    fn new_struct_reader(func_id: FuncId, name: IdentId, slot_index: u16) -> Self {
+        // Same parameter shape as AttrReader (zero positional args,
+        // simple), so wrapper / call dispatch infra can reuse the
+        // attribute-reader code paths.
+        let params = ParamsInfo::new_attr_reader();
+        let reg_num = params.total_args() + 1;
+        Self::new(
+            name,
+            FuncKind::StructReader { slot_index },
+            FuncType::Method,
+            Meta::native(func_id, reg_num, true),
+            params,
+        )
+    }
+
+    fn new_struct_writer(func_id: FuncId, name: IdentId, slot_index: u16) -> Self {
+        let params = ParamsInfo::new_attr_writer();
+        let reg_num = params.total_args() + 1;
+        Self::new(
+            name,
+            FuncKind::StructWriter { slot_index },
             FuncType::Method,
             Meta::native(func_id, reg_num, true),
             params,

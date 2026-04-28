@@ -835,6 +835,45 @@ impl Globals {
     }
 
     ///
+    /// Define a `Struct` member reader (`s.x`) for *class_id*: a method
+    /// named *member_name* that loads slot *slot_index* from the
+    /// receiver's `StructInner`. The wrapper / JIT inline expand this
+    /// into a direct memory load -- no name lookup, no `member_slot_
+    /// index` walk -- once the receiver class has been guarded.
+    ///
+    pub(crate) fn define_struct_reader(
+        &mut self,
+        class_id: ClassId,
+        member_name: IdentId,
+        slot_index: u16,
+        visi: Visibility,
+    ) -> IdentId {
+        let func_id = self.store.new_struct_reader(member_name, slot_index);
+        self.gen_wrapper(func_id);
+        self.add_method(class_id, member_name, func_id, visi);
+        member_name
+    }
+
+    ///
+    /// Define a `Struct` member writer (`s.x = v`) for *class_id*: a
+    /// method named *member_name=* that stores into slot *slot_index*
+    /// of the receiver's `StructInner`.
+    ///
+    pub(crate) fn define_struct_writer(
+        &mut self,
+        class_id: ClassId,
+        member_name: IdentId,
+        slot_index: u16,
+        visi: Visibility,
+    ) -> IdentId {
+        let writer_name = IdentId::add_assign_postfix(member_name);
+        let func_id = self.store.new_struct_writer(writer_name, slot_index);
+        self.gen_wrapper(func_id);
+        self.add_method(class_id, writer_name, func_id, visi);
+        writer_name
+    }
+
+    ///
     /// Undefine the instance method *method* of class *class_id*.
     ///
     pub(crate) fn undef_method_for_class(

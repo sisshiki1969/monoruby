@@ -27,7 +27,7 @@ pub use rational::{RationalFloorResult, RationalInner};
 pub use regexp::{Regexp, RegexpInner};
 pub(crate) use string::pack::*;
 pub use string::{Encoding, RString, RStringInner};
-pub use struct_inner::StructInner;
+pub use struct_inner::{STRUCT_INNER_PTR_OFFSET, StructInner};
 
 mod array;
 mod binding;

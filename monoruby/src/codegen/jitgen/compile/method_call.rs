@@ -200,6 +200,12 @@ impl<'a> JitContext<'a> {
             FuncKind::AttrWriter { ivar_name } => {
                 return Ok(self.attr_writer(state, ir, callid, recv_class, ivar_name));
             }
+            FuncKind::StructReader { slot_index } => {
+                return Ok(self.struct_slot_reader(state, ir, callid, slot_index));
+            }
+            FuncKind::StructWriter { slot_index } => {
+                return Ok(self.struct_slot_writer(state, ir, callid, slot_index));
+            }
             FuncKind::Builtin { .. } => (func_id, None),
             FuncKind::Proc(proc) => (proc.func_id(), proc.outer_lfp()),
             FuncKind::ISeq(iseq) => {
@@ -435,6 +441,68 @@ impl<'a> JitContext<'a> {
                 is_object_ty,
             });
         }
+        state.def_rax2acc(ir, dst);
+        state.unset_side_effect_guard();
+        CompileResult::Continue
+    }
+
+    /// JIT inline a `Struct` member reader. Receiver class is already
+    /// guarded by the call-site cache, so we just emit the slot load
+    /// (3 movs). No recompile path required: the slot index is baked
+    /// into the [`FuncKind::StructReader`] itself.
+    fn struct_slot_reader(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        callid: CallSiteId,
+        slot_index: u16,
+    ) -> CompileResult {
+        let callsite = &self.store[callid];
+        let CallSiteInfo {
+            pos_num,
+            dst,
+            block_fid,
+            recv,
+            ..
+        } = *callsite;
+        assert_eq!(0, pos_num);
+        assert!(!callsite.kw_may_exists());
+        assert!(block_fid.is_none());
+        assert!(callsite.block_arg.is_none());
+        state.load(ir, recv, GP::Rdi);
+        state.discard(dst);
+        state.writeback_acc(ir);
+        ir.push(AsmInst::LoadStructSlot { slot_index });
+        state.def_reg2acc(ir, GP::R15, dst);
+        CompileResult::Continue
+    }
+
+    /// JIT inline a `Struct` member writer. Mirrors `attr_writer` —
+    /// guard frozen, then emit the slot store directly.
+    fn struct_slot_writer(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        callid: CallSiteId,
+        slot_index: u16,
+    ) -> CompileResult {
+        let callsite = &self.store[callid];
+        let CallSiteInfo {
+            args,
+            pos_num,
+            dst,
+            block_fid,
+            recv,
+            ..
+        } = *callsite;
+        assert_eq!(1, pos_num);
+        assert!(!callsite.kw_may_exists());
+        assert!(block_fid.is_none());
+        state.load(ir, recv, GP::Rdi);
+        let deopt = ir.new_deopt(state);
+        ir.guard_frozen(deopt);
+        let src = state.load_or_reg(ir, args, GP::Rax);
+        ir.push(AsmInst::StoreStructSlot { src, slot_index });
         state.def_rax2acc(ir, dst);
         state.unset_side_effect_guard();
         CompileResult::Continue
