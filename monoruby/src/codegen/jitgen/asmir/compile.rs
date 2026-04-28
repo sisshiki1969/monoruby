@@ -607,9 +607,17 @@ impl Codegen {
                 is_object_ty,
             } => self.store_self_ivar_heap(src, ivarid, is_object_ty),
             AsmInst::StoreIVarInline { src, ivarid } => self.store_ivar_object_inline(src, ivarid),
-            AsmInst::LoadStructSlot { slot_index } => self.load_struct_slot(slot_index),
-            AsmInst::StoreStructSlot { src, slot_index } => {
-                self.store_struct_slot(src, slot_index)
+            AsmInst::LoadStructSlotInline { slot_index } => {
+                self.load_struct_slot_inline(slot_index)
+            }
+            AsmInst::LoadStructSlotHeap { slot_index } => {
+                self.load_struct_slot_heap(slot_index)
+            }
+            AsmInst::StoreStructSlotInline { src, slot_index } => {
+                self.store_struct_slot_inline(src, slot_index)
+            }
+            AsmInst::StoreStructSlotHeap { src, slot_index } => {
+                self.store_struct_slot_heap(src, slot_index)
             }
             AsmInst::GuardFrozen { deopt } => {
                 let deopt = &labels[deopt];

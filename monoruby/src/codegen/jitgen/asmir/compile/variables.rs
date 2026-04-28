@@ -98,49 +98,72 @@ impl Codegen {
     }
 
     ///
-    /// Load slot `slot_index` of a `Struct` subclass instance into r15.
-    /// `rdi` holds the receiver `Value` (a heap pointer to the
-    /// `ObjTy::STRUCT` RValue). The `kind` union holds a
-    /// `Box<StructInner>`; deref it once, then index into the slot
-    /// pointer.
+    /// Load slot `slot_index` of a `Struct` instance whose slot
+    /// vector is **inline** in the RValue's union (i.e. the class has
+    /// `≤ STRUCT_INLINE_SLOTS` members). Single mov, no Box deref.
     ///
-    /// 3 movs total: nothing else (no length check, no nil substitution
-    /// needed — every slot is initialised to `Value::nil()` by
-    /// `struct_alloc_func` and never reset to a raw `0`).
+    /// Receiver class is already guarded by the call-site cache, so
+    /// the JIT picks this variant statically based on the class's
+    /// member count.
     ///
     /// #### in
     /// - rdi: &RValue (a STRUCT instance)
     /// #### out
     /// - r15: Value
-    /// #### destroy
-    /// - rdi
-    pub(super) fn load_struct_slot(&mut self, slot_index: u16) {
+    pub(super) fn load_struct_slot_inline(&mut self, slot_index: u16) {
         monoasm! {&mut self.jit,
-            movq rdi, [rdi + (RVALUE_OFFSET_KIND as i32)];        // Box<StructInner>
-            movq rdi, [rdi + (STRUCT_INNER_PTR_OFFSET as i32)];   // slot array
-            movq r15, [rdi + ((slot_index as i32) * 8)];          // the Value
+            movq r15, [rdi + ((slot_index as i32) * 8 + RVALUE_OFFSET_INLINE as i32)];
         }
     }
 
     ///
-    /// Store *src* into slot `slot_index` of the `Struct` subclass
-    /// instance `rdi`. Returns the stored value in `rax` (semantics of
-    /// a Ruby writer method).
-    ///
-    /// Caller is expected to have already emitted a `GuardFrozen` so
-    /// the frozen check is not duplicated here.
+    /// Load slot `slot_index` of a `Struct` instance whose slot
+    /// vector spilled to the **heap** (the class has more than
+    /// `STRUCT_INLINE_SLOTS` members). Two movs.
     ///
     /// #### in
-    /// - rdi: &RValue (a STRUCT instance)
+    /// - rdi: &RValue
+    /// #### out
+    /// - r15: Value
+    /// #### destroy
+    /// - rdi
+    pub(super) fn load_struct_slot_heap(&mut self, slot_index: u16) {
+        monoasm! {&mut self.jit,
+            movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR as i32)];
+            movq r15, [rdi + ((slot_index as i32) * 8)];
+        }
+    }
+
+    ///
+    /// Store *src* into inline slot `slot_index` of `rdi`. Single mov.
+    /// Caller must have emitted `GuardFrozen` already.
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    /// - src: Value to store
+    /// #### out
+    /// - rax: src (return value of the writer)
+    pub(super) fn store_struct_slot_inline(&mut self, src: GP, slot_index: u16) {
+        monoasm! {&mut self.jit,
+            movq [rdi + ((slot_index as i32) * 8 + RVALUE_OFFSET_INLINE as i32)], R(src as _);
+            movq rax, R(src as _);
+        }
+    }
+
+    ///
+    /// Store *src* into heap slot `slot_index` of `rdi`. Two movs.
+    /// Caller must have emitted `GuardFrozen` already.
+    ///
+    /// #### in
+    /// - rdi: &RValue
     /// - src: Value to store
     /// #### out
     /// - rax: src
     /// #### destroy
     /// - rdi
-    pub(super) fn store_struct_slot(&mut self, src: GP, slot_index: u16) {
+    pub(super) fn store_struct_slot_heap(&mut self, src: GP, slot_index: u16) {
         monoasm! {&mut self.jit,
-            movq rdi, [rdi + (RVALUE_OFFSET_KIND as i32)];        // Box<StructInner>
-            movq rdi, [rdi + (STRUCT_INNER_PTR_OFFSET as i32)];   // slot array
+            movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR as i32)];
             movq [rdi + ((slot_index as i32) * 8)], R(src as _);
             movq rax, R(src as _);
         }

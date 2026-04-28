@@ -200,11 +200,11 @@ impl<'a> JitContext<'a> {
             FuncKind::AttrWriter { ivar_name } => {
                 return Ok(self.attr_writer(state, ir, callid, recv_class, ivar_name));
             }
-            FuncKind::StructReader { slot_index } => {
-                return Ok(self.struct_slot_reader(state, ir, callid, slot_index));
+            FuncKind::StructReader { slot_index, inline } => {
+                return Ok(self.struct_slot_reader(state, ir, callid, slot_index, inline));
             }
-            FuncKind::StructWriter { slot_index } => {
-                return Ok(self.struct_slot_writer(state, ir, callid, slot_index));
+            FuncKind::StructWriter { slot_index, inline } => {
+                return Ok(self.struct_slot_writer(state, ir, callid, slot_index, inline));
             }
             FuncKind::Builtin { .. } => (func_id, None),
             FuncKind::Proc(proc) => (proc.func_id(), proc.outer_lfp()),
@@ -447,15 +447,18 @@ impl<'a> JitContext<'a> {
     }
 
     /// JIT inline a `Struct` member reader. Receiver class is already
-    /// guarded by the call-site cache, so we just emit the slot load
-    /// (3 movs). No recompile path required: the slot index is baked
-    /// into the [`FuncKind::StructReader`] itself.
+    /// guarded by the call-site cache; the JIT picks INLINE vs HEAP
+    /// statically based on the class's member count, so the emitted
+    /// code is exactly **1 mov** for the inline case (≤
+    /// `STRUCT_INLINE_SLOTS` members) and 2 movs for the heap case.
+    /// Mirrors how `attr_reader` distinguishes inline vs heap ivars.
     fn struct_slot_reader(
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
         callid: CallSiteId,
         slot_index: u16,
+        inline: bool,
     ) -> CompileResult {
         let callsite = &self.store[callid];
         let CallSiteInfo {
@@ -472,19 +475,25 @@ impl<'a> JitContext<'a> {
         state.load(ir, recv, GP::Rdi);
         state.discard(dst);
         state.writeback_acc(ir);
-        ir.push(AsmInst::LoadStructSlot { slot_index });
+        if inline {
+            ir.push(AsmInst::LoadStructSlotInline { slot_index });
+        } else {
+            ir.push(AsmInst::LoadStructSlotHeap { slot_index });
+        }
         state.def_reg2acc(ir, GP::R15, dst);
         CompileResult::Continue
     }
 
     /// JIT inline a `Struct` member writer. Mirrors `attr_writer` —
-    /// guard frozen, then emit the slot store directly.
+    /// guard frozen, then emit a 1-mov inline store or 2-mov heap
+    /// store based on the FuncKind's `inline` flag.
     fn struct_slot_writer(
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
         callid: CallSiteId,
         slot_index: u16,
+        inline: bool,
     ) -> CompileResult {
         let callsite = &self.store[callid];
         let CallSiteInfo {
@@ -502,7 +511,11 @@ impl<'a> JitContext<'a> {
         let deopt = ir.new_deopt(state);
         ir.guard_frozen(deopt);
         let src = state.load_or_reg(ir, args, GP::Rax);
-        ir.push(AsmInst::StoreStructSlot { src, slot_index });
+        if inline {
+            ir.push(AsmInst::StoreStructSlotInline { src, slot_index });
+        } else {
+            ir.push(AsmInst::StoreStructSlotHeap { src, slot_index });
+        }
         state.def_rax2acc(ir, dst);
         state.unset_side_effect_guard();
         CompileResult::Continue
