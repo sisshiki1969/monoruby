@@ -407,7 +407,7 @@ impl Node {
     }
 
     pub(crate) fn is_symbol_key(&self) -> Option<String> {
-        let s = match &self.kind {
+        let s: &str = match &self.kind {
             NodeKind::Ident(s) => s,
             NodeKind::LocalVar(_, s) => s,
             NodeKind::Const {
@@ -417,9 +417,15 @@ impl Node {
                 name,
             } if prefix.is_empty() => name,
             NodeKind::String(s) => s,
+            // Reserved-word literals are accepted as symbol shorthand keys
+            // (`nil:`, `false:`, `true:`) -- matching CRuby's hash literal
+            // grammar.
+            NodeKind::Nil => "nil",
+            NodeKind::Bool(true) => "true",
+            NodeKind::Bool(false) => "false",
             _ => return None,
         };
-        Some(s.clone())
+        Some(s.to_string())
     }
 
     pub fn new_nil(loc: Loc) -> Self {

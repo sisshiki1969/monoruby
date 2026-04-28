@@ -283,6 +283,27 @@ class Hash
     self
   end
 
+  def compact
+    h = {}
+    h.compare_by_identity if compare_by_identity?
+    each { |k, v| h[k] = v unless v.nil? }
+    if (dp = default_proc)
+      h.default_proc = dp
+    else
+      h.default = default
+    end
+    h
+  end
+
+  def compact!
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
+    drop = []
+    each { |k, v| drop << k if v.nil? }
+    return nil if drop.empty?
+    drop.each { |k| delete(k) }
+    self
+  end
+
   def flatten(level = 1)
     level = level.to_int if level.respond_to?(:to_int) && !level.is_a?(Integer)
     raise TypeError, "no implicit conversion of #{level.class} into Integer" unless level.is_a?(Integer)

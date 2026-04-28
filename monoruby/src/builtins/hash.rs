@@ -18,6 +18,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "default=", default_assign, 1);
     globals.define_builtin_funcs(HASH_CLASS, "==", &["==="], eq, 1);
     globals.define_builtin_func(HASH_CLASS, "eql?", eql, 1);
+    globals.define_builtin_func(HASH_CLASS, "hash", hash, 0);
     globals.define_builtin_func(HASH_CLASS, "<", lt, 1);
     globals.define_builtin_func(HASH_CLASS, "<=", le, 1);
     globals.define_builtin_func(HASH_CLASS, ">", gt, 1);
@@ -536,6 +537,50 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     }, Value::bool(true))
 }
 
+///
+/// ### Hash#hash
+///
+/// - hash -> Integer
+///
+/// Returns an order-independent hash code derived from each key/value
+/// pair. Self-referential hashes use a per-thread recursion guard so the
+/// recursive node contributes a stable sentinel rather than recursing.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/hash.html]
+#[monoruby_builtin]
+fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let recursive_marker = Value::integer(0);
+    crate::value::exec_recursive(
+        self_val.id(),
+        || {
+            let h = self_val.as_hash();
+            // Mix in the size so that empty hashes and hashes with nil
+            // values are distinguishable. Use wrapping addition to combine
+            // the per-pair hashes (rather than XOR) so values don't cancel
+            // when the same value appears in multiple entries.
+            let mut acc: i64 = h.len() as i64;
+            let hash_id = IdentId::get_id("hash");
+            for (k, v) in h.iter() {
+                let kh = vm
+                    .invoke_method_inner(globals, hash_id, k, &[], None, None)?
+                    .try_fixnum()
+                    .unwrap_or(0);
+                let vh = vm
+                    .invoke_method_inner(globals, hash_id, v, &[], None, None)?
+                    .try_fixnum()
+                    .unwrap_or(0);
+                let pair = kh
+                    .wrapping_mul(0x100000001b3i64)
+                    .wrapping_add(vh.rotate_left(13).wrapping_mul(31));
+                acc = acc.wrapping_add(pair);
+            }
+            Ok(Value::integer(acc))
+        },
+        recursive_marker,
+    )
+}
+
 /// Check if all key-value pairs in `sub` exist in `sup`.
 fn hash_subset(
     sub: Hashmap,
@@ -634,8 +679,20 @@ fn index_assign(
     _: BytecodePtr,
 ) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let key = lfp.arg(0);
+    let mut key = lfp.arg(0);
     let val = lfp.arg(1);
+    // CRuby: when storing into a Hash with a fresh String key, the key
+    // is dup'd and frozen so later mutation of the caller's String can't
+    // corrupt the hash. Frozen strings are stored as-is; existing-key
+    // preservation is handled by the underlying RubyMap.
+    if key.is_str().is_some() && !key.is_frozen() {
+        // Build a fresh String value from the bytes so the duplicate
+        // does NOT inherit singleton methods from the caller's key.
+        let inner = key.as_rstring_inner().clone();
+        let mut dup = Value::string_from_inner(inner);
+        dup.set_frozen();
+        key = dup;
+    }
     lfp.self_val().as_hash().insert(key, val, vm, globals)?;
     Ok(val)
 }
