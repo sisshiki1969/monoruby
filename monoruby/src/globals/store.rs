@@ -817,7 +817,10 @@ impl Store {
                     args_names.push(name.map(IdentId::get_id_from_string));
                 }
                 ParamKind::Post(name) => {
-                    args_names.push(Some(IdentId::get_id_from_string(name)));
+                    // Anonymous post (`None`) is emitted for block-trailing
+                    // comma auto-splat (`|k,|`); it bumps the positional
+                    // arity but does NOT allocate a named local.
+                    args_names.push(name.map(IdentId::get_id_from_string));
                     post_num += 1;
                 }
                 ParamKind::Forwarding => {

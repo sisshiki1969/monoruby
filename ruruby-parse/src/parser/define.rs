@@ -220,7 +220,9 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         } else {
             None
         };
-        let args = self.parse_formal_params(term)?;
+        // Method definitions are NOT blocks: trailing commas in
+        // `def foo(a,)` remain a SyntaxError per CRuby.
+        let args = self.parse_formal_params(term, false)?;
         self.consume_term()?;
         Ok(args)
     }

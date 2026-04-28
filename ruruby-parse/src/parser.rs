@@ -535,9 +535,18 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
 
     /// Parse formal parameters.
     /// required, optional = defaule, *rest, post_required, kw: default, **rest_kw, &block
+    ///
+    /// `is_block` is set by the caller to indicate that the parameter list
+    /// belongs to a block (`|...|`). In that case, a trailing comma after
+    /// a required parameter (`|k,|`) injects a synthetic anonymous post
+    /// parameter — bumping the positional arity to >1 so block auto-splat
+    /// of a single Array argument fires. Method `def` and lambda contexts
+    /// pass `false` and reject trailing commas via the usual SyntaxError
+    /// path of the surrounding parser.
     fn parse_formal_params(
         &mut self,
         terminator: impl Into<Option<Punct>>,
+        is_block: bool,
     ) -> Result<Vec<FormalParam>, LexerErr> {
         #[derive(Debug, Clone, PartialEq, PartialOrd)]
         enum Kind {
@@ -724,6 +733,21 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                         break;
                     }
                 }
+            }
+            // Trailing comma in a block parameter list (`|k,|`): when the
+            // next token is the terminator, treat the comma as an
+            // auto-splat hint by injecting an anonymous post parameter.
+            // Only valid while we're still parsing required positionals;
+            // `|*a,|` etc. fall through to the duplicate-rest error path
+            // matching CRuby.
+            if is_block
+                && state == Kind::Required
+                && let Some(term) = terminator
+                && self.peek_punct_no_term(term)
+            {
+                let trailing_loc = self.prev_loc();
+                args.push(FormalParam::post_discard(trailing_loc));
+                break;
             }
         }
         if let Some(term) = terminator {

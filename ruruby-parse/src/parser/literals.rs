@@ -530,9 +530,11 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         {
             vec![]
         } else if self.consume_punct(Punct::LParen)? {
-            self.parse_formal_params(Punct::RParen)?
+            // Lambda params (`->(...) {}`): not a block, no trailing-comma
+            // auto-splat injection.
+            self.parse_formal_params(Punct::RParen, false)?
         } else {
-            self.parse_formal_params(None)?
+            self.parse_formal_params(None, false)?
         };
         let body = if self.consume_punct(Punct::LBrace)? {
             let body = self.parse_comp_stmt()?;

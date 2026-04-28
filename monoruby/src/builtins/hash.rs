@@ -3989,4 +3989,27 @@ mod tests {
         run_test("{nil: 1, false: 2, true: 3}");
         run_test("{nil: 1}.keys");
     }
+
+    #[test]
+    fn hash_each_block_trailing_comma() {
+        // PR #361 follow-up: a trailing comma in a block parameter list
+        // (`|k,|`) injects a synthetic anonymous post param, bumping the
+        // total positional arity to >1 so a single Array argument from
+        // Hash#each (`[k, v]`) auto-splats. The block then sees only the
+        // key, matching CRuby's `core/hash/shared/each.rb`.
+        run_test(
+            r#"
+            ary = []
+            { "a" => 1, "b" => 2, "c" => 3 }.each { |k,| ary << k }
+            ary.sort
+            "#,
+        );
+        // Same for Array#each on a list of pairs.
+        run_test(r#"[[1, 2], [3, 4]].map { |k,| k }"#);
+        // |a, b,| (already 2 params) also auto-splats; trailing comma is
+        // a no-op for the destructuring count.
+        run_test(r#"[[1, 2, 3]].map { |a, b,| [a, b] }"#);
+        // No trailing comma → single param sees the whole array.
+        run_test(r#"[[1, 2]].map { |k| k }"#);
+    }
 }
