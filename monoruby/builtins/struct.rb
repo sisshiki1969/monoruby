@@ -174,16 +174,6 @@ class Struct
     h
   end
 
-  # Order-dependent hash (unlike Hash#hash). Includes the class so
-  # different Struct subclasses with the same content do not collide.
-  def hash
-    acc = self.class.hash
-    each do |v|
-      acc = ((acc * 0x100000001b3) ^ v.hash) & 0x7fffffffffffffff
-    end
-    acc
-  end
-
   # Filter / select: Enumerable's version returns Array; Struct's spec
   # also expects an Array (not a Struct).
   def select(&block)
