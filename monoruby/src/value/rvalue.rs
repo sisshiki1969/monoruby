@@ -27,6 +27,7 @@ pub use rational::{RationalFloorResult, RationalInner};
 pub use regexp::{Regexp, RegexpInner};
 pub(crate) use string::pack::*;
 pub use string::{Encoding, RString, RStringInner};
+pub use struct_inner::StructInner;
 
 mod array;
 mod binding;
@@ -45,6 +46,7 @@ mod range;
 mod rational;
 mod regexp;
 mod string;
+mod struct_inner;
 
 pub const OBJECT_INLINE_IVAR: usize = 6;
 pub const RVALUE_OFFSET_FLAG: usize = std::mem::offset_of!(RValue, header.meta.flag);
@@ -90,6 +92,7 @@ impl std::fmt::Debug for ObjTy {
                 21 => "UMETHOD",
                 22 => "MATCHDATA",
                 23 => "RATIONAL",
+                24 => "STRUCT",
                 _ => unreachable!("Invalid ty: {ty}"),
             }
         )
@@ -126,6 +129,7 @@ impl ObjTy {
     pub const UMETHOD: Self = Self(std::num::NonZeroU8::new(21).unwrap());
     pub const MATCHDATA: Self = Self(std::num::NonZeroU8::new(22).unwrap());
     pub const RATIONAL: Self = Self(std::num::NonZeroU8::new(23).unwrap());
+    pub const STRUCT: Self = Self(std::num::NonZeroU8::new(24).unwrap());
 }
 
 #[repr(C)]
@@ -153,6 +157,9 @@ pub union ObjKind {
     binding: ManuallyDrop<BindingInner>,
     matchdata: ManuallyDrop<MatchDataInner>,
     rational: ManuallyDrop<Box<RationalInner>>,
+    /// Slot-array storage for `Struct` subclass instances. Boxed so the
+    /// union stays small even when the slot vector is large.
+    struct_inner: ManuallyDrop<Box<StructInner>>,
 }
 
 impl ObjKind {
@@ -431,6 +438,7 @@ impl std::fmt::Debug for RValue {
                             ObjTy::BINDING => format!("{:?}", self.kind.binding),
                             ObjTy::UMETHOD => format!("{:?}", self.kind.umethod),
                             ObjTy::MATCHDATA => format!("{:?}", self.kind.matchdata),
+                            ObjTy::STRUCT => format!("{:?}", self.kind.struct_inner),
                             _ => unreachable!(),
                         }
                     })
@@ -477,6 +485,10 @@ impl RValue {
                 ObjTy::BINDING => self.object_debug(store),
                 ObjTy::UMETHOD => self.as_umethod().debug(store),
                 ObjTy::MATCHDATA => self.as_match_data().inspect(),
+                // Struct instances delegate `debug` to the same path as
+                // OBJECT — `Struct#inspect` (Rust builtin) is what users
+                // see; this is just for internal diagnostics.
+                ObjTy::STRUCT => self.object_debug(store),
                 _ => format!("{:016x}", self.id()),
             }
         }
@@ -668,6 +680,7 @@ impl alloc::GC<RValue> for RValue {
                 ObjTy::BINDING => self.as_binding().mark(alloc),
                 ObjTy::UMETHOD => {}
                 ObjTy::MATCHDATA => {}
+                ObjTy::STRUCT => self.as_struct_inner().mark(alloc),
                 _ => unreachable!("mark {:016x} {:?}", self.id(), self.ty()),
             }
         }
@@ -704,6 +717,7 @@ impl alloc::GCBox for RValue {
                 ObjTy::BINDING => ManuallyDrop::drop(&mut self.kind.binding),
                 ObjTy::IO => ManuallyDrop::drop(&mut self.kind.io),
                 ObjTy::RATIONAL => ManuallyDrop::drop(&mut self.kind.rational),
+                ObjTy::STRUCT => ManuallyDrop::drop(&mut self.kind.struct_inner),
                 _ => {}
             }
             self.set_next_none();
@@ -933,6 +947,16 @@ impl RValue {
                         let regexp = self.as_regex();
                         ObjKind::regexp(regexp.clone())
                     }
+                    ObjTy::STRUCT => {
+                        let inner = self.as_struct_inner();
+                        let mut copy = StructInner::new(inner.len());
+                        for (i, v) in inner.iter().enumerate() {
+                            copy.set(i, v.deep_copy());
+                        }
+                        ObjKind {
+                            struct_inner: ManuallyDrop::new(Box::new(copy)),
+                        }
+                    }
                     _ => unreachable!("deep_copy()"),
                 }
             },
@@ -1000,6 +1024,11 @@ impl RValue {
                         },
                         ObjTy::MATCHDATA => ObjKind {
                             matchdata: self.kind.matchdata.clone(),
+                        },
+                        ObjTy::STRUCT => ObjKind {
+                            struct_inner: ManuallyDrop::new(Box::new(
+                                (**self.kind.struct_inner).clone(),
+                            )),
                         },
                         ty => unreachable!("{ty:?}"),
                     }
@@ -1069,6 +1098,11 @@ impl RValue {
                         },
                         ObjTy::MATCHDATA => ObjKind {
                             matchdata: self.kind.matchdata.clone(),
+                        },
+                        ObjTy::STRUCT => ObjKind {
+                            struct_inner: ManuallyDrop::new(Box::new(
+                                (**self.kind.struct_inner).clone(),
+                            )),
                         },
                         ty => unreachable!("{ty:?}"),
                     }
@@ -1197,6 +1231,18 @@ impl RValue {
         RValue {
             header: Header::new(class_id, ObjTy::OBJECT),
             kind: ObjKind::object(),
+            var_table: None,
+        }
+    }
+
+    /// Create a `Struct` subclass instance with `len` slots, all
+    /// initialised to nil. Used by `struct_alloc_func`.
+    pub(super) fn new_struct_obj(class_id: ClassId, len: usize) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::STRUCT),
+            kind: ObjKind {
+                struct_inner: ManuallyDrop::new(Box::new(StructInner::new(len))),
+            },
             var_table: None,
         }
     }
@@ -1665,6 +1711,14 @@ impl RValue {
 
     pub(crate) unsafe fn as_hashmap(&self) -> &HashmapInner {
         unsafe { &self.kind.hash }
+    }
+
+    pub(crate) unsafe fn as_struct_inner(&self) -> &StructInner {
+        unsafe { &self.kind.struct_inner }
+    }
+
+    pub(crate) unsafe fn as_struct_inner_mut(&mut self) -> &mut StructInner {
+        unsafe { &mut self.kind.struct_inner }
     }
 
     pub(super) unsafe fn as_hashmap_mut(&mut self) -> &mut HashmapInner {

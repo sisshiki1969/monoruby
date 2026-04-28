@@ -803,7 +803,7 @@ impl Executor {
 
 impl Executor {
     /// Invoke method_added or singleton_method_added callback for `class_id`.
-    fn invoke_method_added(
+    pub(crate) fn invoke_method_added(
         &mut self,
         globals: &mut Globals,
         class_id: ClassId,

@@ -12,20 +12,20 @@ class Struct
   # otherwise.
   def each
     return to_enum(:each) { size } unless block_given?
-    members.each { |m| yield instance_variable_get("@#{m}") }
+    members.each { |m| yield send(m) }
     self
   end
 
   # Yield [name, value] for each member.
   def each_pair
     return to_enum(:each_pair) { size } unless block_given?
-    members.each { |m| yield m, instance_variable_get("@#{m}") }
+    members.each { |m| yield m, send(m) }
     self
   end
 
   # Array of values, in member order.
   def to_a
-    members.map { |m| instance_variable_get("@#{m}") }
+    members.map { |m| send(m) }
   end
   alias values to_a
   alias deconstruct to_a
@@ -52,11 +52,11 @@ class Struct
       i += size if i < 0
       raise IndexError, "offset #{key} too small for struct (size:#{size})" if i < 0
       raise IndexError, "offset #{key} too large for struct (size:#{size})" if i >= size
-      instance_variable_get("@#{members[i]}")
+      send(members[i])
     elsif key.is_a?(Symbol) || key.is_a?(String)
       sym = key.to_sym
       raise NameError, "no member '#{key}' in struct" unless members.include?(sym)
-      instance_variable_get("@#{sym}")
+      send(sym)
     else
       raise TypeError, "no implicit conversion of #{key.class} into Integer"
     end
@@ -69,11 +69,11 @@ class Struct
       i += size if i < 0
       raise IndexError, "offset #{key} too small for struct (size:#{size})" if i < 0
       raise IndexError, "offset #{key} too large for struct (size:#{size})" if i >= size
-      instance_variable_set("@#{members[i]}", value)
+      send("#{members[i]}=", value)
     elsif key.is_a?(Symbol) || key.is_a?(String)
       sym = key.to_sym
       raise NameError, "no member '#{key}' in struct" unless members.include?(sym)
-      instance_variable_set("@#{sym}", value)
+      send("#{sym}=", value)
     else
       raise TypeError, "no implicit conversion of #{key.class} into Integer"
     end
@@ -92,7 +92,7 @@ class Struct
         last += size if last < 0
         last -= 1 if idx.exclude_end?
         (first..last).each do |i|
-          result << (i < size ? instance_variable_get("@#{members[i]}") : nil)
+          result << (i < size ? send(members[i]) : nil)
         end
       else
         i = if idx.is_a?(Integer)
@@ -111,7 +111,7 @@ class Struct
         elsif adj >= size
           raise IndexError, "offset #{i} too large for struct(size:#{size})"
         end
-        result << instance_variable_get("@#{members[adj]}")
+        result << send(members[adj])
       end
     end
     result
@@ -126,11 +126,11 @@ class Struct
         if idx < 0 || idx >= size
           nil
         else
-          instance_variable_get("@#{members[idx]}")
+          send(members[idx])
         end
       elsif key.is_a?(Symbol) || key.is_a?(String)
         sym = key.to_sym
-        members.include?(sym) ? instance_variable_get("@#{sym}") : nil
+        members.include?(sym) ? send(sym) : nil
       else
         # Mirror Struct#[] coercion path; unsupported types raise TypeError.
         self[key]
@@ -153,7 +153,7 @@ class Struct
         return h unless members.include?(sym)
         # Preserve the caller-supplied key (Symbol stays Symbol, String
         # stays String) per CRuby `rb_struct_deconstruct_keys`.
-        h[k] = instance_variable_get("@#{sym}")
+        h[k] = send(sym)
       else
         i = if k.is_a?(Integer)
               k
@@ -168,7 +168,7 @@ class Struct
         idx += size if idx < 0
         return h if idx < 0 || idx >= size
         # Position numbers are returned AS the original key in the output.
-        h[k] = instance_variable_get("@#{members[idx]}")
+        h[k] = send(members[idx])
       end
     end
     h

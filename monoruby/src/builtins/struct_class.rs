@@ -170,10 +170,24 @@ fn struct_initialize(
         seen.push(name);
     }
 
+    // Slot-based readers/writers (Phase 4): each member name gets a
+    // builtin func_id whose body reads/writes the corresponding slot
+    // in the per-instance `StructInner`. The slot index is resolved at
+    // call time from the function's stored name + the class's
+    // `/members` array, so the same `slot_reader`/`slot_writer` body
+    // can be shared by every member without per-slot specialisation.
+    // We invoke `method_added` after each registration so user hooks
+    // (e.g. `def self.method_added`) see the same `[:x, :x=, :y, :y=]`
+    // sequence that `attr_reader`/`attr_writer` would have produced.
     for arg in members.iter() {
         let name = arg.expect_symbol_or_string(globals)?;
-        vm.define_attr_reader(globals, class_id, name, Visibility::Public)?;
-        vm.define_attr_writer(globals, class_id, name, Visibility::Public)?;
+        let writer_name = IdentId::add_assign_postfix(name);
+        let reader_str = name.get_name().to_string();
+        let writer_str = writer_name.get_name().to_string();
+        globals.define_builtin_func(class_id, &reader_str, slot_reader, 0);
+        vm.invoke_method_added(globals, class_id, name)?;
+        globals.define_builtin_func(class_id, &writer_str, slot_writer, 1);
+        vm.invoke_method_added(globals, class_id, writer_name)?;
     }
 
     new_struct.set_instance_var(&mut globals.store, "/members", Value::array(members))?;
@@ -233,20 +247,19 @@ fn initialize(
     _: BytecodePtr,
 ) -> Result<Value> {
     let args = lfp.arg(0).as_array();
-    let self_val = lfp.self_val();
+    let mut self_val = lfp.self_val();
     let members = get_members(globals, self_val.get_class_obj(globals))?;
     if members.len() < args.len() {
         return Err(MonorubyErr::argumenterr("Struct size differs."));
     };
-    // Each member becomes an ivar. Missing positional args are stored
-    // *explicitly* as nil so that `instance_variables` lists every
-    // member -- matching CRuby's "uninitialized members default to nil"
-    // behavior.
-    for (i, member) in members.iter().enumerate() {
-        let id = member.try_symbol().unwrap();
-        let ivar_name = IdentId::add_ivar_prefix(id);
+    // Slot-only storage (Phase 6): members live in the per-instance
+    // `StructInner` slot vector and are NOT also kept as ivars. This is
+    // why `Struct#instance_variables` returns `[]` and
+    // `Struct#instance_variable_get(:@a)` returns nil even after
+    // `S.new(1).a == 1`, matching CRuby's `RStruct` semantics.
+    for i in 0..members.len() {
         let val = args.get(i).copied().unwrap_or(Value::nil());
-        globals.store.set_ivar(self_val, ivar_name, val)?;
+        self_val.as_struct_mut().set(i, val);
     }
     Ok(Value::nil())
 }
@@ -277,11 +290,14 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     }
 
     let members = get_members(globals, struct_class)?;
+    let slots = self_val.try_struct();
     let mut first = true;
-    for m in members.iter() {
+    for (i, m) in members.iter().enumerate() {
         let name = m.try_symbol().unwrap();
-        let ivar_name = IdentId::add_ivar_prefix(name);
-        let val = match globals.store.get_ivar(self_val, ivar_name) {
+        // Slot-based read: by Phase 3 the per-instance slot vec is the
+        // canonical store. Fall back to the ivar (legacy) if the value
+        // is somehow unsynced -- a paranoia net during the migration.
+        let val = match slots.and_then(|s| s.try_get(i)) {
             Some(v) => v.inspect(&globals.store),
             None => "nil".to_string(),
         };
@@ -325,15 +341,20 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     if self_val.class() != other.class() {
         return Ok(Value::bool(false));
     }
-    let members = get_members(globals, self_val.get_class_obj(globals))?;
-    for member in members.iter() {
-        let name = member.try_symbol().unwrap();
-        let ivar_name = IdentId::add_ivar_prefix(name);
-        let lhs = globals
-            .store
-            .get_ivar(self_val, ivar_name)
-            .unwrap_or_default();
-        let rhs = globals.store.get_ivar(other, ivar_name).unwrap_or_default();
+    let lhs_struct = match self_val.try_struct() {
+        Some(s) => s,
+        None => return Ok(Value::bool(false)),
+    };
+    let rhs_struct = match other.try_struct() {
+        Some(s) => s,
+        None => return Ok(Value::bool(false)),
+    };
+    if lhs_struct.len() != rhs_struct.len() {
+        return Ok(Value::bool(false));
+    }
+    for i in 0..lhs_struct.len() {
+        let lhs = lhs_struct.get(i);
+        let rhs = rhs_struct.get(i);
         if vm.ne_values_bool(globals, lhs, rhs)? {
             return Ok(Value::bool(false));
         }
@@ -351,15 +372,20 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     if self_val.class() != other.class() {
         return Ok(Value::bool(true));
     }
-    let members = get_members(globals, self_val.get_class_obj(globals))?;
-    for member in members.iter() {
-        let name = member.try_symbol().unwrap();
-        let ivar_name = IdentId::add_ivar_prefix(name);
-        let lhs = globals
-            .store
-            .get_ivar(self_val, ivar_name)
-            .unwrap_or_default();
-        let rhs = globals.store.get_ivar(other, ivar_name).unwrap_or_default();
+    let lhs_struct = match self_val.try_struct() {
+        Some(s) => s,
+        None => return Ok(Value::bool(true)),
+    };
+    let rhs_struct = match other.try_struct() {
+        Some(s) => s,
+        None => return Ok(Value::bool(true)),
+    };
+    if lhs_struct.len() != rhs_struct.len() {
+        return Ok(Value::bool(true));
+    }
+    for i in 0..lhs_struct.len() {
+        let lhs = lhs_struct.get(i);
+        let rhs = rhs_struct.get(i);
         if vm.ne_values_bool(globals, lhs, rhs)? {
             return Ok(Value::bool(true));
         }
@@ -375,6 +401,60 @@ fn members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         .get_ivar(class_obj, IdentId::get_id("/members"))
         .unwrap();
     Ok(members)
+}
+
+/// Resolve the slot index for the member named `member_name` on the
+/// receiver's class. `Some(index)` if the class has the named member,
+/// `None` otherwise (caller raises NoMethodError or NameError).
+fn member_slot_index(globals: &Globals, self_val: Value, member_name: IdentId) -> Option<usize> {
+    let mut cls = self_val.get_class_obj(globals);
+    loop {
+        if let Some(m) = globals
+            .store
+            .get_ivar(cls.as_val(), IdentId::get_id("/members"))
+            && let Some(arr) = m.try_array_ty()
+        {
+            for (i, e) in arr.iter().enumerate() {
+                if e.try_symbol() == Some(member_name) {
+                    return Some(i);
+                }
+            }
+            return None;
+        }
+        match cls.superclass() {
+            Some(s) => cls = s,
+            None => return None,
+        }
+    }
+}
+
+/// Builtin body shared by every Struct member reader. Reads its own
+/// slot index from the call site's func name + the class members array.
+#[monoruby_builtin]
+fn slot_reader(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let func_name = globals[lfp.func_id()].name().unwrap();
+    let idx = member_slot_index(globals, self_val, func_name)
+        .ok_or_else(|| MonorubyErr::method_not_found(&globals.store, func_name, self_val))?;
+    Ok(self_val.as_struct().get(idx))
+}
+
+/// Builtin body shared by every Struct member writer. The function's
+/// name is `<member>=`; we strip the trailing `=` to find the slot.
+#[monoruby_builtin]
+fn slot_writer(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    self_val.ensure_not_frozen(&globals.store)?;
+    let func_name = globals[lfp.func_id()].name().unwrap();
+    let s = func_name.get_name();
+    // Strip trailing `=` to get the member name.
+    let bare = s.strip_suffix('=').unwrap_or(&s);
+    let member_id = IdentId::get_id(bare);
+    let idx = member_slot_index(globals, self_val, member_id)
+        .ok_or_else(|| MonorubyErr::method_not_found(&globals.store, func_name, self_val))?;
+    let val = lfp.arg(0);
+    self_val.as_struct_mut().set(idx, val);
+    Ok(val)
 }
 
 ///
@@ -737,5 +817,82 @@ mod tests {
         // test asserts the method exists and returns nil (matching CRuby
         // for the no-`keyword_init:` form).
         run_test(r#"Struct.new(:a, :b).keyword_init?"#);
+    }
+
+    // ----- Slot-array storage migration regressions -----
+
+    #[test]
+    fn struct_members_not_visible_as_ivars() {
+        // Members live in the per-instance slot vector, not as ivars.
+        // `instance_variables` therefore returns `[]` (matching CRuby
+        // `RStruct` semantics) and `instance_variable_get(:@a)` returns
+        // nil rather than the member value.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b, :c)
+            s = S.new(1, 2, 3)
+            s.instance_variables
+            "#,
+        );
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            s = S.new("v", 2)
+            s.instance_variable_get(:@a).nil?
+            "#,
+        );
+        // User-set ivars on a Struct still appear in the introspection.
+        run_test(
+            r#"
+            S = Struct.new(:a)
+            s = S.new(1)
+            s.instance_variable_set(:@x, 99)
+            [s.instance_variables, s.instance_variable_get(:@x)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_member_access_via_slots() {
+        // Reader and writer accessors round-trip through the slot
+        // vector. After mutation, the value reflects the new slot
+        // contents, not any stale ivar.
+        run_test(
+            r#"
+            S = Struct.new(:x, :y)
+            s = S.new(1, 2)
+            s.x = 100
+            s[:y] = 200
+            [s.x, s.y, s.to_a]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_dup_copies_slots() {
+        // Dup'd Struct instances have independent slot vectors;
+        // mutating one doesn't affect the other.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            a = S.new(1, 2)
+            b = a.dup
+            b.a = 99
+            [a.a, b.a]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_default_nil_members() {
+        // Members not provided to `new` are nil and appear in `to_a`,
+        // not as ivars.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b, :c)
+            s = S.new(1)
+            [s.to_a, s.instance_variables]
+            "#,
+        );
     }
 }
