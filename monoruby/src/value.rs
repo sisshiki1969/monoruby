@@ -760,6 +760,13 @@ impl Value {
         RValue::new_object(class_id).pack()
     }
 
+    /// Create a `Struct` subclass instance with `len` slots all set to
+    /// nil. The class id determines which `Struct.new(...)`-derived
+    /// class this instance belongs to.
+    pub fn struct_object(class_id: ClassId, len: usize) -> Self {
+        RValue::new_struct_obj(class_id, len).pack()
+    }
+
     pub fn yielder_object() -> Self {
         // SAFETY: YIELDER is a static variable that is properly initialized before use.
         // Access is synchronized through single-threaded Ruby VM execution.
@@ -1964,6 +1971,32 @@ impl Value {
         assert_eq!(ObjTy::HASH, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue contains a hash.
         unsafe { self.rvalue().as_hashmap() }
+    }
+
+    /// Read-only access to the slot array of a `Struct` subclass
+    /// instance. Asserts the receiver is a STRUCT-typed RValue.
+    pub(crate) fn as_struct(&self) -> &StructInner {
+        assert_eq!(ObjTy::STRUCT, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue is a Struct instance.
+        unsafe { self.rvalue().as_struct_inner() }
+    }
+
+    /// Mutable access to the slot array of a `Struct` subclass instance.
+    pub(crate) fn as_struct_mut(&mut self) -> &mut StructInner {
+        assert_eq!(ObjTy::STRUCT, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue is a Struct instance.
+        unsafe { self.rvalue_mut().as_struct_inner_mut() }
+    }
+
+    /// Returns Some(&StructInner) if `self` is a Struct instance, else None.
+    pub(crate) fn try_struct(&self) -> Option<&StructInner> {
+        if let Some(rv) = self.try_rvalue() {
+            if rv.ty() == ObjTy::STRUCT {
+                // SAFETY: ty() check ensures STRUCT variant.
+                return Some(unsafe { rv.as_struct_inner() });
+            }
+        }
+        None
     }
 
     pub(crate) fn as_hashmap_inner_mut(&mut self) -> &mut HashmapInner {

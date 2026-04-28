@@ -345,6 +345,35 @@ pub extern "C" fn default_alloc_func(class_id: ClassId, _: &mut crate::Globals) 
     Value::object(class_id)
 }
 
+/// Allocator for `Struct.new(:a, :b, ...)`-derived classes. Reads
+/// the class-level `/members` ivar (set during `Struct#initialize` of
+/// the subclass) to size the per-instance slot vector. All slots start
+/// as `nil`; `Struct#initialize` overwrites them positionally.
+///
+/// If the class has no `/members` set yet (e.g. someone called
+/// `allocate` before `Struct.new` finished initialising the subclass)
+/// we fall back to a zero-length slot vector.
+pub extern "C" fn struct_alloc_func(class_id: ClassId, globals: &mut crate::Globals) -> Value {
+    use crate::IdentId;
+    use crate::value::Value;
+    // Walk the class chain looking for `/members` (set on the immediate
+    // subclass produced by `Struct.new(...)`, not propagated to deeper
+    // descendants like `Class.new(MyStruct)`).
+    let mut cls = globals.store[class_id].get_module();
+    let len = loop {
+        if let Some(m) = globals.store.get_ivar(cls.as_val(), IdentId::get_id("/members"))
+            && let Some(arr) = m.try_array_ty()
+        {
+            break arr.len();
+        }
+        match cls.superclass() {
+            Some(s) => cls = s,
+            None => break 0,
+        }
+    };
+    Value::struct_object(class_id, len)
+}
+
 impl alloc::GC<RValue> for ClassInfo {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         if let Some(v) = self.object {
@@ -1095,11 +1124,16 @@ impl ClassInfoTable {
         } else {
             None
         };
-        let m = self.define_class_inner(name, superclass, parent, false, Some(ObjTy::OBJECT));
+        // Struct subclasses tag their RValue as STRUCT (slot-array
+        // storage) rather than OBJECT (ivar-only storage). Members are
+        // stored in the per-instance slot vector instead of leaking out
+        // as ivars from `instance_variables` introspection.
+        let m = self.define_class_inner(name, superclass, parent, false, Some(ObjTy::STRUCT));
         // Struct itself has no alloc_func, so a class created with `<` Struct
         // would inherit None. `Struct.new(...)` however produces instantiable
-        // classes — install the default allocator explicitly.
-        self[m.id()].set_alloc_func(default_alloc_func);
+        // classes — install the struct-specific allocator that allocates a
+        // slot vector sized to the class's `/members` array.
+        self[m.id()].set_alloc_func(struct_alloc_func);
         m
     }
 
