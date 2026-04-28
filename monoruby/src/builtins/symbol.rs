@@ -543,4 +543,23 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn symbol_end_with_encoding_compat() {
+        // PR #361: encoding incompatibility raises Encoding::CompatibilityError.
+        // `String#encode(Encoding::EUC_JP)` updates the encoding tag, so the
+        // pat ends up incompatible with a UTF-8 hash key/string and a
+        // CompatibilityError surfaces from Symbol#end_with?.
+        run_test(
+            r#"
+            pat = "ア".encode(Encoding::EUC_JP)
+            begin
+              "あれ".to_sym.end_with?(pat)
+              :no_error
+            rescue Encoding::CompatibilityError
+              :ok
+            end
+            "#,
+        );
+    }
 }

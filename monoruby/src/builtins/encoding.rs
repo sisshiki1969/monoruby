@@ -178,7 +178,7 @@ fn resolve_enc_arg(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Resu
 /// - encode(dst_encoding, src_encoding, **opts) -> String
 /// - encode(**opts) -> String
 ///
-/// Stub: validates encoding names but does not perform actual byte conversion.
+/// Stub: updates the encoding tag of the result but does not transcode bytes.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/encode.html]
 #[monoruby_builtin]
@@ -188,15 +188,21 @@ pub(super) fn encode(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    // Validate encoding arguments (so we don't raise on known names)
-    if let Some(arg0) = lfp.try_arg(0) {
-        resolve_enc_arg(vm, globals, arg0)?;
-    }
+    // Validate encoding arguments and resolve the destination encoding.
+    let dst = if let Some(arg0) = lfp.try_arg(0) {
+        Some(resolve_enc_arg(vm, globals, arg0)?)
+    } else {
+        None
+    };
     if let Some(arg1) = lfp.try_arg(1) {
         resolve_enc_arg(vm, globals, arg1)?;
     }
-    // Return a copy of self (no actual conversion)
-    Ok(lfp.self_val().dup())
+    let mut result = lfp.self_val().dup();
+    if let Some(dst) = dst {
+        let enc = Encoding::try_from_str(dst)?;
+        result.as_rstring_inner_mut().set_encoding(enc);
+    }
+    Ok(result)
 }
 
 ///
@@ -206,7 +212,7 @@ pub(super) fn encode(
 /// - encode!(dst_encoding, src_encoding, **opts) -> self
 /// - encode!(**opts) -> self
 ///
-/// Stub: validates encoding names but does not perform actual byte conversion.
+/// Stub: updates the encoding tag of self but does not transcode bytes.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/encode=21.html]
 #[monoruby_builtin]
@@ -217,14 +223,18 @@ pub(super) fn encode_(
     _: BytecodePtr,
 ) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
-    // Validate encoding arguments
-    if let Some(arg0) = lfp.try_arg(0) {
-        resolve_enc_arg(vm, globals, arg0)?;
-    }
+    let dst = if let Some(arg0) = lfp.try_arg(0) {
+        Some(resolve_enc_arg(vm, globals, arg0)?)
+    } else {
+        None
+    };
     if let Some(arg1) = lfp.try_arg(1) {
         resolve_enc_arg(vm, globals, arg1)?;
     }
-    // Return self (no actual conversion)
+    if let Some(dst) = dst {
+        let enc = Encoding::try_from_str(dst)?;
+        lfp.self_val().as_rstring_inner_mut().set_encoding(enc);
+    }
     Ok(lfp.self_val())
 }
 
@@ -840,6 +850,19 @@ mod tests {
     #[test]
     fn string_encode_bang() {
         run_test(r#"s = "hello"; s.encode!("UTF-8"); s.encoding.name"#);
+    }
+
+    #[test]
+    fn string_encode_changes_encoding_tag() {
+        // PR #361: `String#encode` (Ruby override + Rust encode) updates
+        // the encoding tag of the result instead of returning self verbatim.
+        run_tests(&[
+            r#""hello".encode("US-ASCII").encoding.name"#,
+            r#""hello".encode("ASCII-8BIT").encoding.name"#,
+            r#""hello".encode(Encoding::US_ASCII).encoding.name"#,
+            // Original is untouched; encode returns a copy.
+            r#"s = "hello"; s.encode("US-ASCII"); s.encoding.name"#,
+        ]);
     }
 
     #[test]

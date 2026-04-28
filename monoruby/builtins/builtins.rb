@@ -91,6 +91,18 @@ end
 class Hash
   include Enumerable
 
+  def initialize(default = (no_arg = true; nil), &block)
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
+    if block
+      raise ArgumentError, "wrong number of arguments (given 1, expected 0)" unless no_arg
+      self.default_proc = block
+    else
+      self.default = no_arg ? nil : default
+    end
+    self
+  end
+  private :initialize
+
   def to_hash
     self
   end
@@ -99,19 +111,30 @@ class Hash
   # to_h -> self
   # to_h {|key, value| block } -> Hash
   def to_h
-    return self unless block_given?
+    unless block_given?
+      return self if self.instance_of?(Hash)
+      h = Hash[self]
+      h.compare_by_identity if compare_by_identity?
+      if (dp = default_proc)
+        h.default_proc = dp
+      else
+        h.default = default
+      end
+      return h
+    end
     h = {}
     self.each {|k, v|
-      new_kv = yield k, v
-      new_k = new_kv[0]
-      new_v = new_kv[1]
-      h[new_k] = new_v
+      pair = yield k, v
+      pair = pair.to_ary if !pair.is_a?(Array) && pair.respond_to?(:to_ary)
+      raise TypeError, "wrong element type #{pair.class} (expected array)" unless pair.is_a?(Array)
+      raise ArgumentError, "element has wrong array length (expected 2, was #{pair.size})" unless pair.size == 2
+      h[pair[0]] = pair[1]
     }
     h
   end
 
   def transform_keys(hash = nil, &block)
-    return to_enum(:transform_keys) unless block || hash
+    return to_enum(:transform_keys) { size } unless block || hash
     h = {}
     if hash
       each do |k, v|
@@ -125,7 +148,8 @@ class Hash
   end
 
   def transform_keys!(hash = nil, &block)
-    return to_enum(:transform_keys!) unless block || hash
+    return to_enum(:transform_keys!) { size } unless block || hash
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     if hash
       keys.each do |k|
         if hash.key?(k)
@@ -141,26 +165,30 @@ class Hash
   end
 
   def transform_values(&block)
-    return to_enum(:transform_values) unless block
+    return to_enum(:transform_values) { size } unless block
     h = {}
+    h.compare_by_identity if compare_by_identity?
     each { |k, v| h[k] = block.call(v) }
     h
   end
 
   def transform_values!(&block)
-    return to_enum(:transform_values!) unless block
+    return to_enum(:transform_values!) { size } unless block
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     each { |k, v| self[k] = block.call(v) }
     self
   end
 
   def slice(*keys)
     h = {}
+    h.compare_by_identity if compare_by_identity?
     keys.each { |k| h[k] = self[k] if key?(k) }
     h
   end
 
   def except(*keys)
     h = dup
+    h.default = nil
     keys.each { |k| h.delete(k) }
     h
   end
@@ -253,6 +281,60 @@ class Hash
 
   def deconstruct_keys(keys)
     self
+  end
+
+  def compact
+    h = {}
+    h.compare_by_identity if compare_by_identity?
+    each { |k, v| h[k] = v unless v.nil? }
+    if (dp = default_proc)
+      h.default_proc = dp
+    else
+      h.default = default
+    end
+    h
+  end
+
+  def compact!
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
+    drop = []
+    each { |k, v| drop << k if v.nil? }
+    return nil if drop.empty?
+    drop.each { |k| delete(k) }
+    self
+  end
+
+  def flatten(level = 1)
+    level = level.to_int if level.respond_to?(:to_int) && !level.is_a?(Integer)
+    raise TypeError, "no implicit conversion of #{level.class} into Integer" unless level.is_a?(Integer)
+    to_a.flatten(level)
+  end
+
+  def fetch_values(*keys, &block)
+    keys.map { |k| fetch(k, &block) }
+  end
+
+  def to_proc
+    hash = self
+    ->(k) { hash[k] }
+  end
+
+  def rehash
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
+    pairs = to_a
+    clear
+    pairs.each { |k, v| self[k] = v }
+    self
+  end
+
+  def self.ruby2_keywords_hash?(h)
+    raise TypeError, "no implicit conversion of #{h.class} into Hash" unless h.is_a?(Hash)
+    false
+  end
+
+  def self.ruby2_keywords_hash(h)
+    raise TypeError, "no implicit conversion of #{h.class} into Hash" unless h.is_a?(Hash)
+    h.dup
   end
 end
 

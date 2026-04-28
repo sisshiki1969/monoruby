@@ -192,8 +192,10 @@ class String
       s = s.gsub("<", "&lt;")
       s = s.gsub(">", "&gt;")
       s
+    elsif args.empty?
+      dup
     else
-      self
+      dup.force_encoding(args[0])
     end
   end
 end
