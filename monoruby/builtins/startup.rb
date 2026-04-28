@@ -814,6 +814,7 @@ require_relative 'string'
 require_relative 'symbol'
 require_relative 'error'
 require_relative 'set'
+require_relative 'struct'
 require_relative 'builtins'
 require_relative 'pathname_builtins'
 
