@@ -2,170 +2,117 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>monoruby ruby/spec core history</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<title>monoruby</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2em; max-width: 1100px; }
-  h1 { margin-bottom: 0.2em; }
-  .meta { color: #666; font-size: 0.9em; margin-bottom: 2em; }
-  section { margin-bottom: 3em; }
-  canvas { max-width: 100%; }
-  select { font-size: 1em; padding: 0.2em 0.5em; }
-  table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
-  th, td { padding: 4px 8px; border-bottom: 1px solid #eee; text-align: right; }
-  th:first-child, td:first-child { text-align: left; }
-  thead th { border-bottom: 2px solid #888; }
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #666;
+    --link: #1565c0;
+    --accent: #2e7d32;
+    --accent-dark: #1b5e20;
+    --border: #eaeaea;
+    --code-bg: #f5f5f5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 2em 1.5em 4em;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.6;
+  }
+  .cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75em;
+    margin: 2em 0 2.5em;
+  }
+  .cta a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.85em 1.5em;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 1em;
+    text-decoration: none;
+    transition: transform 0.1s, background 0.1s;
+  }
+  .cta a:hover { transform: translateY(-1px); }
+  .cta .primary {
+    background: var(--accent);
+    color: #fff;
+    box-shadow: 0 2px 6px rgba(46, 125, 50, 0.25);
+  }
+  .cta .primary:hover { background: var(--accent-dark); }
+  .cta .secondary {
+    background: #f0f0f0;
+    color: var(--fg);
+  }
+  .cta .secondary:hover { background: #e0e0e0; }
+  main h1 {
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 0.3em;
+    margin-top: 0;
+  }
+  main h2 {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.3em;
+    margin-top: 2em;
+  }
+  main h3 { margin-top: 1.5em; }
+  a { color: var(--link); }
+  pre {
+    background: var(--code-bg);
+    padding: 1em;
+    border-radius: 6px;
+    overflow-x: auto;
+    line-height: 1.45;
+  }
+  code {
+    background: var(--code-bg);
+    padding: 0.15em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+  }
+  pre code { background: transparent; padding: 0; }
+  ul { padding-left: 1.5em; }
+  li { margin: 0.3em 0; }
+  img { max-width: 100%; height: auto; }
+  .loading { color: var(--muted); }
 </style>
 </head>
 <body>
-<h1>monoruby × ruby/spec core</h1>
-<div class="meta">
-  Pass rate history of <code>core/*</code> subcategories.
-  Source: <a href="data/history.csv">history.csv</a>,
-  <a href="data/history_total.csv">history_total.csv</a>,
-  <a href="latest.json">latest.json</a>.
-</div>
 
-<section>
-  <h2>Total pass rate over time</h2>
-  <canvas id="totalChart" height="120"></canvas>
-</section>
+<nav class="cta">
+  <a class="primary" href="./spec/">ruby/spec compliance dashboard →</a>
+  <a class="secondary" href="https://github.com/sisshiki1969/monoruby">GitHub</a>
+</nav>
 
-<section>
-  <h2>Per-category pass rate over time</h2>
-  <label>Category: <select id="catSelect"></select></label>
-  <canvas id="catChart" height="120"></canvas>
-</section>
-
-<section>
-  <h2>Latest snapshot</h2>
-  <div id="latestMeta" class="meta"></div>
-  <canvas id="latestBar" height="320"></canvas>
-  <table id="latestTable">
-    <thead>
-      <tr><th>Category</th><th>Files</th><th>Examples</th><th>Pass</th><th>Failures</th><th>Errors</th><th>Pass rate</th></tr>
-    </thead>
-    <tbody></tbody>
-  </table>
-</section>
+<main id="readme"><p class="loading">Loading README…</p></main>
 
 <script>
-async function loadCsv(path) {
-  const res = await fetch(path + '?t=' + Date.now());
-  if (!res.ok) return [];
-  const text = (await res.text()).trim();
-  if (!text) return [];
-  const [header, ...rows] = text.split('\n');
-  const cols = header.split(',');
-  return rows.map(r => {
-    const vals = r.split(',');
-    const obj = {};
-    cols.forEach((c, i) => obj[c] = vals[i]);
-    return obj;
-  });
-}
+const README_URL =
+  "https://raw.githubusercontent.com/sisshiki1969/monoruby/master/README.md";
+const STOP_AT = /^## Prerequisites/m;
 
 (async () => {
-  const total = await loadCsv('data/history_total.csv');
-  const hist = await loadCsv('data/history.csv');
-
-  if (total.length) {
-    new Chart(document.getElementById('totalChart'), {
-      type: 'line',
-      data: {
-        labels: total.map(r => r.timestamp),
-        datasets: [{
-          label: 'Total pass rate (%)',
-          data: total.map(r => parseFloat(r.pass_rate)),
-          borderColor: '#2e7d32',
-          backgroundColor: 'rgba(46,125,50,0.15)',
-          tension: 0.15,
-          fill: true,
-          pointRadius: 2
-        }]
-      },
-      options: {
-        scales: { y: { suggestedMin: 0, suggestedMax: 100 } }
-      }
-    });
-  }
-
-  const categories = [...new Set(hist.map(r => r.category))].sort();
-  const sel = document.getElementById('catSelect');
-  for (const c of categories) {
-    const opt = document.createElement('option');
-    opt.value = c; opt.textContent = c;
-    sel.appendChild(opt);
-  }
-
-  let catChart;
-  function drawCat(cat) {
-    const rows = hist.filter(r => r.category === cat);
-    const cfg = {
-      type: 'line',
-      data: {
-        labels: rows.map(r => r.timestamp),
-        datasets: [{
-          label: cat + ' pass rate (%)',
-          data: rows.map(r => parseFloat(r.pass_rate)),
-          borderColor: '#1565c0',
-          backgroundColor: 'rgba(21,101,192,0.15)',
-          tension: 0.15,
-          fill: true,
-          pointRadius: 2
-        }]
-      },
-      options: { scales: { y: { suggestedMin: 0, suggestedMax: 100 } } }
-    };
-    if (catChart) { catChart.destroy(); }
-    catChart = new Chart(document.getElementById('catChart'), cfg);
-  }
-  if (categories.length) {
-    sel.value = categories[0];
-    drawCat(categories[0]);
-    sel.addEventListener('change', e => drawCat(e.target.value));
-  }
-
-  if (hist.length) {
-    const latestTs = hist[hist.length - 1].timestamp;
-    const latestSha = hist[hist.length - 1].commit;
-    const latest = hist.filter(r => r.timestamp === latestTs)
-                       .sort((a, b) => parseFloat(b.pass_rate) - parseFloat(a.pass_rate));
-    document.getElementById('latestMeta').textContent =
-      'snapshot: ' + latestTs + ' @ ' + latestSha;
-
-    new Chart(document.getElementById('latestBar'), {
-      type: 'bar',
-      data: {
-        labels: latest.map(r => r.category),
-        datasets: [{
-          label: 'Pass rate (%)',
-          data: latest.map(r => parseFloat(r.pass_rate)),
-          backgroundColor: latest.map(r => {
-            const v = parseFloat(r.pass_rate);
-            if (v >= 90) return '#2e7d32';
-            if (v >= 70) return '#f9a825';
-            return '#c62828';
-          })
-        }]
-      },
-      options: {
-        indexAxis: 'y',
-        scales: { x: { suggestedMin: 0, suggestedMax: 100 } },
-        plugins: { legend: { display: false } }
-      }
-    });
-
-    const tbody = document.querySelector('#latestTable tbody');
-    for (const r of latest) {
-      const tr = document.createElement('tr');
-      for (const k of ['category','files','examples','pass','failures','errors','pass_rate']) {
-        const td = document.createElement('td');
-        td.textContent = k === 'pass_rate' ? r[k] + '%' : r[k];
-        tr.appendChild(td);
-      }
-      tbody.appendChild(tr);
-    }
+  const target = document.getElementById("readme");
+  try {
+    const res = await fetch(README_URL + "?t=" + Date.now());
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const md = await res.text();
+    const trimmed = md.split(STOP_AT)[0];
+    target.innerHTML = marked.parse(trimmed, { breaks: false, gfm: true });
+  } catch (e) {
+    target.innerHTML =
+      '<p>Could not load README (' + e.message + '). ' +
+      'See the <a href="https://github.com/sisshiki1969/monoruby">repository</a>.</p>';
   }
 })();
 </script>
