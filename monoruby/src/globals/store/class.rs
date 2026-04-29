@@ -511,6 +511,16 @@ impl ClassInfo {
         self.constants.contains_key(&name)
     }
 
+    /// Returns true if a method entry for `name` exists directly on
+    /// this class/module's method table (not inherited). Used by
+    /// visibility-modifier code to decide whether `private :foo` /
+    /// `public :foo` constitutes adding the method to the table
+    /// (which fires `method_added`) or merely flipping the visibility
+    /// of an already-local entry (which doesn't).
+    pub(crate) fn has_own_method(&self, name: IdentId) -> bool {
+        self.methods.contains_key(&name)
+    }
+
     /// Returns true if the constant `name` defined on this class/module is
     /// marked as private. Constants are public by default. Returns false if
     /// the constant is not defined on this class.
@@ -787,6 +797,64 @@ impl ClassInfoTable {
             .collect()
     }
 
+    /// Public-only method names on the class itself (no inheritance).
+    /// Used by `Module#public_instance_methods(false)`. CRuby
+    /// distinguishes public from protected for this query — protected
+    /// methods belong to `protected_instance_methods`, not
+    /// `public_instance_methods`.
+    pub(crate) fn get_public_method_names(&self, class_id: ClassId) -> Vec<Value> {
+        self[class_id]
+            .methods
+            .iter()
+            .filter_map(|(name, entry)| {
+                if entry.is_public() {
+                    Some(Value::symbol(*name))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Public-only walk of the ancestor chain. Closer-ancestor wins
+    /// the visibility race so a `private`/`protected` modifier on a
+    /// nearer module doesn't surface as public via a deeper public
+    /// definition.
+    pub(crate) fn get_public_method_names_inherit(&self, class_id: ClassId) -> Vec<Value> {
+        let mut names = HashSet::default();
+        let mut module = self.get_module(class_id);
+        let mut exclude = HashSet::default();
+        loop {
+            for (name, entry) in &self[module.id()].methods {
+                if exclude.contains(name) || names.contains(name) {
+                    continue;
+                }
+                match entry.visibility {
+                    Visibility::Undefined | Visibility::Private | Visibility::Protected => {
+                        exclude.insert(*name);
+                    }
+                    Visibility::Public => {
+                        if entry.func_id().is_some() {
+                            names.insert(*name);
+                        } else {
+                            exclude.insert(*name);
+                        }
+                    }
+                }
+            }
+            match module.superclass() {
+                Some(superclass) => {
+                    if superclass.id() == OBJECT_CLASS {
+                        break;
+                    }
+                    module = superclass;
+                }
+                None => break,
+            }
+        }
+        names.into_iter().map(|sym| Value::symbol(sym)).collect()
+    }
+
     ///
     /// Get private method names in the class of *class_id*.
     ///  
@@ -850,12 +918,20 @@ impl ClassInfoTable {
         loop {
             if !only_singleton || module.is_singleton().is_some() || module.is_iclass() {
                 for (name, entry) in &self[module.id()].methods {
+                    // Closer ancestor wins: skip names already resolved
+                    // here. This is what makes `private :foo` on Kernel
+                    // not surface `:foo` as private through Object —
+                    // Object's own public entry has already classified
+                    // it.
+                    if exclude.contains(name) || names.contains(name) {
+                        continue;
+                    }
                     if matches!(
                         entry.visibility,
                         Visibility::Undefined | Visibility::Private
                     ) {
                         exclude.insert(*name);
-                    } else if entry.is_public_protected() && !exclude.contains(name) {
+                    } else if entry.is_public_protected() {
                         names.insert(*name);
                     }
                 }
@@ -882,10 +958,27 @@ impl ClassInfoTable {
         let mut exclude = HashSet::default();
         loop {
             for (name, entry) in &self[module.id()].methods {
+                // Earlier entries in the lookup chain take precedence
+                // for visibility queries: once a name has been resolved
+                // (here or in `Undefined`), don't let a later, deeper
+                // ancestor's different visibility shadow it. This is
+                // why `Object.private_instance_methods` does NOT
+                // include a method that's public on Object even if
+                // `Kernel` (a deeper iclass entry) has marked it
+                // private — Object's own entry wins.
+                if exclude.contains(name) || names.contains(name) {
+                    // Already resolved by a closer ancestor.
+                    continue;
+                }
                 if matches!(entry.visibility, Visibility::Undefined) {
                     exclude.insert(*name);
-                } else if entry.is_private() && !exclude.contains(name) {
+                } else if entry.is_private() {
                     names.insert(*name);
+                } else {
+                    // Public/protected at this level; don't report it
+                    // as private even if a deeper ancestor has a
+                    // private modifier.
+                    exclude.insert(*name);
                 }
             }
             match module.superclass() {
@@ -927,13 +1020,20 @@ impl ClassInfoTable {
         let mut exclude = HashSet::default();
         loop {
             for (name, entry) in &self[module.id()].methods {
+                // Closer ancestor wins (see private/public siblings).
+                if exclude.contains(name) || names.contains(name) {
+                    continue;
+                }
                 if matches!(entry.visibility, Visibility::Undefined) {
                     exclude.insert(*name);
                 } else if entry.func_id().is_some()
                     && entry.visibility() == Visibility::Protected
-                    && !exclude.contains(name)
                 {
                     names.insert(*name);
+                } else {
+                    // Public/private classification at this depth ends
+                    // the lookup for `name`.
+                    exclude.insert(*name);
                 }
             }
             match module.superclass() {
@@ -1452,14 +1552,39 @@ impl Store {
             // `func_id` is `None`, which `is_private` / `is_public` and
             // friends treat as "no method present" — so the spec's
             // `m.private_instance_methods.include?(:foo)` would be false.
-            let (func_id, _, _) = self.find_method_for_class(class_id, *name)?;
+            let (func_id, inherited_vis, _) = self.find_method_for_class(class_id, *name)?;
             match self.classes[class_id].methods.get_mut(name) {
                 Some(entry) => {
                     entry.visibility = visibility;
                     Globals::class_version_inc();
                 }
                 None => {
-                    self.add_method_inner(class_id, *name, func_id, visibility, false);
+                    // Optimization (matches CRuby `set_method_visibility`):
+                    // if the inherited method already has the requested
+                    // visibility, don't bother adding a local copy. The
+                    // ruby/spec
+                    // `"with argument does not clone method from the
+                    // ancestor when setting to the same visibility in a
+                    // child"` exercises this.
+                    if inherited_vis == visibility {
+                        continue;
+                    }
+                    // Insert a *visibility-modifier* entry that shares
+                    // `func_id` with the inherited method but does NOT
+                    // change the func's owner_class — otherwise asking
+                    // `Object.public_instance_methods` would surface
+                    // `Module.new { public :foo }`'s shadow because the
+                    // func itself would now claim Module as owner.
+                    self.insert_method(
+                        class_id,
+                        *name,
+                        MethodTableEntry {
+                            owner: class_id,
+                            func_id: Some(func_id),
+                            visibility,
+                            is_basic_op: false,
+                        },
+                    );
                 }
             };
         }

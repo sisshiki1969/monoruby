@@ -1417,10 +1417,15 @@ fn public_instance_methods(
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    // CRuby distinguishes `public_instance_methods` (public only) from
+    // `instance_methods` (public + protected). The shared helpers
+    // `get_method_names` / `get_method_names_inherit` cover the
+    // public+protected case used by `instance_methods`; here we want
+    // the strict public-only flavor.
     Ok(Value::array_from_vec(if !inherited_too {
-        globals.store.get_method_names(class_id)
+        globals.store.get_public_method_names(class_id)
     } else {
-        globals.store.get_method_names_inherit(class_id, false)
+        globals.store.get_public_method_names_inherit(class_id)
     }))
 }
 
@@ -2060,7 +2065,12 @@ fn class_variables(
     let inherit = lfp.try_arg(0).map(|v| v.as_bool()).unwrap_or(true);
     let mut seen = HashSet::default();
     let mut names: Vec<IdentId> = Vec::new();
-    let mut module = Some(globals.store[class_id].get_module());
+    // CRuby: a class variable defined on a singleton class is shared
+    // with the attached class — `class C; class << self; @@x = …; end;
+    // C.class_variables.include?(:@@x)`. Start the walk on the
+    // attached non-singleton class so `class_variables` sees those.
+    let start_id = singleton_attached_class_for_id(globals, class_id);
+    let mut module = Some(globals.store[start_id].get_module());
     while let Some(m) = module {
         for name in globals.store.get_class_variable_names(m.id()) {
             if seen.insert(name) {
@@ -2075,6 +2085,23 @@ fn class_variables(
     Ok(Value::array_from_vec(
         names.into_iter().map(Value::symbol).collect(),
     ))
+}
+
+/// Mirror of the same-named helper in `class/constants.rs`, exposed
+/// to the builtin layer. Walks up the singleton chain until the
+/// receiver is non-singleton (or the attached object isn't a
+/// class/module).
+fn singleton_attached_class_for_id(globals: &Globals, mut class_id: ClassId) -> ClassId {
+    loop {
+        let module = globals.store[class_id].get_module();
+        match module.is_singleton() {
+            Some(attached) => match attached.is_class_or_module() {
+                Some(m) => class_id = m.id(),
+                None => return class_id,
+            },
+            None => return class_id,
+        }
+    }
 }
 
 /// ### Module#set_temporary_name
@@ -2300,7 +2327,21 @@ fn change_visi(
     }
     let (res, names) = extract_names(globals, arg)?;
     let class_id = self_val.as_class_id();
+    // CRuby fires `method_added` only when `private` / `protected` /
+    // `public` adds a *new* entry to the receiver's method table —
+    // i.e. when the method was inherited rather than defined locally.
+    // Capture which names were missing locally before the call so we
+    // can fire after `change_method_visibility_for_class` runs.
+    let was_missing_locally: Vec<bool> = names
+        .iter()
+        .map(|n| !globals.store[class_id].has_own_method(*n))
+        .collect();
     globals.change_method_visibility_for_class(class_id, &names, visi)?;
+    for (name, was_missing) in names.iter().zip(was_missing_locally) {
+        if was_missing && globals.store[class_id].has_own_method(*name) {
+            vm.invoke_method_added(globals, class_id, *name)?;
+        }
+    }
     Ok(res)
 }
 

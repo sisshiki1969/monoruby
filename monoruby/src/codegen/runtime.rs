@@ -906,8 +906,17 @@ pub(super) extern "C" fn alias_method(
             return None;
         }
     };
-    let func_id = vm.cfp().lfp().func_id();
-    let class_id = func_id.lexical_class(globals);
+    // Target the *runtime* class context (`module_eval` /
+    // `class_eval` push it onto a stack) rather than the iseq's
+    // *lexical* class — the iseq is captured at compile time, so a
+    // block created at top level and run inside
+    // `Module.new do … end` still has Object as its lexical class.
+    // `alias` should target the module that's currently being
+    // defined, matching CRuby's `cref->klass`.
+    let class_id = vm.context_class_id();
+    // `Executor::alias_method_for_class` already fires the
+    // `method_added` hook, so the alias-keyword path matches
+    // `Module#alias_method`'s behaviour for it.
     match vm.alias_method_for_class(globals, class_id, new, old) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
