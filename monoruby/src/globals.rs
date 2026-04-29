@@ -597,6 +597,16 @@ impl Globals {
         CODEGEN.with(|codegen| codegen.borrow().class_version())
     }
 
+    /// Bump the global *constant* version counter, invalidating every
+    /// JIT/VM constant lookup cache. Call this whenever the *resolution*
+    /// of an existing constant might change without the constant itself
+    /// being assigned — for example after `Module#include` /
+    /// `Module#prepend` adds a new iclass to a class chain that earlier
+    /// callers have already resolved against.
+    pub(crate) fn const_version_inc() {
+        CODEGEN.with(|codegen| codegen.borrow_mut().const_version_inc());
+    }
+
     pub fn set_constant(&mut self, class_id: ClassId, name: IdentId, val: Value) {
         CODEGEN.with(|codegen| codegen.borrow_mut().const_version_inc());
         self.store.set_constant(class_id, name, val);
