@@ -2200,6 +2200,39 @@ impl Value {
             .ok_or_else(|| MonorubyErr::is_not_symbol_nor_string(store, *self))
     }
 
+    /// Like [`expect_symbol_or_string`], but additionally tries `#to_str`
+    /// coercion for non-Symbol/non-String values, matching CRuby's
+    /// `rb_check_id` semantics for `attr_*` and similar APIs.
+    ///
+    /// - Symbol or String: return the corresponding `IdentId` directly.
+    /// - Otherwise: invoke `#to_str` on the receiver. If it returns a
+    ///   String, intern that. If it returns anything else (or doesn't
+    ///   exist), raise TypeError.
+    pub(crate) fn coerce_to_symbol_or_string(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<IdentId> {
+        if let Some(id) = self.try_symbol_or_string() {
+            return Ok(id);
+        }
+        if let Some(func_id) = globals.check_method(*self, IdentId::TO_STR) {
+            let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
+            if let Some(s) = result.is_str() {
+                return Ok(IdentId::get_id(s));
+            }
+            // `#to_str` returned a non-String value -> TypeError, matching
+            // CRuby's "can't convert X to String (X#to_str gives Y)".
+            return Err(MonorubyErr::typeerr(format!(
+                "can't convert {} to String ({}#to_str gives {})",
+                self.get_real_class_name(&globals.store),
+                self.get_real_class_name(&globals.store),
+                result.get_real_class_name(&globals.store),
+            )));
+        }
+        Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, *self))
+    }
+
     pub(crate) fn expect_bytes(&self, store: &Store) -> Result<&[u8]> {
         if let Some(s) = self.is_rstring_inner() {
             Ok(&s)

@@ -47,7 +47,10 @@ impl ClassInfoTable {
     ) -> Option<Value> {
         match &self.get_constant(class_id, name)?.kind {
             ConstStateKind::Loaded(v) => Some(*v),
-            _ => unreachable!(),
+            // Caller asked for a no-autoload lookup; pending-autoload
+            // entries don't have a value to hand out without triggering
+            // the load, so behave as "not yet defined".
+            ConstStateKind::Autoload(_) => None,
         }
     }
 

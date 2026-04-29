@@ -77,7 +77,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(MODULE_CLASS, "const_defined?", const_defined, 1, 2, false);
     globals.define_builtin_func_with(MODULE_CLASS, "const_get", const_get, 1, 2, false);
     globals.define_builtin_func(MODULE_CLASS, "const_set", const_set, 2);
-    globals.define_builtin_func(MODULE_CLASS, "remove_const", remove_const, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "remove_const", remove_const, 1);
     globals.define_builtin_func_with(
         MODULE_CLASS,
         "const_source_location",
@@ -130,7 +130,7 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func_rest(MODULE_CLASS, "include", include);
-    globals.define_builtin_func(MODULE_CLASS, "append_features", append_features, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "append_features", append_features, 1);
     globals.define_private_builtin_func(MODULE_CLASS, "extend_object", extend_object, 1);
     globals.define_builtin_func_rest(MODULE_CLASS, "prepend", prepend);
     globals.define_builtin_func(MODULE_CLASS, "prepend_features", prepend_features, 1);
@@ -440,9 +440,11 @@ fn alias_method(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
-    let new_name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    let old_name = lfp.arg(1).expect_symbol_or_string(globals)?;
+    let mut self_val = lfp.self_val();
+    self_val.ensure_not_frozen(&globals.store)?;
+    let class_id = self_val.as_class_id();
+    let new_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
+    let old_name = lfp.arg(1).coerce_to_symbol_or_string(vm, globals)?;
     vm.alias_method_for_class(globals, class_id, new_name, old_name)?;
     Ok(Value::symbol(new_name))
 }
@@ -481,7 +483,7 @@ fn attr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     };
 
     if let Some(writable) = legacy_writable {
-        let arg_name = args[0].expect_symbol_or_string(globals)?;
+        let arg_name = args[0].coerce_to_symbol_or_string(vm, globals)?;
         let method_name = vm.define_attr_reader(globals, class_id, arg_name, visi)?;
         ary.push(Value::symbol(method_name));
         if writable {
@@ -490,7 +492,7 @@ fn attr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
     } else {
         for v in args.iter() {
-            let arg_name = v.expect_symbol_or_string(globals)?;
+            let arg_name = v.coerce_to_symbol_or_string(vm, globals)?;
             let method_name = vm.define_attr_reader(globals, class_id, arg_name, visi)?;
             ary.push(Value::symbol(method_name));
         }
@@ -515,7 +517,7 @@ fn attr_accessor(
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
     for v in lfp.arg(0).as_array().iter() {
-        let arg_name = v.expect_symbol_or_string(globals)?;
+        let arg_name = v.coerce_to_symbol_or_string(vm, globals)?;
         let method_name = vm.define_attr_reader(globals, class_id, arg_name, visi)?;
         ary.push(Value::symbol(method_name));
         let method_name = vm.define_attr_writer(globals, class_id, arg_name, visi)?;
@@ -541,7 +543,7 @@ fn attr_reader(
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
     for v in lfp.arg(0).as_array().iter() {
-        let arg_name = v.expect_symbol_or_string(globals)?;
+        let arg_name = v.coerce_to_symbol_or_string(vm, globals)?;
         let method_name = vm.define_attr_reader(globals, class_id, arg_name, visi)?;
         ary.push(Value::symbol(method_name));
     }
@@ -565,7 +567,7 @@ fn attr_writer(
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
     for v in lfp.arg(0).as_array().iter() {
-        let arg_name = v.expect_symbol_or_string(globals)?;
+        let arg_name = v.coerce_to_symbol_or_string(vm, globals)?;
         let method_name = vm.define_attr_writer(globals, class_id, arg_name, visi)?;
         ary.push(Value::symbol(method_name));
     }
@@ -798,17 +800,10 @@ fn const_defined(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let module = lfp.self_val().as_class();
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
-    let found = if inherit {
-        vm.get_constant_superclass_with_class(globals, module, name)
-            .is_ok()
-    } else {
-        // Non-inherit: only check the receiver's own table.
-        globals.store[module.id()].has_own_constant(name)
-    };
-    Ok(Value::bool(found))
+    let found = lookup_constant_path(vm, globals, module, lfp.arg(0), inherit)?;
+    Ok(Value::bool(found.is_some()))
 }
 
 ///
@@ -819,10 +814,150 @@ fn const_defined(
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_get.html]
 #[monoruby_builtin]
 fn const_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let module = lfp.self_val().as_class();
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
-    vm.const_get(globals, module, name, inherit)
+    match lookup_constant_path(vm, globals, module, lfp.arg(0), inherit)? {
+        Some(v) => Ok(v),
+        None => {
+            // Reuse CRuby-style "uninitialized constant" wording. The path
+            // text is the original String/Symbol exactly as supplied.
+            let display = if let Some(s) = lfp.arg(0).is_str() {
+                s.to_string()
+            } else if let Some(sym) = lfp.arg(0).try_symbol() {
+                sym.get_name().to_string()
+            } else {
+                "?".to_string()
+            };
+            Err(MonorubyErr::nameerr(format!(
+                "uninitialized constant {display}"
+            )))
+        }
+    }
+}
+
+/// True if `name` is a syntactically valid constant identifier — first
+/// character is uppercase ASCII, the rest are word characters (`\w`).
+/// Used by `const_defined?` / `const_get` / `const_set` to raise a
+/// NameError for `"name"`, `"_X"`, `"@X"`, etc., matching CRuby's
+/// `rb_check_id_without_pindown` validation.
+fn is_valid_const_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return false,
+    };
+    if !first.is_ascii_uppercase() {
+        return false;
+    }
+    chars.all(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// Walk a (possibly scoped) constant path. Coerces *name_arg* to a
+/// Symbol or String (via `#to_str`); a Symbol is treated as a bare
+/// name (a `::`-containing Symbol is a NameError). A String may be
+/// fully-qualified (`"::A::B"` -> start at Object) or relative
+/// (`"A::B"` -> start at *receiver*).
+///
+/// Each segment is validated by `is_valid_const_name`. Returns
+/// `Ok(Some(v))` on hit, `Ok(None)` if any segment is missing,
+/// or `Err(NameError)` for malformed names.
+fn lookup_constant_path(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Module,
+    name_arg: Value,
+    inherit: bool,
+) -> Result<Option<Value>> {
+    // Coerce to a String we can split, but remember whether the input
+    // was a Symbol (Symbols may not contain `::`).
+    let (path, was_symbol) = if let Some(sym) = name_arg.try_symbol() {
+        (sym.get_name().to_string(), true)
+    } else if let Some(s) = name_arg.is_str() {
+        (s.to_string(), false)
+    } else if let Some(func_id) = globals.check_method(name_arg, IdentId::TO_STR) {
+        let result = vm.invoke_func_inner(globals, func_id, name_arg, &[], None, None)?;
+        if let Some(s) = result.is_str() {
+            (s.to_string(), false)
+        } else {
+            return Err(MonorubyErr::typeerr(format!(
+                "no implicit conversion of {} into String",
+                name_arg.get_real_class_name(&globals.store)
+            )));
+        }
+    } else {
+        return Err(MonorubyErr::typeerr(format!(
+            "no implicit conversion of {} into String",
+            name_arg.get_real_class_name(&globals.store)
+        )));
+    };
+
+    let (start_at_object, segs): (bool, Vec<&str>) = if was_symbol {
+        if path.contains("::") {
+            return Err(MonorubyErr::nameerr(format!(
+                "wrong constant name {path}"
+            )));
+        }
+        (false, vec![path.as_str()])
+    } else if let Some(rest) = path.strip_prefix("::") {
+        (true, rest.split("::").collect())
+    } else {
+        (false, path.split("::").collect())
+    };
+
+    if segs.iter().any(|s| !is_valid_const_name(s)) {
+        return Err(MonorubyErr::nameerr(format!(
+            "wrong constant name {path}"
+        )));
+    }
+
+    // Walk the scope chain. The first segment honours `inherit`; nested
+    // segments are looked up directly on the resolved class (CRuby
+    // scopes `Foo::Bar::Baz` like the parser would, so each `::` step
+    // is a non-inherited lookup *unless* the user asked for inherited
+    // and we're still at the receiver).
+    let mut current = if start_at_object {
+        globals.store[OBJECT_CLASS].get_module()
+    } else {
+        receiver
+    };
+    let last_idx = segs.len() - 1;
+    for (i, seg) in segs.iter().enumerate() {
+        let id = IdentId::get_id(seg);
+        // For the *first* segment, defer to the inherit flag (and
+        // implicitly walk Object for modules / superclasses for
+        // classes, as `get_constant_superclass_with_class` does). For
+        // later segments, only the resolved class itself is checked.
+        let val = if i == 0 && inherit {
+            match vm.get_constant_superclass_with_class(globals, current, id) {
+                Ok((v, _)) => Some(v),
+                Err(_) => None,
+            }
+        } else if globals.store[current.id()].has_own_constant(id) {
+            // For nested segments, restrict to *direct* lookup on the
+            // resolved class (no superclass walk). Use the
+            // `get_constant_checked` path so autoload triggers fire
+            // correctly; an error means "missing constant" -> None.
+            match vm.get_constant_checked(globals, current.id(), id) {
+                Ok(v) => Some(v),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+        match val {
+            Some(v) => {
+                if i == last_idx {
+                    return Ok(Some(v));
+                }
+                match v.is_class_or_module() {
+                    Some(m) => current = m,
+                    None => return Ok(None),
+                }
+            }
+            None => return Ok(None),
+        }
+    }
+    Ok(None)
 }
 
 ///
@@ -833,9 +968,43 @@ fn const_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_set.html]
 #[monoruby_builtin]
 fn const_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    let module = lfp.self_val().as_class().id();
+    let mut self_val = lfp.self_val();
+    self_val.ensure_not_frozen(&globals.store)?;
+    let name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
+    let name_str = name.get_name();
+    if !is_valid_const_name(&name_str) {
+        return Err(MonorubyErr::nameerr(format!(
+            "wrong constant name {name_str}"
+        )));
+    }
+    let module = self_val.as_class().id();
     let val = lfp.arg(1);
+    // Warn (via Ruby's `$stderr` so mspec's `complain` matcher captures it)
+    // when overwriting an existing same-name constant on the receiver,
+    // matching CRuby's redefinition warning.
+    if globals.store.get_constant_noautoload(module, name).is_some() {
+        let parent_name = globals.store[module]
+            .get_name()
+            .unwrap_or_default()
+            .to_string();
+        let qual = if parent_name.is_empty() {
+            name.get_name().to_string()
+        } else {
+            format!("{parent_name}::{}", name.get_name())
+        };
+        let msg = format!("warning: already initialized constant {qual}\n");
+        let stderr_id = IdentId::get_id("$stderr");
+        let stderr = globals.get_gvar(stderr_id).unwrap_or(Value::nil());
+        let write_id = IdentId::get_id("write");
+        let _ = vm.invoke_method_inner(
+            globals,
+            write_id,
+            stderr,
+            &[Value::string(msg)],
+            None,
+            None,
+        );
+    }
     globals.set_constant(module, name, val);
     let receiver = globals.store[module].get_module().into();
     vm.invoke_method_inner(
@@ -901,12 +1070,12 @@ fn const_source_location(
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/remove_const.html]
 #[monoruby_builtin]
 fn remove_const(
-    _: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
     let module = lfp.self_val().as_class().id();
     globals
         .remove_constant(module, name)
@@ -1089,6 +1258,7 @@ fn append_features(
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut base = lfp.arg(0).expect_class_or_module(&globals.store)?;
+    base.as_val().ensure_not_frozen(&globals.store)?;
     let include_module = lfp.self_val().expect_module(globals)?;
     base.include_module(include_module)?;
     Ok(lfp.self_val())
@@ -1226,9 +1396,13 @@ fn remove_method(
     Ok(lfp.self_val())
 }
 
-fn check_method_defined(globals: &Globals, lfp: Lfp) -> Result<Option<Visibility>> {
+fn check_method_defined(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+) -> Result<Option<Visibility>> {
     let class_id = lfp.self_val().as_class_id();
-    let func_name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let func_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
     let inherit = if let Some(arg) = lfp.try_arg(1) {
         arg.as_bool()
     } else {
@@ -1245,12 +1419,12 @@ fn check_method_defined(globals: &Globals, lfp: Lfp) -> Result<Option<Visibility
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/method_defined=3f.html]
 #[monoruby_builtin]
 fn method_defined(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(Value::bool(match check_method_defined(globals, lfp)? {
+    Ok(Value::bool(match check_method_defined(vm, globals, lfp)? {
         Some(v) => matches!(v, Visibility::Public | Visibility::Protected),
         None => false,
     }))
@@ -1264,13 +1438,13 @@ fn method_defined(
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private_method_defined=3f.html]
 #[monoruby_builtin]
 fn private_method_defined(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     Ok(Value::bool(
-        check_method_defined(globals, lfp)? == Some(Visibility::Private),
+        check_method_defined(vm, globals, lfp)? == Some(Visibility::Private),
     ))
 }
 
@@ -1282,13 +1456,13 @@ fn private_method_defined(
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public_method_defined=3f.html]
 #[monoruby_builtin]
 fn public_method_defined(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     Ok(Value::bool(
-        check_method_defined(globals, lfp)? == Some(Visibility::Public),
+        check_method_defined(vm, globals, lfp)? == Some(Visibility::Public),
     ))
 }
 
@@ -1300,13 +1474,13 @@ fn public_method_defined(
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/protected_method_defined=3f.html]
 #[monoruby_builtin]
 fn protected_method_defined(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     Ok(Value::bool(
-        check_method_defined(globals, lfp)? == Some(Visibility::Protected),
+        check_method_defined(vm, globals, lfp)? == Some(Visibility::Protected),
     ))
 }
 
@@ -1409,13 +1583,15 @@ fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_variable_set.html]
 #[monoruby_builtin]
 fn class_variable_set(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let mut self_val = lfp.self_val();
+    self_val.ensure_not_frozen(&globals.store)?;
+    let class_id = self_val.as_class_id();
+    let name = coerce_to_class_var_name(vm, globals, lfp.arg(0))?;
     let val = lfp.arg(1);
     globals.set_class_variable(class_id, name, val);
     Ok(val)
@@ -1429,13 +1605,13 @@ fn class_variable_set(
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_variable_get.html]
 #[monoruby_builtin]
 fn class_variable_get(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let name = coerce_to_class_var_name(vm, globals, lfp.arg(0))?;
     let module = globals.store[class_id].get_module();
     globals.get_class_variable(module, name).map(|(_, v)| v)
 }
@@ -1448,15 +1624,34 @@ fn class_variable_get(
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_variable_defined=3f.html]
 #[monoruby_builtin]
 fn class_variable_defined(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let name = coerce_to_class_var_name(vm, globals, lfp.arg(0))?;
     let module = globals.store[class_id].get_module();
     Ok(Value::bool(globals.get_class_variable(module, name).is_ok()))
+}
+
+/// Coerce a name argument for `Module#class_variable_*` to an `IdentId`,
+/// validating that the resulting string starts with `@@` (CRuby raises
+/// NameError otherwise). `#to_str` is invoked for non-Symbol/non-String
+/// arguments.
+fn coerce_to_class_var_name(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    name_arg: Value,
+) -> Result<IdentId> {
+    let id = name_arg.coerce_to_symbol_or_string(vm, globals)?;
+    let s = id.get_name();
+    if !s.starts_with("@@") || s.len() <= 2 {
+        return Err(MonorubyErr::nameerr(format!(
+            "`{s}' is not allowed as a class variable name"
+        )));
+    }
+    Ok(id)
 }
 
 ///
@@ -1663,18 +1858,30 @@ fn module_function(
     _: BytecodePtr,
 ) -> Result<Value> {
     let arg0 = lfp.arg(0);
-    let len = arg0.as_array().len();
-    if len == 0 {
+    let args = arg0.as_array();
+    if args.is_empty() {
         vm.set_module_function();
-        Ok(Value::nil())
+        return Ok(Value::nil());
+    }
+    let class_id = lfp.self_val().as_class_id();
+    let mut names: Vec<IdentId> = Vec::with_capacity(args.len());
+    for v in args.iter() {
+        names.push(v.coerce_to_symbol_or_string(vm, globals)?);
+    }
+    for &name in &names {
+        let func_id = globals.find_method_for_class(class_id, name)?.0;
+        // Module-method copy: install on the singleton (callable as `M.name`)
+        // *and* mark the instance-method side private (matching CRuby).
+        vm.add_singleton_method(globals, class_id, name, func_id, Visibility::Public)?;
+        globals.add_method(class_id, name, func_id, Visibility::Private);
+    }
+    // CRuby return value: the single argument as-is when exactly one name
+    // was passed, otherwise the original argument array (preserving the
+    // caller's String/Symbol mix). `module_function(:foo)` -> `:foo`;
+    // `module_function(:a, "b")` -> `[:a, "b"]`.
+    if args.len() == 1 {
+        Ok(args[0])
     } else {
-        let class_id = lfp.self_val().as_class_id();
-        let visi = vm.context_visibility();
-        for v in arg0.as_array().iter() {
-            let name = v.expect_symbol_or_string(globals)?;
-            let func_id = globals.find_method_for_class(class_id, name)?.0;
-            vm.add_singleton_method(globals, class_id, name, func_id, visi)?;
-        }
         Ok(arg0)
     }
 }
@@ -3407,6 +3614,258 @@ mod tests {
                 public_class_method :bar
             end
             Foo.bar
+            "#,
+        );
+    }
+
+    // ----- attr_*/attr/alias_method/const_*/class_variable_* coercion paths -----
+
+    #[test]
+    fn attr_accessor_coerces_via_to_str() {
+        // A non-Symbol/non-String name with a `#to_str` returning a String is
+        // installed as the accessor name. Reading and writing both work.
+        run_test(
+            r#"
+            o = Object.new
+            def o.to_str; "value"; end
+            c = Class.new { attr_accessor o }
+            i = c.new
+            i.value = 42
+            [i.value, i.respond_to?(:value), i.respond_to?(:value=)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn attr_to_str_returning_non_string_raises() {
+        // `#to_str` returning a non-String value -> TypeError, matching CRuby.
+        run_test_error(
+            r#"
+            o = Object.new
+            def o.to_str; 123; end
+            Class.new { attr_reader o }
+            "#,
+        );
+    }
+
+    #[test]
+    fn attr_no_to_str_raises() {
+        // No `#to_str` at all -> TypeError.
+        run_test_error(
+            r#"
+            Class.new { attr_writer Object.new }
+            "#,
+        );
+    }
+
+    #[test]
+    fn alias_method_frozen_raises() {
+        // `mod.freeze; mod.alias_method(...)` raises FrozenError before
+        // installing the alias.
+        run_test(
+            r#"
+            c = Class.new do
+              def foo; :foo; end
+            end
+            c.freeze
+            begin
+              c.send(:alias_method, :bar, :foo)
+              :no_error
+            rescue FrozenError
+              :ok
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn alias_method_keeps_special_methods_private() {
+        // Aliasing TO a special method name (`initialize`, `initialize_copy`,
+        // `initialize_clone`, `initialize_dup`, `respond_to_missing?`) forces
+        // the alias to be private regardless of the source method's
+        // visibility — the spec exercises this for `alias_method`.
+        run_test(
+            r#"
+            c = Class.new do
+              def public_one; :one; end
+            end
+            c.send(:alias_method, :initialize, :public_one)
+            c.send(:alias_method, :initialize_copy, :public_one)
+            c.send(:alias_method, :initialize_clone, :public_one)
+            c.send(:alias_method, :initialize_dup, :public_one)
+            c.send(:alias_method, :respond_to_missing?, :public_one)
+            [
+              c.private_instance_methods(false).include?(:initialize),
+              c.private_instance_methods(false).include?(:initialize_copy),
+              c.private_instance_methods(false).include?(:initialize_clone),
+              c.private_instance_methods(false).include?(:initialize_dup),
+              c.private_instance_methods(false).include?(:respond_to_missing?),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn alias_method_coerces_via_to_str() {
+        run_test(
+            r#"
+            o = Object.new
+            def o.to_str; "alias_target"; end
+            n = Object.new
+            def n.to_str; "alias_new"; end
+            c = Class.new do
+              def alias_target; :hit; end
+            end
+            c.send(:alias_method, n, o)
+            c.new.alias_new
+            "#,
+        );
+    }
+
+    #[test]
+    fn const_set_validates_name() {
+        // Names not starting with an uppercase ASCII letter raise NameError,
+        // matching CRuby. Tests cover lowercase, leading `_`, leading `@`,
+        // and bare `!`.
+        run_test_error(r#"Class.new.const_set("name", 1)"#);
+        run_test_error(r#"Class.new.const_set("_X", 1)"#);
+        run_test_error(r#"Class.new.const_set("@Name", 1)"#);
+        run_test_error(r#"Class.new.const_set("!Name", 1)"#);
+    }
+
+    #[test]
+    fn const_set_frozen_raises() {
+        run_test(
+            r#"
+            m = Module.new
+            m.freeze
+            begin
+              m.const_set(:Foo, 1)
+              :no_error
+            rescue FrozenError
+              :ok
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn const_defined_validates_name() {
+        run_test_error(r#"Module.new.const_defined?("lower")"#);
+        run_test_error(r#"Module.new.const_defined?("_X")"#);
+    }
+
+    #[test]
+    fn const_defined_scoped_path() {
+        // String path "A::B::C" walks scopes; leading "::" rebinds to
+        // toplevel.
+        run_test(
+            r#"
+            module M; class N; CONST = 1; end; end
+            [
+              M.const_defined?("N::CONST"),
+              Object.const_defined?("M::N::CONST"),
+              M.const_defined?("::M"),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn const_defined_symbol_with_scope_separator_raises() {
+        // A `::`-containing Symbol is NameError (Symbols are bare names).
+        run_test_error(
+            r#"
+            class A; CONST = 1; end
+            A.const_defined?(:"A::CONST")
+            "#,
+        );
+    }
+
+    #[test]
+    fn const_get_scoped_path_resolves() {
+        run_test(
+            r#"
+            module M; class N; CONST = 99; end; end
+            M.const_get("N::CONST")
+            "#,
+        );
+        run_test(
+            r#"
+            module M; class N; CONST = 99; end; end
+            Object.const_get("M::N::CONST")
+            "#,
+        );
+        run_test(
+            r#"
+            module M; class N; CONST = 99; end; end
+            M.const_get("::M::N::CONST")
+            "#,
+        );
+    }
+
+    #[test]
+    fn class_variable_set_validates_name() {
+        // Class variable names must start with `@@`. Anything else raises
+        // NameError.
+        run_test_error(r#"Class.new.class_variable_set(:plain, 1)"#);
+        run_test_error(r#"Class.new.class_variable_set(:@only_one_at, 1)"#);
+        run_test_error(r#"Class.new.class_variable_set(:@@, 1)"#);
+    }
+
+    #[test]
+    fn class_variable_set_frozen_raises() {
+        run_test(
+            r#"
+            c = Class.new
+            c.freeze
+            begin
+              c.class_variable_set(:@@x, 1)
+              :no_error
+            rescue FrozenError
+              :ok
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_function_returns_input_arg() {
+        // `module_function(:foo)` returns `:foo`; `module_function(:a, :b)`
+        // returns `[:a, :b]`. Single-arg returns the original Symbol/String
+        // unchanged (CRuby preserves the caller-supplied form).
+        run_test(
+            r#"
+            m = Module.new do
+              def a; end
+              def b; end
+            end
+            r1 = m.send(:module_function, :a)
+            r2 = m.send(:module_function, :a, :b)
+            [r1, r2]
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_function_makes_instance_methods_private() {
+        // After `module_function :foo`, `:foo` is callable as a module
+        // function (`M.foo`) AND its instance-method side is private (so
+        // including `M` exposes `:foo` only via `send`).
+        run_test(
+            r#"
+            m = Module.new do
+              def hi; "hello"; end
+              module_function :hi
+            end
+            o = Object.new
+            o.extend(m)
+            [
+              m.respond_to?(:hi),
+              m.private_instance_methods.include?(:hi),
+              o.respond_to?(:hi),
+              o.send(:hi),
+            ]
             "#,
         );
     }
