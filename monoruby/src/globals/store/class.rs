@@ -451,6 +451,10 @@ impl ClassInfo {
         self.object.unwrap()
     }
 
+    pub(crate) fn try_get_module(&self) -> Option<Module> {
+        self.object
+    }
+
     pub(crate) fn get_ivarid(&self, name: IdentId) -> Option<IvarId> {
         self.ivar_names.get(&name).cloned()
     }
