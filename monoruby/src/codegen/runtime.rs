@@ -932,7 +932,13 @@ pub(super) extern "C" fn defined_const(
     reg: *mut Value,
     site_id: ConstSiteId,
 ) {
-    if vm.find_constant(globals, site_id).is_err() {
+    // CRuby's `defined?` probes the constant table without firing
+    // autoload for the final segment (`rb_const_defined` calls
+    // `rb_const_defined_0` with `autoload_load = FALSE`). Mirror that
+    // via `probe_constant`: intermediate qualifiers are resolved
+    // normally so we can walk into the right class, but the leaf
+    // does not trigger `require`.
+    if !vm.probe_constant(globals, site_id) {
         unsafe { *reg = Value::nil() }
     }
 }

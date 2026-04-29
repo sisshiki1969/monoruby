@@ -690,18 +690,28 @@ impl Executor {
         };
         for constant in prefix {
             // Each intermediate `Foo::Bar::...::Name` lookup is a qualified
-            // access; enforce visibility for it as well.
-            let (val, defining) = self.get_constant_superclass_with_class(
-                globals,
-                globals[parent].get_module(),
-                constant,
-            )?;
-            check_constant_visibility(globals, defining, constant)?;
+            // access; enforce visibility for it as well. CRuby's
+            // `rb_public_const_get` checks visibility *before* firing
+            // autoload, so a `private_constant` registered on an
+            // autoload entry rejects the access without ever invoking
+            // `require`. Probe the ancestor chain non-triggering to
+            // find the defining class, check visibility, then resolve
+            // (triggering) only if visibility passes.
+            let module = globals[parent].get_module();
+            if let Some(defining) =
+                Self::probe_constant_superclass_with_class(globals, module, constant)
+            {
+                check_constant_visibility(globals, defining, constant)?;
+            }
+            let (val, _) =
+                self.get_constant_superclass_with_class(globals, module, constant)?;
             parent = val.expect_class_or_module(&globals.store)?.id();
         }
-        let (v, defining) =
-            self.get_constant_superclass_with_class(globals, globals[parent].get_module(), name)?;
-        check_constant_visibility(globals, defining, name)?;
+        let module = globals[parent].get_module();
+        if let Some(defining) = Self::probe_constant_superclass_with_class(globals, module, name) {
+            check_constant_visibility(globals, defining, name)?;
+        }
+        let (v, _) = self.get_constant_superclass_with_class(globals, module, name)?;
         Ok((v, base))
     }
 

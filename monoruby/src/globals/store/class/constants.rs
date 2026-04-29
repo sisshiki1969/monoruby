@@ -1,5 +1,121 @@
 use super::*;
 
+/// Visibility of a constant. Constants are public by default;
+/// `Module#private_constant` makes them private. Visibility is stored
+/// alongside the constant's value/autoload-path inside `ConstState`, so it
+/// persists across an autoload-to-loaded transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ConstVisibility {
+    #[default]
+    Public,
+    Private,
+}
+
+impl ConstVisibility {
+    pub(crate) fn is_private(self) -> bool {
+        matches!(self, ConstVisibility::Private)
+    }
+}
+
+/// State of a constant slot in a `ClassInfo`'s constant table.
+///
+/// `kind` distinguishes a fully loaded constant from a registered autoload,
+/// and `visibility` records whether the constant is public or private. The
+/// two are kept independent so that toggling visibility on an autoload entry
+/// is preserved when the autoload is later triggered.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ConstState {
+    pub kind: ConstStateKind,
+    pub visibility: ConstVisibility,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ConstStateKind {
+    Loaded(Value),
+    Autoload(AutoloadEntry),
+}
+
+/// Per-constant autoload registration plus its load-state. Mirrors
+/// CRuby's `autoload_const` + `autoload_data`: the `feature` is the
+/// path to require, and `state` tracks whether a load is in progress
+/// or has been declared "done without defining the constant" so that
+/// subsequent references don't keep retrying.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AutoloadEntry {
+    pub feature: std::path::PathBuf,
+    pub state: AutoloadState,
+}
+
+/// Load state for an autoload-registered constant.
+///
+/// `Idle` is the initial state right after `Module#autoload`. The next
+/// triggering reference flips to `Loading` for the duration of the
+/// `require`. monoruby is single-threaded so the flag is just a
+/// recursion guard — a same-(only)-thread re-reference must not
+/// re-enter `require`. After the require returns successfully but the
+/// constant is *still* registered as autoload (i.e. the file did not
+/// define it), the entry is removed entirely so that subsequent
+/// references raise `NameError` rather than retrying. If `require`
+/// itself raises (e.g. `LoadError`), the state is reverted to `Idle`
+/// so a future reference may try again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AutoloadState {
+    Idle,
+    Loading,
+}
+
+impl AutoloadEntry {
+    pub(crate) fn new(feature: std::path::PathBuf) -> Self {
+        Self {
+            feature,
+            state: AutoloadState::Idle,
+        }
+    }
+}
+
+impl ConstState {
+    pub(crate) fn loaded(value: Value) -> Self {
+        Self {
+            kind: ConstStateKind::Loaded(value),
+            visibility: ConstVisibility::Public,
+        }
+    }
+
+    pub(crate) fn autoload(path: std::path::PathBuf) -> Self {
+        Self {
+            kind: ConstStateKind::Autoload(AutoloadEntry::new(path)),
+            visibility: ConstVisibility::Public,
+        }
+    }
+
+    pub(crate) fn loaded_value(&self) -> Option<Value> {
+        match self.kind {
+            ConstStateKind::Loaded(v) => Some(v),
+            ConstStateKind::Autoload(_) => None,
+        }
+    }
+
+    pub(crate) fn is_loaded(&self) -> bool {
+        matches!(self.kind, ConstStateKind::Loaded(_))
+    }
+
+    pub(crate) fn is_autoload(&self) -> bool {
+        matches!(self.kind, ConstStateKind::Autoload(_))
+    }
+
+    pub(crate) fn is_private(&self) -> bool {
+        self.visibility.is_private()
+    }
+
+    pub(crate) fn set_private(&mut self) {
+        self.visibility = ConstVisibility::Private;
+    }
+
+    pub(crate) fn set_public(&mut self) {
+        self.visibility = ConstVisibility::Public;
+    }
+}
+
 /// Walk up the singleton chain until we hit a non-singleton or until
 /// the attached object stops being a class/module. Used by class-var
 /// access so that `class C; class << self; @@x = …; end; end` lands
@@ -31,15 +147,35 @@ impl ClassInfoTable {
                 // (matches CRuby behavior).
                 ConstStateKind::Loaded(_) => {}
                 // Re-registering autoload updates the path; visibility is
-                // preserved.
-                ConstStateKind::Autoload(path) => {
-                    *path = file_name.into();
+                // preserved. CRuby leaves an in-progress load alone here
+                // and only swaps the feature, so we mirror that by keeping
+                // the existing `state` untouched.
+                ConstStateKind::Autoload(entry) => {
+                    entry.feature = file_name.into();
                 }
             },
             None => {
                 self[class_id]
                     .constants
                     .insert(name, ConstState::autoload(file_name.into()));
+            }
+        }
+    }
+
+    /// Transition an Autoload entry's `state`. Used by the const-lookup
+    /// path to mark a slot `Loading` for the duration of the `require`,
+    /// and to revert it on `require` failure. No-op if the slot is gone
+    /// or has been replaced by a Loaded value (e.g. the require defined
+    /// the constant via `set_constant`).
+    pub(crate) fn set_autoload_state(
+        &mut self,
+        class_id: ClassId,
+        name: IdentId,
+        state: AutoloadState,
+    ) {
+        if let Some(slot) = self[class_id].constants.get_mut(&name) {
+            if let ConstStateKind::Autoload(entry) = &mut slot.kind {
+                entry.state = state;
             }
         }
     }

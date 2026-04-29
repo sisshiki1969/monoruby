@@ -4,6 +4,7 @@ use super::*;
 
 mod constants;
 mod instance_var;
+pub(crate) use constants::*;
 pub(crate) use instance_var::*;
 
 pub const BASIC_OBJECT_CLASS: ClassId = ClassId::new(1);
@@ -197,84 +198,6 @@ impl ClassId {
                 Some(base) => format!("#<Class:{}>", base.to_s(store)),
             },
         }
-    }
-}
-
-/// Visibility of a constant. Constants are public by default;
-/// `Module#private_constant` makes them private. Visibility is stored
-/// alongside the constant's value/autoload-path inside `ConstState`, so it
-/// persists across an autoload-to-loaded transition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum ConstVisibility {
-    #[default]
-    Public,
-    Private,
-}
-
-impl ConstVisibility {
-    pub(crate) fn is_private(self) -> bool {
-        matches!(self, ConstVisibility::Private)
-    }
-}
-
-/// State of a constant slot in a `ClassInfo`'s constant table.
-///
-/// `kind` distinguishes a fully loaded constant from a registered autoload,
-/// and `visibility` records whether the constant is public or private. The
-/// two are kept independent so that toggling visibility on an autoload entry
-/// is preserved when the autoload is later triggered.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ConstState {
-    pub kind: ConstStateKind,
-    pub visibility: ConstVisibility,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum ConstStateKind {
-    Loaded(Value),
-    Autoload(std::path::PathBuf),
-}
-
-impl ConstState {
-    pub(crate) fn loaded(value: Value) -> Self {
-        Self {
-            kind: ConstStateKind::Loaded(value),
-            visibility: ConstVisibility::Public,
-        }
-    }
-
-    pub(crate) fn autoload(path: std::path::PathBuf) -> Self {
-        Self {
-            kind: ConstStateKind::Autoload(path),
-            visibility: ConstVisibility::Public,
-        }
-    }
-
-    pub(crate) fn loaded_value(&self) -> Option<Value> {
-        match self.kind {
-            ConstStateKind::Loaded(v) => Some(v),
-            ConstStateKind::Autoload(_) => None,
-        }
-    }
-
-    pub(crate) fn is_loaded(&self) -> bool {
-        matches!(self.kind, ConstStateKind::Loaded(_))
-    }
-
-    pub(crate) fn is_autoload(&self) -> bool {
-        matches!(self.kind, ConstStateKind::Autoload(_))
-    }
-
-    pub(crate) fn is_private(&self) -> bool {
-        self.visibility.is_private()
-    }
-
-    pub(crate) fn set_private(&mut self) {
-        self.visibility = ConstVisibility::Private;
-    }
-
-    pub(crate) fn set_public(&mut self) {
-        self.visibility = ConstVisibility::Public;
     }
 }
 
@@ -593,7 +516,7 @@ impl ClassInfo {
     pub(in crate::globals) fn remove_constant(&mut self, name: IdentId) -> Option<Value> {
         let removed = self.constants.remove(&name).map(|state| match state.kind {
             ConstStateKind::Loaded(v) => v,
-            ConstStateKind::Autoload(..) => Value::nil(),
+            ConstStateKind::Autoload(_) => Value::nil(),
         });
         if removed.is_some() {
             self.constant_locations.remove(&name);
