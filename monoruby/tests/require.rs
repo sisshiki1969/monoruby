@@ -159,3 +159,54 @@ fn autoload_loaderror_keeps_registration() {
         "#,
     );
 }
+
+// `Module#const_source_location(:X)` for an autoload-registered
+// constant returns the location of the `autoload` call itself, until
+// the load actually fires and overwrites the entry. Use a fresh
+// Module each iteration so 25 reruns don't accumulate.
+#[test]
+fn autoload_const_source_location() {
+    run_test(
+        r#"
+        m = Module.new
+        m.autoload :Lazy, "/no/such/file"
+        loc = m.const_source_location(:Lazy)
+        # The location's line number depends on this script's layout
+        # in the test harness; just assert the shape and that the
+        # path entry is a String. (CRuby reports `(eval at …)` for
+        # the path here, so we only check structural properties.)
+        [loc.is_a?(Array), loc[0].is_a?(String), loc[1].is_a?(Integer)]
+        "#,
+    );
+}
+
+// `private_constant` registered on an autoload entry must carry
+// through the load: after the file assigns the constant, qualified
+// access from outside still raises `NameError: private constant
+// referenced`.
+#[test]
+fn autoload_private_constant_carries_through_load() {
+    run_test_once(
+        r#"
+        # `c.rb` defines `Foo::Bar = 20`. Register it as an autoload
+        # under `Foo` and immediately mark it private. After the
+        # implicit load triggered below, Bar must still be private.
+        module Foo
+          autoload :Bar, File.expand_path("c")
+          private_constant :Bar
+        end
+        # Inside `Foo`'s lexical scope, `Bar` is reachable (private
+        # constants are reachable from their own class). Outside,
+        # qualified access raises NameError.
+        outer = begin
+          Foo::Bar
+          :reachable
+        rescue NameError => e
+          e.message =~ /private/ ? :private : :other_name
+        end
+        # Sanity check: confirm the autoload was consumed (Bar is now
+        # an Integer 20) and that visibility carried through.
+        [outer, Foo.const_defined?(:Bar), Foo.autoload?(:Bar)]
+        "#,
+    );
+}

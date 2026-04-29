@@ -586,7 +586,7 @@ fn attr_writer(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/autoload.html]
 #[monoruby_builtin]
-fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let const_name = lfp.arg(0).expect_symbol_or_string(globals)?;
     validate_constant_name(const_name)?;
     let feature = lfp.arg(1).coerce_to_path_rstring(vm, globals)?;
@@ -602,6 +602,16 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     globals
         .store
         .set_constant_autoload(class_id, const_name, feature);
+    // Record the autoload call-site as the constant's source
+    // location so `Module#const_source_location(:Foo)` returns the
+    // `autoload` line until the load actually happens — once the
+    // loaded file assigns the constant, that assignment overwrites
+    // this entry via `Executor::set_constant`'s recording.
+    if let Some(caller) = vm.cfp().prev()
+        && let Some((file, line)) = caller_source_location_with_pc(globals, caller, pc)
+    {
+        globals.store[class_id].record_constant_location(const_name, file, line);
+    }
     if was_autoload {
         let receiver = globals.store[class_id].get_module().into();
         vm.invoke_method_inner(

@@ -303,20 +303,6 @@ impl ConstState {
         matches!(self.kind, ConstStateKind::Autoload(_))
     }
 
-    /// True if this slot is an autoload registration that is currently
-    /// being loaded on this thread. Used to suppress re-triggering
-    /// `require` from inside the autoload's own load chain (CRuby's
-    /// same-thread recursion guard).
-    pub(crate) fn is_autoload_loading(&self) -> bool {
-        matches!(
-            self.kind,
-            ConstStateKind::Autoload(AutoloadEntry {
-                state: AutoloadState::Loading,
-                ..
-            })
-        )
-    }
-
     pub(crate) fn is_private(&self) -> bool {
         self.visibility.is_private()
     }
