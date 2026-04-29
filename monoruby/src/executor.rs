@@ -1013,8 +1013,22 @@ impl Executor {
         func_name: IdentId,
         is_func_call: bool,
     ) -> Result<FuncId> {
-        let class_id = recv.class();
-        match globals.check_method_for_class(class_id, func_name) {
+        // Use the IC class (BOOL_CLASS for bools) so the VM caches a
+        // single class id for `true` / `false` receivers. Lookup on
+        // BOOL_CLASS is implemented in `check_method_for_class` and only
+        // succeeds when both `TrueClass` and `FalseClass` resolve to the
+        // same `FuncId`; otherwise it falls back to the per-class lookup.
+        let class_id = recv.class_for_ic();
+        let entry = globals
+            .check_method_for_class(class_id, func_name)
+            .or_else(|| {
+                if class_id == BOOL_CLASS {
+                    globals.check_method_for_class(recv.class(), func_name)
+                } else {
+                    None
+                }
+            });
+        match entry {
             Some(entry) => {
                 match entry.visibility() {
                     Visibility::Private => {

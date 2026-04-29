@@ -478,6 +478,29 @@ impl Value {
         }
     }
 
+    ///
+    /// Class id used for inline-cache and JIT type-prediction purposes.
+    ///
+    /// Identical to [`Value::class`] except for boolean values: both `true`
+    /// and `false` report [`BOOL_CLASS`] so a polymorphic-on-true/false
+    /// call site does not deopt on every flip. The returned class id has
+    /// no Ruby-visible counterpart — `true.class` and `false.class` still
+    /// return `TrueClass` and `FalseClass`.
+    ///
+    /// Method lookup using [`BOOL_CLASS`] is **not** valid (the class has
+    /// no method table); callers must translate it back to `TRUE_CLASS`
+    /// (which holds the same `FuncId` as `FALSE_CLASS` for any method
+    /// shared between booleans, by construction in `bool_class::init`).
+    ///
+    pub(crate) fn class_for_ic(&self) -> ClassId {
+        let v = self.0.get();
+        if v == TRUE_VALUE || v == FALSE_VALUE {
+            BOOL_CLASS
+        } else {
+            self.class()
+        }
+    }
+
     #[allow(dead_code)]
     pub(crate) fn debug_class(&self) -> Option<ClassId> {
         let class = if self.is_fixnum() {

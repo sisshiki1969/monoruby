@@ -1352,8 +1352,10 @@ mod tests {
             (FLOAT_CLASS, Value::float(f64::MIN)),
             (NIL_CLASS, Value::nil()),
             (SYMBOL_CLASS, Value::symbol_from_str("Ruby")),
-            (TRUE_CLASS, Value::bool(true)),
-            (FALSE_CLASS, Value::bool(false)),
+            // The runtime asm `get_class` returns `BOOL_CLASS` for both
+            // booleans so the IC sees a single class id.
+            (BOOL_CLASS, Value::bool(true)),
+            (BOOL_CLASS, Value::bool(false)),
             (ARRAY_CLASS, Value::array_from_vec(vec![])),
             (HASH_CLASS, Value::hash(RubyMap::default())),
             (STRING_CLASS, Value::string_from_str("Ruby")),
