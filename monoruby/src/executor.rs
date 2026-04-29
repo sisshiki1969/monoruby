@@ -749,6 +749,33 @@ impl Executor {
                 .expect_class_or_module(&globals.store)?
                 .id();
         }
+        // Re-initialization warning, matching CRuby's
+        // `rb_const_set_visibility`: the same wording (and same `$stderr`
+        // delivery) used by `Module#const_set` so mspec's `complain`
+        // matcher catches both code-paths.
+        if globals.store.get_constant_noautoload(parent, name).is_some() {
+            let parent_name = globals.store[parent]
+                .get_name()
+                .unwrap_or_default()
+                .to_string();
+            let qual = if parent_name.is_empty() {
+                name.get_name().to_string()
+            } else {
+                format!("{parent_name}::{}", name.get_name())
+            };
+            let msg = format!("warning: already initialized constant {qual}\n");
+            let stderr_id = IdentId::get_id("$stderr");
+            let stderr = globals.get_gvar(stderr_id).unwrap_or(Value::nil());
+            let write_id = IdentId::get_id("write");
+            let _ = self.invoke_method_inner(
+                globals,
+                write_id,
+                stderr,
+                &[Value::string(msg)],
+                None,
+                None,
+            );
+        }
         globals.set_constant(parent, name, val);
         if let Some((file, line)) = source_loc {
             globals.store[parent].record_constant_location(name, file, line);

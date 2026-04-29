@@ -89,6 +89,31 @@ class Regexp
 end
 
 class Module
+  # Partial ordering on the include / inherit graph, matching CRuby's
+  # `rb_mod_cmp`:
+  #
+  # | relationship                                    | result |
+  # | ----------------------------------------------- | ------ |
+  # | `self` is `other`                               | `0`    |
+  # | `self` is a subclass of, or includes, `other`   | `-1`   |
+  # | `other` is a subclass of, or includes, `self`   | `+1`   |
+  # | unrelated                                       | `nil`  |
+  # | `other` is not a Module / Class                 | `nil`  |
+  #
+  # Defined on Module so `<` / `>` / `<=` / `>=` (provided by
+  # `Comparable` in CRuby; we synthesise them) all reduce to this.
+  def <=>(other)
+    return nil unless other.is_a?(Module)
+    return 0 if equal?(other)
+    if ancestors.include?(other)
+      -1
+    elsif other.ancestors.include?(self)
+      +1
+    else
+      nil
+    end
+  end
+
   private
   def extended(mod)
   end

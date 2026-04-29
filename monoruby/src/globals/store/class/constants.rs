@@ -1,5 +1,23 @@
 use super::*;
 
+/// Walk up the singleton chain until we hit a non-singleton or until
+/// the attached object stops being a class/module. Used by class-var
+/// access so that `class C; class << self; @@x = …; end; end` lands
+/// on `C`'s class-var table rather than the singleton's, matching
+/// CRuby's `rb_cvar_set` /`rb_cvar_get`.
+fn singleton_attached_class(classes: &ClassInfoTable, mut class_id: ClassId) -> ClassId {
+    loop {
+        let module = classes.get_module(class_id);
+        match module.is_singleton() {
+            Some(attached) => match attached.is_class_or_module() {
+                Some(m) => class_id = m.id(),
+                None => return class_id,
+            },
+            None => return class_id,
+        }
+    }
+}
+
 impl ClassInfoTable {
     pub(crate) fn set_constant_autoload(
         &mut self,
@@ -124,7 +142,15 @@ impl Globals {
     }
 
     pub(crate) fn set_class_variable(&mut self, class_id: ClassId, name: IdentId, val: Value) {
-        self.store.classes[class_id].set_cvar(name, val);
+        // Class variable assignments in a singleton class scope
+        // (`class << self; @@x = …; end`) target the attached object's
+        // class — when the attached is a Class/Module, the cvar lands
+        // on it directly. CRuby's `rb_cvar_set` calls
+        // `rb_singleton_class_attached`-aware logic; we replicate by
+        // walking until the target is non-singleton (or the attached
+        // is no longer a class/module).
+        let target = singleton_attached_class(&self.store.classes, class_id);
+        self.store.classes[target].set_cvar(name, val);
     }
 
     pub(crate) fn get_class_variable(
@@ -132,7 +158,9 @@ impl Globals {
         parent: Module,
         name: IdentId,
     ) -> Result<(Module, Value)> {
-        let mut module = parent;
+        let start_id = singleton_attached_class(&self.store.classes, parent.id());
+        let start = self.store.classes[start_id].get_module();
+        let mut module = start;
         let mut res: Option<(Module, Value)> = None;
         loop {
             if let Some(v) = self.store.classes[module.id()].get_cvar(name) {
