@@ -215,13 +215,23 @@ impl Executor {
         name: IdentId,
         current_func: FuncId,
     ) -> Result<Option<Value>> {
-        let stack = globals
-            .store
-            .iseq(current_func)
+        // `current_func` can legitimately be a builtin frame when the
+        // `Module#class_eval` / `instance_eval` / `Kernel#eval` site
+        // walked the cfp chain to find the nearest Ruby frame for the
+        // outer scope but dispatch is now happening *inside* a
+        // bytecode block whose containing method is still the builtin.
+        // No iseq -> nothing to walk; return None and let the caller
+        // fall through to the ancestor-chain lookup.
+        let iseq = match globals.store[current_func].is_iseq() {
+            Some(iseq) => iseq,
+            None => return Ok(None),
+        };
+        let stack = globals.store[iseq]
             .lexical_context
             .iter()
             .rev()
-            .cloned();
+            .cloned()
+            .collect::<Vec<_>>();
         for module in stack {
             if globals.store.get_constant(module, name).is_some() {
                 return self.get_constant(globals, module, name);

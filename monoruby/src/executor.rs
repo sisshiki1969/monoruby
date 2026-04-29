@@ -982,8 +982,15 @@ impl Executor {
         let cref = self.get_class_context();
         let current_func = self.definition_func_id(globals);
         if let Some(iseq) = globals.store[func].is_iseq() {
-            globals.store[iseq].lexical_context =
-                globals.store.iseq(current_func).lexical_context.clone();
+            // Inherit the enclosing method's lexical context. The
+            // enclosing frame may be a builtin (e.g. `class_eval` body
+            // running inside an mspec wrapper); in that case, fall back
+            // to an empty context rather than panicking on `iseq()`.
+            let parent_ctx = match globals.store[current_func].is_iseq() {
+                Some(parent) => globals.store[parent].lexical_context.clone(),
+                None => Vec::new(),
+            };
+            globals.store[iseq].lexical_context = parent_ctx;
         } else {
             runtime::_dump_stacktrace(self, globals);
             return Err(MonorubyErr::runtimeerr(format!(

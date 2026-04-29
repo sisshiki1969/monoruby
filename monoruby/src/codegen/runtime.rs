@@ -43,8 +43,26 @@ pub(super) extern "C" fn enter_classdef<'a>(
     func_id: FuncId,
     self_value: Module,
 ) -> &'a FuncData {
-    let current_func = vm.method_func_id();
-    let mut lexical_context = globals.store.iseq(current_func).lexical_context.clone();
+    // The class definition's lexical context inherits from the
+    // enclosing Ruby method. Walk past any builtin frames (Module#class_eval
+    // string form, mspec, …) to find one — without this, the
+    // `iseq(current_func)` lookup below panics when the immediate
+    // outer is a builtin. If no Ruby frame is reachable at all (eval
+    // body executed at the very top of the cfp stack), start with an
+    // empty context.
+    let mut lexical_context = {
+        let mut frame = Some(vm.cfp());
+        let mut found: Option<&[ClassId]> = None;
+        while let Some(cfp) = frame {
+            let fid = cfp.lfp().outermost().0.func_id();
+            if let Some(iseq) = globals.store[fid].is_iseq() {
+                found = Some(globals.store[iseq].lexical_context.as_slice());
+                break;
+            }
+            frame = cfp.prev();
+        }
+        found.map(|s| s.to_vec()).unwrap_or_default()
+    };
     lexical_context.push(self_value.id());
     if let Some(info) = globals.store.iseq_mut(func_id) {
         info.lexical_context = lexical_context;
@@ -820,8 +838,15 @@ pub(super) extern "C" fn singleton_define_method(
     }
     let current_func = vm.definition_func_id(globals);
     if let Some(iseq) = globals.store[func].is_iseq() {
-        globals.store[iseq].lexical_context =
-            globals.store.iseq(current_func).lexical_context.clone();
+        // See `Executor::define_method`: the parent frame may be a
+        // builtin (string-form `class_eval` inside an mspec wrapper,
+        // for instance). Fall back to an empty lexical context rather
+        // than panicking when the parent isn't a Ruby iseq.
+        let parent_ctx = match globals.store[current_func].is_iseq() {
+            Some(parent) => globals.store[parent].lexical_context.clone(),
+            None => Vec::new(),
+        };
+        globals.store[iseq].lexical_context = parent_ctx;
     }
     let class_id = match obj.get_singleton(&mut globals.store) {
         Ok(val) => val.as_class_id(),

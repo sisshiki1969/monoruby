@@ -689,9 +689,20 @@ fn class_eval(
 ) -> Result<Value> {
     let module = lfp.self_val().as_class();
 
+    // CRuby: `class_eval` accepts at most 3 args (expr, fname, lineno);
+    // anything more is an ArgumentError, even before classifying the
+    // string-vs-block dispatch. The arity is also reported as 0..3 to
+    // match the spec's regex.
+    let supplied = lfp.args_count(3);
+    if supplied > 3 {
+        return Err(MonorubyErr::argumenterr(format!(
+            "wrong number of arguments (given {supplied}, expected 0..3)"
+        )));
+    }
+
     if let Some(bh) = lfp.block() {
         if lfp.try_arg(0).is_some() {
-            return Err(MonorubyErr::wrong_number_of_arg(0, lfp.args_count(3)));
+            return Err(MonorubyErr::wrong_number_of_arg(0, supplied));
         }
         vm.module_eval(globals, module, bh)
     } else if let Some(arg0) = lfp.try_arg(0) {
@@ -4501,5 +4512,49 @@ mod tests {
         // `Module.new.used_refinements` raises NoMethodError. Our mock
         // follows the same shape.
         run_test_error(r#"Module.new.used_refinements"#);
+    }
+
+    // ----- eval through builtin frames -----
+
+    #[test]
+    fn class_eval_string_through_builtin_caller() {
+        // `Module#class_eval` is reachable through a builtin frame
+        // (here `Array#each`, `Array#map`). The eval used to require
+        // the immediate caller to be a Ruby method; it now walks the
+        // CFP chain to find the nearest Ruby frame, so this works.
+        run_test(
+            r#"
+            c = Class.new
+            [1].each do |_|
+              c.class_eval "def hi; 'hi'; end"
+            end
+            c.new.hi
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_eval_string_through_builtin_caller() {
+        run_test(
+            r#"
+            m = Module.new
+            [m].map { |mod| mod.module_eval "def greet; 'hey'; end" }
+            o = Object.new
+            o.extend(m)
+            o.greet
+            "#,
+        );
+    }
+
+    #[test]
+    fn class_eval_too_many_args_raises() {
+        // `Module#class_eval` takes at most 3 args (expr, fname, lineno);
+        // passing 4 raises ArgumentError ("wrong number of arguments
+        // (given 4, expected 0..3)").
+        run_test_error(
+            r#"
+            Class.new.class_eval("nil", "f", 1, :extra)
+            "#,
+        );
     }
 }
