@@ -44,6 +44,11 @@ impl Module {
             return Err(MonorubyErr::argumenterr("cyclic include detected"));
         }
         Globals::class_version_inc();
+        // The newly-inserted iclass exposes `module`'s constants to
+        // anything that previously resolved unqualified constants
+        // against `self`'s ancestor chain. Invalidate the constant
+        // cache so cached lookups re-walk the new chain.
+        Globals::const_version_inc();
         let mut base = *self;
         loop {
             if !module.is_ancestor_of(*self) {

@@ -208,9 +208,31 @@ impl Store {
     }
 
     pub fn ancestors(&self, class_id: ClassId) -> Vec<Module> {
-        let mut class = self[class_id].get_module();
+        // CRuby's `Module#ancestors` returns just the module itself
+        // (plus iclasses for any included/prepended modules) when called
+        // on a plain Module — `Module.new.ancestors == [#<Module>]` and
+        // `module M; end; M.ancestors == [M]`. monoruby's class store
+        // sets every Module's superclass to `Object` for method-lookup
+        // purposes, so the naive walk would include
+        // `[M, Object, Kernel, BasicObject]`. Stop the walk when leaving
+        // the iclass-included region under a non-class receiver.
+        let start = self[class_id].get_module();
+        let receiver_is_class = start.as_val().ty() == Some(ObjTy::CLASS);
+        let mut class = start;
         let mut v = vec![class];
         while let Some(super_class) = class.superclass() {
+            // For a Module receiver, stop walking once we leave the
+            // mixed-in iclass chain — i.e. once the next ancestor is the
+            // first real Class (`Object`). The mixed-in modules are
+            // wrapped in iclass entries that still report themselves with
+            // `is_iclass()`, so the walk stays correct for things like
+            // `m.include otherm; m.ancestors == [m, otherm]`.
+            if !receiver_is_class
+                && super_class.as_val().ty() == Some(ObjTy::CLASS)
+                && !super_class.is_iclass()
+            {
+                break;
+            }
             v.push(super_class);
             class = super_class;
         }

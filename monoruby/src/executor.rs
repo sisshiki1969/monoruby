@@ -559,6 +559,15 @@ impl Executor {
                     .unwrap();
                 v
             }
+            MonorubyErrKind::Name(Some(name)) => {
+                let name = *name;
+                let v = Value::new_exception(err);
+                globals
+                    .store
+                    .set_ivar(v, IdentId::get_id("/name"), Value::symbol(name))
+                    .unwrap();
+                v
+            }
             MonorubyErrKind::Key(Some((receiver, key))) => {
                 let (receiver, key) = (*receiver, *key);
                 let v = Value::new_exception(err);

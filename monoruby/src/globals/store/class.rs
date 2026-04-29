@@ -1445,14 +1445,21 @@ impl Store {
         visibility: Visibility,
     ) -> Result<()> {
         for name in names {
-            self.find_method_for_class(class_id, *name)?;
+            // Resolve the inherited method so the local entry can carry
+            // the same `FuncId`. Without this, when changing visibility
+            // for an *inherited* method (e.g. `private :public_method_on_object`
+            // on a fresh `Module.new`), we'd end up with an entry whose
+            // `func_id` is `None`, which `is_private` / `is_public` and
+            // friends treat as "no method present" — so the spec's
+            // `m.private_instance_methods.include?(:foo)` would be false.
+            let (func_id, _, _) = self.find_method_for_class(class_id, *name)?;
             match self.classes[class_id].methods.get_mut(name) {
                 Some(entry) => {
                     entry.visibility = visibility;
                     Globals::class_version_inc();
                 }
                 None => {
-                    self.add_empty_method(class_id, *name, visibility);
+                    self.add_method_inner(class_id, *name, func_id, visibility, false);
                 }
             };
         }

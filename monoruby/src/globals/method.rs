@@ -903,7 +903,29 @@ impl Globals {
         let (func_id, visibility, _) = self
             .find_method_for_class(class_id, old_name)
             .map_err(|_| MonorubyErr::undefined_method(old_name, class_id.get_name(&self.store)))?;
-        self.add_method(class_id, new_name, func_id, visibility);
+        // Special "always-private" method names: aliasing TO one of these
+        // forces the alias to be private regardless of the source method's
+        // visibility, matching CRuby's `rb_method_entry_make`/`rb_alias`.
+        let forced_visibility = if is_always_private_method(new_name) {
+            Visibility::Private
+        } else {
+            visibility
+        };
+        self.add_method(class_id, new_name, func_id, forced_visibility);
         Ok(())
     }
+}
+
+/// CRuby treats certain method names as implicitly private regardless of
+/// what visibility is requested when defining or aliasing them: object
+/// lifecycle hooks (`initialize`, `initialize_copy`, `initialize_clone`,
+/// `initialize_dup`) and `respond_to_missing?`. The spec
+/// `Module#alias_method "aliasing special methods keeps … private"`
+/// exercises this for the alias path.
+fn is_always_private_method(name: IdentId) -> bool {
+    name == IdentId::INITIALIZE
+        || name == IdentId::get_id("initialize_copy")
+        || name == IdentId::get_id("initialize_clone")
+        || name == IdentId::get_id("initialize_dup")
+        || name == IdentId::get_id("respond_to_missing?")
 }

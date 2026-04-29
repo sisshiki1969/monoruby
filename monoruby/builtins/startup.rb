@@ -99,7 +99,11 @@ class Module
   def included(mod)
   end
 
-  public
+  # CRuby keeps these as private instance methods of Module so subclasses
+  # override them with `def method_added(name); …; end` (i.e. via the
+  # default-private visibility inside a `class M`). `public` here would
+  # surface them as `Module.public_instance_methods` entries, which the
+  # spec explicitly disallows ("is a private instance method").
   def method_added(name)
   end
 
@@ -112,15 +116,34 @@ class Module
   def const_added(name)
   end
 
+  public
   def const_missing(name)
-    raise NameError, "uninitialized constant #{self}::#{name}"
+    # Drop the implicit `Object::` prefix so a top-level miss reads
+    # `uninitialized constant Foo` (not `Object::Foo`), matching CRuby.
+    qual = self.equal?(Object) ? name.to_s : "#{self}::#{name}"
+    raise NameError.new("uninitialized constant #{qual}", name)
   end
 
   def include?(mod)
-    unless mod.is_a?(Module)
+    # CRuby `Module#include?` accepts only true Modules, not Classes (even
+    # though `Class < Module`). And the receiver is *not* counted as one of
+    # its own included modules — `M.include?(M)` is `false`.
+    if !mod.is_a?(Module) || mod.is_a?(Class)
       raise TypeError, "wrong argument type #{mod.class} (expected Module)"
     end
+    return false if equal?(mod)
     ancestors.include?(mod)
+  end
+
+  # `Module.used_refinements` returns the refinements active in the
+  # current scope. monoruby has no refinement support, so this returns
+  # an empty Array as a permissive mock — gems and code that
+  # defensively read this list (RSpec, Sorbet) won't crash. Defined in
+  # Ruby (not Rust) so the user can override it in specs that actually
+  # exercise refinements. CRuby only exposes the class form (no
+  # `Module#used_refinements` instance method), so we follow suit.
+  def self.used_refinements
+    []
   end
 end
 
