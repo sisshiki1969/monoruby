@@ -2231,7 +2231,7 @@ fn methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         globals.store.get_method_names(class_id)
     } else {
         let class_id = lfp.self_val().class();
-        globals.store.get_method_names_inherit(class_id, true)
+        globals.store.get_method_names_inherit(class_id, false)
     }))
 }
 
@@ -2301,7 +2301,7 @@ fn public_methods(
     Ok(Value::array_from_vec(if !inherited_too {
         globals.store.get_method_names(class_id)
     } else {
-        globals.store.get_method_names_inherit(class_id, true)
+        globals.store.get_method_names_inherit(class_id, false)
     }))
 }
 

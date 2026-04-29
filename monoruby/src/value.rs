@@ -216,6 +216,62 @@ where
     result
 }
 
+thread_local! {
+    /// Tracks whether the *outer* recursion-protected hash call has seen any
+    /// nested recursion. Used by [`exec_recursive_outer`] to surface inner
+    /// cycles to the outermost frame so that two structures with cycles at
+    /// different depths still hash to the same sentinel value (matching
+    /// CRuby's `rb_exec_recursive_outer`).
+    static OUTER_RECURSION_DEPTH: std::cell::RefCell<usize> = const { std::cell::RefCell::new(0) };
+    static OUTER_RECURSION_HIT: std::cell::RefCell<bool> = const { std::cell::RefCell::new(false) };
+}
+
+/// Execute `f` with **outer**-recursion protection: if any recursion is
+/// detected at *any* depth during `f` (including transitively, via the same
+/// guard set), the **outermost** call returns `on_recursive` instead of `f`'s
+/// result. Equivalent to CRuby's `rb_exec_recursive_outer`.
+///
+/// This is what `Struct#hash` uses so that two structs that are cyclic at
+/// different depths still hash to the same value (the spec requirement that
+/// `car.hash == similar_car.hash` when one wraps the other and one is
+/// directly self-cyclic).
+pub(crate) fn exec_recursive_outer<T, F>(id: u64, f: F, on_recursive: T) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    let is_outer = OUTER_RECURSION_DEPTH.with(|d| {
+        let was = *d.borrow() == 0;
+        *d.borrow_mut() += 1;
+        was
+    });
+    if is_outer {
+        OUTER_RECURSION_HIT.with(|h| *h.borrow_mut() = false);
+    }
+    let on_stack = HASH_RECURSION_GUARD.with(|g| !g.borrow_mut().insert(id));
+    if on_stack {
+        // Inner recursion: surface to outer.
+        OUTER_RECURSION_HIT.with(|h| *h.borrow_mut() = true);
+        OUTER_RECURSION_DEPTH.with(|d| *d.borrow_mut() -= 1);
+        return Ok(on_recursive);
+    }
+    let result = f();
+    HASH_RECURSION_GUARD.with(|g| {
+        g.borrow_mut().remove(&id);
+    });
+    OUTER_RECURSION_DEPTH.with(|d| *d.borrow_mut() -= 1);
+    if is_outer {
+        let hit = OUTER_RECURSION_HIT.with(|h| {
+            let v = *h.borrow();
+            *h.borrow_mut() = false;
+            v
+        });
+        if hit {
+            return Ok(on_recursive);
+        }
+    }
+    result
+}
+
 /// Execute `f` with recursion protection for paired operations (==, <=>, eql?).
 ///
 /// Uses a `(lhs_id, rhs_id)` pair to detect when the same pair of containers

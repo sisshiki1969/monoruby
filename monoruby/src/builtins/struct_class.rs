@@ -1,4 +1,5 @@
 use super::*;
+use rubymap::RubyEql;
 
 pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Struct", STRUCT_CLASS, ObjTy::CLASS);
@@ -12,23 +13,31 @@ pub(crate) fn init(globals: &mut Globals) {
     // Instance-level initialize lives on Struct itself (private, matching
     // CRuby) so that a user's `def initialize ... super(...) end` inside a
     // `Struct.new(...) do ... end` block can reach the default member-
-    // assignment initializer via super. Mirrors CRuby's
-    // `rb_define_method(rb_cStruct, "initialize", ...)` together with the
-    // implicit private visibility of `initialize`.
-    globals.define_private_builtin_func_rest(STRUCT_CLASS, "initialize", initialize);
+    // assignment initializer via super.
+    //
+    // `kw_rest=true` collects keyword arguments into a separate Hash
+    // (delivered as `lfp.try_arg(1)`), so Ruby 3.2+ "implicit kwargs"
+    // calls like `T.new(a: 1, b: 2)` are distinguishable from a literal
+    // positional Hash `T.new({a: 1, b: 2})` — the former unpacks into
+    // members, the latter is a single positional argument.
+    globals.define_private_builtin_func_with_kw(
+        STRUCT_CLASS,
+        "initialize",
+        initialize,
+        0,
+        0,
+        true,
+        &[],
+        true,
+    );
 
     globals.define_builtin_func(STRUCT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(STRUCT_CLASS, "to_s", inspect, 0);
     globals.define_builtin_func(STRUCT_CLASS, "members", members, 0);
-    globals.define_builtin_funcs(STRUCT_CLASS, "==", &["eql?"], eq, 1);
+    globals.define_builtin_func(STRUCT_CLASS, "==", eq, 1);
+    globals.define_builtin_func(STRUCT_CLASS, "eql?", eql, 1);
     globals.define_builtin_func(STRUCT_CLASS, "!=", ne, 1);
-    // `Struct.keyword_init?` returns true/false/nil to describe how the
-    // struct was created. monoruby's Struct.new currently ignores the
-    // `keyword_init:` option entirely, so this is a stub that always
-    // returns nil — sufficient to satisfy callers that just check the
-    // method exists / is callable, e.g. `klass.keyword_init?`.
-    let struct_meta = globals.store.get_metaclass(STRUCT_CLASS).id();
-    globals.define_builtin_func(struct_meta, "keyword_init?", keyword_init_p, 0);
+    globals.define_builtin_func(STRUCT_CLASS, "hash", hash, 0);
 }
 
 ///
@@ -98,6 +107,40 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         None
     };
 
+    // Warn (via Ruby's `$stderr`, so spec `should complain(/constant/)` sees
+    // it) when redefining an existing same-name constant on the receiver,
+    // matching CRuby's `Struct.new('Person', ...)` behaviour.
+    if let Some(n) = name {
+        let parent_class = lfp.self_val().as_class().id();
+        let prev = globals
+            .store
+            .get_constant_noautoload(parent_class, n)
+            .is_some();
+        if prev {
+            let parent_name = globals.store[parent_class]
+                .get_name()
+                .unwrap_or_default()
+                .to_string();
+            let qual = if parent_name.is_empty() {
+                n.get_name().to_string()
+            } else {
+                format!("{parent_name}::{}", n.get_name())
+            };
+            let msg = format!("warning: already initialized constant {qual}\n");
+            let stderr_id = IdentId::get_id("$stderr");
+            let stderr = globals.get_gvar(stderr_id).unwrap_or(Value::nil());
+            let write_id = IdentId::get_id("write");
+            let _ = vm.invoke_method_inner(
+                globals,
+                write_id,
+                stderr,
+                &[Value::string(msg)],
+                None,
+                None,
+            );
+        }
+    }
+
     let new_struct = globals
         .store
         .define_struct_class(name, lfp.self_val().as_class())
@@ -148,12 +191,16 @@ fn struct_initialize(
         Box::new(super::class::gen_class_new_object()),
     );
     globals.define_builtin_class_func(class_id, "members", struct_members, 0);
-    // `initialize` is inherited from `Struct` (installed in `init`), so the
-    // subclass does not need its own copy. This makes `super` from a user-
-    // defined `initialize` inside the `Struct.new ... do ... end` block reach
-    // the default member-assignment initializer.
-    globals.define_builtin_funcs(class_id, "==", &["eql?"], eq, 1);
-    globals.define_builtin_func(class_id, "!=", ne, 1);
+    // `keyword_init?` is defined per Struct subclass (matching CRuby —
+    // it is intentionally NOT inherited by direct `class X < Struct`
+    // subclasses, only by classes produced by `Struct.new`).
+    globals.define_builtin_class_func(class_id, "keyword_init?", keyword_init_p, 0);
+    // `initialize`, `==`, `eql?`, `!=`, `hash` are inherited from `Struct`
+    // (installed in `init`). Defining them per-subclass would shadow any
+    // module the user later `include`s into the subclass — and the `hash`
+    // spec explicitly tests that an included module's `hash` overrides the
+    // Struct default. Inheriting from `Struct` keeps the user-overrideable
+    // method-lookup chain intact.
 
     let members = ArrayInner::from_iter(args.iter().cloned());
 
@@ -242,16 +289,136 @@ fn get_members(globals: &mut Globals, mut class: Module) -> Result<Array> {
 
 #[monoruby_builtin]
 fn initialize(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let args = lfp.arg(0).as_array();
+    let pos_args = lfp.arg(0).as_array();
+    let kw_args_val = lfp.try_arg(1).filter(|v| {
+        v.try_hash_ty().map(|h| !h.is_empty()).unwrap_or(false)
+    });
+    let kw_args = kw_args_val.and_then(|v| v.try_hash_ty());
     let mut self_val = lfp.self_val();
-    let members = get_members(globals, self_val.get_class_obj(globals))?;
-    if members.len() < args.len() {
-        return Err(MonorubyErr::argumenterr("Struct size differs."));
+    let class_obj = self_val.get_class_obj(globals);
+    let members = get_members(globals, class_obj)?;
+    let keyword_init = is_keyword_init(globals, class_obj);
+
+    if keyword_init {
+        // `Struct.new(:a, :b, keyword_init: true)`. Accepts kwargs (preferred)
+        // or a single Hash. Combinations of positional + kwargs raise.
+        if !pos_args.is_empty() && kw_args.is_some() {
+            return Err(MonorubyErr::argumenterr(format!(
+                "wrong number of arguments (given {}, expected 0)",
+                pos_args.len()
+            )));
+        }
+        let hash_opt = if let Some(kw) = kw_args {
+            Some(kw)
+        } else if pos_args.is_empty() {
+            None
+        } else if pos_args.len() == 1 {
+            // `T.new({...})` accepted as a single Hash.
+            match pos_args.get(0).copied().and_then(|v| v.try_hash_ty()) {
+                Some(h) => Some(h),
+                None => {
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "wrong number of arguments (given {}, expected 0)",
+                        pos_args.len()
+                    )));
+                }
+            }
+        } else {
+            return Err(MonorubyErr::argumenterr(format!(
+                "wrong number of arguments (given {}, expected 0)",
+                pos_args.len()
+            )));
+        };
+        if let Some(hash) = hash_opt {
+            // Validate all keys are declared members.
+            let mut unknown: Vec<String> = Vec::new();
+            let known: Vec<IdentId> = members.iter().filter_map(|m| m.try_symbol()).collect();
+            for (k, _) in hash.iter() {
+                if let Some(sym) = k.try_symbol() {
+                    if !known.contains(&sym) {
+                        unknown.push(sym.get_name().to_string());
+                    }
+                } else {
+                    return Err(MonorubyErr::argumenterr("non-symbol key in keyword args"));
+                }
+            }
+            if !unknown.is_empty() {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "unknown keywords: {}",
+                    unknown.join(", ")
+                )));
+            }
+            for (i, m) in members.iter().enumerate() {
+                let sym = m.try_symbol().unwrap();
+                let key = Value::symbol(sym);
+                let v = hash.get(key, vm, globals)?.unwrap_or(Value::nil());
+                self_val.as_struct_mut().set(i, v);
+            }
+        } else {
+            for i in 0..members.len() {
+                self_val.as_struct_mut().set(i, Value::nil());
+            }
+        }
+        return Ok(Value::nil());
+    }
+
+    // Non-keyword_init struct: a kwargs-only call (no positionals) is
+    // promoted to keyword_init style — `T.new(a: 1)` for `T = Struct.new(:a)`
+    // sets member `a` to 1, matching Ruby 3.2+ implicit-kwargs behavior. If
+    // any positionals are present, the kwargs are appended as a single Hash
+    // positional (`type.new("a", b: "b")` -> `s.b == {b: "b"}`), preserving
+    // the historical behavior the spec still tests.
+    if let Some(kw_hash) = kw_args {
+        if pos_args.is_empty() {
+            // Validate kwargs are member symbols.
+            let known: Vec<IdentId> = members.iter().filter_map(|m| m.try_symbol()).collect();
+            for (k, _) in kw_hash.iter() {
+                if let Some(sym) = k.try_symbol() {
+                    if !known.contains(&sym) {
+                        return Err(MonorubyErr::argumenterr(format!(
+                            "unknown keywords: {}",
+                            sym.get_name()
+                        )));
+                    }
+                }
+            }
+            for (i, m) in members.iter().enumerate() {
+                let sym = m.try_symbol().unwrap();
+                let v = kw_hash
+                    .get(Value::symbol(sym), vm, globals)?
+                    .unwrap_or(Value::nil());
+                self_val.as_struct_mut().set(i, v);
+            }
+            return Ok(Value::nil());
+        } else {
+            // pos + kwargs: kwargs become one extra positional Hash.
+            let total = pos_args.len() + 1;
+            if total > members.len() {
+                return Err(MonorubyErr::argumenterr("struct size differs"));
+            }
+            let _ = kw_hash;
+            let kw_val = kw_args_val.unwrap();
+            for i in 0..members.len() {
+                let val = if i < pos_args.len() {
+                    pos_args.get(i).copied().unwrap_or(Value::nil())
+                } else if i == pos_args.len() {
+                    kw_val
+                } else {
+                    Value::nil()
+                };
+                self_val.as_struct_mut().set(i, val);
+            }
+            return Ok(Value::nil());
+        }
+    }
+
+    if members.len() < pos_args.len() {
+        return Err(MonorubyErr::argumenterr("struct size differs"));
     };
     // Slot-only storage (Phase 6): members live in the per-instance
     // `StructInner` slot vector and are NOT also kept as ivars. This is
@@ -259,10 +426,27 @@ fn initialize(
     // `Struct#instance_variable_get(:@a)` returns nil even after
     // `S.new(1).a == 1`, matching CRuby's `RStruct` semantics.
     for i in 0..members.len() {
-        let val = args.get(i).copied().unwrap_or(Value::nil());
+        let val = pos_args.get(i).copied().unwrap_or(Value::nil());
         self_val.as_struct_mut().set(i, val);
     }
     Ok(Value::nil())
+}
+
+/// Returns whether *class_obj* (a Struct subclass) was created with
+/// `keyword_init: true` (any truthy value, matching `keyword_init?`).
+fn is_keyword_init(globals: &Globals, class_obj: Module) -> bool {
+    let v = match globals
+        .store
+        .get_ivar(class_obj.as_val(), IdentId::get_id("/keyword_init"))
+    {
+        Some(v) => v,
+        None => return false,
+    };
+    if v.is_nil() || v == Value::bool(false) {
+        false
+    } else {
+        true
+    }
 }
 
 #[monoruby_builtin]
@@ -333,12 +517,16 @@ fn qualified_real_class_name(globals: &Globals, class_id: ClassId) -> Option<Str
 /// Struct#==
 /// - self == other -> bool
 ///
+/// Recursive structures are handled via `exec_recursive_paired`: a
+/// `(self_id, other_id)` pair already on the comparison stack returns
+/// `true` (matching CRuby — recursive equal pairs are treated as equal
+/// unless a difference is found elsewhere).
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/Struct/i/=3d=3d.html]
 #[monoruby_builtin]
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
-    // Must be the same class
     if self_val.class() != other.class() {
         return Ok(Value::bool(false));
     }
@@ -353,14 +541,69 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     if lhs_struct.len() != rhs_struct.len() {
         return Ok(Value::bool(false));
     }
-    for i in 0..lhs_struct.len() {
-        let lhs = lhs_struct.get(i);
-        let rhs = rhs_struct.get(i);
-        if vm.ne_values_bool(globals, lhs, rhs)? {
-            return Ok(Value::bool(false));
-        }
+    let len = lhs_struct.len();
+    crate::value::exec_recursive_paired(
+        self_val.id(),
+        other.id(),
+        || {
+            let lhs_struct = self_val.try_struct().unwrap();
+            let rhs_struct = other.try_struct().unwrap();
+            for i in 0..len {
+                let lhs = lhs_struct.get(i);
+                let rhs = rhs_struct.get(i);
+                if vm.ne_values_bool(globals, lhs, rhs)? {
+                    return Ok(Value::bool(false));
+                }
+            }
+            Ok(Value::bool(true))
+        },
+        Value::bool(true),
+    )
+}
+
+///
+/// Struct#eql?
+/// - self.eql?(other) -> bool
+///
+/// Type-strict comparison: each pair of slots is compared with `eql?`
+/// (so `1.eql?(1.0)` is false). Recursive structures use the same
+/// `exec_recursive_paired` machinery as `==`.
+#[monoruby_builtin]
+fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let other = lfp.arg(0);
+    if self_val.class() != other.class() {
+        return Ok(Value::bool(false));
     }
-    Ok(Value::bool(true))
+    let lhs_struct = match self_val.try_struct() {
+        Some(s) => s,
+        None => return Ok(Value::bool(false)),
+    };
+    let rhs_struct = match other.try_struct() {
+        Some(s) => s,
+        None => return Ok(Value::bool(false)),
+    };
+    if lhs_struct.len() != rhs_struct.len() {
+        return Ok(Value::bool(false));
+    }
+    let len = lhs_struct.len();
+    crate::value::exec_recursive_paired(
+        self_val.id(),
+        other.id(),
+        || {
+            let lhs_struct = self_val.try_struct().unwrap();
+            let rhs_struct = other.try_struct().unwrap();
+            for i in 0..len {
+                let lhs = lhs_struct.get(i);
+                let rhs = rhs_struct.get(i);
+                if !lhs.eql(&rhs, vm, globals)? {
+                    return Ok(Value::bool(false));
+                }
+            }
+            Ok(Value::bool(true))
+        },
+        Value::bool(true),
+    )
 }
 
 ///
@@ -384,14 +627,60 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     if lhs_struct.len() != rhs_struct.len() {
         return Ok(Value::bool(true));
     }
-    for i in 0..lhs_struct.len() {
-        let lhs = lhs_struct.get(i);
-        let rhs = rhs_struct.get(i);
-        if vm.ne_values_bool(globals, lhs, rhs)? {
-            return Ok(Value::bool(true));
-        }
-    }
-    Ok(Value::bool(false))
+    let len = lhs_struct.len();
+    let result = crate::value::exec_recursive_paired(
+        self_val.id(),
+        other.id(),
+        || {
+            let lhs_struct = self_val.try_struct().unwrap();
+            let rhs_struct = other.try_struct().unwrap();
+            for i in 0..len {
+                let lhs = lhs_struct.get(i);
+                let rhs = rhs_struct.get(i);
+                if vm.ne_values_bool(globals, lhs, rhs)? {
+                    return Ok(Value::bool(true));
+                }
+            }
+            Ok(Value::bool(false))
+        },
+        Value::bool(false),
+    )?;
+    Ok(result)
+}
+
+///
+/// Struct#hash
+///
+/// Order-dependent hash that includes the receiver's class so different
+/// Struct subclasses with identical content do not collide. Recursive
+/// structures hash to a sentinel via `HASH_RECURSION_GUARD`.
+#[monoruby_builtin]
+fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::hash::Hasher;
+    let self_val = lfp.self_val();
+    let id = self_val.id();
+    let class_hash = (self_val.class().u32() as u64).wrapping_mul(0x100000001b3);
+    crate::value::exec_recursive_outer(
+        id,
+        || {
+            let mut hasher = std::hash::DefaultHasher::new();
+            hasher.write_u64(class_hash);
+            if let Some(s) = self_val.try_struct() {
+                for i in 0..s.len() {
+                    let v = s.get(i);
+                    let h = v.calculate_hash(vm, globals)?;
+                    hasher.write_u64(h);
+                }
+            }
+            Ok(Value::integer(
+                (hasher.finish() & 0x7fff_ffff_ffff_ffff) as i64,
+            ))
+        },
+        // On any recursion at any depth, the outer call returns this
+        // sentinel, so two structs that cycle at different depths still
+        // hash to the same value.
+        Value::integer((class_hash & 0x7fff_ffff_ffff_ffff) as i64),
+    )
 }
 
 #[monoruby_builtin]
@@ -428,10 +717,10 @@ pub(crate) extern "C" fn set_struct_slot_with_check(
 ///
 /// Struct.keyword_init? -> true | false | nil
 ///
-/// Whether the struct was created with `keyword_init: true`. monoruby's
-/// `Struct.new` does not currently parse a `keyword_init:` kwarg, so the
-/// stored flag is never set and this always returns `nil` — matching
-/// CRuby's "no flag specified" return value.
+/// Whether the struct was created with `keyword_init: true`. Returns
+/// `nil` if no `keyword_init:` was passed (or it was passed as `nil`),
+/// `false` if it was passed as `false`, and `true` for any other truthy
+/// value (`Struct.new(:x, keyword_init: 1).keyword_init? == true`).
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Struct/s/keyword_init=3f.html]
 #[monoruby_builtin]
@@ -445,7 +734,13 @@ fn keyword_init_p(
         .store
         .get_ivar(lfp.self_val(), IdentId::get_id("/keyword_init"))
         .unwrap_or(Value::nil());
-    Ok(v)
+    if v.is_nil() {
+        Ok(Value::nil())
+    } else if v == Value::bool(false) {
+        Ok(Value::bool(false))
+    } else {
+        Ok(Value::bool(true))
+    }
 }
 
 #[cfg(test)]
@@ -1044,6 +1339,347 @@ mod tests {
               S.instance_method(:a=).arity,
               S.instance_method(:a).owner == S,
             ]
+            "#,
+        );
+    }
+
+    // ----- Struct#hash -----
+
+    #[test]
+    fn struct_hash_basic_invariants() {
+        // Same class + same content -> same hash. Hash is an Integer.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            a = S.new(1, 2)
+            b = S.new(1, 2)
+            [a.hash == b.hash, a.hash.is_a?(Integer)]
+            "#,
+        );
+        // Same class + different content -> different hash (overwhelmingly
+        // likely; a collision would be a real PRF surprise).
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            S.new(1, 2).hash != S.new(1, 3).hash
+            "#,
+        );
+        // Different struct classes with identical content -> different hash.
+        // The class identity is folded into the hash, matching CRuby.
+        run_test(
+            r#"
+            A = Struct.new(:x)
+            B = Struct.new(:x)
+            A.new(1).hash != B.new(1).hash
+            "#,
+        );
+        // dup'd struct hashes the same as the original.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            s = S.new(10, 20)
+            s.hash == s.dup.hash
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_hash_eql_implies_same_hash() {
+        // The contract Hash relies on: `a.eql?(b)` => `a.hash == b.hash`.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            a = S.new(1, "x")
+            b = S.new(1, "x")
+            [a.eql?(b), a.hash == b.hash]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_hash_recursive_self_cycle() {
+        // Self-recursive struct must hash without StackOverflow. Equal
+        // self-cycles still produce equal hashes.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            x = S.new(nil, "tag")
+            x.a = x
+            y = S.new(nil, "tag")
+            y.a = y
+            [x.hash.is_a?(Integer), x.hash == y.hash]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_hash_recursive_outer_semantics() {
+        // Two structs with cycles at *different* depths still produce the
+        // same hash. This is what `exec_recursive_outer` buys us — any
+        // recursion at any depth surfaces to the outer call as the same
+        // sentinel, so depth-shape doesn't leak into the hash.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            x = S.new(nil, "tag")
+            x.a = x                # depth-1 cycle
+            y = S.new(nil, "tag")
+            y.a = x                # depth-2 cycle (y -> x -> x)
+            x.hash == y.hash
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_hash_module_override() {
+        // An `include`d module's `hash` shadows Struct's: the per-subclass
+        // installation is gone, so method lookup walks `S -> iclass(mod) ->
+        // Struct` and finds the module's `hash` first.
+        run_test(
+            r#"
+            mod = Module.new do
+              def hash
+                42
+              end
+            end
+            S = Struct.new(:arg) do
+              include mod
+            end
+            S.new(1).hash
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_hash_keyword_init() {
+        // keyword_init structs hash like any other struct: members in slot
+        // order, class folded in.
+        run_test(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            a = S.new(name: "elefant", legs: 4)
+            b = S.new(name: "elefant", legs: 4)
+            c = S.new(name: "elefant", legs: 2)
+            [a.hash == b.hash, a.hash != c.hash]
+            "#,
+        );
+    }
+
+    // ----- Struct#initialize: kwargs, keyword_init: true, error paths -----
+
+    #[test]
+    fn struct_init_implicit_kwargs() {
+        // Plain struct (no `keyword_init:`) accepts kwargs whose keys are
+        // member names — Ruby 3.2+ implicit-kwargs behavior. Equivalent to
+        // a positional call.
+        run_test(
+            r#"
+            T = Struct.new(:version, :platform)
+            pos = T.new("3.2", "OS")
+            kw = T.new(version: "3.2", platform: "OS")
+            [pos == kw, kw.version, kw.platform]
+            "#,
+        );
+        // Subset of kwargs is allowed: missing members default to nil.
+        run_test(
+            r#"
+            T = Struct.new(:a, :b, :c)
+            s = T.new(b: 20)
+            [s.a, s.b, s.c]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_explicit_hash_is_positional() {
+        // A literal Hash positional is one positional value (NOT
+        // unpacked as kwargs), distinguishing it from `T.new(a: 1)`.
+        run_test(
+            r#"
+            T = Struct.new(:a, :b)
+            s = T.new({a: 1, b: 2})
+            [s.a, s.b]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_pos_plus_kwargs_appends() {
+        // `T.new("a", b: "b")` for a plain struct: kwargs become a single
+        // positional Hash appended after positionals. The CRuby spec
+        // explicitly tests this "treats keyword arguments as a positional
+        // parameter" behavior for non-`keyword_init:` structs.
+        run_test(
+            r#"
+            T = Struct.new(:a, :b)
+            s = T.new("a", b: "b")
+            [s.a, s.b]
+            "#,
+        );
+        // 3-member struct, 1 positional + kwargs -> kwargs become member 1,
+        // member 2 stays nil.
+        run_test(
+            r#"
+            T = Struct.new(:a, :b, :c)
+            s = T.new("a", b: "b", c: "c")
+            [s.a, s.b, s.c]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_implicit_kwargs_unknown_key_raises() {
+        // Plain struct: kwargs key that doesn't name a member is
+        // ArgumentError (not silently dropped).
+        run_test_error(
+            r#"
+            T = Struct.new(:a, :b)
+            T.new(c: 1)
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_accepts_kwargs() {
+        // The canonical keyword_init: true call: kwargs map to members.
+        run_test(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            s = S.new(name: "elefant", legs: 4)
+            [s.name, s.legs]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_accepts_single_hash() {
+        // keyword_init: true also accepts a single positional Hash (treated
+        // as kwargs). The keys are still validated against members.
+        run_test(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            s = S.new({name: "elefant", legs: 4})
+            [s.name, s.legs]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_partial_keys() {
+        // keyword_init: true with a subset of keys: missing members default
+        // to nil.
+        run_test(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            s = S.new(name: "elefant")
+            [s.name, s.legs]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_no_args() {
+        // keyword_init: true with no args at all: every member is nil.
+        run_test(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            s = S.new
+            [s.name, s.legs]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_truthy_value_normalized() {
+        // `keyword_init: 1` (truthy non-true) acts as `keyword_init: true`,
+        // and `keyword_init?` returns the canonical `true`.
+        run_test(
+            r#"
+            S = Struct.new(:x, keyword_init: 1)
+            s = S.new(x: 7)
+            [S.keyword_init?, s.x]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_false_behaves_positional() {
+        // keyword_init: false reverts to positional semantics.
+        run_test(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: false)
+            s = S.new("elefant", 4)
+            [S.keyword_init?, s.name, s.legs]
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_unknown_keys_raises() {
+        // `unknown keywords: foo` for any kwarg key not in members.
+        run_test_error(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            S.new(name: "elefant", legs: 4, foo: "bar")
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_positional_raises() {
+        // keyword_init: true rejects positional-only calls.
+        run_test_error(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            S.new("elefant", 4)
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_single_non_hash_raises() {
+        // keyword_init: true rejects a single non-Hash positional.
+        run_test_error(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            S.new("elefant")
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_keyword_init_true_pos_plus_kwargs_raises() {
+        // keyword_init: true rejects mixing positional + kwargs, even when
+        // kwargs alone would have been valid.
+        run_test_error(
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
+            S.new("elefant", legs: 4)
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_too_many_positional_raises() {
+        // Plain struct: passing more positional args than members is
+        // ArgumentError ("struct size differs").
+        run_test_error(
+            r#"
+            S = Struct.new(:a, :b)
+            S.new(1, 2, 3)
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_init_pos_plus_kwargs_overflow_raises() {
+        // `pos + kwargs-as-hash` total exceeds members -> ArgumentError.
+        // (`type.new("a", "b", c: "c")` for a 2-member struct: 2 positionals
+        // + 1 trailing kwargs Hash = 3 effective args.)
+        run_test_error(
+            r#"
+            S = Struct.new(:a, :b)
+            S.new("a", "b", c: "c")
             "#,
         );
     }

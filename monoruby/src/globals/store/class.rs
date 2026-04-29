@@ -1119,8 +1119,13 @@ impl ClassInfoTable {
         name: Option<IdentId>,
         superclass: Module,
     ) -> Module {
+        // Named structs nest under the receiver of `new`. For
+        // `Struct.new('Computer', :size)` that's Struct itself
+        // (so `Struct::Computer`); for `Apple.new('Computer', :size)`
+        // where `Apple < Struct`, that's Apple (so `Apple::Computer`),
+        // matching CRuby's "creates a constant in subclass' namespace".
         let parent = if name.is_some() {
-            Some(STRUCT_CLASS)
+            Some(superclass.id())
         } else {
             None
         };
