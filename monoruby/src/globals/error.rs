@@ -128,7 +128,7 @@ impl MonorubyErr {
             MonorubyErrKind::Arguments => "ArgumentError",
             MonorubyErrKind::Syntax => "SyntaxError",
             MonorubyErrKind::Unimplemented => "RuntimeError",
-            MonorubyErrKind::Name => "NameError",
+            MonorubyErrKind::Name(_) => "NameError",
             MonorubyErrKind::DivideByZero => "ZeroDivisionError",
             MonorubyErrKind::LocalJump => "LocalJumpError",
             MonorubyErrKind::Range => "RangeError",
@@ -159,7 +159,7 @@ impl MonorubyErr {
             MonorubyErrKind::Arguments => ARGUMENTS_ERROR_CLASS,
             MonorubyErrKind::Syntax => SYNTAX_ERROR_CLASS,
             MonorubyErrKind::Unimplemented => UNIMPLEMENTED_ERROR_CLASS,
-            MonorubyErrKind::Name => NAME_ERROR_CLASS,
+            MonorubyErrKind::Name(_) => NAME_ERROR_CLASS,
             MonorubyErrKind::DivideByZero => ZERO_DIVISION_ERROR_CLASS,
             MonorubyErrKind::LocalJump => LOCAL_JUMP_ERROR_CLASS,
             MonorubyErrKind::Range => RANGE_ERROR_CLASS,
@@ -398,7 +398,14 @@ impl MonorubyErr {
     }
 
     pub(crate) fn nameerr(msg: impl ToString) -> MonorubyErr {
-        Self::new(MonorubyErrKind::Name, msg)
+        Self::new(MonorubyErrKind::Name(None), msg)
+    }
+
+    /// Like [`nameerr`], but additionally records the missing-name
+    /// symbol so the resulting `NameError`'s `#name` Ruby method returns
+    /// it (matches CRuby's `rb_name_err_new`).
+    pub(crate) fn nameerr_with_name(msg: impl ToString, name: IdentId) -> MonorubyErr {
+        Self::new(MonorubyErrKind::Name(Some(name)), msg)
     }
 
     pub(crate) fn uninitialized_constant(name: IdentId) -> MonorubyErr {
@@ -713,7 +720,10 @@ pub enum MonorubyErrKind {
     Arguments,
     Syntax,
     Unimplemented,
-    Name,
+    /// `NameError` with an optional `name` symbol that the
+    /// `NameError#name` Ruby method exposes (e.g. the missing constant
+    /// or method name passed to `Module#instance_method`).
+    Name(Option<IdentId>),
     DivideByZero,
     LocalJump,
     Range,
@@ -755,7 +765,7 @@ impl MonorubyErrKind {
             ARGUMENTS_ERROR_CLASS => MonorubyErrKind::Arguments,
             SYNTAX_ERROR_CLASS => MonorubyErrKind::Syntax,
             UNIMPLEMENTED_ERROR_CLASS => MonorubyErrKind::Unimplemented,
-            NAME_ERROR_CLASS => MonorubyErrKind::Name,
+            NAME_ERROR_CLASS => MonorubyErrKind::Name(None),
             ZERO_DIVISION_ERROR_CLASS => MonorubyErrKind::DivideByZero,
             LOCAL_JUMP_ERROR_CLASS => MonorubyErrKind::LocalJump,
             RANGE_ERROR_CLASS => MonorubyErrKind::Range,

@@ -99,7 +99,11 @@ class Module
   def included(mod)
   end
 
-  public
+  # CRuby keeps these as private instance methods of Module so subclasses
+  # override them with `def method_added(name); …; end` (i.e. via the
+  # default-private visibility inside a `class M`). `public` here would
+  # surface them as `Module.public_instance_methods` entries, which the
+  # spec explicitly disallows ("is a private instance method").
   def method_added(name)
   end
 
@@ -112,8 +116,12 @@ class Module
   def const_added(name)
   end
 
+  public
   def const_missing(name)
-    raise NameError, "uninitialized constant #{self}::#{name}"
+    # Drop the implicit `Object::` prefix so a top-level miss reads
+    # `uninitialized constant Foo` (not `Object::Foo`), matching CRuby.
+    qual = self.equal?(Object) ? name.to_s : "#{self}::#{name}"
+    raise NameError.new("uninitialized constant #{qual}", name)
   end
 
   def include?(mod)

@@ -135,12 +135,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "prepend", prepend);
     globals.define_builtin_func(MODULE_CLASS, "prepend_features", prepend_features, 1);
     globals.define_builtin_func(MODULE_CLASS, "instance_method", instance_method, 1);
-    // `public_instance_method` is nearly identical to `instance_method`; the
-    // only difference is that it raises NameError for private/protected
-    // methods. ActiveSupport's `delegate` builds dispatch code from the
-    // parameter list of `public_instance_method`, so a working approximation
-    // is enough for AR to load.
-    globals.define_builtin_func(MODULE_CLASS, "public_instance_method", instance_method, 1);
+    // `public_instance_method` is identical to `instance_method` except it
+    // raises NameError when the resolved method is private or protected.
+    globals.define_builtin_func(
+        MODULE_CLASS,
+        "public_instance_method",
+        public_instance_method,
+        1,
+    );
     globals.define_builtin_func_rest(MODULE_CLASS, "remove_method", remove_method);
     globals.define_builtin_func_rest(MODULE_CLASS, "undef_method", undef_method);
     globals.define_builtin_func_with(MODULE_CLASS, "method_defined?", method_defined, 1, 2, false);
@@ -819,12 +821,43 @@ fn const_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     match lookup_constant_path(vm, globals, module, lfp.arg(0), inherit)? {
         Some(v) => Ok(v),
         None => {
-            // Reuse CRuby-style "uninitialized constant" wording. The path
-            // text is the original String/Symbol exactly as supplied.
+            // For a single-segment lookup, fall back to `const_missing` so
+            // user-defined `const_missing` hooks fire (matching CRuby's
+            // `rb_const_get` / `rb_funcall(klass, idConst_missing, …)`).
+            // If the default `const_missing` raises NameError, we re-wrap
+            // it with `nameerr_with_name` so `e.name` is the missing
+            // Symbol — `raise ex_obj` doesn't preserve the original
+            // exception's ivars in monoruby, so the constructor-set
+            // `/name` would otherwise be lost.
+            let single_sym = if let Some(sym) = lfp.arg(0).try_symbol() {
+                Some(sym)
+            } else if let Some(s) = lfp.arg(0).is_str()
+                && !s.contains("::")
+            {
+                Some(IdentId::get_id(s))
+            } else {
+                None
+            };
+            if let Some(sym) = single_sym {
+                return match vm.invoke_method_inner(
+                    globals,
+                    IdentId::get_id("const_missing"),
+                    module.as_val(),
+                    &[Value::symbol(sym)],
+                    None,
+                    None,
+                ) {
+                    Ok(v) => Ok(v),
+                    Err(e) if matches!(e.kind, MonorubyErrKind::Name(_)) => {
+                        Err(MonorubyErr::nameerr_with_name(e.message, sym))
+                    }
+                    Err(e) => Err(e),
+                };
+            }
+            // Multi-segment paths or weird inputs: raise straight away
+            // with the CRuby-style wording.
             let display = if let Some(s) = lfp.arg(0).is_str() {
                 s.to_string()
-            } else if let Some(sym) = lfp.arg(0).try_symbol() {
-                sym.get_name().to_string()
             } else {
                 "?".to_string()
             };
@@ -1335,18 +1368,75 @@ fn prepend_features(
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/instance_method.html]
 #[monoruby_builtin]
 fn instance_method(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let klass = lfp.self_val().as_class();
-    let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let method_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
     let (func_id, _, owner) = globals
         .find_method_for_class(klass.id(), method_name)
         .map_err(|_| {
-            MonorubyErr::undefined_method(method_name, klass.id().get_name(&globals.store))
+            MonorubyErr::nameerr_with_name(
+                format!(
+                    "undefined method `{}' for class `{}'",
+                    method_name.get_name(),
+                    klass.id().get_name(&globals.store),
+                ),
+                method_name,
+            )
         })?;
+    Ok(Value::new_unbound_method(func_id, owner))
+}
+
+#[monoruby_builtin]
+fn public_instance_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let klass = lfp.self_val().as_class();
+    let method_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
+    let (func_id, visibility, owner) =
+        globals
+            .find_method_for_class(klass.id(), method_name)
+            .map_err(|_| {
+                MonorubyErr::nameerr_with_name(
+                    format!(
+                        "undefined method `{}' for class `{}'",
+                        method_name.get_name(),
+                        klass.id().get_name(&globals.store),
+                    ),
+                    method_name,
+                )
+            })?;
+    // CRuby raises a NameError (kind, not NoMethodError) when the
+    // looked-up method exists but isn't public.
+    match visibility {
+        Visibility::Private => {
+            return Err(MonorubyErr::nameerr_with_name(
+                format!(
+                    "method `{}' for class `{}' is private",
+                    method_name.get_name(),
+                    klass.id().get_name(&globals.store),
+                ),
+                method_name,
+            ));
+        }
+        Visibility::Protected => {
+            return Err(MonorubyErr::nameerr_with_name(
+                format!(
+                    "method `{}' for class `{}' is protected",
+                    method_name.get_name(),
+                    klass.id().get_name(&globals.store),
+                ),
+                method_name,
+            ));
+        }
+        _ => {}
+    }
     Ok(Value::new_unbound_method(func_id, owner))
 }
 
@@ -1363,10 +1453,24 @@ fn undef_method(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
+    let mut self_val = lfp.self_val();
+    let class_id = self_val.as_class_id();
     let names = lfp.arg(0).as_array();
-    for name in names.iter().cloned() {
-        let name = name.expect_symbol_or_string(globals)?;
+    // Coerce all names *before* the frozen check so that a non-name
+    // argument raises TypeError (not FrozenError) on a frozen receiver,
+    // matching CRuby's error precedence and the
+    // "raises a TypeError when passed a not name" spec.
+    let resolved: Vec<IdentId> = names
+        .iter()
+        .map(|n| n.coerce_to_symbol_or_string(vm, globals))
+        .collect::<Result<_>>()?;
+    if !resolved.is_empty() {
+        self_val.ensure_not_frozen(&globals.store)?;
+    }
+    for name in resolved {
+        if globals.find_method_for_class(class_id, name).is_err() {
+            return Err(undefined_method_for_kind(globals, class_id, name));
+        }
         globals.undef_method_for_class(class_id, name)?;
         vm.invoke_method_undefined(globals, class_id, name)?;
     }
@@ -1386,14 +1490,59 @@ fn remove_method(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
+    let mut self_val = lfp.self_val();
+    let class_id = self_val.as_class_id();
     let names = lfp.arg(0).as_array();
-    for name in names.iter().cloned() {
-        let name = name.expect_symbol_or_string(globals)?;
+    let resolved: Vec<IdentId> = names
+        .iter()
+        .map(|n| n.coerce_to_symbol_or_string(vm, globals))
+        .collect::<Result<_>>()?;
+    if !resolved.is_empty() {
+        self_val.ensure_not_frozen(&globals.store)?;
+    }
+    for name in resolved {
         globals.remove_method(class_id, name)?;
         vm.invoke_method_removed(globals, class_id, name)?;
     }
     Ok(lfp.self_val())
+}
+
+/// CRuby renders `undef_method`'s missing-name NameError as
+/// "undefined method `<name>' for module `<X>'" or `... for class
+/// `<X>'` depending on whether the receiver is a Module or a Class.
+/// For a singleton class, the name string is the attached object
+/// rather than `#<Class:X>` so e.g.
+/// `String.singleton_class.send(:undef_method, :foo)` reads
+/// `... for class `String'`.
+fn undefined_method_for_kind(
+    globals: &Globals,
+    class_id: ClassId,
+    method: IdentId,
+) -> MonorubyErr {
+    let module = globals.store[class_id].get_module();
+    let kind = if module.as_val().ty() == Some(ObjTy::MODULE) {
+        "module"
+    } else {
+        "class"
+    };
+    // Singleton class display: when the attached object is itself a
+    // class/module (a metaclass like `String.singleton_class`), CRuby
+    // unwraps the display to the attached's own name (`String`). For an
+    // instance's singleton, fall back to the singleton class's own
+    // `#<Class:#<Foo:0x...>>` form.
+    let display = if let Some(attached) = module.is_singleton() {
+        if attached.is_class_or_module().is_some() {
+            attached.to_s(&globals.store)
+        } else {
+            class_id.get_name(&globals.store)
+        }
+    } else {
+        class_id.get_name(&globals.store)
+    };
+    MonorubyErr::nameerr(format!(
+        "undefined method `{}' for {kind} `{display}'",
+        method.get_name(),
+    ))
 }
 
 fn check_method_defined(

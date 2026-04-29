@@ -67,6 +67,15 @@ pub(super) fn init(globals: &mut Globals) {
 
     let nameerr =
         globals.define_builtin_exception_class("NameError", NAME_ERROR_CLASS, standarderr);
+    globals.define_builtin_func(NAME_ERROR_CLASS, "name", nameerr_name, 0);
+    globals.define_builtin_func_with(
+        NAME_ERROR_CLASS,
+        "initialize",
+        nameerr_initialize,
+        0,
+        2,
+        false,
+    );
     globals.define_builtin_exception_class("NoMethodError", NO_METHOD_ERROR_CLASS, nameerr);
     globals.define_builtin_func(NO_METHOD_ERROR_CLASS, "receiver", nomethoderr_receiver, 0);
 
@@ -114,6 +123,62 @@ fn nomethoderr_receiver(
         .get_ivar(self_val, IdentId::get_id("/receiver"))
         .unwrap_or_default();
     Ok(v)
+}
+
+/// `NameError#name` — returns the missing-name Symbol that was passed
+/// when the exception was raised (`nil` if the raiser didn't set one).
+/// Set via `MonorubyErr::nameerr_with_name`, surfaced as the `/name`
+/// ivar in `Executor::take_ex_obj`.
+#[monoruby_builtin]
+fn nameerr_name(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let v = globals
+        .store
+        .get_ivar(self_val, IdentId::get_id("/name"))
+        .unwrap_or_default();
+    Ok(v)
+}
+
+///
+/// `NameError.new(msg = nil, name = nil)`
+///
+/// Adds the second positional `name` argument on top of `Exception#initialize`,
+/// stored as the `/name` ivar so `NameError#name` returns it.
+///
+#[monoruby_builtin]
+fn nameerr_initialize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let class_id = self_.real_class(&globals.store).id();
+    let message = if let Some(msg) = lfp.try_arg(0) {
+        if msg.is_nil() {
+            globals.store.get_class_name(class_id)
+        } else {
+            msg.coerce_to_string(vm, globals)?
+        }
+    } else {
+        globals.store.get_class_name(class_id)
+    };
+    self_.is_exception_mut().unwrap().set_message(message);
+    if let Some(name) = lfp.try_arg(1) {
+        if !name.is_nil() {
+            // Store the name verbatim — typically a Symbol — so that
+            // `NameError#name` can return it as-is.
+            globals
+                .store
+                .set_ivar(self_, IdentId::get_id("/name"), name)?;
+        }
+    }
+    Ok(Value::nil())
 }
 
 /// Allocator for `Exception` and its subclasses. The exception is created
