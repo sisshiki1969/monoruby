@@ -445,7 +445,7 @@ fn alias_method(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
     let class_id = self_val.as_class_id();
     let new_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
@@ -1143,7 +1143,7 @@ fn const_set(
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
     let name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
     let name_str = name.get_name();
@@ -1607,7 +1607,7 @@ fn extend_object(
     _: BytecodePtr,
 ) -> Result<Value> {
     require_module_receiver(globals, lfp.self_val(), "extend_object")?;
-    let mut obj = lfp.arg(0);
+    let obj = lfp.arg(0);
     // Refuse to extend a frozen object — CRuby raises `RuntimeError`
     // (a FrozenError, which is a RuntimeError subclass) before
     // mutating anything.
@@ -1797,7 +1797,7 @@ fn undef_method(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     let class_id = self_val.as_class_id();
     let names = lfp.arg(0).as_array();
     // Coerce all names *before* the frozen check so that a non-name
@@ -1834,7 +1834,7 @@ fn remove_method(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     let class_id = self_val.as_class_id();
     let names = lfp.arg(0).as_array();
     let resolved: Vec<IdentId> = names
@@ -2081,7 +2081,7 @@ fn class_variable_set(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
     let class_id = self_val.as_class_id();
     let name = coerce_to_class_var_name(vm, globals, lfp.arg(0))?;

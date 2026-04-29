@@ -1,25 +1,6 @@
 use super::*;
 
 impl Executor {
-    pub(crate) fn const_get(
-        &mut self,
-        globals: &mut Globals,
-        module: Module,
-        name: IdentId,
-        inherit: bool,
-    ) -> Result<Value> {
-        // Note: `Module#const_get` is a reflection API and (since Ruby 3.0+)
-        // intentionally does *not* enforce constant visibility — private
-        // constants are readable through `const_get`. Visibility is only
-        // checked for syntactic qualified access (`Foo::Bar`, `::Bar`,
-        // `obj::Bar`) in `Executor::find_constant`.
-        if inherit {
-            self.get_constant_superclass_checked(globals, module, name)
-        } else {
-            self.get_constant_checked(globals, module.id(), name)
-        }
-    }
-
     pub(crate) fn get_qualified_constant(
         &mut self,
         globals: &mut Globals,
@@ -123,18 +104,6 @@ impl Executor {
         name: IdentId,
     ) -> Result<Value> {
         match self.get_constant(globals, class_id, name)? {
-            Some(v) => Ok(v),
-            None => Err(MonorubyErr::uninitialized_constant(name)),
-        }
-    }
-
-    pub(crate) fn get_constant_superclass_checked(
-        &mut self,
-        globals: &mut Globals,
-        module: Module,
-        name: IdentId,
-    ) -> Result<Value> {
-        match self.get_constant_superclass(globals, module, name)? {
             Some(v) => Ok(v),
             None => Err(MonorubyErr::uninitialized_constant(name)),
         }
