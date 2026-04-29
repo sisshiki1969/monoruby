@@ -42,33 +42,10 @@ def caller_locations(start = 1, length = nil)
   end
 end
 
-class TrueClass
-  def ^(other)
-    !other
-  end
-
-  def |(other)
-    true
-  end
-
-  def &(other)
-    !!other
-  end
-end
-
-class FalseClass
-  def ^(other)
-    !!other
-  end
-
-  def |(other)
-    !!other
-  end
-
-  def &(other)
-    false
-  end
-end
+# `^`, `|`, `&` for `true` and `false` live on the internal `Boolean`
+# parent class so that `true.method(:&) == false.method(:&)` and the
+# JIT inline cache can treat the receiver as `BOOL_CLASS` regardless of
+# which boolean was observed first.
 
 class NilClass
   def ^(other)

@@ -460,7 +460,7 @@ impl Store {
         self.new_block(outer, compile_info, false, loc, result.source_info)
     }
 
-    pub(super) fn new_builtin_func(
+    pub(crate) fn new_builtin_func(
         &mut self,
         name: &str,
         address: BuiltinFn,
@@ -654,6 +654,9 @@ impl Store {
         name: IdentId,
         class_version: u32,
     ) -> Option<MethodTableEntry> {
+        if class_id == BOOL_CLASS {
+            return self.check_bool_method_with_version(name, class_version);
+        }
         GLOBAL_METHOD_CACHE.with(|cache| {
             let mut c = cache.borrow_mut();
             if let Some(entry) = c.get(class_id, name, class_version) {
@@ -661,6 +664,33 @@ impl Store {
             };
             let entry = self.classes.search_method_by_class_id(class_id, name);
             c.insert((name, class_id), class_version, entry.clone());
+            entry
+        })
+    }
+
+    /// Resolve `name` against `BOOL_CLASS` by looking up on both
+    /// `TRUE_CLASS` and `FALSE_CLASS` and returning the entry only when
+    /// they yield the **same** `FuncId`. The IC tag `BOOL_CLASS` is only
+    /// safe under that invariant — if the two classes diverge (e.g. user
+    /// code defines a method on only one of them), callers fall back to
+    /// the per-class lookup.
+    fn check_bool_method_with_version(
+        &self,
+        name: IdentId,
+        class_version: u32,
+    ) -> Option<MethodTableEntry> {
+        GLOBAL_METHOD_CACHE.with(|cache| {
+            let mut c = cache.borrow_mut();
+            if let Some(entry) = c.get(BOOL_CLASS, name, class_version) {
+                return entry.cloned();
+            }
+            let true_entry = self.classes.search_method_by_class_id(TRUE_CLASS, name);
+            let false_entry = self.classes.search_method_by_class_id(FALSE_CLASS, name);
+            let entry = match (true_entry, false_entry) {
+                (Some(t), Some(f)) if t.func_id() == f.func_id() => Some(t),
+                _ => None,
+            };
+            c.insert((name, BOOL_CLASS), class_version, entry.clone());
             entry
         })
     }
@@ -676,15 +706,20 @@ impl Store {
     /// Get class name of *ClassId*.
     pub(crate) fn debug_class_name(&self, class: impl Into<Option<ClassId>>) -> String {
         if let Some(class) = class.into() {
-            let class_obj = self.classes[class].get_module();
-            match self.classes[class].get_name() {
+            let info = &self.classes[class];
+            match info.get_name() {
                 Some(_) => {
                     let v: Vec<_> = self.classes.get_parents(class).into_iter().rev().collect();
                     v.join("::")
                 }
-                None => match class_obj.is_singleton() {
-                    None => format!("#<Class:{:016x}>", class_obj.as_val().id()),
-                    Some(base) => format!("#<Class:{}>", base.debug_tos(self)),
+                None => match info.try_get_module() {
+                    Some(class_obj) => match class_obj.is_singleton() {
+                        None => format!("#<Class:{:016x}>", class_obj.as_val().id()),
+                        Some(base) => format!("#<Class:{}>", base.debug_tos(self)),
+                    },
+                    // Virtual classes (e.g. BOOL_CLASS) have no Ruby-visible
+                    // Module — fall back to the ClassId's Debug repr.
+                    None => format!("{:?}", class),
                 },
             }
         } else {

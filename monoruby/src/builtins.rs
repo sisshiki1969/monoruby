@@ -2,6 +2,7 @@ use super::*;
 
 mod array;
 mod binding;
+mod bool_class;
 mod class;
 mod dir;
 mod encoding;
@@ -59,6 +60,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     true_class::init(globals);
     false_class::init(globals);
     nil_class::init(globals);
+    bool_class::init(globals);
     module::init(globals);
     class::init(globals);
 

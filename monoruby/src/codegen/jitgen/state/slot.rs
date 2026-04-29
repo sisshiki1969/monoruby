@@ -775,7 +775,10 @@ impl SlotState {
                 Guarded::Fixnum => true,
                 Guarded::Float => true,
                 Guarded::Value => false,
-                Guarded::Class(class) => !class.is_falsy(),
+                // BOOL_CLASS straddles `true` and `false`, so abstract
+                // truthiness is unknown — be conservative and return
+                // false.
+                Guarded::Class(class) => !class.is_falsy() && class != BOOL_CLASS,
             },
         }
     }
@@ -789,7 +792,8 @@ impl SlotState {
                 Guarded::Fixnum => false,
                 Guarded::Float => false,
                 Guarded::Value => false,
-                Guarded::Class(class) => class.is_falsy(),
+                // Same caveat as `is_truthy`: BOOL_CLASS could be either.
+                Guarded::Class(class) => class.is_falsy() && class != BOOL_CLASS,
             },
         }
     }
@@ -1342,7 +1346,10 @@ impl Guarded {
             // Bignum is not Guarded::Fixnum.
             Guarded::Value
         } else {
-            Guarded::Class(v.class())
+            // Use the IC class so `true` and `false` literals collapse to
+            // a single `BOOL_CLASS` guard, avoiding a deopt when a slot
+            // toggles between the two booleans.
+            Guarded::Class(v.class_for_ic())
         }
     }
 

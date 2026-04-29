@@ -321,8 +321,7 @@ impl JitModule {
         let flonum = self.label();
         let symbol = self.label();
         let nil = self.label();
-        let true_ = self.label();
-        let false_ = self.label();
+        let bool_ = self.label();
         monoasm!(&mut self.jit,
         label:
             testq rdi, 0b001;
@@ -340,10 +339,13 @@ impl JitModule {
             je    symbol;
             cmpq  rdi, (NIL_VALUE);
             je    nil;
-            cmpq  rdi, (TRUE_VALUE);
-            je    true_;
-            cmpq  rdi, (FALSE_VALUE);
-            je    false_;
+            // TRUE_VALUE and FALSE_VALUE differ only in bit 3, so test with
+            // the bit forced on and a single compare. Both true and false
+            // therefore report `BOOL_CLASS` for inline-cache purposes.
+            movq  rax, rdi;
+            orq   rax, 8;
+            cmpq  rax, (TRUE_VALUE);
+            je    bool_;
         err:
             movq  rax, (illegal_classid);  // rdi: Value
             call  rax;
@@ -361,11 +363,8 @@ impl JitModule {
         nil:
             movl  rax, (NIL_CLASS.u32());
             ret;
-        true_:
-            movl  rax, (TRUE_CLASS.u32());
-            ret;
-        false_:
-            movl  rax, (FALSE_CLASS.u32());
+        bool_:
+            movl  rax, (BOOL_CLASS.u32());
             ret;
         );
         label

@@ -62,6 +62,14 @@ pub const SET_CLASS: ClassId = ClassId::new(51);
 pub const RATIONAL_CLASS: ClassId = ClassId::new(52);
 pub const FATAL_ERROR_CLASS: ClassId = ClassId::new(53);
 
+/// Internal "Boolean" class — a hidden parent of `TrueClass` and
+/// `FalseClass`. Methods that should resolve to the same `FuncId`
+/// regardless of whether the receiver is `true` or `false` (`!`, `&`, `|`,
+/// `^`, `to_s`, `inspect`, …) live on this class. Inline caches treat any
+/// boolean receiver as `BOOL_CLASS` so that a slot toggling between `true`
+/// and `false` does not deopt on every flip.
+pub const BOOL_CLASS: ClassId = ClassId::new(54);
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ClassId(NonZeroU32);
@@ -124,6 +132,7 @@ impl std::fmt::Debug for ClassId {
             51 => write!(f, "SET"),
             52 => write!(f, "RATIONAL"),
             53 => write!(f, "FATAL_ERROR"),
+            54 => write!(f, "BOOL"),
             n => write!(f, "ClassId({n})"),
         }
     }
@@ -440,6 +449,10 @@ impl ClassInfo {
 
     pub(crate) fn get_module(&self) -> Module {
         self.object.unwrap()
+    }
+
+    pub(crate) fn try_get_module(&self) -> Option<Module> {
+        self.object
     }
 
     pub(crate) fn get_ivarid(&self, name: IdentId) -> Option<IvarId> {

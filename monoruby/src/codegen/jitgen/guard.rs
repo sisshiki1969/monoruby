@@ -147,6 +147,19 @@ impl Codegen {
                     jnz fail;
                 );
             }
+            BOOL_CLASS => {
+                // TRUE_VALUE (0x1c) and FALSE_VALUE (0x14) differ only in
+                // bit 3, so OR'ing bit 3 in collapses both to TRUE_VALUE.
+                // No other tagged value lands at 0x1c after the OR. Use
+                // rax as scratch so the source register is preserved for
+                // the downstream consumer.
+                monoasm!( &mut self.jit,
+                    movq rax, R(reg as _);
+                    orq rax, 8;
+                    cmpq rax, (TRUE_VALUE);
+                    jnz fail;
+                );
+            }
             _ => self.guard_rvalue(reg, class_id, &fail),
         }
         //if reg != GP::Rdi {
@@ -233,6 +246,19 @@ impl Codegen {
             FALSE_CLASS => {
                 monoasm!( &mut self.jit,
                     cmpq R(reg as _), (FALSE_VALUE);
+                    jnz fail;
+                );
+            }
+            BOOL_CLASS => {
+                // TRUE_VALUE (0x1c) and FALSE_VALUE (0x14) differ only in
+                // bit 3, so OR'ing bit 3 in collapses both to TRUE_VALUE.
+                // No other tagged value lands at 0x1c after the OR. Use
+                // rax as scratch so the source register is preserved for
+                // the downstream consumer.
+                monoasm!( &mut self.jit,
+                    movq rax, R(reg as _);
+                    orq rax, 8;
+                    cmpq rax, (TRUE_VALUE);
                     jnz fail;
                 );
             }
