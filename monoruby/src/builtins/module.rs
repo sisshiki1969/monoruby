@@ -186,12 +186,15 @@ pub(super) fn init(globals: &mut Globals) {
         remove_class_variable,
         1,
     );
-    globals.define_builtin_func(MODULE_CLASS, "class_variables", class_variables, 0);
+    globals.define_builtin_func_with(MODULE_CLASS, "class_variables", class_variables, 0, 1, false);
     globals.define_builtin_func(MODULE_CLASS, "included_modules", included_modules, 0);
     globals.define_builtin_func_rest(MODULE_CLASS, "public_constant", public_constant);
     globals.define_builtin_func_rest(MODULE_CLASS, "private_constant", private_constant);
-    globals.define_builtin_class_func(MODULE_CLASS, "used_refinements", used_refinements, 0);
-    globals.define_builtin_func(MODULE_CLASS, "used_refinements", used_refinements_inst, 0);
+    // `used_refinements` (both class and instance forms) is mocked in
+    // Ruby — see `Module#used_refinements` / `Module.used_refinements`
+    // in `builtins/startup.rb`. Both return `[]` since refinements
+    // aren't implemented; defining in Ruby lets specs that actually
+    // exercise refinements override the implementation.
     globals.define_builtin_funcs(MODULE_CLASS, "to_s", &["inspect"], tos, 0);
     globals.define_builtin_func(MODULE_CLASS, "name", name, 0);
     globals.define_builtin_func(MODULE_CLASS, "set_temporary_name", set_temporary_name, 1);
@@ -1892,9 +1895,24 @@ fn class_variables(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let names = globals.store.get_class_variable_names(class_id);
-    let ary: Vec<Value> = names.into_iter().map(Value::symbol).collect();
-    Ok(Value::array_from_vec(ary))
+    let inherit = lfp.try_arg(0).map(|v| v.as_bool()).unwrap_or(true);
+    let mut seen = HashSet::default();
+    let mut names: Vec<IdentId> = Vec::new();
+    let mut module = Some(globals.store[class_id].get_module());
+    while let Some(m) = module {
+        for name in globals.store.get_class_variable_names(m.id()) {
+            if seen.insert(name) {
+                names.push(name);
+            }
+        }
+        if !inherit {
+            break;
+        }
+        module = m.superclass();
+    }
+    Ok(Value::array_from_vec(
+        names.into_iter().map(Value::symbol).collect(),
+    ))
 }
 
 /// ### Module#set_temporary_name
@@ -2004,31 +2022,6 @@ fn set_constants_visibility(globals: &mut Globals, lfp: Lfp, make_private: bool)
         }
     }
     Ok(lfp.self_val())
-}
-
-///
-/// ### Module.used_refinements / Module#used_refinements
-///
-/// Returns an array of refinements active at the call site. monoruby does
-/// not implement refinements; we always return an empty array.
-#[monoruby_builtin]
-fn used_refinements(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    Ok(Value::array_empty())
-}
-
-#[monoruby_builtin]
-fn used_refinements_inst(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    Ok(Value::array_empty())
 }
 
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/set_temporary_name.html]
@@ -4078,5 +4071,435 @@ mod tests {
             ]
             "#,
         );
+    }
+
+    // ----- NameError#name -----
+
+    #[test]
+    fn name_error_name_attribute() {
+        // `NameError.new(msg, name)` records `name` as the exception's
+        // `#name` attribute, so `rescue NameError => e; e.name` returns
+        // the missing-name Symbol that the raiser supplied.
+        run_test(
+            r#"
+            e = NameError.new("test message", :missing_constant)
+            [e.name, e.message]
+            "#,
+        );
+        // Default `Module#const_missing` (and `Module#const_get`'s
+        // fallback through it) sets `e.name` to the missing constant
+        // symbol. Round-trips through `rescue` correctly even though
+        // monoruby's `raise ex_obj` rebuilds the MonorubyErr.
+        run_test(
+            r#"
+            class CGetMissingNameErr; end
+            begin
+              CGetMissingNameErr.const_get(:NOPE)
+            rescue NameError => e
+              e.name
+            end
+            "#,
+        );
+        // `Module#instance_method` on a missing method also sets `name`.
+        run_test(
+            r#"
+            begin
+              Object.instance_method(:utterly_undefined_method_name)
+            rescue NameError => e
+              e.name
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn name_error_name_default_nil() {
+        // No-arg / default `NameError.new` leaves `#name` as `nil`.
+        run_test(
+            r#"
+            [
+              NameError.new.name,
+              NameError.new("just a message").name,
+            ]
+            "#,
+        );
+    }
+
+    // ----- Module#nesting -----
+
+    #[test]
+    fn module_nesting_lexical_chain() {
+        // Lexically nested `module`/`class` definitions push entries on
+        // `Module.nesting`, in inside-out order.
+        run_test(
+            r#"
+            module ModNestOuter
+              module ModNestMiddle
+                class ModNestInner
+                  $nesting = Module.nesting
+                end
+              end
+            end
+            $nesting
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_nesting_top_level_empty() {
+        // At the top level, `Module.nesting` is empty.
+        run_test(r#"Module.nesting"#);
+    }
+
+    // ----- Module#attr -----
+
+    #[test]
+    fn module_attr_legacy_reader_only() {
+        // `attr :foo` (single Symbol) creates a reader, no writer.
+        run_test(
+            r#"
+            c = Class.new { attr :foo }
+            i = c.new
+            i.instance_variable_set(:@foo, 42)
+            [
+              i.respond_to?(:foo),
+              i.respond_to?(:foo=),
+              i.foo,
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_attr_legacy_with_true_creates_writer() {
+        // `attr :foo, true` creates BOTH reader and writer (the Ruby
+        // 1.x compatibility form).
+        run_test(
+            r#"
+            c = Class.new { attr :foo, true }
+            i = c.new
+            i.foo = 7
+            [i.respond_to?(:foo), i.respond_to?(:foo=), i.foo]
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_attr_returns_symbol_array() {
+        run_test(
+            r#"
+            c = Class.new { attr :a, :b }
+            c.instance_methods(false).sort
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_attr_invalid_name_raises() {
+        // A non-Symbol/non-String/non-#to_str arg raises TypeError.
+        run_test_error(r#"Class.new { attr 123 }"#);
+        run_test_error(r#"Class.new { attr Object.new }"#);
+    }
+
+    // ----- Module#autoload? -----
+
+    #[test]
+    fn module_autoload_query_returns_path_or_nil() {
+        // `autoload?` returns the registered path while the constant is
+        // pending, `nil` once it's loaded (or never registered).
+        run_test(
+            r#"
+            m = Module.new do
+              autoload :Foo, "/no/such/path"
+            end
+            [m.autoload?(:Foo), m.autoload?(:Bar)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_autoload_query_string_name() {
+        // `autoload?` accepts a String name as well as a Symbol.
+        run_test(
+            r#"
+            m = Module.new { autoload :X, "/p" }
+            [m.autoload?("X"), m.autoload?("Y")]
+            "#,
+        );
+    }
+
+    // ----- Module#class_exec -----
+
+    #[test]
+    fn class_exec_defines_methods_on_receiver() {
+        // The block runs with `self` set to the receiver class, so
+        // `def`s inside become instance methods of the receiver.
+        run_test(
+            r#"
+            c = Class.new
+            c.class_exec do
+              def hello
+                "hello"
+              end
+            end
+            c.new.hello
+            "#,
+        );
+    }
+
+    #[test]
+    fn class_exec_passes_args_to_block() {
+        // Positional args to `class_exec` are forwarded to the block.
+        run_test(
+            r#"
+            c = Class.new
+            captured = nil
+            c.class_exec(1, 2, 3) { |*args| captured = args }
+            captured
+            "#,
+        );
+    }
+
+    #[test]
+    fn class_exec_self_is_receiver() {
+        // Inside the block, `self` is the receiver — `self.name`,
+        // `define_method`, etc. all act on the class.
+        run_test(
+            r#"
+            c = Class.new
+            c.class_exec do
+              define_method(:answer) { 42 }
+            end
+            c.new.answer
+            "#,
+        );
+    }
+
+    // ----- Module#const_source_location -----
+
+    #[test]
+    fn const_source_location_records_file_and_line() {
+        // Basic shape: returns `[file, line]` for an ordinary
+        // user-defined constant.
+        run_test(
+            r#"
+            class CSrcLocBasic
+              MY_CONST = 1
+            end
+            loc = CSrcLocBasic.const_source_location(:MY_CONST)
+            [loc.is_a?(Array), loc.size, loc[1].is_a?(Integer)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn const_source_location_unknown_returns_nil() {
+        // CRuby returns `nil` for an undefined constant (no NameError).
+        run_test(
+            r#"
+            class CSrcLocMissing; end
+            CSrcLocMissing.const_source_location(:NOPE)
+            "#,
+        );
+    }
+
+    // ----- Module#protected_instance_methods -----
+
+    #[test]
+    fn protected_instance_methods_lists_only_protected() {
+        run_test(
+            r#"
+            c = Class.new do
+              def pub; end
+              protected
+              def pro1; end
+              def pro2; end
+              private
+              def pri; end
+            end
+            c.protected_instance_methods(false).sort
+            "#,
+        );
+    }
+
+    #[test]
+    fn protected_instance_methods_inherits_by_default() {
+        // The inherit flag defaults to `true`. With `false`, only the
+        // immediate class is queried.
+        run_test(
+            r#"
+            parent = Class.new do
+              protected; def parent_pro; end
+            end
+            child = Class.new(parent) do
+              protected; def child_pro; end
+            end
+            [
+              child.protected_instance_methods.include?(:parent_pro),
+              child.protected_instance_methods(false).include?(:parent_pro),
+              child.protected_instance_methods(false).include?(:child_pro),
+            ]
+            "#,
+        );
+    }
+
+    // ----- Module#class_variable_defined? -----
+
+    #[test]
+    fn class_variable_defined_basic() {
+        // Use `class_variable_set` to seed the var so the test body
+        // doesn't need a `class … @@x = 1 … end` form (CRuby rejects
+        // bare `@@x =` inside a `Class.new do … end` block as toplevel
+        // class-var access).
+        run_test(
+            r#"
+            c = Class.new
+            c.class_variable_set(:@@x, 1)
+            [
+              c.class_variable_defined?(:@@x),
+              c.class_variable_defined?(:@@y),
+              c.class_variable_defined?("@@x"),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn class_variable_defined_invalid_name_raises() {
+        // Names not starting with `@@` raise NameError.
+        run_test_error(r#"Class.new.class_variable_defined?(:foo)"#);
+        run_test_error(r#"Class.new.class_variable_defined?(:@only_one_at)"#);
+    }
+
+    // ----- Module#remove_class_variable -----
+
+    #[test]
+    fn remove_class_variable_returns_old_value() {
+        // Returns the value that was bound, then the var is gone.
+        run_test(
+            r#"
+            c = Class.new
+            c.class_variable_set(:@@x, 99)
+            [
+              c.remove_class_variable(:@@x),
+              c.class_variable_defined?(:@@x),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn remove_class_variable_missing_raises() {
+        // Removing a non-existent class variable raises NameError.
+        run_test_error(
+            r#"
+            Class.new.remove_class_variable(:@@nope)
+            "#,
+        );
+    }
+
+    // ----- Module#class_variables -----
+
+    #[test]
+    fn class_variables_basic() {
+        run_test(
+            r#"
+            c = Class.new
+            c.class_variable_set(:@@a, 1)
+            c.class_variable_set(:@@b, 2)
+            c.class_variables.sort
+            "#,
+        );
+    }
+
+    #[test]
+    fn class_variables_includes_inherited_by_default() {
+        // The default inherit flag `true` walks the superclass chain.
+        run_test(
+            r#"
+            parent = Class.new
+            parent.class_variable_set(:@@inherited, 1)
+            child = Class.new(parent)
+            child.class_variable_set(:@@own, 2)
+            [
+              child.class_variables.sort,
+              child.class_variables(false).sort,
+            ]
+            "#,
+        );
+    }
+
+    // ----- Module#included_modules -----
+
+    #[test]
+    fn included_modules_basic() {
+        // The receiver itself is *not* listed; included modules are.
+        run_test(
+            r#"
+            m1 = Module.new
+            m2 = Module.new
+            c = Class.new do
+              include m1
+              include m2
+            end
+            inc = c.included_modules
+            [inc.include?(m1), inc.include?(m2), inc.include?(c)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn included_modules_empty_for_fresh_module() {
+        // `Module.new.included_modules == []` — a Module with nothing
+        // mixed in has no included modules (it isn't its own).
+        run_test(r#"Module.new.included_modules"#);
+    }
+
+    // ----- Module#public_constant -----
+
+    #[test]
+    fn public_constant_unhides_private_constant() {
+        // `private_constant` followed by `public_constant` restores
+        // qualified access (`C::FOO`). Use `const_set` instead of a bare
+        // `FOO = 1` literal so the constant lands on the new class
+        // itself rather than the enclosing lexical scope.
+        run_test(
+            r#"
+            c = Class.new
+            c.const_set(:FOO, 1)
+            c.send(:private_constant, :FOO)
+            c.send(:public_constant, :FOO)
+            c::FOO
+            "#,
+        );
+    }
+
+    #[test]
+    fn public_constant_unknown_constant_raises() {
+        // Calling on an undefined name raises NameError.
+        run_test_error(
+            r#"
+            Class.new.send(:public_constant, :NOPE)
+            "#,
+        );
+    }
+
+    // ----- Module.used_refinements (Ruby-side mock) -----
+
+    #[test]
+    fn used_refinements_mock_returns_empty_array() {
+        // monoruby has no refinement support; `Module.used_refinements`
+        // is mocked in `builtins/startup.rb` to return `[]` so callers
+        // (RSpec, Sorbet, …) that defensively read the list don't
+        // crash. Only the class form is present, matching CRuby.
+        run_test(r#"Module.used_refinements"#);
+    }
+
+    #[test]
+    fn used_refinements_no_instance_method() {
+        // CRuby exposes only the class form, so calling
+        // `Module.new.used_refinements` raises NoMethodError. Our mock
+        // follows the same shape.
+        run_test_error(r#"Module.new.used_refinements"#);
     }
 }

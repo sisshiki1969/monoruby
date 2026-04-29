@@ -134,6 +134,17 @@ class Module
     return false if equal?(mod)
     ancestors.include?(mod)
   end
+
+  # `Module.used_refinements` returns the refinements active in the
+  # current scope. monoruby has no refinement support, so this returns
+  # an empty Array as a permissive mock — gems and code that
+  # defensively read this list (RSpec, Sorbet) won't crash. Defined in
+  # Ruby (not Rust) so the user can override it in specs that actually
+  # exercise refinements. CRuby only exposes the class form (no
+  # `Module#used_refinements` instance method), so we follow suit.
+  def self.used_refinements
+    []
+  end
 end
 
 module Warning
