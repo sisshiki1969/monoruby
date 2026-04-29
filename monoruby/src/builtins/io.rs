@@ -319,15 +319,19 @@ fn close_write(
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
-    match io {
+    let fully_closed = match io {
         IoInner::Popen(popen) => {
             let popen = Rc::get_mut(popen).unwrap();
             popen.writer = None;
-            Ok(Value::nil())
+            popen.reader.is_none()
         }
-        IoInner::Closed => Err(MonorubyErr::ioerr("closed stream")),
-        _ => Err(MonorubyErr::ioerr("closing non-duplex IO for writing")),
+        IoInner::Closed => return Err(MonorubyErr::ioerr("closed stream")),
+        _ => return Err(MonorubyErr::ioerr("closing non-duplex IO for writing")),
+    };
+    if fully_closed {
+        *io = IoInner::Closed;
     }
+    Ok(Value::nil())
 }
 
 /// ### IO#close_read
@@ -340,15 +344,19 @@ fn close_read(
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
-    match io {
+    let fully_closed = match io {
         IoInner::Popen(popen) => {
             let popen = Rc::get_mut(popen).unwrap();
             popen.reader = None;
-            Ok(Value::nil())
+            popen.writer.is_none()
         }
-        IoInner::Closed => Err(MonorubyErr::ioerr("closed stream")),
-        _ => Err(MonorubyErr::ioerr("closing non-duplex IO for reading")),
+        IoInner::Closed => return Err(MonorubyErr::ioerr("closed stream")),
+        _ => return Err(MonorubyErr::ioerr("closing non-duplex IO for reading")),
+    };
+    if fully_closed {
+        *io = IoInner::Closed;
     }
+    Ok(Value::nil())
 }
 
 /// - closed? -> bool
@@ -933,9 +941,11 @@ fn io_fileno(
     Ok(Value::integer(fd as i64))
 }
 
-/// ### IO#to_io
 ///
+/// ### IO#to_io
 /// - to_io -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/to_io.html]
 #[monoruby_builtin]
 fn io_to_io(
     _vm: &mut Executor,
@@ -946,9 +956,12 @@ fn io_to_io(
     Ok(lfp.self_val())
 }
 
-/// ### IO#readlines
 ///
+/// ### IO#readlines
 /// - readlines(rs = $/, [NOT SUPPORTED] limit, [NOT SUPPORTED] chomp: false) -> [String]
+///
+/// Reads all remaining lines from the stream and returns them as an Array
+/// of String.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readlines.html]
 #[monoruby_builtin]
@@ -967,8 +980,8 @@ fn io_readlines(
     Ok(Value::array_from_vec(result))
 }
 
-/// ### IO#binmode
 ///
+/// ### IO#binmode
 /// - binmode -> self
 ///
 /// On platforms with text-mode/binary-mode distinction, switches the stream
@@ -986,9 +999,14 @@ fn io_binmode(
     Ok(lfp.self_val())
 }
 
-/// ### IO#binmode?
 ///
+/// ### IO#binmode?
 /// - binmode? -> bool
+///
+/// Always returns `true` because monoruby operates every stream in binary
+/// mode.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/binmode=3f.html]
 #[monoruby_builtin]
 fn io_binmode_(
     _vm: &mut Executor,
@@ -996,16 +1014,17 @@ fn io_binmode_(
     _lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    // monoruby always operates in binary mode.
     Ok(Value::bool(true))
 }
 
-/// ### IO#autoclose=
 ///
+/// ### IO#autoclose=
 /// - autoclose=(bool) -> bool
 ///
 /// Tracking the autoclose flag is not currently supported; this acts as a
 /// no-op and returns the argument coerced to a Boolean.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/autoclose=3d.html]
 #[monoruby_builtin]
 fn io_autoclose_set(
     _vm: &mut Executor,
@@ -1016,9 +1035,14 @@ fn io_autoclose_set(
     Ok(Value::bool(lfp.arg(0).as_bool()))
 }
 
-/// ### IO#autoclose?
 ///
+/// ### IO#autoclose?
 /// - autoclose? -> bool
+///
+/// Always returns `true` — monoruby's IO does not currently track the
+/// autoclose flag.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/autoclose=3f.html]
 #[monoruby_builtin]
 fn io_autoclose_(
     _vm: &mut Executor,
@@ -1029,14 +1053,16 @@ fn io_autoclose_(
     Ok(Value::bool(true))
 }
 
-/// ### IO#advise
 ///
+/// ### IO#advise
 /// - advise(advice, offset = 0, length = 0) -> nil
 ///
 /// `posix_fadvise(2)` hint. Recognized advice symbols: `:normal`,
 /// `:sequential`, `:random`, `:willneed`, `:dontneed`, `:noreuse`. Other
-/// values raise `NotImplementedError`. monoruby validates the arguments but
+/// values raise `RuntimeError`. monoruby validates the arguments but
 /// does not actually issue the syscall.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/advise.html]
 #[monoruby_builtin]
 fn io_advise(
     vm: &mut Executor,
@@ -1070,10 +1096,14 @@ fn io_advise(
     Ok(Value::nil())
 }
 
-/// ### IO#pos / IO#tell
 ///
+/// ### IO#pos / IO#tell
 /// - pos -> Integer
 /// - tell -> Integer
+///
+/// Returns the current byte offset of the stream.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/pos.html]
 #[monoruby_builtin]
 fn io_pos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
@@ -1084,9 +1114,13 @@ fn io_pos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(Value::integer(pos as i64))
 }
 
-/// ### IO#pos=
 ///
+/// ### IO#pos=
 /// - pos=(n) -> Integer
+///
+/// Seeks to absolute byte offset `n`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/pos=3d.html]
 #[monoruby_builtin]
 fn io_pos_set(
     vm: &mut Executor,
@@ -1103,9 +1137,13 @@ fn io_pos_set(
     Ok(Value::integer(n))
 }
 
-/// ### IO#rewind
 ///
+/// ### IO#rewind
 /// - rewind -> 0
+///
+/// Seeks to the beginning of the stream.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/rewind.html]
 #[monoruby_builtin]
 fn io_rewind(
     _vm: &mut Executor,
@@ -1121,10 +1159,16 @@ fn io_rewind(
     Ok(Value::integer(0))
 }
 
-/// ### IO#eof? / IO#eof
 ///
+/// ### IO#eof? / IO#eof
 /// - eof? -> bool
 /// - eof -> bool
+///
+/// Returns `true` when the stream cursor is past the last byte. For seekable
+/// streams the test is non-destructive; for pipes/stdin a successfully read
+/// byte may be consumed.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/eof.html]
 #[monoruby_builtin]
 fn io_eof_(
     _vm: &mut Executor,
@@ -1146,9 +1190,13 @@ fn io_eof_(
     Ok(Value::bool(false))
 }
 
-/// ### IO#getbyte
 ///
+/// ### IO#getbyte
 /// - getbyte -> Integer | nil
+///
+/// Reads one byte, returning its value as an Integer or `nil` at EOF.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/getbyte.html]
 #[monoruby_builtin]
 fn io_getbyte(
     _vm: &mut Executor,
@@ -1166,11 +1214,13 @@ fn io_getbyte(
     }
 }
 
-/// ### IO#readbyte
 ///
+/// ### IO#readbyte
 /// - readbyte -> Integer
 ///
 /// Like `IO#getbyte` but raises `EOFError` at end of stream.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readbyte.html]
 #[monoruby_builtin]
 fn io_readbyte(
     _vm: &mut Executor,
@@ -1220,9 +1270,14 @@ fn read_one_char(io: &mut IoInner) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-/// ### IO#getc
 ///
+/// ### IO#getc
 /// - getc -> String | nil
+///
+/// Reads one UTF-8 character (1-4 bytes) and returns it as a String, or
+/// `nil` at EOF.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/getc.html]
 #[monoruby_builtin]
 fn io_getc(
     _vm: &mut Executor,
@@ -1240,11 +1295,13 @@ fn io_getc(
     }
 }
 
-/// ### IO#readchar
 ///
+/// ### IO#readchar
 /// - readchar -> String
 ///
 /// Like `IO#getc` but raises `EOFError` at end of stream.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readchar.html]
 #[monoruby_builtin]
 fn io_readchar(
     _vm: &mut Executor,
@@ -1262,9 +1319,13 @@ fn io_readchar(
     }
 }
 
-/// ### IO#sysseek
 ///
+/// ### IO#sysseek
 /// - sysseek(offset, whence = IO::SEEK_SET) -> Integer
+///
+/// Seeks via `lseek(2)` directly, bypassing any user-space buffering.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/sysseek.html]
 #[monoruby_builtin]
 fn io_sysseek(
     vm: &mut Executor,
@@ -1286,13 +1347,15 @@ fn io_sysseek(
     Ok(Value::integer(pos as i64))
 }
 
-/// ### IO#lineno
 ///
+/// ### IO#lineno
 /// - lineno -> Integer
 ///
 /// Returns the value last assigned via `lineno=`, or 0 if it was never
 /// assigned. monoruby does not auto-increment `lineno` on `gets`/`readline`
 /// the way CRuby does — only the explicit setter is honored.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/lineno.html]
 #[monoruby_builtin]
 fn io_lineno(
     _vm: &mut Executor,
@@ -1306,9 +1369,13 @@ fn io_lineno(
     Ok(stored.unwrap_or_else(|| Value::integer(0)))
 }
 
-/// ### IO#lineno=
 ///
+/// ### IO#lineno=
 /// - lineno=(n) -> Integer
+///
+/// Stores `n` as the value returned by subsequent `lineno` reads.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/lineno=3d.html]
 #[monoruby_builtin]
 fn io_lineno_set(
     vm: &mut Executor,
@@ -2770,6 +2837,252 @@ mod tests {
             ensure
               File.unlink(path) rescue nil
             end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_gets() {
+        // Read line-by-line via gets and stop at EOF (gets returns nil).
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_io_gets_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "alpha\nbeta\ngamma\n")
+              f = File.open(path)
+              lines = []
+              while (line = f.gets); lines << line; end
+              tail = f.gets
+              f.close
+              [lines, tail]
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_flush() {
+        // `IO#flush` returns self, but the IO instance identity differs
+        // between monoruby and CRuby runs, so reduce the result to a
+        // boolean.
+        run_test(
+            r#"
+            f = File.open("Cargo.toml")
+            begin
+              f.flush.equal?(f)
+            ensure
+              f.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_closed_predicate() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_io_closed_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "x")
+              f = File.open(path)
+              before = f.closed?
+              f.close
+              [before, f.closed?]
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_close_read_close_write() {
+        // close_read / close_write are only valid for duplex IOs. Use a
+        // bidirectional `popen` to exercise both halves.
+        run_test_once(
+            r#"
+            io = IO.popen("cat", "r+")
+            begin
+              io.close_write
+              writable_after = io.closed?
+              io.close_read
+              [writable_after, io.closed?]
+            ensure
+              io.close rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_close_read_on_nonduplex_raises() {
+        run_test_error(
+            r#"
+            r, w = IO.pipe
+            begin
+              w.close_read
+            ensure
+              r.close
+              w.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_syswrite_returns_bytes_written() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_io_syswrite_#{Process.pid}_#{rand(100000)}"
+            begin
+              f = File.open(path, "w")
+              n = f.syswrite("hello")
+              f.close
+              [n, File.read(path)]
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_select_immediate_timeout_pipe() {
+        // A freshly-created pipe with no data buffered should report no
+        // ready descriptors when polled with a zero-second timeout.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            begin
+              IO.select([r], nil, nil, 0)
+            ensure
+              r.close
+              w.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_select_returns_writable_pipe() {
+        // The write end of a freshly-created pipe is always immediately
+        // writable.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            begin
+              writers = IO.select(nil, [w], nil, 0)
+              writers && writers[1].include?(w)
+            ensure
+              r.close
+              w.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_set_encoding_returns_self() {
+        run_test(
+            r#"
+            f = File.open("Cargo.toml")
+            begin
+              [f.set_encoding("ASCII-8BIT").equal?(f),
+               f.set_encoding("UTF-8", "UTF-8").equal?(f)]
+            ensure
+              f.close
+            end
+            "#,
+        );
+    }
+
+    // ----- error patterns --------------------------------------------------
+
+    #[test]
+    fn io_try_convert_to_io_returns_non_io_raises() {
+        // If the object responds to #to_io but the call yields a non-IO,
+        // CRuby raises TypeError. monoruby matches.
+        run_test_error(
+            r#"
+            klass = Class.new do
+              def to_io; "not an IO"; end
+            end
+            IO.try_convert(klass.new)
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_class_read_missing_path_raises() {
+        run_test_error(r#"IO.read("monoruby_no_such_file_xyz_qq")"#);
+    }
+
+    #[test]
+    fn io_class_binread_negative_length_raises() {
+        run_test_error(r#"IO.binread("Cargo.toml", -1)"#);
+    }
+
+    #[test]
+    fn io_open_invalid_fd_raises() {
+        run_test_error(r#"IO.open(-1)"#);
+        run_test_error(r#"IO.open(99999)"#);
+    }
+
+    #[test]
+    fn io_advise_with_non_symbol_raises() {
+        run_test_error(
+            r#"
+            f = File.open("Cargo.toml")
+            begin
+              f.advise("normal")
+            ensure
+              f.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_select_read_array_must_contain_io() {
+        run_test_error(r#"IO.select(["not an io"], nil, nil, 0)"#);
+    }
+
+    #[test]
+    fn io_pos_on_closed_raises() {
+        run_test_error(
+            r#"
+            f = File.open("Cargo.toml")
+            f.close
+            f.pos
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_syswrite_on_closed_raises() {
+        run_test_error(
+            r#"
+            f = File.open("/tmp/monoruby_syswr_closed_#{Process.pid}", "w")
+            path = "/tmp/monoruby_syswr_closed_#{Process.pid}"
+            f.close
+            begin
+              f.syswrite("hello")
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_gets_on_closed_raises() {
+        run_test_error(
+            r#"
+            f = File.open("Cargo.toml")
+            f.close
+            f.gets
             "#,
         );
     }

@@ -1565,6 +1565,11 @@ fn stat_or<T>(
 ///
 /// ### File.owned?
 /// - owned?(path) -> bool
+///
+/// Returns `true` if the file's owner uid matches the effective uid of
+/// the calling process.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/owned=3f.html]
 #[monoruby_builtin]
 fn owned_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::os::unix::fs::MetadataExt;
@@ -1577,6 +1582,11 @@ fn owned_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// ### File.grpowned?
 /// - grpowned?(path) -> bool
+///
+/// Returns `true` if the file's owner gid matches the effective gid of
+/// the calling process.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/grpowned=3f.html]
 #[monoruby_builtin]
 fn grpowned_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::os::unix::fs::MetadataExt;
@@ -1593,6 +1603,10 @@ const S_ISVTX: u32 = 0o1000;
 ///
 /// ### File.setuid?
 /// - setuid?(path) -> bool
+///
+/// Returns `true` if the file has the set-user-id bit set.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/setuid=3f.html]
 #[monoruby_builtin]
 fn setuid_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::os::unix::fs::MetadataExt;
@@ -1603,6 +1617,10 @@ fn setuid_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// ### File.setgid?
 /// - setgid?(path) -> bool
+///
+/// Returns `true` if the file has the set-group-id bit set.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/setgid=3f.html]
 #[monoruby_builtin]
 fn setgid_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::os::unix::fs::MetadataExt;
@@ -1613,6 +1631,10 @@ fn setgid_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// ### File.sticky?
 /// - sticky?(path) -> bool
+///
+/// Returns `true` if the file has the sticky bit set.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/sticky=3f.html]
 #[monoruby_builtin]
 fn sticky_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::os::unix::fs::MetadataExt;
@@ -1623,6 +1645,11 @@ fn sticky_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// ### File.world_readable?
 /// - world_readable?(path) -> Integer | nil
+///
+/// Returns the file's permission bits if the file is world-readable,
+/// `nil` otherwise.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/world_readable=3f.html]
 #[monoruby_builtin]
 fn world_readable_(
     vm: &mut Executor,
@@ -1644,6 +1671,11 @@ fn world_readable_(
 ///
 /// ### File.world_writable?
 /// - world_writable?(path) -> Integer | nil
+///
+/// Returns the file's permission bits if the file is world-writable,
+/// `nil` otherwise.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/world_writable=3f.html]
 #[monoruby_builtin]
 fn world_writable_(
     vm: &mut Executor,
@@ -1665,6 +1697,8 @@ fn world_writable_(
 ///
 /// ### File.socket?
 /// - socket?(path) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/socket=3f.html]
 #[monoruby_builtin]
 fn socket_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::os::unix::fs::FileTypeExt;
@@ -1675,6 +1709,8 @@ fn socket_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// ### File.chardev?
 /// - chardev?(path) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/chardev=3f.html]
 #[monoruby_builtin]
 fn chardev_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::os::unix::fs::FileTypeExt;
@@ -1687,6 +1723,8 @@ fn chardev_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// ### File.blockdev?
 /// - blockdev?(path) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/blockdev=3f.html]
 #[monoruby_builtin]
 fn blockdev_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::os::unix::fs::FileTypeExt;
@@ -1699,6 +1737,8 @@ fn blockdev_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// ### File.pipe?
 /// - pipe?(path) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/pipe=3f.html]
 #[monoruby_builtin]
 fn pipe_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::os::unix::fs::FileTypeExt;
@@ -1903,6 +1943,8 @@ fn utime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// - lutime(atime, mtime, *path) -> Integer
 ///
 /// Same as `File.utime` but does not follow symlinks (uses `lutimes(2)`).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/lutime.html]
 #[monoruby_builtin]
 fn lutime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     utime_impl(vm, globals, lfp, false)
@@ -1964,6 +2006,11 @@ fn chown_impl(
 ///
 /// ### File.chown
 /// - chown(uid, gid, *path) -> Integer
+///
+/// Changes the owner uid and group gid of each `path`. Pass `nil` to leave
+/// either component unchanged. Returns the number of paths processed.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/chown.html]
 #[monoruby_builtin]
 fn file_chown(
     vm: &mut Executor,
@@ -1977,6 +2024,11 @@ fn file_chown(
 ///
 /// ### File.lchown
 /// - lchown(uid, gid, *path) -> Integer
+///
+/// Same as `File.chown` but operates on symbolic links themselves rather
+/// than their targets (uses `lchown(2)`).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/lchown.html]
 #[monoruby_builtin]
 fn file_lchown(
     vm: &mut Executor,
@@ -2063,6 +2115,10 @@ fn file_time_attr(
 ///
 /// ### File.atime
 /// - atime(path) -> Time
+///
+/// Returns the last access time of `path`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/atime.html]
 #[monoruby_builtin]
 fn file_atime(
     vm: &mut Executor,
@@ -2076,6 +2132,10 @@ fn file_atime(
 ///
 /// ### File.mtime
 /// - mtime(path) -> Time
+///
+/// Returns the last modification time of `path`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/mtime.html]
 #[monoruby_builtin]
 fn file_mtime(
     vm: &mut Executor,
@@ -2090,7 +2150,9 @@ fn file_mtime(
 /// ### File.ctime
 /// - ctime(path) -> Time
 ///
-/// On POSIX returns the inode-change time (`st_ctime`).
+/// Returns the inode-change time (`st_ctime`) of `path`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/ctime.html]
 #[monoruby_builtin]
 fn file_ctime(
     vm: &mut Executor,
@@ -2115,8 +2177,10 @@ fn file_ctime(
 /// ### File.birthtime
 /// - birthtime(path) -> Time
 ///
-/// Returns the inode birth time. Raises `NotImplementedError` if the
-/// filesystem does not record it.
+/// Returns the inode birth time of `path`. Raises `NotImplementedError`
+/// when the filesystem does not record it.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/birthtime.html]
 #[monoruby_builtin]
 fn file_birthtime(
     vm: &mut Executor,
@@ -2869,6 +2933,204 @@ mod tests {
               f.write("ok")
               f.close
               File.read(path)
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_lutime() {
+        // lutime updates timestamps on the symlink itself rather than its
+        // target. Verify the call returns the count of paths processed and
+        // that the target's mtime is unchanged afterwards (only the link's
+        // metadata moves).
+        run_test_once(
+            r##"
+            base = "/tmp/monoruby_test_lutime_#{Process.pid}_#{rand(100000)}"
+            target = base + ".target"
+            sym    = base + ".sym"
+            begin
+              File.write(target, "x")
+              File.symlink(target, sym)
+              orig = File.mtime(target).to_i
+              t = Time.at(1_700_000_000)
+              n = File.lutime(t, t, sym)
+              [n, File.mtime(target).to_i == orig]
+            ensure
+              [sym, target].each { |p| File.unlink(p) rescue nil }
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn file_chown_unchanged() {
+        // Pass nil/nil so chown is a no-op (kernel leaves uid/gid alone)
+        // and only validates the path. CRuby and monoruby should both
+        // return the count of paths processed.
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_chown_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "x")
+              n = File.chown(nil, nil, path)
+              [n, File.owned?(path)]
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_lchown_unchanged() {
+        run_test_once(
+            r#"
+            base = "/tmp/monoruby_test_lchown_#{Process.pid}_#{rand(100000)}"
+            target = base + ".target"
+            sym    = base + ".sym"
+            begin
+              File.write(target, "x")
+              File.symlink(target, sym)
+              n = File.lchown(nil, nil, sym)
+              n
+            ensure
+              [sym, target].each { |p| File.unlink(p) rescue nil }
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_mkfifo() {
+        run_test_once(
+            r##"
+            path = "/tmp/monoruby_test_mkfifo_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.mkfifo(path)
+              [File.pipe?(path), File.ftype(path)]
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn file_birthtime_class() {
+        // birthtime is unsupported on some filesystems and raises
+        // NotImplementedError. Run inside `rescue` so monoruby/CRuby agree
+        // on the rescued shape regardless of the underlying FS.
+        run_test_once(
+            r#"
+            t = File.birthtime("Cargo.toml") rescue :unsupported
+            t == :unsupported || t.is_a?(Time)
+            "#,
+        );
+    }
+
+    // ----- error patterns --------------------------------------------------
+
+    #[test]
+    fn file_ftype_nonexistent_raises() {
+        run_test_error(r#"File.ftype("monoruby_no_such_file_xyz_qq")"#);
+    }
+
+    #[test]
+    fn file_readlink_not_a_link_raises() {
+        run_test_error(r#"File.readlink("Cargo.toml")"#);
+    }
+
+    #[test]
+    fn file_truncate_nonexistent_raises() {
+        run_test_error(r#"File.truncate("monoruby_no_such_file_xyz", 0)"#);
+    }
+
+    #[test]
+    fn file_rename_nonexistent_raises() {
+        run_test_error(
+            r#"File.rename("monoruby_no_such_file_xyz", "/tmp/monoruby_target_qq")"#,
+        );
+    }
+
+    #[test]
+    fn file_link_existing_target_raises() {
+        // Target already exists → EEXIST.
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_link_eexist_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "x")
+              raised = false
+              begin
+                File.link("Cargo.toml", path)
+              rescue SystemCallError
+                raised = true
+              end
+              raised
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_chown_on_missing_path_raises() {
+        run_test_error(r#"File.chown(nil, nil, "monoruby_no_such_file_xyz_qq")"#);
+    }
+
+    #[test]
+    fn file_mkfifo_existing_raises() {
+        // Calling mkfifo on a path that already exists returns EEXIST.
+        run_test_error(r#"File.mkfifo("Cargo.toml")"#);
+    }
+
+    #[test]
+    fn file_utime_missing_path_raises() {
+        run_test_error(
+            r#"File.utime(Time.now, Time.now, "monoruby_no_such_file_xyz_qq")"#,
+        );
+    }
+
+    #[test]
+    fn file_realdirpath_missing_parent_raises() {
+        run_test_error(
+            r#"File.realdirpath("/no_such_directory_xyz_qq/file")"#,
+        );
+    }
+
+    #[test]
+    fn file_binwrite_negative_offset_raises() {
+        run_test_error(
+            r##"
+            path = "/tmp/monoruby_test_binwneg_#{Process.pid}"
+            File.binwrite(path, "x", -5)
+            "##,
+        );
+    }
+
+    #[test]
+    fn file_binread_negative_length_raises() {
+        run_test_error(r#"File.binread("Cargo.toml", -1)"#);
+    }
+
+    #[test]
+    fn file_truncate_negative_length_raises() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_trunc_neg_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "hello")
+              raised = false
+              begin
+                File.truncate(path, -1)
+              rescue ArgumentError, Errno::EINVAL
+                raised = true
+              end
+              raised
             ensure
               File.unlink(path) rescue nil
             end

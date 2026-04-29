@@ -1211,11 +1211,11 @@ mod tests {
     }
 
     #[test]
-    fn dir_chroot_requires_root() {
-        // Without CAP_SYS_CHROOT this surfaces as Errno::EPERM. CRuby raises
-        // the same error on the same path under the same uid, so run_test
-        // will compare the two exception classes.
-        run_test_error(r#"Dir.chroot("/tmp") unless Process.uid == 0"#);
+    fn dir_chroot_argument_required() {
+        // Calling without a path is always an ArgumentError regardless of
+        // privileges, so this is safe to run on any uid (in particular,
+        // it does not actually chroot the test process).
+        run_test_error(r#"Dir.chroot"#);
     }
 
     #[test]
@@ -1239,6 +1239,115 @@ mod tests {
               Dir.rmdir(inner) rescue nil
               Dir.rmdir(base) rescue nil
             end
+            "##,
+        );
+    }
+
+    #[test]
+    fn dir_inst_children_excludes_dots() {
+        run_test_once(
+            r##"
+            base = "/tmp/monoruby_dir_instchildren_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(base)
+            begin
+              File.write("#{base}/x", "")
+              File.write("#{base}/y", "")
+              d = Dir.new(base)
+              kids = d.children.sort
+              has_dot    = kids.include?(".")
+              has_dotdot = kids.include?("..")
+              d.close
+              [kids, has_dot, has_dotdot]
+            ensure
+              File.unlink("#{base}/x") rescue nil
+              File.unlink("#{base}/y") rescue nil
+              Dir.rmdir(base) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn dir_inst_each_child_yields_only_children() {
+        run_test_once(
+            r##"
+            base = "/tmp/monoruby_dir_eachinst_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(base)
+            begin
+              File.write("#{base}/a", "")
+              File.write("#{base}/b", "")
+              d = Dir.new(base)
+              names = []
+              d.each_child { |n| names << n }
+              d.close
+              names.sort
+            ensure
+              File.unlink("#{base}/a") rescue nil
+              File.unlink("#{base}/b") rescue nil
+              Dir.rmdir(base) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn dir_chroot_missing_path_raises() {
+        // Errno::ENOENT under root, Errno::EPERM under non-root — either
+        // way it's a SystemCallError and CRuby/monoruby raise the same
+        // class on the same euid. As root with a missing target it's
+        // ENOENT, which is what the harness will agree on.
+        run_test_error(r#"Dir.chroot("/no_such_dir_xyz_qq")"#);
+    }
+
+    // ----- error patterns --------------------------------------------------
+
+    #[test]
+    fn dir_new_nonexistent_raises() {
+        run_test_error(r#"Dir.new("/no_such_dir_xyz_qq_for_new")"#);
+    }
+
+    #[test]
+    fn dir_open_nonexistent_raises() {
+        run_test_error(r#"Dir.open("/no_such_dir_xyz_qq_for_open")"#);
+    }
+
+    #[test]
+    fn dir_fchdir_invalid_fd_raises() {
+        run_test_error(r#"Dir.fchdir(-1)"#);
+    }
+
+    #[test]
+    fn dir_fchdir_with_non_integer_raises() {
+        run_test_error(r#"Dir.fchdir("not an fd")"#);
+    }
+
+    #[test]
+    fn dir_foreach_missing_path_raises() {
+        run_test_error(
+            r#"Dir.foreach("/no_such_dir_xyz_qq_foreach") { |_| }"#,
+        );
+    }
+
+    #[test]
+    fn dir_inst_chdir_to_missing_path_raises() {
+        // CRuby holds the directory open via DIR*+fchdir, so chdir to a
+        // removed-but-still-open dir succeeds in CRuby and surfaces ENOENT
+        // in monoruby. Avoid that observability gap and instead exercise a
+        // path that was never a real directory.
+        run_test_once(
+            r##"
+            base = "/tmp/monoruby_dir_chdir_missing_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(base)
+            d = Dir.new(base)
+            d.close
+            raised = false
+            begin
+              d.instance_variable_set(:@path, "/no_such_dir_qq_xyz_for_chdir")
+              d.chdir
+            rescue SystemCallError, IOError
+              raised = true
+            end
+            raised
             "##,
         );
     }
