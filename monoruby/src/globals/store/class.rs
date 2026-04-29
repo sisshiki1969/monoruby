@@ -232,7 +232,45 @@ pub(crate) struct ConstState {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ConstStateKind {
     Loaded(Value),
-    Autoload(std::path::PathBuf),
+    Autoload(AutoloadEntry),
+}
+
+/// Per-constant autoload registration plus its load-state. Mirrors
+/// CRuby's `autoload_const` + `autoload_data`: the `feature` is the
+/// path to require, and `state` tracks whether a load is in progress
+/// or has been declared "done without defining the constant" so that
+/// subsequent references don't keep retrying.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AutoloadEntry {
+    pub feature: std::path::PathBuf,
+    pub state: AutoloadState,
+}
+
+/// Load state for an autoload-registered constant.
+///
+/// `Idle` is the initial state right after `Module#autoload`. The next
+/// triggering reference flips to `Loading` for the duration of the
+/// `require`. monoruby is single-threaded so the flag is just a
+/// recursion guard — a same-(only)-thread re-reference must not
+/// re-enter `require`. After the require returns successfully but the
+/// constant is *still* registered as autoload (i.e. the file did not
+/// define it), the entry is removed entirely so that subsequent
+/// references raise `NameError` rather than retrying. If `require`
+/// itself raises (e.g. `LoadError`), the state is reverted to `Idle`
+/// so a future reference may try again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AutoloadState {
+    Idle,
+    Loading,
+}
+
+impl AutoloadEntry {
+    pub(crate) fn new(feature: std::path::PathBuf) -> Self {
+        Self {
+            feature,
+            state: AutoloadState::Idle,
+        }
+    }
 }
 
 impl ConstState {
@@ -245,7 +283,7 @@ impl ConstState {
 
     pub(crate) fn autoload(path: std::path::PathBuf) -> Self {
         Self {
-            kind: ConstStateKind::Autoload(path),
+            kind: ConstStateKind::Autoload(AutoloadEntry::new(path)),
             visibility: ConstVisibility::Public,
         }
     }
@@ -263,6 +301,20 @@ impl ConstState {
 
     pub(crate) fn is_autoload(&self) -> bool {
         matches!(self.kind, ConstStateKind::Autoload(_))
+    }
+
+    /// True if this slot is an autoload registration that is currently
+    /// being loaded on this thread. Used to suppress re-triggering
+    /// `require` from inside the autoload's own load chain (CRuby's
+    /// same-thread recursion guard).
+    pub(crate) fn is_autoload_loading(&self) -> bool {
+        matches!(
+            self.kind,
+            ConstStateKind::Autoload(AutoloadEntry {
+                state: AutoloadState::Loading,
+                ..
+            })
+        )
     }
 
     pub(crate) fn is_private(&self) -> bool {
@@ -593,7 +645,7 @@ impl ClassInfo {
     pub(in crate::globals) fn remove_constant(&mut self, name: IdentId) -> Option<Value> {
         let removed = self.constants.remove(&name).map(|state| match state.kind {
             ConstStateKind::Loaded(v) => v,
-            ConstStateKind::Autoload(..) => Value::nil(),
+            ConstStateKind::Autoload(_) => Value::nil(),
         });
         if removed.is_some() {
             self.constant_locations.remove(&name);

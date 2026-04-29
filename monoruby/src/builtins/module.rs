@@ -640,9 +640,18 @@ fn autoload_query(
     loop {
         if let Some(state) = globals.store.get_constant(module.id(), name) {
             match &state.kind {
-                ConstStateKind::Autoload(path) => {
-                    return Ok(Value::string(path.to_string_lossy().into_owned()));
-                }
+                ConstStateKind::Autoload(entry) => match entry.state {
+                    // CRuby 3.0+: while the autoload's own require is
+                    // in flight, `autoload?` returns nil (the load is
+                    // already in progress, so there's nothing left to
+                    // schedule).
+                    AutoloadState::Loading => return Ok(Value::nil()),
+                    AutoloadState::Idle => {
+                        return Ok(Value::string(
+                            entry.feature.to_string_lossy().into_owned(),
+                        ));
+                    }
+                },
                 ConstStateKind::Loaded(_) => return Ok(Value::nil()),
             }
         }
@@ -818,8 +827,14 @@ fn const_defined(
 ) -> Result<Value> {
     let module = lfp.self_val().as_class();
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
-    let found = lookup_constant_path(vm, globals, module, lfp.arg(0), inherit)?;
-    Ok(Value::bool(found.is_some()))
+    // CRuby's `Module#const_defined?` does not trigger autoload for
+    // the final segment (since Ruby 2.0 — `rb_const_defined` calls
+    // `rb_const_defined_0` with `autoload_load = FALSE`). The
+    // intermediate qualifiers in a path string like `"A::B::C"` are
+    // still resolved through the regular triggering lookup so we can
+    // walk into the right class.
+    let found = probe_constant_path(vm, globals, module, lfp.arg(0), inherit)?;
+    Ok(Value::bool(found))
 }
 
 ///
@@ -1005,6 +1020,104 @@ fn lookup_constant_path(
         }
     }
     Ok(None)
+}
+
+/// Like `lookup_constant_path` but probes the *final* segment without
+/// firing autoload — used by `Module#const_defined?` which (since
+/// Ruby 2.0) reports an autoload-registered constant as defined
+/// without invoking `require`. Intermediate qualifiers still trigger
+/// autoload, since we need the actual class object to walk further.
+fn probe_constant_path(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Module,
+    name_arg: Value,
+    inherit: bool,
+) -> Result<bool> {
+    let (path, was_symbol) = if let Some(sym) = name_arg.try_symbol() {
+        (sym.get_name().to_string(), true)
+    } else if let Some(s) = name_arg.is_str() {
+        (s.to_string(), false)
+    } else if let Some(func_id) = globals.check_method(name_arg, IdentId::TO_STR) {
+        let result = vm.invoke_func_inner(globals, func_id, name_arg, &[], None, None)?;
+        if let Some(s) = result.is_str() {
+            (s.to_string(), false)
+        } else {
+            return Err(MonorubyErr::typeerr(format!(
+                "no implicit conversion of {} into String",
+                name_arg.get_real_class_name(&globals.store)
+            )));
+        }
+    } else {
+        return Err(MonorubyErr::typeerr(format!(
+            "no implicit conversion of {} into String",
+            name_arg.get_real_class_name(&globals.store)
+        )));
+    };
+
+    let (start_at_object, segs): (bool, Vec<&str>) = if was_symbol {
+        if path.contains("::") {
+            return Err(MonorubyErr::nameerr(format!(
+                "wrong constant name {path}"
+            )));
+        }
+        (false, vec![path.as_str()])
+    } else if let Some(rest) = path.strip_prefix("::") {
+        (true, rest.split("::").collect())
+    } else {
+        (false, path.split("::").collect())
+    };
+
+    if segs.iter().any(|s| !is_valid_const_name(s)) {
+        return Err(MonorubyErr::nameerr(format!(
+            "wrong constant name {path}"
+        )));
+    }
+
+    let mut current = if start_at_object {
+        globals.store[OBJECT_CLASS].get_module()
+    } else {
+        receiver
+    };
+    let last_idx = segs.len() - 1;
+    for (i, seg) in segs.iter().enumerate() {
+        let id = IdentId::get_id(seg);
+        if i == last_idx {
+            // Final segment: non-triggering probe. For the receiver
+            // (i == 0) honour `inherit`; for nested resolved classes
+            // (i > 0) restrict to direct lookup, matching the
+            // triggering variant.
+            return Ok(if i == 0 && inherit {
+                Executor::probe_constant_superclass(globals, current, id)
+            } else {
+                Executor::probe_constant_at(globals, current.id(), id)
+            });
+        }
+        // Intermediate segment: resolve via the triggering path so
+        // we can walk into the named class. A miss short-circuits
+        // to "not defined".
+        let val = if i == 0 && inherit {
+            match vm.get_constant_superclass_with_class(globals, current, id) {
+                Ok((v, _)) => Some(v),
+                Err(_) => None,
+            }
+        } else if globals.store[current.id()].has_own_constant(id) {
+            match vm.get_constant_checked(globals, current.id(), id) {
+                Ok(v) => Some(v),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+        match val {
+            Some(v) => match v.is_class_or_module() {
+                Some(m) => current = m,
+                None => return Ok(false),
+            },
+            None => return Ok(false),
+        }
+    }
+    Ok(false)
 }
 
 ///

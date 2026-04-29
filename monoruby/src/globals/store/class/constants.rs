@@ -31,15 +31,35 @@ impl ClassInfoTable {
                 // (matches CRuby behavior).
                 ConstStateKind::Loaded(_) => {}
                 // Re-registering autoload updates the path; visibility is
-                // preserved.
-                ConstStateKind::Autoload(path) => {
-                    *path = file_name.into();
+                // preserved. CRuby leaves an in-progress load alone here
+                // and only swaps the feature, so we mirror that by keeping
+                // the existing `state` untouched.
+                ConstStateKind::Autoload(entry) => {
+                    entry.feature = file_name.into();
                 }
             },
             None => {
                 self[class_id]
                     .constants
                     .insert(name, ConstState::autoload(file_name.into()));
+            }
+        }
+    }
+
+    /// Transition an Autoload entry's `state`. Used by the const-lookup
+    /// path to mark a slot `Loading` for the duration of the `require`,
+    /// and to revert it on `require` failure. No-op if the slot is gone
+    /// or has been replaced by a Loaded value (e.g. the require defined
+    /// the constant via `set_constant`).
+    pub(crate) fn set_autoload_state(
+        &mut self,
+        class_id: ClassId,
+        name: IdentId,
+        state: AutoloadState,
+    ) {
+        if let Some(slot) = self[class_id].constants.get_mut(&name) {
+            if let ConstStateKind::Autoload(entry) = &mut slot.kind {
+                entry.state = state;
             }
         }
     }
