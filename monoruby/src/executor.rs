@@ -1640,6 +1640,28 @@ impl Executor {
             Some(base) => base.expect_class_or_module(&globals.store)?.id(),
             None => self.context_class_id(),
         };
+        // Capture the call-site location *before* we create / look up
+        // the class so we can attach it to the constant if this is the
+        // first definition. Walks the CFP chain for the nearest Ruby
+        // (iseq) frame and uses its current PC line — matches CRuby's
+        // `Module#const_source_location` returning `[__FILE__,
+        // __LINE__]` of `class Foo; end` / `module Foo; end`.
+        let class_def_loc = {
+            let mut frame = Some(self.cfp());
+            let mut found = None;
+            while let Some(c) = frame {
+                let fid = c.lfp().func_id();
+                if let Some(iseq_id) = globals.store[fid].is_iseq() {
+                    let iseq = &globals.store[iseq_id];
+                    let line = iseq.sourceinfo.get_line(&iseq.loc) as u32;
+                    let file = iseq.sourceinfo.file_name().to_string();
+                    found = Some((file, line));
+                    break;
+                }
+                frame = c.prev();
+            }
+            found
+        };
         let (self_val, is_new) = match self.get_constant(globals, parent, name)? {
             Some(val) => {
                 let val = val.expect_class_or_module(&globals.store)?;
@@ -1665,6 +1687,9 @@ impl Executor {
                 } else {
                     let new_class =
                         globals.define_class_with_identid(name, Some(superclass), parent);
+                    if let Some((file, line)) = class_def_loc.clone() {
+                        globals.store[parent].record_constant_location(name, file, line);
+                    }
                     // CRuby invokes `const_added` BEFORE `inherited` when a
                     // new class is created via the `class` keyword.
                     let parent_val = globals.store[parent].get_module().into();
@@ -1690,6 +1715,9 @@ impl Executor {
             }
         };
         if is_new {
+            if let Some((file, line)) = class_def_loc {
+                globals.store[parent].record_constant_location(name, file, line);
+            }
             // Module case: const_added without inherited.
             let parent_val = globals.store[parent].get_module().into();
             self.invoke_method_inner(

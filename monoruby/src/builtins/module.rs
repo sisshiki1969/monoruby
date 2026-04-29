@@ -1014,7 +1014,12 @@ fn lookup_constant_path(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_set.html]
 #[monoruby_builtin]
-fn const_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn const_set(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
     let mut self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
     let name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
@@ -1053,6 +1058,17 @@ fn const_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         );
     }
     globals.set_constant(module, name, val);
+    // Record the call-site as the constant's source location so
+    // `Module#const_source_location(:Foo)` returns `[__FILE__,
+    // __LINE__]` of the `const_set` call. Walks the CFP chain to skip
+    // builtin frames; falls back to no location if we can't find a
+    // Ruby frame (in which case `const_source_location` will return
+    // `[]`, the "C-defined" sentinel).
+    if let Some(caller) = vm.cfp().prev()
+        && let Some((file, line)) = caller_source_location_with_pc(globals, caller, pc)
+    {
+        globals.store[module].record_constant_location(name, file, line);
+    }
     let receiver = globals.store[module].get_module().into();
     vm.invoke_method_inner(
         globals,
@@ -1078,35 +1094,170 @@ fn const_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_source_location.html]
 #[monoruby_builtin]
 fn const_source_location(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    validate_constant_name(name)?;
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
-    let mut module = lfp.self_val().as_class();
-    loop {
-        if let Some(loc) = globals.store[module.id()].get_constant_location(name) {
-            let (file, line) = (loc.0.to_string(), loc.1);
-            return Ok(Value::array_from_vec(vec![
+    let module = lfp.self_val().as_class();
+    let result = lookup_constant_with_owner(vm, globals, module, lfp.arg(0), inherit)?;
+    match result {
+        // Constant found and recorded by user code. Return [file, line].
+        Some((owner_id, Some((file, line)))) => {
+            let _ = owner_id;
+            Ok(Value::array_from_vec(vec![
                 Value::string(file),
                 Value::integer(line as i64),
-            ]));
+            ]))
         }
-        if globals.store.get_constant(module.id(), name).is_some() {
-            // Constant exists but has no recorded location.
-            return Ok(Value::nil());
+        // Constant found but has no recorded location (defined in
+        // Rust, e.g. `Object::String`). CRuby returns an empty array
+        // here ("[] for C-defined constants").
+        Some((_, None)) => Ok(Value::array_empty()),
+        // Constant not found.
+        None => Ok(Value::nil()),
+    }
+}
+
+/// Walk the CFP chain starting at `cfp` for the nearest Ruby (iseq)
+/// frame and return the (file, line) source location *of the current
+/// PC* in that frame. Used by `Module#const_set` to record
+/// `const_source_location` for dynamically assigned constants —
+/// `mod.const_set :Foo, 1` must report the line of the `const_set`
+/// call, not the start of the enclosing iseq. The `pc` argument is the
+/// builtin call site's bytecode pointer, used only when the *immediate*
+/// caller is itself an iseq (i.e. the receiver of `const_set`); deeper
+/// iseq frames fall back to their own loc.
+fn caller_source_location_with_pc(
+    globals: &Globals,
+    cfp: Cfp,
+    pc: BytecodePtr,
+) -> Option<(String, u32)> {
+    let mut frame = Some(cfp);
+    let mut first = true;
+    while let Some(c) = frame {
+        let fid = c.lfp().func_id();
+        if let Some(iseq_id) = globals.store[fid].is_iseq() {
+            let iseq = &globals.store[iseq_id];
+            let loc = if first {
+                let bc_index = iseq.get_pc_index(Some(pc));
+                iseq.sourcemap[bc_index.to_usize()]
+            } else {
+                iseq.loc
+            };
+            let line = iseq.sourceinfo.get_line(&loc) as u32;
+            let file = iseq.sourceinfo.file_name().to_string();
+            return Some((file, line));
         }
-        if !inherit {
-            return Ok(Value::nil());
+        frame = c.prev();
+        first = false;
+    }
+    None
+}
+
+/// Walk a (possibly scoped) constant path and return the (defining class
+/// id, optional source location) of the resolved constant. Returns
+/// `Ok(None)` when no segment in the path resolves. The argument is
+/// coerced through `#to_str` like `Module#const_get`, with the same
+/// `::`-split rules.
+fn lookup_constant_with_owner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Module,
+    name_arg: Value,
+    inherit: bool,
+) -> Result<Option<(ClassId, Option<(String, u32)>)>> {
+    let (path, was_symbol) = if let Some(sym) = name_arg.try_symbol() {
+        (sym.get_name().to_string(), true)
+    } else if let Some(s) = name_arg.is_str() {
+        (s.to_string(), false)
+    } else if let Some(func_id) = globals.check_method(name_arg, IdentId::TO_STR) {
+        let result = vm.invoke_func_inner(globals, func_id, name_arg, &[], None, None)?;
+        if let Some(s) = result.is_str() {
+            (s.to_string(), false)
+        } else {
+            return Err(MonorubyErr::typeerr(format!(
+                "no implicit conversion of {} into String",
+                name_arg.get_real_class_name(&globals.store)
+            )));
         }
-        match module.superclass() {
-            Some(superclass) => module = superclass,
-            None => return Ok(Value::nil()),
+    } else {
+        return Err(MonorubyErr::typeerr(format!(
+            "no implicit conversion of {} into String",
+            name_arg.get_real_class_name(&globals.store)
+        )));
+    };
+
+    let (start_at_object, segs): (bool, Vec<&str>) = if was_symbol {
+        // CRuby rejects `::`-containing Symbols outright (Symbols are
+        // bare names; they can't carry scope qualifiers).
+        if path.contains("::") {
+            return Err(MonorubyErr::nameerr(format!(
+                "wrong constant name {path}"
+            )));
+        }
+        (false, vec![path.as_str()])
+    } else if let Some(rest) = path.strip_prefix("::") {
+        (true, rest.split("::").collect())
+    } else {
+        (false, path.split("::").collect())
+    };
+    if segs.iter().any(|s| !is_valid_const_name(s)) {
+        return Err(MonorubyErr::nameerr(format!("wrong constant name {path}")));
+    }
+
+    let mut current = if start_at_object {
+        globals.store[OBJECT_CLASS].get_module()
+    } else {
+        receiver
+    };
+    let last_idx = segs.len() - 1;
+    for (i, seg) in segs.iter().enumerate() {
+        let id = IdentId::get_id(seg);
+        // First segment honours `inherit`; later segments are looked
+        // up directly on the resolved class, matching CRuby's scoped
+        // resolution.
+        let owner_with_loc: Option<(ClassId, Option<(String, u32)>)> = if i == 0 && inherit {
+            let mut module = current;
+            loop {
+                if globals.store[module.id()].has_own_constant(id) {
+                    let loc = globals.store[module.id()]
+                        .get_constant_location(id)
+                        .map(|(f, l)| (f.to_string(), l));
+                    break Some((module.id(), loc));
+                }
+                match module.superclass() {
+                    Some(superclass) => module = superclass,
+                    None => break None,
+                }
+            }
+        } else if globals.store[current.id()].has_own_constant(id) {
+            let loc = globals.store[current.id()]
+                .get_constant_location(id)
+                .map(|(f, l)| (f.to_string(), l));
+            Some((current.id(), loc))
+        } else {
+            None
+        };
+        let (owner, loc) = match owner_with_loc {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        if i == last_idx {
+            return Ok(Some((owner, loc)));
+        }
+        // Resolve the value to descend into for the next segment.
+        let val = match globals.store.get_constant_noautoload(owner, id) {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        match val.is_class_or_module() {
+            Some(m) => current = m,
+            None => return Ok(None),
         }
     }
+    Ok(None)
 }
 
 ///
@@ -4312,6 +4463,54 @@ mod tests {
             CSrcLocMissing.const_source_location(:NOPE)
             "#,
         );
+    }
+
+    #[test]
+    fn const_source_location_builtin_returns_empty_array() {
+        // For a constant defined in C/Rust (e.g. `Object::String`),
+        // CRuby returns `[]` to signal "exists but has no Ruby
+        // source". Only an undefined constant returns `nil`.
+        run_test(r#"Object.const_source_location(:String)"#);
+    }
+
+    #[test]
+    fn const_source_location_via_const_set() {
+        // `Module#const_set` records the call-site so
+        // `const_source_location` later returns `[__FILE__, line]` of
+        // the `const_set` call.
+        run_test(
+            r#"
+            mod = Module.new
+            mod.const_set(:MyConst, 1)
+            loc = mod.const_source_location(:MyConst)
+            [loc.is_a?(Array), loc.size == 2, loc[1].is_a?(Integer)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn const_source_location_scoped_path() {
+        // `"A::B"` and `"::A::B"` qualified paths resolve and report
+        // the inner constant's recorded location. Rejects malformed
+        // paths with NameError.
+        run_test(
+            r#"
+            class CSrcLocScopeOuter
+              class Inner
+                INNER_CONST = 42
+              end
+            end
+            loc = CSrcLocScopeOuter.const_source_location("Inner::INNER_CONST")
+            [loc.is_a?(Array), loc.size == 2]
+            "#,
+        );
+    }
+
+    #[test]
+    fn const_source_location_invalid_name_raises() {
+        run_test_error(r#"Module.new.const_source_location("lower")"#);
+        run_test_error(r#"Module.new.const_source_location(:"A::B")"#);
+        run_test_error(r#"Module.new.const_source_location(123)"#);
     }
 
     // ----- Module#protected_instance_methods -----
