@@ -319,8 +319,32 @@ impl Globals {
         lineno: i64,
     ) -> Result<FuncId> {
         let line_offset = lineno - 1;
-        let outer_fid = caller_cfp.lfp().func_id();
-        let outer = match self.store[outer_fid].is_iseq() {
+        // Walk the CFP chain to find the nearest *iseq* (Ruby) frame.
+        // `Module#class_eval` / `instance_eval` / `Kernel#eval` may be
+        // invoked indirectly through builtin frames (mspec, helpers
+        // written in Rust, …), so the immediate caller often isn't a
+        // Ruby method itself. CRuby's `rb_eval_string` likewise looks
+        // up the nearest cref/binding rather than failing at the first
+        // C frame.
+        //
+        // Side-effect note: only the *outer scope* (lexical
+        // ancestors + visible locals) is taken from this iseq;
+        // arguments, self, and the lexical-class override (`class_eval`
+        // pushing the receiver as the eval cref) come from the caller
+        // we were originally given.
+        let outer = {
+            let mut frame = Some(caller_cfp);
+            loop {
+                match frame {
+                    Some(cfp) => match self.store[cfp.lfp().func_id()].is_iseq() {
+                        Some(iseq) => break Some(iseq),
+                        None => frame = cfp.prev(),
+                    },
+                    None => break None,
+                }
+            }
+        };
+        let outer = match outer {
             Some(iseq) => iseq,
             None => {
                 return Err(MonorubyErr::runtimeerr(
