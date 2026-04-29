@@ -125,9 +125,13 @@ class Module
   end
 
   def include?(mod)
-    unless mod.is_a?(Module)
+    # CRuby `Module#include?` accepts only true Modules, not Classes (even
+    # though `Class < Module`). And the receiver is *not* counted as one of
+    # its own included modules — `M.include?(M)` is `false`.
+    if !mod.is_a?(Module) || mod.is_a?(Class)
       raise TypeError, "wrong argument type #{mod.class} (expected Module)"
     end
+    return false if equal?(mod)
     ancestors.include?(mod)
   end
 end

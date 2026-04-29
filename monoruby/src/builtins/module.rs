@@ -133,7 +133,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_private_builtin_func(MODULE_CLASS, "append_features", append_features, 1);
     globals.define_private_builtin_func(MODULE_CLASS, "extend_object", extend_object, 1);
     globals.define_builtin_func_rest(MODULE_CLASS, "prepend", prepend);
-    globals.define_builtin_func(MODULE_CLASS, "prepend_features", prepend_features, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "prepend_features", prepend_features, 1);
     globals.define_builtin_func(MODULE_CLASS, "instance_method", instance_method, 1);
     // `public_instance_method` is identical to `instance_method` except it
     // raises NameError when the resolved method is private or protected.
@@ -1270,6 +1270,9 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
+    for v in args.iter().cloned() {
+        require_module_argument(globals, v, "include")?;
+    }
     let self_ = lfp.self_val();
     for v in args.iter().cloned().rev() {
         vm.invoke_method_inner(globals, IdentId::APPEND_FEATURES, v, &[self_], None, None)?;
@@ -1290,6 +1293,7 @@ fn append_features(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    require_module_receiver(globals, lfp.self_val(), "append_features")?;
     let mut base = lfp.arg(0).expect_class_or_module(&globals.store)?;
     base.as_val().ensure_not_frozen(&globals.store)?;
     let include_module = lfp.self_val().expect_module(globals)?;
@@ -1309,7 +1313,12 @@ fn extend_object(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let obj = lfp.arg(0);
+    require_module_receiver(globals, lfp.self_val(), "extend_object")?;
+    let mut obj = lfp.arg(0);
+    // Refuse to extend a frozen object — CRuby raises `RuntimeError`
+    // (a FrozenError, which is a RuntimeError subclass) before
+    // mutating anything.
+    obj.ensure_not_frozen(&globals.store)?;
     let mut class = globals.store.get_singleton(obj)?;
     let include_module = lfp.self_val().expect_module(globals)?;
     class.include_module(include_module)?;
@@ -1327,6 +1336,14 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
+    // Validate up front: every argument must be a true Module (not a
+    // Class, not anything else). CRuby raises TypeError before invoking
+    // any `prepend_features` hook. This also keeps a non-Module from
+    // reaching `Module#prepend_features` (which we removed from Class)
+    // and bottoming out as NoMethodError.
+    for v in args.iter().cloned() {
+        require_module_argument(globals, v, "prepend")?;
+    }
     let self_ = lfp.self_val();
     for v in args.iter().cloned().rev() {
         vm.invoke_method_inner(
@@ -1342,6 +1359,20 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(lfp.self_val())
 }
 
+/// Reject a non-Module argument (a Class, an instance, …). Used by
+/// `Module#prepend` and `Module#include` for their up-front
+/// `TypeError` checks before invoking the per-argument hooks.
+fn require_module_argument(globals: &Globals, arg: Value, op: &str) -> Result<()> {
+    if arg.ty() == Some(ObjTy::MODULE) {
+        Ok(())
+    } else {
+        Err(MonorubyErr::typeerr(format!(
+            "wrong argument type {} (expected Module) in {op}",
+            arg.get_real_class_name(&globals.store),
+        )))
+    }
+}
+
 ///
 /// ### Module#prepend_features
 /// - prepend_features(mod) -> self
@@ -1354,10 +1385,30 @@ fn prepend_features(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    require_module_receiver(globals, lfp.self_val(), "prepend_features")?;
     let mut base = lfp.arg(0).expect_class_or_module(&globals.store)?;
+    base.as_val().ensure_not_frozen(&globals.store)?;
     let prepend_module = lfp.self_val().as_class();
     base.prepend_module(prepend_module)?;
     Ok(lfp.self_val())
+}
+
+/// Reject Class receivers. `Module#module_function`, `prepend_features`,
+/// `append_features`, `extend_object` are conceptually module-only; CRuby
+/// raises TypeError when they're invoked on a Class via
+/// `Module.instance_method(:foo).bind(Class.new).call`. Removing them
+/// from `Class`'s method table covers normal dispatch but not the
+/// rebound-UnboundMethod path, which still routes back through Module's
+/// implementation.
+fn require_module_receiver(globals: &Globals, recv: Value, name: &str) -> Result<()> {
+    if recv.ty() == Some(ObjTy::CLASS) {
+        Err(MonorubyErr::typeerr(format!(
+            "Module#{name} cannot be called on a Class"
+        )))
+    } else {
+        let _ = globals;
+        Ok(())
+    }
 }
 
 ///
@@ -1866,9 +1917,14 @@ fn included_modules(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
+    // Skip the receiver itself: `included_modules` lists the modules
+    // *mixed in* via `include` / `prepend`, not the receiver. CRuby:
+    // `ModuleSpecs.included_modules == []`,
+    // `Child.included_modules == [Super, Basic, Kernel]`.
     let v: Vec<Value> = globals
         .ancestors(class_id)
         .into_iter()
+        .skip(1)
         .filter_map(|m| {
             let val: Value = m.into();
             if val.ty() == Some(ObjTy::MODULE) {
@@ -2006,6 +2062,11 @@ fn module_function(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // `module_function` is meaningful only on a Module. CRuby raises
+    // TypeError when invoked on a Class (e.g. via
+    // `Module.instance_method(:module_function).bind(Class.new).call`),
+    // and we removed it from `Class`'s public method table elsewhere.
+    require_module_receiver(globals, lfp.self_val(), "module_function")?;
     let arg0 = lfp.arg(0);
     let args = arg0.as_array();
     if args.is_empty() {

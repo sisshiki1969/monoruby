@@ -50,6 +50,22 @@ pub(super) fn init(globals: &mut Globals) {
     );
     // hook method (no-op by default, overridden by startup.rb)
     globals.define_private_builtin_func(CLASS_CLASS, "inherited", class_noop_hook, 1);
+
+    // CRuby explicitly undefines a handful of `Module`-only methods on
+    // `Class` so e.g. `Class.new.send(:append_features, …)` raises
+    // NoMethodError instead of treating Class as a Module-mixer.
+    // Surfaced by ruby/spec `core/module/{append,prepend}_features_spec.rb`,
+    // `extend_object_spec.rb`, and `module_function_spec.rb` "on Class
+    // is undefined".
+    for m in [
+        "append_features",
+        "prepend_features",
+        "extend_object",
+        "module_function",
+        "refine",
+    ] {
+        let _ = globals.undef_method_for_class(CLASS_CLASS, IdentId::get_id(m));
+    }
 }
 
 /// No-op hook for Class#inherited (overridden by startup.rb).
