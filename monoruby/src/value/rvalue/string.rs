@@ -278,7 +278,9 @@ impl Encoding {
 
             // Other byte-oriented encodings without native support
             // are stored as ASCII-8BIT but the name isn't preserved
-            // (consistent with monoruby's prior behaviour).
+            // (consistent with monoruby's prior behaviour). Includes
+            // dummy encodings that Ruby exposes by name for round-
+            // trip purposes (UTF-7, Emacs-Mule, CP50220/CP50221).
             "WINDOWS_1250" | "CP1250" | "WINDOWS_1251" | "CP1251" | "WINDOWS_1252"
             | "CP1252" | "WINDOWS_1253" | "CP1253" | "WINDOWS_1254" | "CP1254"
             | "WINDOWS_1255" | "CP1255" | "WINDOWS_1256" | "CP1256" | "WINDOWS_1257"
@@ -288,8 +290,11 @@ impl Encoding {
             | "CP861" | "IBM862" | "CP862" | "IBM863" | "CP863" | "IBM864" | "CP864"
             | "IBM865" | "CP865" | "IBM866" | "CP866" | "IBM869" | "CP869" | "KOI8_R"
             | "KOI8_U" | "GB2312" | "EUC_CN" | "GBK" | "CP936" | "GB18030" | "BIG5"
-            | "BIG5_HKSCS" | "EUC_KR" | "EUCKR" | "CP949" | "EUC_TW" | "EUCTW"
-            | "TIS_620" | "TIS620" | "CESU_8" | "CESU8" => Ok(Encoding::Ascii8),
+            | "BIG5_HKSCS" | "BIG5_UAO" | "EUC_KR" | "EUCKR" | "CP949" | "EUC_TW"
+            | "EUCTW" | "TIS_620" | "TIS620" | "CESU_8" | "CESU8" | "UTF_7"
+            | "EMACS_MULE" | "CP50220" | "CP50221" | "GB12345" | "MACCYRILLIC"
+            | "MACGREEK" | "MACICELAND" | "MACROMAN" | "MACROMANIA" | "MACTHAI"
+            | "MACTURKISH" | "MACUKRAINE" => Ok(Encoding::Ascii8),
 
             _ => Err(MonorubyErr::argumenterr(format!(
                 "unknown encoding name - {s}"
