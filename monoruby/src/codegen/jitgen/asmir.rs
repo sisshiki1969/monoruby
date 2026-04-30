@@ -235,7 +235,7 @@ impl AsmIr {
         self.push(AsmInst::StackToReg(SlotId::self_(), dst));
     }
 
-    pub(super) fn xmm_move(&mut self, src: Xmm, dst: Xmm) {
+    pub(super) fn xmm_move(&mut self, src: VirtFPReg, dst: VirtFPReg) {
         self.push(AsmInst::XmmMove(src, dst));
     }
 
@@ -248,7 +248,7 @@ impl AsmIr {
     /// ### destroy
     /// - rcx
     ///
-    pub fn xmm2stack(&mut self, xmm: Xmm, reg: SlotId) {
+    pub fn xmm2stack(&mut self, xmm: VirtFPReg, reg: SlotId) {
         self.push(AsmInst::XmmToStack(xmm, reg));
     }
 
@@ -276,7 +276,7 @@ impl AsmIr {
     /// ### destroy
     /// - R(*reg*)
     ///
-    pub fn fixnum2xmm(&mut self, reg: GP, x: Xmm) {
+    pub fn fixnum2xmm(&mut self, reg: GP, x: VirtFPReg) {
         self.push(AsmInst::FixnumToXmm(reg, x));
     }
 
@@ -299,21 +299,21 @@ impl AsmIr {
     ///
     /// - rax, rdi
     ///
-    pub fn float_to_xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
+    pub fn float_to_xmm(&mut self, reg: GP, x: VirtFPReg, deopt: AsmDeopt) {
         self.push(AsmInst::FloatToXmm(reg, x, deopt));
     }
 
     ///
-    /// Move *f*(f64) to Xmm(*x*).
+    /// Move *f*(f64) to VirtFPReg(*x*).
     ///
-    pub fn f64_to_xmm(&mut self, f: f64, x: Xmm) {
+    pub fn f64_to_xmm(&mut self, f: f64, x: VirtFPReg) {
         self.push(AsmInst::F64ToXmm(f, x));
     }
 
     ///
-    /// Move *i*(i63) to the stack *slot* and Xmm(*x*).
+    /// Move *i*(i63) to the stack *slot* and VirtFPReg(*x*).
     ///
-    pub fn i64_to_stack_and_xmm(&mut self, i: i64, slot: SlotId, x: Xmm) {
+    pub fn i64_to_stack_and_xmm(&mut self, i: i64, slot: SlotId, x: VirtFPReg) {
         self.push(AsmInst::I64ToBoth(i, slot, x));
     }
 
@@ -527,7 +527,7 @@ impl AsmIr {
     /// - caller save registers
     /// - stack
     ///
-    pub(super) fn xmm_binop(&mut self, kind: BinOpK, lhs: Xmm, rhs: Xmm, dst: Xmm) {
+    pub(super) fn xmm_binop(&mut self, kind: BinOpK, lhs: VirtFPReg, rhs: VirtFPReg, dst: VirtFPReg) {
         self.push(AsmInst::XmmBinOp {
             kind,
             binary_xmm: (lhs, rhs),
@@ -572,7 +572,7 @@ impl AsmIr {
 
     pub(super) fn float_cmp_br(
         &mut self,
-        binary_xmm: (Xmm, Xmm),
+        binary_xmm: (VirtFPReg, VirtFPReg),
         kind: CmpKind,
         brkind: BrKind,
         branch_dest: JitLabel,
@@ -662,28 +662,28 @@ pub(super) enum AsmInst {
     /// movq [rsp + (ofs)], (i);
     U64ToRSPOffset(u64, i32),
 
-    XmmMove(Xmm, Xmm),
-    XmmSwap(Xmm, Xmm),
+    XmmMove(VirtFPReg, VirtFPReg),
+    XmmSwap(VirtFPReg, VirtFPReg),
     XmmBinOp {
         kind: BinOpK,
-        binary_xmm: (Xmm, Xmm),
-        dst: Xmm,
+        binary_xmm: (VirtFPReg, VirtFPReg),
+        dst: VirtFPReg,
     },
     XmmUnOp {
         kind: UnOpK,
-        dst: Xmm,
+        dst: VirtFPReg,
     },
 
     ///
     /// Move f64 to xmm.
     ///
-    F64ToXmm(f64, Xmm),
+    F64ToXmm(f64, VirtFPReg),
     ///
-    /// Move *i*(i63) to the stack slot *reg* and Xmm(*x*).
+    /// Move *i*(i63) to the stack slot *reg* and VirtFPReg(*x*).
     ///
-    I64ToBoth(i64, SlotId, Xmm),
+    I64ToBoth(i64, SlotId, VirtFPReg),
     ///
-    /// Generate convert code from Xmm to Both.
+    /// Generate convert code from VirtFPReg to Both.
     ///
     /// ### out
     /// - rax: Value
@@ -691,7 +691,7 @@ pub(super) enum AsmInst {
     /// ### destroy
     /// - rcx
     ///
-    XmmToStack(Xmm, SlotId),
+    XmmToStack(VirtFPReg, SlotId),
     ///
     /// Move Value *v* to stack slot *reg*.
     ///
@@ -726,7 +726,7 @@ pub(super) enum AsmInst {
     ///
     /// - rax, rdi, R(*reg*)
     ///
-    NumToXmm(GP, Xmm, AsmDeopt),*/
+    NumToXmm(GP, VirtFPReg, AsmDeopt),*/
     ///
     /// Convert Fixnum to f64.
     ///
@@ -739,7 +739,7 @@ pub(super) enum AsmInst {
     /// ### destroy
     /// - R(*reg*)
     ///
-    FixnumToXmm(GP, Xmm),
+    FixnumToXmm(GP, VirtFPReg),
     ///
     /// Float guard and unboxing.
     ///
@@ -759,7 +759,7 @@ pub(super) enum AsmInst {
     ///
     /// - rax, rdi
     ///
-    FloatToXmm(GP, Xmm, AsmDeopt),
+    FloatToXmm(GP, VirtFPReg, AsmDeopt),
 
     ///
     /// Class version guard for JIT.
@@ -972,16 +972,16 @@ pub(super) enum AsmInst {
     #[allow(non_camel_case_types)]
     CFunc_F_F {
         f: unsafe extern "C" fn(f64) -> f64,
-        src: Xmm,
-        dst: Xmm,
+        src: VirtFPReg,
+        dst: VirtFPReg,
         using_xmm: UsingXmm,
     },
     #[allow(non_camel_case_types)]
     CFunc_FF_F {
         f: extern "C" fn(f64, f64) -> f64,
-        lhs: Xmm,
-        rhs: Xmm,
-        dst: Xmm,
+        lhs: VirtFPReg,
+        rhs: VirtFPReg,
+        dst: VirtFPReg,
         using_xmm: UsingXmm,
     },
     ///
@@ -1054,13 +1054,13 @@ pub(super) enum AsmInst {
     },
     FloatCmp {
         kind: CmpKind,
-        lhs: Xmm,
-        rhs: Xmm,
+        lhs: VirtFPReg,
+        rhs: VirtFPReg,
     },
     FloatCmpBr {
         kind: CmpKind,
-        lhs: Xmm,
-        rhs: Xmm,
+        lhs: VirtFPReg,
+        rhs: VirtFPReg,
         brkind: BrKind,
         branch_dest: JitLabel,
     },

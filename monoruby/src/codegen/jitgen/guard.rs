@@ -330,7 +330,7 @@ impl Codegen {
     ///
     /// - rax, rdi
     ///
-    pub(super) fn float_to_f64(&mut self, reg: GP, xmm: Xmm, deopt: &DestLabel) {
+    pub(super) fn float_to_f64(&mut self, reg: GP, xmm: VirtFPReg, deopt: &DestLabel) {
         let l1 = self.jit.label();
         monoasm!( &mut self.jit,
             testq R(reg as _), 0b001;
@@ -364,7 +364,7 @@ impl Codegen {
     ///
     /// - rax, rdi, R(*reg*)
     ///
-    pub(super) fn numeric_val_to_f64(&mut self, reg: GP, xmm: Xmm, deopt: &DestLabel) {
+    pub(super) fn numeric_val_to_f64(&mut self, reg: GP, xmm: VirtFPReg, deopt: &DestLabel) {
         let integer = self.jit.label();
         let exit = self.jit.label();
         monoasm! { &mut self.jit,
@@ -397,7 +397,7 @@ impl Codegen {
     /// ### Safety
     /// - if *reg* is Fixnum, cause UB.
     ///
-    fn float_val_to_f64(&mut self, reg: GP, xmm: Xmm, side_exit: &DestLabel) {
+    fn float_val_to_f64(&mut self, reg: GP, xmm: VirtFPReg, side_exit: &DestLabel) {
         let heap = self.jit.label();
         let exit = self.jit.label();
         let r = reg as _;
@@ -503,7 +503,7 @@ mod tests {
         let mut r#gen = Codegen::new();
         let side_exit = r#gen.entry_panic.clone();
         let entry_point = r#gen.jit.get_current_address();
-        let x = Xmm(0);
+        let x = VirtFPReg(0);
         r#gen.float_to_f64(GP::Rdi, x, &side_exit);
         monoasm!( &mut r#gen.jit,
             movq xmm0, xmm(x.enc());
@@ -537,7 +537,7 @@ mod tests {
         let mut gen = Codegen::new(false);
         let side_exit = gen.entry_panic();
         let entry_point = gen.jit.get_current_address();
-        let x = Xmm(0);
+        let x = VirtFPReg(0);
         gen.numeric_val_to_f64(GP::Rdi, x, &side_exit);
         monoasm!( &mut gen.jit,
             movq xmm0, xmm(x.enc());

@@ -259,9 +259,9 @@ impl Codegen {
     ///
     pub(crate) fn gen_int_rem_if(
         &mut self,
-        lhs_xmm: Xmm,
-        rhs_xmm: Xmm,
-        dst_xmm: Xmm,
+        lhs_xmm: VirtFPReg,
+        rhs_xmm: VirtFPReg,
+        dst_xmm: VirtFPReg,
         using_xmm: UsingXmm,
     ) {
         let lhs = lhs_xmm.enc();
@@ -299,8 +299,8 @@ impl Codegen {
     ///
     pub(crate) fn gen_int_pow_if(
         &mut self,
-        lhs_xmm: Xmm,
-        rhs_xmm: Xmm,
+        lhs_xmm: VirtFPReg,
+        rhs_xmm: VirtFPReg,
         using_xmm: UsingXmm,
     ) {
         let lhs = lhs_xmm.enc();
@@ -331,7 +331,7 @@ impl Codegen {
     /// - caller save registers
     /// - stack
     ///
-    pub(super) fn float_binop(&mut self, kind: BinOpK, dst: Xmm, binary_xmm: (Xmm, Xmm)) {
+    pub(super) fn float_binop(&mut self, kind: BinOpK, dst: VirtFPReg, binary_xmm: (VirtFPReg, VirtFPReg)) {
         let (l, r) = binary_xmm;
         let lhs = l.enc();
         let rhs = r.enc();
@@ -444,7 +444,7 @@ macro_rules! jit_cmp_opt_main {
 }
 
 impl Codegen {
-    pub(super) fn cmp_float(&mut self, binary_xmm: (Xmm, Xmm)) {
+    pub(super) fn cmp_float(&mut self, binary_xmm: (VirtFPReg, VirtFPReg)) {
         let (l, r) = binary_xmm;
         monoasm! { &mut self.jit,
             ucomisd xmm(l.enc()), xmm(r.enc());

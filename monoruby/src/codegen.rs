@@ -114,18 +114,34 @@ pub(crate) enum GP {
 }
 
 ///
-/// Floating point registers.
+/// Virtual floating-point register. The front-end (TraceIr → AsmIr)
+/// allocates these and stores them in `LinkMode::F` / `LinkMode::Sf`
+/// and inside `AsmInst` operands. Code generation maps a
+/// `VirtFPReg(N)` to the physical xmm register `xmm{N+2}` (so
+/// `VirtFPReg(0)` → `xmm2`, `VirtFPReg(13)` → `xmm15`). For now
+/// there is no spill — if more than 14 are live simultaneously,
+/// [`Self::enc`] panics at code generation.
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub(crate) struct Xmm(u16);
+pub(crate) struct VirtFPReg(usize);
 
-impl Xmm {
-    fn new(id: u16) -> Self {
+impl VirtFPReg {
+    fn new(id: usize) -> Self {
         Self(id)
     }
 
+    /// Physical xmm number (`xmm0`..`xmm15`) that this VirtFPReg
+    /// encodes to. The mapping is `id + 2` (so `VirtFPReg(0)` →
+    /// `xmm2`). Panics when the id would exceed `xmm15` — spilling is
+    /// not implemented yet.
     pub fn enc(&self) -> u64 {
+        if self.0 >= 14 {
+            panic!(
+                "VirtFPReg({}) exceeds the 14 physical xmms (xmm2..xmm15); spill is not implemented yet",
+                self.0
+            );
+        }
         self.0 as u64 + 2
     }
 }
@@ -1121,7 +1137,7 @@ impl Codegen {
     /// ### destroy
     /// - R(*reg*)
     ///
-    fn integer_val_to_f64(&mut self, reg: GP, xmm: Xmm) {
+    fn integer_val_to_f64(&mut self, reg: GP, xmm: VirtFPReg) {
         monoasm!(&mut self.jit,
             sarq R(reg as _), 1;
             cvtsi2sdq xmm(xmm.enc()), R(reg as _);

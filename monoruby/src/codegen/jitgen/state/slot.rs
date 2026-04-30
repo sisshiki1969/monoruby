@@ -17,7 +17,7 @@ pub(crate) struct SlotState {
     /// that same xmm as a spill victim (e.g. demote its `Sf` slot to
     /// `S`) and hand the same physical register back, so the consumer
     /// ends up reading both operands from the same register.
-    pinned_xmm: Vec<Xmm>,
+    pinned_xmm: Vec<VirtFPReg>,
 }
 
 impl std::fmt::Debug for SlotState {
@@ -195,15 +195,15 @@ impl SlotState {
         &mut self.liveness[slot.0 as usize]
     }
 
-    fn xmm(&self, xmm: Xmm) -> &[SlotId] {
+    fn xmm(&self, xmm: VirtFPReg) -> &[SlotId] {
         &self.xmm[xmm.0 as usize]
     }
 
-    fn xmm_add(&mut self, slot: SlotId, xmm: Xmm) {
+    fn xmm_add(&mut self, slot: SlotId, xmm: VirtFPReg) {
         self.xmm[xmm.0 as usize].push(slot);
     }
 
-    fn xmm_remove(&mut self, slot: SlotId, xmm: Xmm) {
+    fn xmm_remove(&mut self, slot: SlotId, xmm: VirtFPReg) {
         self.xmm[xmm.0 as usize].retain(|e| *e != slot);
     }
 
@@ -214,13 +214,13 @@ impl SlotState {
     /// without the pin, a later allocation in the same step can choose the
     /// freshly-loaded xmm as a spill victim and reuse it for an unrelated
     /// value.
-    pub(in crate::codegen::jitgen) fn pin_xmm(&mut self, xmm: Xmm) {
+    pub(in crate::codegen::jitgen) fn pin_xmm(&mut self, xmm: VirtFPReg) {
         if !self.pinned_xmm.contains(&xmm) {
             self.pinned_xmm.push(xmm);
         }
     }
 
-    pub(in crate::codegen::jitgen) fn unpin_xmm(&mut self, xmm: Xmm) {
+    pub(in crate::codegen::jitgen) fn unpin_xmm(&mut self, xmm: VirtFPReg) {
         if let Some(pos) = self.pinned_xmm.iter().position(|x| *x == xmm) {
             self.pinned_xmm.swap_remove(pos);
         }
@@ -239,20 +239,20 @@ impl SlotState {
     /// a real spill; use [`Self::alloc_xmm`] from a context that has access to
     /// `AsmIr`).
     ///
-    fn try_alloc_xmm_demote(&mut self) -> Option<Xmm> {
+    fn try_alloc_xmm_demote(&mut self) -> Option<VirtFPReg> {
         let pinned = &self.pinned_xmm;
         // Phase 0: a vacant xmm.
         for (i, xmm) in self.xmm.iter().enumerate() {
-            if pinned.contains(&Xmm(i as u16)) {
+            if pinned.contains(&VirtFPReg(i as usize)) {
                 continue;
             }
             if xmm.is_empty() {
-                return Some(Xmm(i as u16));
+                return Some(VirtFPReg(i as usize));
             }
         }
         // Phase 1: an xmm whose linked slots are all `Sf` — demote them.
         for i in 0..self.xmm.len() {
-            if self.pinned_xmm.contains(&Xmm(i as u16)) {
+            if self.pinned_xmm.contains(&VirtFPReg(i as usize)) {
                 continue;
             }
             if self.xmm[i].is_empty() {
@@ -275,7 +275,7 @@ impl SlotState {
             for (s, g) in to_demote {
                 self.set_mode(s, LinkMode::S(g.into()));
             }
-            return Some(Xmm(i as u16));
+            return Some(VirtFPReg(i as usize));
         }
         None
     }
@@ -288,13 +288,13 @@ impl SlotState {
     /// `xmm2stack` for each `F` slot, demotes every linked slot to `S`, and
     /// returns the freed xmm. Always succeeds.
     ///
-    fn alloc_xmm(&mut self, ir: &mut AsmIr) -> Xmm {
+    fn alloc_xmm(&mut self, ir: &mut AsmIr) -> VirtFPReg {
         if let Some(x) = self.try_alloc_xmm_demote() {
             return x;
         }
         // Phase 2: pick the xmm with the fewest F slots to minimise emit cost.
         let victim_idx = (0..self.xmm.len())
-            .filter(|&i| !self.pinned_xmm.contains(&Xmm(i as u16)))
+            .filter(|&i| !self.pinned_xmm.contains(&VirtFPReg(i as usize)))
             .min_by_key(|&i| {
                 self.xmm[i]
                     .iter()
@@ -302,7 +302,7 @@ impl SlotState {
                     .count()
             })
             .expect("xmm vec is empty (every xmm is pinned)");
-        let xmm_v = Xmm(victim_idx as u16);
+        let xmm_v = VirtFPReg(victim_idx as usize);
         let slots: Vec<SlotId> = self.xmm[victim_idx].iter().copied().collect();
         debug_assert!(!slots.is_empty());
 
@@ -414,7 +414,7 @@ impl SlotState {
     /// F/Sf -> F
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_F(&mut self, slot: SlotId, xmm: Xmm) {
+    pub(super) fn set_F(&mut self, slot: SlotId, xmm: VirtFPReg) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::F(xmm));
         self.xmm_add(slot, xmm);
@@ -424,7 +424,7 @@ impl SlotState {
     /// F/Sf -> Sf
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_Sf(&mut self, slot: SlotId, xmm: Xmm, guarded: SfGuarded) {
+    pub(super) fn set_Sf(&mut self, slot: SlotId, xmm: VirtFPReg, guarded: SfGuarded) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::Sf(xmm, guarded));
         self.xmm_add(slot, xmm);
@@ -434,7 +434,7 @@ impl SlotState {
     /// C -> F (may emit a victim spill if no xmm is free).
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_new_F(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
+    pub(super) fn set_new_F(&mut self, ir: &mut AsmIr, slot: SlotId) -> VirtFPReg {
         let x = self.alloc_xmm(ir);
         self.set_F(slot, x);
         x
@@ -445,7 +445,7 @@ impl SlotState {
     /// an xmm — caller should fall back (e.g. leave the slot as `S`).
     ///
     #[allow(non_snake_case)]
-    pub(super) fn try_set_new_F(&mut self, slot: SlotId) -> Option<Xmm> {
+    pub(super) fn try_set_new_F(&mut self, slot: SlotId) -> Option<VirtFPReg> {
         let x = self.try_alloc_xmm_demote()?;
         self.set_F(slot, x);
         Some(x)
@@ -455,7 +455,7 @@ impl SlotState {
     /// C -> Sf (may emit a victim spill if no xmm is free).
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_new_Sf(&mut self, ir: &mut AsmIr, slot: SlotId, guarded: SfGuarded) -> Xmm {
+    pub(super) fn set_new_Sf(&mut self, ir: &mut AsmIr, slot: SlotId, guarded: SfGuarded) -> VirtFPReg {
         let x = self.alloc_xmm(ir);
         self.set_Sf(slot, x, guarded);
         x
@@ -466,7 +466,7 @@ impl SlotState {
     /// an xmm.
     ///
     #[allow(non_snake_case)]
-    pub(super) fn try_set_new_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> Option<Xmm> {
+    pub(super) fn try_set_new_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> Option<VirtFPReg> {
         let x = self.try_alloc_xmm_demote()?;
         self.set_Sf(slot, x, guarded);
         Some(x)
@@ -476,7 +476,7 @@ impl SlotState {
     /// F -> Sf
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_Sf_float(&mut self, slot: SlotId, xmm: Xmm) {
+    pub(super) fn set_Sf_float(&mut self, slot: SlotId, xmm: VirtFPReg) {
         self.set_Sf(slot, xmm, SfGuarded::Float)
     }
 }
@@ -505,7 +505,7 @@ impl SlotState {
     /// Link *slot* to a new xmm register (may emit a victim spill).
     ///
     #[allow(non_snake_case)]
-    pub(crate) fn def_F(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
+    pub(crate) fn def_F(&mut self, ir: &mut AsmIr, slot: SlotId) -> VirtFPReg {
         let xmm = self.alloc_xmm(ir);
         self.discard(slot);
         self.set_F(slot, xmm);
@@ -513,7 +513,7 @@ impl SlotState {
     }
 
     #[allow(non_snake_case)]
-    pub(crate) fn def_F_with_xmm(&mut self, slot: SlotId, xmm: Xmm) -> Xmm {
+    pub(crate) fn def_F_with_xmm(&mut self, slot: SlotId, xmm: VirtFPReg) -> VirtFPReg {
         self.discard(slot);
         self.set_F(slot, xmm);
         xmm
@@ -524,7 +524,7 @@ impl SlotState {
     /// victim spill).
     ///
     #[allow(non_snake_case)]
-    fn def_Sf(&mut self, ir: &mut AsmIr, slot: SlotId, guarded: SfGuarded) -> Xmm {
+    fn def_Sf(&mut self, ir: &mut AsmIr, slot: SlotId, guarded: SfGuarded) -> VirtFPReg {
         let xmm = self.alloc_xmm(ir);
         self.discard(slot);
         self.set_Sf(slot, xmm, guarded);
@@ -532,7 +532,7 @@ impl SlotState {
     }
 
     #[allow(non_snake_case)]
-    pub(crate) fn def_Sf_float(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
+    pub(crate) fn def_Sf_float(&mut self, ir: &mut AsmIr, slot: SlotId) -> VirtFPReg {
         self.def_Sf(ir, slot, SfGuarded::Float)
     }
 
@@ -855,7 +855,7 @@ impl SlotState {
         assert!(self.r15.is_none());
     }
 
-    fn is_xmm_vacant(&self, xmm: Xmm) -> bool {
+    fn is_xmm_vacant(&self, xmm: VirtFPReg) -> bool {
         self.xmm(xmm).is_empty()
     }
 
@@ -1020,7 +1020,7 @@ impl AbstractFrame {
         WriteBack::new(xmm, literal, r15, vec![])
     }
 
-    fn xmm_swap(&mut self, l: Xmm, r: Xmm) {
+    fn xmm_swap(&mut self, l: VirtFPReg, r: VirtFPReg) {
         let mut guarded_l = None;
         let mut guarded_r = None;
         for link in self.slots.iter() {
@@ -1083,7 +1083,7 @@ impl AbstractFrame {
         });
     }
 
-    fn wb_xmm(&self, f: impl Fn(SlotId) -> bool) -> Vec<(Xmm, Vec<SlotId>)> {
+    fn wb_xmm(&self, f: impl Fn(SlotId) -> bool) -> Vec<(VirtFPReg, Vec<SlotId>)> {
         self.xmm
             .iter()
             .enumerate()
@@ -1099,7 +1099,7 @@ impl AbstractFrame {
                     if v.is_empty() {
                         None
                     } else {
-                        Some((Xmm::new(i as u16), v))
+                        Some((VirtFPReg::new(i as usize), v))
                     }
                 }
             })
@@ -1182,11 +1182,11 @@ pub(in crate::codegen::jitgen) enum LinkMode {
     ///
     /// mutation of the corresponding FPR lazily affects the stack slot.
     ///
-    F(Xmm),
+    F(VirtFPReg),
     ///
     /// On the stack slot and on the floating point register (xmm) which is read-only.
     ///
-    Sf(Xmm, SfGuarded),
+    Sf(VirtFPReg, SfGuarded),
     ///
     /// Concrete value (immediate / packed).
     ///
@@ -1500,7 +1500,7 @@ impl AbstractFrame {
     ///
     /// Generate bridge AsmIr from F/Sf(l) to Sf(r).
     ///
-    fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm, guarded: SfGuarded) {
+    fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: VirtFPReg, r: VirtFPReg, guarded: SfGuarded) {
         if self.is_xmm_vacant(r) {
             self.set_Sf(slot, r, guarded);
             ir.xmm_move(l, r);
@@ -1512,7 +1512,7 @@ impl AbstractFrame {
     ///
     /// Swap xmm registers `l` and `r`.
     ///
-    fn gen_xmm_swap(&mut self, ir: &mut AsmIr, l: Xmm, r: Xmm) {
+    fn gen_xmm_swap(&mut self, ir: &mut AsmIr, l: VirtFPReg, r: VirtFPReg) {
         self.xmm_swap(l, r);
         ir.push(AsmInst::XmmSwap(l, r));
     }

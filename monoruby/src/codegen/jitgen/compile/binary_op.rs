@@ -466,7 +466,7 @@ impl AbstractFrame {
         }
     }
 
-    pub(super) fn load_binary_xmm(&mut self, ir: &mut AsmIr, info: FBinOpInfo) -> (Xmm, Xmm) {
+    pub(super) fn load_binary_xmm(&mut self, ir: &mut AsmIr, info: FBinOpInfo) -> (VirtFPReg, VirtFPReg) {
         let FBinOpInfo {
             lhs,
             rhs,
@@ -498,7 +498,7 @@ impl AbstractFrame {
         ir: &mut AsmIr,
         dst: Option<SlotId>,
         info: FBinOpInfo,
-    ) -> (Xmm, Xmm, Option<Xmm>) {
+    ) -> (VirtFPReg, VirtFPReg, Option<VirtFPReg>) {
         let (lhs, rhs) = self.load_binary_xmm(ir, info);
         // Pin both operands while allocating the destination — `def_F` calls
         // `alloc_xmm`, which can otherwise pick `lhs` or `rhs` as the spill
@@ -518,7 +518,7 @@ impl AbstractFrame {
         (lhs, rhs, dst)
     }
 
-    fn fetch_float_assume(&mut self, ir: &mut AsmIr, rhs: SlotId, class: FOpClass) -> Xmm {
+    fn fetch_float_assume(&mut self, ir: &mut AsmIr, rhs: SlotId, class: FOpClass) -> VirtFPReg {
         match class {
             FOpClass::Integer => self.load_xmm_fixnum(ir, rhs),
             FOpClass::Float => self.load_xmm(ir, rhs),

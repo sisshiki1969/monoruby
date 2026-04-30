@@ -93,7 +93,7 @@ impl AbstractFrame {
     /// ### destroy
     /// - rdi
     ///
-    pub(crate) fn load_xmm_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
+    pub(crate) fn load_xmm_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId) -> VirtFPReg {
         self.use_as_value(slot);
         match self.mode(slot) {
             LinkMode::Sf(x, _) | LinkMode::F(x) => x,
@@ -127,7 +127,7 @@ impl AbstractFrame {
     /// - rdi, rax
     ///
     ///
-    pub(crate) fn load_xmm(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
+    pub(crate) fn load_xmm(&mut self, ir: &mut AsmIr, slot: SlotId) -> VirtFPReg {
         let deopt = ir.new_deopt(self);
         self.use_as_float(slot);
         match self.mode(slot) {
@@ -154,7 +154,7 @@ impl AbstractFrame {
     }
 
     #[allow(non_snake_case)]
-    fn load_xmm_from_C(&mut self, ir: &mut AsmIr, slot: SlotId, v: Immediate) -> Xmm {
+    fn load_xmm_from_C(&mut self, ir: &mut AsmIr, slot: SlotId, v: Immediate) -> VirtFPReg {
         match v.unpack() {
             RV::Float(f) => {
                 // -> F
@@ -172,7 +172,7 @@ impl AbstractFrame {
         }
     }
 
-    fn load_xmm_from_f64(&mut self, ir: &mut AsmIr, slot: SlotId, f: f64) -> Xmm {
+    fn load_xmm_from_f64(&mut self, ir: &mut AsmIr, slot: SlotId, f: f64) -> VirtFPReg {
         let x = self.set_new_F(ir, slot);
         ir.f64_to_xmm(f, x);
         x

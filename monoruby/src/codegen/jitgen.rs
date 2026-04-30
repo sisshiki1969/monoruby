@@ -119,7 +119,7 @@ pub(crate) fn rbp_local(reg: SlotId) -> i32 {
 ///
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct WriteBack {
-    xmm: Vec<(Xmm, Vec<SlotId>)>,
+    xmm: Vec<(VirtFPReg, Vec<SlotId>)>,
     literal: Vec<(Immediate, SlotId)>,
     void: Vec<SlotId>,
     r15: Option<SlotId>,
@@ -170,7 +170,7 @@ impl std::fmt::Debug for WriteBack {
 
 impl WriteBack {
     fn new(
-        xmm: Vec<(Xmm, Vec<SlotId>)>,
+        xmm: Vec<(VirtFPReg, Vec<SlotId>)>,
         literal: Vec<(Immediate, SlotId)>,
         r15: Option<SlotId>,
         void: Vec<SlotId>,
@@ -474,7 +474,7 @@ impl JitModule {
     ///
     /// move xmm(*src*) to xmm(*dst*).
     ///
-    fn xmm_mov(&mut self, src: Xmm, dst: Xmm) {
+    fn xmm_mov(&mut self, src: VirtFPReg, dst: VirtFPReg) {
         if src != dst {
             monoasm!( &mut self.jit,
                 movq  xmm(dst.enc()), xmm(src.enc());
@@ -485,7 +485,7 @@ impl JitModule {
     ///
     /// swap xmm(*l*) and xmm(*r*).
     ///
-    fn xmm_swap(&mut self, l: Xmm, r: Xmm) {
+    fn xmm_swap(&mut self, l: VirtFPReg, r: VirtFPReg) {
         monoasm!( &mut self.jit,
             movq  xmm0, xmm(l.enc());
             movq  xmm(l.enc()), xmm(r.enc());
@@ -515,7 +515,7 @@ impl JitModule {
         for (x, b) in using_xmm.iter().enumerate() {
             if *b {
                 monoasm!( &mut self.jit,
-                    movq [rsp + (8 * i)], xmm(Xmm::new(x as _).enc());
+                    movq [rsp + (8 * i)], xmm(VirtFPReg::new(x as _).enc());
                 );
                 i += 1;
             }
@@ -538,7 +538,7 @@ impl JitModule {
         for (x, b) in using_xmm.iter().enumerate() {
             if *b {
                 monoasm!( &mut self.jit,
-                    movq xmm(Xmm::new(x as _).enc()), [rsp + (8 * i)];
+                    movq xmm(VirtFPReg::new(x as _).enc()), [rsp + (8 * i)];
                 );
                 i += 1;
             }
@@ -557,7 +557,7 @@ impl JitModule {
     /// ### destroy
     /// - rcx
     ///
-    fn xmm_to_stack(&mut self, xmm: Xmm, v: &[SlotId]) {
+    fn xmm_to_stack(&mut self, xmm: VirtFPReg, v: &[SlotId]) {
         if v.is_empty() {
             return;
         }
@@ -573,7 +573,7 @@ impl JitModule {
         }
     }
 
-    fn xmm_to_stack2(&mut self, xmm: Xmm, v: &[SlotId]) {
+    fn xmm_to_stack2(&mut self, xmm: VirtFPReg, v: &[SlotId]) {
         if v.is_empty() {
             return;
         }
@@ -833,7 +833,7 @@ fn float_test2() {
     let mut r#gen = Codegen::new();
 
     let assume_int_to_f64 = r#gen.jit.label();
-    let x = Xmm(0);
+    let x = VirtFPReg(0);
     monoasm!(&mut r#gen.jit,
     assume_int_to_f64:
         pushq rbp;
