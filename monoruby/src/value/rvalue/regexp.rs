@@ -73,6 +73,12 @@ impl RegexpInner {
         if option & onigmo_regex::ONIG_OPTION_EXTEND != 0 {
             res.push('x');
         }
+        // CRuby's `Regexp#inspect` includes the `n` (NOENCODING /
+        // ASCII-8BIT) flag but not `u`/`e`/`s` (which are normalised
+        // away). Order is m-i-x-n.
+        if option & Self::NOENCODING != 0 {
+            res.push('n');
+        }
         res
     }
 
@@ -281,8 +287,41 @@ impl RegexpInner {
     }
 
     pub fn inspect(&self) -> String {
-        format!("/{}/{}", self.as_str(), self.option_string())
+        format!(
+            "/{}/{}",
+            escape_unescaped_slashes(self.as_str()),
+            self.option_string()
+        )
     }
+}
+
+/// Escape forward slashes that aren't already escaped, leaving every
+/// other backslash sequence intact. Used by `Regexp#inspect` so that
+/// `Regexp.new("/foo/bar").inspect` is `"/\\/foo\\/bar/"` (matching
+/// CRuby) without double-escaping `Regexp.new('\\\/')` to
+/// `"/\\\\\\\\\\//"` etc.
+fn escape_unescaped_slashes(src: &str) -> String {
+    let mut out = String::with_capacity(src.len() + 4);
+    let mut chars = src.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                // Pass through the backslash and whatever it escapes
+                // (single char) verbatim, so existing `\/`/`\\`/`\n`/
+                // ... aren't double-escaped.
+                out.push('\\');
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            }
+            '/' => {
+                out.push('\\');
+                out.push('/');
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 // Utility methods
