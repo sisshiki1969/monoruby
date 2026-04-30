@@ -332,7 +332,7 @@ impl RegexpInner {
                     let mut res = given.to_string();
                     let matched = Value::string_from_str(matched_str);
                     let result = vm.invoke_block_once(globals, bh, &[matched])?;
-                    let s = result.to_s(&globals.store);
+                    let s = block_result_to_string(vm, globals, result)?;
                     res.replace_range(start..end, &s);
                     Ok((res, true))
                 }
@@ -400,7 +400,7 @@ impl RegexpInner {
                 let matched = Value::string_from_str(matched_str);
                 vm.save_capture_special_variables(&cap, given);
                 let result = vm.invoke_block(globals, &data, &[matched])?;
-                let replace = result.to_s(&globals.store);
+                let replace = block_result_to_string(vm, globals, result)?;
 
                 range.push((m.range(), replace));
             }
@@ -429,9 +429,9 @@ impl RegexpInner {
     }
 
     /// Replaces the first match in `given` string using hash lookup.
-    /// For each match, the matched text is looked up as a key in the hash.
-    /// If found, the corresponding value (converted to string) is used as replacement.
-    /// If not found, the match is removed (replaced with empty string).
+    /// For each match, the matched text is looked up as a key in the
+    /// hash via `Hash#[]` so that any user-defined `default` / `default_proc`
+    /// fires; values are coerced via `to_s`.
     pub(crate) fn replace_one_hash(
         vm: &mut Executor,
         globals: &mut Globals,
@@ -453,12 +453,7 @@ impl RegexpInner {
                     let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
                     let mut res = given.to_string();
                     let key = Value::string_from_str(matched_str);
-                    let hash = hash_val.as_hash();
-                    let replacement = if let Some(v) = hash.get(key, vm, globals)? {
-                        v.to_s(&globals.store)
-                    } else {
-                        String::new()
-                    };
+                    let replacement = lookup_hash_replacement(vm, globals, hash_val, key)?;
                     res.replace_range(start..end, &replacement);
                     Ok((res, true))
                 }
@@ -493,7 +488,6 @@ impl RegexpInner {
             hash_val: Value,
         ) -> Result<(String, bool)> {
             let mut range = vec![];
-            let hash = hash_val.as_hash();
 
             vm.clear_capture_special_variables();
             for cap in re.captures_iter(given) {
@@ -503,11 +497,7 @@ impl RegexpInner {
                 let matched_str = m.as_str();
                 let key = Value::string_from_str(matched_str);
                 vm.save_capture_special_variables(&cap, given);
-                let replacement = if let Some(v) = hash.get(key, vm, globals)? {
-                    v.to_s(&globals.store)
-                } else {
-                    String::new()
-                };
+                let replacement = lookup_hash_replacement(vm, globals, hash_val, key)?;
 
                 range.push((m.range(), replacement));
             }
@@ -622,15 +612,38 @@ impl RegexpInner {
         given: &str,
         replace: &str,
     ) -> Result<(String, bool)> {
+        // Walk the haystack manually rather than relying on
+        // `captures_iter`, which can skip the zero-width match that
+        // sits between two non-empty matches (e.g.
+        // `"¿por qué?".gsub(/([a-z\d]*)/, "*")` — the empty position
+        // immediately after `"por"` is observable in CRuby but the
+        // bundled iterator collapses it). For empty matches we
+        // advance by one Unicode scalar so the loop terminates.
         let mut replacements = vec![];
         vm.clear_capture_special_variables();
-        let mut last_captures = None;
-        for cap in self.captures_iter(given) {
-            let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
+        let mut last_captures: Option<Captures> = None;
+        let mut pos = 0usize;
+        while pos <= given.len() {
+            let cap = match self.captures_from_pos(given, pos, vm)? {
+                Some(c) => c,
+                None => break,
+            };
             let m = cap.get(0).unwrap();
-            let rep = Self::expand_backref(replace, &cap);
-            replacements.push((m.range(), rep));
+            let (start, end) = (m.start(), m.end());
+            let rep = self.expand_backref(replace, given, &cap);
+            replacements.push((start..end, rep));
             last_captures = Some(cap);
+            pos = if end > start {
+                end
+            } else if start >= given.len() {
+                given.len() + 1
+            } else {
+                let mut next = start + 1;
+                while next < given.len() && !given.is_char_boundary(next) {
+                    next += 1;
+                }
+                next
+            };
         }
         let mut res = given.to_string();
         let is_empty = replacements.is_empty();
@@ -645,30 +658,131 @@ impl RegexpInner {
         Ok((res, !is_empty))
     }
 
-    /// Expand backreference sequences (`\1`, `\2`, etc.) in `replace` using `captures`.
-    fn expand_backref(replace: &str, captures: &Captures) -> String {
+    /// Expand backreference sequences in `replace` using `captures`
+    /// against `given` (the original haystack). Recognises:
+    ///
+    /// - `\0`, `\1`-`\9`: numbered captures (`\0` is the full match).
+    /// - `\&`: same as `\0` (full match).
+    /// - `` \` ``: pre-match (everything before the match).
+    /// - `\'`: post-match (everything after the match).
+    /// - `\+`: highest-numbered participating capture.
+    /// - `\k<name>`: named capture by `<name>`.
+    /// - `\\`: literal backslash.
+    /// - Trailing `\` is left as a literal backslash.
+    /// - Other `\X` sequences are passed through verbatim.
+    fn expand_backref(
+        &self,
+        replace: &str,
+        given: &str,
+        captures: &Captures,
+    ) -> String {
+        let bytes = replace.as_bytes();
         let mut rep = String::new();
-        let mut escape = false;
-        for ch in replace.chars() {
-            if escape {
-                match ch {
-                    '0'..='9' => {
-                        let i = ch as usize - '0' as usize;
-                        if let Some(m) = captures.get(i) {
-                            rep += m.as_str()
+        let mut i = 0;
+        while i < bytes.len() {
+            let ch = bytes[i];
+            if ch != b'\\' {
+                // copy one UTF-8 scalar
+                let len = utf8_char_len(ch);
+                rep.push_str(&replace[i..i + len]);
+                i += len;
+                continue;
+            }
+            // ch == '\\'
+            if i + 1 >= bytes.len() {
+                // Trailing backslash: copy verbatim (CRuby leaves it).
+                rep.push('\\');
+                i += 1;
+                continue;
+            }
+            let next = bytes[i + 1];
+            match next {
+                b'0'..=b'9' => {
+                    let idx = (next - b'0') as usize;
+                    if let Some(m) = captures.get(idx) {
+                        rep.push_str(m.as_str());
+                    }
+                    i += 2;
+                }
+                b'&' => {
+                    if let Some(m) = captures.get(0) {
+                        rep.push_str(m.as_str());
+                    }
+                    i += 2;
+                }
+                b'`' => {
+                    if let Some(m) = captures.get(0) {
+                        rep.push_str(&given[..m.start()]);
+                    }
+                    i += 2;
+                }
+                b'\'' => {
+                    if let Some(m) = captures.get(0) {
+                        rep.push_str(&given[m.end()..]);
+                    }
+                    i += 2;
+                }
+                b'+' => {
+                    // Highest-numbered participating capture *group*
+                    // (1..). If the regex has no capture groups —
+                    // even when there's a full match — `\+` expands
+                    // to the empty string, matching CRuby.
+                    let mut idx = captures.len();
+                    while idx > 1 {
+                        idx -= 1;
+                        if let Some(m) = captures.get(idx) {
+                            rep.push_str(m.as_str());
+                            break;
                         }
                     }
-                    '\\' => rep.push('\\'),
-                    _ => {
-                        rep.push('\\');
-                        rep.push(ch);
+                    i += 2;
+                }
+                b'\\' => {
+                    rep.push('\\');
+                    i += 2;
+                }
+                b'k' => {
+                    // `\k<name>` — named backreference.
+                    if i + 2 < bytes.len() && bytes[i + 2] == b'<' {
+                        if let Some(end_off) = bytes[i + 3..].iter().position(|&b| b == b'>') {
+                            let name_start = i + 3;
+                            let name_end = name_start + end_off;
+                            let name = &replace[name_start..name_end];
+                            // Onigmo stores capture names; look up the
+                            // rightmost group with this name (CRuby
+                            // chooses the last participating one).
+                            // Onigmo allows multiple groups to share
+                            // a name; pick the highest-numbered one
+                            // that participated, matching CRuby.
+                            let members = self.get_group_members(name);
+                            let mut chosen: Option<usize> = None;
+                            for &m_idx in members.iter() {
+                                if let Some(m) = captures.get(m_idx as usize) {
+                                    let _ = m;
+                                    chosen = Some(m_idx as usize);
+                                }
+                            }
+                            if let Some(idx) = chosen {
+                                if let Some(m) = captures.get(idx) {
+                                    rep.push_str(m.as_str());
+                                }
+                            }
+                            i = name_end + 1;
+                            continue;
+                        }
                     }
-                };
-                escape = false;
-            } else if ch != '\\' {
-                rep.push(ch);
-            } else {
-                escape = true;
+                    // Malformed `\k…`: copy verbatim.
+                    rep.push('\\');
+                    rep.push('k');
+                    i += 2;
+                }
+                _ => {
+                    // Unknown `\X`: keep as-is (preserves e.g. `\d`).
+                    let len = utf8_char_len(next);
+                    rep.push('\\');
+                    rep.push_str(&replace[i + 1..i + 1 + len]);
+                    i += 1 + len;
+                }
             }
         }
         rep
@@ -689,10 +803,58 @@ impl RegexpInner {
             Some(captures) => {
                 let mut res = given.to_string();
                 let m = captures.get(0).unwrap();
-                let rep = Self::expand_backref(replace, &captures);
+                let rep = self.expand_backref(replace, given, &captures);
                 res.replace_range(m.start()..m.end(), &rep);
                 Ok((res, Some(captures)))
             }
+        }
+    }
+}
+
+/// Coerce the result of a `String#sub`/`#gsub` block to a String,
+/// calling user-defined `to_s` so a mock returning a non-String
+/// from `to_s` is exercised. Falls back to monoruby's intrinsic
+/// `to_s` rendering when the object's `to_s` doesn't return a String.
+fn block_result_to_string(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<String> {
+    if let Some(s) = v.is_str() {
+        return Ok(s.to_string());
+    }
+    let coerced = vm.invoke_method_inner(globals, IdentId::TO_S, v, &[], None, None)?;
+    if let Some(s) = coerced.is_str() {
+        Ok(s.to_string())
+    } else {
+        Ok(coerced.to_s(&globals.store))
+    }
+}
+
+/// Look up the replacement string for a `String#sub`/`#gsub` match
+/// when the second argument is a `Hash`. Calls `Hash#[]` so that any
+/// user-defined `default` / `default_proc` fires; missing keys
+/// (where `[]` returns `nil` because no default is set) are replaced
+/// with the empty string. Values are coerced via `Object#to_s` per
+/// CRuby.
+fn lookup_hash_replacement(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    hash: Value,
+    key: Value,
+) -> Result<String> {
+    let v =
+        vm.invoke_method_inner(globals, IdentId::get_id("[]"), hash, &[key], None, None)?;
+    if v.is_nil() {
+        Ok(String::new())
+    } else if let Some(s) = v.is_str() {
+        Ok(s.to_string())
+    } else {
+        // CRuby coerces non-String hash values via `Object#to_s`.
+        let s = vm.invoke_method_inner(globals, IdentId::TO_S, v, &[], None, None)?;
+        match s.is_str() {
+            Some(s) => Ok(s.to_string()),
+            None => Ok(s.to_s(&globals.store)),
         }
     }
 }

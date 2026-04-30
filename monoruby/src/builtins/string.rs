@@ -4454,6 +4454,57 @@ mod tests {
     }
 
     #[test]
+    fn sub_gsub_backref_extras() {
+        // \& and \0 → full match.
+        run_test(r#""hello!".sub("he", '<\&>')"#);
+        run_test(r#""hello!".sub("he", '<\0>')"#);
+        // \` → pre-match, \' → post-match.
+        run_test(r#""hello!".sub("l", '<\`>')"#);
+        run_test(r#""hello!".sub("l", "<\\'>")"#);
+        // \+ → highest-numbered participating capture.
+        run_test(r#""hello!".sub(/(.)(.)/, '\+')"#);
+        // \+ with no capture group expands to empty.
+        run_test(r#""hello!".sub(/./, '\+')"#);
+        // Trailing \ kept verbatim.
+        run_test(r#""hello".sub(/./, 'hah\\')"#);
+        // \k<name> for named captures.
+        run_test(r#""hello".gsub(/(?<v>[aeiou])/, '<\k<v>>')"#);
+        run_test(r#""hello".gsub(/(?<c>.)/, '\k<c>\k<c>')"#);
+    }
+
+    #[test]
+    fn sub_gsub_hash_default() {
+        // Hash#default fires for missing keys.
+        run_test(
+            r#"
+        h = Hash.new { |_, k| "<#{k}>" }
+        "abc".gsub(/./, h)
+        "#,
+        );
+        // Plain default value also works.
+        run_test(
+            r#"
+        h = Hash.new("?")
+        "abc".gsub(/./, h)
+        "#,
+        );
+        // Non-String value coerced via to_s.
+        run_test(
+            r#"
+        "abc".gsub(/./, "a" => 1, "b" => 2, "c" => 3)
+        "#,
+        );
+    }
+
+    #[test]
+    fn gsub_multibyte_empty_match() {
+        // Empty match between non-empty matches must be observed
+        // (CRuby gsub of `[a-z\d]*` against "¿por qué?" yields the
+        // 10-char `"*¿** **é*?*"`).
+        run_test(r#""¿por qué?".gsub(/([a-z\d]*)/, "*")"#);
+    }
+
+    #[test]
     fn delete() {
         run_test(r##""abcdefg".delete("b")"##);
         run_test(r##""abcdefg".delete("b", "c")"##);
