@@ -1480,4 +1480,96 @@ mod tests {
         run_test(r#"Encoding::UTF_32.dummy?"#);
         run_test(r#"Encoding::ISO_2022_JP.dummy?"#);
     }
+
+    #[test]
+    fn encoding_extra_dummy_constants() {
+        // Defined and reachable as Encoding objects (CRuby uses
+        // mixed-case canonical identifiers for the dummy / mac-family
+        // names — this is the literal constant identifier).
+        run_test(r#"Encoding::UTF_7.is_a?(Encoding)"#);
+        run_test(r#"Encoding::Emacs_Mule.is_a?(Encoding)"#);
+        run_test(r#"Encoding::CP50220.is_a?(Encoding)"#);
+        run_test(r#"Encoding::CP50221.is_a?(Encoding)"#);
+        // Their `dummy?` is true (CRuby-strict set).
+        run_test(r#"Encoding::UTF_7.dummy?"#);
+        run_test(r#"Encoding::CP50220.dummy?"#);
+        // Mac-family aliases reachable, dummy? false.
+        run_test(r#"Encoding::MacCyrillic.is_a?(Encoding)"#);
+        run_test(r#"Encoding::MacGreek.is_a?(Encoding)"#);
+        run_test(r#"Encoding::MacRoman.is_a?(Encoding)"#);
+        run_test(r#"Encoding::MacTurkish.dummy?"#);
+        run_test(r#"Encoding::Big5_HKSCS.is_a?(Encoding)"#);
+    }
+
+    #[test]
+    fn encoding_object_identity_aliases() {
+        // ASCII <-> US_ASCII share the same Value (object identity).
+        run_test(r#"Encoding::ASCII.equal?(Encoding::US_ASCII)"#);
+        run_test(r#"Encoding::ASCII == Encoding::US_ASCII"#);
+        // CP65001 <-> UTF_8 share the same Value.
+        run_test(r#"Encoding::CP65001.equal?(Encoding::UTF_8)"#);
+        run_test(r#"Encoding::CP65001 == Encoding::UTF_8"#);
+        // BINARY <-> ASCII_8BIT (existing behaviour, asserted for parity).
+        run_test(r#"Encoding::BINARY.equal?(Encoding::ASCII_8BIT)"#);
+    }
+
+    #[test]
+    fn encoding_find_accepts_encoding_object() {
+        // Pre-existing: Encoding.find with a String name.
+        run_test(r#"Encoding.find("UTF-8").is_a?(Encoding)"#);
+        // New: Encoding.find with an Encoding object returns it as-is.
+        run_test(r#"Encoding.find(Encoding::UTF_8).equal?(Encoding::UTF_8)"#);
+        run_test(r#"Encoding.find(Encoding::ASCII_8BIT).equal?(Encoding::ASCII_8BIT)"#);
+    }
+
+    #[test]
+    fn encoding_name_list_class_method() {
+        run_test(r#"Encoding.name_list.is_a?(Array)"#);
+        run_test(r#"Encoding.name_list.all? { |n| n.is_a?(String) }"#);
+        run_test(r#"Encoding.name_list.include?("UTF-8")"#);
+        run_test(r#"Encoding.name_list.include?("ASCII-8BIT")"#);
+        // Aliases listed alongside canonical names.
+        run_test(r#"Encoding.name_list.include?("BINARY")"#);
+        run_test(r#"Encoding.name_list.include?("CP65001")"#);
+    }
+
+    #[test]
+    fn encoding_names_instance_method() {
+        run_test(r#"Encoding::UTF_8.names.is_a?(Array)"#);
+        run_test(r#"Encoding::UTF_8.names.include?("UTF-8")"#);
+        run_test(r#"Encoding::UTF_8.names.include?("CP65001")"#);
+        run_test(r#"Encoding::ASCII_8BIT.names.include?("ASCII-8BIT")"#);
+        run_test(r#"Encoding::ASCII_8BIT.names.include?("BINARY")"#);
+        run_test(r#"Encoding::US_ASCII.names.include?("US-ASCII")"#);
+        run_test(r#"Encoding::US_ASCII.names.include?("ASCII")"#);
+    }
+
+    #[test]
+    fn encoding_inspect_form() {
+        // ASCII-8BIT renders as the 3.4+ canonical `BINARY (ASCII-8BIT)` form.
+        run_test(r#"Encoding::ASCII_8BIT.inspect"#);
+        // Plain non-dummy encoding: `#<Encoding:NAME>`.
+        run_test(r#"Encoding::UTF_8.inspect"#);
+        run_test(r#"Encoding::US_ASCII.inspect"#);
+        // Dummy encoding: `(dummy)` suffix.
+        run_test(r#"Encoding::UTF_7.inspect"#);
+        run_test(r#"Encoding::ISO_2022_JP.inspect"#);
+        run_test(r#"Encoding::UTF_16.inspect"#);
+    }
+
+    #[test]
+    fn force_encoding_accepts_dummy_aliases() {
+        // The new dummy / Mac-family aliases are accepted without
+        // raising. monoruby internally normalises the encoding tag to
+        // ASCII-8BIT (it doesn't transcode), so we just assert that
+        // the call returns a String.
+        run_test_no_result_check(
+            r#"
+            raise unless "abc".force_encoding("UTF-7").is_a?(String)
+            raise unless "abc".force_encoding("Emacs-Mule").is_a?(String)
+            raise unless "abc".force_encoding("CP50220").is_a?(String)
+            raise unless "abc".force_encoding("MacCyrillic").is_a?(String)
+            "#,
+        );
+    }
 }
