@@ -7,6 +7,12 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("MatchData", MATCHDATA_CLASS, ObjTy::MATCHDATA);
     globals.store[MATCHDATA_CLASS].clear_alloc_func();
+    // CRuby explicitly undefines `MatchData.allocate` (via
+    // `rb_undef_method` on the singleton class) so calling it raises
+    // `NoMethodError` rather than the default `TypeError: allocator
+    // undefined`. Mirror that by defining a class method that raises
+    // NoMethodError directly.
+    globals.define_builtin_class_func(MATCHDATA_CLASS, "allocate", allocate_undefined, 0);
     globals.define_builtin_func(MATCHDATA_CLASS, "captures", captures, 0);
     globals.define_builtin_func(MATCHDATA_CLASS, "to_a", to_a, 0);
     globals.define_builtin_func_with(MATCHDATA_CLASS, "[]", index, 1, 2, false);
@@ -28,6 +34,67 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MATCHDATA_CLASS, "byteend", byteend, 1);
     globals.define_builtin_func(MATCHDATA_CLASS, "byteoffset", byteoffset, 1);
     globals.define_builtin_func_with(MATCHDATA_CLASS, "deconstruct_keys", deconstruct_keys_md, 1, 1, false);
+}
+
+/// Stand-in for the undefined `MatchData.allocate`. Raises NoMethodError
+/// to match CRuby (where the method is `rb_undef_method`-removed).
+#[monoruby_builtin]
+fn allocate_undefined(
+    _: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Err(MonorubyErr::method_not_found_for_class(
+        &globals.store,
+        IdentId::get_id("allocate"),
+        MATCHDATA_CLASS,
+    ))
+}
+
+/// Resolve a `begin`/`end`/`offset`/`bytebegin`/`byteend`/`byteoffset`
+/// argument to a non-negative capture index. Accepts Integer / String /
+/// Symbol; for the latter two, looks up the named capture and returns
+/// the *last* group index sharing that name (matching CRuby's "farthest
+/// match" semantics for duplicated capture names). Out-of-range
+/// integers and unknown names raise IndexError.
+fn resolve_capture_index(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    m: &crate::value::rvalue::MatchDataInner,
+    arg: Value,
+) -> Result<usize> {
+    if let Some(name) = arg.try_symbol_or_string() {
+        let group_name = name.to_string();
+        if let Some(i) = m
+            .regexp()
+            .and_then(|r| r.capture_names().ok())
+            .and_then(|names| {
+                let mut last: Option<usize> = None;
+                for (i, n) in names.iter().enumerate() {
+                    if *n == group_name {
+                        last = Some(i + 1);
+                    }
+                }
+                last
+            })
+        {
+            return Ok(i);
+        }
+        return Err(MonorubyErr::indexerr(format!(
+            "undefined group name reference: {group_name}"
+        )));
+    }
+    let idx = arg.coerce_to_int_i64(vm, globals)?;
+    let len = m.len() as i64;
+    // `begin`/`end`/`offset`/`byte*` reject negative indexes outright
+    // (no wrap-around), matching CRuby's `match_array_subseq` rules.
+    if idx < 0 || idx >= len {
+        return Err(MonorubyErr::indexerr(format!(
+            "index {idx} out of matches"
+        )));
+    }
+    Ok(idx as usize)
 }
 
 ///
@@ -107,10 +174,7 @@ fn deconstruct_keys_md(
 fn bytebegin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
-    let idx = lfp.arg(0).coerce_to_int_i64(vm, globals)? as usize;
-    if idx >= m.len() {
-        return Err(MonorubyErr::indexerr(format!("index {idx} out of matches")));
-    }
+    let idx = resolve_capture_index(vm, globals, &m, lfp.arg(0))?;
     match m.pos(idx) {
         Some((start, _)) => Ok(Value::integer(start as i64)),
         None => Ok(Value::nil()),
@@ -129,10 +193,7 @@ fn bytebegin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 fn byteend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
-    let idx = lfp.arg(0).coerce_to_int_i64(vm, globals)? as usize;
-    if idx >= m.len() {
-        return Err(MonorubyErr::indexerr(format!("index {idx} out of matches")));
-    }
+    let idx = resolve_capture_index(vm, globals, &m, lfp.arg(0))?;
     match m.pos(idx) {
         Some((_, end)) => Ok(Value::integer(end as i64)),
         None => Ok(Value::nil()),
@@ -151,10 +212,7 @@ fn byteend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn byteoffset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
-    let idx = lfp.arg(0).coerce_to_int_i64(vm, globals)? as usize;
-    if idx >= m.len() {
-        return Err(MonorubyErr::indexerr(format!("index {idx} out of matches")));
-    }
+    let idx = resolve_capture_index(vm, globals, &m, lfp.arg(0))?;
     match m.pos(idx) {
         Some((s, e)) => Ok(Value::array_from_vec(vec![
             Value::integer(s as i64),
@@ -255,10 +313,7 @@ fn post_match(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 fn offset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
-    let idx = lfp.arg(0).coerce_to_int_i64(vm, globals)? as usize;
-    if idx >= m.len() {
-        return Err(MonorubyErr::indexerr(format!("index {idx} out of matches")));
-    }
+    let idx = resolve_capture_index(vm, globals, &m, lfp.arg(0))?;
     match m.pos(idx) {
         Some((start, end)) => {
             let s = m.string()[..start].chars().count() as i64;
@@ -302,6 +357,60 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let args = lfp.arg(0).as_array();
     let mut res = vec![];
     for a in args.iter() {
+        // Range argument: append the slice (out-of-range range
+        // raises RangeError).
+        if let Some(range) = a.is_range() {
+            let len = m.len() as i64;
+            let (start, slice_len) = match range_to_slice(range, len) {
+                Some(v) => v,
+                None => {
+                    let sep = if range.exclude_end() { "..." } else { ".." };
+                    return Err(MonorubyErr::rangeerr(format!(
+                        "{}{sep}{} out of range",
+                        range.start().to_s(&globals.store),
+                        range.end().to_s(&globals.store),
+                    )));
+                }
+            };
+            let s = start as usize;
+            let e = (s + slice_len as usize).min(m.len());
+            for i in s..e {
+                res.push(m.at(i).map(Value::string_from_str).unwrap_or_default());
+            }
+            // Pad with nil for positions past the end.
+            let requested = (start + slice_len) as usize;
+            for _ in e..requested {
+                res.push(Value::nil());
+            }
+            continue;
+        }
+        // Symbol/String: named-capture lookup.
+        if let Some(name) = a.try_symbol_or_string() {
+            let group_name = name.to_string();
+            let i = m
+                .regexp()
+                .and_then(|r| r.capture_names().ok())
+                .and_then(|names| {
+                    let mut last: Option<usize> = None;
+                    for (i, n) in names.iter().enumerate() {
+                        if *n == group_name {
+                            last = Some(i + 1);
+                        }
+                    }
+                    last
+                })
+                .ok_or_else(|| {
+                    MonorubyErr::indexerr(format!(
+                        "undefined group name reference: {group_name}"
+                    ))
+                })?;
+            res.push(
+                m.at(i)
+                    .map(Value::string_from_str)
+                    .unwrap_or_else(Value::nil),
+            );
+            continue;
+        }
         let idx = a.coerce_to_int_i64(vm, globals)?;
         let idx = if idx >= 0 {
             idx as usize
@@ -482,6 +591,22 @@ fn to_a(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
+    // `[start, length]` two-argument form returns a slice as Array.
+    if let Some(arg1) = lfp.try_arg(1) {
+        let start = lfp.arg(0).try_fixnum().ok_or_else(|| {
+            MonorubyErr::typeerr(format!(
+                "no implicit conversion of {} into Integer",
+                lfp.arg(0).get_real_class_name(globals)
+            ))
+        })?;
+        let len = arg1.try_fixnum().ok_or_else(|| {
+            MonorubyErr::typeerr(format!(
+                "no implicit conversion of {} into Integer",
+                arg1.get_real_class_name(globals)
+            ))
+        })?;
+        return Ok(slice_match_data(&m, start, len));
+    }
     if let Some(idx) = lfp.arg(0).try_fixnum() {
         let idx = if idx >= 0 {
             idx as usize
@@ -498,6 +623,14 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         Ok(m.at(idx as usize)
             .map(|s| Value::string_from_str(s))
             .unwrap_or_default())
+    } else if let Some(range) = lfp.arg(0).is_range() {
+        // `[start..end]` / `[start...]` / `[..end]` slicing.
+        let len = m.len() as i64;
+        let (start, slice_len) = match range_to_slice(range, len) {
+            Some(v) => v,
+            None => return Ok(Value::nil()),
+        };
+        Ok(slice_match_data(&m, start, slice_len))
     } else if let Some(sym) = lfp.arg(0).try_symbol_or_string() {
         if let Some(i) = m
             .regexp()
@@ -522,6 +655,62 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     }
 }
 
+/// Slice `[start, length]` semantics over a MatchData. `start` may be
+/// negative (counts from end). Returns `nil` for out-of-range start.
+/// Out-of-range tail is silently truncated.
+fn slice_match_data(
+    m: &crate::value::rvalue::MatchDataInner,
+    start: i64,
+    length: i64,
+) -> Value {
+    let len = m.len() as i64;
+    let s = if start < 0 { start + len } else { start };
+    if s < 0 || s > len || length < 0 {
+        return Value::nil();
+    }
+    let s = s as usize;
+    let e = (s + length as usize).min(m.len());
+    let mut out = Vec::with_capacity(e - s);
+    for i in s..e {
+        out.push(
+            m.at(i)
+                .map(|v| Value::string_from_str(v))
+                .unwrap_or_default(),
+        );
+    }
+    Value::array_from_vec(out)
+}
+
+/// Convert a `Range` of integers (possibly with nil endpoints for
+/// beginningless / endless) into a `(start, length)` pair suitable
+/// for `slice_match_data`. Returns `None` when the start exceeds the
+/// match-array length (CRuby returns `nil` in that case).
+fn range_to_slice(
+    range: &crate::value::rvalue::RangeInner,
+    len: i64,
+) -> Option<(i64, i64)> {
+    let start_v = range.start();
+    let end_v = range.end();
+    let start = if start_v.is_nil() {
+        0
+    } else {
+        let v = start_v.try_fixnum()?;
+        if v < 0 { v + len } else { v }
+    };
+    if start < 0 || start > len {
+        return None;
+    }
+    let end = if end_v.is_nil() {
+        len
+    } else {
+        let v = end_v.try_fixnum()?;
+        let v = if v < 0 { v + len } else { v };
+        if range.exclude_end() { v } else { v + 1 }
+    };
+    let length = (end.max(start) - start).max(0);
+    Some((start, length))
+}
+
 ///
 /// ### MatchData#begin
 ///
@@ -534,12 +723,7 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn match_begin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
-    let idx = lfp.arg(0).coerce_to_int_i64(vm, globals)? as usize;
-    if idx >= m.len() {
-        return Err(MonorubyErr::indexerr(format!(
-            "index {idx} out of matches"
-        )));
-    }
+    let idx = resolve_capture_index(vm, globals, &m, lfp.arg(0))?;
     match m.pos(idx) {
         Some((start, _)) => {
             let char_offset = m.string()[..start].chars().count();
@@ -561,12 +745,7 @@ fn match_begin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
 fn match_end(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
-    let idx = lfp.arg(0).coerce_to_int_i64(vm, globals)? as usize;
-    if idx >= m.len() {
-        return Err(MonorubyErr::indexerr(format!(
-            "index {idx} out of matches"
-        )));
-    }
+    let idx = resolve_capture_index(vm, globals, &m, lfp.arg(0))?;
     match m.pos(idx) {
         Some((_, end_pos)) => {
             let char_offset = m.string()[..end_pos].chars().count();

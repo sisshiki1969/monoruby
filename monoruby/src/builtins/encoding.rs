@@ -269,7 +269,7 @@ pub(super) fn str_encoding(
 
 /// Map an `Encoding` to the corresponding `Encoding::<NAME>` Ruby
 /// constant name registered by `init_encoding`.
-fn encoding_constant_name(enc: Encoding) -> &'static str {
+pub(super) fn encoding_constant_name(enc: Encoding) -> &'static str {
     match enc {
         Encoding::Ascii8 => "ASCII_8BIT",
         Encoding::Utf8 => "UTF_8",
