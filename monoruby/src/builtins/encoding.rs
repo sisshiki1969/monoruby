@@ -105,6 +105,26 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         "CP51932",
         "STATELESS_ISO_2022_JP",
         "CESU_8",
+        // Additional encodings exercised by ruby/spec. Aliases that
+        // share an *object* with an existing constant (BINARY ↔
+        // ASCII-8BIT, ASCII ↔ US-ASCII, CP65001 ↔ UTF-8) are handled
+        // separately below so the constants compare equal under
+        // object-identity `==`.
+        "UTF_7",
+        "CP50220",
+        "CP50221",
+        "Emacs_Mule",
+        "Big5_HKSCS",
+        "Big5_UAO",
+        "GB12345",
+        "MacCyrillic",
+        "MacGreek",
+        "MacIceland",
+        "MacRoman",
+        "MacRomania",
+        "MacThai",
+        "MacTurkish",
+        "MacUkraine",
     ] {
         let val = Value::object(enc.id());
         globals
@@ -126,6 +146,19 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         globals.set_constant_by_str(enc.id(), name, val);
     }
 
+    // Aliases that share their underlying Value with another
+    // constant — `Encoding::ASCII == Encoding::US_ASCII` and
+    // `Encoding::CP65001 == Encoding::UTF_8` per CRuby. (BINARY ↔
+    // ASCII-8BIT is already wired above.)
+    if let Some(us_ascii) =
+        globals.store.get_constant_noautoload(enc.id(), IdentId::get_id("US_ASCII"))
+    {
+        globals.set_constant_by_str(enc.id(), "ASCII", us_ascii);
+    }
+    if let Some(utf8) = globals.store.get_constant_noautoload(enc.id(), IdentId::get_id("UTF_8")) {
+        globals.set_constant_by_str(enc.id(), "CP65001", utf8);
+    }
+
     // Encoding::CompatibilityError < EncodingError < StandardError
     let enc_error_val = globals
         .store
@@ -142,7 +175,9 @@ pub(super) fn init_encoding(globals: &mut Globals) {
     globals.define_builtin_class_func(enc.id(), "list", enc_list, 0);
     globals.define_builtin_class_func(enc.id(), "find", enc_find, 1);
     globals.define_builtin_class_func(enc.id(), "aliases", enc_aliases, 0);
+    globals.define_builtin_class_func(enc.id(), "name_list", enc_name_list, 0);
     globals.define_builtin_class_func(enc.id(), "compatible?", enc_compatible, 2);
+    globals.define_builtin_func(enc.id(), "names", enc_names, 0);
     globals.define_builtin_func(enc.id(), "to_s", enc_to_s, 0);
     globals.define_builtin_func(enc.id(), "inspect", enc_inspect, 0);
     globals.define_builtin_func(enc.id(), "name", enc_to_s, 0);
@@ -472,8 +507,16 @@ fn enc_list(
 /// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/find.html]
 #[monoruby_builtin]
 fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let name = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let arg0 = lfp.arg(0);
     let enc_class = encoding_class(globals);
+    // CRuby's `Encoding.find` accepts either a String name (subject
+    // to `to_str` coercion) *or* an existing `Encoding` object,
+    // returning it unchanged. Without this short-circuit a value of
+    // class `Encoding` would fail `coerce_to_string`'s TypeError.
+    if arg0.class() == enc_class {
+        return Ok(arg0);
+    }
+    let name = arg0.coerce_to_string(vm, globals)?;
     // Resolve special names first
     let const_name = enc_name_to_const(&name);
     let result = if let Some(c) = const_name {
@@ -501,8 +544,17 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
         // Special pseudo-encoding names
         "LOCALE" | "EXTERNAL" | "FILESYSTEM" => Some("UTF_8"),
 
-        // UTF-8
-        "UTF_8" | "UTF8" => Some("UTF_8"),
+        // UTF-8 (and aliases sharing the constant — `Encoding::CP65001`
+        // is an alias of `Encoding::UTF_8`).
+        "UTF_8" | "UTF8" | "CP65001" => Some("UTF_8"),
+
+        // UTF-7 (dummy)
+        "UTF_7" => Some("UTF_7"),
+
+        // Emacs-Mule and other dummy ISO-2022-JP variants
+        "EMACS_MULE" => Some("Emacs_Mule"),
+        "CP50220" => Some("CP50220"),
+        "CP50221" => Some("CP50221"),
 
         // ASCII-8BIT / BINARY
         "ASCII_8BIT" | "BINARY" => Some("ASCII_8BIT"),
@@ -651,6 +703,121 @@ fn enc_aliases(
     Ok(Value::hash(map))
 }
 
+/// The static set of canonical encoding names plus their aliases.
+/// Used by `Encoding.name_list` and `Encoding#names`. Each tuple is
+/// `(canonical, &[aliases])`.
+const ENCODING_NAMES: &[(&str, &[&str])] = &[
+    ("ASCII-8BIT", &["BINARY"]),
+    ("UTF-8", &["CP65001", "locale", "external", "filesystem"]),
+    ("US-ASCII", &["ASCII", "ANSI_X3.4-1968", "646"]),
+    ("UTF-16BE", &[]),
+    ("UTF-16LE", &[]),
+    ("UTF-16", &[]),
+    ("UTF-32BE", &[]),
+    ("UTF-32LE", &[]),
+    ("UTF-32", &[]),
+    ("ISO-8859-1", &[]),
+    ("ISO-8859-2", &[]),
+    ("ISO-8859-3", &[]),
+    ("ISO-8859-4", &[]),
+    ("ISO-8859-5", &[]),
+    ("ISO-8859-6", &[]),
+    ("ISO-8859-7", &[]),
+    ("ISO-8859-8", &[]),
+    ("ISO-8859-9", &[]),
+    ("ISO-8859-10", &[]),
+    ("ISO-8859-11", &[]),
+    ("ISO-8859-13", &[]),
+    ("ISO-8859-14", &[]),
+    ("ISO-8859-15", &[]),
+    ("ISO-8859-16", &[]),
+    ("Shift_JIS", &["SJIS"]),
+    ("Windows-31J", &["CP932", "csWindows31J"]),
+    ("EUC-JP", &["eucJP"]),
+    ("ISO-2022-JP", &[]),
+    ("Windows-1250", &["CP1250"]),
+    ("Windows-1251", &["CP1251"]),
+    ("Windows-1252", &["CP1252"]),
+    ("Windows-1253", &["CP1253"]),
+    ("Windows-1254", &["CP1254"]),
+    ("Windows-1255", &["CP1255"]),
+    ("Windows-1256", &["CP1256"]),
+    ("Windows-1257", &["CP1257"]),
+    ("Windows-1258", &["CP1258"]),
+    ("KOI8-R", &[]),
+    ("KOI8-U", &[]),
+    ("GB2312", &["EUC-CN"]),
+    ("GBK", &["CP936"]),
+    ("GB18030", &[]),
+    ("Big5", &[]),
+    ("EUC-KR", &[]),
+    ("EUC-TW", &[]),
+    ("CP949", &[]),
+    ("TIS-620", &[]),
+    ("MacJapanese", &[]),
+    ("eucJP-ms", &["eucjp-ms", "euc-jp-ms"]),
+    ("CP51932", &[]),
+    ("stateless-ISO-2022-JP", &[]),
+    ("CESU-8", &[]),
+    ("UTF-7", &[]),
+    ("Emacs-Mule", &[]),
+    ("CP50220", &[]),
+    ("CP50221", &[]),
+];
+
+///
+/// ### Encoding.name_list
+/// - name_list -> [String]
+///
+/// Returns the list of all encoding names plus all aliases.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/name_list.html]
+#[monoruby_builtin]
+fn enc_name_list(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut names: Vec<Value> = Vec::new();
+    for (canonical, aliases) in ENCODING_NAMES {
+        names.push(Value::string_from_str(canonical));
+        for alias in *aliases {
+            names.push(Value::string_from_str(alias));
+        }
+    }
+    Ok(Value::array_from_iter(names.into_iter()))
+}
+
+///
+/// ### Encoding#names
+/// - names -> [String]
+///
+/// Returns the list of all canonical names and aliases that refer to
+/// this encoding.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Encoding/i/names.html]
+#[monoruby_builtin]
+fn enc_names(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let canonical = match globals.store.get_ivar(self_, IdentId::_ENCODING) {
+        Some(v) => v.as_str().to_string(),
+        None => return Ok(Value::array_empty()),
+    };
+    // Find the matching row by canonical name and collect every
+    // (canonical, alias) that points here.
+    let mut names: Vec<Value> = vec![Value::string_from_str(&canonical)];
+    for (c, aliases) in ENCODING_NAMES {
+        if c.eq_ignore_ascii_case(&canonical) {
+            for alias in *aliases {
+                names.push(Value::string_from_str(alias));
+            }
+            break;
+        }
+    }
+    Ok(Value::array_from_iter(names.into_iter()))
+}
+
 ///
 /// ### Encoding.compatible?
 /// - compatible?(obj1, obj2) -> Encoding | nil
@@ -737,10 +904,41 @@ fn enc_inspect(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
-    match globals.store.get_ivar(self_, IdentId::_NAME) {
-        Some(v) => Ok(v),
-        None => Ok(Value::string_from_str("#<Encoding:UTF-8>")),
+    // `#<Encoding:NAME>` form for non-dummy encodings, with a
+    // `(dummy)` suffix for the encodings CRuby flags as dummy.
+    // Ruby 3.4+ renders ASCII-8BIT as `BINARY (ASCII-8BIT)` since
+    // BINARY became the canonical name.
+    let name = match globals.store.get_ivar(self_, IdentId::_ENCODING) {
+        Some(v) => v.as_str().to_string(),
+        None => "UTF-8".to_string(),
+    };
+    if name == "ASCII-8BIT" {
+        return Ok(Value::string_from_str("#<Encoding:BINARY (ASCII-8BIT)>"));
     }
+    let suffix = if is_cruby_dummy_name(&name) { " (dummy)" } else { "" };
+    Ok(Value::string(format!("#<Encoding:{name}{suffix}>")))
+}
+
+/// Encoding names that CRuby flags as "dummy" — registered but not
+/// natively decoded. monoruby's broader `Encoding::is_dummy` covers
+/// "we don't decode", which is too eager (ISO-8859 / EUC-JP / SJIS
+/// have CRuby decoders even if monoruby doesn't). For
+/// `Encoding#dummy?` and `Encoding#inspect` we use this narrower
+/// match to match CRuby observed behaviour.
+fn is_cruby_dummy_name(name: &str) -> bool {
+    let normalized = name.to_uppercase().replace('-', "_");
+    matches!(
+        normalized.as_str(),
+        "UTF_7"
+            | "UTF_16"
+            | "UTF_32"
+            | "EMACS_MULE"
+            | "CP50220"
+            | "CP50221"
+            | "ISO_2022_JP"
+            | "STATELESS_ISO_2022_JP"
+            | "CESU_8"
+    )
 }
 
 ///
@@ -803,16 +1001,9 @@ fn is_ascii_compatible_encoding(name: &str) -> bool {
 }
 
 fn is_dummy_encoding(name: &str) -> bool {
-    matches!(
-        name,
-        "UTF-16"
-            | "UTF-32"
-            | "ISO-2022-JP"
-            | "STATELESS-ISO-2022-JP"
-            | "CP50220"
-            | "CP50221"
-            | "UTF-7"
-    )
+    // Delegate to the canonical helper used by `Encoding#inspect`
+    // so the two views agree.
+    is_cruby_dummy_name(name)
 }
 
 #[cfg(test)]
@@ -1288,5 +1479,97 @@ mod tests {
         run_test(r#"Encoding::UTF_16.dummy?"#);
         run_test(r#"Encoding::UTF_32.dummy?"#);
         run_test(r#"Encoding::ISO_2022_JP.dummy?"#);
+    }
+
+    #[test]
+    fn encoding_extra_dummy_constants() {
+        // Defined and reachable as Encoding objects (CRuby uses
+        // mixed-case canonical identifiers for the dummy / mac-family
+        // names — this is the literal constant identifier).
+        run_test(r#"Encoding::UTF_7.is_a?(Encoding)"#);
+        run_test(r#"Encoding::Emacs_Mule.is_a?(Encoding)"#);
+        run_test(r#"Encoding::CP50220.is_a?(Encoding)"#);
+        run_test(r#"Encoding::CP50221.is_a?(Encoding)"#);
+        // Their `dummy?` is true (CRuby-strict set).
+        run_test(r#"Encoding::UTF_7.dummy?"#);
+        run_test(r#"Encoding::CP50220.dummy?"#);
+        // Mac-family aliases reachable, dummy? false.
+        run_test(r#"Encoding::MacCyrillic.is_a?(Encoding)"#);
+        run_test(r#"Encoding::MacGreek.is_a?(Encoding)"#);
+        run_test(r#"Encoding::MacRoman.is_a?(Encoding)"#);
+        run_test(r#"Encoding::MacTurkish.dummy?"#);
+        run_test(r#"Encoding::Big5_HKSCS.is_a?(Encoding)"#);
+    }
+
+    #[test]
+    fn encoding_object_identity_aliases() {
+        // ASCII <-> US_ASCII share the same Value (object identity).
+        run_test(r#"Encoding::ASCII.equal?(Encoding::US_ASCII)"#);
+        run_test(r#"Encoding::ASCII == Encoding::US_ASCII"#);
+        // CP65001 <-> UTF_8 share the same Value.
+        run_test(r#"Encoding::CP65001.equal?(Encoding::UTF_8)"#);
+        run_test(r#"Encoding::CP65001 == Encoding::UTF_8"#);
+        // BINARY <-> ASCII_8BIT (existing behaviour, asserted for parity).
+        run_test(r#"Encoding::BINARY.equal?(Encoding::ASCII_8BIT)"#);
+    }
+
+    #[test]
+    fn encoding_find_accepts_encoding_object() {
+        // Pre-existing: Encoding.find with a String name.
+        run_test(r#"Encoding.find("UTF-8").is_a?(Encoding)"#);
+        // New: Encoding.find with an Encoding object returns it as-is.
+        run_test(r#"Encoding.find(Encoding::UTF_8).equal?(Encoding::UTF_8)"#);
+        run_test(r#"Encoding.find(Encoding::ASCII_8BIT).equal?(Encoding::ASCII_8BIT)"#);
+    }
+
+    #[test]
+    fn encoding_name_list_class_method() {
+        run_test(r#"Encoding.name_list.is_a?(Array)"#);
+        run_test(r#"Encoding.name_list.all? { |n| n.is_a?(String) }"#);
+        run_test(r#"Encoding.name_list.include?("UTF-8")"#);
+        run_test(r#"Encoding.name_list.include?("ASCII-8BIT")"#);
+        // Aliases listed alongside canonical names.
+        run_test(r#"Encoding.name_list.include?("BINARY")"#);
+        run_test(r#"Encoding.name_list.include?("CP65001")"#);
+    }
+
+    #[test]
+    fn encoding_names_instance_method() {
+        run_test(r#"Encoding::UTF_8.names.is_a?(Array)"#);
+        run_test(r#"Encoding::UTF_8.names.include?("UTF-8")"#);
+        run_test(r#"Encoding::UTF_8.names.include?("CP65001")"#);
+        run_test(r#"Encoding::ASCII_8BIT.names.include?("ASCII-8BIT")"#);
+        run_test(r#"Encoding::ASCII_8BIT.names.include?("BINARY")"#);
+        run_test(r#"Encoding::US_ASCII.names.include?("US-ASCII")"#);
+        run_test(r#"Encoding::US_ASCII.names.include?("ASCII")"#);
+    }
+
+    #[test]
+    fn encoding_inspect_form() {
+        // ASCII-8BIT renders as the 3.4+ canonical `BINARY (ASCII-8BIT)` form.
+        run_test(r#"Encoding::ASCII_8BIT.inspect"#);
+        // Plain non-dummy encoding: `#<Encoding:NAME>`.
+        run_test(r#"Encoding::UTF_8.inspect"#);
+        run_test(r#"Encoding::US_ASCII.inspect"#);
+        // Dummy encoding: `(dummy)` suffix.
+        run_test(r#"Encoding::UTF_7.inspect"#);
+        run_test(r#"Encoding::ISO_2022_JP.inspect"#);
+        run_test(r#"Encoding::UTF_16.inspect"#);
+    }
+
+    #[test]
+    fn force_encoding_accepts_dummy_aliases() {
+        // The new dummy / Mac-family aliases are accepted without
+        // raising. monoruby internally normalises the encoding tag to
+        // ASCII-8BIT (it doesn't transcode), so we just assert that
+        // the call returns a String.
+        run_test_no_result_check(
+            r#"
+            raise unless "abc".force_encoding("UTF-7").is_a?(String)
+            raise unless "abc".force_encoding("Emacs-Mule").is_a?(String)
+            raise unless "abc".force_encoding("CP50220").is_a?(String)
+            raise unless "abc".force_encoding("MacCyrillic").is_a?(String)
+            "#,
+        );
     }
 }
