@@ -282,9 +282,14 @@ impl<'a> MarshalReader<'a> {
     fn read_raw_string(&mut self, encoding: Encoding) -> Result<Value> {
         let len = self.read_fixnum()? as usize;
         let bytes = self.read_bytes(len)?;
-        let val = match encoding {
-            Encoding::Utf8 | Encoding::UsAscii => Value::string_from_inner(RStringInner::from_encoding(bytes, Encoding::Utf8)),
-            Encoding::Ascii8 => Value::bytes_from_slice(bytes),
+        let val = if encoding.is_utf8_compatible() {
+            Value::string_from_inner(RStringInner::from_encoding(bytes, Encoding::Utf8))
+        } else {
+            // Non-UTF-8 encodings (Ascii8 / dummy): preserve the
+            // declared encoding tag verbatim. Marshal data records
+            // ASCII-8BIT for `String#b` etc., and round-tripping
+            // dummy encodings should be lossless.
+            Value::string_from_inner(RStringInner::from_encoding(bytes, encoding))
         };
         self.objects.push(val);
         Ok(val)
@@ -738,6 +743,15 @@ fn marshal_write_string(buf: &mut Vec<u8>, s: &RStringInner, symbols: &mut Vec<I
             buf.push(b'T'); // true
         }
         Encoding::UsAscii | Encoding::Ascii8 => {
+            buf.push(b'"');
+            marshal_write_fixnum(buf, bytes.len() as i32);
+            buf.extend_from_slice(bytes);
+        }
+        // Dummy / non-UTF-8 encodings: write the bytes opaquely
+        // without an encoding ivar. Marshal round-trip will lose
+        // the declared encoding (consistent with monoruby's prior
+        // ASCII-8BIT-only behaviour for these names).
+        _ => {
             buf.push(b'"');
             marshal_write_fixnum(buf, bytes.len() as i32);
             buf.extend_from_slice(bytes);

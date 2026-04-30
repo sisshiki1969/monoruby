@@ -1595,10 +1595,18 @@ fn get_output_field_separator(globals: &mut Globals) -> Option<String> {
 /// must not silently be reinterpreted as UTF-8 (which would turn high
 /// bytes into U+FFFD). Otherwise UTF-8 wins over US-ASCII.
 fn merge_encoding(enc: &mut Encoding, other: Encoding) {
-    *enc = match (*enc, other) {
-        (Encoding::Ascii8, _) | (_, Encoding::Ascii8) => Encoding::Ascii8,
-        (Encoding::Utf8, _) | (_, Encoding::Utf8) => Encoding::Utf8,
-        (Encoding::UsAscii, Encoding::UsAscii) => Encoding::UsAscii,
+    *enc = if matches!(*enc, Encoding::Ascii8) || matches!(other, Encoding::Ascii8) {
+        Encoding::Ascii8
+    } else if !enc.is_utf8_compatible() || !other.is_utf8_compatible() {
+        // A non-UTF-8 dummy encoding (UTF-16/EUC-JP/SJIS/...) on
+        // either side joins as ASCII-8BIT for now: we don't know
+        // how to safely concatenate those character streams, so
+        // CRuby's "byte fallback" is the conservative answer.
+        Encoding::Ascii8
+    } else if matches!(*enc, Encoding::Utf8) || matches!(other, Encoding::Utf8) {
+        Encoding::Utf8
+    } else {
+        Encoding::UsAscii
     };
 }
 
