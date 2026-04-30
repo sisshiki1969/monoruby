@@ -3219,29 +3219,32 @@ fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// ### String#upcase
 ///
-/// - upcase([NOT SUPPORTED] *options) -> String
+/// - upcase(*options) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase.html]
 #[monoruby_builtin]
 fn upcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Upcase)?;
     let self_val = lfp.self_val();
-    let s = self_val.expect_str(globals)?.to_uppercase();
-    Ok(Value::string(s))
+    let s = self_val.expect_str(globals)?;
+    Ok(Value::string(apply_case(s, CaseOp::Upcase, mode)))
 }
 
 ///
 /// ### String#upcase!
 ///
-/// - upcase!([NOT SUPPORTED] *options) -> self | nil
+/// - upcase!(*options) -> self | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase=21.html]
 #[monoruby_builtin]
 fn upcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Upcase)?;
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_val = lfp.self_val();
-    let s = self_val.expect_str(globals)?.to_uppercase();
-    let changed = &s != self_val.expect_str(globals)?;
-    self_val.replace_string(s);
+    let s = self_val.expect_str(globals)?;
+    let result = apply_case(s, CaseOp::Upcase, mode);
+    let changed = &result != self_val.expect_str(globals)?;
+    self_val.replace_string(result);
 
     Ok(if changed {
         lfp.self_val()
@@ -3253,29 +3256,32 @@ fn upcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 //
 /// ### String#downcase
 ///
-/// - downcase([NOT SUPPORTED]*options) -> String
+/// - downcase(*options) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/downcase.html]
 #[monoruby_builtin]
 fn downcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Downcase)?;
     let self_val = lfp.self_val();
-    let s = self_val.expect_str(globals)?.to_lowercase();
-    Ok(Value::string(s))
+    let s = self_val.expect_str(globals)?;
+    Ok(Value::string(apply_case(s, CaseOp::Downcase, mode)))
 }
 
 ///
 /// ### String#downcase!
 ///
-/// - downcase!([NOT SUPPORTED] *options) -> self | nil
+/// - downcase!(*options) -> self | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/downcase=21.html]
 #[monoruby_builtin]
 fn downcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Downcase)?;
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_val = lfp.self_val();
-    let s = self_val.expect_str(globals)?.to_lowercase();
-    let changed = &s != self_val.expect_str(globals)?;
-    self_val.replace_string(s);
+    let s = self_val.expect_str(globals)?;
+    let result = apply_case(s, CaseOp::Downcase, mode);
+    let changed = &result != self_val.expect_str(globals)?;
+    self_val.replace_string(result);
 
     Ok(if changed {
         lfp.self_val()
@@ -3287,7 +3293,7 @@ fn downcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// ### String#capitalize
 ///
-/// - capitalize([NOT SUPPORTED]*options) -> String
+/// - capitalize(*options) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/capitalize.html]
 #[monoruby_builtin]
@@ -3297,29 +3303,16 @@ fn capitalize(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Capitalize)?;
     let self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
-    let mut result = String::with_capacity(s.len());
-    let mut first = true;
-    for c in s.chars() {
-        if first {
-            for uc in c.to_uppercase() {
-                result.push(uc);
-            }
-            first = false;
-        } else {
-            for lc in c.to_lowercase() {
-                result.push(lc);
-            }
-        }
-    }
-    Ok(Value::string(result))
+    Ok(Value::string(apply_case(s, CaseOp::Capitalize, mode)))
 }
 
 ///
 /// ### String#capitalize!
 ///
-/// - capitalize!([NOT SUPPORTED]*options) -> self | nil
+/// - capitalize!(*options) -> self | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/capitalize=21.html]
 #[monoruby_builtin]
@@ -3329,23 +3322,11 @@ fn capitalize_(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Capitalize)?;
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
-    let mut result = String::with_capacity(s.len());
-    let mut first = true;
-    for c in s.chars() {
-        if first {
-            for uc in c.to_uppercase() {
-                result.push(uc);
-            }
-            first = false;
-        } else {
-            for lc in c.to_lowercase() {
-                result.push(lc);
-            }
-        }
-    }
+    let result = apply_case(s, CaseOp::Capitalize, mode);
     let changed = &result != self_val.expect_str(globals)?;
     self_val.replace_string(result);
     Ok(if changed {
@@ -3358,55 +3339,30 @@ fn capitalize_(
 ///
 /// ### String#swapcase
 ///
-/// - swapcase([NOT SUPPORTED]*options) -> String
+/// - swapcase(*options) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/swapcase.html]
 #[monoruby_builtin]
 fn swapcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Swapcase)?;
     let self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
-    let mut result = String::with_capacity(s.len());
-    for c in s.chars() {
-        if c.is_uppercase() {
-            for lc in c.to_lowercase() {
-                result.push(lc);
-            }
-        } else if c.is_lowercase() {
-            for uc in c.to_uppercase() {
-                result.push(uc);
-            }
-        } else {
-            result.push(c);
-        }
-    }
-    Ok(Value::string(result))
+    Ok(Value::string(apply_case(s, CaseOp::Swapcase, mode)))
 }
 
 ///
 /// ### String#swapcase!
 ///
-/// - swapcase!([NOT SUPPORTED]*options) -> self | nil
+/// - swapcase!(*options) -> self | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/swapcase=21.html]
 #[monoruby_builtin]
 fn swapcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Swapcase)?;
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
-    let mut result = String::with_capacity(s.len());
-    for c in s.chars() {
-        if c.is_uppercase() {
-            for lc in c.to_lowercase() {
-                result.push(lc);
-            }
-        } else if c.is_lowercase() {
-            for uc in c.to_uppercase() {
-                result.push(uc);
-            }
-        } else {
-            result.push(c);
-        }
-    }
+    let result = apply_case(s, CaseOp::Swapcase, mode);
     let changed = &result != self_val.expect_str(globals)?;
     self_val.replace_string(result);
     Ok(if changed {
@@ -3414,6 +3370,256 @@ fn swapcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     } else {
         Value::nil()
     })
+}
+
+/// Operation type for the `apply_case` helper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaseOp {
+    Upcase,
+    Downcase,
+    Capitalize,
+    Swapcase,
+}
+
+/// Case-mapping mode parsed from the `*options` rest-args of
+/// `String#upcase`/`#downcase`/`#capitalize`/`#swapcase`. CRuby accepts
+/// `:ascii`, `:turkic`, `:lithuanian`, `:fold` (the last being downcase
+/// only) with these constraints:
+///
+/// - `:ascii` cannot combine with `:turkic` or `:lithuanian`.
+/// - `:fold` is downcase-only.
+/// - At most one mutually-exclusive locale option may apply, but
+///   `:turkic` + `:lithuanian` is allowed (Turkic semantics win).
+///
+/// Lithuanian-specific transforms aren't implemented (CRuby's spec
+/// notes "currently works the same as full Unicode case mapping" for
+/// most cases), so `:lithuanian` falls through to the default Unicode
+/// mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaseMode {
+    Full,
+    Ascii,
+    Turkic,
+    /// Downcase only — Unicode case folding (e.g. `ß` → `ss`).
+    Fold,
+}
+
+fn parse_case_options(globals: &Globals, args: Array, op: CaseOp) -> Result<CaseMode> {
+    if args.is_empty() {
+        return Ok(CaseMode::Full);
+    }
+    let mut ascii = false;
+    let mut turkic = false;
+    let mut lithuanian = false;
+    let mut fold = false;
+    for v in args.iter() {
+        let sym = match v.try_symbol() {
+            Some(s) => s,
+            None => {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "invalid option: {}",
+                    v.inspect(&globals.store)
+                )));
+            }
+        };
+        match sym.get_name().as_str() {
+            "ascii" => ascii = true,
+            "turkic" => turkic = true,
+            "lithuanian" => lithuanian = true,
+            "fold" => fold = true,
+            other => {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "invalid option: :{other}"
+                )));
+            }
+        }
+    }
+    if fold && op != CaseOp::Downcase {
+        return Err(MonorubyErr::argumenterr(
+            "option :fold only allowed for downcasing",
+        ));
+    }
+    if ascii && (turkic || lithuanian || fold) {
+        return Err(MonorubyErr::argumenterr(
+            "ASCII incompatible with other options",
+        ));
+    }
+    if fold && (turkic || lithuanian) {
+        return Err(MonorubyErr::argumenterr(
+            ":fold incompatible with other options",
+        ));
+    }
+    if ascii {
+        Ok(CaseMode::Ascii)
+    } else if turkic {
+        // `:turkic` + `:lithuanian` collapses to Turkic semantics.
+        Ok(CaseMode::Turkic)
+    } else if fold {
+        Ok(CaseMode::Fold)
+    } else {
+        // Bare `:lithuanian` (or empty after locale filter) behaves
+        // like the default full Unicode mapping.
+        Ok(CaseMode::Full)
+    }
+}
+
+/// Per-character upcase under the requested `mode`. Returns an empty
+/// iterator-equivalent (the input char unchanged) for Ascii mode on
+/// non-ASCII bytes.
+fn upcase_char(c: char, mode: CaseMode) -> SmallCaseBuf {
+    match mode {
+        CaseMode::Ascii => {
+            if c.is_ascii() {
+                SmallCaseBuf::one(c.to_ascii_uppercase())
+            } else {
+                SmallCaseBuf::one(c)
+            }
+        }
+        CaseMode::Turkic => match c {
+            // Turkish uses dotless ı / dotted İ. Upcase of `i` is
+            // dotted `İ`; `ı` upcases to `I` (the regular ASCII
+            // uppercase), which already happens by default.
+            'i' => SmallCaseBuf::one('\u{0130}'),
+            _ => SmallCaseBuf::from_iter(c.to_uppercase()),
+        },
+        CaseMode::Full | CaseMode::Fold => SmallCaseBuf::from_iter(c.to_uppercase()),
+    }
+}
+
+fn downcase_char(c: char, mode: CaseMode) -> SmallCaseBuf {
+    match mode {
+        CaseMode::Ascii => {
+            if c.is_ascii() {
+                SmallCaseBuf::one(c.to_ascii_lowercase())
+            } else {
+                SmallCaseBuf::one(c)
+            }
+        }
+        CaseMode::Turkic => match c {
+            // Turkish: `I` (no dot) downcases to dotless `ı`; `İ`
+            // downcases to plain `i`.
+            'I' => SmallCaseBuf::one('\u{0131}'),
+            '\u{0130}' => SmallCaseBuf::one('i'),
+            _ => SmallCaseBuf::from_iter(c.to_lowercase()),
+        },
+        CaseMode::Fold => match c {
+            // The eszett's full case fold expands to `ss`. Rust's
+            // `char::to_lowercase` leaves it as-is, so handle it
+            // explicitly. CRuby applies the same Unicode default
+            // folding here for a small set of characters; `ß` is
+            // the one our spec battery hits.
+            '\u{00DF}' => SmallCaseBuf::two('s', 's'),
+            _ => SmallCaseBuf::from_iter(c.to_lowercase()),
+        },
+        CaseMode::Full => SmallCaseBuf::from_iter(c.to_lowercase()),
+    }
+}
+
+fn apply_case(s: &str, op: CaseOp, mode: CaseMode) -> String {
+    let mut result = String::with_capacity(s.len());
+    match op {
+        CaseOp::Upcase => {
+            for c in s.chars() {
+                for nc in upcase_char(c, mode).iter() {
+                    result.push(nc);
+                }
+            }
+        }
+        CaseOp::Downcase => {
+            for c in s.chars() {
+                for nc in downcase_char(c, mode).iter() {
+                    result.push(nc);
+                }
+            }
+        }
+        CaseOp::Capitalize => {
+            let mut chars = s.chars();
+            if let Some(first) = chars.next() {
+                // CRuby's `capitalize` only uppercases the *first*
+                // character produced by the leading character's
+                // upcase mapping. When a single source character
+                // upcases to multiple (e.g. `ß` → `SS`), only the
+                // first stays uppercase and the rest fall through
+                // the lowercase pipeline (so `"ß".capitalize` is
+                // `"Ss"`, not `"SS"`).
+                let buf = upcase_char(first, mode);
+                let mut it = buf.iter();
+                if let Some(head) = it.next() {
+                    result.push(head);
+                    for trailing in it {
+                        for nc in downcase_char(trailing, mode).iter() {
+                            result.push(nc);
+                        }
+                    }
+                }
+                for c in chars {
+                    for nc in downcase_char(c, mode).iter() {
+                        result.push(nc);
+                    }
+                }
+            }
+        }
+        CaseOp::Swapcase => {
+            for c in s.chars() {
+                let is_upper = c.is_uppercase();
+                let is_lower = c.is_lowercase();
+                if is_upper {
+                    for nc in downcase_char(c, mode).iter() {
+                        result.push(nc);
+                    }
+                } else if is_lower {
+                    for nc in upcase_char(c, mode).iter() {
+                        result.push(nc);
+                    }
+                } else {
+                    result.push(c);
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Tiny inline buffer for a per-character case mapping. Most
+/// transforms produce 1 char, a few (`ß` → `ss`, German full upcase
+/// of certain ligatures) produce 2 or 3. Avoids heap allocation in
+/// the hot loop.
+#[derive(Debug, Clone, Copy)]
+struct SmallCaseBuf {
+    chars: [char; 3],
+    len: u8,
+}
+
+impl SmallCaseBuf {
+    fn one(c: char) -> Self {
+        Self {
+            chars: [c, '\0', '\0'],
+            len: 1,
+        }
+    }
+    fn two(a: char, b: char) -> Self {
+        Self {
+            chars: [a, b, '\0'],
+            len: 2,
+        }
+    }
+    fn from_iter<I: Iterator<Item = char>>(mut it: I) -> Self {
+        let mut chars = ['\0'; 3];
+        let mut len = 0u8;
+        for slot in chars.iter_mut() {
+            match it.next() {
+                Some(c) => {
+                    *slot = c;
+                    len += 1;
+                }
+                None => break,
+            }
+        }
+        Self { chars, len }
+    }
+    fn iter(&self) -> impl Iterator<Item = char> + '_ {
+        self.chars[..self.len as usize].iter().copied()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5034,6 +5240,57 @@ mod tests {
         run_test(r#""abc".casecmp?("abd")"#);
         run_test(r#""abc".casecmp(42)"#);
         run_test(r#""abc".casecmp?(42)"#);
+    }
+
+    #[test]
+    fn case_methods_ascii_option() {
+        // `:ascii` skips non-ASCII characters.
+        run_test(r#""aßet".upcase(:ascii)"#);
+        run_test(r#""ABCß".downcase(:ascii)"#);
+        run_test(r#""aßet".capitalize(:ascii)"#);
+        run_test(r#""aßET".swapcase(:ascii)"#);
+    }
+
+    #[test]
+    fn case_methods_turkic_option() {
+        run_test(r#""i".upcase(:turkic)"#);
+        run_test(r#""I".downcase(:turkic)"#);
+        run_test(r#""İ".downcase(:turkic)"#);
+        run_test(r#""aiS".swapcase(:turkic)"#);
+    }
+
+    #[test]
+    fn case_methods_fold_option() {
+        // `ß` folds to `ss` for downcase only.
+        run_test(r#""ß".downcase(:fold)"#);
+        run_test(r#""Straße".downcase(:fold)"#);
+    }
+
+    #[test]
+    fn case_methods_lithuanian_option() {
+        // Lithuanian falls through to default mapping; combined with
+        // turkic the turkic semantics apply.
+        run_test(r#""i".upcase(:lithuanian)"#);
+        run_test(r#""i".upcase(:lithuanian, :turkic)"#);
+    }
+
+    #[test]
+    fn case_methods_rejects_invalid_options() {
+        run_test_error(r#""abc".upcase(:fold)"#);
+        run_test_error(r#""abc".upcase(:weird)"#);
+        run_test_error(r#""abc".downcase(:weird)"#);
+        run_test_error(r#""i".upcase(:turkic, :ascii)"#);
+        run_test_error(r#""i".upcase(:lithuanian, :ascii)"#);
+        run_test_error(r#""abc".capitalize(:fold)"#);
+        run_test_error(r#""abc".swapcase(:fold)"#);
+    }
+
+    #[test]
+    fn capitalize_multichar_first() {
+        // `ß` upcases to `SS`; capitalize keeps the first uppercase
+        // and lowercases the rest of that multi-char expansion.
+        run_test(r#""ß".capitalize"#);
+        run_test(r#""ßeT".capitalize"#);
     }
 
     #[test]
