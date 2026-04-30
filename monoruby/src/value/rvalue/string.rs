@@ -585,8 +585,11 @@ impl RStringInner {
 
     pub fn set_byte(&mut self, index: usize, byte: u8) {
         self.content[index] = byte;
-        self.ty = Encoding::Ascii8;
-        // Mutating a single byte invalidates the cache.
+        // Phase 1 lets a UTF-8-tagged buffer hold invalid bytes,
+        // so we no longer downgrade the encoding tag here. The
+        // cached classification is invalidated and will be
+        // re-computed on the next access (`valid_encoding?` will
+        // see the byte and report Broken).
         self.cr.set(CodeRange::Unknown);
     }
 
@@ -794,5 +797,267 @@ impl RStringInner {
             self.as_bytes()[0] as u32
         };
         Ok(ord)
+    }
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::*;
+
+    #[test]
+    fn try_from_str_normalises_separators_and_aliases() {
+        assert_eq!(Encoding::try_from_str("UTF-8").unwrap(), Encoding::Utf8);
+        assert_eq!(Encoding::try_from_str("utf-8").unwrap(), Encoding::Utf8);
+        assert_eq!(Encoding::try_from_str("UTF8").unwrap(), Encoding::Utf8);
+        assert_eq!(Encoding::try_from_str("BINARY").unwrap(), Encoding::Ascii8);
+        assert_eq!(Encoding::try_from_str("ASCII-8BIT").unwrap(), Encoding::Ascii8);
+        assert_eq!(Encoding::try_from_str("US-ASCII").unwrap(), Encoding::UsAscii);
+        // ISO-8859-N round-trips through `_` and `-` separators.
+        assert_eq!(Encoding::try_from_str("ISO-8859-1").unwrap(), Encoding::Iso8859(1));
+        assert_eq!(Encoding::try_from_str("ISO_8859_15").unwrap(), Encoding::Iso8859(15));
+        assert_eq!(Encoding::try_from_str("LATIN1").unwrap(), Encoding::Iso8859(1));
+        // UTF-16 / UTF-32 family.
+        assert_eq!(Encoding::try_from_str("UTF-16LE").unwrap(), Encoding::Utf16Le);
+        assert_eq!(Encoding::try_from_str("UTF-16BE").unwrap(), Encoding::Utf16Be);
+        assert_eq!(Encoding::try_from_str("UTF-32").unwrap(), Encoding::Utf32Le);
+        // Japanese.
+        assert_eq!(Encoding::try_from_str("EUC-JP").unwrap(), Encoding::EucJp);
+        assert_eq!(Encoding::try_from_str("Shift_JIS").unwrap(), Encoding::Sjis(0));
+        assert_eq!(Encoding::try_from_str("Windows-31J").unwrap(), Encoding::Sjis(1));
+        assert_eq!(Encoding::try_from_str("CP932").unwrap(), Encoding::Sjis(1));
+        // Pseudo-encoding names map to UTF-8.
+        assert_eq!(Encoding::try_from_str("LOCALE").unwrap(), Encoding::Utf8);
+        // Unknown name → ArgumentError.
+        assert!(Encoding::try_from_str("Bogus-1").is_err());
+    }
+
+    #[test]
+    fn name_round_trips_through_try_from_str() {
+        for enc in [
+            Encoding::Ascii8,
+            Encoding::Utf8,
+            Encoding::UsAscii,
+            Encoding::Utf16Le,
+            Encoding::Utf16Be,
+            Encoding::Utf32Le,
+            Encoding::Utf32Be,
+            Encoding::Iso8859(1),
+            Encoding::Iso8859(5),
+            Encoding::Iso8859(15),
+            Encoding::EucJp,
+            Encoding::Sjis(0),
+            Encoding::Sjis(1),
+        ] {
+            assert_eq!(Encoding::try_from_str(enc.name()).unwrap(), enc);
+        }
+    }
+
+    #[test]
+    fn ascii_compatible_flags() {
+        assert!(Encoding::Utf8.is_ascii_compatible());
+        assert!(Encoding::UsAscii.is_ascii_compatible());
+        assert!(Encoding::Ascii8.is_ascii_compatible());
+        assert!(Encoding::Iso8859(1).is_ascii_compatible());
+        assert!(Encoding::EucJp.is_ascii_compatible());
+        assert!(Encoding::Sjis(0).is_ascii_compatible());
+        assert!(!Encoding::Utf16Le.is_ascii_compatible());
+        assert!(!Encoding::Utf16Be.is_ascii_compatible());
+        assert!(!Encoding::Utf32Le.is_ascii_compatible());
+        assert!(!Encoding::Utf32Be.is_ascii_compatible());
+    }
+
+    #[test]
+    fn dummy_flags_cover_non_native_decoders() {
+        assert!(!Encoding::Utf8.is_dummy());
+        assert!(!Encoding::UsAscii.is_dummy());
+        assert!(!Encoding::Ascii8.is_dummy());
+        assert!(Encoding::Utf16Le.is_dummy());
+        assert!(Encoding::Iso8859(1).is_dummy());
+        assert!(Encoding::EucJp.is_dummy());
+    }
+
+    #[test]
+    fn classify_seven_bit_short_circuit() {
+        // SevenBit fast path applies to every ASCII-compatible enc
+        // when all bytes are < 0x80.
+        for enc in [
+            Encoding::Utf8,
+            Encoding::UsAscii,
+            Encoding::Ascii8,
+            Encoding::Iso8859(1),
+            Encoding::EucJp,
+            Encoding::Sjis(0),
+        ] {
+            assert_eq!(enc.classify(b"abc"), CodeRange::SevenBit, "{:?}", enc);
+        }
+        // UTF-16/32 don't qualify even for 7-bit-only payloads.
+        assert_ne!(Encoding::Utf16Le.classify(b"ab"), CodeRange::SevenBit);
+        assert_ne!(Encoding::Utf32Le.classify(b"abcd"), CodeRange::SevenBit);
+        // Empty → SevenBit by definition.
+        assert_eq!(Encoding::Utf8.classify(b""), CodeRange::SevenBit);
+        assert_eq!(Encoding::Utf16Le.classify(b""), CodeRange::SevenBit);
+    }
+
+    #[test]
+    fn classify_us_ascii_rejects_high_bytes() {
+        // High byte under US-ASCII is Broken (Phase 1's stricter
+        // semantics — was Valid pre-refactor).
+        assert_eq!(Encoding::UsAscii.classify(b"\xff"), CodeRange::Broken);
+        assert_eq!(Encoding::UsAscii.classify(b"a\xffz"), CodeRange::Broken);
+    }
+
+    #[test]
+    fn classify_utf8_validity() {
+        assert_eq!(Encoding::Utf8.classify("é".as_bytes()), CodeRange::Valid);
+        assert_eq!(Encoding::Utf8.classify(&[0xff]), CodeRange::Broken);
+        // Truncated 2-byte scalar.
+        assert_eq!(Encoding::Utf8.classify(&[0xC3]), CodeRange::Broken);
+    }
+
+    #[test]
+    fn classify_utf16_byte_count_parity() {
+        // UTF-16 needs even byte count to validate.
+        assert_eq!(Encoding::Utf16Le.classify(&[0x61, 0x00]), CodeRange::Valid);
+        assert_eq!(Encoding::Utf16Le.classify(&[0x61, 0x00, 0x62]), CodeRange::Broken);
+        assert_eq!(Encoding::Utf16Be.classify(&[0x00, 0x61]), CodeRange::Valid);
+    }
+
+    #[test]
+    fn classify_utf32_byte_count_parity() {
+        assert_eq!(
+            Encoding::Utf32Le.classify(&[0x61, 0x00, 0x00, 0x00]),
+            CodeRange::Valid
+        );
+        assert_eq!(Encoding::Utf32Le.classify(&[0x61, 0x00, 0x00]), CodeRange::Broken);
+    }
+
+    #[test]
+    fn cr_cache_is_lazy_and_then_stable() {
+        // First read computes; subsequent reads return the same
+        // value without re-walking. We can't directly observe
+        // "didn't re-walk" in a unit test, but we can pin the
+        // computed value.
+        let s = RStringInner::from_str("abc");
+        assert_eq!(s.code_range(), CodeRange::SevenBit);
+        assert_eq!(s.code_range(), CodeRange::SevenBit);
+        assert!(s.is_ascii_only());
+        assert!(s.is_valid_encoding());
+
+        let bad = RStringInner::from_encoding(b"\xff", Encoding::Utf8);
+        assert_eq!(bad.code_range(), CodeRange::Broken);
+        assert!(!bad.is_ascii_only());
+        assert!(!bad.is_valid_encoding());
+    }
+
+    #[test]
+    fn set_encoding_invalidates_cache() {
+        let mut s = RStringInner::from_str("abc");
+        // Prime the cache (SevenBit under UTF-8).
+        assert_eq!(s.code_range(), CodeRange::SevenBit);
+        // Switch to UTF-16LE — 3 bytes is now a broken code-unit
+        // sequence. The cache must clear so the next read returns
+        // Broken.
+        s.set_encoding(Encoding::Utf16Le);
+        assert_eq!(s.code_range(), CodeRange::Broken);
+    }
+
+    #[test]
+    fn extend_invalidates_cache_for_new_bytes() {
+        let mut a = RStringInner::from_encoding(&[0xC3], Encoding::Utf8);
+        // 0xC3 alone is a truncated 2-byte UTF-8 scalar → Broken.
+        assert_eq!(a.code_range(), CodeRange::Broken);
+        let b = RStringInner::from_encoding(&[0xA9], Encoding::Utf8);
+        assert_eq!(b.code_range(), CodeRange::Broken);
+        a.extend(&b).unwrap();
+        // Two broken halves combine into U+00E9 (é) — Valid.
+        assert_eq!(a.code_range(), CodeRange::Valid);
+        assert!(a.is_valid_encoding());
+    }
+
+    #[test]
+    fn encoding_compatible_same_encoding() {
+        // `Encoding::compatible` (the bare classifier used by
+        // `Encoding.compatible?`) — same encoding always returns
+        // that encoding regardless of CR.
+        assert_eq!(
+            Encoding::compatible(
+                Encoding::Utf8,
+                CodeRange::Valid,
+                Encoding::Utf8,
+                CodeRange::Broken
+            ),
+            Some(Encoding::Utf8)
+        );
+    }
+
+    #[test]
+    fn encoding_compatible_seven_bit_left_wins() {
+        // Both ASCII-compatible AND both 7-bit → left wins.
+        assert_eq!(
+            Encoding::compatible(
+                Encoding::Utf8,
+                CodeRange::SevenBit,
+                Encoding::UsAscii,
+                CodeRange::SevenBit,
+            ),
+            Some(Encoding::Utf8)
+        );
+        assert_eq!(
+            Encoding::compatible(
+                Encoding::UsAscii,
+                CodeRange::SevenBit,
+                Encoding::Utf8,
+                CodeRange::SevenBit,
+            ),
+            Some(Encoding::UsAscii)
+        );
+    }
+
+    #[test]
+    fn encoding_compatible_seven_bit_defers_to_other() {
+        // Exactly one side 7-bit → the non-7-bit side keeps its
+        // encoding.
+        assert_eq!(
+            Encoding::compatible(
+                Encoding::Utf8,
+                CodeRange::SevenBit,
+                Encoding::Iso8859(1),
+                CodeRange::Valid,
+            ),
+            Some(Encoding::Iso8859(1))
+        );
+        assert_eq!(
+            Encoding::compatible(
+                Encoding::Iso8859(1),
+                CodeRange::Valid,
+                Encoding::Utf8,
+                CodeRange::SevenBit,
+            ),
+            Some(Encoding::Iso8859(1))
+        );
+    }
+
+    #[test]
+    fn encoding_compatible_incompatible_pairs() {
+        // Two non-7-bit, distinct ASCII-compatible encodings → None.
+        assert_eq!(
+            Encoding::compatible(
+                Encoding::Utf8,
+                CodeRange::Valid,
+                Encoding::Iso8859(1),
+                CodeRange::Valid,
+            ),
+            None
+        );
+        // UTF-16 vs anything → None (UTF-16 isn't ASCII-compatible).
+        assert_eq!(
+            Encoding::compatible(
+                Encoding::Utf16Le,
+                CodeRange::Valid,
+                Encoding::Utf8,
+                CodeRange::SevenBit,
+            ),
+            None
+        );
     }
 }
