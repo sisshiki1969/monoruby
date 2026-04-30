@@ -484,6 +484,30 @@ impl MonorubyErr {
         MonorubyErr::typeerr(format!("{} is not a regexp nor a string", val.to_s(store)))
     }
 
+    /// Build an `Encoding::CompatibilityError` with the CRuby-format
+    /// "incompatible character encodings: A and B" message. Falls
+    /// back to `RuntimeError` if `Encoding::CompatibilityError`
+    /// hasn't been registered yet (e.g. very early in startup).
+    pub(crate) fn incompatible_encoding(
+        store: &Store,
+        a: crate::value::Encoding,
+        b: crate::value::Encoding,
+    ) -> MonorubyErr {
+        let msg = format!("incompatible character encodings: {} and {}", a.name(), b.name());
+        if let Some(enc_const) = store.get_constant_noautoload(OBJECT_CLASS, IdentId::ENCODING) {
+            if let Some(compat_const) = store.get_constant_noautoload(
+                enc_const.as_class_id(),
+                IdentId::get_id("CompatibilityError"),
+            ) {
+                return MonorubyErr::new(
+                    MonorubyErrKind::Other(compat_const.as_class_id()),
+                    msg,
+                );
+            }
+        }
+        MonorubyErr::runtimeerr(msg)
+    }
+
     pub fn cant_convert_error_ary(store: &Store, v: Value, result: Value) -> MonorubyErr {
         Self::cant_convert_error(store, v, result, "Array", IdentId::TO_ARY)
     }
