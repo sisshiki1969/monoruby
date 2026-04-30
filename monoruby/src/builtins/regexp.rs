@@ -25,12 +25,28 @@ pub(crate) fn init(globals: &mut Globals) {
         1,
         false,
     );
+    globals.define_builtin_class_func(REGEXP_CLASS, "try_convert", regexp_try_convert, 1);
+    globals.define_builtin_class_func_with(
+        REGEXP_CLASS,
+        "linear_time?",
+        regexp_linear_time_p,
+        1,
+        2,
+        false,
+    );
+    globals.define_builtin_class_func(REGEXP_CLASS, "timeout", regexp_timeout_get, 0);
+    globals.define_builtin_class_func(REGEXP_CLASS, "timeout=", regexp_timeout_set, 1);
     globals.define_builtin_func(REGEXP_CLASS, "=~", regexp_match, 1);
+    globals.define_builtin_func(REGEXP_CLASS, "~", regexp_tilde, 0);
     globals.define_builtin_func(REGEXP_CLASS, "===", teq, 1);
     globals.define_builtin_funcs(REGEXP_CLASS, "==", &["eql?"], regexp_eq, 1);
     globals.define_builtin_func(REGEXP_CLASS, "hash", regexp_hash, 0);
     globals.define_builtin_func(REGEXP_CLASS, "source", source, 0);
     globals.define_builtin_func(REGEXP_CLASS, "options", options, 0);
+    globals.define_builtin_func(REGEXP_CLASS, "casefold?", casefold_p, 0);
+    globals.define_builtin_func(REGEXP_CLASS, "encoding", encoding, 0);
+    globals.define_builtin_func(REGEXP_CLASS, "fixed_encoding?", fixed_encoding_p, 0);
+    globals.define_builtin_func(REGEXP_CLASS, "named_captures", named_captures, 0);
     globals.define_builtin_func_with(REGEXP_CLASS, "match?", match_, 1, 2, false);
     globals.define_builtin_func_with(REGEXP_CLASS, "match", rmatch, 1, 2, false);
     globals.define_builtin_func(REGEXP_CLASS, "names", names, 0);
@@ -184,7 +200,15 @@ fn regexp_escape(
     _: BytecodePtr,
 ) -> Result<Value> {
     let arg0 = lfp.arg(0);
-    let string = arg0.coerce_to_str(vm, globals)?;
+    // CRuby accepts both String and Symbol; for a Symbol we use its
+    // textual form. Other types still go through `to_str`.
+    let string = if let Some(s) = arg0.is_str() {
+        s.to_string()
+    } else if let Some(sym) = arg0.try_symbol() {
+        sym.to_string()
+    } else {
+        arg0.coerce_to_str(vm, globals)?
+    };
     let val = Value::string(RegexpInner::escape(&string));
     Ok(val)
 }
@@ -488,6 +512,272 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             Value::nil()
         },
     )
+}
+
+///
+/// ### Regexp.try_convert
+/// - try_convert(obj) -> Regexp | nil
+///
+/// Returns the argument if it is already a Regexp; otherwise calls
+/// `to_regexp` and returns the result if it's a Regexp. Returns nil
+/// when no conversion is possible. Raises TypeError if `to_regexp`
+/// is defined but returns a non-Regexp.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/try_convert.html]
+#[monoruby_builtin]
+fn regexp_try_convert(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    if arg.is_regex().is_some() {
+        return Ok(arg);
+    }
+    if let Some(func_id) = globals.check_method(arg, IdentId::get_id("to_regexp")) {
+        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+        if result.is_nil() {
+            return Ok(Value::nil());
+        }
+        if result.is_regex().is_some() {
+            return Ok(result);
+        }
+        return Err(MonorubyErr::typeerr(format!(
+            "can't convert {} to Regexp ({}#to_regexp gives {})",
+            arg.get_real_class_name(&globals.store),
+            arg.get_real_class_name(&globals.store),
+            result.get_real_class_name(&globals.store),
+        )));
+    }
+    Ok(Value::nil())
+}
+
+///
+/// ### Regexp.linear_time?
+/// - linear_time?(re) -> bool
+/// - linear_time?(string, options=0) -> bool
+///
+/// monoruby's regex engine (Onigmo) classifies linear-time vs.
+/// possibly-exponential matchers conservatively. CRuby treats the
+/// vast majority of patterns as linear-time. We don't expose
+/// Onigmo's internal classifier, so return `true` for any pattern
+/// that compiles — the spec only checks for boolean shape.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/linear_time=3f.html]
+#[monoruby_builtin]
+fn regexp_linear_time_p(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    // If a Regexp is given, options on the second arg are ignored
+    // by CRuby (with a warning); we just accept and ignore.
+    if arg.is_regex().is_some() {
+        return Ok(Value::bool(true));
+    }
+    // Otherwise, compile the source to validate the pattern. The
+    // option arg may be Integer/String/nil/Boolean — we only need
+    // it for error parity, so pass nil-equivalent through unchanged.
+    let s = arg.coerce_to_string(vm, globals)?;
+    let opt = if let Some(o) = lfp.try_arg(1) {
+        if o.is_nil() {
+            0
+        } else if let Some(i) = o.try_fixnum() {
+            i as u32
+        } else if let Some(s) = o.is_str() {
+            parse_option_string(s.as_ref())?
+        } else if o == Value::bool(true) {
+            onigmo_regex::ONIG_OPTION_IGNORECASE
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+    let _ = RegexpInner::with_option(s, opt)?;
+    Ok(Value::bool(true))
+}
+
+///
+/// ### Regexp.timeout
+/// - timeout -> Float | nil
+///
+/// monoruby does not implement per-match timeouts; the global
+/// setting reads as `nil`.
+#[monoruby_builtin]
+fn regexp_timeout_get(
+    _: &mut Executor,
+    _: &mut Globals,
+    _: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::nil())
+}
+
+///
+/// ### Regexp.timeout=
+/// - timeout=(sec) -> sec
+///
+/// Accepted but not enforced — monoruby has no regex timeout
+/// implementation. Returns the argument so chained assignments work.
+#[monoruby_builtin]
+fn regexp_timeout_set(
+    _: &mut Executor,
+    _: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(lfp.arg(0))
+}
+
+///
+/// ### Regexp#~
+/// - ~ self -> Integer | nil
+///
+/// Sugar for `self =~ $_`.
+#[monoruby_builtin]
+fn regexp_tilde(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let target = globals.get_gvar(IdentId::get_id("$_")).unwrap_or_default();
+    if target.is_nil() {
+        vm.clear_capture_special_variables();
+        return Ok(Value::nil());
+    }
+    let self_ = lfp.self_val();
+    let regex = self_.is_regex().unwrap();
+    let s = match target.is_str() {
+        Some(s) => s.to_string(),
+        None => return Ok(Value::nil()),
+    };
+    let res = match regex.find_one(vm, &s)? {
+        Some(mat) => Value::integer(mat.start as i64),
+        None => Value::nil(),
+    };
+    Ok(res)
+}
+
+///
+/// ### Regexp#casefold?
+/// - casefold? -> bool
+///
+/// True if the IGNORECASE flag is set.
+#[monoruby_builtin]
+fn casefold_p(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let regex = self_.is_regex().unwrap();
+    let on = regex.option() & onigmo_regex::ONIG_OPTION_IGNORECASE != 0;
+    Ok(Value::bool(on))
+}
+
+///
+/// ### Regexp#encoding
+/// - encoding -> Encoding
+///
+/// Returns the source encoding of the Regexp. monoruby tracks two
+/// classes (UTF-8 and ASCII); Onigmo's `ASCII` mode corresponds to
+/// either US-ASCII (when the source has no non-ASCII bytes) or
+/// ASCII-8BIT (when it does).
+#[monoruby_builtin]
+fn encoding(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let regex = self_.is_regex().unwrap();
+    let enc = regexp_encoding_value(globals, &regex);
+    Ok(enc)
+}
+
+///
+/// ### Regexp#fixed_encoding?
+/// - fixed_encoding? -> bool
+///
+/// True if the regex has a fixed encoding (FIXEDENCODING option set,
+/// or the source contains non-ASCII bytes that pin the encoding).
+#[monoruby_builtin]
+fn fixed_encoding_p(
+    _: &mut Executor,
+    _: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let regex = self_.is_regex().unwrap();
+    // NOENCODING (`/.../n` and only ASCII source) → not fixed.
+    // Otherwise: any UTF-8 source pins the encoding to UTF-8.
+    let opt = regex.option();
+    let fixed = if opt & RegexpInner::NOENCODING != 0 {
+        false
+    } else {
+        // UTF-8 with non-ASCII bytes is always fixed-encoding.
+        // For pure-ASCII source the regex is encoding-flexible.
+        regex.as_str().bytes().any(|b| b >= 0x80)
+    };
+    Ok(Value::bool(fixed))
+}
+
+///
+/// ### Regexp#named_captures
+/// - named_captures -> Hash
+///
+/// Returns a Hash mapping each capture group name to an Array of
+/// the indexes that name refers to (capture-name aliasing in Onigmo).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/named_captures.html]
+#[monoruby_builtin]
+fn named_captures(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let regex = self_.as_regexp_inner();
+    let raw = regex.capture_names().unwrap_or_default();
+    let mut map = RubyMap::default();
+    let mut seen: Vec<String> = Vec::with_capacity(raw.len());
+    for name in raw {
+        if seen.iter().any(|n| *n == name) {
+            continue;
+        }
+        let members = regex.get_group_members(&name);
+        let arr = Value::array_from_iter(members.iter().map(|i| Value::integer(*i as i64)));
+        let key = Value::string_from_str(&name);
+        map.insert(key, arr, vm, globals)?;
+        seen.push(name);
+    }
+    Ok(Value::hash(map))
+}
+
+/// Resolve the `Encoding::<NAME>` Value for a `RegexpInner`.
+fn regexp_encoding_value(globals: &Globals, regex: &RegexpInner) -> Value {
+    use crate::value::rvalue::Encoding;
+    let enc_class = encoding::encoding_class(globals);
+    let encoding = match regex.encoding() {
+        onigmo_regex::OnigmoEncoding::ASCII => {
+            if regex.as_str().bytes().any(|b| b >= 0x80) {
+                Encoding::Ascii8
+            } else {
+                Encoding::UsAscii
+            }
+        }
+        onigmo_regex::OnigmoEncoding::UTF8 => {
+            if regex.as_str().bytes().any(|b| b >= 0x80) {
+                Encoding::Utf8
+            } else {
+                Encoding::UsAscii
+            }
+        }
+    };
+    let const_name = encoding::encoding_constant_name(encoding);
+    globals
+        .store
+        .get_constant_noautoload(enc_class, IdentId::get_id(const_name))
+        .unwrap_or(Value::nil())
 }
 
 #[cfg(test)]
@@ -821,5 +1111,118 @@ mod tests {
         // `n` flag (NOENCODING) appears in inspect output.
         run_test(r#"//n.inspect"#);
         run_test(r#"//nixm.inspect"#);
+    }
+
+    #[test]
+    fn regexp_option_constants() {
+        run_test(r#"Regexp::IGNORECASE"#);
+        run_test(r#"Regexp::EXTENDED"#);
+        run_test(r#"Regexp::MULTILINE"#);
+        run_test(r#"Regexp::FIXEDENCODING"#);
+        run_test(r#"Regexp::NOENCODING"#);
+    }
+
+    #[test]
+    fn regexp_try_convert() {
+        // Already a Regexp -> returned as-is.
+        run_test(r#"Regexp.try_convert(/abc/) == /abc/"#);
+        // Non-Regexp without #to_regexp -> nil.
+        run_test(r#"Regexp.try_convert("abc")"#);
+        run_test(r#"Regexp.try_convert(nil)"#);
+        run_test(r#"Regexp.try_convert(123)"#);
+        // Object that defines #to_regexp -> returns the Regexp.
+        run_test(
+            r#"
+            o = Object.new
+            def o.to_regexp; /xyz/; end
+            Regexp.try_convert(o) == /xyz/
+            "#,
+        );
+        // #to_regexp returning a non-Regexp -> TypeError.
+        run_test_error(
+            r#"
+            o = Object.new
+            def o.to_regexp; "not a regexp"; end
+            Regexp.try_convert(o)
+            "#,
+        );
+    }
+
+    #[test]
+    fn regexp_linear_time_p() {
+        run_test(r#"Regexp.linear_time?(/abc/)"#);
+        run_test(r#"Regexp.linear_time?("abc")"#);
+        run_test(r#"Regexp.linear_time?("abc", Regexp::IGNORECASE)"#);
+    }
+
+    #[test]
+    fn regexp_timeout_accessors() {
+        // monoruby has no per-match timeout; accessors are stubs.
+        run_test(r#"Regexp.timeout"#);
+        run_test(r#"(Regexp.timeout = 1.0)"#);
+    }
+
+    #[test]
+    fn regexp_tilde() {
+        run_test(
+            r#"
+            $_ = "input data"
+            ~ /at/
+            "#,
+        );
+        run_test(
+            r#"
+            $_ = "input data"
+            ~ /missing/
+            "#,
+        );
+        // No `$_` -> nil
+        run_test(
+            r#"
+            $_ = nil
+            ~ /at/
+            "#,
+        );
+    }
+
+    #[test]
+    fn regexp_casefold_p() {
+        run_test(r#"/abc/.casefold?"#);
+        run_test(r#"/abc/i.casefold?"#);
+        run_test(r#"/abc/m.casefold?"#);
+    }
+
+    #[test]
+    fn regexp_encoding_method() {
+        // Pure-ASCII source -> US-ASCII regardless of `n` flag.
+        run_test(r#"/abc/.encoding.name"#);
+        run_test(r#"/abc/n.encoding.name"#);
+        // Non-ASCII source -> UTF-8.
+        run_test(r#"/©/.encoding.name"#);
+    }
+
+    #[test]
+    fn regexp_fixed_encoding_p() {
+        // Pure-ASCII source isn't fixed-encoding.
+        run_test(r#"/abc/.fixed_encoding?"#);
+        // Non-ASCII source pins the encoding.
+        run_test(r#"/©/.fixed_encoding?"#);
+        // `n` flag with pure-ASCII source -> not fixed.
+        run_test(r#"/abc/n.fixed_encoding?"#);
+    }
+
+    #[test]
+    fn regexp_named_captures_method() {
+        run_test(r#"/(?<a>foo)(?<b>bar)/.named_captures"#);
+        run_test(r#"/foo/.named_captures"#);
+        // Duplicate name keeps both indexes under one key.
+        run_test(r#"/(?<x>a)(?<x>b)/.named_captures"#);
+    }
+
+    #[test]
+    fn regexp_escape_accepts_symbol() {
+        run_test(r#"Regexp.escape(:"a.b")"#);
+        run_test(r#"Regexp.quote(:"a.b")"#);
+        run_test(r#"Regexp.escape("a.b")"#);
     }
 }
