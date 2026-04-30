@@ -745,11 +745,10 @@ fn string_match_index(
 ///
 /// - self[nth] = val
 /// - self[nth, len] = val
-/// - [NOT SUPPORTED] self[substr] = val
-/// - [NOT SUPPORTED] self[regexp, nth] = val
-/// - [NOT SUPPORTED] self[regexp, name] = val
-/// - [NOT SUPPORTED] self[regexp] = val
-/// - [NOT SUPPORTED] self[range] = val
+/// - self[substr] = val
+/// - self[regexp, nth] = val
+/// - self[regexp] = val
+/// - self[range] = val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=5b=5d=3d.html]
 #[monoruby_builtin]
@@ -760,56 +759,82 @@ fn index_assign(
     _: BytecodePtr,
 ) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
-    let (arg1, subst) = if let Some(arg2) = lfp.try_arg(2) {
-        (Some(lfp.arg(1)), arg2.coerce_to_string(vm, globals)?)
+    let arg0_val = lfp.arg(0);
+    let arg1_opt = lfp.try_arg(2).map(|_| lfp.arg(1));
+    let arg_val = if arg1_opt.is_some() {
+        lfp.arg(2)
     } else {
-        (None, lfp.arg(1).coerce_to_string(vm, globals)?)
+        lfp.arg(1)
     };
+
+    if let Some(re) = arg0_val.is_regex() {
+        // s[/regex/] = val  /  s[/regex/, nth] = val.
+        // CRuby checks the match (and the optional capture index) *before*
+        // calling `to_str` on the replacement; spec exercises this with a
+        // mock that should not receive `to_str` when the match fails.
+        let (start, end) = locate_regex_match(vm, &re, &lfp.self_val(), arg1_opt, globals)?;
+        let subst = arg_val.coerce_to_string(vm, globals)?;
+        replace_byte_range(lfp.self_val(), start, end, &subst);
+        return Ok(arg_val);
+    }
+
+    if arg0_val.is_str().is_some() {
+        // s["needle"] = val
+        if arg1_opt.is_some() {
+            return Err(MonorubyErr::argumenterr(
+                "wrong number of arguments (given 3, expected 2)",
+            ));
+        }
+        let needle = arg0_val.is_str().unwrap().to_string();
+        let subst = arg_val.coerce_to_string(vm, globals)?;
+        let self_ = lfp.self_val();
+        let lhs = self_.expect_str(globals)?;
+        let pos = match lhs.find(needle.as_str()) {
+            Some(p) => p,
+            None => return Err(MonorubyErr::indexerr("string not matched")),
+        };
+        replace_byte_range(lfp.self_val(), pos, pos + needle.len(), &subst);
+        return Ok(arg_val);
+    }
+
+    let subst = arg_val.coerce_to_string(vm, globals)?;
     let self_ = lfp.self_val();
     let mut lhs = self_.expect_string(globals)?;
     let len = lhs.chars().count();
-    let arg0_val = lfp.arg(0);
     if let Some(arg0) = arg0_val.try_fixnum() {
-        let start = match conv_index(arg0, len) {
-            Some(i) => i,
-            None => return Err(MonorubyErr::indexerr("index out of range.")),
-        };
-        let start = match lhs.char_indices().nth(start) {
-            Some((i, _)) => i,
-            None => return Err(MonorubyErr::indexerr("index out of range.")),
-        };
-        let len = if let Some(arg1) = arg1 {
-            // self[nth, len] = val
-            match arg1.coerce_to_int_i64(vm, globals)? {
-                i if i < 0 => return Err(MonorubyErr::indexerr("negative length.")),
-                i => i as usize,
-            }
-        } else {
-            // self[nth] = val
-            1
-        };
-        let end = if let Some((i, _)) = lhs.char_indices().nth(start + len) {
-            i
-        } else {
-            lhs.len()
-        };
-        lhs.replace_range(start..end, &subst);
+        index_assign_by_int(&mut lhs, arg0, arg1_opt, vm, globals, &subst, len)?;
         *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
-        Ok(lfp.self_val())
+        Ok(arg_val)
     } else if let Some(info) = arg0_val.is_range() {
         let char_len = len;
         let start_raw = info.start().coerce_to_int_i64(vm, globals)?;
         let end_raw = info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64;
+        // CRuby: a positive Range begin past `length` raises, but
+        // begin == length is allowed (appends).
+        if start_raw > char_len as i64 {
+            return Err(MonorubyErr::rangeerr(format!(
+                "{}..{} out of range",
+                start_raw, end_raw
+            )));
+        }
         let start_char = match conv_index(start_raw, char_len) {
             Some(i) => i,
-            None => return Err(MonorubyErr::rangeerr("out of range.")),
+            None => {
+                return Err(MonorubyErr::rangeerr(format!(
+                    "{}..{} out of range",
+                    start_raw, end_raw
+                )));
+            }
         };
+        // For Ranges, a negative end out-of-range with a positive
+        // begin acts as a zero-count delete (no-op append at start).
         let end_char = if end_raw < 0 {
             let e = char_len as i64 + end_raw;
-            if e < 0 {
-                return Err(MonorubyErr::rangeerr("out of range."));
+            if e < start_char as i64 {
+                start_char.saturating_sub(1)
+            } else {
+                e as usize
             }
-            e as usize
         } else {
             end_raw as usize
         };
@@ -828,34 +853,115 @@ fn index_assign(
         };
         lhs.replace_range(byte_start..byte_end, &subst);
         *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
-        Ok(lfp.self_val())
+        Ok(arg_val)
     } else {
         let idx = arg0_val.coerce_to_int_i64(vm, globals)?;
-        let start = match conv_index(idx, len) {
-            Some(i) => i,
-            None => return Err(MonorubyErr::indexerr("index out of range.")),
-        };
-        let start = match lhs.char_indices().nth(start) {
-            Some((i, _)) => i,
-            None => return Err(MonorubyErr::indexerr("index out of range.")),
-        };
-        let len = if let Some(arg1) = arg1 {
-            match arg1.coerce_to_int_i64(vm, globals)? {
-                i if i < 0 => return Err(MonorubyErr::indexerr("negative length.")),
-                i => i as usize,
-            }
-        } else {
-            1
-        };
-        let end = if let Some((i, _)) = lhs.char_indices().nth(start + len) {
-            i
-        } else {
-            lhs.len()
-        };
-        lhs.replace_range(start..end, &subst);
+        index_assign_by_int(&mut lhs, idx, arg1_opt, vm, globals, &subst, len)?;
         *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
-        Ok(lfp.self_val())
+        Ok(arg_val)
     }
+}
+
+/// Integer-index assignment (`s[idx] = val` / `s[idx, len] = val`).
+/// Allows the special case `""[0] = "..."` and `s[length] = "..."`
+/// (append) per CRuby.
+fn index_assign_by_int(
+    lhs: &mut String,
+    idx: i64,
+    len_arg: Option<Value>,
+    vm: &mut Executor,
+    globals: &mut Globals,
+    subst: &str,
+    char_len: usize,
+) -> Result<()> {
+    let start = if idx == char_len as i64 {
+        // Append at end.
+        char_len
+    } else {
+        match conv_index(idx, char_len) {
+            Some(i) => i,
+            None => return Err(MonorubyErr::indexerr("index out of range")),
+        }
+    };
+    let byte_start = lhs
+        .char_indices()
+        .nth(start)
+        .map(|(i, _)| i)
+        .unwrap_or(lhs.len());
+    let len = if let Some(arg1) = len_arg {
+        match arg1.coerce_to_int_i64(vm, globals)? {
+            i if i < 0 => return Err(MonorubyErr::indexerr("negative length")),
+            i => i as usize,
+        }
+    } else if len_arg.is_none() && start == char_len {
+        // Single-arg form with index == length: append (length 0).
+        0
+    } else {
+        1
+    };
+    let byte_end = lhs
+        .char_indices()
+        .nth(start + len)
+        .map(|(i, _)| i)
+        .unwrap_or(lhs.len());
+    lhs.replace_range(byte_start..byte_end, subst);
+    Ok(())
+}
+
+/// Locate the byte range to replace for `s[/regex/] = val` /
+/// `s[/regex/, nth] = val`. Resolves the optional `nth` capture
+/// argument (Integer or `to_int`-coercible; can be negative). Raises
+/// `IndexError` if the regex doesn't match or the requested capture
+/// isn't available, *before* the replacement string is applied.
+fn locate_regex_match(
+    vm: &mut Executor,
+    re: &Regexp,
+    self_val: &Value,
+    nth_arg: Option<Value>,
+    globals: &mut Globals,
+) -> Result<(usize, usize)> {
+    let given = self_val.expect_str(globals)?;
+    let captures = match re.captures_from_pos(given, 0, vm)? {
+        Some(c) => c,
+        None => return Err(MonorubyErr::indexerr("regexp not matched")),
+    };
+    let total = captures.len();
+    let idx = if let Some(nth) = nth_arg {
+        let n = nth.coerce_to_int_i64(vm, globals)?;
+        if n < 0 {
+            // Negative indexing counts from the end of the capture
+            // groups (group 0 being the full match is *not* a valid
+            // target this way — CRuby raises `IndexError` for
+            // `s[/a(b)/, -2]` because -2 would resolve to group 0).
+            let resolved = total as i64 + n;
+            if resolved < 1 {
+                return Err(MonorubyErr::indexerr("index out of range"));
+            }
+            resolved as usize
+        } else {
+            n as usize
+        }
+    } else {
+        0
+    };
+    if idx >= total {
+        return Err(MonorubyErr::indexerr("index out of range"));
+    }
+    match captures.get(idx) {
+        Some(m) => Ok((m.start(), m.end())),
+        None => Err(MonorubyErr::indexerr("regexp group not matched")),
+    }
+}
+
+fn replace_byte_range(mut self_val: Value, start: usize, end: usize, subst: &str) {
+    let inner = self_val.as_rstring_inner_mut();
+    let mut buf = inner.as_bytes().to_vec();
+    buf.splice(start..end, subst.as_bytes().iter().copied());
+    // Encoding-preserving construction is a separate concern; for
+    // now treat the result as UTF-8, which matches the rest of the
+    // string-builder paths in this file.
+    let s = String::from_utf8(buf).unwrap_or_default();
+    *inner = RStringInner::from_string(s);
 }
 
 ///
@@ -1727,6 +1833,7 @@ fn lstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/sub.html]
 #[monoruby_builtin]
 fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    require_sub_block_or_replacement(&lfp, "sub")?;
     let (res, _) = sub_main(vm, globals, lfp.self_val(), lfp)?;
     Ok(Value::string(res))
 }
@@ -1740,12 +1847,25 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/sub=21.html]
 #[monoruby_builtin]
 fn sub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    require_sub_block_or_replacement(&lfp, "sub!")?;
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_ = lfp.self_val();
     let (res, changed) = sub_main(vm, globals, self_, lfp)?;
     self_.replace_string(res);
     let res = if changed { self_ } else { Value::nil() };
     Ok(res)
+}
+
+/// `String#sub` / `#sub!` requires either a block or a replacement
+/// argument. CRuby raises `ArgumentError: wrong number of arguments
+/// (given 1, expected 2)` when neither is supplied.
+fn require_sub_block_or_replacement(lfp: &Lfp, _name: &str) -> Result<()> {
+    if lfp.try_arg(1).is_none() && lfp.block().is_none() {
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 1, expected 2)",
+        ));
+    }
+    Ok(())
 }
 
 fn sub_main(
@@ -1785,7 +1905,17 @@ fn sub_main(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/gsub.html]
 #[monoruby_builtin]
-fn gsub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn gsub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    if lfp.try_arg(1).is_none() && lfp.block().is_none() {
+        // `gsub(pattern)` with no block returns an Enumerator that
+        // yields each match — CRuby's Enumerator-or-block dispatch.
+        return vm.generate_enumerator(
+            IdentId::get_id("gsub"),
+            lfp.self_val(),
+            vec![lfp.arg(0)],
+            pc,
+        );
+    }
     let (res, _) = gsub_main(vm, globals, lfp.self_val(), lfp)?;
     Ok(Value::string(res))
 }
@@ -1799,7 +1929,15 @@ fn gsub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/gsub=21.html]
 #[monoruby_builtin]
-fn gsub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn gsub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    if lfp.try_arg(1).is_none() && lfp.block().is_none() {
+        return vm.generate_enumerator(
+            IdentId::get_id("gsub!"),
+            lfp.self_val(),
+            vec![lfp.arg(0)],
+            pc,
+        );
+    }
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_ = lfp.self_val();
     let (res, changed) = gsub_main(vm, globals, self_, lfp)?;
@@ -5123,6 +5261,72 @@ mod tests {
         run_test(
             r#"buf = "hello world"; rindex = buf.rindex("\n"); s = rindex ? buf[rindex+1..-1] : buf; buf[rindex ? rindex+1..-1 : 0..-1] = ""; buf"#,
         );
+    }
+
+    #[test]
+    fn index_assign_special_int_cases() {
+        // CRuby permits `""[0] = "..."` (zero index on an empty
+        // string) and `s[length] = "..."` (append at end).
+        run_test(r#"s = ""; s[0] = "bam"; s"#);
+        run_test(r#"s = "abc"; s[3] = "d"; s"#);
+    }
+
+    #[test]
+    fn index_assign_string_index() {
+        run_test(r#"s = "abcde"; s["cd"] = "ghi"; s"#);
+        run_test(r#"s = "abcde"; s["bcd"] = "f"; s"#);
+        run_test(r#"s = "abcde"; s["cd"] = ""; s"#);
+        // Multibyte source / replacement.
+        run_test(r#"s = "ありgaとう"; s["ga"] = "が"; s"#);
+        run_test(r#"s = "ありがとう"; s["が"] = "ga"; s"#);
+        run_test(r#"s = "ありがとう"; s["が"] = "か"; s"#);
+        // Missing substring → IndexError.
+        run_test_error(r#"s = "abcde"; s["g"] = "h""#);
+    }
+
+    #[test]
+    fn index_assign_regexp() {
+        run_test(r#"s = "abc"; s[/b/] = "X"; s"#);
+        run_test(r#"s = "abc"; s[/ab/] = "Z"; s"#);
+        // Multibyte.
+        run_test(r#"s = "ありgaとう"; s[/ga/] = "が"; s"#);
+        // No match → IndexError.
+        run_test_error(r#"s = "hello"; s[/y/] = "bam""#);
+        // Capture-index form.
+        run_test(r#"s = "aaa bbb ccc"; s[/a (bbb) c/, 1] = "ddd"; s"#);
+        run_test(r#"s = "abcd"; s[/(a)(b)(c)(d)/, -2] = "e"; s"#);
+        // Out-of-range capture → IndexError, both positive and
+        // negative-resolving-to-zero.
+        run_test_error(r#"s = "aaa bbb ccc"; s[/a (bbb) c/,  2] = "ddd""#);
+        run_test_error(r#"s = "aaa bbb ccc"; s[/a (bbb) c/, -2] = "ddd""#);
+        // Optional capture that didn't participate → IndexError
+        // before the replacement is applied.
+        run_test(
+            r#"
+            s1 = "a b c"
+            s2 = s1.dup
+            ok = false
+            begin
+              s2[/a (b) (Z)?/, 2] = "d"
+            rescue IndexError
+              ok = true
+            end
+            [ok, s2]
+            "#,
+        );
+    }
+
+    #[test]
+    fn sub_without_block_or_replacement_raises() {
+        run_test_error(r#""abc".sub(/a/)"#);
+        run_test_error(r#""abc".sub!(/a/)"#);
+    }
+
+    #[test]
+    fn gsub_without_block_returns_enumerator() {
+        run_test(r#"e = "abca".gsub(/a/); e.is_a?(Enumerator)"#);
+        run_test(r#""abca".gsub(/a/).to_a"#);
+        run_test(r#""abca".gsub!(/a/).to_a"#);
     }
 
     #[test]
