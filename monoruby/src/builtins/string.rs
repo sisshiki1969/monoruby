@@ -2488,7 +2488,9 @@ fn string_rindex(
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/length.html]
 #[monoruby_builtin]
 fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let length = lfp.self_val().as_rstring_inner().char_length()?;
+    // Use the encoding-aware char counter; it always succeeds (broken
+    // UTF-8 falls back to byte count, matching CRuby).
+    let length = lfp.self_val().as_rstring_inner().char_count();
     Ok(Value::integer(length as i64))
 }
 
@@ -4215,13 +4217,20 @@ fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn chars(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let recv = self_.expect_str(globals)?;
-    let iter = recv.chars().map(|c| Value::string(c.to_string()));
+    let inner = self_.as_rstring_inner();
+    let enc = inner.encoding();
+    // Materialise per-char byte slices into owned RStringInner values
+    // tagged with the source encoding. Walking eagerly avoids
+    // borrowing `inner` past the iterator.
+    let chars: Vec<Value> = inner
+        .iter_char_bytes()
+        .map(|s| Value::string_from_inner(RStringInner::from_encoding(s, enc)))
+        .collect();
     if let Some(bh) = lfp.block() {
-        vm.invoke_block_map1(globals, bh, iter, None)?;
+        vm.invoke_block_map1(globals, bh, chars.into_iter(), None)?;
         Ok(lfp.self_val())
     } else {
-        Ok(Value::array_from_iter(iter))
+        Ok(Value::array_from_iter(chars.into_iter()))
     }
 }
 
@@ -4235,10 +4244,14 @@ fn chars(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let recv = self_.expect_str(globals)?;
     if let Some(bh) = lfp.block() {
-        let iter = recv.chars().map(|c| Value::string(c.to_string()));
-        vm.invoke_block_iter1(globals, bh, iter)?;
+        let inner = self_.as_rstring_inner();
+        let enc = inner.encoding();
+        let chars: Vec<Value> = inner
+            .iter_char_bytes()
+            .map(|s| Value::string_from_inner(RStringInner::from_encoding(s, enc)))
+            .collect();
+        vm.invoke_block_iter1(globals, bh, chars.into_iter())?;
         Ok(lfp.self_val())
     } else {
         vm.generate_enumerator(IdentId::get_id("each_char"), lfp.self_val(), vec![], pc)
