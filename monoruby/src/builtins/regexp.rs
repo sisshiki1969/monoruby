@@ -766,10 +766,49 @@ mod tests {
     }
 
     #[test]
+    fn regexp_new_string_flag_x() {
+        // The `x` (EXTENDED) flag in the string form sets EXTENDED
+        // and ignores whitespace / `#`-comments inside the pattern.
+        run_test(r#"Regexp.new("Hi", "x") == /Hi/x"#);
+        run_test(r#"(Regexp.new("Hi", "x").options & Regexp::EXTENDED) != 0"#);
+        // EXTENDED skips inline whitespace, so a pattern with spaces
+        // still matches a no-space subject (returns the match position).
+        run_test(r#"Regexp.new("a b c", "x") =~ "abc""#);
+        // Combined with other flags.
+        run_test(r#"Regexp.new("Hi", "ix") == /Hi/ix"#);
+        run_test(r#"Regexp.new("Hi", "mix") == /Hi/mix"#);
+    }
+
+    #[test]
     fn regexp_new_invalid_flag_string_raises() {
         // `e` is *not* accepted in the string-form flag arg.
         run_test_error(r#"Regexp.new("Hi", "e")"#);
         run_test_error(r#"Regexp.new("Hi", "z")"#);
+    }
+
+    #[test]
+    fn regexp_new_unexpected_option_warns_and_treats_as_truthy() {
+        // A non-Integer / non-String / non-bool / non-nil second
+        // argument writes a `warning: expected true or false as
+        // ignorecase: <inspect>` line to `$stderr` and treats the
+        // argument as truthy → IGNORECASE.
+        //
+        // The assertion compares the resulting Regexp to `/Hi/i` so
+        // the truthy-coercion is observable; the warning text itself
+        // ends up on the test's stderr stream and is verified
+        // indirectly by the spec battery.
+        run_test(r#"Regexp.new("Hi", Object.new) == /Hi/i"#);
+        run_test(r#"Regexp.new("Hi", []) == /Hi/i"#);
+        run_test(r#"Regexp.new("Hi", :sym) == /Hi/i"#);
+        // Even an Object that masquerades as falsey via `to_s` still
+        // triggers the warning + IGNORECASE path.
+        run_test(
+            r#"
+              o = Object.new
+              def o.inspect; "fake"; end
+              Regexp.new("Hi", o) == /Hi/i
+            "#,
+        );
     }
 
     #[test]
