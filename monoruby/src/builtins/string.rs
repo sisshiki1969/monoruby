@@ -148,6 +148,7 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func_with(STRING_CLASS, "byteindex", byteindex, 1, 2, false);
+    globals.define_builtin_func_with(STRING_CLASS, "byterindex", byterindex, 1, 2, false);
     globals.define_builtin_func(STRING_CLASS, "to_c", to_c, 0);
     globals.define_builtin_func(STRING_CLASS, "to_r", to_r, 0);
     globals.define_builtin_func(STRING_CLASS, "dump", dump, 0);
@@ -2029,12 +2030,14 @@ fn string_index(
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/byteindex.html]
 #[monoruby_builtin]
 fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
+    let self_ = lfp.self_val();
+    let given = self_.is_rstring().unwrap();
+    let haystack = given.as_bytes();
     let byte_offset = if let Some(arg1) = lfp.try_arg(1) {
         let offset = arg1.coerce_to_int_i64(vm, globals)?;
         if offset < 0 {
-            let self_ = lfp.self_val();
-            let given = self_.is_rstring().unwrap();
-            let len = given.as_bytes().len() as i64;
+            let len = haystack.len() as i64;
             let pos = len + offset;
             if pos < 0 {
                 return Ok(Value::nil());
@@ -2046,20 +2049,15 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     } else {
         0
     };
-    let self_ = lfp.self_val();
-    let given = self_.is_rstring().unwrap();
-    let haystack = given.as_bytes();
     if byte_offset > haystack.len() {
         return Ok(Value::nil());
     }
-    let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
     let s = std::str::from_utf8(haystack).map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
 
     // Ensure byte_offset falls on a valid UTF-8 character boundary.
     if !s.is_char_boundary(byte_offset) {
-        return Err(MonorubyErr::argumenterr(format!(
-            "invalid byte offset {}",
-            byte_offset
+        return Err(MonorubyErr::indexerr(format!(
+            "offset {byte_offset} does not land on character boundary"
         )));
     }
 
@@ -2070,6 +2068,146 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             Ok(Value::integer(start as i64))
         }
     }
+}
+
+/// ### String#byterindex
+///
+/// - byterindex(pattern, offset = self.bytesize) -> Integer | nil
+///
+/// Returns the byte index of the *last* occurrence of `pattern` such
+/// that the match starts at or before `offset` (default: end of
+/// string). Like `String#rindex` but indexed by bytes rather than
+/// characters. `pattern` is a `Regexp` or a `String`/object
+/// convertible via `to_str`; passing `nil`, `true`, `false`, a
+/// Symbol, or an Integer raises `TypeError`. A negative `offset`
+/// counts back from `bytesize`. An offset that lands inside a
+/// multibyte character raises `IndexError`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/byterindex.html]
+#[monoruby_builtin]
+fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
+    let self_ = lfp.self_val();
+    let given = self_.is_rstring().unwrap();
+    let haystack = given.as_bytes();
+    let bytesize = haystack.len();
+
+    let byte_offset = if let Some(arg1) = lfp.try_arg(1) {
+        let offset = arg1.coerce_to_int_i64(vm, globals)?;
+        if offset < 0 {
+            let pos = bytesize as i64 + offset;
+            if pos < 0 {
+                return Ok(Value::nil());
+            }
+            pos as usize
+        } else if offset as usize > bytesize {
+            // CRuby clamps a too-large rindex offset to bytesize so
+            // empty-pattern probes (`"a".byterindex("", 10) == 1`)
+            // still match against the full string.
+            bytesize
+        } else {
+            offset as usize
+        }
+    } else {
+        bytesize
+    };
+
+    let s = std::str::from_utf8(haystack).map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+
+    if !s.is_char_boundary(byte_offset) {
+        return Err(MonorubyErr::indexerr(format!(
+            "offset {byte_offset} does not land on character boundary"
+        )));
+    }
+
+    // Forward scan, keeping the last match whose byte-start is at or
+    // before `byte_offset`. Onigmo's `\G` is anchored to the search
+    // start, so invoking with a fixed start of 0 doesn't reproduce
+    // CRuby's backwards-direction-search behaviour for `\G` — the
+    // half-dozen `\G` tests in `byterindex_spec.rb` are out of scope
+    // for this implementation.
+    let mut best: Option<usize> = None;
+    let mut pos = 0usize;
+    while pos <= s.len() {
+        let captures = match re.captures_from_pos(s, pos, vm)? {
+            None => break,
+            Some(c) => c,
+        };
+        let m = captures.get(0).unwrap();
+        let match_start = m.start();
+        let match_end = m.end();
+        if match_start > byte_offset {
+            break;
+        }
+        best = Some(match_start);
+        // Advance one Unicode scalar past the match start. We need
+        // to consider overlapping matches (`/aba/` in `"ababa"`
+        // matches at byte 0 *and* byte 2), so we cannot simply jump
+        // to `match_end`. Empty matches use the same bump to avoid
+        // an infinite loop.
+        let _ = match_end;
+        let next = next_char_boundary(s, match_start);
+        if next <= pos {
+            pos += 1;
+        } else {
+            pos = next;
+        }
+    }
+
+    Ok(match best {
+        Some(p) => Value::integer(p as i64),
+        None => Value::nil(),
+    })
+}
+
+/// Coerce a value to a `Regexp` for `byteindex`/`byterindex`. Accepts
+/// `Regexp` and `String` directly; falls back to `#to_str`. Anything
+/// else (`nil`, `true`, `false`, `Symbol`, `Integer`, …) raises
+/// `TypeError` with CRuby's "no implicit conversion of <Class> into
+/// String" wording.
+fn coerce_pattern_for_byte_search(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<Regexp> {
+    if let Some(re) = v.is_regex() {
+        return Ok(re);
+    }
+    if let Some(s) = v.is_str() {
+        return Ok(Regexp::new_unchecked(Value::regexp(
+            RegexpInner::with_option(s, 0)?,
+        )));
+    }
+    if let Some(func_id) = globals.check_method(v, IdentId::TO_STR) {
+        let result = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
+        if let Some(s) = result.is_str() {
+            return Ok(Regexp::new_unchecked(Value::regexp(
+                RegexpInner::with_option(s, 0)?,
+            )));
+        }
+    }
+    // CRuby's "no implicit conversion of X into String" wording uses
+    // the keyword for nil/true/false (rather than the class name).
+    let label = if v.is_nil() {
+        "nil".to_string()
+    } else if v == Value::bool(true) {
+        "true".to_string()
+    } else if v == Value::bool(false) {
+        "false".to_string()
+    } else {
+        v.get_real_class_name(&globals.store)
+    };
+    Err(MonorubyErr::typeerr(format!(
+        "no implicit conversion of {label} into String"
+    )))
+}
+
+fn next_char_boundary(s: &str, p: usize) -> usize {
+    let mut next = p + 1;
+    while next < s.len() && !s.is_char_boundary(next) {
+        next += 1;
+    }
+    next
 }
 
 ///
@@ -5850,8 +5988,78 @@ mod tests {
         run_test(r#""hello".byteindex("lo", -3)"#);
         // Multibyte: offset on char boundary should work
         run_test(r#""わたし".byteindex("た")"#);
-        // Multibyte: offset inside a multibyte char should raise ArgumentError
+        // Multibyte: offset inside a multibyte char should raise IndexError
         run_test_error(r#""わたし".byteindex(/た/, 1)"#);
+        // Type errors must use CRuby's "no implicit conversion" wording.
+        run_test_error(r#""abc".byteindex(nil)"#);
+        run_test_error(r#""abc".byteindex(true)"#);
+        run_test_error(r#""abc".byteindex(:a)"#);
+        run_test_error(r#""abc".byteindex(97)"#);
+    }
+
+    #[test]
+    fn string_byterindex_basics() {
+        // String pattern, default offset (= bytesize): last occurrence.
+        run_test(r#""blablabla".byterindex("a")"#);
+        run_test(r#""blablabla".byterindex("la")"#);
+        run_test(r#""blablabla".byterindex("bla")"#);
+        run_test(r#""blablabla".byterindex("abla")"#);
+        run_test(r#""blablabla".byterindex("blablabla")"#);
+        // No match.
+        run_test(r#""blablabla".byterindex("z")"#);
+        run_test(r#""blablabla".byterindex("blablablabla")"#);
+        // Empty pattern returns the offset (or bytesize if not given).
+        run_test(r#""blablabla".byterindex("")"#);
+        run_test(r#""blablabla".byterindex("", 0)"#);
+        run_test(r#""blablabla".byterindex("", 5)"#);
+        run_test(r#""blablabla".byterindex("", 10)"#); // clamped
+    }
+
+    #[test]
+    fn string_byterindex_with_offset() {
+        run_test(r#""blablabla".byterindex("blab", 0)"#);
+        run_test(r#""blablabla".byterindex("blab", 3)"#);
+        run_test(r#""blablabla".byterindex("blab", 6)"#);
+        // Negative offset: counts from end.
+        run_test(r#""blablabla".byterindex("bla", -1)"#);
+        run_test(r#""blablabla".byterindex("bla", -100)"#); // out of range -> nil
+    }
+
+    #[test]
+    fn string_byterindex_regex() {
+        run_test(r#""blablabla".byterindex(/bla/)"#);
+        run_test(r#""blablabla".byterindex(/.{1}/)"#);
+        run_test(r#""blablabla".byterindex(/.l./)"#);
+        run_test(r#""blablabla".byterindex(/bla|a/)"#);
+        // Anchors.
+        run_test(r#""blablabla".byterindex(/\A/)"#);
+        run_test(r#""blablabla".byterindex(/\z/)"#);
+        run_test(r#""blablabla\n".byterindex(/\Z/)"#);
+    }
+
+    #[test]
+    fn string_byterindex_multibyte() {
+        run_test(r#""ありがりがとう".byterindex("が")"#); // 12
+        run_test(r#""ありがりがとう".byterindex(/が/)"#); // 12
+        run_test(r#""ありがりがとう".byterindex("が", 9)"#); // 6
+    }
+
+    #[test]
+    fn string_byterindex_type_errors() {
+        run_test_error(r#""abc".byterindex(nil)"#);
+        run_test_error(r#""abc".byterindex(true)"#);
+        run_test_error(r#""abc".byterindex(false)"#);
+        run_test_error(r#""abc".byterindex(:a)"#);
+        run_test_error(r#""abc".byterindex(97)"#);
+        run_test_error(r#""abc".byterindex("a", nil)"#);
+    }
+
+    #[test]
+    fn string_byterindex_offset_in_multibyte_raises() {
+        run_test_error(r#""わ".byterindex("", 1)"#);
+        run_test_error(r#""わ".byterindex("", 2)"#);
+        run_test_error(r#""わ".byterindex("", -1)"#);
+        run_test_error(r#""わ".byterindex("", -2)"#);
     }
 
     #[test]
