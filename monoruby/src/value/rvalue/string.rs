@@ -9,6 +9,69 @@ mod printable;
 #[monoruby_object]
 pub struct RString(Value);
 
+/// Iterator yielding one character's worth of bytes per call,
+/// honouring the declared encoding. For UTF-8, walks valid UTF-8
+/// scalars; broken byte sequences advance one byte at a time so the
+/// iterator always terminates. Non-UTF-8 encodings use the
+/// fixed-code-unit width (1 for Ascii8/UsAscii/Iso8859, 2 for
+/// UTF-16, 4 for UTF-32) — multibyte ASCII-compatible families
+/// (EUC-JP, Shift_JIS) currently iterate byte-wise.
+pub struct CharByteIter<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+    encoding: Encoding,
+}
+
+impl<'a> Iterator for CharByteIter<'a> {
+    type Item = &'a [u8];
+
+    fn next(&mut self) -> Option<&'a [u8]> {
+        if self.pos >= self.bytes.len() {
+            return None;
+        }
+        let width = match self.encoding {
+            Encoding::Ascii8
+            | Encoding::UsAscii
+            | Encoding::Iso8859(_)
+            | Encoding::EucJp
+            | Encoding::Sjis(_) => 1,
+            Encoding::Utf16Le | Encoding::Utf16Be => 2,
+            Encoding::Utf32Le | Encoding::Utf32Be => 4,
+            Encoding::Utf8 => {
+                let b = self.bytes[self.pos];
+                if b < 0x80 {
+                    1
+                } else if b < 0xC0 {
+                    1 // continuation byte at scalar boundary => broken; consume one
+                } else {
+                    let needed = if b < 0xE0 {
+                        2
+                    } else if b < 0xF0 {
+                        3
+                    } else {
+                        4
+                    };
+                    let end = (self.pos + needed).min(self.bytes.len());
+                    // Validate the candidate scalar; on failure, fall
+                    // back to one byte (CRuby's "adds 1 for every
+                    // invalid byte in UTF-8" rule).
+                    if end - self.pos == needed
+                        && std::str::from_utf8(&self.bytes[self.pos..end]).is_ok()
+                    {
+                        needed
+                    } else {
+                        1
+                    }
+                }
+            }
+        };
+        let end = (self.pos + width).min(self.bytes.len());
+        let slice = &self.bytes[self.pos..end];
+        self.pos = end;
+        Some(slice)
+    }
+}
+
 /// Cached classification of an `RStringInner`'s byte content relative
 /// to its declared `encoding`. CRuby's `enum ruby_coderange_type`
 /// equivalent — keeps `valid_encoding?` / `ascii_only?` /
@@ -541,6 +604,58 @@ impl RStringInner {
         matches!(self.code_range(), CodeRange::SevenBit | CodeRange::Valid)
     }
 
+    /// Number of characters under the declared encoding. Always
+    /// succeeds — broken byte sequences fall back to byte counting
+    /// (matches CRuby's `String#length` returning byte length on
+    /// invalid UTF-8).
+    pub fn char_count(&self) -> usize {
+        match self.ty {
+            // Fixed 1-byte-per-char.
+            Encoding::Ascii8 | Encoding::UsAscii | Encoding::Iso8859(_) => self.content.len(),
+            // UTF-16 / UTF-32 with one extra unit per broken trailing
+            // byte. CRuby's `String#length` for these reports the
+            // number of *complete* code units plus one per stray byte
+            // ("adds 1 (and not 2) for a incomplete surrogate in
+            // UTF-16").
+            Encoding::Utf16Le | Encoding::Utf16Be => {
+                let len = self.content.len();
+                len / 2 + len % 2
+            }
+            Encoding::Utf32Le | Encoding::Utf32Be => {
+                let len = self.content.len();
+                len / 4 + (len % 4 > 0) as usize
+            }
+            // UTF-8: count valid scalars and count each invalid byte
+            // individually (CRuby's "adds 1 for every invalid byte
+            // in UTF-8" rule).
+            Encoding::Utf8 => {
+                if std::str::from_utf8(&self.content).is_ok() {
+                    self.content
+                        .iter()
+                        .filter(|&&b| (b & 0xC0) != 0x80)
+                        .count()
+                } else {
+                    self.iter_char_bytes().count()
+                }
+            }
+            // EUC-JP / Shift_JIS: byte count (no native multibyte
+            // decoder yet).
+            Encoding::EucJp | Encoding::Sjis(_) => self.content.len(),
+        }
+    }
+
+    /// Iterate the string's characters as byte-slice views into
+    /// `self`. The yielded slices reference `self.content`. Used by
+    /// `String#chars` / `#each_char` / `#slice` to be encoding-aware
+    /// without converting through a `&str`.
+    pub fn iter_char_bytes(&self) -> CharByteIter<'_> {
+        CharByteIter {
+            bytes: &self.content,
+            pos: 0,
+            encoding: self.ty,
+        }
+    }
+
     /// Negotiate the result encoding for an operation that combines
     /// `self` and `other` (string concatenation, replacement, …).
     /// Returns `None` if the two encodings are not compatible —
@@ -638,16 +753,10 @@ impl RStringInner {
     /// Get the length in char of the string `self`.
     ///
     pub fn char_length(&self) -> Result<usize> {
-        let len = if self.ty.is_utf8_compatible() {
-            self.check_utf8()?.chars().count()
-        } else {
-            // Non-UTF-8 encodings: report byte length until per-encoding
-            // char-iteration is implemented (matches CRuby for
-            // ASCII-8BIT and is the conservative answer for the dummy
-            // encodings monoruby doesn't decode).
-            self.content.len()
-        };
-        Ok(len)
+        // Always-succeeding char counter: broken UTF-8 falls back to
+        // counting each invalid byte as one character (matches
+        // CRuby's `String#length` rule).
+        Ok(self.char_count())
     }
 
     ///
@@ -711,31 +820,51 @@ impl RStringInner {
     }
 
     pub fn get_range(&self, index: usize, len: usize) -> std::ops::Range<usize> {
-        if self.ty.is_utf8_compatible() {
-            if let Ok(s) = std::str::from_utf8(self) {
-                let mut start = 0;
-                let mut end = 0;
-                for (char_i, (byte_i, _)) in s.char_indices().enumerate() {
-                    if char_i == index {
-                        start = byte_i;
-                        end = s.len();
-                    }
-                    if char_i == index + len {
-                        end = byte_i;
-                        break;
-                    }
+        // Walk the encoding-aware char iterator, accumulating the
+        // byte offsets of chars `index` through `index+len`. Falls
+        // back to byte indexing for fixed-1-byte encodings (which
+        // is what `iter_char_bytes` would do anyway, but we
+        // shortcut it for performance).
+        let unit = match self.ty {
+            Encoding::Ascii8 | Encoding::UsAscii | Encoding::Iso8859(_) => Some(1),
+            Encoding::Utf16Le | Encoding::Utf16Be => Some(2),
+            Encoding::Utf32Le | Encoding::Utf32Be => Some(4),
+            // EUC-JP / Shift_JIS currently iterate byte-wise too, so
+            // a fixed-1-byte shortcut is fine.
+            Encoding::EucJp | Encoding::Sjis(_) => Some(1),
+            Encoding::Utf8 => None,
+        };
+        if let Some(u) = unit {
+            let total = self.content.len();
+            let start_byte = (index * u).min(total);
+            let end_byte = ((index + len) * u).min(total);
+            return start_byte..end_byte;
+        }
+        // UTF-8 path: walk per scalar (or per broken byte) so
+        // `String#[char_index]` indexes by *characters*, not bytes.
+        let mut start_byte: Option<usize> = None;
+        let mut end_byte = self.content.len();
+        let mut byte_pos = 0usize;
+        for (i, c) in self.iter_char_bytes().enumerate() {
+            if i == index {
+                start_byte = Some(byte_pos);
+                if len == 0 {
+                    end_byte = byte_pos;
+                    break;
                 }
-                return start..end;
+            }
+            byte_pos += c.len();
+            if start_byte.is_some() && i + 1 == index + len {
+                end_byte = byte_pos;
+                break;
             }
         }
-        // Byte-based indexing fallback (Ascii8 / dummy encodings /
-        // broken UTF-8).
-        if self.len() <= index {
-            0..0
-        } else if self.len() <= index + len {
-            index..self.len()
-        } else {
-            index..index + len
+        match start_byte {
+            // `index` past the end but exactly equal to char count
+            // is the "append point" — empty range at end.
+            None if index == self.char_count() => self.content.len()..self.content.len(),
+            None => 0..0,
+            Some(s) => s..end_byte,
         }
     }
 

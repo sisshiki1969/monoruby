@@ -1100,6 +1100,36 @@ mod tests {
     }
 
     #[test]
+    fn length_for_dummy_encodings() {
+        // UTF-16: count code units (surrogate pairs count as 2).
+        run_test(r#""ab".force_encoding("UTF-16LE").length"#);
+        run_test(r#""abc".force_encoding("UTF-16LE").length"#); // 1.5 + 1 (broken trailing)
+        // UTF-32: 1 char per 4 bytes.
+        run_test(r#""abcd".force_encoding("UTF-32LE").length"#);
+        // ISO-8859-N: 1 byte per char.
+        run_test(r#""\xff\xfe".force_encoding("ISO-8859-1").length"#);
+    }
+
+    #[test]
+    fn length_for_broken_utf8() {
+        // Broken UTF-8: each invalid byte counts as one char.
+        run_test(r#""\xF4\x90\x80\x80".length"#);
+        run_test(r#""a\xF4\x90\x80\x80b".length"#);
+        run_test(r#""é\xF4\x90\x80\x80è".length"#);
+    }
+
+    #[test]
+    fn chars_preserves_encoding() {
+        // Each yielded character carries the source encoding.
+        run_test(
+            r#""abc".force_encoding("ASCII-8BIT").chars.all? { |c| c.encoding == Encoding::ASCII_8BIT }"#,
+        );
+        run_test(
+            r#""ab".force_encoding("ISO-8859-1").chars.map(&:encoding) == [Encoding::ISO_8859_1, Encoding::ISO_8859_1]"#,
+        );
+    }
+
+    #[test]
     fn encoding_default_external() {
         run_test_no_result_check(
             r#"
