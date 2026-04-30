@@ -1112,4 +1112,117 @@ mod tests {
         run_test(r#"//n.inspect"#);
         run_test(r#"//nixm.inspect"#);
     }
+
+    #[test]
+    fn regexp_option_constants() {
+        run_test(r#"Regexp::IGNORECASE"#);
+        run_test(r#"Regexp::EXTENDED"#);
+        run_test(r#"Regexp::MULTILINE"#);
+        run_test(r#"Regexp::FIXEDENCODING"#);
+        run_test(r#"Regexp::NOENCODING"#);
+    }
+
+    #[test]
+    fn regexp_try_convert() {
+        // Already a Regexp -> returned as-is.
+        run_test(r#"Regexp.try_convert(/abc/) == /abc/"#);
+        // Non-Regexp without #to_regexp -> nil.
+        run_test(r#"Regexp.try_convert("abc")"#);
+        run_test(r#"Regexp.try_convert(nil)"#);
+        run_test(r#"Regexp.try_convert(123)"#);
+        // Object that defines #to_regexp -> returns the Regexp.
+        run_test(
+            r#"
+            o = Object.new
+            def o.to_regexp; /xyz/; end
+            Regexp.try_convert(o) == /xyz/
+            "#,
+        );
+        // #to_regexp returning a non-Regexp -> TypeError.
+        run_test_error(
+            r#"
+            o = Object.new
+            def o.to_regexp; "not a regexp"; end
+            Regexp.try_convert(o)
+            "#,
+        );
+    }
+
+    #[test]
+    fn regexp_linear_time_p() {
+        run_test(r#"Regexp.linear_time?(/abc/)"#);
+        run_test(r#"Regexp.linear_time?("abc")"#);
+        run_test(r#"Regexp.linear_time?("abc", Regexp::IGNORECASE)"#);
+    }
+
+    #[test]
+    fn regexp_timeout_accessors() {
+        // monoruby has no per-match timeout; accessors are stubs.
+        run_test(r#"Regexp.timeout"#);
+        run_test(r#"(Regexp.timeout = 1.0)"#);
+    }
+
+    #[test]
+    fn regexp_tilde() {
+        run_test(
+            r#"
+            $_ = "input data"
+            ~ /at/
+            "#,
+        );
+        run_test(
+            r#"
+            $_ = "input data"
+            ~ /missing/
+            "#,
+        );
+        // No `$_` -> nil
+        run_test(
+            r#"
+            $_ = nil
+            ~ /at/
+            "#,
+        );
+    }
+
+    #[test]
+    fn regexp_casefold_p() {
+        run_test(r#"/abc/.casefold?"#);
+        run_test(r#"/abc/i.casefold?"#);
+        run_test(r#"/abc/m.casefold?"#);
+    }
+
+    #[test]
+    fn regexp_encoding_method() {
+        // Pure-ASCII source -> US-ASCII regardless of `n` flag.
+        run_test(r#"/abc/.encoding.name"#);
+        run_test(r#"/abc/n.encoding.name"#);
+        // Non-ASCII source -> UTF-8.
+        run_test(r#"/©/.encoding.name"#);
+    }
+
+    #[test]
+    fn regexp_fixed_encoding_p() {
+        // Pure-ASCII source isn't fixed-encoding.
+        run_test(r#"/abc/.fixed_encoding?"#);
+        // Non-ASCII source pins the encoding.
+        run_test(r#"/©/.fixed_encoding?"#);
+        // `n` flag with pure-ASCII source -> not fixed.
+        run_test(r#"/abc/n.fixed_encoding?"#);
+    }
+
+    #[test]
+    fn regexp_named_captures_method() {
+        run_test(r#"/(?<a>foo)(?<b>bar)/.named_captures"#);
+        run_test(r#"/foo/.named_captures"#);
+        // Duplicate name keeps both indexes under one key.
+        run_test(r#"/(?<x>a)(?<x>b)/.named_captures"#);
+    }
+
+    #[test]
+    fn regexp_escape_accepts_symbol() {
+        run_test(r#"Regexp.escape(:"a.b")"#);
+        run_test(r#"Regexp.quote(:"a.b")"#);
+        run_test(r#"Regexp.escape("a.b")"#);
+    }
 }

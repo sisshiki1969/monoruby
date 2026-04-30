@@ -938,4 +938,91 @@ mod tests {
         run_test_error(r##"/(foo)(bar)/.match("foobar").begin(-1)"##);
         run_test_error(r##"/(foo)(bar)/.match("foobar").end(-1)"##);
     }
+
+    #[test]
+    fn match_data_allocate_undefined() {
+        // CRuby `rb_undef_method`s allocate -> NoMethodError, not the
+        // default "allocator undefined" TypeError.
+        run_test_error(r##"MatchData.allocate"##);
+    }
+
+    #[test]
+    fn match_data_index_with_start_length() {
+        run_test(
+            r##"/(foo)(bar)(baz)/.match("foobarbaz")[1, 2]"##,
+        );
+        run_test(
+            r##"/(foo)(bar)(baz)/.match("foobarbaz")[0, 4]"##,
+        );
+        // Out-of-range start -> nil.
+        run_test(
+            r##"/(foo)(bar)(baz)/.match("foobarbaz")[10, 1]"##,
+        );
+        // Negative start counts from end.
+        run_test(
+            r##"/(foo)(bar)(baz)/.match("foobarbaz")[-2, 2]"##,
+        );
+    }
+
+    #[test]
+    fn match_data_index_with_range() {
+        run_test(r##"/(foo)(bar)(baz)/.match("foobarbaz")[0..2]"##);
+        run_test(r##"/(foo)(bar)(baz)/.match("foobarbaz")[1..]"##);
+        run_test(r##"/(foo)(bar)(baz)/.match("foobarbaz")[..2]"##);
+        run_test(r##"/(foo)(bar)(baz)/.match("foobarbaz")[1...3]"##);
+        // Out-of-range start -> nil.
+        run_test(r##"/(foo)(bar)/.match("foobar")[10..20]"##);
+    }
+
+    #[test]
+    fn match_data_values_at_with_range_and_names() {
+        run_test(
+            r##"/(?<x>.)(?<y>.)(?<z>.)/.match("abc").values_at(0, 1..2)"##,
+        );
+        run_test(
+            r##"/(?<x>.)(?<y>.)(?<z>.)/.match("abc").values_at(:x, :z)"##,
+        );
+        // Range past the end pads with nil.
+        run_test(
+            r##"/(.)(.)(\d+)(\d)/.match("THX1138: The Movie").values_at(0..5)"##,
+        );
+        // Out-of-range Range -> RangeError with CRuby-format message.
+        run_test_error(
+            r##"/(.)(.)(\d+)(\d)/.match("THX1138: The Movie").values_at(-6..3)"##,
+        );
+    }
+
+    #[test]
+    fn match_data_position_methods_named_arg() {
+        run_test(
+            r##"/(?<f>foo)(?<b>bar)/.match("foobar").begin(:f)"##,
+        );
+        run_test(
+            r##"/(?<f>foo)(?<b>bar)/.match("foobar").end("b")"##,
+        );
+        run_test(
+            r##"/(?<f>foo)(?<b>bar)/.match("foobar").bytebegin(:b)"##,
+        );
+        run_test(
+            r##"/(?<f>foo)(?<b>bar)/.match("foobar").byteend("f")"##,
+        );
+        run_test(
+            r##"/(?<f>foo)(?<b>bar)/.match("foobar").byteoffset(:b)"##,
+        );
+        run_test(
+            r##"/(?<f>foo)(?<b>bar)/.match("foobar").offset(:b)"##,
+        );
+        // Unknown name -> IndexError
+        run_test_error(
+            r##"/(?<f>foo)/.match("foo").begin(:nope)"##,
+        );
+    }
+
+    #[test]
+    fn match_data_position_methods_negative_arg() {
+        // Negative integer arg -> IndexError (no wrap-around).
+        run_test_error(r##"/(foo)/.match("foo").begin(-1)"##);
+        run_test_error(r##"/(foo)/.match("foo").byteoffset(-1)"##);
+        run_test_error(r##"/(foo)/.match("foo").offset(-1)"##);
+    }
 }
