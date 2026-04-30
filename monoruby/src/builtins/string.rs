@@ -4798,6 +4798,111 @@ mod tests {
     }
 
     #[test]
+    fn sub_gsub_backref_extras() {
+        // \& and \0 → full match.
+        run_test(r#""hello!".sub("he", '<\&>')"#);
+        run_test(r#""hello!".sub("he", '<\0>')"#);
+        // \` → pre-match, \' → post-match.
+        run_test(r#""hello!".sub("l", '<\`>')"#);
+        run_test(r#""hello!".sub("l", "<\\'>")"#);
+        // \+ → highest-numbered participating capture.
+        run_test(r#""hello!".sub(/(.)(.)/, '\+')"#);
+        // \+ with no capture group expands to empty.
+        run_test(r#""hello!".sub(/./, '\+')"#);
+        // Trailing \ kept verbatim.
+        run_test(r#""hello".sub(/./, 'hah\\')"#);
+        // \k<name> for named captures.
+        run_test(r#""hello".gsub(/(?<v>[aeiou])/, '<\k<v>>')"#);
+        run_test(r#""hello".gsub(/(?<c>.)/, '\k<c>\k<c>')"#);
+    }
+
+    #[test]
+    fn sub_gsub_hash_default() {
+        // Hash#default fires for missing keys.
+        run_test(
+            r#"
+        h = Hash.new { |_, k| "<#{k}>" }
+        "abc".gsub(/./, h)
+        "#,
+        );
+        // Plain default value also works.
+        run_test(
+            r#"
+        h = Hash.new("?")
+        "abc".gsub(/./, h)
+        "#,
+        );
+        // Non-String value coerced via to_s.
+        run_test(
+            r#"
+        "abc".gsub(/./, "a" => 1, "b" => 2, "c" => 3)
+        "#,
+        );
+    }
+
+    #[test]
+    fn sub_hash_arg_routes_through_replace_one_hash() {
+        // The single-shot `String#sub` Hash path goes through
+        // `RegexpInner::replace_one_hash`, which is independent
+        // from the gsub variant — these cases exercise it.
+
+        // Plain hit: only the *first* match is rewritten, the rest
+        // of the string is preserved verbatim.
+        run_test(r#""hello".sub(/l/, "l" => "L")"#);
+        run_test(r#""hello".sub("l", "l" => "<L>")"#);
+        // Missing key with no default → match is replaced with "".
+        run_test(r#""hello".sub(/l/, "x" => "L")"#);
+        // Hash#default value used for missing keys.
+        run_test(
+            r#"
+            h = Hash.new("<missing>")
+            "hello".sub(/l/, h)
+            "#,
+        );
+        // Hash#default_proc fires for missing keys (gets called
+        // only once, since `sub` only replaces the first match).
+        run_test(
+            r#"
+            calls = 0
+            h = Hash.new do |_, k|
+              calls += 1
+              "<#{k}>"
+            end
+            result = "hello".sub(/l/, h)
+            [result, calls]
+            "#,
+        );
+        // Non-String value is coerced via Object#to_s before
+        // being inserted.
+        run_test(r#""hello".sub(/l/, "l" => 7)"#);
+        // The `!` variant follows the same path and reports
+        // whether the receiver actually changed.
+        run_test(
+            r#"
+            s = "hello"
+            r = s.sub!(/l/, "l" => "L")
+            [r, s]
+            "#,
+        );
+        // No match: receiver unchanged, `sub!` returns nil.
+        run_test(
+            r#"
+            s = "hello"
+            r = s.sub!(/z/, "z" => "Z")
+            [r, s]
+            "#,
+        );
+    }
+
+    #[test]
+    fn gsub_multibyte_empty_match() {
+        // Empty match between non-empty matches must be observed
+        // (CRuby gsub of `[a-z\d]*` against "¿por qué?" yields the
+        // 10-char `"*¿** **é*?*"`).
+        run_test(r#""¿por qué?".gsub(/([a-z\d]*)/, "*")"#);
+    }
+
+    #[test]
     fn delete() {
         run_test(r##""abcdefg".delete("b")"##);
         run_test(r##""abcdefg".delete("b", "c")"##);
