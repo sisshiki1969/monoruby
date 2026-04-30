@@ -1051,6 +1051,55 @@ mod tests {
     }
 
     #[test]
+    fn string_concat_raises_compat_error() {
+        // Two distinct broken sides cannot be concatenated.
+        run_test_error(
+            r#""\xff".force_encoding("UTF-8") + "\xff".force_encoding("ASCII-8BIT")"#,
+        );
+        run_test_error(
+            r#"
+              s = "\xff".force_encoding("UTF-8")
+              s << "\xff".force_encoding("ASCII-8BIT")
+            "#,
+        );
+    }
+
+    #[test]
+    fn string_concat_empty_adopts_other_encoding() {
+        // Empty side adopts the other side's encoding (matters for
+        // non-ASCII-compatible encodings).
+        run_test(
+            r#"("".force_encoding("UTF-16LE") + "abc").encoding == Encoding::UTF_8"#,
+        );
+        run_test(
+            r#"
+              s = "".force_encoding("UTF-16LE")
+              s << "abc"
+              s.encoding == Encoding::UTF_8
+            "#,
+        );
+    }
+
+    #[test]
+    fn gsub_raises_compat_error_on_replacement() {
+        // Receiver is UTF-8 with non-ASCII content, replacement is
+        // an ASCII-8BIT broken byte → CompatibilityError.
+        run_test_error(
+            r#""é".gsub(/é/, "\xff".force_encoding("ASCII-8BIT"))"#,
+        );
+    }
+
+    #[test]
+    fn index_assign_raises_compat_error_on_replacement() {
+        run_test_error(
+            r#"
+              s = "é"
+              s[0] = "\xff".force_encoding("ASCII-8BIT")
+            "#,
+        );
+    }
+
+    #[test]
     fn encoding_default_external() {
         run_test_no_result_check(
             r#"

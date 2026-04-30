@@ -541,6 +541,47 @@ impl RStringInner {
         matches!(self.code_range(), CodeRange::SevenBit | CodeRange::Valid)
     }
 
+    /// Negotiate the result encoding for an operation that combines
+    /// `self` and `other` (string concatenation, replacement, …).
+    /// Returns `None` if the two encodings are not compatible —
+    /// callers should raise `Encoding::CompatibilityError`.
+    pub fn compatible_encoding(&self, other: &Self) -> Option<Encoding> {
+        // CRuby's `rb_enc_compatible` empty-side rules:
+        //   - both empty → self's encoding (left wins).
+        //   - empty self, 7-bit other AND self is ASCII-compatible
+        //     → self's encoding (`"".encode("UTF-8") << "hello".force_encoding(BINARY)"`
+        //     keeps UTF-8).
+        //   - otherwise (one side empty) → the non-empty side's
+        //     encoding wins (matters for ASCII-incompatible enc on
+        //     the empty side, e.g.
+        //     `"".force_encoding("UTF-16LE") + "abc"` → UTF-8).
+        if self.content.is_empty() {
+            if other.content.is_empty() {
+                return Some(self.encoding());
+            }
+            if matches!(other.code_range(), CodeRange::SevenBit)
+                && self.encoding().is_ascii_compatible()
+            {
+                return Some(self.encoding());
+            }
+            return Some(other.encoding());
+        }
+        if other.content.is_empty() {
+            if matches!(self.code_range(), CodeRange::SevenBit)
+                && other.encoding().is_ascii_compatible()
+            {
+                return Some(other.encoding());
+            }
+            return Some(self.encoding());
+        }
+        Encoding::compatible(
+            self.encoding(),
+            self.code_range(),
+            other.encoding(),
+            other.code_range(),
+        )
+    }
+
     pub fn check_utf8(&self) -> Result<&str> {
         match std::str::from_utf8(self) {
             Ok(s) => Ok(s),
@@ -702,35 +743,46 @@ impl RStringInner {
         if other.is_empty() {
             return Ok(());
         }
-        let self_ascii_only = self.content.is_ascii();
-        let other_ascii_only = other.content.is_ascii();
-        match (self.ty, other.ty) {
-            (Encoding::Utf8 | Encoding::UsAscii, Encoding::Ascii8) => {
-                if other_ascii_only {
-                    // ASCII-8BIT with only ASCII bytes is compatible with UTF-8
-                } else if self_ascii_only {
-                    // self is UTF-8 but ASCII-only, other is binary non-ASCII => downgrade
-                    self.ty = Encoding::Ascii8;
-                } else {
-                    // both have non-ASCII bytes => incompatible
-                    return Err(MonorubyErr::runtimeerr(
-                        "incompatible character encodings: UTF-8 and ASCII-8BIT",
-                    ));
-                }
+        let result_enc = match self.compatible_encoding(other) {
+            Some(enc) => enc,
+            None => {
+                // Caller does not have access to `Store`, so raise a
+                // generic runtime error that matches CRuby's
+                // wording. Callers that have access to `Store` can
+                // build a proper `Encoding::CompatibilityError` via
+                // `MonorubyErr::incompatible_encoding`; see
+                // `String#<<` / `String#concat` /
+                // `Array#join`-style sites.
+                return Err(MonorubyErr::runtimeerr(format!(
+                    "incompatible character encodings: {} and {}",
+                    self.ty.name(),
+                    other.ty.name(),
+                )));
             }
-            (Encoding::Ascii8, Encoding::Utf8 | Encoding::UsAscii) => {
-                if self_ascii_only && !other_ascii_only {
-                    // self is binary but ASCII-only, other has non-ASCII UTF-8 => upgrade
-                    self.ty = Encoding::Utf8;
-                }
-                // otherwise keep ASCII-8BIT
-            }
-            _ => {}
-        }
-        self.content.extend_from_slice(other);
+        };
+        self.content.extend_from_slice(&other.content);
+        self.ty = result_enc;
         // The cached classification doesn't survive mutation: appending
         // bytes can flip SevenBit → Valid/Broken, or two Broken halves
         // can combine into a Valid character.
+        self.cr.set(CodeRange::Unknown);
+        Ok(())
+    }
+
+    /// Append `other`'s bytes to `self`, raising
+    /// `Encoding::CompatibilityError` (rather than `RuntimeError`)
+    /// on incompatible encodings. Used by call sites that have
+    /// access to `Store` — preferred for new code; the older
+    /// `extend()` is kept for the call sites that don't.
+    pub fn extend_compat(&mut self, other: &Self, store: &Store) -> Result<()> {
+        if other.is_empty() {
+            return Ok(());
+        }
+        let result_enc = self.compatible_encoding(other).ok_or_else(|| {
+            MonorubyErr::incompatible_encoding(store, self.ty, other.ty)
+        })?;
+        self.content.extend_from_slice(&other.content);
+        self.ty = result_enc;
         self.cr.set(CodeRange::Unknown);
         Ok(())
     }

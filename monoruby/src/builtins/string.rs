@@ -237,7 +237,8 @@ fn string_try_convert(
 fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val().dup();
     let other = lfp.arg(0).coerce_to_rstring(vm, globals)?;
-    self_.as_rstring_inner_mut().extend(&other)?;
+    self_.as_rstring_inner_mut()
+        .extend_compat(&other, &globals.store)?;
     Ok(self_)
 }
 
@@ -488,7 +489,8 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_ = lfp.self_val();
     if let Some(other) = lfp.arg(0).is_rstring() {
-        self_.as_rstring_inner_mut().extend(&other)?;
+        self_.as_rstring_inner_mut()
+            .extend_compat(&other, &globals.store)?;
     } else if let Some(i) = lfp.arg(0).try_fixnum() {
         let ch = match u32::try_from(i) {
             Ok(ch) => ch,
@@ -512,7 +514,8 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     } else {
         // Try to_str coercion
         let coerced = lfp.arg(0).coerce_to_rstring(vm, globals)?;
-        self_.as_rstring_inner_mut().extend(&coerced)?;
+        self_.as_rstring_inner_mut()
+            .extend_compat(&coerced, &globals.store)?;
     }
     Ok(self_)
 }
@@ -760,6 +763,16 @@ fn index_assign(
     _: BytecodePtr,
 ) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
+    // The replacement String's encoding must be compatible with the
+    // receiver before any of the index-resolution work runs. CRuby
+    // raises `Encoding::CompatibilityError` here, ahead of the
+    // index/range/regex match-or-error.
+    let replacement_val = if lfp.try_arg(2).is_some() {
+        lfp.arg(2)
+    } else {
+        lfp.arg(1)
+    };
+    check_replacement_encoding_compat(globals, lfp.self_val(), replacement_val)?;
     let arg0_val = lfp.arg(0);
     let arg1_opt = lfp.try_arg(2).map(|_| lfp.arg(1));
     let arg_val = if arg1_opt.is_some() {
@@ -1883,6 +1896,7 @@ fn sub_main(
         if arg1.try_hash_ty().is_some() {
             RegexpInner::replace_one_hash(vm, globals, lfp.arg(0), given, arg1)
         } else {
+            check_replacement_encoding_compat(globals, self_val, arg1)?;
             let replace = arg1.coerce_to_str(vm, globals)?;
             RegexpInner::replace_one(vm, globals, lfp.arg(0), given, &replace)
         }
@@ -1895,6 +1909,35 @@ fn sub_main(
             }
         }
     }
+}
+
+/// Raise `Encoding::CompatibilityError` if `self_val` (the receiver
+/// of `gsub`/`sub`) and `replacement` (the explicit replacement
+/// String) have incompatible encodings. The block-form callers
+/// don't go through this — block return values are coerced
+/// per-iteration and CRuby ties the result encoding to whichever
+/// chunk first introduces a non-7-bit byte.
+fn check_replacement_encoding_compat(
+    globals: &Globals,
+    self_val: Value,
+    replacement: Value,
+) -> Result<()> {
+    let lhs = match self_val.is_rstring_inner() {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    let rhs = match replacement.is_rstring_inner() {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    if lhs.compatible_encoding(rhs).is_some() {
+        return Ok(());
+    }
+    Err(MonorubyErr::incompatible_encoding(
+        &globals.store,
+        lhs.encoding(),
+        rhs.encoding(),
+    ))
 }
 
 ///
@@ -1961,6 +2004,7 @@ fn gsub_main(
         if arg1.try_hash_ty().is_some() {
             RegexpInner::replace_all_hash(vm, globals, lfp.arg(0), given, arg1)
         } else {
+            check_replacement_encoding_compat(globals, self_val, arg1)?;
             let replace = arg1.coerce_to_str(vm, globals)?;
             RegexpInner::replace_all(vm, globals, lfp.arg(0), given, &replace)
         }
