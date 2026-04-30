@@ -105,6 +105,10 @@ impl AsmIr {
         }
     }
 
+    pub(super) fn inst_iter_mut(&mut self) -> std::slice::IterMut<'_, AsmInst> {
+        self.inst.iter_mut()
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.inst.is_empty()
     }
@@ -631,6 +635,35 @@ impl AsmIr {
 
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
         self.push(AsmInst::BcIndex(index));
+    }
+}
+
+///
+/// Stack offset for [`AsmInst::LoadDynVarSpecialized`] /
+/// [`AsmInst::StoreDynVarSpecialized`].
+///
+/// Pass 1 emits `Hint(ids)` — a chain of [`SpecializedId`]s for the
+/// frames between the captured outer scope and the current frame.
+/// The pre-codegen resolve pass turns each `Hint` into
+/// `Concrete(byte_offset)` by summing the recorded frame sizes from
+/// [`super::context::JitContext::specialized_frame_sizes`]. Code
+/// generation then asserts `Concrete(_)`.
+///
+#[derive(Debug, Clone)]
+pub(crate) enum DynVarOffset {
+    Hint(Vec<super::context::SpecializedId>),
+    Concrete(usize),
+}
+
+impl DynVarOffset {
+    pub(crate) fn unwrap_concrete(&self) -> usize {
+        match self {
+            DynVarOffset::Concrete(o) => *o,
+            DynVarOffset::Hint(ids) => panic!(
+                "DynVarOffset::Hint({:?}) reached code generation — resolve pass did not run",
+                ids
+            ),
+        }
     }
 }
 
@@ -1303,8 +1336,11 @@ pub(super) enum AsmInst {
     },
     /// rax = DynVar(src)
     LoadDynVarSpecialized {
-        /// machine stack offset in bytes
-        offset: usize,
+        /// Machine stack offset in bytes. Emitted as a
+        /// `DynVarOffset::Hint(...)` chain by Pass 1; the pre-codegen
+        /// resolve pass replaces it with `DynVarOffset::Concrete(_)`
+        /// once every frame's final size is known.
+        offset: DynVarOffset,
         reg: SlotId,
     },
     /// DynVar(dst) = src
@@ -1314,8 +1350,9 @@ pub(super) enum AsmInst {
     },
     /// DynVar(dst) = src
     StoreDynVarSpecialized {
-        /// machine stack offset in bytes
-        offset: usize,
+        /// Machine stack offset in bytes — see
+        /// [`AsmInst::LoadDynVarSpecialized`].
+        offset: DynVarOffset,
         dst: SlotId,
         src: GP,
     },

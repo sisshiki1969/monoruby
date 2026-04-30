@@ -293,8 +293,14 @@ impl Codegen {
         };
         let frame = JitStackFrame::new(store, jit_type, 0, iseq_id, None, self_class, None);
         let mut ctx = JitContext::new(store, true, class_version, vec![]);
-        let frame = ctx.traceir_to_asmir(frame)?;
+        let mut frame = ctx.traceir_to_asmir(frame)?;
         let specialized_info = SpecializedCodeInfo::from(&frame);
+
+        // Now that every frame's `stack_offset` has been finalised
+        // and recorded in `JitContext::specialized_frame_sizes`,
+        // rewrite every `DynVarOffset::Hint(...)` in the AsmIr tree
+        // into a concrete byte offset before code generation runs.
+        ctx.resolve_dyn_var_offsets(&mut frame.asm_info);
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 

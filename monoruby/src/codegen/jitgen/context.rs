@@ -4,6 +4,15 @@
 
 use super::*;
 
+///
+/// Unique identifier for a specialized method / block frame within a
+/// single JIT compilation. Used by [`AsmInst::LoadDynVarSpecialized`] /
+/// [`AsmInst::StoreDynVarSpecialized`] hints to defer concrete stack
+/// offset computation until after every frame's size is finalized.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct SpecializedId(pub(super) usize);
+
 #[derive(Debug, Clone)]
 pub(super) enum JitType {
     /// JIT for method / block.
@@ -202,6 +211,30 @@ impl AsmInfo {
     ) -> Option<(AsmIr, Option<BasicBlockId>)> {
         self.inline_bridges.remove(&src_bb)
     }
+
+    // pre-codegen rewrite helpers
+
+    pub(super) fn iter_ir_mut(
+        &mut self,
+    ) -> std::slice::IterMut<'_, (Option<BasicBlockId>, AsmIr)> {
+        self.ir.iter_mut()
+    }
+
+    pub(super) fn iter_outline_bridges_mut(
+        &mut self,
+    ) -> std::slice::IterMut<'_, (AsmIr, JitLabel, BasicBlockId)> {
+        self.outline_bridges.iter_mut()
+    }
+
+    pub(super) fn iter_inline_bridges_mut(
+        &mut self,
+    ) -> std::collections::hash_map::ValuesMut<'_, Option<BasicBlockId>, (AsmIr, Option<BasicBlockId>)> {
+        self.inline_bridges.values_mut()
+    }
+
+    pub(super) fn iter_specialized_methods_mut(&mut self) -> std::slice::IterMut<'_, SpecializeInfo> {
+        self.specialized_methods.iter_mut()
+    }
 }
 
 ///
@@ -260,6 +293,16 @@ pub(super) struct JitStackFrame {
     /// Machine stack offset for this frame.
     ///
     stack_offset: usize,
+
+    ///
+    /// Unique identifier assigned by [`JitContext::push_frame`]. After
+    /// the frame is popped via [`JitContext::pop_frame`], the
+    /// finalised `stack_offset` is recorded in
+    /// [`JitContext::specialized_frame_sizes`] under this id and used
+    /// by the pre-codegen pass to resolve `DynVarOffset::Hint`
+    /// hints into concrete byte offsets.
+    ///
+    specialized_id: SpecializedId,
 }
 
 impl std::fmt::Debug for JitStackFrame {
@@ -338,6 +381,8 @@ impl JitStackFrame {
             backedge_map: HashMap::default(),
             return_context: HashMap::default(),
             stack_offset,
+            // Sentinel — overwritten by [`JitContext::push_frame`].
+            specialized_id: SpecializedId(usize::MAX),
         }
     }
 
@@ -354,6 +399,11 @@ impl JitStackFrame {
             backedge_map: HashMap::default(),
             return_context: HashMap::default(),
             stack_offset: self.stack_offset,
+            // Preserve the source frame's id — the dup is used by
+            // [`JitContext::loop_analysis`] which performs read-only
+            // walks over a snapshot of the stack and never reaches
+            // the codegen resolve pass, so id reuse is safe.
+            specialized_id: self.specialized_id,
         }
     }
 
@@ -405,6 +455,22 @@ pub(crate) struct JitContext<'a> {
     /// Stack frame for specialized compilation. (iseq, outer_scope, block_iseq)
     ///
     stack_frame: Vec<JitStackFrame>,
+
+    ///
+    /// Counter for handing out fresh [`SpecializedId`]s to frames as
+    /// they are pushed. Monotonic across the whole compilation.
+    ///
+    next_specialized_id: usize,
+
+    ///
+    /// Map from each frame's [`SpecializedId`] to its finalised
+    /// `stack_offset` (in bytes). Populated when [`Self::pop_frame`]
+    /// hands the frame back to the caller — at that point the frame's
+    /// machine-stack size is known and stable. Read by
+    /// [`Self::resolve_dyn_var_offsets`] before code generation to
+    /// turn `DynVarOffset::Hint` hints into concrete byte offsets.
+    ///
+    specialized_frame_sizes: HashMap<SpecializedId, usize>,
 }
 
 impl<'a> JitContext<'a> {
@@ -420,6 +486,8 @@ impl<'a> JitContext<'a> {
             class_version,
             inline_method_cache: vec![],
             stack_frame,
+            next_specialized_id: 0,
+            specialized_frame_sizes: HashMap::default(),
         }
     }
 
@@ -432,6 +500,11 @@ impl<'a> JitContext<'a> {
             class_version: self.class_version,
             inline_method_cache: vec![],
             stack_frame,
+            // The cloned context emits AsmIr only for analysis (it is
+            // never codegen'd), so the id counter / size map can stay
+            // empty — the resolve pass never runs against this ir.
+            next_specialized_id: 0,
+            specialized_frame_sizes: HashMap::default(),
         }
     }
 
@@ -522,12 +595,28 @@ impl<'a> JitContext<'a> {
         self.stack_frame.len() - 1
     }
 
-    pub(super) fn push_frame(&mut self, frame: JitStackFrame) {
+    pub(super) fn push_frame(&mut self, mut frame: JitStackFrame) {
+        // Hand out a fresh id; codegen-mode contexts use this to wire
+        // every frame into [`Self::specialized_frame_sizes`] when the
+        // frame is popped. Loop-analysis contexts never codegen, so
+        // they reuse the cloned id from `JitStackFrame::dup`.
+        if frame.specialized_id.0 == usize::MAX {
+            frame.specialized_id = SpecializedId(self.next_specialized_id);
+            self.next_specialized_id += 1;
+        }
         self.stack_frame.push(frame);
     }
 
     pub(super) fn pop_frame(&mut self) -> JitStackFrame {
-        self.stack_frame.pop().unwrap()
+        let frame = self.stack_frame.pop().unwrap();
+        // Record the finalised frame size for the resolve pass. After
+        // this point, `frame.stack_offset` will not be modified
+        // (the `+=`/`-=` adjustments inside `specialized_compile`
+        // are always paired around the recursive `traceir_to_asmir`
+        // call), so this write is the canonical size for the id.
+        self.specialized_frame_sizes
+            .insert(frame.specialized_id, frame.stack_offset);
+        frame
     }
 
     ///
@@ -668,15 +757,90 @@ impl<'a> JitContext<'a> {
         })
     }
 
-    pub(super) fn outer_stack_offset(
+    ///
+    /// Hint variant of stack-offset computation for `LoadDynVar` /
+    /// `StoreDynVar`. Returns the chain of [`SpecializedId`]s for
+    /// frames `[outer..current)` so the pre-codegen resolve pass can
+    /// compute the concrete offset from
+    /// [`Self::specialized_frame_sizes`] once every frame's final
+    /// size is known. The boolean mirrors the `not_captured` flag
+    /// from `state.outer_no_capture_guard`.
+    ///
+    pub(super) fn outer_specialized_ids(
         &self,
         state: &AbstractState,
         outer: usize,
-    ) -> Option<(usize, bool)> {
+    ) -> Option<(Vec<SpecializedId>, bool)> {
         let not_captured = state.outer_no_capture_guard(outer)?;
         let outer = self.outer_pos(outer)?;
-        let offset = self.calc_stack_offset(outer, self.stack_frame.len() - 1);
-        Some((offset, not_captured))
+        let end = self.stack_frame.len() - 1;
+        let ids = self.stack_frame[outer..end]
+            .iter()
+            .map(|f| f.specialized_id)
+            .collect();
+        Some((ids, not_captured))
+    }
+
+    ///
+    /// Resolve a `DynVarOffset::Hint` chain by summing the recorded
+    /// frame sizes. Used by [`Self::resolve_dyn_var_offsets`].
+    ///
+    pub(super) fn resolve_specialized_id_chain(&self, ids: &[SpecializedId]) -> usize {
+        ids.iter()
+            .map(|id| {
+                *self.specialized_frame_sizes.get(id).unwrap_or_else(|| {
+                    panic!(
+                        "DynVarOffset hint references {:?} but no frame size was recorded",
+                        id
+                    )
+                })
+            })
+            .sum()
+    }
+
+    ///
+    /// Walk every `AsmIr` reachable from `asm_info` (the main inst
+    /// stream, inline / outline bridges, and recursively the
+    /// `specialized_methods`) and rewrite each
+    /// `DynVarOffset::Hint(...)` into `DynVarOffset::Concrete(...)`
+    /// using [`Self::specialized_frame_sizes`]. Must be called after
+    /// every frame has been popped (so the size map is fully
+    /// populated) and before `gen_machine_code` runs — code
+    /// generation [`unwrap_concrete`s](DynVarOffset::unwrap_concrete)
+    /// each hint and would panic otherwise.
+    ///
+    pub(super) fn resolve_dyn_var_offsets(&self, asm_info: &mut AsmInfo) {
+        for (_, ir) in asm_info.iter_ir_mut() {
+            for inst in ir.inst_iter_mut() {
+                self.resolve_dyn_var_offset_in(inst);
+            }
+        }
+        for (ir, _, _) in asm_info.iter_outline_bridges_mut() {
+            for inst in ir.inst_iter_mut() {
+                self.resolve_dyn_var_offset_in(inst);
+            }
+        }
+        for (ir, _) in asm_info.iter_inline_bridges_mut() {
+            for inst in ir.inst_iter_mut() {
+                self.resolve_dyn_var_offset_in(inst);
+            }
+        }
+        for SpecializeInfo { info, .. } in asm_info.iter_specialized_methods_mut() {
+            self.resolve_dyn_var_offsets(info);
+        }
+    }
+
+    fn resolve_dyn_var_offset_in(&self, inst: &mut AsmInst) {
+        match inst {
+            AsmInst::LoadDynVarSpecialized { offset, .. }
+            | AsmInst::StoreDynVarSpecialized { offset, .. } => {
+                if let DynVarOffset::Hint(ids) = offset {
+                    let resolved = self.resolve_specialized_id_chain(ids);
+                    *offset = DynVarOffset::Concrete(resolved);
+                }
+            }
+            _ => {}
+        }
     }
 
     pub(super) fn method_caller_stack_offset(&self) -> Option<usize> {
