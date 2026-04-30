@@ -35,8 +35,11 @@ impl Codegen {
                     .sourcemap
                     .push((i, self.jit.get_current() - frame.start_codepos));
             }
-            AsmInst::Init { info } => {
-                self.init_func(&info);
+            AsmInst::Init {
+                info,
+                prologue_offset,
+            } => {
+                self.init_func(&info, prologue_offset.unwrap_concrete());
             }
             AsmInst::Unreachable => {
                 monoasm!( &mut self.jit,
@@ -294,10 +297,10 @@ impl Codegen {
                 self.block_break();
             }
             AsmInst::MethodRetSpecialized { rbp_offset } => {
-                self.method_return_specialized(rbp_offset);
+                self.method_return_specialized(rbp_offset.unwrap_concrete());
             }
             AsmInst::BlockBreakSpecialized { rbp_offset } => {
-                self.method_return_specialized(rbp_offset);
+                self.method_return_specialized(rbp_offset.unwrap_concrete());
             }
             AsmInst::Raise => {
                 let raise = self.entry_raise();

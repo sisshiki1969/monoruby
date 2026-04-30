@@ -639,15 +639,19 @@ impl AsmIr {
 }
 
 ///
-/// Stack offset for [`AsmInst::LoadDynVarSpecialized`] /
-/// [`AsmInst::StoreDynVarSpecialized`].
+/// Chain-based stack offset hint reused by every AsmInst that needs
+/// "sum of frame sizes between frame A and frame B" — DynVar
+/// access ([`AsmInst::LoadDynVarSpecialized`] /
+/// [`AsmInst::StoreDynVarSpecialized`]) and specialized return /
+/// break ([`AsmInst::MethodRetSpecialized`] /
+/// [`AsmInst::BlockBreakSpecialized`]).
 ///
-/// Pass 1 emits `Hint(ids)` — a chain of [`SpecializedId`]s for the
-/// frames between the captured outer scope and the current frame.
-/// The pre-codegen resolve pass turns each `Hint` into
-/// `Concrete(byte_offset)` by summing the recorded frame sizes from
+/// Pass 1 emits `Hint(ids)` — the chain of [`SpecializedId`]s for
+/// the frames involved. The pre-codegen resolve pass rewrites each
+/// `Hint` into `Concrete(byte_offset)` by summing the recorded frame
+/// sizes in
 /// [`super::context::JitContext::specialized_frame_sizes`]. Code
-/// generation then asserts `Concrete(_)`.
+/// generation asserts `Concrete(_)` and panics on a stray `Hint`.
 ///
 #[derive(Debug, Clone)]
 pub(crate) enum DynVarOffset {
@@ -662,6 +666,34 @@ impl DynVarOffset {
             DynVarOffset::Hint(ids) => panic!(
                 "DynVarOffset::Hint({:?}) reached code generation — resolve pass did not run",
                 ids
+            ),
+        }
+    }
+}
+
+///
+/// Bytes the JIT prologue should subtract from `rsp` for a frame.
+///
+/// Pass 1 emits `Hint(id)` — the current frame's [`SpecializedId`].
+/// The pre-codegen resolve pass derives the byte count from the
+/// frame's recorded `stack_offset` once it is finalised (so that
+/// future spill slots growing the frame size feed through to the
+/// prologue subq automatically). Code generation asserts
+/// `Concrete(_)`.
+///
+#[derive(Debug, Clone)]
+pub(crate) enum PrologueOffset {
+    Hint(super::context::SpecializedId),
+    Concrete(usize),
+}
+
+impl PrologueOffset {
+    pub(crate) fn unwrap_concrete(&self) -> usize {
+        match self {
+            PrologueOffset::Concrete(o) => *o,
+            PrologueOffset::Hint(id) => panic!(
+                "PrologueOffset::Hint({:?}) reached code generation — resolve pass did not run",
+                id
             ),
         }
     }
@@ -829,10 +861,16 @@ pub(super) enum AsmInst {
     BlockBreak(BytecodePtr),
     MethodRet(BytecodePtr),
     BlockBreakSpecialized {
-        rbp_offset: usize,
+        /// Bytes between the current rbp and the iter caller's rbp.
+        /// Emitted as `DynVarOffset::Hint(...)` and resolved before
+        /// code generation — see [`DynVarOffset`].
+        rbp_offset: DynVarOffset,
     },
     MethodRetSpecialized {
-        rbp_offset: usize,
+        /// Bytes between the current rbp and the method caller's
+        /// rbp. Emitted as `DynVarOffset::Hint(...)` and resolved
+        /// before code generation — see [`DynVarOffset`].
+        rbp_offset: DynVarOffset,
     },
     Raise,
     Retry(BytecodePtr),
@@ -862,11 +900,19 @@ pub(super) enum AsmInst {
     /// Initialize function frame.
     ///
     /// ### stack pointer adjustment
-    /// - `fn_info`.`stack_offset` * 16
+    /// - `prologue_offset` bytes (resolved before code generation)
     ///
     Init {
         info: FnInitInfo,
-        //not_captured: bool,
+        ///
+        /// Byte count for the prologue `subq rsp, _`. Emitted as
+        /// `PrologueOffset::Hint(current_frame_id)` and rewritten
+        /// to `PrologueOffset::Concrete(_)` by the resolve pass once
+        /// the frame's final `stack_offset` is known. `info.stack_offset`
+        /// is retained for non-JIT callers; the JIT codegen uses this
+        /// field instead.
+        ///
+        prologue_offset: PrologueOffset,
     },
     ///
     /// Deoptimize and fallback to interpreter.

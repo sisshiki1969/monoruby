@@ -619,6 +619,10 @@ impl<'a> JitContext<'a> {
         frame
     }
 
+    pub(super) fn current_frame_id(&self) -> SpecializedId {
+        self.current_frame().specialized_id
+    }
+
     ///
     /// Compile specialized method / block.
     ///
@@ -742,12 +746,6 @@ impl<'a> JitContext<'a> {
         }
     }
 
-    fn calc_stack_offset(&self, begin: usize, end: usize) -> usize {
-        self.stack_frame[begin..end]
-            .iter()
-            .fold(0, |acc, f| acc + f.stack_offset)
-    }
-
     fn check_exception_handler(&self, begin: usize, end: usize) -> bool {
         self.stack_frame[begin..end].iter().any(|f| {
             let iseq_id = f.iseq_id();
@@ -833,34 +831,80 @@ impl<'a> JitContext<'a> {
     fn resolve_dyn_var_offset_in(&self, inst: &mut AsmInst) {
         match inst {
             AsmInst::LoadDynVarSpecialized { offset, .. }
-            | AsmInst::StoreDynVarSpecialized { offset, .. } => {
+            | AsmInst::StoreDynVarSpecialized { offset, .. }
+            | AsmInst::MethodRetSpecialized {
+                rbp_offset: offset, ..
+            }
+            | AsmInst::BlockBreakSpecialized {
+                rbp_offset: offset, ..
+            } => {
                 if let DynVarOffset::Hint(ids) = offset {
                     let resolved = self.resolve_specialized_id_chain(ids);
                     *offset = DynVarOffset::Concrete(resolved);
+                }
+            }
+            AsmInst::Init {
+                prologue_offset, ..
+            } => {
+                if let PrologueOffset::Hint(id) = prologue_offset {
+                    let total = *self.specialized_frame_sizes.get(id).unwrap_or_else(|| {
+                        panic!(
+                            "PrologueOffset hint references {:?} but no frame size was recorded",
+                            id
+                        )
+                    });
+                    // The recorded `stack_offset` includes the iseq's
+                    // bookkeeping `+ 16` and the `CONTINUATION_FRAME_SIZE`
+                    // (= 16). The prologue subtracts only the locals area,
+                    // so subtract the 32-byte overhead. With future
+                    // VirtFPReg spill slots, both grow together, so the
+                    // offset constant stays correct.
+                    let prologue_bytes = total - (CONTINUATION_FRAME_SIZE + 16);
+                    *prologue_offset = PrologueOffset::Concrete(prologue_bytes);
                 }
             }
             _ => {}
         }
     }
 
-    pub(super) fn method_caller_stack_offset(&self) -> Option<usize> {
+    ///
+    /// Hint-form chain of [`SpecializedId`]s between the method
+    /// caller and the current frame. Defers the byte sum to the
+    /// pre-codegen resolve pass.
+    ///
+    pub(super) fn method_caller_specialized_ids(&self) -> Option<Vec<SpecializedId>> {
         let caller = self.method_caller_pos()?;
         let begin = caller + 1;
         let end = self.stack_frame.len() - 1;
         if self.check_exception_handler(begin, end) {
             return None;
         }
-        Some(self.calc_stack_offset(begin, end))
+        Some(
+            self.stack_frame[begin..end]
+                .iter()
+                .map(|f| f.specialized_id)
+                .collect(),
+        )
     }
 
-    pub(super) fn iter_caller_stack_offset(&self) -> Option<usize> {
+    ///
+    /// Hint-form chain of [`SpecializedId`]s between the iter caller
+    /// and the current frame. Defers the byte sum to the pre-codegen
+    /// resolve pass.
+    ///
+    pub(super) fn iter_caller_specialized_ids(&self) -> Option<Vec<SpecializedId>> {
         let caller = self.iter_caller_pos()?;
         let begin = caller + 1;
         let end = self.stack_frame.len() - 1;
         if self.check_exception_handler(begin, end) {
             return None;
         }
-        Some(self.calc_stack_offset(begin, end))
+        Some(
+            self.stack_frame[begin..end]
+                .iter()
+                .map(|f| f.specialized_id)
+                .collect(),
+        )
     }
 
     pub(super) fn get_pc(&self, i: BcIndex) -> BytecodePtr {
