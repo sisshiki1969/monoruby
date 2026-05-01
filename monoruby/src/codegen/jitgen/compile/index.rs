@@ -65,7 +65,7 @@ impl AbstractState {
     ) {
         self.load_array_ty(ir, store, base, GP::Rdi);
         if let Some(idx) = self.is_u16(idx) {
-            ir.inline(move |r#gen, _, _| {
+            ir.inline(move |r#gen, _, _, _| {
                 let out_range = r#gen.jit.label();
                 monoasm! { &mut r#gen.jit,
                     movl rsi, (idx);
@@ -74,7 +74,7 @@ impl AbstractState {
             });
         } else {
             self.load_fixnum(ir, idx, GP::Rsi);
-            ir.inline(move |r#gen, _, _| {
+            ir.inline(move |r#gen, _, _, _| {
                 //r#gen.gen_array_index();
 
                 let generic = r#gen.jit.label();
@@ -125,7 +125,7 @@ impl AbstractState {
             self.load(ir, src, GP::Rdx);
             let using_xmm = self.get_using_xmm();
             let error = ir.new_error(self);
-            ir.inline(move |r#gen, _, labels| {
+            ir.inline(move |r#gen, _, labels, _| {
                 let generic = r#gen.jit.label();
                 monoasm! { &mut r#gen.jit,
                     movl rsi, (idx);
@@ -137,7 +137,7 @@ impl AbstractState {
             self.load(ir, src, GP::Rdx);
             let using_xmm = self.get_using_xmm();
             let error = ir.new_error(self);
-            ir.inline(move |r#gen, _, labels| {
+            ir.inline(move |r#gen, _, labels, _| {
                 let generic = r#gen.jit.label();
                 let checked = r#gen.jit.label();
                 let negative = r#gen.jit.label();

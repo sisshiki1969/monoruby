@@ -444,19 +444,20 @@ fn fiddle_read_inline(
 
     match kind {
         ReadKind::F64 => {
-            let fret = state.def_F(ir, dst).enc();
-            ir.inline(move |r#gen, _, labels| {
+            let fret = state.def_F(ir, dst);
+            ir.inline(move |r#gen, _, labels, base| {
                 let deopt_label = &labels[deopt];
                 monoasm! { &mut r#gen.jit,
                     sarq rdi, 1;
                     testq rdi, rdi;
                     jz deopt_label;
-                    movq xmm(fret), [rdi];
+                    movq xmm0, [rdi];
                 };
+                r#gen.store_xmm0_into_xmm(fret, base);
             });
         }
         _ => {
-            ir.inline(move |r#gen, _, labels| {
+            ir.inline(move |r#gen, _, labels, _| {
                 let deopt_label = &labels[deopt];
                 monoasm! { &mut r#gen.jit,
                     sarq rdi, 1;
@@ -523,23 +524,24 @@ fn fiddle_write_inline(
 
     match kind {
         WriteKind::F64 => {
-            let xenc = state.load_xmm(ir, val_slot).enc();
+            let xsrc = state.load_xmm(ir, val_slot);
             let deopt = ir.new_deopt(state);
-            ir.inline(move |r#gen, _, labels| {
+            ir.inline(move |r#gen, _, labels, base| {
                 let deopt_label = &labels[deopt];
+                r#gen.load_xmm_into_xmm0(xsrc, base);
                 monoasm! { &mut r#gen.jit,
                     movq rax, rdi;
                     sarq rdi, 1;
                     testq rdi, rdi;
                     jz deopt_label;
-                    movq [rdi], xmm(xenc);
+                    movq [rdi], xmm0;
                 };
             });
         }
         _ => {
             state.load_fixnum(ir, val_slot, GP::Rsi);
             let deopt = ir.new_deopt(state);
-            ir.inline(move |r#gen, _, labels| {
+            ir.inline(move |r#gen, _, labels, _| {
                 let deopt_label = &labels[deopt];
                 monoasm! { &mut r#gen.jit,
                     movq rax, rdi;

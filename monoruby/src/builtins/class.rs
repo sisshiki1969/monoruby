@@ -304,7 +304,7 @@ pub(super) fn gen_class_new_inline(
     let using_xmm = state.get_using_xmm();
     let error = ir.new_error(state);
     ir.xmm_save(using_xmm);
-    ir.inline(move |r#gen, _, _| {
+    ir.inline(move |r#gen, _, _, _| {
         let cached_version = r#gen.jit.data_i32(-1);
         let cached_funcid = r#gen.jit.data_i32(-1);
         let class_version = r#gen.class_version_label();

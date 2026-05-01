@@ -912,7 +912,9 @@ impl Codegen {
                 using_xmm,
             } => self.defined_cvar(dst, name, using_xmm),
 
-            AsmInst::Inline(proc) => (proc.proc)(self, store, labels),
+            AsmInst::Inline(proc) => {
+                (proc.proc)(self, store, labels, frame.base_stack_offset)
+            }
             AsmInst::CFunc_F_F {
                 f,
                 src,

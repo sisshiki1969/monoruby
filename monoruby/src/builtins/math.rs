@@ -689,32 +689,34 @@ fn math_sqrt(
         return false;
     }
     let CallSiteInfo { args, dst, .. } = *callsite;
-    let fsrc = state.load_xmm(ir, args).enc();
+    let fsrc = state.load_xmm(ir, args);
     // Create the deopt label before allocating `fret` so the write-back
     // state captured here does not include the (unmodified) dst slot.
     // On a negative argument we bail out to the interpreter, which will
     // re-execute the call via the regular builtin and raise DomainError.
     let deopt = ir.new_deopt(state);
     let fret = dst.map(|dst| state.def_F(ir, dst));
-    ir.inline(move |r#gen, _, labels| {
+    ir.inline(move |r#gen, _, labels, base| {
         let deopt_label = &labels[deopt];
         let do_sqrt = r#gen.jit.label();
         // ucomisd sets PF=1 for NaN and CF=1 for val < 0.
         // NaN passes through (sqrt(NaN) = NaN); negative values deopt.
         // -0.0 compares equal to 0.0, so it skips the deopt and sqrtsd
         // yields -0.0 as CRuby does.
+        // Load the source into xmm0 (works for either pool or spill).
+        r#gen.load_xmm_into_xmm0(fsrc, base);
         monoasm!( &mut r#gen.jit,
             xorpd xmm1, xmm1;
-            ucomisd xmm(fsrc), xmm1;
+            ucomisd xmm0, xmm1;
             jp do_sqrt;
             jb deopt_label;
         do_sqrt:
         );
         if let Some(fret) = fret {
-            let fret = fret.enc();
             monoasm!( &mut r#gen.jit,
-                sqrtsd xmm(fret), xmm(fsrc);
+                sqrtsd xmm0, xmm0;
             );
+            r#gen.store_xmm0_into_xmm(fret, base);
         }
     });
     true

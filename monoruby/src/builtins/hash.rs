@@ -733,7 +733,7 @@ fn hash_index(
     state.load(ir, callsite.recv, GP::Rdx);
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
-    ir.inline(|r#gen, _, _| {
+    ir.inline(|r#gen, _, _, _| {
         monoasm! {&mut r#gen.jit,
             movq rdi, rbx;
             movq rsi, r12;

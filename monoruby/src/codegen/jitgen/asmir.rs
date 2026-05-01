@@ -5,7 +5,7 @@ use super::*;
 mod compile;
 
 pub(super) struct InlineProcedure {
-    proc: Box<dyn FnOnce(&mut Codegen, &Store, &SideExitLabels)>,
+    proc: Box<dyn FnOnce(&mut Codegen, &Store, &SideExitLabels, usize)>,
 }
 
 impl std::fmt::Debug for InlineProcedure {
@@ -643,7 +643,7 @@ impl AsmIr {
 
     pub(crate) fn inline(
         &mut self,
-        f: impl FnOnce(&mut Codegen, &Store, &SideExitLabels) + 'static,
+        f: impl FnOnce(&mut Codegen, &Store, &SideExitLabels, usize) + 'static,
     ) {
         self.inst
             .push(AsmInst::Inline(InlineProcedure { proc: Box::new(f) }));

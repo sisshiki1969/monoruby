@@ -592,7 +592,7 @@ impl JitModule {
     /// or a spill slot. Used by call-trampoline preludes (xmm_to_stack
     /// and CFunc_*) where the helper expects its argument in xmm0.
     ///
-    fn load_xmm_into_xmm0(&mut self, xmm: VirtFPReg, base: usize) {
+    pub(crate) fn load_xmm_into_xmm0(&mut self, xmm: VirtFPReg, base: usize) {
         let pool = state::PHYS_XMM_POOL;
         if xmm.0 < pool {
             let p = xmm.0 as u64 + 2;
@@ -613,7 +613,7 @@ impl JitModule {
     /// register, used by CFunc_FF_F. Pool ids resolve to xmm2..xmm15
     /// so a Phys source never aliases xmm1.
     ///
-    fn load_xmm_into_xmm1(&mut self, xmm: VirtFPReg, base: usize) {
+    pub(crate) fn load_xmm_into_xmm1(&mut self, xmm: VirtFPReg, base: usize) {
         let pool = state::PHYS_XMM_POOL;
         if xmm.0 < pool {
             let p = xmm.0 as u64 + 2;
@@ -633,7 +633,7 @@ impl JitModule {
     /// Store xmm0 (a C-call's f64 return value) into the destination
     /// `VirtFPReg`'s home — phys reg or spill slot.
     ///
-    fn store_xmm0_into_xmm(&mut self, xmm: VirtFPReg, base: usize) {
+    pub(crate) fn store_xmm0_into_xmm(&mut self, xmm: VirtFPReg, base: usize) {
         let pool = state::PHYS_XMM_POOL;
         if xmm.0 < pool {
             let p = xmm.0 as u64 + 2;

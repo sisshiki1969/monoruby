@@ -180,7 +180,7 @@ fn object_not(
         }
     } else {
         state.load(ir, recv, GP::Rdi);
-        ir.inline(|r#gen, _, _| {
+        ir.inline(|r#gen, _, _, _| {
             monoasm! { &mut r#gen.jit,
                 orq  rdi, (0x10);
                 movq rax, (TRUE_VALUE);
@@ -249,7 +249,7 @@ pub(super) fn object_object_id(
     state.load(ir, recv, GP::Rdi);
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
-    ir.inline(move |r#gen, _, _| {
+    ir.inline(move |r#gen, _, _, _| {
         monoasm! {&mut r#gen.jit,
             movq rax, (crate::executor::op::i64_to_value);
             call rax;

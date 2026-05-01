@@ -252,7 +252,7 @@ fn kernel_nil(
         }
     } else {
         state.load(ir, recv, GP::Rdi);
-        ir.inline(|r#gen, _, _| {
+        ir.inline(|r#gen, _, _, _| {
             monoasm! { &mut r#gen.jit,
                 movq rax, (FALSE_VALUE);
                 movq rsi, (TRUE_VALUE);
@@ -299,7 +299,7 @@ fn kernel_block_given(
             state.def_C(dst, Immediate::bool(b));
         }
     } else {
-        ir.inline(|r#gen, _, _| {
+        ir.inline(|r#gen, _, _, _| {
             let exit = r#gen.jit.label();
             monoasm! { &mut r#gen.jit,
                 movq rax, (FALSE_VALUE);
@@ -1672,7 +1672,7 @@ fn inline_max(
     let f2 = bb.fetch_float_for_xmm(ir, args + 1usize, deopt).enc();
     if let Some(dst) = dst {
         let fret = bb.xmm_write_enc(dst);
-        ir.inline(move |gen, _, _| {
+        ir.inline(move |gen, _, _, _| {
             monoasm!( &mut gen.jit,
                 movq xmm(fret), xmm(f1);
                 maxsd xmm(fret), xmm(f2);
@@ -1701,7 +1701,7 @@ fn inline_min(
     let f2 = bb.fetch_float_for_xmm(ir, args + 1usize, deopt).enc();
     if let Some(dst) = dst {
         let fret = bb.xmm_write_enc(dst);
-        ir.inline(move |gen, _, _| {
+        ir.inline(move |gen, _, _, _| {
             monoasm!( &mut gen.jit,
                 movq xmm(fret), xmm(f1);
                 minsd xmm(fret), xmm(f2);
@@ -1815,7 +1815,7 @@ pub fn object_send(
     let using_xmm = state.get_using_xmm();
     let error = ir.new_error(state);
     let callid = callsite.id;
-    ir.inline(move |r#gen, store, labels| {
+    ir.inline(move |r#gen, store, labels, _| {
         let error = &labels[error];
         r#gen.object_send_inline(callid, store, using_xmm, &error, no_splat);
     });
