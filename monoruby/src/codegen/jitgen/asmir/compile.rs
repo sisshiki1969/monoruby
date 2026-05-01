@@ -9,6 +9,31 @@ mod init_method;
 mod method_call;
 mod variables;
 
+///
+/// Location where a `VirtFPReg`'s value lives at code-generation
+/// time. `Phys(N)` means physical `xmm{N}` directly usable in
+/// `monoasm! { ... xmm(N) ... }`; `Spill(off)` means the 8-byte slot
+/// at `[rbp - off]`. Spill-aware codegen lowerings build per-operand
+/// asm based on this — e.g. `addsd xmm, mem` when the rhs operand is
+/// spilled, instead of forcing a scratch load.
+///
+#[derive(Debug, Clone, Copy)]
+pub(super) enum XmmLoc {
+    Phys(u64),
+    Spill(i32),
+}
+
+pub(super) fn xmm_loc(virt: VirtFPReg, base_stack_offset: usize) -> XmmLoc {
+    let pool = super::state::PHYS_XMM_POOL;
+    if virt.0 < pool {
+        XmmLoc::Phys(virt.0 as u64 + 2)
+    } else {
+        let n = virt.0 - pool;
+        let off = (base_stack_offset as i32) - 24 + 8 * (n as i32);
+        XmmLoc::Spill(off)
+    }
+}
+
 extern "C" fn extend_ivar(rvalue: &mut RValue, heap_len: usize) {
     rvalue.extend_ivar(heap_len);
 }
@@ -180,8 +205,12 @@ impl Codegen {
                 );
             }
 
-            AsmInst::XmmMove(l, r) => self.xmm_mov(l, r),
-            AsmInst::XmmSwap(l, r) => self.xmm_swap(l, r),
+            AsmInst::XmmMove(src, dst) => {
+                self.emit_xmm_move(src, dst, frame.base_stack_offset);
+            }
+            AsmInst::XmmSwap(l, r) => {
+                self.emit_xmm_swap(l, r, frame.base_stack_offset);
+            }
             AsmInst::XmmBinOp {
                 kind,
                 binary_xmm,
@@ -1115,6 +1144,67 @@ impl Codegen {
             movq rax, (crate::runtime::jit_generic_set_arguments);
             call rax;
             addq rsp, (offset);
+        }
+    }
+
+    ///
+    /// Spill-aware xmm-to-xmm move. Each operand may live in a phys
+    /// xmm or a spill slot; we emit the cheapest form for each
+    /// combination and avoid the round-trip through xmm0 that the
+    /// generic `expand_spills` wrapping would otherwise produce.
+    ///
+    fn emit_xmm_move(&mut self, src: VirtFPReg, dst: VirtFPReg, base: usize) {
+        if src == dst {
+            return;
+        }
+        match (xmm_loc(src, base), xmm_loc(dst, base)) {
+            (XmmLoc::Phys(s), XmmLoc::Phys(d)) => monoasm!( &mut self.jit,
+                movq xmm(d), xmm(s);
+            ),
+            (XmmLoc::Phys(s), XmmLoc::Spill(d_off)) => monoasm!( &mut self.jit,
+                movq [rbp - (d_off)], xmm(s);
+            ),
+            (XmmLoc::Spill(s_off), XmmLoc::Phys(d)) => monoasm!( &mut self.jit,
+                movq xmm(d), [rbp - (s_off)];
+            ),
+            (XmmLoc::Spill(s_off), XmmLoc::Spill(d_off)) => monoasm!( &mut self.jit,
+                movq xmm0, [rbp - (s_off)];
+                movq [rbp - (d_off)], xmm0;
+            ),
+        }
+    }
+
+    ///
+    /// Spill-aware xmm swap. When both operands are spilled we swap
+    /// the two memory slots through xmm0+xmm1 (avoiding rax/rcx so
+    /// nothing in the surrounding code's GP state is disturbed).
+    ///
+    fn emit_xmm_swap(&mut self, l: VirtFPReg, r: VirtFPReg, base: usize) {
+        if l == r {
+            return;
+        }
+        match (xmm_loc(l, base), xmm_loc(r, base)) {
+            (XmmLoc::Phys(lp), XmmLoc::Phys(rp)) => monoasm!( &mut self.jit,
+                movq xmm0, xmm(lp);
+                movq xmm(lp), xmm(rp);
+                movq xmm(rp), xmm0;
+            ),
+            (XmmLoc::Phys(lp), XmmLoc::Spill(r_off)) => monoasm!( &mut self.jit,
+                movq xmm0, [rbp - (r_off)];
+                movq [rbp - (r_off)], xmm(lp);
+                movq xmm(lp), xmm0;
+            ),
+            (XmmLoc::Spill(l_off), XmmLoc::Phys(rp)) => monoasm!( &mut self.jit,
+                movq xmm0, [rbp - (l_off)];
+                movq [rbp - (l_off)], xmm(rp);
+                movq xmm(rp), xmm0;
+            ),
+            (XmmLoc::Spill(l_off), XmmLoc::Spill(r_off)) => monoasm!( &mut self.jit,
+                movq xmm0, [rbp - (l_off)];
+                movq xmm1, [rbp - (r_off)];
+                movq [rbp - (r_off)], xmm0;
+                movq [rbp - (l_off)], xmm1;
+            ),
         }
     }
 }

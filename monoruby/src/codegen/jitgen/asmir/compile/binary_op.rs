@@ -419,34 +419,6 @@ impl Codegen {
     }
 }
 
-///
-/// Location where a `VirtFPReg`'s value lives at code-generation
-/// time. `Phys(N)` means physical `xmm{N}` directly usable in
-/// `monoasm! { ... xmm(N) ... }`; `Spill(off)` means the 8-byte slot
-/// at `[rbp - off]`. Spill-aware codegen lowerings build per-operand
-/// asm based on this — for instance an `addsd xmm, mem` form when
-/// the rhs operand is spilled, instead of forcing a scratch load.
-///
-#[derive(Debug, Clone, Copy)]
-pub(super) enum XmmLoc {
-    Phys(u64),
-    #[allow(dead_code)]
-    Spill(i32),
-}
-
-pub(super) fn xmm_loc(virt: VirtFPReg, base_stack_offset: usize) -> XmmLoc {
-    let pool = super::super::super::state::PHYS_XMM_POOL;
-    if virt.0 < pool {
-        XmmLoc::Phys(virt.0 as u64 + 2)
-    } else {
-        let n = virt.0 - pool;
-        let off = (base_stack_offset as i32) - 24 + 8 * (n as i32);
-        XmmLoc::Spill(off)
-    }
-}
-
-///
-/// Location where a `VirtFPReg`'s value lives at code-generation
 macro_rules! cmp_main {
     ($op:ident) => {
         paste! {
