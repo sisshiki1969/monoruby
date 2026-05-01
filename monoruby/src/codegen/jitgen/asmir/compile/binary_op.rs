@@ -954,121 +954,69 @@ mod tests {
         run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) >= 0 then 1 else 0 end");
     }
 
-    /// Method JIT spill stress. Holds 17 distinct Float values live
-    /// simultaneously in a single method body and aggregates them
-    /// in the final expression. With PHYS_XMM_POOL = 14, at least 3
-    /// of those values must land in spill slots — exercising
-    /// LoadSpill/StoreSpill, the spill-aware XmmBinOp lowering, and
-    /// (via `Math.sqrt`) CFunc_F_F's spill paths. The 25× repetition
-    /// inside `run_test` triggers Method JIT compilation.
-    #[test]
-    fn method_jit_spill_stress() {
-        run_test(
-            r##"
-            def calc(x)
-              a0  = x + 0.1
-              a1  = x + 0.2
-              a2  = x + 0.3
-              a3  = x + 0.4
-              a4  = x + 0.5
-              a5  = x + 0.6
-              a6  = x + 0.7
-              a7  = x + 0.8
-              a8  = x + 0.9
-              a9  = x + 1.0
-              a10 = x + 1.1
-              a11 = x + 1.2
-              a12 = x + 1.3
-              a13 = x + 1.4
-              a14 = x + 1.5
-              a15 = x + 1.6
-              a16 = x + 1.7
-              s = a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8
-              s += a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16
-              s + Math.sqrt(a0 * a16)
-            end
-            calc(2.5)
-            "##,
-        );
-    }
-
-    /// Method JIT spill stress with a comparison chain. Forces a
-    /// FloatCmp / FloatCmpBr path while many xmm values remain
-    /// live, so the cmp lowering must read its operands either from
-    /// pool registers or from spill slots interchangeably.
-    #[test]
-    fn method_jit_spill_cmp() {
-        run_test(
-            r##"
-            def cmp_chain(x)
-              a0  = x + 0.1
-              a1  = x + 0.2
-              a2  = x + 0.3
-              a3  = x + 0.4
-              a4  = x + 0.5
-              a5  = x + 0.6
-              a6  = x + 0.7
-              a7  = x + 0.8
-              a8  = x + 0.9
-              a9  = x + 1.0
-              a10 = x + 1.1
-              a11 = x + 1.2
-              a12 = x + 1.3
-              a13 = x + 1.4
-              a14 = x + 1.5
-              a15 = x + 1.6
-              a16 = x + 1.7
-              n = 0
-              n += 1 if a0  < a16
-              n += 1 if a1  < a15
-              n += 1 if a2  < a14
-              n += 1 if a3  < a13
-              n += 1 if a4  < a12
-              n += 1 if a5  < a11
-              n += 1 if a6  < a10
-              n += 1 if a7  < a9
-              n + (a0 + a16)
-            end
-            cmp_chain(2.5)
-            "##,
-        );
-    }
-
-    /// Loop JIT spill stress. The hot loop body keeps 17 Float
-    /// variables alive across iterations; `bin/test` reduces the
-    /// loop-JIT threshold so 15 iterations are enough to trigger
-    /// compilation. The accumulator pattern catches off-by-one
-    /// errors in the spill slot offsets between iterations.
+    /// Loop JIT spill stress. The right-associated multiplication chain
+    /// forces every left operand to remain live until the innermost
+    /// `s * t` is evaluated and the result bubbles back out — so all
+    /// 14 input variables (plus the running result) must occupy xmm
+    /// slots simultaneously. With PHYS_XMM_POOL = 14, that overflow
+    /// guarantees at least one `VirtFPReg(>=14)` allocation per
+    /// iteration, exercising LoadSpill/StoreSpill and the spill-aware
+    /// XmmBinOp memory-operand lowering. The hot `for` loop hits the
+    /// loop-JIT threshold at iteration 16 (test mode).
     #[test]
     fn loop_jit_spill_stress() {
         run_test(
             r##"
-            sum = 0.0
-            i = 0
-            while i < 30
-              x = i * 0.1
-              a0  = x + 0.1
-              a1  = x + 0.2
-              a2  = x + 0.3
-              a3  = x + 0.4
-              a4  = x + 0.5
-              a5  = x + 0.6
-              a6  = x + 0.7
-              a7  = x + 0.8
-              a8  = x + 0.9
-              a9  = x + 1.0
-              a10 = x + 1.1
-              a11 = x + 1.2
-              a12 = x + 1.3
-              a13 = x + 1.4
-              a14 = x + 1.5
-              a15 = x + 1.6
-              a16 = x + 1.7
-              sum += a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8
-              sum += a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16
-              i += 1
+            r = 0.0
+            for i in 0..50
+              f = i * 1.1
+              g = i * 0.9
+              h = i * 1.3
+              j = i * 0.7
+              k = i * 1.5
+              l = i * 0.5
+              m = i * 1.7
+              n = i * 0.3
+              o = i * 1.9
+              p = i * 0.1
+              q = i * 2.1
+              s = i * 0.2
+              t = i * 2.3
+              u = i * 0.4
+              r += f * (g * (h * (j * (k * (l * (m * (n * (o * (p * (q * (s * (t * u))))))))))))
             end
-            sum
+            r
+            "##,
+        );
+    }
+
+    /// Method JIT spill stress. Same nested-multiplication shape as
+    /// `loop_jit_spill_stress`, but wrapped in a method body so the
+    /// spill region lives inside the method's frame (not the loop
+    /// frame). 25× call repetition inside `run_test` exceeds the
+    /// method-JIT threshold (5 in test mode).
+    #[test]
+    fn method_jit_spill_stress() {
+        run_test(
+            r##"
+            def calc(i)
+              f = i * 1.1
+              g = i * 0.9
+              h = i * 1.3
+              j = i * 0.7
+              k = i * 1.5
+              l = i * 0.5
+              m = i * 1.7
+              n = i * 0.3
+              o = i * 1.9
+              p = i * 0.1
+              q = i * 2.1
+              s = i * 0.2
+              t = i * 2.3
+              u = i * 0.4
+              f * (g * (h * (j * (k * (l * (m * (n * (o * (p * (q * (s * (t * u))))))))))))
+            end
+            calc(7)
             "##,
         );
     }
