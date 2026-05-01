@@ -228,16 +228,40 @@ impl Codegen {
             },
 
             AsmInst::F64ToXmm(f, x) => {
-                let f = self.jit.const_f64(f);
-                monoasm!( &mut self.jit,
-                    movq  xmm(x.enc()), [rip + f];
-                );
+                let f_const = self.jit.const_f64(f);
+                match xmm_loc(x, frame.base_stack_offset) {
+                    XmmLoc::Phys(p) => monoasm!( &mut self.jit,
+                        movq xmm(p), [rip + f_const];
+                    ),
+                    XmmLoc::Spill(off) => monoasm!( &mut self.jit,
+                        movq xmm0, [rip + f_const];
+                        movq [rbp - (off)], xmm0;
+                    ),
+                }
             }
             AsmInst::FixnumToXmm(r, x) => {
-                self.integer_val_to_f64(r, x);
+                let (work, spill_off) = match xmm_loc(x, frame.base_stack_offset) {
+                    XmmLoc::Phys(p) => (p, None),
+                    XmmLoc::Spill(off) => (0u64, Some(off)),
+                };
+                self.integer_val_to_f64(r, work);
+                if let Some(off) = spill_off {
+                    monoasm!( &mut self.jit,
+                        movq [rbp - (off)], xmm(work);
+                    );
+                }
             }
             AsmInst::FloatToXmm(reg, x, deopt) => {
-                self.float_to_f64(reg, x, &labels[deopt]);
+                let (work, spill_off) = match xmm_loc(x, frame.base_stack_offset) {
+                    XmmLoc::Phys(p) => (p, None),
+                    XmmLoc::Spill(off) => (0u64, Some(off)),
+                };
+                self.float_to_f64(reg, work, &labels[deopt]);
+                if let Some(off) = spill_off {
+                    monoasm!( &mut self.jit,
+                        movq [rbp - (off)], xmm(work);
+                    );
+                }
             }
             AsmInst::I64ToBoth(i, r, x) => {
                 let f = self.jit.const_f64(i as f64);

@@ -1152,15 +1152,15 @@ impl Codegen {
     /// - R(*reg*): Value
     ///
     /// ### out
-    /// - xmm(*xmm*)
+    /// - xmm(*dst*)
     ///
     /// ### destroy
     /// - R(*reg*)
     ///
-    fn integer_val_to_f64(&mut self, reg: GP, xmm: VirtFPReg) {
+    fn integer_val_to_f64(&mut self, reg: GP, dst: u64) {
         monoasm!(&mut self.jit,
             sarq R(reg as _), 1;
-            cvtsi2sdq xmm(xmm.enc()), R(reg as _);
+            cvtsi2sdq xmm(dst), R(reg as _);
         );
     }
 

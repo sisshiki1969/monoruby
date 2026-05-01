@@ -854,7 +854,7 @@ fn float_test2() {
     assume_int_to_f64:
         pushq rbp;
     );
-    r#gen.integer_val_to_f64(GP::Rdi, x);
+    r#gen.integer_val_to_f64(GP::Rdi, x.enc());
     monoasm!(&mut r#gen.jit,
         movq xmm0, xmm(x.enc());
         popq rbp;
