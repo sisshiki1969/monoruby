@@ -80,12 +80,15 @@ impl<'a> JitContext<'a> {
     }
 
     pub(super) fn load_dynvar(&self, state: &AbstractState, ir: &mut AsmIr, src: DynVar) {
-        if let Some((spec_ids, not_captured)) = self.outer_specialized_ids(state, src.outer)
+        if let Some((spec_ids, extra, not_captured)) = self.outer_specialized_ids(state, src.outer)
             && not_captured
         {
             assert!(not_captured);
             ir.push(AsmInst::LoadDynVarSpecialized {
-                offset: DynVarOffset::Hint(spec_ids),
+                offset: DynVarOffset::Hint {
+                    ids: spec_ids,
+                    extra,
+                },
                 reg: src.reg,
             });
         } else {
@@ -102,12 +105,15 @@ impl<'a> JitContext<'a> {
     ) {
         let r = GP::Rdi;
         state.load(ir, src, r);
-        if let Some((spec_ids, not_captured)) = self.outer_specialized_ids(state, dst.outer)
+        if let Some((spec_ids, extra, not_captured)) = self.outer_specialized_ids(state, dst.outer)
             && not_captured
         {
             assert!(not_captured);
             ir.push(AsmInst::StoreDynVarSpecialized {
-                offset: DynVarOffset::Hint(spec_ids),
+                offset: DynVarOffset::Hint {
+                    ids: spec_ids,
+                    extra,
+                },
                 dst: dst.reg,
                 src: r,
             });

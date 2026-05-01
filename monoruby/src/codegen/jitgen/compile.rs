@@ -617,9 +617,12 @@ impl<'a> JitContext<'a> {
             TraceIr::MethodRet(ret) => {
                 assert!(state.no_capture_guard());
                 state.load(ir, ret, GP::Rax);
-                if let Some(spec_ids) = self.method_caller_specialized_ids() {
+                if let Some((spec_ids, extra)) = self.method_caller_specialized_ids() {
                     ir.push(AsmInst::MethodRetSpecialized {
-                        rbp_offset: DynVarOffset::Hint(spec_ids),
+                        rbp_offset: DynVarOffset::Hint {
+                            ids: spec_ids,
+                            extra,
+                        },
                     });
                 } else {
                     ir.push(AsmInst::MethodRet(pc));
@@ -631,9 +634,12 @@ impl<'a> JitContext<'a> {
             TraceIr::BlockBreak(ret) => {
                 assert!(state.no_capture_guard());
                 state.load(ir, ret, GP::Rax);
-                if let Some(spec_ids) = self.iter_caller_specialized_ids() {
+                if let Some((spec_ids, extra)) = self.iter_caller_specialized_ids() {
                     ir.push(AsmInst::BlockBreakSpecialized {
-                        rbp_offset: DynVarOffset::Hint(spec_ids),
+                        rbp_offset: DynVarOffset::Hint {
+                            ids: spec_ids,
+                            extra,
+                        },
                     });
                 } else {
                     ir.push(AsmInst::BlockBreak(pc));

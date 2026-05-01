@@ -290,9 +290,22 @@ pub(super) struct JitStackFrame {
     return_context: HashMap<usize, ReturnState>,
 
     ///
-    /// Machine stack offset for this frame.
+    /// Machine stack offset for this frame. May be temporarily bumped
+    /// by [`JitContext::specialized_compile`] for the duration of a
+    /// nested specialized call (`+= using_xmm.offset()` then `-=`),
+    /// so this is the *dynamic* value at any moment. The base value
+    /// is preserved in [`Self::base_stack_offset`].
     ///
     stack_offset: usize,
+
+    ///
+    /// Initial (immutable) value of [`Self::stack_offset`] at frame
+    /// creation. The dynamic field gets `+=`/`-=` adjustments inside
+    /// `specialized_compile`; this snapshot lets emit-time helpers
+    /// recover the bump (`stack_offset - base_stack_offset`) that
+    /// [`JitContext::specialized_frame_sizes`] alone does not capture.
+    ///
+    base_stack_offset: usize,
 
     ///
     /// Unique identifier assigned by [`JitContext::push_frame`]. After
@@ -381,6 +394,7 @@ impl JitStackFrame {
             backedge_map: HashMap::default(),
             return_context: HashMap::default(),
             stack_offset,
+            base_stack_offset: stack_offset,
             // Sentinel — overwritten by [`JitContext::push_frame`].
             specialized_id: SpecializedId(usize::MAX),
         }
@@ -399,6 +413,7 @@ impl JitStackFrame {
             backedge_map: HashMap::default(),
             return_context: HashMap::default(),
             stack_offset: self.stack_offset,
+            base_stack_offset: self.base_stack_offset,
             // Preserve the source frame's id — the dup is used by
             // [`JitContext::loop_analysis`] which performs read-only
             // walks over a snapshot of the stack and never reaches
@@ -758,25 +773,27 @@ impl<'a> JitContext<'a> {
     ///
     /// Hint variant of stack-offset computation for `LoadDynVar` /
     /// `StoreDynVar`. Returns the chain of [`SpecializedId`]s for
-    /// frames `[outer..current)` so the pre-codegen resolve pass can
-    /// compute the concrete offset from
-    /// [`Self::specialized_frame_sizes`] once every frame's final
-    /// size is known. The boolean mirrors the `not_captured` flag
-    /// from `state.outer_no_capture_guard`.
+    /// frames `[outer..current)` together with `extra` — the sum
+    /// of the dynamic `stack_offset - base_stack_offset` per frame
+    /// at *this* AsmIr emission time. The pre-codegen resolve pass
+    /// computes `sum(map[id]) + extra`. The boolean mirrors the
+    /// `not_captured` flag from `state.outer_no_capture_guard`.
     ///
     pub(super) fn outer_specialized_ids(
         &self,
         state: &AbstractState,
         outer: usize,
-    ) -> Option<(Vec<SpecializedId>, bool)> {
+    ) -> Option<(Vec<SpecializedId>, usize, bool)> {
         let not_captured = state.outer_no_capture_guard(outer)?;
         let outer = self.outer_pos(outer)?;
         let end = self.stack_frame.len() - 1;
-        let ids = self.stack_frame[outer..end]
+        let chain = &self.stack_frame[outer..end];
+        let ids = chain.iter().map(|f| f.specialized_id).collect();
+        let extra = chain
             .iter()
-            .map(|f| f.specialized_id)
-            .collect();
-        Some((ids, not_captured))
+            .map(|f| f.stack_offset - f.base_stack_offset)
+            .sum();
+        Some((ids, extra, not_captured))
     }
 
     ///
@@ -838,8 +855,8 @@ impl<'a> JitContext<'a> {
             | AsmInst::BlockBreakSpecialized {
                 rbp_offset: offset, ..
             } => {
-                if let DynVarOffset::Hint(ids) = offset {
-                    let resolved = self.resolve_specialized_id_chain(ids);
+                if let DynVarOffset::Hint { ids, extra } = offset {
+                    let resolved = self.resolve_specialized_id_chain(ids) + *extra;
                     *offset = DynVarOffset::Concrete(resolved);
                 }
             }
@@ -869,42 +886,46 @@ impl<'a> JitContext<'a> {
 
     ///
     /// Hint-form chain of [`SpecializedId`]s between the method
-    /// caller and the current frame. Defers the byte sum to the
-    /// pre-codegen resolve pass.
+    /// caller and the current frame. Returns `(ids, extra)` where
+    /// `extra` is the live `stack_offset - base_stack_offset` sum
+    /// captured at AsmIr emission time — see
+    /// [`Self::outer_specialized_ids`] for the rationale.
     ///
-    pub(super) fn method_caller_specialized_ids(&self) -> Option<Vec<SpecializedId>> {
+    pub(super) fn method_caller_specialized_ids(&self) -> Option<(Vec<SpecializedId>, usize)> {
         let caller = self.method_caller_pos()?;
         let begin = caller + 1;
         let end = self.stack_frame.len() - 1;
         if self.check_exception_handler(begin, end) {
             return None;
         }
-        Some(
-            self.stack_frame[begin..end]
-                .iter()
-                .map(|f| f.specialized_id)
-                .collect(),
-        )
+        let chain = &self.stack_frame[begin..end];
+        let ids = chain.iter().map(|f| f.specialized_id).collect();
+        let extra = chain
+            .iter()
+            .map(|f| f.stack_offset - f.base_stack_offset)
+            .sum();
+        Some((ids, extra))
     }
 
     ///
     /// Hint-form chain of [`SpecializedId`]s between the iter caller
-    /// and the current frame. Defers the byte sum to the pre-codegen
-    /// resolve pass.
+    /// and the current frame. Returns `(ids, extra)` — see
+    /// [`Self::method_caller_specialized_ids`].
     ///
-    pub(super) fn iter_caller_specialized_ids(&self) -> Option<Vec<SpecializedId>> {
+    pub(super) fn iter_caller_specialized_ids(&self) -> Option<(Vec<SpecializedId>, usize)> {
         let caller = self.iter_caller_pos()?;
         let begin = caller + 1;
         let end = self.stack_frame.len() - 1;
         if self.check_exception_handler(begin, end) {
             return None;
         }
-        Some(
-            self.stack_frame[begin..end]
-                .iter()
-                .map(|f| f.specialized_id)
-                .collect(),
-        )
+        let chain = &self.stack_frame[begin..end];
+        let ids = chain.iter().map(|f| f.specialized_id).collect();
+        let extra = chain
+            .iter()
+            .map(|f| f.stack_offset - f.base_stack_offset)
+            .sum();
+        Some((ids, extra))
     }
 
     pub(super) fn get_pc(&self, i: BcIndex) -> BytecodePtr {

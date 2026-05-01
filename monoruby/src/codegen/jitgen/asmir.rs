@@ -646,16 +646,31 @@ impl AsmIr {
 /// break ([`AsmInst::MethodRetSpecialized`] /
 /// [`AsmInst::BlockBreakSpecialized`]).
 ///
-/// Pass 1 emits `Hint(ids)` — the chain of [`SpecializedId`]s for
-/// the frames involved. The pre-codegen resolve pass rewrites each
-/// `Hint` into `Concrete(byte_offset)` by summing the recorded frame
-/// sizes in
-/// [`super::context::JitContext::specialized_frame_sizes`]. Code
-/// generation asserts `Concrete(_)` and panics on a stray `Hint`.
+/// Pass 1 emits `Hint { ids, extra }`:
+///
+/// * `ids` — the chain of [`SpecializedId`]s. Resolved at the
+///   pre-codegen pass into `sum(map[id])` — the frame *base* sizes.
+/// * `extra` — bytes captured at AsmIr emission time that the
+///   per-frame map cannot reproduce after pop. Currently this is
+///   the cumulative `using_xmm.offset()` bump applied by every
+///   active specialized call up the chain (each call temporarily
+///   `+=`s its `using_xmm.offset()` to the caller frame's
+///   `stack_offset`; we capture `current - base` for every frame in
+///   the chain and sum the differences). Once
+///   [`JitContext::specialized_compile`] stops doing the dynamic
+///   `+=`/`-=` (e.g. when VirtFPReg-aware spill replaces
+///   `using_xmm`), `extra` will be 0.
+///
+/// The pre-codegen resolve pass rewrites each `Hint` into
+/// `Concrete(sum(map[id]) + extra)`. Code generation asserts
+/// `Concrete(_)` and panics on a stray `Hint`.
 ///
 #[derive(Debug, Clone)]
 pub(crate) enum DynVarOffset {
-    Hint(Vec<super::context::SpecializedId>),
+    Hint {
+        ids: Vec<super::context::SpecializedId>,
+        extra: usize,
+    },
     Concrete(usize),
 }
 
@@ -663,9 +678,9 @@ impl DynVarOffset {
     pub(crate) fn unwrap_concrete(&self) -> usize {
         match self {
             DynVarOffset::Concrete(o) => *o,
-            DynVarOffset::Hint(ids) => panic!(
-                "DynVarOffset::Hint({:?}) reached code generation — resolve pass did not run",
-                ids
+            DynVarOffset::Hint { ids, extra } => panic!(
+                "DynVarOffset::Hint(ids={:?}, extra={}) reached code generation — resolve pass did not run",
+                ids, extra
             ),
         }
     }
