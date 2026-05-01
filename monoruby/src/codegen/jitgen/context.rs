@@ -13,6 +13,19 @@ use super::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct SpecializedId(pub(super) usize);
 
+///
+/// Per-frame stack-size pair recorded in
+/// [`JitContext::specialized_frame_sizes`]. `total` is the dynamic
+/// `stack_offset` at pop time (`base` plus any JIT-managed spill);
+/// `base` is the immutable value snapshotted at frame creation. The
+/// difference is what the Loop-JIT-side rsp bump consumes.
+///
+#[derive(Debug, Clone, Copy)]
+pub(super) struct FrameSizes {
+    pub(super) total: usize,
+    pub(super) base: usize,
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum JitType {
     /// JIT for method / block.
@@ -134,6 +147,15 @@ pub(super) struct AsmInfo {
     pub(super) specialized_methods: Vec<SpecializeInfo>,
 
     ///
+    /// For `JitType::Loop`, the bytes the JIT itself adds to `rsp`
+    /// at loop entry (matching the `addq rsp, _` emitted at every
+    /// side-exit handler). Populated by the pre-codegen resolve
+    /// pass; `0` for non-Loop frames or Loop frames with no
+    /// JIT-managed spill space.
+    ///
+    pub(super) loop_jit_spill_bytes: usize,
+
+    ///
     /// Source map for bytecode index and machine code position.
     ///
     pub(super) sourcemap: Vec<(BcIndex, usize)>,
@@ -157,6 +179,7 @@ impl AsmInfo {
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
             specialized_methods: vec![],
+            loop_jit_spill_bytes: 0,
             ivar_heap_accessed: false,
             sourcemap: vec![],
             start_codepos: 0,
@@ -165,10 +188,6 @@ impl AsmInfo {
 
     pub(super) fn is_specialized(&self) -> bool {
         matches!(self.jit_type, JitType::Specialized { .. })
-    }
-
-    pub(super) fn is_loop_jit(&self) -> bool {
-        matches!(self.jit_type, JitType::Loop(_))
     }
 
     #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
@@ -385,6 +404,7 @@ impl JitStackFrame {
                 inline_bridges: HashMap::default(),
                 ivar_heap_accessed: false,
                 specialized_methods: vec![],
+                loop_jit_spill_bytes: 0,
                 sourcemap: vec![],
                 start_codepos: 0,
             },
@@ -483,13 +503,14 @@ pub(crate) struct JitContext<'a> {
 
     ///
     /// Map from each frame's [`SpecializedId`] to its finalised
-    /// `stack_offset` (in bytes). Populated when [`Self::pop_frame`]
-    /// hands the frame back to the caller — at that point the frame's
-    /// machine-stack size is known and stable. Read by
-    /// [`Self::resolve_dyn_var_offsets`] before code generation to
-    /// turn `DynVarOffset::Hint` hints into concrete byte offsets.
+    /// stack-size pair (`total` = base + spill, `base` = invariant
+    /// from frame creation). Populated when [`Self::pop_frame`] hands
+    /// the frame back to the caller. Read by
+    /// [`Self::resolve_dyn_var_offsets`] before code generation:
+    /// `total` resolves DynVar / chain hints and method-JIT
+    /// prologues, `total - base` resolves Loop-JIT rsp bumps.
     ///
-    specialized_frame_sizes: HashMap<SpecializedId, usize>,
+    specialized_frame_sizes: HashMap<SpecializedId, FrameSizes>,
 }
 
 impl<'a> JitContext<'a> {
@@ -628,16 +649,27 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn pop_frame(&mut self) -> JitStackFrame {
         let mut frame = self.stack_frame.pop().unwrap();
-        // STRESS TEST: bump every frame's recorded `stack_offset` by
-        // 16. For `Entry` / `Specialized`, the matching prologue
-        // `subq rsp, _` automatically grows via `PrologueOffset::Hint`;
-        // for `Loop`, the prologue is owned by the invoker so the
-        // JIT instead emits `subq rsp, 16` at its loop-entry hook
-        // and `addq rsp, 16` at every side-exit (see `traceir_to_asmir`
-        // and `side_exit_with_label`).
-        frame.stack_offset += 16;
-        self.specialized_frame_sizes
-            .insert(frame.specialized_id, frame.stack_offset);
+        // Record the finalised frame sizes for the resolve pass.
+        // After this point, `frame.stack_offset` will not be modified
+        // (the `+=`/`-=` adjustments inside `specialized_compile`
+        // are always paired around the recursive `traceir_to_asmir`
+        // call), so this snapshot is the canonical pair for the id.
+        self.specialized_frame_sizes.insert(
+            frame.specialized_id,
+            FrameSizes {
+                total: frame.stack_offset,
+                base: frame.base_stack_offset,
+            },
+        );
+        // Stamp the JIT-owned spill bytes onto the AsmInfo so that
+        // `side_exit_with_label` can emit the matching `addq rsp, _`
+        // without re-walking the AsmIr. Method / specialized frames
+        // restore rsp implicitly via `leave; ret`, so we leave it
+        // at `0` for them.
+        if matches!(frame.asm_info.jit_type, JitType::Loop(_)) {
+            frame.asm_info.loop_jit_spill_bytes =
+                frame.stack_offset - frame.base_stack_offset;
+        }
         frame
     }
 
@@ -805,19 +837,21 @@ impl<'a> JitContext<'a> {
 
     ///
     /// Resolve a `DynVarOffset::Hint` chain by summing the recorded
-    /// frame sizes. Used by [`Self::resolve_dyn_var_offsets`].
+    /// frame `total` sizes. Used by [`Self::resolve_dyn_var_offsets`].
     ///
     pub(super) fn resolve_specialized_id_chain(&self, ids: &[SpecializedId]) -> usize {
         ids.iter()
-            .map(|id| {
-                *self.specialized_frame_sizes.get(id).unwrap_or_else(|| {
-                    panic!(
-                        "DynVarOffset hint references {:?} but no frame size was recorded",
-                        id
-                    )
-                })
-            })
+            .map(|id| self.frame_sizes_or_panic(*id).total)
             .sum()
+    }
+
+    fn frame_sizes_or_panic(&self, id: SpecializedId) -> FrameSizes {
+        *self.specialized_frame_sizes.get(&id).unwrap_or_else(|| {
+            panic!(
+                "frame-size hint references {:?} but no frame sizes were recorded",
+                id
+            )
+        })
     }
 
     ///
@@ -871,20 +905,23 @@ impl<'a> JitContext<'a> {
                 prologue_offset, ..
             } => {
                 if let PrologueOffset::Hint(id) = prologue_offset {
-                    let total = *self.specialized_frame_sizes.get(id).unwrap_or_else(|| {
-                        panic!(
-                            "PrologueOffset hint references {:?} but no frame size was recorded",
-                            id
-                        )
-                    });
-                    // The recorded `stack_offset` includes the iseq's
+                    let sizes = self.frame_sizes_or_panic(*id);
+                    // The recorded `total` includes the iseq's
                     // bookkeeping `+ 16` and the `CONTINUATION_FRAME_SIZE`
                     // (= 16). The prologue subtracts only the locals area,
-                    // so subtract the 32-byte overhead. With future
-                    // VirtFPReg spill slots, both grow together, so the
-                    // offset constant stays correct.
-                    let prologue_bytes = total - (CONTINUATION_FRAME_SIZE + 16);
+                    // so subtract the 32-byte overhead. Spill slots that
+                    // grow `total` flow through automatically.
+                    let prologue_bytes = sizes.total - (CONTINUATION_FRAME_SIZE + 16);
                     *prologue_offset = PrologueOffset::Concrete(prologue_bytes);
+                }
+            }
+            AsmInst::LoopJitRspBump { offset } => {
+                if let LoopRspOffset::Hint(id) = offset {
+                    let sizes = self.frame_sizes_or_panic(*id);
+                    // Loop JIT lives inside an invoker-owned
+                    // prologue, so the JIT-managed bump is exactly
+                    // the spill region grown on top of `base`.
+                    *offset = LoopRspOffset::Concrete(sizes.total - sizes.base);
                 }
             }
             _ => {}

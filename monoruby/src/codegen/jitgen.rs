@@ -750,9 +750,9 @@ impl Codegen {
         pc: BytecodePtr,
         wb: &WriteBack,
         entry: DestLabel,
-        is_loop_jit: bool,
+        loop_jit_spill_bytes: usize,
     ) {
-        self.side_exit_with_label(pc, wb, entry, false, is_loop_jit)
+        self.side_exit_with_label(pc, wb, entry, false, loop_jit_spill_bytes)
     }
 
     ///
@@ -763,9 +763,9 @@ impl Codegen {
         pc: BytecodePtr,
         wb: &WriteBack,
         entry: DestLabel,
-        is_loop_jit: bool,
+        loop_jit_spill_bytes: usize,
     ) {
-        self.side_exit_with_label(pc, wb, entry, true, is_loop_jit)
+        self.side_exit_with_label(pc, wb, entry, true, loop_jit_spill_bytes)
     }
 
     ///
@@ -780,19 +780,20 @@ impl Codegen {
         wb: &WriteBack,
         entry: DestLabel,
         _is_evict: bool,
-        is_loop_jit: bool,
+        loop_jit_spill_bytes: usize,
     ) {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(entry);
-        // STRESS TEST: undo the +16 rsp bump that Loop JIT applied
-        // at its entry (see `traceir_to_asmir`'s `ir.reg_sub(GP::Rsp,
-        // 16)` for Loop-typed frames). Other JIT types restore rsp
-        // implicitly via their `leave; ret` epilogue, so the
-        // adjustment is Loop-specific.
-        if is_loop_jit {
+        // Undo the rsp bump that Loop JIT applied at its entry (see
+        // `AsmInst::LoopJitRspBump`). Method / specialized JITs
+        // restore rsp implicitly via their `leave; ret` epilogue, so
+        // the adjustment is Loop-specific. `loop_jit_spill_bytes`
+        // is `0` for non-Loop frames or Loop frames without spill,
+        // matching the entry-side `subq rsp, _` exactly.
+        if loop_jit_spill_bytes > 0 {
             monoasm!( &mut self.jit,
-                addq rsp, 16;
+                addq rsp, (loop_jit_spill_bytes as i32);
             );
         }
         self.gen_write_back_for_deopt(wb);

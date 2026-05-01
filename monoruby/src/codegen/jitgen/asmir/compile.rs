@@ -41,6 +41,14 @@ impl Codegen {
             } => {
                 self.init_func(&info, prologue_offset.unwrap_concrete());
             }
+            AsmInst::LoopJitRspBump { offset } => {
+                let bytes = offset.unwrap_concrete();
+                if bytes > 0 {
+                    monoasm! { &mut self.jit,
+                        subq rsp, (bytes as i32);
+                    }
+                }
+            }
             AsmInst::Unreachable => {
                 monoasm!( &mut self.jit,
                     movq rax, (unreachable);

@@ -35,13 +35,15 @@ impl<'a> JitContext<'a> {
             ir.self2reg(GP::Rdi);
             ir.push(AsmInst::GuardClass(GP::Rdi, self.self_class(), deopt));
             ir.push(AsmInst::Preparation);
-            // STRESS TEST: bump rsp by 16 at Loop JIT entry to mirror
-            // the +16 stress applied to the recorded frame size in
-            // `pop_frame`. Each side-exit / deopt path restores it
-            // (see `side_exit_with_label`'s `addq rsp, 16` for
-            // Loop-typed frames). Future VirtFPReg spill replaces
-            // this hardcoded 16 with the resolved spill size.
-            ir.reg_sub(GP::Rsp, 16);
+            // Loop JIT runs inside an existing invoker / interpreter
+            // frame, so its prologue isn't JIT-emitted. Any
+            // JIT-managed spill space (e.g. future VirtFPReg spill
+            // slots) needs its own `subq rsp, _` here, paired with
+            // an `addq rsp, _` of the same value at every deopt /
+            // side-exit handler. The size is resolved by the
+            // pre-codegen pass from this frame's
+            // `stack_offset - base_stack_offset`.
+            ir.loop_jit_rsp_bump(LoopRspOffset::Hint(self.current_frame_id()));
         };
 
         //assert!(self.ir.is_empty());

@@ -210,6 +210,10 @@ impl AsmIr {
         self.push(AsmInst::RegSub(r, i));
     }
 
+    pub(super) fn loop_jit_rsp_bump(&mut self, offset: LoopRspOffset) {
+        self.push(AsmInst::LoopJitRspBump { offset });
+    }
+
     /// movq [rsp + (ofs)], R(r);
     pub(super) fn reg2rsp_offset(&mut self, r: GP, ofs: i32) {
         self.push(AsmInst::RegToRSPOffset(r, ofs));
@@ -714,6 +718,37 @@ impl PrologueOffset {
     }
 }
 
+///
+/// Bytes the Loop JIT entry should subtract from `rsp` (and the
+/// matching side-exit handler should add back). Only the bytes that
+/// the JIT itself owns — the invoker / interpreter prologue is left
+/// untouched, so this captures the JIT-managed spill slots that sit
+/// on top of the surrounding interpreter frame.
+///
+/// Pass 1 emits `Hint(id)` — the current frame's [`SpecializedId`].
+/// The pre-codegen resolve pass derives the byte count as
+/// `stack_offset - base_stack_offset` of that frame, so any future
+/// VirtFPReg spill space added to the frame's recorded size flows
+/// through to the JIT-emitted bump automatically.
+///
+#[derive(Debug, Clone)]
+pub(crate) enum LoopRspOffset {
+    Hint(super::context::SpecializedId),
+    Concrete(usize),
+}
+
+impl LoopRspOffset {
+    pub(crate) fn unwrap_concrete(&self) -> usize {
+        match self {
+            LoopRspOffset::Concrete(o) => *o,
+            LoopRspOffset::Hint(id) => panic!(
+                "LoopRspOffset::Hint({:?}) reached code generation — resolve pass did not run",
+                id
+            ),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) enum AsmInst {
     BcIndex(BcIndex),
@@ -911,6 +946,17 @@ pub(super) enum AsmInst {
     },
 
     Preparation,
+    ///
+    /// Loop JIT entry rsp bump. Emits `subq rsp, X` where `X` is the
+    /// JIT-managed spill region for this Loop frame (the existing
+    /// invoker / interpreter prologue is left untouched). The
+    /// matching `addq rsp, X` is emitted by `side_exit_with_label`
+    /// at every deopt / loop-natural-exit handler, using the same
+    /// resolved value (carried through `AsmInfo::loop_jit_spill_bytes`).
+    ///
+    LoopJitRspBump {
+        offset: LoopRspOffset,
+    },
     ///
     /// Initialize function frame.
     ///
@@ -1647,12 +1693,12 @@ impl Codegen {
     ) {
         let mut side_exits = SideExitLabels::new();
         let mut deopt_table: HashMap<(BytecodePtr, WriteBack), DestLabel> = HashMap::default();
-        let is_loop_jit = frame.is_loop_jit();
+        let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
         for side_exit in ir.side_exit {
             let label = match side_exit {
                 SideExit::Evict(Some((pc, wb))) => {
                     let label = self.jit.label();
-                    self.gen_evict_with_label(pc, &wb, label.clone(), is_loop_jit);
+                    self.gen_evict_with_label(pc, &wb, label.clone(), loop_jit_spill_bytes);
                     label
                 }
                 SideExit::Deoptimize(pc, wb) => {
@@ -1661,7 +1707,7 @@ impl Codegen {
                         label.clone()
                     } else {
                         let label = self.jit.label();
-                        self.gen_deopt_with_label(pc, &t.1, label.clone(), is_loop_jit);
+                        self.gen_deopt_with_label(pc, &t.1, label.clone(), loop_jit_spill_bytes);
                         deopt_table.insert(t, label.clone());
                         label
                     }
