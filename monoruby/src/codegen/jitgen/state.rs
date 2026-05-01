@@ -88,6 +88,12 @@ impl AbstractState {
     pub(super) fn gen_bridge(mut self, ir: &mut AsmIr, target: &SlotState, pc: BytecodePtr) {
         #[cfg(feature = "jit-debug")]
         eprintln!("      from:{:?}", &self);
+        // The target state may have allocated more spill slots than us
+        // (a sibling branch reached the merge point with a wider spill
+        // region). Grow our xmm vec to match before bridging so that
+        // any LinkMode::F(VirtFPReg(N)) with N >= self.xmm.len() in
+        // `target` can be looked up without panicking.
+        self.grow_xmm_to(target.xmm_len());
         for slot in self.all_regs() {
             self.bridge(ir, target, slot, pc);
         }

@@ -4,7 +4,15 @@ use super::*;
 /// (xmm2..xmm15 — xmm0/xmm1 are reserved as codegen scratch). A
 /// `VirtFPReg` whose `id < PHYS_XMM_POOL` resolves directly to
 /// `xmm{id+2}`; ids >= `PHYS_XMM_POOL` are spilled to a stack slot.
+///
+/// The `stress-spill-pool` cargo feature shrinks the pool to 2 so
+/// that nearly every F-mode allocation overflows into a spill slot
+/// — this exercises the LoadSpill / StoreSpill paths and the
+/// spill-aware AsmInst lowerings throughout the entire test suite.
+#[cfg(not(feature = "stress-spill-pool"))]
 pub(in crate::codegen::jitgen) const PHYS_XMM_POOL: usize = 14;
+#[cfg(feature = "stress-spill-pool")]
+pub(in crate::codegen::jitgen) const PHYS_XMM_POOL: usize = 2;
 
 #[derive(Clone, Default)]
 pub(crate) struct SlotState {
@@ -211,6 +219,29 @@ impl SlotState {
 
     fn xmm(&self, xmm: VirtFPReg) -> &[SlotId] {
         &self.xmm[xmm.0 as usize]
+    }
+
+    ///
+    /// Number of allocated spill slots (including the pool prefix).
+    /// Used by `gen_bridge` so the source state can grow its own
+    /// `xmm` vec up to the target's width before merge bridging.
+    ///
+    pub(super) fn xmm_len(&self) -> usize {
+        self.xmm.len()
+    }
+
+    ///
+    /// Pad `self.xmm` with empty slot lists until it reaches at least
+    /// *new_len*. The fresh entries correspond to spill slot ids that
+    /// were allocated by a sibling branch but not by us; merging at a
+    /// confluence point will route any `LinkMode::F(VirtFPReg(N))`
+    /// referencing them into a `gen_xmm_swap` / `xmm_move` against a
+    /// vacant binding, which `is_xmm_vacant` correctly reports.
+    ///
+    pub(super) fn grow_xmm_to(&mut self, new_len: usize) {
+        while self.xmm.len() < new_len {
+            self.xmm.push(vec![]);
+        }
     }
 
     fn xmm_add(&mut self, slot: SlotId, xmm: VirtFPReg) {

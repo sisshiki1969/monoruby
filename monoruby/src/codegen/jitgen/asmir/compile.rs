@@ -219,9 +219,16 @@ impl Codegen {
             AsmInst::XmmUnOp { kind, dst } => match kind {
                 UnOpK::Neg => {
                     let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
-                    monoasm!( &mut self.jit,
-                        xorps xmm(dst.enc()), [rip + imm];
-                    );
+                    match xmm_loc(dst, frame.base_stack_offset) {
+                        XmmLoc::Phys(p) => monoasm!( &mut self.jit,
+                            xorps xmm(p), [rip + imm];
+                        ),
+                        XmmLoc::Spill(off) => monoasm!( &mut self.jit,
+                            movq  xmm0, [rbp - (off)];
+                            xorps xmm0, [rip + imm];
+                            movq  [rbp - (off)], xmm0;
+                        ),
+                    }
                 }
                 UnOpK::Pos => {}
                 _ => unreachable!(),
@@ -267,7 +274,15 @@ impl Codegen {
                 let f = self.jit.const_f64(i as f64);
                 monoasm! {&mut self.jit,
                     movq [rbp - (rbp_local(r))], (Value::integer(i).id());
-                    movq xmm(x.enc()), [rip + f];
+                }
+                match xmm_loc(x, frame.base_stack_offset) {
+                    XmmLoc::Phys(p) => monoasm!( &mut self.jit,
+                        movq xmm(p), [rip + f];
+                    ),
+                    XmmLoc::Spill(off) => monoasm!( &mut self.jit,
+                        movq xmm0, [rip + f];
+                        movq [rbp - (off)], xmm0;
+                    ),
                 }
             }
             AsmInst::XmmToStack(x, slots) => {

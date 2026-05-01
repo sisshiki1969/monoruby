@@ -208,7 +208,64 @@ struct WriteBack {
 | `r15` | Accumulator |
 
 ### XMM Registers
-Used for floating-point operations. `xmm2` through `xmm15` are available.
+Floating-point operations use the SSE2 scalar instructions on `xmm0`–`xmm15`.
+
+| Range | Role |
+|-------|------|
+| `xmm0`, `xmm1` | Codegen scratch — never bound to a `VirtFPReg`. Used for SysV C-call argument set-up (`xmm0` = arg0/return, `xmm1` = arg1) and for in-place spill-aware lowerings. |
+| `xmm2`–`xmm15` | Allocator pool (`PHYS_XMM_POOL = 14`). A `VirtFPReg(N)` with `N < 14` resolves directly to `xmm{N + 2}`. |
+
+#### VirtFPReg and spilling
+
+The JIT allocates floating-point values to **virtual** xmm registers
+(`VirtFPReg(usize)`). At code generation each `VirtFPReg` is mapped
+to either a physical xmm or a frame-local spill slot:
+
+```rust
+enum XmmLoc {
+    Phys(u64),    // xmm{N + 2} for VirtFPReg(N), N < PHYS_XMM_POOL
+    Spill(i32),   // [rbp - off] for VirtFPReg(N), N >= PHYS_XMM_POOL
+}
+```
+
+Allocation strategy in `SlotState::alloc_xmm`:
+
+1. **Phase 0** — vacant pool slot (no F/Sf bindings).
+2. **Phase 1** — `Sf`-only demote (kick a writeback-pending binding back to `S`).
+3. **Phase 2 (spill)** — append a fresh id `>= PHYS_XMM_POOL`. The
+   value lives in `[rbp - off]` for the frame's lifetime; whenever
+   it is read or written the codegen lowering uses an x86 memory
+   operand (`addsd xmm, [rbp - off]`) or shuttles through the
+   `xmm0`/`xmm1` scratch.
+
+The spill region sits at the top of the frame's local area. Its
+size is computed at `JitContext::pop_frame` from the highest
+`VirtFPReg` id used, then rounded up to a 16-byte multiple so any
+external `call` keeps a 16-byte aligned `rsp` under the SysV ABI.
+For Loop JIT the entry instruction `LoopJitRspBump` subtracts the
+spill size from `rsp`; matching `addq rsp, X` is emitted before
+every side-exit. Method / specialized JITs unwind via the normal
+`leave; ret` epilogue.
+
+**Spill-aware AsmInst lowerings.** Every variant that touches a
+`VirtFPReg` (`XmmMove`, `XmmSwap`, `XmmBinOp`, `XmmUnOp`,
+`F64ToXmm`, `FixnumToXmm`, `FloatToXmm`, `I64ToBoth`, `XmmToStack`,
+`FloatCmp`, `FloatCmpBr`, `CFunc_F_F`, `CFunc_FF_F`) resolves its
+operands via `xmm_loc(virt, base_stack_offset)` and picks the
+cheapest x86 form per `Phys` / `Spill` combination. Variants that
+are not yet specialised fall back to a generic `expand_spills`
+pass that wraps them with `LoadSpill` + scratch-marker + `StoreSpill`.
+
+Inline closures (`AsmInst::Inline`) receive `base_stack_offset` as
+their fourth argument so custom inlines (`Math.sqrt`, `Float#to_i`,
+`Integer#to_f`, fiddle pointer R/W, `gen_int_rem_if`,
+`gen_int_pow_if`) can use the same `load_xmm_into_xmm0` /
+`store_xmm0_into_xmm` helpers.
+
+**Stress feature.** Building with `--features stress-spill-pool`
+shrinks `PHYS_XMM_POOL` to 2, so almost every F-mode allocation
+overflows into a spill slot. Used in CI to keep the spill code
+paths exercised.
 
 ## Recompilation
 
