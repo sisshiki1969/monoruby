@@ -119,7 +119,7 @@ pub(crate) fn rbp_local(reg: SlotId) -> i32 {
 ///
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct WriteBack {
-    xmm: Vec<(VirtFPReg, Vec<SlotId>)>,
+    fpr: Vec<(FPReg, Vec<SlotId>)>,
     literal: Vec<(Immediate, SlotId)>,
     void: Vec<SlotId>,
     r15: Option<SlotId>,
@@ -127,8 +127,8 @@ pub(crate) struct WriteBack {
 
 impl Hash for WriteBack {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        for (xmm, slots) in &self.xmm {
-            xmm.hash(state);
+        for (fpr, slots) in &self.fpr {
+            fpr.hash(state);
             for slot in slots {
                 slot.hash(state);
             }
@@ -149,8 +149,8 @@ impl Hash for WriteBack {
 impl std::fmt::Debug for WriteBack {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = String::new();
-        for (xmm, slots) in &self.xmm {
-            s.push_str(&format!(" {:?}->", xmm));
+        for (fpr, slots) in &self.fpr {
+            s.push_str(&format!(" {:?}->", fpr));
             for slot in slots {
                 s.push_str(&format!("{:?}", slot));
             }
@@ -170,13 +170,13 @@ impl std::fmt::Debug for WriteBack {
 
 impl WriteBack {
     fn new(
-        xmm: Vec<(VirtFPReg, Vec<SlotId>)>,
+        fpr: Vec<(FPReg, Vec<SlotId>)>,
         literal: Vec<(Immediate, SlotId)>,
         r15: Option<SlotId>,
         void: Vec<SlotId>,
     ) -> Self {
         Self {
-            xmm,
+            fpr,
             literal,
             r15,
             void,
@@ -301,14 +301,6 @@ impl Codegen {
         // rewrite every `DynVarOffset::Hint(...)` in the AsmIr tree
         // into a concrete byte offset before code generation runs.
         ctx.resolve_dyn_var_offsets(&mut frame.asm_info);
-        // Expand every spilled `VirtFPReg(N >= PHYS_XMM_POOL)` into
-        // a `LoadSpill` + scratch-marker AsmInst + `StoreSpill`
-        // triplet. This must run after `resolve_dyn_var_offsets`
-        // (the frame sizes map needs `total` for prologue / chain
-        // resolution) and before `gen_machine_code` (the codegen
-        // lowering only knows how to encode pool ids and the two
-        // scratch markers).
-        ctx.expand_spills(&mut frame.asm_info);
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 
@@ -507,7 +499,7 @@ impl JitModule {
         for (x, b) in using_xmm.iter().enumerate() {
             if *b {
                 monoasm!( &mut self.jit,
-                    movq [rsp + (8 * i)], xmm(VirtFPReg::new(x as _).enc());
+                    movq [rsp + (8 * i)], xmm(x as u64 + 2);
                 );
                 i += 1;
             }
@@ -530,7 +522,7 @@ impl JitModule {
         for (x, b) in using_xmm.iter().enumerate() {
             if *b {
                 monoasm!( &mut self.jit,
-                    movq xmm(VirtFPReg::new(x as _).enc()), [rsp + (8 * i)];
+                    movq xmm(x as u64 + 2), [rsp + (8 * i)];
                 );
                 i += 1;
             }
@@ -552,13 +544,13 @@ impl JitModule {
     /// ### destroy
     /// - rcx
     ///
-    fn xmm_to_stack(&mut self, xmm: VirtFPReg, v: &[SlotId], base: usize) {
+    fn fpr_to_stack(&mut self, xmm: FPReg, v: &[SlotId], base: usize) {
         if v.is_empty() {
             return;
         }
         #[cfg(feature = "jit-debug")]
         eprintln!("      wb: {:?}->{:?}", xmm, v);
-        self.load_xmm_into_xmm0(xmm, base);
+        self.load_fpr_into_xmm0(xmm, base);
         let f64_to_val = self.f64_to_val.clone();
         monoasm!( &mut self.jit,
             call f64_to_val;
@@ -568,13 +560,13 @@ impl JitModule {
         }
     }
 
-    fn xmm_to_stack2(&mut self, xmm: VirtFPReg, v: &[SlotId], base: usize) {
+    fn fpr_to_stack2(&mut self, xmm: FPReg, v: &[SlotId], base: usize) {
         if v.is_empty() {
             return;
         }
         #[cfg(feature = "jit-debug")]
         eprintln!("      wb: {:?}->{:?}", xmm, v);
-        self.load_xmm_into_xmm0(xmm, base);
+        self.load_fpr_into_xmm0(xmm, base);
         let f64_to_val = self.f64_to_val.clone();
         monoasm!( &mut self.jit,
             call f64_to_val;
@@ -592,8 +584,8 @@ impl JitModule {
     /// or a spill slot. Used by call-trampoline preludes (xmm_to_stack
     /// and CFunc_*) where the helper expects its argument in xmm0.
     ///
-    pub(crate) fn load_xmm_into_xmm0(&mut self, xmm: VirtFPReg, base: usize) {
-        let pool = state::PHYS_XMM_POOL;
+    pub(crate) fn load_fpr_into_xmm0(&mut self, xmm: FPReg, base: usize) {
+        let pool = PHYS_XMM_POOL;
         if xmm.0 < pool {
             let p = xmm.0 as u64 + 2;
             monoasm!( &mut self.jit,
@@ -613,8 +605,8 @@ impl JitModule {
     /// register, used by CFunc_FF_F. Pool ids resolve to xmm2..xmm15
     /// so a Phys source never aliases xmm1.
     ///
-    pub(crate) fn load_xmm_into_xmm1(&mut self, xmm: VirtFPReg, base: usize) {
-        let pool = state::PHYS_XMM_POOL;
+    pub(crate) fn load_fpr_into_xmm1(&mut self, xmm: FPReg, base: usize) {
+        let pool = PHYS_XMM_POOL;
         if xmm.0 < pool {
             let p = xmm.0 as u64 + 2;
             monoasm!( &mut self.jit,
@@ -633,8 +625,8 @@ impl JitModule {
     /// Store xmm0 (a C-call's f64 return value) into the destination
     /// `VirtFPReg`'s home — phys reg or spill slot.
     ///
-    pub(crate) fn store_xmm0_into_xmm(&mut self, xmm: VirtFPReg, base: usize) {
-        let pool = state::PHYS_XMM_POOL;
+    pub(crate) fn store_fpr_into_xmm(&mut self, xmm: FPReg, base: usize) {
+        let pool = PHYS_XMM_POOL;
         if xmm.0 < pool {
             let p = xmm.0 as u64 + 2;
             monoasm!( &mut self.jit,
@@ -730,8 +722,8 @@ impl JitModule {
     /// - rax, rcx
     ///
     pub(super) fn gen_write_back(&mut self, wb: &WriteBack, base: usize) {
-        for (xmm, v) in &wb.xmm {
-            self.xmm_to_stack(*xmm, v, base);
+        for (xmm, v) in &wb.fpr {
+            self.fpr_to_stack(*xmm, v, base);
         }
         for (v, slot) in &wb.literal {
             self.literal_to_stack(*slot, (*v).into());
@@ -758,8 +750,8 @@ impl JitModule {
     /// - rax, rcx
     ///
     pub(super) fn gen_write_back_for_deopt(&mut self, wb: &WriteBack, base: usize) {
-        for (xmm, v) in &wb.xmm {
-            self.xmm_to_stack2(*xmm, v, base);
+        for (xmm, v) in &wb.fpr {
+            self.fpr_to_stack2(*xmm, v, base);
         }
         for (v, slot) in &wb.literal {
             self.literal_to_stack2(*slot, (*v).into());
@@ -918,14 +910,14 @@ fn float_test2() {
     let mut r#gen = Codegen::new();
 
     let assume_int_to_f64 = r#gen.jit.label();
-    let x = VirtFPReg(0);
+    let x = 2;
     monoasm!(&mut r#gen.jit,
     assume_int_to_f64:
         pushq rbp;
     );
-    r#gen.integer_val_to_f64(GP::Rdi, x.enc());
+    r#gen.integer_val_to_f64(GP::Rdi, x);
     monoasm!(&mut r#gen.jit,
-        movq xmm0, xmm(x.enc());
+        movq xmm0, xmm(x);
         popq rbp;
         ret;
     );

@@ -259,21 +259,21 @@ impl Codegen {
     ///
     pub(crate) fn gen_int_rem_if(
         &mut self,
-        lhs_xmm: VirtFPReg,
-        rhs_xmm: VirtFPReg,
-        dst_xmm: VirtFPReg,
+        lhs_xmm: FPReg,
+        rhs_xmm: FPReg,
+        dst_xmm: FPReg,
         using_xmm: UsingXmm,
         base: usize,
     ) {
         self.xmm_save(using_xmm);
-        self.load_xmm_into_xmm0(lhs_xmm, base);
-        self.load_xmm_into_xmm1(rhs_xmm, base);
+        self.load_fpr_into_xmm0(lhs_xmm, base);
+        self.load_fpr_into_xmm1(rhs_xmm, base);
         monoasm!( &mut self.jit,
             movq rax, (rem_ff as u64);
             call rax;
         );
         self.xmm_restore(using_xmm);
-        self.store_xmm0_into_xmm(dst_xmm, base);
+        self.store_fpr_into_xmm(dst_xmm, base);
     }
 
     ///
@@ -295,14 +295,14 @@ impl Codegen {
     ///
     pub(crate) fn gen_int_pow_if(
         &mut self,
-        lhs_xmm: VirtFPReg,
-        rhs_xmm: VirtFPReg,
+        lhs_xmm: FPReg,
+        rhs_xmm: FPReg,
         using_xmm: UsingXmm,
         base: usize,
     ) {
         self.xmm_save(using_xmm);
-        self.load_xmm_into_xmm0(lhs_xmm, base);
-        self.load_xmm_into_xmm1(rhs_xmm, base);
+        self.load_fpr_into_xmm0(lhs_xmm, base);
+        self.load_fpr_into_xmm1(rhs_xmm, base);
         monoasm!( &mut self.jit,
             movq rax, (pow_ff as u64);
             call rax;
@@ -345,19 +345,19 @@ impl Codegen {
     pub(super) fn float_binop(
         &mut self,
         kind: BinOpK,
-        dst: VirtFPReg,
-        binary_xmm: (VirtFPReg, VirtFPReg),
+        dst: FPReg,
+        binary_xmm: (FPReg, FPReg),
         base_stack_offset: usize,
     ) {
         let (l, r) = binary_xmm;
-        let lhs_loc = xmm_loc(l, base_stack_offset);
-        let rhs_loc = xmm_loc(r, base_stack_offset);
-        let dst_loc = xmm_loc(dst, base_stack_offset);
+        let lhs_loc = l.loc(base_stack_offset);
+        let rhs_loc = r.loc(base_stack_offset);
+        let dst_loc = dst.loc(base_stack_offset);
 
         // Step 1: pick `work` for `dst`.
         let (work, dst_spill_off) = match dst_loc {
-            XmmLoc::Phys(p) => (p, None),
-            XmmLoc::Spill(off) => (0u64, Some(off)),
+            FPRegLoc::Xmm(p) => (p, None),
+            FPRegLoc::Spill(off) => (0u64, Some(off)),
         };
         let commutative = matches!(kind, BinOpK::Add | BinOpK::Mul);
 
@@ -366,7 +366,7 @@ impl Codegen {
         // `lhs` after the mov in step 3). Scratch xmm1 is the
         // fallback when `rhs` is spilled or the alias would clobber.
         let rhs_phys = match rhs_loc {
-            XmmLoc::Phys(p) if p == work && !commutative => {
+            FPRegLoc::Xmm(p) if p == work && !commutative => {
                 // Save rhs to xmm1 before we overwrite `work` with
                 // `lhs`.
                 monoasm!( &mut self.jit,
@@ -374,8 +374,8 @@ impl Codegen {
                 );
                 1
             }
-            XmmLoc::Phys(p) => p,
-            XmmLoc::Spill(off) => {
+            FPRegLoc::Xmm(p) => p,
+            FPRegLoc::Spill(off) => {
                 monoasm!( &mut self.jit,
                     movq xmm1, [rbp - (off)];
                 );
@@ -384,13 +384,13 @@ impl Codegen {
         };
 
         // Step 3: load `lhs` into `work` (skip when already there).
-        let lhs_in_work = matches!(lhs_loc, XmmLoc::Phys(p) if p == work);
+        let lhs_in_work = matches!(lhs_loc, FPRegLoc::Xmm(p) if p == work);
         if !lhs_in_work {
             match lhs_loc {
-                XmmLoc::Phys(p) => monoasm!( &mut self.jit,
+                FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
                     movq xmm(work), xmm(p);
                 ),
-                XmmLoc::Spill(off) => monoasm!( &mut self.jit,
+                FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
                     movq xmm(work), [rbp - (off)];
                 ),
             }
@@ -464,28 +464,24 @@ macro_rules! jit_cmp_opt_main {
 }
 
 impl Codegen {
-    pub(super) fn cmp_float(
-        &mut self,
-        binary_xmm: (VirtFPReg, VirtFPReg),
-        base_stack_offset: usize,
-    ) {
+    pub(super) fn cmp_float(&mut self, binary_xmm: (FPReg, FPReg), base_stack_offset: usize) {
         let (l, r) = binary_xmm;
-        let l_loc = xmm_loc(l, base_stack_offset);
-        let r_loc = xmm_loc(r, base_stack_offset);
+        let l_loc = l.loc(base_stack_offset);
+        let r_loc = r.loc(base_stack_offset);
         // ucomisd's first operand must be an xmm register; the second
         // can be xmm or memory. Pick the cheapest combination.
         match (l_loc, r_loc) {
-            (XmmLoc::Phys(lp), XmmLoc::Phys(rp)) => monoasm! { &mut self.jit,
+            (FPRegLoc::Xmm(lp), FPRegLoc::Xmm(rp)) => monoasm! { &mut self.jit,
                 ucomisd xmm(lp), xmm(rp);
             },
-            (XmmLoc::Phys(lp), XmmLoc::Spill(r_off)) => monoasm! { &mut self.jit,
+            (FPRegLoc::Xmm(lp), FPRegLoc::Spill(r_off)) => monoasm! { &mut self.jit,
                 ucomisd xmm(lp), [rbp - (r_off)];
             },
-            (XmmLoc::Spill(l_off), XmmLoc::Phys(rp)) => monoasm! { &mut self.jit,
+            (FPRegLoc::Spill(l_off), FPRegLoc::Xmm(rp)) => monoasm! { &mut self.jit,
                 movq xmm0, [rbp - (l_off)];
                 ucomisd xmm0, xmm(rp);
             },
-            (XmmLoc::Spill(l_off), XmmLoc::Spill(r_off)) => monoasm! { &mut self.jit,
+            (FPRegLoc::Spill(l_off), FPRegLoc::Spill(r_off)) => monoasm! { &mut self.jit,
                 movq xmm0, [rbp - (l_off)];
                 ucomisd xmm0, [rbp - (r_off)];
             },

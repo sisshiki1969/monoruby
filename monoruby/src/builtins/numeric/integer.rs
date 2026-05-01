@@ -588,14 +588,14 @@ fn integer_tof(
         // `sarq` / `cvtsi2sdq` below produce NaN, and the caller sees
         // `496.to_f #=> NaN`.
         state.load(ir, recv, GP::Rdi);
-        let fret = state.def_F(ir, ret);
+        let fret = state.def_F(ret);
         ir.inline(move |r#gen, _, _, base| {
             // Convert into xmm0, then store into fret (pool or spill).
             monoasm! { &mut r#gen.jit,
                 sarq  rdi, 1;
                 cvtsi2sdq xmm0, rdi;
             }
-            r#gen.store_xmm0_into_xmm(fret, base);
+            r#gen.store_fpr_into_xmm(fret, base);
         });
     }
     true
@@ -894,7 +894,9 @@ fn integer_shr(
             let k = (-rhs) as u64;
             if k < 64 {
                 let deopt = ir.new_deopt(state);
-                ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl_rhs_imm(k as u8, &labels[deopt]));
+                ir.inline(move |r#gen, _, labels, _| {
+                    r#gen.gen_shl_rhs_imm(k as u8, &labels[deopt])
+                });
             } else {
                 // shift too large for inline, deopt
                 let deopt = ir.new_deopt(state);
@@ -1107,7 +1109,7 @@ fn integer_rem_float_rhs(
         // Result discarded; no work needed (rem_ff is pure).
         return true;
     };
-    let dst_xmm = state.def_F(ir, dst);
+    let dst_xmm = state.def_F(dst);
     let using_xmm = state.get_using_xmm();
     ir.inline(move |r#gen, _, _, base| {
         r#gen.gen_int_rem_if(lhs_xmm, rhs_xmm, dst_xmm, using_xmm, base)

@@ -362,10 +362,10 @@ impl<'a> JitContext<'a> {
                         }
                         let fsrc = state.load_xmm(ir, src);
                         state.pin_xmm(fsrc);
-                        let dst = state.def_F(ir, dst);
+                        let dst = state.def_F(dst);
                         state.unpin_xmm(fsrc);
-                        ir.xmm_move(fsrc, dst);
-                        ir.push(AsmInst::XmmUnOp { kind, dst });
+                        ir.fpr_move(fsrc, dst);
+                        ir.push(AsmInst::FloatUnOp { kind, dst });
                     }
                     Some(recv_class) => {
                         return self.call_unary_method(state, ir, src, recv_class, kind, bc_pos);

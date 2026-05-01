@@ -695,7 +695,7 @@ fn math_sqrt(
     // On a negative argument we bail out to the interpreter, which will
     // re-execute the call via the regular builtin and raise DomainError.
     let deopt = ir.new_deopt(state);
-    let fret = dst.map(|dst| state.def_F(ir, dst));
+    let fret = dst.map(|dst| state.def_F(dst));
     ir.inline(move |r#gen, _, labels, base| {
         let deopt_label = &labels[deopt];
         let do_sqrt = r#gen.jit.label();
@@ -704,7 +704,7 @@ fn math_sqrt(
         // -0.0 compares equal to 0.0, so it skips the deopt and sqrtsd
         // yields -0.0 as CRuby does.
         // Load the source into xmm0 (works for either pool or spill).
-        r#gen.load_xmm_into_xmm0(fsrc, base);
+        r#gen.load_fpr_into_xmm0(fsrc, base);
         monoasm!( &mut r#gen.jit,
             xorpd xmm1, xmm1;
             ucomisd xmm0, xmm1;
@@ -716,7 +716,7 @@ fn math_sqrt(
             monoasm!( &mut r#gen.jit,
                 sqrtsd xmm0, xmm0;
             );
-            r#gen.store_xmm0_into_xmm(fret, base);
+            r#gen.store_fpr_into_xmm(fret, base);
         }
     });
     true

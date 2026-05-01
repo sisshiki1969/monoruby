@@ -2,9 +2,9 @@
 set -e
 
 cargo llvm-cov clean --workspace
-cargo llvm-cov nextest --no-report
+cargo llvm-cov nextest --features stress-spill-pool --no-report
 
-cargo llvm-cov run --no-report --features emit-asm --features deopt --features perf --features gc-debug --features jit-debug --features emit-cfg --features stress-spill-pool -- --version > /dev/null
+cargo llvm-cov run --no-report --features emit-asm --features deopt --features perf --features gc-debug --features jit-debug --features emit-cfg -- --version > /dev/null
 MONORUBY="$PWD/target/llvm-cov-target/debug/monoruby"
 
 $MONORUBY benchmark/app_fib.rb > monoruby.log 2> /dev/null

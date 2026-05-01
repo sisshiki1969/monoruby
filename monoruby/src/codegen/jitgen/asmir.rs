@@ -113,14 +113,6 @@ impl AsmIr {
         self.inst.iter()
     }
 
-    pub(super) fn take_inst(&mut self) -> Vec<AsmInst> {
-        std::mem::take(&mut self.inst)
-    }
-
-    pub(super) fn replace_inst(&mut self, inst: Vec<AsmInst>) {
-        self.inst = inst;
-    }
-
     pub(super) fn is_empty(&self) -> bool {
         self.inst.is_empty()
     }
@@ -255,8 +247,8 @@ impl AsmIr {
         self.push(AsmInst::StackToReg(SlotId::self_(), dst));
     }
 
-    pub(super) fn xmm_move(&mut self, src: VirtFPReg, dst: VirtFPReg) {
-        self.push(AsmInst::XmmMove(src, dst));
+    pub(super) fn fpr_move(&mut self, src: FPReg, dst: FPReg) {
+        self.push(AsmInst::FprMove(src, dst));
     }
 
     ///
@@ -268,8 +260,8 @@ impl AsmIr {
     /// ### destroy
     /// - rcx
     ///
-    pub fn xmm2stack(&mut self, xmm: VirtFPReg, reg: SlotId) {
-        self.push(AsmInst::XmmToStack(xmm, reg));
+    pub fn fpr2stack(&mut self, fpr: FPReg, reg: SlotId) {
+        self.push(AsmInst::FprToStack(fpr, reg));
     }
 
     pub fn lit2stack(&mut self, v: Value, reg: SlotId) {
@@ -296,8 +288,8 @@ impl AsmIr {
     /// ### destroy
     /// - R(*reg*)
     ///
-    pub fn fixnum2xmm(&mut self, reg: GP, x: VirtFPReg) {
-        self.push(AsmInst::FixnumToXmm(reg, x));
+    pub fn fixnum2fpr(&mut self, reg: GP, x: FPReg) {
+        self.push(AsmInst::FixnumToFpr(reg, x));
     }
 
     ///
@@ -319,21 +311,21 @@ impl AsmIr {
     ///
     /// - rax, rdi
     ///
-    pub fn float_to_xmm(&mut self, reg: GP, x: VirtFPReg, deopt: AsmDeopt) {
-        self.push(AsmInst::FloatToXmm(reg, x, deopt));
+    pub fn float_to_fpr(&mut self, reg: GP, x: FPReg, deopt: AsmDeopt) {
+        self.push(AsmInst::FloatToFpr(reg, x, deopt));
     }
 
     ///
     /// Move *f*(f64) to VirtFPReg(*x*).
     ///
-    pub fn f64_to_xmm(&mut self, f: f64, x: VirtFPReg) {
-        self.push(AsmInst::F64ToXmm(f, x));
+    pub fn f64_to_fpr(&mut self, f: f64, x: FPReg) {
+        self.push(AsmInst::F64ToFpr(f, x));
     }
 
     ///
     /// Move *i*(i63) to the stack *slot* and VirtFPReg(*x*).
     ///
-    pub fn i64_to_stack_and_xmm(&mut self, i: i64, slot: SlotId, x: VirtFPReg) {
+    pub fn i64_to_stack_and_fpr(&mut self, i: i64, slot: SlotId, x: FPReg) {
         self.push(AsmInst::I64ToBoth(i, slot, x));
     }
 
@@ -547,8 +539,8 @@ impl AsmIr {
     /// - caller save registers
     /// - stack
     ///
-    pub(super) fn xmm_binop(&mut self, kind: BinOpK, lhs: VirtFPReg, rhs: VirtFPReg, dst: VirtFPReg) {
-        self.push(AsmInst::XmmBinOp {
+    pub(super) fn fpr_binop(&mut self, kind: BinOpK, lhs: FPReg, rhs: FPReg, dst: FPReg) {
+        self.push(AsmInst::FloatBinOp {
             kind,
             binary_xmm: (lhs, rhs),
             dst,
@@ -592,7 +584,7 @@ impl AsmIr {
 
     pub(super) fn float_cmp_br(
         &mut self,
-        binary_xmm: (VirtFPReg, VirtFPReg),
+        binary_xmm: (FPReg, FPReg),
         kind: CmpKind,
         brkind: BrKind,
         branch_dest: JitLabel,
@@ -789,26 +781,26 @@ pub(super) enum AsmInst {
     /// movq [rsp + (ofs)], (i);
     U64ToRSPOffset(u64, i32),
 
-    XmmMove(VirtFPReg, VirtFPReg),
-    XmmSwap(VirtFPReg, VirtFPReg),
-    XmmBinOp {
+    FprMove(FPReg, FPReg),
+    FprSwap(FPReg, FPReg),
+    FloatBinOp {
         kind: BinOpK,
-        binary_xmm: (VirtFPReg, VirtFPReg),
-        dst: VirtFPReg,
+        binary_xmm: (FPReg, FPReg),
+        dst: FPReg,
     },
-    XmmUnOp {
+    FloatUnOp {
         kind: UnOpK,
-        dst: VirtFPReg,
+        dst: FPReg,
     },
 
     ///
     /// Move f64 to xmm.
     ///
-    F64ToXmm(f64, VirtFPReg),
+    F64ToFpr(f64, FPReg),
     ///
     /// Move *i*(i63) to the stack slot *reg* and VirtFPReg(*x*).
     ///
-    I64ToBoth(i64, SlotId, VirtFPReg),
+    I64ToBoth(i64, SlotId, FPReg),
     ///
     /// Generate convert code from VirtFPReg to Both.
     ///
@@ -818,7 +810,7 @@ pub(super) enum AsmInst {
     /// ### destroy
     /// - rcx
     ///
-    XmmToStack(VirtFPReg, SlotId),
+    FprToStack(FPReg, SlotId),
     ///
     /// Move Value *v* to stack slot *reg*.
     ///
@@ -866,7 +858,7 @@ pub(super) enum AsmInst {
     /// ### destroy
     /// - R(*reg*)
     ///
-    FixnumToXmm(GP, VirtFPReg),
+    FixnumToFpr(GP, FPReg),
     ///
     /// Float guard and unboxing.
     ///
@@ -886,7 +878,7 @@ pub(super) enum AsmInst {
     ///
     /// - rax, rdi
     ///
-    FloatToXmm(GP, VirtFPReg, AsmDeopt),
+    FloatToFpr(GP, FPReg, AsmDeopt),
 
     ///
     /// Class version guard for JIT.
@@ -969,32 +961,7 @@ pub(super) enum AsmInst {
     LoopJitRspBump {
         offset: LoopRspOffset,
     },
-    ///
-    /// Load a spilled `VirtFPReg`'s 8-byte value from its stack slot
-    /// into a scratch xmm. Emitted by the pre-codegen `expand_spills`
-    /// pass before any AsmInst that reads the spilled operand.
-    ///
-    /// `scratch` is `VirtFPReg::SCRATCH_XMM_0` or
-    /// `VirtFPReg::SCRATCH_XMM_1` (the two reserved scratch xmms,
-    /// which are not allocated by the pool). `rbp_offset` is the
-    /// positive byte distance from `rbp` to the spill slot;
-    /// codegen emits `movq xmm(scratch.enc()), [rbp - rbp_offset]`.
-    ///
-    LoadSpill {
-        scratch: VirtFPReg,
-        rbp_offset: i32,
-    },
-    ///
-    /// Store a scratch xmm back into a spilled `VirtFPReg`'s stack
-    /// slot. Emitted by `expand_spills` after any AsmInst that
-    /// writes to the spilled operand. `scratch` and `rbp_offset`
-    /// follow the same convention as `LoadSpill`; codegen emits
-    /// `movq [rbp - rbp_offset], xmm(scratch.enc())`.
-    ///
-    StoreSpill {
-        scratch: VirtFPReg,
-        rbp_offset: i32,
-    },
+
     ///
     /// Initialize function frame.
     ///
@@ -1150,16 +1117,16 @@ pub(super) enum AsmInst {
     #[allow(non_camel_case_types)]
     CFunc_F_F {
         f: unsafe extern "C" fn(f64) -> f64,
-        src: VirtFPReg,
-        dst: VirtFPReg,
+        src: FPReg,
+        dst: FPReg,
         using_xmm: UsingXmm,
     },
     #[allow(non_camel_case_types)]
     CFunc_FF_F {
         f: extern "C" fn(f64, f64) -> f64,
-        lhs: VirtFPReg,
-        rhs: VirtFPReg,
-        dst: VirtFPReg,
+        lhs: FPReg,
+        rhs: FPReg,
+        dst: FPReg,
         using_xmm: UsingXmm,
     },
     ///
@@ -1232,13 +1199,13 @@ pub(super) enum AsmInst {
     },
     FloatCmp {
         kind: CmpKind,
-        lhs: VirtFPReg,
-        rhs: VirtFPReg,
+        lhs: FPReg,
+        rhs: FPReg,
     },
     FloatCmpBr {
         kind: CmpKind,
-        lhs: VirtFPReg,
-        rhs: VirtFPReg,
+        lhs: FPReg,
+        rhs: FPReg,
         brkind: BrKind,
         branch_dest: JitLabel,
     },
@@ -1643,52 +1610,24 @@ impl AsmInst {
     /// — once Phase 2's codegen-side spill expansion lands — to
     /// detect operands that need swap-load-swap-store.
     ///
-    pub(super) fn xmm_operands(&self) -> Vec<VirtFPReg> {
+    pub(super) fn xmm_operands(&self) -> Vec<FPReg> {
         match self {
-            Self::XmmMove(a, b) | Self::XmmSwap(a, b) => vec![*a, *b],
-            Self::XmmBinOp {
+            Self::FprMove(a, b) | Self::FprSwap(a, b) => vec![*a, *b],
+            Self::FloatBinOp {
                 binary_xmm: (l, r),
                 dst,
                 ..
             } => vec![*l, *r, *dst],
-            Self::XmmUnOp { dst, .. } => vec![*dst],
-            Self::F64ToXmm(_, x) => vec![*x],
+            Self::FloatUnOp { dst, .. } => vec![*dst],
+            Self::F64ToFpr(_, x) => vec![*x],
             Self::I64ToBoth(_, _, x) => vec![*x],
-            Self::XmmToStack(x, _) => vec![*x],
-            Self::FixnumToXmm(_, x) => vec![*x],
-            Self::FloatToXmm(_, x, _) => vec![*x],
+            Self::FprToStack(x, _) => vec![*x],
+            Self::FixnumToFpr(_, x) => vec![*x],
+            Self::FloatToFpr(_, x, _) => vec![*x],
             Self::CFunc_F_F { src, dst, .. } => vec![*src, *dst],
             Self::CFunc_FF_F { lhs, rhs, dst, .. } => vec![*lhs, *rhs, *dst],
             Self::FloatCmp { lhs, rhs, .. } => vec![*lhs, *rhs],
             Self::FloatCmpBr { lhs, rhs, .. } => vec![*lhs, *rhs],
-            _ => vec![],
-        }
-    }
-
-    ///
-    /// Mutable view of every `VirtFPReg` operand in this instruction.
-    /// Used by `expand_spills` to rewrite spilled operands into
-    /// scratch xmm markers in place.
-    ///
-    pub(super) fn xmm_operands_mut(&mut self) -> Vec<&mut VirtFPReg> {
-        match self {
-            // The variants below resolve spilled operands themselves
-            // in their codegen lowerings (using x86 memory operands
-            // and dedicated scratch paths), so their operands stay
-            // raw through `expand_spills`.
-            Self::XmmMove(_, _)
-            | Self::XmmSwap(_, _)
-            | Self::XmmBinOp { .. }
-            | Self::XmmUnOp { .. }
-            | Self::F64ToXmm(_, _)
-            | Self::FixnumToXmm(_, _)
-            | Self::FloatToXmm(_, _, _)
-            | Self::I64ToBoth(_, _, _)
-            | Self::XmmToStack(_, _)
-            | Self::CFunc_F_F { .. }
-            | Self::CFunc_FF_F { .. }
-            | Self::FloatCmp { .. }
-            | Self::FloatCmpBr { .. } => vec![],
             _ => vec![],
         }
     }
@@ -1707,9 +1646,9 @@ impl AsmInst {
             Self::RegAdd(gpr, i) => format!("{:?} += {i}", gpr),
             Self::RegSub(gpr, i) => format!("{:?} -= {i}", gpr,),
             Self::RegToRSPOffset(gpr, offset) => format!("RSP[{offset}] = {:?}", gpr),
-            Self::XmmMove(src, dst) => format!("{:?} = {:?}", dst, src),
-            Self::XmmSwap(fp1, fp2) => format!("{:?} <-> {:?}", fp1, fp2),
-            Self::XmmBinOp {
+            Self::FprMove(src, dst) => format!("{:?} = {:?}", dst, src),
+            Self::FprSwap(fp1, fp2) => format!("{:?} <-> {:?}", fp1, fp2),
+            Self::FloatBinOp {
                 kind,
                 binary_xmm,
                 dst,
@@ -1717,14 +1656,14 @@ impl AsmInst {
                 "{:?} = {:?} {:?} {:?}",
                 dst, binary_xmm.0, kind, binary_xmm.1
             ),
-            Self::XmmUnOp { kind, dst } => format!("{:?} = {:?} {:?}", dst, kind, dst),
+            Self::FloatUnOp { kind, dst } => format!("{:?} = {:?} {:?}", dst, kind, dst),
 
-            Self::F64ToXmm(f, dst) => format!("{:?} = {}", dst, f),
+            Self::F64ToFpr(f, dst) => format!("{:?} = {}", dst, f),
             Self::I64ToBoth(i, slot, xmm) => format!("{:?}:{:?} = {i}", slot, xmm),
-            Self::XmmToStack(fpr, slots) => format!("{:?} = {:?}", slots, fpr),
+            Self::FprToStack(fpr, slots) => format!("{:?} = {:?}", slots, fpr),
             Self::LitToStack(val, slot) => format!("{:?} = {}", slot, val.debug(store)),
             Self::DeepCopyLit(val, _using_xmm) => format!("DeepCopyLiteral {}", val.debug(store)),
-            Self::FloatToXmm(gpr, fpr, _deopt) => format!("{:?} = {:?} Float to f64", fpr, gpr),
+            Self::FloatToFpr(gpr, fpr, _deopt) => format!("{:?} = {:?} Float to f64", fpr, gpr),
             Self::GuardClassVersion {
                 position: _,
                 with_recovery: _,

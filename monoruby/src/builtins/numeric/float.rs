@@ -20,7 +20,11 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.set_constant_by_str(FLOAT_CLASS, "MIN_EXP", Value::i32(f64::MIN_EXP));
     globals.set_constant_by_str(FLOAT_CLASS, "EPSILON", Value::float(f64::EPSILON));
     globals.set_constant_by_str(FLOAT_CLASS, "DIG", Value::integer(f64::DIGITS as i64));
-    globals.set_constant_by_str(FLOAT_CLASS, "MANT_DIG", Value::integer(f64::MANTISSA_DIGITS as i64));
+    globals.set_constant_by_str(
+        FLOAT_CLASS,
+        "MANT_DIG",
+        Value::integer(f64::MANTISSA_DIGITS as i64),
+    );
     globals.set_constant_by_str(FLOAT_CLASS, "RADIX", Value::integer(f64::RADIX as i64));
     globals.define_builtin_inline_funcs(
         FLOAT_CLASS,
@@ -76,12 +80,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/to_r.html]
 #[monoruby_builtin]
-fn float_to_r(
-    _: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn float_to_r(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let f = lfp.self_val().try_float().unwrap();
     if f.is_nan() {
         return Err(float_domain_error(globals, "NaN"));
@@ -210,7 +209,7 @@ fn float_toi(
         ir.inline(move |r#gen, _, labels, base| {
             let deopt = &labels[deopt];
             // Load fsrc into xmm0 (handles both pool and spill).
-            r#gen.load_xmm_into_xmm0(fsrc, base);
+            r#gen.load_fpr_into_xmm0(fsrc, base);
             monoasm! { &mut r#gen.jit,
                 cvttsd2siq rdi, xmm0;
                 addq  rdi, rdi;
@@ -238,7 +237,10 @@ fn toi(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 return Err(float_domain_error(globals, "NaN"));
             }
             if f.is_infinite() {
-                return Err(float_domain_error(globals, if f > 0.0 { "Infinity" } else { "-Infinity" }));
+                return Err(float_domain_error(
+                    globals,
+                    if f > 0.0 { "Infinity" } else { "-Infinity" },
+                ));
             }
             let truncated = f.trunc();
             if (i64::MIN as f64) < truncated && truncated < (i64::MAX as f64) {
@@ -266,7 +268,10 @@ fn div_floor(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         return Err(float_domain_error(globals, "NaN"));
     }
     if lhs.is_infinite() {
-        return Err(float_domain_error(globals, if lhs > 0.0 { "Infinity" } else { "-Infinity" }));
+        return Err(float_domain_error(
+            globals,
+            if lhs > 0.0 { "Infinity" } else { "-Infinity" },
+        ));
     }
     let rhs = RealKind::expect(globals, lfp.arg(0))?.to_f64();
     if rhs == 0.0 {
@@ -326,9 +331,8 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 if let Some(ary) = result.try_array_ty() {
                     if ary.len() == 2 {
                         let cmp_id = IdentId::get_id("<=>");
-                        let res = vm.invoke_method_inner(
-                            globals, cmp_id, ary[0], &[ary[1]], None, None,
-                        )?;
+                        let res =
+                            vm.invoke_method_inner(globals, cmp_id, ary[0], &[ary[1]], None, None)?;
                         return Ok(res);
                     }
                 }
@@ -428,7 +432,10 @@ fn floor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         if f.is_nan() {
             return Err(float_domain_error(globals, "NaN"));
         } else {
-            return Err(float_domain_error(globals, if f > 0.0 { "Infinity" } else { "-Infinity" }));
+            return Err(float_domain_error(
+                globals,
+                if f > 0.0 { "Infinity" } else { "-Infinity" },
+            ));
         }
     }
     if ndigits == 0 {
@@ -487,7 +494,10 @@ fn ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         if f.is_nan() {
             return Err(float_domain_error(globals, "NaN"));
         } else {
-            return Err(float_domain_error(globals, if f > 0.0 { "Infinity" } else { "-Infinity" }));
+            return Err(float_domain_error(
+                globals,
+                if f > 0.0 { "Infinity" } else { "-Infinity" },
+            ));
         }
     }
     if ndigits == 0 {
@@ -546,7 +556,10 @@ fn truncate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         if f.is_nan() {
             return Err(float_domain_error(globals, "NaN"));
         } else {
-            return Err(float_domain_error(globals, if f > 0.0 { "Infinity" } else { "-Infinity" }));
+            return Err(float_domain_error(
+                globals,
+                if f > 0.0 { "Infinity" } else { "-Infinity" },
+            ));
         }
     }
     if ndigits == 0 {
@@ -604,7 +617,10 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         if f.is_nan() {
             return Err(float_domain_error(globals, "NaN"));
         } else {
-            return Err(float_domain_error(globals, if f > 0.0 { "Infinity" } else { "-Infinity" }));
+            return Err(float_domain_error(
+                globals,
+                if f > 0.0 { "Infinity" } else { "-Infinity" },
+            ));
         }
     }
     if ndigits == 0 {
@@ -660,7 +676,11 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let (quot, rem) = num::integer::div_rem(int_val, mul_big.clone());
         // Determine rounding based on remainder
         let half_mul = &mul_big / 2;
-        let abs_rem = if rem < BigInt::ZERO { -&rem } else { rem.clone() };
+        let abs_rem = if rem < BigInt::ZERO {
+            -&rem
+        } else {
+            rem.clone()
+        };
         let rounded_quot = if abs_rem > half_mul {
             // Not halfway — round away from zero
             if f >= 0.0 { &quot + 1 } else { &quot - 1 }
@@ -676,7 +696,9 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 match half {
                     Some(RoundHalf::Down) => quot.clone(),
                     Some(RoundHalf::Even) => {
-                        if &quot % 2 == BigInt::ZERO { quot.clone() } else {
+                        if &quot % 2 == BigInt::ZERO {
+                            quot.clone()
+                        } else {
                             if f >= 0.0 { &quot + 1 } else { &quot - 1 }
                         }
                     }
@@ -825,25 +847,47 @@ fn angle(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 
 /// ### Float#next_float
 #[monoruby_builtin]
-fn next_float(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn next_float(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let f = lfp.self_val().try_float().unwrap();
     if f.is_nan() || (f.is_infinite() && f.is_sign_positive()) {
         return Ok(Value::float(f));
     }
     let bits = f.to_bits();
-    let next_bits = if f == 0.0 { 1u64 } else if f > 0.0 { bits + 1 } else { bits - 1 };
+    let next_bits = if f == 0.0 {
+        1u64
+    } else if f > 0.0 {
+        bits + 1
+    } else {
+        bits - 1
+    };
     Ok(Value::float(f64::from_bits(next_bits)))
 }
 
 /// ### Float#prev_float
 #[monoruby_builtin]
-fn prev_float(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn prev_float(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let f = lfp.self_val().try_float().unwrap();
     if f.is_nan() || (f.is_infinite() && f.is_sign_negative()) {
         return Ok(Value::float(f));
     }
     let bits = f.to_bits();
-    let prev_bits = if f == 0.0 { (1u64 << 63) | 1u64 } else if f > 0.0 { bits - 1 } else { bits + 1 };
+    let prev_bits = if f == 0.0 {
+        (1u64 << 63) | 1u64
+    } else if f > 0.0 {
+        bits - 1
+    } else {
+        bits + 1
+    };
     Ok(Value::float(f64::from_bits(prev_bits)))
 }
 
@@ -867,11 +911,20 @@ fn quo(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         RV::BigInt(b) => b.to_f64().unwrap_or(f64::INFINITY),
         _ => {
             let coerce_id = IdentId::get_id("coerce");
-            if let Some(result) = vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lfp.self_val()], None, None)? {
+            if let Some(result) =
+                vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?
+            {
                 if let Some(ary) = result.try_array_ty() {
                     if ary.len() == 2 {
                         let div_id = IdentId::get_id("/");
-                        return vm.invoke_method_inner(globals, div_id, ary[0], &[ary[1]], None, None);
+                        return vm.invoke_method_inner(
+                            globals,
+                            div_id,
+                            ary[0],
+                            &[ary[1]],
+                            None,
+                            None,
+                        );
                     }
                 }
             }
@@ -886,7 +939,12 @@ fn quo(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// Returns true only if other is a Float with the same value.
 #[monoruby_builtin]
-fn float_eql(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn float_eql(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let lhs = lfp.self_val().try_float().unwrap();
     let rhs = lfp.arg(0);
     let result = match rhs.unpack() {
@@ -903,7 +961,12 @@ fn float_eql(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePt
 ///
 /// Returns the string representation of self with US-ASCII encoding.
 #[monoruby_builtin]
-fn float_to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn float_to_s(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     if let Some(f) = lfp.self_val().try_float() {
         let s = crate::ruby_float_to_s(f);
         use crate::value::rvalue::{Encoding, RStringInner};
@@ -1169,18 +1232,25 @@ mod tests {
     // Fix 1: Float#round accepts half: keyword argument
     #[test]
     fn round_half_keyword() {
-        run_tests(
-            &[
-                "2.5.round(half: :up)", "2.5.round(half: :down)", "2.5.round(half: :even)",
-                "3.5.round(half: :up)", "3.5.round(half: :down)", "3.5.round(half: :even)",
-                "(-2.5).round(half: :up)", "(-2.5).round(half: :down)", "(-2.5).round(half: :even)",
-                "2.5.round(half: nil)",
-                // half: with ndigits
-                "5.55.round(1, half: :up)", "5.55.round(1, half: :down)", "5.55.round(1, half: :even)",
-                "(-5.55).round(1, half: :up)", "(-5.55).round(1, half: :down)", "(-5.55).round(1, half: :even)",
-            ]
-            ,
-        );
+        run_tests(&[
+            "2.5.round(half: :up)",
+            "2.5.round(half: :down)",
+            "2.5.round(half: :even)",
+            "3.5.round(half: :up)",
+            "3.5.round(half: :down)",
+            "3.5.round(half: :even)",
+            "(-2.5).round(half: :up)",
+            "(-2.5).round(half: :down)",
+            "(-2.5).round(half: :even)",
+            "2.5.round(half: nil)",
+            // half: with ndigits
+            "5.55.round(1, half: :up)",
+            "5.55.round(1, half: :down)",
+            "5.55.round(1, half: :even)",
+            "(-5.55).round(1, half: :up)",
+            "(-5.55).round(1, half: :down)",
+            "(-5.55).round(1, half: :even)",
+        ]);
     }
 
     // Fix 1: Float#round half: with invalid mode raises ArgumentError
@@ -1192,18 +1262,20 @@ mod tests {
     // Fix 2: Float#round algorithm edge cases
     #[test]
     fn round_edge_cases() {
-        run_tests(
-            &[
-                "(-0.49999999999999994).round",
-                "42.0.round(308)", "1.0e307.round(2)",
-                "0.42.round(2.0**30)", "0.42.round(2.0**23)",
-                "(2.5e200).round(-200)", "(-2.5e200).round(-200)",
-                "(2.4e200).round(-200)", "(-2.4e200).round(-200)",
-                "120.0.round(-1)", "123456.78.round(-2)",
-                "767573.1875850001.round(5)",
-            ]
-            ,
-        );
+        run_tests(&[
+            "(-0.49999999999999994).round",
+            "42.0.round(308)",
+            "1.0e307.round(2)",
+            "0.42.round(2.0**30)",
+            "0.42.round(2.0**23)",
+            "(2.5e200).round(-200)",
+            "(-2.5e200).round(-200)",
+            "(2.4e200).round(-200)",
+            "(-2.4e200).round(-200)",
+            "120.0.round(-1)",
+            "123456.78.round(-2)",
+            "767573.1875850001.round(5)",
+        ]);
     }
 
     // Fix 5: Float#<=> with infinite? objects
@@ -1273,14 +1345,13 @@ mod tests {
     // Fix 6: Float#to_s returns US-ASCII encoding
     #[test]
     fn float_to_s_encoding() {
-        run_tests(
-            &[
-                "1.0.to_s.encoding.to_s", "(-0.0).to_s.encoding.to_s",
-                "Float::NAN.to_s.encoding.to_s", "Float::INFINITY.to_s.encoding.to_s",
-                "1.0.inspect.encoding.to_s",
-            ]
-            ,
-        );
+        run_tests(&[
+            "1.0.to_s.encoding.to_s",
+            "(-0.0).to_s.encoding.to_s",
+            "Float::NAN.to_s.encoding.to_s",
+            "Float::INFINITY.to_s.encoding.to_s",
+            "1.0.inspect.encoding.to_s",
+        ]);
     }
 
     #[test]
@@ -1291,18 +1362,17 @@ mod tests {
 
     #[test]
     fn float_eql() {
-        run_tests(
-            &["1.0.eql?(1.0)", "1.0.eql?(1)", "1.0.eql?(1.1)"]
-                ,
-        );
+        run_tests(&["1.0.eql?(1.0)", "1.0.eql?(1)", "1.0.eql?(1.1)"]);
     }
 
     #[test]
     fn float_constants() {
-        run_tests(
-            &["Float::MIN", "Float::DIG", "Float::MANT_DIG", "Float::RADIX"]
-                ,
-        );
+        run_tests(&[
+            "Float::MIN",
+            "Float::DIG",
+            "Float::MANT_DIG",
+            "Float::RADIX",
+        ]);
     }
 
     #[test]
@@ -1319,21 +1389,22 @@ mod tests {
 
     #[test]
     fn float_denominator_special() {
-        run_tests(
-            &[
-                "Float::NAN.denominator", "Float::INFINITY.denominator",
-                "(-Float::INFINITY).denominator", "1.5.denominator",
-            ]
-            ,
-        );
+        run_tests(&[
+            "Float::NAN.denominator",
+            "Float::INFINITY.denominator",
+            "(-Float::INFINITY).denominator",
+            "1.5.denominator",
+        ]);
     }
 
     #[test]
     fn float_divmod_quotient_type() {
-        run_tests(
-            &["3.8.divmod(1)", "(-3.8).divmod(1)", "3.8.divmod(0.5)", "11.5.divmod(3)"]
-                ,
-        );
+        run_tests(&[
+            "3.8.divmod(1)",
+            "(-3.8).divmod(1)",
+            "3.8.divmod(0.5)",
+            "11.5.divmod(3)",
+        ]);
     }
 
     #[test]
@@ -1369,40 +1440,38 @@ mod tests {
 
     #[test]
     fn float_fdiv() {
-        run_tests(
-            &["1.0.fdiv(2)", "1.0.fdiv(2.0)", "1.0.fdiv(0.5)"],
-        );
+        run_tests(&["1.0.fdiv(2)", "1.0.fdiv(2.0)", "1.0.fdiv(0.5)"]);
         run_test_error("1.0.fdiv(:foo)");
     }
 
     #[test]
     fn float_rationalize() {
-        run_tests(
-            &[
-                "3382729202.92822.rationalize",
-                "0.3.rationalize(Rational(1,10))", "0.3.rationalize(0.05)", "0.3.rationalize(0.001)",
-                "(-0.3).rationalize(Rational(1,10))", "(-0.3).rationalize(0.05)", "(-0.3).rationalize(0.001)",
-                "0.0.rationalize",
-            ],
-        );
+        run_tests(&[
+            "3382729202.92822.rationalize",
+            "0.3.rationalize(Rational(1,10))",
+            "0.3.rationalize(0.05)",
+            "0.3.rationalize(0.001)",
+            "(-0.3).rationalize(Rational(1,10))",
+            "(-0.3).rationalize(0.05)",
+            "(-0.3).rationalize(0.001)",
+            "0.0.rationalize",
+        ]);
         run_test_error("Float::NAN.rationalize");
         run_test_error("Float::INFINITY.rationalize");
     }
 
     #[test]
     fn float_round_precision() {
-        run_tests(
-            &[
-                "767573.1875850001.round(5)",
-                "767573.1875850001.round(5, half: :up)",
-                "767573.1875850001.round(5, half: :down)",
-                "767573.1875850001.round(5, half: :even)",
-                "(-767573.1875850001).round(5, half: :down)",
-                "(-767573.1875850001).round(5, half: :even)",
-                "767573.187585.round(5, half: :up)",
-                "767573.187585.round(5, half: :down)",
-                "767573.187585.round(5, half: :even)",
-            ],
-        );
+        run_tests(&[
+            "767573.1875850001.round(5)",
+            "767573.1875850001.round(5, half: :up)",
+            "767573.1875850001.round(5, half: :down)",
+            "767573.1875850001.round(5, half: :even)",
+            "(-767573.1875850001).round(5, half: :down)",
+            "(-767573.1875850001).round(5, half: :even)",
+            "767573.187585.round(5, half: :up)",
+            "767573.187585.round(5, half: :down)",
+            "767573.187585.round(5, half: :even)",
+        ]);
     }
 }

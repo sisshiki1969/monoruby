@@ -502,10 +502,10 @@ mod tests {
         let mut r#gen = Codegen::new();
         let side_exit = r#gen.entry_panic.clone();
         let entry_point = r#gen.jit.get_current_address();
-        let x = VirtFPReg(0);
-        r#gen.float_to_f64(GP::Rdi, x.enc(), &side_exit);
+        let x = 2;
+        r#gen.float_to_f64(GP::Rdi, x, &side_exit);
         monoasm!( &mut r#gen.jit,
-            movq xmm0, xmm(x.enc());
+            movq xmm0, xmm(x);
             ret;
         );
         r#gen.jit.finalize();

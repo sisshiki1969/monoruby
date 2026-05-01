@@ -53,7 +53,10 @@ enum CArg {
     /// caches its pointer as a u64 so `as_libffi_arg` can reference a
     /// stable location. Moving the `CArg` is safe because the `Vec<u8>`
     /// move leaves the heap allocation in place.
-    CStr { _buf: Vec<u8>, ptr: u64 },
+    CStr {
+        _buf: Vec<u8>,
+        ptr: u64,
+    },
 }
 
 impl CArg {
@@ -295,7 +298,12 @@ fn fiddle_call_inner(
 /// - arg_types : Array    – Fiddle type-code integers for each argument
 /// - ret_type  : Integer  – Fiddle type-code for the return value
 #[monoruby_builtin]
-fn fiddle_call(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn fiddle_call(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let ptr = lfp.arg(0).expect_integer(globals)? as usize;
     let args_ary = lfp.arg(1).expect_array_ty(globals)?;
     let types_ary = lfp.arg(2).expect_array_ty(globals)?;
@@ -314,7 +322,12 @@ fn fiddle_call(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
 ///
 /// Read a single typed value from memory at `ptr`.
 #[monoruby_builtin]
-fn fiddle_read(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn fiddle_read(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let ptr = lfp.arg(0).expect_integer(globals)? as usize;
     let ty = lfp.arg(1).expect_integer(globals)?;
     if ptr == 0 {
@@ -352,7 +365,12 @@ fn fiddle_read(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
 /// Write a single typed value to memory at `ptr`.
 /// Returns `ptr` so callers can chain.
 #[monoruby_builtin]
-fn fiddle_write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn fiddle_write(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let ptr = lfp.arg(0).expect_integer(globals)? as usize;
     let ty = lfp.arg(1).expect_integer(globals)?;
     let val = lfp.arg(2);
@@ -444,7 +462,7 @@ fn fiddle_read_inline(
 
     match kind {
         ReadKind::F64 => {
-            let fret = state.def_F(ir, dst);
+            let fret = state.def_F(dst);
             ir.inline(move |r#gen, _, labels, base| {
                 let deopt_label = &labels[deopt];
                 monoasm! { &mut r#gen.jit,
@@ -453,7 +471,7 @@ fn fiddle_read_inline(
                     jz deopt_label;
                     movq xmm0, [rdi];
                 };
-                r#gen.store_xmm0_into_xmm(fret, base);
+                r#gen.store_fpr_into_xmm(fret, base);
             });
         }
         _ => {
@@ -528,7 +546,7 @@ fn fiddle_write_inline(
             let deopt = ir.new_deopt(state);
             ir.inline(move |r#gen, _, labels, base| {
                 let deopt_label = &labels[deopt];
-                r#gen.load_xmm_into_xmm0(xsrc, base);
+                r#gen.load_fpr_into_xmm0(xsrc, base);
                 monoasm! { &mut r#gen.jit,
                     movq rax, rdi;
                     sarq rdi, 1;
@@ -569,7 +587,12 @@ fn fiddle_write_inline(
 /// Read a null-terminated C string from `ptr`.
 /// Returns nil if `ptr` is 0 (NULL).
 #[monoruby_builtin]
-fn fiddle_read_string(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn fiddle_read_string(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let ptr = lfp.arg(0).expect_integer(globals)? as usize;
     if ptr == 0 {
         return Ok(Value::nil());
@@ -582,7 +605,12 @@ fn fiddle_read_string(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: By
 ///
 /// Read exactly `len` bytes from `ptr` into a binary Ruby String.
 #[monoruby_builtin]
-fn fiddle_read_bytes(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn fiddle_read_bytes(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let ptr = lfp.arg(0).expect_integer(globals)? as *const u8;
     let len = lfp.arg(1).expect_integer(globals)? as usize;
     if ptr.is_null() {
@@ -598,7 +626,12 @@ fn fiddle_read_bytes(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byt
 ///
 /// Copy a Ruby String's raw bytes to `ptr`.  Returns `ptr`.
 #[monoruby_builtin]
-fn fiddle_write_bytes(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn fiddle_write_bytes(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let ptr = lfp.arg(0).expect_integer(globals)? as *mut u8;
     let bytes_val = lfp.arg(1);
     let src = bytes_val.as_rstring_inner();
@@ -615,7 +648,12 @@ fn fiddle_write_bytes(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: By
 ///
 /// Free heap memory allocated by Fiddle.malloc / Kernel.___malloc.
 #[monoruby_builtin]
-fn fiddle_free(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn fiddle_free(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let ptr = lfp.arg(0).expect_integer(globals)? as *mut libc::c_void;
     if !ptr.is_null() {
         unsafe { libc::free(ptr) };

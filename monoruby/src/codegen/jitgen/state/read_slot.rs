@@ -13,14 +13,14 @@ impl AbstractFrame {
     pub(crate) fn load(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP) {
         self.use_as_value(slot);
         match self.mode(slot) {
-            LinkMode::F(xmm) => {
+            LinkMode::F(fpr) => {
                 if dst == GP::R15 {
                     assert!(self.no_r15());
                 }
                 // F -> Sf
-                ir.xmm2stack(xmm, slot);
+                ir.fpr2stack(fpr, slot);
                 ir.reg_move(GP::Rax, dst);
-                self.set_Sf_float(slot, xmm);
+                self.set_Sf_float(slot, fpr);
             }
             LinkMode::C(v) => {
                 if dst == GP::R15 {
@@ -93,7 +93,7 @@ impl AbstractFrame {
     /// ### destroy
     /// - rdi
     ///
-    pub(crate) fn load_xmm_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId) -> VirtFPReg {
+    pub(crate) fn load_xmm_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId) -> FPReg {
         self.use_as_value(slot);
         match self.mode(slot) {
             LinkMode::Sf(x, _) | LinkMode::F(x) => x,
@@ -101,16 +101,16 @@ impl AbstractFrame {
                 // S -> Sf
                 ir.stack2reg(slot, GP::Rdi);
                 self.guard_fixnum(ir, slot, GP::Rdi);
-                let x = self.set_new_Sf(ir, slot, SfGuarded::Fixnum);
-                ir.fixnum2xmm(GP::Rdi, x);
+                let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
+                ir.fixnum2fpr(GP::Rdi, x);
                 x
             }
             LinkMode::G(_) => {
                 // G -> Sf
                 ir.reg2stack(GP::R15, slot);
                 self.guard_fixnum(ir, slot, GP::R15);
-                let x = self.set_new_Sf(ir, slot, SfGuarded::Fixnum);
-                ir.fixnum2xmm(GP::R15, x);
+                let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
+                ir.fixnum2fpr(GP::R15, x);
                 x
             }
             LinkMode::C(v) => self.load_xmm_from_C(ir, slot, v),
@@ -127,23 +127,23 @@ impl AbstractFrame {
     /// - rdi, rax
     ///
     ///
-    pub(crate) fn load_xmm(&mut self, ir: &mut AsmIr, slot: SlotId) -> VirtFPReg {
+    pub(crate) fn load_xmm(&mut self, ir: &mut AsmIr, slot: SlotId) -> FPReg {
         let deopt = ir.new_deopt(self);
         self.use_as_float(slot);
         match self.mode(slot) {
             LinkMode::Sf(x, _) | LinkMode::F(x) => x,
             LinkMode::S(_) => {
                 // -> Sf
-                let x = self.set_new_Sf(ir, slot, SfGuarded::Float);
+                let x = self.set_new_Sf(slot, SfGuarded::Float);
                 ir.stack2reg(slot, GP::Rdi);
-                ir.float_to_xmm(GP::Rdi, x, deopt);
+                ir.float_to_fpr(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::G(_) => {
                 // -> Sf
-                let x = self.set_new_Sf(ir, slot, SfGuarded::Float);
+                let x = self.set_new_Sf(slot, SfGuarded::Float);
                 ir.reg2stack(GP::R15, slot);
-                ir.float_to_xmm(GP::R15, x, deopt);
+                ir.float_to_fpr(GP::R15, x, deopt);
                 x
             }
             LinkMode::C(v) => self.load_xmm_from_C(ir, slot, v),
@@ -154,7 +154,7 @@ impl AbstractFrame {
     }
 
     #[allow(non_snake_case)]
-    fn load_xmm_from_C(&mut self, ir: &mut AsmIr, slot: SlotId, v: Immediate) -> VirtFPReg {
+    fn load_xmm_from_C(&mut self, ir: &mut AsmIr, slot: SlotId, v: Immediate) -> FPReg {
         match v.unpack() {
             RV::Float(f) => {
                 // -> F
@@ -162,8 +162,8 @@ impl AbstractFrame {
             }
             RV::Fixnum(i) => {
                 // -> Sf
-                let x = self.set_new_Sf(ir, slot, SfGuarded::Fixnum);
-                ir.i64_to_stack_and_xmm(i, slot, x);
+                let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
+                ir.i64_to_stack_and_fpr(i, slot, x);
                 x
             }
             _ => {
@@ -172,9 +172,9 @@ impl AbstractFrame {
         }
     }
 
-    fn load_xmm_from_f64(&mut self, ir: &mut AsmIr, slot: SlotId, f: f64) -> VirtFPReg {
-        let x = self.set_new_F(ir, slot);
-        ir.f64_to_xmm(f, x);
+    fn load_xmm_from_f64(&mut self, ir: &mut AsmIr, slot: SlotId, f: f64) -> FPReg {
+        let x = self.set_new_F(slot);
+        ir.f64_to_fpr(f, x);
         x
     }
 }

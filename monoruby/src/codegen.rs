@@ -113,57 +113,58 @@ pub(crate) enum GP {
     R15 = 15,
 }
 
+/// Number of physical xmm registers in the JIT allocator pool
+/// (xmm2..xmm15 — xmm0/xmm1 are reserved as codegen scratch). A
+/// `VirtFPReg` whose `id < PHYS_XMM_POOL` resolves directly to
+/// `xmm{id+2}`; ids >= `PHYS_XMM_POOL` are spilled to a stack slot.
+///
+/// The `stress-spill-pool` cargo feature shrinks the pool to 2 so
+/// that nearly every F-mode allocation overflows into a spill slot
+/// — this exercises the LoadSpill / StoreSpill paths and the
+/// spill-aware AsmInst lowerings throughout the entire test suite.
+#[cfg(not(feature = "stress-spill-pool"))]
+const PHYS_XMM_POOL: usize = 14;
+#[cfg(feature = "stress-spill-pool")]
+const PHYS_XMM_POOL: usize = 2;
+
 ///
 /// Virtual floating-point register. The front-end (TraceIr → AsmIr)
 /// allocates these and stores them in `LinkMode::F` / `LinkMode::Sf`
 /// and inside `AsmInst` operands.
 ///
-/// Encoding by id range:
-/// * `0..14` — pool-allocated phys: maps to `xmm{id+2}`
-///   (xmm2..xmm15).
-/// * `14..` — spill: lives on a stack slot (8 bytes per id) at the
-///   bottom of the local frame. The pre-codegen `expand_spills`
-///   pass rewrites every occurrence into a [`Self::SCRATCH_XMM_0`]
-///   / [`Self::SCRATCH_XMM_1`] marker surrounded by `LoadSpill` /
-///   `StoreSpill`, so the codegen lowering only ever sees ids it can
-///   encode.
-/// * `usize::MAX` / `usize::MAX - 1` — scratch markers for `xmm0` /
-///   `xmm1` (reserved as codegen-time scratch and never allocated
-///   by the pool).
-///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub(crate) struct VirtFPReg(pub(crate) usize);
+pub struct FPReg(pub(crate) usize);
 
-impl VirtFPReg {
-    /// Sentinel `VirtFPReg` that lowers to physical `xmm0`. Used by
-    /// the spill-expansion pass to represent the temporary scratch
-    /// register holding a spilled operand for the duration of one
-    /// AsmInst.
-    pub(crate) const SCRATCH_XMM_0: Self = Self(usize::MAX);
-    /// Sentinel `VirtFPReg` that lowers to physical `xmm1`.
-    pub(crate) const SCRATCH_XMM_1: Self = Self(usize::MAX - 1);
-
+impl FPReg {
     fn new(id: usize) -> Self {
         Self(id)
     }
 
-    /// Physical xmm number (`xmm0`..`xmm15`) that this VirtFPReg
-    /// encodes to. Pool ids `0..14` map to `xmm2..xmm15`; the two
-    /// scratch markers map to `xmm0` / `xmm1`. Any other id (= an
-    /// unresolved spill) panics — the pre-codegen `expand_spills`
-    /// pass should have rewritten it.
-    pub fn enc(&self) -> u64 {
-        match self.0 {
-            x if x == Self::SCRATCH_XMM_0.0 => 0,
-            x if x == Self::SCRATCH_XMM_1.0 => 1,
-            x if x < 14 => x as u64 + 2,
-            x => panic!(
-                "VirtFPReg({}) reached code generation unresolved — spill expansion must run first",
-                x
-            ),
+    fn loc(self, base_stack_offset: usize) -> FPRegLoc {
+        let pool = PHYS_XMM_POOL;
+        if self.0 < pool {
+            FPRegLoc::Xmm(self.0 as u64 + 2)
+        } else {
+            let n = self.0 - pool;
+            let ofs = (base_stack_offset as i32) - 24 + 8 * (n as i32);
+            FPRegLoc::Spill(ofs)
         }
     }
+}
+
+///
+/// Location where a `VirtFPReg`'s value lives at code-generation
+/// time. `Phys(N)` means physical `xmm{N}` directly usable in
+/// `monoasm! { ... xmm(N) ... }`; `Spill(off)` means the 8-byte slot
+/// at `[rbp - off]`. Spill-aware codegen lowerings build per-operand
+/// asm based on this — e.g. `addsd xmm, mem` when the rhs operand is
+/// spilled, instead of forcing a scratch load.
+///
+#[derive(Debug, Clone, Copy)]
+pub(super) enum FPRegLoc {
+    Xmm(u64),
+    Spill(i32),
 }
 
 pub struct JitModule {
