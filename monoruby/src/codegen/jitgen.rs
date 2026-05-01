@@ -609,6 +609,47 @@ impl JitModule {
     }
 
     ///
+    /// Move a `VirtFPReg` value into xmm1 — the second SysV f64 arg
+    /// register, used by CFunc_FF_F. Pool ids resolve to xmm2..xmm15
+    /// so a Phys source never aliases xmm1.
+    ///
+    fn load_xmm_into_xmm1(&mut self, xmm: VirtFPReg, base: usize) {
+        let pool = state::PHYS_XMM_POOL;
+        if xmm.0 < pool {
+            let p = xmm.0 as u64 + 2;
+            monoasm!( &mut self.jit,
+                movq xmm1, xmm(p);
+            );
+        } else {
+            let n = xmm.0 - pool;
+            let off = (base as i32) - 24 + 8 * (n as i32);
+            monoasm!( &mut self.jit,
+                movq xmm1, [rbp - (off)];
+            );
+        }
+    }
+
+    ///
+    /// Store xmm0 (a C-call's f64 return value) into the destination
+    /// `VirtFPReg`'s home — phys reg or spill slot.
+    ///
+    fn store_xmm0_into_xmm(&mut self, xmm: VirtFPReg, base: usize) {
+        let pool = state::PHYS_XMM_POOL;
+        if xmm.0 < pool {
+            let p = xmm.0 as u64 + 2;
+            monoasm!( &mut self.jit,
+                movq xmm(p), xmm0;
+            );
+        } else {
+            let n = xmm.0 - pool;
+            let off = (base as i32) - 24 + 8 * (n as i32);
+            monoasm!( &mut self.jit,
+                movq [rbp - (off)], xmm0;
+            );
+        }
+    }
+
+    ///
     /// Move Value *v* to stack slot *reg*.
     ///
     /// ### destroy

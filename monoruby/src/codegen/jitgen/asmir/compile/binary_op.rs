@@ -469,11 +469,32 @@ macro_rules! jit_cmp_opt_main {
 }
 
 impl Codegen {
-    pub(super) fn cmp_float(&mut self, binary_xmm: (VirtFPReg, VirtFPReg)) {
+    pub(super) fn cmp_float(
+        &mut self,
+        binary_xmm: (VirtFPReg, VirtFPReg),
+        base_stack_offset: usize,
+    ) {
         let (l, r) = binary_xmm;
-        monoasm! { &mut self.jit,
-            ucomisd xmm(l.enc()), xmm(r.enc());
-        };
+        let l_loc = xmm_loc(l, base_stack_offset);
+        let r_loc = xmm_loc(r, base_stack_offset);
+        // ucomisd's first operand must be an xmm register; the second
+        // can be xmm or memory. Pick the cheapest combination.
+        match (l_loc, r_loc) {
+            (XmmLoc::Phys(lp), XmmLoc::Phys(rp)) => monoasm! { &mut self.jit,
+                ucomisd xmm(lp), xmm(rp);
+            },
+            (XmmLoc::Phys(lp), XmmLoc::Spill(r_off)) => monoasm! { &mut self.jit,
+                ucomisd xmm(lp), [rbp - (r_off)];
+            },
+            (XmmLoc::Spill(l_off), XmmLoc::Phys(rp)) => monoasm! { &mut self.jit,
+                movq xmm0, [rbp - (l_off)];
+                ucomisd xmm0, xmm(rp);
+            },
+            (XmmLoc::Spill(l_off), XmmLoc::Spill(r_off)) => monoasm! { &mut self.jit,
+                movq xmm0, [rbp - (l_off)];
+                ucomisd xmm0, [rbp - (r_off)];
+            },
+        }
     }
 
     pub(super) fn setflag_float(&mut self, kind: CmpKind) {

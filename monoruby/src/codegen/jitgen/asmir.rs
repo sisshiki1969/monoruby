@@ -1682,13 +1682,13 @@ impl AsmInst {
             | Self::F64ToXmm(_, _)
             | Self::FixnumToXmm(_, _)
             | Self::FloatToXmm(_, _, _)
-            | Self::XmmToStack(_, _) => vec![],
+            | Self::XmmToStack(_, _)
+            | Self::CFunc_F_F { .. }
+            | Self::CFunc_FF_F { .. }
+            | Self::FloatCmp { .. }
+            | Self::FloatCmpBr { .. } => vec![],
             Self::XmmUnOp { dst, .. } => vec![dst],
             Self::I64ToBoth(_, _, x) => vec![x],
-            Self::CFunc_F_F { src, dst, .. } => vec![src, dst],
-            Self::CFunc_FF_F { lhs, rhs, dst, .. } => vec![lhs, rhs, dst],
-            Self::FloatCmp { lhs, rhs, .. } => vec![lhs, rhs],
-            Self::FloatCmpBr { lhs, rhs, .. } => vec![lhs, rhs],
             _ => vec![],
         }
     }

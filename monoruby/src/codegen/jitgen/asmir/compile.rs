@@ -582,7 +582,7 @@ impl Codegen {
                 monoasm! { &mut self.jit,
                     xorq rax, rax;
                 };
-                self.cmp_float((lhs, rhs));
+                self.cmp_float((lhs, rhs), frame.base_stack_offset);
                 self.setflag_float(kind);
             }
             AsmInst::FloatCmpBr {
@@ -593,7 +593,7 @@ impl Codegen {
                 branch_dest,
             } => {
                 let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
-                self.cmp_float((lhs, rhs));
+                self.cmp_float((lhs, rhs), frame.base_stack_offset);
                 self.condbr_float(kind, branch_dest, brkind);
             }
 
@@ -919,18 +919,15 @@ impl Codegen {
                 dst,
                 using_xmm,
             } => {
-                let fsrc = src.enc();
-                let fret = dst.enc();
+                let base = frame.base_stack_offset;
                 self.xmm_save(using_xmm);
+                self.load_xmm_into_xmm0(src, base);
                 monoasm!( &mut self.jit,
-                    movq xmm0, xmm(fsrc);
                     movq rax, (f);
                     call rax;
                 );
                 self.xmm_restore(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq xmm(fret), xmm0;
-                );
+                self.store_xmm0_into_xmm(dst, base);
             }
             AsmInst::CFunc_FF_F {
                 f,
@@ -939,20 +936,20 @@ impl Codegen {
                 dst,
                 using_xmm,
             } => {
-                let flhs = lhs.enc();
-                let frhs = rhs.enc();
-                let fret = dst.enc();
+                let base = frame.base_stack_offset;
                 self.xmm_save(using_xmm);
+                // Load both args into xmm0/xmm1 (the SysV ABI passes
+                // f64 args in xmm0, xmm1, ...). Pool ids resolve to
+                // xmm2..xmm15, so a Phys source can never alias the
+                // scratch register we're writing into.
+                self.load_xmm_into_xmm0(lhs, base);
+                self.load_xmm_into_xmm1(rhs, base);
                 monoasm!( &mut self.jit,
-                    movq xmm0, xmm(flhs);
-                    movq xmm1, xmm(frhs);
                     movq rax, (f);
                     call rax;
                 );
                 self.xmm_restore(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq xmm(fret), xmm0;
-                );
+                self.store_xmm0_into_xmm(dst, base);
             }
         }
     }
