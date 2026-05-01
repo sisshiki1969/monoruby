@@ -895,17 +895,6 @@ impl Executor {
         self.add_method(globals, class_id, name, func_id, Visibility::Public)
     }
 
-    /// Register a private method and invoke the method_added hook.
-    pub(crate) fn add_private_method(
-        &mut self,
-        globals: &mut Globals,
-        class_id: ClassId,
-        name: IdentId,
-        func_id: FuncId,
-    ) -> Result<()> {
-        self.add_method(globals, class_id, name, func_id, Visibility::Private)
-    }
-
     /// Register a method with the given visibility and invoke the method_added hook.
     pub(crate) fn add_method(
         &mut self,
