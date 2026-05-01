@@ -113,6 +113,14 @@ impl AsmIr {
         self.inst.iter()
     }
 
+    pub(super) fn take_inst(&mut self) -> Vec<AsmInst> {
+        std::mem::take(&mut self.inst)
+    }
+
+    pub(super) fn replace_inst(&mut self, inst: Vec<AsmInst>) {
+        self.inst = inst;
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.inst.is_empty()
     }
@@ -962,6 +970,32 @@ pub(super) enum AsmInst {
         offset: LoopRspOffset,
     },
     ///
+    /// Load a spilled `VirtFPReg`'s 8-byte value from its stack slot
+    /// into a scratch xmm. Emitted by the pre-codegen `expand_spills`
+    /// pass before any AsmInst that reads the spilled operand.
+    ///
+    /// `scratch` is `VirtFPReg::SCRATCH_XMM_0` or
+    /// `VirtFPReg::SCRATCH_XMM_1` (the two reserved scratch xmms,
+    /// which are not allocated by the pool). `rbp_offset` is the
+    /// positive byte distance from `rbp` to the spill slot;
+    /// codegen emits `movq xmm(scratch.enc()), [rbp - rbp_offset]`.
+    ///
+    LoadSpill {
+        scratch: VirtFPReg,
+        rbp_offset: i32,
+    },
+    ///
+    /// Store a scratch xmm back into a spilled `VirtFPReg`'s stack
+    /// slot. Emitted by `expand_spills` after any AsmInst that
+    /// writes to the spilled operand. `scratch` and `rbp_offset`
+    /// follow the same convention as `LoadSpill`; codegen emits
+    /// `movq [rbp - rbp_offset], xmm(scratch.enc())`.
+    ///
+    StoreSpill {
+        scratch: VirtFPReg,
+        rbp_offset: i32,
+    },
+    ///
     /// Initialize function frame.
     ///
     /// ### stack pointer adjustment
@@ -1627,6 +1661,33 @@ impl AsmInst {
             Self::CFunc_FF_F { lhs, rhs, dst, .. } => vec![*lhs, *rhs, *dst],
             Self::FloatCmp { lhs, rhs, .. } => vec![*lhs, *rhs],
             Self::FloatCmpBr { lhs, rhs, .. } => vec![*lhs, *rhs],
+            _ => vec![],
+        }
+    }
+
+    ///
+    /// Mutable view of every `VirtFPReg` operand in this instruction.
+    /// Used by `expand_spills` to rewrite spilled operands into
+    /// scratch xmm markers in place.
+    ///
+    pub(super) fn xmm_operands_mut(&mut self) -> Vec<&mut VirtFPReg> {
+        match self {
+            Self::XmmMove(a, b) | Self::XmmSwap(a, b) => vec![a, b],
+            Self::XmmBinOp {
+                binary_xmm: (l, r),
+                dst,
+                ..
+            } => vec![l, r, dst],
+            Self::XmmUnOp { dst, .. } => vec![dst],
+            Self::F64ToXmm(_, x) => vec![x],
+            Self::I64ToBoth(_, _, x) => vec![x],
+            Self::XmmToStack(x, _) => vec![x],
+            Self::FixnumToXmm(_, x) => vec![x],
+            Self::FloatToXmm(_, x, _) => vec![x],
+            Self::CFunc_F_F { src, dst, .. } => vec![src, dst],
+            Self::CFunc_FF_F { lhs, rhs, dst, .. } => vec![lhs, rhs, dst],
+            Self::FloatCmp { lhs, rhs, .. } => vec![lhs, rhs],
+            Self::FloatCmpBr { lhs, rhs, .. } => vec![lhs, rhs],
             _ => vec![],
         }
     }

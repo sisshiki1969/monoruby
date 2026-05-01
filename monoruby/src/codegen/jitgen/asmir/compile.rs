@@ -49,6 +49,22 @@ impl Codegen {
                     }
                 }
             }
+            AsmInst::LoadSpill {
+                scratch,
+                rbp_offset,
+            } => {
+                monoasm!( &mut self.jit,
+                    movq xmm(scratch.enc()), [rbp - (rbp_offset)];
+                );
+            }
+            AsmInst::StoreSpill {
+                scratch,
+                rbp_offset,
+            } => {
+                monoasm!( &mut self.jit,
+                    movq [rbp - (rbp_offset)], xmm(scratch.enc());
+                );
+            }
             AsmInst::Unreachable => {
                 monoasm!( &mut self.jit,
                     movq rax, (unreachable);

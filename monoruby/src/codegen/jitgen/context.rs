@@ -199,6 +199,15 @@ pub(super) struct AsmInfo {
     pub(super) loop_jit_spill_bytes: usize,
 
     ///
+    /// Identifier of the [`JitStackFrame`] that owns this `AsmInfo`.
+    /// Set by [`JitContext::push_frame`]. Used by `expand_spills` to
+    /// look up the frame's `base_stack_offset` from
+    /// [`JitContext::specialized_frame_sizes`] when resolving spill
+    /// slot offsets.
+    ///
+    pub(super) specialized_id: SpecializedId,
+
+    ///
     /// Source map for bytecode index and machine code position.
     ///
     pub(super) sourcemap: Vec<(BcIndex, usize)>,
@@ -223,6 +232,7 @@ impl AsmInfo {
             inline_bridges: HashMap::default(),
             specialized_methods: vec![],
             loop_jit_spill_bytes: 0,
+            specialized_id: SpecializedId(usize::MAX),
             ivar_heap_accessed: false,
             sourcemap: vec![],
             start_codepos: 0,
@@ -448,6 +458,7 @@ impl JitStackFrame {
                 ivar_heap_accessed: false,
                 specialized_methods: vec![],
                 loop_jit_spill_bytes: 0,
+                specialized_id: SpecializedId(usize::MAX),
                 sourcemap: vec![],
                 start_codepos: 0,
             },
@@ -687,6 +698,10 @@ impl<'a> JitContext<'a> {
             frame.specialized_id = SpecializedId(self.next_specialized_id);
             self.next_specialized_id += 1;
         }
+        // Mirror onto AsmInfo so `expand_spills` can look up the
+        // frame's base_stack_offset from `specialized_frame_sizes`
+        // by reading the AsmInfo alone.
+        frame.asm_info.specialized_id = frame.specialized_id;
         self.stack_frame.push(frame);
     }
 
@@ -938,6 +953,98 @@ impl<'a> JitContext<'a> {
         }
         for SpecializeInfo { info, .. } in asm_info.iter_specialized_methods_mut() {
             self.resolve_dyn_var_offsets(info);
+        }
+    }
+
+    ///
+    /// Pre-codegen pass: rewrite every AsmInst whose operands include
+    /// a spilled `VirtFPReg` (`id >= PHYS_XMM_POOL`) into a
+    /// `LoadSpill` + modified-inst + `StoreSpill` triplet, where the
+    /// modified inst's operand is replaced with a scratch xmm marker
+    /// (`SCRATCH_XMM_0` / `SCRATCH_XMM_1`). Recurses into
+    /// `specialized_methods`. Must run before `gen_machine_code` so
+    /// that the codegen lowering only sees ids it can encode.
+    ///
+    /// One AsmInst can have at most two simultaneously-spilled
+    /// operands today; a third would require a third scratch xmm
+    /// outside the (xmm0, xmm1) pair, which the panic flags.
+    ///
+    pub(super) fn expand_spills(&self, asm_info: &mut AsmInfo) {
+        let id = asm_info.specialized_id;
+        let base = match self.specialized_frame_sizes.get(&id) {
+            Some(sizes) => sizes.base,
+            // No size recorded yet (e.g. loop-analysis dummy ctx) —
+            // nothing to expand.
+            None => return,
+        };
+        let pool = super::state::PHYS_XMM_POOL;
+        let resolver = move |virt: VirtFPReg| -> i32 {
+            // Spill slot for `VirtFPReg(N)` (N >= pool) lives at
+            //     [rbp - locals_size - 8 - 8 * (N - pool)]
+            // where `locals_size = base - 32` (the original prologue
+            // subq before `pop_frame`'s spill growth bumped
+            // `total = base + 8 * spill_count`).
+            let n = virt.0 - pool;
+            (base as i32) - 24 + 8 * n as i32
+        };
+        let take = |insts: Vec<AsmInst>| -> Vec<AsmInst> {
+            let mut out = Vec::with_capacity(insts.len());
+            for mut inst in insts {
+                let scratches = [VirtFPReg::SCRATCH_XMM_0, VirtFPReg::SCRATCH_XMM_1];
+                let mut spilled: Vec<(VirtFPReg, i32)> = vec![];
+                for op in inst.xmm_operands_mut() {
+                    if op.0 >= pool {
+                        let scratch_idx = spilled.len();
+                        if scratch_idx >= scratches.len() {
+                            panic!(
+                                "expand_spills: AsmInst {:?} has more than {} simultaneously \
+                                 spilled VirtFPReg operands",
+                                inst,
+                                scratches.len()
+                            );
+                        }
+                        let off = resolver(*op);
+                        let scratch = scratches[scratch_idx];
+                        spilled.push((scratch, off));
+                        *op = scratch;
+                    }
+                }
+                // Pre-loads first: every spilled operand may be
+                // read.
+                for (scratch, off) in &spilled {
+                    out.push(AsmInst::LoadSpill {
+                        scratch: *scratch,
+                        rbp_offset: *off,
+                    });
+                }
+                out.push(inst);
+                // Post-stores: write back any modification. If the
+                // operand was read-only the store is wasted but
+                // harmless (writes the same value back). Spills are
+                // expected to be rare so the overhead is acceptable.
+                for (scratch, off) in &spilled {
+                    out.push(AsmInst::StoreSpill {
+                        scratch: *scratch,
+                        rbp_offset: *off,
+                    });
+                }
+            }
+            out
+        };
+        for (_, ir) in asm_info.iter_ir_mut() {
+            let taken = ir.take_inst();
+            ir.replace_inst(take(taken));
+        }
+        for (ir, _, _) in asm_info.iter_outline_bridges_mut() {
+            let taken = ir.take_inst();
+            ir.replace_inst(take(taken));
+        }
+        for (ir, _) in asm_info.iter_inline_bridges_mut() {
+            let taken = ir.take_inst();
+            ir.replace_inst(take(taken));
+        }
+        for SpecializeInfo { info, .. } in asm_info.iter_specialized_methods_mut() {
+            self.expand_spills(info);
         }
     }
 

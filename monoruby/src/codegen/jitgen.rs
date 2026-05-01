@@ -301,6 +301,14 @@ impl Codegen {
         // rewrite every `DynVarOffset::Hint(...)` in the AsmIr tree
         // into a concrete byte offset before code generation runs.
         ctx.resolve_dyn_var_offsets(&mut frame.asm_info);
+        // Expand every spilled `VirtFPReg(N >= PHYS_XMM_POOL)` into
+        // a `LoadSpill` + scratch-marker AsmInst + `StoreSpill`
+        // triplet. This must run after `resolve_dyn_var_offsets`
+        // (the frame sizes map needs `total` for prologue / chain
+        // resolution) and before `gen_machine_code` (the codegen
+        // lowering only knows how to encode pool ids and the two
+        // scratch markers).
+        ctx.expand_spills(&mut frame.asm_info);
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 

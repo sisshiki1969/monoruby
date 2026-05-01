@@ -116,33 +116,53 @@ pub(crate) enum GP {
 ///
 /// Virtual floating-point register. The front-end (TraceIr → AsmIr)
 /// allocates these and stores them in `LinkMode::F` / `LinkMode::Sf`
-/// and inside `AsmInst` operands. Code generation maps a
-/// `VirtFPReg(N)` to the physical xmm register `xmm{N+2}` (so
-/// `VirtFPReg(0)` → `xmm2`, `VirtFPReg(13)` → `xmm15`). For now
-/// there is no spill — if more than 14 are live simultaneously,
-/// [`Self::enc`] panics at code generation.
+/// and inside `AsmInst` operands.
+///
+/// Encoding by id range:
+/// * `0..14` — pool-allocated phys: maps to `xmm{id+2}`
+///   (xmm2..xmm15).
+/// * `14..` — spill: lives on a stack slot (8 bytes per id) at the
+///   bottom of the local frame. The pre-codegen `expand_spills`
+///   pass rewrites every occurrence into a [`Self::SCRATCH_XMM_0`]
+///   / [`Self::SCRATCH_XMM_1`] marker surrounded by `LoadSpill` /
+///   `StoreSpill`, so the codegen lowering only ever sees ids it can
+///   encode.
+/// * `usize::MAX` / `usize::MAX - 1` — scratch markers for `xmm0` /
+///   `xmm1` (reserved as codegen-time scratch and never allocated
+///   by the pool).
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub(crate) struct VirtFPReg(usize);
+pub(crate) struct VirtFPReg(pub(crate) usize);
 
 impl VirtFPReg {
+    /// Sentinel `VirtFPReg` that lowers to physical `xmm0`. Used by
+    /// the spill-expansion pass to represent the temporary scratch
+    /// register holding a spilled operand for the duration of one
+    /// AsmInst.
+    pub(crate) const SCRATCH_XMM_0: Self = Self(usize::MAX);
+    /// Sentinel `VirtFPReg` that lowers to physical `xmm1`.
+    pub(crate) const SCRATCH_XMM_1: Self = Self(usize::MAX - 1);
+
     fn new(id: usize) -> Self {
         Self(id)
     }
 
     /// Physical xmm number (`xmm0`..`xmm15`) that this VirtFPReg
-    /// encodes to. The mapping is `id + 2` (so `VirtFPReg(0)` →
-    /// `xmm2`). Panics when the id would exceed `xmm15` — spilling is
-    /// not implemented yet.
+    /// encodes to. Pool ids `0..14` map to `xmm2..xmm15`; the two
+    /// scratch markers map to `xmm0` / `xmm1`. Any other id (= an
+    /// unresolved spill) panics — the pre-codegen `expand_spills`
+    /// pass should have rewritten it.
     pub fn enc(&self) -> u64 {
-        if self.0 >= 14 {
-            panic!(
-                "VirtFPReg({}) exceeds the 14 physical xmms (xmm2..xmm15); spill is not implemented yet",
-                self.0
-            );
+        match self.0 {
+            x if x == Self::SCRATCH_XMM_0.0 => 0,
+            x if x == Self::SCRATCH_XMM_1.0 => 1,
+            x if x < 14 => x as u64 + 2,
+            x => panic!(
+                "VirtFPReg({}) reached code generation unresolved — spill expansion must run first",
+                x
+            ),
         }
-        self.0 as u64 + 2
     }
 }
 
